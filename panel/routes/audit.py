@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (render_template, request)
 from flask_login import (current_user, login_required)
-from panel.db.models import (AuditLog, LOCAL_HOST_LABEL, db)
+from panel.db.models import (AuditLog, LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.security.auth import (VIEW_LOGS, accessible_remote_ids, get_user_servers,
                                  permission_required)
 from sqlalchemy import (and_, desc, or_, true)
@@ -58,13 +58,25 @@ def audit_scope(user):
 def _reachable_object_filters(user):
     """Filters for the rows about a game server `user` can access or a host they were granted."""
     server_ids = {gs.id for gs in get_user_servers(user)}
-    remote_ids = accessible_remote_ids(user)
+    # Never the panel host's own row. Its firewall, bans, sshd, Pro and root shell are
+    # superadmin-only (get_host_remote), but the /api/remote/<id>/… twins of those routes audit
+    # BY ROW, with an address, "<name>:<port>/tcp" or the renameable host name as the target — so
+    # the LOCAL_HOST_LABEL test in audit_scope never saw them, and a whole-host grant that covers
+    # the panel host (an ordinary, delegable grant) read every one. A row about a game server on
+    # that host still matches through game_server_id. Same test as get_host_remote.
+    remote_ids = accessible_remote_ids(user) - _r20c_local_host_ids()
     about = []
     if server_ids:
         about.append(AuditLog.game_server_id.in_(sorted(server_ids)))
     if remote_ids:
         about.append(AuditLog.remote_id.in_(sorted(remote_ids)))
     return about
+
+
+def _r20c_local_host_ids():
+    """The ids of the rows that are the panel's own machine (is_local, or the local transport)."""
+    return {rid for (rid,) in db.session.query(RemoteServer.id).filter(
+        or_(RemoteServer.is_local.is_(True), RemoteServer.auth_method == "local"))}
 
 
 def register(app):

@@ -31,7 +31,8 @@ import types as _types76
 
 import app as _app76
 from unit.part01 import check
-from unit.part12 import P9_HOST, _p9, _p9_delete_server, _p9_new_server, _p9_row, _p9_set
+from unit.part12 import (P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_delete_server, _p9_new_server, _p9_row,
+                         _p9_set)
 from unit.part20 import _patch, _patched
 from panel.core import i18n as _i18n76
 from panel.ops import system_ops as _so76
@@ -48,6 +49,15 @@ from panel.services import reboot_words as _rw76
 
 NS = _types76.SimpleNamespace
 _TMP76 = _os76.path.realpath(_tf76.mkdtemp(prefix="lgsm-unit-p76-"))
+# part12's transport tripwire is armed first in every block below (review 1013a: this was the one
+# part since part49 that drove part12's app with none, and _node_tools_cron_pass swallows what it
+# raises), so a host call a block did not stub is named by the check at the end of the part.
+_TRIP76_START = len(_P9_TRIPPED)
+
+
+def _arm76():
+    """Arm the tripwire with part20's _patch: undone when the enclosing _patched() block ends."""
+    _p9_arm(_patch, "part76")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -115,6 +125,7 @@ check("live metrics: on a German-locale host the host and game samplers still re
       repr((_ram76["ram_total"], _gram76["ram_total"])))
 
 with _patched():
+    _arm76()
     _patch(_smc76, "run_command", _bash_on76)
     _up76 = _smh76.remote_uptime(NS(id=-76), force=True)
     _specs76 = _smf76._compute_host_specs(NS(id=-76))
@@ -130,10 +141,12 @@ check("host specs: the CPU model and its max clock are read from lscpu on a Germ
 
 # A privileged verb rendered as shell: on a remote, and on the panel host before its helper exists.
 with _patched():
+    _arm76()
     _patch(_smc76, "is_local_server", lambda s: False)
     _patch(_smc76, "run_command", _bash_on76)
     _rem_ufw76 = _smc76.run_privileged(NS(id=-76, name="p76"), "ufw-status", ["verbose"])
 with _patched():
+    _arm76()
     _patch(_smc76, "is_local_server", lambda s: True)
     _patch(_smc76, "helper_present", lambda recheck=False: False)
     _patch(_smc76, "_run_local", _bash76)
@@ -149,9 +162,11 @@ check("privileged verbs: `ufw status` rendered as shell runs in C.UTF-8 as the h
 # sudo that switches to a just-created game account during an install.
 _osu_cmds76 = []
 with _patched():
+    _arm76()
     _patch(_so76, "_run", lambda cmd, *a, **k: _osu_cmds76.append(cmd) or _bash76(cmd))
     _osu_local76 = _so76.os_update_available(refresh=False)
 with _patched():
+    _arm76()
     _patch(_smc76, "run_privileged", lambda *a, **k: ("", "", 0))
     _patch(_smc76, "run_command", _bash_on76)
     _osu_remote76 = _smh76.remote_os_check_updates(NS(id=-76, name="p76"))
@@ -168,6 +183,7 @@ check("OS updates: on a German host `apt list --upgradable` is read with each pa
 _sudo_log76 = _os76.path.join(_TMP76, "sudo.log")
 _inst_fail76 = []
 with _patched():
+    _arm76()
     _patch(_smc76, "run_command", _bash_on76)
     _patch(_ms76, "time", NS(sleep=lambda _s: None, time=_ms76.time.time))
     _inst_ok76 = _ms76._install_linuxgsm(
@@ -189,6 +205,7 @@ try:
     _p9_set(_rc_sid76, install_error="Step 4: p76 failed", install_error_i18n='{"t": "x"}',
             install_retryable=False)
     with _patched():
+        _arm76()
         _patch(_sh76, "_looks_installed", lambda app, remote, short, lgsm: True)
         _patch(_sh76, "_notify_servers_changed", lambda app: None)
         _patch(_app76, "still_held", lambda gs: True)
@@ -231,6 +248,7 @@ def _held76(ticks):
     d = {"restore": "pending", "owner": "panel", "stop": "stopped"}
     finished = []
     with _patched():
+        _arm76()
         _patch(_hr76, "_scope_ready", lambda remote, row, now: True)
         _patch(_hr76, "_set_rr", lambda g, row: None)
         _patch(_hr76, "_finish", lambda remote, recs, now, rb: finished.append(now))
@@ -266,6 +284,7 @@ check("reboot: ...while a start that went ahead (here, an attempt that failed) e
 def _ts_link76(write_rc):
     writes, warned = [], []
     with _patched():
+        _arm76()
         _patch(_smc76, "write_root_file",
                lambda server, name, body, timeout=15: writes.append((name, body)) or ("", "nope", write_rc))
         _patch(_smc76, "run_privileged",
@@ -295,6 +314,7 @@ _cp_sid76 = _p9_new_server(P9_HOST, "p76cron", "csgo", 27977)
 _cp_upgraded76, _gp_upgraded76 = [], []
 try:
     with _patched():
+        _arm76()
         _patch(_app76, "ensure_node_tools_cron", lambda r: None)
         _patch(_sh76, "game_account_write_refusal",
                lambda remote, user, **k: _i18n76.Sentence("refused") if user == "p76cron" else None)
@@ -313,8 +333,10 @@ check("cron: the daily node-tools pass does not rewrite the crontab of an accoun
       "writes (the host's sudo login), as the Scheduled Tasks page's own upgrade does not; others "
       "it still upgrades",
       "p76cron" not in _cp_upgraded76 and len(_cp_upgraded76) >= 1, repr(_cp_upgraded76))
+# The refused one now says so in its audit note (review 1013a) rather than returning "".
 check("cron: ...nor does the port resync's re-point, which still re-points a cleared account",
-      _gp_upgraded76 == ["p76ok"] and _gp_refused76 == "" and "27978" in _gp_allowed76,
+      _gp_upgraded76 == ["p76ok"] and "was not pointed at port 27978 (refused)" in _gp_refused76
+      and "27978" in _gp_allowed76,
       repr((_gp_upgraded76, _gp_refused76, _gp_allowed76)))
 
 
@@ -332,6 +354,7 @@ def _write76(path, body):
 
 
 with _patched():
+    _arm76()
     _patch(_so76, "panel_fail2ban_status", lambda: {"installed": True})
     _patch(_so76, "_F2B_PANEL_WHITELIST", _f2b_file76)
     _patch(_so76, "_write_root_file", _write76)
@@ -370,6 +393,7 @@ class _Client76:
 
 
 with _patched():
+    _arm76()
     _patch(_smc76, "get_connection", lambda server: _Client76())
     try:
         _smc76._run_via_paramiko(NS(id=-76, sudo_enabled=False), "true", 10, False, "p76 secret")
@@ -383,6 +407,7 @@ check("ssh: an exec whose stdin write fails closes its channel (it stayed open o
 _INF76 = float("inf")
 _inf_seen76 = []
 with _patched():
+    _arm76()
     _patch(_smc76, "run_command", lambda server, cmd, **k: _inf_seen76.append(cmd) or ("", "", 0))
     _patch(_smg76, "_gamedig_player_list", lambda *a: "p76-fallback")
     try:
@@ -399,3 +424,6 @@ check("ports: a REAL-infinity port row is 'no port' to the live sampler, the map
       and _inf_seen76 and "PORT" not in _inf_seen76[0], repr((_inf_err76, _inf_seen76[:1])))
 
 _shutil76.rmtree(_TMP76, ignore_errors=True)
+
+check("part76: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP76_START, repr(_P9_TRIPPED[_TRIP76_START:][:6]))

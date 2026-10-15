@@ -701,7 +701,9 @@ class GameServer(db.Model):
     # status="failed" on its own is a dead end: the row says Failed, the reason lived in memory
     # until the panel restarted, and there was nothing on screen to act on. Cleared the moment an
     # install succeeds. install_retryable is False only for a cause nothing about trying again
-    # changes — today that is a game LinuxGSM caps at an older Ubuntu than the host runs. (An
+    # changes — a game LinuxGSM caps at an older Ubuntu than the host runs, an instance or script
+    # name no account may have, or a first install's account name taken on the host (see
+    # manage_servers.retry_install). (An
     # earlier version listed "no Linux build for this platform" here; that diagnosis was wrong —
     # it is a SteamCMD bug the install now works around itself. See INSTALL_FAILURE_FINAL.)
     install_error = db.Column(db.Text, default="")

@@ -20,7 +20,7 @@ from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _
                                    canonical_ip, ip_address_or_none)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
-from panel.routes._shared import (_whitelist_mutate)
+from panel.routes._shared import (_r20b_audit_on_raise, _whitelist_mutate)
 from panel.ops import ssh_manager as _sm
 from panel.security import banlist as _banlist
 import ipaddress as _ipaddress
@@ -138,12 +138,14 @@ def _register_blocking(app):
             return jsonify({"success": False, "message":
                             i18n.tr("{ip} is on the security whitelist — "
                                     "remove it there first to block it.", ip=ip)})
+        # The address, never the request's text: the row records what was acted on.
+        act, shown = ("ufw_unblock" if unblock else "ufw_block"), canonical_ip(ip) or NOT_AN_IP
         try:
-            ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
-            # The address, never the request's text: the row records what was acted on.
-            log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
-                       target=canonical_ip(ip) or NOT_AN_IP, detail=remote.name, success=ok,
-                       remote=remote)
+            with _r20b_audit_on_raise(act, detail=remote.name, target=shown, remote=remote):
+                ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
+            # The action spelled out: the audit-ids gate reads it from this call.
+            log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=shown,
+                       detail=remote.name, success=ok, remote=remote)
             _follow_in_panel_gate(remote, ok)
             return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
@@ -197,7 +199,9 @@ def _register_whitelist_and_log(app):
         d = _json_body()
         jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
-            ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
+            with _r20b_audit_on_raise("fail2ban_unban", detail="%s on %s" % (jail, remote.name),
+                                      target=canonical_ip(banned_ip) or NOT_AN_IP, remote=remote):
+                ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
             _follow_in_panel_gate(remote, ok)
             log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
                        detail="%s on %s — %s" % (jail, remote.name, msg), success=ok,

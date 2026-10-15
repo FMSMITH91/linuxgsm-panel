@@ -920,15 +920,16 @@ def remote_ufw_status(server):
 # lines. POSIX-sh compatible (no sudo needed — everything read here is world-readable),
 # with fallbacks so it works on x86 servers and ARM SBCs (Raspberry Pi) alike.
 # lscpu in the C locale: its "Model name:" and "CPU max MHz:" labels are translated, and the clock
-# was blank on a German host.
+# was blank on a German host. The RAM awk and df too: mawk (Ubuntu's default awk) and df print a
+# number in the host's decimal comma, and the card read "7,6 GB" in an English page.
 _SPECS_CMD = (
     r'''OS=$(. /etc/os-release 2>/dev/null; printf '%s' "$PRETTY_NAME"); '''
     r'''CPU=$(LC_ALL=C lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -1); '''
     r'''[ -z "$CPU" ] && CPU=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1); '''
     r'''[ -z "$CPU" ] && CPU=$(sed -n 's/^Model[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1); '''
     r'''MAXMHZ=$(LC_ALL=C lscpu 2>/dev/null | sed -n 's/^CPU max MHz:[[:space:]]*//p' | head -1); '''
-    r'''MEM=$(awk '/MemTotal/{printf "%.1f", $2/1048576}' /proc/meminfo); '''
-    r'''DISK=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}'); '''
+    r'''MEM=$(LC_ALL=C awk '/MemTotal/{printf "%.1f", $2/1048576}' /proc/meminfo); '''
+    r'''DISK=$(LC_ALL=C df -hP / 2>/dev/null | awk 'NR==2{print $2}'); '''
     r'''VIRT=$(systemd-detect-virt 2>/dev/null || true); '''
     r'''printf 'OS\t%s\nKERNEL\t%s\nARCH\t%s\nHOST\t%s\nCPU\t%s\nCORES\t%s\nMAXMHZ\t%s\nMEM\t%s\nDISK\t%s\nVIRT\t%s\n' '''
     r'''"$OS" "$(uname -r)" "$(uname -m)" "$(hostname)" "$CPU" "$(nproc)" "$MAXMHZ" "$MEM" "$DISK" "$VIRT"'''

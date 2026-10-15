@@ -28,7 +28,7 @@ import subprocess as _sp26  # nosec B404 - runs bash and this interpreter on the
 import sys
 import tempfile as _tf26
 
-from unit.part01 import check
+from unit.part01 import _R20dOver, check
 from unit.part05 import _root
 from unit.part14 import _wf14, _wf14_code, _wf14_run
 
@@ -36,6 +36,9 @@ _CSA26_PATH = os.path.join(_root, ".github", "scripts", "code_scanning_analyses.
 _spec26 = _ilu26.spec_from_file_location("code_scanning_analyses_p26", _CSA26_PATH)
 CSA = _ilu26.module_from_spec(_spec26)
 _spec26.loader.exec_module(CSA)
+# CSA's own handle on subprocess, swapped whole below: setting CSA.subprocess.run replaced
+# subprocess.run for the whole process (review 1013a).
+_CSA_SP26 = CSA.subprocess
 
 _cq26 = _wf14("codeql.yml")
 _cqa26 = _wf14("codeql-alerts.yml")
@@ -462,12 +465,12 @@ _val26 = [CSA.valid("FMSMITH91/linuxgsm-panel", "refs/pull/391/merge", "a" * 40)
           CSA.valid("x/y", "refs/heads/feature", "a" * 40),
           CSA.safe_ref("refs/pull/007/merge") == "refs/pull/7/merge"]
 _ref26 = []
-_saved_run26 = CSA.subprocess.run
+_saved_run26 = CSA.subprocess
 try:
-    CSA.subprocess.run = lambda argv, **_k: _ref26.append(list(argv))
+    CSA.subprocess = _R20dOver(_CSA_SP26, run=lambda argv, **_k: _ref26.append(list(argv)))
     _refused26 = CSA.read_rows("x/y", "-X POST")
 finally:
-    CSA.subprocess.run = _saved_run26
+    CSA.subprocess = _saved_run26
 check("code-scanning gates: only a PR merge ref or main, rebuilt from validated parts, reaches gh; "
       "any other ref, repository or sha is refused before gh runs (Sonar S8705), and gh's options "
       "end at '--'",
@@ -484,7 +487,7 @@ check("code-scanning gates: only a PR merge ref or main, rebuilt from validated 
 # upload now checks main's head first, and the gate answers MOVED for the run that skipped.
 _X26, _Y26 = "1" * 40, "2" * 40
 _mh_calls26, _mh_rows26 = [], []
-_saved_csa26 = (CSA.subprocess.run, CSA.read_rows)
+_saved_csa26 = (CSA.subprocess, CSA.read_rows)
 _saved_repo26 = os.environ.get("GITHUB_REPOSITORY")
 
 
@@ -510,7 +513,7 @@ def _mh_gh26(head, compare=None):
 def _mh_main26(head, compare=None):
     """main() for a scheduled run of X on main; -> (exit status, the refs it read analyses of)."""
     del _mh_rows26[:]
-    CSA.subprocess.run = _mh_gh26(head, compare)
+    CSA.subprocess = _R20dOver(_CSA_SP26, run=_mh_gh26(head, compare))
     rc = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
                    "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
     return rc, list(_mh_rows26)
@@ -534,7 +537,7 @@ try:
     _mh_renamed26 = _mh_main26(_Y26, {"status": "ahead", "files": [
         {"filename": "docs/app.md", "previous_filename": "app.py"}]})
 finally:
-    CSA.subprocess.run, CSA.read_rows = _saved_csa26
+    CSA.subprocess, CSA.read_rows = _saved_csa26
     if _saved_repo26 is None:
         os.environ.pop("GITHUB_REPOSITORY", None)
     else:
@@ -566,14 +569,14 @@ _sh_out26 = os.path.join(_tf26.mkdtemp(prefix="lgsm-unit-p26-"), "out")
 
 def _still26(head, compare=None):
     open(_sh_out26, "w").close()
-    _saved = (CSA.subprocess.run, os.environ.get("GITHUB_OUTPUT"), os.environ.get("GITHUB_REPOSITORY"))
+    _saved = (CSA.subprocess, os.environ.get("GITHUB_OUTPUT"), os.environ.get("GITHUB_REPOSITORY"))
     try:
         os.environ["GITHUB_OUTPUT"], os.environ["GITHUB_REPOSITORY"] = _sh_out26, "o/r"
-        CSA.subprocess.run = _mh_gh26(head, compare)
+        CSA.subprocess = _R20dOver(_CSA_SP26, run=_mh_gh26(head, compare))
         with _ctx26.redirect_stdout(_io26.StringIO()):
             CSA.still_head_main(["--sha", _X26])
     finally:
-        CSA.subprocess.run = _saved[0]
+        CSA.subprocess = _saved[0]
         for _k, _v in (("GITHUB_OUTPUT", _saved[1]), ("GITHUB_REPOSITORY", _saved[2])):
             if _v is None:
                 os.environ.pop(_k, None)

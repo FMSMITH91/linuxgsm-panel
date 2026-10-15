@@ -1,0 +1,7 @@
+{
+  "{n} days": "{n} días",
+  "By default, each server is backed up every {n} days.": "Por defecto, cada servidor se copia cada {n} días.",
+  "The panel is running on this host": "El panel se ejecuta en este host",
+  "The panel's last check of this host failed": "La última comprobación del panel sobre este host falló",
+  "The panel's last check of this host failed — the servers below show their last known state": "La última comprobación del panel sobre este host falló — los servidores de abajo muestran su último estado conocido"
+}

@@ -164,8 +164,8 @@ def _send_failures77(client, sid):
     check("live console send box: a refused sudo is answered with the host's own reason, in the "
           "viewer's language (it said \"Console (tmux) not accessible. Is the server running?\" for "
           "every failure, in English); no tmux session still says the server isn't running",
-          fr.status_code == 502 and _p9_json(fr).get("error") == want_fr
-          and off.status_code == 502 and _p9_json(off).get("error")
+          fr.status_code == 200 and _p9_json(fr).get("error") == want_fr
+          and off.status_code == 200 and _p9_json(off).get("error")
           == "That server isn't running, so there's no console session to send to.",
           repr((fr.status_code, _p9_json(fr), off.status_code, _p9_json(off))))
 

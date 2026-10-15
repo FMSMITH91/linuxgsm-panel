@@ -3423,7 +3423,7 @@ try:
         _wire.append(c), (_FakeStd(), _FakeStd(), _FakeStd()))[1])
     _sm_core.run_command(_LgsmSrv(), "ufw --force enable", sudo=True)
     check("_core: a remote's linuxgsm_user no longer demotes a privileged command",
-          _wire and _wire[-1].startswith("sudo bash -c ") and "sudo -u" not in _wire[-1],
+          _wire and _wire[-1].startswith(_sm_core._R20A_SUDO_C + "sudo bash -c ") and "sudo -u" not in _wire[-1],
           str(_wire[-1:]))
     _wire.clear()
     _sm_core.run_command(_LgsmSrv(), "whoami", sudo=False)

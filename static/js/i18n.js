@@ -207,6 +207,21 @@ window.tfn = function(n, one, many, vals){
     try { document.documentElement.lang = lang; } catch(e){}
     startObserver();
     run(document.body);
+    // What the server or a script rendered with t() where the walk cannot reach it — a tooltip on a
+    // data-no-i18n chip or a <code>, a <pre>'s placeholder — names its English key in
+    // data-i18n-title / data-i18n-text, and is rendered again here: it stayed in the old language
+    // after a live switch until the page was reloaded. A script that writes other text there
+    // removes the attribute (loadSecurityLog does), so a later switch never overwrites it.
+    try {
+      document.querySelectorAll('[data-i18n-title]').forEach(function(el){
+        el.setAttribute('title', window.t(el.getAttribute('data-i18n-title')));
+      });
+      // data-i18n-vars: the {name} values, as JSON, for a template filled with tf.
+      document.querySelectorAll('[data-i18n-text]').forEach(function(el){
+        var key = el.getAttribute('data-i18n-text'), vars = el.getAttribute('data-i18n-vars');
+        el.textContent = vars ? window.tf(key, JSON.parse(vars)) : window.t(key);
+      });
+    } catch(e){}
   };
   function boot(){
     if (window.LANG !== 'en' && window.I18N){ startObserver(); run(document.body); }

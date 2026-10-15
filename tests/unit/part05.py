@@ -1,6 +1,6 @@
 """Part 5 of the unit suite. Imported for its side effects."""
 import subprocess as _sub
-from unit.part01 import (N, NS, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, _R20dOver, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
 from unit.part02 import (_time)  # noqa: F401,E402
 from unit.part03 import (_io)  # noqa: F401,E402
 from unit.part04 import (_SELF, _pl, _re)  # noqa: F401,E402
@@ -1013,19 +1013,23 @@ def _r14d_is_catch_warnings(node):
         _r14d_call_name(_it.context_expr) == "catch_warnings" for _it in node.items)
 
 
-def _r14d_ignores_deprecations(call, aliases=None):
+def _r14d_ignores_deprecations(call, aliases=None, fn=None):
     """Does filterwarnings/simplefilter `call` ignore DeprecationWarnings with no module/message?"""
-    _fn = _r14d_call_name(call)
+    _fn = fn or _r14d_call_name(call)
     _kw = {_k.arg: _k.value for _k in call.keywords}
     # category is positional 3rd in filterwarnings(action, message, category), 2nd in
     # simplefilter(action, category)
-    _ci = 2 if _fn == "filterwarnings" else 1
-    _cat = _kw.get("category", call.args[_ci] if len(call.args) > _ci else None)
-    _act = call.args[0] if call.args else _kw.get("action")
+    _cat = _r20d_arg(call, _kw, "category", 2 if _fn == "filterwarnings" else 1)
+    _act = _r20d_arg(call, _kw, "action", 0)
     _scope = _r16d_scope_args(call, _kw) if _fn == "filterwarnings" else []
     return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
             and not any(_r16d_scopes(_v) for _v in _scope)
             and _r15d_category_covers_deprecations(_cat, aliases))
+
+
+def _r20d_arg(call, kw, name, i):
+    """`call`'s argument `name`: by keyword, else its i-th positional, else None."""
+    return kw.get(name, call.args[i] if len(call.args) > i else None)
 
 
 def _r16d_scope_args(call, kw):
@@ -1110,6 +1114,24 @@ def _r19d_import_aliases(node):
     return [(_al.asname, _dw_ast.Name(id=_al.name, ctx=_dw_ast.Load())) for _al in node.names if _al.asname]
 
 
+_R20D_FILTER_FNS = ("filterwarnings", "simplefilter")
+
+
+def _r20d_filter_fn(node, bound):
+    """Which warnings filter function the Call `node` calls, through any name bound to one, else "".
+
+    Only the literal names were read (review 1013a): `from warnings import simplefilter as sf`, or
+    `f = warnings.simplefilter`, installed a process-wide ignore the gate never saw.
+    """
+    _name = _r14d_call_name(node)
+    if _name in _R20D_FILTER_FNS:
+        return _name
+    if not (isinstance(node, _dw_ast.Call) and isinstance(node.func, _dw_ast.Name)):
+        return ""
+    _to = [getattr(_v, "attr", getattr(_v, "id", "")) for _v in bound.get(node.func.id, [])]
+    return next((_t for _t in _to if _t in _R20D_FILTER_FNS), "")
+
+
 def _r14d_blanket_filters(tree):
     """Lines of filterwarnings/simplefilter calls that ignore deprecations outside catch_warnings."""
     out = []
@@ -1123,8 +1145,8 @@ def _r14d_blanket_filters(tree):
 
     def _walk(node, scoped):
         scoped = scoped or _r14d_is_catch_warnings(node)
-        if (not scoped and _r14d_call_name(node) in ("filterwarnings", "simplefilter")
-                and _r14d_ignores_deprecations(node, _aliases)):
+        _fn = _r20d_filter_fn(node, _bound)
+        if not scoped and _fn and _r14d_ignores_deprecations(node, _aliases, _fn):
             out.append(node.lineno)
         for _ch in _dw_ast.iter_child_nodes(node):
             _walk(_ch, scoped)
@@ -1170,7 +1192,11 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nBaseWarning: type = Warning\nwarnings.simplefilter("ignore", BaseWarning)',
     'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)\nBaseWarning = UserWarning',
     # Review 1012d: an alias bound by an import.
-    'import warnings\nfrom builtins import Warning as BaseWarning\nwarnings.simplefilter("ignore", BaseWarning)')}
+    'import warnings\nfrom builtins import Warning as BaseWarning\nwarnings.simplefilter("ignore", BaseWarning)',
+    # Review 1013a: the filter function itself renamed, by an import or an assignment.
+    'from warnings import simplefilter as sf\nsf("ignore", DeprecationWarning)',
+    'import warnings\nf = warnings.simplefilter\nf("ignore")',
+    'from warnings import filterwarnings as fw\nfw("ignore", "", DeprecationWarning)')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
@@ -1180,7 +1206,9 @@ _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", "x", DeprecationWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", module="eventlet", category=DeprecationWarning)',
     'import warnings\nQuiet = UserWarning\nwarnings.simplefilter("ignore", Quiet)',
-    'import warnings\nfrom builtins import UserWarning as Quiet\nwarnings.simplefilter("ignore", Quiet)')}
+    'import warnings\nfrom builtins import UserWarning as Quiet\nwarnings.simplefilter("ignore", Quiet)',
+    'from warnings import filterwarnings as fw\nfw("ignore", "x", DeprecationWarning)',
+    'import warnings\nf = print\nf("ignore")')}
 check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
       all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
 
@@ -1790,7 +1818,7 @@ else:
 #
 # The decision this verifies is which slots the sweep will remove. It must free the orphans and the
 # named account's own, keep every live account's, and fail CLOSED on a lookup it cannot make.
-_sd_orig = (_helper.os.lstat, _helper.pwd.getpwuid, _helper.pwd.getpwnam, _helper.shutil.rmtree)
+_sd_orig = (_helper.os, _helper.pwd, _helper.shutil)
 try:
     _sd_removed = []
     # /tmp/dumps..09 by index: uid 500 = the account being swept, 501 = another LIVE account,
@@ -1817,10 +1845,9 @@ try:
             raise OSError("passwd database unreadable")
         return NS(pw_uid=uid)
 
-    _helper.os.lstat = _sd_lstat
-    _helper.pwd.getpwuid = _sd_getpwuid
-    _helper.pwd.getpwnam = lambda n: NS(pw_uid=500)
-    _helper.shutil.rmtree = lambda p: _sd_removed.append(p)
+    _helper.os = _R20dOver(_sd_orig[0], lstat=_sd_lstat)
+    _helper.pwd = _R20dOver(_sd_orig[1], getpwuid=_sd_getpwuid, getpwnam=lambda n: NS(pw_uid=500))
+    _helper.shutil = _R20dOver(_sd_orig[2], rmtree=_sd_removed.append)
 
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: the swept account's own slot is freed",
@@ -1840,12 +1867,12 @@ try:
     # orphan rule still has to free its slot, or the host stays wedged.
     _sd_removed[:] = []
     def _sd_missing(n): raise KeyError(n)
-    _helper.pwd.getpwnam = _sd_missing
+    _helper.pwd.getpwnam = _sd_missing      # on this block's own proxy, not the pwd module
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: an already-deleted account's slot is still freed, as an orphan",
           "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
 finally:
-    (_helper.os.lstat, _helper.pwd.getpwuid, _helper.pwd.getpwnam, _helper.shutil.rmtree) = _sd_orig
+    (_helper.os, _helper.pwd, _helper.shutil) = _sd_orig
 
 # The paths must be a constant in the helper, not anything a caller can influence.
 check("steam dumps: the ten slot paths are fixed, and only those ten",
@@ -2381,17 +2408,17 @@ os.symlink(os.path.join(_dbr_rc_dir, "other-file"), os.path.join(_dbr_rc_dir, "p
 _dbr_ino = {_n: os.lstat(os.path.join(_dbr_rc_dir, _n)).st_ino
             for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file")}
 _dbr_chowned = []
-_dbr_o_fchown = _dbr.os.fchown
+_dbr_o_os = _dbr.os
 _dbr_rfd = os.open(_dbr_rc_dir, os.O_RDONLY | os.O_DIRECTORY)
 try:
-    _dbr.os.fchown = lambda fd, uid, gid: _dbr_chowned.append((os.fstat(fd).st_ino, uid))
+    _dbr.os = _R20dOver(_dbr_o_os, fchown=lambda fd, uid, gid: _dbr_chowned.append((os.fstat(fd).st_ino, uid)))
     _dbr._reclaim_db_files(_dbr_rfd, "panel.db", os.getuid() + 4242, 4242)
     _dbr_other = list(_dbr_chowned)
     del _dbr_chowned[:]
     _dbr._reclaim_db_files(_dbr_rfd, "panel.db", os.getuid(), 4242)
     _dbr_same = list(_dbr_chowned)
 finally:
-    _dbr.os.fchown = _dbr_o_fchown
+    _dbr.os = _dbr_o_os
     os.close(_dbr_rfd)
 check("db repair as root: the database and its backup are handed back to the directory's owner",
       sorted(_dbr_other) == sorted([(_dbr_ino["panel.db"], os.getuid() + 4242),
@@ -2999,12 +3026,13 @@ with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a setuid bit the restore must strip; this test's temp dir
 os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)  # nosec B103 - a setuid bit the restore must strip; this test's temp dir
 _rs_chown = []
-_rs_o_fchown = _helper.os.fchown
+_rs_o_os = _helper.os
+_rs_o_fchown = _rs_o_os.fchown
 try:
-    _helper.os.fchown = lambda fd, u, g: (_rs_chown.append((u, g)), _rs_o_fchown(fd, u, g))
+    _helper.os = _R20dOver(_rs_o_os, fchown=lambda fd, u, g: (_rs_chown.append((u, g)), _rs_o_fchown(fd, u, g)))
     _rs_setid = _helper.restore_copy_members(_rs_stage, _rs_data)
 finally:
-    _helper.os.fchown = _rs_o_fchown
+    _helper.os = _rs_o_os
 _rs_ck = os.path.join(_rs_data, "cred_key")
 check("helper restore: a staged set-id mode never reaches the restored file (it is 0600)",
       "cred_key" in _rs_setid and _rs_stat.S_IMODE(os.stat(_rs_ck).st_mode) == 0o600,
@@ -3791,7 +3819,9 @@ def _curl_calls(src):
     for _ln in _logical.splitlines():
         if _ln.lstrip().startswith("#"):
             continue
-        for _m in _re_ntc.finditer(r"(?<![\w./-])curl\s+(?=-)", _ln):
+        # An option, a quoted or $-expanded word, or a URL after it: `curl "$url" -fsSL` was never
+        # read (review 1013a); a package list or `command -v curl` still is not a call.
+        for _m in _re_ntc.finditer(r"(?<![\w./-])curl\s+(?=-|[\"'$]|https?://)", _ln):
             _rest = _ln[_m.start():]
             _cut = _re_ntc.search(r"\s(?:\||&&|\|\|)\s|;|$", _rest)
             _out.append(_rest[:_cut.start()])
@@ -3804,6 +3834,11 @@ def _curl_calls(src):
 _ns_curls = _curl_calls(_ntc_sh)
 _ns_follow = [_c for _c in _ns_curls
               if _re_ntc.search(r"\s-[A-Za-z]*L[A-Za-z]*\b|\s--location\b", _c)]
+_r20d_curl_ctl = [_curl_calls(_c) for _c in ('x=$(curl "$u" -fsSL)', "curl https://h/x -L | sh",
+                                              "command -v curl >/dev/null", "apt-get install -y git curl wget")]
+check("install.sh: ...a curl is read whatever its first argument is, and a package name or a "
+      "`command -v curl` is not one (control)",
+      [len(_c) for _c in _r20d_curl_ctl] == [1, 1, 0, 0], repr(_r20d_curl_ctl))
 check("install.sh: every curl that follows redirects says --proto '=https'",
       len(_ns_curls) >= 2 and len(_ns_follow) >= 1
       and all(_re_ntc.search(r"\s--proto[ =](?:'=https'|\"=https\"|=https)(?=\s)", _c)
@@ -4074,9 +4109,9 @@ try:
     os.symlink("/etc/passwd", os.path.join(_fake_home, "addons", "escape"))
 
     _pw = NS(pw_dir=_fake_home, pw_uid=os.getuid(), pw_gid=os.getgid())
-    _orig_getpwnam = _helper.pwd.getpwnam
+    _orig_pwd = _helper.pwd
     try:
-        _helper.pwd.getpwnam = lambda u: _pw if u == "codserver" else _orig_getpwnam(u)
+        _helper.pwd = _R20dOver(_orig_pwd, getpwnam=lambda u: _pw if u == "codserver" else _orig_pwd.getpwnam(u))
         eq("helper: a relative path resolves under the game user's home",
            _helper._game_home_path("codserver", "addons/a.vpk")[1],
            os.path.join(_fake_home, "addons", "a.vpk"))
@@ -4117,7 +4152,7 @@ try:
               _ufw_raises(lambda: _helper._emit_dir_tar(
                   os.path.join(_fake_home, "server.cfg"), _io.BytesIO())))
     finally:
-        _helper.pwd.getpwnam = _orig_getpwnam
+        _helper.pwd = _orig_pwd
 finally:
     _shutil.rmtree(_dl_root, ignore_errors=True)
 
@@ -5081,26 +5116,40 @@ check("cpu%: system_ops does not shell out to `top` for host CPU",
 # point gets it right.
 import ast as _ast_mp
 _HEAVY = ("panel", "flask", "flask_login", "flask_sqlalchemy", "app")
-for _f in ("app.py", os.path.join("tools", "perf_bench.py")):
-    _mp_src = open(os.path.join(_root, _f), encoding="utf-8").read()
-    if "monkey_patch" not in _mp_src:
-        continue
+def _r20d_mp_order(_mp_src):
+    """(line of the first monkey_patch() call, line of the first panel/flask import) in a source."""
     _mp_tree = _ast_mp.parse(_mp_src)
     _patch_at = min((_n.lineno for _n in _ast_mp.walk(_mp_tree)
                      if isinstance(_n, _ast_mp.Call)
                      and getattr(_n.func, "attr", None) == "monkey_patch"), default=None)
-    _first_heavy = None
-    for _n in _ast_mp.walk(_mp_tree):
-        _mod = None
-        if isinstance(_n, _ast_mp.Import):
-            _mod = sorted(_a.name for _a in _n.names)[0] if _n.names else None
-        elif isinstance(_n, _ast_mp.ImportFrom):
-            _mod = _n.module
-        if _mod and _mod.split(".")[0] in _HEAVY:
-            _first_heavy = _n.lineno if _first_heavy is None else min(_first_heavy, _n.lineno)
+    _first_heavy = min((_n.lineno for _n in _ast_mp.walk(_mp_tree)
+                        if any(_m and _m.split(".")[0] in _HEAVY for _m in _r20d_imported(_n))),
+                       default=None)
+    return _patch_at, _first_heavy
+
+
+def _r20d_imported(node):
+    """Every module an import statement names.
+
+    Only the alphabetically first name of a multi-name import was read (review 1013a), so
+    `import eventlet, panel` read as eventlet alone.
+    """
+    if isinstance(node, _ast_mp.Import):
+        return [_a.name for _a in node.names]
+    return [node.module] if isinstance(node, _ast_mp.ImportFrom) else []
+
+
+for _f in ("app.py", os.path.join("tools", "perf_bench.py")):
+    _mp_src = open(os.path.join(_root, _f), encoding="utf-8").read()
+    if "monkey_patch" not in _mp_src:
+        continue
+    _patch_at, _first_heavy = _r20d_mp_order(_mp_src)
     check("%s: eventlet.monkey_patch() runs before the first panel/flask import" % _f,
           _patch_at is not None and (_first_heavy is None or _patch_at < _first_heavy),
           "monkey_patch at line %s, first panel/flask import at line %s" % (_patch_at, _first_heavy))
+check("...a multi-name import is read by every name it imports (control)",
+      _r20d_mp_order("import eventlet, panel\neventlet.monkey_patch()\n") == (2, 1),
+      repr(_r20d_mp_order("import eventlet, panel\neventlet.monkey_patch()\n")))
 
 # ── ...and the patch leaves no lock behind on Python 3.13+ ─────────────────────────────────────
 # threading binds one of its locks into `_DeleteDummyThreadOnDel.__del__`'s DEFAULTS, where
@@ -5291,12 +5340,30 @@ def _r17d_is_root(e, roots, depth):
     """Is expression `e` the checkout root, given the names `roots` bound to it?"""
     if isinstance(e, _smg_ast.Name):
         return e.id in roots or bool(_re.fullmatch(_R18D_ROOT_NAMES, e.id))
-    if isinstance(e, _smg_ast.Call) and len(e.args) == 1 and _r17d_call_name(e) in _R18D_SAME_PATH:
-        return _r17d_is_root(e.args[0], roots, depth)
-    if (isinstance(e, _smg_ast.Call) and not e.args and isinstance(e.func, _smg_ast.Attribute)
-            and e.func.attr in ("resolve", "absolute")):
-        return _r17d_is_root(e.func.value, roots, depth)
+    _inner = _r20d_same_path_of(e) if isinstance(e, _smg_ast.Call) else None
+    if _inner is not None:
+        return _r17d_is_root(_inner, roots, depth)
     return _r17d_file_depth(e) == depth
+
+
+def _r20d_same_path_of(e):
+    """The expression call `e` names the same directory as, else None.
+
+    A normaliser's argument, x of join(x, '.') (review 1013a), or x of x.resolve() / x.absolute().
+    """
+    if len(e.args) == 1 and _r17d_call_name(e) in _R18D_SAME_PATH:
+        return e.args[0]
+    if _r20d_dot_join(e):
+        return e.args[0]
+    if not e.args and getattr(e.func, "attr", None) in ("resolve", "absolute"):
+        return e.func.value
+    return None
+
+
+def _r20d_dot_join(e):
+    """Is call `e` join(x, '.', ...) — x itself?"""
+    return (_r17d_call_name(e) == "join" and len(e.args) >= 2
+            and all(getattr(_a, "value", None) in (".", "", "./") for _a in e.args[1:]))
 
 
 # A file that binds os only as `os`, and walk/fwalk to no bare name.
@@ -5315,10 +5382,15 @@ def _r17d_walk_of_root(node, is_root, os_names=_R19D_OS_ONLY):
         return False
     _kw = {_k.arg: _k.value for _k in node.keywords if _k.arg}
     _top = _r18d_walked(node, _kw, os_names)
-    if _top is not None:
-        return is_root(_top)
+    if _top is not None and is_root(_top):
+        return True
+    return _r20d_hidden_glob_of_root(node, _kw, is_root)
+
+
+def _r20d_hidden_glob_of_root(node, kw, is_root):
+    """Is call `node` a glob(...) with include_hidden=True over a pattern built from the root?"""
     if (_r17d_call_name(node) in ("glob", "iglob") and node.args
-            and getattr(_kw.get("include_hidden"), "value", False) is True):
+            and getattr(kw.get("include_hidden"), "value", False) is True):
         return any(is_root(_x) for _x in _smg_ast.walk(node.args[0]) if isinstance(_x, _smg_ast.expr))
     return False
 
@@ -5333,12 +5405,20 @@ def _r18d_walked(node, kw, os_names=_R19D_OS_ONLY):
     """
     if _r19d_os_walk(node, os_names):
         return node.args[0] if node.args else kw.get("top")
+    return _r20d_path_walked(node, kw)
+
+
+def _r20d_path_walked(node, kw):
+    """The Path a `.walk()`, `.rglob(...)` or `.glob('**…')` call reads, or None."""
     _attr = getattr(node.func, "attr", None)
-    if _attr == "walk" and not node.args:
+    # Path.walk's only positional is top_down, a bool (review 1013a: `.walk(True)` was not read);
+    # ast.walk(x) is not one.
+    if _attr == "walk" and (not node.args or isinstance(getattr(node.args[0], "value", None), bool)):
         return node.func.value
     _pat = node.args[0] if node.args else kw.get("pattern")
-    if _attr == "rglob" or (_attr == "glob" and isinstance(getattr(_pat, "value", None), str)
-                            and "**" in _pat.value):
+    # A pattern that is not a literal may be '**' (review 1013a: `.glob(pat)` was not read).
+    if _attr == "rglob" or (_attr == "glob" and (not isinstance(getattr(_pat, "value", None), str)
+                                                 or "**" in _pat.value)):
         return node.func.value
     return None
 
@@ -5347,7 +5427,8 @@ def _r19d_os_walk(node, os_names):
     """Is call `node` os.walk / os.fwalk, through any name the file binds to os or to the function?"""
     _mods, _fns = os_names
     if getattr(node.func, "attr", None) in ("walk", "fwalk"):
-        return getattr(node.func.value, "id", None) in _mods
+        # ...or os reached through another module (`shutil.os.walk`, review 1013a).
+        return getattr(node.func.value, "id", None) in _mods or getattr(node.func.value, "attr", None) == "os"
     return getattr(node.func, "id", None) in _fns
 
 
@@ -5367,6 +5448,23 @@ def _r19d_bound_as(imp, names, asname_only=False):
     return {_a.asname or _a.name for _a in imp.names if _a.name in names and (_a.asname or not asname_only)}
 
 
+import tokenize as _r20d_tok                                                       # noqa: E402
+
+
+def _r20d_code_only(text):
+    """`text` with every comment blanked out, lines and columns kept.
+
+    A comment naming .claude beside a walk counted as pruning it (review 1013a): only code can
+    leave a directory out.
+    """
+    lines = text.splitlines(keepends=True)
+    for _t in _r20d_tok.generate_tokens(_io.StringIO(text).readline):
+        if _t.type == _r20d_tok.COMMENT:
+            (_r, _c), _c2 = _t.start, _t.end[1]          # a comment never spans lines
+            lines[_r - 1] = lines[_r - 1][:_c] + " " * (_c2 - _c) + lines[_r - 1][_c2:]
+    return "".join(lines)
+
+
 def _r16d_unpruned_walks(text, depth=3):
     """Line numbers of an `os.walk(<checkout root>)` whose next six lines never name .claude.
 
@@ -5376,6 +5474,7 @@ def _r16d_unpruned_walks(text, depth=3):
     `os.walk(_rn_root)`, a walk given keyword arguments, and one inside a comprehension (review
     1012b).
     """
+    text = _r20d_code_only(text)
     lines = text.splitlines()
     sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*\.claude", text)}
     tree = _smg_ast.parse(text)
@@ -5425,6 +5524,18 @@ _r17d_walk_ctl = {
     "a glob that includes hidden dirs": (
         "from unit import REPO_ROOT\nx = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True, "
         "include_hidden=True)\n"),
+    # review 1013a: a comment naming .claude prunes nothing, on the call's line or below it, and a
+    # skip set named only in a comment is not one.
+    # review 1013a: os through another module, Path.walk(True), a glob pattern held in a name, and
+    # the root joined with '.'.
+    "os reached through shutil": "from unit import REPO_ROOT\nx = list(shutil.os.walk(REPO_ROOT))\n",
+    "Path.walk(True)": "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).walk(True))\n",
+    "a glob pattern in a name": "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).glob(pat))\n",
+    "join(root, '.')": "from unit import REPO_ROOT\nx = list(os.walk(os.path.join(REPO_ROOT, '.')))\n",
+    "a comment naming .claude": "from unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):  # .claude: TODO\n    pass\n",
+    "a skip set only in a comment": (
+        "SKIP = {'x'}  # not .claude\nfrom unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):\n"
+        "    s[:] = [x for x in s if x not in SKIP]\n"),
 }
 _r17d_walk_ctl = {_k: _r16d_unpruned_walks(_v) != [] for _k, _v in _r17d_walk_ctl.items()}
 _r17d_walk_ctl["a subtree (not the root)"] = _r16d_unpruned_walks(
@@ -5438,6 +5549,9 @@ _r17d_walk_ctl["an rglob of a subtree, and a glob without hidden dirs (not one)"
     "w = list(pathlib.Path(REPO_ROOT).glob('*.py'))\nv = list(ast.walk(REPO_ROOT))\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
       not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
+_r17d_walk_ctl["a .claude prune in code, with a comment beside it (not one)"] = _r16d_unpruned_walks(
+    "from unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):  # worktrees\n"
+    "    s[:] = [x for x in s if x != '.claude']\n") == []
 check("suites: ...a walk is found by what its root name is bound to, with keywords, in a "
       "comprehension, and through a copy; a subtree is not one (controls)",
       all(_r17d_walk_ctl.values()), repr(_r17d_walk_ctl))
@@ -5960,6 +6074,8 @@ finally:
 
 # No route may call user-create on its own again: that is the shape that leaves an account outside
 # the grant. Scanned across the package, so a new call site has to go through the pairing.
+# The verb named in either quote (review 1013a: only "user-create" was read).
+_R20D_UC = _re.compile(r"[\"']user-create[\"']")
 _uc_sites = []
 for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
     _dn[:] = [_d for _d in _dn if _d != "__pycache__"]
@@ -5968,7 +6084,7 @@ for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
             continue                       # privileged.py is where the verb is DEFINED
         _f = os.path.join(_dp, _name)
         _txt = open(_f, encoding="utf-8").read()
-        if '"user-create"' not in _txt:
+        if not _R20D_UC.search(_txt):
             continue
         # The ONE legitimate call is the one inside create_game_user. Attributed by AST rather
         # than by line number so moving the function does not quietly reopen the gate.
@@ -5977,10 +6093,13 @@ for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
             if isinstance(_n, _smg_ast.FunctionDef) and _n.name == "create_game_user":
                 _allowed = set(range(_n.lineno, (_n.end_lineno or _n.lineno) + 1))
         for _i, _l in enumerate(_txt.splitlines(), 1):
-            if '"user-create"' in _l.split("#")[0] and _i not in _allowed:
+            if _R20D_UC.search(_l.split("#")[0]) and _i not in _allowed:
                 _uc_sites.append("%s:%d" % (os.path.relpath(_f, _root), _i))
 check("create_game_user: nothing calls the bare user-create verb any more",
       not _uc_sites, "still calling it: %s" % _uc_sites)
+check("create_game_user: ...a call is read in either quote (control)",
+      [bool(_R20D_UC.search(_c)) for _c in ("run('user-create')", 'run("user-create")',
+                                                                  "run('user-created')")] == [True, True, False])
 
 # ── ...and an account that can ALREADY escalate must never be enrolled ─────────────────────────
 # The grant says the panel may BECOME a member of GAME_GROUP. A member who can run sudo makes that

@@ -370,8 +370,9 @@ try:
     # Left real, those reads went past every stub to the tripwire and still passed, on the
     # "couldn't tell" the tripwire's refusal reads as. The command is the real builder's.
     _p9_patch(_p9_sm, "shell_as_game_user", _p9_shell_as)
-    # Rendering reads Tailscale state for the nav; that is a host command.
-    _p9_patch(_p9_ts, "get_tailscale_info", lambda force_refresh=False: NS(dns_name=None))
+    # Rendering reads Tailscale state for the nav; _p9_arm above answers it with every field a
+    # render reads (review 1013a: a thinner NS(dns_name=None) here dropped serve_config and
+    # serve_unreadable, which 1012d had added for part43).
     # Every file-manager and cron WRITE first asks the host whether the game account can become
     # root there (_shared.game_account_write_refusal -> privileged_accounts). Its probe is a host
     # command; here every account is a plain game account, as smoke_test answers it. The gate
@@ -1452,8 +1453,14 @@ try:
         _p9_drain()
     except Exception:
         _sd_bulk_ok = False
-    check("bulk action: one server's worker raising is contained in that worker",
-          _sd_bulk_ok and _p9_audit_count("update-lgsm_server") == _sd_before)
+    # ...and audited once, as failed (review 1013a): a raised run left no row at all, while the
+    # same failure answered with an rc by a tailscale host was audited.
+    check("bulk action: one server's worker raising is contained in that worker, and audited once "
+          "as failed",
+          _sd_bulk_ok and _p9_audit_count("update-lgsm_server") == _sd_before + 1
+          and _p9_audit("update-lgsm_server").success is False,
+          repr((_sd_bulk_ok, _p9_audit_count("update-lgsm_server") - _sd_before,
+                _p9_audit("update-lgsm_server"))))
     _sd_result[0] = ("", "", 0)
 
     # ── read endpoints whose host call raises ───────────────────────────────────────────────────
@@ -1588,8 +1595,9 @@ try:
 
     _p9_patch(_p9_sd, "send_console_command", _send)
     _r = _A.post("/api/server/%d/custom-command/%d" % (P9_GS, _sd_cc), json={})
-    check("custom command: a send that failed with no stderr says it gave no reason (502)",
-          _r.status_code == 502
+    check("custom command: a send that failed with no stderr says it gave no reason (200: Cloudflare "
+          "swaps a 502 for its own page)",
+          _r.status_code == 200
           and _p9_json(_r).get("message")
           == "The panel could not run that on the host, and it gave no reason.",
           repr(_p9_json(_r)))
@@ -2162,7 +2170,7 @@ try:
     _p9_patch(_p9_sf, "lgsm_write_config", lambda *a, **k: _sf_lt[0])
     _r = _A.post(_sf_url + "/log-timestamps", json={"enabled": False})
     check("log timestamps: a config write that failed is a 502 saying so",
-          _r.status_code == 502 and _p9_json(_r).get("error") == "Could not write the LinuxGSM config")
+          _r.status_code == 200 and _p9_json(_r).get("error") == "Could not write the LinuxGSM config")
     _p9_patch(_p9_sf, "lgsm_get_values", lambda *a, **k: {"logtimestamp": '"on"'})
     eq("log timestamps: GET reads the (quoted) LinuxGSM value",
        _p9_json(_A.get(_sf_url + "/log-timestamps")), {"enabled": True})
@@ -2182,7 +2190,7 @@ try:
     _sd_send[0] = ("", "no server running", 1)
     _r = _A.post("/api/command/%d" % P9_GS, json={"command": "status"})
     check("console command API: a failed send is a 502 and audited as failed",
-          _r.status_code == 502 and _p9_audit("send_command").success is False)
+          _r.status_code == 200 and _p9_audit("send_command").success is False)
     _sd_send[0] = ValueError("not a transport problem")
     _r = _A.post("/api/command/%d" % P9_GS, json={"command": "status"})
     check("console command API: an error that is NOT a lost host stays a 500 (it is ours)",
@@ -3467,6 +3475,55 @@ else:
     _pb_skip("install.sh: visudo accepts the grant", "no visudo, or not root")
 check("helper: the sudoers parser skips the Defaults! line (it is no user specification)",
       len(_pbh._sudoers_matching_rules(_pb_lines, "lgsmpanel", {"lgsmpanel"}, 998, {998})) == 2)
+
+# A visudo that cannot parse `Defaults!` (sudo-rs before 0.2.4 has no scoped Defaults at all) used
+# to make write_sudoers_grant delete the WHOLE grant and die, leaving every privileged panel action
+# failing. The real function runs here with the sudoers dir redirected and a stand-in visudo per
+# case: one with no scoped Defaults, one that refuses everything, one that accepts everything.
+_pb_sd = os.path.join(_PB, "sudoers.d")
+_pb_sdf = os.path.join(_pb_sd, "linuxgsm-panel")
+_pb_grant2 = ["lgsmpanel ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper",
+              "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL"]
+
+
+def _pb_wsg_run(visudo_body):
+    """Run write_sudoers_grant (narrow branch) against _pb_sd. Returns (rc, output, lines|None)."""
+    _pb_shutil.rmtree(_pb_sd, ignore_errors=True)
+    os.makedirs(_pb_sd)
+    script = ("RUN_AS_ROOT=1 HELPER_OK=1 ROOT_TOOLS_OK=1 PANEL_USER=lgsmpanel GAME_GROUP=lgsmpanel-games\n"
+              "HELPER_DST=/usr/local/lib/linuxgsm-panel/panel-helper\n"
+              "HELPER_SECURE_PATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
+              "sync_game_user_group(){ :; }\nroot_tools_present(){ return 0; }\n"
+              "ok(){ echo \"OK: $*\"; }\nwarn(){ echo \"WARN: $*\"; }\ninfo(){ echo \"INFO: $*\"; }\n"
+              "die(){ echo \"DIE: $*\"; exit 9; }\n"
+              "visudo(){ " + visudo_body + "; }\n"
+              + _pb_wsg.replace("/etc/sudoers.d", _pb_sd) + "\nwrite_sudoers_grant\necho \"[rc=$?]\"\n")
+    r = _pb_run(script)
+    lines = open(_pb_sdf, encoding="utf-8").read().splitlines() if os.path.exists(_pb_sdf) else None
+    return r.returncode, r.stdout + r.stderr, lines
+
+
+# sudo-rs 0.2.2's visudo -c: any `Defaults!` line is a syntax error, exit 1.
+_rc, _out, _ln = _pb_wsg_run('grep -q "^Defaults!" "${@: -1}" && { echo "syntax error" >&2; return 1; }; return 0')
+check("install.sh write_sudoers_grant: a visudo without scoped Defaults keeps the two grants",
+      _rc == 0 and _ln == _pb_grant2 and "DIE:" not in _out, repr((_rc, _ln, _out[-600:])))
+check("install.sh write_sudoers_grant: ...and says the helper's command-scoped Defaults were dropped",
+      "WARN: This host's sudo does not accept the helper's command-scoped Defaults" in _out
+      and "secure_path" in _out, _out[-600:])
+check("install.sh write_sudoers_grant: ...and the fallback file is still mode 0440",
+      os.path.exists(_pb_sdf) and (os.stat(_pb_sdf).st_mode & 0o777) == 0o440,
+      oct(os.stat(_pb_sdf).st_mode) if os.path.exists(_pb_sdf) else "missing")
+# A visudo that refuses even the bare grants: today's behaviour, remove and die.
+_rc, _out, _ln = _pb_wsg_run("return 1")
+check("install.sh write_sudoers_grant: a visudo that rejects everything still removes the file and dies",
+      _rc == 9 and _ln is None and "DIE: sudoers entry invalid" in _out
+      and "command-scoped Defaults" not in _out, repr((_rc, _ln, _out[-600:])))
+# Classic sudo and sudo-rs 0.2.4+: the three-line file stands, with no warning.
+_rc, _out, _ln = _pb_wsg_run("return 0")
+check("install.sh write_sudoers_grant: a visudo that accepts the Defaults line keeps all three lines",
+      _rc == 0 and _ln is not None and len(_ln) == 3 and _ln[0].startswith("Defaults!")
+      and _ln[1:] == _pb_grant2 and "WARN:" not in _out, repr((_rc, _ln, _out[-600:])))
+_pb_shutil.rmtree(_pb_sd, ignore_errors=True)
 
 # ── 3. Hard links: never chmod'd (content-grant-read) or chowned (install.sh) as root ─────────
 _pb_cg = os.path.join(_PB, "chmod")

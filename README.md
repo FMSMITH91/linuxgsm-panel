@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
 
 **What the installer does** — one command, unattended:
 
-1. Installs the prerequisites it needs (`python3-venv`, `pip`, `git`, `curl`).
+1. Installs the prerequisites it needs (`python3-venv`, `pip`, `git`, `curl`, `wget`, `cron`, `ufw`).
 2. Patches the OS with `apt full-upgrade` — skip with `PANEL_NO_UPGRADE=1 bash install.sh`. If the
    upgrade needs a reboot it reboots the host (unless game servers are running); `PANEL_NO_REBOOT=1`
    keeps the upgrade and skips the reboot, on a first install and on an update.
@@ -215,6 +215,7 @@ the account. Any leftover grant is stripped at startup.)
 |------------|--------|
 | `view_servers` / `view_console` / `view_logs` | See status / console / audit logs |
 | `send_command` | Send raw console commands |
+| `use_terminal` | Open a shell on a host, as the account the panel uses there, which on most installs can become root: grant it only to people you would give that account |
 | `moderate_server` | Umbrella for `kick_player` + `ban_player` + `say_server` (also grantable individually) |
 | `start_server` / `stop_server` / `restart_server` / `update_server` | Power & update controls |
 | `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers |

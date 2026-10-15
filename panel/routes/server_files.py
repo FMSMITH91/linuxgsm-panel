@@ -42,7 +42,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    game_account_write_refusal)
+    _r20b_audit_on_raise, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1068,7 +1068,8 @@ def _last_output_line(clean):
 
 def _run_mods_action(gs, which, mod_id):
     """Install or remove a mod, audit it, and say whether a restart is pending: the route's answer."""
-    out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
+    with _r20b_audit_on_raise(f"mods_{which}", target=gs.name, server=gs):
+        out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
     clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
     log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:],
                server=gs)
@@ -1423,8 +1424,10 @@ def _read_refused(gs, action, detail=""):
 
 def _store_upload(gs, reldir, f, data, overwrite):
     """Write an uploaded file onto the host and audit it: the upload route's answer."""
-    ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
-                          overwrite=overwrite)
+    with _r20b_audit_on_raise("upload_file", detail=_audit_safe(_audit_name("%s/%s" % (reldir, f.filename))),
+                              target=gs.name, server=gs):
+        ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
+                              overwrite=overwrite)
     # The name as delete's and rename's rows write theirs: a U+202E or a trailing space in an
     # uploaded name reordered or hid what the audit page showed.
     detail = _audit_safe(_audit_name("%s/%s" % (reldir, f.filename))) + (
@@ -1687,7 +1690,8 @@ def _sf_config_write(gs, data):
                 return jsonify({"success": False,
                                 "message": "The file contents must be text."}), 400
             rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
-            ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
+            with _r20b_audit_on_raise("edit_config", target=gs.name, server=gs):
+                ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
         else:
             # The same rule for the other shape: `settings` is a key -> value map, and a list
             # or a string reached the writer's .items() and came back as a 500.
@@ -1695,7 +1699,8 @@ def _sf_config_write(gs, data):
             if not isinstance(settings, dict):
                 return jsonify({"success": False,
                                 "message": "Settings must be a map of names to values."}), 400
-            ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
+            with _r20b_audit_on_raise("edit_config", target=gs.name, server=gs):
+                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
         log_action(current_user, "edit_config", target=gs.name,
                    detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
                    server=gs)
@@ -1758,7 +1763,8 @@ def _register_alerts(app):
             return refused
         updates = _alert_updates(_json_body().get("values"))
         try:
-            ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
+            with _r20b_audit_on_raise("server_alerts_save", target=gs.name, server=gs):
+                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
             # A refusal says why, as edit_config's does: it calls the same writer.
             log_action(current_user, "server_alerts_save", target=gs.name,
                        detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
@@ -1853,7 +1859,9 @@ def _register_file_editor(app):
         if refused is not None:
             return refused
         try:
-            ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
+            with _r20b_audit_on_raise("edit_file", detail=_audit_safe(_audit_name(rel)),
+                                      target=gs.name, server=gs):
+                ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
             log_action(current_user, "edit_file", target=gs.name,
                        detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
                                              _sm.write_failure_reason(msg)),
@@ -1883,7 +1891,9 @@ def _register_file_removal(app):
         if refused is not None:
             return refused
         try:
-            ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
+            with _r20b_audit_on_raise("delete_file", detail=_audit_safe(_audit_name(rel)),
+                                      target=gs.name, server=gs):
+                ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name,
                        detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
                                              _sm.delete_failure_reason(msg)),
@@ -2273,7 +2283,8 @@ def _register_cron_jobs(app):
         # now "" and gets the writer's own refusal.
         schedule, command = _json_str(data, "schedule"), _json_str(data, "command")
         try:
-            ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
+            with _r20b_audit_on_raise("cron_add", detail=schedule[:120], target=gs.name, server=gs):
+                ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
             if ok:
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_add", target=gs.name, success=ok,
@@ -2295,8 +2306,9 @@ def _register_cron_jobs(app):
             return refused
         schedule = _json_str(data, "schedule")      # as cron_add reads them
         try:
-            ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
-                                      schedule, _json_str(data, "command"), gs.lgsm_name)
+            with _r20b_audit_on_raise("cron_update", detail=schedule[:120], target=gs.name, server=gs):
+                ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                          schedule, _json_str(data, "command"), gs.lgsm_name)
             log_action(current_user, "cron_update", target=gs.name, success=ok,
                        detail=schedule[:120], server=gs)
             return jsonify({"success": ok,
@@ -2319,8 +2331,9 @@ def _register_cron_actions(app):
         if refused is not None:
             return refused
         try:
-            ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
-                                          gs.lgsm_name)
+            with _r20b_audit_on_raise("cron_delete", target=gs.name, server=gs):
+                ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                              gs.lgsm_name)
             if ok:
                 # The card's own help text promises that deleting `monitor` turns Autostart off.
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
@@ -2343,7 +2356,8 @@ def _register_cron_actions(app):
         if refused is not None:
             return refused
         try:
-            ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
+            with _r20b_audit_on_raise("cron_run_now", target=gs.name, server=gs):
+                ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
             log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
@@ -2572,7 +2586,9 @@ def _register_console_routes(app):
                     log_action(current_user, "set_log_timestamps", target=gs.name,
                                detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
                                success=False, server=gs)
-                    return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")}), 502
+                    # 200, not 502 (Cloudflare swaps an origin 502 for its own page): the page
+                    # reads `error`, not the status.
+                    return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")})
                 log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
                            server=gs)
                 return jsonify({"success": True, "enabled": want == "on",
@@ -2581,7 +2597,7 @@ def _register_console_routes(app):
             if vals is None:
                 # "enabled": False would be a claim about a config we could not read, and the
                 # toggle renders from it — say so instead, like the write path above.
-                return jsonify({"error": "Could not read the LinuxGSM config on this host."}), 502
+                return jsonify({"error": "Could not read the LinuxGSM config on this host."})
             return jsonify({"enabled": _json_str(vals, "logtimestamp").strip('"') == "on"})
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
@@ -2609,13 +2625,18 @@ def _register_send_command(app):
             return jsonify({"error": i18n.tr(CONSOLE_CONTROL_MSG)}), 400
 
         try:
-            _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10,
-                                              selfname=gs.lgsm_name)
+            # A send that RAISES is audited too (_r20b_audit_on_raise), as the command form does: a
+            # direct-SSH host that is down raises where a tailscale one answers rc -1.
+            with _r20b_audit_on_raise("send_command", detail=cmd_text, target=gs.name, server=gs):
+                _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10,
+                                                  selfname=gs.lgsm_name)
             log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=(rc == 0),
                        server=gs)
             if rc != 0:
                 # What failed, not "Is the server running?" for every rc (_console_send_failure).
-                return jsonify({"error": _console_send_failure(rc, err)}), 502
+                # 200, not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
+                # page, so the console never saw the reason. The page reads `error`, not the status.
+                return jsonify({"error": _console_send_failure(rc, err)})
             return jsonify({"success": True, "command": cmd_text})
         # A host that is switched off is a normal condition, not a fault in the panel — the same
         # distinction api_remote_live_stats draws. Anything that is NOT a ConnectionError stays a

@@ -73,6 +73,29 @@ function renderedServerIds() {
     function(el){ return el.id.slice('status-'.length); }).sort().join(',');
 }
 var _serverIdsBaseline = null;
+// A changed set is adopted as the baseline only once the swap has put it on the page. It was adopted
+// when the swap was ASKED: a swap that failed (a network blip, the panel restarting, an expired
+// session's login page) left the new server missing, and a removed one listed, until a reload — every
+// later poll agreed with the baseline and never asked again. A swap is in flight for up to 20 s (one
+// at a time), then asked again; five tries per set, then the set is adopted as it used to be, so a
+// page that can never render it does not re-fetch itself every 8 s.
+var _r20cIdsAsked = null, _r20cIdsTries = 0, _r20cIdsAt = 0;
+function _r20cIdsChanged(liveIds) {
+  if (liveIds !== _r20cIdsAsked) { _r20cIdsAsked = liveIds; _r20cIdsTries = 0; _r20cIdsAt = 0; }
+  if (_r20cIdsAt && Date.now() - _r20cIdsAt < 20000) return false;   // one in flight: let it land
+  if (_r20cIdsTries >= 5) { _serverIdsBaseline = liveIds; _r20cIdsAsked = null; return false; }
+  _r20cIdsTries++;
+  _r20cIdsAt = Date.now();
+  window.refreshSection('#server-cards', 'afterDashRefresh');
+  return true;
+}
+// After any swap of #server-cards: adopt the asked set if the page now shows it; if not (the fetch
+// came back as some other page), the next poll asks again.
+function _r20cIdsLanded() {
+  if (_r20cIdsAsked === null) return;
+  _r20cIdsAt = 0;
+  if (renderedServerIds() === _r20cIdsAsked) { _serverIdsBaseline = _r20cIdsAsked; _r20cIdsAsked = null; }
+}
 
 // Live status: update the count tiles + each server row's status cell.
 function refreshStatus() {
@@ -82,11 +105,7 @@ function refreshStatus() {
       // If the set of servers changed underneath us (another user installed/uninstalled one), the
       // rows are server-rendered — pull the fresh cards into #server-cards in place (no reload).
       var liveIds = data.map(function(s){ return String(s.id); }).sort().join(',');
-      if (_serverIdsBaseline !== null && liveIds !== _serverIdsBaseline) {
-        _serverIdsBaseline = liveIds;   // adopt now so this doesn't re-fire while the swap is in flight
-        window.refreshSection('#server-cards', 'afterDashRefresh');
-        return;
-      }
+      if (_serverIdsBaseline !== null && liveIds !== _serverIdsBaseline && _r20cIdsChanged(liveIds)) return;
       _dashShowCounts(data);
       // The "+N installing or failed" line under Offline. It was rendered once by the template
       // and never touched again, so as servers finished installing the three tiles above moved to
@@ -221,7 +240,8 @@ function _dashConnectCell(s) {
     var code = document.createElement('code');
     code.className = 'text-info';
     code.style.cssText = 'font-size:.78rem;cursor:pointer;';
-    code.title = 'Click to copy';
+    code.title = t('Click to copy');   // through t(): the translator skips a <code>, its title too
+    code.setAttribute('data-i18n-title', 'Click to copy');   // ...and setLang renders it again
     code.textContent = s.connect;
     code.addEventListener('click', function(){ copyAddr(s.connect); });
     conn.appendChild(code);
@@ -309,17 +329,22 @@ var HOST_REACH = {
   unknown: {cls: 'bg-secondary', text: 'Checking…',
             title: 'The panel has not checked this host yet — the first check runs shortly after startup'}
 };
+// The panel's own machine (data-local on its badge) is read through the local transport, not SSH.
+var _R20C_LOCAL_REACH = {
+  yes: 'The panel is running on this host',
+  no:  'The panel\'s last check of this host failed — the servers below show their last known state'
+};
 function paintHostReach(rid, h){
   var b = document.getElementById('host-reach-' + rid);
   // No entry for this host means the endpoint did not speak about it. Saying nothing is right:
   // the badge keeps whatever the server rendered rather than being downgraded on a hunch.
   if(!b || !h) return;
-  var st = HOST_REACH[h.reachable ? 'yes' : (h.probed ? 'no' : 'unknown')];
+  var key = h.reachable ? 'yes' : (h.probed ? 'no' : 'unknown'), st = HOST_REACH[key];
   b.className = 'badge ' + st.cls;
   // textContent, not innerHTML: i18n.js's observer translates the new text node, and the title
   // attribute, on its own. Setting English here is what makes the swapped badge localised too.
   b.textContent = st.text;
-  b.setAttribute('title', st.title);
+  b.setAttribute('title', (b.hasAttribute('data-local') && _R20C_LOCAL_REACH[key]) || st.title);
 }
 function refreshMetrics(){
   fetch(MOUNT + '/api/dashboard/metrics').then(function(r){ return r.ok ? r.json() : null; })
@@ -393,6 +418,7 @@ window.afterDashRefresh = function(){
   // buttons — which then found nothing checked and did nothing, with no message at all.
   restoreBulkSelection();
   if (typeof filterServers === 'function') filterServers();
+  _r20cIdsLanded();   // before refreshStatus, which compares against the baseline
   refreshStatus();
   // #server-cards itself survives a refreshSection (only its innerHTML is replaced), so its own
   // listener persists — but the tbody elements inside are new objects and need binding again.

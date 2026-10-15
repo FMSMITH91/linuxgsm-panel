@@ -669,6 +669,24 @@ def _sc6_tailscale():
           and cache is not None and cache.group(1) == "false", ts)
 
 
+def _r20d_deploy_stdin(dep=None):
+    """Every installer run in the deploy script has stdin closed: (runs found, the ones that do not).
+
+    The script reaches the host on `bash -s`'s stdin, so an installer that inherits it can read the
+    rest of the script (review 1013a: the per-user branch did, after the system branch was fixed).
+    """
+    dep = _code29(_wf29("deploy.yml") if dep is None else dep)
+    runs = [ln.strip() for ln in dep.splitlines() if _re29.search(r"\bbash\s+\S*install\.sh\b", ln)]
+    return len(runs), [ln for ln in runs if not _re29.search(r"<\s*/dev/null\b", ln)]
+
+
+def _r20d_deploy_stdin_check():
+    ctl = _r20d_deploy_stdin("  bash install.sh || rc=$?\n  sudo -n env X=1 \\\n      bash \"${S}/install.sh\" </dev/null\n")
+    check("deploy: every installer run closes stdin, which is the rest of the `bash -s` script (with "
+          "its control)", _r20d_deploy_stdin()[0] == 2 and not _r20d_deploy_stdin()[1]
+          and ctl == (2, ["bash install.sh || rc=$?"]), repr((_r20d_deploy_stdin(), ctl)))
+
+
 # ── every action is pinned to a full commit SHA (SC8) ─────────────────────────────────────────────
 # The convention, never enforced: CodeQL's unpinned-tag query trusts actions/* and github/*, and the
 # repository does not require SHA pins. A local action (./) and a docker:// image are not commits;
@@ -725,6 +743,7 @@ try:
     _sc5_shellcheck(_TMP29)
     _sc9_vars()
     _sc6_tailscale()
+    _r20d_deploy_stdin_check()
     _sc8_pins()
 finally:
     _shutil29.rmtree(_TMP29, ignore_errors=True)

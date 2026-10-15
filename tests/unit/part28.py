@@ -34,7 +34,7 @@ import sys
 import tempfile as _tf28
 import types as _types28
 
-from unit.part01 import check
+from unit.part01 import _R20dOver, check
 
 _R28 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMP28 = _tf28.mkdtemp(prefix="lgsm-unit-p28-")
@@ -284,12 +284,14 @@ def _answer28(head_extra=(), tools=_PTOOLS28, canary=True, rc=0, raw=None):
 
 def _px28(answer, pairs=(("big.py", "big.py"),), d=None, base=None):
     run = _Run28(answer)
-    saved = _cx28.subprocess.run
-    _cx28.subprocess.run = run
+    # The gate's own handle on subprocess, never subprocess.run itself (review 1013a: that was
+    # process-wide while the gate ran).
+    saved = _cx28.subprocess
+    _cx28.subprocess = _R20dOver(saved, run=run)
     try:
         return _cx28.prospector_violations(base or _cx28_base, list(pairs), cwd=d or _cx28_d), run
     finally:
-        _cx28.subprocess.run = saved
+        _cx28.subprocess = saved
 
 
 _px28_new, _px28_run = _px28(_answer28(head_extra=[("pydocstyle", "D415", 5, "First line")]))
@@ -340,13 +342,13 @@ check("complexity gate: ...a Prospector run it cannot trust fails the check: a c
 # The caller: run() is what main() reports from, so the Prospector findings must reach ITS problems,
 # for the files it found over 150 KB. Pylint is answered with nothing, as Lizard is.
 _run28 = _Run28(_answer28(head_extra=[("pydocstyle", "D415", 5, "First line")]))
-_run28_real, _cx28.subprocess.run = _cx28.subprocess.run, (
+_run28_real, _cx28.subprocess = _cx28.subprocess, _R20dOver(_cx28.subprocess, run=(
     lambda argv, **kw: _sp28.CompletedProcess(argv, 0, "", "") if argv[1:3] == ["-m", "pylint"]
-    else _run28(argv, **kw))
+    else _run28(argv, **kw)))
 try:
     _run28_problems, _run28_files, _run28_big = _cx28.run(_cx28_base, cwd=_cx28_d)
 finally:
-    _cx28.subprocess.run = _run28_real
+    _cx28.subprocess = _run28_real
 check("complexity gate: run() reports Prospector's findings in the files over 150 KB it found, "
       "beside Lizard's and Pylint's",
       [(_p, _l) for _p, _l, _m in _run28_problems if _m.startswith("Prospector pydocstyle D415")]
@@ -405,12 +407,12 @@ def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0)
             raise OSError("HTTP Error 502: Bad Gateway")
         return {"issues": issues if params.get("p") == 1 else [],
                 "paging": {"total": len(issues) if total is None else total}}
-    saved = (_sq28._get, _sq28.time.sleep)
-    _sq28._get, _sq28.time.sleep = _get, sleeps.append
+    saved = (_sq28._get, _sq28.time)
+    _sq28._get, _sq28.time = _get, _R20dOver(_sq28.time, sleep=sleeps.append)
     try:
         problems, judged = _sq28.run_branch("main", sha, 900)
     finally:
-        _sq28._get, _sq28.time.sleep = saved
+        _sq28._get, _sq28.time = saved
     return problems, judged, calls, sleeps
 
 

@@ -129,7 +129,7 @@ from panel.security import banlist as _banlist
 from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none)
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
-from panel.core.http import http_error_page, http_error_sentence, unreachable_error
+from panel.core.http import _wants_json, http_error_page, http_error_sentence, unreachable_error
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
@@ -1732,8 +1732,10 @@ def create_app():
     # keeps whatever behaviour it has today (including propagating under TESTING).
     @app.errorhandler(Exception)
     def _json_for_api_errors(e):
-        wants_json = (request.path.startswith("/api/")
-                      or request.headers.get("X-Requested-With") == "XMLHttpRequest")
+        # _wants_json() counts `Accept: application/json` too, as _form_ok/_form_err do when they
+        # answer: an API client posting to a form endpoint got that endpoint's JSON on success and
+        # an HTML error page (or a raised 500) on any fault.
+        wants_json = request.path.startswith("/api/") or _wants_json()
         if not wants_json:
             # RETURN an HTTPException, do not re-raise it: Flask renders a returned one as its
             # normal page, while a raised one propagates — and under TESTING that means
@@ -1765,8 +1767,10 @@ def create_app():
             # route with no handler of its own (the firewall writes: open, allow-from, limit,
             # close, delete-rule) answered it with "Something went wrong — see the panel log" and
             # a traceback; this says what happened, in the viewer's language, with the same
-            # answer http._unreachable gives the routes that catch it, as a 502.
-            return unreachable_error(_ep)
+            # answer http._unreachable gives the routes that catch it (a 200: a 502 is swapped
+            # for Cloudflare's own page). A changed host key, or a command cut off part-way, is
+            # said as that, not as "unreachable" (http._r20a_unreachable_said).
+            return unreachable_error(_ep, e)
         _log.exception("unhandled error serving %s", _ep)
         # In the viewer's language (request_lang never raises). Pages write it after a mark
         # ("❌ " + message), which the page's translator does not look past, so English sent here

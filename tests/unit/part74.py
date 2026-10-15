@@ -31,7 +31,7 @@ import subprocess as _sp74  # nosec B404 - runs bash on the restart-flags comman
 import tempfile as _tf74
 from types import SimpleNamespace as NS
 
-from unit.part01 import check
+from unit.part01 import _R20dOver, check
 from unit.part05 import _helper
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
                          _p9_restore_all, _p9_sd, _p9_trip)
@@ -295,13 +295,15 @@ def _helper_flags74(root):
             raise PermissionError(13, "Permission denied", path)
         return real_lstat(path, *a, **k)
     _p9_patch(_helper, "HOME_ROOT", root)
-    _p9_patch(_helper.os, "lstat", _lstat)
+    # The helper's own handle on os, never os.lstat itself (review 1013a: that was process-wide).
+    os_saved = _helper.os
+    _p9_patch(_helper, "os", _R20dOver(os_saved, lstat=_lstat))
     out, err = _io74.StringIO(), _io74.StringIO()
     try:
         with _ctx74.redirect_stdout(out), _ctx74.redirect_stderr(err):
             rc = _helper.do_restart_flags([], None)
     finally:
-        _helper.os.lstat = real_lstat
+        _helper.os = os_saved
     check("helper restart-flags: a home it could not look in is named (`?<name>`) and the verb exits 0 "
           "— its exit 1 made the panel drop the whole host's answer — with the homes it read listed",
           rc == 0 and out.getvalue().split() == ["flagged", "?locked"], repr((rc, out.getvalue())))

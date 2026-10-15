@@ -483,6 +483,13 @@ def _lang66(lang):
         _db66.session.commit()
 
 
+# The account's language as this part found it, put back after each block that switches it, as
+# part73 does (review 1013a: reset to "en", a later part would read this part's choice).
+with _p9.app_context():
+    _LANG66_WAS = _db66.session.get(_User66, P9_ADMIN).language
+
+
+
 _titles66 = {}
 try:
     for _L66 in ("es", "fr"):
@@ -494,7 +501,7 @@ try:
             _m66 = _re66.search(r"<title>(.*?)</title>", _h66, _re66.S)
             _titles66[(_L66, _u66)] = _html66.unescape(_m66.group(1).strip()) if _m66 else None
 finally:
-    _lang66("en")
+    _lang66(_LANG66_WAS)
 _want66 = {(_L66, _u66): _cat66[_k66] for _L66, _cat66 in (("es", _ES66), ("fr", _FR66))
            for _u66, _k66 in (("/", "Dashboard"), ("/logs", "Audit Logs"))}
 check("i18n: a page's tab title is in the viewer's language (\"<site> - Dashboard\" and \"- Audit Logs\" "
@@ -808,7 +815,7 @@ try:
         _got66["dup"] = _c66.post("/groups/add", data={"name": _grp66},
                                   follow_redirects=True).get_data(as_text=True)
 finally:
-    _lang66("en")
+    _lang66(_LANG66_WAS)
     with _p9.app_context():
         from panel.db.models import Group as _Group66  # noqa: E402
         for _g66 in _Group66.query.filter_by(name=_grp66).all():
@@ -870,7 +877,7 @@ try:
         _r15d_arm61()
         _ist66 = _p9_json(_p9_client(P9_ADMIN).get("/api/server/%d/install-status" % P9_GS))
 finally:
-    _lang66("en")
+    _lang66(_LANG66_WAS)
     with _ilock66:
         if _ijob66 is None:
             _ijobs66.pop(P9_GS, None)

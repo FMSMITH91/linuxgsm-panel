@@ -40,6 +40,11 @@ _BLOCKS = ("body", "orelse", "finalbody", "handlers")
 _ASSIGN_KINDS = {ast.Name: "expr", ast.Attribute: "expr", ast.Tuple: "seq", ast.List: "seq"}
 
 
+def _stored_names(tree):
+    """Every name `tree` stores to (a target, a comprehension's loop variable, a walrus)."""
+    return [n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
+
+
 class _Scope:
     """The names one module, function or class body binds: name -> binding (None = unreadable)."""
 
@@ -193,9 +198,13 @@ class CallGraph:
         kind = None
         if len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
             kind = _ASSIGN_KINDS.get(type(st.value))
-        for node in (n for tgt in st.targets for n in ast.walk(tgt)):
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                scope.names[node.id] = (kind, st.value, scope) if kind else None
+        # A name the VALUE stores (a comprehension's loop variable, a walrus) is opaque, as in every
+        # other statement (_bind_other): `got = [logs._run() for logs in items]` read `logs` as the
+        # module of that name, so a route calling a same-named method counted as audited (review 1013a).
+        for name in _stored_names(st.value):
+            scope.names[name] = None
+        for name in (n for tgt in st.targets for n in _stored_names(tgt)):
+            scope.names[name] = (kind, st.value, scope) if kind else None
 
     # ── resolution: what an expression refers to ─────────────────────────────────────────────────
     def resolve(self, expr, scope, depth=0):

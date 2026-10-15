@@ -1442,8 +1442,9 @@ try:
        _pb7_c.get("/backup/game/11/download", query_string={"name": "../../etc/shadow"}).status_code, 404)
     _pb7.list_game_backups = _p7_raise(ConnectionError("host down"))
     _gdl2 = _pb7_c.get("/backup/game/11/download", query_string={"name": "a.tar.gz"})
-    check("panel_backup/game download: a listing that RAISES is 502 'could not read', never 'not found'",
-          _gdl2.status_code == 502 and b"Couldn't read this server's backups" in _gdl2.data,
+    check("panel_backup/game download: a listing that RAISES is 503 'could not read' (Cloudflare swaps "
+          "a 502 for its own page), never 'not found'",
+          _gdl2.status_code == 503 and b"Couldn't read this server's backups" in _gdl2.data,
           "%s %r" % (_gdl2.status_code, _gdl2.data[:80]))
 
     # ── per-server schedule: a junk field is refused (it used to clear the override, part53),
@@ -1791,7 +1792,7 @@ def _so7_run_shell_runner_itself():
         _real_run("ufw status", sudo=True)
         SO.os = _so7_saved["os"]
         check("so/_run: sudo is prefixed only when not already root, and output is stripped",
-              [a for a, _k in _rr] == ["sudo ufw status", "ufw status"] and _rr_user == ("hi", "e", 0)
+              [a for a, _k in _rr] == [SO._R20A_SUDO_C + "sudo ufw status", "ufw status"] and _rr_user == ("hi", "e", 0)
               and _rr[0][1].get("shell") is True and _rr[0][1].get("stdin") == _p7_sp.DEVNULL,
               repr(_rr))
         _rr_fail = []

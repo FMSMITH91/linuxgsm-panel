@@ -694,6 +694,7 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     if not _core.game_idents_ok(user):
         return None      # refused, which is "could not query" — never an empty server
     gdtype = cron._gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # a REAL inf port row is "no port", not an OverflowError
     if not gdtype or not port:
         return None
     # Player fields are protocol-specific in gamedig: Source/valve exposes score + time (seconds
@@ -780,12 +781,10 @@ def _playerlist_hit(key):
 def _gamedig_player_list_shared(server, user, game_type, port, query_type):
     """_gamedig_player_list through the short shared cache. Only a list gamedig read is stored."""
     gdtype = cron._gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # a REAL inf port row is "no port": nothing to query
     if not _core.game_idents_ok(user) or not gdtype or not port:
         return _gamedig_player_list(server, user, game_type, port, query_type)
-    try:
-        key = (getattr(server, "id", None), int(port), gdtype)
-    except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
-        return _gamedig_player_list(server, user, game_type, port, query_type)
+    key = (getattr(server, "id", None), port, gdtype)
     hit = _playerlist_hit(key)
     if hit is not None:
         return hit
@@ -2014,6 +2013,7 @@ def _queried_version(server, user, game_type=None, port=None, query_type=None):
     if not _core.game_idents_ok(user):
         return ""
     gdtype = cron._gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # as _gamedig_player_list
     if not gdtype or not port:
         return ""
     jqf = ('[.version, .raw.version, .raw.shortversion, .raw.gamever, '

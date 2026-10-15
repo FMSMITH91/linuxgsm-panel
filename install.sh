@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Every command below runs in C.UTF-8, and LANGUAGE is exported EMPTY. This script reads what
+# its commands print by their English words (`ufw status` "Status: active", apt-cache's
+# "Candidate:"), and on a German or Dutch host they print `Status: aktiv` / `Installationskandidat:`,
+# so a fresh install read an active UFW as inactive, never opened the panel port and printed the
+# setup link as reachable. Empty rather than unset: gettext honours LANGUAGE over LC_ALL for any
+# locale but plain C, and sudo keeps an exported LANGUAGE (env_keep), where an unset one is filled
+# in from /etc/default/locale by sudo's PAM stack. C.UTF-8, not C, keeps UTF-8 names intact. The
+# panel's own reads do the same (ssh_manager/_core.py _R19A_C_LOCALE). Nothing here starts a game
+# server, and the panel service takes its environment from its unit, not from this shell.
+export LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE=
+
 # Absolute path to THIS script — install_root_tools copies it to the root-owned location, and
 # "$0" inside a function is fragile to read. Captured once, before any cd.
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -672,17 +683,19 @@ ufw_port_state() {
 }
 
 # This host's own address, for when no lookup service answered: its first public IPv4 one, else
-# its first IPv6 one that is not link-local, else its first IPv4 one, else its first address of
-# any kind. `hostname -I`
+# its first global IPv6 one, else its first IPv4 one, else its first address of any kind. `hostname -I`
 # lists IPv6 too and in no fixed order, and the firewall verdict printed beside the address reads
 # the IPv4 rule. But once the IPv4 lookups have failed, an IPv4 that is private (docker0's
 # 172.17.0.1, a LAN 192.168.x, the tailnet's 100.64/10) is not the way in from outside: an
 # IPv6-only VPS with docker printed http://172.17.0.1:5000/setup?token=… as its public address. A
-# host with no global IPv6 still gets its (LAN) IPv4 one. The caller brackets an IPv6 answer.
+# host with no global IPv6 still gets its (LAN) IPv4 one. Global means neither link-local
+# (fe80::/10) nor unique-local (fc00::/7): a ULA is the IPv6 twin of those private ranges — the
+# tailnet's fd7a:115c:a1e0::/48, docker's and LXD's fd00::/8 bridges — and it beat the LAN IPv4.
+# The caller brackets an IPv6 answer.
 host_addr_fallback() {
     hostname -I 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) { a = $i
             if (first == "") first = a
-            if (a ~ /:/) { if (v6 == "" && a !~ /^[fF][eE]80:/) v6 = a; continue }
+            if (a ~ /:/) { if (v6 == "" && a !~ /^[fF][eE][89aAbB][0-9a-fA-F]:/ && a !~ /^[fF][cCdD][0-9a-fA-F][0-9a-fA-F]:/) v6 = a; continue }
             if (v4 == "") v4 = a
             if (a ~ /^(10|127)\./ || a ~ /^169\.254\./ || a ~ /^192\.168\./ \
                 || a ~ /^172\.(1[6-9]|2[0-9]|3[01])\./ || a ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./) continue
@@ -1210,7 +1223,9 @@ ensure_nodejs() {
     # Node 12, which is why the NodeSource fallback below stays.
     if [[ "${nmaj:-0}" -lt 18 ]] 2>/dev/null; then
         local cand=0
-        cand="$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/{print $2}' \
+        # In C: apt translates the "Candidate:" label (German "Installationskandidat:"), so on a
+        # non-English host the distro's nodejs was never seen and NodeSource's repo went on anyway.
+        cand="$(LC_ALL=C.UTF-8 LANGUAGE='' apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/{print $2}' \
                 | grep -oE '^[0-9]+' | head -1 || true)"
         cand="$((10#${cand:-0}))"
         if [[ "${cand:-0}" -ge 18 ]] 2>/dev/null; then
@@ -2463,6 +2478,28 @@ write_sudoers_grant() {
         warn "   a failure to REFRESH them no longer widens a grant that is already narrow.)"
     fi
     chmod 440 /etc/sudoers.d/linuxgsm-panel
+    # A sudo that cannot parse the Defaults line must not cost the panel its grant. sudo-rs before
+    # 0.2.4 (Ubuntu 24.04's opt-in sudo-rs package, if an operator made it the system visudo) has no
+    # command-scoped Defaults of any kind, so its `visudo -c` rejects the whole file, and the check
+    # below used to delete the grant and die — every privileged panel action then failed. There is
+    # no other spelling such a sudo accepts, so try once more with the two grants alone. The line
+    # stays on every sudo that takes it (classic, and sudo-rs 0.2.4+). The narrow branch only: the
+    # wide grant has no Defaults line to drop.
+    _sudoers_scoped_dropped=0
+    case "${SUDO_SCOPE}" in
+        narrow*)
+            if ! visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null 2>&1; then
+                # Removed first: it is mode 0440 now, which root writes through but nothing else does.
+                rm -f /etc/sudoers.d/linuxgsm-panel
+                {
+                    echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}"
+                    echo "${PANEL_USER} ALL=(%${GAME_GROUP}) NOPASSWD: ALL"
+                } > /etc/sudoers.d/linuxgsm-panel
+                chmod 440 /etc/sudoers.d/linuxgsm-panel
+                _sudoers_scoped_dropped=1
+            fi
+            ;;
+    esac
     visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null \
         || { rm -f /etc/sudoers.d/linuxgsm-panel
              # Name the damage. This `rm` has just taken the panel's sudo grant away, and the
@@ -2473,6 +2510,18 @@ write_sudoers_grant() {
              die "sudoers entry invalid — the grant at /etc/sudoers.d/linuxgsm-panel has been REMOVED,
      so the panel's privileged actions (firewall, service control, game accounts) will fail until it
      is rewritten. Re-run this installer once the cause is fixed."; }
+    # Reached only when the two-grant file passed where the three-line one did not. Say what was
+    # given up: the helper's own PATH from sudo. What still holds: the helper is named by its
+    # absolute path, its shebang is /usr/bin/python3 -I, and it replaces its own environment and
+    # PATH before any verb runs, so a relaxed host policy reaches less than it would have without
+    # those — but this file no longer decides it.
+    if [[ "${_sudoers_scoped_dropped}" -eq 1 ]]; then
+        warn "This host's sudo does not accept the helper's command-scoped Defaults line (sudo-rs before"
+        warn "  0.2.4 has none), so ${HELPER_DST} is granted without it: sudo starts the helper with this"
+        warn "  host's own env_reset and secure_path settings instead of the panel's fixed ones. The helper"
+        warn "  still resets its own environment and PATH at start-up. Upgrade sudo (sudo-rs 0.2.4 or newer)"
+        warn "  and re-run this installer to put the line back."
+    fi
     # Say which one loudly when it is the wide one. This runs on updates now, so a host that was
     # narrow and could not place the helper this time gets its grant widened again — a real
     # security downgrade, and it should not slide past in a wall of green ticks.

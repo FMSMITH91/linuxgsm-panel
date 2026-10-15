@@ -724,7 +724,10 @@ def _p20_journal_source():
 
 # ── R2: the page uses the server's issue body ───────────────────────────────────────────────────
 # A server error (d.error) reaching innerHTML, however the assignment is spaced or built.
-_R19D_ERR_SINK20 = _re20.compile(r"\.innerHTML\s*\+?=[^;]*\bd\.error\b")
+# Any HTML sink, and a `;` inside a string literal (an `&mdash;` entity) does not end the
+# statement (review 1013a: `[^;]*` stopped there, and outerHTML/insertAdjacentHTML were not read).
+_R19D_ERR_SINK20 = _re20.compile(r"""(?:\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\()"""
+                                 r"""(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|[^;'"])*?\bd\.error\b""")
 
 
 def _p20_js():
@@ -740,9 +743,12 @@ def _p20_js():
           and _R19D_ERR_SINK20.search(fn) is None, fn[:900])
     # The sink is found however it is spaced or built (review 1012d: only the literal
     # `msg.innerHTML=d.error` was refused, so `msg.innerHTML = d.error` passed).
-    check("debug report page: ...a server error reaching innerHTML is found in any spacing (control)",
+    check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
+          "`;` inside a string (control)",
           all(_R19D_ERR_SINK20.search(_x) for _x in (
-              "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;"))
+              "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
+              'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
+              "msg.insertAdjacentHTML('beforeend', d.error);"))
           and _R19D_ERR_SINK20.search("msg.textContent = d.error;") is None)
 
 

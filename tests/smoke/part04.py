@@ -505,7 +505,8 @@ with app.app_context():
                           game_type="tf2", port=27025, installed=True, status="offline")
     # A second row on that host (review 1012d): with one row its order could never change, so
     # "another host's rows are NOT disturbed" passed whatever the saved order did to it.
-    _lay_gs3 = GameServer(remote_id=remote2_id, name="smoke-tf2b", short_name="tf2server",
+    # Its own account: one Linux account is one server per host, and the import refuses a second.
+    _lay_gs3 = GameServer(remote_id=remote2_id, name="smoke-tf2b", short_name="tf2serverb",
                           game_type="tf2", port=27026, installed=True, status="offline")
     db.session.add_all([_lay_gs2, _lay_gs3])
     db.session.commit()
@@ -1868,6 +1869,14 @@ try:
         _eh_writes[_p] = (_r.status_code, (_r.get_json(silent=True) or {}).get("unreachable"))
     _eh_rv.remote_ufw_open_port = _eh_boom
     _resp_gen = _eh_c.post("/api/remote/%d/firewall/open" % _eh_rid, json={"port": 27015})
+    # A changed host key is the panel REFUSING to connect, not a host that is down (review 1013a).
+    from panel.ops.ssh_manager import HostKeyMismatch as _eh_hkm  # noqa: E402
+
+    def _eh_key(*_a, **_k):
+        raise _eh_hkm("smoke: the SSH host key for p04 has CHANGED")
+
+    _eh_rv.remote_ufw_open_port = _eh_key
+    _resp_key = _eh_c.post("/api/remote/%d/firewall/open" % _eh_rid, json={"port": 27015})
 finally:
     _eh_rv.remote_ufw_open_port = _eh_open_was
     with app.app_context():
@@ -1877,15 +1886,26 @@ with app.test_request_context("/"):
     _eh_fr = _eh_i18n.catalog("fr").get("Something went wrong — see the panel log.")
     _eh_fr_down = _eh_i18n.catalog("fr").get("Host unreachable")
 _eh_body = _resp.get_json(silent=True) or {}
-check("errors: ...a host that cannot be reached is said to be unreachable (502), in the viewer's language",
-      _resp.status_code == 502 and bool(_eh_fr_down) and _eh_body.get("message") == _eh_fr_down
+# A 200, as every route that catches it answers (review 1013a): it was a 502, which Cloudflare
+# Tunnel swaps for its own HTML page, so the JSON never reached the page.
+check("errors: ...a host that cannot be reached is said to be unreachable (200), in the viewer's language",
+      _resp.status_code == 200 and bool(_eh_fr_down) and _eh_body.get("message") == _eh_fr_down
       and _eh_body.get("unreachable") is True, repr((_resp.status_code, _eh_body)))
 # close and delete-rule read the firewall first (the lockout guard), and a read that fails is their
 # own refusal, answered 200; neither is the generic 500 any more.
 check("errors: ...and so are allow-from and limit on that host; close and delete-rule refuse as their "
       "own guard says (no write answers the generic 500)",
-      {k: _eh_writes.get(k) for k in ("allow-from", "limit")} == {"allow-from": (502, True), "limit": (502, True)}
+      {k: _eh_writes.get(k) for k in ("allow-from", "limit")} == {"allow-from": (200, True), "limit": (200, True)}
       and all(_eh_writes.get(k, (500,))[0] != 500 for k in ("close", "delete-rule")), repr(_eh_writes))
+with app.test_request_context("/"):
+    _eh_fr_key = _eh_i18n.catalog("fr").get(
+        "The panel refused to connect: this host's SSH key is not the one it trusts. If you "
+        "reinstalled the host, use Re-trust host key on its page.")
+_eh_kb = _resp_key.get_json(silent=True) or {}
+check("errors: ...a changed host key is said as that (Re-trust host key), not as unreachable, in "
+      "the viewer's language",
+      _resp_key.status_code == 200 and bool(_eh_fr_key) and _eh_kb.get("message") == _eh_fr_key
+      and _eh_kb.get("unreachable") is False, repr((_resp_key.status_code, _eh_kb)))
 _eh_said = (_resp_gen.get_json(silent=True) or {}).get("message")
 check("errors: ...and any other fault's generic message is in the viewer's language",
       _resp_gen.status_code == 500 and bool(_eh_fr) and _eh_said == _eh_fr,
@@ -1893,6 +1913,12 @@ check("errors: ...and any other fault's generic message is in the viewer's langu
 # An abort(404) on an API path is the same unparseable body, one status code over.
 _resp = _eh_c.get("/api/server/99999/history")
 check("errors: an abort() on an API path answers JSON too",
+      "json" in (_resp.headers.get("Content-Type") or "") and _resp.status_code == 404,
+      "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+# ...and so does any path asked with `Accept: application/json`, as _form_ok/_form_err answer such a
+# caller (review 1013a: it got that endpoint's JSON on success and an HTML page on any fault).
+_resp = _eh_c.get("/no-such-page-p04", headers={"Accept": "application/json"})
+check("errors: a caller that accepts only JSON gets a JSON error off an /api/ path too",
       "json" in (_resp.headers.get("Content-Type") or "") and _resp.status_code == 404,
       "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
 # ...and none of them carries Werkzeug's English to an es/fr viewer (review 1012d): the JSON reply

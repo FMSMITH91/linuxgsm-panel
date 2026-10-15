@@ -639,6 +639,13 @@ def _set_lang61(lang):
         _db61.session.commit()
 
 
+# The account's language as this part found it, put back after each block that switches it, as
+# part73 does (review 1013a: reset to "en", a later part would read this part's choice).
+with _p9.app_context():
+    _LANG61_WAS = _db61.session.get(_User61, P9_ADMIN).language
+
+
+
 try:
     with _patched():
         _r15d_arm61()
@@ -647,7 +654,7 @@ try:
             _set_lang61(_lang61)
             _pages61[_lang61] = _p9_client(P9_ADMIN).get("/remote/%d/firewall" % P9_HOST).get_data(as_text=True)
 finally:
-    _set_lang61("en")
+    _set_lang61(_LANG61_WAS)
 _want61 = {"en": "This rule opens ports 47140,47150,47160, including port 47150, where",
            "es": "Esta regla abre los puertos 47140,47150,47160, incluido el puerto 47150, donde",
            "fr": "Cette règle ouvre les ports 47140,47150,47160, dont le port 47150, où"}

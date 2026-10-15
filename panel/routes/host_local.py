@@ -153,7 +153,11 @@ def _register_panel_update(app):
             data["boot_id"] = _BOOT_ID   # flips only when the panel process restarts
             return jsonify(data)
         except Exception:
-            return jsonify({"git": False, "update_available": False, "boot_id": _BOOT_ID,
+            # check_failed: the card shows one of its two states only (the owner's rule), and this
+            # is not the not-a-git-checkout line — read as that, "Internal server error" was printed
+            # as a third state and the Update button hidden. It reads as "You're up to date", as an
+            # unreachable update source does; the reason stays here, in the API.
+            return jsonify({"git": False, "check_failed": True, "update_available": False, "boot_id": _BOOT_ID,
                             "current_version": so.panel_version(),
                             # The card shows the version beside its commit (a date alone names a
                             # whole day of commits), so a failed check keeps the commit too.

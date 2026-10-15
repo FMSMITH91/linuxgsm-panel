@@ -288,11 +288,14 @@ function appendSubject(li, text, repo){
   if(last<text.length) li.appendChild(document.createTextNode(text.slice(last)));
 }
 
+// What the card last showed, so a check that could not be made puts it back (see checkPanelUpdate).
+var _r20cUpdateShown=null;
 function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
   var cur=document.getElementById('pu-current'); if(cur) cur.textContent=(d.current_version||'?')+(d.current_sha?' · '+d.current_sha:'');
-  if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
+  _r20cUpdateShown=d;
+  if(d.git===false && !d.check_failed){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
     st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> '+tfHtml(d.behind===1
         ? 'Update available: {version} ({n} commit behind).' : 'Update available: {version} ({n} commits behind).',
@@ -346,7 +349,13 @@ function checkPanelUpdate(force){
   var st=document.getElementById('pu-status'); if(!st) return;
   st.innerHTML='<i class="bi bi-arrow-repeat"></i> Checking for updates…';
   fetch(MOUNT+'/api/panel/update-status'+(force?'?force=1':'')).then(function(r){return r.json();}).then(renderUpdate)
-    .catch(function(){ st.innerHTML='<span class="text-danger">Update check failed.</span>'; });
+    // Not a third state ("Update check failed." was one): the card goes back to what it showed, or
+    // with nothing shown yet, to "You're up to date" — what an unreachable update source reads as.
+    .catch(function(){
+      var cur=document.getElementById('pu-current');
+      renderUpdate(_r20cUpdateShown || {git: true, update_available: false,
+                                         current_version: cur ? cur.textContent : ''});
+    });
 }
 // Render the streamed self-update log with per-line styling (steps / ok / warn / error).
 function renderPuLog(lines){

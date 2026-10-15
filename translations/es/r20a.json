@@ -1,0 +1,5 @@
+{
+  "Routes must be comma-separated networks, e.g. 192.168.1.0/24,10.0.0.0/24": "Las rutas deben ser redes separadas por comas, p. ej. 192.168.1.0/24,10.0.0.0/24",
+  "The panel refused to connect: this host's SSH key is not the one it trusts. If you reinstalled the host, use Re-trust host key on its page.": "El panel se negó a conectarse: la clave SSH de este host no es la que tiene como confiable. Si reinstalaste el host, usa Volver a confiar en la clave del host en su página.",
+  "The connection to the host was lost while the command was running, so it may have run. Check the host before trying again.": "Se perdió la conexión con el host mientras se ejecutaba el comando, así que puede que se haya ejecutado. Comprueba el host antes de volver a intentarlo."
+}

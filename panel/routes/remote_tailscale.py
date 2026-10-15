@@ -15,6 +15,7 @@ from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import HOST_RE
 from app import (_refuse_on_panel_host)
+from panel.routes._shared import (_r20b_audit_on_raise)
 
 # Why migrate and finalize refuse the panel host. Not the generic "it would reboot the panel": they
 # reboot nothing. They are the steps after a REMOTE joins the tailnet, and they rewrite that host's
@@ -73,15 +74,16 @@ def _register_status_and_link_join(app):
         if enable_ssh is None:
             return jsonify({"success": False, "message": "enable_ssh must be true or false."}), 400
         try:
-            ok, result = remote_tailscale_up_url(
-                remote,
-                enable_ssh=enable_ssh,
-                advertise_routes=_json_str(data, "advertise_routes"),
-            )
+            with _r20b_audit_on_raise("remote_tailscale_up", target=remote.name, remote=remote):
+                ok, result = remote_tailscale_up_url(
+                    remote,
+                    enable_ssh=enable_ssh,
+                    advertise_routes=_json_str(data, "advertise_routes"),
+                )
             log_action(current_user, "remote_tailscale_up", target=remote.name, success=ok,
                        remote=remote)
             if not ok:
-                return jsonify({"success": False, "message": result}), 500
+                return jsonify({"success": False, "message": i18n.tr(result)}), 500
             if result == "ALREADY_CONNECTED":
                 return jsonify({"success": True, "connected": True})
             return jsonify({"success": True, "connected": False, "url": result})
@@ -106,7 +108,8 @@ def _register_finalize_and_install(app):
         if refused:
             return refused
         try:
-            status, log = remote_tailscale_finalize(remote)
+            with _r20b_audit_on_raise("remote_tailscale_finalize", target=remote.name, remote=remote):
+                status, log = remote_tailscale_finalize(remote)
             # Opens tailscale0 in the remote's UFW — a firewall change, and the only one of this
             # file's five Tailscale actions that was not audited.
             #
@@ -146,7 +149,8 @@ def _register_finalize_and_install(app):
         if refused:
             return refused
         try:
-            success, msg, log = remote_install_tailscale(remote)
+            with _r20b_audit_on_raise("remote_tailscale_install", target=remote.name, remote=remote):
+                success, msg, log = remote_install_tailscale(remote)
             log_action(current_user, "remote_tailscale_install", target=remote.name, detail=msg, success=success,
                        remote=remote)
             return jsonify({"success": success, "message": msg, "log": log})
@@ -227,11 +231,13 @@ def _register_key_join_and_migrate(app):
             return jsonify({"success": False, "message": "Auth key is required. Get one at https://login.tailscale.com/admin/keys"}), 400
 
         try:
-            success, msg, log = remote_bootstrap_tailscale(
-                remote, auth_key=auth_key,
-                enable_ssh=enable_ssh,
-                advertise_routes=advertise_routes,
-            )
+            # The key is never in the row: a VerbError's text is the boundary's fixed refusal.
+            with _r20b_audit_on_raise("remote_tailscale_bootstrap", target=remote.name, remote=remote):
+                success, msg, log = remote_bootstrap_tailscale(
+                    remote, auth_key=auth_key,
+                    enable_ssh=enable_ssh,
+                    advertise_routes=advertise_routes,
+                )
             log_action(current_user, "remote_tailscale_bootstrap", target=remote.name, detail=msg, success=success,
                        remote=remote)
             return jsonify({"success": success, "message": i18n.tr(msg), "log": log})

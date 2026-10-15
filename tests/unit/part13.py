@@ -2448,7 +2448,7 @@ try:
     _real_rl10("sudo -n /usr/bin/true", sudo=True)
     _real_rl10("uptime", stdin_text="in")
     check("core local: sudo=True runs the whole pipeline under one `sudo bash -c`",
-          _rl_calls10[0] == ("sudo bash -c " + _shlex10.quote("ls /root | wc -l"), None),
+          _rl_calls10[0] == (_sm_core._R20A_SUDO_C + "sudo bash -c " + _shlex10.quote("ls /root | wc -l"), None),
           repr(_rl_calls10[:1]))
     check("core local: a command that escalates itself is not wrapped again; sudo=False is as-is",
           _rl_calls10[1][0] == "sudo -n /usr/bin/true" and _rl_calls10[2] == ("uptime", "in"),
@@ -2797,7 +2797,7 @@ try:
           _cli_pop10 and _cli_pop10[0][0] == [
               "ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
               "-o", "ConnectTimeout=7", "-p", "22", "--", "admin@box.ts.net",
-              "sudo bash -c " + _shlex10.quote("cat /etc/hostname")],
+              _sm_core._R20A_SUDO_C + "sudo bash -c " + _shlex10.quote("cat /etc/hostname")],
           repr(_cli_pop10[:1]))
     check("core ssh cli: a secret goes down stdin (a pipe), never on the command line",
           _cli_pop10[0][1].get("stdin") == "PIPE" and _cli_feed10 == [b"s3cret"]
@@ -2907,7 +2907,7 @@ try:
     _rc_fail10 = _try10(_sm_core.run_command, _REMOTE10, "id -u", sudo=False)
     _core_restore10("_drain_exec", "get_connection")
     check("core run_command: sudo=True on a remote is `sudo bash -c` around the whole command",
-          _exec_seen10[0] == ("sudo bash -c " + _shlex10.quote("id -u"), 12)
+          _exec_seen10[0] == (_sm_core._R20A_SUDO_C + "sudo bash -c " + _shlex10.quote("id -u"), 12)
           and _exec_seen10[1] == ("id -u", 30), repr(_exec_seen10))
     check("core run_command: stdin gets the secret, then EOF — even if the half-close fails",
           _xc10.stdin.wrote == ["pw\n"] and _xc10.stdin.flushed == 1

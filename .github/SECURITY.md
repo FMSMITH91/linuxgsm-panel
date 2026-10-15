@@ -498,6 +498,10 @@ host's: a host whose global policy relaxed `env_reset` or `secure_path` (an imag
 `Defaults` wins over user and global ones for that command; measured with sudo 1.9.15, a
 `Defaults:<panel-user> !env_reset, !secure_path` beside it still gives the helper a reset
 environment and exactly that PATH. It is rewritten on every install and update, like the grants.
+One exception: a sudo with no command-scoped `Defaults` at all (sudo-rs before 0.2.4) rejects the
+file, so the installer writes the two grants without the line and warns. The helper then starts
+with the host's own `env_reset` and `secure_path`; it still replaces its environment and PATH
+itself before any verb runs.
 
 **Root is reachable only by running the helper.** In particular **not** `/bin/bash`, `/bin/sh`,
 `systemd-run`, the `tailscale` binary, or `sudo -u root` — each of those runs whatever argv you

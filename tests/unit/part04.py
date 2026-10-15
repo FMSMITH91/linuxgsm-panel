@@ -2530,11 +2530,13 @@ _cg4_shapes = {_label: _cg4_drive(*_bodies) for _label, _bodies in (
     ("data of strings", ('{"data": ["x"]}',)),
     ("pagination a list", ('{"data": [], "pagination": ["c"]}',)),
     ("a list on page two", ('{"data": [], "pagination": {"cursor": "p2"}}', "[]")),
+    # review 1013a: a cursor still left after the 20-page bound is a list not all read.
+    ("pages past the bound", ('{"data": [], "pagination": {"cursor": "c"}}',) * 20),
     ("clean", ('{"data": [], "pagination": {}}',)))}
 check("tools: ...a 200 whose JSON is not the object it reads fails the run, with a message",
       {_k: _v[0] for _k, _v in _cg4_shapes.items()}
       == {"a list": 1, "a list of issues": 1, "data of strings": 1, "pagination a list": 1,
-          "a list on page two": 1, "clean": 0}
+          "a list on page two": 1, "pages past the bound": 1, "clean": 0}
       and all("::error::" in _v[1] and "refusing to report it clean" in _v[1]
               for _k, _v in _cg4_shapes.items() if _k != "clean"),
       repr({_k: (_v[0], _v[1][:90]) for _k, _v in _cg4_shapes.items()}))

@@ -2244,9 +2244,11 @@ loadGameVersion();
 // else, so watch for one rather than polling a build number that changes a few times a year.
 // Any marker but the opening one counts, including a failure: an update that died partway has
 // still changed the files on disk, and showing the pre-update build would be a lie.
+// Only the panel's OWN pushes (`panel: true`): a game log line holding "[panel] " — a player's chat
+// — made every open page of this server re-read the version.
 socket.on('console_output', function(data) {
   if (data.server_id !== serverId || typeof data.data !== 'string') return;
-  if (_isActionEnd(data.data)) {
+  if (data.panel && _isActionEnd(data.data)) {
     setTimeout(loadGameVersion, 500);
   }
 });
