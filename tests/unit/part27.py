@@ -10,7 +10,8 @@ the tree before it:
 - pip-audit reads the pins as written (--disable-pip), fails a pin it cannot audit (--strict), and
   must have audited every pin: requirements-bootstrap.txt had been audited as zero packages;
 - Dependency Review fails at any severity; every Dependabot entry has Renovate's release-age cooldown;
-- the Semgrep job installs one lockfile with pip's dependency check on (no --no-deps);
+- the Semgrep job installs its lockfile and the one package it pins apart (mcp) with --no-deps, and
+  pip check follows, tolerating only semgrep's own pin of that package;
 - gitleaks runs its `git` command against an `[[allowlists]]` config, not the deprecated forms.
 
 HOW IT RUNS. The workflows are read as text (PyYAML is not installed in CI's test environment), and
@@ -411,36 +412,70 @@ check("dependabot: ...and an entry whose only cooldown is in a comment is caught
       == ['- package-ecosystem: "pip" directory: "/"'])
 
 
-# ── Semgrep: one lockfile, installed whole ──────────────────────────────────────────────────────
-# semgrep 1.178 pinned a vulnerable PyJWT, so PyJWT was compiled out and installed from a second
-# file with --no-deps. semgrep 1.179 allows a safe one: one closure, and pip checks it is complete.
+# ── Semgrep: the lockfile, and mcp pinned apart ────────────────────────────────────────────────
+# semgrep 1.179.0 (and 1.181.0) declare mcp==1.29.0 exactly, and 1.29.0 has GHSA-84m7-p3x7-pcfv, so
+# mcp is compiled out of semgrep.txt (--unsafe-package) and pinned in semgrep-mcp.txt, the two
+# installed together with --no-deps. The same split was made for PyJWT in #375 and undone in #391;
+# semgrep.in says when to undo this one.
 _SG27 = _job27(_SC27, "sast-semgrep")
 _sg_inst27 = [_t for _w, _t in _ci_installs if _w == "security-code.yml"
               and any(_x.startswith(".github/ci-requirements/semgrep") for _x in _t)]
 _sg_txt27 = _read27(".github", "ci-requirements", "semgrep.txt")
-check("semgrep: the job installs semgrep.txt alone, hash-checked, with pip's dependency check on",
+_sg_mcp27 = _read27(".github", "ci-requirements", "semgrep-mcp.txt")
+_sg_in27 = _read27(".github", "ci-requirements", "semgrep.in")
+check("semgrep: the job installs semgrep.txt and semgrep-mcp.txt, hash-checked, wheels only, --no-deps",
       len(_sg_inst27) == 1
       and [_sg_inst27[0][_i + 1] for _i, _t in enumerate(_sg_inst27[0]) if _t == "-r"]
-      == [".github/ci-requirements/semgrep.txt"]
-      and "--require-hashes" in _sg_inst27[0] and "--no-deps" not in _sg_inst27[0]
-      and "-r .github/ci-requirements/semgrep.txt" in " ".join(_SG27.split()),
+      == [".github/ci-requirements/semgrep.txt", ".github/ci-requirements/semgrep-mcp.txt"]
+      and {"--require-hashes", "--no-deps", "--only-binary"} <= set(_sg_inst27[0])
+      and "-r .github/ci-requirements/semgrep-mcp.txt" in " ".join(_SG27.split()),
       repr(_sg_inst27))
-check("semgrep: ...and its lockfile is the whole closure: PyJWT pinned in it, nothing compiled out",
-      _re27.search(r"^pyjwt==\d", _sg_txt27, _re27.M) is not None
-      and "--unsafe-package" not in _sg_txt27 and "were not pinned" not in _sg_txt27
-      and not os.path.exists(os.path.join(_root, ".github", "ci-requirements", "semgrep-pyjwt.txt")))
-# --no-deps turns off pip's check that a lockfile is the whole closure; that is how the semgrep
-# workaround hid a vulnerable PyJWT. One install keeps it: complexity.yml, whose lockfile leaves
-# out pylint-celery (sdist only) by name. Its next step runs pip check and tolerates only what the
-# lockfile's header leaves out with --unsafe-package.
+
+
+def _sg_pins27(text):
+    """{name: version} of a pip-compile lockfile's pins."""
+    return {_m.group(1).lower(): _m.group(2)
+            for _m in _re27.finditer(r"^([A-Za-z0-9._-]+)==(\S+) \\$", text, _re27.M)}
+
+
+_sg_p27, _sg_mp27 = _sg_pins27(_sg_txt27), _sg_pins27(_sg_mcp27)
+_sg_ver27 = tuple(int(_x) for _x in _re27.findall(r"\d+", _sg_mp27.get("mcp", "0"))[:3])
+check("semgrep: mcp is compiled out of semgrep.txt by name, and semgrep-mcp.txt pins a fixed one "
+      "(>= 1.30.0, GHSA-84m7-p3x7-pcfv) with hashes",
+      _re27.search(r"^#    pip-compile (?!.*--allow-unsafe).*--unsafe-package=mcp ", _sg_txt27, _re27.M)
+      is not None and "mcp" not in _sg_p27 and "semgrep" in _sg_p27
+      and _re27.search(r"^mcp==\S+ \\\n    --hash=sha256:[0-9a-f]{64}", _sg_mcp27, _re27.M) is not None
+      and _sg_ver27 >= (1, 30, 0) and "--unsafe-package=mcp" in _sg_in27,
+      repr((_sg_mp27.get("mcp"), sorted(_sg_p27)[:3])))
+# --no-deps would let the two files disagree: the same package at two versions fails the install,
+# and semgrep-mcp.txt's -c line is what keeps them equal. Every package it pins besides mcp must be
+# semgrep.txt's own version.
+_sg_drift27 = sorted(_n for _n, _v in _sg_mp27.items() if _n != "mcp" and _sg_p27.get(_n) != _v)
+check("semgrep: semgrep-mcp.txt is constrained by semgrep.txt, and pins nothing at another version",
+      _re27.search(r"^-c semgrep\.txt$", _read27(".github", "ci-requirements", "semgrep-mcp.in"),
+                   _re27.M) is not None and len(_sg_mp27) > 1 and not _sg_drift27, repr(_sg_drift27))
+# --no-deps turns off pip's check that a lockfile is the whole closure; that is how the first
+# semgrep workaround hid a vulnerable PyJWT. Two installs use it, each followed by a pip check that
+# tolerates only what its lockfile's header names with --unsafe-package: complexity.yml, whose
+# lockfile leaves out pylint-celery (sdist only), and the Semgrep job, which pins mcp apart.
 _PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile leaves out"
+_SG_PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile pins apart"
 _CX27 = _read27(".github", "workflows", "complexity.yml")
-_nodeps27 = sorted({_w for _w, _t in _ci_installs if "--no-deps" in _t})
-check("workflows: --no-deps only in complexity.yml, and pip check follows it there",
-      _ci_installs and _nodeps27 in ([], ["complexity.yml"])
-      and (not _nodeps27 or ("- name: " + _PC_STEP27) in _CX27
-           and _CX27.index("--no-deps\n") < _CX27.index("- name: " + _PC_STEP27)
-           < _CX27.index("complexity_gate.py --self-test")),
+_nodeps27 = sorted(_w for _w, _t in _ci_installs if "--no-deps" in _t)
+
+
+def _follows27(text, before, step):
+    """True when the step named `step` comes after the --no-deps install and before `before`."""
+    _n = "- name: " + step
+    return (_n in text and "--no-deps\n" in text and before in text
+            and text.index("--no-deps\n") < text.index(_n) < text.index(before))
+
+
+check("workflows: --no-deps only in complexity.yml and the Semgrep job, and pip check follows each",
+      _ci_installs and _nodeps27 == ["complexity.yml", "security-code.yml"]
+      and [_t for _w, _t in _ci_installs if _w == "security-code.yml" and "--no-deps" in _t] == _sg_inst27
+      and _follows27(_CX27, "complexity_gate.py --self-test", _PC_STEP27)
+      and _follows27(_SG27, "- name: Semgrep scan", _SG_PC_STEP27),
       repr(_nodeps27))
 
 
@@ -470,6 +505,41 @@ check("complexity job: ...and fails on any other missing or mismatched requireme
       and _pc_version27[0] != 0 and "has requirement astroid" in _pc_version27[1].split("::error::", 1)[1],
       repr((_pc_missing27, _pc_version27)))
 
+
+def _sg_pipcheck27(report):
+    """The Semgrep job's pip-check step, run with `python -m pip check` answering `report`."""
+    if ("- name: " + _SG_PC_STEP27) not in _SG27:
+        return 99, "no such step"
+    with _tf27.TemporaryDirectory() as _d:
+        _bin = os.path.join(_d, "bin")
+        os.mkdir(_bin)
+        _stub27(_bin, "python", "import sys\nsys.stdout.write(%r)\nsys.exit(%d)\n"
+                % (report, 0 if report.startswith("No broken") else 1))
+        _env = dict(os.environ, PATH=_bin + os.pathsep + os.environ.get("PATH", ""))
+        return _run_step27(_wf_run_block(_SG27, _SG_PC_STEP27), _env)
+
+
+# The report pip check gives with semgrep-mcp.txt installed (measured in python:3.11-slim), built
+# from the pins so a Dependabot bump of either file moves it too.
+_SG_PIN27 = "semgrep %s has requirement mcp==1.29.0, but you have mcp %s.\n" % (
+    _sg_p27.get("semgrep"), _sg_mp27.get("mcp"))
+_sg_ok27 = _sg_pipcheck27(_SG_PIN27)
+_sg_clean27 = _sg_pipcheck27("No broken requirements found.\n")
+_sg_other27 = _sg_pipcheck27("semgrep %s has requirement mcp==1.29.0, but you have mcp 1.28.0.\n"
+                             % _sg_p27.get("semgrep"))
+_sg_gone27 = _sg_pipcheck27("semgrep %s requires mcp, which is not installed.\n" % _sg_p27.get("semgrep"))
+_sg_dep27 = _sg_pipcheck27("mcp %s requires httpx-sse, which is not installed.\n%s"
+                           % (_sg_mp27.get("mcp"), _SG_PIN27))
+check("semgrep job: pip check passes semgrep's own mcp pin against the version semgrep-mcp.txt "
+      "installs, and a clean report",
+      _sg_ok27[0] == 0 and _sg_clean27[0] == 0, repr((_sg_ok27, _sg_clean27)))
+check("semgrep job: ...and fails on mcp at any other version, mcp missing, or any other missing "
+      "requirement, naming it",
+      all(_r[0] not in (0, 99) and "::error::" in _r[1] for _r in (_sg_other27, _sg_gone27, _sg_dep27))
+      and "mcp 1.28.0" in _sg_other27[1].split("::error::", 1)[1]
+      and "requires mcp, which" in _sg_gone27[1].split("::error::", 1)[1]
+      and "requires httpx-sse" in _sg_dep27[1].split("::error::", 1)[1],
+      repr((_sg_other27, _sg_gone27, _sg_dep27)))
 
 # ── gitleaks: the `git` command, and the `[[allowlists]]` table ─────────────────────────────────
 # v8.19.0 deprecated `detect` (hidden, still there), v8.25.0 replaced `[allowlist]`. A release that

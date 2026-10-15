@@ -138,7 +138,35 @@ jobs:
         # shellcheck is pre-installed on the ubuntu runners and flake8 is installed above, so this
         # only ever fires when the runner image changes under us.
         # UNIT_LOG: the unit run's output, which the next step compares its root run against.
-        run: PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" bash tools/run-tests.sh
+        #
+        # One after another, the suites here (~22 min) and the root run below (~10 min) were most of
+        # a leg's 32-37 minutes, on a runner with 4 CPUs. RUN_TESTS_PARALLEL=1 runs the suites in
+        # three lanes at once (tools/run-tests.sh says how each lane gets a data/ of its own), and
+        # the root run of the unit suite goes alongside them, started first: the next step only
+        # judges it. It runs in its own copy of the checkout, made before anything else runs, so
+        # nothing it writes as root lands in the tree the lanes read. Its output and duration go to
+        # files the next step reads, and none of it to this step's own output, which a background
+        # process still holding it would keep open; a run-tests.sh failure ends the step without
+        # waiting for it. SC2016: ${!SUDO_@} is the root shell's to expand.
+        run: |
+          set -uo pipefail
+          root_tree="$(mktemp -d "${RUNNER_TEMP}/unit-root-tree-XXXXXX")"
+          chmod --reference=. "${root_tree}"
+          cp -a ./. "${root_tree}/"
+          started="${SECONDS}"
+          (
+            cd "${root_tree}" || exit 1
+            # shellcheck disable=SC2016
+            # The step's shell is `bash -e`, and the subshell inherits it: the root run's own exit
+            # status (non-zero by design, the next step judges its log) must not end the subshell
+            # before the timing is written, nor become `wait`'s answer.
+            sudo -E env PATH="$PATH" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
+            echo "$((SECONDS - started))" > "${RUNNER_TEMP}/unit-root-seconds.txt"
+          ) < /dev/null > "${RUNNER_TEMP}/unit-root.txt" 2>&1 &
+          root_pid=$!
+          PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" RUN_TESTS_PARALLEL=1 \
+            bash tools/run-tests.sh || exit
+          wait "${root_pid}"
 
       - name: Run the root-only unit checks, as root
         if: steps.scope.outputs.docs_only != 'true'
@@ -160,16 +188,14 @@ jobs:
         # sudo exports SUDO_UID, SUDO_USER and the rest, and the privileged helper reads SUDO_UID
         # (who invoked it); the suite's stand-in `pwd` has no getpwuid, so with them set it died in
         # part05 before reaching a single root check. They are unset; nothing else changes.
+        #
+        # The run itself starts in the step above, beside the other suites, and that step waits for
+        # it; this step judges what it wrote. A run that left no output is judged as one that left
+        # no tally.
         run: |
           set -uo pipefail
           root_log="${RUNNER_TEMP}/unit-root.txt"
-          # SC2016: ${!SUDO_@} is the root shell's to expand. SC2024: the log is written by this
-          # shell, as the runner, on purpose; only the suite runs as root.
-          started="${SECONDS}"
-          # shellcheck disable=SC2016,SC2024
-          sudo -E env PATH="$PATH" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' \
-            > "${root_log}" 2>&1 || true
-          echo "the unit suite as root took $((SECONDS - started))s"
+          echo "the unit suite as root took $(cat "${RUNNER_TEMP}/unit-root-seconds.txt" 2>/dev/null || echo '?')s"
           python - "${RUNNER_TEMP}/unit-user.txt" "${root_log}" <<'EOF'
           import re
           import sys

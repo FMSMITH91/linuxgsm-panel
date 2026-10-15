@@ -330,14 +330,45 @@ jobs:
         if: steps.scope.outputs.docs_only != 'true'
         with:
           python-version: "3.11"
-      # semgrep.txt is semgrep's whole closure, PyJWT included, each package hash-checked, and pip
-      # checks it is complete: no --no-deps, so a dependency a semgrep bump adds and the lockfile
-      # lacks fails here, by name, instead of as "wrote no SARIF" below. (semgrep 1.178 pinned a
-      # vulnerable PyJWT, which is why there was a second file; see .github/ci-requirements/semgrep.in.)
+      # --no-deps: semgrep.txt is semgrep's whole closure except mcp, which semgrep-mcp.txt pins
+      # past semgrep's own ==1.29.0 (GHSA-84m7-p3x7-pcfv; fixed in 1.30.0). Together they are every
+      # package the scan needs, each hash-checked; see .github/ci-requirements/semgrep.in, which
+      # also says when to undo this.
       - if: steps.scope.outputs.docs_only != 'true'
         run: >-
-          python -m pip install --quiet --require-hashes --only-binary :all:
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-deps
           -r .github/ci-requirements/semgrep.txt
+          -r .github/ci-requirements/semgrep-mcp.txt
+      # --no-deps also turns off pip's check that the two files are the whole closure, so a semgrep
+      # bump that adds a dependency neither has would install and fail later as "wrote no SARIF".
+      # pip check puts it back. The one report it may make is semgrep's pin of a package the
+      # lockfile's header leaves out with --unsafe-package (mcp), against exactly the version its
+      # own file installs; anything else fails the job, named.
+      - name: The installed tools are the whole closure, apart from what the lockfile pins apart
+        if: steps.scope.outputs.docs_only != 'true'
+        run: |
+          set -euo pipefail
+          dir=.github/ci-requirements
+          # name=version for each package the lockfile pins apart, read from its own file.
+          apart=""
+          while read -r u; do
+            if [ -f "${dir}/semgrep-${u}.txt" ]; then
+              apart="${apart} ${u}=$(awk -v u="${u}" 'index(tolower($1), u "==") == 1 { sub(/^[^=]*==/, "", $1); print $1 }' "${dir}/semgrep-${u}.txt")"
+            fi
+          done < <(grep -oE -- '--unsafe-package=[A-Za-z0-9._-]+' "${dir}/semgrep.txt" | cut -d= -f2 | sort -u)
+          rc=0
+          out="$(python -m pip check 2>&1)" || rc=$?
+          printf '%s\n' "${out}"
+          bad="$(printf '%s\n' "${out}" | awk -v apart="${apart}" '
+            BEGIN { n = split(apart, a, " "); for (i = 1; i <= n; i++) { split(a[i], p, "="); ok[tolower(p[1]) " " p[2] "."] = 1 } }
+            $0 == "" || $0 == "No broken requirements found." { next }
+            $1 == "semgrep" && $3 == "has" && $4 == "requirement" && (tolower($(NF - 1)) " " $NF) in ok { next }
+            { print }')"
+          if [ -n "${bad}" ]; then
+            echo "::error::pip check (exit ${rc}) found requirements semgrep.txt and the files it pins apart do not satisfy (pinned apart:${apart:- none}):"
+            printf '%s\n' "${bad}"
+            exit 1
+          fi
       # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
       # general security-audit + Python + Flask + command-injection + secrets. This
       # catches real code vulns (injection, SSRF, path traversal, unsafe redirects,

@@ -488,19 +488,35 @@ def _ci1_only_docs_gated(root_step, run_step):
             and _re29.findall(r"^ {8}if: (.*)$", run_step, _re29.M) == docs_if)
 
 
+def _ci1_run_step_bad(run_step):
+    """What the run-tests step lacks: UNIT_LOG, and the root run beside the suites, waited for.
+
+    The root run starts in this step, beside the suites (tests1015b), and the step waits for it;
+    the root step judges its log against UNIT_LOG.
+    """
+    bad = []
+    run = " ".join(_ln.strip().rstrip("\\").strip() for _ln in run_step.splitlines())
+    if not _re29.search(r'UNIT_LOG="\$\{RUNNER_TEMP\}/unit-user\.txt" (?:\w+=\S+ )*bash tools/run-tests\.sh',
+                        run):
+        bad.append("run-tests.sh is not given UNIT_LOG")
+    sudo = "sudo -E env PATH=\"$PATH\" bash -c 'unset \"${!SUDO_@}\"; exec python tests/unit_test.py'"
+    if not all(w in run for w in (sudo + " || true", '> "${RUNNER_TEMP}/unit-root.txt"', 'wait "${root_pid}"')):
+        # `|| true`: the step runs under `bash -e`, which the backgrounded subshell inherits, and the
+        # root run exits non-zero by design, so without it `wait` failed a green leg (#431).
+        bad.append("the run-tests step does not run the suite as root, SUDO_* unset, `|| true` under "
+                   "the step's bash -e, into the log the root step reads, and wait for it")
+    return bad
+
+
 def _ci1_root_step_bad(steps):
     names = [_name29(s) for s in steps]
     rt = next((i for i, n in enumerate(names) if n.startswith("Run all checks")), None)
     if any([_CI_ROOT29 not in names, rt is None]) or names.index(_CI_ROOT29) < rt:
         return ["no root step after the run-tests step: %r" % names]
-    bad, rs = [], steps[names.index(_CI_ROOT29)]
-    if 'UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" bash tools/run-tests.sh' not in steps[rt]:
-        bad.append("run-tests.sh is not given UNIT_LOG")
-    wants = ("sudo -E env PATH=\"$PATH\" bash -c 'unset \"${!SUDO_@}\"; exec python tests/unit_test.py'",
-             '"${RUNNER_TEMP}/unit-user.txt" "${root_log}"')
-    if not all(w in rs for w in wants):
-        bad.append("the root step does not run the suite as root, SUDO_* unset, and compare it "
-                   "with UNIT_LOG")
+    bad, rs = _ci1_run_step_bad(steps[rt]), steps[names.index(_CI_ROOT29)]
+    if not all(w in rs for w in ('"${RUNNER_TEMP}/unit-user.txt" "${root_log}"',
+                                 'root_log="${RUNNER_TEMP}/unit-root.txt"')):
+        bad.append("the root step does not compare the root run's log with UNIT_LOG")
     if not _ci1_only_docs_gated(rs, steps[rt]):
         bad.append("the root step can be skipped or fail without failing the job")
     return bad
