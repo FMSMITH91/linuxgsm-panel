@@ -113,6 +113,22 @@ def _r12b_outside_home(out):
     return (out or "").lstrip().startswith(_OUTSIDE_HOME)
 
 
+def _r21b_real_home(hq):
+    """Shell setting "$h" to the home `hq` names, resolved ON THE HOST (`hq` itself if it cannot be).
+
+    The guards below compare a RESOLVED path (`realpath -m`, `cd -P`) with the home. Against the
+    literal `/home/<user>` only, a host whose /home is a symlink (`/home -> /data/home`, as some
+    images set up) resolved every path to /data/home/<user>/..., so the file browser answered
+    "outside the home" for the home itself, and delete, rename, create and download refused
+    everything. Each guard accepts the literal form too: where /home is no link the two are one, and
+    a path realpath resolved never passes through a /home that IS one.
+
+    Every substitution here and in the guards ends in an `x` the shell cannot strip, removed after:
+    `$(...)` drops every trailing newline, and a name may end in one.
+    """
+    return f"h=$(cd -P -- {hq} 2>/dev/null && pwd -P && printf x) && h=${{h%?x}} || h={hq}; "
+
+
 def _guarded(user, abspath, inner):
     """Prefix `inner` with a check that `abspath` still resolves inside /home/<user> ON THE HOST.
 
@@ -132,8 +148,10 @@ def _guarded(user, abspath, inner):
     """
     home = f"/home/{user}"
     hq = _core._quote(home)
-    return (f"p=$(realpath -m {_core._quote(abspath)} 2>/dev/null || printf %s {_core._quote(abspath)}); "
-            f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + inner)
+    aq = _core._quote(abspath)
+    return (_r21b_real_home(hq)
+            + f"p=$(realpath -m {aq} 2>/dev/null && printf x) && p=${{p%?x}} || p={aq}; "
+            f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + inner)
 
 
 # Biggest base64 payload we will put in a single command. The whole `bash -c '<script>'` is ONE
@@ -401,6 +419,23 @@ def lgsm_read_config(server, user, selfname):
 # Printed by the `details` script AFTER LinuxGSM has finished, so its presence is the one thing
 # that separates "details ran and named no config file" from "details never ran".
 _DETAILS_DONE = "__LGSMP_DETAILS_DONE__"
+# Printed ahead of `details`, followed by the home as `pwd -P` resolves it ON THE HOST.
+_R21B_REAL_HOME_MARK = "__LGSMP_REAL_HOME__="
+
+
+def _r21b_reported_config_rel(text, user):
+    """The config file `details` named, relative to the home it is under; None if it named none.
+
+    Either home: /home/<user>, or the one `pwd -P` printed after _R21B_REAL_HOME_MARK.
+    """
+    homes = [f"/home/{user}/"]
+    m = re.search("^" + re.escape(_R21B_REAL_HOME_MARK) + r"(/\S*?)/?$", text, re.M)
+    if m:
+        homes.append(m.group(1) + "/")
+    m = re.search(r"config file[^:\n]*:[ \t]*(/\S+\.cfg)", text, re.I)
+    path = m.group(1) if m else ""
+    home = next((h for h in homes if path.startswith(h)), None)
+    return None if home is None else path[len(home):]
 
 
 def lgsm_game_config(server, user, selfname):
@@ -423,26 +458,21 @@ def lgsm_game_config(server, user, selfname):
     # about the GAME made from a read that never reached the host. The admin concludes their
     # server.cfg does not exist and stops looking. The sentinel only lands if the script ran to
     # the end, so "details said nothing" and "details never answered" stay tellable apart.
-    inner = (f"cd /home/{_core._quote(user)} && {{ ./{_core._quote(selfname)} details 2>&1; "
-             f"printf %s {_core._quote(_DETAILS_DONE)}; }}")
+    # The real home first: LinuxGSM names its files by its own resolved root (`readlink -f` of the
+    # script), so on a host whose /home is a symlink every path it prints is under /data/home, and
+    # the `/home/<user>/` test below answered "no editable game config" for a config that is there.
+    inner = (f"cd /home/{_core._quote(user)} && {{ printf '%s%s\\n' {_R21B_REAL_HOME_MARK} \"$(pwd -P)\"; "
+             f"./{_core._quote(selfname)} details 2>&1; printf %s {_core._quote(_DETAILS_DONE)}; }}")
     o, _, _ = _core.shell_as_game_user(server, user, inner, timeout=45, selfname=selfname)
     text = terminal.strip_escapes(o or "")
     if _DETAILS_DONE not in text:
         _core._log.warning("lgsm_game_config: no DONE marker for %s — reporting a failed read", selfname)
         return {"rel": None, "content": "", "exists": False,
                 "error": "Could not read the game config — the host did not answer."}
-    text = text.replace(_DETAILS_DONE, "")
-    home = f"/home/{user}/"
-    path = None
-    for line in text.splitlines():
-        m = re.search(r"config file[^:]*:\s*(/\S+\.cfg)", line, re.I)
-        if m:
-            path = m.group(1)
-            break
-    if not path or not path.startswith(home):
+    rel = _r21b_reported_config_rel(text.replace(_DETAILS_DONE, ""), user)
+    if rel is None:
         return {"rel": None, "content": "", "exists": False,
                 "error": "No editable game config file was reported for this game."}
-    rel = path[len(home):]
     content, err = read_file(server, user, rel)
     return {"rel": rel, "content": content or "", "exists": err is None, "error": err}
 
@@ -901,10 +931,15 @@ def _protected_resolved(user, ap, selfname, inner):
     home = f"/home/{user}"
     hq = _core._quote(home)
     names = "|".join(_core._quote(n) for n in sorted(_protected_top_names(selfname)))
-    return (f"d=$(cd -P -- {_core._quote(_pp.dirname(ap))} 2>/dev/null && pwd -P) "
-            f"|| {{ echo '{_NO_SUCH_DIR}' >&2; exit 1; }}; "
+    # "$h" (the real home) and "$d" (the real parent) through _r21b_real_home's sentinel: a folder
+    # whose name ENDS in a newline lost it to `$(...)`, so "$t" named the sibling without it, and
+    # `rm -rf -- "$t"` removed `foo/bar` when `foo<LF>/bar` was asked for.
+    return (_r21b_real_home(hq)
+            + f"d=$(cd -P -- {_core._quote(_pp.dirname(ap))} 2>/dev/null && pwd -P && printf x) "
+            f"&& d=${{d%?x}} || {{ echo '{_NO_SUCH_DIR}' >&2; exit 1; }}; "
             f't="$d"/{_core._quote(_pp.basename(ap))}; '
-            f'case "$t" in {hq}/*) r=${{t#{hq}/}} ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
+            f'case "$t" in {hq}/*) r=${{t#{hq}/}} ;; "$h"/*) r=${{t#"$h"/}} ;; '
+            f'*) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
             f'case "$r" in lgsm|lgsm/*|{names}) echo {_PROTECTED_MARK}; exit 8 ;; esac; '
             + inner)
 
@@ -1537,6 +1572,18 @@ def _console_guard(user, selfname):
             f'case "$c" in "$t"|"$t"/*) echo {_RENAME_CONSOLE_MARK}; exit 11 ;; esac; done; ')
 
 
+def _r21b_named_folder(user, folder):
+    """Shell test: "$d" (the resolved folder) is `folder`, the one the browser named.
+
+    As named, or as named under the real home "$h" (_r21b_real_home, which _protected_resolved
+    sets): on a host whose /home is a symlink, `cd -P` puts every folder under /data/home, and
+    rename and create refused every folder as "reached through a symlink".
+    """
+    q = _core._quote
+    rest = folder[len("/home/%s" % user):]
+    return f'{{ [ "$d" = {q(folder)} ] || [ "$d" = "$h"{q(rest)} ]; }}'
+
+
 def _rename_inner(ap, new_name, user, selfname=None):
     """The host-side rename, run after _protected_resolved has set "$d" (real parent) and "$t".
 
@@ -1557,7 +1604,7 @@ def _rename_inner(ap, new_name, user, selfname=None):
     """
     q = _core._quote
     taken = '[ -e "$n" ] || [ -L "$n" ]'
-    return (f'[ "$d" = {q(_pp.dirname(ap))} ] || {{ echo {_RENAME_LINKED}; exit 10; }}; '
+    return (f'{_r21b_named_folder(user, _pp.dirname(ap))} || {{ echo {_RENAME_LINKED}; exit 10; }}; '
             + _console_guard(user, selfname) +
             f'si=$(stat -c %d:%i -- "$t" 2>/dev/null) || {{ echo {_RENAME_GONE}; exit 7; }}; '
             f'n="$d"/{q(new_name)}; '
@@ -1687,13 +1734,12 @@ def _create_inner(dest, kind, user, selfname=None):
     * Whether it was made is read from the filesystem, never from the exit status alone: the new
       name must then be a folder (or a regular file), and not a symlink.
     """
-    q = _core._quote
     taken = '[ -e "$t" ] || [ -L "$t" ]'
     if kind == "folder":
         make, is_kind = 'mkdir -- "$t" 2>/dev/null', '[ -d "$t" ] && [ ! -L "$t" ]'
     else:
         make, is_kind = '( set -o noclobber; : > "$t" ) 2>/dev/null', '[ -f "$t" ] && [ ! -L "$t" ]'
-    return (f'[ "$d" = {q(_pp.dirname(dest))} ] || {{ echo {_CREATE_LINKED}; exit 10; }}; '
+    return (f'{_r21b_named_folder(user, _pp.dirname(dest))} || {{ echo {_CREATE_LINKED}; exit 10; }}; '
             + _console_guard(user, selfname) +
             f'if {taken}; then echo {_CREATE_TAKEN}; exit 6; fi; '
             f'if {make} && {is_kind}; then echo {_CREATE_DONE}; exit 0; fi; '
@@ -1809,12 +1855,17 @@ def _remote_read_command(user, as_tar):
     """
     home = "/home/%s" % user
     hq = _core._quote(home)
-    # `rel=$(cat)` rather than `read -r`: command substitution strips only TRAILING newlines, so a
-    # filename containing one survives. -- everywhere, so a name can never be read as an option.
-    body = (f"rel=$(cat); home={hq}; "
-            'p=$(realpath -m "$home/$rel" 2>/dev/null || printf %s "$home/$rel"); '
-            f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
-    body += ('tar czf - -C "$(dirname "$p")" -- "$(basename "$p")"' if as_tar
+    # `$(cat)` rather than `read -r`, so a newline inside a name survives — but command
+    # substitution strips every TRAILING newline, and a name may END in one: `cfg/foo<LF>` read as
+    # `cfg/foo`, a different file, whose first N bytes (N = the real file's size, from stat_path)
+    # were saved under the other name with a 200. So each substitution ends in an `x` the shell
+    # cannot strip, removed after: the path's own, realpath's (with the newline it prints), and the
+    # tar's folder and name are cut from $p by expansion, not by `$(dirname)` / `$(basename)`.
+    # -- everywhere, so a name can never be read as an option.
+    body = (f"rel=$(cat; printf x); rel=${{rel%x}}; home={hq}; " + _r21b_real_home(hq)
+            + 'p=$(realpath -m "$home/$rel" 2>/dev/null && printf x) && p=${p%?x} || p="$home/$rel"; '
+            f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
+    body += ('d=${p%/*}; tar czf - -C "${d:-/}" -- "${p##*/}"' if as_tar
              else 'cat -- "$p"')
     return _core.game_user_cmd(user, body)
 

@@ -1,0 +1,4 @@
+{
+  "The limit for {spec} was added, but `{rule}` above it is an application profile the panel cannot read, so it cannot confirm the limit is the rule connections meet first.": "El límite para {spec} se añadió, pero `{rule}`, que está por encima, es un perfil de aplicación que el panel no puede leer, así que no puede confirmar que el límite sea la primera regla con la que se encuentran las conexiones.",
+  "That isn't a valid Ubuntu Pro token — copy it again from your Ubuntu Pro dashboard.": "Ese no es un token de Ubuntu Pro válido: vuelve a copiarlo desde tu panel de Ubuntu Pro."
+}

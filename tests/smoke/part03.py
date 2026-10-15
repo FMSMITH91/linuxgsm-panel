@@ -154,8 +154,9 @@ try:
               "differing only by comment, so this retags the other server's rule" % (_cf_opened,))
         check("install job (clash): ...while still opening its own",
               28994 in _cf_opened, "opened %s" % (_cf_opened,))
-        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
-        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        # Only a settled worker's row and job go (as _lv_install does): a still-running worker's
+        # _fail() writes onto whatever row and job dict it holds, and a table without AUTOINCREMENT
+        # (one panel/db/id_sequence.py could not rebuild) hands a deleted row's id to the next INSERT.
         if _cf_settled:
             with app.app_context():
                 _d = db.session.get(GameServer, _cf_id)
@@ -257,8 +258,9 @@ try:
               28997 in _ur_opened and 28999 in _ur_opened,
               "opened %s — query/rcon were closed over a clash nobody observed"
               % (_ur_opened,))
-        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
-        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        # Only a settled worker's row and job go (as _lv_install does): a still-running worker's
+        # _fail() writes onto whatever row and job dict it holds, and a table without AUTOINCREMENT
+        # (one panel/db/id_sequence.py could not rebuild) hands a deleted row's id to the next INSERT.
         if _ur_settled:
             with app.app_context():
                 _d = db.session.get(GameServer, _ur_id)
@@ -344,8 +346,9 @@ try:
               "empty socket table, on a server that started fine (start rc 0)" % (_pu_status,))
         check("install job (unreadable poll): ...and the operator is not told the port is shut",
               "hasn't opened port" not in _pu_msg, repr(_pu_msg[:220]))
-        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
-        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        # Only a settled worker's row and job go (as _lv_install does): a still-running worker's
+        # _fail() writes onto whatever row and job dict it holds, and a table without AUTOINCREMENT
+        # (one panel/db/id_sequence.py could not rebuild) hands a deleted row's id to the next INSERT.
         if _pu_settled:
             with app.app_context():
                 _d = db.session.get(GameServer, _pu_id)
@@ -396,8 +399,9 @@ def _lv_install(short, verdict, port):
     if _rid is None:
         return None, list(_lv_cmds)
     # `settled` is checked by name, as every sibling install block does. Ignored, a worker still
-    # inside _run() at the deadline had its row deleted under it (SQLite hands that id to the
-    # next INSERT, which its _fail() then writes onto) and the real transports handed back by the
+    # inside _run() at the deadline had its row deleted under it (its _fail() then writes onto
+    # what it holds, and onto the next row given that id where a table lacks AUTOINCREMENT) and
+    # the real transports handed back by the
     # finally below, with nothing saying so. An unsettled worker keeps its row and job.
     _job, _row_st, _settled = _ij_wait(_rid, 60)
     check("install step 4 (%s): the install worker finished before the block moved on" % short,
@@ -614,7 +618,8 @@ thief = _clone_cookies(victim)
 thief_rt = _clone_cookies(victim, keep={"remember_token"})
 check("stolen cookie works BEFORE logout (200)", thief.get("/").status_code == 200)
 
-# Log the victim out (bumps auth_epoch), then replay the snapshots.
+# Log the victim out (a real login carries a sid, so this deletes the victim's own session row; only
+# a cookie with no sid falls back to bumping auth_epoch), then replay the snapshots.
 victim.post("/logout")
 check("REUSE BLOCKED: stolen cookie rejected AFTER logout (not 200)",
       thief.get("/").status_code != 200, "cookie still valid after logout!")
@@ -910,8 +915,9 @@ finally:
         RemoteServer.query.filter_by(name="evil-smoke").delete(synchronize_session=False)
         db.session.commit()
 
-# Every one of these maps is keyed by a database row id, and SQLite hands a deleted row's id
-# to the next INSERT — so a new server inherits the old one's alert flags and, via
+# Every one of these maps is keyed by a database row id, and a table without AUTOINCREMENT (one
+# panel/db/id_sequence.py could not rebuild) hands a deleted row's id to the next INSERT — so a
+# new server would inherit the old one's alert flags and, via
 # _max_players_cache, its CAPACITY. #81 pruned one such map; these are its siblings.
 _monmod = sys.modules["panel.services.monitoring"]   # functions moved here resolve their deps HERE
 _ps = sys.modules["panel.core.panel_state"]      # the shared caches now live here
@@ -3200,10 +3206,15 @@ check("session: the other device was signed out",
       _kicked.status_code in (301, 302, 303) and "/login" in (_kicked.headers.get("Location") or ""),
       "status=%d" % _kicked.status_code)
 _bare_after = _bare.get("/api/auth/ping").status_code
+# The premise on its own (review 1015a): with the epoch already moved, the legacy loader refuses a
+# bare "<id>" before the sweep, so "401 after" would hold whatever the sweep did. Required, not
+# allowed either way.
+check("session: (premise) the bare pre-epoch '<id>' cookie is signed in before the sweep, at epoch 0",
+      epoch_before == 0 and _bare_before == 200,
+      "before %d (epoch was %d)" % (_bare_before, epoch_before))
 check("session: a bare pre-epoch '<id>' cookie is signed out by it too (it used to survive "
       "every epoch bump)",
-      _bare_after == 401 and (epoch_before != 0 or _bare_before == 200),
-      "before %d, after %d (epoch was %d)" % (_bare_before, _bare_after, epoch_before))
+      _bare_after == 401, "before %d, after %d (epoch was %d)" % (_bare_before, _bare_after, epoch_before))
 # The admin's epoch just moved, so the suite's own admin client (client_as, "<id>:<epoch>")
 # is one of the cookies it revoked. Re-issue it for everything below.
 c = client_as(admin_id)
@@ -3328,7 +3339,7 @@ try:
                         headers=dict(_sp_ua, **{"User-Agent": "Stolen/9.9"})).status_code
     check("session protection: basic does not bind (the mode really is what decides)",
           _sp_basic == 200, "got %s" % _sp_basic)
-    _sp.get("/logout", headers=_sp_ua)
+    _sp.post("/logout", headers=_sp_ua)
     # IPv6: bound to the /64, as the login throttle counts it. A temporary ("privacy") address
     # rotates inside it about daily and each new connection takes the newest, so an exact
     # address signed every IPv6 user out whenever theirs rotated.
@@ -3348,7 +3359,7 @@ try:
           "same address %s, rotated address %s" % (_sp6_same, _sp6_rot))
     check("session protection: ...and strong still refuses it from another /64 (control)",
           _sp6_away == 401, "got %s" % _sp6_away)
-    _sp6.get("/logout", headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
+    _sp6.post("/logout", headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
 finally:
     app.config["SESSION_PROTECTION"] = _sp_saved
 _ping = s1.get("/api/auth/ping")

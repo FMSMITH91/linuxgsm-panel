@@ -17,12 +17,11 @@ import subprocess as _sp18  # nosec B404 - runs sh and jq on fixed argvs, on thi
 import tempfile as _tf18
 import time as _time18
 import urllib.error as _ue18
-import urllib.request as _ur18
 from types import SimpleNamespace as NS
 
 import pyotp as _pyotp18
 
-from unit.part01 import _r13d_window, check
+from unit.part01 import _r13d_window, _r21d_urlopen_of, check
 from unit.part01 import skip as _skip18
 from unit.part05 import _helper as _helper18, _priv as _priv18
 from unit.part12 import (_p9, _p9_arm, _p9_app, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all,
@@ -458,7 +457,8 @@ def _p18b_telegram():
         _tg18_urlopen.append(a)
         raise OSError("urlopen is not the opener these reads may use")
     _p9_patch(_notif18, "_OPENER", _TgOp18())
-    _p9_patch(_ur18, "urlopen", _tg18_no_urlopen)
+    # On notifications' own urllib, never the process-wide urlopen (review 1015a).
+    _p9_patch(_r21d_urlopen_of(_notif18), "urlopen", _tg18_no_urlopen)
     _tg18_me = _notif18.telegram_get_me(_tg18_tok)
     _p9_patch(_notif18, "_OPENER", _TgOp18(exc=_ue18.HTTPError(
         "https://api.telegram.org/x", 302, "Found", {"Location": "http://169.254.169.254/"}, None)))

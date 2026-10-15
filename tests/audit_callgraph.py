@@ -18,10 +18,10 @@ So each call is resolved statically, the way Python would resolve it:
   * `mod.fn` and `mod.sub.fn` on a resolved module, `self.fn` / `cls.fn` inside a method, and
     `Class.fn`, including a base class the walk can resolve; calling a class runs its __init__;
   * only the calls in a function's own body: a nested def's calls are that def's, reached only
-    when something calls it;
+    when something calls it, and so are a lambda's, whose parameters are its own;
   * a function PASSED to a call (threading.Thread(target=fn), start_background_task(fn),
     functools.partial(fn)) counts as reached by the caller, because that is how a route hands its
-    work to a worker thread.
+    work to a worker thread; a lambda written in that argument counts the same way.
 
 Anything else (a call on an object the walk cannot type, getattr(), a dict of functions) resolves to
 nothing and so never counts as logging. That is the conservative direction: a route that logs only
@@ -33,7 +33,10 @@ import collections
 import pathlib
 
 LOG_MODULE, LOG_NAME = "panel.security.auth", "log_action"
-_SKIP = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+# A lambda is a nested function too (review 1015a: walked as part of its enclosing body, an
+# uncalled `{"ok": lambda: auth.log_action(...)}` counted as an audit row, and so did a lambda
+# parameter shadowing a logging module).
+_SKIP = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _BLOCKS = ("body", "orelse", "finalbody", "handlers")
 # What `name = <value>` binds `name` to: an alias of a name or attribute, or a sequence (read only
 # for a package's _MODULES). Any other value leaves the name opaque.
@@ -160,7 +163,7 @@ class CallGraph:
         for a in positional + args.kwonlyargs + [args.vararg, args.kwarg]:
             if a is not None:
                 inner.names[a.arg] = None
-        static = any(getattr(d, "id", None) == "staticmethod" for d in node.decorator_list)
+        static = any(getattr(d, "id", None) == "staticmethod" for d in getattr(node, "decorator_list", ()))
         if scope.kind == "class" and positional and not static:
             inner.cls, inner.self_name = scope.cls, positional[0].arg
 
@@ -305,8 +308,8 @@ class CallGraph:
 
     # ── edges and reachability ───────────────────────────────────────────────────────────────────
     def _body_nodes(self, node):
-        """Every node in a function's body, not descending into a nested def or class."""
-        todo = list(node.body)
+        """Every node in a function's body or a lambda's expression, not inside a nested scope."""
+        todo = list(node.body) if isinstance(node.body, list) else [node.body]
         while todo:
             cur = todo.pop()
             yield cur
@@ -320,8 +323,19 @@ class CallGraph:
                 continue
             out.update(self._fn_keys(self.resolve(cur.func, scope), call=True))
             for arg in list(cur.args) + [kw.value for kw in cur.keywords]:
-                out.update(self._fn_keys(self.resolve(arg, scope), call=False))
+                if isinstance(arg, ast.Lambda):
+                    out.update(self._lambda_callees(arg, scope))
+                else:
+                    out.update(self._fn_keys(self.resolve(arg, scope), call=False))
         return out
+
+    def _lambda_callees(self, node, scope):
+        """What a lambda handed to a call reaches: its parameters and stores are its own names."""
+        inner = _Scope(scope.mod, "function", scope)
+        self._bind_args(node, inner, scope)
+        for name in _stored_names(node.body):
+            inner.names[name] = None
+        return self._callees(node, inner)
 
     def _fn_keys(self, binding, call):
         """The functions a call, or a function value passed on, reaches (a class runs __init__)."""

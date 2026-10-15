@@ -1,5 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _R20dOver, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _R20dOver, _r21d_urlopen_of, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 
 from unit.part05 import (_SMOKE_SUITE_FILES, _ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
@@ -1778,8 +1778,57 @@ def _r19d_unread_loads(tree, here):
     (review 1013a), so an unreadable load in a test helper taking `case`, or a loader's call site
     inside one, was dropped without a word.
     """
-    return sorted(_name for _scope, _loads in _r19d_scoped_loads(tree, here)
-                  for _name, _rel in _loads.items() if _rel == _R19D_UNREAD)
+    return sorted([_name for _scope, _loads in _r19d_scoped_loads(tree, here)
+                   for _name, _rel in _loads.items() if _rel == _R19D_UNREAD] + _r21d_unread_calls(tree, here))
+
+
+def _r21d_unread_calls(tree, here):
+    """`loader@line` for each loader call that is not `name = loader(…)` and loads by an unread path.
+
+    Only a call assigned to a plain name was read (review 1015a): `_ld(where())` as a statement,
+    `self.m = _ld(…)`, `return _ld(…)`, and a loader that stubs inside and returns nothing, were
+    never named. Every module the loader loads counts, not only the one it returns.
+    """
+    funcs = [_f for _f in _ast_scan.walk(tree) if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))]
+    factories = {_f.name: _f for _f in funcs if _r18d_loads_a_spec(_f)}
+    env0 = dict.fromkeys(_r19d_root_imports(tree), "")
+    out = []
+    for _scope, _env in [(tree, dict(env0))] + [(_f, dict(env0, **_r20d_param_env(_f))) for _f in funcs]:
+        out += _r21d_scope_unread_calls(_scope, _env, here, factories)
+    return out
+
+
+def _r21d_scope_unread_calls(scope, env, here, factories):
+    """`loader@line` for one scope's loader calls that are not `name = loader(…)` and load unread."""
+    _assigns = _r18d_scope_assigns(scope)
+    _r18d_scope_loads(_assigns, env, here, factories)        # fills env with the scope's paths
+    _read = {id(_a.value) for _a in _assigns if any(isinstance(_t, _ast_scan.Name) for _t in _a.targets)}
+    return ["%s@%d" % (_c.func.id, _c.lineno) for _c in _r21d_scope_calls(scope)
+            if id(_c) not in _read and _r21d_call_unread(factories.get(getattr(_c.func, "id", None)), _c, env, here)]
+
+
+def _r21d_call_unread(fn, call, env, here):
+    """Does loader `fn` (None: not a loader), called as `call`, load any module by an unread path?"""
+    if fn is None:
+        return False
+    _p_env = dict(env)
+    _p_env.update({_p.arg: _r18d_eval_path(_x, env, here) for _p, _x in zip(fn.args.args, call.args)})
+    _p_env.update({_k.arg: _r18d_eval_path(_k.value, env, here) for _k in call.keywords if _k.arg})
+    return _R19D_UNREAD in _r18d_scope_loads(_r18d_scope_assigns(fn), _p_env, here, {}).values()
+
+
+def _r21d_scope_calls(scope):
+    """The calls of one scope (module or function), not those inside a nested def, class or lambda."""
+    out, todo = [], list(_ast_scan.iter_child_nodes(scope))
+    while todo:
+        _n = todo.pop()
+        if isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef,
+                           _ast_scan.Lambda)):
+            continue
+        if isinstance(_n, _ast_scan.Call):
+            out.append(_n)
+        todo.extend(_ast_scan.iter_child_nodes(_n))
+    return out
 
 
 def _r18d_loads_a_spec(fn):
@@ -2034,12 +2083,18 @@ _r19d_unread_ctl_t = _ast_scan.parse(
     "def t(case):\n    s = _ilu.spec_from_file_location('x', where())\n    m = _ilu.module_from_spec(s)\n"
     "    three = _ld(other())\n    fine = _ld('tools/i18n_scan.py')\n"
     "def _ok(rel, *a):\n    s = _ilu.spec_from_file_location('y', os.path.dirname(os.path.join(_R9, rel)))\n"
-    "    ok = _ilu.module_from_spec(s)\n    return ok\n")
+    "    ok = _ilu.module_from_spec(s)\n    return ok\n"
+    # review 1015a: a loader call that is not `name = loader(…)`, and a loader returning nothing.
+    "_ld(other())\nobj.m = _ld(other())\n"
+    "def u(case):\n    return _ld(other())\n"
+    "def _st(rel):\n    s = _ilu.spec_from_file_location('z', os.path.join(_R9, rel))\n"
+    "    m = _ilu.module_from_spec(s)\n    m.x = 1\n_st(other())\n_st('tools/i18n_scan.py')\n")
 check("stub gate: ...a root imported under another name is a root, and a load by a path it cannot "
       "work out is named, at its call site for a loader given the path (control)",
       _r14d_aliases(_r19d_unread_ctl_t, {}, os.path.join(_root, "tests", "unit", "part99.py"))
       == {"_scan75": "path:tools/i18n_scan.py", "fine": "path:tools/i18n_scan.py"}
-      and _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py") == ["_two", "_what", "m", "three"],
+      and _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py")
+      == ["_ld@20", "_ld@21", "_ld@23", "_st@28", "_two", "_what", "m", "three"],
       repr((_r14d_aliases(_r19d_unread_ctl_t, {}), _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py"))))
 _r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
     "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
@@ -5689,13 +5744,13 @@ def _cd_run(behaviour):
         if isinstance(behaviour, BaseException):
             raise behaviour
         return _CdResp(behaviour)
-    _saved = (_cd.urllib.request.urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None), sys.stdout)
-    _cd.urllib.request.urlopen = _urlopen
+    _saved = (_r21d_urlopen_of(_cd).urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None), sys.stdout)
+    _r21d_urlopen_of(_cd).urlopen = _urlopen
     sys.stdout = _cd_io.StringIO()
     try:
         return _cd.main()
     finally:
-        _cd.urllib.request.urlopen = _saved[0]
+        _r21d_urlopen_of(_cd).urlopen = _saved[0]
         sys.stdout = _saved[2]
         if _saved[1] is not None:
             os.environ["GITHUB_STEP_SUMMARY"] = _saved[1]
@@ -10824,7 +10879,7 @@ try:
         _uc_fh.write("=== panel self-update ===\n\033[0;31m[ERROR]\033[0m an OLD run's failure\n"
                      "=== installer exit 1 ===\n")
     _uc_launch = {}
-    _uc_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess.run,
+    _uc_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess,
                  SO._run_verb)
 
     def _uc_fake_run(argv, *a, **k):
@@ -10843,7 +10898,7 @@ try:
         SO.PANEL_DIR = _uc_pd
         SO._is_system_service = lambda: False
         SO._helper_present = lambda: False
-        SO.subprocess.run = _uc_fake_run
+        SO.subprocess = _R20dOver(_uc_saved[3], run=_uc_fake_run)     # its own handle (review 1015a)
         _uc_ok = SO._launch_installer(target_ref="", branch="")
         # ...and the helper route, with a stale log planted again.
         with open(os.path.join(_uc_pd, "data", "self-update.log"), "w", encoding="utf-8") as _uc_fh:
@@ -10853,7 +10908,7 @@ try:
         SO._run_verb = _uc_fake_verb
         _uc_ok_h = SO._launch_installer(target_ref="", branch="")
     finally:
-        (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess.run,
+        (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess,
          SO._run_verb) = _uc_saved
     check("self-update card: both launchers remove the PREVIOUS run's log before starting this one, so "
           "its exit line is never read as this run's",

@@ -420,12 +420,15 @@ _upd_prog81 = (
     "})();\n") % (_line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("),
                   _cut_or81(_RMH81, "function checkPanelUpdate("), _json81.dumps(_upd81))
 _card81 = _node81("remote_manage_host.js: the update card when the check fails", _upd_prog81)
+# The route's own answer is Python's to check, with or without node (review 1015a: it sat inside the
+# JS half, so a machine without node never read it).
+check("update card: the route's answer to a check it could not make still carries the reason",
+      _upd81.get("check_failed") is True and _upd81.get("message") == "Internal server error", repr(_upd81))
 if _card81 is not None:
     _ok81 = '<span class="text-success"><i class="bi bi-check-circle"></i> '
     check("update card: a check the server could not make reads \"You're up to date (sha)\" (it printed "
-          "\"Internal server error\" and hid Update), and its answer still carries the reason",
-          _upd81.get("check_failed") is True and _upd81.get("message") == "Internal server error"
-          and (_card81.get("failedRoute") or [""])[0] == _ok81 + "You're up to date (a1b2c3d).</span>",
+          "\"Internal server error\" and hid Update)",
+          (_card81.get("failedRoute") or [""])[0] == _ok81 + "You're up to date (a1b2c3d).</span>",
           repr((_upd81, _card81)))
     check("update card: ...a fetch that failed shows no \"Update check failed.\" line: \"You're up to "
           "date\" with nothing shown yet, and an offer already shown stays offered",

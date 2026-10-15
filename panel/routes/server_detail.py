@@ -34,7 +34,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
-    _server_action_buttons, _r20b_audit_on_raise, game_account_write_refusal)
+    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal)
 
 
 def _summarise_action_output(detail):
@@ -745,8 +745,11 @@ def _register_actions(app):
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
             flash(_r15e_said(msg), "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
-            log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
-                       server=gs)
+            # Unless the host call's own wrapper already wrote the row (a short action's SSH that
+            # raised, _run_sync_action): one attempt, one row.
+            if not _r21b_audited(e):
+                log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
+                           server=gs)
             # The exception text is in the audit log above, not in the flash: echoing str(e) to the
             # browser is how internals leak into the UI (py/stack-trace-exposure), and this
             # codebase's rule is never to do it.
@@ -1153,14 +1156,20 @@ def _register_schedules(app):
         if refused is not None:
             return refused
         try:
-            ok, detail = set_autostart(gs.remote, gs.short_name, enabled, gs.lgsm_name)
+            # Every attempt audited, as the cron card's writes are (_write_refused names these two
+            # as the same host crontab writes): a refused write and a raise left no row at all.
+            with _r20b_audit_on_raise("set_autostart", detail=str(enabled), target=gs.name, server=gs):
+                ok, detail = set_autostart(gs.remote, gs.short_name, enabled, gs.lgsm_name)
             if ok:
                 gs.autostart = enabled
                 db.session.commit()
                 log_action(current_user, "set_autostart", target=gs.name, detail=str(enabled),
                            server=gs)
                 return jsonify({"success": True, "enabled": enabled})
-            return jsonify({"success": False, "message": detail or "Failed to update crontab"}), 500
+            log_action(current_user, "set_autostart", target=gs.name, success=False,
+                       detail=("%s - %s" % (enabled, detail or ""))[:300], server=gs)
+            return jsonify({"success": False,
+                            "message": i18n.tr(detail) if detail else "Failed to update crontab"}), 500
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -1190,9 +1199,12 @@ def _register_schedules(app):
             if at is None:
                 return jsonify({"success": False, "message": "time must be HH:MM."}), 400
             host_h, host_m = at
-            ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
-                                           gs.game_type, gs.port, enabled,
-                                           at=(host_h, host_m), query_type=gs.query_type)
+            _at = "%s at %02d:%02d %s" % (enabled, host_h, host_m, host_tz or "host time")
+            # Audited on every outcome, as Autostart is: a refused write and a raise left no row.
+            with _r20b_audit_on_raise("set_daily_restart", detail=_at, target=gs.name, server=gs):
+                ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
+                                               gs.game_type, gs.port, enabled,
+                                               at=(host_h, host_m), query_type=gs.query_type)
             if ok:
                 gs.daily_restart = enabled
                 gs.daily_restart_at = "%02d:%02d" % (host_h, host_m)
@@ -1205,7 +1217,10 @@ def _register_schedules(app):
                                 "host_time": gs.daily_restart_at, "host_tz": host_tz,
                                 "local_time": "%02d:%02d" % (back_h, back_m),
                                 "viewer_tz": viewer_tz})
-            return jsonify({"success": False, "message": detail or "Failed to update schedule"}), 500
+            log_action(current_user, "set_daily_restart", target=gs.name, success=False,
+                       detail=("%s - %s" % (_at, detail or ""))[:300], server=gs)
+            return jsonify({"success": False,
+                            "message": i18n.tr(detail) if detail else "Failed to update schedule"}), 500
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 

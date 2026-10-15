@@ -6,7 +6,7 @@ from flask import (jsonify, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (_r15a_cfg_int, load_config)
 from panel.core.panel_state import (_os_update_seen)
-from panel.db.models import (GameServer, RemoteServer, db, row_label)
+from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer, db, row_label)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, remote_os_run_updates, remote_os_update_start, remote_os_update_status,
@@ -863,7 +863,11 @@ def _register_os_update_checks(app):
         # costs a query set each time it is asked — fine when the grants were lazily cached on the
         # user, and three queries per host now that they are eagerly loaded. Same check, same
         # result, asked once instead of once per host in the snapshot.
-        _allowed = None if current_user.is_superadmin else accessible_remote_ids(current_user)
+        # Less the panel host: its patch state is a superadmin's, as its OS Updates card and every
+        # read behind it are (get_host_remote). A delegated grant covering the panel host reaches
+        # it nowhere else, so the banner must not hand it over either.
+        _allowed = None if current_user.is_superadmin \
+            else accessible_remote_ids(current_user) - {local_id}
         for rid, seen in current:
             if not seen.get("count"):
                 continue
@@ -871,13 +875,13 @@ def _register_os_update_checks(app):
             # must not learn the name or patch state of another's from this summary.
             if _allowed is not None and rid not in _allowed:
                 continue
-            hosts.append({"id": rid, "name": seen["name"], "count": seen["count"],
+            # The panel host's fixed label in the viewer's language (the banner's link guards the
+            # name from the page's translator, which is right for a remote's own words only).
+            name = i18n.tr(LOCAL_HOST_LABEL) if rid == local_id else seen["name"]
+            hosts.append({"id": rid, "name": name, "count": seen["count"],
                           "security": seen["security"], "at": seen["at"],
-                          # The panel host has a dedicated page, but it is superadmin-only — anyone
-                          # else reaching it through the banner would land on a 403, so send them
-                          # to the same host's ordinary manage page (it is just a remote row).
-                          "url": url_for("server_management")
-                                 if rid == local_id and current_user.is_superadmin
+                          # The panel host has a dedicated page (superadmin-only, as is its line).
+                          "url": url_for("server_management") if rid == local_id
                                  else url_for("remote_manage", remote_id=rid)})
         return jsonify({"hosts": hosts})
 
@@ -888,8 +892,11 @@ def _register_os_update_checks(app):
         """One host's last-known package list, as {known:false} when nothing has checked it yet.
 
         It fills the OS Updates card on page load without making the page wait on apt.
+        get_host_remote, as its check/install twins and the firewall read: the panel host's card is
+        superadmin-only (remote_manage.html's _host_ctl), and this read served its package list to
+        any MANAGE_REMOTES holder whose group covered that host.
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         seen = _os_update_seen.get(remote.id)
         if not _os_update_current(seen, remote.created_at):
             return jsonify({"known": False})
@@ -935,8 +942,12 @@ def _register_os_update_jobs(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_os_update_status(remote_id):
-        """Live output + running/done state of the OS update, for the watch popup."""
-        remote = get_remote(remote_id)
+        """Live output + running/done state of the OS update, for the watch popup.
+
+        get_host_remote: the popup's start twin is superadmin-only on the panel host, and so is
+        reading its apt output (see api_remote_updates_cached).
+        """
+        remote = get_host_remote(remote_id)
         try:
             return jsonify(remote_os_update_status(remote))
         except Exception:
@@ -982,8 +993,11 @@ def _register_reboot(app):
         {required, packages[], known, pending_empty, wait, job}: `wait` is a pending "reboot when
         everyone has left", `job` a reboot the panel is running now. Either keeps the banner up even
         when no reboot is required, so a wait is never invisible (or uncancellable).
+        get_host_remote, as the Power card's reboot-plan: the panel host's pending kernel packages
+        and reboot state were readable here by any MANAGE_REMOTES grant covering it, and nowhere
+        else (its OS Updates and Power cards are superadmin-only).
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         try:
             info = dict(remote_reboot_required(remote))
         except Exception:

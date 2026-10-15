@@ -730,6 +730,67 @@ _R19D_ERR_SINK20 = _re20.compile(r"""(?:\.(?:inner|outer)HTML\s*\+?=|insertAdjac
                                  r"""(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|[^;'"])*?\bd\.error\b""")
 
 
+def _r21d_untemplate(src):
+    """`src` with each template literal rewritten as quoted text joined to its ${…} expressions.
+
+    A template literal is a string too, so a `;` or a quote in its text must not end the statement,
+    while d.error inside ${…} is still code (review 1015a: `&mdash; ${d.error}` and `it's ` + d.error
+    in backticks were not read as reaching the sink).
+    """
+    _out, _i = [], 0
+    while _i < len(src):
+        _c = src[_i]
+        if _c in "'\"":
+            _j = _r21d_quote_end(src, _i)
+            _out.append(src[_i:_j])
+        elif _c == "`":
+            _text, _j = _r21d_template_at(src, _i)
+            _out.append(_text)
+        else:
+            _out.append(_c)
+            _j = _i + 1
+        _i = _j
+    return "".join(_out)
+
+
+def _r21d_quote_end(src, i):
+    """The index just past the '…' or "…" string opened at src[i] (or at its line's end)."""
+    _j = i + 1
+    while _j < len(src) and src[_j] not in (src[i], "\n"):
+        _j += 2 if src[_j] == "\\" else 1
+    return _j + 1
+
+
+def _r21d_template_at(src, i):
+    """(the template literal opened at src[i] as quoted text joined to its ${…}, the index past it)."""
+    _out, _i = ["'"], i + 1
+    while _i < len(src) and src[_i] != "`":
+        if src.startswith("${", _i):
+            _depth, _j = 1, _i + 2
+            while _j < len(src) and _depth:
+                _depth += {"{": 1, "}": -1}.get(src[_j], 0)
+                _j += 1
+            _out.append("' + (" + _r21d_untemplate(src[_i + 2:_j - 1]) + ") + '")
+            _i = _j
+        else:
+            _i += 2 if src[_i] == "\\" else 1
+    return "".join(_out) + "'", _i + 1
+
+
+def _r21d_err_sink(src):
+    """The first place a server error (d.error) reaches an HTML sink in JS `src`, or None."""
+    return _R19D_ERR_SINK20.search(_r21d_untemplate(src))
+
+
+# Nine sinks the reader must find, then two it must not (review 1012d, 1013a, 1015a).
+_R21D_SINK_CTL20 = (
+    "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
+    'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
+    "msg.insertAdjacentHTML('beforeend', d.error);", "msg.innerHTML = `&mdash; ${d.error}`;",
+    "msg.innerHTML = `it's ` + d.error;", "msg.innerHTML = `<b>${`x; ${d.error}`}</b>`;",
+    "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;")
+
+
 def _p20_js():
     src = open(os.path.join(SO.PANEL_DIR, "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
     fn = src.split("function genDebugReport(){", 1)[-1].split("\nfunction ", 1)[0]
@@ -740,16 +801,13 @@ def _p20_js():
     check("debug report page: a 429 (a report is still being built) says so, in a fixed string, "
           "instead of 'Could not generate the report.'",
           "r.status===429" in fn and "still being built" in fn and "d.error" in fn
-          and _R19D_ERR_SINK20.search(fn) is None, fn[:900])
+          and _r21d_err_sink(fn) is None, fn[:900])
     # The sink is found however it is spaced or built (review 1012d: only the literal
     # `msg.innerHTML=d.error` was refused, so `msg.innerHTML = d.error` passed).
+    _r21d_sink_ctl = [bool(_r21d_err_sink(_x)) for _x in _R21D_SINK_CTL20]
     check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
-          "`;` inside a string (control)",
-          all(_R19D_ERR_SINK20.search(_x) for _x in (
-              "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
-              'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
-              "msg.insertAdjacentHTML('beforeend', d.error);"))
-          and _R19D_ERR_SINK20.search("msg.textContent = d.error;") is None)
+          "`;` inside a string or a template literal (control)",
+          _r21d_sink_ctl == [True] * 9 + [False] * 2, repr(_r21d_sink_ctl))
 
 
 try:

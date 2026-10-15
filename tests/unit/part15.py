@@ -301,7 +301,7 @@ def _live_threads15(match, grace=5.0):
             mod, qual = getattr(fn, "__module__", None) or "", getattr(fn, "__qualname__", "")
             if fn is not None and match(mod, qual):
                 found.append("%s -> %s.%s" % (th.name, mod, qual))
-        found += _r20d_live_greenlets15(match) + _r20d_open_pools15()
+        found += _r20d_live_greenlets15(match) + _r20d_open_pools15() + _r21d_running_items15(match)
         if not found or _time15.monotonic() >= end:
             return found
         _time15.sleep(0.1)
@@ -346,6 +346,49 @@ def _r20d_open_pools15():
         if ex is not None and not getattr(ex, "_shutdown", True):
             out.append("%s -> an open ThreadPoolExecutor" % th.name)
     return out
+
+
+def _r21d_running_items15(match):
+    """Pool work items still running a function `match` accepts, their pool open or shut down.
+
+    A pool shut down with wait=False drops out of _r20d_open_pools15 while its worker still runs
+    the panel task it took (review 1015a), and that worker's target is concurrent.futures' own.
+    Read from the frames: each real thread's, and each green thread's (a monkey-patched pool's
+    workers are greenlets), for concurrent.futures' _WorkItem.run and the function it holds.
+    """
+    out = []
+    for f in _r21d_all_frames15():
+        fn = _r21d_pool_fn15(f)
+        mod, qual = getattr(fn, "__module__", None) or "", getattr(fn, "__qualname__", "")
+        if fn is not None and match(mod, qual):
+            out.append("pool work item -> %s.%s" % (mod, qual))
+    return out
+
+
+def _r21d_all_frames15():
+    """The innermost frame of every real thread and every live green thread."""
+    import gc as _gc15
+    import sys as _sys15
+    import greenlet as _gl15
+    return list(_sys15._current_frames().values()) + [
+        g.gr_frame for g in _gc15.get_objects()
+        if isinstance(g, _gl15.greenlet) and not g.dead and g.gr_frame is not None]
+
+
+def _r21d_pool_fn15(f):
+    """The function a ThreadPoolExecutor work item in frame `f`'s stack is running, or None.
+
+    `self.fn` on _WorkItem.run up to 3.13, a local `fn` in 3.14's WorkerContext.run (its
+    _WorkItem.run holds only a task).
+    """
+    pool_py = os.path.join("concurrent", "futures", "thread.py")
+    while f is not None:
+        if f.f_code.co_name == "run" and f.f_code.co_filename.endswith(pool_py):
+            fn = f.f_locals.get("fn") or getattr(f.f_locals.get("self"), "fn", None)
+            if fn is not None:
+                return fn
+        f = f.f_back
+    return None
 
 
 def _reaches_host15(mod, _qual):
@@ -401,6 +444,26 @@ _thr15_more = (_live_threads15(lambda mod, qual: qual == "_thr15_green_probe", g
 _THR15_GREEN.send(True)
 _thr15_g.wait()
 _thr15_pool.shutdown(wait=True)
+# ...and a pool shut down with wait=False whose worker is still running its task (review 1015a).
+_THR15_ITEM = _thr15.Event()
+
+
+def _thr15_item_probe():
+    """Block until released: the work item a shut-down pool's worker is still running."""
+    _THR15_ITEM.wait(10)
+
+
+_thr15_pool2 = _cf15.ThreadPoolExecutor(max_workers=1)
+_thr15_fut2 = _thr15_pool2.submit(_thr15_item_probe)
+_time15.sleep(0.2)
+_thr15_pool2.shutdown(wait=False)
+_thr15_item = _live_threads15(lambda mod, qual: qual == "_thr15_item_probe", grace=0)
+_THR15_ITEM.set()
+_thr15_fut2.result(10)
+check("threads: ...and a work item still running in a pool shut down without waiting (control)",
+      _thr15_item == ["pool work item -> unit.part15._thr15_item_probe"]
+      and not _live_threads15(lambda mod, qual: qual == "_thr15_item_probe", grace=2),
+      repr(_thr15_item))
 check("threads: ...and a live green thread by its function, and an open pool's worker (controls)",
       sorted(_e.split(" -> ", 1)[1] for _e in _thr15_more[0])
       == ["an open ThreadPoolExecutor", "unit.part15._thr15_green_probe"]

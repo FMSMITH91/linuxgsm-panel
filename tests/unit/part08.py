@@ -81,8 +81,8 @@ _GH_SAVED = [(_sm_core, n, getattr(_sm_core, n)) for n in (
 # game's own handle on time is replaced, never the stdlib module (review 1013a): setting
 # `_sm_game.time.sleep` replaced time.sleep for the whole process while the table ran, so a green
 # thread polling with sleep spun without yielding.
-_GH_SAVED += [(_sm_cron.subprocess, "Popen", _sm_cron.subprocess.Popen),
-              (_sm_files.subprocess, "Popen", _sm_files.subprocess.Popen),
+_GH_SAVED += [(_sm_core, "subprocess", _sm_core.subprocess), (_sm_cron, "subprocess", _sm_cron.subprocess),
+              (_sm_files, "subprocess", _sm_files.subprocess),
               (_sm_game, "time", _sm_game.time)]
 
 _GH_SRV = NS(id=9101, is_local=False, auth_method="key", host="h", port=22, username="admin",
@@ -267,10 +267,12 @@ def _gh_stub_transports():
     _sm_core.helper_present = lambda recheck=False: False
     _sm_core.get_connection = lambda s, **k: _GhClient()
     _sm_core._resolve_ts_host = lambda s: "ts-host"
-    # The shared subprocess shim is stubbed itself, on purpose: every module holding it is a transport
-    # the table's functions may use. game's `time` is the stdlib module, so only its handle is swapped.
-    _sm_cron.subprocess.Popen = _GhPopen
-    _sm_files.subprocess.Popen = _GhPopen
+    # _core's (the ssh-CLI transport), cron's and files' own handles, the transports the table's
+    # functions spawn through: in CI's bare run they ARE the subprocess module, so setting their
+    # Popen replaced it for the whole process (review 1015a). game's `time` likewise.
+    _sm_core.subprocess = _R20dOver(_sm_core.subprocess, Popen=_GhPopen)
+    _sm_cron.subprocess = _R20dOver(_sm_cron.subprocess, Popen=_GhPopen)
+    _sm_files.subprocess = _R20dOver(_sm_files.subprocess, Popen=_GhPopen)
     _sm_game.time = _R20dOver(_sm_game.time, sleep=lambda s: None)
 
 

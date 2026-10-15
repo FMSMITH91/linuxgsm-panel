@@ -34,7 +34,7 @@ import sys
 import tempfile as _tf28
 import types as _types28
 
-from unit.part01 import _R20dOver, check
+from unit.part01 import _R20dOver, _r21d_urlopen_of, check
 
 _R28 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMP28 = _tf28.mkdtemp(prefix="lgsm-unit-p28-")
@@ -85,18 +85,18 @@ def _drive28(issues, accepted, checkout):
     sent, out = [], _io28.StringIO()
     acc = _pl28.Path(_tf28.mkdtemp(prefix="acc-", dir=_TMP28)) / "accepted.json"
     acc.write_text(_json28.dumps({"accepted": accepted}), encoding="utf-8")
-    saved = (_cg28.urllib.request.urlopen, _cg28.ACCEPTED_FILE, _cg28.CHECKOUT,
+    saved = (_r21d_urlopen_of(_cg28).urlopen, _cg28.ACCEPTED_FILE, _cg28.CHECKOUT,
              os.environ.pop("GITHUB_STEP_SUMMARY", None))
 
     def _urlopen(req, **_kw):
         sent.append(_json28.loads(req.data.decode()))
         return _Resp28(_json28.dumps({"data": issues, "pagination": {}}).encode())
-    _cg28.urllib.request.urlopen, _cg28.ACCEPTED_FILE, _cg28.CHECKOUT = _urlopen, acc, checkout
+    _r21d_urlopen_of(_cg28).urlopen, _cg28.ACCEPTED_FILE, _cg28.CHECKOUT = _urlopen, acc, checkout
     try:
         with _ctx28.redirect_stdout(out), _ctx28.redirect_stderr(out):
             rc = _cg28.main()
     finally:
-        _cg28.urllib.request.urlopen, _cg28.ACCEPTED_FILE, _cg28.CHECKOUT = saved[:3]
+        _r21d_urlopen_of(_cg28).urlopen, _cg28.ACCEPTED_FILE, _cg28.CHECKOUT = saved[:3]
         if saved[3] is not None:
             os.environ["GITHUB_STEP_SUMMARY"] = saved[3]
     return rc, out.getvalue(), sent

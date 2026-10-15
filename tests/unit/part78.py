@@ -138,6 +138,11 @@ _prog78 = _DOM72 + (
     "console.log(JSON.stringify({es, en, fr, esLabel, enLabel, frLabel, shared}));\n"
 ) % (_json78.dumps(_ES_SUB78), _json78.dumps(_FR_SUB78), _json78.dumps(_read78("static", "js", "i18n.js")))
 _out78 = _node78("i18n.js: ✅/❌ marks and text written already translated", _prog78)
+# The fixture's premise, as its own check (review 1013a): a translator giving the two keys
+# different words then fails here, by name, not as "i18n.js guessed". It reads the catalog only, so
+# it runs with or without node (review 1015a: it sat inside the JS half).
+check("i18n.js: (fixture) fr gives \"Done\" and \"Complete\" one translation, the shared pair the "
+      "next check drives", _FR78["Done"] == _FR78["Complete"], repr((_FR78["Done"], _FR78["Complete"])))
 if _out78 is not None:
     check("i18n.js: a message behind ❌ or ✅ is translated with its mark kept, as one behind ✓/✗ is "
           "(\"❌ Port required\" stayed English for every es/fr viewer); an unknown one stays",
@@ -152,10 +157,6 @@ if _out78 is not None:
                                                        "✗ " + _FR78["Host unreachable"]]
           and (_out78.get("esLabel"), _out78.get("enLabel"), _out78.get("frLabel"))
           == (_ES78["New file name"], "New file name", _FR78["New file name"]), repr(_out78))
-    # The fixture's premise, as its own check (review 1013a): a translator giving the two keys
-    # different words then fails here, by name, not as "i18n.js guessed".
-    check("i18n.js: (fixture) fr gives \"Done\" and \"Complete\" one translation, the shared pair the "
-          "next check drives", _FR78["Done"] == _FR78["Complete"], repr((_FR78["Done"], _FR78["Complete"])))
     check("i18n.js: ...and a translation two keys share (fr \"Done\" and \"Complete\") is left as it was, "
           "not guessed back to one of them",
           _out78.get("shared") == _FR78["Done"], repr(_out78))

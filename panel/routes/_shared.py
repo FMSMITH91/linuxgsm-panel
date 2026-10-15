@@ -739,7 +739,8 @@ def _run_pending_backups(app):
 
 
 # Consecutive failed attempts at a queued stop/restart, per server id (registered, so a deleted
-# server's count is not inherited by the next server SQLite gives its id). In memory on purpose: a
+# server's count is not inherited by a next server SQLite gives its id, on a table id_sequence.py
+# could not rebuild). In memory on purpose: a
 # panel restart starting the count again costs at most a few more attempts.
 _queued_action_failures = register_server_state({})
 # How many failed attempts before a queued stop/restart is given up on. Retrying at all is what the
@@ -802,6 +803,40 @@ def _queued_action_detail(act, result, fails, retry, give_up):
                else " — still queued until the server is seen stopped", last))
 
 
+def _r21b_raised_attempt(act, fails, last):
+    """Audit detail for a queued stop/restart whose run RAISED: no exit status, as a timeout."""
+    return ("queued '%s when empty' got no answer (attempt %d of %d)%s"
+            % (act, fails, _QUEUED_ACTION_ATTEMPTS,
+               " — no longer queued" if last else " — still queued, will retry"))
+
+
+def _r21b_count_raised(gs, fails, last):
+    """Count a queued action's raised run as a failed attempt; the last one clears the queue."""
+    try:
+        if last:
+            _queued_action_failures.pop(gs.id, None)
+            gs.restart_pending = gs.stop_pending = False
+            db.session.commit()
+        else:
+            _queued_action_failures[gs.id] = fails
+    except Exception:  # noqa: BLE001 - the raise being counted still goes to the sweep
+        db.session.rollback()
+        _log.warning("could not clear a queued action after its last attempt", exc_info=True)
+
+
+def _r21b_run_counted(gs, act):
+    """run_as_game_user for a queued action; a raise is audited, counted as an attempt, re-raised."""
+    raised_fails = _queued_action_failures.get(gs.id, 0) + 1
+    raised_last = raised_fails >= _QUEUED_ACTION_ATTEMPTS
+    try:
+        with _r20b_audit_on_raise("%s_server" % act, who=None, target=gs.name, server=gs,
+                                  detail=_r21b_raised_attempt(act, raised_fails, raised_last)):
+            return _sm.run_as_game_user(gs.remote, gs.short_name, act, timeout=90, selfname=gs.lgsm_name)
+    except Exception:
+        _r21b_count_raised(gs, raised_fails, raised_last)
+        raise
+
+
 def _run_queued_action(app, gs):
     """Run the queued 'stop/restart when empty' for an online, empty server.
 
@@ -823,10 +858,10 @@ def _run_queued_action(app, gs):
     # runs unattended, so if the game does not come back, that page is the only notice there is.
     _mark_expected_offline(gs.id, act)
     # A run that RAISES is audited too: "every attempt is audited" (above) held only for a host
-    # whose transport answers a failure instead of raising it.
-    with _r20b_audit_on_raise("%s_server" % act, who=None, target=gs.name, server=gs):
-        _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
-                                             timeout=90, selfname=gs.lgsm_name)
+    # whose transport answers a failure instead of raising it. And COUNTED, as the same failure
+    # answered with no exit status is: the raise left before the counter, so on a direct-SSH host
+    # _QUEUED_ACTION_ATTEMPTS never applied and every tick ran the action again, a row each time.
+    _out, err, rc = _r21b_run_counted(gs, act)
     ok = (rc == 0)
     retry = _queued_action_retries(act, rc)
     if act == "restart" and not retry:
@@ -932,7 +967,8 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
     It streams progress into `job`, the entry _begin_bootstrap registered for the status endpoint.
 
     THAT entry, not whichever one holds remote_id when a step reports. remote_id is a rowid, and
-    SQLite hands a deleted host's id to the next host added — while this worker, on a machine
+    SQLite handed a deleted host's id to the next host added (it still does on a table
+    panel/db/id_sequence.py could not give AUTOINCREMENT) — while this worker, on a machine
     whose owner can hold any step for as long as they like, is still running. Looked up by id, a
     delegated admin's deleted host wrote its own output into the next host's job (a superadmin's,
     on a host outside the delegate's reach), flipped it to "done/Complete" while that host's real
@@ -1103,9 +1139,10 @@ def _maybe_cache_commands(app, gs):
 # live in the same (single) panel process, so a plain dict + lock is sufficient.
 #
 # REGISTERED (with its lock), like every other map keyed by a database row id — see
-# panel_state.register_remote_state. It was not, and remote_id is a rowid SQLite hands straight to
-# the next INSERT: delete a host mid-bootstrap and the job outlives the row, so the next host to
-# take that id is refused by _begin_bootstrap with "A bootstrap is already running for this
+# panel_state.register_remote_state. It was not, and remote_id is a rowid SQLite handed straight to
+# the next INSERT (still does where id_sequence.py could not add AUTOINCREMENT): delete a host
+# mid-bootstrap and the job outlives the row, so the next host to take that id is refused by
+# _begin_bootstrap with "A bootstrap is already running for this
 # server" until _prune_jobs ages the entry out two hours later.
 _bootstrap_lock = threading.Lock()
 _bootstrap_jobs = register_remote_state({}, _bootstrap_lock)
@@ -1685,8 +1722,10 @@ def _r20b_audit_raised(action, exc, target, detail="", who=_R20B_VIEWER, **kw):
     (paramiko) host that is down raises ConnectionError, while a tailscale or local one answers
     ("", "…timed out", -1). So the same click against a host that is down left an audit row on
     one host and none on another. `detail` is followed by why: a ConnectionError's own text (the
-    transport's fixed "timed out" / "authentication failed" sentences), and for anything else only
-    its type — its text is for the panel log, as _rename_answer keeps it.
+    transport's sentences — "timed out", "authentication failed" — which can carry the host's
+    address and port and paramiko's own exception text; the row is the server's, whose viewers
+    already see that address), and for anything else only its type — its text is for the panel
+    log, as _rename_answer keeps it.
 
     The session is rolled back first: nothing the route had pending was going to be committed
     once its call raised, and the audit's own commit must not be what commits it. `who` is the
@@ -1715,7 +1754,19 @@ def _r20b_audit_on_raise(action, target, detail="", who=_R20B_VIEWER, **kw):
         yield
     except Exception as exc:
         _r20b_audit_raised(action, exc, target, detail, who, **kw)
+        # Marked, so a caller further out whose own except audits a raise writes no second row
+        # for the same attempt (_r21b_audited): server_action's did, and /logs showed two failed
+        # attempts for one click.
+        try:
+            exc._r21b_audited = True
+        except AttributeError:
+            _log.debug("could not mark %s as audited", type(exc).__name__)
         raise
+
+
+def _r21b_audited(exc):
+    """Whether `exc` was already audited as failed by _r20b_audit_on_raise on its way out."""
+    return getattr(exc, "_r21b_audited", False) is True
 
 
 def _reauth_key(user):

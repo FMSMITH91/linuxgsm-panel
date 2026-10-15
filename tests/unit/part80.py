@@ -270,6 +270,9 @@ def _audit_queued80(sid):
         gs = db.session.get(GameServer, sid)
         gs.stop_pending = False
         db.session.commit()
+        # The raised run is counted as an attempt now (review 1015a); the count is per server id,
+        # and SQLite hands this one to the next row created.
+        _sh80._queued_action_failures.pop(sid, None)
     row = _p9_audit("stop_server")
     seen = (out, _p9_audit_count("stop_server") - m, row.success, row.username)
     check("audit: a queued stop-when-empty whose run raised is audited as failed, by the system "

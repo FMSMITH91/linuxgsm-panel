@@ -234,17 +234,26 @@ function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
   var hdr=document.getElementById('sec-log-title');
   if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? tf('fail2ban activity — {jail}', {jail: jail}) : '';
-  el.removeAttribute('data-i18n-text');   // a log, not the placeholder, from here on (see setLang)
-  el.textContent=t('Loading…');   // t(): the translator skips this <pre>
+  _r21cLogNote(el, 'Loading…');
   var url=secBase()+'/log?which='+encodeURIComponent(which);
   if(jail) url += '&jail='+encodeURIComponent(jail);
   fetch(url).then(function(r){return r.json();}).then(function(d){  // nosemgrep
     // A read that FAILED answers {text:"", error:...}; "(log is empty)" there told an admin an
     // unreachable host had no SSH or ban activity, on the card that exists to show attacks.
-    if(!d || d.error){ el.textContent=t('Could not read the log.'); return; }
-    el.textContent=d.text||t('(log is empty)'); el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
+    if(!d || d.error){ _r21cLogNote(el, 'Could not read the log.'); return; }
+    if(d.text){
+      el.removeAttribute('data-i18n-text');   // a log, not a note, from here on (see setLang)
+      el.textContent=d.text;   // textContent: raw log is never HTML
+    } else _r21cLogNote(el, '(log is empty)');
+    el.scrollTop=el.scrollHeight;
     if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }).catch(function(){ el.textContent=t('Could not read the log.'); });
+  }).catch(function(){ _r21cLogNote(el, 'Could not read the log.'); });
+}
+// The log <pre>'s own notes, through t() (the translator skips a <pre>) and named in data-i18n-text,
+// so a live language switch renders them again: they stayed in the page's first language.
+function _r21cLogNote(el, key){
+  el.setAttribute('data-i18n-text', key);
+  el.textContent=t(key);
 }
 
 // "update available" badge links to #updates, so a hash pointing at a card opens its tab and
@@ -338,7 +347,12 @@ function pollLive(){
       // Not on the panel host's own page: a failed local read is not "cannot reach this host over
       // SSH" about the machine that is serving this page (a good read still paints it Reachable).
       if(d.unreachable && !window.IS_LOCAL) _r18cPaintHostBadge(false);
-      if(stale){ stale.textContent = d.unreachable
+      // A changed host key or a cut-off read is flagged unreachable too, and `code` says which:
+      // "the host did not answer" sent the operator to wait when they need Re-trust host key.
+      var why = d.code;
+      if(stale){ stale.textContent = (why && why !== 'host_unreachable' && d.message)
+        ? d.message
+        : d.unreachable
         ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
         : t('Live figures are paused — the last read failed.'); stale.style.display=''; }
       return;
@@ -444,7 +458,12 @@ function checkUpdates(){
       // no `ok` key at all, and `d.ok===false` let that through to a green "System is up to date."
       // with Install disabled as "Nothing to install".
       if(d.ok!==true){
-        if(d.unreachable) el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
+        // A changed host key or a cut-off read: the route's own sentence (in the viewer's
+        // language) names the way out, where "apt may be busy. Try again" sent them to retry.
+        var why = d.code;
+        if(why && why !== 'host_unreachable' && d.message) el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
+          + escapeHtml(d.message) + '</span>';
+        else if(d.unreachable) el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
           + "Couldn't reach the host — its update state is unknown.</span>";
         else el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
           + "Couldn't read the package list — apt may be busy. Try again in a minute.</span>";
@@ -564,7 +583,7 @@ function _osuShowDone(d, spin, stEl){
   _osuRebootNag();
 }
 function _osuRebootNag(){
-  if(window.rebootNagCheck){ if(IS_LOCAL && window.LOCAL_HOST_ID!=null) rebootNagCheck(window.LOCAL_HOST_ID,'the panel host');
+  if(window.rebootNagCheck){ if(IS_LOCAL && window.LOCAL_HOST_ID!=null && window.LOCAL_HOST_CTL) rebootNagCheck(window.LOCAL_HOST_ID,'the panel host');
                              else if(!IS_LOCAL) rebootNagCheck(REMOTE_ID, REMOTE_NAME); }   // kernel update -> banner
 }
 // Not done yet. False once apt has been definitely not running for three polls in a row, which

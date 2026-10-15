@@ -260,10 +260,21 @@ def _r20a_verb_shell(verb, args, timeout, merge_stderr):
     command at all (` 2>&1`), and it went out behind `sudo `, so Install Tailscale on a non-root
     panel host with no helper ran a bare `sudo` and showed sudo's usage text as the install log.
     """
-    if not _priv.tool_argv(verb, args) and verb not in _priv._REMOTE_ACTIONS:
+    has_tool = bool(_priv.tool_argv(verb, args))
+    if not has_tool and verb not in _priv._REMOTE_ACTIONS:
         return _r20a_needs_helper(verb)
-    return _run_verb_shell(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                           timeout=timeout, sudo=True, whole=verb in _WHOLE_OUTPUT_VERBS)
+    # A _REMOTE_ACTIONS rendering is a compound script (`rm …; nohup tailscale up … > /run/… &
+    # for …`), and `sudo <script>` elevates only its first simple command: Connect Tailscale ran
+    # `tailscale up` unprivileged, its redirect into root-only /run was refused, and no login link
+    # ever came. Wrapped whole, as _core._run_local does for the same reason. A tool's own argv
+    # rendering keeps the bare prefix: a host with a narrow sudoers grant allows the tool, not
+    # `bash`. As root no `sudo` is added (_run_verb_shell), so nothing needs wrapping there. Built
+    # inline, so the shell-quoting and escalation gates read the builder.
+    elevated = hasattr(os, "geteuid") and os.geteuid() != 0
+    return _run_verb_shell(
+        _priv.remote_command(verb, args, merge_stderr=merge_stderr) if has_tool or not elevated
+        else "bash -c " + shlex.quote(_priv.remote_command(verb, args, merge_stderr=merge_stderr)),
+        timeout=timeout, sudo=True, whole=verb in _WHOLE_OUTPUT_VERBS)
 
 
 def _run_verb_once(verb, args, timeout, merge_stderr):
@@ -392,7 +403,8 @@ def _run_verb_shell(cmd, timeout=30, sudo=False, whole=False):
     try:
         # In C.UTF-8 by its environment, not by a prefix: `sudo {cmd}` elevates the first word, and
         # sudo keeps the locale for it (_core._r20a_c_env); the rest of a pipe gets it
-        # from the shell.
+        # from the shell. (A compound _REMOTE_ACTIONS form arrives as `bash -c '…'` already, so
+        # all of it is the elevated word: _r20a_verb_shell.)
         # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true -- the pre-helper verb form, built by privileged.py from its fixed table
         p = subprocess.Popen(cmd, shell=True,  # nosec B602 - privileged.py's own shell form
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,

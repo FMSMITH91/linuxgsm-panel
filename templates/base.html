@@ -318,8 +318,9 @@ window.CSRF = {{ csrf_token()|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/palette.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
   window.LOCAL_HOST_ID = {{ local_remote_id|default(none)|tojson }};
-  // Whether this user may act on the panel host (reboot, cancel): every such route takes it through
-  // get_host_remote, which is superadmin-only there. LOCAL_HOST_ID alone is any host admin.
+  // Whether this user may act on the panel host (reboot, cancel) or read its reboot and patch state:
+  // every such route takes it through get_host_remote, which is superadmin-only there. LOCAL_HOST_ID
+  // alone is any host admin (it is the OS-updates banner's audience, for the hosts they manage).
   window.LOCAL_HOST_CTL = {{ 'true' if current_user.is_authenticated and current_user.is_superadmin else 'false' }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/nags.js') }}"></script>

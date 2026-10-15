@@ -25,6 +25,7 @@ from collections import Counter
 
 from sqlalchemy import func
 
+from panel.core.validation import canonical_host
 from panel.ops import system_ops as _so
 from panel.ops.debug_report._base import Result, ago, unread_line
 
@@ -731,13 +732,18 @@ def _peer_names(peer):
 
 def _peer_keys(peer):
     """Every name and address a peer answers to, lower-cased (for matching only)."""
-    ips = {str(i) for i in (peer.get("ips") or peer.get("TailscaleIPs") or ())}
+    ips = {canonical_host(str(i)) for i in (peer.get("ips") or peer.get("TailscaleIPs") or ())}
     return ips | _peer_names(peer)
 
 
 def match_peer(host, peers):
-    """The peer a stored tailscale host names, matched IN MEMORY (name, MagicDNS or IP)."""
-    h = (host or "").strip().lower().rstrip(".")
+    """The peer a stored tailscale host names, matched IN MEMORY (name, MagicDNS or IP).
+
+    An address is compared in its canonical text on both sides (validation.canonical_host): a host
+    stored as `fd7a:115c:a1e0:0:0:0:0:1`, with a leading zero, or in brackets, connected, yet read
+    "no tailnet peer matches its stored address", and its offline warning never fired.
+    """
+    h = canonical_host((host or "").strip().lower().rstrip("."))
     found = [p for p in (peers or ()) if isinstance(p, dict) and h and h in _peer_keys(p)]
     return found[0] if found else None
 

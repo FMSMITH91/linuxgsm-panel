@@ -167,8 +167,11 @@ window.addEventListener('pageshow', function(ev){
 // saying which was newest: the fr catalog arriving last put the page, and every picker, back in
 // French, and the saves raced the same way on the server. Each pick takes a number; only the newest
 // pick's catalog is applied or warns, and each save is sent once the one before it has answered,
-// so the server's last write is the last pick.
-var _r20cLangSeq = 0, _r20cLangSaved = Promise.resolve();
+// so the server's last write is the last pick. A save that never answers (a stalled connection;
+// fetch has no timeout of its own) is given up after _r21cLangSaveMs: it held every later pick's
+// save behind it for the life of the page, so the server kept the old language while the page
+// showed the new one.
+var _r20cLangSeq = 0, _r20cLangSaved = Promise.resolve(), _r21cLangSaveMs = 15000;
 document.addEventListener('change', function(e){
   var el = e.target;
   if (!el || !el.matches || !el.matches('select[data-lang-select]') || !el.value) return;
@@ -182,13 +185,16 @@ document.addEventListener('change', function(e){
   // CSRF could not cover. The wrapper above adds the token; pre-login there is no user row to
   // write, and the session half of the switch works on either method.
   if (tmpl) _r20cLangSaved = _r20cLangSaved.then(function(){
+    var ctl = window.AbortController ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function(){ ctl.abort(); }, _r21cLangSaveMs) : null;
     return fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1',
-                 {method: 'POST', cache: 'no-store'})
+                 {method: 'POST', cache: 'no-store', signal: ctl ? ctl.signal : undefined})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){
         if (mine === _r20cLangSeq && d && d.success === false && window.toast) toast(d.message || 'Saved for this session only.', 'warning');
       })
-      .catch(function(){});
+      .catch(function(){})
+      .then(function(){ if (timer) clearTimeout(timer); });
   });
   // …and flip the UI right now: fetch the new language's catalog and re-translate the page in place,
   // no reload (window.setLang reverts every node to its stored English, then applies the new catalog).

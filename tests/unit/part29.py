@@ -17,6 +17,7 @@ import glob as _glob29
 import json as _json29
 import os
 import re as _re29
+import shlex as _shlex29
 import shutil as _shutil29
 import subprocess as _sp29  # nosec B404 - runs bash and python on this part's own fixtures
 import sys as _sys29
@@ -760,3 +761,41 @@ check("fuzz_firewall: _RULE_RE is the production regex (firewall._UFW_NUMBERED_R
       len(_ff29_bind) == 1 and isinstance(_ff29_bind[0], _ast29.Attribute)
       and _ff29_bind[0].attr == "_UFW_NUMBERED_RE",
       repr([_ast29.unparse(v) for v in _ff29_bind]))
+
+
+# ── the fuzz jobs' scope reads the WHOLE file list, or fuzzes ──────────────────────────────────
+# GitHub's pull-request file list stops at 3000 files, and both scope steps decided "nothing to
+# fuzz" from whatever it returned (review 1015a). Driven with a stand-in `gh`: a list that holds
+# fewer files than the pull request's changed_files runs the job, as an unread one does.
+def _r21d_scope_run(wf, total, rows):
+    """`run=` the scope step of workflow `wf` writes, with `gh` answering `total` and `rows`."""
+    d = _tf29.mkdtemp(prefix="p29-scope-")
+    try:
+        with open(os.path.join(d, "gh"), "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/bash\ncase "$*" in\n  *pulls/7/files*) printf "%%s\\n" %s ;;\n'
+                     '  *pulls/7*) echo %d ;;\n  *) exit 1 ;;\nesac\n' % (_shlex29.quote(rows), total))
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this part runs itself
+        os.chmod(os.path.join(d, "gh"), 0o700)  # nosec B103 - a stand-in in a private temp dir
+        out = os.path.join(d, "out")
+        env = dict(os.environ, PATH=d + os.pathsep + os.environ.get("PATH", ""), EVENT="pull_request",
+                   PR="7", REPO="o/r", GITHUB_OUTPUT=out, LC_ALL="C.UTF-8")
+        env.pop("LANGUAGE", None)
+        step = _wf_run_block(_wf29(wf), "Does this pull request change what this job fuzzes?")
+        # This repo's own workflow step, run by bash on a stand-in gh.
+        _sp29.run(["bash", "-c", step], env=env, capture_output=True, text=True, timeout=30)  # nosec B603 B607
+        with open(out, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except (OSError, _sp29.SubprocessError) as e:
+        return "error: %s" % e
+    finally:
+        _shutil29.rmtree(d, ignore_errors=True)
+
+
+_r21d_scope = {wf: [_r21d_scope_run(wf, t, r) for t, r in ((1, "f docs/x.md"), (2, "f docs/x.md"),
+                                                          (2, "f docs/x.md\nf tests/fuzz/fuzz_x.py"),
+                                                          (1, "f docs/x.md\np tests/fuzz/fuzz_x.py"))]
+               for wf in ("fuzz.yml", "cflite_pr.yml")}
+check("fuzz workflows: a file list shorter than the pull request's changed_files (GitHub's 3000 cap) "
+      "fuzzes, as a changed or renamed-from in-scope file does; a whole out-of-scope list does not",
+      all(_v == ["run=false", "run=true", "run=true", "run=true"] for _v in _r21d_scope.values()),
+      repr(_r21d_scope))

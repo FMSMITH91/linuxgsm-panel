@@ -151,17 +151,23 @@ def _log_and_generic(context):
 # "unreachable" says it did not.
 _R20A_HOSTKEY = ("The panel refused to connect: this host's SSH key is not the one it trusts. If "
                  "you reinstalled the host, use Re-trust host key on its page.")
-_R20A_STARTED = ("The connection to the host was lost while the command was running, so it may "
-                 "have run. Check the host before trying again.")
+# "Stopped answering", not "the connection was lost": the same marked ConnectionError comes from a
+# drain that gave up on a host still connected but silent past _DRAIN_IDLE_FLOOR.
+_R20A_STARTED = ("The host stopped answering while the command was running, so it may have run. "
+                 "Check the host before trying again.")
 
 
 def _r20a_unreachable_said(exc):
-    """(what the viewer is told, whether it is "unreachable") for the ConnectionError `exc`."""
+    """Return (what the viewer is told, a stable `code` naming the case) for ConnectionError `exc`.
+
+    `unreachable` itself stays true for all three (see _unreachable): the code, not the flag, is
+    what tells them apart.
+    """
     if type(exc).__name__ == "HostKeyMismatch":
-        return i18n.tr(_R20A_HOSTKEY), False
+        return i18n.tr(_R20A_HOSTKEY), "host_key_mismatch"
     if getattr(exc, "command_started", False):
-        return i18n.tr(_R20A_STARTED), False
-    return i18n.tr("Host unreachable"), True
+        return i18n.tr(_R20A_STARTED), "command_started"
+    return i18n.tr("Host unreachable"), "host_unreachable"
 
 
 def _unreachable(context, status=200, exc=None):
@@ -188,14 +194,21 @@ def _unreachable(context, status=200, exc=None):
         exc = sys.exc_info()[1]
     if exc is None:
         current_app.logger.warning("%s: host unreachable", context)
-        said, down = i18n.tr("Host unreachable"), True
+        said, code = i18n.tr("Host unreachable"), "host_unreachable"
     else:
         current_app.logger.warning("%s: %s: %r", context, type(exc).__name__, str(exc))
-        said, down = _r20a_unreachable_said(exc)
+        said, code = _r20a_unreachable_said(exc)
     # In the viewer's language, and as `message` too: pages write a route's `message` (close port
     # 22's dialog read it and showed nothing at all), and they write it after a mark, which the
     # page's translator only learned to look past later.
-    return jsonify({"success": False, "unreachable": down,
+    # `unreachable` is true for EVERY ConnectionError, a changed host key and a cut-off read
+    # included: what the pages key on it is "no reading was taken", which holds for all three.
+    # It was false for those two, and the remote Firewall page's refresh — which reads only that
+    # flag — painted "Inactive", "No open ports yet." and "No IPs are blocked." about a host the
+    # panel had refused to connect to. `code` is how a page tells the three apart (a page must not
+    # match the sentence: it is in the viewer's language) and shows `message` instead of its own
+    # "did not answer".
+    return jsonify({"success": False, "unreachable": True, "code": code,
                     "message": said, "error": said}), status
 
 

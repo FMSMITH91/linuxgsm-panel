@@ -1,5 +1,5 @@
 """Part 4 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _Path, _command_arg, _parse_tg_command, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, _sm_hosts, _valid_ip_or_cidr, _whitelisted, check, config, eq, os)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _Path, _R20dOver, _r21d_urlopen_of, _command_arg, _parse_tg_command, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, _sm_hosts, _valid_ip_or_cidr, _whitelisted, check, config, eq, os)  # noqa: F401,E402
 from unit.part02 import (_pre)  # noqa: F401,E402
 from unit.part03 import (_GS, _app, _orig_disc_rc, _so)  # noqa: F401,E402
 from unit import REPO_ROOT as _UNIT_ROOT  # noqa: E402
@@ -110,7 +110,7 @@ check("lgsm data: the deps file has its own shape check",
 # as the game list.
 _lgd._mem.clear()
 _lgd._fetch = _lgd_real_fetch          # the stub above would make both checks below meaningless
-_orig_urlopen_lgd = _lgd.urllib.request.urlopen
+_orig_urlopen_lgd = _r21d_urlopen_of(_lgd).urlopen
 
 
 class _FakeResp:
@@ -125,13 +125,13 @@ class _FakeResp:
         return False
 
 
-_lgd.urllib.request.urlopen = lambda req, timeout=None: _FakeResp(_html)
+_r21d_urlopen_of(_lgd).urlopen = lambda req, timeout=None: _FakeResp(_html)
 check("lgsm data: _fetch REJECTS a body that is not the file it asked for",
       _lgd._fetch(_lgd.SERVERLIST) is None)
 _good_csv = "shortname,gameservername,gamename,os\n" + ("a%d,a%dserver,Game %d,ubuntu-24.04\n" % (1, 1, 1)) * 40
-_lgd.urllib.request.urlopen = lambda req, timeout=None: _FakeResp(_good_csv)
+_r21d_urlopen_of(_lgd).urlopen = lambda req, timeout=None: _FakeResp(_good_csv)
 check("lgsm data: ...and accepts a real one", _lgd._fetch(_lgd.SERVERLIST) is not None)
-_lgd.urllib.request.urlopen = _orig_urlopen_lgd
+_r21d_urlopen_of(_lgd).urlopen = _orig_urlopen_lgd
 # NOT restored at the end of this block, deliberately: every lgsm check below depends on "the
 # network is down", and putting the real _fetch back makes them hit the network. It is a
 # suite-wide fixture rather than a leak — but it IS still installed when part05 and part06 run,
@@ -998,7 +998,7 @@ check("branch: ...so a leading '_' is refused up front, not by the verb mid-swit
 # And _run_verb keeps its "never raises" contract when a verb refuses an argument: callers are
 # written on it and have no handler for VerbError.
 from io import BytesIO as _RvBytesIO  # noqa: E402
-_rv_saved = (_so._helper_present, _so.subprocess.Popen)
+_rv_saved = (_so._helper_present, _so.subprocess)
 _rv_ran = []
 
 
@@ -1017,7 +1017,7 @@ class _RvProc:
 
 try:
     _so._helper_present = lambda: True
-    _so.subprocess.Popen = _RvProc
+    _so.subprocess = _R20dOver(_rv_saved[1], Popen=_RvProc)     # its own handle (review 1015a)
     try:
         _rv_r = _so._run_verb("panel-self-update", ["-", "-oops"])
     except Exception as _rv_e:  # noqa: BLE001 - the regression IS the raise
@@ -1028,7 +1028,7 @@ try:
           _so._run_verb("panel-self-update", ["-", "main"])[2] == 0 and len(_rv_ran) == 1,
           repr(_rv_ran))
 finally:
-    _so._helper_present, _so.subprocess.Popen = _rv_saved
+    _so._helper_present, _so.subprocess = _rv_saved
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
@@ -2480,16 +2480,16 @@ _cg4.ACCEPTED_FILE.write_text(_json_tg.dumps({"accepted": [
     {"filePath": "a.py", "patternId": "x.rule1", "lineText": "foo( bar )", "reason": "r"}]}),
     encoding="utf-8")
 _cg4_sum = os.path.join(_cg4_dir, "summary.md")
-_cg4_saved = (_cg4.urllib.request.urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None))
+_cg4_saved = (_r21d_urlopen_of(_cg4).urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None))
 _cg4_out, _cg4_err = _tl_io.StringIO(), _tl_io.StringIO()
 try:
     os.environ["GITHUB_STEP_SUMMARY"] = _cg4_sum
-    _cg4.urllib.request.urlopen = (
+    _r21d_urlopen_of(_cg4).urlopen = (
         lambda req, timeout=None: _Cg4Resp(_json_tg.dumps({"data": _cg4_issues}).encode()))
     with _tl_ctx.redirect_stdout(_cg4_out), _tl_ctx.redirect_stderr(_cg4_err):
         _cg4_rc = _cg4.main()
 finally:
-    _cg4.urllib.request.urlopen = _cg4_saved[0]
+    _r21d_urlopen_of(_cg4).urlopen = _cg4_saved[0]
     os.environ.pop("GITHUB_STEP_SUMMARY", None)
     if _cg4_saved[1] is not None:
         os.environ["GITHUB_STEP_SUMMARY"] = _cg4_saved[1]
@@ -2509,16 +2509,16 @@ with open(_cg4_sum, encoding="utf-8") as _cg4_fh:
 def _cg4_drive(*bodies):
     """main()'s exit code (or the exception it raised) and stdout, answering with `bodies`."""
     pages = iter(bodies)
-    out, saved = _tl_io.StringIO(), _cg4.urllib.request.urlopen
+    out, saved = _tl_io.StringIO(), _r21d_urlopen_of(_cg4).urlopen
     step_summary = os.environ.pop("GITHUB_STEP_SUMMARY", None)
-    _cg4.urllib.request.urlopen = lambda req, timeout=None: _Cg4Resp(next(pages).encode())
+    _r21d_urlopen_of(_cg4).urlopen = lambda req, timeout=None: _Cg4Resp(next(pages).encode())
     try:
         with _tl_ctx.redirect_stdout(out), _tl_ctx.redirect_stderr(_tl_io.StringIO()):
             rc = _cg4.main()
     except Exception as exc:  # noqa: BLE001 - the traceback IS the bug
         rc = type(exc).__name__
     finally:
-        _cg4.urllib.request.urlopen = saved
+        _r21d_urlopen_of(_cg4).urlopen = saved
         if step_summary is not None:
             os.environ["GITHUB_STEP_SUMMARY"] = step_summary
     return rc, out.getvalue()

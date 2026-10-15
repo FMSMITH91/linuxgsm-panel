@@ -453,12 +453,15 @@ def check_peer_reachability(host) -> dict:
     if not valid_peer_host(host):
         return {"reachable": False, "latency_ms": 0}
     host = str(host).strip()
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
     try:
         # An argv list, no shell, and `host` passed valid_peer_host: its first character is a
         # letter, a digit or '[', so ping never reads it as an option.
+        # In C.UTF-8 (_core._r20a_c_env): `time=` below is read by its English word, and iputils
+        # ping prints through gettext in the service's own language.
         r = subprocess.run(  # nosec B603 B607  # NOSONAR - argv list; host passed valid_peer_host
             ["ping", "-c", "1", "-W", "3", host],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, env=_smc._r20a_c_env(),
         )
         reachable = r.returncode == 0
         if reachable:
@@ -771,7 +774,9 @@ def tailscale_up_local(enable_ssh=True):
     Every path below now goes through the verb table: the helper when it is installed, the tool
     directly when already root, and the verb's own rendered shell form otherwise — and that
     rendering uses the /run path too, so the /tmp hazard is gone even on a host that has not had
-    install.sh re-run as root.
+    install.sh re-run as root. That last form is a compound script, so system_ops runs it under
+    `sudo bash -c` whole (a bare `sudo ` elevated only its leading `rm`, and `tailscale up` never
+    started); only a host with no helper takes it, and its grant is the old broad one anyway.
     """
     out, err, rc = _so._run_verb("tailscale-up-login",
                                  ["yes" if enable_ssh else "no", "-"],

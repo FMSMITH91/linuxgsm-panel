@@ -36,7 +36,7 @@
         <select name="remote_id" id="remote-select" class="form-select" required data-action="hostChanged" data-on="change">
           {% if remotes|length != 1 %}<option value="">Select a server...</option>{% endif %}
           {% for r in remotes %}
-          <option value="{{ r.id }}"{% if remotes|length == 1 %} selected{% endif %} data-no-i18n>{{ r.display_name }}</option>
+          <option value="{{ r.id }}"{% if remotes|length == 1 %} selected{% endif %}{% if not r.is_local %} data-no-i18n{% endif %}>{{ r.display_name }}</option>
           {% endfor %}
         </select>
       </div>

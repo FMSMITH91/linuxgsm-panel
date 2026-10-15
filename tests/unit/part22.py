@@ -51,7 +51,7 @@ from panel.security import auth as _auth22
 from panel.security import banlist as _bl22
 from panel.security import privileged as _priv22
 from panel.services import notifications as _notif22
-from unit.part01 import check, eq
+from unit.part01 import _R20dOver, check, eq
 from unit.part01 import skip as _skip22
 
 _TMP22 = _tf22.mkdtemp(prefix="lgsm-p22-")
@@ -62,7 +62,12 @@ _ABSENT22 = object()
 
 @_ctx22.contextmanager
 def _patched(owner, **attrs):
-    """Set attributes on `owner` for the block, and put every one back after it."""
+    """Set attributes on `owner` for the block, and put every one back after it.
+
+    `owner` is a panel module (or its own handle), never a stdlib module: network's `os` is
+    replaced by an _R20dOver, since setting `_nw22.os.geteuid` replaced os.geteuid for every
+    thread in the process (review 1015a).
+    """
     saved = {k: owner.__dict__.get(k, _ABSENT22) if isinstance(owner, type(os)) else
              getattr(owner, k, _ABSENT22) for k in attrs}
     for k, v in attrs.items():
@@ -632,7 +637,7 @@ def _verb22(verb, args=(), timeout=30, merge_stderr=True):
 
 with _patched(_so22, _run_verb=_verb22, _helper_present=lambda: False,
               _SUDO_PROBE={"at": 0.0, "ok": None}), \
-        _patched(_nw22.os, geteuid=lambda: 1000):
+        _patched(_nw22, os=_R20dOver(_nw22.os, geteuid=lambda: 1000)):
     _ur22a = _nw22.ufw_read()
 with _patched(_so22, _run_verb=_verb22, _helper_present=lambda: True):
     _ur22b = _nw22.ufw_read()
@@ -691,7 +696,7 @@ def _sudo_n22(answer, fn):
     with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": _time22.time(), "ok": True},
                   _run_verb=lambda *a, **k: verbs.append(a) or ("", "", 1),
                   _collect_verb_output=lambda p, argv, timeout, *a, **k: fake.answer), \
-            _patched(_nw22, subprocess=fake), _patched(_nw22.os, geteuid=lambda: 1000):
+            _patched(_nw22, subprocess=fake), _patched(_nw22, os=_R20dOver(_nw22.os, geteuid=lambda: 1000)):
         return fn(), fake.calls, verbs
 
 
@@ -711,7 +716,7 @@ check("R41: ...and fail2ban the same way: three `sudo -n fail2ban-client` argvs,
       len(_sfc22) == 3 and all(c[0][:2] == ["sudo", "-n"] for c in _sfc22) and _sfv22 == []
       and _sf22["status"] == (0, "`- Jail list:\tsshd"), repr((_sf22, _sfc22)))
 with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": 1.0, "ok": False}), \
-        _patched(_nw22.os, geteuid=lambda: 1000):
+        _patched(_nw22, os=_R20dOver(_nw22.os, geteuid=lambda: 1000)):
     eq("R40/R41: a cached REFUSAL (or no probe) reads nothing: no new sudo is tried",
        (_nw22.may_read_privileged(), _nw22.priv_read("ufw-status", ["verbose"], 10)), (False, None))
 
@@ -738,7 +743,7 @@ check("R41: at most three helper calls, 5 s each", len(_fc22b) == 3 and all(c[2]
 _f2b_calls22 = []
 with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": 0.0, "ok": None},
               _run_verb=lambda *a, **k: _f2b_calls22.append(a) or ("", "", 1)), \
-        _patched(_nw22.os, geteuid=lambda: 1000):
+        _patched(_nw22, os=_R20dOver(_nw22.os, geteuid=lambda: 1000)):
     eq("R41: without the helper or root fail2ban is not read", (_nw22.f2b_runtime(), _f2b_calls22),
        (None, []))
 eq("R41: a status with no 'Jail list:' line is unreadable (None), not 'no jails'",

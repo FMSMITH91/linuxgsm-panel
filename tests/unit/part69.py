@@ -850,7 +850,9 @@ for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
                                _read69(_root, "templates", _tpl_r16u), _re_r16u.S)
     check("375px: %s's heading carries the host name as its own item (a direct child the rule reaches)"
           % _tpl_r16u,
-          _h1_r16u is not None and "<span data-no-i18n>{{ remote.display_name }}</span>" in _h1_r16u.group(1),
+          _h1_r16u is not None and ("<span data-no-i18n>{{ remote.display_name }}</span>" in _h1_r16u.group(1)
+                                    # review 1015a: one span, data-host-name, the local label unguarded
+                                    or "{{ host_label(remote) }}" in _h1_r16u.group(1)),
           _h1_r16u.group(1).strip()[:200] if _h1_r16u else "no page-title h1")
 
 check("part69: nothing it drove reached a real transport (every host call was stubbed)",

@@ -19,12 +19,13 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
-from panel.core.validation import HOST_RE as _HOST_RE
+from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
 from panel.security import privileged as _priv
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
-# Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. SQLite
-# hands a deleted row's id straight to the next INSERT (plain INTEGER PRIMARY KEY = rowid, no
-# AUTOINCREMENT), so whatever a deleted host left behind is inherited by the next host added —
+# Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. A
+# remote_server table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) hands
+# a deleted row's id straight to the next INSERT, so whatever a deleted host left behind is
+# inherited by the next host added there —
 # and these are read to RENDER its pages and to decide where to send a player query.
 #
 # game.py already closes this for its version cache, with an after_delete listener and the
@@ -1037,7 +1038,9 @@ _R19A_C_LOCALE = "export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; "
 # sudo's env_keep lists them, and a kept variable wins over PAM's /etc/default/locale), so every
 # root command wrapped this way runs in C.UTF-8 too. That is the locale every parser of their
 # output wants; none of them starts a game server (game commands build their own `sudo -u` and
-# pass sudo=False, so they never reach this wrap). sudo-rs prints English and ignores it.
+# pass sudo=False, so they never reach this wrap). sudo-rs has no message catalog (its own words
+# are English already), and it too keeps LC_ALL and LANGUAGE for the command (measured on 0.2.2;
+# its env_check list holds both), so the wrapped command runs in C.UTF-8 under either sudo.
 _R20A_SUDO_C = "LC_ALL=C.UTF-8 LANGUAGE= "
 
 
@@ -1285,7 +1288,7 @@ def _connect_by_auth_method(client, server, cred, timeout):
                                   "restored from a backup, its credential key may not match."
                                   % getattr(server, "host", "this host"))
         client.connect(
-            server.host,
+            canonical_host(server.host),
             port=server.port or 22,
             username=server.username,
             password=cred,
@@ -1306,7 +1309,7 @@ def _connect_by_auth_method(client, server, cred, timeout):
         )
     else:
         client.connect(
-            server.host,
+            canonical_host(server.host),
             port=server.port or 22,
             username=server.username,
             timeout=timeout,
@@ -1342,7 +1345,12 @@ def _r20a_magicdns_host(host):
     command, the Test button and the web terminal failed. A hostname never contains ":", so that
     one character covers bracketed and zone-id forms too. One helper for both transports, so the
     paramiko and ssh-CLI paths cannot drift apart again. May raise (the tailscale CLI read).
+
+    An address comes back canonical and WITHOUT brackets (validation.canonical_host): `[fd7a::1]`
+    was dialled as typed, and neither ssh nor paramiko resolves a bracketed host. Rows are stored
+    canonical now; this covers one read before data migration 2 has run.
     """
+    host = canonical_host(host)
     if "." in host or ":" in host:
         return host
     from panel.ops import tailscale_integration as ts
@@ -1600,7 +1608,7 @@ def _resolve_ts_host(server):
         return _r20a_magicdns_host(server.host)
     except Exception:
         _log.debug("_resolve_ts_host: ignored non-fatal error", exc_info=True)
-    return server.host
+    return canonical_host(server.host)
 
 
 # Connection-multiplexing socket dir for the ssh-CLI path (Tailscale remotes). Per-uid so the
@@ -2144,17 +2152,20 @@ def _discover_scan_script(home="/home"):
     whole in a shell variable took 1.3 GB for a 256 MB common.cfg, and a FIFO, or a symlink to
     /dev/urandom, at secrets-common.cfg (which the scan never used to read) ran root's shell until
     the 45 s timeout — and a scan that times out finds nothing, for every account on the host.
+    The test and the read are two steps, so a file swapped for a FIFO between them still blocked
+    root's `head` in open(): each read is bounded by `timeout` where the host has it (coreutils).
     """
     cfgs = " ".join('"%s"' % f.format(inst="$g") for f in LGSM_CFG_ORDER)
     return (
         "h=%s; " % _quote(home.rstrip("/") or "/") +
+        'T=; command -v timeout >/dev/null 2>&1 && T="timeout 5"; ' +
         'for u in $(ls -1 "$h/" 2>/dev/null); do '
         '  d="$h/$u/lgsm/config-lgsm"; [ -d "$d" ] || continue; '
         '  cj=$(crontab -u "$u" -l 2>/dev/null); '
         '  for g in $(ls -1 "$d" 2>/dev/null); do '
         '    [ -x "$h/$u/$g" ] || continue; '
         '    cf=$(for f in ' + cfgs + '; do x="$d/$g/$f"; [ -f "$x" ] && [ ! -L "$x" ] || continue; '
-        '        head -c %d "$x" 2>/dev/null | grep -E "^[[:space:]]*(port|startparameters)="; '
+        '        $T head -c %d "$x" 2>/dev/null | grep -E "^[[:space:]]*(port|startparameters)="; '
         '        done); ' % LGSM_CFG_READ_MAX +
         '    p=$(printf "%s\\n" "$cf" | grep -E "^[[:space:]]*port=" | tail -n 1 '
         '        | sed "s/^[^=]*=//" | grep -oE "[0-9]+" | head -n 1); '
@@ -3556,7 +3567,8 @@ GAMEDIG_HUMANS_JQ = ('([(.players|length), ((.numplayers|numbers) - '
                      '([(.bots|arrays|length), (.raw.numbots?|numbers)] | max // 0))] | max)')
 
 
-# Registered: a deleted host's id is reused, and this decides where a player query is SENT — so a
+# Registered: a deleted host's id can be reused (a table id_sequence.py could not rebuild), and
+# this decides where a player query is SENT — so a
 # stale entry points the new host's queries at the old machine. See register_remote_cache.
 _gamedig_host_cache = register_remote_cache({})   # {remote_id: (expiry_ts, ip)}
 _GAMEDIG_HOST_TTL = 3600

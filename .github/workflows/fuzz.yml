@@ -93,8 +93,13 @@ jobs:
               # A Dependabot bump of the fuzzer must run it.
               '.github/ci-requirements/atheris.txt'
             )
-            if files="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate \
-                        --jq '.[] | .filename, (.previous_filename // empty)')"; then
+            # The file list stops at 3000 files, so it decides only when it holds the pull
+            # request's changed_files, as the docs-only scope does; a partial or unread one fuzzes.
+            if total="$(gh api "repos/${REPO}/pulls/${PR}" --jq '.changed_files')" \
+               && rows="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate \
+                          --jq '.[] | "f " + .filename, ("p " + (.previous_filename // empty))')" \
+               && [ "$(grep -c '^f ' <<< "$rows")" -eq "$total" ]; then
+              files="$(cut -c3- <<< "$rows")"   # drop the "f " / "p " tag
               run=false
               while IFS= read -r f; do
                 for g in "${scope[@]}"; do

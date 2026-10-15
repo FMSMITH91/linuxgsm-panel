@@ -1256,8 +1256,9 @@ def _mon_server_came_up(remote, gs, prev_up, muted):
 def _forget_deleted_rows(remote_ids, server_ids):
     """Drop per-row state for hosts/servers that no longer exist.
 
-    Every map below is keyed by a database row id, and SQLite hands a deleted row's id straight to
-    the next INSERT (plain INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT). Without this a newly
+    Every map below is keyed by a database row id, and a table without AUTOINCREMENT (one
+    panel/db/id_sequence.py could not rebuild) hands a deleted row's id straight to the next
+    INSERT. Without this a newly
     added server inherits the deleted one's flags: _server_full_alerted swallows its first "server
     full", _server_peak_notified suppresses its first peak for an hour, _expected_offline hides a
     genuine outage, and _monitor_state["disk"] eats a new host's first disk-low alert. Worse,

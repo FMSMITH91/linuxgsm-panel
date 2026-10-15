@@ -1257,7 +1257,11 @@ _HOST_LEVEL_VIEWS = {
                       "api_remote_ssh_status", "api_remote_ssh_mode", "api_remote_ssh_port",
                       "api_remote_close_panel_port", "api_remote_game_port_open",
                       "api_remote_check_updates", "api_remote_run_updates", "api_remote_os_update_start",
-                      "api_remote_reboot_plan", "api_remote_reboot", "api_remote_reboot_cancel"},
+                      # review 1015a: the OS Updates card's two reads (package list, apt output)
+                      "api_remote_updates_cached", "api_remote_os_update_status",
+                      "api_remote_reboot_plan", "api_remote_reboot", "api_remote_reboot_cancel",
+                      # review 1015a integration: the reboot banner's read (pending packages, state)
+                      "api_remote_reboot_required"},
     "remotes.py": {"edit_remote", "delete_remote"},
     "ubuntu_pro.py": {"api_remote_pro_status", "api_remote_pro_attach", "api_remote_pro_service",
                       "api_remote_pro_detach"},
@@ -4013,10 +4017,8 @@ check("every <remote_id> route enforces per-host access (not just MANAGE_REMOTES
 _MUT_NO_PERM_OK = {
     # Self-service: the object IS the caller.
     "account_update_profile", "account_change_password", "account_2fa_enable",
-    "account_2fa_disable", "account_2fa_verify", "account_revoke_sessions",
-    "account_revoke_session", "account_api_token_generate", "account_api_token_revoke",
-    "account_regenerate_backup_codes", "api_account_ui_order", "api_account_prefs", "logout",
-    "account_2fa_setup", "account_set_language", "api_account_session_revoke",
+    "account_2fa_disable", "account_revoke_sessions", "account_api_token_generate",
+    "account_api_token_revoke", "api_account_ui_order", "logout", "api_account_session_revoke",
     "api_account_ui_order_reset", "account_dismiss_otp_nag",
     # The viewer's own UI language. POST because the PROFILE write is a stored state change and
     # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
@@ -4030,7 +4032,7 @@ _MUT_NO_PERM_OK = {
     # the SetupState lock and _setup_owner_ok(), which no token here names; moving the admin step
     # into a helper (route_helpers.py) turned that coincidence red. Named, rather than kept passing
     # on a word that was never a permission check.
-    "login", "login_2fa", "redeem_invite", "force_password_change", "setup_wizard",
+    "login", "redeem_invite", "setup_wizard",
     "api_setup_ts_install", "api_setup_ts_serve", "api_setup_ts_up",
     # The finished wizard's "Restart now". Gated on _setup_owner_ok() — the browser that ran the
     # wizard, or a signed-in superadmin — and it restarts only while a stored loopback bind is
@@ -4046,7 +4048,19 @@ def _mut_scanned():
 
 _GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
                 "can_moderate_action", "can_run_custom_command", "_can_manage_files",
-                "_can_edit_tags", "is_superadmin", "_required_perms")
+                "_can_edit_tags", "_required_perms")
+
+
+def _r21d_reads_caller_superadmin(tree):
+    """Does the view read the CALLER's is_superadmin (`current_user.is_superadmin`)?
+
+    Any `.is_superadmin` read counted (review 1015a): a route showing a TARGET user's flag, or a
+    JSON field of that name, read as gated.
+    """
+    return any(isinstance(_n, ast.Attribute) and _n.attr == "is_superadmin"
+               and getattr(_n.value, "id", None) == "current_user" for _n in ast.walk(tree))
+
+
 for _rule in app.url_map.iter_rules():
     if not ({"POST", "PUT", "PATCH", "DELETE"} & set(_rule.methods or ())):
         continue
@@ -4070,18 +4084,30 @@ for _rule in app.url_map.iter_rules():
     # or a string saying "is_superadmin" satisfied the substring test — the trap the <remote_id>
     # gate was moved to AST matching to avoid.
     try:
-        _names = {getattr(_n, "id", None) or getattr(_n, "attr", None)
-                  for _n in ast.walk(ast.parse(textwrap.dedent(_src)))
-                  if isinstance(_n, (ast.Name, ast.Attribute))} if _src else set()
+        _tree = ast.parse(textwrap.dedent(_src)) if _src else None
     except SyntaxError:
-        _names = set()
-    if not (_perms or _names & set(_GATE_TOKENS)):
+        _tree = None
+    _names = {getattr(_n, "id", None) or getattr(_n, "attr", None)
+              for _n in ast.walk(_tree) if isinstance(_n, (ast.Name, ast.Attribute))} if _tree else set()
+    if not (_perms or _names & set(_GATE_TOKENS) or (_tree is not None and _r21d_reads_caller_superadmin(_tree))):
         _mut_unguarded.append(str(_rule))
 # The positive control: a walk that finds no mutating routes at all would pass silently.
+_r21d_su_ctl = [_r21d_reads_caller_superadmin(ast.parse(_c)) for _c in (
+    "def v():\n    if not current_user.is_superadmin:\n        abort(403)",
+    "def v():\n    return {'admin': target.is_superadmin}",
+    "def v():\n    return 'is_superadmin'")]
+check("rbac: ...only the caller's is_superadmin is a gate, not a target's flag or a word (control)",
+      _r21d_su_ctl == [True, False, False], repr(_r21d_su_ctl))
 check("rbac: the mutating-route scan found routes to check", _mut_scanned() > 40,
       "only %d mutating routes seen — the gate below proves nothing" % _mut_scanned())
 check("every mutating route checks a PERMISSION, not just object access",
       not _mut_unguarded, "no permission gate on: %s" % sorted(_mut_unguarded)[:6])
+# ...and no exemption outlives its route (review 1015a: eight named no mutating route, and each
+# pre-approved a FUTURE route of that name past the gate above unread), as _NO_AUDIT_OK and
+# html_sink_baseline.json already refuse.
+_mut_stale = sorted(_e for _e in _MUT_NO_PERM_OK if _e not in _mut_seen)
+check("rbac: every no-permission exemption is a current mutating route",
+      not _mut_stale, "not a mutating route (drop it): %s" % _mut_stale)
 
 # ── an invite must not outlive the authority behind it ────────────────────────────────────────
 # An invite is a delegation. Without this the delegation survives its grantor: an admin who is
@@ -4281,6 +4307,7 @@ _AUD_FIXTURE_SCOPES = dict(_AUD_FIXTURE, **{
                    "def _listed():\n    log_action(None, 'l')\n"
                    "def unlisted():\n    log_action(None, 'u')\n", False),
     "fx.scopes": (textwrap.dedent('''
+        import threading
         import fx.logs
         from fx import logs, quiet
         from .logs import _run as _rel_run
@@ -4322,6 +4349,19 @@ _AUD_FIXTURE_SCOPES = dict(_AUD_FIXTURE, **{
             def _w():
                 logs._run()
             return 1
+
+        def by_unused_lambda():
+            cb = lambda: logs._run()
+            return cb
+
+        def by_dict_of_lambdas():
+            return {"ok": lambda: logs._run()}
+
+        def by_shadowing_lambda_param():
+            return sorted((), key=lambda logs: logs._run())
+
+        def by_lambda_target():
+            threading.Thread(target=lambda: logs._run()).start()
 
         def by_star_private():
             _hidden()
@@ -4368,7 +4408,8 @@ _aud_fx2_logs = {q: _aud_fx2.logs(_aud_fx2.function_key("fx.scopes", q)) for q i
     "by_shadowing_local", "by_shadowing_with", "by_shadowing_for", "by_shadowing_except",
     "by_shadowing_comprehension", "by_shadowing_comprehension_arg", "by_unused_nested", "by_star_private", "by_star_unlisted", "K.m", "by_class_init",
     "by_module_alias", "by_local_alias", "by_submodule_attr", "by_relative_import",
-    "by_star_import", "by_star_all")}
+    "by_star_import", "by_star_all", "by_unused_lambda", "by_dict_of_lambdas",
+    "by_shadowing_lambda_param", "by_lambda_target")}
 check("audit gate: a local, loop, with, except or comprehension name that shadows a logging "
       "module is not an audit row",
       not any(_aud_fx2_logs[q] for q in ("by_shadowing_local", "by_shadowing_with",
@@ -4376,14 +4417,16 @@ check("audit gate: a local, loop, with, except or comprehension name that shadow
                                           "by_shadowing_comprehension",
                                           "by_shadowing_comprehension_arg")),
       repr(_aud_fx2_logs))
-check("audit gate: ...nor a nested def nothing calls, nor a name a star import does not bind",
-      not any(_aud_fx2_logs[q] for q in ("by_unused_nested", "by_star_private",
-                                          "by_star_unlisted")), repr(_aud_fx2_logs))
+check("audit gate: ...nor a nested def or lambda nothing calls, a lambda parameter shadowing it, nor "
+      "a name a star import does not bind",
+      not any(_aud_fx2_logs[q] for q in ("by_unused_nested", "by_star_private", "by_star_unlisted",
+                                          "by_unused_lambda", "by_dict_of_lambdas",
+                                          "by_shadowing_lambda_param")), repr(_aud_fx2_logs))
 check("audit gate: ...while a method reads its module's names, not its class's, and a class call, "
-      "an alias, a submodule, a relative and a star import are followed (control)",
+      "a lambda handed to a thread, an alias, a submodule, a relative and a star import are followed (control)",
       all(_aud_fx2_logs[q] for q in ("K.m", "by_class_init", "by_module_alias", "by_local_alias",
                                     "by_submodule_attr", "by_relative_import", "by_star_import",
-                                    "by_star_all")), repr(_aud_fx2_logs))
+                                    "by_star_all", "by_lambda_target")), repr(_aud_fx2_logs))
 # ── an audit row about a server or host names it by ID ─────────────────────────────────────────
 # audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
 # records only from its server= / remote= arguments. A call whose target is a server's or a host's

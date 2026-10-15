@@ -821,13 +821,19 @@ _ug_missing = []
 for _tpl, _expr in (("manage_groups.html", "{{ group.name }}</strong>"),
                     ("manage_groups.html", "{{ group.description }}</span>"),
                     ("manage_groups.html", "{{ u.username }}"),
-                    ("manage_groups.html", "{{ s.display_name }}"),
-                    ("manage_groups.html", "{{ r.display_name }}"),
                     ("manage_groups.html", "{{ g.name }}"),
                     ("base.html", "{{ current_user.display_name or current_user.username }}")):
     _tags = _enclosing_tag((TEMPLATES / _tpl).read_text(encoding="utf-8"), _expr)
     if not _tags or any("data-no-i18n" not in _t for _t in _tags):
         _ug_missing.append("%s %s -> %s" % (_tpl, _expr, _tags[:1]))
+# A host's name goes through host_label (review 1015a), which guards a remote's own name and leaves
+# only the panel host's fixed label to the translator; the guard is checked in the helper itself.
+for _expr in ("{{ host_label(s) }}", "{{ host_label(r) }}"):
+    if _expr not in (TEMPLATES / "manage_groups.html").read_text(encoding="utf-8"):
+        _ug_missing.append("manage_groups.html %s -> missing" % _expr)
+_hl_src = (ROOT / "panel" / "db" / "models.py").read_text(encoding="utf-8")
+if 'Markup("<span data-host-name data-no-i18n>%s</span>")' not in _hl_src:
+    _ug_missing.append("models.py _r21c_host_label: a remote's name is not guarded")
 check(not _ug_missing,
       "i18n: user-authored names on the groups page and the sidebar user are marked do-not-translate",
       "unguarded: %s" % _ug_missing)
@@ -1188,7 +1194,9 @@ check(not _raw_body,
 _ESCAPERS = ("escapeHtml", "_esc", "esc", "e", "tfHtml")
 # tfHtml's raw-markup value under any spelling of its key: `html:`, `'html':` or `"html":` (i18n.js
 # tests `'html' in v`, so all three are the same key; only the bare one was read, review 1012a).
-_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*=\s*|insertAdjacentHTML\s*\(|[{,]\s*['\"]?html['\"]?\s*:\s*")
+# `+=` appends markup as much as `=` sets it (review 1015a: `el.innerHTML += '<li>' + d.name` was no
+# sink at all). A `${…}` in a template literal is refused everywhere by _r20d_template_interps.
+_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*\+?=\s*|insertAdjacentHTML\s*\(|[{,]\s*['\"]?html['\"]?\s*:\s*")
 
 
 def _js_expr_at(src, i):
@@ -1452,7 +1460,12 @@ def _safe_markup_helpers(src):
     for name, _params, body in _fn_bodies(src):
         # Each whole return expression, read as the sinks are: `[^\n;]+` stopped at a `;` inside a
         # string literal (review 1013a).
-        rets = [_js_expr_at(body, m.end()) for m in re.finditer(r"\breturn\s+", body)]
+        # A `return` inside a comment or a string is not one (review 1015a: `// return the '<b>'
+        # marker` added a quoted "return expression" and could class a raw helper as safe): found
+        # in a copy with strings and comments blanked to their length, read from the original.
+        # Blanked to NULs, not spaces: `\s+` after `return` would run on through blank spaces.
+        _blank = _R20D_STR_OR_COMMENT.sub(lambda m: "\0" * len(m.group(0)), body)
+        rets = [_js_expr_at(body, m.end()) for m in re.finditer(r"\breturn\s+", _blank)]
         if any("'" in r or '"' in r for r in rets) and not any(_r20d_adjacent(r) for r in rets):
             out.add(name)
     return out
@@ -1594,6 +1607,10 @@ _r15d_sink_ctl = {
     "a helper returning raw after a ';' in a string": _r15d_sink_sigs(
         "function lk(x) {\n  return '<a title=\"a;b\">' + x.name;\n}\n"
         "function zz(x, el) {\n  var buf = '';\n  buf += '<p>' + lk(x);\n  el.innerHTML = buf;\n}\n"),
+    # Review 1015a: markup appended at the sink with `+=`.
+    "innerHTML += raw": _r16d_direct_sigs(
+        "function zz(x, el) {\n  el.innerHTML += '<li>' + x.name + '</li>';\n}\n"),
+    "outerHTML+=raw": _r16d_direct_sigs("function zz(x, el) {\n  el.outerHTML+='<b>' + x.name;\n}\n"),
 }
 # (the URL local is named by the local that holds the raw value, as any unsafe local is)
 _r20d_ctl_names = {"a URL local in a buffer": "link", "a helper returning raw after a ';' in a string": "lk"}
@@ -1601,12 +1618,38 @@ check(all(_r20d_ctl_names.get(_k, "x.name") in _v for _k, _v in _r15d_sink_ctl.i
       "static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;`, "
       "behind a `||` fallback, concatenated or in a ternary's arm, is traced like one assigned to "
       "innerHTML (control)", repr(_r15d_sink_ctl))
+# A `return` in a comment or a string is not the helper's return (review 1015a).
+_r21d_safe_ctl = (_safe_markup_helpers("function lk(x) {\n  // return the '<b>' marker\n  return x.name;\n}\n"),
+                  _safe_markup_helpers("function lk(x) {\n  var s = 'return \"<b>\"';\n  return x.name;\n}\n"),
+                  _safe_markup_helpers("function ok(x) {\n  // the badge\n  return '<b>on</b>';\n}\n"))
+check(_r21d_safe_ctl == (set(), set(), {"ok"}),
+      "static/js: ...a helper is safe markup by its own returns, not by a `return` in a comment or a "
+      "string (control)", repr(_r21d_safe_ctl))
 
 # Every scanner in this file reads a value as interpolated only through `+` (review 1013a): a
 # template literal's `${x.name}` was deleted with its backticks, so `el.innerHTML = `<b>${x.name}</b>``
 # and a `${}` confirmDialog body passed every XSS gate here. None exists in the tree, so the
 # scanners' assumption is enforced instead of taught a second syntax: no `${…}` in a template
 # literal, in any page script or template.
+_R21D_SCRIPT = re.compile(r"(<script\b[^>]*>)(.*?)(</script[^>]*>)", re.S | re.I)
+
+
+def _r21d_html_for_scan(src):
+    """A template with its prose made inert for the string/comment reader, at the same offsets.
+
+    Outside <script> blocks an apostrophe ("don't") opened a `'…'` match and a URL's `//` a comment,
+    either of which could swallow a backtick on the same line (review 1015a). There, every character
+    but a backtick, `$`, braces, a word character and a newline is blanked; scripts are kept whole.
+    """
+    out, last = [], 0
+    for m in _R21D_SCRIPT.finditer(src):
+        out.append(re.sub(r"[^\w`${}\n]", " ", src[last:m.start(2)]))
+        out.append(m.group(2))
+        last = m.end(2)
+    out.append(re.sub(r"[^\w`${}\n]", " ", src[last:]))
+    return "".join(out)
+
+
 def _r20d_template_interps(src):
     """Line numbers of each template literal holding a `${…}`, outside comments and other strings."""
     out = []
@@ -1616,11 +1659,15 @@ def _r20d_template_interps(src):
     return out
 
 
-_r20d_tl = ["%s:%d" % (_n, _ln) for _n, _s in srcs.items() for _ln in _r20d_template_interps(_s)]
+_r20d_tl = ["%s:%d" % (_n, _ln) for _n, _s in srcs.items()
+            for _ln in _r20d_template_interps(_r21d_html_for_scan(_s) if _n.endswith(".html") else _s)]
 _r20d_tl_ctl = [_r20d_template_interps(_c) for _c in (
     "el.innerHTML = `<b>${x.name}</b>`;", "confirmDialog({body: `<b>${name}</b>`});",
-    "// `${not code}`\nvar a = '`${x}`', b = `plain`;")]
-check(not _r20d_tl and _r20d_tl_ctl == [[1], [1], []],
+    "// `${not code}`\nvar a = '`${x}`', b = `plain`;",
+    _r21d_html_for_scan("<p>Don't</p><button onclick=\"go(`${x}`)\">'</button>"),
+    _r21d_html_for_scan("<a href=\"https://h/\">x</a><b onclick=\"f(`${y}`)\"></b>"),
+    _r21d_html_for_scan("<p>it's</p><script>var a = 'don`t ${x}';</script>"))]
+check(not _r20d_tl and _r20d_tl_ctl == [[1], [1], [], [1], [1], []],
       "static/js and templates: no template literal interpolates a value (`${…}`), which no XSS gate "
       "here reads (with its control)", "; ".join(_r20d_tl[:4]) or repr(_r20d_tl_ctl))
 
@@ -2618,7 +2665,8 @@ check(not _pw_capped, "password: no password field caps what can be typed into i
 # (logs.html had one too — raw attribute text for a sort header, `<th {{ extra|safe }}>`, safe only
 #   while every caller passed a literal. It is a `nowrap` flag now, and needs no bypass.)
 _SAFE_BYPASS_FILES = {"account_2fa.html"}
-_MARKUP_FILES = {"app.py"}                  # Python modules allowed a Markup()
+# models.py: _r21c_host_label, a fixed span around the escaped host name (Markup's % escapes it).
+_MARKUP_FILES = {"app.py", "models.py"}     # Python modules allowed a Markup()
 
 _bypass_found = set()
 for _p in sorted(TEMPLATES.glob("*.html")):
@@ -3101,13 +3149,64 @@ check("updateTsNotice" in _js_function_body(_sd_js, "applyTsVisible") or "",
 # is findable for the panel host and invisible for every remote one — which is how Banned IPs and
 # Top offenders shipped: both render on every host page, and the palette offered them for exactly
 # one. This asks the template which cards are panel-only rather than trusting a list.
-_IS_LOCAL_GUARD = "is_local"
+_IS_LOCAL_GUARD = re.compile(r"[\w.]+\.is_local")
+
+
+def _r21d_split_top(cond, word):
+    """`cond` split on ` word ` outside parentheses."""
+    parts, depth, start, i = [], 0, 0, 0
+    sep = " %s " % word
+    while i < len(cond):
+        if cond[i] == "(":
+            depth += 1
+        elif cond[i] == ")":
+            depth -= 1
+        elif depth == 0 and cond.startswith(sep, i):
+            parts.append(cond[start:i])
+            start = i = i + len(sep)
+            continue
+        i += 1
+    return [p.strip() for p in parts + [cond[start:]]]
+
+
+def _r21d_unparen(cond):
+    """`cond` without parentheses that enclose all of it."""
+    cond = cond.strip()
+    while cond.startswith("(") and cond.endswith(")"):
+        depth = 0
+        for i, ch in enumerate(cond):
+            depth += {"(": 1, ")": -1}.get(ch, 0)
+            if depth == 0 and i < len(cond) - 1:
+                return cond     # the first one closes early: `(a) or (b)`
+        cond = cond[1:-1].strip()
+    return cond
+
+
+def _r21d_requires_local(cond, negated=False):
+    """Can the Jinja condition `cond` (or, `negated`, its negation) hold only on the panel host?
+
+    Mentioning is_local is not requiring it (review 1015a): `not remote.is_local or
+    current_user.is_superadmin` renders on every remote, and an {% else %} of an is_local test
+    renders on remotes, yet both read as panel-only and the gate never looked at Banned IPs or
+    Top offenders, the two cards it was written for.
+    """
+    cond = _r21d_unparen(cond)
+    ors, ands = _r21d_split_top(cond, "or"), _r21d_split_top(cond, "and")
+    if len(ors) > 1:      # not (a or b) is (not a and not b)
+        return (any if negated else all)(_r21d_requires_local(d, negated) for d in ors)
+    if len(ands) > 1:     # not (a and b) is (not a or not b)
+        return (all if negated else any)(_r21d_requires_local(c, negated) for c in ands)
+    if cond.startswith("not "):
+        return _r21d_requires_local(cond[4:], not negated)
+    return not negated and bool(_IS_LOCAL_GUARD.fullmatch(cond))
 
 
 def _is_panel_host_only(html, anchor_id):
-    """Is this id inside an {% if ... is_local ... %} block? Walks Jinja if/endif, tracking the
-    conditions currently open — the same nesting question as the data-mtab walker above, over
-    template tags instead of divs."""
+    """Is this id inside a Jinja block that renders only when the host is the panel's own?
+
+    Walks Jinja if/endif, tracking the conditions currently open — the same nesting question as
+    the data-mtab walker above, over template tags instead of divs. An {% else %} arm holds the
+    negation of the arm before it."""
     pos = html.find('id="%s"' % anchor_id)
     if pos < 0:
         return None
@@ -3117,22 +3216,35 @@ def _is_panel_host_only(html, anchor_id):
             break
         kind, cond = m.group(1), m.group(2).strip()
         if kind == "if":
-            stack.append(cond)
+            stack.append((cond, False))
         elif kind == "endif":
             if stack:
                 stack.pop()
         elif stack:
-            stack[-1] = cond if kind == "elif" else ("not " + stack[-1])
-    return any(_IS_LOCAL_GUARD in c for c in stack)
+            stack[-1] = (cond, False) if kind == "elif" else (stack[-1][0], True)
+    return any(_r21d_requires_local(c, neg) for c, neg in stack)
 
 
 # Vacuity guard: two ids whose gating is known independently — the panel's self-update card is
 # panel-only, the firewall card is on every host. If the Jinja walk desyncs these go first.
+# Banned IPs sits under `not remote.is_local or current_user.is_superadmin`, which renders on every
+# remote: a walker that counts any mention of is_local reads it as panel-only (review 1015a).
+_r21d_walk_ctl = [_is_panel_host_only(_h, "x") for _h in (
+    '{% if remote.is_local %}{% else %}<p id="x">{% endif %}',
+    '{% if not remote.is_local %}{% else %}<p id="x">{% endif %}',
+    '{% if not remote.is_local or u.is_superadmin %}<p id="x">{% endif %}',
+    '{% if remote.is_local and u.is_superadmin %}<p id="x">{% endif %}',
+    '{% if a and (b or not (remote.is_local or c)) %}<p id="x">{% endif %}',
+    '{% if (remote.is_local) %}<p id="x">{% endif %}')]
 check(_is_panel_host_only(_rm_html, "updates") is True
-      and _is_panel_host_only(_rm_html, "sec-firewall") is False,
-      "palette: the is_local walker agrees with two independently known cards",
-      "updates=%r sec-firewall=%r" % (_is_panel_host_only(_rm_html, "updates"),
-                                      _is_panel_host_only(_rm_html, "sec-firewall")))
+      and _is_panel_host_only(_rm_html, "sec-firewall") is False
+      and _is_panel_host_only(_rm_html, "sec-bans") is False
+      and _r21d_walk_ctl == [False, True, False, True, False, True],
+      "palette: the is_local walker agrees with three independently known cards, and reads an else "
+      "arm, an `or` and a `not` (control)",
+      "updates=%r sec-firewall=%r sec-bans=%r ctl=%r" % (
+          _is_panel_host_only(_rm_html, "updates"), _is_panel_host_only(_rm_html, "sec-firewall"),
+          _is_panel_host_only(_rm_html, "sec-bans"), _r21d_walk_ctl))
 _pinned = [h for pg, h in _sections if pg == "/server-management"]
 check(len(_pinned) >= 3, "palette: there are /server-management sections to check",
       "%d found — the gate below proves nothing if this is 0" % len(_pinned))
@@ -4352,8 +4464,12 @@ check("_fwUnlisted(" in _fw_win_code and "'rules-count'" in _fw_unl,
 check("'blocks-list'" in _fw_unl and "'blocks-count'" in _fw_unl and "'\\u2014'" in _fw_unl,
       "firewall: an unreadable refresh clears the Blocked IPs list and count as well",
       "_fwUnlisted: %r" % _fw_unl[:300])
-# A sudo refusal arrives flagged unreachable too; the page named the network for it.
-check("data.permission_denied" in _fw_win_code and "sudo refused the firewall read" in _fw_win_code,
+# A sudo refusal arrives flagged unreachable too; the page named the network for it. The reason is
+# chosen in _fwUnreadWhy (review 1015a, beside a changed host key's), read when the window calls it.
+_fw_why = (_js_code_only(_js_function_body(_fw_js, "_fwUnreadWhy") or "")
+           if "_fwUnreadWhy(" in _fw_win_code else "")
+check("data.permission_denied" in _fw_win_code + _fw_why
+      and "sudo refused the firewall read" in _fw_win_code + _fw_why,
       "firewall: a refresh refused by sudo says sudo, not 'unreachable'",
       "the refresh reads only data.unreachable")
 # An INACTIVE ufw lists nothing, stored rules included: "No open ports yet." / "0 blocked" about it

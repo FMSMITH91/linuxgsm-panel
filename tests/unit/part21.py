@@ -22,13 +22,12 @@ import tempfile as _tf21
 import threading as _th21
 import time as _t21
 import urllib.error as _ue21
-import urllib.request as _ur21
 from types import SimpleNamespace as NS
 
 from flask import Flask as _Flask21
 
 from eventlet.timeout import Timeout as _EvTimeout21  # noqa: E402 - a timed-out green join raises it
-from unit.part01 import check, eq
+from unit.part01 import _r21d_urlopen_of, check, eq
 from panel.core import config as _cfg21
 from panel.core import runtime_stats as _rs21
 from panel.db import models as _m21
@@ -931,7 +930,7 @@ def _f_ci_record():
            "X-RateLimit-Reset": "1790000000", "Authorization": "token SECRETTOKEN"}
     runs = {"v": [{"name": "checks (ubuntu)", "status": "completed", "conclusion": "failure"},
                   {"name": "coverage", "status": "in_progress", "conclusion": None}]}
-    _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(runs["v"], hdr))
+    _p21(_r21d_urlopen_of(_so21), "urlopen", lambda req, timeout=8: _Resp21(runs["v"], hdr))
     sha1 = "1" * 40
     st1 = _so21._remote_ci_state(sha1)
     runs["v"] = list(_REQ21)
@@ -952,7 +951,7 @@ def _f_ci_record():
           all([rate.get("remaining") == 41, rate.get("limit") == 60, "SECRET" not in repr(snap)]),
           repr(rate))
     _p21(_rs21, "put", _raiser(RuntimeError("stats broke")))
-    _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), hdr))
+    _p21(_r21d_urlopen_of(_so21), "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), hdr))
     check("CI gate: recording that raises cannot change or break the answer",
           _call21(_so21._remote_ci_state, "5" * 40) == "passing", "")
 
@@ -963,7 +962,7 @@ def _f_ci_rate_limited():
     def _http403(req, timeout=8):
         raise _ue21.HTTPError("u", 403, "rate limited", {"X-RateLimit-Remaining": "0",
                                                          "X-RateLimit-Limit": "60"}, None)
-    _p21(_ur21, "urlopen", _http403)
+    _p21(_r21d_urlopen_of(_so21), "urlopen", _http403)
     st403 = _so21._remote_ci_state("4" * 40)
     rate = (_rs21.snapshot("ci_walk").get("ratelimit") or (0, {}))[1]
     check("CI gate: a 403 is still 'pending', and its rate-limit answer is recorded",
@@ -978,7 +977,7 @@ def _f_ci_rate_limited():
 def _f_ci_no_deadlock():
     _p21(_so21, "_repo_slug", lambda: "o/r")
     _p21(_so21, "_ci_suite_expected", lambda sha, runs: True)
-    _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), {}))
+    _p21(_r21d_urlopen_of(_so21), "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), {}))
     out = []
     _p21(_so21, "_update_lock", _th21.Lock())   # green, as in the panel: see _f_cache's note
     with _so21._update_lock:      # the status computation holds it across the whole walk

@@ -132,12 +132,15 @@ function toggleCreds(select) {
     group.style.display = '';
     label.textContent = 'Password';
     // t(): the field carries data-no-i18n (its value is a path or a password, never translated), so
-    // the translator never reaches the placeholder this writes.
+    // the translator never reaches the placeholder this writes; data-i18n-placeholder names its
+    // key, so a live language switch renders it again (setLang).
+    input.setAttribute('data-i18n-placeholder', 'Enter SSH password');
     input.placeholder = t('Enter SSH password');
     input.value = '';
     input.type = 'password';
     input.autocomplete = 'new-password';
   } else if (select.value === 'tailscale') {
+    input.removeAttribute('data-i18n-placeholder');
     group.style.display = 'none';
     input.value = '';
     input.type = 'text';
@@ -147,6 +150,7 @@ function toggleCreds(select) {
     input.type = 'text';
     input.autocomplete = 'off';
     label.textContent = 'SSH Key Path';
+    input.removeAttribute('data-i18n-placeholder');   // a path, not a key: a switch leaves it alone
     input.placeholder = '~/.ssh/id_rsa';
     input.value = '~/.ssh/id_rsa';
   }
@@ -159,7 +163,8 @@ function toggleEditCreds(select, id) {
     input.value = '';
   } else {
     group.style.display = '';
-    input.placeholder = t('Key path or password');   // t(): see toggleCreds
+    input.setAttribute('data-i18n-placeholder', 'Key path or password');   // see toggleCreds
+    input.placeholder = t('Key path or password');
   }
 }
 

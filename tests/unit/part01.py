@@ -1089,6 +1089,33 @@ class _R20dOver(object):
         return getattr(self._real, name)
 
 
+def _r21d_urlopen_of(mod):
+    """Module `mod`'s own urllib.request, to set `urlopen` on for that module only.
+
+    Setting `<mod>.urllib.request.urlopen` replaced urllib.request.urlopen for the whole process
+    (review 1015a): every other thread's fetch read the stand-in while it was set. The module's
+    `urllib` becomes a proxy holding a proxy of urllib.request, so the attribute lands on that.
+    """
+    if not isinstance(mod.urllib, _R20dOver):
+        mod.urllib = _R20dOver(mod.urllib, request=_R20dOver(mod.urllib.request))
+    return mod.urllib.request
+
+
+# (control) the stand-in lands on that module's handle and nowhere else.
+import urllib.request as _r21d_ur  # noqa: E402
+
+
+def _r21d_url_stand_in(*_a, **_k):
+    """A urlopen stand-in for the control below; never called."""
+
+
+_r21d_url_mod = type(sys)("r21d_url_mod")
+_r21d_url_mod.urllib = sys.modules["urllib"]
+_r21d_urlopen_of(_r21d_url_mod).urlopen = _r21d_url_stand_in
+check("unit helpers: a urlopen stand-in set through _r21d_urlopen_of reaches that module only (control)",
+      _r21d_url_mod.urllib.request.urlopen is _r21d_url_stand_in and _r21d_ur.urlopen is not _r21d_url_stand_in)
+
+
 _real_ts_host = _sm_core._resolve_ts_host
 _r20d_core_sp = _sm_core.subprocess
 try:
@@ -1882,20 +1909,30 @@ try:
                                                         advertise_routes="1.2.3.0/24; reboot")
     check("tailscale: an injected route list runs nothing at all", _ts_badroute[0] is False
           and not _ts_calls, str(_ts_calls))
-    _sm_hosts.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
-                                  advertise_routes="1.2.3.0/24", tags="tag:x; rm -rf /")
-    _ts_up = [a for v, a in _ts_calls if v == "tailscale-up-key"]
-    if _ts_up:
-        _ts_up[0][2] = "1.2.3.0/24; reboot"    # the routes position, for its validator below
-    check("tailscale: the join goes through the verb, not a composed command", _ts_up, str(_ts_calls))
-    # One bad argument per check, the rest the known-good values below: with all three injected
-    # at once, check_args refused on the auth key first, so "routes" and "tags" passed with their
-    # own validators deleted.
+    # ...and so are an injected key and tag list now (review 1015a: the key reached the verb's
+    # validator only at the join, after IP forwarding was written and loaded): the verb's own
+    # validator refuses them, raising as the join did, before anything runs.
+    _ts_inj = ["tskey; touch /tmp/x", "yes", "1.2.3.0/24; reboot", "tag:x; rm -rf /"]
+    try:
+        _sm_hosts.remote_bootstrap_tailscale(None, auth_key=_ts_inj[0],
+                                             advertise_routes="1.2.3.0/24", tags=_ts_inj[3])
+        _ts_early = "returned"
+    except _privmod.VerbError:
+        _ts_early = "refused"
+    check("tailscale: an injected key and tag list are refused by the verb's validator before "
+          "anything runs", _ts_early == "refused" and not _ts_calls, repr((_ts_early, _ts_calls)))
     _ts_good = ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"]
+    _sm_hosts.remote_bootstrap_tailscale(None, auth_key=_ts_good[0], advertise_routes=_ts_good[2],
+                                         tags=_ts_good[3])
+    _ts_up = [a for v, a in _ts_calls if v == "tailscale-up-key"]
+    check("tailscale: the join goes through the verb, not a composed command", _ts_up, str(_ts_calls))
+    # One bad argument per check, the rest the known-good values: with all three injected at
+    # once, check_args refused on the auth key first, so "routes" and "tags" passed with their
+    # own validators deleted.
     for _i, _label in ((0, "auth_key"), (2, "routes"), (3, "tags")):
         _ts_one = list(_ts_good)
         if _ts_up:
-            _ts_one[_i] = _ts_up[0][_i]
+            _ts_one[_i] = _ts_inj[_i]
         check("tailscale: an injected %s is refused by privileged.py, not quoted into a command"
               % _label,
               _ts_up and _ufw_raises_verb(

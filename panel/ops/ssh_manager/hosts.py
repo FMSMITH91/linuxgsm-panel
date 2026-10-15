@@ -193,12 +193,31 @@ def _compute_pro_status(server):
     }
 
 
+def _r21b_pro_token_refusal(token):
+    """The refusal for no token, or one the pro-attach verb's own validator refuses, else None.
+
+    Asked BEFORE anything runs: such a token (a hyphen or quote picked up while copying, a
+    truncated paste) raised its VerbError out of run_privileged, past the route's ConnectionError
+    handler — "Something went wrong", a traceback, and an audit row saying only "raised VerbError".
+    The value is a secret, so the refusal never names it.
+    """
+    if not token:
+        return "No token provided"
+    try:
+        _priv.check_args("pro-attach", [token])
+    except _priv.VerbError:
+        return i18n.Sentence("That isn't a valid Ubuntu Pro token — copy it again from your Ubuntu Pro "
+                             "dashboard.")
+    return None
+
+
 def pro_attach(server, token):
     """Attach a host to Ubuntu Pro with a subscription token. Installs the pro client
     first if it's somehow missing. The token is NEVER echoed back in messages/logs."""
     token = (token or "").strip()
-    if not token:
-        return False, "No token provided"
+    refused = _r21b_pro_token_refusal(token)
+    if refused:
+        return False, refused
     _pro_cache_invalidate(server)   # state is about to change; next status read must be fresh
     # Was one root shell: `(command -v pro || (apt-get update && apt-get install …)) ; pro attach`.
     # The presence test is now the pro-status verb's own exit code — rc 127 is "not installed" on
@@ -529,7 +548,13 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     if not firewall._ufw_is_active(after):
         return False, i18n.Sentence("The limit for {spec} is stored, but UFW is not active on this host, so "
                                     "nothing is limited until it is enabled.", spec=spec)
-    first = _ufw_first_public_rule(after, port, proto)
+    first = _ufw_first_public_rule(after, port, proto, unresolved=True)
+    if first is not None and first.get("unresolved"):
+        # An app profile other than OpenSSH (`Nginx Full`, `Apache`): its ports are in a file on the
+        # host the panel does not read, so whether it shadows the limit is unknown. Not a success.
+        return False, i18n.Sentence("The limit for {spec} was added, but `{rule}` above it is an application "
+                                    "profile the panel cannot read, so it cannot confirm the limit is the rule "
+                                    "connections meet first.", spec=spec, rule=first["detail"])
     if first is None or first["action"] != "LIMIT":
         return False, i18n.Sentences(i18n.Sentence(
             "{spec} is still matched first by `{rule}`, so the limit is never reached — remove or narrow that "
@@ -545,8 +570,9 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     return True, i18n.Sentence("{spec} is now rate limited (6 connections per 30s per address)", spec=spec)
 
 
-# `To` column of a port rule: a port or lo:hi range, optionally /tcp or /udp (none = both).
-_UFW_TO_PORT_RE = re.compile(r"^(\d{1,5})(?::(\d{1,5}))?(?:/(tcp|udp))?\Z")
+# A protocol ufw prints after a To or From column ("22,80/tcp", "Anywhere/udp", "<ip>/gre"). Letters
+# only: "10.0.0.0/8" is an address, not a protocol.
+_R21B_PROTO_SUFFIX_RE = re.compile(r"/([A-Za-z]+)\Z")
 
 
 def _ufw_public_rules(status_out):
@@ -561,19 +587,76 @@ def _ufw_public_rules(status_out):
         m = re.match(r"\s*\[\s*\d+\]\s*", line)
         detail = (line[m.end():] if m else line).strip()
         p = firewall._parse_ufw_rule(detail)
+        # From "Anywhere/udp" is still everyone (`ufw allow proto udp from any`): the protocol is
+        # _r21b_rule_matches' to read, not a reason to leave the rule out.
         if (not p["action"] or p["v6"] or p["iface"] or p["direction"] not in ("", "IN")
-                or p["from"].lower() != "anywhere"):
+                or _R21B_PROTO_SUFFIX_RE.sub("", p["from"]).lower() != "anywhere"):
             continue
         p["detail"] = re.sub(r"\s{2,}", "  ", detail)
         rules.append(p)
     return rules
 
 
-def _ufw_first_public_rule(status_out, port, proto):
-    """The first public rule a `proto` connection to `port` meets, or None."""
+def _r21b_rule_matches(p, port, proto):
+    """Whether public rule `p` matches a `proto` connection to `port`: True, False or None.
+
+    None when its To column is an app profile other than OpenSSH, whose ports the panel cannot know.
+    Every shape ufw prints, not only `N` / `N/proto` / `lo:hi`: the OpenSSH profile (port 22), a
+    port list (`27015,27016/tcp`), a destination before the port (`203.0.113.5 22/tcp`), and no
+    port at all (`Anywhere`, an address alone) — each matches ahead of a LIMIT appended below it.
+    Read by the To pattern alone they were skipped, so the LIMIT read as the first rule and the
+    port was reported rate limited while every connection met the ALLOW above it.
+    """
+    words = p["to"].split()
+    last = words[-1] if words else ""
+    for column in (last, p["from"]):
+        m = _R21B_PROTO_SUFFIX_RE.search(column)
+        if m and m.group(1).lower() != proto:
+            return False
+    return _r21b_port_column_matches(_R21B_PROTO_SUFFIX_RE.sub("", last), port, proto)
+
+
+def _r21b_port_column_matches(body, port, proto):
+    """_r21b_rule_matches for the To column's last word, its protocol already taken off."""
+    if body.lower() in firewall._SSH_APP_PROFILES:
+        return port == 22 and proto == "tcp"
+    if body and all(_UFW_PORT_ITEM_RE.match(i) for i in body.split(",")):
+        return firewall._r12a_names_port(body, {port})      # a port, a list, a range
+    return _r21b_portless_matches(body or "Anywhere")
+
+
+def _r21b_portless_matches(body):
+    """A To column with no port: every port (`Anywhere`, an address) — True; None when unknown."""
+    if body.lower() == "anywhere" or firewall._r14a_net(body) is not None:
+        # Every port, unless the address is one no TCP or unicast reaches (multicast).
+        return firewall._r13a_every_port({}, body)
+    return None
+
+
+def _r21b_dest_scoped(p):
+    """Whether public rule `p` names one destination address in its To column."""
+    words = p["to"].split()
+    return bool(words) and firewall._r14a_net(words[0]) is not None
+
+
+def _ufw_first_public_rule(status_out, port, proto, unresolved=False, scoped=True):
+    """The first public rule a `proto` connection to `port` meets, or None.
+
+    With `unresolved`, an app profile whose ports are unknown (_r21b_rule_matches None) ahead of
+    every match is returned marked "unresolved": the caller cannot say what it shadows.
+
+    `scoped=False` leaves out a rule for one destination address (`203.0.113.5 22/tcp`, an address
+    alone): it matches only connections to that address. Counted as matching first, it decides a
+    limit is shadowed (the safe answer there); for "is this port already open?" it is not, since
+    the host's other addresses still meet whatever comes after it.
+    """
     for p in _ufw_public_rules(status_out):
-        m = _UFW_TO_PORT_RE.match(p["to"])
-        if m and int(m.group(1)) <= port <= int(m.group(2) or m.group(1)) and m.group(3) in (None, proto):
+        if not scoped and _r21b_dest_scoped(p):
+            continue
+        hit = _r21b_rule_matches(p, port, proto)
+        if hit is None and unresolved:
+            return dict(p, unresolved=True)
+        if hit:
             return p
     return None
 
@@ -1271,8 +1354,9 @@ LGSM_COMMON_DEPS = (
 # Registered, and keyed by the remote id alone. It had NO expiry and was not registered, and its
 # key was the tuple ("srv", id) — which forget_remote_caches could not have popped even if it had
 # been. That is the exact shape firewall.py's _specs_cache note describes: delete a remote, add
-# another that takes the same rowid (SQLite reuses them), and deps_for_game loads the DELETED
-# host's distro package list. A Debian 12 box gets ubuntu-22.04.csv; apt-get install is atomic, so
+# another that takes the same rowid (SQLite reused them; it still does where id_sequence.py
+# could not add AUTOINCREMENT), and deps_for_game loads the DELETED host's distro package list.
+# A Debian 12 box gets ubuntu-22.04.csv; apt-get install is atomic, so
 # one nonexistent package aborts the batch and install_game_dependencies' per-package fallback
 # silently drops the rest. The game server then fails to start on a missing library with nothing
 # in the log pointing at why, for the life of the process.
@@ -2602,9 +2686,17 @@ def _r20a_routes_or_none(advertise_routes):
     if text in ("", "-"):     # "-" is the verb's own "no routes"; it switched forwarding on
         return ""
     try:
-        return _priv._routes(text)
-    except _priv.VerbError:
+        routes = _priv._routes(text)
+        # ...and what `tailscale up` refuses after it: the verb takes an address (`10.0.0.1`) or a
+        # prefix with host bits (`192.168.1.5/24`, a gateway typed for its LAN), and tailscale's
+        # CalcAdvertiseRoutes refuses both — so the host was left forwarding with nothing joined.
+        for part in routes.split(","):
+            if "/" not in part:
+                return None
+            _ipaddress.ip_network(part, strict=True)
+    except (_priv.VerbError, ValueError):
         return None
+    return routes
 
 
 def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
@@ -2657,6 +2749,12 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
     advertise_routes = _r20a_routes_or_none(advertise_routes)
     if advertise_routes is None:
         return False, i18n.Sentence(_R20A_BAD_ROUTES), "\n".join(log)
+    # Every argument through the verb's own validator BEFORE forwarding is switched on: a key the
+    # boundary refuses (a stray quote, a truncated paste) raised its VerbError only at the join,
+    # with IPv4 and IPv6 forwarding already written and loaded. Raised as it was, so the route's
+    # answer ("That isn't a usable Tailscale auth key.", a 400) is unchanged.
+    _priv.check_args("tailscale-up-key", [auth_key, "yes" if enable_ssh else "no",
+                                          advertise_routes or "-", tags or "-"])
 
     # 1. Enable IP forwarding for subnet routing
     if advertise_routes:
@@ -3433,7 +3531,8 @@ def _open_ssh_port_rule(server, port, old_ports):
     with _core.ufw_lock(server):
         before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
         known = brc == 0 and firewall._ufw_is_active(before or "")
-        first = _ufw_first_public_rule(before, port, "tcp") if known else None
+        # scoped=False: an allow to ONE of the host's addresses does not open the port on the others.
+        first = _ufw_first_public_rule(before, port, "tcp", scoped=False) if known else None
         if first is not None:
             if first["action"] in ("ALLOW", "LIMIT"):
                 return False, None
@@ -3690,10 +3789,6 @@ def change_ssh_port(server, new_port, bind_addr=""):
         port=new_port, done=_done), _unchecked)
 
 
-# A ufw rule whose To column IS port 22 — the number (with or without /tcp) or the app profile.
-# Anchored: the To column is the first thing on the line.
-_SSH22_RE = re.compile(r"\s*(?:22(?:/tcp)?|OpenSSH)\s", re.I)
-
 # The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`
 # (protocol any). ufw never matches either against a `22/tcp` rule, so a delete or a limit of
 # `22/tcp` leaves them in place — AHEAD of whatever was just appended, where every connection
@@ -3736,29 +3831,29 @@ def remote_public_ssh_status(server, panel_port=None):
             res["panel_port_open"] = False
         return res
     active = firewall._ufw_is_active(out)
-    mode = "off"
-    first_found = False
+    # ANCHORED to the To column, which is what `ufw status` prints first. `"22/tcp" in low`
+    # is a substring test, and "2222/tcp" contains it — so after the panel's own
+    # change_ssh_port moved sshd to 2222 and the operator closed 22 as the panel told them
+    # to, this still reported port 22 rate-limited, marked that button active-and-disabled,
+    # and never once showed the true `off` state. 8022, 1022 and 22022 read the same way, and
+    # so did a source address ending in .22 once you widen the test to a word boundary.
+    #
+    # And the FIRST such rule decides, because ufw stops at the first rule a packet matches.
+    # This read "any LIMIT anywhere wins", so `OpenSSH ALLOW` followed by `22/tcp LIMIT` —
+    # the list `ufw allow OpenSSH` plus the Limit button produce — was reported as
+    # rate-limited while every connection matched the ALLOW above it and nothing was ever
+    # throttled. Only rules that govern the PUBLIC: from Anywhere, inbound, on no interface.
+    #
+    # Both are now _ufw_first_public_rule's, which reads every shape ufw prints for port 22. The
+    # `_SSH22_RE` this matched with knew
+    # only `22`, `22/tcp` and OpenSSH, so a host whose SSH was open through a list (`22,80/tcp`), a
+    # destination (`203.0.113.5 22/tcp`) or an every-port allow read "off" — "reachable over the
+    # tailnet only", the reassurance an operator closes port 22 on — and `off` / `limit` reported
+    # success with every connection still meeting that rule.
+    first = _ufw_first_public_rule(out, 22, "tcp")
+    mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(first["action"], "off") if first else "off"
     panel_open = False
     for line in (out or "").splitlines():
-        low = line.lower()
-        # ANCHORED to the To column, which is what `ufw status` prints first. `"22/tcp" in low`
-        # is a substring test, and "2222/tcp" contains it — so after the panel's own
-        # change_ssh_port moved sshd to 2222 and the operator closed 22 as the panel told them
-        # to, this still reported port 22 rate-limited, marked that button active-and-disabled,
-        # and never once showed the true `off` state. 8022, 1022 and 22022 read the same way, and
-        # so did a source address ending in .22 once you widen the test to a word boundary.
-        #
-        # And the FIRST such rule decides, because ufw stops at the first rule a packet matches.
-        # This read "any LIMIT anywhere wins", so `OpenSSH ALLOW` followed by `22/tcp LIMIT` —
-        # the list `ufw allow OpenSSH` plus the Limit button produce — was reported as
-        # rate-limited while every connection matched the ALLOW above it and nothing was ever
-        # throttled. Only rules that govern the PUBLIC: from Anywhere, inbound, on no interface.
-        if not first_found and _SSH22_RE.match(line) and " (v6)" not in low:
-            _p = firewall._parse_ufw_rule(line)
-            if (not _p["iface"] and _p["direction"] in ("", "IN")
-                    and _p["from"].lower() == "anywhere" and _p["action"]):
-                first_found = True
-                mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(_p["action"], "off")
         # A rule that holds the panel port open to the public, read the way the close route
         # (remote_vps _panel_port_rule_nums) reads it: inbound ALLOW *or LIMIT*, on no interface.
         # This was `"allow" in low`, so a rate-limited port (`ufw limit 5000/tcp`, which

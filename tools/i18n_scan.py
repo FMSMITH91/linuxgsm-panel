@@ -517,7 +517,7 @@ def is_js_ui_text(text):
 # claimed by no rule). Claimed here only where the code puts it in front of a person: a toast, a
 # textContent or innerHTML write, a confirm or busy label, or nags.js's element builders.
 _JS_UI_WORD = re.compile(r"^[A-Z][a-z]+(?:…|\.\.\.|[.!])?$")
-_JS_UI_SLOT = re.compile(r"(?:\btoast\([^;]*|\btextContent\s*=\s*[^;]*|\binnerHTML\s*=\s*[^;]*"
+_JS_UI_SLOT = re.compile(r"(?:\btoast\([^;]*|\btextContent\s*\+?=\s*[^;]*|\binnerHTML\s*\+?=\s*[^;]*"
                          r"|\bconfirmLabel\s*:\s*|\bbusy[A-Za-z]*\s*[:=]\s*[^;]*"
                          r"|\b_rbButton\(\s*|\b_rbEl\([^;]*)$")
 
@@ -888,6 +888,77 @@ def guarded_attrs(template_dir=TEMPLATE_DIR, catalog=None):
     return out
 
 
+# ── t() rendered where the translator skips, with nothing to render it again ──────────────────
+# guarded_attrs reads LITERAL text only: a {{ … }} is per-request text to _resolve_jinja, so
+# `placeholder="{{ c.argument_label or t('value') }}"` on a data-no-i18n input, or
+# `<code>{{ remote.display_host or t('this host') }}</code>`, passed it. Rendered in the page's
+# language on the server, such text is right on load and then stays in that language after a live
+# switch: the walk skips it, and nothing names its English key for setLang (review 1015a). Reported
+# unless the element carries the matching data-i18n-<attr> / data-i18n-text marker.
+_R21C_TCALL = "\x07"   # a {{ … }} that calls t(): kept apart from _DYNAMIC so its place is known
+_R21C_TCALL_RE = re.compile(r"\{\{(?:(?!\}\}).)*?(?<![\w.])t\((?:(?!\}\}).)*\}\}", re.S)
+
+
+class _R21cGuardedTCalls(HTMLParser):
+    """[(where, element)]: a t() call in a skipped attribute or text that setLang cannot re-render."""
+
+    def __init__(self):
+        HTMLParser.__init__(self, convert_charrefs=True)
+        self.found = []
+        self._open = []           # (tag, attrs) of every open non-void element
+        self._skip_at = None      # len(self._open) when the innermost skip began
+
+    def handle_starttag(self, tag, attrs):
+        attrs = _r20c_attr_pairs(attrs)
+        names = {k for k, _v in attrs}
+        skips = tag in SKIP_TAGS or "data-no-i18n" in names
+        if self._skip_at is not None or skips:
+            self.found += [("@" + name, tag) for name in self._unnamed_tcalls(attrs, names)]
+        if tag in _Walker._VOID:
+            return
+        self._open.append((tag, names))
+        if skips and self._skip_at is None:
+            self._skip_at = len(self._open)
+
+    @staticmethod
+    def _unnamed_tcalls(attrs, names):
+        """The translatable attributes holding a t() call whose key no data-i18n-<attr> names."""
+        return [name for name, value in attrs if name in I18N_ATTRS and value
+                and _R21C_TCALL in value and "data-i18n-" + name not in names]
+
+    def handle_endtag(self, tag):
+        if tag in _Walker._VOID or tag not in [t for t, _n in self._open]:
+            return
+        while self._open and self._open.pop()[0] != tag:
+            pass
+        if self._skip_at is not None and len(self._open) < self._skip_at:
+            self._skip_at = None
+
+    def handle_data(self, data):
+        if self._skip_at is None or _R21C_TCALL not in data:
+            return
+        tag, names = self._open[-1]
+        if "data-i18n-text" not in names:
+            self.found.append(("text", tag))
+
+
+def guarded_tcalls(template_dir=TEMPLATE_DIR):
+    """[(template, where, element)]: see _R21cGuardedTCalls.
+
+    Fix: move the guard onto an inner element around the user's text, put the t() text outside the
+    skipped element, or give the element data-i18n-text / data-i18n-<attr> naming its English key.
+    """
+    out = []
+    for path in sorted(glob.glob(os.path.join(template_dir, "*.html"))):
+        with open(path, encoding="utf-8") as fh:
+            src = re.sub(r"\{#.*?#\}", "", fh.read(), flags=re.S)
+        walker = _R21cGuardedTCalls()
+        walker.feed(_resolve_jinja(_R21C_TCALL_RE.sub(_R21C_TCALL, src)))
+        walker.close()
+        out += [(os.path.basename(path), where, tag) for where, tag in walker.found]
+    return out
+
+
 _JS_WRITE = r"\.(?:textContent|innerText|placeholder|title)\s*=(?!=)"
 
 
@@ -926,6 +997,36 @@ def guarded_writes(js_dir=JS_DIR, template_dir=TEMPLATE_DIR):
                 window = source[start:start + 2500]
                 for w in re.finditer(r"\b%s%s([^;]*)" % (re.escape(var), _JS_WRITE), window):
                     out.extend(_untranslated_in(path, source, start + w.start(1), w.group(1)))
+    return sorted(set(out))
+
+
+# The same hole on the script side: t() into a guarded field is right on load, but the walk never
+# reaches it again, so a live switch left it in the old language unless the element names its key
+# for setLang (data-i18n-placeholder / -title / -text) — manage_remotes.js's "Enter SSH password".
+_R21C_MARKER = {"placeholder": "data-i18n-placeholder", "title": "data-i18n-title",
+                "textContent": "data-i18n-text", "innerText": "data-i18n-text"}
+
+
+def guarded_tcall_writes(js_dir=JS_DIR, template_dir=TEMPLATE_DIR):
+    """[(file, line, write)]: a t()/tf() write into a skipped element that names no key for setLang."""
+    guard = _GuardedIds()
+    for path in sorted(glob.glob(os.path.join(template_dir, "*.html"))):
+        with open(path, encoding="utf-8") as fh:
+            guard.feed(_resolve_jinja(fh.read()))
+    out = []
+    for path in sorted(glob.glob(os.path.join(js_dir, "*.js"))):
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        for var, starts in _guarded_vars(source, guard.ids, guard.names).items():
+            for start in starts:
+                window = source[start:start + 2500]
+                for w in re.finditer(r"\b%s\.(textContent|innerText|placeholder|title)\s*=(?!=)\s*tf?\("
+                                     % re.escape(var), window):
+                    marker = r"\b%s\.setAttribute\(\s*['\"]%s['\"]" % (re.escape(var),
+                                                                     _R21C_MARKER[w.group(1)])
+                    if not re.search(marker, window):
+                        out.append((os.path.basename(path), source.count("\n", 0, start + w.start()) + 1,
+                                    w.group(0)))
     return sorted(set(out))
 
 
@@ -2089,17 +2190,50 @@ def _r20c_lambda_view(lam):
     that is the lambda's parameter is not that local: `msg = f"…"; cb = lambda msg: flash(msg)`
     was reported as a built message flashed, and `def f(text): … lambda text: jsonify(text)` made
     f a wrapper of a parameter it never hands on. A copy, so the tree the other walks read is
-    untouched; line numbers (which # i18n-ok reads) are kept. Defaults stay as they are: they are
-    evaluated in the enclosing scope.
+    untouched; line numbers (which # i18n-ok reads) are kept. A parameter with a default is the
+    default instead: `lambda msg=msg: flash(msg)` flashes the enclosing `msg` (the default is
+    evaluated in the enclosing scope), so its use reads as a copy of the default expression; renaming
+    it too left that built message read by no gate (review 1015a).
     """
     params = {a.arg for a in lam.args.posonlyargs + lam.args.args + lam.args.kwonlyargs}
     params |= {a.arg for a in (lam.args.vararg, lam.args.kwarg) if a is not None}
     view = ast.Lambda(args=lam.args, body=copy.deepcopy(lam.body))
     ast.copy_location(view, lam)
-    for n in ast.walk(view.body):
-        if isinstance(n, ast.Name) and n.id in params:
-            n.id = "<lambda param> " + n.id
+    view.body = _R21cDefaultsIn(_r21c_lambda_defaults(lam), params).visit(view.body)
     return view
+
+
+def _r21c_lambda_defaults(lam):
+    """{parameter: default expression} for a lambda's parameters that have one."""
+    positional = lam.args.posonlyargs + lam.args.args
+    out = dict(zip([a.arg for a in positional[len(positional) - len(lam.args.defaults):]],
+                   lam.args.defaults))
+    out.update({a.arg: d for a, d in zip(lam.args.kwonlyargs, lam.args.kw_defaults) if d is not None})
+    return out
+
+
+class _R21cDefaultsIn(ast.NodeTransformer):
+    """Each use of a lambda parameter: a copy of its default, or the name renamed out of reach."""
+
+    def __init__(self, defaults, params):
+        self.defaults, self.params = defaults, params
+
+    def visit_Name(self, node):
+        if node.id in self.defaults:
+            return ast.copy_location(copy.deepcopy(self.defaults[node.id]), node)
+        if node.id in self.params:
+            node.id = "<lambda param> " + node.id
+        return node
+
+    def visit_Lambda(self, node):
+        # A lambda inside the body: its defaults are read here, its own parameters shadow ours.
+        node.args = self.visit(node.args)
+        mine = {a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs}
+        mine |= {a.arg for a in (node.args.vararg, node.args.kwarg) if a is not None}
+        inner = _R21cDefaultsIn({k: v for k, v in self.defaults.items() if k not in mine},
+                                self.params - mine)
+        node.body = inner.visit(node.body)
+        return node
 
 
 def shown_literals_py(root=ROOT):

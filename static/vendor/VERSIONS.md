@@ -60,7 +60,7 @@ JSON files, and it shows up in review.
 | Bootstrap (JS) | 5.3.3 | `bootstrap/bootstrap.bundle.min.js` | https://cdnjs.cloudflare.com/ajax/libs/bootstrap/ |
 | Bootstrap (CSS) | 5.3.3 | `bootstrap/bootstrap.min.css` | https://cdnjs.cloudflare.com/ajax/libs/bootstrap/ |
 | Bootstrap Icons | 1.11.3 | `bootstrap-icons/bootstrap-icons.min.css` | https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/ |
-| Chart.js | 4.4.1 | `chartjs/chart.umd.min.js` | https://cdnjs.cloudflare.com/ajax/libs/Chart.js/ |
+| Chart.js | 4.4.1 | `chartjs/chart.umd.min.js` | https://cdn.jsdelivr.net/npm/chart.js/ |
 | Socket.IO (client) | 4.8.4 | `socketio/socket.io.min.js` | https://registry.npmjs.org/socket.io-client/-/socket.io-client-4.8.4.tgz |
 | xterm.js (JS) | 5.5.0 | `xterm/xterm.min.js` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
 | xterm.js (CSS) | 5.5.0 | `xterm/xterm.min.css` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |

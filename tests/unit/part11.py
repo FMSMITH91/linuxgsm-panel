@@ -14,7 +14,7 @@ paramiko, the ssh CLI or a local subprocess would be running against whatever ma
 on. Transports differ in how they fail — paramiko RAISES, tailscale/local return ("", err, -1) — so
 the failure branches below are driven both ways where the code treats them differently.
 """
-from unit.part01 import (NS, SO, _sm_core, _sm_files, _sm_firewall, _sm_hosts, check, eq, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (NS, SO, _r21d_urlopen_of, _sm_core, _sm_files, _sm_firewall, _sm_hosts, check, eq, os, re, sys)  # noqa: F401,E402
 
 import json as _p8_json  # noqa: E402
 import subprocess as _p8_subprocess  # noqa: E402
@@ -704,10 +704,11 @@ try:
     _pa = _p8_srv()
     _H._pro_status_cache[_H._pro_key(_pa)] = (_p8_time.time() + 999, {"attached": False})
     _w = _wire(verbs={"pro-status": ("", "", 127),
-                      "pro-attach": ("", "Invalid token C1secretToken99 for this contract", 1)})
-    _pa_r = _H.pro_attach(_pa, "C1secretToken99")
+                      "pro-attach": ("", "Invalid token C1secretToken999 for this contract", 1)})
+    # 16+ letters and digits, the shape the verb takes: a shorter one is refused before any call.
+    _pa_r = _H.pro_attach(_pa, "C1secretToken999")
     check("pro attach: a failure message NEVER carries the token", _pa_r[0] is False
-          and "C1secretToken99" not in _pa_r[1] and "<token>" in _pa_r[1], repr(_pa_r))
+          and "C1secretToken999" not in _pa_r[1] and "<token>" in _pa_r[1], repr(_pa_r))
     eq("pro attach: pro missing (rc 127) is installed first, then attach",
        [v for v, _ in _w.verbs_called()], ["pro-status", "apt-update", "apt-install", "pro-attach"])
     check("pro attach: ...and the cached status is dropped before anything changes",
@@ -715,7 +716,7 @@ try:
     _w = _wire(verbs={"pro-status": (_pro_json, "", 0),
                       "pro-attach": ("This machine is already attached to 'x'", "", 1)})
     eq("pro attach: 'already attached' is success even on a non-zero exit, and pro present means "
-       "no install", (_H.pro_attach(_p8_srv(), "tok"), [v for v, _ in _w.verbs_called()]),
+       "no install", (_H.pro_attach(_p8_srv(), "tok" + "0" * 13), [v for v, _ in _w.verbs_called()]),
        ((True, "Attached to Ubuntu Pro."), ["pro-status", "pro-attach"]))
 
     _w = _wire()
@@ -1780,7 +1781,7 @@ try:
     import tempfile as _p8_tempfile  # noqa: E402
     _p8_ld_saved = {n: getattr(_p8_ld, n)
                     for n in ("_text", "_fetch", "_fetch_release", "_CACHE_DIR")}
-    _p8_urlopen_saved = _p8_ld.urllib.request.urlopen
+    _p8_urlopen_saved = _r21d_urlopen_of(_p8_ld).urlopen
     _p8_urls = []
     # The real rows: v26.1.0's lgsm/data/ubuntu-24.04.csv against master's (v26.2.0) for pmc and vints.
     _P8_MASTER = _P8_CSV + "pmc,openjdk-25-jre\nvints,dotnet-runtime-10.0\n"
@@ -1827,7 +1828,7 @@ try:
                                                    _p8_rel_lists.get(tag))[1]
         _p8_ld._fetch = lambda name: (_p8_master_calls.append(name), _p8_master_now[0])[1]
         # Nothing below may reach the network: a request that gets past the stubs is recorded.
-        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
+        _r21d_urlopen_of(_p8_ld).urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
                                                                    _p8_raise(OSError("no network")))
         _H.host_os_slug = lambda s: "ubuntu-24.04"
         _P8_ACCT = dict(account="vintsserver", selfname="vintsserver")
@@ -1895,7 +1896,7 @@ try:
         check("release lists: deps_at_release sends NO request for a tag that is not one",
               _p8_bad_direct == [{}] * 4 and _p8_urls == [], repr((_p8_bad_direct, _p8_urls)))
         _P8_V2610_FULL = _P8_V2610 + "".join("g%02d,libg%02d\n" % (i, i) for i in range(25))
-        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (
+        _r21d_urlopen_of(_p8_ld).urlopen = lambda req, timeout=None: (
             _p8_urls.append(req.full_url), _FakeResp8(_P8_V2610_FULL))[1]
         _p8_real_rel = _p8_ld.deps_at_release("ubuntu-24.04", "v26.1.0")
         check("release lists: fetched from LinuxGSM's own repository at exactly that tag",
@@ -1903,7 +1904,7 @@ try:
                            "lgsm/data/ubuntu-24.04.csv"]
               and _p8_real_rel.get("vints") == ["dotnet-runtime-8.0"],
               repr((_p8_urls, _p8_real_rel.get("vints"))))
-        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
+        _r21d_urlopen_of(_p8_ld).urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
                                                                    _p8_raise(OSError("no network")))
         _p8_ld._fetch_release = lambda tag, name: (_p8_rel_calls.append((tag, name)),
                                                    _p8_rel_lists.get(tag))[1]
@@ -1955,7 +1956,7 @@ try:
             __import__("shutil").rmtree(str(_p8_ld._CACHE_DIR), ignore_errors=True)
         for _k8, _v8 in _p8_ld_saved.items():
             setattr(_p8_ld, _k8, _v8)
-        _p8_ld.urllib.request.urlopen = _p8_urlopen_saved
+        _r21d_urlopen_of(_p8_ld).urlopen = _p8_urlopen_saved
         _p8_ld._mem.clear()
         _p8_ld._releases.clear()
         _p8_ld._attempted.clear()
@@ -2370,7 +2371,8 @@ try:
           and "could not be read" in _bt[2], repr(_bt))
     _wire(verbs={"tailscale-up-key": ("", "invalid key: unable to validate", 1)})
     eq("remote tailscale bootstrap: a rejected key is a failure with tailscale's reason",
-       _H.remote_bootstrap_tailscale(_p8_srv(), auth_key="tskey-bad")[:2],
+       # A key of a shape the verb takes (10+ characters): one it refuses never reaches the host.
+       _H.remote_bootstrap_tailscale(_p8_srv(), auth_key="tskey-bad-k1")[:2],
        (False, "Tailscale auth failed: invalid key: unable to validate"))
     _ts_st["v"] = {"running": False, "tailscale_ip": "", "dns_name": ""}
     _w = _wire(verbs={"ufw-status": ("Status: inactive\n", "", 0)})

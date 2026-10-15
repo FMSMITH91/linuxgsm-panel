@@ -41,7 +41,10 @@ LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\Z")     # for linuxgsm_user
 # option — `-oProxyCommand=…` runs a command. No hostname, IPv4 or IPv6 address starts with one.
 # ssh_manager._core.ssh_destination holds every stored host to this again before it is used,
 # because a row LOADED from the database never passed through the route that checks it here.
-HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]][A-Za-z0-9._:\[\]-]{0,254}\Z")
+# No brackets: `[2001:db8::5]` (how the panel itself PRINTS an IPv6 login) passed, was stored, and
+# was handed to ssh and paramiko as typed — neither strips them, so nothing resolved and every
+# command to that host failed. canonical_host drops them before this is asked.
+HOST_RE = re.compile(r"^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,254}\Z")
 # Free-text display labels (e.g. a remote's name): allow spaces/punctuation but reject the
 # characters that would let a stored label break out of HTML or a JS string when it's shown
 # in the UI's client-side rendering. Defense-in-depth alongside output encoding.
@@ -117,6 +120,22 @@ def canonical_ip(value):
     """The canonical text of `value` as one IP address, or None (see ip_address_or_none)."""
     addr = ip_address_or_none(value)
     return None if addr is None else str(addr)
+
+
+def canonical_host(value):
+    """A host as the panel stores and dials it: an IP literal in its canonical text, brackets gone.
+
+    `[2001:db8::5]` -> `2001:db8::5`, and every spelling of one address the same text
+    (`fd7a:115c:a1e0:0:0:0:0:1` and `fd7a:115c:a1e0::1`), which is how Tailscale lists a peer's
+    address. A name, or anything else that is not one address, comes back unchanged for HOST_RE to
+    judge. The ONE canonicalisation every reader of RemoteServer.host goes through: the model's
+    validator, the stored-row migration, the transports and the debug report's peer match.
+    """
+    if not isinstance(value, str):
+        return value
+    inner = value[1:-1] if value.startswith("[") and value.endswith("]") else value
+    addr = ip_address_or_none(inner)
+    return value if addr is None else str(addr)
 
 
 def canonical_ip_or_network(value):
