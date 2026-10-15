@@ -2139,6 +2139,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **The root helper no longer lets the panel account run commands as root through apt.** Its
+  check for `/etc/apt/apt.conf.d/20auto-upgrades` skipped every line starting with `#`, but apt
+  reads `#include <file>` and `#clear <key>` as instructions, so an included file could carry a
+  hook that apt runs as root. That file now accepts only the four update settings the panel
+  writes, with no comment lines. Proven against apt on Ubuntu. Installs where the panel already
+  runs as a root-capable user were not exposed by this.
+
 - **CI's Semgrep job runs on an MCP SDK with no known advisory.** semgrep pins `mcp==1.29.0`,
   which has GHSA-84m7-p3x7-pcfv (unbounded sessions in its HTTP server mode). Semgrep's lock now
   leaves mcp out and a second hash lockfile pins 1.30.0, installed with `--no-deps`; a `pip check`
