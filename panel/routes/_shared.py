@@ -1700,7 +1700,7 @@ def _r20b_audit_raised(action, exc, target, detail="", who=_R20B_VIEWER, **kw):
                    detail=("%s - %s" % (detail, why)) if detail else why, success=False, **kw)
     except Exception:  # noqa: BLE001 - the route's own answer to the raise still goes out
         db.session.rollback()
-        _log.warning("could not audit the failed %s", action, exc_info=True)
+        _log.warning("could not audit the failed %r", action, exc_info=True)  # %r: no CR/LF reaches the log
 
 
 @contextlib.contextmanager

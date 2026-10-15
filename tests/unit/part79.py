@@ -252,13 +252,13 @@ try:
     _p9_patch(_net79, "subprocess", _Sub79)
     _try79(_net79.sudo_n_verb, "ufw-status", ["numbered"], 5)
     _three_pop79, _pop79[:] = list(_pop79), []
-    _sh79 = _so79._run_verb("ufw-status", ["numbered"], timeout=5)
+    _so79._run_verb("ufw-status", ["numbered"], timeout=5)
     _sh_pop79, _pop79[:] = list(_pop79), []
     _p9_patch(_so79, "os", _euid79(0))
-    _rt79 = _so79._run_verb("ufw-status", ["numbered"], timeout=5)
+    _so79._run_verb("ufw-status", ["numbered"], timeout=5)
     _rt_pop79, _pop79[:] = list(_pop79), []
     _p9_patch(_so79, "_helper_present", lambda: True)
-    _he79 = _so79._run_verb("ufw-status", ["numbered"], timeout=5)
+    _so79._run_verb("ufw-status", ["numbered"], timeout=5)
     _he_pop79, _pop79[:] = list(_pop79), []
     check("system_ops: a helper-only verb on a non-root panel host with no helper says it needs the "
           "helper, and starts nothing (it ran a bare `sudo` and showed sudo's usage text)",

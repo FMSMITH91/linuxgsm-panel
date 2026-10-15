@@ -37,7 +37,6 @@ from panel.ops import system_ops as _so81
 from panel.routes import audit as _audit81, remote_security as _rs81
 from panel.security import auth as _auth81, banlist as _bl81
 
-_JS81 = os.path.join(_root, "static", "js")
 _XHR81 = {"X-Requested-With": "XMLHttpRequest"}
 _TRIP81_START = len(_P9_TRIPPED)
 _spec81 = _ilu81.spec_from_file_location("i18n_scan_p81", os.path.join(_root, "tools", "i18n_scan.py"))
