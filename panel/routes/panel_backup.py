@@ -900,7 +900,7 @@ def _register_panel_diagnostics(app):
     def api_panel_debug_report():
         """A diagnostic bundle the operator can attach to a GitHub issue.
 
-        {report, summary, issue_body, issues_url, filename}: whitelisted fields, classes and
+        {report, summary, posture, issue_body, issues_url, filename}: whitelisted fields, classes and
         counts, and a log tail with known names pseudonymised and secrets redacted (see
         panel/ops/debug_report). Best-effort, so the page asks the operator to review it before
         sharing. One report is built at a time: a second request waits for the first's result.

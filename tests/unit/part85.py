@@ -469,7 +469,7 @@ try:
     _sec85 = _nw85.section_network(NS(app=NS(config={"BOOT_PORT": 5000})))
 finally:
     _nw85.bounded = _saved_bd85
-_sect85 = "\n".join(_sec85.lines)
+_sect85 = "\n".join(_sec85.lines + _sec85.page_lines)
 check("debug report: the network section reads sshd beside UFW and hands its ports to Ways in",
       "SSH ALLOW from Anywhere (on sshd's own ports)" in _sect85, _sect85)
 

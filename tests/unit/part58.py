@@ -352,14 +352,14 @@ def _funnel_port58():
     v = {"backend_state": "Running", "serve_services": [], "funnel_enabled": True}
     res = _base58.Result()
     _nw58._tailscale_lines(ctx, res, {}, ("ok", ("ok", v)))
-    shared = [f for f in res.findings if "whole :443 listener" in repr(f)]
+    shared = [f for f in res.page_findings if "whole :443 listener" in repr(f)]   # posture
     check("debug report: the shared-Funnel finding is looked for on the port the panel is bound "
           "to, not config.json's (a restart pending)", ports == [5001] and len(shared) == 1,
           repr((ports, res.findings)))
     _p9_patch(_nw58, "_load_cfg", lambda: ({}, False))
     res = _base58.Result()
     _nw58._tailscale_lines(ctx, res, {}, ("ok", ("ok", v)))
-    said = " | ".join(repr(f) for f in res.findings)
+    said = " | ".join(repr(f) for f in res.findings + res.page_findings)
     check("debug report: with config.json unreadable, Funnel on is not blamed on a config value "
           "nobody read", "config says off" not in said and "off in the panel's config" not in said
           and "could not be read" in said, said)

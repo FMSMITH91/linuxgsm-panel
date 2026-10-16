@@ -7,6 +7,10 @@ prints a section that could not be read as exactly that -- never as "(none)" or 
 same as "nothing there" (empty-is-not-a-measurement).
 
 Privacy is the rule every section is held to: the report is meant to be pasted on a PUBLIC issue.
+Security POSTURE -- what tells a reader which of this panel's defences is weak (2FA counts, invites
+that grant superadmin, the setup-token file, the firewall's ways in, fail2ban jails that cannot ban)
+-- never goes in it: a section records those with Result.posture()/posture_find(), and
+assemble.py shows them only on the in-panel report page (_page_only there, POSTURE_RE below).
 A section prints counts, classes, booleans, ids, fixed-vocabulary tokens and exception CLASS names.
 It never prints a host, address, account name, game-server name, path outside the checkout, URL,
 token, or str(exc). The pseudonymiser in privacy.py runs over the finished text as a backstop, not
@@ -44,12 +48,31 @@ CROSS-MODULE CONTRACTS (who writes, who reads):
     _src_tailscale.shared_read(ctx) / shared_info(ctx)   Tailscale status (R36, R49, R72)
     diagnostics.shared_integrity(ctx) the one quick_check (R12, R57)
 """
+import re
 import threading
 import time
 
 # A finding's level. "unread" is a section or check that could not be read: a problem in itself,
 # never a pass.
 LEVELS = ("fail", "warn", "unread", "ok")
+
+# The posture's own vocabulary: the labels and finding texts the sections print through posture()
+# and posture_find(). assemble.py withholds any line of the downloadable file that matches, whichever
+# section printed it and however (a posture line a new section adds with add() instead): the file is
+# what the GitHub issue form asks to have attached publicly, and the issue's account names the owner.
+# Fixed, English report vocabulary (the report is not translated), never a host's text.
+POSTURE_RE = re.compile(
+    r"\*\*2FA on\*\*|not every superadmin has 2FA|grant superadmin|setup token file|Must change password"
+    r"|\*\*Ways in\*\*|default incoming|can never ban|which no jail can ban|jail file\*\*"
+    r"|jail \(runtime\)\*\*|\*\*sshd jail\*\*|· jails:|without the panel-login jail"
+    r"|does not watch this install's auth\.log|no failed login reaches fail2ban"
+    r"|auth\.log handler attached|\*\*UFW\*\*: (?:active|inactive|not installed)"
+    r"|\*\*fail2ban\*\*: (?:running|not installed)|UFW (?:active|inactive)|fail2ban running"
+    r"|Defence tools|defence tool missing|\*\*Ban gate \(|ban gate's fail2ban set"
+    r"|\*\*Funnel\*\*:|Funnel is ON in Serve|Funnel is on for the whole|through Tailscale Funnel"
+    r"|Tailscale-Funnel-Request|\*\*tailscale_use_funnel\*\*|Tailscale \w+, Funnel (?:on|off)"
+    r"|\*\*Session cookie\*\*|Secure cookies while|session cookie Secure|\*\*cookie_secure\*\*"
+    r"|trust_proxy is on but the panel listens beyond loopback|Automatic security updates")
 
 
 def finding(level, area, text):
@@ -66,6 +89,9 @@ class Result(object):
     findings      finding() dicts for the At-a-glance block (ok ones are not shown there).
     verdict       one fixed-vocabulary line for the Verdicts block, or None.
     summary_lines lines that ALSO go in the public summary (the GitHub issue body). Keep them few.
+    page_lines    security-posture lines: shown on the in-panel report page ONLY, never in the
+                  downloaded file, the summary or the issue body.
+    page_findings posture findings, likewise: never in At a glance.
     """
 
     def __init__(self, lines=None, findings=None, verdict=None, summary_lines=None):
@@ -74,6 +100,8 @@ class Result(object):
         self.findings = list(findings or [])
         self.verdict = verdict
         self.summary_lines = list(summary_lines or [])
+        self.page_lines = []
+        self.page_findings = []
 
     def add(self, line):
         """Append one body line; returns self so a section can chain."""
@@ -83,6 +111,16 @@ class Result(object):
     def find(self, level, area, text):
         """Record a finding; returns self."""
         self.findings.append(finding(level, area, text))
+        return self
+
+    def posture(self, line):
+        """Append one security-posture line, for the in-panel page only; returns self."""
+        self.page_lines.append(line)
+        return self
+
+    def posture_find(self, level, area, text):
+        """Record a security-posture finding, for the in-panel page only; returns self."""
+        self.page_findings.append(finding(level, area, text))
         return self
 
 

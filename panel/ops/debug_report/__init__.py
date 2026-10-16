@@ -7,6 +7,7 @@ generate() runs every section in SECTIONS, each under the contract in _base.py, 
   report      the full markdown (download / paste)
   summary     the public part: header, At a glance, Verdicts, Diagnostics, Hosts
   issue_body  the summary sized for a GitHub new-issue URL, the "describe the problem" prompt first
+  posture     the security posture, for the in-panel report page ONLY (in none of the above)
   issues_url, filename
 
 Sections run in one of two modes:
@@ -38,6 +39,7 @@ MAX_WORKERS = 4
 #   part "header": the report's header lines (assemble.py puts them at the top, not as a section).
 #   part "summary": also in the public summary/issue body, in this order.
 #   part "full": the full report only.
+#   any other part (e.g. "page"): the in-panel report page only, never the file (assemble.FILE_PARTS).
 # A section's function is `section` in panel/ops/debug_report/<module>.py.
 # The two Hosts sections are workers although they read the database: on a stale Tailscale cache
 # they make the report's one `tailscale status` read, which can take ~20 s cold, and a request
@@ -157,7 +159,7 @@ WAIT_S = DEADLINE_S + 15
 
 
 def generate(app=None, request_info=None):
-    """The report dict: {report, summary, issue_body, issues_url, filename}.
+    """The report dict: {report, summary, posture, issue_body, issues_url, filename}.
 
     One build at a time: a caller arriving while one builds waits for it (at most WAIT_S) and gets
     its result. Raises ReportBusy when that build is still running at WAIT_S; a build that raised

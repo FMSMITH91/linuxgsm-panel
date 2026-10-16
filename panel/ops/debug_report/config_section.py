@@ -41,6 +41,8 @@ _RUNNING_KEYS = frozenset(("port", "bind_host", "trust_proxy", "trusted_proxies"
                            "remember_days", "session_protection", "use_https"))
 # What an unset key means, for the keys DEFAULT_CONFIG does not carry.
 _UNSET_EFFECTIVE = {"audit_log_retention_days": "0: audit rows are kept forever"}
+# Whitelisted keys that are security posture: printed on the in-panel page only (Result.posture).
+_POSTURE_KEYS = frozenset(("tailscale_use_funnel",))
 _DEFAULT_PROXY_USERS = ("www-data", "nginx", "http", "caddy", "cloudflared")
 _IGNORED_WARN_WINDOW = 3600
 
@@ -170,11 +172,12 @@ def _cookie_lines(ctx, cfg, res):
                  "trust_proxy %s" % (_scalar(cfg.get("use_https")),
                                      _scalar(cfg.get("tailscale_setup_done")),
                                      _scalar(cfg.get("trust_proxy")))
+    # The cookie's flags are posture (owner's decision, 2026-10-16): page-only, never the file.
     if secure is _NO_APP:
-        res.add("- **Session cookie**: unknown (no app context) · %s" % reason)
+        res.posture("- **Session cookie**: unknown (no app context) · %s" % reason)
         return
     samesite = _running(ctx, "SESSION_COOKIE_SAMESITE")
-    res.add("- **Session cookie**: Secure %s (%s) · HttpOnly %s · SameSite %s" % (
+    res.posture("- **Session cookie**: Secure %s (%s) · HttpOnly %s · SameSite %s" % (
         "yes" if secure else "no", reason,
         "yes" if _running(ctx, "SESSION_COOKIE_HTTPONLY") is True else "no",
         samesite if samesite in ("Lax", "Strict", "None") else "unset"))
@@ -182,8 +185,8 @@ def _cookie_lines(ctx, cfg, res):
     bind = _boot_bind(ctx)
     if secure and boot_tls is False and addr_class(bind) != "loopback" \
             and not _running(ctx, "_TRUST_PROXY"):
-        res.add("- [!] Secure cookies while the process serves plain HTTP directly: browsers drop "
-                "them and sign-in loops back to /login")
+        res.posture("- [!] Secure cookies while the process serves plain HTTP directly: browsers "
+                    "drop them and sign-in loops back to /login")
 
 
 def _boot_bind(ctx):
@@ -304,9 +307,10 @@ def _proxy_lines(ctx, cfg, res):
     _trusted_lines(ctx, cfg, res)
     _peer_and_origin_lines(cfg, res)
     if run is not _NO_APP and run and addr_class(_boot_bind(ctx)) != "loopback":
-        res.add("- [!] trust_proxy is on but the panel listens beyond loopback, so it can be "
-                "reached without going through the proxy")
-        res.find("warn", "Network", "trust_proxy is on but the panel listens beyond loopback")
+        # A way round the proxy: posture, page-only (owner's decision, 2026-10-16).
+        res.posture("- [!] trust_proxy is on but the panel listens beyond loopback, so it can be "
+                    "reached without going through the proxy")
+        res.posture_find("warn", "Network", "trust_proxy is on but the panel listens beyond loopback")
 
 
 def _ssh_timeout(cfg):
@@ -348,7 +352,7 @@ def _other_lines(cfg, res):
         else:
             value = _scalar(cfg[key]) if key in cfg else "(unset → %s)" % _UNSET_EFFECTIVE.get(
                 key, "default")
-        res.add("- **%s**: %s" % (key, value))
+        (res.posture if key in _POSTURE_KEYS else res.add)("- **%s**: %s" % (key, value))
 
 
 def section_config(ctx):

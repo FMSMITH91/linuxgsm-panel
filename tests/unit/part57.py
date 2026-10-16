@@ -213,7 +213,6 @@ check("serve status: ...and with both, the node's own listener is the one read (
 
 _calls57 = []
 with _patched():
-    _patch(_ts57, "ensure_operator", lambda: _calls57.append("operator"))
     _patch(_ts57, "allow_tailscale_ufw", lambda: _calls57.append("ufw"))
     _patch(_ts57, "_r12a_serve_verb", lambda *a: (None, "refused. Nothing was changed."))
     _patch(_ts57, "_apply_serve", lambda *a: _calls57.append("apply") or (True, ""))
@@ -224,9 +223,9 @@ with _patched():
     _done57 = _ts57.setup_tailscale_serve(port=5000, mount="/lgsm")
 check("serve: a refused write opens no tailscale0 UFW rule (the refusal says 'Nothing was changed', "
       "and every port stayed open to the tailnet)",
-      _refused57[0] is False and _refused_calls57 == ["operator"], repr((_refused57, _refused_calls57)))
+      _refused57[0] is False and _refused_calls57 == [], repr((_refused57, _refused_calls57)))
 check("serve: ...while a write that goes ahead still allows tailscale0 first (control)",
-      _done57[0] is True and _calls57 == ["operator", "ufw", "apply"], repr((_done57, _calls57)))
+      _done57[0] is True and _calls57 == ["ufw", "apply"], repr((_done57, _calls57)))
 
 _aud57 = []
 with _patched():

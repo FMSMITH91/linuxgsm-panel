@@ -959,9 +959,9 @@ def _section_banwatch_caller34(rig):
 
 
 def _gate_line34():
-    """The debug report's ban-gate line, as printed."""
+    """The debug report's ban-gate line, as printed (on the report page: it is posture)."""
     lines = []
-    _nw34._bangate_line(NS(add=lines.append, find=lambda *a, **k: None))
+    _nw34._bangate_line(NS(posture=lines.append, posture_find=lambda *a, **k: None))
     return "".join(lines)
 
 

@@ -874,6 +874,12 @@ _r16d_wrap_ts_handles()
 # over its own fixture tree; imports part01 and 12.
 # part90 (the thirteenth review's page and script fixes, builder C) drives part12's app and runs node
 # on its own fixtures; imports part01, 05, 12, 47 and 87 (part87's DOM).
+# part91 (Tailscale on the panel's host through the helper, never the panel account as operator,
+# builder T) runs the helper and the Tailscale code on stand-ins, and bash over install.sh's and
+# uninstall.sh's own functions with a stand-in tailscale; imports part01 and 05.
+# part92 (decisions 1016a: the debug report's security posture on the panel's page only, never the
+# downloaded file, builder R) runs the report's network and access sections and its assembler on
+# stand-ins, and node on the page's script; imports part01, 05, 47 and 87 (part87's DOM).
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -883,7 +889,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part59", "part60", "part61", "part62", "part63", "part64", "part65", "part66",
           "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
-          "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part15")
+          "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
+          "part92", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

@@ -80,7 +80,7 @@ for path in ["/", "/users", "/groups", "/logs", "/remotes", "/tailscale", "/acco
 # alpha CLI's, which had no --bg), so it never worked.
 import panel.ops.tailscale_integration as _tsd
 from panel.core.config import load_config as _tsd_load, save_config as _tsd_save
-_tsd_saved = (_tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator)
+_tsd_saved = (_tsd.get_tailscale_info, _tsd._so._run_verb)
 _tsd_cfg0 = dict(_tsd_load())
 _tsd_port = _tsd_cfg0.get("port", 5000)
 _tsd_ran = []
@@ -92,8 +92,9 @@ _tsd_info = _tsd.TailscaleInfo(
         {"mount": "/lgsm", "target": "http://127.0.0.1:%d" % _tsd_port}]}], "raw": "x"})
 try:
     _tsd.get_tailscale_info = lambda force_refresh=False: _tsd_info
-    _tsd._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "", 0))[1]
-    _tsd.ensure_operator = lambda: (True, "panel")
+    # The `off` is the helper's tailscale-serve-off verb: what it runs is the verb's tool argv.
+    _tsd._so._run_verb = lambda v, a=(), **k: (_tsd_ran.append(_tsd._priv.tool_argv(v, a)[1:]),
+                                               ("", "", 0))[1]
     _tsd_c = _tsd_load()
     # No stored mount: the button's mount has to come from the host's routes, which only the
     # route supplies — a stored "/lgsm" would let a route that passed nothing pass this too.
@@ -152,7 +153,7 @@ try:
           _tsd_load().get("tailscale_setup_done") is False
           and not _tsd_load().get("tailscale_use_funnel"))
 finally:
-    _tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator = _tsd_saved
+    _tsd.get_tailscale_info, _tsd._so._run_verb = _tsd_saved
     _tsd._cache["info"] = None
     _tsd_save(_tsd_cfg0)
 # ── window.MOUNT follows the LIVE mount, like url_for does ────────────────────────────────

@@ -2180,6 +2180,20 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **On the panel's own machine, the panel account no longer controls Tailscale.** It used to be
+  made Tailscale's "operator", which let it join the machine to a tailnet of its choosing and turn
+  on Tailscale SSH (root logins by that tailnet's rules) without sudo. Connect, Serve, route removal
+  and Tailscale SSH on/off now go through the root helper, which refuses to move a joined machine
+  to another tailnet; every button stays. Connect on a machine that is logged in but down (or whose
+  key expired) now refuses and asks you to run `sudo tailscale up` on it, since a login link would let
+  whoever opens it pick any tailnet. Existing installs drop the operator role on their next update or
+  panel start (on a per-user install that is your own login, so your own `tailscale serve` then needs
+  sudo; the installer says so). Remote hosts are unchanged.
+- **The downloadable debug report leaves out account security.** 2FA counts, superadmin invites,
+  the setup-token file, ways in, firewall and fail2ban state (including the ban gate), Funnel,
+  automatic security updates, proxy trust and session cookie settings are shown only on the report
+  page in the panel, not in the file the issue form asks you to attach publicly, and a check keeps it so.
+
 - **The root helper no longer lets the panel account run commands as root through apt.** Its
   check for `/etc/apt/apt.conf.d/20auto-upgrades` skipped every line starting with `#`, but apt
   reads `#include <file>` and `#clear <key>` as instructions, so an included file could carry a

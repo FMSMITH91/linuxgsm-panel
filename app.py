@@ -3300,8 +3300,10 @@ def _boot_serve(app, cfg, port):
     start that failed and fell back to HTTP, so the re-point wrote https+insecure in front of a
     plain-HTTP panel and a restart reproduced the 502 it was meant to heal.
     """
-    app.config["BOOT_SERVE"] = "not attempted"
-    app.config["BOOT_SERVE_LEFTOVERS"] = "not attempted"
+    app.config["BOOT_SERVE"] = app.config["BOOT_SERVE_LEFTOVERS"] = "not attempted"
+    # First, whether or not Serve is set up: an earlier panel made its account the Tailscale
+    # operator, and that is taken back at the first start on this code. Never raises.
+    ts.release_operator()
     if not cfg.get("tailscale_setup_done"):
         return
     mount = cfg.get("tailscale_mount", "/") or "/"

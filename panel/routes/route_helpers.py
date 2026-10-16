@@ -639,14 +639,11 @@ def _wizard_serve_mount(cfg, port):
 
     ts.free_panel_mount on a FRESH read: the stored mount unless another app holds it on :443,
     then /lgsm. A Serve config that cannot be read is not an empty one: it cannot say whether "/"
-    is another app's, and the CLI replaces a mount without asking. Until the panel's account is the
-    Tailscale operator, an unreadable config is what `serve status` answers, so the operator is set
-    (as setup_tailscale_serve would) and the config read once more before giving up.
+    is another app's, and the CLI replaces a mount without asking. (The read already asks the
+    helper when Tailscale answers only root: this made the panel's account the Tailscale operator
+    and read again, and an operator can change tailscaled without the helper.)
     """
     info = ts.get_tailscale_info(force_refresh=True)
-    if info.serve_unreadable:
-        ts.ensure_operator()
-        info = ts.get_tailscale_info(force_refresh=True)
     if info.serve_unreadable:
         return None, ("Couldn't read this host's Tailscale Serve configuration, so the panel can't "
                       "tell whether another app is published where it would go. Nothing was "

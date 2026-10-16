@@ -253,14 +253,14 @@ def _authlog44(rotated):
                      % (_time44.strftime("%Y-%m-%d %H:%M:%S", _time44.localtime(now - age)), age % 250))
     if rotated:
         open(path + ".1", "w").close()
-    return _nw44._authlog_text(_nw44.authlog_scan(path), True, 6000)
+    return _nw44._authlog_text(_nw44.authlog_scan(path), 6000)
 
 
 _ar44, _af44 = _authlog44(True), _authlog44(False)
 check("auth.log: rotated within the 24 h, its count is not held against the audit log's (no ✗ that "
       "says the fail2ban feed is broken); a file that is its whole history still is",
       "3 failed-login lines in 24 h (audit log says 6000; not compared" in _ar44 and "✗" not in
-      _ar44.split("·")[1] and "(audit log says 6000 ✗)" in _af44, repr((_ar44, _af44)))
+      _ar44.split("·")[0] and "(audit log says 6000 ✗)" in _af44, repr((_ar44, _af44)))
 
 
 # ── ufw_status: no rule row is dropped (B-extra) ────────────────────────────────────────────────

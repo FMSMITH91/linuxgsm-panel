@@ -3734,8 +3734,11 @@ _pb_popen = []
 try:
     _pbh.TS_UP_LOG, _pbh.TS_UP_POLL_SECONDS = _pb_log, 0
     _pbh.resolve = lambda n: "/usr/bin/" + n
+    # `run` answers the verb's own `tailscale status --json` read: a node that has not joined.
     _pbh.subprocess = NS(Popen=lambda *a, **k: _pb_popen.append(a), DEVNULL=_pb_sp.DEVNULL,
-                         STDOUT=_pb_sp.STDOUT)
+                         STDOUT=_pb_sp.STDOUT, TimeoutExpired=_pb_sp.TimeoutExpired,
+                         run=lambda argv, **k: _pb_sp.CompletedProcess(
+                             argv, 0, '{"BackendState": "NeedsLogin"}', ""))
     _pb_rc_plain = _pbh.do_tailscale_up_login(["no", "-"], "")
     _pb_plain_mode = _pb_stat.S_IMODE(os.lstat(_pb_log).st_mode)
     _pbh.os = _PbOs()

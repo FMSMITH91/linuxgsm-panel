@@ -126,14 +126,15 @@ sudo's `SUDO_*` identity, plus what one verb needs (`DEBIAN_FRONTEND` for apt).
 Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log reads
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
-detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
+detached OS update, Tailscale's join, Tailscale Serve and Tailscale SSH on the panel's own host,
+the panel's own restore/self-update, the VPS hardening
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
 grant names, installing a game's dependencies, reading the pending-restart flags, freeing
 Steam's per-account crash-dump slots, configuring NodeSource's repository on a remote with its
 signing key pinned, installing gamedig on a remote from its hash-locked lockfile, deleting a
 ufw rule by number only while it is still the rule that was checked, a scheduled task's "Run now",
 moving game servers and the local terminal's shell out of the panel's own cgroup, and removing an
-uninstalled server's crontab** — 108 verbs. (`tests/unit_test.py` asserts
+uninstalled server's crontab** — 111 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **Where what the helper starts runs (cgroups).** sudo opens no session on Ubuntu (its PAM stack
@@ -389,6 +390,28 @@ types rather than in the command names:
   tool's own stdin on the panel host, and into a root-only temp file the tool is pointed at on a
   remote. The interactive login flow's poll log also moved from `/tmp` to `/run`: in `/tmp` any
   local user could pre-create the file the root poll then reads.
+- **Tailscale on the panel's own host** is changed only through verbs: Serve (`tailscale-serve`,
+  and `tailscale-serve-off`, which always names one mount, since an `off` with none removes every
+  app on that listener), Tailscale SSH on and off (`tailscale-ssh`, which is `tailscale set
+  --ssh=true|false` and nothing else), and the interactive join. The panel used to make its own
+  account the tailscaled **operator** instead, so these worked without root. That stepped round
+  this whole grant: an operator talks to tailscaled with no sudo and no helper, so it can log the
+  host out, join it to a tailnet of its own choosing with an auth key, and turn Tailscale SSH on,
+  which lets that tailnet's members log in as root by that tailnet's rules. Now no verb can make any
+  account the operator, and `install.sh` (fresh install and every update) and the panel's own start
+  take the role back from the panel's account when it holds it (an operator someone chose for their
+  own login is left alone). The helper also refuses the shapes that would move the host: a key join
+  (`tailscale-up-key`) of a node that is in a tailnet, holds a node key, or whose state it cannot
+  read (an `up` with a key logs in afresh, into the key's tailnet), and an interactive `up` on a
+  node already Running or Starting (answered "already connected", with nothing run) or one that
+  holds a node key while it is not up (an expired key, or `tailscale down`): there the login link
+  would let whoever opens it pick another tailnet, so the owner signs it in again at the host with
+  `sudo tailscale up`. A status the helper cannot read still gets the link, so the first Connect
+  works while tailscaled is still starting after an install. Tailscale SSH
+  stays a button: the helper allows it on and off because `tailscale set` cannot change which
+  tailnet the host is in, so it is SSH on the tailnet this host already joined, by its owner's
+  rules. A Tailscale old enough to answer `serve status` only to root or the operator is read
+  through a read verb. Remote hosts are unchanged: there the panel's account already reaches root.
 - **The sshd hardening** set four directives with `sed -i 's/^#\?Key.*/Key value/'` in a joined
   root shell. Both halves are closed sets now: the panel may set exactly those four directives, to
   exactly the values it hardens them to. `PermitRootLogin yes` is individually well-formed and

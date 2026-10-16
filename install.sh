@@ -2507,6 +2507,33 @@ write_terminal_sudo_grant() {
     esac
 }
 
+# Tailscale on the panel's own host is changed only through the helper's verbs now (Connect, Serve,
+# Tailscale SSH on and off): the helper can refuse what it should, such as an `up` that would move a
+# host already in a tailnet into another one. Earlier panels made their own account the Tailscale
+# "operator" instead, and an operator writes to tailscaled with no sudo and no helper, so it could
+# do exactly that, or turn Tailscale SSH on — root logins by some other tailnet's rules, round the
+# narrow grant. Taken back here, on a fresh install and on every update (the panel also does it at
+# start, for an update run by an older copy of this script). Only when the operator IS the panel's
+# account: an operator someone chose for their own login is theirs. No sudo is needed for either
+# half: prefs answer any local account, and an account that is the operator may clear itself.
+release_tailscale_operator() {
+    command -v tailscale >/dev/null 2>&1 || return 0
+    local _rto_cur=""
+    _rto_cur="$(LC_ALL=C.UTF-8 timeout 10 tailscale debug prefs 2>/dev/null \
+        | python3 -I -c 'import json,sys;print(json.load(sys.stdin).get("OperatorUser") or "")' \
+        2>/dev/null)" || return 0
+    [[ -n "${_rto_cur}" && "${_rto_cur}" == "${PANEL_USER}" ]] || return 0
+    if LC_ALL=C.UTF-8 timeout 10 tailscale set --operator= >/dev/null 2>&1; then
+        ok "The panel's account is no longer the Tailscale operator (the panel changes Tailscale through its helper)"
+        # Per-user: the panel's account IS the owner's own login, so the owner just lost the role.
+        # Say it now, not only in the README: their own `tailscale serve` starts asking for sudo.
+        [[ "${RUN_AS_ROOT}" -eq 1 ]] || warn "This is a per-user install, so that account is your own login: your own \`tailscale serve\` and \`tailscale set\` now need sudo (an operator can move this host to another tailnet and turn on Tailscale SSH without root)."
+    else
+        warn "Could not take the Tailscale operator role back from '${PANEL_USER}'. Run:  sudo tailscale set --operator="
+    fi
+    return 0
+}
+
 write_sudoers_grant() {
     [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
     if { [[ "${HELPER_OK}" -eq 1 ]] && [[ "${ROOT_TOOLS_OK}" -eq 1 ]]; } || root_tools_present; then
@@ -2653,6 +2680,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_root_tools
         [[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant
         write_terminal_sudo_grant
+        release_tailscale_operator
         # And the recovery command, which was the one root-owned piece this branch backfilled
         # everything EXCEPT. /usr/local/bin/linuxgsm-panel-recover lives outside the checkout and
         # has exactly the staleness this branch exists for — an install that took new code by
@@ -2905,6 +2933,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     install_root_tools
     [[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant
     write_terminal_sudo_grant
+    release_tailscale_operator
 
     info "[5/6] Starting the service…"
     ensure_service_unit     # the unit itself, as a fresh install of this version writes it
@@ -3135,6 +3164,7 @@ else
     # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
     install_recovery_command
 fi
+release_tailscale_operator                     # both install kinds; a no-op unless it is the operator
 ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
 ensure_system_tuning                           # prefer RAM over swap (vm.swappiness)
 svc restart linuxgsm-panel.service || true     # apply the priority drop-in just written

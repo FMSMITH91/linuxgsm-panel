@@ -18,7 +18,7 @@ against the code path the finding named:
 * the panel host's own Block, Unblock and Allow-Tailscale take its ufw lock, and an Unblock that
   removed nothing (ufw exits 0) is not reported as one.
 * the destroy verbs refuse an account whose home is not /home/<name> (helper, and the remote's
-  account probe); tailscale-set-operator names only the account that invoked the helper.
+  account probe); tailscale-release-operator names only the account that invoked the helper.
 * app.py: a quoted port in config.json no longer stops the panel from starting.
 * panel-helper: the restore checks data/ itself for a link and removes its staging directory
   relative to data/ opened without following one.
@@ -489,13 +489,13 @@ _me88 = _helper88._pw_name(os.getuid())
 _op88 = {"another account": _helper_says88(_helper88.v_r23a_operator_self, "nobody", os.getuid()),
          "the caller": _helper_says88(_helper88.v_r23a_operator_self, _me88, os.getuid()),
          "root directly": _helper_says88(_helper88.v_r23a_operator_self, "nobody", None)}
-check("panel-helper: tailscale-set-operator names only the account that invoked it (an operator "
+check("panel-helper: tailscale-release-operator names only the account that invoked it (an operator "
       "can join the node to any tailnet with Tailscale SSH on), not another account such as a game's",
       str(_op88["another account"]).startswith("refused") and _op88["the caller"] == _me88
       and _op88["root directly"] == "nobody", repr(_op88))
-check("panel-helper: ...and the verb table uses that validator for tailscale-set-operator",
-      _helper88.VERBS["tailscale-set-operator"][0] == [_helper88.v_r23a_operator_self],
-      repr(_helper88.VERBS["tailscale-set-operator"][0]))
+check("panel-helper: ...and the verb table uses that validator for tailscale-release-operator",
+      _helper88.VERBS["tailscale-release-operator"][0] == [_helper88.v_r23a_operator_self],
+      repr(_helper88.VERBS["tailscale-release-operator"][0]))
 
 # A remote has no helper: the panel's own account probe reads the home, run here in bash for real.
 _probe88 = _sp88.run(["bash", "-c", _shared88._account_probe_cmd(["nobody"])],  # nosec B603 B607 - the panel's probe

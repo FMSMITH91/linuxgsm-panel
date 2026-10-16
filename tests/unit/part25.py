@@ -471,7 +471,7 @@ def _p25_f2b():
         with _patched():
             _patch(NW, "auth_log_path", lambda: os.path.join(_TMP25, "auth.log"))
             NW._f2b_runtime_lines(res, facts, {"status": status, "panel": panel, "sshd": "not-read"})
-        found[label] = [(f["level"], f["text"]) for f in res.findings]
+        found[label] = [(f["level"], f["text"]) for f in res.findings + res.page_findings]
     check("review fix: a panel jail watching another file is a fail, and one whose read failed is "
           "unread, never silent",
           any(lv == "fail" and "another file" in t for lv, t in found["other"])

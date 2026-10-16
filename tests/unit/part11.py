@@ -68,7 +68,7 @@ for (_p8_m, _p8_a), _p8_real_mod in list(_p8_mods.items())[1:]:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _ts_saved = {k: getattr(_tsi, k) for k in (
     "subprocess", "socket", "_run_ts", "_run_ts_json", "_get_tailscale_info", "get_tailscale_info",
-    "ensure_operator", "allow_tailscale_ufw", "_current_os_user")}
+    "release_operator", "allow_tailscale_ufw", "_current_os_user")}
 _ts_so_saved = {"_run_verb": _tsi._so._run_verb, "ufw_allow_tailscale": SO.ufw_allow_tailscale}
 _ts_cache_saved = dict(_tsi._cache)
 _ts_real_run_ts = _tsi._run_ts
@@ -168,7 +168,7 @@ try:
         sys.modules["pwd"] = _ts_real_pwd
         _ts_getpass.getuser = _ts_real_getuser
 
-    # ── ensure_operator: root needs nothing; anyone else goes through the VERB, not sudo ────────
+    # ── the verb recorder (release_operator's own checks are part91's) ──────────────────────────
     _ts_verbs = []
 
     def _ts_verb_rec(resp=("", "", 0)):
@@ -179,14 +179,6 @@ try:
             return resp(verb, args) if callable(resp) else resp
         return _v
     _tsi._so._run_verb = _ts_verb_rec()
-    _tsi._current_os_user = lambda: "root"
-    eq("tailscale operator: a panel running as root is already the operator (no command)",
-       (_tsi.ensure_operator(), _ts_verbs), ((True, "root"), []))
-    _tsi._current_os_user = lambda: "lgsmpanel"
-    eq("tailscale operator: another user is made operator through the tailscale-set-operator verb",
-       (_tsi.ensure_operator(), _ts_verbs), ((True, "lgsmpanel"),
-                                             [("tailscale-set-operator", ["lgsmpanel"])]))
-    _tsi._current_os_user = _ts_saved["_current_os_user"]
 
     # ── allow_tailscale_ufw: best-effort, and an exception becomes (False, text) ───────────────
     SO.ufw_allow_tailscale = lambda *a, **k: (True, "tailscale0 allowed")
@@ -355,10 +347,9 @@ try:
 
     # ── setup_tailscale_serve ──────────────────────────────────────────────────────────────────
     _ts_steps = []
-    _tsi.ensure_operator = lambda: (_ts_steps.append("operator"), (True, "u"))[1]
     _tsi.allow_tailscale_ufw = lambda: (_ts_steps.append("ufw"), (True, ""))[1]
     _ts_cli_calls = []
-    _tsi._run_ts = _ts_cli([], _ts_cli_calls)      # every unprivileged try exits 1
+    _tsi._run_ts = _ts_cli([], _ts_cli_calls)      # an unprivileged write would exit 1 (none is made)
     del _ts_verbs[:]
     _tsi._so._run_verb = _ts_verb_rec()
     eq("tailscale serve: an option-shaped mount is refused with a message, before anything runs",
@@ -367,19 +358,22 @@ try:
         [], [], []))
     _tsi._cache["info"] = "stale"
     _ts_ok = _tsi.setup_tailscale_serve(5000, mount="/lgsm", funnel=True)
-    check("tailscale serve: when the unprivileged form fails, the root verb is the fallback and "
+    check("tailscale serve: the write is the helper's root verb (never the panel's own account) and "
           "its success is reported (with Funnel)",
           _ts_ok == (True, "Tailscale Serve enabled (with Funnel)")
           and _ts_verbs == [("tailscale-serve", ["funnel", "modern", "/lgsm", "http", "5000"])],
           "result=%r verbs=%r" % (_ts_ok, _ts_verbs))
-    check("tailscale serve: ...after making the panel user operator and allowing tailscale0",
-          _ts_steps == ["operator", "ufw"], repr(_ts_steps))
+    check("tailscale serve: ...after allowing tailscale0, and with no Serve write as the panel's account",
+          _ts_steps == ["ufw"] and not [c for c in _ts_cli_calls if c[:1] in (["serve"], ["funnel"])
+                                        and c[1:2] != ["status"]], repr((_ts_steps, _ts_cli_calls)))
     check("tailscale serve: ...and the cached info is dropped so the page re-reads Serve",
           _tsi._cache["info"] is None, repr(_tsi._cache["info"]))
     del _ts_verbs[:]
     _tsi._run_ts = _ts_cli([(["serve"], ("", "", 0))])
-    eq("tailscale serve: an unprivileged success needs no root at all",
-       (_tsi.setup_tailscale_serve(5000), _ts_verbs), ((True, "Tailscale Serve enabled"), []))
+    eq("tailscale serve: a Tailscale that would take the write from the panel's account still gets it "
+       "through the verb (the account is not the operator, so must not be relied on)",
+       (_tsi.setup_tailscale_serve(5000), _ts_verbs),
+       ((True, "Tailscale Serve enabled"), [("tailscale-serve", ["serve", "modern", "/", "http", "5000"])]))
     _tsi._run_ts = _ts_cli([(["serve"], ("", "flag provided but not defined", 2))])
     _tsi._so._run_verb = _ts_verb_rec(("", "Access denied: serve config denied", 1))
     del _ts_verbs[:]
@@ -425,8 +419,9 @@ try:
           _ts_inj[0] is False, repr(_ts_inj))
     del _ts_steps[:]
     _tsi._so._run_verb = _ts_verb_rec(("ALREADY_CONNECTED", "", 0))
-    eq("tailscale up: an already-joined node answers ALREADY_CONNECTED and gets operator + ufw",
-       (_tsi.tailscale_up_local(), _ts_steps), ((True, "ALREADY_CONNECTED"), ["operator", "ufw"]))
+    eq("tailscale up: an already-joined node answers ALREADY_CONNECTED and gets the ufw rule (and is "
+       "not made the Tailscale operator)",
+       (_tsi.tailscale_up_local(), _ts_steps), ((True, "ALREADY_CONNECTED"), ["ufw"]))
     _tsi._so._run_verb = _ts_verb_rec(("", "", -1))
     _ts_info["v"] = _tsi.TailscaleInfo(installed=True, running=True)
     eq("tailscale up: no URL but a Running node is also already connected",
@@ -471,7 +466,16 @@ try:
             {"mount": "/", "target": "http://127.0.0.1:3000"},
             {"mount": "/lgsm", "target": "http://127.0.0.1:5000"}]}]}
     _ts_off_calls = []
-    _tsi._run_ts = _ts_cli([(["serve"], ("", "", 0))], _ts_off_calls)
+
+    def _ts_off_verb(resp, calls=None):
+        """_run_verb recording what each verb runs as root (its tool argv, less the binary)."""
+        def _v(verb, args=(), timeout=30, merge_stderr=True):
+            if calls is not None:
+                calls.append(_tsi._priv.tool_argv(verb, list(args))[1:])
+            return resp
+        return _v
+    _tsi._run_ts = _ts_cli([(["serve"], ("", "", 0))])
+    _tsi._so._run_verb = _ts_off_verb(("", "", 0), _ts_off_calls)
     del _ts_steps[:]
     eq("tailscale disable: an option-shaped mount is refused",
        (_tsi.disable_tailscale_serve("-x", 5000), _ts_off_calls),
@@ -495,9 +499,9 @@ try:
     check("tailscale disable: the panel's own mapping is removed with the listener's off-grammar",
           _ts_rm[0] is True and _ts_rm[1].startswith("Tailscale Serve mapping removed")
           and _ts_off_calls == [["serve", "--https=443", "--set-path=/lgsm", "off"]]
-          and _ts_steps == ["operator"] and _tsi._cache["info"] is None,
+          and _ts_steps == [] and _tsi._cache["info"] is None,
           "result=%r calls=%r steps=%r" % (_ts_rm, _ts_off_calls, _ts_steps))
-    _tsi._run_ts = _ts_cli([(["serve"], ("", "serve config denied", 1))])
+    _tsi._so._run_verb = _ts_off_verb(("", "serve config denied", 1))
     eq("tailscale disable: a refused removal is a failure carrying the CLI's error",
        _tsi.disable_tailscale_serve("/lgsm", 5000), (False, "Failed to remove: serve config denied"))
     _ts_info["v"] = _tsi.TailscaleInfo(serve_config={"services": [
