@@ -287,8 +287,14 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python app.py
 
-# Every suite, each in a throwaway copy of the tree with sudo refused and outbound connections blocked
-for s in tests/*_test.py; do PYTHON=./venv/bin/python ./tools/smoke-local.sh "$s" || break; done
+# The test tools CI installs beside them (esprima, which the template checks need, builds from source)
+pip install --require-hashes -r .github/ci-requirements-checks/build.txt
+pip install --require-hashes --no-build-isolation -r .github/ci-requirements-checks/checks.txt
+
+# Every suite, each in a throwaway copy of the tree with sudo refused and outbound connections blocked.
+# A failing suite does not stop the loop, so every suite runs; the names of the ones that failed
+# are printed at the end.
+failed=""; for s in tests/*_test.py; do PYTHON=./venv/bin/python ./tools/smoke-local.sh "$s" || failed="$failed $s"; done; echo "failed:${failed:- none}"
 ```
 
 `tools/run-tests.sh` (compile, flake8, shellcheck, then every suite) is what CI runs. Do not run it on your own machine: it boots the app with real `sudo -n` probes, which pam_faillock counts until it locks you out of sudo, and real outbound SSH to the test fixtures' hosts. `tools/smoke-local.sh` runs the same suites without either.

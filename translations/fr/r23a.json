@@ -1,0 +1,5 @@
+{
+  "{ip} is still blocked: the firewall rule that blocks it is not a plain deny from that address, which is the only kind the panel removes. Remove it on the host.": "{ip} est toujours bloquée : la règle de pare-feu qui la bloque n'est pas un simple refus depuis cette adresse, le seul type que le panneau supprime. Supprimez-la sur l'hôte.",
+  "its home is {home}, not {want}": "son répertoire personnel est {home}, et non {want}",
+  "{ip} stands for every address: blocking it would drop every connection to the host, SSH included. Nothing was changed.": "{ip} représente toutes les adresses : la bloquer couperait toutes les connexions à l'hôte, SSH compris. Rien n'a été modifié."
+}

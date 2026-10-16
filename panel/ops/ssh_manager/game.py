@@ -2054,8 +2054,13 @@ def _version_detail(info):
         # Date only: the hour Steam happened to push a build is noise next to which build it is.
         # UTC, not localtime: the panel process's timezone has no business deciding what date a
         # build carries, and the browser reading it is frequently in a different one anyway.
-        bits.append("files updated %s (UTC)"
-                    % time.strftime("%Y-%m-%d", time.gmtime(info["updated"])))
+        # The epoch is an appmanifest's LastUpdated, which the game account can write: one past
+        # time_t made gmtime raise, and game_version ("Never raises") lost the whole reading.
+        try:
+            bits.append("files updated %s (UTC)"
+                        % time.strftime("%Y-%m-%d", time.gmtime(info["updated"])))
+        except (OverflowError, OSError, ValueError, TypeError):
+            pass  # no date to show; the build and app id still are
     return " \u00b7 ".join(bits)
 
 

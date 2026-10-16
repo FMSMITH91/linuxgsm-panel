@@ -1,0 +1,6 @@
+{
+  "Port 22 is still open to the public: connections meet `{rule}` first — remove or narrow that rule.": "El puerto 22 sigue abierto al público: las conexiones se encuentran primero con `{rule}`; elimina o restringe esa regla.",
+  "There is no rule for {spec}/{proto} from {src}, so nothing was removed.": "No hay ninguna regla para {spec}/{proto} desde {src}, así que no se eliminó nada.",
+  "Port {port} is still open: connections meet `{rule}` first — remove or narrow that rule.": "El puerto {port} sigue abierto: las conexiones se encuentran primero con `{rule}`; elimina o restringe esa regla.",
+  "The live console reads this file — replacing it would stop the console until the server restarts. Nothing was saved.": "La consola en vivo lee este archivo: reemplazarlo detendría la consola hasta que el servidor se reinicie. No se guardó nada."
+}

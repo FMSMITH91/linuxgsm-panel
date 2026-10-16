@@ -692,6 +692,19 @@ def v_cidr(s):
     raise ValueError("not an IP address or network")
 
 
+def v_r23a_deny_source(s):
+    """What `ufw-deny-ip` may deny: a v_cidr that is not EVERY address (0.0.0.0, ::, any /0).
+
+    A deny from one of those, prepended, drops every incoming connection, SSH included. Mirrors
+    privileged._r23a_deny_source.
+    """
+    s = v_cidr(s)
+    net = ipaddress.ip_network(s, strict=False)
+    if net.prefixlen == 0 or net.network_address.is_unspecified:
+        raise ValueError("refusing to deny every address")
+    return s
+
+
 def v_comment(s):
     """A UFW rule comment. The panel already strips these to this charset before storing them;
     re-checking here is the point — the helper trusts nothing it is told."""
@@ -922,6 +935,26 @@ def v_managed_user(s):
     return s
 
 
+def v_r23a_operator_self(s):
+    """The account `tailscale-set-operator` may name: the one that invoked the helper, and no other.
+
+    A tailscaled operator has full write access to the daemon without root (Tailscale's own
+    ipnserver: a connection from the operator's uid is not read-only): it can log the node out, join
+    it to a tailnet of its choosing with an auth key, and turn Tailscale SSH on, which then admits
+    root logins by THAT tailnet's policy. Its one caller, ensure_operator, names the panel's own
+    account (the account sudo ran this for). Any other non-root account passed v_managed_user: a
+    game account named here was handed that reach. Invoked as root directly (no SUDO_UID, or root's)
+    there is no other account to hold to, and root may name whom it likes, as with v_game_account.
+    """
+    s = v_managed_user(s)
+    caller_uid = _int_or_none(os.environ.get("SUDO_UID"))
+    if caller_uid in (None, 0):
+        return s
+    if _pw_name(caller_uid) != s:
+        raise ValueError("the Tailscale operator can only be the account that asked")
+    return s
+
+
 def v_destroyable_user(s):
     """A Linux user the panel may DESTROY — v_managed_user, and never the panel's own account.
 
@@ -935,7 +968,28 @@ def v_destroyable_user(s):
     s = v_game_account(s)
     if _is_panel_account(s):
         raise ValueError("refusing the panel's own account")
+    _r23a_home_is_own(s)
     return s
+
+
+def _r23a_home_is_own(s):
+    """Refuse (ValueError) an account `s` that exists and whose passwd home is not HOME_ROOT/<s>.
+
+    The four destroy verbs are `userdel -r [-f]`, which removes the home RECORDED IN PASSWD wherever
+    it is (with -f even when the account does not own it), `pkill -9 -u` and an rm of
+    HOME_ROOT/<s>. Every account the panel creates or manages lives at HOME_ROOT/<s>; the system
+    accounts do not (proxy and sync at /bin, sys at /dev, www-data at /var/www, backup at
+    /var/backups), and the other refusals here let them through wherever v_game_account accepts
+    (an invoking account that already reaches root accepts anything). Uninstalling a row bound to
+    one emptied a system directory as root. An account with no passwd entry is
+    _no_account_home_check's question, already asked by v_game_account.
+    """
+    try:
+        home = pwd.getpwnam(s).pw_dir
+    except KeyError:
+        return
+    if (home or "").rstrip("/") != HOME_ROOT + "/" + s:
+        raise ValueError("refusing: %s's home is not %s/%s" % (s, HOME_ROOT, s))
 
 
 def v_game_account(s):
@@ -2233,7 +2287,7 @@ VERBS = {
                                  SYSTEMCTL, "restart", PANEL_UNIT], None),
     # `tailscale set --operator=<user>` — see privileged.py. One caller, one validated argument;
     # the subcommand and flag are fixed on this side of the boundary.
-    "tailscale-set-operator": ([v_managed_user],
+    "tailscale-set-operator": ([v_r23a_operator_self],
                                lambda a: ["tailscale", "set", "--operator=%s" % a[0]], None),
     "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
@@ -2474,7 +2528,7 @@ VERBS = {
     # exists (IPv4 rules are numbered first), so every IPv6 block failed. `prepend` tops the
     # rule's own address family's list. Mirrors privileged.py — the parity gate compares them.
     "ufw-deny-ip": (
-        [v_cidr, v_comment],
+        [v_r23a_deny_source, v_comment],
         lambda a: [UFW, "prepend", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
         None),
     "ufw-delete-deny-ip": (
@@ -3422,8 +3476,29 @@ def _restore_run(data_dir):
             pass
         # The staging dir holds a plaintext database AND both encryption keys — the pair that
         # decrypts every stored SSH credential. Remove it whatever happened above.
-        shutil.rmtree(stage, ignore_errors=True)
+        _r23a_remove_stage(data_dir)
     return 0
+
+
+def _r23a_remove_stage(data_dir):
+    """Remove the restore's staging directory from `data_dir`, never through a link at data_dir.
+
+    This was shutil.rmtree(<data_dir>/<stage>), by PATH. rmtree refuses a link only at its LAST
+    component, so a data/ the panel user swapped for a link (it owns the directory above) had root
+    remove a directory of that name wherever the link pointed: another panel instance's staged
+    restore, say. Relative to data_dir opened O_NOFOLLOW instead, as the copy and the sidecar drop
+    above are, and by _remove_at, which follows no link at any depth.
+    """
+    try:
+        ddir = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return                  # not a real directory any more: nothing of the panel's to remove
+    try:
+        _remove_at(ddir, RESTORE_STAGE)
+    except OSError:
+        pass                    # in the restore's finally, with nobody to tell; the panel is up
+    finally:
+        os.close(ddir)
 
 
 def _r11b_drop_sidecars(data_dir):
@@ -3452,7 +3527,10 @@ def _restore_target():
     if not data_dir or not os.path.isabs(data_dir) or not os.path.isdir(data_dir):
         sys.stderr.write("panel.conf has no usable data_dir\n")
         return None
-    if _refuse_conf_path_link(os.path.dirname(data_dir), "data directory"):
+    # data_dir itself too, not only the directories above it: the staging test below follows a
+    # link, and a data/ swapped for one made it answer for the link's target (see
+    # _r23a_remove_stage). A link root made (data/ moved to another disk) is still followed.
+    if _refuse_conf_path_link(data_dir, "data directory"):
         return None
     if not os.path.isdir(os.path.join(data_dir, RESTORE_STAGE)):
         sys.stderr.write("nothing staged to restore\n")

@@ -628,8 +628,10 @@ _c22 = {}
 _core22 = {n: getattr(_core66, n) for n in ("run_privileged", "run_command", "write_root_file")}
 try:
     for _k66, _st66 in {"inactive": ("Status: inactive\n", "", 0), "unread": ("", "", 1),
-                        "active": ("Status: active\n\nTo  Action  From\n--  ------  ----\n"
-                                   "22/tcp  ALLOW  Anywhere\n", "", 0)}.items():
+                        # Read again after the delete (review 1015d), and by then the rule is gone.
+                        "active": [("Status: active\n\nTo  Action  From\n--  ------  ----\n"
+                                    "22/tcp  ALLOW  Anywhere\n", "", 0),
+                                   ("Status: active\n\nTo  Action  From\n--  ------  ----\n", "", 0)]}.items():
         with _patched():
             _r15d_arm61()
             _w66 = _wire66(verbs={"ufw-status": _st66, "ufw-delete-allow-port": ("", "", 0)})
@@ -640,7 +642,7 @@ finally:
         setattr(_core66, _n66, _v66)
 check("close port 22: on a UFW that is not active, or not read, it refuses and deletes nothing (it said "
       "\"Port 22 rule removed from UFW\" with port 22 still open); an active one still closes it",
-      _c22 == {"inactive": (False, []), "unread": (False, []), "active": (True, ["ufw-delete-allow-port"])},
+      _c22 == {"inactive": (False, []), "unread": (False, []), "active": (True, ["ufw-delete-allow-port"] * 2)},
       repr(_c22))
 
 

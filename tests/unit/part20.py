@@ -761,8 +761,7 @@ def _r21d_untemplate(src):
 def _r22d_skip_at(src, i):
     """The index past a comment or a regex literal opened at src[i], or None when neither is.
 
-    A `/` opens a regex where an operand is due: after an operator, an opening bracket, `,`, `;`,
-    or nothing (else it divides).
+    A `/` opens a regex where an operand is due (_r23d_operand_due), else it divides.
     """
     if src.startswith("//", i):
         _j = src.find("\n", i)
@@ -770,9 +769,32 @@ def _r22d_skip_at(src, i):
     if src.startswith("/*", i):
         _j = src.find("*/", i + 2)
         return len(src) if _j < 0 else _j + 2
-    if src[i] != "/" or src[:i].rstrip()[-1:] not in tuple("(,=:[!&|?{};+-*%<>~^") + ("",):
+    if src[i] != "/" or not _r23d_operand_due(src[:i]):
         return None
     return _r22d_regex_end(src, i)
+
+
+# Keywords after which an expression starts: a `/` there opens a regex (`return /'/.test(s)`).
+_R23D_OPERAND_KEYWORDS20 = frozenset(("return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+                                      "throw", "case", "do", "else", "yield", "await"))
+
+
+def _r23d_operand_due(before):
+    """Is an operand due after JS text `before`, judged by its previous token?
+
+    Yes after an operator, an opening bracket, `,`, `;`, an expression keyword, or nothing; no after
+    a name, a value, a closing bracket or a postfix ++/--. Read by the previous TOKEN, not its last
+    character (review 1015d: `i++ / 2 + d.error + '</b>'` opened a "regex" at the `/` that
+    swallowed d.error, and `return /'/` divided, so its quote opened a string to the end of the
+    line; both hid the sink).
+    """
+    _t = before.rstrip()
+    if _t.endswith(("++", "--")):
+        return False
+    _word = _re20.search(r"(?<![\w$.])[A-Za-z_$][\w$]*$", _t)
+    if _word:
+        return _word.group(0) in _R23D_OPERAND_KEYWORDS20
+    return _t[-1:] in tuple("(,=:[!&|?{};+-*%<>~^") + ("",)
 
 
 def _r22d_regex_end(src, i):
@@ -837,7 +859,7 @@ def _r21d_err_sink(src):
     return _R19D_ERR_SINK20.search(_r21d_untemplate(src))
 
 
-# Thirteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
+# Sixteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
 _R21D_SINK_CTL20 = (
     "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
     'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
@@ -845,6 +867,10 @@ _R21D_SINK_CTL20 = (
     "msg.innerHTML = `it's ` + d.error;", "msg.innerHTML = `<b>${`x; ${d.error}`}</b>`;",
     "msg.innerHTML = `${ok ? '}' : d.error}`;", 'msg.innerHTML = `${ok ? "}" : d.error}`;',
     "msg.innerHTML = /* it's */ d.error;", "msg.innerHTML = s.replace(/'/g, '') + d.error;",
+    # A division after a postfix ++, and a regex after `return` (review 1015d).
+    "msg.innerHTML = i++ / 2 + d.error + '</b>';",
+    "msg.innerHTML = (function(){ return /'/.test(s) })() ? '' : d.error;",
+    "msg.innerHTML = a / b + d.error;",
     "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;",
     "msg.innerHTML = x /* d.error */;")
 
@@ -865,7 +891,7 @@ def _p20_js():
     _r21d_sink_ctl = [bool(_r21d_err_sink(_x)) for _x in _R21D_SINK_CTL20]
     check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
           "`;` inside a string or a template literal, a quoted brace, a comment or a regex (control)",
-          _r21d_sink_ctl == [True] * 13 + [False] * 3, repr(_r21d_sink_ctl))
+          _r21d_sink_ctl == [True] * 16 + [False] * 3, repr(_r21d_sink_ctl))
 
 
 try:

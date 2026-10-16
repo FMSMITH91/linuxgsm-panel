@@ -1262,7 +1262,9 @@ def _gamedig_type(game_type, query_type=None):
     break out of the query command regardless of upstream validation. Returns '' when the game
     isn't queryable.
     """
-    qt = re.sub(r"[^a-z0-9_-]", "", (query_type or "").strip().lower())[:40]
+    # ...and never starting with `-` or `_`, as the route that sets it requires: a stored value
+    # that begins with `-` (a restored or hand-edited row) reached gamedig as an option, not a type.
+    qt = re.sub(r"[^a-z0-9_-]", "", (query_type or "").strip().lower()).lstrip("-_")[:40]
     return qt or _core.GAMEDIG_TYPE.get(game_type or "", "")
 
 

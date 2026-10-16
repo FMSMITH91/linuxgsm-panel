@@ -20,7 +20,7 @@ from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _
                                    canonical_ip, ip_address_or_none)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
-from panel.routes._shared import (_r20b_audit_on_raise, _whitelist_mutate)
+from panel.routes._shared import (_r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _whitelist_mutate)
 from panel.ops import ssh_manager as _sm
 from panel.security import banlist as _banlist
 import ipaddress as _ipaddress
@@ -239,6 +239,7 @@ def _register_panel_binding(app):
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
     @superadmin_required
+    @_r23a_not_while_panel_host_reboots
     def api_panel_change_port():
         """Change where the panel's web server listens: its bind address and/or port.
 

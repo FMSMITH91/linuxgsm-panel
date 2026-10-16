@@ -1427,8 +1427,9 @@ def _store_upload(gs, reldir, f, data, overwrite):
     """Write an uploaded file onto the host and audit it: the upload route's answer."""
     with _r20b_audit_on_raise("upload_file", detail=_audit_safe(_audit_name("%s/%s" % (reldir, f.filename))),
                               target=gs.name, server=gs):
+        # selfname: an upload over the live console's log is refused (files.WRITE_CONSOLE).
         ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
-                              overwrite=overwrite)
+                              overwrite=overwrite, selfname=gs.lgsm_name)
     # The name as delete's and rename's rows write theirs: a U+202E or a trailing space in an
     # uploaded name reordered or hid what the audit page showed.
     detail = _audit_safe(_audit_name("%s/%s" % (reldir, f.filename))) + (
@@ -1862,7 +1863,8 @@ def _register_file_editor(app):
         try:
             with _r20b_audit_on_raise("edit_file", detail=_audit_safe(_audit_name(rel)),
                                       target=gs.name, server=gs):
-                ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
+                ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"],
+                                     selfname=gs.lgsm_name)
             log_action(current_user, "edit_file", target=gs.name,
                        detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
                                              _sm.write_failure_reason(msg)),

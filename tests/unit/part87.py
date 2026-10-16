@@ -236,7 +236,8 @@ _out87 = _node87(_name87, _DOM87 + _SETTLE47 + (
     "global._fwUnlisted = m => { unlisted = m; };\n"
     "global._fwRenderRules = () => {}; global._fwRenderBlocks = () => {};\n"
     + "".join(_cut_or87(_FWJS87, h) + "\n" for h in (
-        "function refreshFirewall(", "function _fwUnreadWhy(", "function _fwHostSaid(", "function _fwStatusNote("))
+        "function refreshFirewall(", "function _fwUnreadWhy(", "function _fwHostSaid(", "function _fwStatusNote(",
+        "function _r23c_fwNotRead("))
     + "(async () => {\n"
     "  const card = document.getElementById('ufw-status-note'), out = {};\n"
     "  card.textContent = 'server-rendered';\n"

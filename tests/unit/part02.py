@@ -1805,7 +1805,7 @@ try:
             if gone and (a[0], gone) in rules:
                 rules.remove((a[0], gone))
                 return ("Rule deleted", "", 0)
-            return ("Could not delete non-existent rule", "", 1)
+            return ("Could not delete non-existent rule", "", 0)   # ufw's real rc for an absent rule
         _sm_core.run_privileged = _rp
     for _start in (["OpenSSH"], ["22"]):
         _rules = [(_t, "ALLOW") for _t in _start]
@@ -1862,7 +1862,7 @@ try:
                 hit = [r for r in rules if r[0] == a[0] and r[1] == act]
                 for r in hit:
                     rules.remove(r)
-                return (("Rule deleted", "", 0) if hit else ("Could not delete non-existent rule", "", 1))
+                return (("Rule deleted", "", 0) if hit else ("Could not delete non-existent rule", "", 0))
             return ("", "", 0)
         _sm_core.run_privileged = _rp
 

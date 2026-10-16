@@ -213,7 +213,8 @@ rbac_suite() {
 # the checkout a suite would have seen. Unit runs in the tree itself, where it always has; it writes
 # nothing in data/.
 #
-# Each lane's output goes to its own log, printed whole when the lane ends, in lane order. A lane's
+# Each lane's output goes to its own log, printed whole as soon as that lane ends (an interrupt
+# prints the tail of each lane not shown yet). A lane's
 # result is its exit status (wait), and every suite in it has already failed that status on a FAIL,
 # a SKIP, a crash or a missing tally. A lane that did not finish is not a pass: wait answers its
 # signal, and nothing is reported as passed that has no status.
@@ -223,9 +224,12 @@ rbac_suite() {
 # directory and return 0, and the lanes would start in it and fail on whatever file was missing.
 lane_tree() {
     local dest
+    # The checkout's own mode, not mktemp's 0700, on the copy AND on $RT_TMP above it: a check that
+    # runs a tool as another account reads the tree through these directories as it would the
+    # checkout. $RT_TMP was given it in run_lanes only, so in the sequential mode the copy sat
+    # under a 0700 directory no other account could enter.
+    chmod --reference=. "$RT_TMP" || return 1
     dest="$(mktemp -d "$RT_TMP/lane-XXXXXX")" || return 1
-    # The checkout's own mode, not mktemp's 0700: a check that runs a tool as another account
-    # reads the tree through this directory as it would the checkout.
     chmod --reference=. "$dest" || return 1
     git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - | tar -xf - -C "$dest" \
         || return 1
@@ -268,10 +272,24 @@ _r22a_stop_lanes() {
     wait 2>/dev/null || true
 }
 
+# A lane's log, under its header. The interrupt path passes "interrupted" and gets the tail only:
+# the lane that hung is the one being looked for, and its last lines are where it stopped.
+_r23a_lane_log() {
+    local i="$1" label="$2" how="${3:-}"
+    if [[ -n "$how" ]]; then
+        echo "== lane $i ($label, $how: its last 200 lines) =="
+        tail -n 200 "$RT_TMP/lane$i.log" 2>/dev/null || true
+    else
+        echo "== lane $i ($label) =="
+        cat "$RT_TMP/lane$i.log"
+    fi
+}
+
 run_lanes() {
     local -a lanes=("unit_suite" "other_suites rbac_suite" "smoke_suite")
-    local -a pids
-    local i rc bad=0 other smoke want got
+    local -a pids shown
+    local -A lane_of
+    local i n rc bad=0 other smoke want got
     # shellcheck disable=SC2048,SC2086  # a lane is a list of function names, split on purpose
     got="$(printf '%s\n' ${lanes[*]} | sort)"
     want="$(printf '%s\n' "${ALL_SUITES[@]}" | sort)"
@@ -279,28 +297,54 @@ run_lanes() {
         echo "  !! the lanes run [${got//$'\n'/ }], not each of [${want//$'\n'/ }] once" >&2
         return 1
     fi
-    chmod --reference=. "$RT_TMP"
     # Plain assignments, so a copy that failed stops the run (set -e) before any lane starts:
     # lane_tree returns non-zero for that (see it), and an assignment takes its command's status.
     other="$(lane_tree)"
     smoke="$(lane_tree)"
     local -a dirs=("$PWD" "$other" "$smoke")
+    # Installed BEFORE the first lane starts, so no Ctrl-C lands in a window where a lane (which
+    # ignores SIGINT) is running and nothing would stop it. On the way out it prints every lane log
+    # not shown yet: those were in $RT_TMP, which the EXIT trap removes, so a run cancelled because
+    # a lane hung (CI's job timeout, a Ctrl-C) used to end with no output from any suite at all —
+    # not the hung one's last lines, and not the lanes that had already finished and failed.
+    trap '_r22a_stop_lanes "${pids[@]}"; for n in "${!lanes[@]}"; do [[ -n "${shown[$n]:-}" ]] || _r23a_lane_log "$n" "${lanes[$n]}" interrupted; done; exit 130' INT TERM
     for i in "${!lanes[@]}"; do
         # shellcheck disable=SC2086  # a lane is a list of function names, split on purpose
         ( set -e; cd "${dirs[$i]}"; for fn in ${lanes[$i]}; do "$fn"; done ) >"$RT_TMP/lane$i.log" 2>&1 &
         pids+=("$!")
+        lane_of[$!]="$i"
         echo "== lane $i started: ${lanes[$i]} =="
     done
-    trap '_r22a_stop_lanes "${pids[@]}"; exit 130' INT TERM
-    for i in "${!lanes[@]}"; do
-        set +e
-        wait "${pids[$i]}"; rc=$?
-        set -e
-        echo "== lane $i (${lanes[$i]}) =="
-        cat "$RT_TMP/lane$i.log"
-        if [[ "$rc" -ne 0 ]]; then
-            echo "  !! lane $i (${lanes[$i]}) exited ${rc}" >&2
-            bad=1
+    # Each lane's log as soon as THAT lane ends, not in lane order: waiting on lane 0 first held
+    # back lanes that had already finished for as long as lane 0 ran, or for ever when it hung.
+    # Polled, not `wait -n -p`: on bash 5.2 (Ubuntu 24.04) `wait -n` named a lane it had already
+    # reaped answers "no such job" and leaves -p's variable unset, which ended the run under set -u
+    # with every lane green (#434). `kill -0` tells a running lane from one that ended, and `wait`
+    # on that one pid returns its status on every bash this runs on; a Ctrl-C still lands, between
+    # polls, in the trap above.
+    local -a left=("${pids[@]}")
+    local p
+    while (( ${#left[@]} )); do
+        local -a still=()
+        for p in "${left[@]}"; do
+            if kill -0 "$p" 2>/dev/null; then
+                still+=("$p")
+                continue
+            fi
+            set +e
+            wait "$p"; rc=$?
+            set -e
+            i="${lane_of[$p]}"
+            _r23a_lane_log "$i" "${lanes[$i]}"
+            shown[i]=1
+            if [[ "$rc" -ne 0 ]]; then
+                echo "  !! lane $i (${lanes[$i]}) exited ${rc}" >&2
+                bad=1
+            fi
+        done
+        left=("${still[@]}")
+        if (( ${#left[@]} )); then
+            sleep 0.2
         fi
     done
     echo "== lanes =="

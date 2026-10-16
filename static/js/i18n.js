@@ -222,9 +222,11 @@ window.tfn = function(n, one, many, vals){
         el.setAttribute('placeholder', window.t(el.getAttribute('data-i18n-placeholder')));
       });
       // data-i18n-vars: the {name} values, as JSON, for a template filled with tf.
+      // Each element in its own try: one unparseable data-i18n-vars threw out of this loop and left
+      // every later element in the old language. That one keeps its text as it is.
       document.querySelectorAll('[data-i18n-text]').forEach(function(el){
         var key = el.getAttribute('data-i18n-text'), vars = el.getAttribute('data-i18n-vars');
-        el.textContent = vars ? window.tf(key, JSON.parse(vars)) : window.t(key);
+        try { el.textContent = vars ? window.tf(key, JSON.parse(vars)) : window.t(key); } catch(e){}
       });
     } catch(e){}
   };

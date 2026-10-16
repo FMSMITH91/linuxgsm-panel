@@ -11,6 +11,7 @@ still matched, and the routes would have failed only when someone used them. A g
 broken route is the exact failure this repo keeps finding; here the F821 gate was the net.
 """
 import contextlib
+import functools
 from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
@@ -551,12 +552,17 @@ def _marked_backup(sid, *args, runner=None, **kwargs):
     `runner` is the caller's own reference to run_game_backup (panel_backup imports it by name, and
     that name is the seam its tests stub); None means this module's.
     """
-    _game_backup_status[sid] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
+    mark = {"running": True, "ok": None, "msg": "", "ts": time.time()}
+    _game_backup_status[sid] = mark
     try:
         result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:
-        _game_backup_status[sid] = {"running": False, "ok": False,
-                                    "msg": "backup error (%s)" % type(e).__name__, "ts": time.time()}
+        # Only over this run's own mark. The callers check the row still holds the id before they
+        # write an outcome; this wrote unconditionally, so a server deleted mid-backup (its entry
+        # dropped by forget_rows) whose id a new server took had "backup error" filed under it.
+        if _game_backup_status.get(sid) is mark:
+            _game_backup_status[sid] = {"running": False, "ok": False,
+                                        "msg": "backup error (%s)" % type(e).__name__, "ts": time.time()}
         raise
     # It RETURNED, so the host answered: a streak of raises (_backup_raise_streak) is over, and
     # the next raise is news worth an alert again.
@@ -1880,6 +1886,8 @@ def _account_probe_cmd(users):
         parts.append(
             "if uid=$(id -u %(q)s 2>/dev/null); then "
             "printf 'ACCT %%s %%s %%s\\n' %(q)s \"$uid\" \"$(id -Gn %(q)s 2>/dev/null)\"; "
+            # Its home as passwd records it: `userdel -r` removes THAT directory, wherever it is.
+            "printf 'HOME %%s %%s\\n' %(q)s \"$(getent passwd %(q)s 2>/dev/null | cut -d: -f6)\"; "
             # `sudo -l -U` needs root, so it is asked only when the probe IS root (a remote whose
             # login escalates); otherwise the groups above are the evidence there is. EVERY sudo
             # present is asked, as the panel host's helper does (_sudo_lists_rules): on Ubuntu
@@ -1913,12 +1921,49 @@ def _fold_probe_line(verdict, words, users):
     kind, user = words[0], words[1]
     if kind == "ACCT" and len(words) >= 3:
         _fold_acct_line(verdict, words)
+    elif kind == "HOME":
+        _r23a_fold_home_line(verdict, user, " ".join(words[2:]))
     elif len(words) != 2:
         return
     elif kind == "NOACCT":
         verdict.setdefault(user, "absent")
     elif kind == "SUDOERS" and verdict.get(user) in (None, "ok"):   # uid 0 / a group says more
         verdict[user] = i18n.Sentence("it has sudo rules of its own")
+
+
+def _r23a_not_while_panel_host_reboots(view):
+    """Refuse the route (409, saying why) while the panel is rebooting its own host.
+
+    For the routes that restart the panel: a branch switch, a database repair, a backup restore and
+    a binding change. A restart before the reboot is sent rolls the reboot plan back (host_reboot's
+    _same_boot): the servers it stopped start again and the host is never rebooted. The Update
+    button and the OS update refuse the same, inline. Put below the auth decorators, so the reason
+    is told only to someone allowed to ask.
+    """
+    @functools.wraps(view)
+    def refused_or_view(*args, **kwargs):
+        from panel.services import host_reboot as _hr
+        busy = _hr.panel_host_busy()
+        if busy:
+            return jsonify({"success": False, "message": i18n.tr(busy)}), 409
+        return view(*args, **kwargs)
+    return refused_or_view
+
+
+def _r23a_fold_home_line(verdict, user, home):
+    """Fold a `HOME <user> <home>` line: a home other than /home/<user> refuses the account.
+
+    Every account the panel creates or manages lives at /home/<user>, and its uninstall runs
+    `userdel -r -f`, which removes the home passwd records wherever it is: a system account (proxy
+    and sync at /bin, sys at /dev, www-data at /var/www) bound to a row by an older version, or
+    created between the install route's check and its job, had root empty that directory. On the
+    panel host the helper refuses the same (v_destroyable_user); a remote has no helper, so its
+    answer is read here. No home printed (getent did not answer) decides nothing.
+    """
+    from panel.security.privileged import HOME_ROOT
+    want = HOME_ROOT + "/" + user
+    if home and home.rstrip("/") != want and verdict.get(user) in (None, "ok"):
+        verdict[user] = i18n.Sentence("its home is {home}, not {want}", home=home, want=want)
 
 
 def _parse_account_probe(out, users):

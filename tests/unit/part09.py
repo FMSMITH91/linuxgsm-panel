@@ -643,9 +643,13 @@ _rv_probe_users = ["root", "nobody", "lgsmnosuchacct"]
 _rv_out = _rv_sub.run(["bash", "-c", _rv_sh._account_probe_cmd(_rv_probe_users)],  # nosec B603 B607 - bash, a fixed argv, the probe on fixed names
                       capture_output=True, text=True, timeout=60).stdout
 _rv_verdict = _rv_sh._parse_account_probe(_rv_out, _rv_probe_users)
-check("account probe (real shell): uid 0 is refused, a plain account is ok, a missing one absent",
+# `nobody` is a plain account (no root group, no sudo rules), and its home is never /home/nobody: the
+# probe refuses it for that (review 1015d — userdel -r would remove its home). A plain account at
+# /home/<name> reading "ok" is part88's check, on the probe's own lines: no such account is on every host.
+check("account probe (real shell): uid 0 is refused, a plain account whose home is not /home/<name> "
+      "is refused for its home, a missing one absent",
       _rv_verdict is not None and "uid 0" in _rv_verdict.get("root", "")
-      and _rv_verdict.get("nobody") == "ok" and _rv_verdict.get("lgsmnosuchacct") == "absent",
+      and "home" in (_rv_verdict.get("nobody") or "") and _rv_verdict.get("lgsmnosuchacct") == "absent",
       repr((_rv_out, _rv_verdict)))
 _RV_END = _rv_sh._ACCOUNT_PROBE_END
 check("account probe: a root-equivalent group is refused, named in the reason",

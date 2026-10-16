@@ -3394,7 +3394,9 @@ _gd_npm_seen = []
 # unread. A second pattern rooted at the hidden top-level directories, since include_hidden needs 3.11.
 _gd_npm_files = sorted(_f for _p in (os.path.join(_UNIT_ROOT, "**", "*.sh"), os.path.join(_UNIT_ROOT, ".*", "**", "*.sh"))
                        for _f in _gdl_glob.glob(_p, recursive=True)
-                       if "/.venv/" not in _f and "/node_modules/" not in _f and "/.git/" not in _f)
+                       if "/.venv/" not in _f and "/node_modules/" not in _f and "/.git/" not in _f
+                       # Other worktrees are other branches' scripts (review 1015d).
+                       and "/.claude/" not in _f)
 _gd_npm_files.append(os.path.join(_UNIT_ROOT, "tools", "panel-helper"))
 for _f in _gd_npm_files:
     with open(_f, encoding="utf-8") as _fh:
@@ -5460,7 +5462,20 @@ def _r17d_walk_of_root(node, is_root, os_names=_R19D_OS_ONLY):
     _top = _r18d_walked(node, _kw, os_names)
     if _top is not None and is_root(_top):
         return True
-    return _r20d_hidden_glob_of_root(node, _kw, is_root)
+    return _r20d_hidden_glob_of_root(node, _kw, is_root) or _r23d_hidden_join_of_root(node, is_root)
+
+
+def _r23d_hidden_join_of_root(node, is_root):
+    """Is call `node` a join(<root>, '.*', ...) — a glob pattern that enters the root's hidden directories?
+
+    A dot-leading wildcard component with more after it reads every hidden directory's contents
+    whatever glob's include_hidden says, and the pattern may reach glob through a name the gate
+    cannot follow (review 1015d: part05's npm scan read .claude/worktrees/* with the gate green).
+    """
+    if _r17d_call_name(node) != "join" or len(node.args) < 3 or not is_root(node.args[0]):
+        return False
+    return any(isinstance(getattr(_a, "value", None), str) and _re.match(r"\.[^/]*[*?[]", _a.value)
+               for _a in node.args[1:-1])
 
 
 def _r20d_hidden_glob_of_root(node, kw, is_root):
@@ -5609,6 +5624,10 @@ _r17d_walk_ctl = {
     "a glob pattern in a name": "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).glob(pat))\n",
     "join(root, '.')": "from unit import REPO_ROOT\nx = list(os.walk(os.path.join(REPO_ROOT, '.')))\n",
     "a comment naming .claude": "from unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):  # .claude: TODO\n    pass\n",
+    # review 1015d: a dot-leading wildcard joined to the root, held in a name before glob reads it.
+    "a '.*' pattern joined to the root": (
+        "from unit import REPO_ROOT\nps = (os.path.join(REPO_ROOT, '.*', '**', '*.sh'),)\n"
+        "x = [f for p in ps for f in glob.glob(p, recursive=True)]\n"),
     "a skip set only in a comment": (
         "SKIP = {'x'}  # not .claude\nfrom unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):\n"
         "    s[:] = [x for x in s if x not in SKIP]\n"),
@@ -5622,7 +5641,8 @@ _r17d_walk_ctl["an rglob of a subtree, and a glob without hidden dirs (not one)"
     "from unit import REPO_ROOT\nx = list((pathlib.Path(REPO_ROOT) / 'panel').rglob('*'))\n"
     "y = list(pathlib.Path(REPO_ROOT, 'panel').rglob('*'))\n"
     "z = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True)\n"
-    "w = list(pathlib.Path(REPO_ROOT).glob('*.py'))\nv = list(ast.walk(REPO_ROOT))\n") == []
+    "w = list(pathlib.Path(REPO_ROOT).glob('*.py'))\nv = list(ast.walk(REPO_ROOT))\n"
+    "u = os.path.join(REPO_ROOT, '.*')\nt = os.path.join(REPO_ROOT, '.github', '*.yml')\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
       not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
 _r17d_walk_ctl["a .claude prune in code, with a comment beside it (not one)"] = _r16d_unpruned_walks(
@@ -6513,8 +6533,10 @@ _ga_groups = {"sudo": ["ubuntu"], "lgsmpanel-games": ["cssserver"]}
 def _ga_pw(name):
     if name not in _ga_users:
         raise KeyError(name)
+    # /home/<name>, where the panel puts every account it manages: the destroy verbs refuse an
+    # account whose passwd home is anywhere else (review 1015d, v_destroyable_user).
     return NS(pw_name=name, pw_uid=_ga_users[name], pw_gid=_ga_users[name],
-              pw_dir="/nonexistent/" + name)
+              pw_dir="/home/" + name)
 
 
 def _ga_pwuid(uid):
@@ -7226,8 +7248,8 @@ check("host key: clearing the pin is still possible (the re-trust route writes \
 _core_src2 = open(os.path.join(_root, "panel", "ops", "ssh_manager", "_core.py"),
                   encoding="utf-8").read()
 check("host key: get_connection refuses an unreadable pin before building the policy",
-      _core_src2.find("isinstance(server.host_key, UnreadableSecret)")
-      < _core_src2.find("policy = _PinPolicy(") != -1)
+      -1 < _core_src2.find("isinstance(server.host_key, UnreadableSecret)")
+      < _core_src2.find("policy = _PinPolicy("))
 check("host key: ...and only where the pin is actually enforced (not tailscale/local)",
       "if enforce_pin and isinstance(server.host_key, UnreadableSecret):" in _core_src2)
 
@@ -8193,8 +8215,8 @@ def _r21d_stdlib_stubs(tree):
         _out += [_smg_ast.unparse(_t) for _t in _r21d_targets(_n)
                  if isinstance(_t, _smg_ast.Attribute) and _r21d_names_stdlib(_t.value, _al)]
         if _r21d_patches_stdlib(_n, _al):
-            _out.append("%s.%s" % (_smg_ast.unparse(_n.args[0]), _r22d_str_arg(_n, 1) or "*")
-                        if len(_n.args) > 1 else _smg_ast.unparse(_n.args[0]))
+            _out.append(_r22d_str_arg(_n) or ("%s.%s" % (_smg_ast.unparse(_n.args[0]), _r22d_str_arg(_n, 1) or "*")
+                                              if len(_n.args) > 1 else _smg_ast.unparse(_n.args[0])))
     return _out
 
 
@@ -8214,9 +8236,50 @@ def _r21d_patches_stdlib(node, aliases):
     if not (isinstance(node, _smg_ast.Call) and node.args):
         return False
     _fname = getattr(node.func, "id", getattr(node.func, "attr", "")) or ""
-    _shaped = (len(node.args) >= 3 and isinstance(node.args[1], (_smg_ast.Constant, _smg_ast.Name))
-               and _fname != "getattr")
-    return (_shaped or bool(_R21D_PATCHER.search(_fname))) and _r21d_is_stdlib_module(node.args[0], aliases)
+    # mock's patch("os.replace", f) names its target as text (review 1015d).
+    if _fname == "patch" and (_r22d_str_arg(node) or "").split(".")[0] in _R21D_STDLIB:
+        return True
+    return (_r23d_shaped_patcher(node, _fname) or bool(_R21D_PATCHER.search(_fname))) and (
+        _r21d_is_stdlib_module(node.args[0], aliases) or _r23d_std_submodule(node.args[0], aliases))
+
+
+def _r23d_shaped_patcher(node, fname):
+    """Is call `node` shaped (module, "name", value), its value third or as new=?
+
+    mock's patch.object(os, "replace", new=f) gives it by keyword (review 1015d). getattr only reads.
+    """
+    _n_args = len(node.args) + any(_k.arg == "new" for _k in node.keywords)
+    return (_n_args >= 3 and len(node.args) >= 2
+            and isinstance(node.args[1], (_smg_ast.Constant, _smg_ast.Name)) and fname != "getattr")
+
+
+def _r23d_std_module_name(expr):
+    """The dotted name of a stdlib module expression `os`, `x.os`, `x.urllib.request`, `__import__("pwd")`, or None."""
+    if isinstance(expr, _smg_ast.Name):
+        return expr.id if expr.id in _R21D_STDLIB else None
+    if isinstance(expr, _smg_ast.Attribute):
+        return "urllib.request" if expr.attr == "request" else expr.attr
+    if isinstance(expr, _smg_ast.Call):
+        return _r22d_str_arg(expr)
+    return str(getattr(expr.slice, "value", "")) or None
+
+
+def _r23d_std_submodule(expr, aliases):
+    """Is `expr` a stdlib SUBMODULE reached by attribute: `os.path`, `_so.os.path`, `importlib.metadata`?
+
+    A patcher handed one replaces the function process-wide, as an assignment to it does (review
+    1015d: `setattr(os.path, "isfile", f)` passed while `os.path.isfile = f` was caught). Not every
+    attribute chain: `atexit.register(shutil.rmtree, d, True)` hands a function, not a module. A
+    module behind an alias whose name says nothing is looked for among the loaded stdlib modules,
+    never imported.
+    """
+    if not (isinstance(expr, _smg_ast.Attribute) and _r21d_is_stdlib_module(expr.value, aliases)):
+        return False
+    _mod = _r23d_std_module_name(expr.value)
+    if _mod is not None:
+        return _r22d_submodule(_mod, expr.attr)
+    return any(isinstance(getattr(sys.modules[_m], expr.attr, None), type(sys))
+               for _m in sorted(_R21D_STDLIB) if _m in sys.modules)
 
 
 _r21d_std_seen, _r21d_std_hits = set(), []
@@ -8236,10 +8299,17 @@ _r21d_std_ctl = [_r21d_stdlib_stubs(_smg_ast.parse(_c)) for _c in (
     "sys.modules['subprocess'].run = f",
     "x.os = _R20dOver(x.os, geteuid=f)", "_r21d_urlopen_of(x).urlopen = f", "x.subprocess = p",
     "import os\ngetattr(os, 'replace', None)", "from os import replace as r\nr.x = f", "import sys\nsys.argv = f",
-    "import os\n_set34(os, name, f)")]
+    "import os\n_set34(os, name, f)",
+    # A stdlib submodule reached by attribute, handed to a patcher (review 1015d).
+    "import os\nsetattr(os.path, 'isfile', f)", "_patch(_so.os.path, 'exists', f)",
+    "import importlib\n_patch(importlib.metadata, 'distributions', f)",
+    "import os as _o\n_p9_patch(_o.path, 'isdir', f)",
+    "from unittest import mock\nimport os\nmock.patch.object(os, 'replace', new=f)",
+    "from unittest import mock\nmock.patch('os.replace', f)",
+    "import atexit, shutil\natexit.register(shutil.rmtree, d, True)")]
 check("tests: no test sets an attribute on a stdlib module other than sys/builtins (it would stand in for "
       "every module and thread); each listed exception still exists, and the reader finds each spelling "
       "and each (module, name, value) patcher whatever its name (control)",
       not _r21d_std_hits and _R21D_STDLIB_OK <= _r21d_std_seen
-      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True],
+      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 7 + [False],
       repr((_r21d_std_hits, sorted(_R21D_STDLIB_OK - _r21d_std_seen), _r21d_std_ctl)))

@@ -129,7 +129,8 @@ from panel.security import banlist as _banlist
 from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none)
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
-from panel.core.http import _wants_json, http_error_page, http_error_sentence, unreachable_error
+from panel.core.http import (_r23c_error_json, _wants_json, http_error_page, http_error_sentence,
+                              unreachable_error)
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
@@ -1751,7 +1752,7 @@ def create_app():
             # A routing redirect (308) is not an error and is returned as Werkzeug built it.
             if e.code == 401 or (e.code or 500) < 400:
                 return e
-            return jsonify({"success": False, "message": i18n.tr(http_error_sentence(e))}), (e.code or 500)
+            return _r23c_error_json(i18n.tr(http_error_sentence(e))), (e.code or 500)
         # The endpoint name taken from app.view_functions, not off the request. Werkzeug only ever
         # matches a request to one of the app's own rules, so the two are the same string — but
         # py/log-injection traces every value reached through `request`, and this repo's answer to
@@ -1776,8 +1777,7 @@ def create_app():
         # In the viewer's language (request_lang never raises). Pages write it after a mark
         # ("❌ " + message), which the page's translator does not look past, so English sent here
         # stayed English for every es/fr viewer.
-        return jsonify({"success": False,
-                        "message": i18n.tr("Something went wrong — see the panel log.")}), 500
+        return _r23c_error_json(i18n.tr("Something went wrong — see the panel log.")), 500
 
     # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
     # before the per-file size check runs. Werkzeug already bounds in-memory form fields, but NOT
@@ -3361,7 +3361,10 @@ if __name__ == "__main__":
     _sys.modules.setdefault("app", _sys.modules["__main__"])
     app = create_app()
     cfg = load_config()
-    port = cfg.get("port", 5000)
+    # _r15a_cfg_int, as every other reader of this key does (firewall, the change-port form): a
+    # hand-edited `"port": "5000"` reached socketio.run as a string, eventlet's bind raised
+    # TypeError, and the service never came up. Anything but a number reads as unset.
+    port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
 
     # Make sure the fail2ban panel-login jail is up and pointed at the current port. fail2ban is
     # installed by the panel installer; this self-heals the jail on every boot (and after a port

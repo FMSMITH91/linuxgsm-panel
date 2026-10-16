@@ -331,6 +331,33 @@ def canonical_cidr(s):
 _cidr = canonical_cidr      # the name the verb tables below use
 
 
+def _r23a_deny_source(s):
+    """What `ufw-deny-ip` may deny: a canonical_cidr that is not EVERY address.
+
+    canonical_cidr takes 0.0.0.0, ::, and any /0 network, and `ufw prepend deny from 0.0.0.0/0`
+    puts a deny-everything rule at the top of the list: every incoming connection, SSH and the
+    panel's own port included, is dropped from then on. No attacker's address is the unspecified
+    one or every one, so neither is ever a block. The helper's v_r23a_deny_source mirrors this.
+    """
+    s = _cidr(s)
+    if _r23a_denies_everything(s):
+        raise VerbError("refusing to deny every address")
+    return s
+
+
+def _r23a_denies_everything(s):
+    """Whether address or network `s` (canonical text) stands for no address or every address.
+
+    0.0.0.0, ::, any /0, or a network starting at the unspecified address. False for anything that
+    does not parse; the validators refuse that for their own reason.
+    """
+    try:
+        net = ipaddress.ip_network(s, strict=False)
+    except (TypeError, ValueError):
+        return False
+    return net.prefixlen == 0 or net.network_address.is_unspecified
+
+
 def _comment(s):
     s = "" if s is None else str(s)
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
@@ -1148,7 +1175,7 @@ _ARGV = {
     # slot and it refuses an IPv6 rule there ("Invalid position '1'") whenever any IPv4 rule
     # exists — and `allow OpenSSH` alone makes one. Every IPv6 block failed on a firewalled host.
     # `prepend` puts the rule at the top of its own address family's list, for either family.
-    "ufw-deny-ip": ([_cidr, _comment],
+    "ufw-deny-ip": ([_r23a_deny_source, _comment],
                     lambda a: [UFW, "prepend", "deny", "from", a[0]]
                     + (["comment", a[1]] if a[1] else []), None),
     "ufw-delete-deny-ip": ([_cidr], lambda a: [UFW, "delete", "deny", "from", a[0]], None),

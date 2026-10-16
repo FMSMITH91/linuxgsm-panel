@@ -1023,8 +1023,10 @@ def guarded_tcall_writes(js_dir=JS_DIR, template_dir=TEMPLATE_DIR):
                 # A t() call anywhere in the right-hand side, up to the statement's end: the
                 # codebase's own idiom `el.title = window.t ? window.t('…') : '…'` (server_tags.js)
                 # starts with neither t( nor tf(, and a bare-start pattern passed it unmarked.
+                # tfn( too, the plural helper: `tf?\(` read t( and tf( only, so a guarded field
+                # written with tfn() and no marker passed.
                 for w in re.finditer(r"\b%s\.(textContent|innerText|placeholder|title)\s*=(?!=)[^;]*?"
-                                     r"\b(?:window\.)?tf?\(" % re.escape(var), window):
+                                     r"\b(?:window\.)?t(?:f|fn)?\(" % re.escape(var), window):
                     marker = r"\b%s\.setAttribute\(\s*['\"]%s['\"]" % (re.escape(var),
                                                                      _R21C_MARKER[w.group(1)])
                     if not re.search(marker, window):

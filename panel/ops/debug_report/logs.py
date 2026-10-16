@@ -47,8 +47,10 @@ _PAM_SESSION_RE = re.compile(r"^pam_unix\((?:sudo|sudo-i|runuser|runuser-l|su|su
 # `sudo VAR=val …` (GROUP=, ENV=) did not parse, was not counted, and was printed WHOLE — argv,
 # ENV= values and all — in a report meant to be posted publicly.
 # HOST= leads when sudoers sets log_host, and CWD= is the --chdir directory; both used to leave
-# the line unparsed.
-_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:HOST|TTY|CHROOT|PWD|CWD)=[^;\n]{0,512};[ \t]{1,4}){1,5}"
+# the line unparsed. None of them at all is allowed too (review 1015d): every one is "only when it
+# applies", PWD= included (sudo omits it when it cannot read the working directory), and a line
+# whose first field was USER= matched neither this nor the shape below and printed whole.
+_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:HOST|TTY|CHROOT|PWD|CWD)=[^;\n]{0,512};[ \t]{1,4}){0,5}"
                           r"USER=([^;\n]{1,64});[ \t]{1,4}"
                           r"(?:(?:GROUP|TSID|ENV)=[^;\n]{0,2048};[ \t]{1,4}){0,3}"
                           r"COMMAND=(\S{1,512})(?: ([^\n]{0,2048}))?")
@@ -80,7 +82,7 @@ _R13B_DOAS_RE = re.compile(r"\bdoas\[\d{1,10}\]: (?:\S{1,64} ran command "
 # refused one is (fail closed): an unknown refusal reason ("user NOT authorized on host", a custom
 # authfail_message), an ENV= or PWD= value holding `;`, or a line sudo split before COMMAND= was
 # printed whole, argv and ENV= values included.
-_R12B_SUDO_SHAPE_RE = re.compile(r";[ \t]{1,4}USER=[^\n]{0,4096}?(?:ENV|COMMAND)=|@cee:|"
+_R12B_SUDO_SHAPE_RE = re.compile(r"(?:;| :)[ \t]{1,4}USER=[^\n]{0,4096}?(?:ENV|COMMAND)=|@cee:|"
                                  r"\"(?:runargv|runenv|command)\"[ \t]{0,4}:")
 # Where the part of a sudo line that is not printed starts when it has no COMMAND= to cut at.
 _R12B_SUDO_CUT_TOKENS = ("ENV=", "@cee:", '"runargv"', '"runenv"', '"command"')

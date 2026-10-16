@@ -185,7 +185,26 @@ _R22B_TARGET = '"$p"'
 _R22B_MKDIR = 'mkdir -p -- "${p%/*}"'
 
 
-def _write_file_as_user(server, user, abspath, data_bytes):
+def _r23b_console_frag(user, selfname):
+    """Host-side refusal of a write whose resolved target ("$p") is the live console's log.
+
+    A save renames a staged copy over the name, which gives the file a NEW inode, and tmux
+    pipe-pane goes on appending to the old one it opened: saving the console log (to clear it) or
+    uploading over it, directly or through a link to it, left the panel's live console showing
+    nothing new until the server restarted, under "Saved". Rename and create already refuse it.
+    Empty without `selfname`, which the console's path is built from.
+    """
+    return ('t="$p"; ' + _console_guard(user, selfname)) if selfname else ""
+
+
+def _r23b_console_write_refusal(user, ap, selfname):
+    """WRITE_CONSOLE when `ap` names the console log as typed, else None (the host checks links)."""
+    if selfname and _pp.relpath(ap, f"/home/{user}") == f"log/console/{selfname}-console.log":
+        return WRITE_CONSOLE
+    return None
+
+
+def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
     """Write bytes to a file as the game user, via base64.
 
     Round trips are the whole cost here. Every run_command is a separate SSH exec, and this used to
@@ -205,6 +224,9 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     denied", silently, long after the save said "Saved"), and a hand-placed 0600 file became
     world-readable. The destination's mode is copied onto the temp file before the rename; a new
     file keeps the umask default, which is what `>` gave it before.
+
+    With `selfname`, a target that resolves to the live console's log is refused on the host
+    (_r23b_console_frag) before any byte is staged.
     """
     import base64 as _b64
     b64 = _b64.b64encode(data_bytes).decode()
@@ -213,12 +235,17 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     mk = "mkdir -p " + _core._quote(parent)
     # The guard rides whichever command goes first, so a target that resolves outside the home dir
     # is refused before any byte is written.
+    mk = _r23b_console_frag(user, selfname) + mk
     if len(b64) <= _ONE_SHOT_B64:
-        return _write_one_shot(server, user, abspath, b64, mk)
-    return _write_chunked(server, user, abspath, b64, tmp, mk)
+        ok, msg = _write_one_shot(server, user, abspath, b64, mk, selfname)
+    else:
+        ok, msg = _write_chunked(server, user, abspath, b64, tmp, mk, selfname)
+    if not ok and _RENAME_CONSOLE_MARK in (msg or ""):
+        return False, WRITE_CONSOLE
+    return ok, msg
 
 
-def _write_one_shot(server, user, abspath, b64, mk):
+def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
     """Write a small base64 payload in ONE guarded command: decode to a staged copy, keep mode, rename."""
     # `mv -T`: the destination is the file's own name, never a directory to move INTO. Plain
     # `mv -f tmp cfg`, with a folder named cfg there, put the file inside it as cfg/cfg.paneltmp
@@ -229,41 +256,63 @@ def _write_one_shot(server, user, abspath, b64, mk):
     inner = (f"{mk} && {_R22B_MKDIR} && printf %s {_core._quote(b64)} | base64 -d > {st} "
              f"&& {_keep_mode(t, st)} && {{ mv -f -T {st} {t} "
              f"|| {{ rm -f {st}; false; }}; }}")
-    out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
+    out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60,
+                                          selfname=selfname)
     if _r12b_outside_home(out):
         return False, "Invalid path"
+    if _RENAME_CONSOLE_MARK in (out or ""):
+        return False, _RENAME_CONSOLE_MARK
     return (rc == 0), (e or out or "")
 
 
-def _write_chunked(server, user, abspath, b64, tmp, mk):
+def _write_chunked(server, user, abspath, b64, tmp, mk, selfname=None):
     """Stream a large base64 payload to `tmp` in chunks (guard + mkdir on the first), then decode."""
+    refused = _r23b_send_chunks(server, user, abspath, (b64, tmp, mk), selfname)
+    if refused:
+        return refused
+    return _r23b_chunk_finish(server, user, abspath, tmp, selfname)
+
+
+def _r23b_send_chunks(server, user, abspath, payload, selfname):
+    """_write_chunked's chunks, appended to `tmp`: None when all went, else its (False, why)."""
+    b64, tmp, mk = payload
     op = ">"
-    first = True
     for i in range(0, max(len(b64), 1), _CHUNK_B64):
-        chunk = b64[i:i + _CHUNK_B64]
-        inner = f"printf %s {_core._quote(chunk)} {op} {_core._quote(tmp)}"
-        if first:
-            inner = f"{mk} && {inner}"
-            inner = _guarded(user, abspath, inner)
-        out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60)
-        if first and _r12b_outside_home(out):
+        inner = f"printf %s {_core._quote(b64[i:i + _CHUNK_B64])} {op} {_core._quote(tmp)}"
+        if op == ">":
+            inner = _guarded(user, abspath, f"{mk} && {inner}")
+        out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60, selfname=selfname)
+        if op == ">" and _r12b_outside_home(out):
             return False, "Invalid path"
+        if op == ">" and _RENAME_CONSOLE_MARK in (out or ""):
+            return False, _RENAME_CONSOLE_MARK
         if rc != 0:
+            # A chunk that failed part-way leaves what came before it staged in the user's folder,
+            # where the browser lists it as `<name>.paneltmp`.
+            _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30, selfname=selfname)
             return False, e or "write failed"
         op = ">>"
-        first = False
+    return None
+
+
+def _r23b_chunk_finish(server, user, abspath, tmp, selfname):
+    """_write_chunked's last command: decode the staged chunks over the file, then remove them."""
     # `mv -T` for the reason _write_one_shot gives; a refused rename removes both staged copies.
     # Guarded again: it is its own command, and it is the one that needs "$p" (_R22B_TARGET).
+    # The staged chunks go whatever happens after the guard: a finish whose folder the account
+    # cannot write, a full disk during the decode or a failed _keep_mode stopped the `&&` chain
+    # before its `rm -f`, and the whole payload stayed beside the file as `<name>.paneltmp`.
     t, new = _R22B_TARGET, _R22B_TARGET + ".new"
-    fin = (f"{_R22B_MKDIR} && base64 -d {_core._quote(tmp)} > {new} "
+    fin = (f"{{ {_R22B_MKDIR} && base64 -d {_core._quote(tmp)} > {new} "
            f"&& {_keep_mode(t, new)} "
-           f"&& {{ mv -f -T {new} {t} "
-           f"|| {{ rm -f {new} {_core._quote(tmp)}; false; }}; }} "
-           f"&& rm -f {_core._quote(tmp)}")
-    o, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, fin), timeout=60)
-    if _r12b_outside_home(o):
-        _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30)
-        return False, "Invalid path"
+           f"&& {{ mv -f -T {new} {t} || {{ rm -f {new}; false; }}; }}; }}; "
+           f"r=$?; rm -f {_core._quote(tmp)}; exit $r")
+    fin = _r23b_console_frag(user, selfname) + fin
+    o, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, fin), timeout=60,
+                                        selfname=selfname)
+    if _r12b_outside_home(o) or _RENAME_CONSOLE_MARK in (o or ""):
+        _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30, selfname=selfname)
+        return False, ("Invalid path" if _r12b_outside_home(o) else _RENAME_CONSOLE_MARK)
     return (rc == 0), (e or o or "")
 
 
@@ -1234,17 +1283,21 @@ def _rawlts_refusal(server, user, ap, data):
 R14B_NOT_TEXT = "The file contents must be text."
 
 
-def write_file(server, user, relpath, content):
-    """Write text content to a file in the game user's home."""
+def write_file(server, user, relpath, content, selfname=None):
+    """Write text content to a file in the game user's home.
+
+    `selfname` (the LinuxGSM script name) refuses the live console's log, by name and resolved.
+    """
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return False, "Invalid path"
     if not _is_text(content or ""):
         return False, R14B_NOT_TEXT        # a lone surrogate: .encode() below raised, a 500
-    refusal = _rawlts_refusal(server, user, ap, content or "")
+    refusal = (_r23b_console_write_refusal(user, ap, selfname)
+               or _rawlts_refusal(server, user, ap, content or ""))
     if refusal:
         return False, refusal
-    return _write_file_as_user(server, user, ap, (content or "").encode())
+    return _write_file_as_user(server, user, ap, (content or "").encode(), selfname)
 
 
 # upload_file returns this as its message when the target exists and overwrite wasn't granted.
@@ -1322,12 +1375,13 @@ def _upload_conflicts(names, present):
     return hits
 
 
-def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
+def upload_file(server, user, reldir, filename, data_bytes, overwrite=True, selfname=None):
     """Upload a file into a directory in the game user's home.
 
     overwrite=False refuses when the target already exists, returning UPLOAD_EXISTS. The UI asks
     first, but the check and the write are two round trips — without a server-side refusal a file
     created in between is silently clobbered, and a caller that never checks never asks at all.
+    `selfname` refuses the live console's log, as write_file does.
     """
     apdir = _safe_abspath(user, reldir)
     if apdir is None:
@@ -1338,14 +1392,22 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
     target = _pp.join(apdir, fn)
     if not (target.startswith(f"/home/{user}/")):
         return False, "Invalid path"
-    refusal = _rawlts_refusal(server, user, target, data_bytes or b"")
+    refusal = _r23b_upload_refusal(server, user, target, (data_bytes, overwrite), selfname)
     if refusal:
         return False, refusal
-    if not overwrite:
-        refusal = _existing_target_refusal(server, user, target)
-        if refusal:
-            return False, refusal
-    return _write_file_as_user(server, user, target, data_bytes)
+    return _write_file_as_user(server, user, target, data_bytes, selfname)
+
+
+def _r23b_upload_refusal(server, user, target, upload, selfname):
+    """Why upload_file must not write `upload` = (bytes, overwrite) at `target`, else None.
+
+    In order: the live console's log, a logtimestamp the console cannot survive, and (without
+    overwrite) a name already taken or a check that did not run.
+    """
+    data_bytes, overwrite = upload
+    return (_r23b_console_write_refusal(user, target, selfname)
+            or _rawlts_refusal(server, user, target, data_bytes or b"")
+            or (None if overwrite else _existing_target_refusal(server, user, target)))
 
 
 def _existing_target_refusal(server, user, target):
@@ -1454,6 +1516,8 @@ RENAME_REFUSED = "Refusing to rename this path."
 RENAME_CONSOLE = ("The live console reads this path — renaming it would stop the console until the "
                   "server restarts.")
 _RENAME_CONSOLE_MARK = "__RENAME_CONSOLE__"
+WRITE_CONSOLE = ("The live console reads this file — replacing it would stop the console until the "
+                 "server restarts. Nothing was saved.")
 RENAME_EDGE_SPACE = ("A name can't start or end with a space — it would look just like the name "
                      "without one.")
 # Unicode's Bidi_Control characters. Each makes the text after it display in another order, so a
@@ -2081,5 +2145,5 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
 _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
     _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
-    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD,
+    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE,
 })

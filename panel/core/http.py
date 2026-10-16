@@ -237,6 +237,16 @@ def _unreachable(context, status=200, exc=None):
                     "message": said, "error": said}), status
 
 
+def _r23c_error_json(said):
+    """The JSON body of an error reply: `said` as `message` AND as `error`, as _unreachable sends it.
+
+    A page's READ (public SSH's mode, live stats, a log or a listing) checks `error` or
+    `unreachable`, and a reply carrying neither was painted as a reading: app.py's catch-all 500
+    and its HTTPException answers read as "not filtered — UFW is inactive".
+    """
+    return jsonify({"success": False, "message": said, "error": said})
+
+
 def unreachable_error(context, exc=None):
     """The app error handler's answer to a ConnectionError no route caught: _unreachable's.
 

@@ -160,12 +160,28 @@ def _run_tests85(parallel, dispatch=None):
     return rc, out, sorted(os.listdir(os.path.join(d, "data")))
 
 
+def _r23d_all_ran85(out):
+    """Did every stand-in suite run: each DB-owning one under its run_suite header, and all four tallied?
+
+    A data/ left intact and rc 0 also hold when the mode runs NONE of the DB-owning suites
+    (review 1015d: `for fn in unit_suite` in the sequential dispatch passed).
+    """
+    return (all(out.count("== %s ==" % _n) >= 1 for _n in ("other_suites", "smoke_suite", "rbac_suite"))
+            and out.count("1 / 1 checks passed") >= 4)
+
+
 _seq85, _par85 = _run_tests85(False), _run_tests85(True)
 check("run-tests: the sequential mode runs every DB-owning suite in a copy, so the checkout's "
       "own data/panel.db and panel.db.backup (a developer's panel) survive a passing run",
-      _seq85[0] == 0 and _seq85[2] == ["panel.db", "panel.db.backup"], repr(_seq85))
+      _seq85[0] == 0 and _seq85[2] == ["panel.db", "panel.db.backup"] and _r23d_all_ran85(_seq85[1]),
+      repr(_seq85))
 check("run-tests: ...and so does the parallel mode (control)",
-      _par85[0] == 0 and _par85[2] == ["panel.db", "panel.db.backup"], repr(_par85))
+      _par85[0] == 0 and _par85[2] == ["panel.db", "panel.db.backup"] and _r23d_all_ran85(_par85[1]),
+      repr(_par85))
+_r23d_one85 = _run_tests85(False, _DISPATCH85.replace('for fn in "${ALL_SUITES[@]}"; do', "for fn in unit_suite; do"))
+check("run-tests: ...a sequential mode that runs only the unit suite is not read as having run them all (control)",
+      'for fn in "${ALL_SUITES[@]}"; do' in _DISPATCH85 and _r23d_one85[0] == 0
+      and not _r23d_all_ran85(_r23d_one85[1]), repr(_r23d_one85))
 _rsd85 = _checkout85()
 _rs85 = _bash85("set -e\nPY=%s\nRT_ROOT=\"$PWD\"\n%srun_suite x %s"
                 % (sys.executable, _RUN_SUITE85, _OK_SUITE85), _rsd85)

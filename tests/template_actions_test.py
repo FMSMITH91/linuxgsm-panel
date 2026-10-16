@@ -1199,11 +1199,54 @@ _ESCAPERS = ("escapeHtml", "_esc", "esc", "e", "tfHtml")
 _SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*\+?=\s*|insertAdjacentHTML\s*\(|[{,]\s*['\"]?html['\"]?\s*:\s*")
 
 
+# Keywords after which an expression starts: a `/` there opens a regex literal.
+_R23D_OPERAND_KEYWORDS = frozenset(("return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+                                    "throw", "case", "do", "else", "yield", "await"))
+
+
+def _r23d_operand_due(before):
+    """Is an operand due after JS text `before` (its previous token; see _r23d_regex_end)?"""
+    _t = before.rstrip()
+    if _t.endswith(("++", "--")):
+        return False
+    _word = re.search(r"(?<![\w$.])[A-Za-z_$][\w$]*$", _t)
+    if _word:
+        return _word.group(0) in _R23D_OPERAND_KEYWORDS
+    return _t[-1:] in tuple("(,=:[!&|?{};+-*%<>~^") + ("",)
+
+
+def _r23d_regex_end(src, i):
+    """The index past a regex literal opened by the `/` at src[i], or None when a `/` there divides.
+
+    A regex opens where an operand is due, read by the previous token: an operator, an opening
+    bracket, `,`, `;`, an expression keyword, or nothing; not a name, a value, a closing bracket or
+    a postfix ++/-- (review 1015d: `/'/g` in a sink's expression opened a "string" at its quote,
+    which swallowed the names after it, the one direction this gate must never fail in).
+    """
+    if not _r23d_operand_due(src[max(0, i - 200):i]):     # the previous token is all that is read
+        return None
+    _j, _cls = i + 1, False
+    while _j < len(src) and src[_j] != "\n":
+        if src[_j] == "\\":
+            _j += 2
+            continue
+        if src[_j] == "/" and not _cls:
+            return _j + 1
+        _cls = (_cls or src[_j] == "[") and src[_j] != "]"
+        _j += 1
+    return None
+
+
 def _js_expr_at(src, i):
     """One JS expression from i, stopping at a statement end outside any bracket or string."""
     out, depth = [], 0
     while i < len(src):
         c = src[i]
+        _rx = _r23d_regex_end(src, i) if c == "/" and src[i:i + 2] not in ("//", "/*") else None
+        if _rx is not None:
+            out.append("/r/")       # a regex literal is neither a string nor a name
+            i = _rx
+            continue
         # Comments are SKIPPED, not read. A trailing `// …` on a sink line is prose, and prose
         # contains semicolons and apostrophes — which this loop would otherwise treat as "the
         # statement ended" and "a string opened". Both make the scanned expression SHORTER, i.e.
@@ -1236,6 +1279,18 @@ def _js_expr_at(src, i):
             out.append(c)
         i += 1
     return "".join(out)
+
+
+# A regex literal in a sink's expression is skipped, a division is not (control, review 1015d).
+_r23d_rx_ctl = [_js_expr_at(_x, 0) for _x in (
+    "s.replace(/'/g, '') + d.name; x", "i++ / 2 + d.name + '</b>'; x", "a / b + d.name; x",
+    "(function(){ return /'/.test(s) })() ? '' : d.name; x")]
+# Exact: a quote opened at the regex runs to the end of the text, which still holds d.name and
+# hides it as string text, so "d.name in it" could not fail.
+check(_r23d_rx_ctl == ["s.replace(/r/g, '') + d.name", "i++ / 2 + d.name + '</b>'", "a / b + d.name",
+                       "(function(){ return /r/.test(s) })() ? '' : d.name"],
+      "sinks: a regex literal's quote in a sink's expression does not hide the names after it (control)",
+      repr(_r23d_rx_ctl))
 
 
 _ESC_ALIAS_FN = (r"function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{\s*"
@@ -2671,18 +2726,23 @@ _SAFE_BYPASS_FILES = {"account_2fa.html": 1}
 # the escaped host name (Markup's % escapes it).
 _MARKUP_FILES = {"app.py": 1, "panel/db/models.py": 2}     # Python modules allowed a Markup(), and how many
 
+# `{% autoescape false %}` is a bypass too, of a whole block (review 1015d): counted as a site, so
+# one cannot pass a gate that read `|safe` alone. The tree has none.
 _bypass_found = {}
 for _p in sorted(TEMPLATES.glob("*.html")):
-    _n = len(re.findall(r"\|\s*safe\b", re.sub(r"\{#.*?#\}", "", _p.read_text(encoding="utf-8"), flags=re.S)))
+    _n = len(re.findall(r"\|\s*safe\b|\{%-?\s*autoescape\s+false\b",
+                        re.sub(r"\{#.*?#\}", "", _p.read_text(encoding="utf-8"), flags=re.S)))
     if _n:
         _bypass_found[_p.name] = _n
 check(_bypass_found == _SAFE_BYPASS_FILES,
       "xss: only the enumerated templates bypass autoescaping with |safe, each as many times as listed",
       "found %s; listed %s" % (_bypass_found, _SAFE_BYPASS_FILES))
 
+# An aliased import (`from markupsafe import Markup as M`) or a class with `__html__` emits markup
+# without the word `Markup(` (review 1015d): each counts as a site, so it needs listing too.
 _markup_found = {}
 for _p in sorted(list((ROOT / "panel").rglob("*.py")) + [ROOT / "app.py"]):
-    _n = len(re.findall(r"\bMarkup\s*\(", _p.read_text(encoding="utf-8")))
+    _n = len(re.findall(r"\bMarkup\s*\(|\bMarkup\s+as\b|\bdef\s+__html__\b", _p.read_text(encoding="utf-8")))
     if _n:
         _markup_found[_p.relative_to(ROOT).as_posix()] = _n
 check(_markup_found == _MARKUP_FILES,

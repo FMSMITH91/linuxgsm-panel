@@ -47,8 +47,14 @@ def _apply_user_order(items, order, key=lambda o: o.id):
     The sort is stable, so items the user never ordered keep their relative default order instead of
     being shuffled. Pure and module-level so it is unit-testable with no app context.
     """
+    # A LIST, or nothing. The write route cleans what it stores, but this also reads the install
+    # default from config.json and a user blob read back, neither of which it shaped: a hand-edited
+    # `"host_order": 5` raised TypeError out of the dashboard render, a 500 for every user who
+    # inherits it. A dict or a string would iterate as keys or characters, which is no order either.
+    if not isinstance(order, (list, tuple)):
+        return list(items)
     pos = {}
-    for ident in (order or []):
+    for ident in order:
         try:
             num = int(ident)
         except (TypeError, ValueError, OverflowError):

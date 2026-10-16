@@ -19,7 +19,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json
 from panel.core.validation import (NOT_AN_IP, canonical_ip)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
-from panel.routes._shared import (_whitelist_mutate)
+from panel.routes._shared import (_r23a_not_while_panel_host_reboots, _whitelist_mutate)
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.
 # The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
@@ -212,6 +212,7 @@ def _register_panel_update(app):
     @app.route("/api/panel/switch-branch", methods=["POST"])
     @login_required
     @superadmin_required
+    @_r23a_not_while_panel_host_reboots
     def api_panel_switch_branch():
         """Switch the panel to another branch and pull it (same rollback-safe path as an update)."""
         branch = _json_str(_json_body(), "branch")
@@ -335,6 +336,7 @@ def _register_panel_db_repair(app):
     @app.route("/api/panel/repair-db", methods=["POST"])
     @login_required
     @superadmin_required
+    @_r23a_not_while_panel_host_reboots
     def api_panel_repair_db():
         """Repair a flagged database on-demand.
 

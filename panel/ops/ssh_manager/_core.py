@@ -2960,7 +2960,10 @@ def _host_sample_cmd():
 # replace skipped it.
 
 def _put_mem(f, m, _acc=None):
-    if len(f) >= 3:
+    # Digits checked like every other handler's: a figure that is not one (a `df`/`free` that
+    # prints "-" or a warning in its place) raised out of host_live_metrics and server_live_metrics,
+    # where every other malformed line is skipped.
+    if len(f) >= 3 and f[1].isdecimal() and f[2].isdecimal():
         m["ram_total"], m["ram_used"] = int(f[1]), int(f[2])
 
 
@@ -2970,7 +2973,7 @@ def _put_load(f, m, _acc=None):
 
 
 def _put_disk(f, m, _acc=None):
-    if len(f) >= 3:
+    if len(f) >= 3 and f[1].isdecimal() and f[2].isdecimal():
         m["disk_total"], m["disk_used"] = int(f[1]), int(f[2])
 
 
