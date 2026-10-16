@@ -22,6 +22,7 @@ HOW IT RUNS. The helper and the panel's modules with stand-ins, undone in a fina
 and uninstall.sh's own text run under bash in a throwaway directory with a stand-in `tailscale`.
 Nothing reaches this machine's tailscale, sudo, or the checkout's data/.
 """
+import ast as _ast91
 import atexit as _atexit91
 import io as _io91
 import json as _json91
@@ -107,17 +108,22 @@ class _HelperRun91:
 
 def _in_helper91(fake, argv, stdin=""):
     """(rc, stdout, stderr) of the helper's main(argv) with `fake` as its subprocess."""
-    saved = (_helper91.subprocess, _helper91.resolve, sys.stdin, sys.stdout, sys.stderr)
+    saved = (_helper91.subprocess, _helper91.resolve, sys.stdin, sys.stdout, sys.stderr,
+             _helper91.panel_conf)
     # As root directly (no SUDO_UID): tailscale-release-operator then takes the name it is given,
     # whoever runs the suite.
     sudo_uid = os.environ.pop("SUDO_UID", None)
     _helper91.subprocess, _helper91.resolve = fake, (lambda n: "/usr/bin/" + n)
+    # The owner chose Tailscale SSH at install: these checks are about the joined-node rules, and
+    # part93 holds the opt-in itself.
+    _helper91.panel_conf = lambda: {"tailscale_ssh": "yes"}
     sys.stdin, sys.stdout, sys.stderr = _io91.StringIO(stdin), _io91.StringIO(), _io91.StringIO()
     try:
         rc = _helper91.main(["panel-helper"] + list(argv))
         return rc, sys.stdout.getvalue(), sys.stderr.getvalue()
     finally:
-        _helper91.subprocess, _helper91.resolve, sys.stdin, sys.stdout, sys.stderr = saved
+        (_helper91.subprocess, _helper91.resolve, sys.stdin, sys.stdout, sys.stderr,
+         _helper91.panel_conf) = saved
         if sudo_uid is not None:
             os.environ["SUDO_UID"] = sudo_uid
 
@@ -257,12 +263,67 @@ _TS_SRC91 = _read91("panel", "ops", "tailscale_integration.py")
 _SO_SRC91 = _read91("panel", "ops", "system_ops.py")
 # ...and the one write that only takes power away: the operator clearing ITSELF (release_operator,
 # on a host with no helper or a helper too old for the verb; install.sh does the same).
-_READS91 = (r'\["version"\]', r'\["--version"\]', r'\["status"\]', r'\["debug", "prefs"\]',
-            r'\["serve", "status"\]', r"args \+ \[\"--json\"\]", r'\["set", "--operator="\]\Z')
-_ts_calls91 = _re91.findall(r"(?<!def )\b_run_ts(?:_json)?\((\[[^\]\n]*\]|[^,)\n]+)", _TS_SRC91)
-_ts_writes91 = [c for c in _ts_calls91 if not any(_re91.match(p, c.strip()) for p in _READS91)]
-_so_ts91 = _re91.findall(r'_run\("(tailscale [^"]*)"', _SO_SRC91)
-_so_writes91 = [c for c in _so_ts91 if not _re91.match(r"tailscale (status|debug prefs)\b", c)]
+# Read by AST, not by a line pattern (review 1016b: a call whose argument list started on the next
+# line, and system_ops' `_run('tailscale …')` in single quotes or an f-string, were never collected).
+_READS91 = {("version",), ("--version",), ("status",), ("debug", "prefs"), ("serve", "status"),
+            ("set", "--operator=")}
+
+
+def _r25d_call_name91(node):
+    _f = node.func
+    return _f.id if isinstance(_f, _ast91.Name) else getattr(_f, "attr", None)
+
+
+def _r25d_ts_arg_is_read91(node):
+    """Is the first argument of a `_run_ts(...)` call one of the reads (or _run_ts_json's own `args + ['--json']`)?"""
+    if not node.args:
+        return False
+    try:
+        return tuple(_ast91.literal_eval(node.args[0])) in _READS91
+    except (ValueError, TypeError, SyntaxError):
+        return _ast91.unparse(node.args[0]) == "args + ['--json']"
+
+
+def _r25d_so_ts_command91(node):
+    """The `tailscale` command a system_ops `_run(...)` call runs ("" for none, its source when not a constant)."""
+    if _r25d_call_name91(node) != "_run" or not node.args:
+        return ""
+    _a = node.args[0]
+    if isinstance(_a, _ast91.Constant) and isinstance(_a.value, str):
+        return _a.value if _re91.search(r"(?:^|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)tailscale\b", _a.value) else ""
+    _txt = _ast91.unparse(_a)
+    return _txt if "tailscale" in _txt else ""
+
+
+def _r25d_calls91(src):
+    """Every call in source `src`."""
+    return [_n for _n in _ast91.walk(_ast91.parse(src)) if isinstance(_n, _ast91.Call)]
+
+
+def _r25d_so_write91(command):
+    """Is system_ops' tailscale command `command` (from _r25d_so_ts_command91) a write?"""
+    return bool(command) and not _re91.match(r"tailscale (status|debug prefs)\b", command)
+
+
+def _r25d_ts_writes91(ts_src, so_src):
+    """(the _run_ts calls in `ts_src`, the ones that are not reads, system_ops' tailscale commands that are not)."""
+    _calls = [_n for _n in _r25d_calls91(ts_src) if _r25d_call_name91(_n) in ("_run_ts", "_run_ts_json")]
+    _writes = [_ast91.unparse(_n) for _n in _calls if not _r25d_ts_arg_is_read91(_n)]
+    _so = [_r25d_so_ts_command91(_n) for _n in _r25d_calls91(so_src)]
+    return _calls, _writes, [_c for _c in _so if _r25d_so_write91(_c)]
+
+
+_ts_calls91, _ts_writes91, _so_writes91 = _r25d_ts_writes91(_TS_SRC91, _SO_SRC91)
+# The gate against planted writes (control): one per spelling the line pattern could not see.
+_r25d_planted91 = _r25d_ts_writes91(
+    "_run_ts(\n    ['set', '--ssh=true'], timeout=10)\nx._run_ts(['serve', '--bg', '5000'])\n"
+    "_run_ts_json(['status'])\n",
+    "_run(\n    'tailscale set --ssh 2>&1')\n_run(f'tailscale serve {port}')\n"
+    "_run('sudo -n tailscale up')\n_run('ip -o link show | grep -i tailscale')\n_run('tailscale status')\n")
+check("panel source: (control) a write in a call split over lines, by an attribute, in single quotes, "
+      "an f-string or behind sudo is caught, and reads and a grep for the name are not",
+      (len(_r25d_planted91[0]), len(_r25d_planted91[1]), len(_r25d_planted91[2])) == (3, 2, 3),
+      repr(_r25d_planted91[1:]))
 _names91 = [p for p in ("ensure_operator(", "tailscale-set-operator\"", "--operator=%s")
             for src in (_TS_SRC91, _SO_SRC91, _read91("app.py"),
                         _read91("panel", "routes", "tailscale.py"),
@@ -395,7 +456,8 @@ check("release_operator: the panel takes the operator role back from its own acc
           "someone else's": ("not-operator", [], []), "no operator": ("not-operator", [], []),
           "prefs unread": ("not-operator", [], []), "root": ("root", [], []),
           "no helper": ("released", [], _SELF91),
-          "helper refused": ("failed", [("tailscale-release-operator", ["lgsmpanel"])], []),
+          # A refused helper falls back to the self-clear (review 1016b, part93).
+          "helper refused": ("released", [("tailscale-release-operator", ["lgsmpanel"])], _SELF91),
           "stale helper": ("released", [("tailscale-release-operator", ["lgsmpanel"])], _SELF91),
           "no helper, set failed": ("failed", [], _SELF91)}, repr(_bare91))
 check("release_operator: a helper too old for the verb is logged as such, telling the operator to "

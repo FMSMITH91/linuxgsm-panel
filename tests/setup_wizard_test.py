@@ -173,7 +173,8 @@ def _audit(action):
 # The three Tailscale actions that change this host, and the wizard's SSH test, are recorders for
 # the whole run: a broken gate then RECORDS a call instead of installing Tailscale, joining a
 # tailnet, rewriting Serve or opening an SSH connection from a test run. rbac_test.py warns what
-# these do unstubbed — they reconfigure the tailnet of the machine the suite runs on.
+# these do unstubbed: through the root helper's verbs, on a machine that has the helper, they
+# reconfigure the tailnet of the machine the suite runs on.
 from panel.ops import tailscale_integration as _ts_mod  # noqa: E402
 _so_mod = _so                                      # restart_panel is stubbed on it below
 import panel.routes.route_helpers as _rh  # noqa: E402

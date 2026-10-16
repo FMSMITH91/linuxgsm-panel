@@ -126,7 +126,7 @@ from panel.security import banlist as _banlist
 # app.py does not use has no reason to be reachable through app.py, and leaving it importable from
 # here is what let the cycle grow in the first place. See the docstrings in panel/core/validation.py
 # and panel/core/http.py.
-from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
+from panel.core.validation import (MAX_PORT, MIN_PORT, _port_or, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none)
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
 from panel.core.http import (_r23c_error_json, _wants_json, http_error_page, http_error_sentence,
@@ -157,7 +157,7 @@ from panel.ops import system_ops as so
 from panel.ops.debug_report import errors as _dr_errors
 from panel.ops.debug_report import process as _dr_process
 from panel.ops.serve_upkeep import (_boot_audit, _boot_shared_funnel, _panel_tailscale_url,
-    _remove_serve_leftovers, _tailscale_banner)
+    _r25j_boot_host_records, _remove_serve_leftovers, _tailscale_banner)
 from panel.ops import backup as bk
 from panel.services import lgsm_data
 
@@ -3301,9 +3301,10 @@ def _boot_serve(app, cfg, port):
     plain-HTTP panel and a restart reproduced the 502 it was meant to heal.
     """
     app.config["BOOT_SERVE"] = app.config["BOOT_SERVE_LEFTOVERS"] = "not attempted"
-    # First, whether or not Serve is set up: an earlier panel made its account the Tailscale
-    # operator, and that is taken back at the first start on this code. Never raises.
-    ts.release_operator()
+    # First, whether or not Serve is set up: the Tailscale operator role an earlier panel gave its
+    # account is taken back, then the panel's port is recorded where the root helper's record names
+    # another (Serve publishes only the recorded port: the re-point below needs it). Never raises.
+    _r25j_boot_host_records(app, port, _boot_audit)
     if not cfg.get("tailscale_setup_done"):
         return
     mount = cfg.get("tailscale_mount", "/") or "/"
@@ -3365,8 +3366,11 @@ if __name__ == "__main__":
     cfg = load_config()
     # _r15a_cfg_int, as every other reader of this key does (firewall, the change-port form): a
     # hand-edited `"port": "5000"` reached socketio.run as a string, eventlet's bind raised
-    # TypeError, and the service never came up. Anything but a number reads as unset.
-    port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
+    # TypeError, and the service never came up. Anything but a number reads as unset. And a PORT,
+    # not any integer (review 1016b): `0` bound an ephemeral port nobody knew, 70000 raised in bind
+    # so the service never started, and 5000.7 read as 5000. Out of range, or not a whole number,
+    # reads as unset too.
+    port = _port_or(cfg.get("port", 5000), 5000)
 
     # Make sure the fail2ban panel-login jail is up and pointed at the current port. fail2ban is
     # installed by the panel installer; this self-heals the jail on every boot (and after a port

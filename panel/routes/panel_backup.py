@@ -16,6 +16,7 @@ from panel.services import (notifications)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count)
 import calendar
 import concurrent.futures
+import functools
 import os
 import threading
 import time
@@ -88,7 +89,7 @@ def _full_backup_server(app, gs, modes, tally):
     ok, reason, was_skipped = _marked_backup(
         gs.id, gs.remote, gs.short_name, gs.lgsm_name, _keep,
         game_type=gs.game_type, port=gs.port, force=force,
-        query_type=gs.query_type, runner=run_game_backup)
+        query_type=gs.query_type, runner=run_game_backup, held=functools.partial(still_held, gs))
     if still_held(gs):
         _record_full_backup_outcome(gs, (ok, reason, was_skipped), defer, tally)
         _schedule_after_full(app, ident, (ok, was_skipped), (defer, was_pending))

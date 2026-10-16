@@ -1693,7 +1693,10 @@ def _sf_config_write(gs, data):
                                 "message": "The file contents must be text."}), 400
             rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
             with _r20b_audit_on_raise("edit_config", target=gs.name, server=gs):
-                ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
+                # selfname, as the file editor passes it: a cfg that is a link to the live
+                # console's log was replaced through it, and the console went silent.
+                ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"],
+                                     selfname=gs.lgsm_name)
         else:
             # The same rule for the other shape: `settings` is a key -> value map, and a list
             # or a string reached the writer's .items() and came back as a 500.

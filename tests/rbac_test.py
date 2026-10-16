@@ -1857,14 +1857,17 @@ def _check_membership_escalation():
         _prize_gid = _prize.id
 
     cmu = client_as(_mu_uid)
-    cmu.post("/users/%d/edit" % _mu_uid,
-             data={"display_name": "MU admin", "is_active": "on",
-                   "groups": [str(_mu_gid), str(_prize_gid)]})
+    # Bound and read: a 500 in the refusal branch also leaves the account unchanged, and read as the
+    # guard holding (review 1016b; the eight sibling refusals got `< 500` in #434).
+    _join_r = cmu.post("/users/%d/edit" % _mu_uid,
+                       data={"display_name": "MU admin", "is_active": "on",
+                             "groups": [str(_mu_gid), str(_prize_gid)]})
     with app.app_context():
         _now = auth.get_user_permissions(db.session.get(User, _mu_uid))
-    check("escalation: MANAGE_USERS cannot join a group holding permissions they lack",
-          auth.UNINSTALL_SERVER not in _now and auth.MANAGE_REMOTES not in _now,
-          "ended up with: %s" % sorted(_now))
+    check("escalation: MANAGE_USERS cannot join a group holding permissions they lack (refused, not crashed)",
+          _join_r.status_code < 500
+          and auth.UNINSTALL_SERVER not in _now and auth.MANAGE_REMOTES not in _now,
+          "status %s, ended up with: %s" % (_join_r.status_code, sorted(_now)))
     check("escalation: ...and keeps the group they legitimately had",
           auth.MANAGE_USERS in _now, "ended up with: %s" % sorted(_now))
 
@@ -2044,7 +2047,7 @@ def _check_manage_users_needs_the_objects():
 
 def _check_manage_users_custom_commands():
     """...nor one holding custom commands the actor cannot run."""
-    global _cmd_peer_hash, _cmd_peer_id, _plain_peer_hash, _plain_peer_id
+    global _cmd_peer_hash, _cmd_peer_id, _plain_peer_hash, _plain_peer_id, _r25d_cmd_peer_status
     # ── ...and with CUSTOM COMMANDS, which need no permission at all to run ──────────────────
     # can_run_custom_command authorises on group membership alone, and the reach tests compared
     # permissions, hosts and game servers — never Group.custom_commands. So a group whose
@@ -2087,8 +2090,11 @@ def _check_manage_users_custom_commands():
           "now in groups %s, holding commands %s" % (sorted(_mu_gids), sorted(_mu_cmds)))
     check("escalation: ...while the same group WITHOUT the command is still joined",
           _plain_gid in _mu_gids, "the plain group was refused too — the guard is too broad")
-    cmu.post("/users/%d/edit" % _cmd_peer_id,
-             data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
+    # Its status is kept: a 500 in the refusal branch also leaves the hash, and read as the guard
+    # holding (review 1016b). The plain peer's reset is a request of its own, so it cannot tell.
+    _r25d_cmd_peer_status = cmu.post(
+        "/users/%d/edit" % _cmd_peer_id,
+        data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"}).status_code  # nosec B105 - a checkbox value
     cmu.post("/users/%d/edit" % _plain_peer_id,
              data={"display_name": "plain peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
 
@@ -2099,8 +2105,9 @@ def _check_custom_command_peers_untouched():
         _cmd_peer_changed = db.session.get(User, _cmd_peer_id).password_hash != _cmd_peer_hash
         _plain_peer_changed = (db.session.get(User, _plain_peer_id).password_hash
                                != _plain_peer_hash)
-    check("escalation: MANAGE_USERS cannot take over a peer whose extra reach is a command",
-          not _cmd_peer_changed, "the command holder's password hash was replaced")
+    check("escalation: MANAGE_USERS cannot take over a peer whose extra reach is a command (refused, not crashed)",
+          _r25d_cmd_peer_status < 500 and not _cmd_peer_changed,
+          "status %s; hash replaced: %s" % (_r25d_cmd_peer_status, _cmd_peer_changed))
     check("escalation: ...but may still reset a peer with the same permissions and no command",
           _plain_peer_changed, "a legitimate reset was refused — the guard is too broad")
 
@@ -2119,15 +2126,16 @@ def _check_view_logs_scope_and_users_add():
     # The same via /users/add — creating the account in the privileged group, then logging in as it
     # (the generated password is handed straight back to the caller).
     _new_name = tag + "_mu_made"
-    cmu.post("/users/add", data={"username": _new_name, "display_name": _new_name,
-                                 "groups": [str(_prize_gid)]})
+    _add_r = cmu.post("/users/add", data={"username": _new_name, "display_name": _new_name,
+                                          "groups": [str(_prize_gid)]})
     with app.app_context():
         _made = User.query.filter_by(username=_new_name).first()
         _made_perms = auth.get_user_permissions(_made) if _made else set()
-    check("escalation: ...nor create a NEW user in that group",
-          _made is None or (auth.UNINSTALL_SERVER not in _made_perms
-                            and auth.MANAGE_REMOTES not in _made_perms),
-          "the new account holds: %s" % sorted(_made_perms))
+    check("escalation: ...nor create a NEW user in that group (refused, not crashed)",
+          _add_r.status_code < 500
+          and (_made is None or (auth.UNINSTALL_SERVER not in _made_perms
+                                 and auth.MANAGE_REMOTES not in _made_perms)),
+          "status %s, the new account holds: %s" % (_add_r.status_code, sorted(_made_perms)))
 
 
 def _check_group_admin_cannot_widen_reach():
@@ -3077,11 +3085,11 @@ def _check_setup_endpoints_stay_shut():
     # which is precisely the OSError branch, and restored in the finally.
     #
     # WARNING if you verify this by mutation (removing the guard to watch these fail): with the
-    # guard gone these four requests REALLY RUN. tools/nosudo_runner.py will not save you — it
-    # refuses sudo, but `tailscale up` and `tailscale serve` run as the operator user without it,
-    # so /up and /serve reconfigure the tailnet of whatever machine you are sitting at, and /serve
-    # writes a config file through the redirected CONFIG_FILE path. Mutate this one on a throwaway
-    # host, or read the 403 and take it on faith.
+    # guard gone these four requests REALLY RUN. Since #435 `tailscale up` and `tailscale serve` go
+    # through the root helper's verbs, so tools/nosudo_runner.py refuses them on a machine without
+    # the helper; on one WITH it (any panel host) /up and /serve reconfigure the tailnet of that
+    # machine, and /serve writes a config file through the redirected CONFIG_FILE path. Mutate this
+    # one on a throwaway host, or read the 403 and take it on faith.
     from panel.core import config as _cfg_mod
 
     with app.app_context():

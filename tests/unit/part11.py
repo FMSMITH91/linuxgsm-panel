@@ -419,8 +419,9 @@ try:
           _ts_inj[0] is False, repr(_ts_inj))
     del _ts_steps[:]
     _tsi._so._run_verb = _ts_verb_rec(("ALREADY_CONNECTED", "", 0))
-    eq("tailscale up: an already-joined node answers ALREADY_CONNECTED and gets the ufw rule (and is "
-       "not made the Tailscale operator)",
+    # That no step makes it the Tailscale operator is part91's (no such verb or call exists); this
+    # stub records only the ufw step, so the name says only what it shows (review 1016b).
+    eq("tailscale up: an already-joined node answers ALREADY_CONNECTED and gets the ufw rule",
        (_tsi.tailscale_up_local(), _ts_steps), ((True, "ALREADY_CONNECTED"), ["ufw"]))
     _tsi._so._run_verb = _ts_verb_rec(("", "", -1))
     _ts_info["v"] = _tsi.TailscaleInfo(installed=True, running=True)
@@ -3111,6 +3112,8 @@ try:
         for _t in ("(not a rule number)", "(not a rule number)", "3")])
 
     # ── SSH port ───────────────────────────────────────────────────────────────────────────────
+    # A key-auth host: on a Tailscale-SSH one the route keeps the row on port 22 (part94).
+    _r.auth_method = "key"
     _rv.current_user = _RvUser(superadmin=False, name="op")
     _csp = []
     _rv.change_ssh_port = lambda remote, port, bind: (_csp.append((port, bind)), (True, "moved"))[1]
@@ -3129,7 +3132,7 @@ try:
     # request is made from INSIDE the first's change_ssh_port, i.e. exactly while it runs.
     _rv_inner = _rv_app.test_client()
     _csp_runs, _inner = [], {}
-    _other = _rv_remote()
+    _other = _rv_remote(auth_method="key")   # its port is committed too (see _held_at_commit)
 
     def _csp_slow(remote, port, bind):
         _csp_runs.append((remote.id, port))
@@ -3178,7 +3181,7 @@ try:
           and "busy(true)" in _csp_fn and _csp_fn.index("busy(true)") < _csp_fn.index("fetch(")
           and "busy(false)" in _csp_then and "busy(false)" in _csp_catch,
           "changeSshPort never disables its button, or leaves it disabled after an answer")
-    _r.port = 22
+    _r.port, _r.auth_method = 22, "tailscale"
 
     # ── close the panel's public port ──────────────────────────────────────────────────────────
     # The default-policy read is a privileged `ufw status verbose` of its own: never the real one.
@@ -3367,9 +3370,11 @@ try:
           repr(_body))
     _rv.remote_reboot_required = lambda remote: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.get("/api/remote/%d/reboot-required" % _r.id))
-    eq("reboot required: a raise answers not-required, with the wait and the job beside it",
-       _body, {"required": False, "packages": [], "pending_empty": True, "wait": {"by": "admin"},
-               "job": None})
+    # known: False — "could not look", as remote_reboot_required says it (review 1016b): without it
+    # the banner read this fallback as "no reboot needed" and came down.
+    eq("reboot required: a raise answers not-required and not known, with the wait and the job beside it",
+       _body, {"required": False, "packages": [], "known": False, "pending_empty": True,
+               "wait": {"by": "admin"}, "job": None})
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot" % _r.id, json={}))
     check("reboot: a body-less request goes to the gate with no mode, and its 409 comes back as is",
           _st == 409 and _body.get("needs_choice") is True and _rv_calls[-1] == ("reboot", _r.id, None, "web"),
@@ -3480,12 +3485,17 @@ _fl_core_saved = {n: getattr(_sm_core, n) for n in (
 _fl_priv_saved = {"helper_argv": _p8_priv.helper_argv}
 
 
+_r25d_fl_cmds = []      # the commands _fl_rc's run_command was given, in order (since its last call)
+
+
 def _fl_rc(*answers):
     """run_command answering in order (the last repeats), counting the round trips."""
     seq, calls = list(answers), []
+    del _r25d_fl_cmds[:]
 
     def _rc(server, command, timeout=30, sudo=None, stdin_text=None):
         calls.append(sudo)
+        _r25d_fl_cmds.append(command)
         r = seq.pop(0) if len(seq) > 1 else seq[0]
         if isinstance(r, BaseException):
             raise r
@@ -3515,6 +3525,14 @@ try:
     eq("file write (large): a failed chunk stops the write, says why and removes what was staged",
        (_F._write_file_as_user(_p8_srv(), "cs2server", "/home/cs2server/big.bin", _big), len(_calls)),
        ((False, "No space left on device"), 3))
+    # ...and the third call IS that removal, not the finishing decode: a write that ignored the
+    # failed chunk and went on to finish is also 3 calls, and the repeated answer made it fail the
+    # same way (review 1016b).
+    _r25d_fl_third = _r25d_fl_cmds[2] if len(_r25d_fl_cmds) > 2 else ""
+    check("file write (large): ...the call after the failed chunk removes the staged file and "
+          "decodes nothing",
+          "rm -f" in _r25d_fl_third and ".paneltmp" in _r25d_fl_third and "base64 -d" not in _r25d_fl_third,
+          repr(_r25d_fl_cmds[2:3])[:300])
 
     # ── LinuxGSM config read ───────────────────────────────────────────────────────────────────
     _fl_rc(("__LGSMP_DEFAULT_B__!!notbase64!!__LGSMP_DEFAULT_E__" + _fl_frame("COMMON", "")

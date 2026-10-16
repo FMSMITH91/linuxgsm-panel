@@ -631,7 +631,9 @@ def lgsm_write_config(server, user, selfname, updates):
         return True, ""
     _apply_cfg_updates(lines, updates)
     content = "\n".join(lines).rstrip("\n") + "\n"
-    return _write_file_as_user(server, user, inst, content.encode())
+    # selfname: the instance cfg may be a link to the live console's log (the account can make
+    # one), and replacing that through the link silenced the console (_r23b_console_frag).
+    return _write_file_as_user(server, user, inst, content.encode(), selfname)
 
 
 def _turns_logtimestamp_on(updates):

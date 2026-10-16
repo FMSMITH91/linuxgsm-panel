@@ -277,6 +277,32 @@ def _sudo_ws86():
                   "sudo grants": "yes"}, repr(cas))
 
 
+def _r25d_home86(getent_row):
+    """The probe's verdict for `deploy` whose account row (getent's output) is `getent_row`.
+
+    Named for what it is, an account row with no password in it ("x": the hash is in shadow): the
+    old name made CodeQL read it as a password stored in clear text (py/clear-text-storage).
+    """
+    d = _shims86(_SUDO_NO86, None)
+    _standin86(os.path.join(d, "getent"), 'echo "%s"\n' % getent_row)
+    _p9_patch(_p9_sh, "_R22B_SUDO_WS", os.path.join(d, "sudo.ws"))
+    out, _e, _rc = _bash86(_p9_sh._account_probe_cmd(["deploy"]),
+                           env={"PATH": d + ":/usr/bin:/bin", "LC_ALL": "C"})
+    return str((_p9_sh._parse_account_probe(out, ["deploy"]) or {}).get("deploy"))
+
+
+def _r25d_probe_home86():
+    # The probe's HOME line, read from passwd's sixth field by the real text: no other check ran the
+    # command against an account whose home IS /home/<name>, so a probe reading another field (the
+    # shell, -f7) refused every game account on every remote with every gate green (review 1016b).
+    got = (_r25d_home86("deploy:x:1086:1086::/home/deploy:/bin/bash"),
+           _r25d_home86("deploy:x:1086:1086::/srv/x:/home/deploy"))
+    check("account probe (real text): an account whose passwd home is /home/<name> is a plain "
+          "account, and one whose home is elsewhere is refused for it even when another field "
+          "says /home/<name>",
+          got[0] == "ok" and "home" in got[1] and "/srv/x" in got[1], repr(got))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. A host that is down: _unreachable's answer, never "Internal server error"
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -389,13 +415,16 @@ def _v6_86():
                     ("v4 allow only", (_ALLOW_ROW83 % "2286/tcp",)),
                     ("v6 allow only", (_V6ROW86 % ("2286/tcp (v6)", "ALLOW IN"),))):
         out = _UFW_HEAD86 + "".join(r + "\n" for r in rows)
-        _p9_patch(_p9_core, "run_privileged", lambda *a, _o=out, **kw: (_o, "", 0))
+        _p9_patch(_p9_core, "run_privileged", lambda *a, _o=out, **kw: (
+            opened.append(a[1]) if a[1] == "ufw-allow-from-port" else None, (_o, "", 0))[1])
         del opened[:]
         _added, refusal = _hosts86._open_ssh_port_rule(NS(id=-86, name="p86"), 2286, ["22"])
         res[k] = (bool(refusal), list(opened))
     check("ssh port move: a (v6) DENY first for the new port refuses the move; an IPv4 allow with "
-          "no v6 rule needs nothing opened; a v6-only allow still opens it for IPv4",
-          res == {"v6 deny": (True, []), "v4 allow only": (False, []), "v6 allow only": (False, [2286])},
+          "no v6 rule needs nothing opened; a v6-only allow still opens it for IPv4 (that family's rule "
+          "alone since review 1016b)",
+          res == {"v6 deny": (True, []), "v4 allow only": (False, []),
+                  "v6 allow only": (False, ["ufw-allow-from-port"])},
           repr(res))
 
 
@@ -550,6 +579,7 @@ try:
     _symlink_save86()
     _binary86()
     _sudo_ws86()
+    _r25d_probe_home86()
     _unreachable_routes86(_A86, _RID86, _GS86)
     _p9_restore_all()
     _p9_arm(who="part86")

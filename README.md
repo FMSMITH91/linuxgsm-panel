@@ -46,6 +46,15 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
    be typing that password into a terminal the panel itself renders, so it protects you against a
    stolen panel session, not against a compromised panel. Remote hosts are untouched by this —
    whatever their own account already has is what applies.
+   **Tailscale SSH on the panel host** is chosen here too, because with it on, the tailnet the host
+   joins decides who may log in as root: the installer asks (no by default, and no when nobody is
+   at a terminal), `PANEL_TAILSCALE_SSH=1` or `=0` answers ahead (put it AFTER `sudo`, which
+   drops a variable set before it: `curl … | sudo PANEL_TAILSCALE_SSH=1 bash`, or
+   `sudo PANEL_TAILSCALE_SSH=1 bash install.sh`; on a per-user install, run it as the panel's user
+   without `sudo`), and an update keeps the answer.
+   A host already running Tailscale SSH is recorded as yes, so it keeps working. Without it the
+   panel's **Connect** still joins the host to Tailscale, just without SSH, and **Enable Tailscale
+   SSH** is shown read-only. Remote hosts are untouched by this.
 7. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots** if step 2's upgrade needs it and no game server is running.
 
 Then finish in the browser: open **the link the installer prints at the end** — `https://your-server:5000/setup?token=…` (`http://` won't load — it's TLS-only) — accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
@@ -227,7 +236,7 @@ the account. Any leftover grant is stripped at startup.)
 
 Run behind **Tailscale** (recommended — tailnet-only, no open ports; auto-detected in the wizard or managed at `/tailscale`) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](docs/https.md).
 
-For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page, not a `tailscale serve` command of your own. The panel then writes the route itself, on the scheme it is actually serving (its own self-signed HTTPS by default, which needs `https+insecure://`; plain `http://` only once it is bound to `127.0.0.1` with Serve set up), records the mount in `tailscale_mount`, and re-points the route at every start. A route you add by hand is one the panel does not manage: nothing re-points it, so it answers 502 once the panel's scheme changes, and a hand-made one at `/` makes the wizard publish the panel a second time at `/lgsm`. On the panel's own host the panel changes Tailscale (Connect, Serve, Tailscale SSH) only through its root-owned helper, and its account is not the Tailscale *operator* (an install or update takes that role back from it if an earlier version gave it), so a `tailscale serve` command you run yourself there needs `sudo`. If you already have one, the `/tailscale` page lists it with a **Remove** button, and the debug report names it with the exact `sudo tailscale serve --https=443 --set-path=<mount> off` that removes it.
+For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page, not a `tailscale serve` command of your own. The panel then writes the route itself, on the scheme it is actually serving (its own self-signed HTTPS by default, which needs `https+insecure://`; plain `http://` only once it is bound to `127.0.0.1` with Serve set up), records the mount in `tailscale_mount`, and re-points the route at every start. A route you add by hand is one the panel does not manage: nothing re-points it, so it answers 502 once the panel's scheme changes, and a hand-made one at `/` makes the wizard publish the panel a second time at `/lgsm`. On the panel's own host the panel changes Tailscale (Connect, Serve, Tailscale SSH) only through its root-owned helper, and its account is not the Tailscale *operator* (an install or update takes that role back from it whenever it holds it; on a per-user install that account is your own login), so a `tailscale serve` command you run yourself there needs `sudo`. If you already have one, the `/tailscale` page lists it with a **Remove** button, and the debug report names it with the exact `sudo tailscale serve --https=443 --set-path=<mount> off` that removes it.
 
 ```nginx
 # Reverse proxy — the WebSocket console needs the upgrade headers

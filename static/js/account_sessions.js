@@ -41,8 +41,10 @@
     fetch(mp() + '/api/account/sessions', {cache:'no-store'})
       .then(function(r){ return r.json(); })
       .then(function(d){
+        // An error reply lists no sessions: "No active sessions." about the one you are using.
+        if(!d || !Array.isArray(d.sessions)) throw new Error('not a reading');
         box.textContent = '';
-        var list = (d && d.sessions) || [];
+        var list = d.sessions;
         if(!list.length){ box.innerHTML = '<div class="text-secondary small">No active sessions.</div>'; return; }
         list.forEach(function(s){ box.appendChild(row(s)); });
       })

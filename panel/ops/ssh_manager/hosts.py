@@ -753,22 +753,30 @@ def remote_ufw_close_port(server, port, protocol=None, force=False):
         return False, refusal
     if rc != 0:
         return False, err or out or "Unknown error"
-    return _r23b_closed_answer(server, port, proto)
+    return _r23b_closed_answer(server, port, proto, out)
 
 
-def _r23b_closed_answer(server, port, proto):
+def _r23b_closed_answer(server, port, proto, out=""):
     """remote_ufw_close_port's answer once its delete exited 0: read back, never taken from rc.
 
     rc 0 is not "closed": ufw exits 0 deleting a rule that is not there, and a delete by spec
     matches only its own shape — `delete allow proto tcp ... port N` leaves a bare `N` allow, a
     `N/tcp LIMIT` or a port list in place. So this answered "Port N closed" with N still open.
+
+    `out` is the delete's own output. When the firewall could not be read back AND that output says
+    no rule matched, nothing confirms the port is closed and nothing was removed: it answered
+    "Port N closed" for a rule that may still let N in.
     """
     one = proto in ("tcp", "udp")
     label = ("%s/%s" % (port, proto)) if one else port
-    left = _r23b_still_open(server, port, (proto,) if one else ("tcp", "udp"))
+    read = []
+    left = _r23b_still_open(server, port, (proto,) if one else ("tcp", "udp"), read)
     if left is not None:
         return False, i18n.Sentence("Port {port} is still open: connections meet `{rule}` first — remove or "
                                     "narrow that rule.", port=label, rule=left["detail"])
+    if not read and _r23b_deleted_nothing(out):
+        return False, i18n.Sentence("No rule for port {port} matched, so nothing was removed, and the firewall "
+                                    "could not be read back to say whether the port is open.", port=label)
     return True, i18n.Sentence("Port {port} closed on remote", port=label)
 
 
@@ -783,7 +791,7 @@ def _r23b_deleted_nothing(out):
             and not any(ln.startswith("Rule deleted") for ln in lines))
 
 
-def _r23b_still_open(server, port, protos):
+def _r23b_still_open(server, port, protos, read=None):
     """After a close, the first public rule that still lets `port` in (ALLOW or LIMIT), else None.
 
     Either family, for any of `protos`.
@@ -795,6 +803,8 @@ def _r23b_still_open(server, port, protos):
     out, _err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
     if rc != 0 or not (out or "").strip() or not firewall._ufw_is_active(out):
         return None
+    if read is not None:
+        read.append(True)   # `read`: told that the listing was read (None here is then "none open")
     for proto in protos:
         for first in _r22b_first_rules(out, port, proto):
             if first and first["action"] in ("ALLOW", "LIMIT"):
@@ -1483,7 +1493,7 @@ def host_os_slug(server):
         out, _, rc = _core.run_command(
             server,
             '. /etc/os-release 2>/dev/null; printf %s "${ID}-${VERSION_ID}"',
-            timeout=10)
+            timeout=10, sudo=False)
         cand = (out or "").strip().lower()
         # Validated by lgsm_data before it can reach a URL; this is just the cheap early reject.
         if rc == 0 and 3 < len(cand) < 24:
@@ -1940,7 +1950,8 @@ def remote_reboot_required(server):
     # kernel-update nag on an unpatched host disappeared. Require one of the probe's OWN two
     # tokens plus rc 0, the way remote_bootstrap_vps requires EXISTS/NOTEXISTS below.
     try:
-        out, _, rc = _core.run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=12)
+        out, _, rc = _core.run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=12,
+                                       sudo=False)
     except Exception:
         return {"required": False, "packages": [], "known": False}
     text = out or ""
@@ -1951,7 +1962,8 @@ def remote_reboot_required(server):
         return {"required": False, "packages": [], "known": True}
     packages = []
     try:
-        pk, _, _ = _core.run_command(server, "cat /var/run/reboot-required.pkgs 2>/dev/null", timeout=12)
+        pk, _, _ = _core.run_command(server, "cat /var/run/reboot-required.pkgs 2>/dev/null", timeout=12,
+                                     sudo=False)
         packages = sorted({p.strip() for p in (pk or "").splitlines() if p.strip()})
     except Exception:
         packages = []
@@ -1982,7 +1994,7 @@ def host_boot_identity(server):
     try:
         out, _err, _rc = _core.run_command(
             server, "cat /proc/sys/kernel/random/boot_id /etc/machine-id /proc/uptime; date +%s; "
-                    "systemctl is-system-running 2>/dev/null || true", timeout=12)
+                    "systemctl is-system-running 2>/dev/null || true", timeout=12, sudo=False)
     except Exception:
         return None
     return _parse_boot_identity(out)
@@ -2031,7 +2043,9 @@ def remote_uptime(server, force=False):
         "echo CORES $(nproc)",
         "grep '^cpu ' /proc/stat", "sleep 0.25", "grep '^cpu ' /proc/stat",
     ]
-    out, _, _ = _core.run_command(server, " ; ".join(parts), timeout=15)
+    # sudo=False: everything read here is world-readable, and the default (the row's sudo_enabled)
+    # made this poll a `sudo bash -c` on a remote, failing outright where sudo wants a password.
+    out, _, _ = _core.run_command(server, " ; ".join(parts), timeout=15, sudo=False)
     d = {"uptime": "unknown", "load": "?", "disk": "?", "memory": "?", "memory_percent": "?",
          "kernel": "?", "cpu_percent": "?", "cpu_cores": "?", "cpu_per_core": ""}
     cpu_lines = []
@@ -3652,8 +3666,9 @@ def _r22b_ssh_port_reading(status_out, port):
 def _open_ssh_port_rule(server, port, old_ports):
     """Step 1 of change_ssh_port: let `port`/tcp through ufw. (added, refusal).
 
-    `added` is True only when THIS call put the allow there, which is what makes it the revert's
-    to delete. Nothing is opened when:
+    `added` is truthy only when THIS call put the allow there, which is what makes it the revert's
+    to delete (_R25B_V4_ADDED when that was only the IPv4 rule; see _r25b_close_added_ssh_rule).
+    Nothing is opened when:
       * sshd already serves `port` (it is in `old_ports`): whatever lets it in today is what the
         panel's own connection is using, and re-allowing would rewrite a LIMIT into an ALLOW;
       * the first public rule a TCP connection to it meets already allows it (ALLOW or LIMIT, a
@@ -3678,13 +3693,45 @@ def _open_ssh_port_rule(server, port, old_ports):
             return False, i18n.Sentence("Port {port}/tcp is blocked by the firewall rule `{rule}`, so SSH moved "
                                         "there would be unreachable — remove or change that rule first. Nothing was "
                                         "changed.", port=port, rule=first["detail"])
-        # An IPv6-only allow for exactly `port`/tcp is the operator's, and `ufw allow port/tcp`
-        # takes it over: ufw rewrites a rule that differs only in comment or action in place, so
-        # the revert's `delete allow port/tcp` would remove it with the panel's v4 half. The v4
-        # rule still goes in (IPv4 clients need it), but it is not counted as this call's to delete.
-        v6_own = known and _r23b_v6_exact_open(before, port)
-        ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
-        return bool(ok and known and not v6_own), None
+        return _r25b_add_ssh_rule(server, port, known, before), None
+
+
+def _r25b_add_ssh_rule(server, port, known, before):
+    """_open_ssh_port_rule's open, once nothing lets `port` in or blocks it: its `added`.
+
+    The caller holds ufw_lock. `known`: `before` is an active firewall's listing.
+    """
+    # An IPv6-only allow or LIMIT for exactly `port`/tcp is the operator's, and `ufw allow
+    # port/tcp` takes it over: ufw rewrites a rule that differs only in comment or action in
+    # place, so a LIMIT became a plain ALLOW (IPv6 SSH lost its brute-force brake whether the
+    # move worked or not) and the revert's `delete allow port/tcp` would remove it. So only the
+    # IPv4 half goes in: a source of 0.0.0.0/0 is an IPv4-only rule that ufw lists as
+    # "Anywhere", and the revert deletes exactly that rule (_R25B_V4_ADDED), never the v6 one.
+    # "SSH panel" is what remote_ufw_open_port stores for "SSH (panel)": the verb refuses "()".
+    if known and _r23b_v6_exact_open(before, port):
+        _o, _e, rc = _core.run_privileged(server, "ufw-allow-from-port",
+                                          [_R25B_V4_ANYWHERE, str(port), "tcp", "SSH panel"],
+                                          timeout=15)
+        return _R25B_V4_ADDED if rc == 0 else False
+    ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
+    return bool(ok and known)
+
+
+# Every IPv4 source: ufw stores `allow from 0.0.0.0/0` as an IPv4-only rule listed "Anywhere".
+_R25B_V4_ANYWHERE = "0.0.0.0/0"  # NOSONAR(S1313) - the IPv4 "any source" network, not a host
+# _open_ssh_port_rule's `added` when it put in only the IPv4 rule above: the revert deletes that.
+_R25B_V4_ADDED = "v4-only"
+
+
+def _r25b_close_added_ssh_rule(server, port, added):
+    """Remove the rule _open_ssh_port_rule added for `port` (its `added`), and nothing else."""
+    if added == _R25B_V4_ADDED:
+        with _core.ufw_lock(server):
+            _core.run_privileged(server, "ufw-delete-allow-from-port",
+                                 [_R25B_V4_ANYWHERE, str(port), "tcp"], timeout=15)
+    elif added:
+        # force: the rule step 1 added, for a port sshd may already be listening on.
+        remote_ufw_close_port(server, port, "tcp", force=True)
 
 
 def _r23b_v6_exact_open(status_out, port):
@@ -3854,9 +3901,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # path left a public ALLOW for a port nothing serves — including the step-3 path, whose
         # message says "sshd rejected the new config — nothing changed". Best-effort, like the
         # open: a host without UFW no-ops either way. ONLY a rule step 1 added (see there).
-        if _ufw_added:
-            # force: the rule step 1 added, for a port sshd may already be listening on.
-            remote_ufw_close_port(server, new_port, "tcp", force=True)
+        _r25b_close_added_ssh_rule(server, new_port, _ufw_added)
         _restart_ssh_listener(server, socket_mode)
         return False, msg
 
@@ -4140,7 +4185,7 @@ def _tsiface_names(server):
     without it (an empty answer from a transport that timed out) is not a reading.
     """
     try:
-        out, _err, rc = _core.run_command(server, "ls -1 /sys/class/net", timeout=10)
+        out, _err, rc = _core.run_command(server, "ls -1 /sys/class/net", timeout=10, sudo=False)
     except Exception:
         _core._log.debug("tailscale interface probe failed", exc_info=True)
         return []
@@ -4469,7 +4514,9 @@ def host_timezone(server):
           "|| cat /etc/timezone 2>/dev/null "
           "|| readlink -f /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##'")
     try:
-        out, _, _ = _core.run_command(server, sh, timeout=10)
+        # sudo=False: everything read here is world-readable, and the default (the row's sudo_enabled)
+        # made this poll a `sudo bash -c` on a remote, failing outright where sudo wants a password.
+        out, _, _ = _core.run_command(server, sh, timeout=10, sudo=False)
     except Exception:
         _core._log.debug("host timezone read failed for %s", getattr(server, "name", "?"),
                          exc_info=True)

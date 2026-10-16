@@ -382,7 +382,10 @@ window.rebootNagCheck = function(hostId, label){
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       var el = document.getElementById('reboot-nag-'+hostId);
-      if(!d || !(d.required || d.pending_empty || d.job)){ if(el) el.remove(); return; }
+      // A read that failed (no answer, or `known: false` — the host did not say) is not "no reboot
+      // needed": the banner a good read put up stays until a read says otherwise.
+      if(!d || (d.known === false && !(d.pending_empty || d.job))) return;
+      if(!(d.required || d.pending_empty || d.job)){ if(el) el.remove(); return; }
       if(!el){ el = document.createElement('div'); el.id = 'reboot-nag-'+hostId; el.className='mb-2'; box.appendChild(el); }
       window.rebootNagRender(el, hostId, label, d);
     }).catch(function(){});
@@ -415,7 +418,9 @@ window.osUpdatesNagCheck = function(){
   fetch(MOUNT+'/api/os-updates/summary',{cache:'no-store'})
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
-      var hosts = (d && d.hosts) || [];
+      // A failed read is not "nothing waiting": keep the banner a good read put up.
+      if(!d || !Array.isArray(d.hosts)) return;
+      var hosts = d.hosts;
       if(!hosts.length){ _osNagClear(box); return; }
       var sig = hosts.map(function(h){ return h.id+':'+h.count+':'+h.security; }).join('|');
       var off = null; try { off = sessionStorage.getItem('osUpdatesNagOff'); } catch(e){}

@@ -67,7 +67,9 @@ window.applyPlayersVisibility = function(){
 };
 
 function renderPlayers(d){
-  var card=document.getElementById('players-card'); if(!card||!d) return;
+  // An error reply (the catch-all's 500, a denial) is not a reading: keep what is shown, as the
+  // fetch's own failure does — read on, it painted the game as one that cannot be queried.
+  var card=document.getElementById('players-card'); if(!card||!d||d.error) return;
   var caps=d.caps||{}, players=d.players||[], queryable=!!d.queryable;
   // Moderators see the card whenever there's something to do (a list, or the announce box);
   // everyone else only when there's a list or announce to show — but only on the Console tab.
@@ -1938,10 +1940,14 @@ function _ds(label, data, color, fill){
            fill:!!fill, tension:.3, pointRadius:0, borderWidth:2, spanGaps:true };  // NOPMD
 }
 
+// A reply that is not a reading: none at all, or an error body (`error`, on every one since #435).
+function _r25c_histUnread(d){ return !d || !!d.error; }
 window.loadHistory = function(){
   fetch(MOUNT + '/api/server/' + serverId + '/history?range=' + encodeURIComponent(_histRange))
     .then(function(r){ return r.json(); })
     .then(function(d){
+      // An error reply is not "No history yet": keep what is shown, as a failed request does.
+      if(_r25c_histUnread(d)) return;
       var s = d.server || [], h = d.host || [];
       var empty = document.getElementById('hist-empty'), charts = document.getElementById('hist-charts');
       if(!s.length && !h.length){ if(empty)empty.style.display=''; if(charts)charts.style.display='none'; return; }

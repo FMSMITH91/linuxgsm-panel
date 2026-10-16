@@ -754,7 +754,9 @@ def _first_percent(text):
 def _host_disk_pct(remote):
     """Root-filesystem usage percent for a host (int), or None. Cheap df, best-effort."""
     try:
-        out, _, _ = run_command(remote, "df -P / | awk 'NR==2{print $5}'", timeout=10)
+        # sudo=False: everything read here is world-readable, and the default (the row's sudo_enabled)
+        # made this poll a `sudo bash -c` on a remote, failing outright where sudo wants a password.
+        out, _, _ = run_command(remote, "df -P / | awk 'NR==2{print $5}'", timeout=10, sudo=False)
         return _first_percent(out)
     except Exception:
         return None
@@ -767,7 +769,7 @@ def _host_load_mem(remote):
             remote,
             "L=$(awk '{print $1}' /proc/loadavg); C=$(nproc); "
             "M=$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf \"%d\", t?(t-a)*100/t:0}' /proc/meminfo); "
-            "echo \"$L $C $M\"", timeout=10)
+            "echo \"$L $C $M\"", timeout=10, sudo=False)
         parts = (out or "").split()
         load1, cores, mempct = float(parts[0]), max(1, int(parts[1])), int(parts[2])
         return int(load1 / cores * 100), mempct
@@ -1443,7 +1445,7 @@ def _autoblock_host_io(remote):
 
         def undeny(ip):
             with ufw_lock(remote):
-                return so.ufw_undeny_ip(ip)
+                return _r25a_release_own(ip, so.ufw_blocked_ips, so.ufw_undeny_ip)
     else:
         counts = remote_fail2ban_attempt_counts(remote, days=7)
         blocked = remote_ufw_blocked_ips(remote)
@@ -1452,8 +1454,31 @@ def _autoblock_host_io(remote):
             return remote_ufw_deny_ip(remote, ip, tag=_AUTOBLOCK_TAG)
 
         def undeny(ip):
-            return remote_ufw_undeny_ip(remote, ip)
+            with ufw_lock(remote):
+                return _r25a_release_own(ip, lambda: remote_ufw_blocked_ips(remote),
+                                         lambda a: remote_ufw_undeny_ip(remote, a))
     return counts, blocked, deny, undeny
+
+
+def _r25a_release_own(ip, read_blocked, undeny):
+    """Release `ip` only if it is STILL the reconcile's own auto-block. Called under ufw_lock.
+
+    The release list comes from the read at the top of the reconcile, taken outside the lock, and
+    the new blocks are applied first, which can take minutes. A superadmin's Block in that window
+    re-tags the address as a manual block, and `ufw delete deny from <ip>` matches whatever the
+    comment says: the release deleted the manual block while the page and the audit trail said it
+    was blocked. So the firewall is read again here, with the lock held (an RLock, so the writer's
+    own lock below nests), and anything not tagged as an auto-block is left alone.
+
+    (ok, msg) as the writers answer; ok None for an address that is not ours any more (neither
+    released nor failed). A read that fails releases nothing and counts as a failure.
+    """
+    now = read_blocked()
+    if now is None:
+        return False, "the firewall could not be read again before the release"
+    if now.get(ip) != _AUTOBLOCK_TAG:
+        return None, "no longer an auto-block"
+    return undeny(ip)
 
 
 def _autoblock_offenders(remote, counts, threshold):
@@ -1471,7 +1496,7 @@ def _autoblock_apply(write, ips, what, failed):
         ok, _msg = write(ip)
         if ok:
             applied += 1
-        else:
+        elif ok is not None:        # None: nothing to do any more (_r25a_release_own)
             failed.append(what % ip)
     return applied
 

@@ -22,12 +22,20 @@ _log = logging.getLogger("panel.certs")
 _CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly dedup)
 
 
-def _maybe_alert_cert_expiring():
+def _maybe_alert_cert_expiring(boot=None):
     """Alert when the panel's own TLS certificate is within 14 days of expiry, at most once a week.
 
     No-op if the cert file isn't present (e.g. Tailscale Serve / a reverse proxy terminates TLS).
     Best-effort — never raises.
+
+    `boot` is the app's config, holding app.py's boot record (BOOT_TLS, BOOT_TLS_ERROR). A panel
+    that booted serving plain HTTP on purpose is not using the file: a cert of the operator's own
+    left there after TLS moved to Tailscale Serve paged "renew it" for a certificate nothing
+    served (system_ops._diag_tls already calls it leftover). A TLS start that FAILED still alerts,
+    and so does a caller with no boot record.
     """
+    if boot is not None and boot.get("BOOT_TLS") is False and not boot.get("BOOT_TLS_ERROR"):
+        return
     try:
         from cryptography import x509
         cert_path = DATA_DIR / "ssl" / "cert.pem"

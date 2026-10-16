@@ -1891,12 +1891,12 @@ try:
           repr((_reach_ok10, _reach_ts10, _reach_raise10)))
 
     # ── disk / load probes: parsed when answered, None when not ────────────────────────────────
-    _mon10.run_command = lambda r, cmd, timeout=None: ("87%\n", "", 0)
+    _mon10.run_command = lambda r, cmd, timeout=None, sudo=None: ("87%\n", "", 0)
     _disk10 = _mon10._host_disk_pct(NS())
-    _mon10.run_command = lambda r, cmd, timeout=None: ("", "timed out", -1)
+    _mon10.run_command = lambda r, cmd, timeout=None, sudo=None: ("", "timed out", -1)
     _disk_none10 = _mon10._host_disk_pct(NS())
     _load_none10 = _mon10._host_load_mem(NS())
-    _mon10.run_command = lambda r, cmd, timeout=None: ("2.00 4 55\n", "", 0)
+    _mon10.run_command = lambda r, cmd, timeout=None, sudo=None: ("2.00 4 55\n", "", 0)
     _load10 = _mon10._host_load_mem(NS())
     _mon10.run_command = _raiser10(ConnectionError("down"))
     _disk_raise10 = _mon10._host_disk_pct(NS())
@@ -2920,7 +2920,7 @@ try:
     # ── remote_public_ip: the next source is tried when one fails ──────────────────────────────
     _pip_n10 = {"n": 0}
 
-    def _pip_rc10(server, cmd, timeout=None):
+    def _pip_rc10(server, cmd, timeout=None, sudo=None):
         _pip_n10["n"] += 1
         if _pip_n10["n"] == 1:
             raise ConnectionError("blip")
@@ -2928,7 +2928,7 @@ try:
 
     _sm_core.run_command = _pip_rc10
     _pip10 = _sm_core.remote_public_ip(_REMOTE10)
-    _sm_core.run_command = lambda server, cmd, timeout=None: ("<html>blocked</html>", "", 0)
+    _sm_core.run_command = lambda server, cmd, timeout=None, sudo=None: ("<html>blocked</html>", "", 0)
     _pip_none10 = _sm_core.remote_public_ip(_REMOTE10)
     check("core public ip: a failing lookup falls through to the next; non-IP answers are ''",
           _pip10 == "203.0.113.5" and _pip_none10 == "", repr((_pip10, _pip_none10)))
@@ -2992,7 +2992,7 @@ try:
                   "===MEM\nMemTotal: 8000000 kB\nMemAvailable: 6000000 kB\nSwapTotal: junk kB\n"
                   "===DISK\nFilesystem 1B-blocks Used Available Use% Mounted\n"
                   "/dev/sda1 100000 25000 75000 25% /\n")
-    _sm_core.run_command = lambda server, cmd, timeout=None: (_RLM_OUT10, "", 0)
+    _sm_core.run_command = lambda server, cmd, timeout=None, sudo=None: (_RLM_OUT10, "", 0)
     _so10.live_metrics = _raiser10(OSError("no /proc"))
     try:
         _rlm10 = _sm_core.remote_live_metrics(_LOCAL10)

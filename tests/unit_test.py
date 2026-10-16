@@ -238,11 +238,33 @@ def _r18d_dash_c(argv):
 
 
 def _r18d_shell_word(argv):
-    """Index of the shell word: argv[0], or the word after the wrapper commands in front of it."""
-    _i = _r19d_unwrap(argv, None)[0]
-    if _i >= len(argv) or os.path.basename(str(argv[_i])) not in ("sh", "bash", "dash"):
-        return None
-    return _i
+    """Index of the shell word: argv[0], or the word after the wrapper commands in front of it.
+
+    Under every reading of the long options that only prefix a value-taking one (_r25d_readings;
+    review 1016b: only "each takes a value" was tried, so `setsid --f bash -c …`, --f being
+    setsid's --fork and a prefix of --format, hid the shell and it ran without the functions).
+    """
+    for _pv in _r25d_readings(argv):
+        _i = _r19d_unwrap(argv, None, _pv)[0]
+        if _i < len(argv) and os.path.basename(str(argv[_i])) in ("sh", "bash", "dash"):
+            return _i
+    return None
+
+
+def _r25d_readings(argv):
+    """Each way to read argv's ambiguous long options: the set of their indices that take a value.
+
+    An ambiguous one is a prefix of a value-taking name (`--f` of --format) that may be a flag of
+    the wrapper it follows (setsid's --fork, timeout's --foreground). Reading them all one way or
+    all the other missed an argv needing both (review 1016b: `timeout --f --sig KILL 5 tailscale`
+    and `xargs --in --arg /dev/null tailscale` were judged as running nothing). Few enough to try
+    every combination; past eight, the two uniform readings.
+    """
+    _amb = [_k for _k, _a in enumerate(argv) if isinstance(_a, str) and "=" not in _a
+            and _a not in _R19D_LONG_VALUE and _r23d_long_prefix(_a, _R19D_LONG_VALUE)]
+    if len(_amb) > 8:
+        return [frozenset(_amb), frozenset()]
+    return [frozenset(_k for _b, _k in enumerate(_amb) if _n >> _b & 1) for _n in range(2 ** len(_amb))]
 
 
 # Commands that run the rest of their argv as a command: (short options taking a value, operands
@@ -289,7 +311,8 @@ def _r19d_unwrap(argv, path, prefix_value=True):
 
     The PATH is None when a wrapper clears or resets it: `env -i`, `env -u PATH`, sudo.
     `prefix_value` is how a long option that is only a PREFIX of a value-taking one is read
-    (_r19d_opt_word): the guard judges the argv both ways (_r20d_argv_programs).
+    (_r19d_opt_word): True or False for all of them, or the set of their argv indices that take
+    one; the guard judges the argv every way (_r25d_readings).
     """
     _i = 0
     while (_i < len(argv) and isinstance(argv[_i], str)
@@ -346,7 +369,8 @@ def _r19d_opt_word(word, argv, _i, prefix_value=True):
 def _r23d_long_opt(argv, _i, prefix_value):
     """(words used, [(option, value)]) for the long option word argv[_i] (see _r19d_opt_word)."""
     _name, _eq, _val = argv[_i].partition("=")
-    if not _eq and (_name in _R19D_LONG_VALUE or (prefix_value and _r23d_long_prefix(_name, _R19D_LONG_VALUE))):
+    _pv = _i in prefix_value if isinstance(prefix_value, frozenset) else prefix_value
+    if not _eq and (_name in _R19D_LONG_VALUE or (_pv and _r23d_long_prefix(_name, _R19D_LONG_VALUE))):
         return 2, [(_name, _r19d_next(argv, _i))]
     return 1, [(_name, _val)]
 
@@ -428,8 +452,14 @@ def _r16d_ts_shell_funcs():
                                      "return 127; fi; command tailscale \"$@\"; }" % _is_sys,
             # Any `which` that names tailscale among its words, options included (review 1013a:
             # `which -a tailscale` was answered by the real which, and `$t` then ran its path).
-            "BASH_FUNC_which%%": '() { case " $* " in *" tailscale "*) if { %s; }; then return 1; fi;; esac; '
-                                 'command which "$@"; }' % _is_sys}
+            # Past a stand-in first on PATH, `which -a` still listed the machine's after it, and
+            # `| tail -n1` handed that to the script (review 1016b): only stand-ins are printed.
+            "BASH_FUNC_which%%": ('() { case " $* " in *" tailscale "*) if { %s; }; then return 1; fi; '
+                                  'command which "$@" | while IFS= read -r _r25d_w; do case "$_r25d_w" in '
+                                  '*/tailscale) _r25d_q=$(readlink -f "$_r25d_w" 2>/dev/null); '
+                                  'case "$_r25d_w" in %s) case "$_r25d_q" in %s) echo "$_r25d_w";; esac;; esac;; '
+                                  '*) echo "$_r25d_w";; esac; done; return;; esac; '
+                                  'command which "$@"; }' % (_is_sys, _roots, _roots))}
 
 
 def _r16d_ts_shell_env(env):
@@ -471,6 +501,23 @@ def _r20d_cmdline_values(cmd):
             continue
         if _r21d_whole_cmdline(cmd, _k):
             _out.append(_a.partition("=")[2] if _a.startswith("--") and "=" in _a else _a)
+        _val = _r21d_cluster_value(cmd, _k)
+        if _val is not None:
+            _out.append(_val)
+    return _out
+
+
+def _r25d_option_cmdlines(cmd):
+    """The argv words that are an option's command line (-S/-c/--command/--split-string), not merely spaced."""
+    _out = []
+    for _k, _a in enumerate(cmd):
+        if not isinstance(_a, str):
+            continue
+        _prev = cmd[_k - 1] if _k else None
+        if _r22d_cmdline_long(_prev) and "=" not in _prev:
+            _out.append(_a)
+        elif _r22d_cmdline_long(_a) and "=" in _a:
+            _out.append(_a.partition("=")[2])
         _val = _r21d_cluster_value(cmd, _k)
         if _val is not None:
             _out.append(_val)
@@ -520,7 +567,7 @@ def _r20d_cmdline_candidates(cmd, kw):
     # A value that names the binary by a path runs that path, whatever PATH finds first (review
     # 1015a: `env -S '<dir>/tailscale up'` with a stand-in first on PATH was judged by the stand-in).
     _named = [_h for _v in _vals for _h in _r19d_script_candidates(_v, kw)]
-    if not any(_r20d_names_tailscale(_v, _r20d_run_env(kw)) for _v in _vals):
+    if not _r25d_may_name(cmd, _vals, _r20d_run_env(kw)):
         return _named
     _paths = [_r20d_run_env(kw).get("PATH", os.defpath)]
     if _r20d_may_reset_path(cmd):
@@ -528,16 +575,55 @@ def _r20d_cmdline_candidates(cmd, kw):
     return _named + [shutil.which("tailscale", path=_p) for _p in _paths]
 
 
-# A variable a shell or env -S expands: $NAME, ${NAME}, and ${NAME:-word} / ${NAME-word}.
-_R23D_SHELL_VAR = re.compile(r"\$(?:\{(\w+)(?::?[-=]([^}]*))?\}|(\w+))")
+def _r25d_may_name(cmd, vals, env):
+    """Might one of argv `cmd`'s command lines `vals` name `tailscale`?
+
+    One that names it in its words, or an option's command line that can build a word
+    (_r25d_builds), which may name it however it is spelled. A plain word with whitespace is only
+    read by its words: it is an operand (ssh's remote command), not a command line run here.
+    """
+    return (any(_r25d_builds(_v) for _v in _r25d_option_cmdlines(cmd))
+            or any(_r20d_names_tailscale(_v, env) for _v in vals))
+
+
+# A variable a shell or env -S expands: $NAME, ${NAME}, and ${NAME[:]-word}, [:]=, [:]+ and [:]?.
+_R23D_SHELL_VAR = re.compile(r"\$(?:\{(\w+)(?:(:?)([-=+?])([^}]*))?\}|(\w+))")
 
 
 def _r23d_expand_vars(text, env):
-    """`text` with each variable expanded as a shell or env -S expands it against `env` (unset: empty or its default)."""
+    """`text` with each variable expanded as a shell or env -S expands it against `env`.
+
+    As the shell reads the operators (review 1016b: `${X-w}` with X set but empty gave w, where the
+    shell gives "", and `${X:+w}` was not read at all): without the colon only an UNSET name takes
+    the default, with it an empty one does too, and `+` gives the word only when that does not hold.
+    """
     def _one(_m):
-        _name = _m.group(1) or _m.group(3)
-        return env.get(_name) or (_m.group(2) or "")
+        _name, _colon, _op, _word = _m.group(1) or _m.group(5), _m.group(2), _m.group(3), _m.group(4) or ""
+        _v = env.get(_name)
+        _missing = _v is None or (bool(_colon) and _v == "")
+        if _op in ("-", "="):
+            return _word if _missing else _v
+        if _op == "+":
+            return "" if _missing else _word
+        return _v or ""
     return _R23D_SHELL_VAR.sub(_one, text)
+
+
+# What lets a command line build a word at run time: an expansion, a quote-free escape, brace
+# expansion, eval or a sourced file. Its letters are not its words then, so a line holding one
+# is judged as one that may name `tailscale` (review 1016b: `T=tail; ${T}scale`, `tail$(:)scale`,
+# `$'tail\x73cale'` and `tail${X:+scale}` each ran the machine's binary under a shell the guard
+# reads statically; a fifth spelling would always remain, so the construct is what is judged).
+_R25D_BUILDS = re.compile(r"[$`\\{]|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s")
+
+
+def _r25d_builds(text):
+    """Can command line `text` build a word at run time (_R25D_BUILDS), outside its '…' strings?
+
+    A single-quoted string is literal to the shell: awk's `'$1 >= c'` builds nothing, and read as
+    if it did, the f2b readers' scripts were refused. `$'…'` keeps its `$`, so it still counts.
+    """
+    return bool(_R25D_BUILDS.search(re.sub(r"'[^']*'", "''", text)))
 
 
 def _r20d_names_tailscale(text, env=None):
@@ -574,11 +660,83 @@ def _r20d_may_reset_path(cmd):
 _R19D_SCRIPT_WRAPPED = re.compile(
     r"(?:^|[\s;&|(`/])(?:%s)\s[^;&|\n]*?\btailscale\b"
     % "|".join(sorted(set(_R19D_WRAPPERS) | set(_R20D_SCRIPT_ONLY))))
+# ...and one of those commands given a word the script builds at run time (`command ${T}scale`,
+# `exec $(printf …)`): the function cannot see it, and the word may be the binary (review 1016b).
+_R25D_SCRIPT_WRAPPED_BUILT = re.compile(
+    r"(?:^|[\s;&|(`/])(?:%s)\s[^;&|\n]*?(?:[$`]|\beval\b)"
+    % "|".join(sorted(set(_R19D_WRAPPERS) | set(_R20D_SCRIPT_ONLY))))
+# A shell the functions never reach (dash, zsh, …) handed a quoted script of its own: that script
+# is judged by what it can build, not by the quotes that make it literal to the outer shell.
+_R25D_NESTED_SHELL = re.compile(r"(?:^|[\s;&|(`/])(?:sh|dash|zsh|ksh|mksh|busybox)\s+(?:busybox\s+)?"
+                                r"(?:[-+]\w+\s+)*-\w*c\w*\s+('[^']*'|\"[^\"]*\")")
 # env's clearing options anywhere among its options, and by a long name's prefix (review 1015d:
 # only one right after `env` was read, so `env -v -i x`, `env -u PATH x` and `env --unse PATH x`
 # were judged on the PATH the script started with).
-_R19D_SCRIPT_RESETS = re.compile(r"\benv(?:\s+(?:-\S*|\w+=\S*))*?\s+(?:-\w*i\w*\b|-(?=\s)|--i[\w-]*"
-                                 r"|(?:-\w*u\s*|--u[\w-]*[=\s]\s*)PATH\b)|\b(?:sudo|doas|runuser|su)\b|\bPATH=")
+# An option that takes its value as the next word is skipped with it (review 1016b: the scan
+# stopped at the value of `env -u X -i` and `env --chdir /x -i`, and both were judged on the PATH
+# the script started with).
+# Read word by word, not by one regex (CodeQL py/redos, review 1016b twice): a pattern with a repeated
+# option group followed by an option alternative could split a run of `-C! ` or `-- ` words more
+# than one way, and a failing search backtracked exponentially. One pass over the words has one
+# reading. -S/--split-string hands env a string it splits into more options (a -i among them), so
+# it counts as a reset outright, as it was effectively read.
+_R25J_RESET_WORDS = re.compile(r"\b(?:sudo|doas|runuser|su)\b|\bPATH=")
+_R25J_ENV_WORD = re.compile(r"\benv\b")
+
+
+def _r25j_long(w, nxt):
+    """(resets PATH?, words consumed) for one `--name[=value]` option of env."""
+    name, eq, val = w[2:].partition("=")
+    if name[:1] in ("i", "s"):
+        return True, 1
+    if name[:1] not in ("u", "c"):
+        return False, 1
+    value = val if eq else nxt
+    return name[0] == "u" and value == "PATH", (1 if eq else 2)
+
+
+def _r25j_short(cl, nxt):
+    """(resets PATH?, words consumed) for one `-cluster` option of env (cl is without the dash)."""
+    if cl[0] in "uC":
+        value = cl[1:] if len(cl) > 1 else nxt
+        return cl[0] == "u" and value == "PATH", (1 if len(cl) > 1 else 2)
+    if "i" in cl or "S" in cl:
+        return True, 1
+    rest = cl[cl.index("u") + 1:] if "u" in cl else None
+    return rest == "PATH" or (rest == "" and nxt == "PATH"), 1
+
+
+def _r25j_env_resets(words):
+    """Whether env's options (the words after `env`) clear or replace the PATH it searches."""
+    i = 0
+    while i < len(words):
+        w = words[i]
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if w == "-":
+            return True
+        if w.startswith("-"):
+            reset, step = _r25j_long(w, nxt) if w.startswith("--") else _r25j_short(w[1:], nxt)
+            if reset:
+                return True
+            i += step
+        elif "=" in w and not w.startswith("="):
+            i += 1
+        else:
+            return False
+    return False
+
+
+class _R25JResets:
+    """`.search(text)` like the regex it replaced: a reset word anywhere, or an env that resets."""
+
+    @staticmethod
+    def search(text):
+        if _R25J_RESET_WORDS.search(text):
+            return True
+        return any(_r25j_env_resets(text[m.end():].split()) for m in _R25J_ENV_WORD.finditer(text))
+
+
+_R19D_SCRIPT_RESETS = _R25JResets()
 # Commands that find a program somewhere other than PATH: `whereis` searches the system's own
 # directories whatever PATH says, and `find` walks them (review 1015a: with a part's stand-in first
 # on PATH, `whereis -b tailscale` handed the script the machine's binary and was judged on PATH).
@@ -597,17 +755,33 @@ def _r19d_script_candidates(script, kw):
 
 def _r19d_wrapped_candidates(script, env):
     """The tailscale a wrapper in `script` could exec from PATH: the starting one, and the default."""
-    if not _R19D_SCRIPT_WRAPPED.search(script):
+    if not (_R19D_SCRIPT_WRAPPED.search(script)
+            or _R25D_SCRIPT_WRAPPED_BUILT.search(re.sub(r"'[^']*'", "''", script))
+            or any(_r25d_builds(_n.strip("'\"")) for _n in _R25D_NESTED_SHELL.findall(script))
+            or _R19D_SCRIPT_WRAPPED.search(_r23d_expand_vars(script, _r25d_script_env(script, env)))):
         return []
     _paths = [env.get("PATH", os.defpath)] + ([_R19D_DEFAULT_PATH] if _R19D_SCRIPT_RESETS.search(script)
                                               or _R21D_SCRIPT_SEARCHES.search(script) else [])
     return [shutil.which("tailscale", path=_p) for _p in _paths]
 
 
+def _r25d_script_env(script, env):
+    """`env` plus the plain assignments `script` makes (`T=tail`, `T='tail'`), as its later words see them."""
+    _env = dict(env)
+    for _name, _val in re.findall(r"(?:^|[\s;&|(])(\w+)=('[^']*'|\"[^\"]*\"|[^\s;&|)]*)", script):
+        _env[_name] = _val.strip("'\"")
+    return _env
+
+
 def _r19d_path_candidates(script, env, cwd):
-    """Each tailscale `script` names by a path that exists, read against `env` and `cwd`."""
+    """Each tailscale `script` names by a path that exists, read against `env` and `cwd`.
+
+    Also once its variables are expanded, the script's own assignments included (review 1016b:
+    `d=/usr/bin; t=tail; $d/${t}scale` named no path the pattern could see).
+    """
     _out = []
-    for _lit in _R19D_SCRIPT_PATH.findall(script):
+    _expanded = _r23d_expand_vars(script, _r25d_script_env(script, env))
+    for _lit in set(_R19D_SCRIPT_PATH.findall(script)) | set(_R19D_SCRIPT_PATH.findall(_expanded)):
         # An unset variable is empty, as the shell reads it (review 1013a: `$PREFIX/bin/tailscale`
         # with PREFIX unset runs /bin/tailscale, and was read as a path that does not exist).
         _lit = re.sub(r"\$\{?(\w+)\}?", lambda _m: env.get(_m.group(1), ""), os.path.expanduser(_lit))
@@ -625,8 +799,9 @@ def _r20d_argv_programs(cmd, kw):
     went through).
     """
     _out = []
-    # A long option that is only a prefix of a value-taking one is read both ways (_r19d_opt_word).
-    for _prog, _path in {_r18d_ts_program(cmd, kw, _pv) for _pv in (True, False)}:
+    # A long option that is only a prefix of a value-taking one is read every way (_r25d_readings).
+    _readings = _r25d_readings(cmd) if isinstance(cmd, (list, tuple)) else [True]
+    for _prog, _path in {_r18d_ts_program(cmd, kw, _pv) for _pv in _readings}:
         if _prog is None:
             continue
         if os.sep in _prog:
@@ -661,9 +836,14 @@ class _R15dNoSystemTailscale:
         return any(_h is not None and not _r19d_stand_in(_h) for _h in _hits)
 
     def _guard_shell(self, cmd, kw, how):
-        """(cmd, kw) for a shell that names tailscale: under bash, with _r16d_ts_shell_env's functions."""
+        """(cmd, kw) for a shell that may name tailscale: under bash, with _r16d_ts_shell_env's functions.
+
+        One that may is one that names it, or builds a word at run time (_r25d_builds; review
+        1016b: only the literal word was, so `T=tail; ${T}scale version` ran the machine's binary
+        with no function to stop it). The functions judge the word as the shell has built it.
+        """
         _sh = _r16d_shell_text(cmd, kw)
-        if (_sh is None or "tailscale" not in _sh
+        if (_sh is None or ("tailscale" not in _sh and not _r25d_builds(_sh))
                 or getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how)):
             return cmd, kw
         kw = dict(kw, env=_r16d_ts_shell_env(_r20d_run_env(kw)))
@@ -880,6 +1060,19 @@ _r16d_wrap_ts_handles()
 # part92 (decisions 1016a: the debug report's security posture on the panel's page only, never the
 # downloaded file, builder R) runs the report's network and access sections and its assembler on
 # stand-ins, and node on the page's script; imports part01, 05, 47 and 87 (part87's DOM).
+# part93 (review 1016b: Tailscale SSH on the panel host only by the owner's choice at install, the
+# helper's restore and self-update targets, the debug report, monitoring, install and uninstall,
+# builder A) runs the helper and the panel's modules on stand-ins, part12's app, and bash over
+# install.sh's and uninstall.sh's own functions in throwaway dirs, and the debug report's
+# assembler through part92's fixture; imports part01, 05, 12 and 92.
+# part94 (review 1016b: an SSH port move on a Tailscale-SSH host, a v6 LIMIT kept, reads without
+# sudo, an adopted account's uninstall, the config writers and the console log, builder B) drives
+# part12's app with stand-ins and bash over its own fixture tree; imports part01, 10, 12 and 89.
+# part95 (the fourteenth review's page and script fixes, builder C) drives part12's app and runs node
+# on its own fixtures; imports part01, 05, 12, 47 and 87 (part87's DOM).
+# part96 (review 1016b, the integrator: Tailscale Serve and Funnel publish only the panel's own port,
+# recorded root-side) runs the helper on stand-in socket tables, install.sh's functions under bash,
+# and part12's app for change-port and the setup wizard; imports part01, 05 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -890,7 +1083,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
-          "part92", "part15")
+          "part92", "part93", "part94", "part95", "part96",
+          "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -970,6 +1164,23 @@ from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
 # and part56 each put it back and say so; this names any part, present or future, that does not.
 check("unit suite: no part leaves sys.path changed for the parts after it",
       not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
+
+# The env-reset reader against a run of value-taking options: it backtracked exponentially there
+# (CodeQL py/redos), so 40 `-C!` words would not finish. Run in a child with a limit, so the old
+# pattern fails this check rather than stall the suite; then what it answers, both ways.
+import time as _time25j  # noqa: E402 - only this timing check needs it
+_t0_resets = _time25j.monotonic()
+_R19D_SCRIPT_RESETS.search("env" + " -C!" * 4000 + " x")
+_R19D_SCRIPT_RESETS.search("env" + " --" * 4000 + " x")
+_redos_ok = _time25j.monotonic() - _t0_resets < 2.0
+_resets_rows = {c: bool(_R19D_SCRIPT_RESETS.search(c)) for c in (
+    "env -i x", "env -v -i x", "env -u PATH x", "env --unse PATH x", "env -u X -i y",
+    "env --chdir /x -i y", "env -C! -i x", "env -uPATH x", "env -S x", "env --split-string=x",
+    "env -u X y", "env -C /x y", "env --debug x", "env FOO=1 x", "env -u -u PATH x")}
+check("unit suite: the env-reset reader answers 4000 `-C!` or `--` options at once (no exponential "
+      "backtracking), still finds -i, -u PATH, -S and an option's value skipped, and not a plain env",
+      _redos_ok and all(_resets_rows[c] for c in list(_resets_rows)[:10])
+      and not any(_resets_rows[c] for c in list(_resets_rows)[10:]), repr(_resets_rows))
 
 
 # ── the ordering notes above _PARTS name what each part imports ─────────────────────────────────
@@ -1248,7 +1459,29 @@ def _r23d_ts_shapes(d):
         ("run", (["xargs", "--arg", "/dev/null", "tailscale"],), {}),
         # A variable env -S or a shell expands to nothing, unset or empty.
         ("run", (["env", "-S", "tail${R23D_UNSET}scale version"],), {}),
-        ("run", (["zsh", "-c", "tail$R23D_UNSET'scale' version"],), {}))
+        ("run", (["zsh", "-c", "tail$R23D_UNSET'scale' version"],), {})) + _r25d_ts_shapes(d)
+
+
+def _r25d_ts_shapes(d):
+    """_r19d_ts_shapes' mixed-reading, built-word and which -a shapes (review 1016b)."""
+    _own_then_d = dict(os.environ, PATH=os.pathsep.join((os.path.join(_r15d_ts_ctl_dir, "own"), d, "/usr/bin:/bin")))
+    return (
+        # --f is timeout's --foreground (a flag) and a prefix of --format; --sig needs its value.
+        ("run", (["timeout", "--f", "--sig", "KILL", "5", "tailscale", "version"],), {}),
+        # A name the script builds: bash, sh and a shell-less shell the guard reads statically.
+        ("run", (["bash", "-c", "T=tail; ${T}scale version"],), {}),
+        ("run", ("T=tail; ${T}scale version",), {"shell": True}),
+        ("run", (["sh", "-c", "T=tail; ${T}scale version"],), {}),
+        ("run", (["zsh", "-c", "T=tail; ${T}scale version"],), {}),
+        ("run", (["zsh", "-c", "tail${HOME:+scale} version"],), {}),
+        ("run", (["zsh", "-c", "tail$(:)scale version"],), {}),
+        # ...past the function: a wrapper given the built word, and a path the script builds.
+        ("run", ("T=tail; command ${T}scale version",), {"shell": True}),
+        ("run", ("sh -c 'T=tail; ${T}scale version'",), {"shell": True}),
+        ("run", ('p=%s; t=tail; "$p/${t}scale" version' % d,), {"shell": True}),
+        # `which -a` past a part's stand-in first on PATH listed the machine's binary after it.
+        ("run", ('t=$(which -a tailscale | grep -v /own/ | head -n 1); [ -n "$t" ] && "$t" version',),
+         {"shell": True, "env": _own_then_d}))
 
 
 def _r21d_spawn(how):
@@ -1337,7 +1570,14 @@ try:
         # env clearing PATH past another option, or by -u / a long prefix (review 1015d).
         _r21d_static += [_r16d_ts_wraps[0]._system_tailscale(_x, {"shell": True, "env": _r21d_own_first})
                          for _x in ("env -v -i tailscale version", "env -u PATH tailscale version",
-                                    "env --unse PATH tailscale version")]
+                                    "env --unse PATH tailscale version",
+                                    # ...past an option's own value (review 1016b).
+                                    "env -u X -i tailscale version", "env -C /tmp -i tailscale version",
+                                    "env --chdir /tmp --ignore-environment tailscale version")]
+        # ...and an argv needing both readings of its ambiguous options, which a machine without
+        # xargs' --interactive tty cannot run here (review 1016b).
+        _r21d_static.append(_r16d_ts_wraps[0]._system_tailscale(
+            ["xargs", "--in", "--arg", "/dev/null", "tailscale"], {"env": dict(os.environ, PATH=_r17d_ts_sys)}))
     finally:
         _R19D_DEFAULT_PATH = _r21d_saved_default
     _r21d_saved_path = os.environ.get("PATH", "")
@@ -1385,19 +1625,30 @@ _r16d_sh_read = [_r16d_shell_text(*_c) for _c in (
     (["env", "--unset", "sh", "--chdir=/", "-", "sh", "-c", "h"], {}),
     # The wrappers only the script form knew, and a tuple behind `env --` (review 1013a).
     (["xargs", "-a", "/dev/null", "bash", "-c", "i"], {}), (["taskset", "1", "sh", "-c", "j"], {}),
-    (("env", "--", "bash", "-c", "k"), {}), (["flock", "-w", "1", "/l", "dash", "-c", "m"], {}))]
-check("unit suite: ...behind a sudo that keeps PATH, through whereis and through getoutput, the machine's "
+    (("env", "--", "bash", "-c", "k"), {}), (["flock", "-w", "1", "/l", "dash", "-c", "m"], {}),
+    # A flag that only prefixes a value-taking option, alone and beside one that takes its value
+    # (review 1016b).
+    (["setsid", "--f", "bash", "-c", "n"], {}), (["timeout", "--f", "--sig", "KILL", "5", "bash", "-c", "o"], {}))]
+check("unit suite: ...behind a sudo that keeps PATH, through whereis, an env clearing PATH past another "
+      "option's value, both readings of ambiguous options and through getoutput, the machine's "
       "tailscale is refused too (control)",
-      _r21d_static[:6] == [True] * 6
-      and not any("stand-in" in _o for _o in _r21d_static[6:]),
+      _r21d_static[:10] == [True] * 10
+      and not any("stand-in" in _o for _o in _r21d_static[10:]),
       repr(_r21d_static))
 
 check("unit suite: ...a grouped -lc, a list with shell=True, options before -c and wrapper commands "
       "in front are read as shells (control)",
       _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None,
                         "a", "b", "c", None, None, "d", "e", "f", None, "g", None, "h",
-                        "i", "j", "k", "m"],
+                        "i", "j", "k", "m", "n", "o"],
       repr(_r16d_sh_read))
+# A variable's operators, as the shell reads them (review 1016b): without a colon only an unset
+# name takes the default, `+` gives the word only for a set one.
+_r25d_expanded = [_r23d_expand_vars(_t, _e) for _t, _e in (
+    ("tail${X-junk}scale", {"X": ""}), ("tail${X:-scale}", {"X": ""}), ("tail${X:+scale}", {"X": "1"}),
+    ("tail${X:+junk}scale", {}), ("tail${X+scale}", {"X": ""}), ("tail${X=scale}", {}))]
+check("unit suite: ...a variable with a default, an alternate or an assignment is expanded as the shell "
+      "expands it (control)", _r25d_expanded == ["tailscale"] * 6, repr(_r25d_expanded))
 # ...and the PATH a wrapped program is found on: a clearing `env` or sudo resets it (None).
 _r19d_unwrapped = [_r19d_unwrap(*_c) for _c in (
     (["env", "-i", "tailscale"], "/p"), (["env", "-iv", "PATH=/q", "tailscale"], "/p"),

@@ -790,12 +790,30 @@ def _r23d_operand_due(before):
     line; both hid the sink).
     """
     _t = before.rstrip()
+    # A block comment is not a token: the one before it decides (review 1016b: `= /* c */ /'/`
+    # divided, so the regex's quote opened a string that hid what followed).
+    while _t.endswith("*/") and "/*" in _t[:-2]:
+        _t = _t[:_t.rindex("/*", 0, len(_t) - 2)].rstrip()
     if _t.endswith(("++", "--")):
         return False
+    if _t.endswith(")"):
+        # The `)` closing an if/while/for/with head is followed by a statement, not an operator
+        # (review 1016b: `if (x) /'/.test(s)` divided).
+        return _r25d_closes_head(_t)
     _word = _re20.search(r"(?<![\w$.])[A-Za-z_$][\w$]*$", _t)
     if _word:
         return _word.group(0) in _R23D_OPERAND_KEYWORDS20
     return _t[-1:] in tuple("(,=:[!&|?{};+-*%<>~^") + ("",)
+
+
+def _r25d_closes_head(text):
+    """Does the `)` ending JS `text` close the head of an if, while, for or with?"""
+    _depth = 0
+    for _k in range(len(text) - 1, -1, -1):
+        _depth += {")": 1, "(": -1}.get(text[_k], 0)
+        if _depth == 0:
+            return bool(_re20.search(r"(?<![\w$.])(?:if|while|for|with)\s*$", text[:_k]))
+    return False
 
 
 def _r22d_regex_end(src, i):
@@ -860,7 +878,7 @@ def _r21d_err_sink(src):
     return _R19D_ERR_SINK20.search(_r21d_untemplate(src))
 
 
-# Sixteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
+# Eighteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
 _R21D_SINK_CTL20 = (
     "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
     'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
@@ -872,6 +890,9 @@ _R21D_SINK_CTL20 = (
     "msg.innerHTML = i++ / 2 + d.error + '</b>';",
     "msg.innerHTML = (function(){ return /'/.test(s) })() ? '' : d.error;",
     "msg.innerHTML = a / b + d.error;",
+    # A regex after a block comment, and after an if's head (review 1016b).
+    "msg.innerHTML = /* c */ /'/.test(s) ? '' : d.error;",
+    "msg.innerHTML = (function(){ if (x) /'/.test(s) })() ? '' : d.error;",
     "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;",
     "msg.innerHTML = x /* d.error */;")
 
@@ -892,7 +913,7 @@ def _p20_js():
     _r21d_sink_ctl = [bool(_r21d_err_sink(_x)) for _x in _R21D_SINK_CTL20]
     check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
           "`;` inside a string or a template literal, a quoted brace, a comment or a regex (control)",
-          _r21d_sink_ctl == [True] * 16 + [False] * 3, repr(_r21d_sink_ctl))
+          _r21d_sink_ctl == [True] * 18 + [False] * 3, repr(_r21d_sink_ctl))
 
 
 try:

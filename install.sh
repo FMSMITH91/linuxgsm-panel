@@ -1441,7 +1441,7 @@ restore_service_unit() {
 # Not as the tree's owner (TREE_SUDO), as the snapshot steps are: snapshots made before TREE_SUDO
 # existed are root's, and the owner could never remove them.
 _r22a_prune_snapshots() {
-    local _want
+    local _want _rootlink=0
     # PANEL_DIR itself first. It is an entry in the panel user's home, so that user can rename it
     # and put a link in its place; `cd -P` below then resolves BOTH sides of the check through the
     # link, they agree, and root prunes stamp-named directories under whatever <target>/data/.backups
@@ -1450,12 +1450,33 @@ _r22a_prune_snapshots() {
         warn "Old update snapshots not pruned: ${PANEL_DIR} is a link."
         return 0
     fi
-    _want="$(cd -P -- "${PANEL_DIR}" 2>/dev/null && pwd -P)" || return 0
+    # And the expected path is built WITHOUT going through PANEL_DIR, which the check above cannot
+    # pin: the panel user (its crontab survives the service stop) can swap it for a link between
+    # that check and any later use, and a `cd -P` through PANEL_DIR for both sides then agreed again.
+    # So: PANEL_DIR's parent resolved (the user's home, an entry root owns in /home) plus its own
+    # name, which a link swapped in there can never match. A link root made is resolved instead,
+    # and checked again once inside, below.
+    if [[ -L "${PANEL_DIR}" ]]; then
+        _rootlink=1
+        _want="$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" || return 0
+    else
+        _want="$(cd -P -- "$(dirname -- "${PANEL_DIR}")" 2>/dev/null && pwd -P)" || return 0
+        _want="${_want%/}/$(basename -- "${PANEL_DIR}")"
+    fi
+    [[ -n "${_want}" ]] || return 0
     _want="${_want}/data/.backups"
     (
         cd -P -- "${PANEL_DIR}/data/.backups" 2>/dev/null || exit 0
         if [[ "$(pwd -P)" != "${_want}" ]]; then
             warn "Old update snapshots not pruned: ${PANEL_DIR}/data/.backups is reached through a link."
+            exit 0
+        fi
+        # Inside now, so the directory is pinned: PANEL_DIR must still be that same root-made link,
+        # or the readlink above may have read one the panel user swapped in and back out again.
+        if [[ "${_rootlink}" -eq 1 ]] && { [[ ! -L "${PANEL_DIR}" ]] \
+               || [[ "$(stat -c '%u' -- "${PANEL_DIR}" 2>/dev/null)" != "0" ]] \
+               || [[ "$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)/data/.backups" != "${_want}" ]]; }; then
+            warn "Old update snapshots not pruned: ${PANEL_DIR} changed while it was being checked."
             exit 0
         fi
         _snaps=()
@@ -2038,6 +2059,124 @@ install_recovery_command() {
     ${H_SUDO} ln -sf "${target}" "${link}" 2>/dev/null || true
 }
 
+# ── Tailscale SSH on this host: the owner's choice, recorded root-owned ─────────────────────────
+# Tailscale SSH lets the TAILNET decide who may log in here as root, by its own SSH policy. The
+# panel's Connect joins a host through a login link, and whoever opens that link picks the tailnet;
+# so if the panel's account could ask for SSH, a compromised panel could hand some tailnet root
+# logins on this host. Whether the panel may turn it on is therefore asked HERE, and recorded in
+# the root-owned panel.conf as `tailscale_ssh=yes|no`; the helper refuses `--ssh` and `tailscale-ssh
+# on` without "yes". Joining without SSH, and turning it off, stay open to the panel.
+#
+# Prints "yes|no <why>", why being env|kept|running|asked|default. `PANEL_TAILSCALE_SSH=1 ./install.sh` (or 0) decides. Unset, the choice already
+# recorded is kept, so an update never changes it. With none recorded: a host already running
+# Tailscale SSH is recorded "yes", so it keeps working exactly as before (the owner turned it on);
+# otherwise the question is asked when someone is at a terminal, and the answer is no by default
+# and whenever nobody is there to ask (a self-update, `curl | bash` with no tty, CI).
+#
+# The question goes to /dev/tty, never stdout: this runs inside $( ), so stdout is a pipe and
+# stderr is what says whether a person is watching.
+_r25a_tailscale_ssh_choice() {
+    local _conf="$1" _prev="" _ans="" _env="${PANEL_TAILSCALE_SSH:-}"
+    # Never on a run the PANEL started (PANEL_SELF_UPDATE): the choice is the owner's, and the
+    # helper's environment for that run is its own (_self_update_env), but this must not rest on it.
+    [[ -z "${PANEL_SELF_UPDATE:-}" ]] || _env=""
+    case "${_env}" in
+        1|yes|true) echo "yes env"; return 0 ;;
+        0|no|false) echo "no env"; return 0 ;;
+    esac
+    if [[ -f "${_conf}" ]]; then
+        _prev="$(sed -n 's/^tailscale_ssh=//p' "${_conf}" 2>/dev/null | tail -n 1)" || _prev=""
+    fi
+    case "${_prev}" in
+        yes|no) echo "${_prev} kept"; return 0 ;;
+    esac
+    if command -v tailscale >/dev/null 2>&1 \
+       && LC_ALL=C.UTF-8 timeout 10 tailscale debug prefs 2>/dev/null \
+          | python3 -I -c 'import json,sys;sys.exit(0 if json.load(sys.stdin).get("RunSSH") is True else 1)' \
+            >/dev/null 2>&1; then
+        echo "yes running"; return 0
+    fi
+    if [[ -t 2 ]] && ( exec </dev/tty ) 2>/dev/null; then
+        {
+            printf '\nAllow the panel to turn on Tailscale SSH for this host? With it on, the tailnet\n'
+            printf 'this host joins decides who may log in here (as root, by its SSH rules).\n'
+            printf 'Joining Tailscale from the panel works either way. [y/N] '
+        } >/dev/tty 2>/dev/null
+        IFS= read -r -t 120 _ans </dev/tty 2>/dev/null || _ans=""
+        case "${_ans}" in
+            y|Y|yes|YES|Yes) echo "yes asked" ;;
+            *) echo "no asked" ;;
+        esac
+        return 0
+    fi
+    echo "no default"
+    return 0
+}
+
+# ── the panel's own port, recorded root-owned ────────────────────────────────────────────────────
+# The helper's `tailscale-serve` (Serve, and Funnel to the internet) publishes ONE port: the one
+# panel.conf records as `panel_port`. The panel's account cannot change that file, so a compromised
+# panel cannot point Serve or Funnel at another local service. The panel moves it through the
+# helper's `panel-port-record` when its own port changes (to a port no other account listens on).
+#
+# Prints the port to record, or nothing. A fresh install's port was just chosen free by this run
+# (_R25J_CHOSEN_PORT). Otherwise config.json's port, which the panel's account can edit, is taken
+# only when it is the one already recorded or no other account is listening on it; else the
+# recorded one is kept.
+_R25J_CHOSEN_PORT=""
+_r25j_panel_port_to_record() {
+    local _conf="$1" _prev="" _cfg="" _owner_uid=""
+    if [[ -n "${_R25J_CHOSEN_PORT}" ]]; then
+        echo "${_R25J_CHOSEN_PORT}"; return 0
+    fi
+    if [[ -f "${_conf}" ]]; then
+        _prev="$(sed -n 's/^panel_port=//p' "${_conf}" 2>/dev/null | tail -n 1)" || _prev=""
+    fi
+    _r25j_is_panel_port "${_prev}" || _prev=""
+    _cfg="$(panel_port)"
+    _r25j_is_panel_port "${_cfg}" || _cfg=""
+    _owner_uid="$(stat -c '%u' "${PANEL_DIR}" 2>/dev/null)" || _owner_uid=""
+    if [[ -n "${_cfg}" ]] && { [[ "${_cfg}" == "${_prev}" ]] \
+            || { [[ -n "${_owner_uid}" ]] && ! _r25j_port_held_by_other "${_cfg}" "${_owner_uid}"; }; }; then
+        echo "${_cfg}"
+    else
+        echo "${_prev}"
+    fi
+    return 0
+}
+
+# 1024..65535: the helper's own definition (v_r25j_panel_port), which reads anything below 1024 as
+# no record at all. This took 1000..1023 too, and wrote a record the helper then ignored.
+_r25j_is_panel_port() {
+    [[ "$1" =~ ^[1-9][0-9]{3,4}$ ]] && [[ "$1" -ge 1024 ]] && [[ "$1" -le 65535 ]]
+}
+
+# Whether an account other than uid $2 holds a TCP LISTEN socket on port $1 (unreadable counts as
+# yes). From the kernel's socket tables, which name each socket's owner.
+_r25j_port_held_by_other() {
+    python3 -I - "$1" "$2" <<'PYEOF'
+import sys
+port, owner = int(sys.argv[1]), int(sys.argv[2])
+uids, read = set(), False
+for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+    try:
+        with open(path, encoding="ascii", errors="replace") as fh:
+            rows = fh.read().splitlines()[1:]
+    except OSError:
+        continue  # tcp6 is absent with IPv6 off; the other table still answers
+    read = True
+    for row in rows:
+        f = row.split()
+        if len(f) >= 8 and f[3] == "0A" and ":" in f[1]:
+            try:
+                if int(f[1].rsplit(":", 1)[1], 16) == port:
+                    uids.add(int(f[7]))
+            except ValueError:
+                pass  # a malformed row names no socket
+sys.exit(0 if (not read or uids - {owner}) else 1)
+PYEOF
+}
+
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
     if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then
@@ -2099,11 +2238,32 @@ install_root_tools() {
     # Panel install on this host". Recording the path costs nothing and does not depend on any
     # file having been copied.
     CONF_OK=0
-    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
-        "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
+    # Read BEFORE the rewrite below: an unset PANEL_TAILSCALE_SSH keeps what this file recorded.
+    local _ts_ssh_why=""
+    read -r TS_SSH_CHOICE _ts_ssh_why <<< "$(_r25a_tailscale_ssh_choice "${PANEL_CONF}")" || true
+    [[ "${TS_SSH_CHOICE:-}" == "yes" ]] || TS_SSH_CHOICE=no
+    # Likewise read before the rewrite: an update keeps the recorded port unless it may take a new one.
+    local _panel_port_rec=""
+    _panel_port_rec="$(_r25j_panel_port_to_record "${PANEL_CONF}")" || _panel_port_rec=""
+    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\n' \
+        "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" "${TS_SSH_CHOICE}" \
+        "${_panel_port_rec}" \
         | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
         && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
         && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
+    if [[ "${CONF_OK}" -eq 1 ]] && [[ -z "${_panel_port_rec}" ]]; then
+        warn "Could not record the panel's port for the privileged helper (another account is"
+        warn "listening on the port in config.json), so it will not publish the panel over Tailscale."
+    fi
+    if [[ "${CONF_OK}" -eq 1 ]]; then
+        if [[ "${_ts_ssh_why}" == "running" ]]; then
+            ok "Tailscale SSH is already on here, so it stays allowed: recorded that the panel may turn it on (PANEL_TAILSCALE_SSH=0 to refuse)"
+        elif [[ "${TS_SSH_CHOICE}" == "yes" ]]; then
+            ok "Tailscale SSH: the panel may turn it on for this host (PANEL_TAILSCALE_SSH=0 to refuse)"
+        else
+            info "Tailscale SSH: the panel will not turn it on for this host (PANEL_TAILSCALE_SSH=1 to allow)"
+        fi
+    fi
 
     if _stage="$(stage_root_source db_maintenance.py db_maintenance.py)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${DBM_DST}" 2>/dev/null; then
@@ -3114,6 +3274,7 @@ ensure_fail2ban  # brute-force protection for the panel login (jail is configure
 # the root-install path fixes ownership afterward.)
 DESIRED_PORT="$(panel_port)"
 PANEL_PORT="$(choose_and_record_port "${DESIRED_PORT}")"
+_R25J_CHOSEN_PORT="${PANEL_PORT}"
 # Empty = the probe found nothing free in the whole range and recorded nothing. Asked only "is it
 # the port we wanted?", these two branches could say "a different port" or "it is free" and nothing
 # else — so the one outcome where NONE of the three consumers named above would work printed as the

@@ -264,8 +264,7 @@ def _register_panel_binding(app):
         new_bind = _r11c_canonical_bind(str(data.get("bind_host") or cur_bind).strip())
 
         local = RemoteServer.query.filter_by(is_local=True).first()
-        refusal = (_port_refusal(local, cur_port, new_port)
-                   or _bind_refusal(bool(cfg.get("tailscale_setup_done")), new_bind))
+        refusal = _r25j_binding_refusal(local, cfg, cur_port, new_port, new_bind)
         if refusal:
             return jsonify({"success": False, "message": refusal}), 400
         if new_port == cur_port and new_bind == cur_bind:
@@ -336,6 +335,34 @@ def _port_refusal(local, cur_port, new_port):
         if so.port_in_use(new_port):
             return i18n.tr("Port {port} is already in use on this host.", port=new_port)
     return None
+
+
+def _r25j_binding_refusal(local, cfg, cur_port, new_port, new_bind):
+    """Why the panel must not move to `new_bind`:`new_port`, or None when it may.
+
+    The record last: it is the one refusal that writes (root's panel.conf), so only a move every
+    other check allowed is recorded.
+    """
+    return (_port_refusal(local, cur_port, new_port)
+            or _bind_refusal(bool(cfg.get("tailscale_setup_done")), new_bind)
+            or _r25j_port_not_recorded(cur_port, new_port))
+
+
+def _r25j_port_not_recorded(cur_port, new_port):
+    """Why the move to `new_port` must stop here, or None: the helper would not record it.
+
+    Before anything is saved. The helper publishes only the port it has recorded as the panel's,
+    so an unrecorded move would come back up behind a Serve route the helper refuses to re-point.
+    It also refuses a port another account is listening on, which _port_refusal's `ss` read can
+    miss (that read answers "free" when it cannot run).
+    """
+    if new_port == cur_port:
+        return None
+    ok, why = so.record_panel_port(new_port)
+    if ok:
+        return None
+    return i18n.tr("Port {port} could not be recorded as the panel's port, so nothing was "
+                   "changed ({why}).", port=new_port, why=why)
 
 
 def _r11c_canonical_bind(bind):

@@ -787,8 +787,80 @@ def tailscale_ssh_status():
 # --ssh` itself, which worked because the panel had made its account the Tailscale operator, and
 # an operator needs no helper to change anything about tailscaled (tailscale_integration
 # .release_operator). The verb can only flip this one pref: `set` cannot change the tailnet.
+# Whether the owner chose, at install, to let the panel turn Tailscale SSH on for this host: the
+# root-owned panel.conf's `tailscale_ssh=yes` (install.sh _r25a_tailscale_ssh_choice). The helper
+# refuses `tailscale-ssh on` and an `up --ssh` without it (its _r25a_ssh_refusal), because the
+# tailnet a host joins decides who may log in here as root, and whoever opens a Connect login link
+# picks that tailnet. This copy only lets the page say so and Connect leave --ssh off, so neither
+# asks for a refusal. With NO helper the panel's own grant is the old wide one and the helper is
+# not the boundary, so nothing changes there: allowed, as before.
+_R25A_PANEL_CONF = os.path.join(os.path.dirname(_priv.HELPER_PATH), "panel.conf")
+
+
+def _r25j_panel_conf():
+    """The helper's panel.conf as {key: value} (world-readable, root-owned), or None when unreadable."""
+    try:
+        with open(_R25A_PANEL_CONF, encoding="utf-8", errors="replace") as fh:
+            rows = [line.strip().partition("=") for line in fh]
+    except OSError:
+        return None
+    return {k.strip(): v.strip() for k, sep, v in rows if sep and not k.startswith("#")}
+
+
+def tailscale_ssh_choice():
+    """The owner's install-time Tailscale SSH choice: "yes", "no", or "unrecorded".
+
+    "unrecorded" is a panel.conf with no `tailscale_ssh` key at all: the previous installer wrote it
+    (the panel's self-update runs that root-owned installer once, so the first update to this code
+    records nothing). The helper then records "yes" itself while Tailscale SSH is on (its
+    _r25a_ssh_record_running, as install.sh records a host already running it), at the boot's
+    reconcile_panel_port or the first SSH verb. No helper: "yes", the old wide grant (see above).
+    No panel.conf: "no", as the helper reads it.
+    """
+    if not _helper_present():
+        return "yes"
+    conf = _r25j_panel_conf()
+    if conf is None:
+        return "no"         # no record is no: the helper reads the same file and refuses
+    if "tailscale_ssh" not in conf:
+        return "unrecorded"
+    return "yes" if conf["tailscale_ssh"] == "yes" else "no"
+
+
+def _r25j_ssh_allowed_for(choice, ssh_on):
+    """Answer tailscale_ssh_allowed from a choice and whether Tailscale SSH is on now.
+
+    An unrecorded choice with SSH on is the helper's "yes" (it records that before it answers).
+    """
+    return choice == "yes" or (choice == "unrecorded" and ssh_on is True)
+
+
+def tailscale_ssh_allowed():
+    """Whether the panel may turn Tailscale SSH on for this host (see above)."""
+    choice = tailscale_ssh_choice()
+    if choice != "unrecorded":
+        return choice == "yes"
+    return _r25j_ssh_allowed_for(choice, tailscale_ssh_status().get("enabled"))
+
+
+# How to allow it, for both install models: sudo resets the environment, so a variable set BEFORE
+# `sudo` never reaches the installer, and a per-user install refuses a root run outright.
+TS_SSH_NOT_CHOSEN = i18n.Sentence(
+    "Tailscale SSH on this host was not chosen when the panel was installed. To allow it, re-run "
+    "the installer with PANEL_TAILSCALE_SSH=1: sudo PANEL_TAILSCALE_SSH=1 bash install.sh, or on a "
+    "per-user install the same command as the panel's user, without sudo.")
+TS_SSH_NOT_RECORDED = i18n.Sentence(
+    "No Tailscale SSH choice is recorded for this host yet: an older installer wrote its settings, "
+    "and the next update records one (no, unless Tailscale SSH is on by then). To allow it now, "
+    "re-run the installer with PANEL_TAILSCALE_SSH=1: sudo PANEL_TAILSCALE_SSH=1 bash install.sh, "
+    "or on a per-user install the same command as the panel's user, without sudo.")
+
+
 def tailscale_ssh_enable():
     """Turn this node's Tailscale SSH server on, and change nothing else (see above)."""
+    if not tailscale_ssh_allowed():
+        return False, (TS_SSH_NOT_RECORDED if tailscale_ssh_choice() == "unrecorded"
+                       else TS_SSH_NOT_CHOSEN)
     out, err, rc = _run_verb("tailscale-ssh", ["on"], timeout=30)
     if rc == 0:
         return True, "Tailscale SSH enabled"
@@ -1111,6 +1183,7 @@ def get_server_status(force=False):
         return _status_cache["data"]
     ufw = ufw_status()
     ts_ssh = tailscale_ssh_status()
+    ts_ssh_choice = tailscale_ssh_choice()
     updates = os_update_available(refresh=False)
     uptime = server_uptime()
     has_sudo = _check_sudo()
@@ -1124,6 +1197,8 @@ def get_server_status(force=False):
         "has_sudo": has_sudo,
         "ufw": ufw,
         "tailscale_ssh": ts_ssh,
+        "tailscale_ssh_allowed": _r25j_ssh_allowed_for(ts_ssh_choice, ts_ssh.get("enabled")),
+        "tailscale_ssh_unrecorded": ts_ssh_choice == "unrecorded",
         "tailscale_interface": ts_iface,
         "tailscale_ufw_allowed": tailscale_ufw_allowed,
         "updates": updates,
@@ -2658,6 +2733,70 @@ def port_in_use(port):
     except Exception:
         return False
     return False
+
+
+def record_panel_port(port):
+    """Record `port` as the panel's own in the helper's panel.conf: (ok, the helper's reason).
+
+    The helper's `tailscale-serve` publishes that recorded port and no other, so a move the panel
+    makes has to be recorded before the restart that binds it, or the boot's Serve re-point is
+    refused and a panel reached through Serve is lost. The helper refuses a port another account is
+    listening on. No helper, no record: that host has no narrow grant for it to protect.
+    """
+    if not _helper_present():
+        return True, ""
+    out, err, rc = _run_verb("panel-port-record", [str(int(port))], timeout=15, merge_stderr=False)
+    if rc == 0:
+        return True, ""
+    # A helper that cannot take the record is not a refusal of THIS port, and it blocked every port
+    # change: a helper older than the verb (new code from a git pull, install.sh not re-run) answers
+    # "unknown verb", and sudo refusing the helper (a sudoers.d rule sorting after the grant) asks
+    # for a password. Neither helper publishes by the record: the old one has no Serve port check at
+    # all, and one sudo will not run publishes nothing. So the move goes ahead, as it did before the
+    # record existed, and the boot records the port once the helper can (reconcile_panel_port).
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    outcome = _smc.privileged_outcome("helper", out, err, rc)
+    if outcome in ("unknown_verb", "refused"):
+        _log.warning("The panel's port could not be recorded for the root helper (%s): %s",
+                     outcome, "re-run install.sh as root to update the helper"
+                     if outcome == "unknown_verb" else "sudo would not run the helper")
+        return True, ""
+    return False, (err or out or "the privileged helper did not answer").strip()
+
+
+def reconcile_panel_port(port):
+    """At start, record `port` (the one this start binds) as the panel's own where it is not.
+
+    Where panel.conf records another port or none. Answers "ok", "recorded", "recorded, tailscale
+    ssh" (the helper also recorded Tailscale SSH as chosen: it was on, with no choice recorded), or
+    "failed: <the helper's reason>".
+
+    The helper's Serve publishes only the recorded port, and the record can drift from config.json
+    without the panel ever asking to move it: a restored backup taken before a port change (or on
+    another host), the window after the self-update that brings the record (the previous installer
+    writes panel.conf without it), or a change-port whose save failed after the record landed. The
+    boot's Serve re-point, the Tailscale page's Enable and the wizard all pass config.json's port,
+    so each was then refused until the installer was re-run. This adds no power: the panel's account
+    can already call the verb, and the helper still refuses a port another account listens on.
+    """
+    if not _helper_present():
+        return "ok"
+    conf = _r25j_panel_conf()
+    # Also while the Tailscale SSH choice is unrecorded (that same previous installer's panel.conf):
+    # the verb records "yes" for a host running Tailscale SSH, as install.sh does, so the first
+    # update to this code meets the owner's rule without waiting for the next (tailscale_ssh_choice).
+    unrecorded = conf is not None and "tailscale_ssh" not in conf
+    if conf is not None and conf.get("panel_port") == str(int(port)) and not unrecorded:
+        return "ok"
+    ok, why = record_panel_port(port)
+    if not ok:
+        _log.warning("The panel's port %d could not be recorded for the root helper, so Tailscale "
+                     "Serve will not publish it: %s", int(port),
+                     why.replace("\r", " ").replace("\n", " "))
+        return "failed: " + why
+    if unrecorded and tailscale_ssh_choice() == "yes":
+        return "recorded, tailscale ssh"
+    return "recorded"
 
 
 def host_has_ip(ip):

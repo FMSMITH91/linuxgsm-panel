@@ -558,6 +558,13 @@ def _restart_delay(s):
     return str(s)
 
 
+def _r25j_panel_port(s):
+    """A port the panel itself may listen on: 1024..65535 (the helper's v_r25j_panel_port)."""
+    if int(_port(s)) < 1024:
+        raise VerbError("not a port the panel listens on")
+    return str(s)
+
+
 def _port(s):
     """A single TCP port number, 1..65535.
 
@@ -987,6 +994,10 @@ _ARGV = {
     "tailscale-serve": ([_choice("serve", "funnel"), _choice("modern", "legacy"), _ts_mount,
                          _choice("http", "https+insecure"), _port],
                         lambda a: ts_serve_argv(a[0], a[1], a[2], a[3], a[4]), None),
+    # The one port the helper's `tailscale-serve` publishes: the panel's own, recorded root-side in
+    # panel.conf. Moved when the panel's port changes, to a port no other account listens on. The
+    # helper performs it, so it has no tool form.
+    "panel-port-record": ([_r25j_panel_port], lambda a: [], None),
     # Removing ONE Serve mapping, always named by listener AND mount: with no --set-path, `off`
     # removes every mount on the listener, the other apps' with the panel's.
     "tailscale-serve-off": ([_choice("https", "http"), _port, _r24t_off_mount],
@@ -1281,6 +1292,7 @@ LOCAL_ONLY_VERBS = frozenset({
     # should. A remote's Tailscale is the remote flow's (ssh_manager), unchanged by these.
     "tailscale-release-operator",
     "tailscale-ssh",
+    "panel-port-record",
     "tailscale-serve-off",
     "tailscale-serve-status",
     # Two-sided callers: the remote half is a dedicated builder, not this table.

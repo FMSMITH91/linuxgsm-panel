@@ -1004,9 +1004,11 @@ def _request_lines(res, conf):
         client, _believed_text(auth._request_came_through_proxy(peer), conf)))
     res.add("- **HSTS on this response**: %s" % _yn(hsts_expected(
         env.get("HTTP_X_FORWARDED_PROTO", ""), request.is_secure, _self_tls(conf))))
+    # Posture, page-only: it says brute-force protection (the throttle and fail2ban) does not work
+    # for any proxied client, which is what the downloadable file never tells a public reader.
     if client == "loopback" and env.get("HTTP_X_FORWARDED_FOR"):
-        res.find("warn", AREA, "this proxied request was keyed as loopback: every proxied client "
-                               "shares one throttle bucket, and fail2ban ignores them")
+        res.posture_find("warn", AREA, "this proxied request was keyed as loopback: every proxied "
+                                       "client shares one throttle bucket, and fail2ban ignores them")
 
 
 # ── R43: sign-ins and auth.log ───────────────────────────────────────────────────────────────────

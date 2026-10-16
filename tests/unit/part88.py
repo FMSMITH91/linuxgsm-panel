@@ -40,7 +40,7 @@ from types import SimpleNamespace as NS
 from unit.part01 import check
 from unit.part05 import _helper as _helper88, _root
 from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
-from panel.core import config as _cfg88
+from panel.core import validation as _val88
 from panel.db import prefs as _prefs88
 from panel.ops import backup as _bk88, system_ops as _so88
 from panel.ops.debug_report import logs as _logs88
@@ -432,8 +432,9 @@ _main88 = _APP88[_APP88.find('\nif __name__ == "__main__":'):]
 _bootport88 = [ln.strip() for ln in _main88.splitlines() if ln.strip().startswith("port = ")]
 check("app.py: the boot reads config.json's port as a number (a hand-edited \"5000\" binds 5000; "
       "it used to reach eventlet's bind as a string and the service never started)",
-      _bootport88 == ['port = _r15a_cfg_int(cfg.get("port", 5000), 5000)']
-      and _cfg88._r15a_cfg_int("5000", 5000) == 5000 and _cfg88._r15a_cfg_int("x", 5000) == 5000,
+      # _port_or since review 1016b (part93): a port, not just a number.
+      _bootport88 == ['port = _port_or(cfg.get("port", 5000), 5000)']
+      and _val88._port_or("5000", 5000) == 5000 and _val88._port_or("x", 5000) == 5000,
       repr(_bootport88))
 
 

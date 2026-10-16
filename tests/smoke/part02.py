@@ -2798,8 +2798,11 @@ try:
           "Trying again won" in _dash2)
     _rr2 = c.post("/servers/%d/retry-install" % gs_id)
     with app.app_context():
+        # Refused (_form_err redirects), not crashed: a 500 before the guard also leaves the row
+        # failed, and read as the route refusing it (review 1016b).
         check("failed install: ...and the route refuses it too, not just the button",
-              db.session.get(GameServer, gs_id).status == "failed", _rr2.status_code)
+              _rr2.status_code == 302 and db.session.get(GameServer, gs_id).status == "failed",
+              _rr2.status_code)
 finally:
     with _install_lock_sm:
         _install_jobs_sm.pop(gs_id, None)

@@ -1351,12 +1351,18 @@ eq("R20: TLS that started, TLS that failed (class only), and TLS not configured"
 
 
 _boot_reads22 = []
+# The tailscale CLI runs the boot made past the stubs, and its operator releases (review 1016b: #435's
+# release_operator at the top of _boot_serve was not stubbed, so each boot ran the real
+# `tailscale debug prefs` and, where this account is the operator, would write tailscaled).
+_r25d_boot_cli22 = []
+_r25d_boot_release22 = []
 
 
 def _boot_serve(cfg, answer):
     fake = type("A", (), {"config": {}})()
     calls = []
     del _boot_reads22[:]
+    del _r25d_boot_release22[:]
 
     def setup(**kw):
         calls.append(kw)
@@ -1370,7 +1376,10 @@ def _boot_serve(cfg, answer):
     # `tailscale` CLI (`version`, `status --json`, the Serve read) from a part that reaches no host.
     with _patched(_ts22, setup_tailscale_serve=setup,
                   remove_stale_panel_routes=lambda port, mount: ("none", [], ""),
-                  get_tailscale_info=lambda force_refresh=False: (_boot_reads22.append(1), _ti())[1]), \
+                  get_tailscale_info=lambda force_refresh=False: (_boot_reads22.append(1), _ti())[1],
+                  release_operator=lambda: (_r25d_boot_release22.append(1), "not-operator")[1],
+                  _run_ts=lambda args, timeout=5: (_r25d_boot_cli22.append(args), ("", "", 1))[1],
+                  _run_ts_json=lambda args, timeout=5: (_r25d_boot_cli22.append(args), None)[1]), \
             _patched(_app22, _ts_backend_scheme=lambda c: "http"):
         _app22._boot_serve(fake, cfg, 5000)
     return fake.config.get("BOOT_SERVE"), len(calls)
@@ -1386,5 +1395,9 @@ eq("R20: Serve's boot re-point is recorded as ok / failed:<reason class> / not a
 _boot_serve({"tailscale_setup_done": True}, (True, "ok"))
 check("R20: an ok boot reads the host's Tailscale state once, through the stub (no real CLI run)",
       len(_boot_reads22) == 1, "%d reads" % len(_boot_reads22))
+check("R20: ...and that boot releases the operator through the stub, while no boot above runs a "
+      "tailscale CLI of its own",
+      len(_r25d_boot_release22) == 1 and _r25d_boot_cli22 == [],
+      repr((len(_r25d_boot_release22), _r25d_boot_cli22[:4])))
 
 _sh22.rmtree(_TMP22, ignore_errors=True)

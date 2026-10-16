@@ -47,6 +47,27 @@ from panel.routes.manage_servers import (withheld_game_ports)
 # host id is the whole fix; threading is green under eventlet's monkey-patching. Registered so a
 # deleted host's lock is forgotten with its other per-host state.
 _ssh_port_locks = _sm._core.register_remote_cache(collections.defaultdict(threading.Lock))
+# What a port move on a Tailscale-SSH host adds to its answer: the row keeps port 22 (see the route).
+_R25B_TS_PORT_KEPT = i18n.Sentence(
+    "The panel still reaches this host over Tailscale SSH on port 22, so it keeps using that; the new "
+    "port is for SSH from outside your tailnet.")
+
+
+def _r25b_store_moved_port(remote, new_port, msg):
+    """Point the row at sshd's new port after a move that worked; return the reply's message."""
+    if remote.auth_method == "tailscale":
+        # NOT for a host the panel reaches over Tailscale SSH. tailscaled answers port 22 on the
+        # tailnet address whatever sshd listens on, so the panel's way in did not move; only SSH
+        # from outside the tailnet did. Storing the new port sent every later command to the
+        # host's ordinary sshd on it, which wants a key the panel does not hold (the migration
+        # cleared it), and the host was lost to the panel.
+        return i18n.Sentences(msg, _R25B_TS_PORT_KEPT)
+    # Point the panel at the new port for future connections (cosmetic for the local host, which
+    # doesn't SSH). Same host, so the pinned host key still applies — leave it. The old port stays
+    # open, so any connection the panel is using right now survives.
+    remote.port = new_port
+    db.session.commit()
+    return msg
 
 
 def _resync_game_port(gs, info, withheld=()):
@@ -480,12 +501,7 @@ def _register_ssh_port(app):
                 # (its command_started code); anything else is the generic 500.
                 return _r22b_unreachable_or_generic("SSH port change failed")
             if ok:
-                # Point the panel at the new port for future connections (cosmetic for the local
-                # host, which doesn't SSH). Same host, so the pinned host key still applies — leave
-                # it. The old port stays open, so any connection the panel is using right now
-                # survives.
-                remote.port = new_port
-                db.session.commit()
+                msg = _r25b_store_moved_port(remote, new_port, msg)
         finally:
             lock.release()
         log_action(current_user, "change_ssh_port", target=remote.name,
@@ -1017,7 +1033,9 @@ def _register_reboot(app):
         try:
             info = dict(remote_reboot_required(remote))
         except Exception:
-            info = {"required": False, "packages": []}
+            # known: False, as remote_reboot_required says a probe that did not answer: without it
+            # this fallback read as "no reboot needed" and the banner a good read put up came down.
+            info = {"required": False, "packages": [], "known": False}
         st = _hr.status(remote)
         info["pending_empty"] = st["wait"] is not None
         info["wait"], info["job"] = st["wait"], st["job"]

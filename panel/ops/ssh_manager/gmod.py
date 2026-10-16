@@ -130,7 +130,8 @@ def _user_primary_group(server, user):
     "" instead, so the caller can tell a real group from a failed read; the grant refuses rather
     than guessing which group to join.
     """
-    grp, _, rc = _core.run_command(server, f"id -gn {_core._quote(user)} 2>/dev/null", timeout=10)
+    grp, _, rc = _core.run_command(server, f"id -gn {_core._quote(user)} 2>/dev/null", timeout=10,
+                                   sudo=False)
     if rc != 0:
         _core._log.warning("could not read the primary group of %s", user)
         return ""
@@ -182,7 +183,8 @@ def ensure_content_user(server):
     if found:
         return found
     u = _CONTENT_USER
-    exists, _, _ = _core.run_command(server, f"id {_core._quote(u)} >/dev/null 2>&1 && echo Y || echo N", timeout=10)
+    exists, _, _ = _core.run_command(server, f"id {_core._quote(u)} >/dev/null 2>&1 && echo Y || echo N", timeout=10,
+                                     sudo=False)
     if "Y" not in (exists or ""):
         # Was one root shell: useradd && passwd -l ; install -d. Three verbs, and the
         # serverfiles path is built by the helper from the validated name.

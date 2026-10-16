@@ -103,18 +103,26 @@ def _forget_deleted_from_ui_prefs(remote_id, game_server_ids):
         _log.debug("could not clear ui_prefs for deleted remote %s", remote_id, exc_info=True)
 
 
+# Both skip a saved value that is not the shape the panel writes (a hand-edited panel.db), as
+# prefs._apply_user_order does: iterating `{"3": 7}` raised TypeError inside the caller's one try,
+# and its rollback then dropped every OTHER user's clean-up for that host delete too.
 def _host_order_without(prefs, remote_id):
     """A saved host_order with the deleted host dropped, or None when it did not hold it."""
-    hosts = [h for h in (prefs.get("host_order") or []) if h != remote_id]
-    return hosts if hosts != (prefs.get("host_order") or []) else None
+    order = prefs.get("host_order")
+    if not isinstance(order, list):
+        return None
+    hosts = [h for h in order if h != remote_id]
+    return hosts if hosts != order else None
 
 
 def _server_order_without(prefs, remote_id, gone):
     """A saved server_order without the deleted host and its servers, or None when it held neither."""
-    servers = {k: [s for s in v if s not in gone]
-               for k, v in (prefs.get("server_order") or {}).items()
-               if str(k) != str(remote_id)}
-    return servers if servers != (prefs.get("server_order") or {}) else None
+    order = prefs.get("server_order")
+    if not isinstance(order, dict):
+        return None
+    servers = {k: ([s for s in v if s not in gone] if isinstance(v, list) else v)
+               for k, v in order.items() if str(k) != str(remote_id)}
+    return servers if servers != order else None
 
 
 # The ways of signing in to a host that prove the REQUESTER controls it. Only a password does:

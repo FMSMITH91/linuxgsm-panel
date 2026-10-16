@@ -1701,7 +1701,9 @@ def _lgsm_gamedig_target(vals, fallback_port):
     """(querytype, queryport) when LinuxGSM queries this game with gamedig, else None."""
     if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
         return None
-    qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
+    # Never starting with `-` or `_`, as _gamedig_type strips the panel's own override: the cfg is
+    # the game account's to write, and `querytype="--debug"` reached gamedig as an option.
+    qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip()).lstrip("-_")[:40]
     qport = _lgsm_query_port(vals, fallback_port)
     if not qtype or not qport.isdecimal():
         return None

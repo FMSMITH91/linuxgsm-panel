@@ -885,8 +885,12 @@ _typed_bkreal = _typed_bkmod.run_game_backup
 _typed_bkmod.run_game_backup = lambda *a, **k: (_typed_bkcalls.append(1), (True, "", False))[1]
 # The stub goes back in a finally: a test client that raised would otherwise leave every later
 # check's run_game_backup recording into this list (review 1011e).
+# A plain threading.Lock: release() from here succeeds even while a straggler holds it, so it is
+# released only when this acquire took it (review 1016b: a timed-out acquire released the
+# straggler's lock under it, and the sweep ran unguarded with nothing saying so).
+_typed_held = False
 try:
-    _typed_lock.acquire(timeout=60)
+    _typed_held = _typed_lock.acquire(timeout=60)
     try:
         for _path, _body in _typed:
             _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
@@ -895,10 +899,8 @@ try:
             if _tr.status_code == 404:
                 _typed_404.append(_path)
     finally:
-        try:
+        if _typed_held:
             _typed_lock.release()
-        except RuntimeError:
-            pass        # the acquire timed out; nothing of ours to release
     # Settle: a worker the sweep started returns from the route before it reaches the backup.
     for _ in range(40):
         if _typed_bkcalls:
@@ -906,6 +908,8 @@ try:
         _ijw_time.sleep(0.05)
 finally:
     _typed_bkmod.run_game_backup = _typed_bkreal
+check("typed body: (setup) the sweep held the backup lock, so no full backup it starts can run",
+      _typed_held, "an earlier backup still held it after 60s")
 check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
       len(_typed) >= 20, "the list shrank — the check below would prove less")
 # ...and every one of them REACHES a handler. This list had "/notifications/test" while the
@@ -2115,9 +2119,12 @@ check("console chunk: (control) a framed empty chunk is a reading, not a failure
       "an idle server's empty read now looks like a failed one, and the offset never advances")
 _bs_partial_state.pop(-97, None)
 
-# Driven through the poller's own loop shape, because the damage is in the offset arithmetic
-# rather than in one call: one tick's chunk read fails the way tailscale fails, and every byte
-# of the burst must still arrive.
+# A burst read in capped chunks, one of which fails the way tailscale fails: a caller that
+# refuses the advance on None (the `continue` below, written HERE) still gets every line, so
+# _console_whole_lines' held fragment survives the failed read. The loop is this check's own: the
+# poller's handling of None is held by the source check after it and by the real tick below
+# ("console tick: a chunk read that never ran is retried"). Named for what it proves, since a
+# poller that dropped its `if out is None` still passed it (review 1016b).
 _bs_partial_state.pop(-96, None)
 _fp_log = "".join("[2026-09-18 06:22:08] MODULE: fp_%05d.lua\n" % i for i in range(3000))
 check("console poller: (setup) the fixture spans more than one capped read",
@@ -2135,7 +2142,8 @@ while _fp_pos < len(_fp_log) and _fp_tick < 20:
         _fp_seen.extend(_fp_out.split("\n"))
     _fp_pos += _fp_diff
 _bs_partial_state.pop(-96, None)
-check("console poller: a chunk read that never ran does not advance the offset past it",
+check("console chunk: a caller that does not advance on a None answer still gets every line of a "
+      "burst over several capped reads",
       _fp_seen == [_l for _l in _fp_log.split("\n") if _l],
       "saw %d of %d lines — a window of console output was skipped and can never be "
       "recovered" % (len(_fp_seen), 3000))
@@ -2269,8 +2277,8 @@ try:
           _ct_offsets[_CT] == _ct_before, "offset %r -> %r" % (_ct_before, _ct_offsets[_CT]))
 
     # A chunk read that does not run (the non-raising transports) must not advance: the next
-    # tick re-reads the range. This is the case the loop-shaped check above simulates; here
-    # it goes through the real function.
+    # tick re-reads the range, through the real function (the loop-shaped check above only
+    # proves the chunk reader's side).
     _ct_sio.lines = []
     _ct_log.data += "[03:40:05] Done (4.2s)! For help, type \"help\"\n"
     _ct_log.fail_chunk = True

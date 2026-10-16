@@ -601,6 +601,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A fourteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Moving SSH on a Tailscale-SSH host** no longer loses the host: the port change is refused there.
+  - **Close Port and Unblock** no longer say "closed" when the read-back failed and nothing was removed;
+    a v4 rule beside a v6-only LIMIT no longer turns that LIMIT into a plain allow. Proven against real UFW.
+  - **Errors no longer read as "nothing there"** on a dozen pages (file lists, backups, logs and more).
+  - **Removing a server** made on an existing account leaves that account alone; config saves keep the
+    live console log intact; uptime, timezone and other world-readable reads no longer need sudo.
+  - **Smaller fixes** in the update snapshot prune, uninstall's Tailscale route removal, auto-block
+    release, the debug report's At-a-glance line, and an unreadable dropped folder's message.
+  - **Tests.** The guard that keeps tests off the machine's own tailscale reads shells and options as
+    they really parse, eight refusal checks no longer pass on a crash, and several gates now can fail.
 - **A thirteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
   its fix.
   - **Close Port 22 really closes it.** On every host the panel set up, port 22 is open through a
@@ -2179,6 +2191,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **Tailscale SSH on the panel's machine is your install-time choice.** The installer asks (default
+  no) and records it as root; the panel can join Tailscale from Connect but turns SSH on only if you
+  chose it, and the System page's switch is read-only otherwise. A machine that already runs Tailscale
+  SSH keeps it (the next update records yes). Before this, on a machine not yet on Tailscale, a
+  compromised panel account could start a login with SSH on and let whoever opened it pick the tailnet.
+- **Serve and Funnel publish only the panel's own port.** The root helper reads the panel's port from
+  its root-owned config and refuses any other, or one another account is listening on; changing the
+  panel's port refuses a port already in use. Funnel is also refused while anything else is served on
+  the same listener, since Funnel opens the whole listener. Before, a compromised panel account could
+  put any local service on the public internet through Funnel.
 
 - **On the panel's own machine, the panel account no longer controls Tailscale.** It used to be
   made Tailscale's "operator", which let it join the machine to a tailnet of its choosing and turn

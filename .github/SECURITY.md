@@ -134,7 +134,7 @@ Steam's per-account crash-dump slots, configuring NodeSource's repository on a r
 signing key pinned, installing gamedig on a remote from its hash-locked lockfile, deleting a
 ufw rule by number only while it is still the rule that was checked, a scheduled task's "Run now",
 moving game servers and the local terminal's shell out of the panel's own cgroup, and removing an
-uninstalled server's crontab** — 111 verbs. (`tests/unit_test.py` asserts
+uninstalled server's crontab** — 112 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **Where what the helper starts runs (cgroups).** sudo opens no session on Ubuntu (its PAM stack
@@ -399,18 +399,50 @@ types rather than in the command names:
   host out, join it to a tailnet of its own choosing with an auth key, and turn Tailscale SSH on,
   which lets that tailnet's members log in as root by that tailnet's rules. Now no verb can make any
   account the operator, and `install.sh` (fresh install and every update) and the panel's own start
-  take the role back from the panel's account when it holds it (an operator someone chose for their
-  own login is left alone). The helper also refuses the shapes that would move the host: a key join
+  take the role back from the panel's account whenever it holds it, whoever set it (an operator
+  someone chose for another account is left alone; on a per-user install the panel's account is
+  your own login, so the role is taken back from it there too). The helper also refuses the shapes that would move the host: a key join
   (`tailscale-up-key`) of a node that is in a tailnet, holds a node key, or whose state it cannot
   read (an `up` with a key logs in afresh, into the key's tailnet), and an interactive `up` on a
   node already Running or Starting (answered "already connected", with nothing run) or one that
   holds a node key while it is not up (an expired key, or `tailscale down`): there the login link
   would let whoever opens it pick another tailnet, so the owner signs it in again at the host with
   `sudo tailscale up`. A status the helper cannot read still gets the link, so the first Connect
-  works while tailscaled is still starting after an install. Tailscale SSH
-  stays a button: the helper allows it on and off because `tailscale set` cannot change which
-  tailnet the host is in, so it is SSH on the tailnet this host already joined, by its owner's
-  rules. A Tailscale old enough to answer `serve status` only to root or the operator is read
+  works while tailscaled is still starting after an install. That first join is still the panel's
+  to start, and whoever opens its link picks the tailnet, so it grants no logins on its own:
+  **Tailscale SSH on the panel's host is the owner's choice at install**, recorded root-owned in
+  the helper's `panel.conf` (`tailscale_ssh=yes|no`; `PANEL_TAILSCALE_SSH=1` or `=0` sets it, an
+  unset one keeps what is recorded, a host already running Tailscale SSH when its installer first
+  records it is recorded yes so it keeps working, and anything else is no). The self-update that
+  brings this runs the previous installer, which records no choice at all; the helper then records
+  "yes" itself, read as root, when Tailscale SSH is on (at the next start's `panel-port-record`, or
+  the first SSH verb, so an `off` cannot lose it), which grants nothing that is not already on;
+  otherwise the page says no choice is recorded yet. Without "yes" the
+  helper refuses `--ssh` on either join and `tailscale-ssh on`, the panel's Connect joins without
+  SSH, and the System page's Enable button is shown read-only with how to allow it. Turning SSH
+  off always works. With "yes", the button and the join's SSH work as before: `tailscale set`
+  cannot change which tailnet the host is in. Serve and Funnel publish **only the panel's own port**: the
+  helper's `tailscale-serve` targets loopback, and only the port `panel.conf` records as
+  `panel_port` (before the first update that records it, only the port the panel's own account
+  alone is listening on), and only while no other account's process is listening on it, so the
+  panel's account cannot point a Serve or Funnel route at another local service. `install.sh`
+  records the port (an update takes `config.json`'s only when no other account listens on it); the
+  panel's port change, its setup wizard, and each start (when the record names another port or
+  none, as after a restored backup) move it through `panel-port-record`, which refuses a port
+  another account is listening on. **Funnel is set per listener**, not per route: a `funnel`
+  write turns it on for every app on the node's `:443`. So the helper reads `tailscale serve
+  status --json` as root before a `funnel` write and refuses it while that listener (in the
+  background config or a foreground session's) has any route that is not loopback on the panel's
+  port (another app, a file share, a fixed reply, a redirect, a raw TCP forward on 443) and Funnel
+  is not already on there; a config it cannot read is refused. What this does **not** cover: a
+  `serve` write (tailnet only) beside other apps is allowed, and it turns Funnel off for the whole
+  `:443` listener, taking the other apps there off the internet (an outage for them, not an
+  exposure; the panel itself refuses it unless the boot is keeping the listener as it is). Other
+  listeners (another port, a Tailscale Service) are never touched by the panel's write. A route the
+  owner adds to `:443` after Funnel is on is public because the owner put it on a Funnel listener.
+  The listener checks are point-in-time reads, and a panel account that can run code can still
+  relay other traffic through the panel's own port; this keeps Serve and Funnel from being pointed
+  anywhere else. A Tailscale old enough to answer `serve status` only to root or the operator is read
   through a read verb. Remote hosts are unchanged: there the panel's account already reaches root.
 - **The sshd hardening** set four directives with `sed -i 's/^#\?Key.*/Key value/'` in a joined
   root shell. Both halves are closed sets now: the panel may set exactly those four directives, to

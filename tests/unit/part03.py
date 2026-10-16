@@ -2668,7 +2668,16 @@ def _tsu_stub(serve_rc, serve_out=""):
     _tsi._run_ts = _run
     _tsi._run_ts_json = lambda args, timeout=5: dict(_tsu_json)
     _tsi._cache["info"] = None
-    return _tsi._get_tailscale_info()
+    # No helper, whatever this machine has: since #435 a refused `serve status` falls back to the
+    # helper's read verb, so on a host with the helper installed this ran the real
+    # `sudo -n panel-helper tailscale-serve-status` and judged that machine's Serve state (review
+    # 1016b). The fallback is part91's, on stand-ins; these checks are the rc reading alone.
+    _was = _tsi._so._HELPER_STATE["present"]
+    _tsi._so._HELPER_STATE["present"] = False
+    try:
+        return _tsi._get_tailscale_info()
+    finally:
+        _tsi._so._HELPER_STATE["present"] = _was
 
 
 # "Accept Routes" is the RouteAll pref. It was read from status JSON's TUN field — kernel TUN vs
