@@ -136,11 +136,36 @@ def _log_and_generic(context):
 
     That way raw exception text is never sent to the client (CodeQL py/stack-trace-exposure).
     Admins read the detail in the panel logs.
+
+    A ConnectionError is not a fault in the panel (see _unreachable), and it is the one exception
+    whose sentence the viewer can act on. Routes call this from a catch-all that also catches it, so
+    a host that was switched off answered "Internal server error" with a traceback, a changed host
+    key lost "use Re-trust host key", and an SSH-port move cut off part-way lost "it may have run".
+    Each caller keeps its own shape, status and audit row; the sentence is _unreachable's.
     """
+    exc = sys.exc_info()[1]
+    if isinstance(exc, ConnectionError):
+        # CR and LF replaced, not left to %r (CodeQL's log-injection rule does not accept that).
+        current_app.logger.warning("%s: %s: %s", context, type(exc).__name__,
+                                   str(exc).replace("\r", " ").replace("\n", " "))
+        return _r20a_unreachable_said(exc)[0]
     current_app.logger.exception(context)
     # In the viewer's language: the string is fixed, so a catalog entry is all it needs, but it
     # reaches the page as a helper's return value, which no literal scan of a sink can see.
     return i18n.tr("Internal server error")
+
+
+def _r22b_unreachable_or_generic(context, status=500):
+    """A route catch-all's answer: _unreachable's for a ConnectionError, else the generic one.
+
+    For `except Exception:` around a host call. A host that is down, or presents a changed key, is
+    not a fault in the panel and gets the 200 with `unreachable` and a `code` the pages read; any
+    other raise is still `status` with "Internal server error" and the traceback logged.
+    """
+    exc = sys.exc_info()[1]
+    if isinstance(exc, ConnectionError):
+        return _unreachable(context, exc=exc)
+    return jsonify({"success": False, "message": _log_and_generic(context)}), status
 
 
 # What the viewer is told for the two ConnectionErrors that are NOT "the host did not answer".

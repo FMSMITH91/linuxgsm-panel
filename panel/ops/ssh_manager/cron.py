@@ -1551,9 +1551,13 @@ def _batch_queries(targets):
     out = []
     for key, game_type, port, query_type in targets:
         gdtype = _gamedig_type(game_type, query_type)
+        # _r20b_query_port, as every other gamedig reader: a bare int() turned a fractional REAL
+        # port (27015.5, a hand edit) into 27015 and queried that neighbour as this server, and
+        # raised on REAL infinity. None (no port to query) is skipped below.
+        port = _core._r20b_query_port(port)
         try:
-            port, key = int(port), int(key)
-        except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
+            key = int(key)
+        except (TypeError, ValueError, OverflowError):
             continue
         if gdtype and port:
             out.append((key, gdtype, port))

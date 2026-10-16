@@ -190,7 +190,11 @@ def _register_palette(app):
             "id": gs.id,
             "name": gs.name,
             "game": gs.game_type or "",
-            "host": gs.remote.name if gs.remote else "",
+            # The panel host as its fixed label (display_name), not the name typed when it was
+            # added, and flagged: the palette shows it through its own catalog (its meta is guarded
+            # for a remote's name), so it reads "Servidor del panel" as every page around it does.
+            "host": str(gs.remote.display_name) if gs.remote else "",
+            "host_local": bool(gs.remote and gs.remote.is_local),
             "installed": bool(gs.installed),
             # An un-installed server has nothing to start, so it gets no verbs even for an admin.
             "actions": _allowed if gs.installed else [],

@@ -346,10 +346,11 @@ function pollLive(){
     if(d.error){
       // Not on the panel host's own page: a failed local read is not "cannot reach this host over
       // SSH" about the machine that is serving this page (a good read still paints it Reachable).
-      if(d.unreachable && !window.IS_LOCAL) _r18cPaintHostBadge(false);
       // A changed host key or a cut-off read is flagged unreachable too, and `code` says which:
       // "the host did not answer" sent the operator to wait when they need Re-trust host key.
       var why = d.code;
+      // The badge's tooltip too: "cannot reach this host over SSH" about a host the panel refused.
+      if(d.unreachable && !window.IS_LOCAL) _r18cPaintHostBadge(false, d);
       if(stale){ stale.textContent = (why && why !== 'host_unreachable' && d.message)
         ? d.message
         : d.unreachable
@@ -367,14 +368,16 @@ function pollLive(){
 // The header's reachability badge, from what this page's own live read just found. Rendered once,
 // it kept saying "Reachable" for as long as the page stayed open on a host that had since died.
 // English, as the template renders it: the page's translator swaps the text node and the title.
-function _r18cPaintHostBadge(up){
+// `d`: the failed read, whose reason is the tooltip when it is not the network (a changed host key).
+function _r18cPaintHostBadge(up, d){
+  var said = (d && d.code === 'host_key_mismatch') ? d.message : '';
   var b = document.getElementById('remote-status');
   if(!b) return;
   b.className = 'badge ' + (up ? 'bg-success' : 'bg-danger');
   b.textContent = up ? 'Reachable' : 'Unreachable';
   // The panel's own machine is read through the local transport, not SSH (never painted down here).
   b.setAttribute('title', up ? (window.IS_LOCAL ? 'The panel is running on this host' : 'The panel can reach this host over SSH')
-                             : 'The panel cannot reach this host over SSH');
+                             : (said || 'The panel cannot reach this host over SSH'));
 }
 // One /live reading onto the card, for pollLive: the CPU and its cores, RAM and swap, the disk.
 function _livePaintCpu(d){

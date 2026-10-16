@@ -165,12 +165,24 @@ _CHUNK_B64 = 50000
 def _keep_mode(dest, staged):
     """Shell fragment copying `dest`'s permission bits onto `staged`.
 
+    Both are shell WORDS, already quoted or expanded (`"$p"`, `"$p".new`).
+
     For a write that renames `staged` over `dest`. True when `dest` does not exist yet. When it
     exists and the chmod fails, the fragment removes `staged` and fails, so the save is refused
     rather than landing with a silently changed mode.
     """
-    d, s = _core._quote(dest), _core._quote(staged)
-    return f"{{ [ ! -e {d} ] || chmod --reference={d} {s} || {{ rm -f {s}; false; }}; }}"
+    return f"{{ [ ! -e {dest} ] || chmod --reference={dest} {staged} || {{ rm -f {staged}; false; }}; }}"
+
+
+# The file the writers below replace: the one the guard resolved ("$p", set by _guarded), not the
+# name asked for. A rename onto a name replaces a SYMLINK there with a regular file, so saving a
+# home's convenience link (`server.cfg -> serverfiles/.../server.cfg`) answered "Saved" while the
+# file the game reads kept the old text, and the link was gone. Every read follows the link (the
+# editor showed the target), so the write now does too; the guard has already checked that the
+# target is inside the home, exactly as it did for the name.
+_R22B_TARGET = '"$p"'
+# ...and its folder, which a link to a file not created yet may name before it exists.
+_R22B_MKDIR = 'mkdir -p -- "${p%/*}"'
 
 
 def _write_file_as_user(server, user, abspath, data_bytes):
@@ -202,19 +214,21 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     # The guard rides whichever command goes first, so a target that resolves outside the home dir
     # is refused before any byte is written.
     if len(b64) <= _ONE_SHOT_B64:
-        return _write_one_shot(server, user, abspath, b64, tmp, mk)
+        return _write_one_shot(server, user, abspath, b64, mk)
     return _write_chunked(server, user, abspath, b64, tmp, mk)
 
 
-def _write_one_shot(server, user, abspath, b64, tmp, mk):
-    """Write a small base64 payload in ONE guarded command: decode to `tmp`, keep mode, rename."""
+def _write_one_shot(server, user, abspath, b64, mk):
+    """Write a small base64 payload in ONE guarded command: decode to a staged copy, keep mode, rename."""
     # `mv -T`: the destination is the file's own name, never a directory to move INTO. Plain
     # `mv -f tmp cfg`, with a folder named cfg there, put the file inside it as cfg/cfg.paneltmp
     # and exited 0 — "Uploaded", a success audit row, and no file at `cfg`. -T refuses instead,
     # and the staged copy is removed rather than left beside it.
-    inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
-             f"&& {_keep_mode(abspath, tmp)} && {{ mv -f -T {_core._quote(tmp)} {_core._quote(abspath)} "
-             f"|| {{ rm -f {_core._quote(tmp)}; false; }}; }}")
+    # Staged beside the resolved target (_R22B_TARGET), so the rename stays inside one directory.
+    t, st = _R22B_TARGET, _R22B_TARGET + ".paneltmp"
+    inner = (f"{mk} && {_R22B_MKDIR} && printf %s {_core._quote(b64)} | base64 -d > {st} "
+             f"&& {_keep_mode(t, st)} && {{ mv -f -T {st} {t} "
+             f"|| {{ rm -f {st}; false; }}; }}")
     out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
     if _r12b_outside_home(out):
         return False, "Invalid path"
@@ -239,12 +253,17 @@ def _write_chunked(server, user, abspath, b64, tmp, mk):
         op = ">>"
         first = False
     # `mv -T` for the reason _write_one_shot gives; a refused rename removes both staged copies.
-    fin = (f"base64 -d {_core._quote(tmp)} > {_core._quote(abspath)}.new "
-           f"&& {_keep_mode(abspath, abspath + '.new')} "
-           f"&& {{ mv -f -T {_core._quote(abspath)}.new {_core._quote(abspath)} "
-           f"|| {{ rm -f {_core._quote(abspath)}.new {_core._quote(tmp)}; false; }}; }} "
+    # Guarded again: it is its own command, and it is the one that needs "$p" (_R22B_TARGET).
+    t, new = _R22B_TARGET, _R22B_TARGET + ".new"
+    fin = (f"{_R22B_MKDIR} && base64 -d {_core._quote(tmp)} > {new} "
+           f"&& {_keep_mode(t, new)} "
+           f"&& {{ mv -f -T {new} {t} "
+           f"|| {{ rm -f {new} {_core._quote(tmp)}; false; }}; }} "
            f"&& rm -f {_core._quote(tmp)}")
-    o, e, rc = _core.shell_as_game_user(server, user, fin, timeout=60)
+    o, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, fin), timeout=60)
+    if _r12b_outside_home(o):
+        _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30)
+        return False, "Invalid path"
     return (rc == 0), (e or o or "")
 
 
@@ -1055,9 +1074,15 @@ def read_file(server, user, relpath, max_bytes=1048576):
         # on the unframed path below, which already says "could not read" rather than guessing.
         f"case \"$sz\" in ''|*[!0-9]*) exit 0;; esac; "
         f"if [ \"$sz\" -gt {int(max_bytes)} ]; then echo __TOOBIG__; exit 0; fi; "
-        f"if [ ! -s {_core._quote(ap)} ] || grep -qI . {_core._quote(ap)} 2>/dev/null; then "
-        f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "
-        f"printf %s {_core._quote(_READ_END)}; else echo __BINARY__; fi"
+        # Text or binary by grep's own status, never by "did `.` match": `.` needs a character on
+        # some line, so a file of blank lines (an empty file the editor saved with one Enter in it)
+        # exited 1 and was refused as "Binary file", and a file the game account cannot read
+        # exited 2 and said the same, pointing at a download that fails too. The empty pattern
+        # matches any line; -I still makes a file with a NUL in it no match (1); 2 is a read error.
+        f"if [ ! -r {_core._quote(ap)} ]; then echo __UNREADABLE__; exit 0; fi; "
+        f"rc=0; [ ! -s {_core._quote(ap)} ] || {{ grep -qI '' {_core._quote(ap)} 2>/dev/null; rc=$?; }}; "
+        f"case $rc in 0) printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "
+        f"printf %s {_core._quote(_READ_END)};; 1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
     )
     out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     return _read_file_reply(out, ap, _rc)
@@ -1068,6 +1093,7 @@ _READ_REFUSALS = {
     "__NOFILE__": "File not found",
     "__TOOBIG__": "File is too large to edit in the browser",
     "__BINARY__": "Binary file — download/replace via upload instead",
+    "__UNREADABLE__": "The game account can't read this file, so it can't be opened or downloaded here.",
 }
 
 

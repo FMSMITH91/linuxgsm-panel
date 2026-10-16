@@ -15,7 +15,7 @@ import json
 import os
 import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
-    _port_or, bind_host_error, can_bind_address, password_problem, username_problem)
+    _port_or, bind_host_error, can_bind_address, canonical_host, password_problem, username_problem)
 from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
 from panel.ops.serve_upkeep import (_remove_serve_leftovers, with_leftover_note)
 from app import (_bind_is_loopback, _current_lang, _log, _serve_scheme_now, _setup_open,
@@ -483,7 +483,9 @@ def _setup_remote_server(state, data, cfg):
 def _setup_add_remote(state, data):
     """Test and add the remote host the wizard's form names; the outcome is flashed."""
     name = request.form.get("name", "").strip()
-    host = request.form.get("host", "").strip()
+    # The Hosts page's add form canonicalises first (remotes.py), so `[2001:db8::5]`, the way the
+    # panel prints an IPv6 login, is accepted there; HOST_RE has no bracket, so here it was refused.
+    host = canonical_host(request.form.get("host", "").strip())
     ssh_user = request.form.get("ssh_user", "root").strip()
     ssh_port = _port_or(request.form.get("ssh_port"), None)
     auth_method = request.form.get("auth_method", "key")

@@ -2289,7 +2289,8 @@ try:
     _orig_guarded = _sm_files._guarded
     _mode_dir = _tmpf.mkdtemp(prefix="unit-keepmode-")
     try:
-        _sm_files._guarded = lambda u, a, inner: inner
+        # The guard's one output the writers use: "$p", the path it resolved (here the name itself).
+        _sm_files._guarded = lambda u, a, inner: "p=%s; " % _sm_core._quote(a) + inner
 
         def _run_peeled(s, c, **k):
             _r = _subp.run(["bash", "-c", c.split(" ", 3)[3]], capture_output=True, text=True)

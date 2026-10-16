@@ -80,8 +80,9 @@ def _forget_deleted_from_ui_prefs(remote_id, game_server_ids):
     """Drop a deleted host/server from every user's saved layout.
 
     ui_prefs stores host_order (a list of remote ids) and server_order ({remote_id: [server id]}),
-    and nothing cleared them — so after SQLite recycles the rowid a brand-new host or server
-    silently inherited the deleted one's saved position in every user's dashboard, for every user
+    and nothing cleared them — so when SQLite handed a deleted row's id to the next new row (as it did
+    before panel/db/id_sequence.py, and still can on a table that could not be rebuilt) a brand-new
+    host or server silently inherited the deleted one's saved position in every user's dashboard, for every user
     who had ever reordered. _apply_user_order degrades gracefully, so the effect is ordering only;
     it is the same class as the other three things cleared beside it here and it belongs with them.
     """

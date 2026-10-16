@@ -1858,6 +1858,8 @@ def spend_totp_step(u, step):
 # and disk each hand out root outright (a privileged container, a raw block device).
 _ROOT_EQUIVALENT_GROUPS = frozenset({"sudo", "wheel", "admin", "root", "docker", "lxd", "disk"})
 _ACCOUNT_PROBE_END = "LGSM_ACCT_PROBE_DONE"
+# Classic sudo where sudo-rs is `sudo` (Ubuntu 26.04); _account_probe_cmd asks it too.
+_R22B_SUDO_WS = "/usr/bin/sudo.ws"
 # privileged_accounts' reason for a name it will not put into any command (see _refused_by_name).
 INVALID_ACCOUNT_NAME = "its name is not a plain account name, so the panel puts it into no command"
 
@@ -1879,10 +1881,14 @@ def _account_probe_cmd(users):
             "if uid=$(id -u %(q)s 2>/dev/null); then "
             "printf 'ACCT %%s %%s %%s\\n' %(q)s \"$uid\" \"$(id -Gn %(q)s 2>/dev/null)\"; "
             # `sudo -l -U` needs root, so it is asked only when the probe IS root (a remote whose
-            # login escalates); otherwise the groups above are the evidence there is.
-            "if [ \"$(id -u)\" = 0 ] && LC_ALL=C sudo -n -l -U %(q)s 2>/dev/null "
-            "| grep -q \"may run the following\"; then printf 'SUDOERS %%s\\n' %(q)s; fi; "
-            "else printf 'NOACCT %%s\\n' %(q)s; fi" % {"q": _shlex.quote(u)})
+            # login escalates); otherwise the groups above are the evidence there is. EVERY sudo
+            # present is asked, as the panel host's helper does (_sudo_lists_rules): on Ubuntu
+            # 26.04 `sudo` is sudo-rs, which never reads LDAP or SSSD rules and says "not allowed"
+            # for an account that classic sudo, beside it as sudo.ws, takes to root through them.
+            "if [ \"$(id -u)\" = 0 ]; then for s in %(ws)s sudo; do "
+            "command -v \"$s\" >/dev/null 2>&1 && LC_ALL=C \"$s\" -n -l -U %(q)s 2>/dev/null "
+            "| grep -q \"may run the following\" && { printf 'SUDOERS %%s\\n' %(q)s; break; }; done; fi; "
+            "else printf 'NOACCT %%s\\n' %(q)s; fi" % {"q": _shlex.quote(u), "ws": _shlex.quote(_R22B_SUDO_WS)})
     parts.append("echo %s" % _ACCOUNT_PROBE_END)
     return "; ".join(parts)
 

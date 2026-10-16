@@ -30,7 +30,8 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
 import collections
 import threading
 from panel.core import i18n
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r20a_unreachable_said,
+                             _r22b_unreachable_or_generic, _unreachable)
 from panel.routes._shared import (_json_int, _r20b_audit_on_raise)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
@@ -141,7 +142,7 @@ def _register_firewall_view(app):
         remote = get_host_remote(remote_id)
         try:
             status = remote_ufw_status(remote)
-        except ConnectionError:
+        except ConnectionError as exc:
             # A host that is down, rebooting or behind a dropped tunnel raises here, and this
             # view rendered a 500 for it — while the API twin below, calling the same function,
             # has always caught ConnectionError and answered "unreachable". A page whose whole
@@ -155,8 +156,12 @@ def _register_firewall_view(app):
             # id-logging sites in panel/routes/_shared.py.
             _log.info("remote firewall page: remote %s unreachable", row_label(remote, "id"),
                       exc_info=True)
+            # `code` and `message` as the API twin answers them (_unreachable): a changed host key
+            # is flagged unreachable too, and the page as loaded blamed the network for it while
+            # its own Refresh said "use Re-trust host key".
+            said, code = _r20a_unreachable_said(exc)
             status = {"installed": False, "enabled": False, "rules": [], "groups": [],
-                      "unreachable": True}
+                      "unreachable": True, "code": code, "message": said}
         games = GameServer.query.filter_by(remote_id=remote_id).all()
         # fw_reason: a protected rule's reason in the viewer's language (firewall.r14a_reason_text).
         return render_template("remote_firewall.html", remote=remote, status=status, games=games,
@@ -470,8 +475,10 @@ def _register_ssh_port(app):
                                           target=remote.name, remote=remote):
                     ok, msg = change_ssh_port(remote, new_port, bind)
             except Exception:
-                return jsonify({"success": False,
-                                "message": _log_and_generic("SSH port change failed")}), 500
+                # Inside the lock's try, so the finally still releases it. A host that is down is
+                # _unreachable's answer, and a connection lost mid-move says "it may have run"
+                # (its command_started code); anything else is the generic 500.
+                return _r22b_unreachable_or_generic("SSH port change failed")
             if ok:
                 # Point the panel at the new port for future connections (cosmetic for the local
                 # host, which doesn't SSH). Same host, so the pinned host key still applies — leave
@@ -750,7 +757,9 @@ def _register_game_ports(app):
         try:
             return _rv_sync_ports_run(gs)
         except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+            # A host that is down or refused the panel is not a fault in it: _unreachable's answer
+            # (200, `unreachable`, a `code`); anything else is the generic 500.
+            return _r22b_unreachable_or_generic("sync ports failed")
 
 
 def _register_host_stats(app):
@@ -805,10 +814,13 @@ def _current_os_updates(snapshot):
     (_local_remote_id), so the identity check costs the banner nothing — it is on every page load,
     and its query budget is asserted.
     """
-    rows = (db.session.query(RemoteServer.id, RemoteServer.created_at, RemoteServer.is_local)
+    rows = (db.session.query(RemoteServer.id, RemoteServer.created_at, RemoteServer.is_local,
+                             RemoteServer.auth_method)
             .filter(RemoteServer.id.in_(list(snapshot))).all())
-    born = {rid: created for rid, created, _local in rows}
-    local_id = next((rid for rid, _created, is_local in rows if is_local), None)
+    born = {rid: created for rid, created, _local, _auth in rows}
+    # The panel host as get_host_remote and is_local_server read it: is_local OR the "local"
+    # transport. By is_local alone, a row local by its transport only stayed in a delegate's banner.
+    local_id = next((rid for rid, _created, is_local, auth in rows if is_local or auth == "local"), None)
     return ([(rid, seen) for rid, seen in sorted(snapshot.items())
              if rid in born and _os_update_current(seen, born[rid])], local_id)
 
@@ -878,7 +890,9 @@ def _register_os_update_checks(app):
             # The panel host's fixed label in the viewer's language (the banner's link guards the
             # name from the page's translator, which is right for a remote's own words only).
             name = i18n.tr(LOCAL_HOST_LABEL) if rid == local_id else seen["name"]
-            hosts.append({"id": rid, "name": name, "count": seen["count"],
+            # `local`: the page names the panel host with its own catalog (nags.js), so a live
+            # language switch follows it; `name` stays the label in the viewer's language.
+            hosts.append({"id": rid, "name": name, "local": rid == local_id, "count": seen["count"],
                           "security": seen["security"], "at": seen["at"],
                           # The panel host has a dedicated page (superadmin-only, as is its line).
                           "url": url_for("server_management") if rid == local_id
@@ -936,7 +950,9 @@ def _register_os_update_jobs(app):
                            remote=remote)
             return jsonify({"success": ok, "message": msg})
         except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("couldn't start update")}), 500
+            # A host that is down or refused the panel is not a fault in it: _unreachable's answer
+            # (200, `unreachable`, a `code`); anything else is the generic 500.
+            return _r22b_unreachable_or_generic("couldn't start update")
 
     @app.route("/api/remote/<int:remote_id>/os-update/status")
     @login_required

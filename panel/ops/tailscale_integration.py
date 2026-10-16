@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from panel.core import i18n
-from panel.core.validation import ip_address_or_none
+from panel.core.validation import canonical_host, ip_address_or_none
 from panel.security import privileged as _priv
 from panel.ops import system_ops as _so
 
@@ -452,7 +452,11 @@ def check_peer_reachability(host) -> dict:
     latency_ms = 0
     if not valid_peer_host(host):
         return {"reachable": False, "latency_ms": 0}
-    host = str(host).strip()
+    # Brackets off an IP literal (validation.canonical_host, the panel's one canonicalisation):
+    # `[fd7a:115c:a1e0::1]` is how the panel prints an IPv6 host, and valid_peer_host accepts it,
+    # but ping reads it as a host NAME, fails to resolve it, and the peer read "not responding".
+    # The result is an address's own text or the name unchanged, so it cannot start with a dash.
+    host = canonical_host(str(host).strip())
     from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
     try:
         # An argv list, no shell, and `host` passed valid_peer_host: its first character is a
@@ -1207,7 +1211,9 @@ def is_tailscale_ip(host):
     today (it feeds a display flag on check-peer), which is precisely when a wrong answer is
     cheapest to fix and most likely to become load-bearing later.
     """
-    host = (host or "").strip()
+    # The bracketed IPv6 form too (see check_peer_reachability): ip_address_or_none parses no
+    # brackets, so `[fd7a:115c:a1e0::1]` read as not a Tailscale address.
+    host = canonical_host((host or "").strip())
     if not host:
         return False
     if _TS_DNS_RE.search(host):

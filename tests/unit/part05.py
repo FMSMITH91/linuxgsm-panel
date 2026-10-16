@@ -1142,14 +1142,24 @@ def _r21d_filter_of(expr, bound, seen=frozenset()):
     return ""
 
 
-def _r21d_partials(tree):
+def _r22d_partial_names(tree):
+    """The names functools.partial is called by.
+
+    `partial`, and `from functools import partial as P` (review 1015c: only the name `partial` was
+    read, so `P(warnings.simplefilter, "ignore")()` passed).
+    """
+    return {"partial"} | {_a.asname for _n in _dw_ast.walk(tree) if isinstance(_n, _dw_ast.ImportFrom)
+                          and _n.module == "functools" for _a in _n.names if _a.name == "partial" and _a.asname}
+
+
+def _r21d_partials(tree, names=("partial",)):
     """{name: the functools.partial(...) Call it is bound to} for `p = partial(...)` anywhere."""
     return {_t.id: _a.value for _a in _dw_ast.walk(tree) if isinstance(_a, _dw_ast.Assign)
-            and _r14d_call_name(_a.value) == "partial" and _a.value.args
+            and _r14d_call_name(_a.value) in names and _a.value.args
             for _t in _a.targets if isinstance(_t, _dw_ast.Name)}
 
 
-def _r21d_unpartial(node, partials):
+def _r21d_unpartial(node, partials, names=("partial",)):
     """Call `node` as the call it makes, when it calls a functools.partial; else `node` itself.
 
     `partial(warnings.simplefilter, "ignore")()` installs the filter with the partial's arguments
@@ -1157,7 +1167,7 @@ def _r21d_unpartial(node, partials):
     """
     if not isinstance(node, _dw_ast.Call):
         return node
-    _p = node.func if _r14d_call_name(node.func) == "partial" and node.func.args else partials.get(
+    _p = node.func if _r14d_call_name(node.func) in names and node.func.args else partials.get(
         getattr(node.func, "id", None))
     if _p is None:
         return node
@@ -1176,11 +1186,12 @@ def _r14d_blanket_filters(tree):
     _bound = _r19d_bound_classes(tree)
     _aliases = {_k: _v[0] if len(_v) == 1 else _dw_ast.Tuple(elts=_v, ctx=_dw_ast.Load())
                 for _k, _v in _bound.items()}
-    _partials = _r21d_partials(tree)
+    _pnames = _r22d_partial_names(tree)
+    _partials = _r21d_partials(tree, _pnames)
 
     def _walk(node, scoped):
         scoped = scoped or _r14d_is_catch_warnings(node)
-        _call = _r21d_unpartial(node, _partials)
+        _call = _r21d_unpartial(node, _partials, _pnames)
         _fn = _r20d_filter_fn(_call, _bound)
         if not scoped and _fn and _r14d_ignores_deprecations(_call, _aliases, _fn):
             out.append(node.lineno)
@@ -1236,7 +1247,10 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     # Review 1015a: an alias of an alias, and the filter called through functools.partial.
     'import warnings\nf = warnings.simplefilter\ng = f\ng("ignore")',
     'import functools, warnings\nfunctools.partial(warnings.simplefilter, "ignore")()',
-    'import functools, warnings\np = functools.partial(warnings.filterwarnings, "ignore")\np(category=Warning)')}
+    'import functools, warnings\np = functools.partial(warnings.filterwarnings, "ignore")\np(category=Warning)',
+    # Review 1015c: partial itself imported under another name.
+    'import warnings\nfrom functools import partial as P\nP(warnings.simplefilter, "ignore")()',
+    'import warnings\nfrom functools import partial as P\nq = P(warnings.simplefilter, "ignore")\nq()')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
@@ -3376,9 +3390,11 @@ check("CI: the gamedig lockfile is installed with npm ci and run on Node 18.19, 
 _GD_NPM_RE = _re_ntc.compile(
     r"(?<![^\s;&|(){}])npm\s+(?:-\S+\s+)*(install|i|install-test|it|update|up|ci)\b")
 _gd_npm_seen = []
-_gd_npm_files = sorted(_f for _f in _gdl_glob.glob(os.path.join(_UNIT_ROOT, "**", "*.sh"),
-                                                    recursive=True)
-                       if "/.venv/" not in _f and "/node_modules/" not in _f)
+# Hidden directories too (review 1015c): glob's `**` skips them, so .clusterfuzzlite/build.sh went
+# unread. A second pattern rooted at the hidden top-level directories, since include_hidden needs 3.11.
+_gd_npm_files = sorted(_f for _p in (os.path.join(_UNIT_ROOT, "**", "*.sh"), os.path.join(_UNIT_ROOT, ".*", "**", "*.sh"))
+                       for _f in _gdl_glob.glob(_p, recursive=True)
+                       if "/.venv/" not in _f and "/node_modules/" not in _f and "/.git/" not in _f)
 _gd_npm_files.append(os.path.join(_UNIT_ROOT, "tools", "panel-helper"))
 for _f in _gd_npm_files:
     with open(_f, encoding="utf-8") as _fh:
@@ -3431,9 +3447,11 @@ def _gd_render(verb, args):
 
 _gd_npm_remote = [_v for _v in sorted(_priv._REMOTE_ACTIONS)
                   if _GD_NPM_RE.search(_gd_render(_v, _VERB_SAMPLES.get(_v, [])))]
-check("npm: no shell script installs from the registry — the one npm install is install-gamedig's ci",
-      _gd_npm_seen == [("tools/gamedig/install-gamedig.sh", "ci")] and not _gd_npm_remote,
-      "scripts=%r remote renderings=%r" % (_gd_npm_seen, _gd_npm_remote))
+check("npm: no shell script installs from the registry — the one npm install is install-gamedig's ci "
+      "(scripts in hidden directories read too)",
+      _gd_npm_seen == [("tools/gamedig/install-gamedig.sh", "ci")] and not _gd_npm_remote
+      and os.path.join(_UNIT_ROOT, ".clusterfuzzlite", "build.sh") in _gd_npm_files,
+      "scripts=%r remote renderings=%r read=%r" % (_gd_npm_seen, _gd_npm_remote, _gd_npm_files))
 
 # ── gamedig-install, as a remote receives it ───────────────────────────────────────────────────
 # One root shell: tools/gamedig's three files into GAMEDIG_DIR, each through a temp file and a
@@ -6140,7 +6158,10 @@ _uc_sites = []
 _r21d_uc_walk = list(os.walk(os.path.join(_root, "panel"))) + [
     (_root, [], sorted(_n for _n in os.listdir(_root) if _n.endswith(".py")))]
 for _dp, _dn, _fn in _r21d_uc_walk:
-    _dn[:] = [_d for _d in _dn if _d != "__pycache__"]
+    # The walk is a list already, so pruning _dn would skip nothing (review 1015c): a cache directory
+    # is passed over here instead.
+    if "__pycache__" in _dp.split(os.sep):
+        continue
     for _name in _fn:
         if not _name.endswith(".py") or _name == "privileged.py":
             continue                       # privileged.py is where the verb is DEFINED
@@ -6613,7 +6634,7 @@ def _inst_fn(name):
 check("install.sh: the backfill asks whether an account can already reach root",
       'grep -qxE "${_cas_groups}"' in _inst_fn("can_already_sudo")
       and '_cas_groups="sudo|admin|wheel|root|' in _inst_fn("can_already_sudo")
-      and 'sudo -l -U "${_cas_user}"' in _inst_fn("can_already_sudo"),
+      and '"${_cas_sudo}" -l -U "${_cas_user}"' in _inst_fn("can_already_sudo"),
       "the check is missing from can_already_sudo")
 check("install.sh: ...and the backfill acts on its answer, enrolling only on a definite no",
       "can_already_sudo" in _inst_fn("sync_game_user_group")
@@ -8045,7 +8066,15 @@ check("gmod mount: ...and a grant that worked still returns None (positive contr
 # urllib). The module under test's own handle is swapped instead (part01's _R20dOver). Read from
 # every test file's AST; a stub whose module imports the stdlib name inside a function has no
 # handle to swap, and is listed with that reason.
-_R21D_STDLIB = {"os", "subprocess", "time", "socket", "shutil", "urllib", "signal", "select", "threading"}
+# Review 1015c: the gate read nine fixed module names, so pwd/grp/getpass/sqlite3/sys stubs passed
+# unread, and found a patcher only by its name, so `_set34(t, "sleep", f)` passed. Every stdlib module
+# now counts, under any spelling (`from os import path as p`, `__import__("pwd")`,
+# `importlib.import_module(…)`, `sys.modules["…"]`), and any call handing a stdlib module a name as a
+# string and a value is read as a patcher, whatever it is called. A patcher's stub is listed by its
+# module AND attribute, so one exception does not exempt every later stub on that module. sys and
+# builtins are left out: their attributes (argv, stdout, stdin, executable, input) are the process's
+# own state with no per-module copy to swap, and contextlib.redirect_stdout sets them the same way.
+_R21D_STDLIB = set(sys.stdlib_module_names) - {"sys", "builtins"}
 _R21D_STDLIB_OK = {
     # system_ops.live_metrics imports shutil inside the function: the module is the only seam.
     "tests/unit/part10.py:_p7_sh.disk_usage",
@@ -8053,44 +8082,119 @@ _R21D_STDLIB_OK = {
     "tests/unit/part16.py:os.replace",
     # The runner drives shutil.rmtree's two modes on purpose: they are process-wide by nature.
     "tests/unit_test.py:shutil._use_fd_functions", "tests/unit_test.py:shutil._rmtree_impl",
-    "tests/unit_test.py:shutil",
+    "tests/unit_test.py:shutil.*",
+    # The runner tracks every temp path the suite makes: process-wide by nature.
+    "tests/unit_test.py:tempfile.mkdtemp", "tests/unit_test.py:tempfile.mkstemp",
+    "tests/unit_test.py:tempfile._mkstemp_inner",
+    # On the block's own _R20dOver proxy (set two lines up), not the pwd module.
+    "tests/unit/part05.py:_helper.pwd.getpwnam",
+    # terminal_session imports pwd inside panel_account/sudo_hint/_login_shell, and _core inside
+    # enrol_game_user: the module is the only seam.
+    "tests/unit/part06.py:_pwd6.getpwuid", "tests/unit/part06.py:_pwd7.getpwuid",
+    "tests/unit/part13.py:_pwd10.getpwuid", "tests/unit/part63.py:_pwd63.getpwuid",
+    # debug_report.header imports importlib.metadata inside the function: the module is the only seam.
+    "tests/unit/part10.py:_p7_md.distributions",
+    # tailscale_integration imports getpass inside the function: the module is the only seam.
+    "tests/unit/part11.py:_ts_getpass.getuser",
+    # models imports sqlite3 inside each backup/health function: the module is the only seam.
+    "tests/unit/part16.py:_sq16h.connect",
+    # A tripwire, process-wide on purpose: NO module may make these NSS calls.
+    "tests/unit/part25.py:pwd.getpwall", "tests/unit/part25.py:pwd.getpwnam", "tests/unit/part25.py:grp.getgrnam",
+    # monitoring imports pwd/grp inside _admin_account, debug_report.logs pwd inside its own-name
+    # lookup: the module is the only seam.
+    "tests/unit/part34.py:_pwd34.getpwnam", "tests/unit/part34.py:_grp34.getgrgid",
+    "tests/unit/part34.py:_pwd34.getpwuid",
 }
+
+def _r22d_submodule(mod, name):
+    """Is `from mod import name` a module (`from os import path`), not a function or a value?"""
+    import importlib as _r22d_il
+    try:
+        _r22d_il.import_module("%s.%s" % (mod, name))
+        return True
+    except ImportError:
+        try:
+            return isinstance(getattr(_r22d_il.import_module(mod), name, None), type(sys))
+        except ImportError:
+            return False
+
+
+def _r22d_import_binds(node):
+    """The names one import statement binds to a stdlib module (`import os as _o`, `from os import path`)."""
+    if isinstance(node, _smg_ast.Import):
+        return {_a.asname or _a.name.split(".")[0] for _a in node.names if _a.name.split(".")[0] in _R21D_STDLIB}
+    if isinstance(node, _smg_ast.ImportFrom) and _r22d_from_stdlib(node):
+        return {_a.asname or _a.name for _a in node.names if _r22d_submodule(node.module, _a.name)}
+    return set()
+
+
+def _r22d_from_stdlib(node):
+    """Is ImportFrom `node` an absolute import from a stdlib module?"""
+    return not node.level and (node.module or "").split(".")[0] in _R21D_STDLIB
 
 
 def _r21d_std_aliases(tree):
-    """The names a module's imports bind to a stdlib module of _R21D_STDLIB (`import os as _o`)."""
-    return {_a.asname or _a.name.split(".")[0] for _n in _smg_ast.walk(tree) if isinstance(_n, _smg_ast.Import)
-            for _a in _n.names if _a.name.split(".")[0] in _R21D_STDLIB}
+    """The names a module's imports, or an assignment of one, bind to a stdlib module."""
+    _out = set()
+    for _n in _smg_ast.walk(tree):
+        _out |= _r22d_import_binds(_n)
+    # `_pwd63 = __import__("pwd")` binds one too; a second pass follows a name bound to such a name.
+    for _ in range(2):
+        _out |= {_t.id for _n in _smg_ast.walk(tree) if isinstance(_n, _smg_ast.Assign)
+                 and _r21d_is_stdlib_module(_n.value, _out) for _t in _n.targets if isinstance(_t, _smg_ast.Name)}
+    return _out
+
+
+def _r22d_str_arg(call, i=0):
+    """The string constant a call is handed at position `i`, or None."""
+    _a = call.args[i] if len(call.args) > i else None
+    return _a.value if isinstance(_a, _smg_ast.Constant) and isinstance(_a.value, str) else None
+
+
+def _r21d_is_stdlib_module(expr, aliases):
+    """Is `expr` a stdlib module itself, not a value in one.
+
+    `os`, `_sp44`, `x.os`, `x.urllib.request`, `__import__("pwd")`, `sys.modules["os"]`.
+    """
+    if isinstance(expr, _smg_ast.Name):
+        return expr.id in aliases
+    if isinstance(expr, _smg_ast.Attribute):
+        return expr.attr in _R21D_STDLIB or (expr.attr == "request" and getattr(expr.value, "attr", "") == "urllib")
+    return _r22d_imported_module(expr)
+
+
+def _r22d_imported_module(expr):
+    """Is `expr` a stdlib module fetched by name: `__import__("pwd")`, `import_module(…)`, `sys.modules[…]`?"""
+    if isinstance(expr, _smg_ast.Call):
+        _fn = getattr(expr.func, "id", getattr(expr.func, "attr", ""))
+        return (_fn in ("__import__", "import_module")
+                and (_r22d_str_arg(expr) or "").split(".")[0] in _R21D_STDLIB)
+    return (isinstance(expr, _smg_ast.Subscript) and getattr(expr.value, "attr", "") == "modules"
+            and isinstance(expr.slice, _smg_ast.Constant)
+            and str(expr.slice.value).split(".")[0] in _R21D_STDLIB)
 
 
 def _r21d_names_stdlib(expr, aliases):
-    """Is `expr` a stdlib module: a name bound to one, or an attribute chain through one?"""
+    """Is `expr` a stdlib module: one itself, or an attribute chain through one?"""
     while isinstance(expr, _smg_ast.Attribute):
-        if expr.attr in _R21D_STDLIB or (expr.attr == "request" and getattr(expr.value, "attr", "") == "urllib"):
+        if _r21d_is_stdlib_module(expr, aliases):
             return True
         expr = expr.value
-    return isinstance(expr, _smg_ast.Name) and expr.id in aliases
+    return _r21d_is_stdlib_module(expr, aliases)
 
 
 _R21D_PATCHER = _re.compile(r"patch|setattr|swap|^_p\d+$")
 
 
-def _r21d_is_stdlib_module(expr, aliases):
-    """Is `expr` a stdlib module itself (`os`, `_sp44`, `x.os`, `x.urllib.request`), not a value in one?"""
-    if isinstance(expr, _smg_ast.Name):
-        return expr.id in aliases
-    return isinstance(expr, _smg_ast.Attribute) and (
-        expr.attr in _R21D_STDLIB or (expr.attr == "request" and getattr(expr.value, "attr", "") == "urllib"))
-
-
 def _r21d_stdlib_stubs(tree):
-    """`expr` text of each attribute set on a stdlib module: assigned, or by _patch/_patched/setattr."""
+    """`expr` text of each attribute set on a stdlib module: assigned, or by a patcher call."""
     _al, _out = _r21d_std_aliases(tree), []
     for _n in _smg_ast.walk(tree):
         _out += [_smg_ast.unparse(_t) for _t in _r21d_targets(_n)
                  if isinstance(_t, _smg_ast.Attribute) and _r21d_names_stdlib(_t.value, _al)]
         if _r21d_patches_stdlib(_n, _al):
-            _out.append(_smg_ast.unparse(_n.args[0]))
+            _out.append("%s.%s" % (_smg_ast.unparse(_n.args[0]), _r22d_str_arg(_n, 1) or "*")
+                        if len(_n.args) > 1 else _smg_ast.unparse(_n.args[0]))
     return _out
 
 
@@ -8102,11 +8206,17 @@ def _r21d_targets(node):
 
 
 def _r21d_patches_stdlib(node, aliases):
-    """Is `node` a patcher (_patch, _p9_patch, _p21, setattr, _swap…, by its name) handed a stdlib module?"""
+    """Is `node` a patcher handed a stdlib module.
+
+    One named like _patch/_p9_patch/_p21/setattr/_swap…, or any call shaped (module, "name", value),
+    as _set34/_set38 and mock's patch.object are. getattr only reads.
+    """
     if not (isinstance(node, _smg_ast.Call) and node.args):
         return False
     _fname = getattr(node.func, "id", getattr(node.func, "attr", "")) or ""
-    return bool(_R21D_PATCHER.search(_fname)) and _r21d_is_stdlib_module(node.args[0], aliases)
+    _shaped = (len(node.args) >= 3 and isinstance(node.args[1], (_smg_ast.Constant, _smg_ast.Name))
+               and _fname != "getattr")
+    return (_shaped or bool(_R21D_PATCHER.search(_fname))) and _r21d_is_stdlib_module(node.args[0], aliases)
 
 
 _r21d_std_seen, _r21d_std_hits = set(), []
@@ -8119,9 +8229,17 @@ for _f in sorted(_smg_glob.glob(os.path.join(_root, "tests", "**", "*.py"), recu
 _r21d_std_ctl = [_r21d_stdlib_stubs(_smg_ast.parse(_c)) for _c in (
     "x.os.geteuid = f", "import subprocess as sp\n_patch(sp, 'run', f)", "a, x.urllib.request.urlopen = b",
     "_patched(x.os, geteuid=f)", "import os\nos.replace = f", "import urllib.request as u\n_p21(u, 'urlopen', f)",
-    "x.os = _R20dOver(x.os, geteuid=f)", "_r21d_urlopen_of(x).urlopen = f", "x.subprocess = p")]
-check("tests: no test sets an attribute on a stdlib module (it would stand in for every module and "
-      "thread); each listed exception still exists, and the reader finds each spelling (control)",
+    "import pwd as _pw\n_pw.getpwnam = f", "import grp\n_set34(grp, 'getgrnam', f)",
+    "import time as t\n_set34(t, 'sleep', f)", "_pw = __import__('pwd')\n_pw.getpwuid = f",
+    "from os import path as p\np.isfile = f", "from importlib import metadata\nmetadata.distributions = f",
+    "__import__('pwd').getpwuid = f", "importlib.import_module('getpass').getuser = f",
+    "sys.modules['subprocess'].run = f",
+    "x.os = _R20dOver(x.os, geteuid=f)", "_r21d_urlopen_of(x).urlopen = f", "x.subprocess = p",
+    "import os\ngetattr(os, 'replace', None)", "from os import replace as r\nr.x = f", "import sys\nsys.argv = f",
+    "import os\n_set34(os, name, f)")]
+check("tests: no test sets an attribute on a stdlib module other than sys/builtins (it would stand in for "
+      "every module and thread); each listed exception still exists, and the reader finds each spelling "
+      "and each (module, name, value) patcher whatever its name (control)",
       not _r21d_std_hits and _R21D_STDLIB_OK <= _r21d_std_seen
-      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 6 + [False] * 3,
+      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True],
       repr((_r21d_std_hits, sorted(_R21D_STDLIB_OK - _r21d_std_seen), _r21d_std_ctl)))

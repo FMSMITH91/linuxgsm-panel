@@ -587,7 +587,8 @@ check("install-status: ...and one the host would not answer for is left as it wa
 #    NOT work after logout. We log in for real (so we get genuine signed session +
 #    remember_token cookies), clone the cookie jar the way a thief would, log out,
 #    then replay the pre-logout cookies. They must work BEFORE and be rejected AFTER.
-#    This proves logout invalidates cookies server-side (epoch bump), not just in the
+#    This proves logout invalidates cookies server-side (the device's session row is
+#    deleted; auth_epoch moves only for a cookie with no sid), not just in the
 #    browser (where clearing the client's copy wouldn't stop a captured one). ──
 def _cookie_names(client):
     return {k[2] for k in getattr(client, "_cookies", {})}
@@ -1296,9 +1297,11 @@ with app.app_context():
     # cheap half had been done while the wal_size beside it never moved.
     from panel.db import models as _dbm
     _rm_real = _dbm._run_maintenance(str(DB_PATH))
+    # Two answers: the checkpoint (True / False busy / None unread) and the vacuum (a bool).
     check("optimize: _run_maintenance reports the checkpoint AND the vacuum",
           isinstance(_rm_real, tuple) and len(_rm_real) == 2
-          and _rm_real[0] in (True, False, None), "got %r" % (_rm_real,))
+          and _rm_real[0] in (True, False, None) and isinstance(_rm_real[1], bool),
+          "got %r" % (_rm_real,))
     _rm_saved = _dbm._run_maintenance
     try:
         _dbm._run_maintenance = lambda p: (False, False)      # checkpoint busy, VACUUM busy

@@ -287,8 +287,11 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python app.py
 
-bash tools/run-tests.sh    # compile, flake8, unit + smoke tests, shellcheck
+# Every suite, each in a throwaway copy of the tree with sudo refused and outbound connections blocked
+for s in tests/*_test.py; do PYTHON=./venv/bin/python ./tools/smoke-local.sh "$s" || break; done
 ```
+
+`tools/run-tests.sh` (compile, flake8, shellcheck, then every suite) is what CI runs. Do not run it on your own machine: it boots the app with real `sudo -n` probes, which pam_faillock counts until it locks you out of sudo, and real outbound SSH to the test fixtures' hosts. `tools/smoke-local.sh` runs the same suites without either.
 
 CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, zizmor (on the workflows themselves), a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records the job's outbound connections and the processes it runs as root (in the job's public log, and with StepSecurity), routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
 
@@ -328,7 +331,7 @@ that fails if any of them drifts back to being module-relative.
 
 ## Contributing
 
-Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run `bash tools/run-tests.sh` first, and keep CI green.
+Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run the suites through `tools/smoke-local.sh` first (see Development), and keep CI green.
 
 **Tests come with the change.** New functionality comes with tests of it, and a bug fix comes with a check that fails without the fix, in the suite that owns that area (`tests/unit/`, `tests/smoke/`, `tests/rbac_test.py`, …). A PR that changes behaviour without a test is not merged.
 

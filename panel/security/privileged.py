@@ -1443,6 +1443,20 @@ _R18B_RESTART_FLAGS_REMOTE = (
 
 
 # The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
+def _r22a_content_cron_path(user):
+    """/etc/cron.d's file for one content user's weekly update cron.
+
+    Debian's cron (Ubuntu's) skips every cron.d file whose name holds anything but letters, digits,
+    `_` and `-` (the run-parts rule), and an account name may hold a `.`: a content box adopted
+    from an existing `my.srcds` account got an update cron that never ran. Such a name is written
+    as `--` and its hex instead; no account name starts with `-`, so the two forms never meet.
+    The same rule is in tools/panel-helper; the two must agree.
+    """
+    if "." in user:
+        return "%s--%s" % (CONTENT_CRON_PREFIX, user.encode().hex())
+    return "%s-%s" % (CONTENT_CRON_PREFIX, user)
+
+
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
     "tailscale-up-key": lambda a: (shlex.join(ts_up_argv(a[1], a[2], a[3]))
@@ -1632,8 +1646,9 @@ _REMOTE_ACTIONS = {
         ([content_path(a[0], CONTENT_SUBDIR, a[1])] if a[2] == "-" else
          [content_path(a[0], CONTENT_SUBDIR, a[1]), content_path(a[0], a[2]),
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
-    "content-cron-remove": lambda a: (
-        "rm -f %s" % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0])))),
+    # Both names, as the helper removes them (do_content_cron_remove).
+    "content-cron-remove": lambda a: "rm -f " + " ".join(shlex.quote(p) for p in dict.fromkeys((
+        _r22a_content_cron_path(_username(a[0])), "%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))))),
     # The helper's read and its ceiling, with the same rc for a cut read — see the function.
     "f2b-log-lines": _f2b_log_lines_remote,
     # AS THE GAME ACCOUNT, as the helper reads it (do_gmod_mount_read, _as_game_user). Every
@@ -1808,7 +1823,7 @@ def remote_content_cron_command(user, content):
     Same shape as remote_write_command, but the destination is per-user so it cannot live in
     WRITE_TARGETS — the path is still built here from a validated name, not passed in.
     """
-    path = "%s-%s" % (CONTENT_CRON_PREFIX, _username(user))
+    path = _r22a_content_cron_path(_username(user))
     b64 = base64.b64encode(content.encode()).decode()
     return ("echo %s | base64 -d > %s && chmod 644 %s"
             % (shlex.quote(b64), shlex.quote(path), shlex.quote(path)))

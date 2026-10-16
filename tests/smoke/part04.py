@@ -480,8 +480,9 @@ with app.app_context():
     from panel.db.models import game_server_tags as _gst
     _n_assoc = len(db.session.execute(_gst.select()).fetchall())
 check("tags: exactly one association row exists for that pair", _n_assoc == 1, "rows=%d" % _n_assoc)
-# Deleting a tag must take its association rows with it: FKs are never enforced here and SQLite
-# reuses rowids, so an orphan would later be inherited by an unrelated server.
+# Deleting a tag must take its association rows with it: FKs are never enforced here, and where a
+# table lacks AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) SQLite reuses rowids,
+# so an orphan would later be inherited by an unrelated server.
 check("tags: delete succeeds", c.post("/api/tags/%d/delete" % _tag_id).status_code == 200)
 with app.app_context():
     from panel.db.models import game_server_tags as _gst2

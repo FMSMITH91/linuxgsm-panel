@@ -1416,6 +1416,44 @@ restore_service_unit() {
     return 0
 }
 
+# Prune old update snapshots in data/.backups, keeping the newest KEEP_BACKUPS. This runs as ROOT
+# over a directory the panel user owns, so:
+#  - it touches only names in the STAMP shape this script creates, and never through word
+#    splitting: `ls | xargs rm -rf` split each name on whitespace, and a snapshot the panel named
+#    "x /etc" had root delete /etc. STAMP sorts chronologically as text, so newest-first is a
+#    reverse glob order, not mtimes the owner can set.
+#  - it never reaches them through a link. The panel user can turn data/ or data/.backups into a
+#    link at any time (a crontab of its own survives the service stop), and a glob through that
+#    link lists the TARGET's entries: root then `rm -rf`ed stamp-named directories anywhere it can
+#    reach, an operator's own `date +%Y%m%d-%H%M%S` backups among them. So the prune works from
+#    INSIDE the directory: `cd -P`, then the physical path must be PANEL_DIR's own data/.backups
+#    (a data/ that is a link, even a deliberate one, is refused, with a warning: the snapshots are
+#    then kept, which loses nothing). Once inside, every name is relative to that directory, which
+#    swapping the path afterwards cannot move us out of; an entry swapped for a link after its
+#    check is removed as a link (rm does not follow a link it is named), and rm -rf follows no link
+#    inside what it removes. A subshell, so the cd never outlives it.
+# Not as the tree's owner (TREE_SUDO), as the snapshot steps are: snapshots made before TREE_SUDO
+# existed are root's, and the owner could never remove them.
+_r22a_prune_snapshots() {
+    local _want
+    _want="$(cd -P -- "${PANEL_DIR}" 2>/dev/null && pwd -P)" || return 0
+    _want="${_want}/data/.backups"
+    (
+        cd -P -- "${PANEL_DIR}/data/.backups" 2>/dev/null || exit 0
+        if [[ "$(pwd -P)" != "${_want}" ]]; then
+            warn "Old update snapshots not pruned: ${PANEL_DIR}/data/.backups is reached through a link."
+            exit 0
+        fi
+        _snaps=()
+        for _snap in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+            [[ -d "${_snap}" && ! -L "${_snap}" ]] && _snaps+=("${_snap}")
+        done
+        for (( _i = ${#_snaps[@]} - 1 - KEEP_BACKUPS; _i >= 0; _i-- )); do
+            rm -rf -- "./${_snaps[_i]}"
+        done
+    )
+}
+
 # Prefer RAM over swap on small game hosts. The default vm.swappiness=60 makes the kernel swap out
 # pages the game/panel still want even when RAM is free, adding disk-latency stalls. 10 keeps active
 # memory in RAM but still lets swap save us from OOM under real pressure (so we DON'T disable swap).
@@ -1526,6 +1564,8 @@ check_origin_trusted() {
 # panel-writable. That is what closes the window between staging and `install`.
 # Root-owned, outside the panel's checkout — see stage_root_source and SECURITY.md.
 HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+# Classic sudo on a host whose `sudo` is sudo-rs (Ubuntu 26.04); can_already_sudo asks both.
+SUDO_WS="/usr/bin/sudo.ws"
 # The PATH sudo gives the helper (write_sudoers_grant's Defaults line). The helper's own CHILD_PATH
 # is the same string, and a unit gate holds the two together.
 HELPER_SECURE_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -2261,12 +2301,20 @@ CAS_PY
         esac
         return 0
     fi
-    _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
-    case "${_cas_out}" in
-        *"may run the following"*)    echo yes ;;
-        *"not allowed to run sudo"*)  echo no ;;
-        *)                            echo unknown ;;
-    esac
+    # EVERY sudo present, as the helper asks them: on Ubuntu 26.04 `sudo` is sudo-rs, which never
+    # reads LDAP or SSSD rules and answers "not allowed" for an account classic sudo (beside it as
+    # sudo.ws) takes to root through them. Any "yes" is yes; "no" only when every one said no.
+    local _cas_sudo _cas_out _cas_ans=""
+    for _cas_sudo in "${SUDO_WS:-/usr/bin/sudo.ws}" sudo; do
+        command -v "${_cas_sudo}" >/dev/null 2>&1 || continue
+        _cas_out="$(LC_ALL=C "${_cas_sudo}" -l -U "${_cas_user}" 2>&1)" || true
+        case "${_cas_out}" in
+            *"may run the following"*)    echo yes; return 0 ;;
+            *"not allowed to run sudo"*)  _cas_ans="${_cas_ans:-no}" ;;
+            *)                            _cas_ans=unknown ;;
+        esac
+    done
+    echo "${_cas_ans:-unknown}"
 }
 
 # Why `$1` may NOT join GAME_GROUP, as one printable line; nothing when it may. The root-owned
@@ -2869,21 +2917,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         # installer 30 minutes. gamedig is not something the panel needs in order to start, and a
         # rolled-back update leaves the tree the host already had alone.
         install_gamedig
-        # Prune old snapshots, keep the most recent few. This runs as ROOT over a directory the
-        # panel user owns, so it touches only names in the STAMP shape this script creates, and
-        # never through word splitting: `ls | xargs rm -rf` split each name on whitespace, and a
-        # snapshot the panel named "x /etc" had root delete /etc. STAMP sorts chronologically as
-        # text, so newest-first is a reverse glob order, not mtimes the owner can set.
-        if [[ -d "${BACKUP_ROOT}" ]]; then
-            _snaps=()
-            for _snap in "${BACKUP_ROOT}"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
-                [[ -d "${_snap}" && ! -L "${_snap}" ]] && _snaps+=("${_snap}")
-            done
-            for (( _i = ${#_snaps[@]} - 1 - KEEP_BACKUPS; _i >= 0; _i-- )); do
-                rm -rf -- "${_snaps[_i]}"
-            done
-            unset _snaps _snap _i
-        fi
+        # Prune old snapshots, keep the most recent few (see the function for why it is careful).
+        _r22a_prune_snapshots
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
         # If the panel has just switched to HTTPS, say so explicitly: an existing http://

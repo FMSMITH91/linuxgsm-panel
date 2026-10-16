@@ -303,12 +303,15 @@ var PALETTE_HOST_SECTIONS = [
       addSection(sec, full, i);
     });
     (servers || []).forEach(function (s, i) {
+      // The panel host's fixed label in this page's language: the meta line is guarded (it is a
+      // remote's own name everywhere else), so the walker never reaches it.
+      var host = s.host_local ? t('Panel Server') : s.host;
       consider({
         label: s.name,
         href: (window.MOUNT || '') + '/server/' + s.id,
         icon: 'bi bi-hdd-stack',
-        meta: [s.game, s.host].filter(Boolean).join(' · ')
-      }, s.name + ' ' + (s.game || '') + ' ' + (s.host || ''), 'servers', i);
+        meta: [s.game, host].filter(Boolean).join(' · ')
+      }, s.name + ' ' + (s.game || '') + ' ' + (host || ''), 'servers', i);
       // ...and the things you can DO to it. The palette used to be a way to reach a page, which
       // left "restart it" as search -> land -> find the button -> click. These rows run.
       //
@@ -322,10 +325,10 @@ var PALETTE_HOST_SECTIONS = [
           label: _tr(ACTION_LABEL[act]) + ' ' + s.name,
           act: act, sid: s.id, sname: s.name,
           icon: ACTION_ICON[act] || 'bi bi-play-fill',
-          meta: [s.game, s.host].filter(Boolean).join(' · ')
+          meta: [s.game, host].filter(Boolean).join(' · ')
         // Matchable by verb OR by name, so "restart" lists every server you could restart and
         // "cod" lists everything you can do to that one.
-        }, act + ' ' + s.name + ' ' + (s.game || '') + ' ' + (s.host || ''),
+        }, act + ' ' + s.name + ' ' + (s.game || '') + ' ' + (host || ''),
            'actions', i * 10 + j);
       });
     });

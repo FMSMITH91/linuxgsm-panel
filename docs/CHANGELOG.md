@@ -601,6 +601,27 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A twelfth full review on 2026-10-15: fixes.** Every item below has a check that fails without
+  its fix. (Its one high finding, apt `#include` through the root helper, shipped on its own; see
+  Security.)
+  - **Updates keep their snapshots safe.** The update's clean-up of old snapshots followed a link
+    the panel account could plant at `data/.backups`, so root could be made to delete folders
+    elsewhere. It now refuses a linked path and removes only dated folders inside the real one.
+    Proven on a real host.
+  - **Rate limiting over IPv6.** IPv4 and IPv6 firewall rules are now read separately: an IPv6
+    allow above the limit no longer reads as "rate limited". Proven against real UFW output.
+  - **OS-updates banner for delegated admins** shows again for the hosts they manage; it stopped
+    when the eleventh review hid the panel host from them.
+  - **Running the tests no longer deletes a developer's database.** The default test run removed
+    `data/panel.db` and its backup in the checkout; it now runs those suites in a copy, Ctrl-C
+    stops a parallel run, and the README points contributors to the safe runner.
+  - **Smaller fixes.** The setup wizard and Tailscale ping accept a bracketed IPv6 address; saving
+    a file through a link writes the file it points at; a file of blank lines opens as text; the
+    root-capable account check also asks classic sudo on sudo-rs hosts; a host that is down or has
+    a changed key says so instead of "Internal server error"; the debug report's "Ways in" line
+    reads the real SSH ports; several untranslated labels follow the viewer's language.
+  - **Tests.** The stdlib-stub gate now covers pwd and grp and patcher helpers, several checks that
+    could no longer fail can again, and a hung lock control can no longer stall the run.
 - **An eleventh full review on 2026-10-15: fixes.** Every item below has a check that fails without
   its fix.
   - **Firewall page after a host key change.** When a remote's SSH key had changed, refreshing its

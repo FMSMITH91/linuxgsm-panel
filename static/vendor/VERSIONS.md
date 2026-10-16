@@ -85,7 +85,8 @@ rows to agree, so the next split fails the build instead of sitting there.
    `overrides`.
 4. Regenerate the lockfile in a scratch copy: `npm install --package-lock-only --ignore-scripts`
    beside a copy of `package.json`, then copy `package-lock.json` back.
-5. Run `./tools/run-tests.sh`; the JS parse gate and these manifest gates all run.
+5. Run `./tools/smoke-local.sh tests/template_actions_test.py` and `./tools/smoke-local.sh tests/unit_test.py`;
+   the JS parse gate and these manifest gates run in those two suites.
 
 ## Socket.IO client 4.8.4 (2026-10-03)
 

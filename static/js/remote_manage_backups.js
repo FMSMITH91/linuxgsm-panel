@@ -451,15 +451,20 @@ function gameSchedule(g){
   // from the stored schedule costs nothing; reloading the list would be one SSH per server.
   (window._bkSched || (window._bkSched = {}))[g.id] = sc;
   var ivVal=sc.interval_set?String(sc.interval_days):'default';
-  function opt(v,label,cur){ return '<option value="'+v+'"'+(String(v)===cur?' selected':'')+'>'+label+'</option>'; }
+  // `named`: the attributes setLang fills a template label from again (as _r20cIntervalOption).
+  function opt(v,label,cur,named){ return '<option value="'+v+'"'+(String(v)===cur?' selected':'')+(named||'')+'>'+label+'</option>'; }
   // The same choices Files & Config offers, '3' included, plus one for any other stored interval
   // (the API accepts 0-365). A value with no <option> left the select showing its FIRST entry —
   // "Default" — beside a note saying "Custom — every 3 days", and the next save posted that.
   var ivOpts=[['default','Default'],['0','Off'],['1','Daily'],['3','Every 3 days'],['7','Weekly'],
               ['14','Every 2 weeks'],['30','Monthly']];
-  if(!ivOpts.some(function(o){ return o[0]===ivVal; })) ivOpts.push([ivVal, tf('Every {n} days', {n: Number(sc.interval_days)})]);
+  // Its label is a filled template, which a live language switch cannot map back to a key, so it
+  // names the template and its value for setLang to fill again ("Cada 5 días" on an English page).
+  var ivN={n: Number(sc.interval_days)};
+  if(!ivOpts.some(function(o){ return o[0]===ivVal; })) ivOpts.push([ivVal, escapeHtml(tf('Every {n} days', ivN)),
+    ' data-i18n-text="Every {n} days" data-i18n-vars="'+escapeHtml(JSON.stringify(ivN))+'"']);
   var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
-    +ivOpts.map(function(o){ return opt(escapeHtml(o[0]), o[1], ivVal); }).join('')+'</select>';
+    +ivOpts.map(function(o){ return opt(escapeHtml(o[0]), o[1], ivVal, o[2]); }).join('')+'</select>';
   // Typed, not picked — the same change as the two global boxes above. A <select> could carry a
   // labelled "Default" option; a number box says it by being EMPTY, so the placeholder has to
   // carry that meaning and the endpoint has to read "" as "inherit".

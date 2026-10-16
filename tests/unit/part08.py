@@ -74,6 +74,7 @@ class _GhClient:
 
 import panel.routes._shared as _gh_shared  # noqa: E402
 from panel.core import panel_state as _gh_ps  # noqa: E402
+from panel.ops import terminal_session as _gh_term     # noqa: E402
 
 _GH_SAVED = [(_sm_core, n, getattr(_sm_core, n)) for n in (
     "run_command", "run_privileged", "_exec_local_argv", "helper_present",
@@ -83,6 +84,7 @@ _GH_SAVED = [(_sm_core, n, getattr(_sm_core, n)) for n in (
 # thread polling with sleep spun without yielding.
 _GH_SAVED += [(_sm_core, "subprocess", _sm_core.subprocess), (_sm_cron, "subprocess", _sm_cron.subprocess),
               (_sm_files, "subprocess", _sm_files.subprocess),
+              (_gh_term, "subprocess", _gh_term.subprocess),
               (_sm_game, "time", _sm_game.time)]
 
 _GH_SRV = NS(id=9101, is_local=False, auth_method="key", host="h", port=22, username="admin",
@@ -269,10 +271,13 @@ def _gh_stub_transports():
     _sm_core._resolve_ts_host = lambda s: "ts-host"
     # _core's (the ssh-CLI transport), cron's and files' own handles, the transports the table's
     # functions spawn through: in CI's bare run they ARE the subprocess module, so setting their
-    # Popen replaced it for the whole process (review 1015a). game's `time` likewise.
+    # Popen replaced it for the whole process (review 1015a). game's `time` likewise. And the web
+    # terminal's, which F4 drives with hostile logins: without it a regressed refusal spawned a
+    # real ssh with `-oProxyCommand=…` (review 1015c).
     _sm_core.subprocess = _R20dOver(_sm_core.subprocess, Popen=_GhPopen)
     _sm_cron.subprocess = _R20dOver(_sm_cron.subprocess, Popen=_GhPopen)
     _sm_files.subprocess = _R20dOver(_sm_files.subprocess, Popen=_GhPopen)
+    _gh_term.subprocess = _R20dOver(_gh_term.subprocess, Popen=_GhPopen)
     _sm_game.time = _R20dOver(_sm_game.time, sleep=lambda s: None)
 
 
@@ -490,7 +495,6 @@ def _gh_check_f3():
 # Each is driven with a hostile login and a hostile host, through the recorded Popen, and must
 # refuse without spawning anything; a plain one must still spawn ssh with the destination
 # after `--`.
-from panel.ops import terminal_session as _gh_term     # noqa: E402
 
 
 def _gh_ts(**kw):

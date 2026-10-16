@@ -320,8 +320,13 @@ window.CSRF = {{ csrf_token()|tojson }};
   window.LOCAL_HOST_ID = {{ local_remote_id|default(none)|tojson }};
   // Whether this user may act on the panel host (reboot, cancel) or read its reboot and patch state:
   // every such route takes it through get_host_remote, which is superadmin-only there. LOCAL_HOST_ID
-  // alone is any host admin (it is the OS-updates banner's audience, for the hosts they manage).
+  // alone is any host admin whose grants include the panel host (the palette's reboot row).
   window.LOCAL_HOST_CTL = {{ 'true' if current_user.is_authenticated and current_user.is_superadmin else 'false' }};
+  // The OS-updates banner's audience: whoever /api/os-updates/summary can show a host to — a
+  // superadmin, or a host admin with a remote of their own (nav_remotes is exactly that set). Not
+  // LOCAL_HOST_ID: that is set only when the grants include the panel host, which the summary never
+  // shows a delegate, so an admin scoped to remotes never saw the banner for the hosts they manage.
+  window.OS_NAG = {{ 'true' if current_user.is_authenticated and (current_user.is_superadmin or nav_remotes) else 'false' }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/nags.js') }}"></script>
 {% if show_app_chrome and current_user.is_superadmin %}

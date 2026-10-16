@@ -514,8 +514,12 @@ def _mh_main26(head, compare=None):
     """main() for a scheduled run of X on main; -> (exit status, the refs it read analyses of)."""
     del _mh_rows26[:]
     CSA.subprocess = _R20dOver(_CSA_SP26, run=_mh_gh26(head, compare))
-    rc = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
-                   "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
+    # main() prints ::error::/::warning:: lines, which the Actions runner turns into annotations on
+    # every green CI leg when they reach the step's output (review 1015c): kept here, as still_head
+    # below already is.
+    with _ctx26.redirect_stdout(_io26.StringIO()):
+        rc = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
+                       "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
     return rc, list(_mh_rows26)
 
 

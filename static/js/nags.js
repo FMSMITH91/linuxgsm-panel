@@ -429,12 +429,16 @@ window.osUpdatesNagCheck = function(){
         var n = Number(h.count) || 0, s = Number(h.security) || 0;
         // inline-block + padding: a bare inline link is only as tall as its text (16px), which is
         // an unfair target on a phone. This lifts each one to a 24px row without padding the banner.
-        // data-no-i18n: the link's text is the host's NAME (a host called "Server" read "Servidor").
-        return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;" data-no-i18n'
+        // data-no-i18n: a remote's link text is the host's NAME (a host called "Server" read
+        // "Servidor"). The panel host's is the fixed label, left to the translator in English: the
+        // server's translation behind the guard kept the old language after a live switch.
+        return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
+             + (h.local ? '' : ' data-no-i18n')
              + ' href="' + escapeHtml(h.url) + '#os-updates">'
              // Each word in its own span, apart from its count: "12 updates" as one node matched
              // no catalog key, so the banner stayed English on every page of a translated panel.
-             + escapeHtml(h.name) + '</a> — ' + n + ' <span>' + (n===1?'update':'updates') + '</span>'
+             + escapeHtml(h.local ? 'Panel Server' : h.name)
+             + '</a> — ' + n + ' <span>' + (n===1?'update':'updates') + '</span>'
              + (s ? ' <span class="badge bg-danger" style="font-weight:normal;">'
                   + s + ' <span>security</span></span>' : '') + '</div>';
       }).join('');
@@ -450,7 +454,7 @@ window.osUpdatesNagCheck = function(){
     }).catch(function(){});
 };
 (function(){
-  if (window.LOCAL_HOST_ID == null) return;   // same audience as the reboot banner: hosts you manage
+  if (!window.OS_NAG) return;   // the summary's audience (base.html): someone it can show a host to
   window.osUpdatesNagCheck();
   // Hourly: the underlying check is daily, and the panel's own page actions (a forced check, an
   // install) call osUpdatesNagCheck() directly rather than waiting for this.

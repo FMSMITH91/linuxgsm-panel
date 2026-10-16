@@ -4,6 +4,11 @@
 #   pip-compile --generate-hashes --no-annotate --strip-extras \
 #     --output-file=semgrep-mcp.txt semgrep-mcp.in
 -c semgrep.txt
+# The requirement semgrep.txt's semgrep declares for mcp, which pip check reports against the
+# version this file installs: the Semgrep job tolerates exactly that report, and fails when it
+# changes or goes (a semgrep release that allows mcp>=1.30.0 means the split can be undone; see
+# semgrep.in). Read by the job's pip-check step; keep it in step with semgrep.txt.
+# semgrep-pins: mcp==1.29.0
 # 1.30.0 is the first release with GHSA-84m7-p3x7-pcfv fixed; below 2 because semgrep is written
 # against mcp 1.x (2.0 is a new major whose dependencies differ: mcp-types and httpx2, for two).
 mcp>=1.30.0,<2

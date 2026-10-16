@@ -524,15 +524,25 @@ def _sg_pipcheck27(report):
 _SG_PIN27 = "semgrep %s has requirement mcp==1.29.0, but you have mcp %s.\n" % (
     _sg_p27.get("semgrep"), _sg_mp27.get("mcp"))
 _sg_ok27 = _sg_pipcheck27(_SG_PIN27)
+# A clean report means semgrep no longer pins mcp, and another requirement means it needs a
+# different one: both fail, so the split is undone or its record updated (review 1015c: any
+# `semgrep … has requirement mcp…` against the pinned version passed, and so did a clean report).
 _sg_clean27 = _sg_pipcheck27("No broken requirements found.\n")
+_sg_newer27 = _sg_pipcheck27("semgrep %s has requirement mcp>=1.31.0, but you have mcp %s.\n" % (
+    _sg_p27.get("semgrep"), _sg_mp27.get("mcp")))
 _sg_other27 = _sg_pipcheck27("semgrep %s has requirement mcp==1.29.0, but you have mcp 1.28.0.\n"
                              % _sg_p27.get("semgrep"))
 _sg_gone27 = _sg_pipcheck27("semgrep %s requires mcp, which is not installed.\n" % _sg_p27.get("semgrep"))
 _sg_dep27 = _sg_pipcheck27("mcp %s requires httpx-sse, which is not installed.\n%s"
                            % (_sg_mp27.get("mcp"), _SG_PIN27))
-check("semgrep job: pip check passes semgrep's own mcp pin against the version semgrep-mcp.txt "
-      "installs, and a clean report",
-      _sg_ok27[0] == 0 and _sg_clean27[0] == 0, repr((_sg_ok27, _sg_clean27)))
+check("semgrep job: pip check passes semgrep's own mcp pin, as semgrep-mcp.in records it, against the "
+      "version semgrep-mcp.txt installs",
+      _sg_ok27[0] == 0 and "# semgrep-pins: mcp==1.29.0" in _read27(".github", "ci-requirements", "semgrep-mcp.in"),
+      repr(_sg_ok27))
+check("semgrep job: ...and fails, naming the record, when semgrep stops pinning mcp (a clean report) or "
+      "requires another version of it",
+      all(_r[0] not in (0, 99) and "no longer reports semgrep pinning mcp" in _r[1].split("::error::", 1)[-1]
+          for _r in (_sg_clean27, _sg_newer27)), repr((_sg_clean27, _sg_newer27)))
 check("semgrep job: ...and fails on mcp at any other version, mcp missing, or any other missing "
       "requirement, naming it",
       all(_r[0] not in (0, 99) and "::error::" in _r[1] for _r in (_sg_other27, _sg_gone27, _sg_dep27))

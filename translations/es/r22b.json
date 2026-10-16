@@ -1,0 +1,7 @@
+{
+  "File not found": "Archivo no encontrado",
+  "File is too large to edit in the browser": "El archivo es demasiado grande para editarlo en el navegador",
+  "Binary file — download/replace via upload instead": "Archivo binario: descárgalo o reemplázalo con una subida",
+  "The game account can't read this file, so it can't be opened or downloaded here.": "La cuenta del juego no puede leer este archivo, así que no se puede abrir ni descargar aquí.",
+  "Connections to port 22 meet `{rule}` first — remove or narrow that rule.": "Las conexiones al puerto 22 se encuentran primero con `{rule}`: elimina o restringe esa regla."
+}

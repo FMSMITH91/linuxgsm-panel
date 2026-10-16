@@ -17,7 +17,8 @@ from flask import has_request_context, render_template, request
 from flask_login import current_user, login_required
 from flask_socketio import emit
 
-from panel.db.models import RemoteServer, claim_row, row_birth
+from panel.core import i18n
+from panel.db.models import RemoteServer, _r21c_host_text, claim_row, row_birth
 from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
 from panel.ops.ssh_manager import is_local_server
@@ -240,7 +241,6 @@ def _register_terminal_page(app):
 def _r14c_translator():
     """The viewer's language as a one-string translator, as templates' t() is."""
     from app import _current_lang
-    from panel.core import i18n
     lang = _current_lang()
     return lambda s: i18n.translate(lang, s)
 
@@ -283,7 +283,10 @@ def _register_terminal_open(app, socketio):
         # The session opening is auditable; what gets typed into it is not recorded anywhere —
         # people type passwords into terminals.
         log_action(current_user, "terminal_open", target=remote.name, remote=remote)
-        emit("term_ready", {"host": remote.display_name})
+        # The name the page fills into "Connected to {host}.": the panel host's label in the viewer's
+        # language (display_name is an i18n.Sentence, which serialized as the English "Panel Server"
+        # under a heading that said "Servidor del panel"); a remote's name as typed, never translated.
+        emit("term_ready", {"host": _r21c_host_text(remote, i18n.request_lang())})
 
 
 def _term_payload(data):
