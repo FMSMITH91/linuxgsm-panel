@@ -812,6 +812,19 @@ def _register_actions(app):
         try:
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
             return jsonify({"success": ok, "message": _r15e_said(msg)})
+        except SQLAlchemyError as e:
+            # The form route's answer (server_action): a commit that raised — an audit row, a
+            # status — is not the action failing, and a long one is already running. This answered
+            # 500 "request failed" from the dashboard, the detail page and the palette.
+            db.session.rollback()
+            # `action` is one of RUNNABLE_ACTIONS by now, but it came from the request: CR/LF are
+            # replaced explicitly, as _shared.py does (CodeQL accepts no %r as a sanitiser).
+            _log.warning("server action %s: a database write failed",
+                         action.replace("\r", "\\r").replace("\n", "\\n"), exc_info=True)
+            if not _r21b_audited(e):
+                _r25b_audit(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
+                            server=gs)
+            return jsonify({"success": False, "code": "action_unsure", "message": i18n.tr(_R25B_ACTION_UNSURE)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -1080,14 +1093,18 @@ def _register_custom_commands(app):
                                       target=gs.name, server=gs):
                 _, err, rc = send_console_command(gs.remote, gs.short_name, final,
                                                   timeout=10, selfname=gs.lgsm_name)
-            log_action(current_user, "custom_command", target=gs.name,
-                       detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0), server=gs)
+            # _r25b_audit: the command has run by now, so a row whose commit raises is not the send
+            # failing (it answered 500 "custom command failed" for a command the game already had).
+            audited = _r25b_audit(current_user, "custom_command", target=gs.name,
+                                  detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0), server=gs)
+            note = {} if audited else {"audit_unwritten": True}
             if rc != 0:
                 # 200, not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
                 # page, so the reason never reached the toast. The page reads `success`.
-                return jsonify({"success": False,
-                                "message": _console_send_failure(rc, err)})
-            return jsonify({"success": True, "message": i18n.tr("Ran '{name}'.", name=cmd.name)})
+                return jsonify(dict(note, success=False, message=_console_send_failure(rc, err)))
+            ran = i18n.Sentence("Ran '{name}'.", name=cmd.name)
+            return jsonify(dict(note, success=True, message=i18n.tr(
+                ran if audited else i18n.Sentences(ran, _R25B_AUDIT_UNWRITTEN))))
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("custom command failed")}), 500
 

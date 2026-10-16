@@ -1408,6 +1408,10 @@ try:
     _cv_login = "%d:%d:smoke_console_sid2" % (admin_id, _cv_saved[0] or 0)
     _cv_c, _cv_sid = _cv_socket()
     _cv_clients.append(_cv_c)
+    # Kept until the flag is set, as each case above shows first (review 1016c: without it an
+    # eviction for any other reason passed the check below).
+    check("console socket: (control) a fresh viewer is kept before the password reset",
+          _cv_sid is not None and _cv_evict(), "viewer=%r" % (_cv_sid,))
     with app.app_context():
         db.session.get(User, admin_id).must_change_password = True
         db.session.commit()
@@ -2051,8 +2055,9 @@ for _ in range(12):
     _bs_out = _bs_whole_lines(-99, "B" + _bs_log[_bs_pos:_bs_pos + _bs_diff] + "E")
     if _bs_out:
         _bs_seen.extend(_bs_out.split("\n"))
-    _bs_pos = _bs_pos + _bs_diff          # the fix: advance by what was READ
-check("console burst: nothing is dropped — every line of the burst arrives",
+    _bs_pos = _bs_pos + _bs_diff          # this loop advances by what was READ, as the poller must
+check("console chunk: _console_whole_lines carries a held fragment across capped reads, so a "
+      "caller advancing by what it read loses no line of a burst",
       len(_bs_seen) == 3000, "saw %d of 3000 lines" % len(_bs_seen))
 check("console burst: ...and not one of them is a fragment",
       all(l.startswith("[2026-09-18 06:22:08] MODULE: ") and l.endswith(".lua")
@@ -2062,8 +2067,9 @@ check("console burst: ...and not one of them is a fragment",
 check("console burst: ...in order, with no duplicates",
       _bs_seen == [l for l in _bs_log.split("\n") if l],
       "the reassembled stream does not match the file")
-# The source of the bug, pinned directly: advancing to the file's size instead of to what was
-# read is what threw the rest away.
+# The poller's own advance (by what was read, not to the file's size) is held by the real tick
+# below ("console tick: a burst bigger than one read arrives complete"): this loop is the test's.
+# What is pinned here is the rotation's fragment drop.
 _bs_src = open(os.path.join(_repo_root, "panel", "routes", "server_files.py"),
                encoding="utf-8").read()
 check("console burst: a rotated log drops the half-line held from the old file",
@@ -3119,7 +3125,7 @@ check("api token: revoking it works", _rev.status_code == 200)
 if _shown:
     check("api token: ...and the revoked token stops authenticating",
           app.test_client().get("/api/servers", headers={
-              "Authorization": "Bearer %s" % _shown.group(1)}).status_code != 200)
+              "Authorization": "Bearer %s" % _shown.group(1)}).status_code == 401)
 
 # ── An API token is a SECOND credential, and it has to answer to the controls that take an
 # account back. It answered to none of them: it carries no auth_epoch, so a password change
@@ -3141,7 +3147,7 @@ if _m:
         "/api/servers", headers={"Authorization": "Bearer %s" % _tok}).status_code
     check("api token: it authenticates before the revoke", _bearer() == 200)
     _tok_c.post("/account/sessions/revoke")
-    check("api token: 'sign out everywhere' also revokes the API token", _bearer() != 200,
+    check("api token: 'sign out everywhere' also revokes the API token", _bearer() == 401,
           "status=%s" % _bearer())
     # ...and every older smoke_admin cookie with it, the suite's own `c` included (a bare
     # "<id>" used to survive this; see the pre-epoch cookie check above). Re-issued.
@@ -3175,7 +3181,7 @@ if _pw_m:
     _pw_c.post("/account/password", data={"current_password": "Str0ng!passw0rd",
                                           "new_password": "Str0ng!passw0rd-2",
                                           "confirm_password": "Str0ng!passw0rd-2"})
-    check("api token: a password change also revokes the API token", _pw_bearer() != 200,
+    check("api token: a password change also revokes the API token", _pw_bearer() == 401,
           "status=%s — the token answers to no epoch, so only that route's explicit "
           "revoke_api_token() takes it away" % _pw_bearer())
 

@@ -16,7 +16,7 @@ emit an ESC only as the canonical SGR it writes itself.
 | `fuzz_firewall.py` | `_parse_ufw_rule`, `_group_ufw_rules`, `_ufw_first_public_rule`, `_r22b_not_limit` | `ufw status numbered` output |
 | `fuzz_config.py` | `_parse_cfg`, `_parse_upgradable`, `_parse_mods_available`, `_parse_mods_installed` | LinuxGSM config / `apt list` / mod listings |
 | `fuzz_fail2ban.py` | `_tally_f2b_lines`, `_parse_top_ips` | the fail2ban log counting pipeline — the raw log lines *and* the tallied rows |
-| `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render`, and `render_colour` — the live console's renderer (`terminal.py`) | a game console's output — player names, chat and RCON replies, so partly attacker-*authored* |
+| `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render_line`, `render`, and `render_colour` — the live console's renderer (`terminal.py`) | a game console's output — player names, chat and RCON replies, so partly attacker-*authored* |
 | `fuzz_cron.py` | `_split_cron_line`, `_unwrap_cron_command`, `_cron_role`, `_cron_line_managed`, `_cron_log_text`, `_clean_cron_error` | a remote host's crontab, and the base64 status blob the panel's cron wrapper writes |
 
 ## Run locally

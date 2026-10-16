@@ -1241,7 +1241,11 @@ def _prune_for_headroom(server, user, backups, keep, free, need):
     # 0-byte archives are failed backups (junk) — delete them first and never protect one.
     # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
     valid = [b for b in backups if b.get("size", 0) > 0]        # newest first
-    junk = [b for b in backups if b.get("size", 0) == 0]
+    # ...but not the archive a backup is writing right now (list_game_backups' in_progress): one
+    # started outside the panel (the control bar, a bot, a host cron) is 0 bytes for its first
+    # moments, and this runs before the panel's own run meets that backup's lock. Unlinked then,
+    # the backup finished into a file nobody could reach.
+    junk = [b for b in backups if b.get("size", 0) == 0 and not b.get("in_progress")]
     keep_newest = max(1, int(keep) - 1)
     candidates = junk + list(reversed(valid[keep_newest:]))     # junk first, then oldest valid
     deleted = 0

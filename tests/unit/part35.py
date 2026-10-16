@@ -340,7 +340,7 @@ def _p35_health_footer():
 # tailscaled's Tailscale SSH line from the test VPS's journal (the proof of #393), the account
 # changed from root to one the report does not know, and a second connection to a known host.
 _SSH_LINE35 = ("Sep 26 19:28:03 h tailscaled[1010]: handling conn: 100.69.18.95:32914->"
-               "quokka7731@100.84.48.111:22; ->root@100.84.48.111:22; "
+               "quokka7731@100.64.0.10:22; ->root@100.64.0.10:22; "
                "->quokka7731@zephyrhost7731:22")
 
 
@@ -363,7 +363,7 @@ def _p35_account_at_address():
 # The name in plain text BEFORE its 'name@<IPv4>': the name pass had run when the account rule
 # mapped it, so the plain one printed beside its own token and linked the two.
 _SSH_TWO35 = ("Sep 26 19:28:01 h sshd[901]: Accepted publickey for quokka7731 from 100.69.18.95\n"
-              "Sep 26 19:28:03 h tailscaled[1010]: handling conn: ->quokka7731@100.84.48.111:22")
+              "Sep 26 19:28:03 h tailscaled[1010]: handling conn: ->quokka7731@100.64.0.10:22")
 _SECS35 = (("header", "Header", "header", "worker", "header"),
            ("brief", "Brief", "m", "worker", "summary"),
            ("logs", "Logs", "m", "worker", "full"))
@@ -380,7 +380,7 @@ def _p35_account_at_order():
           and out.endswith("handling conn: ->[account-1]@[ip:tailnet]:22"), out)
     ctx, _st = _ctx_with()
     out = PV.scrub(ctx, "mail quokka7731@corp7731.example; key abcdefghijkl-quokka7731-opqrstuvwx"
-                        "yz0123 ->quokka7731@100.84.48.111:22")
+                        "yz0123 ->quokka7731@100.64.0.10:22")
     check("privacy: ...and those mentions are replaced AFTER the email and long-token rules, so an "
           "address or a long token holding the name is still redacted whole, not split around a "
           "token into a printed domain or printed fragments",
@@ -390,7 +390,7 @@ def _p35_account_at_order():
     results = {"header": ("ok", 0.01, Result(lines=["- **Generated**: now"])),
                "brief": ("ok", 0.01, Result(lines=["- quokka7731 signed in over Tailscale SSH"])),
                "logs": ("ok", 0.01,
-                        Result(lines=["- handling conn: ->quokka7731@100.84.48.111:22"]))}
+                        Result(lines=["- handling conn: ->quokka7731@100.64.0.10:22"]))}
     with _patched():
         _patch(_DR35, "SECTIONS", _SECS35)
         _patch(AS, "_filename", lambda _ctx: "r.md")
@@ -432,7 +432,7 @@ def _p35_account_shape():
     first = PV.scrub(ctx, "peer 2026@10.0.0.1 ok")
     later = PV.scrub(ctx, "Report generated 2026-10-03 13:00 UTC")
     ctx2, _st2 = _ctx_with(("alice", "account", None))
-    glued = PV.scrub(ctx2, "alice.smith@100.84.48.111 alice_smith@100.84.48.112")
+    glued = PV.scrub(ctx2, "alice.smith@100.64.0.10 alice_smith@100.64.0.11")
     after = PV.scrub(ctx2, "see .smith, _smith and smith")
     check("privacy: a word that cannot be an account name (a year before '@<address>') is not "
           "mapped as one, so every date in the report keeps its year; nor is a fragment glued to a "

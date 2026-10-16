@@ -274,14 +274,18 @@ def _r25d_call_name91(node):
     return _f.id if isinstance(_f, _ast91.Name) else getattr(_f, "attr", None)
 
 
-def _r25d_ts_arg_is_read91(node):
-    """Is the first argument of a `_run_ts(...)` call one of the reads (or _run_ts_json's own `args + ['--json']`)?"""
+def _r25d_ts_arg_is_read91(node, in_run_ts_json=False):
+    """Is the first argument of a `_run_ts(...)` call one of the reads (or _run_ts_json's own `args + ['--json']`)?
+
+    That one only inside _run_ts_json itself, whose own calls are judged by their arguments (review
+    1016c: the same text at any other call site passed as a read, whatever `args` held).
+    """
     if not node.args:
         return False
     try:
         return tuple(_ast91.literal_eval(node.args[0])) in _READS91
     except (ValueError, TypeError, SyntaxError):
-        return _ast91.unparse(node.args[0]) == "args + ['--json']"
+        return in_run_ts_json and _ast91.unparse(node.args[0]) == "args + ['--json']"
 
 
 def _r25d_so_ts_command91(node):
@@ -305,10 +309,22 @@ def _r25d_so_write91(command):
     return bool(command) and not _re91.match(r"tailscale (status|debug prefs)\b", command)
 
 
+def _r26d_inside91(tree, name):
+    """The ids of every node inside the function(s) `name` in `tree`."""
+    return {id(_n) for _f in _ast91.walk(tree) if getattr(_f, "name", None) == name for _n in _ast91.walk(_f)}
+
+
+def _r26d_calls_in91(tree):
+    """Every call in `tree`."""
+    return [_n for _n in _ast91.walk(tree) if isinstance(_n, _ast91.Call)]
+
+
 def _r25d_ts_writes91(ts_src, so_src):
     """(the _run_ts calls in `ts_src`, the ones that are not reads, system_ops' tailscale commands that are not)."""
-    _calls = [_n for _n in _r25d_calls91(ts_src) if _r25d_call_name91(_n) in ("_run_ts", "_run_ts_json")]
-    _writes = [_ast91.unparse(_n) for _n in _calls if not _r25d_ts_arg_is_read91(_n)]
+    _tree = _ast91.parse(ts_src)
+    _in_json = _r26d_inside91(_tree, "_run_ts_json")
+    _calls = [_n for _n in _r26d_calls_in91(_tree) if _r25d_call_name91(_n) in ("_run_ts", "_run_ts_json")]
+    _writes = [_ast91.unparse(_n) for _n in _calls if not _r25d_ts_arg_is_read91(_n, id(_n) in _in_json)]
     _so = [_r25d_so_ts_command91(_n) for _n in _r25d_calls91(so_src)]
     return _calls, _writes, [_c for _c in _so if _r25d_so_write91(_c)]
 
@@ -317,12 +333,14 @@ _ts_calls91, _ts_writes91, _so_writes91 = _r25d_ts_writes91(_TS_SRC91, _SO_SRC91
 # The gate against planted writes (control): one per spelling the line pattern could not see.
 _r25d_planted91 = _r25d_ts_writes91(
     "_run_ts(\n    ['set', '--ssh=true'], timeout=10)\nx._run_ts(['serve', '--bg', '5000'])\n"
-    "_run_ts_json(['status'])\n",
+    "_run_ts_json(['status'])\ndef _run_ts_json(args):\n    return _run_ts(args + ['--json'])\n"
+    "def elsewhere(args):\n    return _run_ts(args + ['--json'])\n",
     "_run(\n    'tailscale set --ssh 2>&1')\n_run(f'tailscale serve {port}')\n"
     "_run('sudo -n tailscale up')\n_run('ip -o link show | grep -i tailscale')\n_run('tailscale status')\n")
 check("panel source: (control) a write in a call split over lines, by an attribute, in single quotes, "
-      "an f-string or behind sudo is caught, and reads and a grep for the name are not",
-      (len(_r25d_planted91[0]), len(_r25d_planted91[1]), len(_r25d_planted91[2])) == (3, 2, 3),
+      "an f-string or behind sudo is caught, as is `args + ['--json']` outside _run_ts_json, and reads, "
+      "a grep for the name and _run_ts_json's own call are not",
+      (len(_r25d_planted91[0]), len(_r25d_planted91[1]), len(_r25d_planted91[2])) == (5, 3, 3),
       repr(_r25d_planted91[1:]))
 _names91 = [p for p in ("ensure_operator(", "tailscale-set-operator\"", "--operator=%s")
             for src in (_TS_SRC91, _SO_SRC91, _read91("app.py"),

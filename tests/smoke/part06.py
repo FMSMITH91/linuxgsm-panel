@@ -55,10 +55,12 @@ with app.app_context():
     db.session.commit()
 _after_l = _vc_legacy.get("/api/servers").status_code
 _after_m = _vc_modern.get("/api/servers").status_code
+# Stops working = the API's 401, not "not 200", which a loader raising on the deactivated
+# account (a 500) also passed (review 1016c).
 check("deactivation: the legacy-cookie session stops working once deactivated",
-      _after_l != 200, "status=%s" % _after_l)
+      _after_l == 401, "status=%s" % _after_l)
 check("deactivation: the epoch-cookie session stops working once deactivated",
-      _after_m != 200, "status=%s" % _after_m)
+      _after_m == 401, "status=%s" % _after_m)
 
 # ── two more "reported success without reading the result" ────────────────────────────────
 # Both stubbed at the seam that actually fails on this codebase: run_command returns

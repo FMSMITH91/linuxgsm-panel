@@ -791,12 +791,17 @@ check("install.sh unit (driven): ...replaced when it differs, and a rollback put
       "byte for byte, leaving no temporary file",
       "changed=1" in _iu_lines and "refreshed" in _iu_lines and "restored=exact" in _iu_lines
       and "leftovers=0" in _iu_lines, repr(_iu_out.stdout))
-check("install.sh unit (driven): ...the per-user layout has no User= and starts with the session; "
-      "a unit it cannot write is warned about and left as it was",
-      "user-unit=1" in _iu_lines
-      and (os.geteuid() == 0   # root writes through a 0555 directory: nothing to refuse it
-           or ("ro=0" in _iu_lines and "kept=keep" in _iu_lines and "WARN" in _iu_out.stdout)),
-      repr(_iu_out.stdout))
+check("install.sh unit (driven): ...the per-user layout has no User= and starts with the session",
+      "user-unit=1" in _iu_lines, repr(_iu_out.stdout))
+# Root writes through a 0555 directory, so nothing refuses it there: a SKIP as root, not a PASS that
+# tested nothing (review 1016c: it was one check that passed on CI's root leg unconditionally).
+if os.geteuid() == 0:
+    _skip18("install.sh unit (driven): ...a unit it cannot write is warned about and left as it was",
+            "root writes through a read-only directory, so there is nothing to refuse it")
+else:
+    check("install.sh unit (driven): ...a unit it cannot write is warned about and left as it was",
+          "ro=0" in _iu_lines and "kept=keep" in _iu_lines and "WARN" in _iu_out.stdout,
+          repr(_iu_out.stdout))
 
 
 # ── the checks a pull request must pass to merge: required, and run on every pull request ──────

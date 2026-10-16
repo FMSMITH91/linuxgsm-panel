@@ -943,6 +943,8 @@ def _cron_b64(s):
 _ARGV = {
     "ufw-status": ([_choice("plain", "numbered", "verbose")],
                    lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]], None),
+    # The stored rules an inactive ufw does not list in `status` (hosts._open_ssh_port_rule).
+    "ufw-show-added": ([], lambda a: [UFW, "show", "added"], None),
     "ufw-enable": ([], lambda a: [UFW, "--force", "enable"], None),
     "ufw-default": ([_choice("allow", "deny", "reject"), _choice("incoming", "outgoing")],
                     lambda a: [UFW, "default", a[0], a[1]], None),

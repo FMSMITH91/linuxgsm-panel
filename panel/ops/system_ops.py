@@ -3723,13 +3723,10 @@ def ufw_undeny_ip(ip):
         # rule", measured on the test VPS), and `delete deny from <ip>` matches only a plain deny,
         # not a REJECT or a deny scoped to a port. So the firewall is read again, and an address it
         # still lists as blocked is not reported unblocked. A read that fails says nothing either
-        # way, and the delete's own answer stands, as it did.
+        # way, and the delete's own answer stands — unless that answer is that it removed nothing.
         blocked = ufw_blocked_ips()
-    if blocked is not None and ip in blocked:
-        return False, i18n.Sentence("{ip} is still blocked: the firewall rule that blocks it is not a plain "
-                                    "deny from that address, which is the only kind the panel removes. "
-                                    "Remove it on the host.", ip=ip)
-    return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
+    from panel.ops.ssh_manager import hosts as _smh     # lazy: ssh_manager imports this module
+    return _smh._r26b_unblock_answer(ip, out, blocked)
 
 
 _F2B_EVENT_RE = re.compile(r"\[([A-Za-z0-9._-]+)\] (Ban|Found) ([0-9a-fA-F:.]+)")

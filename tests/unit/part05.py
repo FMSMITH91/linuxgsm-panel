@@ -805,18 +805,18 @@ finally:
 from panel.ops import tailscale_integration as TS
 
 for _h in ("100.64.0.1", "100.115.92.7", "fd7a:115c:a1e0::1",
-           "ns106051.taile87e07.ts.net", "box.tail1234.ts.net",
-           "BOX.TAILE87E07.TS.NET"):     # MagicDNS names are case-insensitive
+           "node.taile00000.ts.net", "box.tail1234.ts.net",
+           "BOX.TAILE00000.TS.NET"):     # MagicDNS names are case-insensitive
     check("tailnet: %r is recognised" % _h, TS.is_tailscale_ip(_h) is True)
 # The near-misses. The first three used to answer True: `".taile" in host` is an UNANCHORED
 # substring anywhere in the string, and `host.startswith("100.")` is a string prefix rather than
 # a range — so a domain somebody else controls was reported as being on the tailnet, and so was
 # 100.0.0.1, which is a PUBLIC address outside Tailscale's 100.64.0.0/10 CGNAT block.
-# "host.taile87e07.example" was in the recognised list above and should never have been: a
+# "host.taile00000.example" was in the recognised list above and should never have been: a
 # MagicDNS name always ends .ts.net.
 for _h in ("10.0.0.1", "192.168.1.5", "1.100.0.1", "203.0.113.9", "example.ts.net.evil.com",
            "fd7b:115c::1", "", None, "100abc.example.com",
-           "host.taile87e07.example", "evil.tailed-hosting.example",
+           "host.taile00000.example", "evil.tailed-hosting.example",
            "100.telemetry.example.com", "100.0.0.1", "100.128.0.1"):
     check("tailnet: %r is NOT taken for a tailnet address" % (_h,), TS.is_tailscale_ip(_h) is False)
 
@@ -826,14 +826,14 @@ _sv_info = TS.get_tailscale_info
 try:
     class _Info(object):
         def __init__(self, dns): self.dns_name, self.tailscale_ips, self.peers = dns, [], []
-    TS.get_tailscale_info = lambda *a, **k: _Info("box.taile87e07.ts.net")
-    eq("magic url: no port for https", TS.get_magic_url(), "https://box.taile87e07.ts.net")
-    eq("magic url: 443 is left off", TS.get_magic_url(443), "https://box.taile87e07.ts.net")
-    eq("magic url: 80 is left off too", TS.get_magic_url(80), "https://box.taile87e07.ts.net")
+    TS.get_tailscale_info = lambda *a, **k: _Info("box.taile00000.ts.net")
+    eq("magic url: no port for https", TS.get_magic_url(), "https://box.taile00000.ts.net")
+    eq("magic url: 443 is left off", TS.get_magic_url(443), "https://box.taile00000.ts.net")
+    eq("magic url: 80 is left off too", TS.get_magic_url(80), "https://box.taile00000.ts.net")
     eq("magic url: any other port is appended", TS.get_magic_url(5000),
-       "https://box.taile87e07.ts.net:5000")
+       "https://box.taile00000.ts.net:5000")
     eq("magic url: the protocol is honoured", TS.get_magic_url(8080, "http"),
-       "http://box.taile87e07.ts.net:8080")
+       "http://box.taile00000.ts.net:8080")
     TS.get_tailscale_info = lambda *a, **k: _Info("")
     eq("magic url: no MagicDNS name means no URL, not a broken one", TS.get_magic_url(), None)
 finally:
@@ -1343,6 +1343,7 @@ _VERB_SAMPLES = {
     "ufw-delete-deny-ip": ["203.0.113.5"],
     "ufw-delete-num": ["3"],
     "ufw-delete-num-if": ["3", "22/tcp ALLOW IN Anywhere # ssh"],
+    "ufw-show-added": [],
     "f2b-status": [],
     "f2b-status-jail": ["sshd"],
     "f2b-unban": ["sshd", "203.0.113.5"],
@@ -4488,6 +4489,7 @@ _REMOTE_EXPECTED = {
     ("ufw-status", ("numbered",)): "ufw status numbered 2>&1",
     ("ufw-status", ("plain",)): "ufw status 2>&1",
     ("ufw-enable", ()): "ufw --force enable 2>&1",
+    ("ufw-show-added", ()): "ufw show added 2>&1",
     ("ufw-default", ("deny", "incoming")): "ufw default deny incoming 2>&1",
     ("ufw-allow-port", ("27015", "Game")): "ufw allow 27015 comment Game 2>&1",
     ("ufw-allow-proto-port", ("tcp", "27015", "")): "ufw allow proto tcp to any port 27015 2>&1",
@@ -5486,7 +5488,43 @@ def _r17d_walk_of_root(node, is_root, os_names=_R19D_OS_ONLY):
     _top = _r18d_walked(node, _kw, os_names)
     if _top is not None and is_root(_top):
         return True
-    return _r20d_hidden_glob_of_root(node, _kw, is_root) or _r25d_hidden_pattern_of_root(node, is_root)
+    return (_r20d_hidden_glob_of_root(node, _kw, is_root) or _r25d_hidden_pattern_of_root(node, is_root)
+            or _r26d_rooted_hidden_glob(node, _kw, is_root))
+
+
+def _r26d_enters_hidden(text):
+    """Does path pattern `text` have a dot-leading wildcard component with more after it?"""
+    _parts = [_c for _c in text.split("/") if _c]
+    return any(_re.match(r"\.[^/]*[*?[]", _c) for _c in _parts[:-1])
+
+
+def _r26d_rooted_hidden_glob(node, kw, is_root):
+    """Is call `node` a glob(pattern, root_dir=<root>) whose pattern enters hidden directories?
+
+    root_dir= makes the pattern relative to the root (review 1016c: `glob('.*/**/*.sh',
+    root_dir=REPO_ROOT)` read every hidden directory unseen).
+    """
+    _pat = node.args[0] if node.args else kw.get("pathname")
+    return (_r17d_call_name(node) in ("glob", "iglob") and _pat is not None
+            and kw.get("root_dir") is not None and is_root(kw["root_dir"])
+            and _r26d_enters_hidden("/" + "".join(_r26d_pieces(_pat))))
+
+
+def _r26d_pieces(node):
+    """The text pieces of a path expression: constants as written, os.sep as "/", anything else "/X/"."""
+    if isinstance(node, _smg_ast.BinOp) and isinstance(node.op, (_smg_ast.Add, _smg_ast.Div)):
+        return _r26d_pieces(node.left) + (["/"] if isinstance(node.op, _smg_ast.Div) else []) + _r26d_pieces(node.right)
+    _parts = _r26d_joined_parts(node)
+    return [_r25d_txt(node)] if _parts is None else [_p for _a in _parts for _p in _r26d_pieces(_a)]
+
+
+def _r26d_joined_parts(node):
+    """The expressions an f-string or a join(…) puts together ("/" between a join's), else None."""
+    if isinstance(node, _smg_ast.JoinedStr):
+        return list(node.values)
+    if isinstance(node, _smg_ast.Call) and _r17d_call_name(node) == "join" and node.args:
+        return [_x for _a in node.args for _x in (_smg_ast.Constant("/"), _a)]
+    return None
 
 
 def _r25d_hidden_pattern_of_root(node, is_root):
@@ -5500,21 +5538,26 @@ def _r25d_hidden_pattern_of_root(node, is_root):
     f-string read the same directories unseen).
     """
     _rest = _r25d_built_from_root(node, is_root)
-    if _rest is None:
-        return False
-    _parts = [_c for _c in "".join(_rest).split("/") if _c]
-    return any(_re.match(r"\.[^/]*[*?[]", _c) for _c in _parts[:-1])
+    return _rest is not None and _r26d_enters_hidden("".join(_rest))
 
 
 def _r25d_txt(node):
-    """A string constant's text, else "X" (a piece the gate cannot read)."""
-    return node.value if isinstance(node, _smg_ast.Constant) and isinstance(node.value, str) else "X"
+    """A string constant's text, os.sep / os.path.sep as "/", else "/X/" (a piece the gate cannot read).
+
+    That piece is a component of its own (review 1016c: read as a bare "X" with no separator,
+    `<root> + os.sep + '.*' + os.sep + '**'` came out as one component and entered nothing).
+    """
+    if isinstance(node, _smg_ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, _smg_ast.FormattedValue):
+        return _r25d_txt(node.value)
+    return "/" if getattr(node, "attr", None) == "sep" else "/X/"
 
 
 def _r25d_built_from_root(node, is_root):
     """The text after the root of a path `node` builds from it (a non-constant piece reads "X"), or None."""
     for _reader in (_r25d_joined_from_root, _r25d_added_to_root, _r25d_fstring_from_root,
-                    _r25d_formatted_from_root):
+                    _r25d_formatted_from_root, _r26d_divided_from_root):
         _rest = _reader(node, is_root)
         if _rest is not None:
             return _rest
@@ -5524,7 +5567,7 @@ def _r25d_built_from_root(node, is_root):
 def _r25d_joined_from_root(node, is_root):
     """join(<root>, …): the pieces after the root, each a path component."""
     if isinstance(node, _smg_ast.Call) and _r17d_call_name(node) == "join" and node.args and is_root(node.args[0]):
-        return ["/" + _r25d_txt(_a) for _a in node.args[1:]]
+        return ["/" + "".join(_r26d_pieces(_a)) for _a in node.args[1:]]
     return None
 
 
@@ -5535,6 +5578,15 @@ def _r25d_added_to_root(node, is_root):
         _chain.insert(0, node.right)
         node = node.left
     return [_r25d_txt(_a) for _a in _chain] if _chain and is_root(node) else None
+
+
+def _r26d_divided_from_root(node, is_root):
+    """Path(<root>) / "…" / …: the pieces after the root, each a component (review 1016c: not read)."""
+    _chain = []
+    while isinstance(node, _smg_ast.BinOp) and isinstance(node.op, _smg_ast.Div):
+        _chain.insert(0, node.right)
+        node = node.left
+    return ["/" + "".join(_r26d_pieces(_a)) for _a in _chain] if _chain and is_root(node) else None
 
 
 def _r25d_fstring_from_root(node, is_root):
@@ -5594,9 +5646,11 @@ def _r20d_path_walked(node, kw):
     if _attr == "walk" and (not node.args or isinstance(getattr(node.args[0], "value", None), bool)):
         return node.func.value
     _pat = node.args[0] if node.args else kw.get("pattern")
-    # A pattern that is not a literal may be '**' (review 1013a: `.glob(pat)` was not read).
+    # A pattern that is not a literal may be '**' (review 1013a: `.glob(pat)` was not read), and
+    # one with a dot-leading wildcard before more reads hidden directories without it (review
+    # 1016c: `.glob('.*/*/*/*.sh')`).
     if _attr == "rglob" or (_attr == "glob" and (not isinstance(getattr(_pat, "value", None), str)
-                                                 or "**" in _pat.value)):
+                                                 or "**" in _pat.value or _r26d_enters_hidden(_pat.value))):
         return node.func.value
     return None
 
@@ -5643,6 +5697,12 @@ def _r20d_code_only(text):
     return "".join(lines)
 
 
+# .claude named as a path a filter compares: a string literal that IS it (".claude", "/.claude/",
+# ".claude/worktrees"), not one that mentions it (review 1016c: `print("skipping .claude")` beside a
+# walk read as its prune).
+_R26D_CLAUDE_LIT = _re.compile(r""""/?\.claude(?:/[\w./-]*)?"|'/?\.claude(?:/[\w./-]*)?'""")
+
+
 def _r16d_unpruned_walks(text, depth=3):
     """Line numbers of an `os.walk(<checkout root>)` whose next six lines never name .claude.
 
@@ -5654,14 +5714,14 @@ def _r16d_unpruned_walks(text, depth=3):
     """
     text = _r20d_code_only(text)
     lines = text.splitlines()
-    sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*\.claude", text)}
+    sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*(?:%s)" % _R26D_CLAUDE_LIT.pattern, text)}
     tree = _smg_ast.parse(text)
     is_root = _r17d_root_names(tree, depth)
     _os_names = _r19d_os_names(tree)
     _wins = {_c.lineno: "\n".join(lines[_c.lineno - 1:_c.lineno + 6])
              for _c in _smg_ast.walk(tree) if _r17d_walk_of_root(_c, is_root, _os_names)}
     return sorted(_ln for _ln, _win in _wins.items()
-                  if ".claude" not in _win and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets))
+                  if not _R26D_CLAUDE_LIT.search(_win) and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets))
 
 
 _r16d_walks = []
@@ -5724,6 +5784,21 @@ _r17d_walk_ctl = {
         "from unit import REPO_ROOT\np = f'{REPO_ROOT}/.*/**/*.sh'\nx = glob.glob(p, recursive=True)\n"),
     "a '/.*/…' pattern formatted with the root": (
         "from unit import REPO_ROOT\np = '%s/.*/**/*.sh' % REPO_ROOT\nq = '{}/.*/x'.format(REPO_ROOT)\n"),
+    # review 1016c: os.sep between the pieces, a join with os.sep inside one argument, root_dir=,
+    # a Path's `/`, and a hidden pattern with no '**'.
+    "a '.*' pattern added with os.sep": (
+        "from unit import REPO_ROOT\np = REPO_ROOT + os.sep + '.*' + os.sep + '**' + os.sep + '*.sh'\n"
+        "x = glob.glob(p, recursive=True)\n"),
+    "a '.*' pattern joined with os.sep inside": (
+        "from unit import REPO_ROOT\np = os.path.join(REPO_ROOT, '.*' + os.sep + '**', '*.sh')\n"),
+    "a hidden pattern under root_dir=": (
+        "from unit import REPO_ROOT\nx = glob.glob('.*/**/*.sh', root_dir=REPO_ROOT, recursive=True)\n"),
+    "a Path's / into '.*'": (
+        "from unit import REPO_ROOT\nx = glob.glob(str(pathlib.Path(REPO_ROOT) / '.*' / '**' / '*.sh'), recursive=True)\n"),
+    "a Path glob into '.*' with no '**'": (
+        "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).glob('.*/*/*/*.sh'))\n"),
+    "a .claude only in a message": (
+        "from unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):\n    print('skipping .claude')\n"),
     "a skip set only in a comment": (
         "SKIP = {'x'}  # not .claude\nfrom unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):\n"
         "    s[:] = [x for x in s if x not in SKIP]\n"),
@@ -5739,7 +5814,10 @@ _r17d_walk_ctl["an rglob of a subtree, and a glob without hidden dirs (not one)"
     "z = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True)\n"
     "w = list(pathlib.Path(REPO_ROOT).glob('*.py'))\nv = list(ast.walk(REPO_ROOT))\n"
     "u = os.path.join(REPO_ROOT, '.*')\nt = os.path.join(REPO_ROOT, '.github', '*.yml')\n"
-    "r = REPO_ROOT + '/.github/*.yml'\nq = f'{REPO_ROOT}/.*'\np = '%s/panel/*.py' % REPO_ROOT\n") == []
+    "r = REPO_ROOT + '/.github/*.yml'\nq = f'{REPO_ROOT}/.*'\np = '%s/panel/*.py' % REPO_ROOT\n"
+    "o = REPO_ROOT + os.sep + 'panel' + os.sep + '*.py'\nn = pathlib.Path(REPO_ROOT) / '.github' / '*.yml'\n"
+    "m = glob.glob('**/*.py', root_dir=REPO_ROOT, recursive=True)\nk = list(pathlib.Path(REPO_ROOT).glob('.github/*.yml'))\n"
+    "j = REPO_ROOT + os.sep + name + '.py'\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
       not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
 _r17d_walk_ctl["a .claude prune in code, with a comment beside it (not one)"] = _r16d_unpruned_walks(

@@ -298,7 +298,9 @@ _out95 = _js95(_name95, (
 if _out95 is not None:
     check("OS updates card on load: an error reply leaves the card empty, as a failed request does — "
           "not \"Not checked yet\"; a host never checked still says so",
-          _out95.get("500") == ["", []] and "Not checked yet" in (_out95.get("never") or [""])[0],
+          # The button half: since review 1016c an error reply sets Install updates usable
+          # ('unknown'), as a failed Check does; part99 holds that change.
+          _out95.get("500") == ["", ["unknown"]] and "Not checked yet" in (_out95.get("never") or [""])[0],
           repr(_out95))
 
 _RMH95 = _read95("static", "js", "remote_manage_host.js")
@@ -346,12 +348,13 @@ _NG95 = _read95("static", "js", "nags.js")
 _name95 = "banners: a failed read keeps what a good one put up"
 _out95 = _js95(_name95, (
     "let removed = 0, cleared = 0, rendered = 0;\n"
-    "const nag = {remove(){ removed++; }};\n"
+    # A "reboot needed" banner (review 1016c: a wait or job banner is taken down on known: false).
+    "const nag = {remove(){ removed++; }, getAttribute(k){ return k === 'data-rb' ? 'required' : null; }};\n"
     "const _gid = document.getElementById; document.getElementById = id => id === 'reboot-nag-1' ? nag : _gid(id);\n"
     "window.rebootNagRender = () => { rendered++; };\n"
     "function _osNagClear(){ cleared++; }\n"
     "global.sessionStorage = {getItem(){ return null; }};\n"),
-    ("window.rebootNagCheck = function(", "window.osUpdatesNagCheck = function("), (
+    ("function _r26c_rbUnread(", "window.rebootNagCheck = function(", "window.osUpdatesNagCheck = function("), (
     "  const out = {};\n"
     "  reply(" + _J95["reboot"] + "); window.rebootNagCheck(1, 'h'); await settle(); out.rbErr = removed;\n"
     "  reply(null, false); window.rebootNagCheck(1, 'h'); await settle(); out.rbFail = removed;\n"

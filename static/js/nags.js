@@ -338,10 +338,25 @@ function _r11c_rbStateOnly(text, label, d){
   text.appendChild(document.createTextNode(' '));
   text.appendChild(_rbEl('span', 'text-secondary', 'Only a superadmin can reboot the panel host.'));
 }
+// True when a /reboot-required reply is not a reading of the host (no answer, or `known: false`),
+// so rebootNagCheck stops there. Such a reply leaves the banner a good read put up, with one
+// exception: `pending_empty` and `job` come from the panel's own state, not the host, so the same
+// reply says any wait or job is over (a Cancel while the host is down). A wait or job banner kept
+// here contradicted the Power card, and its Cancel cancelled nothing; only "reboot needed" stays.
+function _r26c_rbUnread(d, el){
+  if (!d) return true;
+  if (d.known !== false || d.pending_empty || d.job) return false;
+  if (el && el.getAttribute('data-rb') !== 'required') el.remove();
+  return true;
+}
 window.rebootNagRender = function(el, hostId, label, d){
   var isLocal = hostId === window.LOCAL_HOST_ID;
   el.className = 'alert alert-warning d-flex flex-wrap align-items-center gap-2';
   el.setAttribute('role','alert');
+  // Which of the three states this banner shows, for rebootNagCheck's failed-read branch
+  // (_r26c_rbUnread): only a "reboot needed" banner is a reading of the host; a wait or a job is
+  // the panel's own state. Set in the branches below that draw a wait or a job.
+  el.setAttribute('data-rb', 'required');
   el.textContent = '';
   el.appendChild(_rbEl('i', 'bi bi-arrow-clockwise fs-5'));
   var text = _rbEl('div', 'flex-grow-1'); text.style.minWidth = '220px';
@@ -351,10 +366,12 @@ window.rebootNagRender = function(el, hostId, label, d){
   if (isLocal && !window.LOCAL_HOST_CTL) {
     _r11c_rbStateOnly(text, label, d);
   } else if (d.job) {
+    el.setAttribute('data-rb', 'job');
     text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
     text.appendChild(document.createTextNode(' ')); text.appendChild(_rbHost(label));
     if (!d.job.sent) acts.appendChild(_rbButton('Cancel', 'btn-sm btn-outline-secondary', function(){ window.rebootCancel(hostId); }));
   } else if (d.pending_empty) {
+    el.setAttribute('data-rb', 'wait');
     text.appendChild(_rbEl('span', null, 'Auto-reboot scheduled once empty'));
     text.appendChild(document.createTextNode(' — ')); text.appendChild(_rbHost(label));
     acts.appendChild(_rbButton('Reboot now instead', 'btn-sm btn-outline-warning', function(){ window.rebootHost(hostId, label, isLocal, {prefer: 'now'}); }));
@@ -383,8 +400,8 @@ window.rebootNagCheck = function(hostId, label){
     .then(function(d){
       var el = document.getElementById('reboot-nag-'+hostId);
       // A read that failed (no answer, or `known: false` — the host did not say) is not "no reboot
-      // needed": the banner a good read put up stays until a read says otherwise.
-      if(!d || (d.known === false && !(d.pending_empty || d.job))) return;
+      // needed": the banner a good read put up stays until a read says otherwise (_r26c_rbUnread).
+      if(_r26c_rbUnread(d, el)) return;
       if(!(d.required || d.pending_empty || d.job)){ if(el) el.remove(); return; }
       if(!el){ el = document.createElement('div'); el.id = 'reboot-nag-'+hostId; el.className='mb-2'; box.appendChild(el); }
       window.rebootNagRender(el, hostId, label, d);

@@ -160,7 +160,9 @@ def _serve_disable(port, mount):
         return jsonify({"success": False, "message": refusal}), 400
     success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
     if not success:
-        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
+        # A mount that is another app's is refused before anything runs: the request's fault, a
+        # 409 with its message, not the 500 of a host that failed the command.
+        return jsonify({"success": False, "message": i18n.tr(msg)}), (409 if ts.disable_refused(msg) else 500)
     # Mirror the enable branch. Nothing else in the repo ever cleared these, so a disable left
     # tailscale_setup_done True — which six readers treat as ground truth: one permits a
     # 127.0.0.1-only bind (lockout risk) and the boot path RE-APPLIES Serve, quietly undoing the

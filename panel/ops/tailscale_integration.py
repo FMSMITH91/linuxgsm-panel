@@ -1231,11 +1231,20 @@ def _r14a_svc_note(routes):
                          names=", ".join(names))
 
 
+# Disable's refusal for a mount that is not the panel's: a designed answer about what was asked,
+# not a host failure. disable_refused() names it by this template, never by its (translated) words.
+_R26J_NOT_AT_MOUNT = "The panel is published at {ours}, not at {mount}, so nothing was removed."
+
+
+def disable_refused(msg):
+    """Whether disable_tailscale_serve's failure `msg` is its designed refusal (nothing asked of the host)."""
+    return isinstance(msg, i18n.Sentence) and msg.template == _R26J_NOT_AT_MOUNT
+
+
 def _r14a_nothing_at_mount(ours, mount, on_svc):
     """Disable's answer when nothing at `mount` proxies the panel; another app's is never touched."""
     if ours:
-        return False, i18n.Sentence("The panel is published at {ours}, not at {mount}, so nothing was "
-                                    "removed.", ours=ours[0]["mount"], mount=mount)
+        return False, i18n.Sentence(_R26J_NOT_AT_MOUNT, ours=ours[0]["mount"], mount=mount)
     if on_svc:
         return True, i18n.Sentences(i18n.Sentence("Tailscale Serve wasn't publishing the panel on this "
                                                   "node, so there was nothing to remove."), on_svc)

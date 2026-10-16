@@ -470,9 +470,9 @@ class _FakeRemote:
 _orig_rc = _sm_core.run_command
 try:
     _sm_core._gamedig_host_cache.clear()
-    _sm_core.run_command = lambda *a, **k: ("45.76.63.211\n", "", 0)
+    _sm_core.run_command = lambda *a, **k: ("203.0.113.45\n", "", 0)
     check("gamedig-host: uses the host's primary IP, not 127.0.0.1",
-          _sm_core._gamedig_host(_FakeRemote(9001)) == "45.76.63.211")
+          _sm_core._gamedig_host(_FakeRemote(9001)) == "203.0.113.45")
     _sm_core._gamedig_host_cache.clear()
     _sm_core.run_command = lambda *a, **k: ("", "", 0)          # no default route / no output
     check("gamedig-host: falls back to 127.0.0.1 when the IP can't be resolved",

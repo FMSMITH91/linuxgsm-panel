@@ -193,6 +193,20 @@ def _r16a_flags(config):
     return config
 
 
+def _r26a_port(config):
+    """Make config["port"] the port the panel binds, in place, so every reader agrees with it.
+
+    The boot's own reading (app.py's `_port_or(..., 5000)`). A hand-edited 0, 70000, -1 or `true` made the boot bind 5000 while everything else read the raw
+    value: fail2ban's login jail went to port 0, the firewall guard stopped protecting the rule for
+    the port the panel really listens on (a plain delete on the only way in), the Tailscale steps
+    asked the helper for a port it does not publish, and the debug report said "restart pending"
+    for good. Lazily imported: validation imports i18n, which imports Flask.
+    """
+    from panel.core.validation import _port_or
+    config["port"] = _port_or(config.get("port"), DEFAULT_CONFIG["port"])
+    return config
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:
@@ -215,6 +229,7 @@ def load_config():
             _cfg_cache["key"] = key
         config.update(copy.deepcopy(_cfg_cache["data"]))
         _r16a_flags(config)
+        _r26a_port(config)
     except FileNotFoundError:
         _cfg_cache["key"] = None   # no config.json yet: defaults ARE the configuration
     except (json.JSONDecodeError, ValueError, OSError):

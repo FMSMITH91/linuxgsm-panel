@@ -108,8 +108,12 @@ try:
           'data-mount="/lgsm"' in _tsd_html and 'data-mount="/"' not in _tsd_html,
           repr([ln.strip() for ln in _tsd_html.splitlines() if "data-mount" in ln][:3]))
     _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/"})
-    check("tailscale serve: disabling at another app's mount removes nothing and keeps the config",
-          _tsd_r.status_code != 200 and _tsd_ran == []
+    check("tailscale serve: disabling at another app's mount removes nothing and keeps the config, "
+          "and answers 409 (the request's fault), not the 500 of a host that failed",
+          # The refusal itself, not "not 200": a crash is a 500 too; the refusal names the mount it
+          # kept (review 1016c), and is a 409 since the integrator's fix in the same review.
+          _tsd_r.status_code == 409 and "/lgsm" in ((_tsd_r.get_json() or {}).get("message") or "")
+          and _tsd_ran == []
           and _tsd_load().get("tailscale_setup_done") is True,
           "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
     # A loopback-bound panel is reached ONLY through Serve. Removing it ended the admin's session

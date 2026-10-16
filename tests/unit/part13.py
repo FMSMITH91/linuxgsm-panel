@@ -1880,9 +1880,9 @@ _mon_trip_saved10 = _arm10()
 
 try:
     # ── _host_reachable: an unanswered probe is "no", whichever transport failed ───────────────
-    _mon10.run_command = lambda r, cmd, timeout=None: ("ok\n", "", 0)
+    _mon10.run_command = lambda r, cmd, timeout=None, sudo=None: ("ok\n", "", 0)
     _reach_ok10 = _mon10._host_reachable(NS())
-    _mon10.run_command = lambda r, cmd, timeout=None: ("", "SSH command timed out", -1)
+    _mon10.run_command = lambda r, cmd, timeout=None, sudo=None: ("", "SSH command timed out", -1)
     _reach_ts10 = _mon10._host_reachable(NS())
     _mon10.run_command = _raiser10(ConnectionError("down"))
     _reach_raise10 = _mon10._host_reachable(NS())

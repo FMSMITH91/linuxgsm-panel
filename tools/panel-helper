@@ -47,6 +47,7 @@ USAGE
     panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
+import fcntl
 import glob
 import grp
 import gzip
@@ -2288,6 +2289,12 @@ VERBS = {
         [v_choice("plain", "numbered", "verbose")],
         lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]],
         None),
+    # The STORED rules, which an inactive ufw does not list in `status`: read before an open that
+    # would rewrite one of them in place (ssh_manager.hosts._open_ssh_port_rule). No arguments.
+    "ufw-show-added": (
+        [],
+        lambda a: [UFW, "show", "added"],
+        None),
     "ufw-enable": (
         [],
         lambda a: [UFW, "--force", "enable"],
@@ -3191,18 +3198,87 @@ def _conf_path_link(path):
     database the panel user chose (_db_repair_account read the owner THROUGH the link: root's
     tree, so root's repair), and restore and the self-update log followed it too. A link root
     owns is an operator's (data/ moved to another disk) and is followed; the panel user cannot
-    make one.
+    make one. Followed INTO its target, too (_r26a_walk): judged only by its own components, a
+    root-made link let realpath follow a link of the panel user's beyond it.
     """
-    cur = "/"
-    for part in [p for p in path.split("/") if p]:
-        cur = os.path.join(cur, part)
-        try:
-            st = os.lstat(cur)
-        except OSError:
-            return ""             # not there: the caller's own existence test says so
-        if stat.S_ISLNK(st.st_mode) and st.st_uid != 0:
-            return cur
-    return ""
+    return _r26a_walk(path)[1]
+
+
+def _r26a_link_root_made(path):
+    """Is the link at `path` root's (an operator's), judged by lstat, never through it?"""
+    return os.lstat(path).st_uid == 0
+
+
+def _r26a_entry(path):
+    """What `path` is, judged by lstat, never through it.
+
+    ("entry", None) not a link; ("link", its target) a link root made; ("refused", None) a link
+    anyone else made; ("gone", None) missing or unreadable.
+    """
+    try:
+        if not stat.S_ISLNK(os.lstat(path).st_mode):
+            return "entry", None
+        if not _r26a_link_root_made(path):
+            return "refused", None
+        return "link", os.readlink(path)
+    except OSError:
+        return "gone", None
+
+
+def _r26a_parts(path):
+    """`path`'s components, without the empty ones and `.`."""
+    return [p for p in path.split("/") if p and p != "."]
+
+
+def _r26a_walk(path):
+    """(`path` resolved, its first link root did not make): one of the two is None or "".
+
+    Component by component, as the kernel would, but a link is followed only when root made it,
+    and its target is walked by the same rule, so a link the panel user made is refused at ANY
+    depth: beyond a root-made link as well as before it. (None, "") when a component is missing;
+    the caller's own existence test says so. A chain of more than 40 links is refused as a loop.
+    A `..` is walked like any directory (the path before it holds no link, so it is the real
+    parent) and folded away at the end.
+    """
+    todo, cur, hops = _r26a_parts(path), "/", 0
+    while todo:
+        nxt = os.path.join(cur, todo.pop(0))
+        kind, target = _r26a_entry(nxt)
+        if kind == "entry":
+            cur = nxt
+            continue
+        hops += 1
+        if kind != "link" or hops > 40:
+            return None, ("" if kind == "gone" else nxt)
+        cur = "/" if target.startswith("/") else cur
+        todo[:0] = _r26a_parts(target)
+    return os.path.normpath(cur), ""
+
+
+def _r26a_open_pinned_dir(path):
+    """Open directory `path` (absolute, link-free) one component at a time, never through a link.
+
+    The job bodies used to open their data directory by PATH with O_NOFOLLOW, which refuses a link
+    at the LAST component only: a directory above it that the panel user owns (its checkout),
+    swapped for a link after the target was checked, was followed. Each component here is opened
+    O_NOFOLLOW relative to the one before, so a link anywhere raises OSError, as a link at the end
+    did. Raises OSError; the caller closes the descriptor.
+    """
+    parts = [p for p in path.split("/") if p and p != "."]
+    if ".." in parts:
+        raise OSError("a .. in a pinned path: %s" % path)
+    fd = os.open("/" if path.startswith("/") else ".", os.O_RDONLY | os.O_DIRECTORY)
+    done = False
+    try:
+        for part in parts:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        done = True
+    finally:
+        if not done:
+            os.close(fd)
+    return fd
 
 
 def _refuse_conf_path_link(path, what):
@@ -3220,11 +3296,17 @@ def _r25a_resolved_dir(path, what):
     (data/ moved to another disk), which the check follows on purpose. The job bodies then open the
     directory O_NOFOLLOW, which refuses exactly that link (ELOOP), so a restore or a self-update
     reported STARTED and did nothing -- the restore leaving its staging directory, a plaintext
-    database and both keys, in place. Resolved once here, the bodies open the real directory. The
-    result is checked again, so a link swapped in between is refused rather than followed.
+    database and both keys, in place. Resolved once here, the bodies open the real directory.
+    Resolved by _r26a_walk, not realpath: realpath followed every link in the chain, a link of the
+    panel user's inside a root-made link's target too, and a resolved path has no links left for a
+    second check to see. The bodies then open the result one component at a time
+    (_r26a_open_pinned_dir), so a link swapped in after this is refused rather than followed.
     """
-    real = os.path.realpath(path)
-    if _refuse_conf_path_link(real, what) or not os.path.isdir(real):
+    real, link = _r26a_walk(path)
+    if link:
+        sys.stderr.write("refusing: the %s path goes through a symlink (%s)\n" % (what, link))
+        return None
+    if real is None or not os.path.isdir(real):
         return None
     return real
 
@@ -3488,12 +3570,12 @@ def restore_copy_members(stage, data_dir):
     # exactly like a member, in a directory of the attacker's choosing, in that window) and free
     # to close: a descriptor cannot be re-pointed once it is open.
     try:
-        sdir = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        sdir = _r26a_open_pinned_dir(stage)
     except OSError:
         return copied           # the staging dir itself must be a real directory, not a link
     try:
         try:
-            ddir = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            ddir = _r26a_open_pinned_dir(data_dir)
         except OSError:
             return copied
         try:
@@ -3564,7 +3646,7 @@ def _r23a_remove_stage(data_dir):
     above are, and by _remove_at, which follows no link at any depth.
     """
     try:
-        ddir = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        ddir = _r26a_open_pinned_dir(data_dir)
     except OSError:
         return                  # not a real directory any more: nothing of the panel's to remove
     try:
@@ -3578,7 +3660,7 @@ def _r23a_remove_stage(data_dir):
 def _r11b_drop_sidecars(data_dir):
     """Remove panel.db-wal and panel.db-shm from `data_dir`, never through a link at data_dir."""
     try:
-        ddir = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        ddir = _r26a_open_pinned_dir(data_dir)
     except OSError:
         return                  # not a real directory any more: nothing of the panel's to drop
     try:
@@ -3662,7 +3744,7 @@ def _open_log_in_dir(dir_path, name):
     the log is CREATED with O_EXCL, which fails on any name that reappears in between rather than
     opening it. The new file is then given to the directory's owner through the descriptor, so the
     panel can still read — and rotate — its own log."""
-    dfd = os.open(dir_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    dfd = _r26a_open_pinned_dir(dir_path)
     try:
         owner = os.fstat(dfd)
         try:
@@ -5527,8 +5609,25 @@ def _r25j_conf_set(values):
     """Set these keys in panel.conf, keeping its other lines and its mode: "" or why it failed.
 
     The file is replaced whole (a temp file in its directory, then os.replace), never edited in
-    place, and never created: the installer writes it.
+    place, and never created: the installer writes it. Read, change and replace hold an exclusive
+    lock: two runs at once (the boot's panel-port-record beside a Tailscale SSH verb recording its
+    choice) each read the old file and wrote it back, and the second dropped the first's key. The
+    lock is on the root-owned directory that holds it, which is never replaced (panel.conf is, so a
+    lock on it would be on the file the other run already swapped out), and leaves no file behind.
     """
+    try:
+        lock = os.open(os.path.dirname(PANEL_CONF), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError as e:
+        return "failed (%s)" % e.__class__.__name__
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _r26a_conf_rewrite(values)
+    finally:
+        os.close(lock)              # closing the descriptor releases the lock
+
+
+def _r26a_conf_rewrite(values):
+    """_r25j_conf_set's body, under its lock."""
     try:
         with open(PANEL_CONF, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
@@ -6363,7 +6462,7 @@ READ_VERBS = frozenset({
     "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
     "listening-sockets-owner", "log-tail", "os-update-log", "pro-status", "restart-flags",
     "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
-    "ufw-status",
+    "ufw-show-added", "ufw-status",
 })
 # ...of which these stream a download for as long as it takes, so they have no deadline: they end
 # when the caller stops reading (their next write fails) or by the two signals above.

@@ -334,7 +334,7 @@ window.CSRF = {{ csrf_token()|tojson }};
 {% endif %}
 {# The install-progress corner widget. Inside show_app_chrome because a login/setup page has no
    servers to install, and it asks /api/installs once on load — which answers [] for anyone with
-   no install running, and starts no timer. #}
+   no install running, and that answer stops the poll it started. #}
 {% if show_app_chrome %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/install_progress.js') }}"></script>
 {% endif %}

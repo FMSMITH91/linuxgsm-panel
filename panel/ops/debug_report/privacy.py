@@ -101,7 +101,7 @@ _LONG_ID_RE = re.compile(r"(?<!\d)\d{15,}(?!\d)")
 # An account written before an address or a host name the pass has already replaced: 'name@<IPv4>'
 # is 'name@[ip:tailnet]' by the time _redact's email rule runs, and 'name@<known host>' is
 # 'name@[host-1]', so neither is email-shaped any more and the account printed (tailscaled's
-# '…->alice@100.84.48.111:22'). The account is pseudonymised like any other: an [account-N] token.
+# '…->alice@100.64.0.10:22'). The account is pseudonymised like any other: an [account-N] token.
 # Shaped as an account name (a letter or '_' first, as useradd requires), and never a fragment
 # glued to a token ('[account-1].smith@'): a year or a fragment taken for one is replaced in every
 # later mention ('2026@10.0.0.1' made every date read '[account-1]-10-03').
@@ -787,6 +787,12 @@ def _generic(text, st, found=None):
 def scrub(ctx, text):
     """`text` pseudonymised; when the pattern pass itself fails, every body is withheld."""
     st = prepare(ctx)
+    if st.pattern_error:
+        # Failed on an earlier piece: withheld here too, as scrub_lines and scrub_text already do.
+        # The final pass over the whole report ran again and could succeed, so the bodies of the
+        # sections scrubbed before the failure printed under a footer saying every body was
+        # withheld; what the reader is told is now what was done.
+        return _withhold(text)
     try:
         text = _paths(text, st)
         text = _syslog_hosts(text, st)

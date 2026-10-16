@@ -72,7 +72,8 @@ POSTURE_RE = re.compile(
     r"|\*\*Funnel\*\*:|Funnel is ON in Serve|Funnel is on for the whole|through Tailscale Funnel"
     r"|Tailscale-Funnel-Request|\*\*tailscale_use_funnel\*\*|Tailscale \w+, Funnel (?:on|off)"
     r"|\*\*Session cookie\*\*|Secure cookies while|session cookie Secure|\*\*cookie_secure\*\*"
-    r"|trust_proxy is on but the panel listens beyond loopback|Automatic security updates")
+    r"|trust_proxy is on but the panel listens beyond loopback|Automatic security updates"
+    r"|\*\*Tailscale operator\*\*|panel account is the operator")
 
 
 def finding(level, area, text):

@@ -22,6 +22,9 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAM
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
 from panel.ops import socket_hooks as _socket_hooks
+# The audit write that rolls back instead of raising (_r25b_audit), through the module so a stub on
+# server_detail's log_action is the one seam for both routes.
+from panel.routes import server_detail as _sd
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
     _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
@@ -2654,14 +2657,18 @@ def _register_send_command(app):
             with _r20b_audit_on_raise("send_command", detail=cmd_text, target=gs.name, server=gs):
                 _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10,
                                                   selfname=gs.lgsm_name)
-            log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=(rc == 0),
-                       server=gs)
+            # _r25b_audit: the game has the command by now, so a row whose commit raises (the
+            # database locked) is not a failed send — it answered 500 "request failed", as the form
+            # route (server_command) did until it was given the same answer.
+            audited = _sd._r25b_audit(current_user, "send_command", target=gs.name, detail=cmd_text,
+                                      success=(rc == 0), server=gs)
+            note = {} if audited else {"audit_unwritten": True}
             if rc != 0:
                 # What failed, not "Is the server running?" for every rc (_console_send_failure).
                 # 200, not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
                 # page, so the console never saw the reason. The page reads `error`, not the status.
-                return jsonify({"error": _console_send_failure(rc, err)})
-            return jsonify({"success": True, "command": cmd_text})
+                return jsonify(dict(note, error=_console_send_failure(rc, err)))
+            return jsonify(dict(note, success=True, command=cmd_text))
         # A host that is switched off is a normal condition, not a fault in the panel — the same
         # distinction api_remote_live_stats draws. Anything that is NOT a ConnectionError stays a
         # 500 on purpose: those are ours.

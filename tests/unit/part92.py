@@ -253,39 +253,49 @@ def _r25d_call_text92(node, consts):
                 _out.append(n.value)
             elif isinstance(n, _ast92.Name) and n.id in consts:
                 _out.append(consts[n.id])
+            elif isinstance(n, _ast92.Attribute) and n.attr in consts:
+                _out.append(consts[n.attr])     # another module's constant, `_base.NAME`
     return " ".join(_out)
 
 
-def _r24r_add_offenders(src, name):
+def _r24r_add_offenders(src, name, shared=None):
     """[(file, line)] where a section prints posture vocabulary with add()/find(), not posture().
 
     Also through a module-level string constant, and by appending to the result's lines or findings
-    itself (review 1016b: only string literals inside add()/find() were read).
+    itself (review 1016b: only string literals inside add()/find() were read). `shared` holds every
+    debug_report module's constants, so one imported or reached as `module.NAME` is read too
+    (review 1016c: only this module's own were).
     """
     tree = _ast92.parse(src)
-    consts = _r25d_str_consts92(tree)
+    consts = dict(shared or {}, **_r25d_str_consts92(tree))
     return [(name, node.lineno) for node in _ast92.walk(tree)
             if isinstance(node, _ast92.Call) and _r25d_report_writer92(node)
             and _b92.POSTURE_RE.search(_r25d_call_text92(node, consts))]
 
 
 _DRDIR92 = os.path.join(_root, "panel", "ops", "debug_report")
-_off92 = []
+_srcs92 = {}
 for _fn92 in sorted(os.listdir(_DRDIR92)):
     if _fn92.endswith(".py"):
         with open(os.path.join(_DRDIR92, _fn92), encoding="utf-8") as _fh92:
-            _off92 += _r24r_add_offenders(_fh92.read(), _fn92)
+            _srcs92[_fn92] = _fh92.read()
+_shared92 = {}
+for _src92 in _srcs92.values():
+    _shared92.update(_r25d_str_consts92(_ast92.parse(_src92)))
+_off92 = [_o for _fn92, _src92 in _srcs92.items() for _o in _r24r_add_offenders(_src92, _fn92, _shared92)]
 _plantsrc92 = ("def section(ctx):\n    res = Result()\n"
                "    res.add(\"- **Ways in**: SSH %s from %s\" % (a, b))\n"
                "    res.find(\"fail\", AREA, \"the jail \"\n             \"can never ban\")\n"
                "    res.posture(\"- **2FA on**: 0/1\")\n    return res\n"
                "_WAYS = \"- **Ways in**: SSH open\"\ndef other(res):\n    res.add(_WAYS)\n"
-               "    res.lines.append(\"- **2FA on**: 0/1\")\n    res.posture(_WAYS)\n")
+               "    res.lines.append(\"- **2FA on**: 0/1\")\n    res.posture(_WAYS)\n"
+               "def third(res):\n    res.add(_base.ELSEWHERE)\n    res.add(IMPORTED)\n")
+_plantshared92 = {"ELSEWHERE": "- **Ways in**: SSH open", "IMPORTED": "- **2FA on**: 0/1"}
 check("debug report posture gate: no debug-report section prints posture vocabulary with add() or "
       "find() (posture() / posture_find() keep it on the page); a planted one is caught, line by line",
-      _off92 == [] and _r24r_add_offenders(_plantsrc92, "planted") == [("planted", 3), ("planted", 4), ("planted", 10),
-                                                       ("planted", 11)],
-      repr((_off92, _r24r_add_offenders(_plantsrc92, "planted"))))
+      _off92 == [] and _r24r_add_offenders(_plantsrc92, "planted", _plantshared92)
+      == [("planted", 3), ("planted", 4), ("planted", 10), ("planted", 11), ("planted", 14), ("planted", 15)],
+      repr((_off92, _r24r_add_offenders(_plantsrc92, "planted", _plantshared92))))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -357,7 +367,8 @@ def _r24r_more_sections():
     from panel.ops.debug_report import diagnostics as _dg92
     from panel.ops.debug_report import process as _pr92
     out = {"network": _b92.Result(), "config": _b92.Result(), "process": _b92.Result()}
-    v = {"backend_state": "Running", "funnel_enabled": True, "serve_services": [
+    v = {"backend_state": "Running", "funnel_enabled": True, "operator_user": "p92-someone-else",
+         "serve_services": [
         {"url": "https://h92.tail0.ts.net", "funnel": True,
          "routes": [{"mount": "/", "target": "http://127.0.0.1:5000"}]}]}
     app = _Flask92("p92more")
@@ -388,9 +399,10 @@ def _r24r_more_sections():
 _MORE92 = ("- **Funnel**: config off · Serve says on", "Funnel is ON in Serve but off",
            "- **This request through Tailscale Funnel**: yes", "- **Session cookie**: Secure yes",
            "trust_proxy is on but the panel listens beyond loopback", "- **tailscale_use_funnel**: false",
-           "[warn] **Automatic security updates**")
+           "[warn] **Automatic security updates**",
+           "- **Tailscale operator**: panel account is the operator: no")
 _MOREABS92 = ("Funnel on", "Funnel off", "Tailscale-Funnel-Request", "Session cookie", "cookie Secure",
-              "Automatic security updates", "listens beyond loopback", "Secure cookies")
+              "Automatic security updates", "listens beyond loopback", "Secure cookies", "operator")
 _rm92 = {}
 try:
     _rm92["secs"] = _r24r_more_sections()
@@ -402,8 +414,8 @@ _mfile92 = "\n".join(_mrep92.get(k) or "" for k in ("report", "summary", "issue_
 _mpage92 = _mrep92.get("posture") or ""
 check("debug report posture: Funnel's state (the line, its findings, this request through Funnel, "
       "the config key, the verdict), the automatic-security-updates check, trust_proxy beyond "
-      "loopback and the session cookie's flags are on the page and in none of the file, summary "
-      "or issue body",
+      "loopback, the session cookie's flags and whether the panel account is the Tailscale "
+      "operator are on the page and in none of the file, summary or issue body",
       bool(_mrep92) and not [p for p in _MORE92 + _MOREABS92 if p in _mfile92]
       and not [p for p in _MORE92 if p not in _mpage92],
       repr(_rm92.get("error") or ([p for p in _MORE92 + _MOREABS92 if p in _mfile92],
@@ -418,18 +430,20 @@ check("debug report posture: ...and the sections kept them apart themselves (the
 _plmore92 = _b92.Result(lines=["- **Funnel**: config on · Serve says on (planted-p92)",
                                "- **Session cookie**: Secure no (planted-p92)",
                                "- [warn] **Automatic security updates**: off (planted-p92)",
-                               "- Network & security: Tailscale Running, Funnel on (planted-p92)"])
+                               "- Network & security: Tailscale Running, Funnel on (planted-p92)",
+                               "- **Tailscale**: v1.80 · Running · panel account is the operator: YES (planted-p92)"])
 _rpm92 = {}
 try:
     _rpm92["rep"] = _r24r_assemble(extra={"planted92": ("ok", 0.01, _plmore92)},
                                    sections=(("planted92", "Planted", "header", "request", "full"),))[0]
 except Exception as _e92:  # noqa: BLE001 - a harness failure fails by name below
     _rpm92["error"] = "%s: %s" % (type(_e92).__name__, _e92)
-check("debug report posture gate: the backstop (POSTURE_RE) withholds the Funnel, cookie and "
-      "security-updates wordings, the old verdict's included, printed by any section with add()",
+check("debug report posture gate: the backstop (POSTURE_RE) withholds the Funnel, cookie, "
+      "security-updates and Tailscale-operator wordings, the old verdict's and the old Tailscale "
+      "head line's included, printed by any section with add()",
       bool(_rpm92.get("rep")) and "planted-p92" not in "\n".join(
           (_rpm92["rep"].get(k) or "") for k in ("report", "summary", "issue_body"))
-      and (_rpm92["rep"].get("posture") or "").count("planted-p92") == 4,
+      and (_rpm92["rep"].get("posture") or "").count("planted-p92") == 5,
       repr(_rpm92.get("error") or _rpm92["rep"].get("report", "")[-800:]))
 
 _sh92.rmtree(_TMP92, ignore_errors=True)

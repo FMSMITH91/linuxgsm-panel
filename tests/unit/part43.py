@@ -238,6 +238,9 @@ def _scan_in43(shell):
             raise ConnectionError("SSH connection failed (part43)")
         if command.startswith("ss -H -lntu") and server.host in _LISTEN43:
             return "\n".join("0.0.0.0:%d" % p for p in sorted(_LISTEN43[server.host])), "", 0
+        if command == _p9_sm.hosts._R26B_SOCKET_SHOW:
+            # sshd's ports also come from ssh.socket now (review 1016c): not socket-activated here.
+            return "ActiveState=inactive\n", "", 0
         if "/home" not in command or "FOUND|" not in command:
             _P9_TRIPPED.append(("p43 run_command", command[:120]))
             return ("", "refused by part43", -1)

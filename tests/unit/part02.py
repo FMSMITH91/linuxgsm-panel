@@ -1020,6 +1020,8 @@ check("backup/enc: the bound's own ceiling (n=2**16, r=8, p=2) is still accepted
 _sh2.rmtree(_kdf_tmp, ignore_errors=True)
 
 _sh2.rmtree(_bktmp, ignore_errors=True)
+# backup's paths are left on the removed temp dir on purpose: put back, they would name the
+# checkout's real data dir for every later part. A part that uses backup sets its own and restores.
 
 # ── per-server backup schedules (config-backed; swap in an in-memory config) ──
 def _fake_update(fakecfg, m):   # mirror config.update_config (backup now writes via update_config)

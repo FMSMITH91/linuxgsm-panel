@@ -98,8 +98,13 @@ def _host_reachable(remote):
     debug report: a host key that changed and a box that is powered off were the same
     "unreachable" here, and so was every other cause.
     """
+    # sudo=False: `echo ok` needs no privilege, and run_command's default for a remote is the row's
+    # sudo_enabled. On a remote whose sudo asks for a password that read as "unreachable": the
+    # monitor paged "Host unreachable", marked the host offline and skipped its disk, load and port
+    # checks (the sudo=False reads after it never ran), and a reboot was refused as "not
+    # answering". The reboot's own privilege check is escalation(), in preflight and the arm.
     try:
-        out, err, rc = run_command(remote, "echo ok", timeout=10)
+        out, err, rc = run_command(remote, "echo ok", timeout=10, sudo=False)
         ok = "ok" in (out or "")
     except Exception as exc:
         _note_probe(remote, False, _probe_exc_token(exc), None)

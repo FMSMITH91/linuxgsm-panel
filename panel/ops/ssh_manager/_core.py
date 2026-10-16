@@ -320,11 +320,11 @@ def crontab_lock(server, user):
     return _host_lock("crontab", server, user)
 
 
-# The ufw verbs that CHANGE the rule list (every ufw verb but the read). Each is run under the
+# The ufw verbs that CHANGE the rule list (every ufw verb but the two reads). Each is run under the
 # host's ufw_lock by run_privileged, so a caller holding that lock across a read and a delete by
 # number knows the numbers it read are still the numbers.
 def _ufw_mutating(verb):
-    return verb.startswith("ufw-") and verb != "ufw-status"
+    return verb.startswith("ufw-") and verb not in ("ufw-status", "ufw-show-added")
 
 
 # How long a stopped command's process group gets after SIGTERM before SIGKILL. SIGTERM FIRST

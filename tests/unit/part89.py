@@ -223,13 +223,14 @@ def _allow_from89():
 
 
 def _undeny89():
-    def unblock(*rows, read_rc=0):
+    def unblock(*rows, read_rc=0,
+                deleted="Could not delete non-existent rule\nCould not delete non-existent rule (v6)"):
         verbs = []
 
         def run(server, verb, args=(), timeout=30, **k):
             verbs.append(verb)
             if verb == "ufw-delete-deny-ip":
-                return "Could not delete non-existent rule\nCould not delete non-existent rule (v6)", "", 0
+                return deleted, "", 0
             if verb == "ufw-status":
                 return (_HEAD89 + "".join("%-27s%-12s%s\n" % r for r in rows)), "", read_rc
             return "", "", 0
@@ -242,9 +243,11 @@ def _undeny89():
           not still[0] and "still blocked" in still[1]
           and still[2] == ["ufw-delete-deny-ip", "ufw-status"], repr(still))
     gone = {"unlisted": unblock(("22/tcp", "LIMIT IN", "Anywhere")),
-            "read failed": unblock(("Anywhere", "REJECT IN", "198.51.100.7"), read_rc=1)}
+            "read failed": unblock(("Anywhere", "REJECT IN", "198.51.100.7"), read_rc=1,
+                                   deleted="Rule deleted\nRule deleted (v6)")}
     check("ufw unblock on a remote: ...an address the read-back no longer lists, or a read-back that "
-          "fails (the delete's answer stands), is reported unblocked (control)",
+          "fails after a delete that removed a rule (the delete's answer stands), is reported "
+          "unblocked (control; part98 holds the delete that removed nothing)",
           all(v[0] and v[1] == "Unblocked 198.51.100.7." for v in gone.values()), repr(gone))
 
 

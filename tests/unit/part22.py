@@ -1356,6 +1356,10 @@ _boot_reads22 = []
 # `tailscale debug prefs` and, where this account is the operator, would write tailscaled).
 _r25d_boot_cli22 = []
 _r25d_boot_release22 = []
+# ...and the port it records as the panel's own (review 1016c: #436's reconcile_panel_port, the
+# boot's second step, was not stubbed, so on a host with the root helper each boot read the real
+# panel.conf and ran the real `panel-port-record` verb, a root write).
+_r26d_boot_record22 = []
 
 
 def _boot_serve(cfg, answer):
@@ -1363,6 +1367,7 @@ def _boot_serve(cfg, answer):
     calls = []
     del _boot_reads22[:]
     del _r25d_boot_release22[:]
+    del _r26d_boot_record22[:]
 
     def setup(**kw):
         calls.append(kw)
@@ -1380,7 +1385,8 @@ def _boot_serve(cfg, answer):
                   release_operator=lambda: (_r25d_boot_release22.append(1), "not-operator")[1],
                   _run_ts=lambda args, timeout=5: (_r25d_boot_cli22.append(args), ("", "", 1))[1],
                   _run_ts_json=lambda args, timeout=5: (_r25d_boot_cli22.append(args), None)[1]), \
-            _patched(_app22, _ts_backend_scheme=lambda c: "http"):
+            _patched(_app22, _ts_backend_scheme=lambda c: "http"), \
+            _patched(_so22, reconcile_panel_port=lambda port: (_r26d_boot_record22.append(port), "ok")[1]):
         _app22._boot_serve(fake, cfg, 5000)
     return fake.config.get("BOOT_SERVE"), len(calls)
 
@@ -1399,5 +1405,7 @@ check("R20: ...and that boot releases the operator through the stub, while no bo
       "tailscale CLI of its own",
       len(_r25d_boot_release22) == 1 and _r25d_boot_cli22 == [],
       repr((len(_r25d_boot_release22), _r25d_boot_cli22[:4])))
+check("R20: ...and records the port it binds through the stub, once (no real helper verb)",
+      _r26d_boot_record22 == [5000], repr(_r26d_boot_record22))
 
 _sh22.rmtree(_TMP22, ignore_errors=True)

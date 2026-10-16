@@ -1,0 +1,5 @@
+{
+  "The config could not be re-read after the settings save, so this text may be out of date. Reload the page before saving it.": "La configuration n’a pas pu être relue après l’enregistrement des réglages, ce texte est donc peut-être périmé. Rechargez la page avant de l’enregistrer.",
+  "The config has not been read, so there is nothing safe to save. Reload the page and try again.": "La configuration n’a pas été lue, il n’y a donc rien à enregistrer sans risque. Rechargez la page et réessayez.",
+  "The mod list could not be re-read, so these rows may be out of date. Reload the page to see them.": "La liste des mods n’a pas pu être relue, ces lignes sont donc peut-être périmées. Rechargez la page pour les voir."
+}

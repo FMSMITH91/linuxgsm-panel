@@ -727,8 +727,8 @@ def _p20_journal_source():
 # A server error (d.error) reaching innerHTML, however the assignment is spaced or built.
 # Any HTML sink, and a `;` inside a string literal (an `&mdash;` entity) does not end the
 # statement (review 1013a: `[^;]*` stopped there, and outerHTML/insertAdjacentHTML were not read).
-_R19D_ERR_SINK20 = _re20.compile(r"""(?:\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\()"""
-                                 r"""(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|[^;'"])*?\bd\.error\b""")
+_R26D_SINK_START20 = _re20.compile(r"\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\(")
+_R26D_D_ERROR20 = _re20.compile(r"d\.error(?![\w$])")
 
 
 def _r21d_untemplate(src):
@@ -790,10 +790,14 @@ def _r23d_operand_due(before):
     line; both hid the sink).
     """
     _t = before.rstrip()
-    # A block comment is not a token: the one before it decides (review 1016b: `= /* c */ /'/`
-    # divided, so the regex's quote opened a string that hid what followed).
-    while _t.endswith("*/") and "/*" in _t[:-2]:
-        _t = _t[:_t.rindex("/*", 0, len(_t) - 2)].rstrip()
+    # A comment is not a token: the one before it decides (review 1016b: `= /* c */ /'/` divided, so
+    # the regex's quote opened a string that hid what followed; review 1016c: so did `= // c` and a
+    # regex on the next line).
+    _prev = None
+    while _prev != _t:
+        _prev, _t = _t, _r26d_drop_line_comment(_t)
+        while _t.endswith("*/") and "/*" in _t[:-2]:
+            _t = _t[:_t.rindex("/*", 0, len(_t) - 2)].rstrip()
     if _t.endswith(("++", "--")):
         return False
     if _t.endswith(")"):
@@ -807,13 +811,41 @@ def _r23d_operand_due(before):
 
 
 def _r25d_closes_head(text):
-    """Does the `)` ending JS `text` close the head of an if, while, for or with?"""
-    _depth = 0
-    for _k in range(len(text) - 1, -1, -1):
-        _depth += {")": 1, "(": -1}.get(text[_k], 0)
-        if _depth == 0:
-            return bool(_re20.search(r"(?<![\w$.])(?:if|while|for|with)\s*$", text[:_k]))
+    """Does the `)` ending JS `text` close the head of an if, while, for or with?
+
+    Read back from the end, stepping over each quoted string whole (review 1016c: a `)` inside
+    one, `if (s == ')')`, was counted, so the head was not found and the regex after it divided).
+    """
+    _depth, _k = 0, len(text) - 1
+    while _k >= 0:
+        _c = text[_k]
+        if _c in "'\"`":
+            _k -= 1
+            while _k >= 0 and not (text[_k] == _c and text[_k - 1:_k] != "\\"):
+                _k -= 1
+        else:
+            _depth += {")": 1, "(": -1}.get(_c, 0)
+            if _depth == 0:
+                return bool(_re20.search(r"(?<![\w$.])(?:if|while|for|with)\s*$", text[:_k]))
+        _k -= 1
     return False
+
+
+def _r26d_drop_line_comment(text):
+    """`text` without the `//` comment that ends its last line, if one does (a quote opens a string)."""
+    _nl = text.rfind("\n") + 1
+    _line, _q, _k = text[_nl:], None, 0
+    while _k < len(_line):
+        _c = _line[_k]
+        if _q:
+            _k += 1 if _c == "\\" else 0
+            _q = None if _c == _q else _q
+        elif _c in "'\"`":
+            _q = _c
+        elif _line.startswith("//", _k):
+            return text[:_nl + _k].rstrip()
+        _k += 1
+    return text
 
 
 def _r22d_regex_end(src, i):
@@ -874,8 +906,28 @@ def _r22d_past_text(src, j):
 
 
 def _r21d_err_sink(src):
-    """The first place a server error (d.error) reaches an HTML sink in JS `src`, or None."""
-    return _R19D_ERR_SINK20.search(_r21d_untemplate(src))
+    """The first place a server error (d.error) reaches an HTML sink in JS `src`, or None.
+
+    The sink's expression is read to the end of ITS statement: a `;` inside a bracket it opened (a
+    function body, `(function(){ y(); return d.error })()`) does not end it (review 1016c: the
+    pattern stopped at any `;` outside a string).
+    """
+    _text = _r21d_untemplate(src)
+    for _m in _R26D_SINK_START20.finditer(_text):
+        _base = 1 if _m.group(0).endswith("(") else 0
+        _depth, _k = _base, _m.end()
+        while _k < len(_text):
+            _c = _text[_k]
+            if _c in "'\"":
+                _k = _r21d_quote_end(_text, _k)
+                continue
+            _depth += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(_c, 0)
+            if _depth < _base or (_c == ";" and _depth == _base):
+                break
+            if _R26D_D_ERROR20.match(_text, _k) and not _re20.match(r"[\w$.]", _text[_k - 1:_k]):
+                return _m
+            _k += 1
+    return None
 
 
 # Eighteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
@@ -893,8 +945,15 @@ _R21D_SINK_CTL20 = (
     # A regex after a block comment, and after an if's head (review 1016b).
     "msg.innerHTML = /* c */ /'/.test(s) ? '' : d.error;",
     "msg.innerHTML = (function(){ if (x) /'/.test(s) })() ? '' : d.error;",
+    # A `;` inside a function body the expression opens, a regex after a block's `}`, a `)` inside
+    # a string in an if's head, and a regex after a line comment (review 1016c).
+    "msg.innerHTML = (function(){ y(); return d.error })();",
+    "msg.innerHTML = (function(){ if (x) { y(); } /'/.test(s) })() ? '' : d.error;",
+    "msg.innerHTML = (function(){ if (s == ')') /'/.test(s) })() ? '' : d.error;",
+    "msg.innerHTML = // c\n /'/.test(s) ? '' : d.error;",
     "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;",
-    "msg.innerHTML = x /* d.error */;")
+    "msg.innerHTML = x /* d.error */;", "msg.innerHTML = (function(){ y(); })(); z = d.error;",
+    "msg.insertAdjacentHTML('beforeend', x); y(d.error);")
 
 
 def _p20_js():
@@ -913,7 +972,7 @@ def _p20_js():
     _r21d_sink_ctl = [bool(_r21d_err_sink(_x)) for _x in _R21D_SINK_CTL20]
     check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
           "`;` inside a string or a template literal, a quoted brace, a comment or a regex (control)",
-          _r21d_sink_ctl == [True] * 18 + [False] * 3, repr(_r21d_sink_ctl))
+          _r21d_sink_ctl == [True] * 22 + [False] * 5, repr(_r21d_sink_ctl))
 
 
 try:

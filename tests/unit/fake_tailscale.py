@@ -292,7 +292,20 @@ def _log_call(args):
                 fh.write(json.dumps(args) + "\n")
 
 
+# The marker as_helper puts first in its own call's argv: a call made as root, for that call only.
+AS_ROOT_ARG = "--fake-ts-as-root"
+
+
+def _as_root(args):
+    """`args` without AS_ROOT_ARG, marking this process (the fake's own) as root when it led them."""
+    if args[:1] == [AS_ROOT_ARG]:
+        os.environ["FAKE_TS_AS_ROOT"] = "1"
+        return args[1:]
+    return args
+
+
 def main(args):
+    args = _as_root(args)
     _log_call(args)
     if args in (["version"], ["--version"]):
         _out("1.102.4\n  tailscale commit: fake\n")
@@ -325,8 +338,8 @@ def as_helper(ts, priv, record=None):
 
     `ts` is tailscale_integration, `priv` privileged. Each verb in ROOT_VERBS runs its own tool
     argv (priv.tool_argv, which validates the arguments as the helper does) through ts._run_ts,
-    so through this fake on PATH, with FAKE_TS_AS_ROOT set. Every other verb is refused. `record`,
-    a list, gets (verb, args) for each call.
+    so through this fake on PATH, marked as root by AS_ROOT_ARG in that call's own argv. Every
+    other verb is refused. `record`, a list, gets (verb, args) for each call.
     """
     def _run_verb(verb, args=(), timeout=30, merge_stderr=True, **_kw):
         if record is not None:
@@ -339,11 +352,10 @@ def as_helper(ts, priv, record=None):
             return "", "invalid argument", -1
         if not argv:
             return "", "refused by the fake helper", 1
-        os.environ["FAKE_TS_AS_ROOT"] = "1"
-        try:
-            out, err, rc = ts._run_ts(argv[1:], timeout=timeout)
-        finally:
-            os.environ.pop("FAKE_TS_AS_ROOT", None)
+        # Not FAKE_TS_AS_ROOT in os.environ (review 1016c): that marked every tailscale call the
+        # whole process made meanwhile, a worker's unprivileged write included, as root, and the
+        # closing "the panel's account changed nothing" check could not see it.
+        out, err, rc = ts._run_ts([AS_ROOT_ARG] + list(argv[1:]), timeout=timeout)
         if merge_stderr and err:
             return (out + "\n" + err).strip(), "", rc
         return out, err, rc
