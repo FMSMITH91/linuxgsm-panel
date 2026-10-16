@@ -833,11 +833,17 @@ window.UPro = (function(){
     // .catch() eight lines down already says "Could not read Ubuntu Pro status." for a transport
     // that throws; this is the same answer arriving as a 200.
     if(d && (d.unreadable || d.unreachable || d.success === false)){
+      // A changed host key or a read cut off part-way is flagged unreachable too, and `code` says
+      // which: the route's own sentence (already in the viewer's language) names the way out,
+      // "Re-trust host key", which the fixed "could not read" hid. As remote_manage.js does.
+      var why = d.code;
+      var said = (why && why !== 'host_unreachable' && d.message)
+        ? d.message
+        : t('Could not read Ubuntu Pro status on this host, so it is unknown.');
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2">'
         + '<span class="badge bg-warning text-dark">Unknown</span></div>'
-        + '<p class="small text-secondary mb-2">'
-        + 'Could not read Ubuntu Pro status on this host, so it is unknown.'
-        + '</p>';  // nosemgrep - fixed string, no interpolation
+        + '<p class="small text-secondary mb-2">' + escapeHtml(said)
+        + '</p>';  // nosemgrep - the one value goes through escapeHtml
       return;
     }
     if(!d || d.installed === false){

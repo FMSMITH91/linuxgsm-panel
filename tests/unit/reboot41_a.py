@@ -1742,6 +1742,10 @@ def _probe_alone41(wait=120.0):
     the look is taken alone: an exclusive flock on the temp directory itself, which every run on
     the machine can open whoever it runs as, and which leaves nothing behind. Released when the
     descriptor closes (_session_probe_checks41).
+
+    The lock covers only this section's 'tmux: server'. Parts 58/62/65/67 run stand-in scripts
+    named `tmux`, which the probe's `pgrep -x '…|tmux|…'` matches too while one runs, for a few
+    milliseconds; the idle reads are taken again to see past one of those (_steady41).
     """
     import fcntl as _fcntl41
     import tempfile as _tempfile41
@@ -1757,17 +1761,28 @@ def _probe_alone41(wait=120.0):
             _time41.sleep(0.1)
 
 
-_HOLD41 = ("import fcntl, os, sys, time; fd = os.open(sys.argv[1], os.O_RDONLY); "
-           "fcntl.flock(fd, fcntl.LOCK_EX); print('held', flush=True); time.sleep(30)")
+# The holder tries for the lock with the same 120 s bound as the look, and the parent reads its
+# answer with a bound too (review 1015c: a blocking flock and an unbounded readline, both before the
+# bounded look, hung the whole suite with no failure named while another run held the lock).
+_HOLD41 = ("import fcntl, os, sys, time; fd = os.open(sys.argv[1], os.O_RDONLY); end = time.monotonic() + 120\n"
+           "while True:\n"
+           "    try:\n"
+           "        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); break\n"
+           "    except BlockingIOError:\n"
+           "        if time.monotonic() > end: print('busy', flush=True); sys.exit(0)\n"
+           "        time.sleep(0.1)\n"
+           "print('held', flush=True); time.sleep(30)\n")
 
 
 def _probe_lock_control41():
     """(the holder held it, taken while it did, taken once it is gone): (True, False, True)."""
+    import select as _select41
     import tempfile as _tempfile41
     holder = _popen41([sys.executable, "-c", _HOLD41, _tempfile41.gettempdir()],
                       stdout=-1, text=True)     # -1: subprocess.PIPE
     try:
-        held = holder.stdout.readline().strip() == "held"
+        held = (bool(_select41.select([holder.stdout], [], [], 125)[0])
+                and holder.stdout.readline().strip() == "held")
         fd, during = _probe_alone41(wait=0.5)
         os.close(fd)
     finally:
@@ -1793,14 +1808,35 @@ def _session_probe_checks41():
         os.close(fd)
 
 
+def _steady41(read, idle, *args, tries=5):
+    """`read(*args)`, taken again (up to `tries` times, 0.2 s apart) until `idle` holds of it.
+
+    Another run's stand-in `tmux` (review 1015c) lives for milliseconds, so a read that met one
+    reads idle a moment later; a session this machine really runs, or a probe that always answers
+    busy, reads busy every time and still decides the checks.
+    """
+    got = read(*args)
+    for _ in range(tries - 1):
+        if idle(got):
+            break
+        _time41.sleep(0.2)
+        got = read(*args)
+    return got
+
+
+def _probe_once41(probe):
+    """The game-session probe's answer on this machine, once."""
+    return _run41(["bash", "-c", probe]).stdout.strip()
+
+
 def _session_probe_body41():
     probe = _hosts41.GAME_SESSIONS_PROBE
     blocks = _install_blocks41()
     _power_guard_checks41()
     if not _only_bare_reboot41(blocks):
         return
-    pre = _run41(["bash", "-c", probe]).stdout.strip()
-    idle = _run_blocks41(blocks)
+    pre = _steady41(_probe_once41, lambda v: v == "NO", probe)
+    idle = _steady41(_run_blocks41, lambda o: all("REBOOTING" in x for x in o), blocks)
     proc = _popen41([sys.executable, "-c", _TMUX_NAME41])
     try:
         _time41.sleep(0.4)

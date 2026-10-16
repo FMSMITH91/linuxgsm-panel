@@ -572,18 +572,80 @@ def _src_kind(rule):
     return "Anywhere" if src.startswith("Anywhere") else "a specific source"
 
 
-def _port_rules(rules, port):
-    pat = re.compile(r"%s(?:/(?:tcp|udp))?(?: \(v6\))?\Z" % re.escape(str(port)))
-    return [r for r in rules if r["direction"] == "IN" and r["action"] in ("ALLOW", "LIMIT")
-            and pat.match(r["to"])]
+# A To column naming TCP ports for every address and interface: one port, a range or a list
+# (`22`, `22/tcp`, `5000:5010/tcp`, `5000,8080/tcp`), every port (`Anywhere`, `Anywhere/tcp`), or
+# ufw's OpenSSH application profile (port 22/tcp); then ufw's ` (v6)`. `/udp` carries no SSH and no
+# panel, and a rule on one interface (`22/tcp on lo`, a docker bridge) or to one address is not a
+# way in from outside, so none of those match.
+_R22A_TO_RE = re.compile(r"(?:(?P<ports>[0-9][0-9,:]{0,200})(?:/tcp)?|(?P<all>Anywhere)(?:/tcp)?"
+                         r"|(?P<app>OpenSSH))(?P<v6> \(v6\))?\Z")
 
 
-def _ways_in(u, port, cfg):
+def _r22a_to_ranges(to):
+    """([(first, last), ...] the To column admits over TCP, is_v6), or None for any other rule."""
+    m = _R22A_TO_RE.match(to or "")
+    if not m:
+        return None
+    if m.group("all"):
+        return [(1, 65535)], bool(m.group("v6"))
+    if m.group("app"):
+        return [(22, 22)], bool(m.group("v6"))
+    ranges = []
+    for part in m.group("ports").split(","):
+        lo, _, hi = part.partition(":")
+        if not lo.isdecimal() or not (hi or lo).isdecimal():
+            return None
+        ranges.append((int(lo), int(hi or lo)))
+    return ranges, bool(m.group("v6"))
+
+
+def _port_rules(rules, ports):
+    """The ALLOW/LIMIT IN rules UFW lets act on any of `ports` over TCP, in UFW's order.
+
+    UFW takes the first rule a packet matches, so an allow below a DENY/REJECT IN from Anywhere for
+    the same port and address family admits nothing on that port; it is left out. The report used
+    to match one literal port, any protocol, in no order: sshd moved to 2222 (the panel's own
+    "Change SSH port") read "SSH: no rule", a range or list naming the panel port read "not
+    allowed", and a DENY above the SSH allow still read as a way in.
+    """
+    out, denied = [], set()
+    for r in rules:
+        hit = _r22a_hits(r, ports) - denied
+        if r["action"] in ("DENY", "REJECT"):
+            if _src_kind(r) == "Anywhere":
+                denied |= hit
+        elif hit and r["action"] in ("ALLOW", "LIMIT"):
+            out.append(r)
+    return out
+
+
+def _r22a_hits(rule, ports):
+    """{(port, is_v6)} for each of `ports` an IN rule `rule` names over TCP; empty for any other."""
+    got = _r22a_to_ranges(rule["to"]) if rule["direction"] == "IN" else None
+    if got is None or so._r15a_not_tcp(rule.get("from")):
+        return set()
+    return {(p, got[1]) for p in ports if any(lo <= p <= hi for lo, hi in got[0])}
+
+
+def sshd_ports_read():
+    """The ports sshd serves on (its effective config, `sshd -T`), or None when not read."""
+    got = priv_read("sshd-effective-config", [], UFW_TIMEOUT)
+    if got is None or got[2] != 0:
+        return None
+    ports = sorted({int(p[1]) for p in (ln.split() for ln in (got[0] or "").splitlines())
+                    if len(p) >= 2 and p[0].lower() == "port" and p[1].isdecimal()})
+    return ports or None
+
+
+def _ways_in(u, port, cfg, ssh_ports=None):
+    """The posture's one line; `ssh_ports` is sshd_ports_read's answer (None: port 22, said so)."""
     rules = u["rules"]
-    ssh = _port_rules(rules, 22) + [r for r in rules if r["to"].startswith("OpenSSH")
-                                    and r["direction"] == "IN" and r["action"] in ("ALLOW", "LIMIT")]
-    ssh_text = ("SSH %s from %s" % (ssh[0]["action"], _src_kind(ssh[0]))) if ssh else "SSH: no rule"
-    panel = _port_rules(rules, port)
+    ssh = _port_rules(rules, ssh_ports or [22])
+    # Which ports were checked, not their numbers: a moved SSH port is the operator's to publish.
+    where = "on sshd's own ports" if ssh_ports else "port 22; sshd's own ports not read"
+    ssh_text = ("SSH %s from %s (%s)" % (ssh[0]["action"], _src_kind(ssh[0]), where) if ssh
+                else "SSH: no rule (%s)" % where)
+    panel = _port_rules(rules, [port])
     panel_text = ("allowed from %s" % ", ".join(sorted({_src_kind(r) for r in panel})) if panel
                   else "not allowed" + (" (tailnet-only, Serve up)"
                                         if cfg.get("tailscale_setup_done") else ""))
@@ -611,8 +673,8 @@ _UFW_STATES = {
 }
 
 
-def _ufw_lines(res, facts, got, cfg, port):
-    """R40's lines; `port` is the one the panel serves on (running_port)."""
+def _ufw_lines(res, facts, got, cfg, port, ssh_ports=None):
+    """R40's lines; `port` is the one the panel serves on (running_port), `ssh_ports` sshd's."""
     status, u = got
     if status != "ok":
         res.add("- **UFW**: %s" % ("timed out (not shown)" if status == "timeout"
@@ -630,7 +692,7 @@ def _ufw_lines(res, facts, got, cfg, port):
     facts["ufw"] = "active" if u["active"] else "inactive"
     res.add("- **UFW**: %s · %d rules · default incoming: %s" % (
         facts["ufw"], len(u["rules"]), _tok(u["default_in"])))
-    res.add("- **Ways in**: " + _ways_in(u, port, cfg))
+    res.add("- **Ways in**: " + _ways_in(u, port, cfg, ssh_ports))
     res.add("- **Deny-all-ports rules**: " + _deny_text(u))
 
 
@@ -817,14 +879,15 @@ def _f2b_lines(res, facts, got, cfg, readable):
 
 # ── the network section (a worker) ───────────────────────────────────────────────────────────────
 def section_network(ctx):
-    """R36, R40, R41: the three slow reads run side by side, each under the report's deadline."""
+    """R36, R40, R41: the slow reads run side by side, each under the report's deadline."""
     res, facts = Result(), {}
     got = bounded(ctx, (("tailscale", lambda: _src_tailscale.shared_read(ctx)),
-                        ("ufw", ufw_read), ("f2b", f2b_runtime)))
+                        ("ufw", ufw_read), ("f2b", f2b_runtime), ("sshd", sshd_ports_read)))
     cfg, readable = _load_cfg()
+    sshd = got["sshd"][1] if got["sshd"][0] == "ok" else None
     parts = (("Tailscale", lambda: _tailscale_lines(ctx, res, facts, got["tailscale"])),
              ("UFW", lambda: _ufw_lines(res, facts, got["ufw"], cfg,
-                                        running_port(ctx, cfg if readable else {}))),
+                                        running_port(ctx, cfg if readable else {}), sshd)),
              ("fail2ban", lambda: _f2b_lines(res, facts, got["f2b"], cfg, readable)))
     for title, part in parts:
         try:

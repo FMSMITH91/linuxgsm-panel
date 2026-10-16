@@ -107,7 +107,9 @@ class _Ufw83:
         if verb == "ufw-status":
             return self.status(), "", 0
         if verb == "ufw-limit-port":
+            # Both families, as ufw does with IPv6 on: the (v6) twin is listed after the v4 rules.
             self.rows.append("%-27sLIMIT IN    Anywhere" % args[0])
+            self.rows.append("%-27sLIMIT IN    Anywhere (v6)" % (args[0] + " (v6)"))
         return "", "", 0
 
 
@@ -129,11 +131,15 @@ def _limit_shadowed83():
         "every port": (22, _ALLOW_ROW83 % "Anywhere"),
         "range": (27015, _ALLOW_ROW83 % "27000:27030/tcp"),
         "DENY above": (22, "%-27sDENY IN     Anywhere" % "22/tcp"),
+        # IPv6 is its own chain: a (v6) allow above the (v6) LIMIT leaves every IPv6 client
+        # unthrottled (review 1015c; this was listed below as a harmless "v6 twin").
+        "v6 profile above": (22, "%-27sALLOW IN    Anywhere (v6)" % "OpenSSH (v6)"),
+        "v6 port above": (22, "%-27sALLOW IN    Anywhere (v6)" % "22/tcp (v6)"),
     }
     got = {k: _limit83(port, row) for k, (port, row) in shadows.items()}
     check("ufw limit: a LIMIT appended below an ALLOW it never reaches — the OpenSSH profile, a "
-          "port list, a destination before the port, an every-port allow, a range, or a DENY above "
-          "it — is NOT reported rate limited; the answer names the rule matched first",
+          "port list, a destination before the port, an every-port allow, a range, a DENY above it, or "
+          "a (v6) allow above the (v6) LIMIT — is NOT reported rate limited; the answer names the rule matched first",
           all(not ok and "is still matched first by" in msg for ok, msg in got.values()),
           repr({k: v for k, v in got.items() if v[0] or "is still matched first by" not in v[1]}))
     prof = _limit83(443, _ALLOW_ROW83 % "Nginx Full")
@@ -153,7 +159,8 @@ def _limit_reached83():
         "UDP list": (27015, _ALLOW_ROW83 % "27015,27016/udp"),
         "OUT": (22, "%-27sALLOW OUT   Anywhere" % "22/tcp"),
         "FWD": (22, "%-27sALLOW FWD   Anywhere" % "22/tcp"),
-        "v6 twin": (22, _ALLOW_ROW83 % "OpenSSH (v6)"),
+        "v6 on lo": (22, "%-27sALLOW IN    Anywhere (v6)" % "22/tcp (v6) on lo"),
+        "v6 one source": (22, "%-27sALLOW IN    2001:db8::7" % "22/tcp (v6)"),
         "multicast": (22, _ALLOW_ROW83 % "224.0.0.251"),
         "UDP every port": (22, "%-27sALLOW IN    Anywhere/udp" % "Anywhere"),
         "profile, other port": (27015, _ALLOW_ROW83 % "OpenSSH"),
@@ -161,7 +168,8 @@ def _limit_reached83():
     }
     got = {k: _limit83(port, row) for k, (port, row) in harmless.items()}
     check("ufw limit: ...while a rule no public TCP connection to the port matches (loopback, "
-          "docker or tailscale interface, a loopback or single source, UDP, OUT, FWD, the v6 twin, "
+          "docker or tailscale interface, a loopback or single source, UDP, OUT, FWD, a v6 rule on lo or "
+          "for one v6 source, "
           "multicast, another port) still lets the limit count as reached",
           all(ok for ok, _m in got.values()), repr({k: v for k, v in got.items() if not v[0]}))
     check("ufw limit: ...and a host with no rule for the port at all is limited (control)",

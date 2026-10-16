@@ -9,6 +9,11 @@
    whose firewall had simply never been switched on, and a block added there denies nothing. #}
 {% set fw_inactive = status.installed and not status.enabled and not status.unreachable %}
 {% set fw_unlisted = status.unreachable or fw_inactive %}
+{# Why an unreachable read was not taken, when it is not the network: a changed host key (the panel
+   refused to connect) or a read cut off part-way. The route's own sentence, in the viewer's
+   language, as the API twin sends it and refreshFirewall shows it (_fwHostSaid). #}
+{% set fw_unread_why = status.message if status.unreachable and not status.permission_denied
+   and status.code and status.code != 'host_unreachable' and status.message else '' %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
@@ -45,7 +50,7 @@
           {% if status.unreachable %}Unknown{% else %}{{ "Active" if status.enabled else "Inactive" }}{% endif %}
         </span>
       </div>
-      <div class="card-body">
+      <div class="card-body" id="ufw-status-note">
         {# "Unreachable" and "UFW isn't installed" are different facts, and only one of them is
            something the operator can act on here. Reporting a host that is simply down as having
            no firewall is the more alarming of the two, and it is the wrong one. #}
@@ -55,6 +60,8 @@
            page. It names its own cause. #}
         {% if status.permission_denied %}
         <p class="text-warning small mb-0"><i class="bi bi-lock"></i> The panel reached this host, but sudo refused the firewall read, so its rules can't be shown. Check the panel's sudoers grant on this host.</p>
+        {% elif fw_unread_why %}
+        <p class="text-warning small mb-0"><i class="bi bi-key"></i> {{ fw_unread_why }}</p>
         {% elif status.unreachable %}
         <p class="text-secondary small mb-0"><i class="bi bi-plug"></i> The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.</p>
         {% elif not status.installed %}
@@ -267,6 +274,8 @@
              wrong about an open port matters most. #}
           {% if status.permission_denied %}
           <div class="p-3 text-center text-secondary small">Rules can't be read: sudo refused the firewall read on this host.</div>
+          {% elif fw_unread_why %}
+          <div class="p-3 text-center text-secondary small">{{ fw_unread_why }}</div>
           {% else %}
           <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
           {% endif %}
@@ -346,6 +355,8 @@
              deny IS a rule, and it is already in the catalog in both languages. #}
           {% if status.permission_denied %}
           <div class="p-3 text-center text-secondary small">Rules can't be read: sudo refused the firewall read on this host.</div>
+          {% elif fw_unread_why %}
+          <div class="p-3 text-center text-secondary small">{{ fw_unread_why }}</div>
           {% else %}
           <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
           {% endif %}

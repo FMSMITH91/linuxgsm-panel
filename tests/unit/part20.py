@@ -739,8 +739,13 @@ def _r21d_untemplate(src):
     """
     _out, _i = [], 0
     while _i < len(src):
-        _c = src[_i]
-        if _c in "'\"":
+        _c, _skip = src[_i], _r22d_skip_at(src, _i)
+        if _skip is not None:
+            # A comment or a regex literal is neither code nor a string: its quote must not open one
+            # (review 1015c: `/* it's */` and `/'/g` hid d.error after them).
+            _out.append(" " if src[_i + 1] in "/*" else "/r/")
+            _j = _skip
+        elif _c in "'\"":
             _j = _r21d_quote_end(src, _i)
             _out.append(src[_i:_j])
         elif _c == "`":
@@ -751,6 +756,37 @@ def _r21d_untemplate(src):
             _j = _i + 1
         _i = _j
     return "".join(_out)
+
+
+def _r22d_skip_at(src, i):
+    """The index past a comment or a regex literal opened at src[i], or None when neither is.
+
+    A `/` opens a regex where an operand is due: after an operator, an opening bracket, `,`, `;`,
+    or nothing (else it divides).
+    """
+    if src.startswith("//", i):
+        _j = src.find("\n", i)
+        return len(src) if _j < 0 else _j
+    if src.startswith("/*", i):
+        _j = src.find("*/", i + 2)
+        return len(src) if _j < 0 else _j + 2
+    if src[i] != "/" or src[:i].rstrip()[-1:] not in tuple("(,=:[!&|?{};+-*%<>~^") + ("",):
+        return None
+    return _r22d_regex_end(src, i)
+
+
+def _r22d_regex_end(src, i):
+    """The index past the regex literal opened by the `/` at src[i], or None if its line ends first."""
+    _j, _cls = i + 1, False
+    while _j < len(src) and src[_j] != "\n":
+        if src[_j] == "\\":
+            _j += 2
+            continue
+        if src[_j] == "/" and not _cls:
+            return _j + 1
+        _cls = (_cls or src[_j] == "[") and src[_j] != "]"
+        _j += 1
+    return None
 
 
 def _r21d_quote_end(src, i):
@@ -768,8 +804,12 @@ def _r21d_template_at(src, i):
         if src.startswith("${", _i):
             _depth, _j = 1, _i + 2
             while _j < len(src) and _depth:
-                _depth += {"{": 1, "}": -1}.get(src[_j], 0)
-                _j += 1
+                # A brace inside a string, a nested template, a comment or a regex is text, not the
+                # end of the expression (review 1015c: `${ok ? '}' : d.error}` ended at the quote).
+                _j = _r22d_past_text(src, _j)
+                if _j < len(src):
+                    _depth += {"{": 1, "}": -1}.get(src[_j], 0)
+                    _j += 1
             _out.append("' + (" + _r21d_untemplate(src[_i + 2:_j - 1]) + ") + '")
             _i = _j
         else:
@@ -777,18 +817,36 @@ def _r21d_template_at(src, i):
     return "".join(_out) + "'", _i + 1
 
 
+def _r22d_past_text(src, j):
+    """`j`, or the index past the string, template literal, comment or regex literal opened there."""
+    while j < len(src):
+        _skip = _r22d_skip_at(src, j)
+        if _skip is not None:
+            j = _skip
+        elif src[j] in "'\"":
+            j = _r21d_quote_end(src, j)
+        elif src[j] == "`":
+            j = _r21d_template_at(src, j)[1]
+        else:
+            return j
+    return j
+
+
 def _r21d_err_sink(src):
     """The first place a server error (d.error) reaches an HTML sink in JS `src`, or None."""
     return _R19D_ERR_SINK20.search(_r21d_untemplate(src))
 
 
-# Nine sinks the reader must find, then two it must not (review 1012d, 1013a, 1015a).
+# Thirteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
 _R21D_SINK_CTL20 = (
     "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
     'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
     "msg.insertAdjacentHTML('beforeend', d.error);", "msg.innerHTML = `&mdash; ${d.error}`;",
     "msg.innerHTML = `it's ` + d.error;", "msg.innerHTML = `<b>${`x; ${d.error}`}</b>`;",
-    "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;")
+    "msg.innerHTML = `${ok ? '}' : d.error}`;", 'msg.innerHTML = `${ok ? "}" : d.error}`;',
+    "msg.innerHTML = /* it's */ d.error;", "msg.innerHTML = s.replace(/'/g, '') + d.error;",
+    "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;",
+    "msg.innerHTML = x /* d.error */;")
 
 
 def _p20_js():
@@ -806,8 +864,8 @@ def _p20_js():
     # `msg.innerHTML=d.error` was refused, so `msg.innerHTML = d.error` passed).
     _r21d_sink_ctl = [bool(_r21d_err_sink(_x)) for _x in _R21D_SINK_CTL20]
     check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
-          "`;` inside a string or a template literal (control)",
-          _r21d_sink_ctl == [True] * 9 + [False] * 2, repr(_r21d_sink_ctl))
+          "`;` inside a string or a template literal, a quoted brace, a comment or a regex (control)",
+          _r21d_sink_ctl == [True] * 13 + [False] * 3, repr(_r21d_sink_ctl))
 
 
 try:

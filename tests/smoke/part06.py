@@ -2659,12 +2659,14 @@ try:
               "no terminal_close row — the socket_hooks chain did not reach the terminal, "
               "which is exactly what a second disconnect handler would cause")
 finally:
-    (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
+    # The client goes before the stand-ins do, as the second block's finally does (review 1015c):
+    # its disconnect handler calls close_for_sid, which must still be the stand-in.
     try:
         if _ta_c is not None and _ta_c.is_connected():
             _ta_c.disconnect()
     except Exception:
         pass  # a client the server already dropped has nothing left to close
+    (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
     with app.app_context():
         _row = db.session.get(RemoteServer, _ta_id)
         if _row is not None:

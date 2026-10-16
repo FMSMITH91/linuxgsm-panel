@@ -1020,8 +1020,11 @@ def guarded_tcall_writes(js_dir=JS_DIR, template_dir=TEMPLATE_DIR):
         for var, starts in _guarded_vars(source, guard.ids, guard.names).items():
             for start in starts:
                 window = source[start:start + 2500]
-                for w in re.finditer(r"\b%s\.(textContent|innerText|placeholder|title)\s*=(?!=)\s*tf?\("
-                                     % re.escape(var), window):
+                # A t() call anywhere in the right-hand side, up to the statement's end: the
+                # codebase's own idiom `el.title = window.t ? window.t('…') : '…'` (server_tags.js)
+                # starts with neither t( nor tf(, and a bare-start pattern passed it unmarked.
+                for w in re.finditer(r"\b%s\.(textContent|innerText|placeholder|title)\s*=(?!=)[^;]*?"
+                                     r"\b(?:window\.)?tf?\(" % re.escape(var), window):
                     marker = r"\b%s\.setAttribute\(\s*['\"]%s['\"]" % (re.escape(var),
                                                                      _R21C_MARKER[w.group(1)])
                     if not re.search(marker, window):

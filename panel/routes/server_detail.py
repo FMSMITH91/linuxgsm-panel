@@ -1161,10 +1161,13 @@ def _register_schedules(app):
             with _r20b_audit_on_raise("set_autostart", detail=str(enabled), target=gs.name, server=gs):
                 ok, detail = set_autostart(gs.remote, gs.short_name, enabled, gs.lgsm_name)
             if ok:
-                gs.autostart = enabled
-                db.session.commit()
+                # The crontab HAS changed: audited first, so a commit of the column that raises
+                # (a locked database) cannot leave that change with no row, as the cron card's
+                # writes are. The next cron listing syncs the column from the crontab anyway.
                 log_action(current_user, "set_autostart", target=gs.name, detail=str(enabled),
                            server=gs)
+                gs.autostart = enabled
+                db.session.commit()
                 return jsonify({"success": True, "enabled": enabled})
             log_action(current_user, "set_autostart", target=gs.name, success=False,
                        detail=("%s - %s" % (enabled, detail or ""))[:300], server=gs)
@@ -1206,12 +1209,13 @@ def _register_schedules(app):
                                                gs.game_type, gs.port, enabled,
                                                at=(host_h, host_m), query_type=gs.query_type)
             if ok:
+                # Audited before the column commit, as Autostart above (the crontab has changed).
+                log_action(current_user, "set_daily_restart", target=gs.name,
+                           detail="%s at %02d:%02d %s" % (enabled, host_h, host_m,
+                                                          host_tz or "host time"), server=gs)
                 gs.daily_restart = enabled
                 gs.daily_restart_at = "%02d:%02d" % (host_h, host_m)
                 db.session.commit()
-                log_action(current_user, "set_daily_restart", target=gs.name,
-                           detail="%s at %s %s" % (enabled, gs.daily_restart_at,
-                                                   host_tz or "host time"), server=gs)
                 back_h, back_m = clock.convert_wall_time(host_h, host_m, host_tz, viewer_tz)
                 return jsonify({"success": True, "enabled": enabled,
                                 "host_time": gs.daily_restart_at, "host_tz": host_tz,

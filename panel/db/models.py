@@ -1655,6 +1655,13 @@ def _run_data_migrations():
     for migrate, mark in _DATA_MIGRATIONS[done:]:
         try:
             migrate()
+            # Flushed first, so the migration's own UPDATEs open the transaction the count is set
+            # in. A migration that works through the ORM (migration 2: the column is encrypted)
+            # sends nothing until the flush, and pysqlite begins a transaction only before DML: the
+            # PRAGMA ran in autocommit, durable at once, and a commit that then failed (a lock past
+            # the busy timeout, a full disk) rolled the rewrite back with the count already
+            # recording it done, so no later start ran it.
+            db.session.flush()
             db.session.execute(text(mark))
             db.session.commit()
         except Exception:

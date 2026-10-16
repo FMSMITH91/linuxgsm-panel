@@ -1478,11 +1478,15 @@ var _bkShown = {interval:null, keep:null};
 // Backups page takes any keep from 1 to 30 and the API any interval, but these lists are short:
 // assigning a value no <option> carries leaves the select with NO selection, so it rendered blank
 // and its .value read '' — which the endpoint takes as "clear the override".
-function _bkShow(sel, field, v, label){
+// `named` ({key, vars}): the label is that catalog template filled with tf. A filled template
+// matches no key, so the walk cannot redo it on a live switch: setLang fills it again from these,
+// as _r20cIntervalOption does on the Backups page ("Cada 5 días" stayed on an English page).
+function _bkShow(sel, field, v, label, named){
   var has=false;
   for(var i=0;i<sel.options.length;i++){ if(sel.options[i].value===v){ has=true; break; } }
   if(!has){
     var o=document.createElement('option'); o.value=v; o.textContent=label;
+    if(named){ o.setAttribute('data-i18n-text', named.key); o.setAttribute('data-i18n-vars', JSON.stringify(named.vars)); }
     sel.appendChild(o);
   }
   sel.value=v;
@@ -1569,8 +1573,9 @@ function renderBackups(d){
   // The two schedule selects. Don't clobber a select the user is actively changing.
   function showSchedule(sc){
     var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
+    var ivN={n: Number(sc.interval_days)};
     if(iv && document.activeElement!==iv) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
-                                                  tf('Every {n} days', {n: sc.interval_days}));
+                                                  tf('Every {n} days', ivN), {key: 'Every {n} days', vars: ivN});
     if(kp && document.activeElement!==kp) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
   }
   if(!d || d.error) return;

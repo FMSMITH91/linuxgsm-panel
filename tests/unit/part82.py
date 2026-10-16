@@ -12,7 +12,9 @@ Held here, each against the code path the finding named:
   English words).
 
 HOW IT RUNS. Routes on part12's Flask app and client (part12 has run), every stub through
-_p9_patch and undone in the finally; nothing reaches a transport. Page scripts in node.
+_p9_patch and undone in the finally. part12's transport tripwire is armed for the whole part and
+read at its end, so "nothing reaches a transport" is checked, not assumed (review 1015c); section 2
+puts back the one internal it drives, by name. Page scripts in node.
 """
 import json as _json82
 import os
@@ -23,7 +25,8 @@ from types import SimpleNamespace as NS
 from unit.part01 import check, skip
 from unit.part05 import _helper, _root
 from unit.part47 import _SETTLE47, _cut47, _node47
-from unit.part12 import P9_ADMIN, P9_HOST, _p9, _p9_client, _p9_json, _p9_patch, _p9_restore_all
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
+                         _p9_restore_all)
 from panel.core import i18n as _i18n82
 from panel.db.models import User as _U82, db as _db82
 from panel.ops import system_ops as _so82, tailscale_integration as _ts82
@@ -70,12 +73,16 @@ _DOM82 = (
     "  setAttribute(){}, appendChild(c){ this.children.push(c); return c; }}; }\n"
     "global.window = global; global.MOUNT = ''; global.remoteId = 7; global.REMOTE_ID = 7;\n"
     "global.document = {getElementById: id => els[id] || (els[id] = mk(id)),\n"
-    "  createElement: tag => mk(tag), querySelectorAll: () => []};\n"
+    "  createElement: tag => mk(tag), createTextNode: v => ({textContent: String(v)}),\n"
+    "  querySelectorAll: () => []};\n"
     "global.t = s => s; global.escapeHtml = s => String(s).replace(/</g, '&lt;');\n"
     "global.toast = () => {}; global.setInstallUpdatesState = () => {};\n"
     "global.renderUpdates = () => {}; global._r18cPaintHostBadge = () => {};\n")
 
+_TRIP82_START = len(_P9_TRIPPED)
+_REAL82 = {"_run_verb": _so82._run_verb}
 try:
+    _p9_arm(who="part82")
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. A changed host key / a cut-off read: unreachable stays true, `code` says which
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -126,13 +133,15 @@ try:
     _body82 = _json82.dumps(_fw82["key"][1])
     _fw_out82 = _node82("remote_firewall.js: a refresh answered with a changed host key", _DOM82 + _SETTLE47 + (
         "global.fetch = () => Promise.resolve({json: () => Promise.resolve(%s)});\n"
-        "%s\n%s\n%s\n%s\n%s\n"
+        "%s\n%s\n%s\n%s\n%s\n%s\n%s\n"
         "(async () => { refreshFirewall(); await settle();\n"
         "  const txt = id => els[id].children.map(c => c.textContent).join('|');\n"
         "  console.log(JSON.stringify({badge: els['ufw-badge'].textContent, rules: txt('rules-list'),\n"
         "    blocks: txt('blocks-list'), count: els['rules-count'].textContent})); })();\n"
     ) % (_body82, _cut47(_fwjs82, "function refreshFirewall("), _cut47(_fwjs82, "function _fwUnlisted("),
          _cut47(_fwjs82, "function _fwUnreadWhy("),
+         # The status card's repaint and the reason both it and the lists read (review 1015c).
+         _cut47(_fwjs82, "function _fwHostSaid("), _cut47(_fwjs82, "function _fwStatusNote("),
          _cut47(_fwjs82, "function _fwRenderRules("), _cut47(_fwjs82, "function _fwRenderBlocks(")))
     if _fw_out82 is not None:
         check("remote firewall page: a refresh answered with a changed host key reads 'Unknown' and "
@@ -190,6 +199,7 @@ try:
             return getattr(os, name)
 
     _p9_patch(_so82, "subprocess", _Sub82)
+    _p9_patch(_so82, "_run_verb", _REAL82["_run_verb"])     # driven here, onto _Sub82
     _p9_patch(_so82, "_collect_verb_output", lambda p, cmd, timeout, *a, **k: ("", "", 0))
     _p9_patch(_so82, "_helper_present", lambda: False)
     _p9_patch(_so82, "os", _Euid82(1000))
@@ -251,3 +261,5 @@ try:
 finally:
     _p9_restore_all()
     _as82(_LANG82_WAS)
+check("part82: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP82_START, repr(_P9_TRIPPED[_TRIP82_START:][:6]))

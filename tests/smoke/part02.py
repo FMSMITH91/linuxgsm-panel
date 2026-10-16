@@ -1494,11 +1494,15 @@ check("backups: download 404s on a bad name", c.get("/api/panel/backup/download/
 # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
 #    NOT superadmin) must not be able to become / create a superadmin. ──
 dc = client_as(deleg_id)
-dc.post("/users/add", data={"username": "esc_user", "password": "Str0ng!passw0rd",
-                            "is_superadmin": "on"})
+_esc_r = dc.post("/users/add", data={"username": "esc_user", "password": "Str0ng!passw0rd",
+                                     "is_superadmin": "on"})
 with app.app_context():
     eu = User.query.filter_by(username="esc_user").first()
-    check("MANAGE_USERS user can't create a superadmin", eu is None or not eu.is_superadmin)
+    # Refused by the guard, which redirects before creating anything: a 500 left no row either and
+    # read as the guard holding (review 1015c).
+    check("MANAGE_USERS user can't create a superadmin (the request is refused, not crashed)",
+          eu is None and _esc_r.status_code == 302,
+          "status %s, user %r" % (_esc_r.status_code, eu and eu.is_superadmin))
 # reset_password=on is the real reset path now (the password is generated, never posted), so
 # this has to drive THAT to still be testing the superadmin guard rather than an ignored field.
 dc.post("/users/%d/edit" % admin2_id,
@@ -2710,7 +2714,8 @@ try:
             check("install seam: no worker outlives the %s block that started it" % _what,
                   _left == 0,
                   "%d still running after 180s — whatever it fails on next lands on the row "
-                  "the NEXT block creates, which may hold this one's recycled id" % _left)
+                  "the NEXT block creates, which may hold this one's id where a table lacks "
+                  "AUTOINCREMENT" % _left)
 
     def _retry_under_gate():
         with _install_seam_closed("retry"):
@@ -2838,9 +2843,10 @@ try:
     _cg_has = _cg_msmod.host_account_state
     _cg_msmod.host_account_state = lambda r, n: "absent"
     # Under the seam, and drained before the row goes: this POST starts a real install thread,
-    # and the row it belongs to is deleted a few lines down. SQLite then hands that freed id
-    # to the next INSERT — the install-job block's row — and this worker, still running, wrote
-    # its SSH failure onto it. See _install_seam_closed.
+    # and the row it belongs to is deleted a few lines down. Before AUTOINCREMENT
+    # (panel/db/id_sequence.py, and still on a table it could not rebuild) SQLite handed that
+    # freed id to the next INSERT — the install-job block's row — and this worker, still
+    # running, wrote its SSH failure onto it. See _install_seam_closed.
     try:
         with _install_seam_closed("content-capture"):
             _add = c.post("/servers/add", data={

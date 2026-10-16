@@ -802,7 +802,10 @@ try:
     _AFTER = _UFW_HDR + (
         "[ 1] 22/tcp                     LIMIT IN    Anywhere\n"
         "[ 2] 27015/tcp                  LIMIT IN    Anywhere\n"
-        "[ 3] 27015/udp                  ALLOW IN    Anywhere                   # cs2server\n")
+        "[ 3] 27015/udp                  ALLOW IN    Anywhere                   # cs2server\n"
+        # The (v6) twins ufw writes with IPv6 on: each family is read on its own (review 1015c).
+        "[ 4] 27015/tcp (v6)             LIMIT IN    Anywhere (v6)\n"
+        "[ 5] 27015/udp (v6)             ALLOW IN    Anywhere (v6)              # cs2server\n")
     eq("ufw public rules: interface, source-restricted and v6 rules are not what the public meets",
        [(r["to"], r["action"]) for r in _H._ufw_public_rules(_BEFORE)],
        [("27015", "ALLOW"), ("22/tcp", "LIMIT")])
@@ -3272,7 +3275,12 @@ try:
     _rv_games.remove(_p8_other)
     _rv.detect_game_ports = lambda *a: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
-    eq("sync ports: a raise is a generic 500", (_st, _body),
+    # A host that is down is _unreachable's answer (review 1015c), not the catch-all's 500.
+    eq("sync ports: a host that is down is the unreachable answer, not a generic 500", (_st, _body),
+       (200, {"success": False, "unreachable": True, "code": "host_unreachable", "message": "Host unreachable", "error": "Host unreachable"}))
+    _rv.detect_game_ports = lambda *a: (_ for _ in ()).throw(RuntimeError("bug"))
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    eq("sync ports: ...while any other raise is still a generic 500", (_st, _body),
        (500, {"success": False, "message": "Internal server error"}))
 
     # ── live stats: only a real reading is persisted ───────────────────────────────────────────
@@ -3309,7 +3317,11 @@ try:
     eq("os update start: one that did not start writes no 'started' row", len(_rv_log), _n_log)
     _rv.remote_os_update_start = lambda remote: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/os-update/start" % _r.id))
-    eq("os update start: a raise is a generic 500", (_st, _body),
+    eq("os update start: a host that is down is the unreachable answer, not a generic 500", (_st, _body),
+       (200, {"success": False, "unreachable": True, "code": "host_unreachable", "message": "Host unreachable", "error": "Host unreachable"}))
+    _rv.remote_os_update_start = lambda remote: (_ for _ in ()).throw(RuntimeError("bug"))
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/os-update/start" % _r.id))
+    eq("os update start: ...while any other raise is still a generic 500", (_st, _body),
        (500, {"success": False, "message": "Internal server error"}))
 
     # ── players and reboots: the routes hand everything to host_reboot ─────────────────────────

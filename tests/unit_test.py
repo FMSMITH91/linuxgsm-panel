@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.join(_root, "tests"))
 #      load_config` then holds the wrapper too), and a call made while a path resolves to the
 #      checkout's own file — a check that pointed it back, or a runner that lost step 1 — is
 #      recorded with the test line that led to it, and fails the run below.
+import shlex  # noqa: E402
 import shutil  # noqa: E402
 import tempfile  # noqa: E402
 
@@ -273,11 +274,14 @@ _R19D_LONG_VALUE = {"--unset", "--chdir", "--split-string", "--signal", "--kill-
 # Options whose VALUE is a command line (`env -S 'tailscale up'`, `su -c`, `runuser -c`, `flock
 # -c`): the program inside is never the next argv word, so such a value is judged by the words it
 # names (review 1013a).
-_R20D_CMDLINE_OPTS = ("-S", "--split-string", "-c", "--command")
 # The short letters of those, read anywhere in a cluster and with the value attached or in the next
 # word, as getopt reads them (review 1015a: only the exact words above were, so `env -Stailscale`,
 # `env -vS tailscale`, `zsh -ec tailscale` and `su -lc tailscale` ran the machine's binary).
 _R21D_CMDLINE_LETTERS = "Sc"
+# The long ones, read as getopt_long reads them: also by an unambiguous prefix (`--split-str=`,
+# `--comm x`), and su/runuser's --session-command (review 1015c: only the exact `--split-string=`
+# and `--command=` were, so `env --split-str=tailscale` ran the machine's binary).
+_R22D_CMDLINE_LONG = ("--split-string", "--command", "--session-command")
 
 
 def _r19d_unwrap(argv, path):
@@ -428,7 +432,7 @@ def _r20d_run_env(kw):
 def _r20d_cmdline_values(cmd):
     """Each argv word that is a command line in itself.
 
-    That is an option value of _R20D_CMDLINE_OPTS (a short one also grouped or attached:
+    That is an option value of `-S`/`--split-string`/`-c`/`--command` (a short one also grouped or attached:
     _r21d_cluster_value), or a word with whitespace in it (a script handed to a shell the guard
     does not read, zsh -c …).
     """
@@ -444,10 +448,16 @@ def _r20d_cmdline_values(cmd):
     return _out
 
 
+def _r22d_cmdline_long(word):
+    """Is `word` (`--x` or `--x=…`) a long option whose value is a command line, by its name or a prefix?"""
+    _name = word.partition("=")[0] if isinstance(word, str) else ""
+    return len(_name) > 2 and _name.startswith("--") and any(_o.startswith(_name) for _o in _R22D_CMDLINE_LONG)
+
+
 def _r21d_whole_cmdline(cmd, k):
-    """Is cmd[k] a command line by its long option (`--command x`, `--split-string=x`) or its whitespace?"""
+    """Is cmd[k] a command line by its long option (`--command x`, `--split-str=x`) or its whitespace?"""
     _a, _prev = cmd[k], cmd[k - 1] if k else None
-    return (_prev in _R20D_CMDLINE_OPTS[1::2] or any(_a.startswith(_o + "=") for _o in _R20D_CMDLINE_OPTS[1::2])
+    return ((_r22d_cmdline_long(_prev) and "=" not in _prev) or (_r22d_cmdline_long(_a) and "=" in _a)
             or bool(re.search(r"\s", _a)))
 
 
@@ -490,8 +500,18 @@ def _r20d_cmdline_candidates(cmd, kw):
 
 
 def _r20d_names_tailscale(text):
-    """Does a command line held in one word name `tailscale` as one of its words?"""
-    return any(os.path.basename(_w) == "tailscale" for _w in re.split(r"[\s;&|()`'\"$=]+", text))
+    """Does a command line held in one word name `tailscale` as one of its words?
+
+    Also once unquoted, as a shell or env -S reads it, with env -S's backslash-underscore as a space
+    (review 1015c: `tail'scale' version`, and tailscale joined to `version` by that escape, ran the
+    machine's binary).
+    """
+    _words = re.split(r"[\s;&|()`'\"$=]+", text)
+    try:
+        _words += [_x for _w in shlex.split(text.replace("\\_", " ")) for _x in re.split(r"[\s;&|()`$=]+", _w)]
+    except ValueError:
+        pass    # unbalanced quotes: a shell refuses it, and the split above still reads its words
+    return any(os.path.basename(_w) == "tailscale" for _w in _words)
 
 
 def _r20d_may_reset_path(cmd):
@@ -786,6 +806,14 @@ _r16d_wrap_ts_handles()
 # part12's app with stand-ins, and bash over its own fixture tree; imports part01 and 12.
 # part84 (the eleventh review's routes, tools, page and i18n fixes, builder C) drives part12's app
 # and runs node on its own fixtures; imports part01, 05, 12, 47 and 72 (part72's DOM).
+# part85 (the twelfth review's install, test-runner, core and report fixes, builder A) runs bash over
+# install.sh's and run-tests.sh's own functions in throwaway dirs, and part18's app on its own
+# database file; imports part01, 05 and 18.
+# part86 (review 1015c: bracketed wizard hosts, saves through a symlink, every sudo asked, unreachable
+# catch-alls, builder B) drives part12's app with stand-ins, bash over its own fixture tree and
+# stand-in sudo, and node on panel.js; imports part01, 05, 12, 47 and 83.
+# part87 (the twelfth review's page, script and i18n-tool fixes, builder C) drives part12's app and
+# its socket, and runs node on its own fixtures; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -795,7 +823,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part59", "part60", "part61", "part62", "part63", "part64", "part65", "part66",
           "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
-          "part84", "part15")
+          "part84", "part85", "part86", "part87", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -1114,6 +1142,12 @@ def _r19d_ts_shapes(d):
             ("run", (["xargs", "-a", "/dev/null", "bash", "-c", "tailscale version"],), {}),
             ("run", (["env", "-S", "tailscale version"],), {}),
             ("run", (["env", "--split-string=tailscale version"],), {}),
+            # A long option by its prefix, as getopt_long takes it (review 1015c).
+            ("run", (["env", "--split-str=tailscale version"],), {}),
+            ("run", (["env", "--spl=tailscale"],), {}),
+            ("run", (["flock", d, "--comm=tailscale"],), {}),
+            ("run", (["env", "-S", "tail'scale' version"],), {}),
+            ("run", (["env", "-Stailscale\\_version"],), {}),
             ("run", (["zsh", "-c", "tailscale version"],), {}),
             ("run", (("env", "--", "tailscale", "version"),), {}),
             ("run", (("env", "--", "bash", "-c", "tailscale version"),), {}),
@@ -1310,14 +1344,23 @@ def _r20d_unsafe_roots(roots, home):
     return [_r for _r in roots if any(_h.startswith(_r) for _h in _held)]
 
 
+def _r22d_ts_held(found):
+    """The machine's own tailscale binaries in `found` that a stand-in root holds (each would run)."""
+    return [_f for _f in found if _f and _r19d_stand_in(_f)]
+
+
 _r20d_roots_ctl = _r20d_unsafe_roots(("/", "/home/u/", "/home/u/x/", "/usr/", "/srv/u/"), "/home/u")
+# ...and the start-of-run half has a control of its own (review 1015c: on CI, with no tailscale, it
+# read [None, None], so nothing showed it could fail).
+_r22d_held_ctl = _r22d_ts_held([os.path.join(_TESTS_DIR, "tailscale"), "/usr/bin/tailscale", None])
 _r21d_misread_ctl = [_r19d_stand_in(_f) for _f in (os.path.join(_TESTS_DIR, "tailscale"), "/usr/bin/tailscale")]
 check("unit suite: no stand-in root holds a home, a system program directory or the machine's own "
       "tailscale (with its control)",
       not _r20d_unsafe_roots(_R19D_STAND_IN_ROOTS, os.path.expanduser("~"))
-      and not [_f for _f in _r21d_ts_at_start if _f and _r19d_stand_in(_f)]
-      and _r20d_roots_ctl == ["/", "/home/u/", "/usr/"] and _r21d_misread_ctl == [True, False],
-      repr((_R19D_STAND_IN_ROOTS, _r20d_roots_ctl, _r21d_ts_at_start, _r21d_misread_ctl)))
+      and not _r22d_ts_held(_r21d_ts_at_start)
+      and _r20d_roots_ctl == ["/", "/home/u/", "/usr/"] and _r21d_misread_ctl == [True, False]
+      and _r22d_held_ctl == [os.path.join(_TESTS_DIR, "tailscale")],
+      repr((_R19D_STAND_IN_ROOTS, _r20d_roots_ctl, _r21d_ts_at_start, _r21d_misread_ctl, _r22d_held_ctl)))
 
 # The cleanup, against unlistable directories, in BOTH of shutil.rmtree's modes. Which one a run gets
 # depends on import order: eventlet.monkey_patch() replaces os.open with a function not in

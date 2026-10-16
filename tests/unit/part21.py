@@ -363,7 +363,9 @@ def _probe_harness(first):
         if isinstance(answer["r"], Exception):
             raise answer["r"]
         return answer["r"]
-    _p21(_so21, "subprocess", _Over21(_sp21, run=_run))
+    # Over system_ops' own handle, not the raw module (review 1015c): the raw one's Popen and
+    # check_output skip the runner's tailscale guard and the no-sudo shim that handle carries.
+    _p21(_so21, "subprocess", _Over21(_so21.subprocess, run=_run))
     _p21(_so21, "os", _Over21(os, geteuid=lambda: 1000))
     _so21._HELPER_PROBE.update(at=0.0, res=None)
     return calls, answer
@@ -421,7 +423,7 @@ def _b_helper_probe_2():
 def _b_helper_absent():
     _b_stub_quiet_diag()
     ran = []
-    _p21(_so21, "subprocess", _Over21(_sp21, run=lambda *a, **k: ran.append(a)))
+    _p21(_so21, "subprocess", _Over21(_so21.subprocess, run=lambda *a, **k: ran.append(a)))
     _p21(_core21, "helper_on_disk", lambda: True)
     late = _so21._diag_privileged_helper()
     _p21(_core21, "helper_on_disk", lambda: False)

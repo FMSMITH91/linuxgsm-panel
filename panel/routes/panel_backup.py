@@ -20,7 +20,8 @@ import os
 import threading
 import time
 from panel.core import i18n
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r13b_json_flag)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r13b_json_flag,
+    _r22b_unreachable_or_generic)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
     _r20b_audit_on_raise, _record_game_clock)
@@ -611,7 +612,9 @@ def _register_game_backup_files(app):
                        detail=match["name"], success=ok, server=gs)
             return jsonify({"success": ok, "message": i18n.tr("Deleted." if ok else "Delete failed.")})
         except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("game backup delete failed")}), 200
+            # A host that is down or refused the panel is not a fault in it: _unreachable's answer
+            # (200, `unreachable`, a `code`); anything else is the generic answer, 200 as before.
+            return _r22b_unreachable_or_generic("game backup delete failed", status=200)
 
     @app.route("/backup/game/<int:server_id>/download")
     @login_required

@@ -1840,7 +1840,9 @@ def detect_game_ports(server, user, selfname=None):
         and (p["desc"].lower().startswith(("game", "query")))
     })
     if game_port is None:
-        m = re.search(r"(?:server|internet)\s+ip:.*?:(\d{2,5})", text, re.I)
+        # The port that ENDS the line: the first `:digits` in `Internet IP: [2001:db8::1234]:27015`
+        # is part of the IPv6 address, and was read as game port 1234.
+        m = re.search(r"(?:server|internet)\s+ip:[^\n]*:(\d{2,5})[ \t\r]*(?:\n|\Z)", text, re.I)
         game_port = int(m.group(1)) if m else (open_ports[0] if open_ports else None)
     # Always ensure the game port itself is opened, even if the details table used an
     # unexpected description for it.

@@ -5433,13 +5433,27 @@ def content_cron_line_re(user):
         r" update(?:-lgsm)? > /dev/null 2>&1)" % {"u": u})
 
 
+def _r22a_content_cron_path(user):
+    """/etc/cron.d's file for one content user's weekly update cron.
+
+    Debian's cron (Ubuntu's) skips every cron.d file whose name holds anything but letters, digits,
+    `_` and `-` (the run-parts rule), and an account name may hold a `.`: a content box adopted
+    from an existing `my.srcds` account got an update cron that never ran. Such a name is written
+    as `--` and its hex instead; no account name starts with `-`, so the two forms never meet.
+    The same rule is in panel/security/privileged.py; the two must agree.
+    """
+    if "." in user:
+        return "%s--%s" % (CONTENT_CRON_PREFIX, user.encode().hex())
+    return "%s-%s" % (CONTENT_CRON_PREFIX, user)
+
+
 def do_content_cron_write(args, content):
     """Write the weekly content-update cron for one content user."""
     user = v_username(args[0])
     if not _lines_match(content, content_cron_line_re(user)):
         print("panel-helper: content-cron-write body rejected", file=sys.stderr)
         return 2
-    path = "%s-%s" % (CONTENT_CRON_PREFIX, user)
+    path = _r22a_content_cron_path(user)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".panel-", suffix=".tmp")
     with os.fdopen(fd, "w") as fh:
         fh.write(content)
@@ -5451,11 +5465,17 @@ def do_content_cron_write(args, content):
 
 
 def do_content_cron_remove(args, content):
-    """Drop that cron file — the user has no content games left."""
-    try:
-        os.unlink("%s-%s" % (CONTENT_CRON_PREFIX, v_username(args[0])))
-    except FileNotFoundError:
-        pass                      # already absent; the shell form used `rm -f` for the same reason
+    """Drop that cron file — the user has no content games left.
+
+    The name the old writer used goes too: for a name with a `.` it is a different file, which
+    cron never ran (see _r22a_content_cron_path).
+    """
+    user = v_username(args[0])
+    for path in dict.fromkeys((_r22a_content_cron_path(user), "%s-%s" % (CONTENT_CRON_PREFIX, user))):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass                  # already absent; the shell form used `rm -f` for the same reason
     return 0
 
 

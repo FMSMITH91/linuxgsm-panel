@@ -1283,8 +1283,9 @@ try:
           _d.get("message") == "details: no output", repr(_d))
     _sd_result[0] = ConnectionError("ssh down")
     _r = _A.post("/api/server/%d/action" % P9_GS, json={"action": "details"})
-    check("action (JSON): a host that raises is a 500 with a generic message",
-          _r.status_code == 500 and _p9_json(_r).get("message") == "Internal server error")
+    # A ConnectionError is said as what it is (http._log_and_generic, review 1015c), never its text.
+    check("action (JSON): a host that raises is a 500 saying the host is unreachable",
+          _r.status_code == 500 and _p9_json(_r).get("message") == "Host unreachable")
 
     # The FORM variant: flash + redirect, never the exception text.
     _r = _A.post("/server/%d/action" % P9_GS, data={"action": "details"})
@@ -1571,8 +1572,8 @@ try:
 
     _p9_patch(_p9_sm, "moderate", _raise_conn)
     _r = _A.post("/api/server/%d/moderate" % P9_GS, json={"action": "kick", "target": "x"})
-    check("moderate: a console that raises is a 500 with a generic message",
-          _r.status_code == 500 and _p9_json(_r).get("message") == "Internal server error")
+    check("moderate: a console that raises is a 500 saying the host is unreachable",
+          _r.status_code == 500 and _p9_json(_r).get("message") == "Host unreachable")
 
     # ── custom commands ─────────────────────────────────────────────────────────────────────────
     _r = _A.post("/api/server/%d/custom-command/99906" % P9_GS, json={})
@@ -1719,7 +1720,7 @@ try:
     _p9_patch(_p9_sf, "lgsm_read_config", _raise_conn)
     _r = _A.get(_sf_url + "/config")
     check("config GET: a read that raises is a 500, not an empty editor",
-          _r.status_code == 500 and _p9_json(_r).get("error") == "Internal server error")
+          _r.status_code == 500 and _p9_json(_r).get("error") == "Host unreachable")
     _sf_writes = []
     _sf_write_result = [(True, "")]
 
@@ -1760,7 +1761,7 @@ try:
     _p9_patch(_p9_sf, "lgsm_game_config", _raise_conn)
     _r = _A.get(_sf_url + "/game-config")
     check("game-config: a read that raises answers an error body the page can show",
-          _r.status_code == 200 and _p9_json(_r).get("error") == "Internal server error")
+          _r.status_code == 200 and _p9_json(_r).get("error") == "Host unreachable")
 
     # alerts
     _p9_patch(_p9_sf, "lgsm_get_values", _raise_conn)
@@ -1900,7 +1901,7 @@ try:
     _p9_patch(_p9_lgsm, "refresh", _raise_conn)
     _d = _p9_json(_A.post("/api/lgsm-data/refresh"))
     check("lgsm refresh: a refresh that raises answers success=false",
-          _d == {"success": False, "message": "Internal server error"}, repr(_d))
+          _d == {"success": False, "message": "Host unreachable"}, repr(_d))
     _p9_app._GAME_LIST_CACHE.clear()
     _p9_app._GAME_LIST_CACHE.update(_sf_cache[0])
     _p9_app._LGSM_NAME_MAP.clear()
@@ -1968,7 +1969,7 @@ try:
     _p9_patch(_p9_sf, "gmod_current_mounts", _raise_conn)
     _d = _p9_json(_A.get(_sf_gm))
     check("gmod content GET: a status read that raises is an error with no games to tick",
-          _d.get("games") == [] and _d.get("error") == "Internal server error", repr(_d))
+          _d.get("games") == [] and _d.get("error") == "Host unreachable", repr(_d))
 
     _gmc = {"mounts": ["cstrike", "tf"], "cu": {"user": "gmcontent", "present": {"cstrike": 1}},
             "removed": ["cstrike"], "installed": [], "setup": []}
@@ -2937,8 +2938,8 @@ try:
           _r.status_code == 500 and _p9_json(_r).get("success") is False
           and _p9_exists(_ms_x))
     _r = _A.post("/servers/%d/delete" % _ms_x)
-    check("uninstall (form): a removal that raises flashes a generic failure",
-          _r.status_code == 302 and _p9_flashes(_A) == ["Internal server error"])
+    check("uninstall (form): a removal that raises flashes a failure naming no exception text",
+          _r.status_code == 302 and _p9_flashes(_A) == ["Host unreachable"])
     _ms_reset()
     _ms_fw[0] = ConnectionError("ufw unreachable")
     _p9_patch(_p9_bk, "remove_game_schedule", _raise_conn)

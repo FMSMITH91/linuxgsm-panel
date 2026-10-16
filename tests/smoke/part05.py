@@ -397,12 +397,13 @@ try:
           _pa_wait(_done_long) and _done_long[0][0] is True, "done=%s" % (_done_long,))
     # The promise only holds because every action a bot can send is backgrounded. If one ever
     # became synchronous, the bot would ack it and then wait for a callback that never comes.
+    # start/stop/restart are backgrounded by run_action itself (the on_done checks above wait for
+    # their callback); backup and update only as LONG_ACTIONS, which is what is read here
+    # (review 1015c: the three power verbs were unioned in, so they passed by construction).
     from app import LONG_ACTIONS as _LONG
-    _bg_verbs = {"start", "stop", "restart"} | set(_LONG)
-    check("run_action: every action a chat bot can send is a backgrounded one",
-          {"start", "stop", "restart", "backup", "update"} <= _bg_verbs,
-          "not backgrounded: %s" % sorted({"start", "stop", "restart", "backup", "update"}
-                                          - _bg_verbs))
+    check("run_action: backup and update, the long actions a chat bot can send, are LONG_ACTIONS "
+          "(backgrounded)", {"backup", "update"} <= set(_LONG),
+          "not backgrounded: %s" % sorted({"backup", "update"} - set(_LONG)))
 finally:
     (_sm_core.server_live_metrics, _sm_core.run_as_game_user,
      _sm_core.set_game_priority) = _pa_saved
@@ -996,8 +997,8 @@ with app.app_context():
     check("invite: ...but the stamped revocation still holds", not _inv_after.is_usable,
           "a rowid cannot undo revoked_at")
     # Same delete, the other dangling pointer: AuditLog.user_id is a FK with no cascade, the
-    # app never sets PRAGMA foreign_keys, and the rowid is recycled — so the deleted admin's
-    # entries pointed at their replacement. The entries themselves must SURVIVE (username is
+    # app never sets PRAGMA foreign_keys, and the rowid was recycled (before AUTOINCREMENT, and
+    # still where a table lacks it) — so the deleted admin's entries pointed at their replacement. The entries themselves must SURVIVE (username is
     # the auditable fact and is meant to outlive the account); only the pointer must not lie.
     _al_rows = _AL.query.filter_by(username="smoke_inviter").count()
     check("audit: the deleted user's entries are still there", _al_rows >= 1,
@@ -1012,8 +1013,9 @@ with app.app_context():
 
 # ── ...and deleting a GROUP kills the invites that grant it, for the same reason ────────────
 # Invite.group_ids is a JSON list of bare Group.id integers, frozen at mint time and resolved
-# at redemption purely by id — and Group.id is the same bare INTEGER PRIMARY KEY with the same
-# rowid recycling. Nothing downstream catches it: redeem_invite's group re-check is guarded by
+# at redemption purely by id — and Group.id was the same bare INTEGER PRIMARY KEY with the same
+# rowid recycling (AUTOINCREMENT since, except on a table panel/db/id_sequence.py could not
+# rebuild). Nothing downstream catches it: redeem_invite's group re-check is guarded by
 # `if _creator is not None and not _creator.is_superadmin`, and minting is @superadmin_required,
 # so for a creator who is still a superadmin the check is skipped and user.groups is assigned
 # from whatever rows hold those ids now. Driven with the freed id taken deliberately, the same
@@ -1086,7 +1088,7 @@ with app.app_context():
 #     the panel starts adding `ufw deny` rules to a machine nobody enabled auto-blocking on.
 #   * config["game_schedules"] — per-server backup overrides, keyed by game-server id.
 #     uninstall_server already removes these deliberately; the cascade never did.
-#   * ssh_manager's per-remote caches. _specs_cache has NO expiry, so a recycled id reported
+#   * ssh_manager's per-remote caches. _specs_cache has NO expiry, so a recycled id (see above) reported
 #     the deleted machine's CPU/RAM/disk/OS until the panel restarted.
 with app.app_context():
     _dr_remote = RemoteServer(name="smoke-delhost", host="127.0.0.1", port=22,
@@ -1108,8 +1110,9 @@ _dr_bk.set_game_schedule(_dr_gid, 3, 2)
 # ...and a metric sample for that game server. _prune_host_game_samples listens on
 # RemoteServer's after_delete and deletes by `server_id IN (SELECT id FROM game_server WHERE
 # remote_id = ...)` — but delete_remote BULK-deletes the game servers first, so by the time it
-# fires the subquery matches nothing. Both rowids are then recycled and the next server created
-# serves the deleted one's history on /api/server/<id>/history for the 14-day prune window.
+# fires the subquery matches nothing. Where a table lacks AUTOINCREMENT (one
+# panel/db/id_sequence.py could not rebuild) both rowids are then recycled and the next server
+# created serves the deleted one's history on /api/server/<id>/history for the 14-day prune window.
 from panel.db.models import MetricSample as _dr_MS
 from panel.core.clock import utcnow as _utcnow_mon
 with app.app_context():
@@ -1120,9 +1123,10 @@ with app.app_context():
 check("delete host: the sample fixture armed", _dr_samples_before >= 1,
       "no MetricSample row — the check after the delete would pass vacuously")
 # ...and a saved LAYOUT position for both. ui_prefs holds host_order (remote ids) and
-# server_order ({remote_id: [server id]}), and nothing cleared them — so after the rowid is
-# recycled a brand-new host or server inherited the deleted one's slot in every user's
-# dashboard, for every user who had ever reordered.
+# server_order ({remote_id: [server id]}), and nothing cleared them — so once the rowid was
+# recycled (before AUTOINCREMENT, and still on a table id_sequence.py could not rebuild) a
+# brand-new host or server inherited the deleted one's slot in every user's dashboard, for every
+# user who had ever reordered.
 with app.app_context():
     _dr_u = User.query.filter_by(username="smoke_admin").first()
     _dr_u.set_ui_pref("host_order", [_dr_rid, 99999])

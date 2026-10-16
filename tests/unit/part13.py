@@ -39,7 +39,7 @@ import urllib.parse
 from types import SimpleNamespace as NS
 
 from eventlet.timeout import Timeout as _EvTimeout13  # noqa: E402 - a timed-out green join raises it
-from unit.part01 import (_r21d_urlopen_of, _sm_core, check, eq)  # noqa: F401,E402
+from unit.part01 import (_sm_core, check, eq)  # noqa: F401,E402
 
 
 def _join13(t, secs=5):
@@ -113,7 +113,6 @@ from panel.services import notifications as _n10  # noqa: E402
 # section so nothing here reads or writes the run's config.json.
 _n10_store = {}
 _n10_saved = {k: getattr(_n10, k) for k in ("load_config", "update_config", "_OPENER", "threading")}
-_n10_urlopen_saved = _r21d_urlopen_of(_n10).urlopen
 
 
 def _n10_update(fn):
@@ -775,7 +774,6 @@ try:
 finally:
     for _k10, _v10 in _n10_saved.items():
         setattr(_n10, _k10, _v10)
-    _r21d_urlopen_of(_n10).urlopen = _n10_urlopen_saved
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

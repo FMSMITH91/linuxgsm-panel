@@ -29,6 +29,7 @@ function refreshFirewall() {
       var inactive = !data.unreachable && data.installed === true && data.enabled !== true;
       var bin = document.getElementById('blocks-inactive-note');
       if (bin) bin.classList.toggle('d-none', !inactive);
+      _fwStatusNote(data, inactive);
       if (data.unreachable) {
         badge.textContent = 'Unknown';
         badge.className = 'badge bg-secondary';
@@ -71,9 +72,42 @@ function refreshFirewall() {
 // sentence, already in the viewer's language, names the way out ("Re-trust host key").
 function _fwUnreadWhy(data) {
   if (data.permission_denied) return "Rules can't be read: sudo refused the firewall read on this host.";
+  return _fwHostSaid(data) || "Rules can't be read while this host is unreachable.";
+}
+
+// The route's sentence for an unreachable read that the network did not cause, or ''.
+function _fwHostSaid(data) {
   var why = data.code;
-  if (why && why !== 'host_unreachable' && data.message) return data.message;
-  return "Rules can't be read while this host is unreachable.";
+  return (why && why !== 'host_unreachable' && data.message) ? data.message : '';
+}
+
+// The UFW Status card's line, from the same read the badge and the lists are painted from. It was
+// server-rendered only, so a refresh listed a host's rules under a card still saying the host could
+// not be reached, and a changed host key read "can't reach" there under lists saying "Re-trust".
+// The same states and sentences as the template's card, in its order.
+function _fwStatusNote(data, inactive) {
+  var box = document.getElementById('ufw-status-note');
+  if (!box) return;
+  var said = _fwHostSaid(data), n = null;
+  if (data.permission_denied) {
+    n = ['text-warning', 'bi-lock', "The panel reached this host, but sudo refused the firewall read, so its rules can't be shown. Check the panel's sudoers grant on this host."];
+  } else if (data.unreachable) {
+    n = said ? ['text-warning', 'bi-key', said]
+      : ['text-secondary', 'bi-plug', "The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back."];
+  } else if (data.installed !== true) {
+    n = ['text-warning', 'bi-exclamation-triangle', 'UFW is not installed on this remote.'];
+  } else if (inactive) {
+    n = ['text-warning', 'bi-exclamation-triangle', 'UFW is installed but inactive: nothing on this page is enforced, and ufw does not list its stored rules until it is enabled.'];
+  }
+  box.textContent = '';
+  if (!n) return;
+  var p = document.createElement('p');
+  p.className = n[0] + ' small mb-0';
+  var icon = document.createElement('i');
+  icon.className = 'bi ' + n[1];
+  p.appendChild(icon);
+  p.appendChild(document.createTextNode(' ' + n[2]));
+  box.appendChild(p);
 }
 
 // The open-ports table, or its empty state, and the rule count beside the card title.

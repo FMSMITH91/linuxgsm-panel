@@ -1802,7 +1802,12 @@ def _r21d_scope_unread_calls(scope, env, here, factories):
     """`loader@line` for one scope's loader calls that are not `name = loader(…)` and load unread."""
     _assigns = _r18d_scope_assigns(scope)
     _r18d_scope_loads(_assigns, env, here, factories)        # fills env with the scope's paths
-    _read = {id(_a.value) for _a in _assigns if any(isinstance(_t, _ast_scan.Name) for _t in _a.targets)}
+    # `name = loader(…)` is left to _r18d_factory_load only where that resolves the module the loader
+    # returns (review 1015c): `ok = _st(other())`, whose loader returns something else, was named
+    # by neither reader.
+    _read = {id(_a.value) for _a in _assigns if any(isinstance(_t, _ast_scan.Name) for _t in _a.targets)
+             and not (isinstance(_a.value, _ast_scan.Call) and getattr(_a.value.func, "id", None) in factories
+                      and _r18d_factory_load(factories[_a.value.func.id], _a.value, env, here, factories) is None)}
     return ["%s@%d" % (_c.func.id, _c.lineno) for _c in _r21d_scope_calls(scope)
             if id(_c) not in _read and _r21d_call_unread(factories.get(getattr(_c.func, "id", None)), _c, env, here)]
 
@@ -2088,13 +2093,15 @@ _r19d_unread_ctl_t = _ast_scan.parse(
     "_ld(other())\nobj.m = _ld(other())\n"
     "def u(case):\n    return _ld(other())\n"
     "def _st(rel):\n    s = _ilu.spec_from_file_location('z', os.path.join(_R9, rel))\n"
-    "    m = _ilu.module_from_spec(s)\n    m.x = 1\n_st(other())\n_st('tools/i18n_scan.py')\n")
+    "    m = _ilu.module_from_spec(s)\n    m.x = 1\n_st(other())\n_st('tools/i18n_scan.py')\n"
+    # review 1015c: assigned, from a loader that returns something else.
+    "ok = _st(other())\nfine2 = _st('tools/i18n_scan.py')\n")
 check("stub gate: ...a root imported under another name is a root, and a load by a path it cannot "
       "work out is named, at its call site for a loader given the path (control)",
       _r14d_aliases(_r19d_unread_ctl_t, {}, os.path.join(_root, "tests", "unit", "part99.py"))
       == {"_scan75": "path:tools/i18n_scan.py", "fine": "path:tools/i18n_scan.py"}
       and _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py")
-      == ["_ld@20", "_ld@21", "_ld@23", "_st@28", "_two", "_what", "m", "three"],
+      == ["_ld@20", "_ld@21", "_ld@23", "_st@28", "_st@30", "_two", "_what", "m", "three"],
       repr((_r14d_aliases(_r19d_unread_ctl_t, {}), _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py"))))
 _r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
     "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
@@ -4080,7 +4087,10 @@ try:
     # These drive the fallback — the `sudo -l` test install.sh uses when the root-owned helper is not
     # installed — so HELPER_DIR names a directory with no helper in it. The delegation is below.
     _cas_fn = _su_between("can_already_sudo() {", "\n}\n")
-    _cas = "HELPER_DIR=%s\n" % _su_shlex.quote(os.path.join(_su_sb, "no-helper-here")) + _cas_fn
+    # SUDO_WS names nothing, so only the `sudo` stand-in answers (part86 drives the two together).
+    _cas = ("HELPER_DIR=%s\nSUDO_WS=%s\n" % (_su_shlex.quote(os.path.join(_su_sb, "no-helper-here")),
+                                            _su_shlex.quote(os.path.join(_su_sb, "no-sudo-ws-here")))
+            + _cas_fn)
     _cas_cases = [
         ("User x may run the following commands on h:", "yes",  "a sudo-capable account"),
         ("User x is not allowed to run sudo on h.",     "no",   "a plain game account"),
@@ -12045,10 +12055,16 @@ def _rs6_verdict(text):
     return r.returncode
 
 
+# Each SKIP shape carries a full tally (review 1015c): without one the tally rule below fails it
+# too, and these checks stayed green with the SKIP detector deleted. unit_test.py really prints a
+# tally of what ran and then its "DID NOT RUN" summary.
 for _rs6_text, _rs6_want, _rs6_what in (
-        ("SKIP: panel.db already exists", 1, "a DB suite's 'SKIP:' line"),
-        ("PASS  a\n\n1 CHECK(S) DID NOT RUN:\n  SKIP  x   [no esprima]", 1, "an indented summary SKIP"),
-        ("SKIP  some check   [reason]", 1, "a check-level SKIP row"),
+        ("SKIP: panel.db already exists\n\n1 / 1 checks passed", 1, "a DB suite's 'SKIP:' line"),
+        ("PASS  a\n\n1 CHECK(S) DID NOT RUN:\n  SKIP  x   [no esprima]\n\n1 / 1 checks passed", 1,
+         "an indented summary SKIP"),
+        ("SKIP  some check   [reason]\n\n1 / 1 checks passed", 1, "a check-level SKIP row"),
+        ("PASS  a\n\n5 / 5 checks passed\n\n1 CHECK(S) DID NOT RUN:\n  SKIP  x   [r]", 1,
+         "a full tally followed by a DID NOT RUN summary"),
         ("PASS  backups: hands a refusal to the skip dialog\n\n1 / 1 checks passed", 0,
          "a passing check whose NAME says 'skip'")):
     check("run-tests: run_suite reads %s as %s" % (_rs6_what, "a skip" if _rs6_want else "a pass"),

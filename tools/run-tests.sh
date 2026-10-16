@@ -21,6 +21,8 @@ else
     RT_TMP="$(mktemp -d -t lgsm-tests-XXXXXX)"
 fi
 trap 'rm -rf "$RT_TMP"' EXIT
+# The checkout itself. run_suite refuses to clear a database here (see it).
+RT_ROOT="$PWD"
 
 # ORDER IS CHEAPEST-FIRST, and deliberately so. Every step aborts the run (set -e), so whatever
 # runs first decides how long a BROKEN tree takes to tell you. The static checks and the sub-second
@@ -49,9 +51,19 @@ VENVS='(^|/)(\.?venv)/'
 # So the database is cleared BEFORE each of them (what the coverage job in ci.yml already does,
 # which is why that job is the only one that has really been running all five), and a SKIP is
 # treated as a FAILURE. Order is now a free choice rather than a hidden dependency.
+#
+# Cleared only in a COPY of the tree (lane_tree), never in the checkout: there, data/panel.db is a
+# developer's own panel (README's development steps run `python app.py` in it, which creates it:
+# their admin account, hosts and stored credentials), and panel.db.backup is the known-good copy
+# the panel restores it from. Both modes run these suites in a copy; this refusal is what keeps a
+# later edit from calling one in the checkout again.
 run_suite() {
     local label="$1" path="$2" out rc
     echo "== ${label} =="
+    if [[ -n "${RT_ROOT:-}" && "$PWD" -ef "$RT_ROOT" ]]; then
+        echo "  !! ${path} would run in the checkout and delete its data/panel.db; run it in a lane_tree copy" >&2
+        return 1
+    fi
     rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
     set +e
     out="$("$PY" "$path" 2>&1)"; rc=$?
@@ -205,25 +217,71 @@ rbac_suite() {
 # result is its exit status (wait), and every suite in it has already failed that status on a FAIL,
 # a SKIP, a crash or a missing tally. A lane that did not finish is not a pass: wait answers its
 # signal, and nothing is reported as passed that has no status.
+#
+# Every step ends in `|| return 1`. lane_tree runs inside $(…), where bash clears set -e, so a
+# failed mktemp, chmod, copy or `cp .git` (a full disk, say) would still print the half-made
+# directory and return 0, and the lanes would start in it and fail on whatever file was missing.
 lane_tree() {
     local dest
-    dest="$(mktemp -d "$RT_TMP/lane-XXXXXX")"
+    dest="$(mktemp -d "$RT_TMP/lane-XXXXXX")" || return 1
     # The checkout's own mode, not mktemp's 0700: a check that runs a tool as another account
     # reads the tree through this directory as it would the checkout.
-    chmod --reference=. "$dest"
-    git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - | tar -xf - -C "$dest"
+    chmod --reference=. "$dest" || return 1
+    git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - | tar -xf - -C "$dest" \
+        || return 1
     if [[ -d .git ]]; then
-        cp -a .git "$dest/.git"
+        cp -a .git "$dest/.git" || return 1
     fi
     printf '%s\n' "$dest"
+}
+
+# Every suite, in the order the sequential mode runs them. run_lanes refuses lanes that do not run
+# each of these exactly once: a suite dropped from a lane (rbac's 325 permission and IDOR checks,
+# say) otherwise stops running in CI with every check still green, since a lane is judged only by
+# what it ran. tests/unit/part85.py holds every tests/*_test.py to a function named here.
+ALL_SUITES=("unit_suite" "other_suites" "smoke_suite" "rbac_suite")
+
+# A process and everything below it, parents first: a lane is a subshell, and its suite (and that
+# suite's own children) sit one or more levels under it.
+_r22a_tree() {
+    local p c
+    for p in "$@"; do
+        printf '%s\n' "$p"
+        for c in $(pgrep -P "$p" 2>/dev/null || true); do
+            _r22a_tree "$c"
+        done
+    done
+}
+
+# Ctrl-C (or a TERM) during the lanes. Without job control bash starts each `( … ) &` lane with
+# SIGINT ignored, and the suites inherit that, so they never see a Ctrl-C and run on to the end
+# (minutes) while this script sits in `wait`. Stop every lane's whole tree instead: TERM, then
+# KILL for anything still there a moment later, then reap them before the EXIT trap removes the
+# directories they run in.
+_r22a_stop_lanes() {
+    local -a tree
+    mapfile -t tree < <(_r22a_tree "$@")
+    echo "  !! interrupted: stopping the lanes" >&2
+    kill -TERM "${tree[@]}" 2>/dev/null || true
+    sleep 1
+    kill -KILL "${tree[@]}" 2>/dev/null || true
+    wait 2>/dev/null || true
 }
 
 run_lanes() {
     local -a lanes=("unit_suite" "other_suites rbac_suite" "smoke_suite")
     local -a pids
-    local i rc bad=0 other smoke
+    local i rc bad=0 other smoke want got
+    # shellcheck disable=SC2048,SC2086  # a lane is a list of function names, split on purpose
+    got="$(printf '%s\n' ${lanes[*]} | sort)"
+    want="$(printf '%s\n' "${ALL_SUITES[@]}" | sort)"
+    if [[ "$got" != "$want" ]]; then
+        echo "  !! the lanes run [${got//$'\n'/ }], not each of [${want//$'\n'/ }] once" >&2
+        return 1
+    fi
     chmod --reference=. "$RT_TMP"
-    # Plain assignments, so a copy that failed stops the run (set -e) before any lane starts.
+    # Plain assignments, so a copy that failed stops the run (set -e) before any lane starts:
+    # lane_tree returns non-zero for that (see it), and an assignment takes its command's status.
     other="$(lane_tree)"
     smoke="$(lane_tree)"
     local -a dirs=("$PWD" "$other" "$smoke")
@@ -233,6 +291,7 @@ run_lanes() {
         pids+=("$!")
         echo "== lane $i started: ${lanes[$i]} =="
     done
+    trap '_r22a_stop_lanes "${pids[@]}"; exit 130' INT TERM
     for i in "${!lanes[@]}"; do
         set +e
         wait "${pids[$i]}"; rc=$?
@@ -248,16 +307,23 @@ run_lanes() {
     for i in "${!lanes[@]}"; do
         printf '  lane %s: %s\n' "$i" "$(grep -E '^[0-9]+ / [0-9]+ checks passed$' "$RT_TMP/lane$i.log" | tr '\n' ',' || true)"
     done
+    trap - INT TERM
     return "$bad"
 }
 
 if [[ "${RUN_TESTS_PARALLEL:-0}" = "1" ]]; then
     run_lanes
 else
-    unit_suite
-    other_suites
-    smoke_suite
-    rbac_suite
+    # One after another, in ALL_SUITES' order: unit in the tree, as in the lanes, and every suite
+    # that owns data/ in ONE copy of it (see run_suite), never in the checkout.
+    seq_tree="$(lane_tree)"
+    for fn in "${ALL_SUITES[@]}"; do
+        if [[ "$fn" == "unit_suite" ]]; then
+            "$fn"
+        else
+            ( cd "$seq_tree"; "$fn" )
+        fi
+    done
 fi
 
 echo ""

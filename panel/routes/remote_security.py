@@ -15,7 +15,7 @@ from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, lo
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag,
-                             _unreachable)
+                             _r22b_unreachable_or_generic, _unreachable)
 from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _port_or,
                                    canonical_ip, ip_address_or_none)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
@@ -149,7 +149,9 @@ def _register_blocking(app):
             _follow_in_panel_gate(remote, ok)
             return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
+            # A host that is down or refused the panel is not a fault in it: _unreachable's answer
+            # (200, `unreachable`, a `code`); anything else is the generic 500.
+            return _r22b_unreachable_or_generic("block failed")
 
     @app.route("/api/remote/<int:remote_id>/security/autoblock", methods=["POST"])
     @login_required

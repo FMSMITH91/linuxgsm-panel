@@ -2326,11 +2326,14 @@ def _r21b_sync_after_cron_write(gs):
     row for it, and the operator was answered "request failed". Its failure now only skips the
     toggle sync, which the next listing of the card makes anyway (_cron_listing).
     """
+    # Read before the try: the rollback below expires `gs`, and reloading it from a row deleted (or
+    # replaced, RowReplaced) while the read-back ran raised out of this "never raises" except.
+    sid = gs.id
     try:
         _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
     except Exception:  # noqa: BLE001 - best-effort, after the write and its audit row
         db.session.rollback()
-        _log.warning("could not re-read the crontab after a change to server %s", gs.id, exc_info=True)
+        _log.warning("could not re-read the crontab after a change to server %s", sid, exc_info=True)
 
 
 def _register_cron_actions(app):

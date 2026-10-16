@@ -548,26 +548,32 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     if not firewall._ufw_is_active(after):
         return False, i18n.Sentence("The limit for {spec} is stored, but UFW is not active on this host, so "
                                     "nothing is limited until it is enabled.", spec=spec)
-    first = _ufw_first_public_rule(after, port, proto, unresolved=True)
+    # Both families: a `(v6)` ALLOW above the v6 LIMIT left IPv6 clients unthrottled while this
+    # answered "now rate limited" from the IPv4 list alone.
+    first = _r22b_not_limit(after, port, proto)
     if first is not None and first.get("unresolved"):
         # An app profile other than OpenSSH (`Nginx Full`, `Apache`): its ports are in a file on the
         # host the panel does not read, so whether it shadows the limit is unknown. Not a success.
         return False, i18n.Sentence("The limit for {spec} was added, but `{rule}` above it is an application "
                                     "profile the panel cannot read, so it cannot confirm the limit is the rule "
                                     "connections meet first.", spec=spec, rule=first["detail"])
-    if first is None or first["action"] != "LIMIT":
+    if first is not None:
         return False, i18n.Sentences(i18n.Sentence(
             "{spec} is still matched first by `{rule}`, so the limit is never reached — remove or narrow that "
-            "rule.", spec=spec, rule=first["detail"] if first else "nothing"), unsplit)
-    if split:
+            "rule.", spec=spec, rule=first["detail"]), unsplit)
+    if split and _r22b_closed_by_split(before, after, port, other):
         # The split must not have closed what the bare rule kept open for the other protocol.
-        o_was = _ufw_first_public_rule(before, port, other)
-        o_now = _ufw_first_public_rule(after, port, other)
-        if (o_was and o_was["action"] in ("ALLOW", "LIMIT")
-                and not (o_now and o_now["action"] in ("ALLOW", "LIMIT"))):
-            return False, i18n.Sentence("{spec} is now rate limited, but {port}/{proto} is no longer open — "
-                                        "re-open it from the Firewall page.", spec=spec, port=port, proto=other)
+        return False, i18n.Sentence("{spec} is now rate limited, but {port}/{proto} is no longer open — "
+                                    "re-open it from the Firewall page.", spec=spec, port=port, proto=other)
     return True, i18n.Sentence("{spec} is now rate limited (6 connections per 30s per address)", spec=spec)
+
+
+def _r22b_closed_by_split(before, after, port, proto):
+    """Whether `port`/`proto` was open to the public before the split, and is not after, in either family."""
+    def _open(out, v6):
+        f = _ufw_first_public_rule(out, port, proto, v6=v6)
+        return bool(f and f["action"] in ("ALLOW", "LIMIT"))
+    return any(_open(before, v6) and not _open(after, v6) for v6 in (False, True))
 
 
 # A protocol ufw prints after a To or From column ("22,80/tcp", "Anywhere/udp", "<ip>/gre"). Letters
@@ -575,11 +581,15 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
 _R21B_PROTO_SUFFIX_RE = re.compile(r"/([A-Za-z]+)\Z")
 
 
-def _ufw_public_rules(status_out):
-    """The IPv4 rules in `ufw status [numbered]` output that govern traffic from ANYWHERE —
-    inbound, on no particular interface — in the order ufw evaluates them. Each is
-    _parse_ufw_rule's dict plus its `detail` text. Source-restricted rules, interface rules and
-    the (v6) twins are left out: none of them decides what the public meets first."""
+def _ufw_public_rules(status_out, v6=False):
+    """The public rules of one family in `ufw status [numbered]` output, in ufw's order.
+
+    IPv4, or IPv6 with `v6`: the rules that govern traffic from ANYWHERE — inbound, on no
+    particular interface. Each is _parse_ufw_rule's dict plus its `detail` text. Source-restricted
+    rules and interface rules are left out: neither decides what the public meets first. The two
+    families are separate chains (ufw6 is its own table), so each is read on its own: a `(v6)`
+    ALLOW above the v6 LIMIT leaves every IPv6 client unthrottled whatever the IPv4 list says.
+    """
     rules = []
     for line in (status_out or "").splitlines():
         # The row after its `[ N]` number, sliced off: a splitlines() line holds no newline, so the
@@ -589,7 +599,7 @@ def _ufw_public_rules(status_out):
         p = firewall._parse_ufw_rule(detail)
         # From "Anywhere/udp" is still everyone (`ufw allow proto udp from any`): the protocol is
         # _r21b_rule_matches' to read, not a reason to leave the rule out.
-        if (not p["action"] or p["v6"] or p["iface"] or p["direction"] not in ("", "IN")
+        if (not p["action"] or p["v6"] != v6 or p["iface"] or p["direction"] not in ("", "IN")
                 or _R21B_PROTO_SUFFIX_RE.sub("", p["from"]).lower() != "anywhere"):
             continue
         p["detail"] = re.sub(r"\s{2,}", "  ", detail)
@@ -639,7 +649,20 @@ def _r21b_dest_scoped(p):
     return bool(words) and firewall._r14a_net(words[0]) is not None
 
 
-def _ufw_first_public_rule(status_out, port, proto, unresolved=False, scoped=True):
+def _r22b_dest_loopback(p):
+    """Whether public rule `p` is for a loopback destination (`127.0.0.1 22/tcp`) only.
+
+    No connection from outside the host is addressed to one (the kernel drops such a packet as a
+    martian before ufw sees it), so it is no way in for the public and shadows nothing they meet.
+    Counted, `127.0.0.1 22/tcp ALLOW` read as public SSH "open (allow)", and "off" could never
+    succeed while it stood. A network that only CONTAINS loopback (`0.0.0.0/0`) is not one.
+    """
+    words = p["to"].split()
+    net = firewall._r14a_net(words[0]) if words else None
+    return net is not None and net.is_loopback
+
+
+def _ufw_first_public_rule(status_out, port, proto, unresolved=False, scoped=True, v6=False):
     """The first public rule a `proto` connection to `port` meets, or None.
 
     With `unresolved`, an app profile whose ports are unknown (_r21b_rule_matches None) ahead of
@@ -649,15 +672,39 @@ def _ufw_first_public_rule(status_out, port, proto, unresolved=False, scoped=Tru
     alone): it matches only connections to that address. Counted as matching first, it decides a
     limit is shadowed (the safe answer there); for "is this port already open?" it is not, since
     the host's other addresses still meet whatever comes after it.
+
+    One family: IPv4, or IPv6 with `v6` (_r22b_first_rules reads both).
     """
-    for p in _ufw_public_rules(status_out):
-        if not scoped and _r21b_dest_scoped(p):
+    for p in _ufw_public_rules(status_out, v6=v6):
+        if _r22b_dest_loopback(p) or (not scoped and _r21b_dest_scoped(p)):
             continue
         hit = _r21b_rule_matches(p, port, proto)
         if hit is None and unresolved:
             return dict(p, unresolved=True)
         if hit:
             return p
+    return None
+
+
+def _r22b_first_rules(status_out, port, proto, **kw):
+    """[the IPv4 first public rule, then the IPv6 one] (_ufw_first_public_rule's, `kw` passed on).
+
+    The IPv6 entry is left out when no v6 rule matches at all: a host with IPv6 off in ufw, or with
+    no v6 rule for the port, has nothing there to shadow or open it. The IPv4 one is always there,
+    None when nothing matches.
+    """
+    v6 = _ufw_first_public_rule(status_out, port, proto, v6=True, **kw)
+    return [_ufw_first_public_rule(status_out, port, proto, **kw)] + ([v6] if v6 is not None else [])
+
+
+def _r22b_not_limit(status_out, port, proto):
+    """The first public rule, in either family, that a connection meets ahead of (or instead of) a
+    LIMIT: None when the LIMIT is first in both. An IPv4 list with no match is {"detail": "nothing"}."""
+    for first in _r22b_first_rules(status_out, port, proto, unresolved=True):
+        if first is None:
+            return {"action": "", "detail": "nothing"}
+        if first.get("unresolved") or first["action"] != "LIMIT":
+            return first
     return None
 
 
@@ -3509,6 +3556,18 @@ def _socket_listen_lines(ports, bind_addr):
     return body
 
 
+def _r22b_ssh_port_reading(status_out, port):
+    """(already open, the rule blocking it or None) for TCP `port`, both families read.
+
+    A `(v6)` DENY first blocks every IPv6 client, whatever the IPv4 list says. Open already only
+    when IPv4 has a rule letting it in and nothing blocks it (the IPv6 list may have no rule).
+    scoped=False: an allow to ONE of the host's addresses does not open the port on the others.
+    """
+    firsts = _r22b_first_rules(status_out, port, "tcp", scoped=False)
+    blocking = next((f for f in firsts if f and f["action"] not in ("ALLOW", "LIMIT")), None)
+    return blocking is None and firsts[0] is not None, blocking
+
+
 def _open_ssh_port_rule(server, port, old_ports):
     """Step 1 of change_ssh_port: let `port`/tcp through ufw. (added, refusal).
 
@@ -3531,11 +3590,10 @@ def _open_ssh_port_rule(server, port, old_ports):
     with _core.ufw_lock(server):
         before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
         known = brc == 0 and firewall._ufw_is_active(before or "")
-        # scoped=False: an allow to ONE of the host's addresses does not open the port on the others.
-        first = _ufw_first_public_rule(before, port, "tcp", scoped=False) if known else None
+        is_open, first = _r22b_ssh_port_reading(before, port) if known else (False, None)
+        if is_open:
+            return False, None
         if first is not None:
-            if first["action"] in ("ALLOW", "LIMIT"):
-                return False, None
             return False, i18n.Sentence("Port {port}/tcp is blocked by the firewall rule `{rule}`, so SSH moved "
                                         "there would be unreachable — remove or change that rule first. Nothing was "
                                         "changed.", port=port, rule=first["detail"])
@@ -3796,6 +3854,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
 _SSH22_SHADOWING = (("ufw-delete-allow-app", ["OpenSSH"]), ("ufw-delete-allow-port", ["22"]))
 
 
+_R22B_OPENNESS = {"off": 0, "limit": 1, "allow": 2}
+
+
 def remote_public_ssh_status(server, panel_port=None):
     """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
     reachable only over tailscale0), plus whether UFW is active at all. When
@@ -3850,8 +3911,13 @@ def remote_public_ssh_status(server, panel_port=None):
     # destination (`203.0.113.5 22/tcp`) or an every-port allow read "off" — "reachable over the
     # tailnet only", the reassurance an operator closes port 22 on — and `off` / `limit` reported
     # success with every connection still meeting that rule.
-    first = _ufw_first_public_rule(out, 22, "tcp")
-    mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(first["action"], "off") if first else "off"
+    # Each family read on its own, and the more open answer stands: a `(v6)` ALLOW above the v6
+    # LIMIT is public SSH unthrottled for every IPv6 client, whatever the IPv4 list says.
+    first, mode = None, "off"
+    for f in _r22b_first_rules(out, 22, "tcp"):
+        m = {"LIMIT": "limit", "ALLOW": "allow"}.get(f["action"], "off") if f else "off"
+        if first is None or _R22B_OPENNESS[m] > _R22B_OPENNESS[mode]:
+            first, mode = f, m
     panel_open = False
     for line in (out or "").splitlines():
         # A rule that holds the panel port open to the public, read the way the close route
@@ -3865,6 +3931,9 @@ def remote_public_ssh_status(server, panel_port=None):
         if panel_port and _r14a_holds_port_open(line, panel_port):
             panel_open = True
     res = {"active": active, "mode": mode}
+    if first:
+        # The row itself, so a change that could not take (remote_set_public_ssh) names it.
+        res["rule"] = first["detail"]
     if panel_port:
         res["panel_port"] = int(panel_port)
         res["panel_port_open"] = panel_open
@@ -4137,7 +4206,11 @@ def remote_set_public_ssh(server, mode):
             i18n.Sentence("Could not set public SSH to {mode} — the firewall still reports it as {now}.",
                           mode=labels[mode], now=labels.get(state.get("mode"), state.get("mode"))),
             i18n.Sentence("The new 22/tcp rule was refused ({why}), so no other SSH rule was removed.",
-                          why=gate_err) if gate_err else "")
+                          why=gate_err) if gate_err else "",
+            # Which rule is in the way: one the panel does not remove (a port list, a destination,
+            # an every-port allow), as remote_ufw_limit_port names it in the same situation.
+            i18n.Sentence("Connections to port 22 meet `{rule}` first — remove or narrow that rule.",
+                          rule=state["rule"]) if state.get("rule") and not gate_err else "")
     return True, i18n.Sentence("Public SSH is now {mode}", mode=labels[mode])
 
 

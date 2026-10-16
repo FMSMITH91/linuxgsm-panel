@@ -1057,7 +1057,9 @@ def _bk7_restore_backup_refusal_happens_2():
     # detached launch of it. The launcher's run is recorded, never run.
     _popen = []
     _bk7._helper_present = lambda: False
-    _bk7.subprocess = _Over(_p7_sp, run=lambda argv, **k: (
+    # Over backup's own handle, not the raw module (review 1015c): the raw one's Popen/check_output
+    # skip the runner's tailscale guard and the no-sudo shim that handle carries.
+    _bk7.subprocess = _Over(_bk7_saved["subprocess"], run=lambda argv, **k: (
         _popen.append(list(argv)), _p7_sp.CompletedProcess(argv, 0, "", ""))[1])
     _bk7._service_restart_launcher = lambda script: ["LAUNCH", script]
     try:

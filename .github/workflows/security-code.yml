@@ -343,27 +343,33 @@ jobs:
       # bump that adds a dependency neither has would install and fail later as "wrote no SARIF".
       # pip check puts it back. The one report it may make is semgrep's pin of a package the
       # lockfile's header leaves out with --unsafe-package (mcp), against exactly the version its
-      # own file installs; anything else fails the job, named.
+      # own file installs, and only the requirement that package's .in records (`# semgrep-pins:`):
+      # a semgrep needing another version, or no longer pinning it (the split can be undone), fails
+      # the job too, named. Anything else fails the job, named.
       - name: The installed tools are the whole closure, apart from what the lockfile pins apart
         if: steps.scope.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
           dir=.github/ci-requirements
-          # name=version for each package the lockfile pins apart, read from its own file.
+          # name|version|requirement for each package the lockfile pins apart: the version read
+          # from its own .txt, the requirement semgrep declares for it from its .in's record.
           apart=""
           while read -r u; do
             if [ -f "${dir}/semgrep-${u}.txt" ]; then
-              apart="${apart} ${u}=$(awk -v u="${u}" 'index(tolower($1), u "==") == 1 { sub(/^[^=]*==/, "", $1); print $1 }' "${dir}/semgrep-${u}.txt")"
+              ver="$(awk -v u="${u}" 'index(tolower($1), u "==") == 1 { sub(/^[^=]*==/, "", $1); print $1 }' "${dir}/semgrep-${u}.txt")"
+              req="$(sed -n 's/^# semgrep-pins: *//p' "${dir}/semgrep-${u}.in" 2>/dev/null | head -n 1)"
+              apart="${apart} ${u}|${ver}|${req}"
             fi
           done < <(grep -oE -- '--unsafe-package=[A-Za-z0-9._-]+' "${dir}/semgrep.txt" | cut -d= -f2 | sort -u)
           rc=0
           out="$(python -m pip check 2>&1)" || rc=$?
           printf '%s\n' "${out}"
           bad="$(printf '%s\n' "${out}" | awk -v apart="${apart}" '
-            BEGIN { n = split(apart, a, " "); for (i = 1; i <= n; i++) { split(a[i], p, "="); ok[tolower(p[1]) " " p[2] "."] = 1 } }
+            BEGIN { n = split(apart, a, " "); for (i = 1; i <= n; i++) { split(a[i], p, "|"); want[tolower(p[3]) ", " tolower(p[1]) " " p[2] "."] = p[1] } }
             $0 == "" || $0 == "No broken requirements found." { next }
-            $1 == "semgrep" && $3 == "has" && $4 == "requirement" && (tolower($(NF - 1)) " " $NF) in ok { next }
-            { print }')"
+            $1 == "semgrep" && $3 == "has" && $4 == "requirement" && NF == 10 && (tolower($5) " " tolower($9) " " $10) in want { seen[tolower($5) " " tolower($9) " " $10] = 1; next }
+            { print }
+            END { for (k in want) if (!(k in seen)) print "pip check no longer reports semgrep pinning " want[k] " as semgrep-" want[k] ".in records (expected: " k "): undo the split or update the record" }')"
           if [ -n "${bad}" ]; then
             echo "::error::pip check (exit ${rc}) found requirements semgrep.txt and the files it pins apart do not satisfy (pinned apart:${apart:- none}):"
             printf '%s\n' "${bad}"
