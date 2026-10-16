@@ -782,9 +782,14 @@ def tailscale_ssh_status():
 # to its default: a hand-set hostname (and with it the Serve URL the admins reach the panel on),
 # advertised subnet routes, an exit node, shields-up and advertised tags were all withdrawn, and
 # accept-routes was forced on, while the panel reported only "Tailscale SSH enabled".
+#
+# Through the helper's `tailscale-ssh` verb, not as the panel's account. That ran `tailscale set
+# --ssh` itself, which worked because the panel had made its account the Tailscale operator, and
+# an operator needs no helper to change anything about tailscaled (tailscale_integration
+# .release_operator). The verb can only flip this one pref: `set` cannot change the tailnet.
 def tailscale_ssh_enable():
     """Turn this node's Tailscale SSH server on, and change nothing else (see above)."""
-    out, err, rc = _run("tailscale set --ssh 2>&1", timeout=30)
+    out, err, rc = _run_verb("tailscale-ssh", ["on"], timeout=30)
     if rc == 0:
         return True, "Tailscale SSH enabled"
     return False, err or out or "Failed to enable Tailscale SSH"
@@ -792,7 +797,7 @@ def tailscale_ssh_enable():
 
 def tailscale_ssh_disable():
     """Turn this node's Tailscale SSH server off, and change nothing else."""
-    out, err, rc = _run("tailscale set --ssh=false 2>&1", timeout=30)
+    out, err, rc = _run_verb("tailscale-ssh", ["off"], timeout=30)
     if rc == 0:
         return True, "Tailscale SSH disabled"
     return False, err or out or "Failed to disable Tailscale SSH"
@@ -5006,7 +5011,8 @@ def generate_debug_report():
     """Build the diagnostic report an operator can attach to a GitHub issue.
 
     A thin wrapper over panel.ops.debug_report.generate (see that package for the sections, the
-    privacy pass and the time budget). Returns {report, summary, issue_body, issues_url, filename}.
+    privacy pass and the time budget). Returns {report, summary, posture, issue_body, issues_url,
+    filename}; `posture` is for the in-panel page only.
     """
     from panel.ops import debug_report
     app, request_info = _debug_report_context()

@@ -20,6 +20,13 @@ is Tailscale's own split (1.102.4: ipnserver actor.Permissions answers read=true
 socket client and write only for root or the operator; localapi serves GET serve-config on read,
 POST on write), so a page that can LIST a route cannot necessarily remove it.
 
+$FAKE_TS_AS_ROOT=1 is a call made as root (the helper's verbs, install.sh, uninstall.sh): it may
+change Serve whoever the operator is. Every call that CHANGES something (a Serve write or `off`,
+`set`) made without it is also appended to $FAKE_TS_UNPRIV_LOG when that is set, so a part can
+show the panel's own account changed nothing. as_helper() below is system_ops._run_verb as the
+helper would answer the Tailscale verbs: their tool argv, through the panel's _run_ts, as root.
+`debug prefs` reports the state's "operator" as OperatorUser, and `set --operator=` (empty) clears it.
+
 $FAKE_TS_TAKEOVER, a STATE as JSON, replaces the state right after the first `serve status` read
 answers: another app taking a mount between a caller's read and its `off`.
 
@@ -136,7 +143,8 @@ def _parse_serve(rest):
 
 def _denied(st):
     """True when this call may not change Serve: OFF/WRITE_FAIL aside, a non-operator account."""
-    return bool(st.get("operator_required")) and not st.get("operator")
+    return (bool(st.get("operator_required")) and not st.get("operator")
+            and not os.environ.get("FAKE_TS_AS_ROOT"))
 
 
 def _off(st, port, path):
@@ -266,18 +274,34 @@ def _takeover(st):
             json.dump(new, fh, indent=1, sort_keys=True)
 
 
+def _changes(args):
+    """Whether `args` asks the daemon to CHANGE something (every write the panel could make)."""
+    if args[:1] == ["set"]:
+        return True
+    return args[:1] in (["serve"], ["funnel"]) and args[1:2] != ["status"]
+
+
+def _log_call(args):
+    """Log `args` to $FAKE_TS_LOG, and to $FAKE_TS_UNPRIV_LOG if it is an unprivileged change."""
+    unpriv = os.environ.get("FAKE_TS_UNPRIV_LOG")
+    if not unpriv or os.environ.get("FAKE_TS_AS_ROOT") or not _changes(args):
+        unpriv = None
+    for path in (os.environ.get("FAKE_TS_LOG"), unpriv):
+        if path:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(args) + "\n")
+
+
 def main(args):
-    log = os.environ.get("FAKE_TS_LOG")
-    if log:
-        with open(log, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(args) + "\n")
+    _log_call(args)
     if args in (["version"], ["--version"]):
         _out("1.102.4\n  tailscale commit: fake\n")
     if args == ["status", "--json"]:
         _out(json.dumps({"BackendState": "Running", "TailscaleIPs": ["100.64.0.9"],
                          "Self": {"HostName": "fakehost", "DNSName": HOST + "."}, "Peer": {}}))
     if args == ["debug", "prefs"]:
-        _out(json.dumps({"RouteAll": False, "OperatorUser": "", "RunSSH": False}))
+        _out(json.dumps({"RouteAll": False, "OperatorUser": _load().get("operator") or "",
+                         "RunSSH": False}))
     if args[:1] == ["set"]:
         _set(args[1:])
     if args[:2] == ["serve", "status"]:
@@ -290,6 +314,35 @@ def main(args):
     if args[:1] in (["serve"], ["funnel"]):
         _serve(args[0], args[1:])
     _out(rc=1, err="fake tailscale: unhandled %r\n" % (args,))
+
+
+# The verbs the helper answers with the tailscale CLI as root (privileged.tool_argv renders them).
+ROOT_VERBS = ("tailscale-serve", "tailscale-serve-off", "tailscale-serve-status", "tailscale-ssh")
+
+
+def as_helper(ts, priv, record=None):
+    """A stand-in for system_ops._run_verb: the helper's answer to the Tailscale verbs, as root.
+
+    `ts` is tailscale_integration, `priv` privileged. Each verb in ROOT_VERBS runs its own tool
+    argv (priv.tool_argv, which validates the arguments as the helper does) through ts._run_ts,
+    so through this fake on PATH, with FAKE_TS_AS_ROOT set. Every other verb is refused. `record`,
+    a list, gets (verb, args) for each call.
+    """
+    def _run_verb(verb, args=(), timeout=30, merge_stderr=True, **_kw):
+        if record is not None:
+            record.append((verb, list(args)))
+        argv = priv.tool_argv(verb, list(args)) if verb in ROOT_VERBS else []
+        if not argv:
+            return "", "refused by the fake helper", 1
+        os.environ["FAKE_TS_AS_ROOT"] = "1"
+        try:
+            out, err, rc = ts._run_ts(argv[1:], timeout=timeout)
+        finally:
+            os.environ.pop("FAKE_TS_AS_ROOT", None)
+        if merge_stderr and err:
+            return (out + "\n" + err).strip(), "", rc
+        return out, err, rc
+    return _run_verb
 
 
 if __name__ == "__main__":

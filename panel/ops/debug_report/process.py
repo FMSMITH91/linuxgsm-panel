@@ -728,7 +728,10 @@ def _leftovers_text(left):
 
 
 def _scheme_line(conf, cfg):
-    """'process serves http · routes point Serve at http ✓ · cookies Secure: yes'."""
+    """'process serves http · routes would point Serve at http ✓'.
+
+    The session cookie's Secure flag is not here: it is posture, on the page (config_section).
+    """
     serves = "https" if conf.get("BOOT_TLS") else "http"
     mod = _app_module()
     try:
@@ -737,8 +740,8 @@ def _scheme_line(conf, cfg):
         backend = None
     want = "https+insecure" if serves == "https" else "http"
     mark = "" if backend is None else (" ✓" if backend == want else " ✗ MISMATCH")
-    return "process serves %s · routes would point Serve at %s%s · session cookie Secure: %s" % (
-        serves, backend or "unknown", mark, _yn(conf.get("SESSION_COOKIE_SECURE"))), mark
+    return "process serves %s · routes would point Serve at %s%s" % (
+        serves, backend or "unknown", mark), mark
 
 
 def _boot_lines(ctx, res, facts):

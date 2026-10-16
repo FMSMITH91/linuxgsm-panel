@@ -299,8 +299,9 @@ fi
 # root/user split anywhere in that path — so a per-user panel publishes a Serve mapping exactly
 # like a system one does. Gating the teardown on `system` left that mapping on the tailnet,
 # pointing at a backend that no longer exists, for precisely the installs where nothing else was
-# going to clean it up. The CLI call needs no root either: setup made the panel user the Tailscale
-# operator (ensure_operator()), which is the same reason the panel's own teardown calls it plain.
+# going to clean it up. Removing a route needs root (or the Tailscale operator, which the panel's
+# account no longer is: the panel changes Tailscale through its helper), so a per-user uninstall
+# runs the `off` under sudo (U_SUDO); a system one is root already. Reading needs neither.
 #
 # WHICH routes: every Serve web route whose backend is loopback on the panel's port, on any
 # listener, read from `tailscale serve status --json`. The panel is gone, so each of them is dead,
@@ -349,10 +350,17 @@ for hp, web in sorted((sc.get("Web") or {}).items()):
 '
 # The panel's routes as "<listener flag> <mount> <funnel 0|1>" lines (mode "routes"), or the
 # listeners still funnelled with routes on them (mode "funnel"). Non-zero when Serve could not be
-# read: that is not "no routes".
+# read: that is not "no routes". A per-user uninstall whose plain read is refused (an older
+# Tailscale answers `serve status` only to root or the operator, and the panel's account is no
+# longer the operator) reads again under sudo, as it removes; the re-read before each removal
+# comes through here too, so it reads the same way.
 _ts_panel_routes() {
     local _js
-    _js="$(timeout 15 tailscale serve status --json 2>/dev/null)" || return 1
+    if ! _js="$(timeout 15 tailscale serve status --json 2>/dev/null)"; then
+        [[ -n "${U_SUDO:-}" ]] || return 1
+        sudo_note
+        _js="$(${U_SUDO} timeout 15 tailscale serve status --json 2>/dev/null)" || return 1
+    fi
     printf '%s' "${_js}" | python3 -I -c "${_TS_ROUTES_PY}" "$1" "$2" 2>/dev/null
 }
 _ts_remove_routes() {
@@ -370,7 +378,8 @@ _ts_remove_routes() {
             continue
         fi
         [[ $'\n'"${_now}"$'\n' == *$'\n'"${_flag} ${_mount} "* ]] || continue
-        if _err="$(timeout 15 tailscale serve "${_flag}" "--set-path=${_mount}" off 2>&1 >/dev/null)"; then
+        [[ -z "${U_SUDO:-}" ]] || sudo_note
+        if _err="$(${U_SUDO:-} timeout 15 tailscale serve "${_flag}" "--set-path=${_mount}" off 2>&1 >/dev/null)"; then
             ok "Removed the panel's Tailscale Serve route at ${_mount} (${_flag#--}); other routes untouched"
             _gone=$((_gone + 1))
             [[ "${_fun}" != "1" ]] || _funnelled="${_funnelled} ${_flag}"

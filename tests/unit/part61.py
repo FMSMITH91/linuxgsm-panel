@@ -78,10 +78,11 @@ _svc61 = _ts61._parse_serve_status(_SVC61)
 _offs61 = []
 
 
-def _ts_run61(args, timeout=5):
-    """The `tailscale` CLI: every `off` is recorded and succeeds; nothing else is asked here."""
-    if args and args[-1] == "off":
-        _offs61.append(list(args))
+def _ts_verb61(verb, args=(), timeout=30, merge_stderr=True):
+    """The helper: each `off` (tailscale-serve-off) is recorded as the argv it runs; all succeed."""
+    argv = _ts61._priv.tool_argv(verb, list(args))[1:]
+    if argv and argv[-1] == "off":
+        _offs61.append(argv)
     return "", "", 0
 
 
@@ -91,8 +92,7 @@ def _with_svc61(fn, *a):
     with _patched():
         _patch(_ts61, "get_tailscale_info", lambda force_refresh=False: NS(
             installed=True, serve_unreadable=False, serve_config=_svc61))
-        _patch(_ts61, "_run_ts", _ts_run61)
-        _patch(_ts61, "ensure_operator", lambda: None)
+        _patch(_ts61._so, "_run_verb", _ts_verb61)
         got = _try61(fn, *a)
     return got, list(_offs61)
 

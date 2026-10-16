@@ -184,11 +184,9 @@ def _serve_remove_route(port, data):
     if refusal is not None:
         return refusal
     mount, url = route["mount"], route["url"]
-    # Reading Serve needs no privilege; changing it needs the operator (or root). A host where the
-    # panel never published Serve itself — a system-service install with a hand-made route, the
-    # README's case — lists the route here and then refused its `off` with "Access denied". Enable
-    # and Disable make the panel the operator first; so does this.
-    ts.ensure_operator()
+    # Reading Serve needs no privilege; changing it needs root, so the `off` is the helper's verb
+    # (ts.remove_panel_route). It ran as the panel's account after making that account the
+    # Tailscale operator, which hands it every other change to tailscaled too.
     state, err = ts.remove_panel_route(route, port)
     if state == "gone":
         return jsonify({"success": True, "message": "That route was already gone."})

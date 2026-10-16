@@ -144,7 +144,7 @@ def _fake_ts(calls):
 
 def _ts_network(state, v):
     head = _nw24._ts_head(v) if state == "ok" else ""
-    wanted = ("panel account is the operator: yes", "health warnings 1")
+    wanted = ("panel account is the operator: YES", "health warnings 1")
     check("contract tailscale -> Network: the status/prefs JSON is kept, so key expiry, health and "
           "the operator are read, not 'not recorded'",
           v["extras_recorded"] is True and "not recorded" not in head

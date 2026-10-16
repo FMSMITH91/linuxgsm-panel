@@ -540,6 +540,14 @@
       <span class="visually-hidden" id="diag-report-name">Debug report</span>
       <textarea id="diag-report-text" class="form-control" rows="8" readonly aria-labelledby="diag-report-name"
                 style="display:none;font-family:ui-monospace,monospace;font-size:.72rem;"></textarea>
+      <!-- Security posture (2FA, invites, ways in, fail2ban): this page only, never the file. -->
+      <div id="diag-report-posture-wrap" class="mt-2" style="display:none;">
+        <div class="small text-secondary mb-1" id="diag-report-posture-name">
+          <i class="bi bi-shield-lock"></i> Security posture — shown here only, not in the download or the GitHub issue
+        </div>
+        <textarea id="diag-report-posture" class="form-control" rows="6" readonly aria-labelledby="diag-report-posture-name"
+                  style="font-family:ui-monospace,monospace;font-size:.72rem;"></textarea>
+      </div>
     </div>
   </div>
 </div>

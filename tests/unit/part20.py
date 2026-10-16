@@ -531,7 +531,8 @@ def _config_text(cfg, no_app=False, **app_config):
     with _patched():
         _patch(config, "load_config", lambda: cfg)
         res = CS.section_config(Ctx(app=app))
-    return "\n".join(res.lines), [f["text"] for f in res.findings]
+    # The cookie flags and the trust_proxy warning are posture (page-only): read both channels.
+    return "\n".join(res.lines + res.page_lines), [f["text"] for f in res.findings + res.page_findings]
 
 
 def _p20_config():

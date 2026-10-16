@@ -792,6 +792,14 @@ function _enableAutoUpdates(){
     .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
+// The security posture is this page's only: the download and the issue never carry it.
+function _r24rShowPosture(text){
+  var pw=document.getElementById('diag-report-posture-wrap'), pt=document.getElementById('diag-report-posture');
+  if(!pw || !pt) return;
+  pt.value=text||'';   // .value (not innerHTML) — nothing to inject
+  pw.style.display=text ? '' : 'none';
+}
+
 // Generate a shareable debug report — show it for review, then let the admin download
 // it or open a pre-filled GitHub issue (safe summary; log goes in the download).
 function genDebugReport(){
@@ -809,6 +817,7 @@ function genDebugReport(){
     }
     var ta=document.getElementById('diag-report-text');
     ta.value=d.report; ta.style.display='';   // .value (not innerHTML) — nothing to inject
+    _r24rShowPosture(d.posture);
     var dl=document.getElementById('diag-report-dl');
     dl.href=URL.createObjectURL(new Blob([d.report],{type:'text/markdown'}));
     dl.download=d.filename; dl.style.display='';

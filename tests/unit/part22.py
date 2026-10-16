@@ -87,11 +87,13 @@ def _ctx(deadline=20.0, app=_APP22):
 
 
 def _text(res):
-    return "\n".join(res.lines) + "\n" + repr(res.findings) + "\n" + str(res.verdict)
+    """Everything a section said: the file's lines and the in-panel page's posture alike."""
+    return ("\n".join(res.lines + res.page_lines) + "\n" + repr(res.findings + res.page_findings)
+            + "\n" + str(res.verdict))
 
 
 def _levels(res):
-    return [f["level"] for f in res.findings]
+    return [f["level"] for f in res.findings + res.page_findings]
 
 
 def _w(name, content, mode="w"):
@@ -829,8 +831,8 @@ check("R36: state, Serve and Funnel print without any node name, tailnet, IP, UR
 check("R36: Funnel on for a listener another app shares, config off: a fail naming that cause",
       # This fixture's listener is SHARED with another app ("/"), so the finding names that cause.
       any("Funnel is on for the whole :443 listener" in f["text"] and f["level"] == "fail"
-          for f in _tl22.findings),
-      repr(_tl22.findings))
+          for f in _tl22.page_findings),
+      repr(_tl22.page_findings))
 # ...and the OTHER branch, with the panel's route alone on the listener: an OR of the two texts
 # above passed with this branch deleted, since the shared fixture only ever took the first.
 _tl22s, _ = _ts_lines(dict(_tsv22, serve_services=[
@@ -841,9 +843,9 @@ _tl22s, _ = _ts_lines(dict(_tsv22, serve_services=[
 check("R36: Funnel on in Serve but off in the config, no other app: a fail (switched on outside "
       "the panel)",
       any("Funnel is ON in Serve but off" in f["text"] and f["level"] == "fail"
-          for f in _tl22s.findings)
-      and not any("for the whole :443 listener" in f["text"] for f in _tl22s.findings),
-      repr(_tl22s.findings))
+          for f in _tl22s.page_findings)
+      and not any("for the whole :443 listener" in f["text"] for f in _tl22s.page_findings),
+      repr(_tl22s.page_findings))
 _tl22u, _ = _ts_lines(dict(_tsd22, serve_unreadable=True), {"port": 5000})
 check("R36: an unreadable Serve status is UNREADABLE, never 'no routes'",
       "Serve**: UNREADABLE" in _text(_tl22u) and "0 routes" not in _text(_tl22u), _text(_tl22u))
@@ -965,16 +967,18 @@ def _access(counts, funnel):
 _al22 = _b22.Result()
 with _patched(_nw22, _funnel_on=lambda: False):
     _nw22._account_lines(_al22, _q22r)
-check("R45: the accounts are TWO lines (active and superadmins with the census; must-change-password "
-      "with a token and the setup token)", len(_al22.lines) == 2
-      and "1 holding an API token" in _al22.lines[1] and "1 active (1 superadmin" in _al22.lines[0],
-      repr(_al22.lines))
+check("R45: the accounts are ONE file line (the census) and TWO posture lines for the page only "
+      "(2FA and invites; must-change-password with a token and the setup token)",
+      len(_al22.lines) == 1 and "1 active (1 superadmin" in _al22.lines[0]
+      and len(_al22.page_lines) == 2 and "1 holding an API token" in _al22.page_lines[1],
+      repr((_al22.lines, _al22.page_lines)))
 _ac22 = _access(_q22r, True)
 check("R45: with Funnel on, the ONE aggregated posture finding; no username anywhere",
-      [f["text"] for f in _ac22.findings] == ["Funnel is on and not every superadmin has 2FA"]
+      [f["text"] for f in _ac22.page_findings] == ["Funnel is on and not every superadmin has 2FA"]
+      and _ac22.findings == []
       and "'a'" not in _text(_ac22), _text(_ac22))
-check("R45: ...and with Funnel off, posture stays out of At a glance", _access(_q22r, False).findings
-      == [])
+check("R45: ...and with Funnel off, posture stays out of At a glance", (_access(_q22r, False).findings
+      + _access(_q22r, False).page_findings) == [])
 _ac22e = _access({k: "error:OperationalError" for k in _nw22.signin_queries()}, False)
 check("R43/R45: a count that could not be read says so with its class, never 0",
       "audit log not queryable (OperationalError)" in _text(_ac22e)
@@ -1018,7 +1022,7 @@ check("R43: auth.log is read from its last 512 KB: failed sign-ins in 24 h apart
 _sg22f = {}
 _nw22._signin_lines(_b22.Result(), {"signins": [("login_failed", 2, 3), ("login_blocked", 4, 4),
                                                 ("api_token_blocked", 5, 5)], "sources": []}, _sg22f)
-_at22 = _nw22._authlog_text(_as22, True, _sg22f.get("audit_fail_24h"))
+_at22 = _nw22._authlog_text(_as22, _sg22f.get("audit_fail_24h"))
 check("R43: auth.log is held against login_failed ONLY (a refusal writes a line per request but one "
       "audit row per window), so these agree", _sg22f == {"audit_fail_24h": 2}
       and "2 failed-login lines in 24 h (audit log says 2 ✓) · 3 refusal lines" in _at22,

@@ -1349,8 +1349,11 @@ _VERB_SAMPLES = {
     "f2b-reload": [],
     "service-restart": ["ssh"],
     "panel-restart": ["2"],
-    "tailscale-set-operator": ["ubuntu"],
+    "tailscale-release-operator": ["ubuntu"],
+    "tailscale-ssh": ["on"],
     "tailscale-serve": ["serve", "modern", "/", "http", "5000"],
+    "tailscale-serve-off": ["https", "443", "/lgsm/"],
+    "tailscale-serve-status": [],
     "service-reload": ["fail2ban"],
     "service-enable-now": ["fail2ban"],
     "service-disable-now": ["cups"],
@@ -1555,6 +1558,18 @@ _sec_runs = []
 _sec_saved = (_helper.subprocess, _helper.resolve, sys.stdin, sys.stderr, sys.stdout)
 
 
+def _sec_run(argv, kw):
+    """Stand in for subprocess.run in the helper.
+
+    The joined-node read (tailscale-up-key's precheck) answers a node that has never joined; every
+    other run is recorded and succeeds.
+    """
+    if list(argv[1:]) == ["status", "--json"]:
+        return _sub.CompletedProcess(argv, 0, '{"BackendState": "NeedsLogin", "HaveNodeKey": false}', "")
+    _sec_runs.append((list(argv), kw.get("input")))
+    return _sub.CompletedProcess(argv, 0, "", "")
+
+
 def _sec_helper(argv, stdin):
     del _sec_runs[:]
     sys.stdin, sys.stderr, sys.stdout = _sec_io.StringIO(stdin), _sec_io.StringIO(), _sec_io.StringIO()
@@ -1567,9 +1582,8 @@ def _sec_helper(argv, stdin):
 
 try:
     _helper.subprocess = _sec_types.SimpleNamespace(
-        run=lambda argv, **kw: (_sec_runs.append((list(argv), kw.get("input"))),
-                                _sub.CompletedProcess(argv, 0, "", ""))[1],
-        TimeoutExpired=_sub.TimeoutExpired)
+        run=lambda argv, **kw: _sec_run(argv, kw), TimeoutExpired=_sub.TimeoutExpired,
+        DEVNULL=_sub.DEVNULL)
     _helper.resolve = lambda n: "/usr/bin/" + n
     _sec_pro = _sec_helper(["pro-attach"], "Zq7Tok3nSecretX9\n")
     check("secrets: the helper runs pro attach with the token on pro's stdin, not its argv",
@@ -2215,7 +2229,7 @@ _uid0_verbs = [("game-file-read", ["root", ".ssh/id_rsa"]), ("game-dir-tar", ["r
                ("user-lock-password", ["root"]), ("renice-users", ["-1", "root"]),
                ("content-grant-read", ["root", "root", "somegmod", "cstrike"]),
                ("content-cron-write", ["root"]), ("gmod-mount-read", ["root"]),
-               ("tailscale-set-operator", ["root"])]
+               ("tailscale-release-operator", ["root"])]
 # A refusal counts only when it is refused for the reason under test. These loops caught Exception,
 # so an unknown verb (a rename), a wrong argument count or a crash read as "refused", and the check
 # passed without testing the name at all.
@@ -2291,11 +2305,11 @@ check("helper: _game_home_path refuses uid 0 even if a name got past the validat
       repr(_helper._game_home_path("root", ".ssh/id_rsa")))
 # A uid FLOOR would be the tidier rule and is the wrong one: install.sh creates the panel's own
 # account with `useradd --system`, so the panel user is legitimately uid < 1000 and is the argument
-# to tailscale-set-operator. Only uid 0 has no legitimate caller.
+# to tailscale-release-operator. Only uid 0 has no legitimate caller.
 _sys_name = next((_p.pw_name for _p in __import__("pwd").getpwall() if 0 < _p.pw_uid < 1000), None)
 if _sys_name:
     try:
-        _helper.validate("tailscale-set-operator", [_sys_name])
+        _helper.validate("tailscale-release-operator", [_sys_name])
         _sys_why = ""
     except Exception as _sys_exc:
         _sys_why = repr(_sys_exc)
@@ -2560,7 +2574,7 @@ check("privileged: ...and an ordinary game-server account is still accepted",
 
 # ── The guard belongs on the FOUR destructive verbs, not on v_managed_user ────────────────────
 # v_managed_user gates 20 verbs. Only four destroy anything, and the panel legitimately names its
-# OWN account to several of the rest — `tailscale-set-operator` exists to pass it
+# OWN account to several of the rest — `tailscale-release-operator` exists to pass it
 # (tailscale_integration hands it _current_os_user()), and on a single-box install where LinuxGSM
 # runs under the same account as the panel, the game-file reads and `crontab-list` take it too.
 # Putting the refusal on v_managed_user refused ALL TWENTY: it broke the file browser, downloads,
@@ -2576,7 +2590,7 @@ for _dv in ("user-delete", "user-delete-force", "user-kill-processes", "user-rem
           bool(_why), "built an argv for %r" % _pa_me)
     check("privileged: %s still builds for a real game server" % _dv,
           _priv_mod.helper_argv(_dv, ["codserver"])[-1] == "codserver")
-for _av, _aargs in (("tailscale-set-operator", [_pa_me]),
+for _av, _aargs in (("tailscale-release-operator", [_pa_me]),
                     ("game-file-read", [_pa_me, "cfg/server.cfg"]),
                     ("game-dir-tar", [_pa_me, "serverfiles"]),
                     ("game-backup-read", [_pa_me, "b.tar.gz"]),
@@ -4312,7 +4326,9 @@ _BAD = {
     # These two are exported into a ROOT-run installer's environment.
     "panel-self-update": ["--upload-pack=x", "main; id", "a/../b", "HEAD~1", "'"],
     # The operator is a Linux user name; anything shaped like a flag or a shell fragment is out.
-    "tailscale-set-operator": ["root; id", "--operator=x", "", "a" * 40, "has space"],
+    "tailscale-release-operator": ["root; id", "--operator=x", "", "a" * 40, "has space"],
+    # Tailscale SSH takes on/off and nothing else; a `set` flag smuggled in is refused.
+    "tailscale-ssh": ["yes", "true", "--operator=x", "on; id", ""],
     "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
     # Package names reach `apt-get install` as separate argv entries, but a name is still the one
     # place an attacker-supplied string gets to be a whole argument — so it is charset-checked.

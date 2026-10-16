@@ -23,6 +23,7 @@ import app as _app54  # noqa: E402
 from panel.core import config as _cfg54  # noqa: E402
 from panel.ops import system_ops as _so54  # noqa: E402
 from panel.ops import tailscale_integration as _ts54  # noqa: E402
+from unit import fake_tailscale as _fake54  # noqa: E402
 
 NS = _types54.SimpleNamespace
 _ROOT54 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -71,10 +72,10 @@ try:
     os.environ["FAKE_TS_LOG"] = os.path.join(_TMP54, "ts-calls.jsonl")
     _verbs54 = []
     with _patched():
-        _patch(_ts54, "ensure_operator", lambda: (True, "p54"))
         _patch(_ts54, "allow_tailscale_ufw", lambda: (True, ""))
-        _patch(_ts54._so, "_run_verb",
-               lambda verb, args, **kw: (_verbs54.append(verb), ("", "refused by part54", 1))[1])
+        # The helper's answer to the Tailscale verbs, as root, through the fake on PATH: every Serve
+        # write is one of those now (the panel's account is no longer the Tailscale operator).
+        _patch(_ts54._so, "_run_verb", _fake54.as_helper(_ts54, _ts54._priv, _verbs54))
         _patch(_app54, "_remove_serve_leftovers", lambda *a, **k: "none")
 
         _seed54({"443": {"/": _OTHER54}}, funnel=["443"])
@@ -201,7 +202,7 @@ try:
                 _nw54._ts_findings(_res54, {"serve_services": _ts54.get_tailscale_info(
                     force_refresh=True).serve_config.get("services"), "funnel_enabled": bool(_fun54),
                     "backend_state": "Running"}, _cfg54_now, [])
-                _pages54[_tag54] = (_ts_html54, _sm_html54, _priv54, " | ".join(str(f) for f in _res54.findings))
+                _pages54[_tag54] = (_ts_html54, _sm_html54, _priv54, " | ".join(str(f) for f in _res54.page_findings))
         finally:
             if _snap54 is not None:
                 _CFGP54.write_bytes(_snap54)
@@ -226,7 +227,9 @@ try:
               repr((_sh54[2], _tn54[2])))
         check("debug report: the shared-listener Funnel is named as such, not 'switched on outside the "
               "panel'", "because another app on it uses Funnel" in _sh54[3], _sh54[3])
-        check("tailscale funnel: nothing reached the root fallback", _verbs54 == [], repr(_verbs54))
+        check("tailscale funnel: every write went through the helper's Tailscale verbs (never the panel's "
+              "own account)", bool(_verbs54) and all(v[0] in _fake54.ROOT_VERBS for v in _verbs54),
+              repr(_verbs54))
 finally:
     for _k54, _v54 in _ENV54.items():
         if _v54 is None:

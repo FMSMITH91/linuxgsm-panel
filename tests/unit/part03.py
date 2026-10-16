@@ -607,17 +607,22 @@ finally:
 # an exit node, dropped a hand-set hostname (and the Serve URL built on it) and forced accept-routes
 # on — reported as "Tailscale SSH enabled". `tailscale set --ssh[=false]` touches only RunSSH.
 import shlex as _tss_shlex   # noqa: E402
+# Through the helper's `tailscale-ssh` verb since the panel stopped being the Tailscale operator:
+# it ran `tailscale set --ssh` as the panel's own account, which only an operator may do.
 _tss_cmds, _tss_rc = [], {"rc": 0}
-_tss_orig = _so._run
+_tss_orig = _so._run_verb
 try:
-    _so._run = lambda c, **k: (_tss_cmds.append(c), ("", "boom", _tss_rc["rc"]))[1]
+    _so._run_verb = lambda v, a=(), **k: (_tss_cmds.append((v, list(a))), ("", "boom", _tss_rc["rc"]))[1]
     _tss_on = _so.tailscale_ssh_enable()
     _tss_off = _so.tailscale_ssh_disable()
-    _tss_argv = [[t for t in _tss_shlex.split(c) if t != "2>&1"] for c in _tss_cmds]
-    check("tailscale-ssh: enabling runs `tailscale set --ssh` and nothing that resets other prefs",
-          _tss_argv[:1] == [["tailscale", "set", "--ssh"]], repr(_tss_cmds))
-    check("tailscale-ssh: disabling runs `tailscale set --ssh=false` and nothing else",
-          _tss_argv[1:2] == [["tailscale", "set", "--ssh=false"]], repr(_tss_cmds))
+    _tss_argv = [_priv_p3.tool_argv(v, a) for v, a in _tss_cmds]
+    check("tailscale-ssh: enabling runs the helper's verb, `tailscale set --ssh=true`, and nothing that "
+          "resets other prefs",
+          (_tss_cmds[:1], _tss_argv[:1]) == ([("tailscale-ssh", ["on"])],
+                                             [["tailscale", "set", "--ssh=true"]]), repr(_tss_cmds))
+    check("tailscale-ssh: disabling runs `tailscale set --ssh=false` through the verb and nothing else",
+          (_tss_cmds[1:2], _tss_argv[1:2]) == ([("tailscale-ssh", ["off"])],
+                                               [["tailscale", "set", "--ssh=false"]]), repr(_tss_cmds))
     check("tailscale-ssh: ...and a toggle that ran reports it (control)",
           _tss_on == (True, "Tailscale SSH enabled") and _tss_off == (True, "Tailscale SSH disabled"),
           repr((_tss_on, _tss_off)))
@@ -625,7 +630,7 @@ try:
     check("tailscale-ssh: ...while one the CLI refused is reported as a failure (control)",
           _so.tailscale_ssh_enable()[0] is False and _so.tailscale_ssh_disable()[0] is False)
 finally:
-    _so._run = _tss_orig
+    _so._run_verb = _tss_orig
 
 # ── perf guard: the /server-management host probe (sudo ufw + tailscale + apt, ~1.2s of
 #    CPU across several subprocesses) is cached for _STATUS_TTL, so a page render and its
@@ -2740,12 +2745,13 @@ _tsd_info = TailscaleInfo(
     serve_config={"services": [{"url": "https://node.example.ts.net", "funnel": True, "routes": [
         {"mount": "/", "target": "http://127.0.0.1:3000"},
         {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}], "raw": "x"})
-_tsd_saved = (_tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator)
+_tsd_saved = (_tsi.get_tailscale_info, _tsi._so._run_verb)
 _tsd_ran, _tsd_rc = [], {"rc": 0}
 try:
     _tsi.get_tailscale_info = lambda force_refresh=False: _tsd_info
-    _tsi._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "err", _tsd_rc["rc"]))[1]
-    _tsi.ensure_operator = lambda: (True, "panel")
+    # The `off` is the helper's tailscale-serve-off verb; what it runs is the verb's tool argv.
+    _tsi._so._run_verb = lambda v, a=(), **k: (_tsd_ran.append(_priv_p3.tool_argv(v, a)[1:]),
+                                               ("", "err", _tsd_rc["rc"]))[1]
     eq("serve-off: the panel's route is found by its backend, not by its place in the list",
        [r["mount"] for r in _tsi.panel_serve_routes(_tsd_info.serve_config, 5000)], ["/lgsm"])
     _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
@@ -2772,7 +2778,7 @@ try:
     check("serve-off: with nothing proxying the panel, disabling is done and touches nothing",
           _tsd_r[0] is True and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
 finally:
-    _tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator = _tsd_saved
+    _tsi.get_tailscale_info, _tsi._so._run_verb = _tsd_saved
     _tsi._cache["info"] = None
 _tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 

@@ -4792,7 +4792,8 @@ try:
                      '  esac; return 0; }\n'
                      'ufw() { echo "UFW $*" >> "${TRACE}"; _fakeufw "$@"; }\n'
                      'sudo() { echo "SUDO $*" >> "${TRACE}";'
-                     ' if [ "$1" = ufw ]; then shift; _fakeufw "$@"; fi; }\n')
+                     ' if [ "$1" = ufw ]; then shift; _fakeufw "$@";'
+                     ' elif [ "$1" = timeout ]; then "$@"; fi; }\n')
         # tailscale is a PROGRAM on PATH, not a shell function: the teardown runs it under
         # `timeout`, which execs from PATH, so a function shim would be bypassed and the host's
         # REAL tailscale run instead. It is tests/unit/fake_tailscale.py (the stateful CLI part32
@@ -4962,8 +4963,11 @@ try:
         _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=5000\n'
                           'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n', rules=(),
                           serve={"443": {"/lgsm-panel": "http://127.0.0.1:5000"}})
-        check("uninstall.sh: a PER-USER panel's Tailscale Serve mapping is removed too",
-              "TS serve --https=443 --set-path=/lgsm-panel off" in _tr and _fw_serve_left() == {},
+        # Under sudo: the panel's account is no longer the Tailscale operator, so as itself the
+        # `off` is refused (Access denied) and the mapping stayed.
+        check("uninstall.sh: a PER-USER panel's Tailscale Serve mapping is removed too, under sudo",
+              "SUDO timeout 15 tailscale serve --https=443 --set-path=/lgsm-panel off" in _tr
+              and "TS serve --https=443 --set-path=/lgsm-panel off" in _tr and _fw_serve_left() == {},
               "the mapping stays on the tailnet pointing at a dead backend: %r" % _tr)
 
         # ── a config that could not be read is never guessed at ──────────────────────────────
@@ -8235,8 +8239,9 @@ for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursiv
 # The floor tracks the real count and moves with it — it went 30 -> 29 when
 # enable_unattended_upgrades stopped hand-rolling `printf … | sudo tee` and went through the write
 # verb like every other root-owned write in that module, and 29 -> 27 when the debug report's uname
-# and journalctl reads moved from shell _run() to the argv runner _debug_run().
-check("shell: the _run() scan actually found the call sites", _shell_seen >= 27,
+# and journalctl reads moved from shell _run() to the argv runner _debug_run(), and 27 -> 25 when
+# the Tailscale SSH toggle's two `tailscale set --ssh` went through the helper's verb.
+check("shell: the _run() scan actually found the call sites", _shell_seen >= 25,
       "only %d matched — the scan stopped finding them, so the gate below proves nothing"
       % _shell_seen)
 check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,

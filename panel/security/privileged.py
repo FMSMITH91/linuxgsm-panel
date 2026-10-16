@@ -170,6 +170,8 @@ TS_UP_POLL_SECONDS = 20
 # panel's HTML. Whoever checks it must FULLMATCH — a prefix test accepts anything after the trusted
 # part, and the far side's grep is running on a host whose output is exactly what is in question.
 TS_LOGIN_URL_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes (tools/panel-helper's twin).
+R24T_SSH_PREF = {"on": "true", "off": "false"}
 
 # The detached OS-update job — see tools/panel-helper. OS_UPDATE_LOG is the same file
 # the os-update-log verb tails.
@@ -607,6 +609,22 @@ def _ts_mount(s):
     return "".join(out)
 
 
+def _r24t_off_mount(s):
+    """The mount a `tailscale serve ... off` names: _ts_mount's, or one of those plus one "/".
+
+    Tailscale keeps "/x/" and "/x" as two handlers, so `off` has to name the one stored. The slash
+    comes off for _ts_mount and goes back on as a literal, so every other character is rebuilt from
+    its alphabet. Never "//" and never empty (an `off` with no mount clears the whole listener).
+    """
+    m = str(s)
+    if len(m) > 1 and m.endswith("/"):
+        inner = _ts_mount(m[:-1])
+        if inner == "/":
+            raise VerbError("not a mount point")
+        return inner + "/"
+    return _ts_mount(m)
+
+
 def _jail(s):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(s)):
         raise VerbError("not a jail name")
@@ -661,8 +679,8 @@ def _destroyable_user(s):
 
     The mirror of the helper's v_destroyable_user, and separate from _managed_user for the reason
     given there: _managed_user gates 20 verbs, only four of which destroy anything, and the panel
-    legitimately passes its OWN account to several of the others — `tailscale-set-operator` is
-    built to take it, and on a single-box install the game-file reads and `crontab-list` take it
+    legitimately passes its OWN account to several of the others — `tailscale-release-operator`
+    is built to take it, and on a single-box install the game-file reads and `crontab-list` take it
     too.
     """
     s = _managed_user(s)
@@ -944,12 +962,17 @@ _ARGV = {
     "panel-restart": ([_restart_delay],
                       lambda a: [SYSTEMD_RUN, "--on-active=%s" % a[0], "--collect",
                                  SYSTEMCTL, "restart", PANEL_UNIT], None),
-    # `tailscale set --operator=<user>` — makes the panel's own user Tailscale's operator so
-    # `serve` and `serve status` work without root afterwards. One caller (ensure_operator), one
-    # argument, validated as a Linux user name. The flag is fixed here so a caller cannot turn
-    # `set` into any other tailscale subcommand.
-    "tailscale-set-operator": ([_managed_user],
-                               lambda a: ["tailscale", "set", "--operator=%s" % a[0]], None),
+    # Takes the Tailscale operator role back from the panel's own account, when it holds it (see
+    # tools/panel-helper). This was `tailscale-set-operator`, which MADE the panel the operator: an
+    # operator writes to tailscaled with no sudo, so it could join the host to another tailnet or
+    # turn Tailscale SSH on, round the narrow grant. No verb can make anyone the operator now; every
+    # Tailscale write on the panel's host is one of the verbs below. The helper performs it (it
+    # reads the prefs first), so it has no tool form.
+    "tailscale-release-operator": ([_managed_user], lambda a: [], None),
+    # Tailscale SSH on or off: `tailscale set --ssh=…` changes that one pref and cannot change the
+    # tailnet, so this is SSH on the tailnet the host has already joined.
+    "tailscale-ssh": ([_choice("on", "off")],
+                      lambda a: ["tailscale", "set", "--ssh=%s" % R24T_SSH_PREF[a[0]]], None),
     "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
@@ -964,6 +987,13 @@ _ARGV = {
     "tailscale-serve": ([_choice("serve", "funnel"), _choice("modern", "legacy"), _ts_mount,
                          _choice("http", "https+insecure"), _port],
                         lambda a: ts_serve_argv(a[0], a[1], a[2], a[3], a[4]), None),
+    # Removing ONE Serve mapping, always named by listener AND mount: with no --set-path, `off`
+    # removes every mount on the listener, the other apps' with the panel's.
+    "tailscale-serve-off": ([_choice("https", "http"), _port, _r24t_off_mount],
+                            lambda a: ["tailscale", "serve", "--%s=%s" % (a[0], a[1]),
+                                       "--set-path=%s" % a[2], "off"], None),
+    # `tailscale serve status`, for a Tailscale old enough to answer it only to root or the operator.
+    "tailscale-serve-status": ([], lambda a: ["tailscale", "serve", "status"], None),
     "sysctl-reload": ([_choice("tailscale")],
                       lambda a: ["sysctl", "-p", WRITE_TARGETS["sysctl-" + a[0]][0]], None),
 
@@ -1247,6 +1277,12 @@ LOCAL_ONLY_VERBS = frozenset({
     "panel-restore",     # likewise — restoring the panel onto another machine is not a thing
     "panel-self-update", # the panel's own checkout
     "tailscale-install", # bootstrapping a remote's tailscale goes through its own SSH flow
+    # Tailscale on the panel's OWN host, which goes through the helper so it can refuse what it
+    # should. A remote's Tailscale is the remote flow's (ssh_manager), unchanged by these.
+    "tailscale-release-operator",
+    "tailscale-ssh",
+    "tailscale-serve-off",
+    "tailscale-serve-status",
     # Two-sided callers: the remote half is a dedicated builder, not this table.
     "write-file",        # write_root_file() -> remote_write_command() when not local
     "content-cron-write",# write_content_cron() -> remote_content_cron_command() when not local

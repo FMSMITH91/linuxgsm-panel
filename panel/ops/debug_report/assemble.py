@@ -9,12 +9,18 @@ returned nothing at all (or only '(none)') prints '(could not be read: ...)' in 
 
 Everything public passes through privacy.scrub; the issue body is cut from the SCRUBBED summary,
 by whole lines, so a URL never carries anything the summary would not.
+
+Security posture (_base.py's Result.posture, and any section whose part is not one of FILE_PARTS)
+is shown on the in-panel report page ONLY: never in the downloaded file, the summary or the issue
+body, which the issue form asks to have attached to a public issue (owner's decision, 2026-10-16).
+_page_only() is the one place that decides it, and _r24r_withhold() holds back any line of the file
+that still reads as posture (POSTURE_RE), whoever printed it.
 """
 import re
 import time
 from urllib.parse import quote
 
-from panel.ops.debug_report._base import LEVELS
+from panel.ops.debug_report._base import LEVELS, POSTURE_RE
 
 # A GitHub new-issue URL is a GET; past about 8 KB of URL, GitHub refuses it. The body is encoded
 # into the query string, so the budget is on the WHOLE encoded URL. Python's quote(safe="") encodes
@@ -27,6 +33,20 @@ REPORT_MAX_CHARS = 60000
 GLANCE_MAX_ITEMS = 7          # plus the heading: the block stays at 8 lines or fewer
 _ORDER = {lvl: i for i, lvl in enumerate(LEVELS)}
 _EMPTY_LINES = frozenset(("", "- (none)", "(none)", "- none", "none"))
+# The SECTIONS parts that may reach the downloaded file. Any other part -- "page", or one a new
+# section names by mistake -- is shown on the in-panel page only: a section leaks only by being
+# put in one of these on purpose.
+FILE_PARTS = frozenset(("header", "summary", "full"))
+POSTURE_NOTE = ("- **Security posture**: shown on the panel's report page only; not included in "
+                "this file or the GitHub issue")
+WITHHELD_LINE = "- (a security-posture line, withheld: shown on the panel's report page only)"
+PAGE_HEAD = ("## Security posture: shown here only, not in the downloaded file or the GitHub "
+             "issue")
+
+
+def _page_only(part):
+    """Whether a section of SECTIONS part `part` is shown on the in-panel page only."""
+    return part not in FILE_PARTS
 
 
 def _clean(text):
@@ -40,11 +60,20 @@ def _valid_finding(f):
             and isinstance(f.get("text"), str))
 
 
+def _r24r_posture_only(res):
+    """Whether `res` was read but holds posture only; its file body then says where that is."""
+    if not (res.page_lines or res.page_findings):
+        return False
+    # Never "could not be read": the section answered, all of it for the page.
+    res.lines = ["- (security posture only: shown on the panel's report page)"]
+    return True
+
+
 def _enforce_one(res):
     """(status, Result-or-class) for one section that returned: R7's rules applied."""
-    if not all(_valid_finding(f) for f in res.findings):
+    if not all(_valid_finding(f) for f in res.findings + res.page_findings):
         return "error", "MalformedFinding"
-    if not all(ln.strip() in _EMPTY_LINES for ln in res.lines):
+    if not all(ln.strip() in _EMPTY_LINES for ln in res.lines) or _r24r_posture_only(res):
         return "ok", res
     if not res.verdict and not res.findings:
         return "error", "EmptyResult"
@@ -81,7 +110,7 @@ def _glance_items(sections, results, extra):
     """
     items = [(f["level"], f["area"], f["text"]) for f in extra if f["level"] != "ok"]
     for key, title, _module, _mode, part in sections:
-        if part == "header":
+        if part == "header" or _page_only(part):
             continue
         status, _sec, res = results[key]
         if status != "ok":
@@ -129,8 +158,10 @@ def all_findings(sections, results, extra=()):
 
 def _verdicts(sections, results):
     out = []
-    for key, _title, _module, _mode, _part in sections:
+    for key, _title, _module, _mode, part in sections:
         status, _sec, res = results[key]
+        if _page_only(part):
+            continue
         if status == "ok" and isinstance(res.verdict, str) and res.verdict:
             out.append("- " + res.verdict)
     return out
@@ -150,8 +181,8 @@ def _header(ctx, results):
 
 
 def _slowest(sections, results):
-    timed = [(results[key][1], title) for key, title, _m, _mode, _p in sections
-             if results[key][0] != "timeout"]
+    timed = [(results[key][1], title) for key, title, _m, _mode, part in sections
+             if results[key][0] != "timeout" and not _page_only(part)]
     timed.sort(reverse=True)
     return ", ".join("%s %.2f s" % (title, sec) for sec, title in timed[:3])
 
@@ -200,7 +231,7 @@ def _parts(ctx, sections, results):
     """(summary section lines, full-report section lines) with R3 headings."""
     summary, full = [], []
     for key, title, _module, _mode, part in sections:
-        if part == "header":
+        if part == "header" or _page_only(part):
             continue
         status, sec, res = results[key]
         heading = _heading(title, status, sec, res if status == "error" else None,
@@ -211,6 +242,41 @@ def _parts(ctx, sections, results):
         else:
             full += [heading] + (res.lines if status == "ok" else []) + [""]
     return summary, full
+
+
+def _page(sections, results):
+    """The in-panel page's posture block: each section's posture, then every page-only section."""
+    out = []
+    for key, title, _module, _mode, part in sections:
+        status, _sec, res = results[key]
+        if status != "ok":
+            if _page_only(part):
+                out += ["### %s" % title, "- could not be read", ""]
+            continue
+        lines = list(res.page_lines) + ["- [%s] %s: %s" % (f["level"], f["area"], f["text"])
+                                        for f in res.page_findings]
+        if _page_only(part):
+            lines = list(res.lines) + lines + ["- [%s] %s: %s" % (f["level"], f["area"], f["text"])
+                                               for f in res.findings if f["level"] != "ok"]
+        if lines:
+            out += ["### %s" % title] + lines + [""]
+    return out
+
+
+def _r24r_withhold(text):
+    """(`text` with every line that reads as posture replaced, the lines replaced).
+
+    The backstop to _page_only and Result.posture: a posture line a section printed with add(),
+    or a log line quoting one, is held back from the file and shown on the page instead.
+    """
+    kept, held = [], []
+    for line in text.split("\n"):
+        if POSTURE_RE.search(line):
+            held.append(line)
+            kept.append(WITHHELD_LINE)
+        else:
+            kept.append(line)
+    return "\n".join(kept), held
 
 
 def _glance_or_fallback(sections, results, extra):
@@ -239,7 +305,10 @@ def _filename(ctx):
 
 
 def assemble(ctx, results):
-    """{report, summary, issue_body, issues_url, filename} from {key: (status, s, Result|cls)}."""
+    """{report, summary, posture, issue_body, issues_url, filename} from {key: (status, s, Result|cls)}.
+
+    `posture` is the in-panel page's security-posture block; it is in none of the others.
+    """
     from panel.ops import system_ops as so
     from panel.ops.debug_report import SECTIONS, privacy
     results = enforce(results)
@@ -250,23 +319,29 @@ def assemble(ctx, results):
     glance_lines, every, problems = _glance_or_fallback(SECTIONS, results,
                                                         head_findings + privacy.findings(ctx))
     verdicts = _verdicts(SECTIONS, results)
-    top = ["## LinuxGSM Panel debug report", ""] + head + [""] + glance_lines + [""]
+    top = ["## LinuxGSM Panel debug report", ""] + head + [POSTURE_NOTE, ""] + glance_lines + [""]
     must_keep = len(top)
     if verdicts:
         top += ["### Verdicts"] + verdicts + [""]
     summary_secs, full_secs = _parts(ctx, SECTIONS, results)
-    summary = "\n".join(top + summary_secs)
-    report = "\n".join(top + every + summary_secs) + "\n" + "\n".join(full_secs)
+    summary, held = _r24r_withhold("\n".join(top + summary_secs))
+    report, held_r = _r24r_withhold("\n".join(top + every + summary_secs) + "\n"
+                                    + "\n".join(full_secs))
+    page = _page(SECTIONS, results)
+    held = held + [ln for ln in held_r if ln not in held]
+    if held:
+        page += ["### Held back from the file (they read as posture)"] + held + [""]
     # The report first: it holds all of the summary, so an account the pass maps only from the
     # report's 'name@<address>' is known before the summary is scrubbed, and prints there as its
     # token too, not as the name.
     report = _cap(_clean(privacy.scrub(ctx, report)))
     summary = _clean(privacy.scrub(ctx, summary))
+    posture = _clean(privacy.scrub(ctx, "\n".join([PAGE_HEAD, ""] + (page or ["- none recorded"]))))
     if privacy.prepare(ctx).pattern_error:
         summary += "\n- [fail] Privacy: pattern redaction failed; section bodies withheld\n"
     report += "\n" + "\n".join(privacy.footer(ctx)) + (
         "\n\n<!-- Generated by the panel. Review before sharing. -->\n")
     issues_url = so._github_issues_url()
-    return {"report": report, "summary": summary,
+    return {"report": report, "summary": summary, "posture": posture,
             "issue_body": _clean(issue_body(summary, issues_url, must_keep, problems)),
             "issues_url": issues_url, "filename": _filename(ctx)}

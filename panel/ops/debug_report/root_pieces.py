@@ -28,6 +28,7 @@ _ORIGIN_TEXT = {
 # The tools install.sh keeps in place (install-update-parity) and the ones the panel runs.
 _HOST_TOOLS = ("git", "curl", "wget", "cron", "ufw", "fail2ban-client", "systemd-run", "sudo",
                "node", "npm", "jq")
+_R24R_DEFENCE_TOOLS = frozenset(("ufw", "fail2ban-client"))
 _HELPER_SECURE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"      # the helper's CHILD_PATH
 _RECOVER_LINK = "/usr/local/bin/linuxgsm-panel-recover"
 
@@ -244,14 +245,29 @@ def _gamedig_present():
     return os.path.exists(tree) or shutil.which("gamedig", path=smc.CRON_TOOL_PATH) is not None
 
 
+def _r24r_ticks(have):
+    """'tool ✓ other ✗' for [(tool, present)]."""
+    return " ".join("%s %s" % (t, "✓" if ok else "✗") for t, ok in have)
+
+
+def _r24r_missing(have):
+    """', '-joined names of the absent tools in [(tool, present)]; '' when none is."""
+    return ", ".join(t for t, ok in have if not ok)
+
+
 def _tools_lines(res):
     path = _search_path()
     have = [(t, shutil.which(t, path=path) is not None) for t in _HOST_TOOLS]
     have.append(("gamedig", _gamedig_present()))
-    res.add("- **Host tools**: " + " ".join("%s %s" % (t, "✓" if ok else "✗") for t, ok in have))
-    missing = [t for t, ok in have if not ok]
-    if missing:
-        res.find("warn", "Host tools", "missing: " + ", ".join(missing))
+    # Whether the firewall and fail2ban are installed is security posture: the page's only.
+    guard = [h for h in have if h[0] in _R24R_DEFENCE_TOOLS]
+    have = [h for h in have if h[0] not in _R24R_DEFENCE_TOOLS]
+    res.add("- **Host tools**: " + _r24r_ticks(have))
+    res.posture("- **Defence tools installed**: " + _r24r_ticks(guard))
+    if _r24r_missing(have):
+        res.find("warn", "Host tools", "missing: " + _r24r_missing(have))
+    if _r24r_missing(guard):
+        res.posture_find("warn", "Host tools", "defence tool missing: " + _r24r_missing(guard))
 
 
 def section_root_pieces(ctx):

@@ -39,11 +39,11 @@ own write replaces it, and the report and the Tailscale page, which only read Se
 HOW IT RUNS. A stateful fake `tailscale` (tests/unit/fake_tailscale.py; its overwrite and `off`
 semantics are the real CLI's) is put FIRST on PATH for the whole part, so the panel's code reaches
 it through tailscale_integration._run_ts, and the scripts through `timeout tailscale`, exactly as
-they would the real binary — nothing here reaches this machine's own tailscale. ensure_operator,
-allow_tailscale_ufw and system_ops._run_verb (the root fallback) are replaced for the part; the
-last records what reached it, and a check reads that. The stand-in ensure_operator ends as the real
-one does, with this account the operator (the fake's `set --operator=`), so a host seeded as one
-where it is not yet the operator refuses every change until something calls it. Routes run through part12's Flask app as its
+they would the real binary — nothing here reaches this machine's own tailscale. allow_tailscale_ufw
+and system_ops._run_verb are replaced for the part: the latter by fake_tailscale.as_helper, the
+helper's answer to the Tailscale verbs, as root (every Serve write and `off` is one of those now,
+since the panel stopped making its account the Tailscale operator). Every change the panel's OWN
+account makes is logged apart by the fake, and the part ends by checking there were none. Routes run through part12's Flask app as its
 signed-in superadmin, on part12's throwaway config.json. The shell parts run as `bash -c` over the
 functions and regions lifted out of the scripts, in a scratch directory. All is put back at the end.
 """
@@ -58,6 +58,7 @@ import tempfile
 from unit.part01 import check
 from unit.part12 import P9_ADMIN, _P9_CFG_PATH, _p9, _p9_audit, _p9_client, _p9_json
 import app as _app32
+from unit import fake_tailscale as _fake32
 from panel.core import config as _cfg32
 from panel.core.middleware import PrefixMiddleware as _Prefix32
 from panel.ops import serve_upkeep as _su32
@@ -74,6 +75,7 @@ _BIN32 = os.path.join(_TMP32, "bin")
 _STATE32 = os.path.join(_TMP32, "ts-state.json")
 _LOG32 = os.path.join(_TMP32, "ts-calls.jsonl")
 _FAKE32 = os.path.join(_ROOT32, "tests", "unit", "fake_tailscale.py")
+_UNPRIV32 = os.path.join(_TMP32, "ts-unprivileged.jsonl")
 _HOST32 = "https://fakehost.tail0000.ts.net"
 _P = "http://127.0.0.1:5000"
 _PS = "https+insecure://127.0.0.1:5000"
@@ -85,7 +87,7 @@ _LIVE_CFG = {"tailscale_setup_done": True, "tailscale_mount": "/lgsm", "bind_hos
 
 _SAVED32 = []
 _ENV_KEYS32 = ("PATH", "FAKE_TS_STATE", "FAKE_TS_LOG", "FAKE_TS_SERVE_UNREADABLE",
-               "FAKE_TS_OFF_FAIL", "FAKE_TS_WRITE_FAIL")
+               "FAKE_TS_OFF_FAIL", "FAKE_TS_WRITE_FAIL", "FAKE_TS_UNPRIV_LOG", "FAKE_TS_AS_ROOT")
 _ENV_SAVED32 = {k: os.environ.get(k) for k in _ENV_KEYS32}
 _CFG_SNAPSHOT32 = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 _CONF_KEYS32 = ("BOOT_TLS", "BOOT_TLS_ERROR", "BOOT_SERVE", "BOOT_SERVE_LEFTOVERS", "BOOT_BIND",
@@ -119,8 +121,11 @@ def _seed(web, funnel=(), http=(), **extra):
 
 def _ts_cli(args, stdin=""):
     """Run the fake `tailscale` directly, as a script would, with `stdin`; -> its exit code."""
+    # As root: the harness seeding a state is not the panel's account (the closing check reads
+    # every change made without it).
     r = subprocess.run([os.path.join(_BIN32, "tailscale")] + list(args),  # nosec B603 - the fake this part wrote
-                       input=stdin, capture_output=True, text=True, timeout=60, check=False)
+                       input=stdin, capture_output=True, text=True, timeout=60, check=False,
+                       env=dict(os.environ, FAKE_TS_AS_ROOT="1"))
     return r.returncode
 
 
@@ -152,8 +157,16 @@ def _table():
 
 
 def _calls():
-    with open(_LOG32, encoding="utf-8") as fh:
-        return [json.loads(line) for line in fh if line.strip()]
+    return _p32_lines(_LOG32)
+
+
+def _p32_lines(path):
+    """The fake's JSON-lines log at `path` (none yet: [])."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+    except FileNotFoundError:
+        return []
 
 
 def _offs():
@@ -213,6 +226,7 @@ def _panel_mounts():
 
 def _bash(script, args=(), env=None):
     full = dict(os.environ)
+    full["FAKE_TS_AS_ROOT"] = "1"      # the scripts (install.sh, uninstall.sh) run as root
     full.update(env or {})
     return subprocess.run(["bash", "-c", script, "p32"] + list(args),  # nosec B603 B607 - see top
                           capture_output=True, text=True, env=full, cwd=_TMP32, timeout=120)
@@ -327,8 +341,10 @@ def _p32_boot_scope():
           (_table(), b) == ({"443": {"/lgsm": _PS}}, ("ok", "removed:/old/")),
           repr((b, _table(), _offs())))
     b = _boot(_LIVE, {"BOOT_TLS": True}, tailscale_setup_done=False)
+    # Reads only: the boot's operator check (release_operator) reads the prefs whatever Serve is.
     check("boot: with Serve not set up nothing is written or removed (the panel does not manage it)",
-          (b, _calls()) == (("not attempted", "not attempted"), []), repr((b, _calls())))
+          (b, [c for c in _calls() if c != ["debug", "prefs"]])
+          == (("not attempted", "not attempted"), []), repr((b, _calls())))
 
 
 def _p32_fake_writes():
@@ -402,17 +418,11 @@ def _p32_boot_failures():
     check("boot: an `off` the CLI refuses is recorded as failed, with its class, and audited — not "
           "swallowed", (b, row.success, _table()) == (("ok", "failed:permission"), False, _LIVE),
           repr((b, row)))
-    # Only the fallback THIS refused write sets off is let go below: clearing the whole list also
-    # erased every root-fallback call the steps before it made, so the closing check never saw one.
-    _n_verbs32 = len(_VERBS32)
     with _Env32(FAKE_TS_WRITE_FAIL="1"):
         b = _boot(_LIVE, {"BOOT_TLS": True})
     check("boot: when the configured mapping itself could not be written, no other route is touched",
           (str(b[0])[:7], b[1], _offs(), _table()) == ("failed:", "not attempted", [], _LIVE),
           repr((b, _table())))
-    # A refused write goes on to the root fallback (setup_tailscale_serve's own design); that one
-    # is expected here, and the check at the end is about every OTHER path.
-    del _VERBS32[_n_verbs32:]
     b = _boot({"443": {"/lgsm": _PS}}, {"BOOT_TLS": False, "BOOT_TLS_ERROR": "OSError"})
     check("boot: a TLS start that FAILED re-points Serve at http, the scheme really served (the "
           "stored config still says https)", (_table(), b[0]) == ({"443": {"/lgsm": _P}}, "ok"),
@@ -591,16 +601,19 @@ def _p32_remove_operator():
     _seed({"443": {"/lgsm": _PS}}, operator_required=True)
     denied = ts._run_ts(["serve", "--https=443", "--set-path=/lgsm", "off"], timeout=10)[2]
     readable = not ts.get_tailscale_info(force_refresh=True).serve_unreadable
+    open(_UNPRIV32, "w", encoding="utf-8").close()   # that `off` was the harness's own probe
     check("p32 harness: a host where this account is not the operator READS Serve and may not change "
           "it (Tailscale's own split, which the fake models)", (denied, readable, _table())
           == (1, True, {"443": {"/lgsm": _PS}}), repr((denied, readable)))
     _seed(_LIVE, operator_required=True)
     _save_cfg(**_LIVE_CFG)
     r = _serve_api(action="remove-route", mount="/", url=_HOST32)
-    check("Remove makes the panel the Tailscale operator first, as Enable and Disable do: a host "
-          "that lists the route (reading needs no privilege) can also remove it",
-          (r.status_code, _table(), ["set", "--operator=p32"] in _calls())
-          == (200, {"443": {"/lgsm": _PS}}, True), repr((_p9_json(r), _calls())))
+    check("Remove on a host where the panel's account is not the Tailscale operator removes the route "
+          "through the helper's verb, and never makes the account the operator (an operator can join "
+          "the host to another tailnet without the helper)",
+          (r.status_code, _table(), [c for c in _calls() if c[:1] == ["set"]],
+           ("tailscale-serve-off", ["https", "443", "/"]) in _VERBS32)
+          == (200, {"443": {"/lgsm": _PS}}, [], True), repr((_p9_json(r), _calls())))
 
 
 def _p32_page_follows():
@@ -1003,28 +1016,16 @@ def _p32_docs():
           bad == [], repr(bad))
 
 
-def _fake_operator():
-    """ensure_operator as the real one ends on a host: this account becomes the Tailscale operator.
-
-    The real one runs the helper's tailscale-set-operator verb, as root; here the fake CLI's own
-    `set --operator=` records it, so a host seeded operator_required lets this account change
-    Serve from then on, and not before.
-    """
-    ts._run_ts(["set", "--operator=p32"], timeout=10)
-    return True, "p32"
-
-
 def _p32_harness():
     os.makedirs(_BIN32)
     _exe("tailscale", 'exec "%s" "%s" "$@"\n' % (sys.executable, _FAKE32))
     os.environ["PATH"] = _BIN32 + os.pathsep + os.environ.get("PATH", "")
     os.environ["FAKE_TS_STATE"] = _STATE32
     os.environ["FAKE_TS_LOG"] = _LOG32
-    _patch32(ts, "ensure_operator", _fake_operator)
+    os.environ["FAKE_TS_UNPRIV_LOG"] = _UNPRIV32
     _patch32(ts, "allow_tailscale_ufw", lambda: (True, ""))
-    _patch32(ts._so, "_run_verb",
-             lambda verb, args, **kw: (_VERBS32.append((verb, list(args))),
-                                       ("", "refused by part32", 1))[1])
+    _patch32(ts._so, "_run_verb", _fake32.as_helper(ts, ts._priv, _VERBS32))
+    _patch32(ts._so, "_helper_present", lambda: True)
     _patch32(_rh32, "_setup_ts_ok", lambda: True)
     _seed({"443": {"/": _OTHER}})
     check("p32 harness: the panel's own code reaches the FAKE tailscale on PATH (never this host's)",
@@ -1061,7 +1062,11 @@ try:
                     _p32_report_boot, _p32_uninstall, _p32_uninstall_refusals, _p32_install_hint,
                     _p32_install_readers, _p32_install_ufw, _p32_docs):
         _step32()
-    check("p32 harness: nothing reached the root fallback (every Serve command ran as the fake "
-          "operator would)", _VERBS32 == [], repr(_VERBS32))
+    _unpriv32 = _p32_lines(_UNPRIV32)
+    check("Tailscale on the panel's host: across every flow above (boot, Enable, Disable, Remove, the "
+          "wizard), the panel's own account changed nothing in tailscaled; every Serve write and `off` "
+          "went through the helper's verbs",
+          _unpriv32 == [] and any(v[0] == "tailscale-serve" for v in _VERBS32)
+          and any(v[0] == "tailscale-serve-off" for v in _VERBS32), repr((_unpriv32, _VERBS32[:6])))
 finally:
     _p32_cleanup()

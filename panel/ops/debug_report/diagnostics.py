@@ -13,6 +13,10 @@ from panel.ops.debug_report._base import Result
 # The memo key every section uses for the shared integrity check (systemd's is _src_systemd.MEMO_KEY).
 MEMO_DB_INTEGRITY = "db.integrity"
 _ORDER = {"fail": 0, "warn": 1, "ok": 2}
+# Checks that are security posture: on the in-panel page only, never the file, the summary or
+# At a glance (owner's decision, 2026-10-16). Whether the OS patches itself tells a reader of the
+# public issue how old the host's packages may be.
+POSTURE_CHECKS = frozenset(("Automatic security updates",))
 
 
 def shared_integrity(ctx):
@@ -39,8 +43,9 @@ def section_diagnostics(ctx):
                                                                   "no checks came back")
         return res
     for c in checks:
-        res.add("- [%s] **%s**: %s" % (c["level"], c["name"], c["detail"]))
+        page = c["name"] in POSTURE_CHECKS
+        (res.posture if page else res.add)("- [%s] **%s**: %s" % (c["level"], c["name"], c["detail"]))
         if c["level"] in ("fail", "warn"):
-            res.find(c["level"], "Diagnostics", c["name"])
+            (res.posture_find if page else res.find)(c["level"], "Diagnostics", c["name"])
     res.summary_lines = list(res.lines)
     return res

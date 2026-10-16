@@ -41,11 +41,12 @@ class TailscaleInfo:
     version: str = ""
     serve_config: dict = field(default_factory=dict)
     # serve_config is {} for BOTH "nothing is published" and "`tailscale serve status` did not
-    # answer", and the page stated the first of those as a fact about the host. The second is
-    # ordinary: when the panel's own account is not the tailscale operator the command exits
-    # non-zero with "Access denied: serve config denied", and /tailscale then said "No Serve routes
-    # configured yet." while the panel was being served over the very mapping it was reporting as
-    # absent. Defaults to False so a reader that never sets it keeps the old, positive wording.
+    # answer", and the page stated the first of those as a fact about the host. The second happens:
+    # an older Tailscale answers it only to root or the operator ("Access denied: serve config
+    # denied"), and the panel's account is not the operator (_read_serve_status asks the helper
+    # then), and /tailscale said "No Serve routes configured yet." while the panel was being served
+    # over the very mapping it was reporting as absent. Defaults to False so a reader that never
+    # sets it keeps the old, positive wording.
     serve_unreadable: bool = False
     funnel_enabled: bool = False
     peers: list = field(default_factory=list)  # List of peer dicts
@@ -69,9 +70,11 @@ def _run_ts(args, timeout=5):
         # tool_argv, which validate every input and rebuild the mount from a literal alphabet
         # (CodeQL #375 closed on that change). Not a static string by design.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        # In the C locale: callers match its words (_read_serve_status's "Access denied").
+        from panel.ops.ssh_manager import _core as _smc   # lazy: ssh_manager imports system_ops
         r = subprocess.run(  # nosec B603 - literal program, validated args (see above), no shell
             ["tailscale"] + args,
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, timeout=timeout, env=_smc._r20a_c_env(),
         )
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except FileNotFoundError:
@@ -97,22 +100,82 @@ def _current_os_user():
         return getpass.getuser()
 
 
-def ensure_operator():
-    """Make the panel's own user the Tailscale 'operator'.
+def release_operator():
+    """Stop the panel's own account being the Tailscale operator, if it is; return what happened.
 
-    Then `tailscale serve` config AND `tailscale serve status` work as the panel user without
-    root — Tailscale's recommended fix for 'Access denied: serve config denied'. Idempotent,
-    best-effort (needs sudo once).
+    "root" (the panel runs as root: nothing to release), "not-operator", "released" or "failed".
+    Called once at every start (app._boot_serve), so a host an earlier panel set up switches with
+    its first start on new code, whichever way the update arrived. ONE rule, the same as
+    install.sh's release_tailscale_operator: wherever the panel's account holds the role, it is
+    taken back, helper or not.
+
+    The panel used to MAKE its account the operator (ensure_operator, after Connect, Serve setup,
+    the setup wizard and a leftover route's removal), because then Serve and Tailscale SSH work
+    without root. But an operator writes to tailscaled with no sudo and no helper: it can log the
+    host out, join it to another tailnet with an auth key, and turn Tailscale SSH on, which admits
+    root logins by THAT tailnet's rules — round the narrow sudo grant, whose point is that the
+    panel's account cannot choose what root does. Every Tailscale write on the panel's host is a
+    helper verb now, and the helper refuses the unsafe ones. Only the panel's own account is
+    released: an operator someone chose for their own login is theirs (the helper checks that too).
+    Never raises: it runs at boot, before anything else about Tailscale.
     """
+    try:
+        return _r24t_release_operator()
+    except Exception:  # noqa: BLE001 - a boot step: logged, and the boot goes on
+        _log.debug("Tailscale operator release failed", exc_info=True)
+        return "failed"
+
+
+def _r24t_release_operator():
+    """release_operator's body (it only adds the never-raise)."""
     user = _current_os_user()
     if not user or user == "root":
-        return True, "root"
-    # Was `sudo tailscale set --operator=<user>`. A sudoers rule permitting the tailscale binary
-    # would cover every tailscale subcommand — `up`, `logout`, `set --exit-node`, the lot — so this
-    # goes through the verb table, where the subcommand and flag are fixed and the user name is
-    # validated on the far side.
-    _so._run_verb("tailscale-set-operator", [user], timeout=10)
-    return True, user
+        return "root"
+    prefs = _read_prefs_json()     # prefs answer any local account: read, not write
+    if not prefs or prefs.get("OperatorUser") != user:
+        return "not-operator"
+    if _so._helper_present():
+        done = _r24t_release_via_helper(user)
+        if done is not None:
+            return done
+    # No helper (or one too old for the verb): the operator clears ITSELF, as install.sh does.
+    # tailscaled lets the operator edit its own prefs, and clearing the operator can only take
+    # power away, so this is the one write the panel's account makes to tailscaled.
+    _out, _err, rc = _run_ts(["set", "--operator="], timeout=10)
+    if rc != 0:
+        _log.warning("Tailscale operator release as the panel's own account failed: rc %s", rc)
+        return "failed"
+    return _r24t_released()
+
+
+def _r24t_release_via_helper(user):
+    """The release through the helper's verb: "released", "failed", or None for a stale helper."""
+    out, err, rc = _so._run_verb("tailscale-release-operator", [user], timeout=20, merge_stderr=False)
+    if rc == 0:
+        return _r24t_released()
+    if not (rc == 2 and "unknown verb" in (err or "") + (out or "")):
+        _log.warning("Tailscale operator release for the panel's account failed: rc %s", rc)
+        return "failed"
+    # The installed helper predates the verb: new code arrived without install.sh being run (a
+    # plain git pull). Said apart, because the cure is not a retry. The caller then releases the
+    # role as the panel's own account.
+    _log.warning("The installed root helper is older than this panel and has no "
+                 "tailscale-release-operator verb: re-run install.sh as root to update it. "
+                 "Releasing the Tailscale operator role as the panel's own account instead.")
+    return None
+
+
+def _r24t_released():
+    """Log a release that took, and say what it means on a per-user install; "released"."""
+    _log.info("The panel's account is no longer the Tailscale operator")
+    if not _so._is_system_service():
+        # Per-user install: the panel's account is the owner's own login, so it was the owner who
+        # lost the role. Tell them once, now, why their own `tailscale serve` starts asking for sudo.
+        _log.warning("This is a per-user install, so the panel's account is your own login: your "
+                     "own `tailscale serve` and `tailscale set` now need sudo. An operator account "
+                     "can move this host to another tailnet and turn on Tailscale SSH without "
+                     "root, so the panel no longer leaves your account holding that role.")
+    return "released"
 
 
 def allow_tailscale_ufw():
@@ -262,7 +325,17 @@ def _read_status_text(info):
 
 def _read_serve_status(info):
     """Fill `info`'s Serve fields from `tailscale serve status`."""
-    serve_out, _, serve_rc = _run_ts(["serve", "status"])
+    serve_out, serve_err, serve_rc = _run_ts(["serve", "status"])
+    if serve_rc != 0 and _so._helper_present() and (
+            info.running or "access denied" in (serve_err or "").lower()):
+        # An older Tailscale answers `serve status` only to root or the operator, and the panel's
+        # account is not the operator (release_operator). The helper's read verb, then: only with
+        # the helper, so a host without one never sends a failing sudo per page load. And only
+        # when the read was REFUSED (the CLI's "Access denied: …", read in the C locale; its exit
+        # code is 1 for every error) or tailscaled is up: a stopped or hung tailscaled fails the
+        # same read as root too, and each try is a sudo (a journal line, up to 10 s).
+        serve_out, _, serve_rc = _so._run_verb("tailscale-serve-status", [], timeout=10,
+                                               merge_stderr=False)
     # rc 0 with no output is a READING — `tailscale serve status` prints "No serve config" and
     # exits 0 when nothing is published — so only a non-zero rc means the panel did not learn
     # anything. Carried on the info rather than inferred from an empty serve_config, because
@@ -525,11 +598,9 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
         return False, ("That isn't a usable mount point. Use \"/\" or a short path like "
                        "\"/lgsm\".")
 
-    # serve/funnel is privileged — make the panel user the Tailscale operator first so it
-    # works (and status reads back) without root. Also make sure the tailnet interface is
-    # allowed through UFW, or the Serve URL would be unreachable on a firewalled host.
-    ensure_operator()
-
+    # serve/funnel is privileged: the write goes through the helper's verb (_apply_serve). The
+    # tailnet interface is allowed through UFW too, or the Serve URL would be unreachable on a
+    # firewalled host.
     verb, note = _r12a_serve_verb(port, mount, funnel, keep_shared_funnel)
     if verb is None:
         return False, note
@@ -560,9 +631,9 @@ def _r12a_listener_funnel(serve_config, port):
 def _r12a_serve_verb(port, mount, funnel, keep_shared_funnel):
     """("serve"|"funnel", note) for setup_tailscale_serve to write, or (None, why) to write nothing.
 
-    Read fresh, after ensure_operator, so the read is the operator's. An unreadable config is
-    written as asked, as it always was: it cannot show another app, and refusing would stop the
-    boot re-point keeping the panel's own route on the scheme it serves.
+    Read fresh (through the helper's read verb where Tailscale answers only root). An unreadable
+    config is written as asked, as it always was: it cannot show another app, and refusing would
+    stop the boot re-point keeping the panel's own route on the scheme it serves.
     """
     want = "funnel" if funnel else "serve"
     info = get_tailscale_info(force_refresh=True)
@@ -698,25 +769,19 @@ def _r12a_funnel_refusal(funnel, others):
 
 
 def _apply_serve(verb, mount, backend_scheme, port):
-    """Run the Serve/Funnel command in the first form that works; return (ok, last error text)."""
-    # Two things vary by Tailscale version/setup: (1) the CLI grammar changed — newer
-    # (~1.58+) takes the target as the only positional with a --set-path mount, older took
-    # the mount as a positional ("... 443 / URL"); (2) privilege — usually the operator set
-    # in setup_tailscale_serve is enough, but fall back to sudo if not. Try each combination and
-    # use the first that succeeds, so it works across Tailscale versions and permission setups.
+    """Run the Serve/Funnel command in the first grammar that works; return (ok, last error text)."""
+    # The CLI grammar changed by Tailscale version — newer (~1.58+) takes the target as the only
+    # positional with a --set-path mount, older took the mount as a positional ("... 443 / URL") —
+    # so both are tried, newest first. Only through the helper's verb: this tried the panel's own
+    # account first, which worked because the panel had made itself the Tailscale operator, and
+    # an operator can change anything about tailscaled without the helper (release_operator).
+    # The verb fixes the subcommand and validates the rest; a sudoers rule naming the tailscale
+    # binary would have covered every subcommand it has (up, logout, set --exit-node).
     err = ""
     for grammar in ("modern", "legacy"):
-        # Unprivileged first: ensure_operator() above normally makes this work as the panel user,
-        # and a command that needs no root should not ask for it.
-        out, e, rc = _run_ts(_ts_serve_args(verb, grammar, mount, backend_scheme, port), timeout=10)
-        if rc != 0:
-            # Root fallback, for a host where the operator setting did not take. This used to be
-            # `sudo tailscale <args>`; a sudoers rule permitting the tailscale binary would cover
-            # every subcommand it has — up, logout, set --exit-node — so it goes through the verb
-            # table, which fixes the subcommand and validates the rest.
-            out, e, rc = _so._run_verb(
-                "tailscale-serve", [verb, grammar, mount, backend_scheme, str(port)],
-                timeout=10, merge_stderr=False)
+        out, e, rc = _so._run_verb(
+            "tailscale-serve", [verb, grammar, mount, backend_scheme, str(port)],
+            timeout=10, merge_stderr=False)
         if rc == 0:
             return True, ""
         err = e or out or err
@@ -798,7 +863,6 @@ def tailscale_up_local(enable_ssh=True):
         return True, line
     info = get_tailscale_info(force_refresh=True)
     if info.running or line == "ALREADY_CONNECTED":
-        ensure_operator()      # so the panel user can manage Serve without root afterward
         allow_tailscale_ufw()  # keep the node reachable over the tailnet if UFW is active
         return True, "ALREADY_CONNECTED"
     return False, (r.stderr or r.stdout or "Could not get a login link — is Tailscale installed on this host?")
@@ -874,13 +938,7 @@ def off_mount(mount):
     _ts_mount refuses "/x/", so the slash comes off for the check and goes back on as a literal:
     every other character still comes from _ts_mount's alphabet.
     """
-    m = str(mount)
-    if len(m) > 1 and m.endswith("/"):
-        inner = _priv._ts_mount(m[:-1])
-        if inner == "/":
-            raise _priv.VerbError("not a mount point")
-        return inner + "/"
-    return _priv._ts_mount(m)
+    return _priv._r24t_off_mount(mount)     # the helper's verb validates it the same way
 
 
 def serve_off_args(url, mount):
@@ -1032,8 +1090,9 @@ def remove_panel_route(route, port):
     gets. The path is always named (serve_off_args), and only a route to loopback on `port` is ever
     a candidate.
 
-    There is no root fallback. The helper's only Serve verb publishes (serve/funnel); a host where
-    the operator setting did not take answers "failed" here, and the caller has to say so.
+    The `off` is the helper's `tailscale-serve-off` verb, named by listener and mount. It ran as
+    the panel's account, which worked only while the panel made itself the Tailscale operator
+    (release_operator says why it no longer does). A refusal answers "failed", with its text.
 
     A route on a Tailscale Service's listener ("svc") answers "failed" and runs nothing. The
     removal grammar has no --service here, so its `off` named the NODE's own :443 at that mount:
@@ -1056,12 +1115,23 @@ def remove_panel_route(route, port):
         return "failed", i18n.Sentence(R17A_UNNAMED_MOUNT)
     if args is None:
         return "failed", i18n.Sentence(R17A_LISTENER_UNREAD)
-    out, err, rc = _run_ts(args, timeout=10)
+    out, err, rc = _so._run_verb("tailscale-serve-off", _r24t_off_verb_args(args), timeout=10,
+                                 merge_stderr=False)
     with _cache_lock:
         _cache["info"] = None
     if rc != 0:
         return "failed", err or out or "tailscale exited %d" % rc
     return "removed", ""
+
+
+def _r24t_off_verb_args(args):
+    """serve_off_args' `["serve", "--https=443", "--set-path=/x", "off"]` as the verb's arguments.
+
+    `["https", "443", "/x"]`: the listener's scheme and port and the mount, which the helper
+    validates and assembles back into the same command.
+    """
+    scheme, _, port = args[1][2:].partition("=")
+    return [scheme, port, args[2][len("--set-path="):]]
 
 
 def remove_stale_panel_routes(port, mount):
@@ -1129,9 +1199,6 @@ def disable_tailscale_serve(mount, port):
     on_svc = _r14a_svc_note(routes)
     if not any(r["mount"] == mount for r in ours):
         return _r14a_nothing_at_mount(ours, mount, on_svc)
-    # The panel user has to be the Tailscale operator to change Serve config — the same step the
-    # enable path takes first.
-    ensure_operator()
     ok, msg = _remove_serve_mappings(ours, port)
     if not ok:
         return False, msg

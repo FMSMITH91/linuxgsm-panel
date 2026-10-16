@@ -8,8 +8,11 @@ R37 and R39 are builder B1's, in config_section. R38 is printed by `access`, whi
 request greenlet: it needs the request, and `network` runs in a worker thread.
 
 Nothing here prints an address (only its class), a host name, an account, a jail's logpath, a rule's
-source or comment, or a header value. The privileged reads (ufw, fail2ban-client) run only through
-the root-owned helper or as root: never the pre-helper `sudo` form, which has no -n.
+source or comment, or a header value. The security posture (2FA and invites, the setup token, the
+firewall's ways in and default, what fail2ban can ban) goes through Result.posture(): it is shown on
+the in-panel report page only, never in the downloaded file (owner's decision, 2026-10-16). The
+privileged reads (ufw, fail2ban-client) run only through the root-owned helper or as root: never the
+pre-helper `sudo` form, which has no -n.
 """
 import calendar
 import os
@@ -197,7 +200,9 @@ def _operator_text(op):
         me = pwd.getpwuid(os.geteuid()).pw_name
     except KeyError:
         return "unknown"
-    return "yes" if op == me else "NO"
+    # The panel's account is meant NOT to be the operator: it writes to tailscaled through the
+    # helper, and every start and update take the role back (release_operator). "YES" is the anomaly.
+    return "YES (expected no; the next panel start releases it)" if op == me else "no"
 
 
 def _ts_head(v):
@@ -324,11 +329,21 @@ def _restart_removes(flag, conf, cfg):
             and not str(conf.get("BOOT_SERVE_LEFTOVERS") or "").startswith("failed"))
 
 
+# Why `tailscale serve status` did not answer. Not "the panel account may not be the operator": the
+# panel's account is never the operator (tailscale_integration.release_operator), and a current
+# Tailscale answers this read to any local account (measured on 1.104). What is left is tailscaled
+# itself not answering, or a Tailscale old enough to answer only root or the operator, read on a host
+# without the helper (or with a helper that refused) -- _read_serve_status asks the helper then.
+_SERVE_UNREADABLE = ("UNREADABLE (tailscaled did not answer, or this Tailscale is old enough to "
+                     "answer only root and the helper's read did not either), not the same as no "
+                     "routes")
+
+
 def _serve_text(v, port, want):
     """'readable · 1 route to the panel at /lgsm → http to loopback:5000 ✓ · 1 other app route'."""
     from panel.ops import tailscale_integration as ts
     if v.get("serve_unreadable"):
-        return "UNREADABLE (the panel account may not be the operator), not the same as no routes", []
+        return _SERVE_UNREADABLE, []
     services = v.get("serve_services") or []
     routes = ts.panel_serve_routes({"services": services}, port)
     total = sum(len(s.get("routes") or []) for s in services)
@@ -355,6 +370,9 @@ def _expected_scheme(conf, cfg):
 def _funnel_findings(res, v, cfg, port, readable):
     """Funnel on in Serve while the panel's config says off: for another app, or switched on.
 
+    Posture (page-only, like every Funnel state): whether the panel is reachable from the
+    internet is a public way in, and the file is attached to a public issue.
+
     `port` is the one the panel is bound to (running_port), which is the one Serve's routes reach:
     config.json's, read with a restart pending, found no panel route and blamed the operator for a
     Funnel another app had put the panel on. With config.json unreadable there is no setting to
@@ -363,20 +381,20 @@ def _funnel_findings(res, v, cfg, port, readable):
     from panel.ops import tailscale_integration as ts
     if not readable:
         if v.get("funnel_enabled"):
-            res.find("warn", AREA, "Funnel is ON in Serve, and config.json could not be read to say "
-                                   "whether the panel is meant to be on it")
+            res.posture_find("warn", AREA, "Funnel is ON in Serve, and config.json could not be "
+                                           "read to say whether the panel is meant to be on it")
         return
     shared = ts.shared_funnel_apps({"services": v.get("serve_services") or []},
                                    port, cfg.get("tailscale_use_funnel"))
     if shared:
         # Funnel is per listener: another app on the panel's :443 listener uses it, so the panel
         # is public against its own setting (the boot keeps it so rather than take that app off).
-        res.find("fail", AREA, "Funnel is on for the whole :443 listener because another app on it "
-                               "uses Funnel, so the panel is reachable from the internet although its "
-                               "config says off")
+        res.posture_find("fail", AREA, "Funnel is on for the whole :443 listener because another "
+                                       "app on it uses Funnel, so the panel is reachable from the "
+                                       "internet although its config says off")
     elif v.get("funnel_enabled") and not cfg.get("tailscale_use_funnel"):
-        res.find("fail", AREA, "Funnel is ON in Serve but off in the panel's config (switched on "
-                               "outside the panel)")
+        res.posture_find("fail", AREA, "Funnel is ON in Serve but off in the panel's config "
+                                       "(switched on outside the panel)")
 
 
 def _ts_findings(res, v, cfg, routes, port=None, readable=True):
@@ -487,12 +505,18 @@ def _ts_unread(res, facts, got):
     return True
 
 
-def _funnel_line(cfg, readable, v, routes):
-    mounts = ", ".join(sorted({_mount(r["mount"]) for r in routes})) or "none"
-    return "config %s · Serve says %s · **Mount**: Serve %s, config %s" % (
+def _funnel_line(cfg, readable, v):
+    """Funnel on or off, in config and in Serve: posture, printed on the page only."""
+    return "config %s · Serve says %s" % (
         _onoff(cfg.get("tailscale_use_funnel")) if readable else "unread",
-        _onoff(v.get("funnel_enabled")), mounts,
-        _mount(cfg.get("tailscale_mount") or "/") if readable else "unread")
+        _onoff(v.get("funnel_enabled")))
+
+
+def _mount_line(cfg, readable, routes):
+    """Which mounts Serve has for the panel, and the configured one: diagnostic, in the file."""
+    mounts = ", ".join(sorted({_mount(r["mount"]) for r in routes})) or "none"
+    return "Serve %s, config %s" % (mounts,
+                                    _mount(cfg.get("tailscale_mount") or "/") if readable else "unread")
 
 
 def _tailscale_lines(ctx, res, facts, got):
@@ -512,7 +536,10 @@ def _tailscale_lines(ctx, res, facts, got):
     _health_lines(ctx, res, v)
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)
-    res.add("- **Funnel**: " + _funnel_line(cfg, readable, v, routes))
+    # Funnel is a way in from the internet: page-only (owner's decision, 2026-10-16). The mount
+    # it shares a line with is not posture, and stays in the file.
+    res.posture("- **Funnel**: " + _funnel_line(cfg, readable, v))
+    res.add("- **Mount**: " + _mount_line(cfg, readable, routes))
     if readable:
         from panel.ops import tailscale_integration as ts
         for r in routes:
@@ -521,8 +548,7 @@ def _tailscale_lines(ctx, res, facts, got):
     _ts_findings(res, v, cfg, routes, port, readable)
     _route_findings(res, cfg, routes, want, readable, conf)
     state = v.get("backend_state")
-    facts["ts"] = "%s, Funnel %s" % (state if state in _STATES else "other",
-                                     _onoff(v.get("funnel_enabled")))
+    facts["ts"] = state if state in _STATES else "other"   # Funnel is posture: not in the verdict
 
 
 # ── R40: UFW, read once through the helper ───────────────────────────────────────────────────────
@@ -683,16 +709,19 @@ def _ufw_lines(res, facts, got, cfg, port, ssh_ports=None):
         return
     if u["state"] != "ok":
         text = _UFW_STATES.get(u["state"]) or "UNREADABLE (rc %s)" % u.get("rc")
-        res.add("- **UFW**: " + text)
+        # A read that failed is a diagnosis (sudoers, the helper); "not installed" is posture.
+        (res.posture if u["state"] == "not-installed" else res.add)("- **UFW**: " + text)
         facts["ufw"] = u["state"]
         if u["state"] in ("refused", "timeout", "unreadable"):
             res.find("fail" if u["state"] == "refused" else "unread", AREA,
                      "UFW could not be read" + (": sudo refused" if u["state"] == "refused" else ""))
         return
     facts["ufw"] = "active" if u["active"] else "inactive"
-    res.add("- **UFW**: %s · %d rules · default incoming: %s" % (
-        facts["ufw"], len(u["rules"]), _tok(u["default_in"])))
-    res.add("- **Ways in**: " + _ways_in(u, port, cfg, ssh_ports))
+    # Posture, all of it: whether the firewall is up, which ports answer from anywhere, and
+    # whether anything else does by default. The panel's own deny rules below state none of it.
+    res.posture("- **UFW**: %s · %d rules" % (facts["ufw"], len(u["rules"])))
+    res.posture("- **UFW default incoming**: %s" % _tok(u["default_in"]))
+    res.posture("- **Ways in**: " + _ways_in(u, port, cfg, ssh_ports))
     res.add("- **Deny-all-ports rules**: " + _deny_text(u))
 
 
@@ -817,7 +846,7 @@ def _f2b_status_names(res, facts, status):
         facts["f2b"] = "unread"
         return None
     if status[0] == 127:
-        res.add("- **fail2ban**: not installed")
+        res.posture("- **fail2ban**: not installed")
         facts["f2b"] = "not installed"
         return None
     names = jail_list(status[1]) if status[0] == 0 else None
@@ -833,15 +862,17 @@ def _f2b_runtime_lines(res, facts, rt):
     if names is None:
         return
     facts["f2b"] = "running"
-    res.add("- **fail2ban**: running · jails: %s" % (_f2b_names(names) or "none"))
+    # Whether fail2ban runs, which jails it has, and whether they can ban are all posture; only a
+    # read that failed (above) is printed in the file.
+    res.posture("- **fail2ban**: running · jails: %s" % (_f2b_names(names) or "none"))
     if PANEL_JAIL not in names:
-        res.find("warn", AREA, "fail2ban runs without the panel-login jail")
+        res.posture_find("warn", AREA, "fail2ban runs without the panel-login jail")
     else:
         text, c = _jail_status_text(rt.get("panel"), auth_log_path())
-        res.add("- **%s jail (runtime)**: %s" % (PANEL_JAIL, text))
+        res.posture("- **%s jail (runtime)**: %s" % (PANEL_JAIL, text))
         _panel_jail_findings(res, c)
     if "sshd" in names:
-        res.add("- **sshd jail**: %s" % _jail_status_text(rt.get("sshd"))[0])
+        res.posture("- **sshd jail**: %s" % _jail_status_text(rt.get("sshd"))[0])
 
 
 def _panel_jail_findings(res, c):
@@ -849,22 +880,23 @@ def _panel_jail_findings(res, c):
     if c is None:
         res.find("unread", AREA, "the panel's fail2ban jail could not be read")
     elif c["journal"]:
-        res.find("fail", AREA, "the panel's fail2ban jail is active but watches no file, "
-                               "so it can never ban")
+        res.posture_find("fail", AREA, "the panel's fail2ban jail is active but watches no file, "
+                                       "so it can never ban")
     elif not _watching(c, auth_log_path()):
-        res.find("fail", AREA, "the panel's fail2ban jail watches another file, not this "
-                               "install's auth.log, so it can never ban")
+        res.posture_find("fail", AREA, "the panel's fail2ban jail watches another file, not this "
+                                       "install's auth.log, so it can never ban")
 
 
 def _f2b_lines(res, facts, got, cfg, readable):
     status, rt = got
     if readable:
         text, health = _jail_file_text(cfg)
-        res.add("- **%s jail file**: %s" % (PANEL_JAIL, text))
+        res.posture("- **%s jail file**: %s" % (PANEL_JAIL, text))
         if health is not None and not health["logpath"]:
-            res.find("fail", AREA, "the panel's fail2ban jail does not watch this install's auth.log")
+            res.posture_find("fail", AREA,
+                             "the panel's fail2ban jail does not watch this install's auth.log")
     else:
-        res.add("- **%s jail file**: not compared (config.json could not be read)" % PANEL_JAIL)
+        res.posture("- **%s jail file**: not compared (config.json could not be read)" % PANEL_JAIL)
     if status != "ok":
         res.add("- **fail2ban**: %s" % ("timed out (not shown)" if status == "timeout"
                                         else "could not be read (%s)" % rt))
@@ -895,8 +927,9 @@ def section_network(ctx):
         except Exception as exc:  # noqa: BLE001 - one part's failure is printed, the rest still run
             res.add(unread_line(title, exc))
             res.find("unread", AREA, "%s could not be read" % title)
-    res.verdict = "Network & security: Tailscale %s · UFW %s · fail2ban %s" % (
-        facts.get("ts", "unread"), facts.get("ufw", "unread"), facts.get("f2b", "unread"))
+    # The verdict is public (the summary and the issue body): UFW's and fail2ban's states are
+    # posture, so they are on the page's lines only.
+    res.verdict = "Network & security: Tailscale %s" % facts.get("ts", "unread")
     return res
 
 
@@ -960,11 +993,12 @@ def _request_lines(res, conf):
     env = request.environ
     peer, peer_text = _peer_text(env)
     mount = request.script_root or "/"
-    res.add("- **This request**: from a %s · X-Forwarded-For present: %s · "
-            "Tailscale-Funnel-Request: %s · scheme %s · mount %s" % (
-                peer_text, _yn(env.get("HTTP_X_FORWARDED_FOR")),
-                _yn(env.get("HTTP_TAILSCALE_FUNNEL_REQUEST")), _tok(request.scheme),
-                "/" if mount == "/" else _mount(mount)))
+    res.add("- **This request**: from a %s · X-Forwarded-For present: %s · scheme %s · mount %s" % (
+        peer_text, _yn(env.get("HTTP_X_FORWARDED_FOR")), _tok(request.scheme),
+        "/" if mount == "/" else _mount(mount)))
+    # A request that came through Funnel says Funnel is on: posture, page-only.
+    res.posture("- **This request through Tailscale Funnel**: %s"
+                % _yn(env.get("HTTP_TAILSCALE_FUNNEL_REQUEST")))
     client = _src_net.addr_class(auth.client_ip())
     res.add("- **Client address as the panel keys it**: %s · forwarded headers believed: %s" % (
         client, _believed_text(auth._request_came_through_proxy(peer), conf)))
@@ -1116,37 +1150,44 @@ def _authlog_handler():
     return any(getattr(h, "_panel_auth", False) for h in logging.getLogger("panel.auth").handlers)
 
 
-def _authlog_text(scan, attached, want):
+def _authlog_text(scan, want):
     if want is None:
         agree = ""
     elif not scan.get("covers_24h", True):
         agree = " (audit log says %d; not compared: auth.log was rotated within the 24 h)" % want
     else:
         agree = " (audit log says %d %s)" % (want, "✓" if want == scan["lines_24h"] else "✗")
-    return ("handler attached %s · %d failed-login lines in 24 h%s · %d refusal lines · last line "
-            "%s · %d KB · 'unknown' addresses: %d" % (
-                "✓" if attached else "✗", scan["lines_24h"], agree, scan["blocked_24h"],
-                "never" if scan["last_age"] is None else ago(scan["last_age"]) + " ago",
-                scan["size"] // 1024, scan["unknown"]))
+    return ("%d failed-login lines in 24 h%s · %d refusal lines · last line %s · %d KB" % (
+        scan["lines_24h"], agree, scan["blocked_24h"],
+        "never" if scan["last_age"] is None else ago(scan["last_age"]) + " ago",
+        scan["size"] // 1024))
 
 
 def _authlog_lines(res, facts):
+    # Whether a failed login can reach fail2ban at all (the handler, an address it can ban) is
+    # posture; the file's counts are the diagnosis.
     attached = _authlog_handler()
     if not attached:
-        res.find("fail", AREA, "the auth.log handler is not attached: no failed login reaches fail2ban")
+        res.posture_find("fail", AREA,
+                         "the auth.log handler is not attached: no failed login reaches fail2ban")
     try:
         scan = authlog_scan(auth_log_path())
     except FileNotFoundError:
-        res.add("- **auth.log**: handler attached %s · missing (fail2ban 0.11 refuses to start a "
-                "jail whose logpath does not exist)" % ("✓" if attached else "✗"))
+        res.posture("- **auth.log handler attached**: %s" % ("✓" if attached else "✗"))
+        res.add("- **auth.log**: missing (fail2ban 0.11 refuses to start a jail whose logpath does "
+                "not exist)")
         res.find("warn", AREA, "auth.log is missing")
         return
     except OSError as exc:
+        res.posture("- **auth.log handler attached**: %s" % ("✓" if attached else "✗"))
         res.add(unread_line("auth.log", exc))
         return
-    res.add("- **auth.log**: " + _authlog_text(scan, attached, facts.get("audit_fail_24h")))
+    res.posture("- **auth.log handler attached**: %s · 'unknown' addresses: %d" % (
+        "✓" if attached else "✗", scan["unknown"]))
+    res.add("- **auth.log**: " + _authlog_text(scan, facts.get("audit_fail_24h")))
     if scan["unknown"]:
-        res.find("warn", AREA, "auth.log holds failures with no usable address, which no jail can ban")
+        res.posture_find("warn", AREA,
+                         "auth.log holds failures with no usable address, which no jail can ban")
 
 
 # ── R44: the in-memory throttles and the ban gate ────────────────────────────────────────────────
@@ -1217,19 +1258,26 @@ def _ufw_checked(banlist):
 
 
 def _bangate_line(res):
+    """The ban gate's sets and refusals: posture, so page-only.
+
+    How many networks fail2ban and UFW have banned at the Funnel / proxy gate, and whether the
+    fail2ban set was ever read, say whether bans are enforced for requests that come through a
+    proxy: what a reader of the public file needs to know whether brute force there is stopped.
+    """
     from panel.security import banlist
     taken = dict(getattr(banlist, "_taken", {}) or {})
     gate = runtime_stats.snapshot("bangate")
     last = gate.get("last")
-    res.add("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, %s%s"
-            " · whitelist %d · refusals since boot %d%s" % (
-                len(getattr(banlist, "_f2b", ()) or ()), _age(taken.get("f2b")),
-                len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")), _ufw_checked(banlist),
-                len(getattr(banlist, "_allow", ()) or ()), int(gate.get("refused", 0) or 0),
-                (" (last %s ago)" % ago(time.time() - last[0])) if isinstance(last, tuple) else ""))
+    res.posture("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, "
+                "%s%s · whitelist %d · refusals since boot %d%s" % (
+                    len(getattr(banlist, "_f2b", ()) or ()), _age(taken.get("f2b")),
+                    len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")),
+                    _ufw_checked(banlist), len(getattr(banlist, "_allow", ()) or ()),
+                    int(gate.get("refused", 0) or 0),
+                    (" (last %s ago)" % ago(time.time() - last[0])) if isinstance(last, tuple) else ""))
     if taken.get("f2b") in (None, float("-inf")):
-        res.find("warn", AREA, "the ban gate's fail2ban set was never read since boot (the "
-                               "ban-watcher is not running, or every read failed)")
+        res.posture_find("warn", AREA, "the ban gate's fail2ban set was never read since boot "
+                                       "(the ban-watcher is not running, or every read failed)")
 
 
 # ── R45: accounts as counts ──────────────────────────────────────────────────────────────────────
@@ -1265,24 +1313,23 @@ def _account_lines(res, counts):
         res.add("- **Accounts**: DB not queryable (%s)" % exc.args[0])
         return
     others = c["active"] - c["supers"]
-    res.add("- **Accounts**: %d active (%d superadmin, %d other) · %d deactivated · 2FA on: "
-            "superadmins %d/%d, others %d/%d · API tokens %d · sessions seen in 7 d %d (%d "
-            "remember-me) · open invites %d (%d grant superadmin)" % (
-                c["active"], c["supers"], others, c["off"], c["s2fa"], c["supers"], c["o2fa"],
-                others, c["tokens"], c["sessions"], c["remember"], c["invites"], c["invites_super"]))
+    res.add("- **Accounts**: %d active (%d superadmin, %d other) · %d deactivated · API tokens %d · "
+            "sessions seen in 7 d %d (%d remember-me)" % (
+                c["active"], c["supers"], others, c["off"], c["tokens"], c["sessions"],
+                c["remember"]))
+    # Posture: which accounts are the weak target. Shown on the in-panel page only, never in the
+    # downloaded file, the summary or At a glance: the issue form asks for the file to be attached
+    # to a public issue, whose account identifies the owner (owner's decision, 2026-10-16).
+    res.posture("- **2FA on**: superadmins %d/%d, others %d/%d · open invites %d (%d "
+                "grant superadmin)" % (c["s2fa"], c["supers"], c["o2fa"], others, c["invites"],
+                                       c["invites_super"]))
     token_file = _cfg.SETUP_TOKEN_FILE.exists()
-    res.add("- **Must change password**: %d (%d holding an API token, whose API calls get 403 "
-            "password_change_required) · **setup token file present**: %s%s" % (
-                c["mcp"], c["mcp_tok"], _yn(token_file),
-                " (and setup is complete)" if token_file and c["setup_done"] else ""))
-    # Posture stays out of the public summary and At a glance (it tells an attacker which target is
-    # weak), except this one aggregated line when the panel is on the public internet. It is NOT
-    # kept out of the full report: the lines above are in the downloaded file, which the issue
-    # prompt asks the operator to attach to that same public issue. What the attached file should
-    # carry is an open question for the owner (review 1015d); this comment no longer claims a
-    # protection the attach step removes.
+    res.posture("- **Must change password**: %d (%d holding an API token, whose API calls get 403 "
+                "password_change_required) · **setup token file present**: %s%s" % (
+                    c["mcp"], c["mcp_tok"], _yn(token_file),
+                    " (and setup is complete)" if token_file and c["setup_done"] else ""))
     if c["s2fa"] < c["supers"] and _funnel_on():
-        res.find("warn", AREA, "Funnel is on and not every superadmin has 2FA")
+        res.posture_find("warn", AREA, "Funnel is on and not every superadmin has 2FA")
 
 
 # ── the access section (in the request greenlet) ─────────────────────────────────────────────────

@@ -51,6 +51,7 @@ import glob
 import grp
 import gzip
 import ipaddress
+import json
 import os
 import pwd
 import re
@@ -346,6 +347,11 @@ def panel_conf():
 
 
 TS_LOGIN_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes.
+R24T_SSH_PREF = {"on": "true", "off": "false"}
+# The BackendStates of a node that has joined a tailnet and is in it (or on its way back in with
+# its own key). An `up` on one of these can only re-home it: see _r24t_joined.
+R24T_JOINED_STATES = ("Running", "Starting")
 TS_UP_POLL_SECONDS = 20
 
 # The detached OS-update job: where it streams, the sentinel it ends with, and what the
@@ -893,6 +899,20 @@ def v_ts_mount(s):
     return s
 
 
+def v_r24t_off_mount(s):
+    """The mount a `tailscale serve ... off` names: v_ts_mount, or one of its mounts plus one "/".
+
+    Tailscale keeps "/x/" and "/x" as two handlers, so removing one has to name it exactly as
+    stored. Never "//" and never empty: with no mount, `off` removes EVERY handler on the listener,
+    another app's with the panel's.
+    """
+    if len(s) > 1 and s.endswith("/"):
+        if v_ts_mount(s[:-1]) == "/":
+            raise ValueError("not a mount point")
+        return s
+    return v_ts_mount(s)
+
+
 def v_jail(s):
     """A fail2ban jail name."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", s):
@@ -919,7 +939,7 @@ def v_managed_user(s):
 
     A uid FLOOR would be the tidier rule, but it is wrong here: install.sh creates the panel's own
     account with `useradd --system`, so the panel user is legitimately uid < 1000 and is named to
-    `tailscale-set-operator`. uid 0 is the account with no legitimate caller, so uid 0 is what this
+    `tailscale-release-operator`. uid 0 is the account with no legitimate caller, so uid 0 is what this
     refuses.
 
     An unknown name passes — the verb's own lookup fails a moment later, and `user-create` needs to
@@ -936,15 +956,15 @@ def v_managed_user(s):
 
 
 def v_r23a_operator_self(s):
-    """The account `tailscale-set-operator` may name: the one that invoked the helper, and no other.
+    """The account `tailscale-release-operator` may name: the one that invoked the helper, no other.
 
     A tailscaled operator has full write access to the daemon without root (Tailscale's own
     ipnserver: a connection from the operator's uid is not read-only): it can log the node out, join
     it to a tailnet of its choosing with an auth key, and turn Tailscale SSH on, which then admits
-    root logins by THAT tailnet's policy. Its one caller, ensure_operator, names the panel's own
-    account (the account sudo ran this for). Any other non-root account passed v_managed_user: a
-    game account named here was handed that reach. Invoked as root directly (no SUDO_UID, or root's)
-    there is no other account to hold to, and root may name whom it likes, as with v_game_account.
+    root logins by THAT tailnet's policy. So no verb MAKES an account the operator any more (the
+    panel did, with `tailscale-set-operator`); this one only takes the role back from the account
+    that asks, the panel's own (release_operator). Invoked as root directly (no SUDO_UID, or
+    root's) there is no other account to hold to, as with v_game_account.
     """
     s = v_managed_user(s)
     caller_uid = _int_or_none(os.environ.get("SUDO_UID"))
@@ -960,7 +980,7 @@ def v_destroyable_user(s):
 
     Deliberately separate from v_managed_user, which gates 20 verbs. Only four of them destroy
     anything, and the panel legitimately names its OWN account to several of the rest:
-    `tailscale-set-operator` exists precisely to pass it (tailscale_integration passes
+    `tailscale-release-operator` exists precisely to pass it (tailscale_integration passes
     _current_os_user()), and on a single-box install where LinuxGSM runs under the same account as
     the panel, `game-file-read`, `game-dir-tar`, `game-backup-read` and `crontab-list` all take it
     too. Putting the refusal on v_managed_user broke every one of those — the file browser,
@@ -2285,10 +2305,17 @@ VERBS = {
     "panel-restart": ([v_restart_delay],
                       lambda a: [SYSTEMD_RUN, "--on-active=%s" % a[0], "--collect",
                                  SYSTEMCTL, "restart", PANEL_UNIT], None),
-    # `tailscale set --operator=<user>` — see privileged.py. One caller, one validated argument;
-    # the subcommand and flag are fixed on this side of the boundary.
-    "tailscale-set-operator": ([v_r23a_operator_self],
-                               lambda a: ["tailscale", "set", "--operator=%s" % a[0]], None),
+    # Takes the Tailscale operator role back from the account that asks (v_r23a_operator_self),
+    # and only when that account holds it: `tailscale set --operator=` with an EMPTY name. Earlier
+    # panels made their own account the operator, and an operator writes to tailscaled with no sudo
+    # (joins another tailnet, turns Tailscale SSH on). Nothing here can make anyone the operator:
+    # do_tailscale_release_operator.
+    "tailscale-release-operator": ([v_r23a_operator_self], lambda a: [], None),
+    # Tailscale SSH on or off, and nothing else: `tailscale set` changes only the pref it names,
+    # and cannot change which tailnet the node is in, so this is SSH on the tailnet the host has
+    # already joined. The panel's account used to run it itself, as the operator.
+    "tailscale-ssh": ([v_choice("on", "off")],
+                      lambda a: ["tailscale", "set", "--ssh=%s" % R24T_SSH_PREF[a[0]]], None),
     "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([v_choice(*UNITS)],
@@ -2302,6 +2329,15 @@ VERBS = {
     "tailscale-serve": ([v_choice("serve", "funnel"), v_choice("modern", "legacy"), v_ts_mount,
                          v_choice("http", "https+insecure"), v_port],
                         lambda a: ts_serve_argv(a[0], a[1], a[2], a[3], a[4]), None),
+    # Removing ONE Serve mapping: the listener (scheme + port) and the mount, always both. `off`
+    # with no --set-path removes every mount on the listener, so the mount is required and is
+    # never empty (v_r24t_off_mount).
+    "tailscale-serve-off": ([v_choice("https", "http"), v_port, v_r24t_off_mount],
+                            lambda a: ["tailscale", "serve", "--%s=%s" % (a[0], a[1]),
+                                       "--set-path=%s" % a[2], "off"], None),
+    # `tailscale serve status`, for a Tailscale old enough to answer it only to root or the
+    # operator (newer ones answer any local account, and the panel reads it unprivileged first).
+    "tailscale-serve-status": ([], lambda a: ["tailscale", "serve", "status"], None),
 
     # sysctl -p on one of the panel's own drop-ins. The NAME maps to the same path the write verb
     # uses, so the two cannot point at different files.
@@ -5168,6 +5204,95 @@ def run_job(job, args):
         print("panel-helper: --job %s: %s" % (job, exc), file=sys.stderr)
         return 2
 
+def _r24t_ts_json(*sub):
+    """`tailscale <sub...>`'s JSON output as a dict, or None when it could not be run or read."""
+    try:
+        argv = [resolve("tailscale")] + list(sub)      # `sub` is a literal at each call site
+        p = subprocess.run(argv, shell=False,  # nosec B603 - fixed argv
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           env=_clean_env(), timeout=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if p.returncode != 0:
+        return None
+    try:
+        data = json.loads(p.stdout or "")
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _r24t_joined(status):
+    """Whether `status` (`tailscale status --json`) is a node already in a tailnet.
+
+    Running or Starting, or one that holds a node key (HaveNodeKey): it has joined, even if it is
+    down or its key has expired. None (unreadable) counts as joined: the callers refuse on it.
+    """
+    if status is None:
+        return True
+    return status.get("BackendState") in R24T_JOINED_STATES or status.get("HaveNodeKey") is True
+
+
+def _r24t_up_key_refusal():
+    """Why `tailscale-up-key` must not run on this host now, or "".
+
+    An `up` with an auth key never just edits prefs (cli/up.go: justEdit needs no auth key): it
+    logs the node in with that key, into whichever tailnet the key is for. On a node already in a
+    tailnet that is a move to another one, and with --ssh it hands that tailnet root logins here.
+    The panel joins a REMOTE with this verb (privileged.py renders it there; a remote has no
+    helper). On the panel's own host it has no caller, so here it may only join a node that has
+    never joined, and a status this cannot read is refused too.
+    """
+    if _r24t_joined(_r24t_ts_json("status", "--json")):
+        return ("this node is already in a tailnet (or its state could not be read); "
+                "not joining it again")
+    return ""
+
+
+def do_tailscale_release_operator(args, content):
+    """Take the Tailscale operator role back from `args[0]`, and only from it.
+
+    Reads the prefs (`tailscale debug prefs`) and runs `tailscale set --operator=` (empty: no
+    operator) only when the operator IS that account; an operator someone chose for their own
+    login is theirs to keep. Prints "released", "not-operator" or "unread"; rc 0 for the first two.
+    """
+    prefs = _r24t_ts_json("debug", "prefs")
+    if prefs is None:
+        sys.stdout.write("unread")
+        return 1
+    if prefs.get("OperatorUser") != args[0]:
+        sys.stdout.write("not-operator")
+        return 0
+    try:
+        p = subprocess.run([resolve("tailscale"), "set", "--operator="],  # nosec B603 - fixed argv
+                           shell=False, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           env=_clean_env(), timeout=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        sys.stderr.write("tailscale-release-operator failed (%s)\n" % e.__class__.__name__)
+        return 1
+    if p.returncode != 0:
+        sys.stderr.write(p.stderr or "")
+        return p.returncode
+    sys.stdout.write("released")
+    return 0
+
+
+def _r24t_up_login_early(status):
+    """tailscale-up-login's answer when it must run no `up` (see there), else None."""
+    if status is None:
+        return None
+    if status.get("BackendState") in R24T_JOINED_STATES:
+        sys.stdout.write("ALREADY_CONNECTED")
+        return 0
+    if status.get("HaveNodeKey") is True:
+        sys.stderr.write("this node already belongs to a tailnet (it holds a node key, but is not "
+                         "connected: its key may have expired); the panel will not hand out a "
+                         "login link that could move it to another tailnet. Run `sudo tailscale "
+                         "up` on this host to sign it in again.\n")
+        return 1
+    return None
+
+
 def do_tailscale_up_login(args, content):
     """Start `tailscale up` detached and print its login URL once it appears.
 
@@ -5177,8 +5302,25 @@ def do_tailscale_up_login(args, content):
 
     The log path is fixed here, so the poll cannot be pointed at a file a caller names, and it
     lives in /run — tmpfs, cleared on reboot, root-owned — rather than /tmp, where any local user
-    could have pre-created or replaced it."""
+    could have pre-created or replaced it.
+
+    A node already in a tailnet (Running or Starting) is answered ALREADY_CONNECTED without running
+    `up` at all: there it can only change prefs (--ssh among them) on a tailnet this host already
+    trusts, and Tailscale SSH has its own verb. A node that holds a node key but is not up (its key
+    expired, or someone ran `tailscale down`) has joined a tailnet too, the same rule as
+    _r24t_joined: it is REFUSED, because the login URL `up` prints there lets whoever opens it pick
+    the tailnet, and with --ssh that tailnet gets root logins here. Re-authenticating it stays the
+    owner's job at the host (`sudo tailscale up`), where they see which account they sign in to.
+    Only a node with no key (never joined, or logged out) gets the URL: that is Connect.
+
+    A status this cannot read still proceeds, unlike tailscale-up-key: it reads as root, so it
+    fails only when tailscaled is not answering, which is the first Connect right after an install
+    (the daemon still starting). Refusing there would break first-run Connect, and an `up` against
+    a daemon that is not answering fails on its own; a node with a key answers status."""
     ssh, routes = args[0], args[1]
+    early = _r24t_up_login_early(_r24t_ts_json("status", "--json"))
+    if early is not None:
+        return early
     try:
         os.unlink(TS_UP_LOG)
     except FileNotFoundError:
@@ -5801,6 +5943,7 @@ ACTIONS = {
     "gmod-mount-read": do_gmod_mount_read,
     "f2b-log-lines": do_f2b_log_lines,
     "tailscale-up-login": do_tailscale_up_login,
+    "tailscale-release-operator": do_tailscale_release_operator,
     "os-update-run": do_os_update_run,
     "panel-db-repair": do_panel_db_repair,
     "panel-restore": do_panel_restore,
@@ -5834,6 +5977,13 @@ ACTIONS = {
 # tests/unit/part05.py derives this set from the source and fails if it drifts, so adding a verb
 # that reads stdin without listing it here cannot silently start returning "".
 STDIN_VERBS = frozenset({"write-file", "content-cron-write"})
+
+# Verbs whose arguments are fine but which may still be refused by the state of the host, read
+# here as root: {verb: a function answering why not, or ""}. Run after validation and before the
+# verb's stdin is read.
+PRECHECKS = {
+    "tailscale-up-key": _r24t_up_key_refusal,
+}
 
 # Argv verbs whose SECRET comes on stdin: {verb: (its validator, the text the tool reads)}.
 #
@@ -5883,7 +6033,8 @@ READ_VERBS = frozenset({
     "f2b-status", "f2b-status-jail", "game-backup-read", "game-dir-tar", "game-file-read",
     "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
     "listening-sockets-owner", "log-tail", "os-update-log", "pro-status", "restart-flags",
-    "sshd-effective-config", "sshd-socket-active", "sshd-validate", "ufw-status",
+    "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
+    "ufw-status",
 })
 # ...of which these stream a download for as long as it takes, so they have no deadline: they end
 # when the caller stops reading (their next write fails) or by the two signals above.
@@ -6131,6 +6282,11 @@ def main(argv):
         # the panel UI, so repeating attacker-controlled text here would be a reflection.
         print("panel-helper: %s" % e, file=sys.stderr)
         return 2
+    refusal = PRECHECKS[verb]() if verb in PRECHECKS else ""
+    if refusal:
+        # Fixed words: nothing the caller sent is in them.
+        print("panel-helper: %s refused: %s" % (verb, refusal), file=sys.stderr)
+        return 1
     if verb in SECRET_STDIN:
         check_secret, tool_doc = SECRET_STDIN[verb]
         try:
