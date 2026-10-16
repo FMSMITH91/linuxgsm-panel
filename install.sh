@@ -422,12 +422,31 @@ _chown_panel_tree() {
 # Port the panel serves on (from data/config.json), default 5000. Read through _owner_read, for
 # the reasons given there; anything that is not a JSON object with an integer port reads as 5000.
 panel_port() {
+    local p
+    p="$(_r26a_cfg_port)" || p=""
+    echo "${p:-5000}"
+}
+
+# config.json's port as the panel reads it, or nothing when config.json could not be read. As the
+# panel reads it (panel.core.config._r26a_port, the boot's own rule): ASCII digits in 1..65535 and
+# not a JSON true/false, anything else 5000, which is what the panel then binds. This took int() of
+# the raw value, so a hand-edited 0, 70000 or `true` opened, recorded and printed a port the panel
+# never listened on. And "could not be read" is no reading: panel_port says 5000 for it, which
+# _r25j_panel_port_to_record took as config.json's and recorded over the real port.
+_r26a_cfg_port() {
     local cfg="${PANEL_DIR}/data/config.json"
-    if [[ -f "${cfg}" ]]; then
-        _owner_read "${cfg}" | python3 -I -c "import json,sys;print(int(json.load(sys.stdin).get('port',5000)))" 2>/dev/null || echo 5000
-    else
-        echo 5000
+    if [[ ! -f "${cfg}" ]]; then
+        echo 5000; return 0
     fi
+    _owner_read "${cfg}" | python3 -I -c '
+import json, re, sys
+c = json.load(sys.stdin)
+if not isinstance(c, dict):
+    sys.exit(1)
+v = c.get("port")
+s = "" if v is None or isinstance(v, bool) else str(v).strip()
+ok = re.fullmatch(r"[+-]?[0-9]+", s) is not None and 1 <= int(s) <= 65535
+print(int(s) if ok else 5000)' 2>/dev/null
 }
 
 # The first-run wizard's one-time setup token, for the link the banner prints. Until the first
@@ -487,7 +506,9 @@ def free(p):
         s.close()
 
 port = None
-for cand in range(desired, desired + 51):   # 5000..5050 — plenty of headroom
+# Never past 65535: bind() raises OverflowError there, not OSError, and the traceback read as
+# "No free port" for a range the message then printed as running past the last port.
+for cand in range(desired, min(desired + 51, 65536)):   # 5000..5050 — plenty of headroom
     if free(cand):
         port = cand
         break
@@ -1422,6 +1443,37 @@ restore_service_unit() {
     return 0
 }
 
+# Is link $1 one the operator made: root's, or the running account's own ($2, its uid)? On a root
+# run the two are the same test, so the panel user's link is never followed.
+_r26a_link_trusted() {
+    local _o
+    _o="$(stat -c '%u' -- "$1" 2>/dev/null)" || return 1
+    [[ "${_o}" = "0" || "${_o}" = "$2" ]]
+}
+
+# The directory root-made link $1 names, printed only when the panel user can never make that path
+# lead anywhere else: the link's own target (not the resolved chain), absolute or relative to the
+# link's directory, with no `.`/`..`, no link at any depth, and every directory above the target
+# beyond the panel user's reach (so the target itself cannot be renamed or replaced). Fails closed,
+# without _panel_ids, too.
+_r26a_fixed_target() {
+    local t p part
+    local -a parts
+    _panel_ids || return 1
+    t="$(readlink -- "$1" 2>/dev/null)" && [[ -n "${t}" ]] || return 1
+    [[ "${t}" = /* ]] || t="$(dirname -- "$1")/${t}"
+    p=""
+    IFS=/ read -ra parts <<< "${t#/}"
+    for part in "${parts[@]}"; do
+        case "${part}" in ""|.|..) return 1 ;; esac
+        [[ -z "${p}" ]] || _panel_cannot_write "${p}" || return 1
+        p="${p}/${part}"
+        [[ ! -L "${p}" ]] && [[ -d "${p}" ]] || return 1
+    done
+    _panel_cannot_write / && [[ -n "${p}" ]] || return 1
+    printf '%s\n' "${p}"
+}
+
 # Prune old update snapshots in data/.backups, keeping the newest KEEP_BACKUPS. This runs as ROOT
 # over a directory the panel user owns, so:
 #  - it touches only names in the STAMP shape this script creates, and never through word
@@ -1441,12 +1493,16 @@ restore_service_unit() {
 # Not as the tree's owner (TREE_SUDO), as the snapshot steps are: snapshots made before TREE_SUDO
 # existed are root's, and the owner could never remove them.
 _r22a_prune_snapshots() {
-    local _want _rootlink=0
+    local _want _rootlink=0 _me
+    _me="$(id -u)"
     # PANEL_DIR itself first. It is an entry in the panel user's home, so that user can rename it
     # and put a link in its place; `cd -P` below then resolves BOTH sides of the check through the
     # link, they agree, and root prunes stamp-named directories under whatever <target>/data/.backups
-    # the link names. A link root made (the operator moved the install) is still followed.
-    if [[ -L "${PANEL_DIR}" ]] && [[ "$(stat -c '%u' -- "${PANEL_DIR}" 2>/dev/null)" != "0" ]]; then
+    # the link names. A link the operator made (they moved the install) is still followed: root's,
+    # or on a per-user install the running account's own. There the run IS the panel's account, so
+    # there is no boundary to keep, and refusing its own link left every update's snapshot (the
+    # whole database each time) in place forever.
+    if [[ -L "${PANEL_DIR}" ]] && ! _r26a_link_trusted "${PANEL_DIR}" "${_me}"; then
         warn "Old update snapshots not pruned: ${PANEL_DIR} is a link."
         return 0
     fi
@@ -1458,7 +1514,18 @@ _r22a_prune_snapshots() {
     # and checked again once inside, below.
     if [[ -L "${PANEL_DIR}" ]]; then
         _rootlink=1
-        _want="$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" || return 0
+        if [[ "${_me}" -eq 0 ]]; then
+            # A root run: the link's own target, and only one beyond the panel user's reach.
+            # readlink -f would resolve the whole chain, and a target in the panel user's home (or
+            # a link of its own further down) could be swapped for a link to <other> first; both
+            # sides then resolved to <other>, and root pruned its stamp-named directories.
+            _want="$(_r26a_fixed_target "${PANEL_DIR}")" || {
+                warn "Old update snapshots not pruned: ${PANEL_DIR} leads where the panel user can write."
+                return 0
+            }
+        else
+            _want="$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" || return 0
+        fi
     else
         _want="$(cd -P -- "$(dirname -- "${PANEL_DIR}")" 2>/dev/null && pwd -P)" || return 0
         _want="${_want%/}/$(basename -- "${PANEL_DIR}")"
@@ -1474,7 +1541,7 @@ _r22a_prune_snapshots() {
         # Inside now, so the directory is pinned: PANEL_DIR must still be that same root-made link,
         # or the readlink above may have read one the panel user swapped in and back out again.
         if [[ "${_rootlink}" -eq 1 ]] && { [[ ! -L "${PANEL_DIR}" ]] \
-               || [[ "$(stat -c '%u' -- "${PANEL_DIR}" 2>/dev/null)" != "0" ]] \
+               || ! _r26a_link_trusted "${PANEL_DIR}" "${_me}" \
                || [[ "$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)/data/.backups" != "${_want}" ]]; }; then
             warn "Old update snapshots not pruned: ${PANEL_DIR} changed while it was being checked."
             exit 0
@@ -2133,7 +2200,7 @@ _r25j_panel_port_to_record() {
         _prev="$(sed -n 's/^panel_port=//p' "${_conf}" 2>/dev/null | tail -n 1)" || _prev=""
     fi
     _r25j_is_panel_port "${_prev}" || _prev=""
-    _cfg="$(panel_port)"
+    _cfg="$(_r26a_cfg_port)" || _cfg=""
     _r25j_is_panel_port "${_cfg}" || _cfg=""
     _owner_uid="$(stat -c '%u' "${PANEL_DIR}" 2>/dev/null)" || _owner_uid=""
     if [[ -n "${_cfg}" ]] && { [[ "${_cfg}" == "${_prev}" ]] \
@@ -3281,7 +3348,7 @@ _R25J_CHOSEN_PORT="${PANEL_PORT}"
 # green tick. Stop here instead: the operator can free a port or pick one, and either beats a
 # service that restarts every 5s against an address the installer called free.
 if [[ -z "${PANEL_PORT}" ]]; then
-    die "No free port found in ${DESIRED_PORT}-$((DESIRED_PORT + 50)).
+    die "No free port found in ${DESIRED_PORT}-$(( DESIRED_PORT + 50 > 65535 ? 65535 : DESIRED_PORT + 50 )).
      Free one of them, or set \"port\" in ${PANEL_DIR}/data/config.json, and re-run."
 elif [[ "${PANEL_PORT}" != "${DESIRED_PORT}" ]]; then
     warn "Port ${DESIRED_PORT} is already in use — the panel will use port ${PANEL_PORT} instead."

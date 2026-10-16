@@ -33,6 +33,7 @@ function loadSshStatus(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-status').then(r=>r.json())
     .then(d=>{
       el.textContent = sshModeLabel(d);
+      _r26bSshPortNow(d);
       // Reflect the CURRENT public-SSH mode on the buttons: the active mode's button is
       // marked active + disabled (you're already in that state — clicking it is a no-op).
       // Other buttons become clickable again, EXCEPT the "off" button when it's disabled
@@ -71,7 +72,21 @@ function loadSshStatus(){
         }
       }
     })
-    .catch(()=>{ el.textContent='unknown'; });
+    .catch(()=>{ el.textContent='unknown'; _r26bSshPortNow(null); });
+}
+// The SSH port card on a host the panel reaches over Tailscale SSH: the row's port is 22 there
+// (tailscaled's), so the server render cannot say what sshd listens on — ssh-status reads it.
+function _r26bSshPortNow(d){
+  var pn=document.getElementById('ssh-port-now');
+  if(!pn || !pn.hasAttribute('data-live')) return;
+  var ps=(d && Array.isArray(d.sshd_ports)) ? d.sshd_ports : [];
+  if(ps.length){
+    pn.removeAttribute('data-i18n-text');
+    pn.textContent = ps.join(', ');
+  } else {
+    pn.setAttribute('data-i18n-text', 'unknown');   // a <code>: the walker skips it, setLang renders this
+    pn.textContent = t('unknown');
+  }
 }
 function sshMode(mode){
   var run = function(){
@@ -193,6 +208,7 @@ function changeSshPort(){
           busy(false);
           if(m) m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message||''):(d.message||''))+'</span>';  // nosemgrep
           if(window.toast) toast(d.message||(d.success?'SSH port changed':'Failed'), d.success?'success':'danger');
+          if(d.success) loadSshStatus();   // the card's live port (a Tailscale-SSH host) moved too
         })
         .catch(function(){ busy(false); if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
     }});
@@ -565,6 +581,16 @@ var DIAG_ICON  = { ok:'bi-check-circle-fill text-success',
                    warn:'bi-exclamation-triangle-fill text-warning',
                    fail:'bi-x-circle-fill text-danger' };
 
+// The diagnostics card's summary badge, from one run's counts.
+function _r26c_diagBadge(d){
+  var badge=document.getElementById('diag-summary');
+  if(!badge) return;
+  var s=d.summary||'fail';
+  badge.className='badge '+(DIAG_BADGE[s]||DIAG_BADGE.fail);
+  // 'all healthy' in English, for the page's translator: written already translated, it stayed
+  // in that language after a live switch until diagnostics ran again.
+  badge.textContent = s==='ok' ? 'all healthy' : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
+}
 function runDiagnostics(){
   var btn=document.getElementById('diag-run-btn');
   var msg=document.getElementById('diag-msg');
@@ -572,6 +598,10 @@ function runDiagnostics(){
   if(btn){ btn.disabled=true; }
   if(msg){ msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Running…</span>'; }
   fetch(MOUNT+'/api/panel/diagnostics').then(function(r){return r.json();}).then(function(d){
+    // An error reply (the route's own {checks: [], fail: 1, error}, the catch-all's 500, a denial)
+    // is not a run: it emptied the list, put "1 problem(s)" (or "undefined problem(s)") over
+    // nothing and cleared the line that would have said why. It fails like a dropped request.
+    if(!d || d.error || !Array.isArray(d.checks)) throw new Error('not a diagnostics run');
     // Build rows with textContent (file details can contain paths) — no innerHTML injection.
     list.textContent='';
     (d.checks||[]).forEach(function(c){
@@ -587,14 +617,7 @@ function runDiagnostics(){
       row.appendChild(ic); row.appendChild(txt);
       list.appendChild(row);
     });
-    var badge=document.getElementById('diag-summary');
-    if(badge){
-      var s=d.summary||'fail';
-      badge.className='badge '+(DIAG_BADGE[s]||DIAG_BADGE.fail);
-      // 'all healthy' in English, for the page's translator: written already translated, it stayed
-      // in that language after a live switch until diagnostics ran again.
-      badge.textContent = s==='ok' ? 'all healthy' : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
-    }
+    _r26c_diagBadge(d);
     if(msg) msg.textContent='';
     loadIntegrity();  // refresh the file list + repair button
     loadDbStats();    // refresh DB size + audit row count

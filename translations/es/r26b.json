@@ -1,0 +1,6 @@
+{
+  "The panel itself connects over Tailscale SSH on port 22, whatever port sshd uses.": "El panel se conecta por Tailscale SSH en el puerto 22, sea cual sea el puerto que use sshd.",
+  "'{name}' was removed from the panel. The '{user}' account on {host} was left as it is: the panel found it already on the host and did not create it.": "Se quitó '{name}' del panel. La cuenta '{user}' de {host} se dejó tal como está: el panel la encontró ya en el host y no la creó.",
+  "No rule for port {port} matched, so nothing was removed. UFW is not active on this host, so it filters nothing now, and its stored rules cannot be listed to say whether another one opens the port.": "Ninguna regla coincidió con el puerto {port}, así que no se quitó nada. UFW no está activo en este host, así que ahora no filtra nada, y sus reglas guardadas no se pueden listar para saber si otra abre el puerto.",
+  "No deny rule for {ip} matched, so nothing was removed, and the firewall's rules could not be listed to say whether another one still blocks it.": "Ninguna regla de denegación coincidió con {ip}, así que no se quitó nada, y no se pudieron listar las reglas del cortafuegos para saber si otra la sigue bloqueando."
+}

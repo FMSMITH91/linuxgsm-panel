@@ -971,7 +971,7 @@ def _p32_install_readers():
     os.makedirs(os.path.join(pdir, "data"), exist_ok=True)
     with open(os.path.join(pdir, "data", "config.json"), "w", encoding="utf-8") as fh:
         json.dump({"port": 5000, "tailscale_mount": "/lgsm"}, fh)
-    readers = "".join(_sh_fn(_INS32, n) for n in ("_owner_read", "panel_port", "panel_serve_url"))
+    readers = "".join(_sh_fn(_INS32, n) for n in ("_owner_read", "panel_port", "_r26a_cfg_port", "panel_serve_url"))
     script = "set -euo pipefail\nPANEL_DIR=%s\n%s\npanel_serve_url\n" % (pdir, readers)
     _seed({"443": {"/": _OTHER, "/lgsm": _PS}})
     u1 = _bash(script).stdout.strip()
@@ -1077,5 +1077,18 @@ try:
           "went through the helper's verbs",
           _unpriv32 == [] and any(v[0] == "tailscale-serve" for v in _VERBS32)
           and any(v[0] == "tailscale-serve-off" for v in _VERBS32), repr((_unpriv32, _VERBS32[:6])))
+    # ...and the helper's root marker is its own call's, not the process's: an unprivileged write
+    # made while a helper verb runs is still read as the panel's account (review 1016c).
+    _r26d_run_ts32 = ts._run_ts
+
+    def _r26d_beside32(args, timeout=5):
+        _r26d_run_ts32(["set", "--operator=r26d"], timeout=timeout)
+        return _r26d_run_ts32(args, timeout=timeout)
+    _patch32(ts, "_run_ts", _r26d_beside32)
+    _r26d_rc32 = ts._so._run_verb("tailscale-serve-status", [])[2]
+    check("Tailscale on the panel's host: an unprivileged write made while a helper verb runs is "
+          "still counted as the panel's account's",
+          _r26d_rc32 == 0 and ["set", "--operator=r26d"] in _p32_lines(_UNPRIV32),
+          repr((_r26d_rc32, _p32_lines(_UNPRIV32)[-3:])))
 finally:
     _p32_cleanup()

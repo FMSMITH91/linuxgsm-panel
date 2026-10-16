@@ -622,10 +622,16 @@ check("stolen cookie works BEFORE logout (200)", thief.get("/").status_code == 2
 # Log the victim out (a real login carries a sid, so this deletes the victim's own session row; only
 # a cookie with no sid falls back to bumping auth_epoch), then replay the snapshots.
 victim.post("/logout")
-check("REUSE BLOCKED: stolen cookie rejected AFTER logout (not 200)",
-      thief.get("/").status_code != 200, "cookie still valid after logout!")
-check("REUSE BLOCKED: stolen remember_token rejected after logout (not 200)",
-      thief_rt.get("/").status_code != 200, "remember_token still valid after logout!")
+# Refused means the login redirect, not merely "not 200": a user loader that raised on the dead
+# session answered 500, and "not 200" read that broken page as the refusal (review 1016c).
+_r26d_thief, _r26d_thief_rt = thief.get("/"), thief_rt.get("/")
+check("REUSE BLOCKED: stolen cookie rejected AFTER logout (sent to the login page)",
+      _r26d_thief.status_code == 302 and "/login" in _r26d_thief.headers.get("Location", ""),
+      "cookie still valid after logout! %s %r" % (_r26d_thief.status_code, _r26d_thief.headers.get("Location")))
+check("REUSE BLOCKED: stolen remember_token rejected after logout (sent to the login page)",
+      _r26d_thief_rt.status_code == 302 and "/login" in _r26d_thief_rt.headers.get("Location", ""),
+      "remember_token still valid after logout! %s %r"
+      % (_r26d_thief_rt.status_code, _r26d_thief_rt.headers.get("Location")))
 
 # ── ...and logout must not CLAIM a revocation it did not make ──────────────────────────────
 # The handler's stated purpose is server-side invalidation — "clearing the client's copy alone
@@ -679,9 +685,11 @@ try:
     _lo_mod.db = _FlakyDB(_lo_real_db, 1)
     _lo_body_a = _lo_a.post("/logout", follow_redirects=True).get_data(as_text=True)
     _lo_mod.db = _lo_real_db
+    _r26d_lo = _lo_thief.get("/")
     check("logout: a failed revoke is retried, and the cookie really is dead afterwards",
-          _lo_thief.get("/").status_code != 200,
-          "the session outlived a sign-out the user was told had happened")
+          _r26d_lo.status_code == 302 and "/login" in _r26d_lo.headers.get("Location", ""),
+          "the session outlived a sign-out the user was told had happened: %s %r"
+          % (_r26d_lo.status_code, _r26d_lo.headers.get("Location")))
     check("logout: ...and that user is still told plainly that they were logged out",
           "could not revoke" not in _lo_body_a, _lo_body_a[:200])
     # (b) both attempts fail: say so, rather than asserting the revocation anyway.
@@ -1438,6 +1446,10 @@ with app.app_context():
     def _ucols():
         return {col["name"] for col in _inspect(db.engine).get_columns("user")}
 
+    # Which legacy-column drops took: one that did not skipped its checks without a word (review
+    # 1016c), and SQLite also refuses DROP COLUMN for an indexed or constrained column, not only
+    # on a release too old for it. Each is named at the end of this block.
+    _r26d_drops = {}
     _dropped = False
     try:
         db.session.execute(_t("ALTER TABLE user DROP COLUMN backup_codes"))
@@ -1445,6 +1457,7 @@ with app.app_context():
         _dropped = True
     except Exception:
         db.session.rollback()   # SQLite too old to DROP COLUMN — idempotency check still runs
+    _r26d_drops["user.backup_codes"] = _dropped
     if _dropped:
         check("migrate: legacy DB is missing a newer column", "backup_codes" not in _ucols())
         _n0 = db.session.execute(_t("SELECT COUNT(*) FROM user")).scalar()
@@ -1474,6 +1487,7 @@ with app.app_context():
             _gdropped = True
         except Exception:
             db.session.rollback()     # SQLite too old to DROP COLUMN
+        _r26d_drops["game_server." + _col] = _gdropped
         if _gdropped:
             check("migrate: a legacy DB is missing game_server.%s" % _col,
                   _col not in _gcols())
@@ -1492,6 +1506,7 @@ with app.app_context():
     except Exception:
         db.session.rollback()
         _idropped = False
+    _r26d_drops["invite.revoked_at"] = _idropped
     if _idropped:
         check("migrate: a pre-feature DB really is missing invite.revoked_at",
               "revoked_at" not in _icols())
@@ -1542,6 +1557,7 @@ with app.app_context():
     except Exception:
         db.session.rollback()
         _sdropped = False
+    _r26d_drops["user_session.remember"] = _sdropped
     if _sdropped:
         db.session.execute(_t("INSERT INTO user_session (user_id, sid, created_at, last_seen, "
                               "ip, user_agent) VALUES (1, 'smoke_migrate_sid', :n, :n, '', '')"),
@@ -1557,6 +1573,9 @@ with app.app_context():
               bool(_back), "remember=%r" % (_back,))
         db.session.execute(_t("DELETE FROM user_session WHERE sid = 'smoke_migrate_sid'"))
         db.session.commit()
+    check("migrate: (premise) every legacy column above really was dropped, so no upgrade check "
+          "was skipped", len(_r26d_drops) == 6 and all(_r26d_drops.values()),
+          "not dropped: %r" % sorted(_k for _k, _v in _r26d_drops.items() if not _v))
 
 # ── Bulk action endpoint: guards + dispatch bookkeeping ───────
 ba_bad = c.post("/api/servers/bulk-action", json={"action": "nope", "server_ids": [gs_id]})

@@ -465,6 +465,129 @@ check("runtime-path: ...and a file named on neither side counts as one a host ru
       _so._path_class("a-new-file.cfg") is None and _so._is_runtime_path("a-new-file.cfg") is True
       and _so._path_class("panel/x.py") == "runtime" and _so._path_class("tests/x.py") == "noise")
 
+# ── no committed file names the owner's real infrastructure ─────────────────────────────────────
+# Fixtures once carried the live host's name, its tailnet name, the test VPS's name and addresses
+# (review 1016c). They were replaced with synthetic values of the same shape (node.taile00000.ts.net,
+# 100.64.0.10, 203.0.113.x); this keeps them from coming back.
+#
+# HOW THEY ARE STORED, so the gate does not publish them itself. Each value is one entry: a random
+# salt of its own, a 14-bit tag (salted SHA-256) and PBKDF2-HMAC-SHA256 at 600000 rounds, with no
+# word saying which value is which (a single fast salted SHA-256 per value, each labelled with its
+# kind, fell to a brute force in seconds for an address). The tag only spares the scan the slow
+# hash for all but about 1 candidate in 16384; a match is decided by PBKDF2. What that buys is
+# bounded: a guesser pays what the scan pays per candidate, so a value from a small space (a short
+# hex name) still falls in minutes and an IPv4 address in about a day of one CPU. Git history holds
+# the old fixtures anyway: the gate's job is "never again", and this keeps it from being a lookup.
+#
+# Every word-shaped run of the tracked tree is a candidate, and so is each dot-separated label,
+# each run of up to four labels (an IPv4 address inside a longer token), each hyphen-joined piece
+# of a label, and the same with '-' read as '.' (tailscale writes 100-64-0-10 in DNS names).
+import hashlib as _r26d_hl  # noqa: E402
+
+_R26D_ROUNDS = 600000
+_R26D_TAG_BITS = 14
+_R26D_FORBIDDEN = (
+    ("0b10e375b6cdf504e06cfb504348e719", 3046,
+     "be3db78240b7a0e6bdc7327096d62b9b7e1ec4eded924cfc99ea1bb218aaa5a8"),
+    ("474878c9ccd7feef8c0ee502f30e4923", 3993,
+     "f7f17b0c729f5c3a1ec852c565251f8ce1be07aaa350e3eebb8631fae839968a"),
+    ("6215853ec779fd83f1d0757d46895d9b", 11269,
+     "b5def33f1f041f3a49c0857b5616c01a2caa60bf1480f745d427bcc38bc8ed95"),
+    ("6c8c0cab85e2c4c3bcfe5607a6515a9a", 747,
+     "bb10def418d1e9a4d455837d65b061e1867d475741dcfec911a8b0a3b2a0b627"),
+    ("a317806187aca28fc0b14a4d5bb4fefe", 14120,
+     "47e4238a0bbdfb6376229c039272efc7b8a8cae4bf29a48d6f267b07414047e3"),
+)
+_R26D_TOKEN = _re_bk.compile(r"[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?")
+
+
+def _r26d_candidates(text):
+    """Every string in `text` (lower-cased) that one forbidden value could be written as."""
+    out = set()
+    for tok in _R26D_TOKEN.findall(text.lower()):
+        for form in {tok, tok.replace("-", ".")}:
+            labels = form.split(".")
+            for i in range(len(labels)):
+                for j in range(i + 1, min(i + 4, len(labels)) + 1):
+                    out.add(".".join(labels[i:j]))
+                parts = labels[i].split("-")
+                out.update("-".join(parts[a:b]) for a in range(len(parts))
+                           for b in range(a + 1, len(parts) + 1))
+    return out
+
+
+def _r26d_tag(salt, value):
+    """The cheap tag of `value` (bytes) under `salt`: its salted SHA-256's top _R26D_TAG_BITS bits."""
+    return int.from_bytes(_r26d_hl.sha256(salt + value).digest()[:4], "big") >> (32 - _R26D_TAG_BITS)
+
+
+def _r26d_digest(salt, value):
+    """The slow digest a forbidden value (bytes) is stored as, under its own salt."""
+    return _r26d_hl.pbkdf2_hmac("sha256", value, salt, _R26D_ROUNDS).hex()
+
+
+def _r26d_entry(value, salt=None):
+    """`value`'s (salt, tag, digest) entry, with a fresh random salt unless one is given."""
+    salt = os.urandom(16) if salt is None else salt
+    return (salt.hex(), _r26d_tag(salt, value.encode("utf-8")), _r26d_digest(salt, value.encode("utf-8")))
+
+
+def _r26d_hits(text, forbidden, memo=None):
+    """The forbidden entries' digests that some candidate string in `text` matches.
+
+    `memo` (candidate -> its hits) carries across calls: the tree repeats most candidates, and each
+    one costs a tag per entry, plus PBKDF2 for an entry whose tag it shares.
+    """
+    memo = {} if memo is None else memo
+    keyed = [(bytes.fromhex(_s), _t, _d) for _s, _t, _d in forbidden]
+    hits = set()
+    for cand in _r26d_candidates(text):
+        if cand not in memo:
+            raw = cand.encode("utf-8")
+            memo[cand] = frozenset(_d for _s, _t, _d in keyed
+                                   if _r26d_tag(_s, raw) == _t and _r26d_digest(_s, raw) == _d)
+        hits |= memo[cand]
+    return hits
+
+
+_r26d_found, _r26d_memo = [], {}
+for _r26d_f in _cls_files:
+    with open(os.path.join(_root, _r26d_f), "rb") as _r26d_fh:
+        _r26d_text = _r26d_fh.read().decode("utf-8", "ignore")
+    if _r26d_hits(_r26d_text, _R26D_FORBIDDEN, _r26d_memo):
+        _r26d_found.append(_r26d_f)
+check("privacy: no file in the repository names the owner's real hosts, tailnet or addresses",
+      len(_cls_files) >= 300 and not _r26d_found,
+      "files naming a forbidden value: %r (replace each with a synthetic one of the same shape: "
+      "node.taile00000.ts.net, 100.64.0.10, 203.0.113.x)" % (_r26d_found,))
+
+
+# The control: the same scan, with synthetic values listed as forbidden, finds each written the
+# ways a fixture writes them (a MagicDNS label, an address before a port or inside a DNS name, a
+# hyphenated name) and passes their near-misses, so a clean result above means the scan read.
+_r26d_ctl = tuple(_r26d_entry(_v) for _v in ("taile00000", "100.64.0.10", "vps-00000000"))
+check("privacy: the scan finds a forbidden value written as a label, an address or a hyphenated "
+      "name, and passes its near-misses (control)",
+      [bool(_r26d_hits(_t, _r26d_ctl)) for _t in (
+          "https://node.TAILE00000.ts.net:5000", "->alice@100.64.0.10:22",
+          "100-64-0-10.example", "the test VPS (vps-00000000, ufw)", "box-vps-00000000-old",
+          "taile000001.ts.net", "100.64.0.101", "vps-000000001", "1100.64.0.10")]
+      == [True, True, True, True, True, False, False, False, False])
+# ...a tag shared is not a match (PBKDF2 decides), and the stored entries are what the comment above
+# says: one salt each, 600000 rounds, and no line naming what a value is.
+_r26d_salt = os.urandom(16)
+_r26d_tagonly = ((_r26d_salt.hex(), _r26d_tag(_r26d_salt, b"100.64.0.101"),
+                  _r26d_digest(_r26d_salt, b"100.64.0.10")),)
+with open(os.path.join(_root, "tests", "unit", "part03.py"), encoding="utf-8") as _r26d_fh:
+    _r26d_block = _re_bk.search(r"(?ms)^_R26D_FORBIDDEN = \($(.*?)^\)$", _r26d_fh.read())
+check("privacy: a candidate sharing only an entry's tag is no hit, and every forbidden value is stored "
+      "under its own 16-byte salt at >= 600000 PBKDF2 rounds, with no label naming it",
+      not _r26d_hits("100.64.0.101", _r26d_tagonly) and _R26D_ROUNDS >= 600000
+      and len(_R26D_FORBIDDEN) == 5 and len({_e[0] for _e in _R26D_FORBIDDEN}) == 5
+      and all(len(bytes.fromhex(_e[0])) == 16 and len(_e[2]) == 64 for _e in _R26D_FORBIDDEN)
+      and _r26d_block is not None and "#" not in _r26d_block.group(1),
+      repr((_R26D_ROUNDS, len(_R26D_FORBIDDEN), _r26d_block is not None)))
+
 # ...and the runtime side is complete. Every module the panel's entry points import, all the way
 # down (lazy imports inside functions too), is a file named runtime: a module moved under tools/ or
 # tests/ and imported from there would otherwise change without the host ever being told.
@@ -561,8 +684,8 @@ check("port_in_use: ...and the surviving one is the single-argument local check"
 
 _orig_sorun2 = _so._run
 try:
-    _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
-    check("host_has_ip: recognises a local address", _so.host_has_ip("100.84.48.111") is True)
+    _so._run = lambda c, **k: ("127.0.0.1\n100.64.0.10\n203.0.113.45\n", "", 0)
+    check("host_has_ip: recognises a local address", _so.host_has_ip("100.64.0.10") is True)
     check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
     # _run never raises: a timeout or a missing `ip` is ("", ..., -1). `ip in set()` refused the
     # host's own Tailscale IP as "not an address on this host"; answering True instead accepted a
@@ -571,9 +694,9 @@ try:
     _so._run = lambda c, **k: ("", "Command timed out", -1)
     _hh_kern = _so._kernel_has_ip
     try:
-        _so._kernel_has_ip = lambda addr: str(addr) == "100.84.48.111"
+        _so._kernel_has_ip = lambda addr: str(addr) == "100.64.0.10"
         check("host_has_ip: a read that timed out does not call the host's own address foreign",
-              _so.host_has_ip("100.84.48.111") is True)
+              _so.host_has_ip("100.64.0.10") is True)
         check("host_has_ip: ...nor accept an address the host does not have",
               _so.host_has_ip("10.0.0.51") is False)
     finally:
@@ -3668,6 +3791,25 @@ finally:
     _sm_core.run_privileged = _orig_rp
 
 
+def _r26j_socket_rc(state):
+    """run_command for the change_ssh_port blocks below: ssh.socket as the stand-in says.
+
+    `state()` is "active" or not; never the test machine's. Unstubbed, `systemctl show ssh.socket`
+    ran on the machine itself (these hosts are local), and on a socket-activated CI runner its real
+    ports replaced the stand-in sshd's. Anything else is refused, so a new read cannot reach it either.
+    """
+    def _rc(server, cmd, timeout=30, sudo=None, stdin_text=None, **k):
+        if cmd != _sm_hosts._R26B_SOCKET_SHOW:
+            return ("", "refused by part03's stand-in: %s" % cmd[:60], 1)
+        if state() == "active":
+            return ("ActiveState=active\nListen=0.0.0.0:22 (Stream)\nListen=[::]:22 (Stream)\n", "", 0)
+        return ("ActiveState=inactive\n", "", 0)
+    return _rc
+
+
+_r26j_rc_saved = _sm_core.run_command
+
+
 # Covering the two helpers is not covering the BRANCH that picks between them — the bug was in the
 # call site, which wrote to a file the OS ignores. So drive change_ssh_port itself and assert which
 # destination it names. [[test-the-caller-not-just-the-helper]]
@@ -3690,6 +3832,7 @@ try:
         return ("", "", 0)
 
     _sm_core.run_privileged = _cs_priv
+    _sm_core.run_command = _r26j_socket_rc(lambda: _cs["socket"])
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _cs["writes"].append((target, content)), ("", "", 0))[1]
     _sm_core._restart_sshd = lambda *a, **k: (_cs.__setitem__("up", True), ("", "", 0))[1]
@@ -3729,6 +3872,7 @@ finally:
     (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
      _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
      _sm_hosts.remote_ufw_close_port) = _orig
+    _sm_core.run_command = _r26j_rc_saved
 
 
 # ── change_ssh_port must not drop the port the host is LISTENING on ─────────────────────────────
@@ -3757,6 +3901,7 @@ try:
         return ("", "", 0)
 
     _sm_core.run_privileged = _sp_priv
+    _sm_core.run_command = _r26j_socket_rc(lambda: _sp["socket"])
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _sp["writes"].append((target, content)), ("", "", 0))[1]
     _sm_core._restart_sshd = lambda *a, **k: (_sp.__setitem__("up", True), ("", "", 0))[1]
@@ -3788,6 +3933,7 @@ finally:
     (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
      _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
      _sm_hosts.remote_ufw_close_port) = _o_sp
+    _sm_core.run_command = _r26j_rc_saved
 
 
 # ── the panel-login fail2ban jail must actually READ the panel's auth.log ───────────────────────
@@ -4042,6 +4188,7 @@ try:
         return ("", "", 0)
 
     _sm_core.run_privileged = _lb_priv
+    _sm_core.run_command = _r26j_socket_rc(lambda: "inactive")
     _sm_core.write_root_file = lambda *a, **k: (_lb["touched"].append("WRITE"), ("", "", 0))[1]
     _sm_core._restart_sshd = lambda *a, **k: (_lb.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
@@ -4134,6 +4281,7 @@ finally:
     (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
      _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
      _sm_hosts.remote_ufw_close_port, _so.host_has_ip) = _lb_orig
+    _sm_core.run_command = _r26j_rc_saved
 
 
 # ── a tailnet address must not be firewall-blocked because the probe failed ─────────────────────

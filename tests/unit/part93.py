@@ -321,9 +321,9 @@ check("System page: ...where it was, Enable works (control); and SSH already on 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. A data/ that is a link root made: restore and self-update act on the real directory
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# A root-made link cannot be made here without root, so _conf_path_link (which tells a root-made
-# link from the panel user's by its owner) answers "root made it" for this one path; realpath, the
-# O_NOFOLLOW opens and the copies are the real ones.
+# A root-made link cannot be made here without root, so _r26a_link_root_made (which tells a
+# root-made link from the panel user's by its owner) answers "root made it" for this one path; the
+# walk, the pinned opens and the copies are the real ones.
 def _r25a_linked_data(root_made=True):
     """(restore target, members copied, stage left behind, self-update target, log written)."""
     base = _tf93.mkdtemp(dir=_TMP93)
@@ -342,7 +342,7 @@ def _r25a_linked_data(root_made=True):
     installer = os.path.join(base, "install.sh")
     with open(installer, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\n")
-    real_link = _helper93._conf_path_link
+    real_link = _helper93._r26a_link_root_made
     try:
         _p9_patch(_helper93, "panel_conf", lambda: {"data_dir": data, "panel_dir": panel})
         _p9_patch(_helper93, "INSTALLER_PATH", installer)
@@ -350,8 +350,8 @@ def _r25a_linked_data(root_made=True):
         _p9_patch(_helper93, "subprocess", NS(run=lambda *a, **k: NS(returncode=0),
                                              STDOUT=_sp93.STDOUT, TimeoutExpired=_sp93.TimeoutExpired))
         if root_made:
-            _p9_patch(_helper93, "_conf_path_link",
-                      lambda p: "" if p == data else real_link(p))
+            _p9_patch(_helper93, "_r26a_link_root_made",
+                      lambda p: p == data or real_link(p))
         target = _helper93._restore_target()
         if target is not None:
             _helper93._restore_run(target)
@@ -595,8 +595,12 @@ check("uninstall.sh: its first Serve read is the one behind the parent's sudo-no
 _STAMPS93 = ["20260101-00000%d" % i for i in range(5)]
 # The hooks stand in for the panel user swapping PANEL_DIR (a real directory) for a link to <other>
 # at one moment of the prune: at its first `cd`, its first `readlink`, or never. Where `rootlink`
-# asks for a link root made, `stat` answers "root" (0) for it until the swap replaces it.
+# asks for a link root made, `stat` answers "root" (0) for it until the swap replaces it. The prune
+# runs as root (`id -u` answers 0), with the test's own directories beyond the panel user's reach.
 _PRUNE_HOOKS93 = r'''
+id() { if [ "$*" = "-u" ]; then echo 0; else command id "$@"; fi; }
+_panel_ids() { _PR_UID=4242; }
+_panel_cannot_write() { return 0; }
 _p93_swap() { [ -e "$P93/swapped" ] && return 0; : > "$P93/swapped"
               mv -- "$PANEL_DIR" "$P93/moved"; ln -s -- "$P93/other" "$PANEL_DIR"; }
 cd() { [ "$P93_AT" = cd ] && _p93_swap; builtin cd "$@"; }
@@ -620,8 +624,9 @@ def _r25a_prune(at, rootlink=False):
         os.rename(real, panel)
         real = os.path.join(base, "moved") if at else panel
     script = ("set -euo pipefail\nwarn() { echo \"WARN $*\"; }\nKEEP_BACKUPS=3\nP93=%s\nP93_AT=%s\n"
-              "P93_ROOTLINK=%s\nPANEL_DIR=%s\n%s\n%s_r22a_prune_snapshots\n"
+              "P93_ROOTLINK=%s\nPANEL_DIR=%s\n%s\n%s%s%s_r22a_prune_snapshots\n"
               % (base, at, "1" if rootlink else "", panel, _PRUNE_HOOKS93,
+                 _fn93(_INS93, "_r26a_link_trusted"), _fn93(_INS93, "_r26a_fixed_target"),
                  _fn93(_INS93, "_r22a_prune_snapshots")))
     r = _sp93.run(["bash", "-c", script], cwd=base, capture_output=True, text=True,  # nosec B603 B607
                   timeout=60)

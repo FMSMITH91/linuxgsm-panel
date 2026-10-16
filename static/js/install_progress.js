@@ -9,8 +9,8 @@
 // wrong shape for something you want to keep an eye on — so it is inline now, and it goes away
 // when the install does, not when you close it.
 //
-// Deliberately quiet: no timer runs unless something is actually installing. It asks once on load,
-// polls only while a job is live, and the `servers_changed` broadcast the panel already sends
+// Deliberately quiet: no timer runs unless something is actually installing (or the last read
+// failed, so nobody knows yet). It asks once on load, polls only while a job is live, and the `servers_changed` broadcast the panel already sends
 // wakes it for an install started in another tab or by another user.
 (function () {
   var POLL_MS = 3000;
@@ -246,13 +246,12 @@
   };
 
   document.addEventListener('DOMContentLoaded', function () {
-    fetch(MOUNT + '/api/installs', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var jobs = d.installs || [];
-        if (jobs.length) { apply(jobs); if (!timer) timer = setInterval(tick, POLL_MS); }
-      })
-      .catch(function () {});
+    // The load read goes through the poller. It had its own fetch that armed the interval only on
+    // a reply listing jobs, so a failed request or an error reply (a phone just woken, the panel
+    // restarting, a 500) armed nothing, and an install already running showed no progress until it
+    // ended: the one-dropped-request bug tick's miss path exists to prevent. tick stops on a real
+    // answer that nothing is installing, so an idle page still makes one request and keeps no timer.
+    window.watchInstallsNow();
     if (window.onServersChanged) window.onServersChanged(function () { window.watchInstallsNow(); });
   });
 })();

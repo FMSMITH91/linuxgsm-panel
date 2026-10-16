@@ -337,7 +337,7 @@ _PDIR96 = _tf96.mkdtemp(dir=_TMP96)
 def _to_record96(chosen, recorded, cfg_port, held):
     """What install.sh records: `held` is whether another account listens on config.json's port."""
     conf = _conf_file96("" if recorded is None else "panel_port=%s\n" % recorded)
-    script = (_FNS96 + "panel_port() { echo %s; }\n" % cfg_port
+    script = (_FNS96 + "_r26a_cfg_port() { echo %s; }\n" % cfg_port
               + "_r25j_port_held_by_other() { return %d; }\n" % (0 if held else 1)
               + "PANEL_DIR=%s\n_R25J_CHOSEN_PORT=%s\n" % (_PDIR96, chosen)
               + "_r25j_panel_port_to_record %s\n" % conf)

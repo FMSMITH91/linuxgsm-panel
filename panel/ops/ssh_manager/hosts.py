@@ -774,7 +774,13 @@ def _r23b_closed_answer(server, port, proto, out=""):
     if left is not None:
         return False, i18n.Sentence("Port {port} is still open: connections meet `{rule}` first — remove or "
                                     "narrow that rule.", port=label, rule=left["detail"])
-    if not read and _r23b_deleted_nothing(out):
+    if read != [True] and _r23b_deleted_nothing(out):
+        if read == ["inactive"]:
+            # Read, and inactive: it lists no rules, stored ones included. "Could not be read back"
+            # sent the operator to retry, or to check a host that had answered every call.
+            return False, i18n.Sentence("No rule for port {port} matched, so nothing was removed. UFW is not "
+                                        "active on this host, so it filters nothing now, and its stored rules "
+                                        "cannot be listed to say whether another one opens the port.", port=label)
         return False, i18n.Sentence("No rule for port {port} matched, so nothing was removed, and the firewall "
                                     "could not be read back to say whether the port is open.", port=label)
     return True, i18n.Sentence("Port {port} closed on remote", port=label)
@@ -801,15 +807,25 @@ def _r23b_still_open(server, port, protos, read=None):
     answer stands there, as it always did.
     """
     out, _err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
-    if rc != 0 or not (out or "").strip() or not firewall._ufw_is_active(out):
+    state = _r26b_listing_state(out, rc)
+    if read is not None and state:
+        # `read`: told that the listing was read (None here is then "none open"), or that it was
+        # read and is inactive, which answers nothing either way.
+        read.append(state)
+    if state is not True:
         return None
-    if read is not None:
-        read.append(True)   # `read`: told that the listing was read (None here is then "none open")
     for proto in protos:
         for first in _r22b_first_rules(out, port, proto):
             if first and first["action"] in ("ALLOW", "LIMIT"):
                 return first
     return None
+
+
+def _r26b_listing_state(out, rc):
+    """A `ufw status` read: True (an active listing), "inactive", or None (not read)."""
+    if rc != 0 or not (out or "").strip():
+        return None
+    return True if firewall._ufw_is_active(out) else "inactive"
 
 
 def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
@@ -1337,7 +1353,7 @@ def remote_ufw_tagged_ports(server, name):
 def protected_host_ports(server):
     """The ports on `server` no game server may open, adopt or clean up, as a set of ints.
 
-    SSH — 22, the port the panel connects on, and every port sshd's effective config names — and,
+    SSH — 22, the port the panel connects on, and every port sshd serves (_sshd_current_ports) — and,
     on the panel's own host, the panel's web port. A game server's ports are read from LinuxGSM's
     `details`, run AS THE GAME ACCOUNT over a config that account (and anyone with MANAGE_SERVERS,
     through the file manager) can write, so "Query 22" is a line they can make the panel act on as
@@ -1855,8 +1871,9 @@ def remote_os_check_updates(server):
     _core.run_privileged(server, "apt-update", [], timeout=60, merge_stderr=False)
     # C.UTF-8 and no LANGUAGE, as the verb above runs: apt translates "[upgradable from: …]", and
     # parse_upgradable reads the English words (see system_ops.os_update_available).
+    # sudo=False: the package lists are world-readable, as every read #436 moved off sudo.
     out, _, rc = _core.run_command(server, _core._R19A_C_LOCALE + "apt list --upgradable 2>/dev/null",
-                                   timeout=30)
+                                   timeout=30, sudo=False)
     pkgs = _parse_upgradable(out)
     return {"ok": rc == 0, "count": len(pkgs), "packages": pkgs}
 
@@ -2672,7 +2689,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
 def remote_check_tailscale(server):
     """Check if Tailscale is already installed and running on the remote."""
-    installed_out, _, installed_rc = _core.run_command(server, "which tailscale 2>/dev/null && echo 'INSTALLED' || echo 'NOTINSTALLED'", timeout=10)
+    # sudo=False here and below: neither `which` nor `tailscale status` needs root (tailscaled's
+    # LocalAPI answers reads to any local user), and a sudo that wants a password made the host
+    # read as unreachable.
+    installed_out, _, installed_rc = _core.run_command(
+        server, "which tailscale 2>/dev/null && echo 'INSTALLED' || echo 'NOTINSTALLED'", timeout=10, sudo=False)
     # BOTH halves, and the same shape manage_servers.py already uses for its `id` probe:
     # `"NOTEXISTS" not in idout and "EXISTS" in idout`. A bare negative test reads an EMPTY answer
     # as the positive one — "NOTINSTALLED" is not in "", so a probe that never ran said Tailscale
@@ -2690,7 +2711,8 @@ def remote_check_tailscale(server):
     ts_ip = ""
     dns_name = ""
     if installed:
-        out, _, rc = _core.run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
+        out, _, rc = _core.run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10,
+                                       sudo=False)
         # `|| echo '{}'` makes an answered failure "{}", so nothing at all is the probe not running
         # — not "installed but not running", which offers to re-authenticate the node.
         unread = unread or not (out or "").strip()
@@ -3051,7 +3073,27 @@ def _bootstrap_ssh_ports(server):
 
 
 def _sshd_current_ports(server):
-    """The ports sshd currently listens on (from its *effective* config). Empty on failure."""
+    """Return the ports sshd currently listens on. Empty on failure.
+
+    ssh.socket's while that unit holds the listening socket, else its *effective* config's.
+    """
+    # Under socket activation `sshd -T` prints sshd_config's Port, which systemd ignores, so a port
+    # the panel moved sshd to lives only in ssh.socket. Every caller unioned in the stored port to
+    # cover that, and on a host the panel reaches over Tailscale SSH the stored port stays 22
+    # whatever sshd serves: a second move dropped the first move's port from the drop-in (while
+    # saying "the previous port is still available"), the bootstrap and the firewall's protection
+    # stopped counting it, and a game server could take it.
+    #
+    # REPLACED, not unioned, as sshd_listen_ports does: with sshd moved off 22, `sshd -T` still says
+    # 22, and counted as served, a leftover `22/tcp ALLOW` read as another way in, so the rule for
+    # the port sshd really serves came back warn instead of protected and could be deleted.
+    # change_ssh_port, for which more is the safe direction, unions `sshd -T` back in itself.
+    sock = _r26b_socket_ports(server)
+    return list(sock) if sock else _r26b_sshd_t_ports(server)
+
+
+def _r26b_sshd_t_ports(server):
+    """The Port lines of sshd's effective config (`sshd -T`), as strings. Empty on failure."""
     # Was `sshd -T | awk 'tolower($1)=="port"{print $2}'` — an awk program running as root to do
     # what a list comprehension does. The verb returns the effective config; the parsing is here.
     out, _, _ = _core.run_privileged(server, "sshd-effective-config", [], timeout=15, merge_stderr=False)
@@ -3061,6 +3103,58 @@ def _sshd_current_ports(server):
         if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdecimal():
             ports.append(parts[1])
     return ports
+
+
+def sshd_listen_ports(server):
+    """The ports sshd serves, as ints, for the host page: [] when they could not be read.
+
+    ssh.socket's own list while it holds the socket (sshd_config's Port is ignored then), else
+    `sshd -T`'s. Not the stored port: on a host the panel reaches over Tailscale SSH that stays 22,
+    the port tailscaled answers on, whatever sshd listens on.
+    """
+    return [int(p) for p in _sshd_current_ports(server)]
+
+
+# What systemd reports for ssh.socket: whether it is active, and every address it listens on.
+# Read-only and world-readable (no sudo), in the C locale like every read parsed by its words.
+_R26B_SOCKET_SHOW = _core._R19A_C_LOCALE + "systemctl show ssh.socket -p ActiveState -p Listen"
+
+
+def _r26b_socket_ports(server):
+    """The TCP ports ssh.socket listens on, as strings, when it is the active listener; else None.
+
+    None too when systemd could not be read: the callers then keep what they had (sshd -T, and the
+    stored port). systemd prints one `Listen=<address>:<port> (Stream)` line per socket, after the
+    panel's drop-in and Ubuntu's sshd-socket-generator have been applied, so this is what is
+    actually bound — the one reading that names a port the panel moved sshd to on such a host.
+    """
+    try:
+        out, _err, rc = _core.run_command(server, _R26B_SOCKET_SHOW, timeout=15, sudo=False)
+    except Exception:
+        _core._log.debug("ssh.socket's listen addresses could not be read", exc_info=True)
+        return None
+    return _r26b_listen_ports(out) if rc == 0 else None
+
+
+def _r26b_listen_ports(out):
+    """`systemctl show -p ActiveState -p Listen` output's TCP ports while active, else None."""
+    lines = [ln.strip().partition("=") for ln in (out or "").splitlines()]
+    if ("ActiveState", "=", "active") not in lines:
+        return None
+    ports = []
+    for port in (_r26b_stream_port(val) for key, _eq, val in lines if key == "Listen"):
+        if port and port not in ports:
+            ports.append(port)
+    return ports or None
+
+
+def _r26b_stream_port(listen):
+    """The TCP port of one systemd `Listen=` value (`[::]:22 (Stream)`), as a string, or None."""
+    addr, _sp, kind = listen.partition(" ")
+    port = addr.rpartition(":")[2]
+    if kind != "(Stream)" or not re.fullmatch(r"[0-9]{1,5}", port):
+        return None
+    return str(int(port))
 
 
 # The hardening directives whose failure leaves a door open, as opposed to the keepalive pair.
@@ -3226,12 +3320,27 @@ def remote_ufw_undeny_ip(server, ip):
         # plain deny, not a REJECT or a deny scoped to a port. So the firewall is read again under
         # the same lock, and an address it still lists as blocked is not reported unblocked — the
         # panel host's ufw_undeny_ip does the same. A read that fails says nothing either way, and
-        # the delete's own answer stands.
+        # the delete's own answer stands — unless that answer is that it removed nothing.
         blocked = remote_ufw_blocked_ips(server)
+    return _r26b_unblock_answer(ip, out, blocked)
+
+
+def _r26b_unblock_answer(ip, out, blocked):
+    """An unblock's answer once its delete exited 0 with output `out`; `blocked` is the read-back.
+
+    For both hosts (system_ops.ufw_undeny_ip too). `blocked` is None when the firewall could not be
+    listed (unreadable, or inactive, which lists no rules). A delete that removed nothing with no
+    listing to read was still "Unblocked", the case close-port already refuses (_r23b_closed_answer):
+    a deny the delete did not match — a REJECT, one scoped to a port — went on blocking the address.
+    """
     if blocked is not None and ip in blocked:
         return False, i18n.Sentence("{ip} is still blocked: the firewall rule that blocks it is not a plain "
                                     "deny from that address, which is the only kind the panel removes. "
                                     "Remove it on the host.", ip=ip)
+    if blocked is None and _r23b_deleted_nothing(out):
+        return False, i18n.Sentence("No deny rule for {ip} matched, so nothing was removed, and the firewall's "
+                                    "rules could not be listed to say whether another one still blocks it.",
+                                    ip=ip)
     return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
 
 
@@ -3677,23 +3786,30 @@ def _open_ssh_port_rule(server, port, old_ports):
     "succeeded" (the listening check does not go through the firewall) onto a port nobody can
     reach, and the advice that follows is to close the old one. Nothing has been changed by then.
 
-    A firewall that cannot be read, or an inactive one (which lists no rules, stored ones
-    included), is opened as it always was — but NOT counted as added: a rule that may have been
-    there before is not one to delete on the way out.
+    An inactive firewall lists none of its rules in `status`, stored ones included, so its stored
+    rules are read with `ufw show added` (_r26j_inactive_open). A firewall that cannot be read, or
+    an inactive one whose stored rules cannot be read either, is opened as it always was — but NOT
+    counted as added: a rule that may have been there before is not one to delete on the way out.
     """
     if str(port) in old_ports:
         return False, None
     with _core.ufw_lock(server):
         before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
         known = brc == 0 and firewall._ufw_is_active(before or "")
+        if brc == 0 and not known:
+            return _r26j_inactive_open(server, port)
         is_open, first = _r22b_ssh_port_reading(before, port) if known else (False, None)
         if is_open:
             return False, None
         if first is not None:
-            return False, i18n.Sentence("Port {port}/tcp is blocked by the firewall rule `{rule}`, so SSH moved "
-                                        "there would be unreachable — remove or change that rule first. Nothing was "
-                                        "changed.", port=port, rule=first["detail"])
+            return False, _r26j_blocked(port, first["detail"])
         return _r25b_add_ssh_rule(server, port, known, before), None
+
+
+def _r26j_blocked(port, rule):
+    """_open_ssh_port_rule's refusal when `rule` (active, or stored on an inactive firewall) blocks `port`/tcp."""
+    return i18n.Sentence("Port {port}/tcp is blocked by the firewall rule `{rule}`, so SSH moved there would be "
+                         "unreachable — remove or change that rule first. Nothing was changed.", port=port, rule=rule)
 
 
 def _r25b_add_ssh_rule(server, port, known, before):
@@ -3717,6 +3833,71 @@ def _r25b_add_ssh_rule(server, port, known, before):
     return bool(ok and known)
 
 
+# A stored rule `ufw show added` prints in short form for exactly `<port>/tcp` from anywhere, inbound:
+# the rule `ufw allow proto tcp to any port <port>` would rewrite in place (ufw matches a rule by
+# everything but its action and comment). Both families print the same line, so this cannot tell a
+# `(v6)`-only LIMIT from a both-family one, and does not need to: either is the operator's. The
+# commands are ufw's own syntax, never translated; the heading line above them is, and is skipped.
+_R26J_STORED_RULE_RE = re.compile(r"ufw (?:allow|deny|reject|limit)(?: in)?(?: log(?:-all)?)? "
+                                  r"(\d{1,5})/tcp(?: comment .*)?")
+# Any stored rule from anywhere, inbound, whose ports a TCP connection to `<port>` meets: a bare `N` (both
+# protocols), `N/tcp`, a list (`22,2222/tcp`) or a range (`2200:2300/tcp`). Its action and port spec.
+_R26J_STORED_COVER_RE = re.compile(r"ufw (allow|deny|reject|limit)(?: in)?(?: log(?:-all)?)? "
+                                   r"([0-9][0-9,:]*)(?:/(tcp|udp))?(?: comment .*)?")
+
+
+def _r26j_inactive_open(server, port):
+    """_open_ssh_port_rule's open on an inactive firewall: its (added, refusal). The caller holds ufw_lock.
+
+    `ufw status` lists none of an inactive firewall's stored rules, so the open ran `ufw allow`
+    blind: a stored `port/tcp` LIMIT (either family) became an ALLOW, which applies the moment UFW
+    is enabled, and the revert did not count it as the panel's to delete. Now:
+      * the first stored rule a TCP connection to `port` meets DENIES or REJECTS it: refused, as the
+        active firewall's same rule is (_r26j_blocked). Kept silently, the move went on to tell the
+        operator to close the old port, while the rule shut the new one the moment UFW came on;
+      * a stored allow or LIMIT for exactly `port`/tcp is the operator's: nothing is added or rewritten;
+      * none stored: the allow goes in, and it is the panel's own, so the revert deletes it;
+      * stored rules that cannot be read (a host without the verb, a failed read): opened as
+        before, not counted as added.
+    """
+    out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
+    stored, blocking = _r26j_stored_reading(out if rc == 0 else "", port)
+    if blocking:
+        return False, _r26j_blocked(port, blocking)
+    if stored:
+        return False, None
+    ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
+    return bool(ok and stored is False), None
+
+
+def _r26j_stored_reading(out, port):
+    """(stored, blocking) for `port` from `ufw show added`'s `out`.
+
+    `stored`: whether an allow or LIMIT for exactly `port`/tcp is stored (None when nothing was
+    read). `blocking`: the first stored rule a TCP connection to `port` meets, when that rule denies
+    or rejects it (else None).
+    """
+    if not (out or "").strip():
+        return None, None
+    lines = [line.strip() for line in out.splitlines()]
+    first = next((line for line in lines if _r26j_stored_covers(line, port)), None)
+    if first is not None and _R26J_STORED_COVER_RE.fullmatch(first).group(1) in ("deny", "reject"):
+        return True, first
+    return any(m and int(m.group(1)) == int(port) for m in map(_R26J_STORED_RULE_RE.fullmatch, lines)), None
+
+
+def _r26j_stored_covers(line, port):
+    """Whether stored rule `line` (`ufw show added`'s short form) is met by TCP to `port` from anywhere."""
+    m = _R26J_STORED_COVER_RE.fullmatch(line)
+    if not m or m.group(3) == "udp":
+        return False
+    for part in m.group(2).split(","):
+        lo, _sep, hi = part.partition(":")
+        if lo.isdecimal() and (hi or lo).isdecimal() and int(lo) <= int(port) <= int(hi or lo):
+            return True
+    return False
+
+
 # Every IPv4 source: ufw stores `allow from 0.0.0.0/0` as an IPv4-only rule listed "Anywhere".
 _R25B_V4_ANYWHERE = "0.0.0.0/0"  # NOSONAR(S1313) - the IPv4 "any source" network, not a host
 # _open_ssh_port_rule's `added` when it put in only the IPv4 rule above: the revert deletes that.
@@ -3738,6 +3919,41 @@ def _r23b_v6_exact_open(status_out, port):
     """Whether an IPv6 public ALLOW or LIMIT for exactly `port`/tcp is listed (ufw would take it over)."""
     return any(r["to"] == "%s/tcp" % port and r["action"] in ("ALLOW", "LIMIT")
                for r in _ufw_public_rules(status_out, v6=True))
+
+
+def _r26b_dials_after_bind(server):
+    """Whether change_ssh_port confirms a bind change by dialling the host on the new port.
+
+    Only where the panel comes in through sshd: not its own host, and not a host it reaches over
+    Tailscale SSH (tailscaled answers port 22 there, whatever sshd is bound to).
+    """
+    return not _core.is_local_server(server) and getattr(server, "auth_method", "") != "tailscale"
+
+
+# A remote's own addresses: unprivileged, and in the C locale like every read parsed by its words.
+_R26J_ADDR_SHOW = _core._R19A_C_LOCALE + "ip -o addr show"
+
+
+def _r26j_remote_has_ip(server, addr):
+    """Whether `addr` is one of remote `server`'s interface addresses: True/False, None when unread.
+
+    system_ops.host_has_ip's question for a host the panel reaches over SSH. A host always has
+    loopback, so a listing with no address in it was not read, and says nothing either way.
+    """
+    want = ip_address_or_none(addr)
+    try:
+        out, _err, rc = _core.run_command(server, _R26J_ADDR_SHOW, timeout=15, sudo=False)
+    except Exception:
+        _core._log.debug("the host's addresses could not be read", exc_info=True)
+        return None
+    have = set()
+    for line in (out or "").splitlines() if rc == 0 else ():
+        parts = line.split()
+        for i, word in enumerate(parts[:-1]):
+            if word in ("inet", "inet6"):
+                have.add(ip_address_or_none(parts[i + 1].partition("/")[0]))
+    have.discard(None)
+    return (want in have) if have else None
 
 
 def change_ssh_port(server, new_port, bind_addr=""):
@@ -3815,18 +4031,38 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # backups and their monitoring were connected on — while reporting "The previous port is still
     # available as a fallback" about a port that had just stopped listening.
     socket_mode = _sshd_socket_activated(server)
-    old_ports = _sshd_current_ports(server) or [str(int(getattr(server, "port", 22) or 22))]
+    old_ports = _sshd_current_ports(server)
     if socket_mode:
-        # There is no read verb for the ssh.socket drop-in, so `sshd -T` is the best the helper can
-        # answer here — but the port the panel is CONNECTED ON is known for certain, and it is the
-        # one whose loss locks everybody out. Union it in unconditionally rather than only as the
-        # empty-read fallback. (Not done on the sshd_config path: there `sshd -T` is authoritative,
-        # and adding a stale stored port would re-open a port the operator had deliberately closed.)
+        # ...and `sshd -T`'s with them, though systemd ignores them: _sshd_current_ports answers
+        # ssh.socket's ports alone, which is right for deciding what is protected, and here keeping
+        # one port too many in the drop-in is the safe direction (as before ssh.socket was read).
+        old_ports = old_ports + [p for p in _r26b_sshd_t_ports(server) if p not in old_ports]
+    old_ports = old_ports or [str(int(getattr(server, "port", 22) or 22))]
+    if socket_mode:
+        # _sshd_current_ports reads ssh.socket's own listen ports (systemd's answer, after
+        # the drop-in) — but that read can fail, and the port the panel is CONNECTED ON is known for
+        # certain, and it is the one whose loss locks everybody out. Union it in unconditionally
+        # rather than only as the empty-read fallback. It is not enough on its own: on a host the
+        # panel reaches over Tailscale SSH the stored port stays 22 after a move. (Not done on the
+        # sshd_config path: there `sshd -T` is authoritative, and adding a stale stored port would
+        # re-open a port the operator had deliberately closed.)
         _stored = str(int(getattr(server, "port", 22) or 22))
         if _stored not in old_ports:
             old_ports = old_ports + [_stored]
     if not bind_addr and old_ports == [str(new_port)]:
         return False, i18n.Sentence("SSH is already on port {port}.", port=new_port)
+    # The panel's own host is checked above. A socket-activated host the panel reaches over Tailscale
+    # SSH has the same hole and no backstop either: step 6 does not dial it (tailscaled answers there),
+    # and the address check finds the socket systemd bound in name. So the host's own list decides.
+    if bind_addr and socket_mode and not _r26b_dials_after_bind(server) and not _core.is_local_server(server):
+        _has = _r26j_remote_has_ip(server, bind_addr)
+        if _has is None:
+            return False, i18n.Sentence("Could not list this host's addresses, so the panel can't tell whether "
+                                        "{address} is one of them — nothing was changed.", address=bind_addr)
+        if not _has:
+            return False, i18n.Sentence("{address} isn't an address on this host, so sshd could only bind it in "
+                                        "name — SSH would answer nowhere. Use one of the host's own addresses.",
+                                        address=bind_addr)
 
     # Keep every current port plus the new one (new first).
     ports = []
@@ -3920,7 +4156,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
 
     # 6. Verify. A bind change must confirm the panel can still REACH the host (no all-interfaces
     #    fallback); a port-only change just confirms sshd bound the new port.
-    if bind_addr and not _core.is_local_server(server):
+    #    Not on a host the panel reaches over Tailscale SSH: its way in is tailscaled on port 22,
+    #    which no sshd bind touches, so dialling `server.host` (the tailnet address) on the new port
+    #    reverted every bind to the host's public address as "not the one the panel connects to".
+    #    There, as on the panel's own host, the address check below confirms sshd bound it.
+    if bind_addr and _r26b_dials_after_bind(server):
         if not _tcp_reachable(server.host, new_port, timeout=8):
             return _revert(i18n.Sentence("After binding SSH to {address}, the panel couldn't reach it on "
                                          "{host}:{port} — reverted. The bind address has to be the one the panel "
@@ -4101,13 +4341,15 @@ def _tailscale_conn_state(server):
     import json as _json
     running = ssh_enabled = False
     try:
-        out, _, _ = _core.run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
+        out, _, _ = _core.run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10,
+                                      sudo=False)
         running = _json.loads(out or "{}").get("BackendState") == "Running"
     except Exception:
         running = False   # can't confirm → treat as not running (fail safe)
     if running:
         try:  # authoritative: prefs RunSSH
-            out, _, _ = _core.run_command(server, "tailscale debug prefs 2>/dev/null || echo '{}'", timeout=10)
+            out, _, _ = _core.run_command(server, "tailscale debug prefs 2>/dev/null || echo '{}'", timeout=10,
+                                          sudo=False)
             ssh_enabled = bool(_json.loads(out or "{}").get("RunSSH", False))
         except Exception:
             ssh_enabled = False   # fail safe
@@ -4154,9 +4396,13 @@ def tailnet_exempt_ips(server, ips):
     # ("", "…timed out", -1) and never raises). Any other rc means the HOST answered — tailscale
     # missing (127) or stopped (non-zero with a Stopped backend) are real answers, and an address
     # in the CGNAT range genuinely is not protected then, so blocking it is allowed.
+    #
+    # sudo=False: a read any local user may make. Under sudo, a remote whose sudo wants a password
+    # answered rc 1 with nothing on stdout, which read as "the host answered: not running", and the
+    # tailnet addresses lost their exemption — the unsafe direction for this guard.
     import json as _json
     try:
-        out, _err, rc = _core.run_command(server, "tailscale status --json", timeout=10)
+        out, _err, rc = _core.run_command(server, "tailscale status --json", timeout=10, sudo=False)
     except Exception:
         _core._log.debug("tailnet exemption probe failed", exc_info=True)
         return cand      # could not even attempt it → protect the address

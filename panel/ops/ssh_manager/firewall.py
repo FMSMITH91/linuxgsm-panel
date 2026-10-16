@@ -173,9 +173,10 @@ def _fwssh_served_ports(server):
     take) and wrong here. On a host whose sshd was moved to 2222 by hand, the stock `22/tcp ALLOW`
     (or `OpenSSH ALLOW`) left in UFW counted as a second way in, so the 2222 rule — the only one
     sshd answers on — came back warn ("another way in exists") instead of protected, and
-    remote_ufw_delete_rule, which gates only on protected, deleted it. sshd's effective config
-    (`sshd -T`) says what it serves; the port the panel connects on is kept beside it, because
-    that connection is the proof it is served. A config that cannot be read keeps the old answer:
+    remote_ufw_delete_rule, which gates only on protected, deleted it. What sshd serves is read by
+    hosts._sshd_current_ports (ssh.socket's ports while it holds the socket, else `sshd -T`'s);
+    the port the panel connects on is kept beside it, because that connection is the proof it is
+    served. A config that cannot be read keeps the old answer:
     a failed read must never leave a rule LESS protected than it was.
     """
     try:
@@ -203,7 +204,9 @@ def _last_parsed_panel_port():
     """
     try:
         from panel.core import config as _cfg
-        return int((_cfg._cfg_cache.get("data") or {}).get("port", _cfg.DEFAULT_CONFIG["port"]))
+        # Read as load_config reads it (_r26a_port): the raw cache holds the hand-edited value,
+        # and the panel bound the corrected one.
+        return _cfg._r26a_port(dict(_cfg._cfg_cache.get("data") or {}))["port"]
     except Exception:
         _core._log.debug("could not recover the last parsed panel web port", exc_info=True)
         return None

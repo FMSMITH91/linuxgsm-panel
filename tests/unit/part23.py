@@ -152,7 +152,7 @@ def _rec23(rid):
 
 def _probe_streak23():
     ts_host = NS(id=-2301, auth_method="tailscale", is_local=False)
-    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None: ("", "SSH command timed out", -1))
+    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None, sudo=None: ("", "SSH command timed out", -1))
     first = _mon23._host_reachable(ts_host)
     rec1 = _rec23(-2301)
     _time23.sleep(0.01)
@@ -163,7 +163,7 @@ def _probe_streak23():
     check("probe record: a second failure extends the streak and keeps when the failing began",
           all((second is False, rec2.get("streak") == 2, rec2.get("at", 0) > rec1.get("at", 0),
                rec2.get("fail_since") == rec1.get("fail_since"))), repr((rec1, rec2)))
-    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None: ("ok\n", "", 0))
+    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None, sudo=None: ("ok\n", "", 0))
     third = _mon23._host_reachable(ts_host)
     rec3 = _rec23(-2301)
     check("probe record: an answer is True, resets the streak and stamps the last OK",
@@ -190,7 +190,7 @@ _PROBE_REPLIES23 = {
 
 
 def _raiser23(exc):
-    def _raise(r, cmd, timeout=None):
+    def _raise(r, cmd, timeout=None, sudo=None):
         raise exc
     return _raise
 
@@ -207,19 +207,19 @@ def _probe_tokens23():
           not _leaks23(repr(_rec23(-2302))), repr(_rec23(-2302)))
     rgot = {}
     for want, reply in _PROBE_REPLIES23.items():
-        _patch23(_mon23, "run_command", lambda r, cmd, timeout=None, _rep=reply: _rep)
+        _patch23(_mon23, "run_command", lambda r, cmd, timeout=None, sudo=None, _rep=reply: _rep)
         _mon23._host_reachable(NS(id=-2303, auth_method="tailscale", is_local=False))
         rgot[want] = _rec23(-2303).get("token")
     check("probe record: a non-raising transport's reply is classified from stderr and rc",
           all(rgot[k] == k for k in _PROBE_REPLIES23), repr(rgot))
-    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None: ("", "", 7))
+    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None, sudo=None: ("", "", 7))
     _mon23._host_reachable(NS(id=-2304, auth_method=None, is_local=True))
     check("probe record: the panel host's own failure names its transport (local_rc7)",
           _rec23(-2304).get("token") == "local_rc7", repr(_rec23(-2304)))
 
 
 def _probe_contract23():
-    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None: ("ok", "", 0))
+    _patch23(_mon23, "run_command", lambda r, cmd, timeout=None, sudo=None: ("ok", "", 0))
     check("probe record: a host object with no id is answered as before and records nothing",
           _mon23._host_reachable(NS()) is True and None not in _mon23._probe_record)
     _ps23.forget_rows(remote_ids=[-2301])

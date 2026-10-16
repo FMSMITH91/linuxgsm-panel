@@ -552,8 +552,11 @@ def _prune88(linked):
     if linked:
         panel = os.path.join(base, "linuxgsm-panel")
         os.symlink(target, panel)
+    # As root (`id -u` answers 0): on a per-user run the account's own link is the operator's.
     rc, out = _bash88('set -euo pipefail\nwarn() { echo "WARN $*"; }\nKEEP_BACKUPS=3\n'
-                      'PANEL_DIR=%s\n%s_r22a_prune_snapshots\n' % (panel, _PRUNE88), base)
+                      'id() { if [ "$*" = "-u" ]; then echo 0; else command id "$@"; fi; }\n'
+                      'PANEL_DIR=%s\n%s%s_r22a_prune_snapshots\n'
+                      % (panel, _fn88(_INS88, "_r26a_link_trusted"), _PRUNE88), base)
     return rc, sorted(os.listdir(os.path.join(target, "data", ".backups"))), out
 
 

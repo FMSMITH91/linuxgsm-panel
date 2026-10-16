@@ -653,13 +653,15 @@ def _rv_ufw_rows(*rows):
                              for i, (to, act) in enumerate(rows))
 
 
-def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0):
+def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0, added=""):
     sent = []
 
     def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
         sent.append((verb, list(args)))
         if verb == "ufw-status":
             return (status or "", "", status_rc)
+        if verb == "ufw-show-added":        # an inactive ufw's stored rules; "" reads as unread
+            return (added, "", 0)
         if verb == "listening-sockets":
             return ("tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         if verb == "sshd-validate":
@@ -678,7 +680,7 @@ def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0):
     finally:
         (_sm_core.run_privileged, _sm_core.write_root_file, _sm_hosts._sshd_socket_activated,
          _sm_hosts._sshd_current_ports, _sm_hosts._restart_ssh_listener) = saved
-    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] != "ufw-status"]
+    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] not in ("ufw-status", "ufw-show-added")]
     return res, ufw, sent
 
 
@@ -705,9 +707,15 @@ check("change_ssh_port: a port the firewall DENIES is refused before anything is
       _rv_r[0] is False and "blocked by the firewall rule" in _rv_r[1] and _rv_ufw == []
       and ("write",) not in _rv_sent, repr((_rv_r, _rv_sent)))
 _rv_r, _rv_ufw, _ = _rv_move(["22"], 2022, status="Status: inactive\n")
-check("change_ssh_port: on an inactive (unlistable) ufw the port is opened but the revert does "
-      "not delete a rule that may have been there", _rv_ufw == [
+check("change_ssh_port: on an inactive ufw whose stored rules cannot be read either the port is "
+      "opened but the revert does not delete a rule that may have been there", _rv_ufw == [
           ("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])], repr(_rv_ufw))
+_rv_r, _rv_ufw, _ = _rv_move(["22"], 2022, status="Status: inactive\n",
+                             added="Added user rules (see 'ufw status' for running firewall):\n(None)\n")
+check("change_ssh_port: ...one whose stored rules read as none gets the allow, and the revert "
+      "deletes it (the panel's own); part98 holds a stored rule for the port", _rv_ufw == [
+          ("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"]),
+          ("ufw-delete-allow-proto-port", ["tcp", "2022"])], repr(_rv_ufw))
 
 
 # 2. ufw: every change runs under the host's ufw_lock, and remote_ufw_delete_rule holds it from its

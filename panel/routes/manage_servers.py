@@ -136,6 +136,7 @@ def record_install_failure(row, name, detail="", retryable=True, explained=False
     """
     step = name if isinstance(name, (i18n.Sentence, i18n.Sentences)) else i18n.Sentence(str(name))
     said = step if (explained or not detail) else i18n.Sentence("{step}: {detail}", step=step, detail=detail)
+    said = _r26b_keep_left_account(row, said)
     reason = str(said)[:1000]
     row.install_error = reason
     row.install_error_i18n = json.dumps(i18n.sentence_record(said), ensure_ascii=False)
@@ -143,6 +144,38 @@ def record_install_failure(row, name, detail="", retryable=True, explained=False
     row.installed = False
     row.status = "failed"
     return reason
+
+
+def _r26b_keep_left_account(row, said):
+    """`said`, still saying the account is left alone when the row's last failure promised that.
+
+    A step-1 refusal of an account found on the host (_R25B_FOUND_*) tells the operator that
+    removing the server leaves the account as it is, and _r25b_left_account reads that promise
+    from the recorded reason. A retry that then failed differently (the host did not answer, a
+    crash) wrote only its own reason, the marker was gone, and Remove ran `userdel -r -f` on the
+    account. Carried on until an install gets past it: this process creating the account, or
+    finishing (which clears the record).
+    """
+    try:
+        if (not _r25b_left_account(row) or _r25b_names_found_refusal(i18n.sentence_record(said))
+                or (row.remote_id, row.short_name) in _accounts_created):
+            return said
+    except Exception:
+        _log.debug("could not read the row's earlier install failure", exc_info=True)
+        return said
+    return i18n.Sentences(said, i18n.Sentence(_R25B_FOUND_UNCONFIRMED, name=row.short_name))
+
+
+def _r26b_clear_for_retry(gs):
+    """Clear a failed row's reason as a retry starts: "installing" again, retryable.
+
+    The reason's record is kept while it holds a step-1 promise to leave a found account alone: a
+    retry that fails differently must still keep it (_r26b_keep_left_account). install_error is what
+    shows a reason, so clearing it alone hides the old one.
+    """
+    gs.install_error, gs.install_retryable = "", True
+    if not _r25b_left_account(gs):
+        gs.install_error_i18n = None
 
 
 def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
@@ -567,7 +600,7 @@ def _register_install(app):
         if not _queue_install_job(gs, _retry_content):
             return _form_err("That server is being uninstalled.", "manage_servers")
         gs.status = "installing"
-        gs.install_error, gs.install_error_i18n, gs.install_retryable = "", None, True
+        _r26b_clear_for_retry(gs)
         db.session.commit()
         _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port,
                          _retry_content)
@@ -1099,7 +1132,7 @@ class _InstallRun:
         # recorded reason, or a retried server keeps showing the failure it recovered from.
         try:
             _row = self.row()
-            if _row is not None and (_row.install_error or not _row.install_retryable):
+            if _row is not None and (_row.install_error or _row.install_error_i18n or not _row.install_retryable):
                 _row.install_error, _row.install_error_i18n, _row.install_retryable = "", None, True
                 db.session.commit()
         except Exception:
@@ -2562,6 +2595,14 @@ def _row_only_texts(name, short_name, remote, why):
                 i18n.tr("'{name}' was removed from the panel. Its stored account name was not a plain "
                         "account name, so nothing on {host} was touched.",
                         name=name, host=remote.display_name))
+    if why is _R25B_LEFT_ACCOUNT_WHY:
+        # Not the generic text, written for an imported account that holds a LinuxGSM install: this
+        # one the install found on the host and refused at step 1, so "remove its LinuxGSM files by
+        # hand" pointed the operator at an account that may be somebody's login.
+        return ("removed from the panel only — the account was left on the host: %s" % why,
+                i18n.tr("'{name}' was removed from the panel. The '{user}' account on {host} was left as it is: "
+                        "the panel found it already on the host and did not create it.",
+                        name=name, user=short_name, host=remote.display_name))
     return ("removed from the panel only — the account was left on the host: %s" % why,
             i18n.tr("'{name}' was removed from the panel, but the '{user}' account on {host} was NOT "
                     "deleted or stopped: {why}. Remove its LinuxGSM files by hand if you meant to.",

@@ -489,8 +489,10 @@ function checkUpdates(){
     .then(function(d){
       var el=document.getElementById('update-info'); if(!el || _updatesAsked) return;
       // An error reply (a denial, the catch-all's 500) is not "never checked": leave the card empty,
-      // as a failed request does, rather than say "Not checked yet".
-      if(d && d.error) return;
+      // as a failed request does, rather than say "Not checked yet". Install updates is not left as
+      // the template drew it, though (disabled, "Checking for updates…" while nothing is checking):
+      // nothing is known, so it is usable, as after a Check that failed.
+      if(d && d.error){ setInstallUpdatesState('unknown'); return; }
       if(!d || !d.known){
         el.innerHTML='<span class="text-secondary">Not checked yet — press Check.</span>';  // nosemgrep
         // Never checked is not "up to date" — leave the button usable rather than disabling it
@@ -499,7 +501,7 @@ function checkUpdates(){
         return;
       }
       renderUpdates(d, tf('Last checked {when}', {when: window.agoText(d.at)}));
-    }).catch(function(){});
+    }).catch(function(){ if(!_updatesAsked) setInstallUpdatesState('unknown'); });
 })();
 var _osuTimer=null, _osuStale=0, _osuMiss=0;
 // A status poll that did not READ the host: the route's exception answer (`error`), an unread log

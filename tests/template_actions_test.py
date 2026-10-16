@@ -1207,10 +1207,14 @@ _R23D_OPERAND_KEYWORDS = frozenset(("return", "typeof", "instanceof", "in", "of"
 def _r23d_operand_due(before):
     """Is an operand due after JS text `before` (its previous token; see _r23d_regex_end)?"""
     _t = before.rstrip()
-    # A block comment is not a token: the one before it decides (review 1016b: `= /* c */ /'/`
-    # divided, so the regex's quote opened a string that hid what followed).
-    while _t.endswith("*/") and "/*" in _t[:-2]:
-        _t = _t[:_t.rindex("/*", 0, len(_t) - 2)].rstrip()
+    # A comment is not a token: the one before it decides (review 1016b: `= /* c */ /'/` divided, so
+    # the regex's quote opened a string that hid what followed; review 1016c: so did `= // c` and a
+    # regex on the next line).
+    _prev = None
+    while _prev != _t:
+        _prev, _t = _t, _r26d_drop_line_comment(_t)
+        while _t.endswith("*/") and "/*" in _t[:-2]:
+            _t = _t[:_t.rindex("/*", 0, len(_t) - 2)].rstrip()
     if _t.endswith(("++", "--")):
         return False
     if _t.endswith(")"):
@@ -1224,13 +1228,41 @@ def _r23d_operand_due(before):
 
 
 def _r25d_closes_head(text):
-    """Does the `)` ending JS `text` close the head of an if, while, for or with?"""
-    _depth = 0
-    for _k in range(len(text) - 1, -1, -1):
-        _depth += {")": 1, "(": -1}.get(text[_k], 0)
-        if _depth == 0:
-            return bool(re.search(r"(?<![\w$.])(?:if|while|for|with)\s*$", text[:_k]))
+    """Does the `)` ending JS `text` close the head of an if, while, for or with?
+
+    Read back from the end, stepping over each quoted string whole (review 1016c: a `)` inside
+    one, `if (s == ')')`, was counted, so the head was not found and the regex after it divided).
+    """
+    _depth, _k = 0, len(text) - 1
+    while _k >= 0:
+        _c = text[_k]
+        if _c in "'\"`":
+            _k -= 1
+            while _k >= 0 and not (text[_k] == _c and text[_k - 1:_k] != "\\"):
+                _k -= 1
+        else:
+            _depth += {")": 1, "(": -1}.get(_c, 0)
+            if _depth == 0:
+                return bool(re.search(r"(?<![\w$.])(?:if|while|for|with)\s*$", text[:_k]))
+        _k -= 1
     return False
+
+
+def _r26d_drop_line_comment(text):
+    """`text` without the `//` comment that ends its last line, if one does (a quote opens a string)."""
+    _nl = text.rfind("\n") + 1
+    _line, _q, _k = text[_nl:], None, 0
+    while _k < len(_line):
+        _c = _line[_k]
+        if _q:
+            _k += 1 if _c == "\\" else 0
+            _q = None if _c == _q else _q
+        elif _c in "'\"`":
+            _q = _c
+        elif _line.startswith("//", _k):
+            return text[:_nl + _k].rstrip()
+        _k += 1
+    return text
 
 
 def _r23d_regex_end(src, i):
@@ -1304,12 +1336,15 @@ _r23d_rx_ctl = [_js_expr_at(_x, 0) for _x in (
     "s.replace(/'/g, '') + d.name; x", "i++ / 2 + d.name + '</b>'; x", "a / b + d.name; x",
     "(function(){ return /'/.test(s) })() ? '' : d.name; x",
     # After a block comment, and after an if's head (review 1016b).
-    "/* c */ /'/.test(s) ? '' : d.name; x", "(function(){ if (x) /'/.test(s) })() ? '' : d.name; x")]
+    "/* c */ /'/.test(s) ? '' : d.name; x", "(function(){ if (x) /'/.test(s) })() ? '' : d.name; x",
+    # After a `)` inside a string in an if's head, and after a line comment (review 1016c).
+    "(function(){ if (s == ')') /'/.test(s) })() ? '' : d.name; x", "// c\n /'/.test(s) ? '' : d.name; x")]
 # Exact: a quote opened at the regex runs to the end of the text, which still holds d.name and
 # hides it as string text, so "d.name in it" could not fail.
 check(_r23d_rx_ctl == ["s.replace(/r/g, '') + d.name", "i++ / 2 + d.name + '</b>'", "a / b + d.name",
                        "(function(){ return /r/.test(s) })() ? '' : d.name",
-                       " /r/.test(s) ? '' : d.name", "(function(){ if (x) /r/.test(s) })() ? '' : d.name"],
+                       " /r/.test(s) ? '' : d.name", "(function(){ if (x) /r/.test(s) })() ? '' : d.name",
+                       "(function(){ if (s == ')') /r/.test(s) })() ? '' : d.name", "\n /r/.test(s) ? '' : d.name"],
       "sinks: a regex literal's quote in a sink's expression does not hide the names after it (control)",
       repr(_r23d_rx_ctl))
 

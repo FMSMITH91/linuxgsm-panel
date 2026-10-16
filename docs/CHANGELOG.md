@@ -601,6 +601,22 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A fifteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
+  its fix.
+  - **The Raw config editor can no longer blank a server's config.** If re-reading the config after a
+    settings save failed, the editor was left empty and its Save wrote that over the file; it now keeps
+    the last good text and refuses to save what it never loaded.
+  - **Moving SSH twice on a Tailscale-SSH host** no longer drops the first move's port while saying it
+    is still a fallback, and the host page shows the port sshd really uses.
+  - **Update snapshots are pruned on per-user installs** whose panel folder is a link you made; before,
+    every update kept another full copy and disk use only grew.
+  - **Smaller fixes.** Every reader uses the corrected panel port; moving SSH with UFW inactive keeps a
+    rule you already had; disabling Serve at another app's path is a refusal, not an error; the install
+    page keeps polling after a failed first read; a stale reboot banner clears; audit rows for actions and
+    commands are kept; and more.
+  - **Tests.** The guard that keeps tests off the machine's own tailscale reads clustered options, runs its
+    speed check in a time-limited child, and keeps scripts on their own shell; 19 refusal checks no longer
+    pass on a crash.
 - **A fourteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
   its fix.
   - **Moving SSH on a Tailscale-SSH host** no longer loses the host: the port change is refused there.
@@ -2191,6 +2207,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **The repository no longer names the maintainer's own hosts.** Test fixtures that used a real host
+  label, tailnet name and addresses now use made-up values, and a check keeps them out.
 
 - **Tailscale SSH on the panel's machine is your install-time choice.** The installer asks (default
   no) and records it as root; the panel can join Tailscale from Connect but turns SSH on only if you

@@ -833,7 +833,11 @@ with app.app_context():
 check("layout: after reset the default order is back",
       _card_order(c.get("/").get_data(as_text=True)) == _lay_default)
 _lay_anon = app.test_client().post("/api/account/ui-order", json={"host_order": [1]})
-check("layout: saving requires a login", _lay_anon.status_code != 200, "got %d" % _lay_anon.status_code)
+# The JSON caller's 401, not "not 200": with @login_required dropped the handler raised on the
+# anonymous user and answered 500, which passed as the refusal (review 1016c).
+check("layout: saving requires a login",
+      _lay_anon.status_code == 401 and _lay_anon.headers.get("X-Auth-Required") == "1",
+      "got %d %r" % (_lay_anon.status_code, _lay_anon.headers.get("X-Auth-Required")))
 with app.app_context():
     db.session.delete(db.session.get(GameServer, _lay_gs2_id))
     db.session.delete(db.session.get(GameServer, _lay_gs3_id))
@@ -1818,10 +1822,11 @@ for _nx in ("//evil.example", "https://evil.example", "http://evil.example",
     _lr = _lc.post("/login?next=" + _nx,
                    data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
     _loc = _lr.headers.get("Location", "")
+    # The login succeeds and the guard drops the bad `next`: home, and only home. Any other
+    # answer (a 500, the login page again) proved nothing about the guard (review 1016c).
     check("login redirect: %r cannot send the user off-site" % _nx,
-          _lr.status_code != 302 or (_loc.startswith("/") and not _loc.startswith("//")
-                                     and "\\" not in _loc and "://" not in _loc),
-          "Location: %r" % _loc)
+          _lr.status_code == 302 and _loc.split("localhost", 1)[-1] == "/",
+          "%s Location: %r" % (_lr.status_code, _loc))
     _lc.post("/logout")
 
 # ── A JSON endpoint must answer JSON, whatever went wrong ─────────────────────────────────
@@ -3003,13 +3008,16 @@ with app.app_context():
 _ok = _bearer(_admin_tok)
 check("api token: a valid token authenticates with no session cookie",
       _ok.status_code == 200, "got %d" % _ok.status_code)
+# A refused bearer is the API's 401, not "not 200" (review 1016c: a loader that raised on the
+# token answered 500 and passed as a refusal).
 check("api token: an unknown token does not authenticate",
-      _bearer("lgsm_" + "0" * 48).status_code != 200)
+      _bearer("lgsm_" + "0" * 48).status_code == 401)
 # The property that makes storing only a hash worth anything: whoever reads the DB holds the
 # hash, and replaying it must NOT authenticate.
 check("api token: replaying the STORED hash does not authenticate",
-      _bearer(_stored).status_code != 200, "the stored value logged in")
-check("api token: an empty bearer does not authenticate", _bearer("").status_code != 200)
+      _bearer(_stored).status_code == 401, "the stored value logged in")
+check("api token: an empty bearer does not authenticate", _bearer("").status_code in (302, 401),
+      "got %d" % _bearer("").status_code)
 
 # The bearer path is the panel's other way in and had no throttle at all, so an attacker could
 # try tokens as fast as the network allowed. Exercise it end-to-end through a real request,
@@ -3055,7 +3063,7 @@ try:
           repr(_tt_tokenlines))
     _blocked = _bearer(_admin_tok)
     check("token throttle: a valid token is refused once its IP is blocked",
-          _blocked.status_code != 200, "got %d" % _blocked.status_code)
+          _blocked.status_code == 401, "got %d" % _blocked.status_code)
     _tt_tokenlines = [ln for ln in _tt_h.lines if "api token" in ln]
     check("token throttle: a REFUSED attempt goes to auth.log as the line the jail counts",
           _tt_tokenlines == ["panel api token blocked from 127.0.0.1"], repr(_tt_tokenlines))
@@ -3098,13 +3106,13 @@ with app.app_context():
     db.session.get(User, mru_id).is_active = False
     db.session.commit()
 check("api token: deactivating the owner kills their token",
-      _bearer(_mru_tok).status_code != 200, "a disabled user's token still worked")
+      _bearer(_mru_tok).status_code == 401, "a disabled user's token still worked")
 with app.app_context():
     _mu2 = db.session.get(User, mru_id)
     _mu2.is_active = True
     _mu2.revoke_api_token()
     db.session.commit()
-check("api token: a revoked token stops working", _bearer(_mru_tok).status_code != 200)
+check("api token: a revoked token stops working", _bearer(_mru_tok).status_code == 401)
 
 # ── The Telegram bot's /start must reach the server action, not the help text ────────────
 # `if cmd in ("help", "start")` matched the word alone, so `/start codserver` — which

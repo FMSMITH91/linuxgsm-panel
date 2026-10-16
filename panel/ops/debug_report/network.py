@@ -209,10 +209,15 @@ def _ts_head(v):
     ver = re.match(r"\d+\.\d+(?:\.\d+)?", v.get("version") or "")
     state = v.get("backend_state") if v.get("backend_state") in _STATES else "other"
     health = v.get("health")
-    return ("v%s · %s · MagicDNS %s · %s · panel account is the operator: %s · health warnings %s"
+    return ("v%s · %s · MagicDNS %s · %s · health warnings %s"
             % (ver.group(0) if ver else "?", state, "on" if v.get("magic_dns") else "off",
-               _key_text(v.get("key_expiry")), _operator_text(v.get("operator_user")),
-               "not recorded" if health is None else len(health)))
+               _key_text(v.get("key_expiry")), "not recorded" if health is None else len(health)))
+
+
+def _operator_line(v):
+    """The operator role's posture line: whether the panel's own account can reconfigure tailscaled."""
+    return "- **Tailscale operator**: panel account is the operator: " + _operator_text(
+        v.get("operator_user"))
 
 
 def _health_domain(counted):
@@ -533,6 +538,9 @@ def _tailscale_lines(ctx, res, facts, got):
     conf = getattr(ctx.app, "config", None) or {}
     want = _expected_scheme(conf, cfg) if readable else None
     res.add("- **Tailscale**: " + _ts_head(v))
+    # Which account may reconfigure tailscaled is a way in, not a fault: page-only (integrator's
+    # decision, review 1016c), like Funnel below.
+    res.posture(_operator_line(v))
     _health_lines(ctx, res, v)
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)

@@ -70,6 +70,18 @@ def _r25b_store_moved_port(remote, new_port, msg):
     return msg
 
 
+def _r26b_sshd_ports(remote):
+    """The ports sshd serves on `remote` for the SSH port card; [] (shown as unknown) when unread.
+
+    Its own failure is not the status read's: the public-SSH mode beside it still answers.
+    """
+    try:
+        return _sm.sshd_listen_ports(remote)
+    except Exception:
+        _log.debug("ssh-status: sshd's ports could not be read", exc_info=True)
+        return []
+
+
 def _resync_game_port(gs, info, withheld=()):
     """Store the game port LinuxGSM reports when it differs from the stored one; return that port.
 
@@ -437,6 +449,11 @@ def _register_ssh_settings(app):
             panel_port = load_config().get("port", 5000) if remote.is_local else None
             st = remote_public_ssh_status(remote, panel_port=panel_port)
             st["auth_method"] = remote.auth_method
+            if remote.auth_method == "tailscale":
+                # The SSH port card printed the row's port as "the port sshd listens on". On a host
+                # the panel reaches over Tailscale SSH that stays 22 after a move (it is the port
+                # tailscaled answers on), so the card said 22 while sshd served 2222. Read sshd's.
+                st["sshd_ports"] = _r26b_sshd_ports(remote)
             return jsonify(st)
         except Exception:
             return jsonify({"error": _log_and_generic("ssh-status failed")}), 200

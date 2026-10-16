@@ -1979,11 +1979,14 @@ def _check_manage_users_needs_the_perms():
     with app.app_context():
         _vic_now = db.session.get(User, _vic_id)
         _hash_changed = _vic_now.password_hash != _vic_hash
+    # Each refusal read with its status too: a refusal branch that raised answered 500 and left
+    # the hash alone, which passed both checks (review 1016c).
     check("escalation: MANAGE_USERS cannot reset the password of a more-privileged account",
-          not _hash_changed, "the victim's password hash was replaced")
+          not _hash_changed and _r_take.status_code < 500,
+          "hash replaced=%s, status %d" % (_hash_changed, _r_take.status_code))
     check("escalation: ...and the response does not hand back a credential",
-          "lgsm_" not in _r_take.get_data(as_text=True),
-          "a credential appeared in the refusal body")
+          "lgsm_" not in _r_take.get_data(as_text=True) and _r_take.status_code < 500,
+          "a credential appeared in the refusal body, or it crashed (%d)" % _r_take.status_code)
     # The control must still work where it legitimately applies: a LESS-privileged target.
     with app.app_context():
         _low = User(username=tag + "_low", password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -2520,12 +2523,13 @@ def _check_group_edit_default_group():
           _within, "the check below would pass on the group's own reach, not on its members")
     _name, _desc, _perms = _gsx["dflt_before"]
     try:
-        client_as(_gsx["dana"]).post("/groups/%d/edit" % _gsx["dflt"], data={
+        _r26d_dflt = client_as(_gsx["dana"]).post("/groups/%d/edit" % _gsx["dflt"], data={
             "name": _name, "description": _desc or "",
             "permissions": sorted(set(_perms) | {auth.USE_TERMINAL, auth.SEND_COMMAND})})
         check("group scope: ...nor the DEFAULT group, which holds every account",
-              auth.USE_TERMINAL not in _gsx_perms("vic"),
-              "vic holds %s after one POST to the default group" % sorted(_gsx_perms("vic")))
+              auth.USE_TERMINAL not in _gsx_perms("vic") and _r26d_dflt.status_code < 500,
+              "vic holds %s after one POST to the default group (status %d)"
+              % (sorted(_gsx_perms("vic")), _r26d_dflt.status_code))
     finally:
         with app.app_context():
             _dflt = db.session.get(Group, _gsx["dflt"])
@@ -3410,9 +3414,11 @@ def _check_delete_user_ordinary_and_self():
         db.session.add(_self_sa)
         db.session.commit()
         _self_id = _self_sa.id
-    client_as(_self_id).post("/users/%d/delete" % _self_id)
-    check("delete user: you cannot delete your own account", _alive(_self_id),
-          "the acting superadmin deleted themselves — the panel would have no admin left")
+    _r26d_self = client_as(_self_id).post("/users/%d/delete" % _self_id)
+    check("delete user: you cannot delete your own account",
+          _alive(_self_id) and _r26d_self.status_code < 500,
+          "the acting superadmin deleted themselves — the panel would have no admin left "
+          "(or the refusal crashed: %d)" % _r26d_self.status_code)
 
     # Every trap except the two the controls above reach on purpose must still be untouched: the
     # reboot probes (legacy grant -> panel host, delegated admin -> a non-granted remote), the

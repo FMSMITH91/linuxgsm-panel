@@ -3640,6 +3640,7 @@ with open(_pb_secret, "w") as _fh:
     _fh.write('{"port": 7777}\nroot:$6$hash:1\n')
 os.chmod(_pb_secret, 0o600)
 _pb_ver_sh = ("set -euo pipefail\n" + _pb_shfn("_owner_read") + _pb_shfn("panel_port")
+              + _pb_shfn("_r26a_cfg_port")
               + _pb_shfn("_epoch_version") + _pb_shfn("_version_file"))
 _pb_cfg = os.path.join(_pb_rd, "data", "config.json")
 with open(_pb_cfg, "w") as _fh:

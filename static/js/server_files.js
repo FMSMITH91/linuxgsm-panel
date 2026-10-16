@@ -20,6 +20,11 @@ function fileIcon(name){
 
 // ── Config tabs ──
 var gameCfgLoaded=false, gameCfgRel=null;
+// What the Raw editor holds: 'unread' until a read of the config filled it, 'ok' once one did,
+// 'stale' when a later re-read (after a settings save) failed. Its Save writes the box over the
+// instance .cfg byte for byte, so it is refused in the other two states: an unread box is "" (or
+// whatever was typed into it), and a stale one would put back the settings the save just changed.
+var _r26c_rawRead='unread';
 var _el_cfg_tabs = document.getElementById('cfg-tabs');
 if (_el_cfg_tabs) _el_cfg_tabs.addEventListener('click', function(ev){
   var b=ev.target.closest('[data-tab]'); if(!b) return;
@@ -69,6 +74,7 @@ function loadConfig(){
     if(!(d.groups||[]).length) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
     document.getElementById('cfg-raw').value = d.raw||'';
+    _r26c_rawRead='ok';
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
 }
 // Accordion toggle (delegated).
@@ -112,11 +118,26 @@ function saveConfig(ev){
 }
 // Re-read just the raw instance cfg and update the Raw tab, WITHOUT re-rendering the settings
 // form (which would collapse the accordion). Skipped if the user is actively editing the raw box.
+// A read that did not happen answers {raw: "", error: ...} (a host blip; the tailscale and local
+// transports return "" without raising): that is not the file's text. It used to empty the box,
+// and the Raw tab's Save then wrote "" over the cfg. The last good text stays, marked stale.
 function refreshRawConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(function(d){
     var ta=document.getElementById('cfg-raw');
-    if(ta && d && d.raw !== undefined && document.activeElement!==ta) ta.value = d.raw || '';
-  }).catch(function(){});
+    if(!d || d.error || typeof d.raw !== 'string'){ _r26c_rawStale(); return; }
+    if(ta && document.activeElement!==ta){
+      // A good read clears a stale mark a failed earlier one left.
+      if(_r26c_rawRead==='stale') document.getElementById('cfg-raw-msg').textContent='';
+      ta.value = d.raw; _r26c_rawRead='ok';
+    }
+  }).catch(function(){ _r26c_rawStale(); });
+}
+function _r26c_rawStale(){
+  if(_r26c_rawRead!=='ok') return;
+  _r26c_rawRead='stale';
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.textContent=_tr('The config could not be re-read after the settings save, so this text may be out of date. Reload the page before saving it.');
+  msg.className='small ms-2 text-warning';
 }
 // ── Game config file ──
 function loadGameCfg(){
@@ -142,7 +163,15 @@ function saveGameCfg(){
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small ms-2 text-danger'; });
 }
 function saveRaw(){
-  var msg=document.getElementById('cfg-raw-msg'); msg.textContent='Saving…'; msg.className='small ms-2 text-secondary';
+  var msg=document.getElementById('cfg-raw-msg');
+  if(_r26c_rawRead!=='ok'){
+    msg.textContent=_tr(_r26c_rawRead==='stale'
+      ? 'The config could not be re-read after the settings save, so this text may be out of date. Reload the page before saving it.'
+      : 'The config has not been read, so there is nothing safe to save. Reload the page and try again.');
+    msg.className='small ms-2 text-danger';
+    return;
+  }
+  msg.textContent='Saving…'; msg.className='small ms-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:document.getElementById('cfg-raw').value})})
     .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved':'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); if(d.success) loadConfig(); })
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small ms-2 text-danger'; });
@@ -1416,6 +1445,27 @@ function modRow(m, installed){
   return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1 gap-2">'
     + '<span class="small"'+(m.desc?' title="'+escA(m.desc)+'"':'')+'>'+tick+modLabel(m)+'</span>'+btn+'</div>';
 }
+// One mods reading drawn into the card (loadMods); true, as it always draws something.
+function _r26c_modsDraw(d, load, body, uns){
+  // This game has no LinuxGSM mods installer (e.g. Call of Duty) — hide the whole card.
+  if(d.supported===false){ var card=document.getElementById('mods-card'); if(card) card.style.display='none'; return true; }
+  var avail=d.available||[], inst=d.installed||[];
+  load.style.display='none';
+  if(!avail.length && !inst.length){ uns.style.display=''; body.style.display='none'; return true; }
+  var installedSet={}; inst.forEach(function(m){ installedSet[m.id]=1; });
+  // One merged list: the available catalog is the superset; append any installed mod that isn't in
+  // the catalog so it stays removable. Each row shows Install or Remove for its current state.
+  var byId={}, merged=[];
+  avail.concat(inst).forEach(function(m){ if(!byId[m.id]){ byId[m.id]=1; merged.push(m); } });
+  document.getElementById('mods-list').innerHTML =  // nosemgrep
+    merged.length ? merged.map(function(m){ return modRow(m, !!installedSet[m.id]); }).join('')
+    : '<span class="text-secondary small">None available.</span>';
+  var n=inst.length;
+  document.getElementById('mods-count').textContent =
+    n ? tf('{n} installed · {m} available', {n: n, m: merged.length}) : tf('{m} available', {m: merged.length});
+  body.style.display='';
+  return true;
+}
 function loadMods(force){
   var load=document.getElementById('mods-loading'), body=document.getElementById('mods-body'),
       uns=document.getElementById('mods-unsupported');
@@ -1424,28 +1474,13 @@ function loadMods(force){
   // the null threw and took loadBackups() (and anything added after it) with it. Same shape as
   // the #file-list / #breadcrumb listeners above: the template can legitimately omit the card,
   // so the code that drives it has to cope with the card being gone.
-  if(!load || !body || !uns) return;
+  if(!load || !body || !uns) return Promise.resolve(false);
   if(force){ load.style.display=''; body.style.display='none'; uns.style.display='none'; modsMsg(''); }
-  fetch(MOUNT+'/api/server/'+serverId+'/mods').then(r=>r.json()).then(function(d){
-    if(d.error){ load.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
-    // This game has no LinuxGSM mods installer (e.g. Call of Duty) — hide the whole card.
-    if(d.supported===false){ var card=document.getElementById('mods-card'); if(card) card.style.display='none'; return; }
-    var avail=d.available||[], inst=d.installed||[];
-    load.style.display='none';
-    if(!avail.length && !inst.length){ uns.style.display=''; body.style.display='none'; return; }
-    var installedSet={}; inst.forEach(function(m){ installedSet[m.id]=1; });
-    // One merged list: the available catalog is the superset; append any installed mod that isn't in
-    // the catalog so it stays removable. Each row shows Install or Remove for its current state.
-    var byId={}, merged=[];
-    avail.concat(inst).forEach(function(m){ if(!byId[m.id]){ byId[m.id]=1; merged.push(m); } });
-    document.getElementById('mods-list').innerHTML =  // nosemgrep
-      merged.length ? merged.map(function(m){ return modRow(m, !!installedSet[m.id]); }).join('')
-      : '<span class="text-secondary small">None available.</span>';
-    var n=inst.length;
-    document.getElementById('mods-count').textContent =
-      n ? tf('{n} installed · {m} available', {n: n, m: merged.length}) : tf('{m} available', {m: merged.length});
-    body.style.display='';
-  }).catch(function(){ load.innerHTML='<span class="text-danger">Could not load mods.</span>'; });
+  // Resolves true when it drew the card, false when the read failed (modAction's re-list).
+  return fetch(MOUNT+'/api/server/'+serverId+'/mods').then(r=>r.json()).then(function(d){
+    if(!d || d.error){ load.innerHTML='<span class="text-danger">'+esc((d && d.error) || 'Could not load mods.')+'</span>'; return false; }  // nosemgrep
+    return _r26c_modsDraw(d, load, body, uns);
+  }).catch(function(){ load.innerHTML='<span class="text-danger">Could not load mods.</span>'; return false; });
 }
 function modAction(which, id, btn){
   var run = function(){
@@ -1462,7 +1497,16 @@ function modAction(which, id, btn){
           if(m){ m.insertAdjacentHTML('beforeend',
             ' <button class="btn btn-sm btn-warning py-0 px-1 ms-1"' + _da('modRestartNow', ['@self']) + '><i class="bi bi-arrow-clockwise"></i> Restart now</button>'); }
         }
-        loadMods(false);
+        // The re-list draws the rows in their new state. When it fails, its error lands in the
+        // hidden loading line, and the rows stayed as before the action with this one's spinner
+        // spinning for good. Say so beside the result, and put the label back; the button stays
+        // disabled, since nobody knows which state it should offer now.
+        loadMods(false).then(function(ok){
+          if(ok) return;
+          btn.innerHTML=orig;  // nosemgrep
+          var m=document.getElementById('mods-msg');
+          if(m) m.appendChild(document.createTextNode(' '+_tr('The mod list could not be re-read, so these rows may be out of date. Reload the page to see them.')));
+        }).catch(function(){ /* loadMods never rejects; this only stops a throwing note going unhandled */ });
       })
       .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });  // nosemgrep
   };
@@ -1483,7 +1527,7 @@ function modRestartNow(btn){
         .catch(function(){ modsMsg('✗ Restart failed — connection error','text-danger'); });
     }});
 }
-loadMods(true);
+void loadMods(true);   // resolves either way; a failure is drawn in the card
 
 // ── Backups (this server) — superadmin card; reuses the game-backup endpoints ──
 function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD

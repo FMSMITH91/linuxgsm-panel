@@ -1219,7 +1219,7 @@ try:
     _sm_firewall.remote_ufw_status = _h_fw_saved["remote_ufw_status"]
 
     # ── the cleanup and "Open all ports" against ufw 0.36.2's own listing ─────────────────────
-    # _Ufw36 prints `ufw status numbered` the way the test VPS (vps-374e9220, ufw 0.36.2) printed it
+    # _Ufw36 prints `ufw status numbered` the way the test VPS (ufw 0.36.2) printed it
     # on 2026-09-29: a rule from anywhere is listed TWICE, its IPv4 row in the first block and its
     # (v6) twin in the second, numbered as one list — so one inserted row moves every number after
     # it. A rule from one IPv4 source has no twin. `allow` appends to the end of each block
@@ -2534,7 +2534,9 @@ try:
           and "sshd-restore-dropin" in _w.names() and "sshd-discard-backup" not in _w.names(), repr(_cp))
     _H._tcp_reachable = lambda host, port, timeout=8: False
     _w = _csp_wire()
-    _cp = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="198.51.100.4")
+    # A key-auth row: the dial after a bind is for a host the panel reaches through sshd (review
+    # 1016c: a Tailscale-SSH row takes the listening-address check instead, part98).
+    _cp = _H.change_ssh_port(_p8_srv(auth_method="key"), 2222, bind_addr="198.51.100.4")
     check("ssh port: a bind the panel cannot reach afterwards is reverted, naming the address",
           _cp[0] is False and "couldn't reach it on 203.0.113.10:2222" in _cp[1]
           and any(c[0] == "write" and "ListenAddress 198.51.100.4:2222\n" in c[2] for c in _w.calls),
@@ -2609,11 +2611,11 @@ try:
     # The bind-address branch on a REMOTE verified by a TCP connect alone — equally process-blind.
     _H._tcp_reachable = lambda host, port, timeout=8: True
     _w = _csp_wire(**_own("LISTEN 0 128 198.51.100.4:2222 0.0.0.0:* uid:1001 ino:4600 sk:7 <->\n"))
-    _cp_bind_squat = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="198.51.100.4")
+    _cp_bind_squat = _H.change_ssh_port(_p8_srv(auth_method="key"), 2222, bind_addr="198.51.100.4")
     _bind_squat_names = _w.names()
     _csp_wire(**_own("LISTEN 0 128 [fd00::5]:2222 [::]:* ino:4700 sk:8 "
                      "cgroup:/system.slice/ssh.service <->\n"))
-    _cp_bind_ok = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="fd00:0:0::5")
+    _cp_bind_ok = _H.change_ssh_port(_p8_srv(auth_method="key"), 2222, bind_addr="fd00:0:0::5")
     _H._tcp_reachable = _h_saved["_tcp_reachable"]
     check("ssh port (bind): a reachable address held by a non-root account is reverted too",
           _cp_bind_squat[0] is False and "uid 1001" in _cp_bind_squat[1]
@@ -3438,8 +3440,10 @@ try:
     eq("firewall panel port: an unparseable config.json answers the port the RUNNING panel parsed",
        _sm_firewall._panel_web_port(_local), 8443)
     _fw_cfg._cfg_cache["data"] = {"port": "eighty"}
-    check("firewall panel port: ...and None when even that cannot be read as a port",
-          _sm_firewall._panel_web_port(_local) is None)
+    # The boot binds such a port as 5000 (_port_or), so 5000 is the port to protect (review 1016c:
+    # this answered None, and the rule for the panel's real port went unprotected).
+    check("firewall panel port: ...and the boot's 5000 when that cannot be read as a port",
+          _sm_firewall._panel_web_port(_local) == 5000)
     check("firewall tailscale rule: an unparseable config PROTECTS the tailscale0 rule",
           _sm_firewall._panel_served_over_tailscale(_local) is True)
     _sm_firewall._config_unreadable = lambda: False
