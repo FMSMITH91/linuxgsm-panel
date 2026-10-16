@@ -16,6 +16,13 @@ function refreshFirewall() {
     .then(data => {
       var badge = document.getElementById('ufw-badge');
       var listEl = document.getElementById('rules-list');
+      // A reply that is not a reading at all: a 500 from the panel's catch-all, a 403/404 denial.
+      // Those carry `success:false` and a message, but no `unreachable`, no `installed` and no
+      // `groups`, so the branches below read them as a reading: "UFW is not installed on this
+      // remote.", badge "Inactive", "No open ports yet." and "0 blocked" — after every block,
+      // unblock, open, delete and sync, about a host whose firewall nobody read. A reading always
+      // says `installed` (remote_ufw_status's every return does); an unreachable reply says so.
+      if (_r23c_fwNotRead(badge, data)) return;
       // A host the panel could not reach has no firewall state to report. The endpoint says so —
       // remote_ufw_status returns unreachable:true rather than claiming UFW is installed, and the
       // ConnectionError branch answers the same shape — and the TEMPLATE renders that carefully:
@@ -67,6 +74,23 @@ function refreshFirewall() {
     });
 }
 
+// When the reply is no reading, paint that and answer true: badge "Unknown", both lists and counts
+// unlisted, the status card and a toast saying why. The inactive note is hidden: nothing says UFW
+// is inactive.
+function _r23c_fwNotRead(badge, data) {
+  if (data && (data.unreachable || typeof data.installed === 'boolean')) return false;
+  var why = (data && data.message) || t("The firewall could not be read, so its rules can't be shown.");
+  badge.textContent = 'Unknown';
+  badge.className = 'badge bg-secondary';
+  var bin = document.getElementById('blocks-inactive-note');
+  if (bin) bin.classList.toggle('d-none', true);
+  _fwUnlisted(why);
+  // The card's own painter, handed the sentence as a route's own (any code but the network's).
+  _fwStatusNote({unreachable: true, code: 'not_read', message: why}, false);
+  if (window.toast) toast(why, 'danger');
+  return true;
+}
+
 // Why a refresh could not list the rules. A changed host key (the panel refused to connect) and a
 // read cut off part-way are flagged unreachable too: `code` says which, and the route's own
 // sentence, already in the viewer's language, names the way out ("Re-trust host key").
@@ -86,19 +110,21 @@ function _fwHostSaid(data) {
 // not be reached, and a changed host key read "can't reach" there under lists saying "Re-trust".
 // The same states and sentences as the template's card, in its order.
 function _fwStatusNote(data, inactive) {
-  var box = document.getElementById('ufw-status-note');
-  if (!box) return;
   var said = _fwHostSaid(data), n = null;
   if (data.permission_denied) {
     n = ['text-warning', 'bi-lock', "The panel reached this host, but sudo refused the firewall read, so its rules can't be shown. Check the panel's sudoers grant on this host."];
   } else if (data.unreachable) {
-    n = said ? ['text-warning', 'bi-key', said]
+    // The key icon for a changed host key only: a read cut off part-way (`command_started`) is
+    // not a key problem, and showed one.
+    n = said ? ['text-warning', data.code === 'host_key_mismatch' ? 'bi-key' : 'bi-exclamation-triangle', said]
       : ['text-secondary', 'bi-plug', "The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back."];
   } else if (data.installed !== true) {
     n = ['text-warning', 'bi-exclamation-triangle', 'UFW is not installed on this remote.'];
   } else if (inactive) {
     n = ['text-warning', 'bi-exclamation-triangle', 'UFW is installed but inactive: nothing on this page is enforced, and ufw does not list its stored rules until it is enabled.'];
   }
+  var box = document.getElementById('ufw-status-note');
+  if (!box) return;
   box.textContent = '';
   if (!n) return;
   var p = document.createElement('p');

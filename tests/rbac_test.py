@@ -1817,14 +1817,15 @@ def _check_group_admin_cannot_grant_more():
     # PRESERVED by _grantable_perms while the rest of the edit went through; a group holding one is
     # now outside the editor's reach, so the whole edit is refused (_may_manage_group) and this
     # asserts the refusal — the description is what shows whether the edit landed at all.
-    c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "changed by grpadm",
-                                            "permissions": [auth.VIEW_SERVERS]})
+    # Refused, not crashed: a 500 before the guard also left the group as it was (review 1015d).
+    _r23d_ge = c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "changed by grpadm",
+                                                       "permissions": [auth.VIEW_SERVERS]})
     with app.app_context():
         kept = set(Group.query.get(gid5).get_permissions())
         kept_desc = Group.query.get(gid5).description
     check("escalation: an edit of a group holding a permission the editor cannot grant is refused",
-          auth.MANAGE_USERS in kept and kept_desc == "RBAC test preserve (auto)",
-          "after edit: %s, description %r" % (sorted(kept), kept_desc))
+          _r23d_ge.status_code < 500 and auth.MANAGE_USERS in kept and kept_desc == "RBAC test preserve (auto)",
+          "status %d, after edit: %s, description %r" % (_r23d_ge.status_code, sorted(kept), kept_desc))
 
 
 def _check_membership_escalation():
@@ -1904,14 +1905,15 @@ def _check_join_needs_the_hosts_too():
         db.session.add(_reach)
         db.session.commit()
         _reach_gid = _reach.id
-    cmu.post("/users/%d/edit" % _mu_uid,
-             data={"display_name": "MU admin", "is_active": "on",
-                   "groups": [str(_mu_gid), str(_reach_gid)]})
+    _r23d_jn = cmu.post("/users/%d/edit" % _mu_uid,
+                        data={"display_name": "MU admin", "is_active": "on",
+                              "groups": [str(_mu_gid), str(_reach_gid)]})
     with app.app_context():
         _mu_after = db.session.get(User, _mu_uid)
         _got_host = auth.can_access_server(_mu_after, other_id)
     check("escalation: joining a permission-subset group does not hand over its hosts",
-          _got_host is False, "gained access to server %s on an ungranted host" % other_id)
+          _r23d_jn.status_code < 500 and _got_host is False,
+          "status %d; access to server %s on an ungranted host: %s" % (_r23d_jn.status_code, other_id, _got_host))
 
 
 def _check_user_form_offers_only_joinable():
@@ -2031,12 +2033,13 @@ def _check_manage_users_needs_the_objects():
           _perms_equal and _reach_wider,
           "perms_equal=%s reach_wider=%s — the check below would prove nothing"
           % (_perms_equal, _reach_wider))
-    cmu.post("/users/%d/edit" % _peer_id,
-             data={"display_name": "peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
+    _r23d_pr = cmu.post("/users/%d/edit" % _peer_id,
+                        data={"display_name": "peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _peer_changed = db.session.get(User, _peer_id).password_hash != _peer_hash
     check("escalation: MANAGE_USERS cannot take over a peer who can reach hosts the actor cannot",
-          not _peer_changed, "the peer's password hash was replaced")
+          _r23d_pr.status_code < 500 and not _peer_changed,
+          "status %d, the peer's password hash replaced: %s" % (_r23d_pr.status_code, _peer_changed))
 
 
 def _check_manage_users_custom_commands():
@@ -2135,14 +2138,15 @@ def _check_group_admin_cannot_widen_reach():
     # the checks above still passed — while can_access_remote started returning True for all of it.
     with app.app_context():
         _all_remote_ids = [r.id for r in RemoteServer.query.all()]
-    c4.post("/groups/%d/edit" % gid4_for_scope,
-            data={"name": tag4, "description": "",
-                  "permissions": [auth.VIEW_SERVERS, auth.MANAGE_GROUPS],
-                  "servers": [str(i) for i in _all_remote_ids]})
+    _r23d_gh = c4.post("/groups/%d/edit" % gid4_for_scope,
+                       data={"name": tag4, "description": "",
+                             "permissions": [auth.VIEW_SERVERS, auth.MANAGE_GROUPS],
+                             "servers": [str(i) for i in _all_remote_ids]})
     with app.app_context():
         _granted = {r.id for r in db.session.get(Group, gid4_for_scope).servers}
     check("escalation: a MANAGE_GROUPS admin cannot grant hosts they cannot reach",
-          _granted <= {granted_remote}, "group now grants hosts: %s" % sorted(_granted))
+          _r23d_gh.status_code < 500 and _granted <= {granted_remote},
+          "status %d, group now grants hosts: %s" % (_r23d_gh.status_code, sorted(_granted)))
 
 
 def _check_groups_page_offers_only_grantable():
@@ -2528,22 +2532,24 @@ def _check_group_delete_refusals():
     from panel.db.models import Invite as _GInv
     _dc = client_as(_gsx["dana"])
     # 745378983: a group holding a superadmin-authored custom command dana does not hold.
-    _dc.post("/groups/%d/delete" % _gsx["cmd"])
+    # Each refusal is an answer, not a crash: a 500 left the group in place too (review 1015d).
+    _r23d_d1 = _dc.post("/groups/%d/delete" % _gsx["cmd"]).status_code
     with app.app_context():
         _carl_cmds = auth.custom_command_ids(db.session.get(User, _gsx["carl"]))
     check("group scope: a delegated admin cannot delete a group holding a command they lack",
-          _gsx_row("cmd") is not None and _gsx["cmd_id"] in _carl_cmds,
-          "the group is gone and carl lost the command")
-    _dc.post("/groups/%d/delete" % _gsx["a_mixdel"])
+          _r23d_d1 < 500 and _gsx_row("cmd") is not None and _gsx["cmd_id"] in _carl_cmds,
+          "status %d; the group is gone or carl lost the command" % _r23d_d1)
+    _r23d_d2 = _dc.post("/groups/%d/delete" % _gsx["a_mixdel"]).status_code
     check("group scope: ...nor one whose member reaches more than they do",
-          _gsx_row("a_mixdel") is not None, "a_mixdel was deleted, stripping mia")
-    _dc.post("/groups/%d/delete" % _gsx["a_inv"])
+          _r23d_d2 < 500 and _gsx_row("a_mixdel") is not None,
+          "status %d; a_mixdel deleted, stripping mia: %s" % (_r23d_d2, _gsx_row("a_mixdel") is None))
+    _r23d_d3 = _dc.post("/groups/%d/delete" % _gsx["a_inv"]).status_code
     with app.app_context():
         _inv = db.session.get(_GInv, _gsx["inv_id"])
         _inv_live = _inv is not None and _inv.revoked_at is None
     check("group scope: ...nor one a live invite names beside an out-of-reach group",
-          _gsx_row("a_inv") is not None and _inv_live,
-          "the group was deleted, which also revoked the superadmin's invite")
+          _r23d_d3 < 500 and _gsx_row("a_inv") is not None and _inv_live,
+          "status %d; the group was deleted, or the superadmin's invite revoked" % _r23d_d3)
     _dc.post("/groups/%d/delete" % _gsx["a_del"])
     check("group scope: an in-reach group with no members still deletes (control)",
           _gsx_row("a_del") is None, "every delegated delete is refused, so the above prove nothing")
@@ -3367,9 +3373,9 @@ def _check_users_page_reach_and_sa_delete():
             db.session.commit()
 
     # 1. A delegated admin must not remove a superadmin.
-    cmu.post("/users/%d/delete" % _vsa_id)
-    check("delete user: MANAGE_USERS alone cannot delete a SUPERADMIN", _alive(_vsa_id),
-          "a non-superadmin removed a superadmin account")
+    _r23d_du = cmu.post("/users/%d/delete" % _vsa_id).status_code
+    check("delete user: MANAGE_USERS alone cannot delete a SUPERADMIN", all((_r23d_du < 500, _alive(_vsa_id))),
+          "status %d; a non-superadmin removed a superadmin account: %s" % (_r23d_du, not _alive(_vsa_id)))
 
     # 2. The control that makes 1 mean something: a real superadmin CAN delete that same account,
     #    so the refusal above is authorization and not "deleting a superadmin never works".

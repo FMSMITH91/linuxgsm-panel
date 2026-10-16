@@ -475,6 +475,26 @@ def spend_update_check():
     return _UPDATE_GATE.spend()
 
 
+def _r23a_update_busy_reply(app):
+    """The reply refusing a panel /update while the panel is rebooting its own host, else None.
+
+    The web Update button refuses this (host_local.api_panel_update); the bots called
+    so.panel_self_update directly and did not, so a chat /update during the reboot plan restarted
+    the panel before the reboot was sent, and the plan was rolled back: the servers it had stopped
+    were started again and the host was never rebooted. In an app context of its own: the bots'
+    update runs on their worker thread, where panel_host_busy's lookup would otherwise fail and,
+    being a courtesy check, refuse nothing. Never raises, as panel_host_busy never does.
+    """
+    from panel.services import host_reboot as _hr
+    try:
+        with app.app_context():
+            busy = _hr.panel_host_busy()
+    except Exception:  # noqa: BLE001 - a courtesy check never blocks the command on its own failure
+        _log.debug("reboot busy check failed", exc_info=True)
+        busy = None
+    return None if busy is None else "⚠️ Update not started: %s" % busy
+
+
 def update_rate_reply():
     """What to say when the hour's forced checks are spent."""
     mins = max(1, int(round(_UPDATE_GATE.retry_in() / 60.0)))

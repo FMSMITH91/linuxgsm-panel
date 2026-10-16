@@ -2257,7 +2257,7 @@ check("install.sh: ...and that group is never root — the Runas list names no u
       'NOPASSWD: ALL' not in _inst.replace('ALL=(%${GAME_GROUP}) NOPASSWD: ALL', '')
       .replace('ALL=(ALL) NOPASSWD:ALL', ''))
 check("install.sh: the group is synced before the grant that names it is written",
-      _inst.find("sync_game_user_group\n") < _inst.find('ALL=(%${GAME_GROUP})')
+      -1 < _inst.find("sync_game_user_group\n") < _inst.find('ALL=(%${GAME_GROUP})')
       and "sync_game_user_group()" in _inst)
 # A person's account must never land in a grant that lets the panel become them. The rule is a
 # property of the home directory — a LinuxGSM instance or a Steam content tree — not a uid range.
@@ -11748,12 +11748,21 @@ check("autoblock: ...while a tailnet address below it is shadowed (positive cont
 _ab_verbs6 = []
 _ab_saved6 = (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
               _mon6._autoblock_threshold, _mon6._whitelist_networks)
+_ab_track6 = False
 
 
 def _ab_run6(verb, args=(), **k):
+    global _ab_listing6
     if verb == "ufw-status":
         return (_ab_listing6, "", 0)
     _ab_verbs6.append((verb, list(args)))
+    if verb == "ufw-delete-deny-ip" and _ab_track6:
+        # As ufw does: the deny for that address is gone from the next read. ufw_undeny_ip reads
+        # the firewall again after its delete (review 1015d), and a listing that never changed
+        # read as a release that removed nothing. Only while _ab_track6: the checks after the
+        # release check start from the listing as it was.
+        _ab_listing6 = re.sub(r"(?m)^[^\n]*DENY +%s(?: [^\n]*)?\n" % re.escape(args[0]), "",
+                              _ab_listing6, count=1)
     return ("", "", 0)
 
 
@@ -11769,7 +11778,10 @@ try:
     # ...and .11 carries BOTH a panel auto-block and the operator's own rule, and has aged out.
     _ab_listing6 += ("Anywhere                   DENY        203.0.113.11               # panel-autoblock\n"
                      "Anywhere                   DENY        203.0.113.11\n")
+    _ab_kept6, _ab_track6 = _ab_listing6, True
     _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    # The checks below start from the same listing (.9 still auto-blocked).
+    _ab_listing6, _ab_track6 = _ab_kept6, False
     check("autoblock: an operator's own block is neither deleted nor replaced",
           not any(a[0] in ("203.0.113.7", "203.0.113.8") for v, a in _ab_verbs6),
           "commands run for the operator's addresses: %r" % (_ab_verbs6,))

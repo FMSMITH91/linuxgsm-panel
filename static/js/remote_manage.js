@@ -417,7 +417,9 @@ function isSecurityPkg(p){ return ((p.suite||'').indexOf('-security') >= 0); }
 // what the host has waiting on page load WITHOUT making the load wait on `apt update`.
 function renderUpdates(d, note){
   var el=document.getElementById('update-info'); if(!el) return;
-  var n=d.count||0, pkgs=d.packages||[];
+  // Number(): `n` goes into innerHTML below. The API sends an int; the coercion at the sink makes
+  // that this line's guarantee, not the server's (nags.js does the same).
+  var n=Number(d.count)||0, pkgs=d.packages||[];
   var sec=pkgs.filter(isSecurityPkg).length;
   var head=(n ? '<div class="mb-1"><span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '
                 + n + ' <span>' + (n===1?'update available':'updates available') + '</span></span>'

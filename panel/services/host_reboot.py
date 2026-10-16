@@ -530,7 +530,11 @@ def _panel_host_blockers():
     except Exception:  # noqa: BLE001
         _log.debug("self-update state unreadable", exc_info=True)
     from panel.ops import backup as _bk
-    if _bk._restore_lock.locked():
+    # restore_pending, not the restore's lock alone: _launch_installer asks the same question this
+    # way. The lock is released when the restore DISPATCHES its detached swap, a second or two
+    # before the swap stops the panel; a reboot planned in that window put in a database with no
+    # record of what the plan had stopped.
+    if _bk.restore_pending():
         out.append(_rw.panel_blocker("restore"))
     if _full_backup_lock.locked():
         out.append(_rw.panel_blocker("full_backup"))

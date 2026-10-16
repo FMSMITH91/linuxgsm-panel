@@ -755,11 +755,12 @@ try:
                              {"cmd": "stop", "short": "sp", "desc": "Stop it."}])
         db.session.commit()
     _fr_stub(_fr_game, "list_server_commands", lambda *a, **k: [])
-    c.post("/server/%d/refresh-commands" % gs_id)
+    _r23d_rc = c.post("/server/%d/refresh-commands" % gs_id)
     with app.app_context():
         _rc_after = db.session.get(GameServer, gs_id).get_commands()
+    # Answered, not crashed: a 500 wiped nothing either (review 1015d).
     check("failed read: an empty command list does not wipe the stored one",
-          len(_rc_after) == 2,
+          _r23d_rc.status_code < 500 and len(_rc_after) == 2,
           "the stored list became %r — Start/Stop/Update vanish from the control bar for "
           "everyone" % (_rc_after,))
     # ...and a real answer still replaces it, so the guard is not "never update".
@@ -840,13 +841,15 @@ try:
         _oc_state = (_oc2.scope_type, _oc2.scope_value, _oc2.command_template)
     check("custom command edit: saving it keeps that game scope and applies the edit",
           _oc_state == ("game", "nosuchgame", "say hello"), "stored %r" % (_oc_state,))
-    c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say bye",
-                                                "scope": "game|othernosuchgame", "enabled": "on"})
+    _r23d_oc = c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say bye",
+                                                           "scope": "game|othernosuchgame", "enabled": "on"})
     with app.app_context():
         _oc3 = db.session.get(CustomCommand, _oc_id)
         _oc_state = (_oc3.scope_value, _oc3.command_template)
+    # Refused, not crashed: a 500 stored nothing either (review 1015d).
     check("custom command edit: ...while moving it to a DIFFERENT unknown game is still refused",
-          _oc_state == ("nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+          _r23d_oc.status_code < 500 and _oc_state == ("nosuchgame", "say hello"),
+          "status %d, stored %r" % (_r23d_oc.status_code, _oc_state))
 finally:
     with app.app_context():
         db.session.delete(db.session.get(CustomCommand, _oc_id))

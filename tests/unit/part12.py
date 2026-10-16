@@ -1724,7 +1724,7 @@ try:
     _sf_writes = []
     _sf_write_result = [(True, "")]
 
-    def _sf_write_file(remote, user, rel, content):
+    def _sf_write_file(remote, user, rel, content, selfname=None):
         _sf_writes.append(("file", user, rel, content))
         r = _sf_write_result[0]
         if isinstance(r, Exception):
@@ -2104,7 +2104,7 @@ try:
     _sf_up = [(True, "")]
     _sf_ups = []
 
-    def _sf_upload(remote, user, reldir, name, data, overwrite=False):
+    def _sf_upload(remote, user, reldir, name, data, overwrite=False, selfname=None):
         _sf_ups.append((reldir, name, data, overwrite))
         r = _sf_up[0]
         if isinstance(r, Exception):

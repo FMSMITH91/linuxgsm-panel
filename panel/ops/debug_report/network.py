@@ -1276,7 +1276,11 @@ def _account_lines(res, counts):
                 c["mcp"], c["mcp_tok"], _yn(token_file),
                 " (and setup is complete)" if token_file and c["setup_done"] else ""))
     # Posture stays out of the public summary and At a glance (it tells an attacker which target is
-    # weak), except this one aggregated line when the panel is on the public internet.
+    # weak), except this one aggregated line when the panel is on the public internet. It is NOT
+    # kept out of the full report: the lines above are in the downloaded file, which the issue
+    # prompt asks the operator to attach to that same public issue. What the attached file should
+    # carry is an open question for the owner (review 1015d); this comment no longer claims a
+    # protection the attach step removes.
     if c["s2fa"] < c["supers"] and _funnel_on():
         res.find("warn", AREA, "Funnel is on and not every superadmin has 2FA")
 

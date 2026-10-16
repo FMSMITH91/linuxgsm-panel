@@ -11,7 +11,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
     UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
-    update_rate_reply)
+    update_rate_reply, _r23a_update_busy_reply)
 from panel.db.models import (LOCAL_HOST_LABEL)
 import functools
 import logging
@@ -340,6 +340,10 @@ def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
 
 def _discord_do_update(app, bot_token, channel_id, sender=None):
     # Not force=True, and the self-update's own forced check is metered — see _telegram_do_update.
+    _busy = _r23a_update_busy_reply(app)
+    if _busy:
+        _dc_reply(bot_token, channel_id, _busy)
+        return
     try:
         st = bot_update_status()
     except Exception:

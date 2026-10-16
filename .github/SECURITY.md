@@ -245,10 +245,10 @@ which is correct — their sudoers is the operator's to arrange.
 **What that fix does NOT cover, stated plainly.** `run_as_game_user` was one of about 45 sites
 that build `sudo -u <game user> bash -c '<shell>'` and pass `sudo=False`: the file browser,
 the GMod content mounts, the cron readers, the install flows and the disk-usage probes are all
-the same shape, and all of them fail under the narrow grant exactly as server control did. The
-count in the table below is of `sudo=True` sites and has never included any of these. Converting
-them is not finished; until it is, a host with the narrow grant has working server control and a
-file browser that does not work.
+the same shape, and all of them failed under the narrow grant exactly as server control did. The
+count in the table below is of `sudo=True` sites and has never included any of these. They work
+under the narrow grant now through its second line, the bounded right to become an enrolled game
+account (see "The second line is the game accounts" below), not through the unrestricted grant.
 
 **The dependency installer is a verb now, and it was not merely unnarrowed — it was broken.**
 `install_game_dependencies` ran one `sudo bash -c '<pipeline>'`, which the narrow grant refuses, and
@@ -282,8 +282,9 @@ them, overstating the remaining work. A test pins the exclusion at exactly those
 quietly widen and make the number flattering.)
 
 Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
-root, so they are a smaller problem — but they still depend on the same unrestricted grant,
-and they are not yet counted in the conversion.
+root, and they are covered by the narrow grant's second line — `ALL=(%lgsmpanel-games)`, the right
+to become an enrolled game account and no other (see "The second line is the game accounts"
+below) — not by the unrestricted grant. They are not counted in the table, which counts root.
 
 **Those game-account commands have ONE builder, and it refuses rather than trusts
 (GHSA-hh39-76g3-wxcx, reported by kta1kri).** A server's account (`short_name`) and LinuxGSM script

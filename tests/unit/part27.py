@@ -266,7 +266,7 @@ check("osv-scanner: installed from the release tag and checked against its sha25
       _re27.search(r"OSV_SCANNER_VERSION: 'v[0-9.]+'\n\s+OSV_SCANNER_SHA256: '[0-9a-f]{64}'",
                    _osv_inst27) is not None
       and "releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" in _osv_inst27
-      and _osv_inst27.find("sha256sum -c -") < _osv_inst27.find('chmod +x "${RUNNER_TEMP}/osv-scanner"'),
+      and -1 < _osv_inst27.find("sha256sum -c -") < _osv_inst27.find('chmod +x "${RUNNER_TEMP}/osv-scanner"'),
       _osv_inst27[-500:])
 _osv_steps27 = [_b for _b in _DA27.split("\n      - ") if "osv-scanner" in _b.split("\n")[0]]
 check("osv-scanner: both its steps run even when pip-audit failed (if: !cancelled()), skipped only on "

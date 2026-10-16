@@ -1692,7 +1692,7 @@ finally:
 _fs_writes = []
 _fs_saved = _dl_mod.write_file
 try:
-    _dl_mod.write_file = lambda srv, user, rel, content: (_fs_writes.append((rel, content)), (True, ""))[1]
+    _dl_mod.write_file = lambda srv, user, rel, content, selfname=None: (_fs_writes.append((rel, content)), (True, ""))[1]
     for _fs_body in ({"path": "cfg/server.cfg", "contents": "typo"}, {"path": "cfg/server.cfg", "content": None},
                      {"path": "cfg/server.cfg", "content": 0}, {"path": "cfg/server.cfg", "content": []}):
         _fs_r = c.post("/api/server/%d/file" % gs_id, json=_fs_body)

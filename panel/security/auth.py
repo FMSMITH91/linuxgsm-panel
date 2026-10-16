@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from panel.core.clock import utcnow
+from panel.core.http import _r23c_error_json
 from panel.core.validation import canonical_ip, ip_network_or_none, unzoned_ip_address_or_none
 from contextlib import suppress
 from functools import wraps
@@ -615,7 +616,8 @@ def _deny(message, code):
     denial the whole tab has to react to, not just the one widget that asked.
     """
     if _denial_wants_json():
-        resp = jsonify({"success": False, "message": message})
+        # _r23c_error_json: `error` as well as `message`, which a page's READ checks.
+        resp = _r23c_error_json(message)
         resp.status_code = code
         if code == 401:
             resp.headers["X-Auth-Required"] = "1"

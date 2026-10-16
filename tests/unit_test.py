@@ -284,24 +284,27 @@ _R21D_CMDLINE_LETTERS = "Sc"
 _R22D_CMDLINE_LONG = ("--split-string", "--command", "--session-command")
 
 
-def _r19d_unwrap(argv, path):
+def _r19d_unwrap(argv, path, prefix_value=True):
     """(index of the word the wrapper commands in front leave to run, the PATH it is found on).
 
     The PATH is None when a wrapper clears or resets it: `env -i`, `env -u PATH`, sudo.
+    `prefix_value` is how a long option that is only a PREFIX of a value-taking one is read
+    (_r19d_opt_word): the guard judges the argv both ways (_r20d_argv_programs).
     """
     _i = 0
     while (_i < len(argv) and isinstance(argv[_i], str)
            and os.path.basename(argv[_i]) in _R19D_WRAPPERS):
         _w = os.path.basename(argv[_i])
-        _i, path = _r19d_wrapper_opts(_w, argv, _i + 1, None if _w in _R20D_PATH_RESETS else path)
+        _i, path = _r19d_wrapper_opts(_w, argv, _i + 1, None if _w in _R20D_PATH_RESETS else path,
+                                      prefix_value)
         _i += _R19D_WRAPPERS[_w][1]
     return _i, path
 
 
-def _r19d_wrapper_opts(word, argv, _i, path):
+def _r19d_wrapper_opts(word, argv, _i, path, prefix_value=True):
     """(index of the first operand after `word`'s options from argv[_i], the PATH its command sees)."""
     while _i < len(argv) and isinstance(argv[_i], str) and argv[_i] != "--":
-        _step = _r19d_opt_word(word, argv, _i)
+        _step = _r19d_opt_word(word, argv, _i, prefix_value)
         if _step is None:
             return _i, path
         path = _r19d_path_after(word, _step[1], path)
@@ -311,11 +314,22 @@ def _r19d_wrapper_opts(word, argv, _i, path):
     return _i + (1 if tuple(argv[_i:_i + 1]) == ("--",) else 0), path
 
 
-def _r19d_opt_word(word, argv, _i):
+def _r23d_long_prefix(name, full):
+    """Is `name` (`--x`, no `=`) one of `full` (a long option or a collection of them) by getopt_long's prefix rule?"""
+    _full = (full,) if isinstance(full, str) else full
+    return len(name) > 2 and name.startswith("--") and any(_o.startswith(name) for _o in _full)
+
+
+def _r19d_opt_word(word, argv, _i, prefix_value=True):
     """(words used, [(option, value)]) for the option word argv[_i] of `word`, or None at its operand.
 
     A variable set by env or sudo reads as ("=", "NAME=value"): any word holding "=" sets one,
     the guard's own BASH_FUNC_x%%=… included.
+    A long option is read as getopt_long reads it, also by an unambiguous prefix (review 1015d:
+    only the exact names were, so `env --ch /x tailscale` and `timeout --sig KILL 5 tailscale`
+    took the option's value for the program and ran the machine's binary). The table spans every
+    wrapper, so a prefix of a value-taking name may be a flag of this one (env's `--i` is
+    --ignore-environment, stdbuf's takes a value): `prefix_value` says which reading this pass takes.
     """
     _a = argv[_i]
     if word in ("env", "sudo") and re.fullmatch(r"[^=-][^=]*=.*", _a, re.S):
@@ -323,13 +337,18 @@ def _r19d_opt_word(word, argv, _i):
     if _a == "-" and word == "env":
         return 1, [("-i", "")]
     if _a.startswith("--"):
-        _name, _eq, _val = _a.partition("=")
-        if not _eq and _name in _R19D_LONG_VALUE:
-            return 2, [(_name, _r19d_next(argv, _i))]
-        return 1, [(_name, _val)]
+        return _r23d_long_opt(argv, _i, prefix_value)
     if re.fullmatch(r"-[A-Za-z0-9]+", _a):
         return _r19d_short_opts(word, argv, _i)
     return None
+
+
+def _r23d_long_opt(argv, _i, prefix_value):
+    """(words used, [(option, value)]) for the long option word argv[_i] (see _r19d_opt_word)."""
+    _name, _eq, _val = argv[_i].partition("=")
+    if not _eq and (_name in _R19D_LONG_VALUE or (prefix_value and _r23d_long_prefix(_name, _R19D_LONG_VALUE))):
+        return 2, [(_name, _r19d_next(argv, _i))]
+    return 1, [(_name, _val)]
 
 
 def _r19d_next(argv, _i):
@@ -349,15 +368,25 @@ def _r19d_short_opts(word, argv, _i):
 
 
 def _r19d_path_after(word, opts, path):
-    """The PATH after options `opts`: set by PATH=, cleared by env -i and env -u PATH."""
+    """The PATH after options `opts`: set by PATH=, cleared by env -i and env -u PATH.
+
+    Their long names count by a prefix too (`--ignore-e`, `--unse PATH`, review 1015d); an
+    ambiguous one (`--ig`) reads as clearing, which judges both PATHs (_r20d_argv_programs).
+    """
     for _name, _val in opts:
         # sudo's own PATH= does not choose where sudo looks: secure_path does (review 1013a).
         if _name == "=" and _val.startswith("PATH=") and word not in _R20D_PATH_RESETS:
             path = _val[len("PATH="):]
-        elif word == "env" and (_name in ("-i", "--ignore-environment")
-                                or (_name in ("-u", "--unset") and _val == "PATH")):
+        elif word == "env" and _r23d_env_clears_path(_name, _val):
             path = None
     return path
+
+
+def _r23d_env_clears_path(name, val):
+    """Does env's option `name` (with value `val`) clear PATH: -i, -u PATH, or their long names by a prefix?"""
+    if name == "-i" or _r23d_long_prefix(name, "--ignore-environment"):
+        return True
+    return (name == "-u" or _r23d_long_prefix(name, "--unset")) and val == "PATH"
 
 
 def _r18d_shell_opts(argv, _j):
@@ -408,7 +437,7 @@ def _r16d_ts_shell_env(env):
     return dict(env, **_r16d_ts_shell_funcs())
 
 
-def _r18d_ts_program(cmd, kw):
+def _r18d_ts_program(cmd, kw, prefix_value=True):
     """(program word, PATH it is found on or None) of a shell-less `tailscale` run, else (None, None).
 
     A bare string without a shell is a program name on POSIX, and an argv may name the binary by
@@ -418,7 +447,7 @@ def _r18d_ts_program(cmd, kw):
         cmd = [cmd]
     if not isinstance(cmd, (list, tuple)) or kw.get("shell"):
         return None, None
-    _i, _path = _r19d_unwrap(cmd, _r20d_run_env(kw).get("PATH", os.defpath))
+    _i, _path = _r19d_unwrap(cmd, _r20d_run_env(kw).get("PATH", os.defpath), prefix_value)
     if _i < len(cmd) and isinstance(cmd[_i], str) and os.path.basename(cmd[_i]) == "tailscale":
         return cmd[_i], _path
     return None, None
@@ -491,7 +520,7 @@ def _r20d_cmdline_candidates(cmd, kw):
     # A value that names the binary by a path runs that path, whatever PATH finds first (review
     # 1015a: `env -S '<dir>/tailscale up'` with a stand-in first on PATH was judged by the stand-in).
     _named = [_h for _v in _vals for _h in _r19d_script_candidates(_v, kw)]
-    if not any(_r20d_names_tailscale(_v) for _v in _vals):
+    if not any(_r20d_names_tailscale(_v, _r20d_run_env(kw)) for _v in _vals):
         return _named
     _paths = [_r20d_run_env(kw).get("PATH", os.defpath)]
     if _r20d_may_reset_path(cmd):
@@ -499,18 +528,33 @@ def _r20d_cmdline_candidates(cmd, kw):
     return _named + [shutil.which("tailscale", path=_p) for _p in _paths]
 
 
-def _r20d_names_tailscale(text):
+# A variable a shell or env -S expands: $NAME, ${NAME}, and ${NAME:-word} / ${NAME-word}.
+_R23D_SHELL_VAR = re.compile(r"\$(?:\{(\w+)(?::?[-=]([^}]*))?\}|(\w+))")
+
+
+def _r23d_expand_vars(text, env):
+    """`text` with each variable expanded as a shell or env -S expands it against `env` (unset: empty or its default)."""
+    def _one(_m):
+        _name = _m.group(1) or _m.group(3)
+        return env.get(_name) or (_m.group(2) or "")
+    return _R23D_SHELL_VAR.sub(_one, text)
+
+
+def _r20d_names_tailscale(text, env=None):
     """Does a command line held in one word name `tailscale` as one of its words?
 
     Also once unquoted, as a shell or env -S reads it, with env -S's backslash-underscore as a space
     (review 1015c: `tail'scale' version`, and tailscale joined to `version` by that escape, ran the
-    machine's binary).
+    machine's binary), and with its variables expanded against the run's environment (review
+    1015d: `env -S 'tail${NOPE}scale'` and `zsh -c 'tail$NOPE"scale"'` ran it).
     """
-    _words = re.split(r"[\s;&|()`'\"$=]+", text)
-    try:
-        _words += [_x for _w in shlex.split(text.replace("\\_", " ")) for _x in re.split(r"[\s;&|()`$=]+", _w)]
-    except ValueError:
-        pass    # unbalanced quotes: a shell refuses it, and the split above still reads its words
+    _words = []
+    for _t in {text, _r23d_expand_vars(text, env or {})}:
+        _words += re.split(r"[\s;&|()`'\"$=]+", _t)
+        try:
+            _words += [_x for _w in shlex.split(_t.replace("\\_", " ")) for _x in re.split(r"[\s;&|()`$=]+", _w)]
+        except ValueError:
+            pass    # unbalanced quotes: a shell refuses it, and the split above still reads its words
     return any(os.path.basename(_w) == "tailscale" for _w in _words)
 
 
@@ -530,7 +574,11 @@ def _r20d_may_reset_path(cmd):
 _R19D_SCRIPT_WRAPPED = re.compile(
     r"(?:^|[\s;&|(`/])(?:%s)\s[^;&|\n]*?\btailscale\b"
     % "|".join(sorted(set(_R19D_WRAPPERS) | set(_R20D_SCRIPT_ONLY))))
-_R19D_SCRIPT_RESETS = re.compile(r"\benv\s+(?:-\w*i|-\s|--ignore)|\b(?:sudo|doas|runuser|su)\b|\bPATH=")
+# env's clearing options anywhere among its options, and by a long name's prefix (review 1015d:
+# only one right after `env` was read, so `env -v -i x`, `env -u PATH x` and `env --unse PATH x`
+# were judged on the PATH the script started with).
+_R19D_SCRIPT_RESETS = re.compile(r"\benv(?:\s+(?:-\S*|\w+=\S*))*?\s+(?:-\w*i\w*\b|-(?=\s)|--i[\w-]*"
+                                 r"|(?:-\w*u\s*|--u[\w-]*[=\s]\s*)PATH\b)|\b(?:sudo|doas|runuser|su)\b|\bPATH=")
 # Commands that find a program somewhere other than PATH: `whereis` searches the system's own
 # directories whatever PATH says, and `find` walks them (review 1015a: with a part's stand-in first
 # on PATH, `whereis -b tailscale` handed the script the machine's binary and was judged on PATH).
@@ -576,13 +624,17 @@ def _r20d_argv_programs(cmd, kw):
     (review 1015a: only the default PATH was judged, so a tailscale found on the run's PATH alone
     went through).
     """
-    _prog, _path = _r18d_ts_program(cmd, kw)
-    if _prog is None:
-        return []
-    if os.sep in _prog:
-        return [_prog]
-    _paths = [_R19D_DEFAULT_PATH, _r20d_run_env(kw).get("PATH", os.defpath)] if _path is None else [_path]
-    return [shutil.which("tailscale", path=_p) for _p in _paths]
+    _out = []
+    # A long option that is only a prefix of a value-taking one is read both ways (_r19d_opt_word).
+    for _prog, _path in {_r18d_ts_program(cmd, kw, _pv) for _pv in (True, False)}:
+        if _prog is None:
+            continue
+        if os.sep in _prog:
+            _out.append(_prog)
+            continue
+        _paths = [_R19D_DEFAULT_PATH, _r20d_run_env(kw).get("PATH", os.defpath)] if _path is None else [_path]
+        _out += [shutil.which("tailscale", path=_p) for _p in _paths]
+    return _out
 
 
 class _R15dNoSystemTailscale:
@@ -814,6 +866,14 @@ _r16d_wrap_ts_handles()
 # stand-in sudo, and node on panel.js; imports part01, 05, 12, 47 and 83.
 # part87 (the twelfth review's page, script and i18n-tool fixes, builder C) drives part12's app and
 # its socket, and runs node on its own fixtures; imports part01, 05, 12 and 47.
+# part88 (review 1015d: helper, install, test runner, system_ops, prefs and docs, builder A) runs the
+# helper's and system_ops' functions on stand-ins, bash over install.sh's and run-tests.sh's own
+# functions in throwaway dirs, and part12's app; imports part01, 05 and 12.
+# part89 (review 1015d: Close Port 22 and every ufw close read back, the console log refused to the
+# file writers, a chunked save's leftovers, builder B) drives part12's app with stand-ins and bash
+# over its own fixture tree; imports part01 and 12.
+# part90 (the thirteenth review's page and script fixes, builder C) drives part12's app and runs node
+# on its own fixtures; imports part01, 05, 12, 47 and 87 (part87's DOM).
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -823,7 +883,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part59", "part60", "part61", "part62", "part63", "part64", "part65", "part66",
           "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
-          "part84", "part85", "part86", "part87", "part15")
+          "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -1145,7 +1205,6 @@ def _r19d_ts_shapes(d):
             # A long option by its prefix, as getopt_long takes it (review 1015c).
             ("run", (["env", "--split-str=tailscale version"],), {}),
             ("run", (["env", "--spl=tailscale"],), {}),
-            ("run", (["flock", d, "--comm=tailscale"],), {}),
             ("run", (["env", "-S", "tail'scale' version"],), {}),
             ("run", (["env", "-Stailscale\\_version"],), {}),
             ("run", (["zsh", "-c", "tailscale version"],), {}),
@@ -1165,7 +1224,24 @@ def _r19d_ts_shapes(d):
             ("run", (["env", "-vS", "tailscale version"],), {}),
             ("run", (["zsh", "-ec", "tailscale"],), {}),
             ("run", (["env", "-S", "%s version" % _ts],), {"env": _r21d_own_first}),
-            ("run", (["zsh", "-c", "%s version" % _ts],), {"env": _r21d_own_first}))
+            ("run", (["zsh", "-c", "%s version" % _ts],), {"env": _r21d_own_first})) + _r23d_ts_shapes(d)
+
+
+def _r23d_ts_shapes(d):
+    """_r19d_ts_shapes' long-option and variable shapes (review 1015d)."""
+    return (
+        # flock reads -c/--command only as the word after the lock file, and by its value in
+        # the next word: `--comm=x` was refused by flock itself, so it could not fail; this one
+        # runs the binary unless the separate-word reading judges it.
+        ("run", (["flock", d, "--command", "tailscale"],), {}),
+        ("run", (["env", "--spl", "tailscale\\_version"],), {}),
+        # A value-taking long option by its prefix: its value is not the program.
+        ("run", (["env", "--ch", d, "tailscale", "version"],), {}),
+        ("run", (["timeout", "--sig", "TERM", "5", "tailscale", "version"],), {}),
+        ("run", (["xargs", "--arg", "/dev/null", "tailscale"],), {}),
+        # A variable env -S or a shell expands to nothing, unset or empty.
+        ("run", (["env", "-S", "tail${R23D_UNSET}scale version"],), {}),
+        ("run", (["zsh", "-c", "tail$R23D_UNSET'scale' version"],), {}))
 
 
 def _r21d_spawn(how):
@@ -1251,6 +1327,10 @@ try:
         _R19D_DEFAULT_PATH = _r17d_ts_sys
         _r21d_static.append(_r16d_ts_wraps[0]._system_tailscale(
             't=$(whereis -b tailscale | cut -d" " -f2); "$t" version', {"shell": True, "env": _r21d_own_first}))
+        # env clearing PATH past another option, or by -u / a long prefix (review 1015d).
+        _r21d_static += [_r16d_ts_wraps[0]._system_tailscale(_x, {"shell": True, "env": _r21d_own_first})
+                         for _x in ("env -v -i tailscale version", "env -u PATH tailscale version",
+                                    "env --unse PATH tailscale version")]
     finally:
         _R19D_DEFAULT_PATH = _r21d_saved_default
     _r21d_saved_path = os.environ.get("PATH", "")
@@ -1301,8 +1381,8 @@ _r16d_sh_read = [_r16d_shell_text(*_c) for _c in (
     (("env", "--", "bash", "-c", "k"), {}), (["flock", "-w", "1", "/l", "dash", "-c", "m"], {}))]
 check("unit suite: ...behind a sudo that keeps PATH, through whereis and through getoutput, the machine's "
       "tailscale is refused too (control)",
-      _r21d_static[:3] == [True, True, True]
-      and not any("stand-in" in _o for _o in _r21d_static[3:]),
+      _r21d_static[:6] == [True] * 6
+      and not any("stand-in" in _o for _o in _r21d_static[6:]),
       repr(_r21d_static))
 
 check("unit suite: ...a grouped -lc, a list with shell=True, options before -c and wrapper commands "
@@ -1319,10 +1399,14 @@ _r19d_unwrapped = [_r19d_unwrap(*_c) for _c in (
     (["timeout", "--signal", "TERM", "1", "x"], "/p"), (["tailscale"], "/p"),
     # sudo's PATH= does not move where it looks, and a tuple's `--` is skipped (review 1013a).
     (["sudo", "PATH=/x", "tailscale"], "/p"), (("env", "--", "tailscale"), "/p"),
-    (["doas", "-u", "u", "tailscale"], "/p"))]
+    (["doas", "-u", "u", "tailscale"], "/p"),
+    # Long options by an unambiguous prefix, as getopt_long reads them (review 1015d).
+    (["env", "--ch", "/x", "tailscale"], "/p"), (["timeout", "--sig", "KILL", "5", "x"], "/p"),
+    (["env", "--unse", "PATH", "tailscale"], "/p"), (["env", "--ignore-e", "tailscale"], "/p"))]
 check("unit suite: ...a wrapped program is found on the PATH its wrappers leave it (control)",
       _r19d_unwrapped == [(2, None), (3, "/q"), (2, None), (2, None), (3, "/p"), (2, None), (4, "/p"),
-                          (0, "/p"), (2, None), (2, "/p"), (3, None)],
+                          (0, "/p"), (2, None), (2, "/p"), (3, None),
+                          (3, "/p"), (4, "/p"), (3, None), (2, None)],
       repr(_r19d_unwrapped))
 # An explicit empty environment is empty: the program is found on os.defpath, as Popen finds it,
 # and a shell gets the guard's functions in an otherwise empty environment (review 1013a).

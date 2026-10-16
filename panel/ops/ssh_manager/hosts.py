@@ -369,6 +369,11 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
             lambda g: _r15a_spec_names(g, spec, proto.upper(), src))
         if refusal:
             return False, refusal
+        # ufw exits 0 for a rule that is not there, saying so in words (C locale: run_privileged's),
+        # so rc 0 alone answered "Rule ... removed" about a rule that never existed.
+        if rc == 0 and _r23b_deleted_nothing(out):
+            return False, i18n.Sentence("There is no rule for {spec}/{proto} from {src}, so nothing was removed.",
+                                        spec=spec, proto=proto, src=src)
     if rc == 0:
         return True, (i18n.Sentence("Port {spec}/{proto} open from {src}", spec=spec, proto=proto, src=src)
                       if allow else
@@ -746,10 +751,55 @@ def remote_ufw_close_port(server, port, protocol=None, force=False):
         server, verb, vargs, None if force else (lambda g: _r15a_spec_names(g, port, label)))
     if refusal:
         return False, refusal
-    if rc == 0:
-        return True, i18n.Sentence("Port {port} closed on remote",
-                                   port=("%s/%s" % (port, proto)) if proto in ("tcp", "udp") else port)
-    return False, err or out or "Unknown error"
+    if rc != 0:
+        return False, err or out or "Unknown error"
+    return _r23b_closed_answer(server, port, proto)
+
+
+def _r23b_closed_answer(server, port, proto):
+    """remote_ufw_close_port's answer once its delete exited 0: read back, never taken from rc.
+
+    rc 0 is not "closed": ufw exits 0 deleting a rule that is not there, and a delete by spec
+    matches only its own shape — `delete allow proto tcp ... port N` leaves a bare `N` allow, a
+    `N/tcp LIMIT` or a port list in place. So this answered "Port N closed" with N still open.
+    """
+    one = proto in ("tcp", "udp")
+    label = ("%s/%s" % (port, proto)) if one else port
+    left = _r23b_still_open(server, port, (proto,) if one else ("tcp", "udp"))
+    if left is not None:
+        return False, i18n.Sentence("Port {port} is still open: connections meet `{rule}` first — remove or "
+                                    "narrow that rule.", port=label, rule=left["detail"])
+    return True, i18n.Sentence("Port {port} closed on remote", port=label)
+
+
+def _r23b_deleted_nothing(out):
+    """Whether a by-spec `ufw delete` removed nothing: every family answered that no rule matched.
+
+    ufw (backend_iptables.set_rule) prints "Could not delete non-existent rule" per family and exits
+    0 — measured on the test VPS — so the exit code cannot tell; one "Rule deleted" line can.
+    """
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    return (any(ln.startswith("Could not delete non-existent rule") for ln in lines)
+            and not any(ln.startswith("Rule deleted") for ln in lines))
+
+
+def _r23b_still_open(server, port, protos):
+    """After a close, the first public rule that still lets `port` in (ALLOW or LIMIT), else None.
+
+    Either family, for any of `protos`.
+
+    None too when the firewall cannot be read back or is not active: an inactive UFW filters
+    nothing and lists no rules, so there is nothing to read the answer from; the delete's own
+    answer stands there, as it always did.
+    """
+    out, _err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
+    if rc != 0 or not (out or "").strip() or not firewall._ufw_is_active(out):
+        return None
+    for proto in protos:
+        for first in _r22b_first_rules(out, port, proto):
+            if first and first["action"] in ("ALLOW", "LIMIT"):
+                return first
+    return None
 
 
 def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
@@ -2936,19 +2986,38 @@ def remote_ufw_close_port_22(server):
     if not state.get("active"):
         return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
                        "here — port 22 is governed by whatever else is in front of it.")
-    return _r15c_delete_port_22(server)
+    _r15c_delete_port_22(server)
+    # ASK THE HOST, as remote_set_public_ssh(..., "off") does. This answered from the delete's exit
+    # code, and ufw exits 0 deleting a rule that is not there ("Could not delete non-existent
+    # rule", measured on the test VPS). Every host the panel bootstrapped holds SSH open with
+    # `22/tcp LIMIT`, which no `delete allow` matches, so "Close Port 22" said "Port 22 rule removed
+    # from UFW", wrote a success audit row, and left port 22 open to the internet.
+    after = remote_public_ssh_status(server)
+    if after.get("unreachable"):
+        return False, ("Could not read this host's firewall afterwards, so whether public SSH "
+                       "changed is unknown — check the host and try again.")
+    if not after.get("active"):
+        return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
+                       "here — port 22 is governed by whatever else is in front of it.")
+    if after.get("mode") != "off":
+        # The rule still in the way is one the panel does not remove: a port list, a destination,
+        # an every-port allow. Named, so the operator can find it on the Firewall page.
+        return False, i18n.Sentence("Port 22 is still open to the public: connections meet `{rule}` first — "
+                                    "remove or narrow that rule.", rule=after.get("rule") or "?")
+    return True, "Port 22 rule removed from UFW"
+
 
 
 def _r15c_delete_port_22(server):
-    """Delete the 22/tcp allow, unchecked.
+    """Delete every public rule the panel knows opens 22/tcp, unchecked; the caller reads back.
 
-    The Tailscale migration's last step, which has proved its own way back in and removes the stored
-    rule whether or not UFW is on.
+    Also the Tailscale migration's last step, which has proved its own way back in and removes the
+    stored rules whether or not UFW is on. It deleted only `allow 22/tcp`, so a bootstrapped host
+    (`22/tcp LIMIT`) kept its public door after a migration that said it closed it. Exit codes are
+    not read: ufw answers 0 for a rule that was never there, so they say nothing either way.
     """
-    out, err, rc = _core.run_privileged(server, "ufw-delete-allow-port", ["22/tcp"], timeout=15)
-    if rc == 0:
-        return True, "Port 22 rule removed from UFW"
-    return False, err or out or "Failed to remove port 22"
+    for verb, vargs in _R23B_SSH22_DELETES:
+        _core.run_privileged(server, verb, vargs, timeout=15)
 
 
 def _bootstrap_ssh_ports(server):
@@ -3134,10 +3203,22 @@ def remote_ufw_undeny_ip(server, ip):
     # "count what applied" block tallies `removed` from this return value and collects failures
     # into a list that could never fill, so the hourly reconcile reported releases that had not
     # happened on every remote host, while the panel-host path (already fixed) told the truth.
-    out, err, rc = _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=15)
-    if rc == 0:
-        return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
-    return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
+    with _core.ufw_lock(server):
+        out, err, rc = _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=15)
+        if rc != 0:
+            return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
+        # rc 0 is not "unblocked" either: ufw exits 0 when no rule matched ("Could not delete
+        # non-existent rule", measured on the test VPS), and `delete deny from <ip>` matches only a
+        # plain deny, not a REJECT or a deny scoped to a port. So the firewall is read again under
+        # the same lock, and an address it still lists as blocked is not reported unblocked — the
+        # panel host's ufw_undeny_ip does the same. A read that fails says nothing either way, and
+        # the delete's own answer stands.
+        blocked = remote_ufw_blocked_ips(server)
+    if blocked is not None and ip in blocked:
+        return False, i18n.Sentence("{ip} is still blocked: the firewall rule that blocks it is not a plain "
+                                    "deny from that address, which is the only kind the panel removes. "
+                                    "Remove it on the host.", ip=ip)
+    return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
 
 
 def remote_ufw_blocked_ips(server, shadowed=None):
@@ -3597,8 +3678,19 @@ def _open_ssh_port_rule(server, port, old_ports):
             return False, i18n.Sentence("Port {port}/tcp is blocked by the firewall rule `{rule}`, so SSH moved "
                                         "there would be unreachable — remove or change that rule first. Nothing was "
                                         "changed.", port=port, rule=first["detail"])
+        # An IPv6-only allow for exactly `port`/tcp is the operator's, and `ufw allow port/tcp`
+        # takes it over: ufw rewrites a rule that differs only in comment or action in place, so
+        # the revert's `delete allow port/tcp` would remove it with the panel's v4 half. The v4
+        # rule still goes in (IPv4 clients need it), but it is not counted as this call's to delete.
+        v6_own = known and _r23b_v6_exact_open(before, port)
         ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
-        return bool(ok and known), None
+        return bool(ok and known and not v6_own), None
+
+
+def _r23b_v6_exact_open(status_out, port):
+    """Whether an IPv6 public ALLOW or LIMIT for exactly `port`/tcp is listed (ufw would take it over)."""
+    return any(r["to"] == "%s/tcp" % port and r["action"] in ("ALLOW", "LIMIT")
+               for r in _ufw_public_rules(status_out, v6=True))
 
 
 def change_ssh_port(server, new_port, bind_addr=""):
@@ -3852,6 +3944,13 @@ def change_ssh_port(server, new_port, bind_addr=""):
 # `22/tcp` leaves them in place — AHEAD of whatever was just appended, where every connection
 # meets them first. Removed wherever the panel sets what public SSH is.
 _SSH22_SHADOWING = (("ufw-delete-allow-app", ["OpenSSH"]), ("ufw-delete-allow-port", ["22"]))
+
+
+# Every rule shape that opens 22/tcp to the public which the panel removes by spec: the 22/tcp ALLOW,
+# the 22/tcp LIMIT a panel bootstrap leaves (hosts' step 5), and the OpenSSH profile and bare 22 that
+# Ubuntu's own setup leaves. Each family goes with its rule: ufw deletes the (v6) twin of a spec too.
+_R23B_SSH22_DELETES = ((("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"]))
+                       + _SSH22_SHADOWING)
 
 
 _R22B_OPENNESS = {"off": 0, "limit": 1, "allow": 2}
@@ -4168,8 +4267,8 @@ def remote_set_public_ssh(server, mode):
         steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     else:
         return False, "Invalid mode"
-    # ...but only once it IS in. The loop below ignores every exit code, because a delete of an
-    # absent rule is a normal non-zero — and it ignored the add's too, so when `ufw limit 22/tcp`
+    # ...but only once it IS in. The loop below ignores every exit code, because a delete's says
+    # nothing (ufw exits 0 for a rule that is not there, and non-zero for a held lock) — and it ignored the add's too, so when `ufw limit 22/tcp`
     # failed (a timeout, a held lock) it went on to delete the OpenSSH and bare-22 allows anyway,
     # and a host opened only by `ufw allow OpenSSH` was left with nothing letting SSH in. The
     # read-back below reported the failure after the lockout. The add is the gate: if it fails,
@@ -4189,8 +4288,8 @@ def remote_set_public_ssh(server, mode):
     # ASK THE HOST what it ended up with. This used to return True unconditionally, so on a host
     # with no ufw at all every verb failed and the operator still got "✓ Public SSH is now disabled
     # (tailnet-only)", an audit row saying the hardening succeeded, and port 22 open to the
-    # internet. The exit codes cannot answer it either: a delete of an absent rule is a normal
-    # non-zero, which is exactly why they were being ignored.
+    # internet. The exit codes cannot answer it either: ufw exits 0 deleting a rule that is not
+    # there ("Could not delete non-existent rule"), so a delete's rc never says a rule went.
     state = remote_public_ssh_status(server)
     # "I could not read the firewall" is not "UFW is not active" — both refuse, but only one of
     # them is a fact about the host, and the other message sends the operator to check a setting

@@ -714,28 +714,34 @@ function _flat(f){ return {file:f, dir:''}; }
 //   * webkitGetAsEntry() must be called while the drop event is still being handled; the items
 //     list is emptied as soon as it returns. So the roots are taken synchronously below and only
 //     the walk is async.
-function _walkEntry(entry, prefix, out){
+//
+// What cannot be read is skipped and COUNTED in `miss.n`, and the drop handler says how many: a
+// skip was silent, so a partly unreadable tree uploaded short under "Upload N files" with nothing
+// saying N was not all of it.
+function _walkEntry(entry, prefix, out, miss){
   return new Promise(function(resolve, reject){
     if(!entry){ resolve(); return; }
     if(entry.isFile){
       entry.file(function(f){ out.push({file:f, dir:prefix}); resolve(); },
-                 function(){ resolve(); });   // unreadable file: skip it, keep the rest of the tree
+                 function(){ if(miss) miss.n++; resolve(); });   // unreadable file: skip it, keep the rest
       return;
     }
     if(!entry.isDirectory){ resolve(); return; }
     var dir = prefix ? prefix+'/'+entry.name : entry.name;
     var reader = entry.createReader(), kids = [];
+    // A sub-walk that threw goes up to the drop handler, which says the folder could not be read;
+    // with no rejection handler here this directory just stayed pending for good.
+    function walkKids(){
+      Promise.all(kids.map(function(k){ return _walkEntry(k, dir, out, miss); })).then(resolve, reject);
+    }
+    // A batch that fails: the children already listed are still walked (it resolved with none of
+    // them, dropping every earlier batch of this folder), and the rest counts as one skip.
     (function read(){
       reader.readEntries(function(batch){
-        if(!batch.length){
-          // A sub-walk that threw goes up to the drop handler, which says the folder could not be
-          // read; with no rejection handler here this directory just stayed pending for good.
-          Promise.all(kids.map(function(k){ return _walkEntry(k, dir, out); })).then(resolve, reject);
-          return;
-        }
+        if(!batch.length){ walkKids(); return; }
         kids = kids.concat(Array.prototype.slice.call(batch));
         read();
-      }, function(){ resolve(); });
+      }, function(){ if(miss) miss.n++; walkKids(); });
     })();
   });
 }
@@ -1055,9 +1061,13 @@ if (_crumb) _crumb.addEventListener('click', function(ev){
     var base=curDir;                   // the folder it was dropped INTO, before a long tree walk
     if(roots.length){
       _uploadStatus('Reading what you dropped\u2026');
-      var out=[];
-      Promise.all(roots.map(function(r){ return _walkEntry(r, '', out); }))
-        .then(function(){ uploadEntries(out, base); })
+      var out=[], miss={n:0};
+      Promise.all(roots.map(function(r){ return _walkEntry(r, '', out, miss); }))
+        .then(function(){
+          if(miss.n && window.toast) toast(tfn(miss.n, '1 dropped item could not be read and is not uploaded.',
+                                                 '{n} dropped items could not be read and are not uploaded.'), 'warning');
+          uploadEntries(out, base);
+        })
         .catch(function(){ _uploadStatus('Could not read the dropped folder.','text-danger'); });
       return;
     }

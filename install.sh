@@ -964,6 +964,11 @@ fetch_code() {
             x_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
             [[ "${x_owner}" != "root" ]] && x_as="sudo -u ${x_owner}"
         fi
+        # Marked BEFORE the write, not after fetch_code returns: an extract that fails partway (the
+        # disk filling, which the update window's abort names) has already rewritten part of the
+        # tree, and the abort then has to put the old code back rather than restart the panel on a
+        # mix of both versions. Restoring a tree this did not get to touch is harmless.
+        _CODE_FETCHED=1
         tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . \
             | (cd / && ${x_as} tar -C "${PANEL_DIR}" --no-same-owner -xf -)
     elif [[ -d "${PANEL_DIR}/.git" ]]; then
@@ -991,6 +996,7 @@ fetch_code() {
                     echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip"
                 fi ;;
         esac
+        _CODE_FETCHED=1   # before the reset, which rewrites the tree as it goes (see the extract above)
         _gitc reset --hard --quiet "${UPD_TARGET}"
     elif [[ -z "${SRC}" ]]; then
         command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  apt install -y git"
@@ -1436,6 +1442,14 @@ restore_service_unit() {
 # existed are root's, and the owner could never remove them.
 _r22a_prune_snapshots() {
     local _want
+    # PANEL_DIR itself first. It is an entry in the panel user's home, so that user can rename it
+    # and put a link in its place; `cd -P` below then resolves BOTH sides of the check through the
+    # link, they agree, and root prunes stamp-named directories under whatever <target>/data/.backups
+    # the link names. A link root made (the operator moved the install) is still followed.
+    if [[ -L "${PANEL_DIR}" ]] && [[ "$(stat -c '%u' -- "${PANEL_DIR}" 2>/dev/null)" != "0" ]]; then
+        warn "Old update snapshots not pruned: ${PANEL_DIR} is a link."
+        return 0
+    fi
     _want="$(cd -P -- "${PANEL_DIR}" 2>/dev/null && pwd -P)" || return 0
     _want="${_want}/data/.backups"
     (
@@ -3156,7 +3170,12 @@ PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
 TS_ADDR=""
 if command -v tailscale >/dev/null 2>&1; then
     TS_DNS="$(tailscale status --json 2>/dev/null | python3 -I -c 'import sys,json;print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)"
-    TS_IP="$(tailscale ip -4 2>/dev/null | head -1)"
+    # `|| TS_IP=""`: `tailscale ip` exits 1 when the node is logged out or tailscaled is not running
+    # ("no current Tailscale IPs", or no daemon socket), and under pipefail that failed assignment
+    # ended the fresh install right here, silently, with the service already up but the setup link,
+    # the firewall auto-open and the reboot step never reached. A host with Tailscale installed and
+    # not up is ordinary (uninstall.sh leaves it installed), and it simply has no tailnet address.
+    TS_IP="$(tailscale ip -4 2>/dev/null | head -1)" || TS_IP=""
     TS_ADDR="${TS_DNS:-${TS_IP}}"
 fi
 

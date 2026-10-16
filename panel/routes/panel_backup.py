@@ -24,7 +24,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
     _r22b_unreachable_or_generic)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
-    _r20b_audit_on_raise, _record_game_clock)
+    _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock)
 
 
 class _FullBackupTally:
@@ -816,6 +816,7 @@ def _register_panel_backups(app):
     @app.route("/api/panel/backup/restore", methods=["POST"])
     @login_required
     @superadmin_required
+    @_r23a_not_while_panel_host_reboots
     def api_panel_backup_restore():
         """Restore a panel backup (destructive).
 

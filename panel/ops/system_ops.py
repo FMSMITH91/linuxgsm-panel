@@ -229,11 +229,39 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
 
     Every finished call is counted for the debug report (ssh_manager._core.note_privileged, which
     cannot raise), by the path it took and how it ended."""
-    path, res = _run_verb_once(verb, args, timeout, merge_stderr)
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    if _smc._ufw_mutating(verb):
+        # Under the panel host's ufw lock, as run_privileged takes it for every ufw write. These
+        # writers ran without it, so a Block pressed during the auto-block reconcile could be
+        # undone by the reconcile's release, and a delete-by-number on the local row could hit
+        # the rule next to the one it checked after an unlocked insert renumbered the list.
+        with _r23a_local_ufw_lock():
+            path, res = _run_verb_once(verb, args, timeout, merge_stderr)
+    else:
+        path, res = _run_verb_once(verb, args, timeout, merge_stderr)
     if path:
-        from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
         _smc.note_privileged(verb, path, res)
     return res
+
+
+class _R23aLocalRow:
+    """The panel's own host as ssh_manager's host locks key it (is_local).
+
+    For system_ops, which has no row in hand: every local row shares one lock key, so this one
+    names the same lock.
+    """
+
+    is_local = True
+
+
+def _r23a_local_ufw_lock():
+    """The panel host's ufw lock.
+
+    The one run_privileged and the auto-block reconcile take for a local row. An RLock, so a
+    caller already holding it (the reconcile) nests.
+    """
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    return _smc.ufw_lock(_R23aLocalRow)
 
 
 def _r19b_root_runs_tool(verb):
@@ -3489,6 +3517,12 @@ def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
     the panel did not write is left alone where it blocks, moved (never re-tagged) where it does
     not, and the only other delete is of the panel's own rule when it is re-tagged (auto-block →
     manual) — put back if the new one does not go in."""
+    # Before anything is written, for both hosts (this is ufw_deny_ip's and remote_ufw_deny_ip's
+    # one implementation): the verb refuses these too (privileged._r23a_deny_source), but as an
+    # exception the routes answer with a bare 500.
+    if _priv._r23a_denies_everything(ip):
+        return False, i18n.Sentence("{ip} stands for every address: blocking it would drop every "
+                                    "connection to the host, SSH included. Nothing was changed.", ip=ip)
     if existing is not None and _ufw_deny_tag_rank(existing) == 0:
         return True, i18n.Sentence("{ip} is already blocked by an existing firewall rule (left as it is).", ip=ip)
     if existing is None and shadowed:
@@ -3518,10 +3552,13 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # Separate verbs, never a "a; b" compound: _run prepends `sudo` to the FIRST command only.
     shadowed = {}
-    existing = (ufw_blocked_ips(shadowed) or {}).get(ip)
-    return _ufw_deny_with(ip, tag, existing,
-                          lambda verb, args: _run_verb(verb, args, timeout=15),
-                          shadowed.get(ip))
+    # The read and the writes decided from it, under one hold of the host's ufw lock (as
+    # hosts.remote_ufw_deny_ip does): _ufw_deny_with deletes and inserts by what this read found.
+    with _r23a_local_ufw_lock():
+        existing = (ufw_blocked_ips(shadowed) or {}).get(ip)
+        return _ufw_deny_with(ip, tag, existing,
+                              lambda verb, args: _run_verb(verb, args, timeout=15),
+                              shadowed.get(ip))
 
 
 def ufw_undeny_ip(ip):
@@ -3534,10 +3571,21 @@ def ufw_undeny_ip(ip):
     # timeout ("", "Command timed out", -1), a missing helper binary, or a sudo refusal all
     # reported "Unblocked", showed a green toast, and wrote an audit row saying the unblock
     # succeeded, for a deny rule that is still in the firewall.
-    out, err, rc = _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
-    if rc == 0:
-        return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
-    return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
+    with _r23a_local_ufw_lock():
+        out, err, rc = _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
+        if rc != 0:
+            return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
+        # rc 0 is not "unblocked": ufw exits 0 when no rule matched ("Could not delete non-existent
+        # rule", measured on the test VPS), and `delete deny from <ip>` matches only a plain deny,
+        # not a REJECT or a deny scoped to a port. So the firewall is read again, and an address it
+        # still lists as blocked is not reported unblocked. A read that fails says nothing either
+        # way, and the delete's own answer stands, as it did.
+        blocked = ufw_blocked_ips()
+    if blocked is not None and ip in blocked:
+        return False, i18n.Sentence("{ip} is still blocked: the firewall rule that blocks it is not a plain "
+                                    "deny from that address, which is the only kind the panel removes. "
+                                    "Remove it on the host.", ip=ip)
+    return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
 
 
 _F2B_EVENT_RE = re.compile(r"\[([A-Za-z0-9._-]+)\] (Ban|Found) ([0-9a-fA-F:.]+)")
@@ -4755,7 +4803,10 @@ def _redact_emails(text, hit=None):
 # printed everything after its first blank. JSON inside a JSON string escapes every quote
 # (`body={\"password\": \"hunter2 x\"}`): the key's closing quote may follow a backslash, and a value
 # opened by `\"` runs to the next `\"` — it printed whole before.
-_SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
+# `passphrase` too (review 1015d): the backup encryption passphrase is the panel's own secret, and a
+# `passphrase=…` under the long-token rule's 28 characters printed. Not `pass` or `pwd` alone: those
+# name a test count ("passed: 3") and sudo's PWD= working directory, which the report reads.
+_SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth[_-]?key|"
                            r"cred(?:ential)?|cookie|bearer)[\w-]*)(\\?[\"']?\s*[=:]\s*)"
                            r"(\"(?:[^\"\\\n]|\\.){0,1024}\"|'(?:[^'\\\n]|\\.){0,1024}'"
                            r"|\\\"(?:[^\\\n]|\\[^\"\n]){0,1024}\\\"|\\'(?:[^\\\n]|\\[^'\n]){0,1024}\\'"

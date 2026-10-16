@@ -365,7 +365,9 @@ _ok64 = {"from, with another SSH rule": _fwrun64(_BOTH64, _smh64.remote_ufw_allo
          "force": _fwrun64(_ONLY_PUBLIC64, _smh64.remote_ufw_close_port, _S64, 22, "tcp", force=True)}
 check("firewall: ...while a rule that is not the only way in, another port, another protocol and the "
       "panel's own forced moves still delete (control)",
-      all(isinstance(v[0], tuple) and v[0][0] is True and len(v[1]) == 1 for v in _ok64.values()),
+      # One delete each; a close also reads the firewall back (review 1015d), which changes nothing.
+      all(isinstance(v[0], tuple) and v[0][0] is True and len([x for x in v[1] if x != "ufw-status"]) == 1
+          for v in _ok64.values()),
       repr(_ok64))
 _un64 = {"from": _fwrun64(_ONLY_FROM64, _smh64.remote_ufw_allow_from, _S64, _ADMIN64, "22", "tcp",
                           allow=False, status={"installed": False, "unreachable": True}),

@@ -2866,7 +2866,7 @@ def _so7_generate_debug_report():
                _p7_journal_verbs() == _P7_HELPER_JOURNAL)), _rep_log[-200:])
     check("so/debug report: the recent log is the newest 400 lines, in order, and no older one",
           all((_rep_log.startswith("line 0200 "), "line 0199" not in _rep_log,
-               _rep_log.find("line 0300") < _rep_log.find("line 0400"))), _rep_log[:80])
+               -1 < _rep_log.find("line 0300") < _rep_log.find("line 0400"))), _rep_log[:80])
 
 
 def _so7_generate_debug_report_2():

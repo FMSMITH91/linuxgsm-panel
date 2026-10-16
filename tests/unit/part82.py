@@ -133,7 +133,7 @@ try:
     _body82 = _json82.dumps(_fw82["key"][1])
     _fw_out82 = _node82("remote_firewall.js: a refresh answered with a changed host key", _DOM82 + _SETTLE47 + (
         "global.fetch = () => Promise.resolve({json: () => Promise.resolve(%s)});\n"
-        "%s\n%s\n%s\n%s\n%s\n%s\n%s\n"
+        "%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n"
         "(async () => { refreshFirewall(); await settle();\n"
         "  const txt = id => els[id].children.map(c => c.textContent).join('|');\n"
         "  console.log(JSON.stringify({badge: els['ufw-badge'].textContent, rules: txt('rules-list'),\n"
@@ -142,7 +142,9 @@ try:
          _cut47(_fwjs82, "function _fwUnreadWhy("),
          # The status card's repaint and the reason both it and the lists read (review 1015c).
          _cut47(_fwjs82, "function _fwHostSaid("), _cut47(_fwjs82, "function _fwStatusNote("),
-         _cut47(_fwjs82, "function _fwRenderRules("), _cut47(_fwjs82, "function _fwRenderBlocks(")))
+         _cut47(_fwjs82, "function _fwRenderRules("), _cut47(_fwjs82, "function _fwRenderBlocks("),
+         # The not-a-reading guard refreshFirewall calls first (review 1015d).
+         _cut47(_fwjs82, "function _r23c_fwNotRead(")))
     if _fw_out82 is not None:
         check("remote firewall page: a refresh answered with a changed host key reads 'Unknown' and "
               "says the route's Re-trust sentence on both lists (it read Inactive, 'No open ports "

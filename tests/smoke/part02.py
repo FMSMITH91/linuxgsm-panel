@@ -1505,12 +1505,16 @@ with app.app_context():
           "status %s, user %r" % (_esc_r.status_code, eu and eu.is_superadmin))
 # reset_password=on is the real reset path now (the password is generated, never posted), so
 # this has to drive THAT to still be testing the superadmin guard rather than an ignored field.
-dc.post("/users/%d/edit" % admin2_id,
-        data={"is_superadmin": "on", "is_active": "on", "reset_password": "on"})
+_rst_r = dc.post("/users/%d/edit" % admin2_id,
+                 data={"is_superadmin": "on", "is_active": "on", "reset_password": "on"})
 with app.app_context():
     a2 = User.query.get(admin2_id)
-    check("MANAGE_USERS user can't reset a superadmin's password",
-          a2.is_superadmin and auth.check_password("Str0ng!passw0rd", a2.password_hash))
+    # Refused (_form_err redirects), not crashed: a 500 before the reset also left the old
+    # password, and read as the guard holding (review 1015d).
+    check("MANAGE_USERS user can't reset a superadmin's password (the request is refused, not crashed)",
+          _rst_r.status_code == 302 and a2.is_superadmin
+          and auth.check_password("Str0ng!passw0rd", a2.password_hash),
+          "status %s" % _rst_r.status_code)
 dc.post("/groups/add", data={"name": "esc_group", "permissions": ["super_admin", "manage_users"]})
 with app.app_context():
     eg = Group.query.filter_by(name="esc_group").first()
@@ -1662,11 +1666,15 @@ check("edit_remote: ...leaving no entry under a key nothing can name again",
       _ek2 not in _sm_core._connections)
 
 _ek3, _ec3 = _pool_one(remote2_id)
-c.post("/remotes/%d/edit" % remote2_id,
-       data={"name": "renamed-only", "host": "127.0.0.2", "ssh_port": "22",
-             "ssh_user": "root", "auth_method": "password"})
+_r23d_rn = c.post("/remotes/%d/edit" % remote2_id,
+                  data={"name": "renamed-only", "host": "127.0.0.2", "ssh_port": "22",
+                        "ssh_user": "root", "auth_method": "password"})
+with app.app_context():
+    _r23d_rn_name = db.session.get(RemoteServer, remote2_id).name
+# The rename really happened: a request that crashed first churned nothing either (review 1015d).
 check("edit_remote: a rename alone does NOT churn the pool",
-      not _ec3.closed and _ek3 in _sm_core._connections)
+      _r23d_rn_name == "renamed-only" and not _ec3.closed and _ek3 in _sm_core._connections,
+      "status %d, name %r" % (_r23d_rn.status_code, _r23d_rn_name))
 _sm_core._connections.pop(_ek3, None)
 _sm_core._remote_conn_keys.pop(remote2_id, None)
 

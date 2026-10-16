@@ -778,14 +778,23 @@ try:
     # with no rules protects nothing, so the delete goes ahead.
     _NO_RULES = ("Status: active\n\n     To                         Action      From\n"
                  "     --                         ------      ----\n", "", 0)
-    _w = _wire(verbs={"ufw-delete-allow-from-port": ("Could not delete non-existent rule", "", 1),
+    # ufw exits 0 deleting a rule that is not there, and says so in words (measured on the test
+    # VPS, review 1015d): this stand-in modelled it as rc 1, which is why no check caught a
+    # "removed" built on the exit code.
+    _w = _wire(verbs={"ufw-delete-allow-from-port": ("Could not delete non-existent rule", "", 0),
                       "ufw-status": _NO_RULES})
-    eq("ufw allow-from: allow=False removes the rule with the delete verb, and a failure says why",
+    eq("ufw allow-from: allow=False removes the rule with the delete verb, and a rule that was not "
+       "there is not reported removed",
        (_H.remote_ufw_allow_from(_p8_srv(), "203.0.113.9", 22, allow=False),
         _w.verbs_called("ufw-delete-allow-from-port")),
-       ((False, "Could not delete non-existent rule"),
+       ((False, "There is no rule for 22/tcp from 203.0.113.9, so nothing was removed."),
         [("ufw-delete-allow-from-port", ["203.0.113.9", "22", "tcp"])]))
-    _wire(verbs={"ufw-status": _NO_RULES})
+    _wire(verbs={"ufw-delete-allow-from-port": ("", "ERROR: Could not acquire lock", 1),
+                 "ufw-status": _NO_RULES})
+    eq("ufw allow-from: ...and a failed delete says why",
+       _H.remote_ufw_allow_from(_p8_srv(), "203.0.113.9", 22, allow=False),
+       (False, "ERROR: Could not acquire lock"))
+    _wire(verbs={"ufw-status": _NO_RULES, "ufw-delete-allow-from-port": ("Rule deleted", "", 0)})
     eq("ufw allow-from: a removed rule is reported as removed",
        _H.remote_ufw_allow_from(_p8_srv(), "203.0.113.9", 22, allow=False),
        (True, "Rule for 22/tcp from 203.0.113.9 removed"))
@@ -885,18 +894,21 @@ try:
     eq("ufw close: one protocol deletes the proto rule",
        (_H.remote_ufw_close_port(_p8_srv(), 22, "tcp"), _w.verbs_called("ufw-delete-allow-proto-port")),
        ((True, "Port 22/tcp closed on remote"), [("ufw-delete-allow-proto-port", ["tcp", "22"])]))
-    _wire(verbs={"ufw-delete-allow-port": ("Could not delete non-existent rule", "", 1),
+    _wire(verbs={"ufw-delete-allow-port": ("", "ERROR: Could not acquire lock", 1),
                  "ufw-status": _NO_RULES})
     eq("ufw close: a failed bare delete is reported", _H.remote_ufw_close_port(_p8_srv(), 27015),
-       (False, "Could not delete non-existent rule"))
-    # On an active firewall (the close reads it first: an inactive UFW filters nothing).
+       (False, "ERROR: Could not acquire lock"))
+    # On an active firewall (the close reads it first: an inactive UFW filters nothing). Read
+    # again afterwards: success is port 22 off, never the deletes' exit codes (review 1015d).
     _active11 = ("Status: active\n\nTo  Action  From\n--  ------  ----\n22/tcp  ALLOW  Anywhere\n", "", 0)
-    _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-status": _active11})
+    _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-status": [_active11, _NO_RULES]})
     eq("ufw close port 22: removes the 22/tcp allow", _H.remote_ufw_close_port_22(_p8_srv()),
        (True, "Port 22 rule removed from UFW"))
     _wire(verbs={"ufw-delete-allow-port": ("", "", 1), "ufw-status": _active11})
-    eq("ufw close port 22: a silent failure still says it failed",
-       _H.remote_ufw_close_port_22(_p8_srv()), (False, "Failed to remove port 22"))
+    eq("ufw close port 22: a failure still says it failed, naming the rule left",
+       _H.remote_ufw_close_port_22(_p8_srv()),
+       (False, "Port 22 is still open to the public: connections meet `22/tcp  ALLOW  Anywhere` first — "
+               "remove or narrow that rule."))
     # ── a game server's firewall cleanup takes only ITS rules (Aikido 745379215) ──────────────
     # remote_ufw_close_game_port deleted by SPEC — `ufw delete allow <port>` and the same for
     # proto tcp and udp — with no comment, and ufw removes a rule matching all but its comment when
@@ -938,7 +950,7 @@ try:
         def spec_delete(self, to):
             left = [r for r in self.rules if not (r["to"] == to and r["action"] == "ALLOW")]
             gone, self.rules = len(self.rules) - len(left), left
-            return ("Rule deleted", "", 0) if gone else ("Could not delete non-existent rule", "", 1)
+            return ("Rule deleted", "", 0) if gone else ("Could not delete non-existent rule", "", 0)
 
         def allow(self, a):
             to, comment = a[0], (a[1] if len(a) > 1 else "")
@@ -1445,7 +1457,7 @@ try:
             for fam in (self.v4, self.v6):
                 fam[:] = [r for r in fam if not (r[0] == a[0] and r[1:3] == ["ALLOW", "Anywhere"])]
             if n == len(self.v4) + len(self.v6):
-                return ("Could not delete non-existent rule", "", 1)
+                return ("Could not delete non-existent rule\nCould not delete non-existent rule (v6)", "", 0)
             return ("Rule deleted\nRule deleted (v6)", "", 0)
 
         def verbs(self):
@@ -2495,7 +2507,9 @@ try:
           "again, sshd restarted — and nothing else is touched",
           _cp[0] is False and _cp[1].startswith("sshd rejected the new config — nothing changed.")
           and ("write", "sshd-port-dropin") in [(c[0], c[1]) for c in _w.calls]
-          and _w.names()[-3:] == ["sshd-restore-dropin", "ufw-delete-allow-proto-port", "service-restart"]
+          # (the close reads the firewall back, review 1015d: that read is not a change)
+          and [n for n in _w.names() if n != "ufw-status"][-3:]
+          == ["sshd-restore-dropin", "ufw-delete-allow-proto-port", "service-restart"]
           and not _w.verbs_called("f2b-set-sshd-ports"), "result=%r names=%r" % (_cp, _w.names()))
     check("ssh port: ...and the drop-in it tried kept the old port beside the new one",
           any(c[0] == "write" and c[2].endswith("Port 2222\nPort 22\n") for c in _w.calls))
@@ -3493,9 +3507,10 @@ try:
        (_F._write_file_as_user(_p8_srv(), "cs2server", "/home/cs2server/link/x", _big), len(_calls)),
        ((False, "Invalid path"), 1))
     _calls = _fl_rc(("", "", 0), ("", "No space left on device", 1))
-    eq("file write (large): a failed chunk stops the write and says why",
+    # The third call removes the chunk already staged (review 1015d: it was left as .paneltmp).
+    eq("file write (large): a failed chunk stops the write, says why and removes what was staged",
        (_F._write_file_as_user(_p8_srv(), "cs2server", "/home/cs2server/big.bin", _big), len(_calls)),
-       ((False, "No space left on device"), 2))
+       ((False, "No space left on device"), 3))
 
     # ── LinuxGSM config read ───────────────────────────────────────────────────────────────────
     _fl_rc(("__LGSMP_DEFAULT_B__!!notbase64!!__LGSMP_DEFAULT_E__" + _fl_frame("COMMON", "")
@@ -3518,7 +3533,7 @@ try:
 
     # ── LinuxGSM config write: an invalid key never becomes a line ──────────────────────────────
     _written = []
-    _F._write_file_as_user = lambda server, user, ap, data: (_written.append((ap, data)), (True, ""))[1]
+    _F._write_file_as_user = lambda server, user, ap, data, selfname=None: (_written.append((ap, data)), (True, ""))[1]
     _fl_rc(("__NOFILE__", "", 0))
     eq("lgsm config write: a key that is not an identifier is skipped; a fresh instance cfg is "
        "just the valid updates",

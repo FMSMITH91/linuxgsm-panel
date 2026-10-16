@@ -1286,6 +1286,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "_shared.py:refused_or_view",
       "view:api_panel_backup_restore"
     ],
     "methods": [
@@ -1308,6 +1309,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "_shared.py:refused_or_view",
       "view:api_panel_change_port"
     ],
     "methods": [
@@ -1352,6 +1354,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "_shared.py:refused_or_view",
       "view:api_panel_repair_db"
     ],
     "methods": [
@@ -1407,6 +1410,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "_shared.py:refused_or_view",
       "view:api_panel_switch_branch"
     ],
     "methods": [

@@ -260,6 +260,7 @@ try:
         _scan_r13d["up"] = not _scan_r13d["up"]
         _Q["n"] = 0
         resp = (client or c).get(path)
+        _Q["resp"] = resp       # for a check that must also read what was measured
         return _Q["n"], resp.status_code
 
     c.get("/api/servers")                  # warm one-time caches so the count is steady
@@ -306,9 +307,11 @@ try:
         # early (0 queries) while its snapshot is empty, so the snapshot has to be populated
         # for the measurement to mean anything.
         _sv_seen = dict(_appmod._os_update_seen)
+        _written_ids = []
         try:
             with app.app_context():
                 for _r in RemoteServer.query.all():
+                    _written_ids.append(_r.id)
                     # "created" ties an entry to the row holding its id now; one without
                     # it reads as not-checked-yet, and would skip every host below.
                     _appmod._os_update_seen[_r.id] = {
@@ -316,8 +319,13 @@ try:
                         "packages": [{"name": "openssl", "suite": "noble-security"}],
                         "at": 1.0, "created": _r.created_at}
             _sum_q, _sum_code = _qcount("/api/os-updates/summary")
-            check("perf: the OS-updates banner endpoint renders", _sum_code == 200,
-                  "got %d" % _sum_code)
+            _sum_ids = [_h["id"] for _h in (_Q["resp"].get_json() or {}).get("hosts") or []]
+            # Every host written above is in the answer: an entry the route drops (a renamed
+            # identity key) leaves an empty loop, and its ~1 query passed the budget below having
+            # measured nothing (review 1015d).
+            check("perf: the OS-updates banner endpoint renders, naming every host in the snapshot",
+                  _sum_code == 200 and _written_ids and sorted(_sum_ids) == sorted(_written_ids),
+                  "got %d, hosts %r of %r" % (_sum_code, _sum_ids, sorted(_written_ids)))
             # 5 and 8, not 10 and 15: it really costs 3 and 7 (measured 2026-09-29, with 9
             # hosts in the snapshot — the same with the row-identity check the entries now
             # carry, whose query also answers which host is the panel's), so a per-host query
@@ -327,12 +335,13 @@ try:
                   _sum_q <= 5, "%d queries for %d hosts"
                   % (_sum_q, len(_appmod._os_update_seen)))
             _usum_q, _usum_code = _qcount("/api/os-updates/summary", client_as(mru_id))
+            _usum_ids = [_h["id"] for _h in (_Q["resp"].get_json() or {}).get("hosts") or []]
             # Weaker than the superadmin check by nature, and worth saying so: this user is
             # scoped to one host, so the loop skips the rest and a per-host regression only
             # costs it one query. The superadmin budget above is the one that bites.
             check("perf: ...and stays in budget for a NON-superadmin, whose access check is real",
-                  _usum_code == 200 and _usum_q <= 8,
-                  "%d queries (status %d)" % (_usum_q, _usum_code))
+                  _usum_code == 200 and _usum_q <= 8 and remote_id in _usum_ids,
+                  "%d queries (status %d, hosts %r)" % (_usum_q, _usum_code, _usum_ids))
         finally:
             _appmod._os_update_seen.clear()
             _appmod._os_update_seen.update(_sv_seen)
@@ -577,10 +586,11 @@ check("layout: that host's rows render in the saved order",
 check("layout: another host's rows are NOT disturbed",
       _row_order(_html_sv, remote2_id) == _other_before)
 # A server id belonging to a different host must not be able to move it across cards.
-c.post("/api/account/ui-order", json={"server_order": {str(remote_id): _other_before}})
+_r23d_fo = c.post("/api/account/ui-order", json={"server_order": {str(remote_id): _other_before}})
 _html_x = c.get("/").get_data(as_text=True)
+# Answered, not crashed: a 500 moved nothing either (review 1015d).
 check("layout: a foreign server id cannot pull a row into another host's card",
-      _row_order(_html_x, remote2_id) == _other_before
+      _r23d_fo.status_code < 500 and _row_order(_html_x, remote2_id) == _other_before
       and sorted(_row_order(_html_x, remote_id)) == sorted(_rows_default))
 
 
@@ -1921,6 +1931,14 @@ _resp = _eh_c.get("/api/server/99999/history")
 check("errors: an abort() on an API path answers JSON too",
       "json" in (_resp.headers.get("Content-Type") or "") and _resp.status_code == 404,
       "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+# Both carry `error` beside `message` (review 1015d): a page's READ checks `error` or `unreachable`,
+# and a reply with neither was painted as a reading (public SSH "not filtered — UFW is inactive").
+_eh_404 = _resp.get_json(silent=True) or {}
+_eh_500 = _resp_gen.get_json(silent=True) or {}
+check("errors: ...the generic 500 and an API 404 each carry `error`, the same sentence as `message`",
+      bool(_eh_500.get("message")) and _eh_500.get("error") == _eh_500.get("message")
+      and bool(_eh_404.get("message")) and _eh_404.get("error") == _eh_404.get("message"),
+      repr((_eh_500, _eh_404)))
 # ...and so does any path asked with `Accept: application/json`, as _form_ok/_form_err answer such a
 # caller (review 1013a: it got that endpoint's JSON on success and an HTML page on any fault).
 _resp = _eh_c.get("/no-such-page-p04", headers={"Accept": "application/json"})

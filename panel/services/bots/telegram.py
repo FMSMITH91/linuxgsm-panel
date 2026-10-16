@@ -11,7 +11,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
     UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
-    update_rate_reply)
+    update_rate_reply, _r23a_update_busy_reply)
 from panel.db.models import (LOCAL_HOST_LABEL)
 import logging
 import time
@@ -360,6 +360,10 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
 def _telegram_do_update(app, token, chat_id, sender=None):
     # NOT force=True: a status seconds old is reused, and a forced check is spent from an hourly
     # allowance both bots share — each one can cost a GitHub request (see bot_update_status).
+    _busy = _r23a_update_busy_reply(app)
+    if _busy:
+        _tg_reply(token, chat_id, _busy)
+        return
     try:
         st = bot_update_status()
     except Exception:

@@ -1,0 +1,5 @@
+{
+  "The firewall could not be read, so its rules can't be shown.": "Le pare-feu n'a pas pu être lu, ses règles ne peuvent donc pas être affichées.",
+  "1 dropped item could not be read and is not uploaded.": "1 élément déposé n'a pas pu être lu et n'est pas envoyé.",
+  "{n} dropped items could not be read and are not uploaded.": "{n} éléments déposés n'ont pas pu être lus et ne sont pas envoyés."
+}

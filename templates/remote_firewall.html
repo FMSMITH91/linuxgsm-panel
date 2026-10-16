@@ -61,7 +61,9 @@
         {% if status.permission_denied %}
         <p class="text-warning small mb-0"><i class="bi bi-lock"></i> The panel reached this host, but sudo refused the firewall read, so its rules can't be shown. Check the panel's sudoers grant on this host.</p>
         {% elif fw_unread_why %}
-        <p class="text-warning small mb-0"><i class="bi bi-key"></i> {{ fw_unread_why }}</p>
+        {# The key icon for a changed host key only, as refreshFirewall paints it: a read cut off
+           part-way is not a key problem. #}
+        <p class="text-warning small mb-0"><i class="bi {{ 'bi-key' if status.code == 'host_key_mismatch' else 'bi-exclamation-triangle' }}"></i> {{ fw_unread_why }}</p>
         {% elif status.unreachable %}
         <p class="text-secondary small mb-0"><i class="bi bi-plug"></i> The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.</p>
         {% elif not status.installed %}

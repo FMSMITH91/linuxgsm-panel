@@ -745,6 +745,9 @@ def _register_actions(app):
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
             flash(_r15e_said(msg), "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
+            # Rolled back first, as _r20b_audit_raised does: a raise from a commit leaves the
+            # session refusing every write, and the failure row below would raise in its turn.
+            db.session.rollback()
             # Unless the host call's own wrapper already wrote the row (a short action's SSH that
             # raised, _run_sync_action): one attempt, one row.
             if not _r21b_audited(e):
@@ -1299,6 +1302,7 @@ def _register_commands(app):
             flash(i18n.tr("Loaded {n} commands for '{name}'.", n=len(cmds), name=gs.name), "success")
         except Exception:
             _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
+            db.session.rollback()   # the commit above can be what raised (see server_action)
             log_action(current_user, "refresh_commands", target=gs.name,
                        detail="could not read the command list", success=False, server=gs)
             flash(i18n.tr("Could not read the command list for '{name}'.", name=gs.name), "danger")
@@ -1340,6 +1344,7 @@ def _register_commands(app):
             flash(i18n.tr("Command sent: {command}", command=cmd_text), "success")
 
         except Exception as e:
+            db.session.rollback()   # the success row's commit can be what raised (see server_action)
             log_action(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}", success=False,
                        server=gs)
             flash("Failed to send that command. The audit log has the details.", "danger")

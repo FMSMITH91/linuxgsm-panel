@@ -2463,6 +2463,9 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
 
     except Exception:
         _em = _log_and_generic("uninstall failed")
+        # Rolled back first: a raise from the row delete's commit leaves the session refusing every
+        # write (PendingRollbackError), so the failure row raised here and the reply never went out.
+        db.session.rollback()
         log_action(current_user, "uninstall_server", target=name, success=False, server=gs)
         return _index_reply(_em, False, "danger", 500)
 

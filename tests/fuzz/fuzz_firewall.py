@@ -6,7 +6,8 @@ each line goes through `_parse_ufw_rule`, and lines matching UFW's numbered-rule
 by `_group_ufw_rules` exactly as the live parser feeds it (rule numbers come from the `\d+` capture,
 never arbitrary strings — feeding a non-numeric num would be a harness bug, not a real input). The
 same text also goes whole through `hosts._ufw_first_public_rule`, the read-back the rate limit and
-the lockout guards decide by, for a fuzzed port and protocol.
+the lockout guards decide by, for a fuzzed port and protocol, and through `hosts._r22b_not_limit`,
+which reads it in both address families.
 
 Run locally (from anywhere):
     pip install atheris
@@ -43,6 +44,11 @@ def TestOneInput(data):
     unresolved, scoped = fdp.ConsumeBool(), fdp.ConsumeBool()
     text = fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes())
     _hosts._ufw_first_public_rule(text, port, proto, unresolved=unresolved, scoped=scoped)
+    # And both families, as the rate limit reads them (review 1015d): the call above is IPv4 only
+    # (v6 defaults to False), so every `(v6)` row was filtered out before it was matched, and the
+    # IPv6 half of the read-back was parsed but never matched under fuzzing. No extra bytes are
+    # consumed, so the committed seed decodes as it did.
+    _hosts._r22b_not_limit(text, port, proto)
     rules = []
     for line in text.split("\n"):
         ssh_manager._parse_ufw_rule(line)             # per-line field parser

@@ -1829,13 +1829,36 @@ def _probe_once41(probe):
     return _run41(["bash", "-c", probe]).stdout.strip()
 
 
+# The process names GAME_SESSIONS_PROBE and install.sh's game_sessions_running look for.
+_R23D_SESSION_NAMES41 = frozenset(("tmux: server", "tmux", "SCREEN", "screen"))
+
+
+def _r23d_proc_sessions41():
+    """The tmux/screen processes this machine runs, read from /proc, never by the probe under test.
+
+    Whether the machine is idle was decided by GAME_SESSIONS_PROBE itself (review 1015d): a probe
+    regressed to always answering YES read as "this machine runs a session of its own", and all
+    three of its checks became SKIPs while the suite still passed.
+    """
+    _found = []
+    for _pid in (_p for _p in os.listdir("/proc") if _p.isdigit()):
+        try:
+            with open(os.path.join("/proc", _pid, "comm"), encoding="utf-8", errors="replace") as _fh:
+                _name = _fh.read().rstrip("\n")
+        except OSError:
+            continue        # ended while being read
+        if _name in _R23D_SESSION_NAMES41:
+            _found.append((int(_pid), _name))
+    return _found
+
+
 def _session_probe_body41():
     probe = _hosts41.GAME_SESSIONS_PROBE
     blocks = _install_blocks41()
     _power_guard_checks41()
     if not _only_bare_reboot41(blocks):
         return
-    pre = _steady41(_probe_once41, lambda v: v == "NO", probe)
+    machine_idle = _r23d_machine_idle41(probe)
     idle = _steady41(_run_blocks41, lambda o: all("REBOOTING" in x for x in o), blocks)
     proc = _popen41([sys.executable, "-c", _TMUX_NAME41])
     try:
@@ -1853,12 +1876,12 @@ def _session_probe_body41():
             skip(_sp41n, "prctl(PR_SET_NAME) did not take here")
         # Not the idle control: its `idle` was run before the stand-in started, so prctl is no
         # reason to skip it — and skipping it hid the "always busy" regression as a SKIP.
-        _idle_control41(_idle_name, pre, idle)
+        _idle_control41(_idle_name, machine_idle, idle)
         return
     # On a machine already running a tmux or screen session of its own, the probe says YES before
     # the stand-in starts, so the busy checks would pass on THAT session (perhaps through another
     # branch of the probe) without testing the 'tmux: server' one: they are skipped there, too.
-    if pre != "NO":
+    if not machine_idle:
         for _sp41n in ("game-session probe: with LinuxGSM's tmux server running, the bootstrap's "
                        "probe answers YES",
                        "install.sh: with it running, neither reboot spot reboots"):
@@ -1869,7 +1892,17 @@ def _session_probe_body41():
               busy_probe == "YES", repr(busy_probe))
         check("install.sh: with it running, neither reboot spot reboots, and both say why",
               all("REBOOTING" not in o and "game servers" in o for o in busy), repr(busy))
-    _idle_control41(_idle_name, pre, idle)
+    _idle_control41(_idle_name, machine_idle, idle)
+
+
+def _r23d_machine_idle41(probe):
+    """Whether this machine runs no tmux/screen, by /proc; when it runs none, the probe must SAY none."""
+    machine_idle = not _steady41(_r23d_proc_sessions41, lambda v: not v)
+    pre = _steady41(_probe_once41, lambda v: v == "NO", probe)
+    if machine_idle:
+        check("game-session probe: on a machine running no tmux or screen process (read from /proc), "
+              "the bootstrap's probe answers NO", pre == "NO", repr(pre))
+    return machine_idle
 
 
 def _only_bare_reboot41(blocks):
@@ -1880,13 +1913,14 @@ def _only_bare_reboot41(blocks):
     return not power
 
 
-def _idle_control41(name, pre, idle):
+def _idle_control41(name, machine_idle, idle):
     """An idle host that needs a reboot still gets one: checked whenever this machine is idle."""
     # The machine decides whether this RUNS, never whether it passes: it was `if pre == "NO" and
     # <the control holds>: check(True) else: skip(...)`, so a probe that always answered "busy"
     # (`pgrep -f` matching its own `bash -c` line, say) read as a SKIP about tmux sessions, and
-    # install.sh never rebooting a host that needed it passed the suite.
-    if pre == "NO":
+    # install.sh never rebooting a host that needed it passed the suite. Idle is read from /proc,
+    # not by the probe (_r23d_proc_sessions41).
+    if machine_idle:
         check(name, all("REBOOTING" in o for o in idle), repr(idle))
     else:
         skip(name, "this machine runs a tmux or screen session of its own")

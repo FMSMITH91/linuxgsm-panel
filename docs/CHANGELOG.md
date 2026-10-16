@@ -601,6 +601,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A thirteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Close Port 22 really closes it.** On every host the panel set up, port 22 is open through a
+    rate-limit rule, and the button removed only a plain allow (which ufw reports as done even when
+    it is not there), so it said "removed" while 22 stayed open. It now removes every public rule
+    for 22 in both IPv4 and IPv6 and checks the firewall afterwards. Proven against real UFW.
+  - **Unblock tells the truth.** Unblocking an address on the panel host or a remote no longer says
+    "Unblocked" when it is still blocked by another rule. Proven against real UFW.
+  - **Fresh installs with Tailscale stopped.** A host with Tailscale installed but not running no
+    longer aborts the install before printing the setup link.
+  - **A failed update rolls back its code.** An update that failed while writing the new code
+    restarted the half-written tree as the old version; it now restores the old code first.
+  - **Root helper.** It names only its own account as Tailscale's operator, refuses a restore whose
+    data folder was swapped for a link, and refuses to remove an account whose home is not its own.
+  - **Smaller fixes.** Panel restarts are refused while the panel host reboots; the firewall page no
+    longer shows a server error as a reading; saving over the live console log keeps it working;
+    a failed large save leaves no staging file; IPv6-only SSH rules are read when moving SSH; test
+    runs print each lane's log as it ends, and on Ctrl-C.
+  - **Tests.** Stand-ins now model ufw's real answer to deleting a missing rule, ten refusal checks
+    no longer read a crashed request as a refusal, and several gates that could not fail now can.
 - **A twelfth full review on 2026-10-15: fixes.** Every item below has a check that fails without
   its fix. (Its one high finding, apt `#include` through the root helper, shipped on its own; see
   Security.)
