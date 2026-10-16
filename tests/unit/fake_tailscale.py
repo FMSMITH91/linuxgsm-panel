@@ -331,7 +331,12 @@ def as_helper(ts, priv, record=None):
     def _run_verb(verb, args=(), timeout=30, merge_stderr=True, **_kw):
         if record is not None:
             record.append((verb, list(args)))
-        argv = priv.tool_argv(verb, list(args)) if verb in ROOT_VERBS else []
+        try:
+            argv = priv.tool_argv(verb, list(args)) if verb in ROOT_VERBS else []
+        except priv.VerbError:
+            # What the real _run_verb answers for arguments the verb refuses (review 1016b: it
+            # raised here, so a check could not drive the caller's refusal branch).
+            return "", "invalid argument", -1
         if not argv:
             return "", "refused by the fake helper", 1
         os.environ["FAKE_TS_AS_ROOT"] = "1"

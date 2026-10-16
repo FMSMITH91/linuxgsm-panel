@@ -2845,7 +2845,7 @@ def remote_public_ip(server):
                 "curl -fsS --max-time 5 https://ifconfig.me",
                 "dig +short myip.opendns.com @resolver1.opendns.com"):
         try:
-            out, _, _ = run_command(server, cmd, timeout=8)
+            out, _, _ = run_command(server, cmd, timeout=8, sudo=False)
             ip = (out or "").strip().split("\n")[0].strip()
             if re.match(r"^\d{1,3}(\.\d{1,3}){3}\Z", ip):
                 return ip
@@ -3242,7 +3242,9 @@ def remote_live_metrics(server):
     cmd = ("echo ===A; grep '^cpu' /proc/stat; echo ===B; sleep 0.25; grep '^cpu' /proc/stat; "
            "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo; "
            "echo ===DISK; df -PB1 /")
-    out, _, _lm_rc = run_command(server, cmd, timeout=12)
+    # sudo=False: everything read here is world-readable, and the default (the row's sudo_enabled)
+    # made this poll a `sudo bash -c` on a remote, failing outright where sudo wants a password.
+    out, _, _lm_rc = run_command(server, cmd, timeout=12, sudo=False)
     acc = _parse_live_sections(out)
     A, B, mem = acc["A"], acc["B"], acc["MEM"]
     disk_total, disk_used = acc["disk"]
@@ -3597,7 +3599,7 @@ def _gamedig_host(server):
         out, _, _ = run_command(
             server,
             "ip route get 1.1.1.1 2>/dev/null | awk 'NR==1{for(i=1;i<=NF;i++)if($i==\"src\")print $(i+1)}'",
-            timeout=8)
+            timeout=8, sudo=False)
         cand = (out or "").strip()
         if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}\Z", cand):
             ip = cand

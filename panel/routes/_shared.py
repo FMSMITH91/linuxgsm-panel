@@ -540,7 +540,7 @@ def _button_backup_running(sid):
     return False
 
 
-def _marked_backup(sid, *args, runner=None, **kwargs):
+def _marked_backup(sid, *args, runner=None, held=None, **kwargs):
     """run_game_backup, with the server marked RUNNING in _game_backup_status while it runs.
 
     Only the manual per-server route set that flag, so the two tickers backed servers up
@@ -551,6 +551,12 @@ def _marked_backup(sid, *args, runner=None, **kwargs):
 
     `runner` is the caller's own reference to run_game_backup (panel_backup imports it by name, and
     that name is the seam its tests stub); None means this module's.
+
+    `held` (no arguments) answers whether the row still holds `sid`, as the caller asks before it
+    writes an outcome. A server deleted after the caller's own check but before the mark went in
+    has no entry for forget_rows to drop, and the caller then writes nothing over the mark: it
+    stayed "running" under the id, and a new server that took the id read as being backed up, so
+    _run_due_restarts left it alone. Such a mark is removed here, whichever way the run ended.
     """
     mark = {"running": True, "ok": None, "msg": "", "ts": time.time()}
     _game_backup_status[sid] = mark
@@ -560,14 +566,29 @@ def _marked_backup(sid, *args, runner=None, **kwargs):
         # Only over this run's own mark. The callers check the row still holds the id before they
         # write an outcome; this wrote unconditionally, so a server deleted mid-backup (its entry
         # dropped by forget_rows) whose id a new server took had "backup error" filed under it.
-        if _game_backup_status.get(sid) is mark:
+        if _r25b_mark_orphaned(sid, mark, held):
+            _game_backup_status.pop(sid, None)
+        elif _game_backup_status.get(sid) is mark:
             _game_backup_status[sid] = {"running": False, "ok": False,
                                         "msg": "backup error (%s)" % type(e).__name__, "ts": time.time()}
         raise
+    if _r25b_mark_orphaned(sid, mark, held):
+        _game_backup_status.pop(sid, None)
     # It RETURNED, so the host answered: a streak of raises (_backup_raise_streak) is over, and
     # the next raise is news worth an alert again.
     _backup_raise_streak.pop(sid, None)
     return result
+
+
+def _r25b_mark_orphaned(sid, mark, held):
+    """Whether `mark` is still sid's entry while the row no longer holds sid (see _marked_backup)."""
+    if held is None or _game_backup_status.get(sid) is not mark:
+        return False
+    try:
+        return not held()
+    except Exception:
+        _log.debug("backup mark: could not ask whether the row is still there", exc_info=True)
+        return False
 
 
 def _back_up_if_due(app, target):
@@ -603,7 +624,8 @@ def _back_up_if_due(app, target):
     keep = sched["keep"]
     ok, reason, was_skipped = _marked_backup(sid, remote, short, lgsm, keep,
                                              game_type=gtype, port=port,
-                                             query_type=qtype)
+                                             query_type=qtype,
+                                             held=functools.partial(claim_row, GameServer, sid, born))
     if claim_row(GameServer, sid, born) is None:
         return   # deleted while it was being archived: nothing below is its any more
     if was_skipped:
@@ -674,7 +696,8 @@ def _back_up_queued(app, gs):
     sched = bk.get_game_schedule(gs.id)
     ok, reason, was_skipped = _marked_backup(
         gs.id, gs.remote, gs.short_name, gs.lgsm_name, sched["keep"],
-        game_type=gs.game_type, port=gs.port, query_type=gs.query_type)
+        game_type=gs.game_type, port=gs.port, query_type=gs.query_type,
+        held=functools.partial(still_held, gs))
     if not still_held(gs):
         return
     if was_skipped:

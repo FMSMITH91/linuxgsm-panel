@@ -352,6 +352,17 @@ R24T_SSH_PREF = {"on": "true", "off": "false"}
 # The BackendStates of a node that has joined a tailnet and is in it (or on its way back in with
 # its own key). An `up` on one of these can only re-home it: see _r24t_joined.
 R24T_JOINED_STATES = ("Running", "Starting")
+# panel.conf's record of the owner's answer at install: may the panel turn Tailscale SSH on for this
+# host? Only the exact word "yes" counts, and any other value is no. A missing key (an older
+# installer wrote this panel.conf) is recorded "yes" while Tailscale SSH is on, as install.sh
+# records a host already running it, and is otherwise no. See _r25a_ssh_refusal.
+R25A_SSH_CONF_KEY = "tailscale_ssh"
+# panel.conf's record of the port the panel listens on: the one port `tailscale-serve` may publish
+# (see _r25j_serve_port_refusal). install.sh writes it, and `panel-port-record` moves it when the
+# panel's own port changes.
+R25J_PORT_CONF_KEY = "panel_port"
+# Where the kernel lists this host's TCP sockets, each with the uid that owns it.
+R25J_PROC_NET_TCP = ("/proc/net/tcp", "/proc/net/tcp6")
 TS_UP_POLL_SECONDS = 20
 
 # The detached OS-update job: where it streams, the sentinel it ends with, and what the
@@ -886,6 +897,13 @@ def v_port(s):
     """A single TCP port number, 1..65535 — see privileged.py."""
     if not re.fullmatch(r"[1-9][0-9]{0,4}", s) or not (1 <= int(s) <= 65535):
         raise ValueError("not a port")
+    return s
+
+
+def v_r25j_panel_port(s):
+    """A port the panel itself may listen on: 1024..65535, as /api/panel/change-port allows."""
+    if int(v_port(s)) < 1024:
+        raise ValueError("not a port the panel listens on")
     return s
 
 
@@ -2313,7 +2331,8 @@ VERBS = {
     "tailscale-release-operator": ([v_r23a_operator_self], lambda a: [], None),
     # Tailscale SSH on or off, and nothing else: `tailscale set` changes only the pref it names,
     # and cannot change which tailnet the node is in, so this is SSH on the tailnet the host has
-    # already joined. The panel's account used to run it itself, as the operator.
+    # already joined. The panel's account used to run it itself, as the operator. `on` only where
+    # the owner chose it at install (PRECHECKS, _r25a_ssh_refusal); `off` always.
     "tailscale-ssh": ([v_choice("on", "off")],
                       lambda a: ["tailscale", "set", "--ssh=%s" % R24T_SSH_PREF[a[0]]], None),
     "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
@@ -2329,6 +2348,9 @@ VERBS = {
     "tailscale-serve": ([v_choice("serve", "funnel"), v_choice("modern", "legacy"), v_ts_mount,
                          v_choice("http", "https+insecure"), v_port],
                         lambda a: ts_serve_argv(a[0], a[1], a[2], a[3], a[4]), None),
+    # Which port that is: the panel's own, recorded in panel.conf. Moved here when the panel's port
+    # changes, and only to a port no other account is listening on (do_r25j_panel_port_record).
+    "panel-port-record": ([v_r25j_panel_port], lambda a: [], None),
     # Removing ONE Serve mapping: the listener (scheme + port) and the mount, always both. `off`
     # with no --set-path removes every mount on the listener, so the mount is required and is
     # never empty (v_r24t_off_mount).
@@ -3191,6 +3213,22 @@ def _refuse_conf_path_link(path, what):
     return bool(link)
 
 
+def _r25a_resolved_dir(path, what):
+    """`path` with every link in it resolved, or None (and why, on stderr).
+
+    For a data/ that passed _refuse_conf_path_link: what is left of a link there is one ROOT made
+    (data/ moved to another disk), which the check follows on purpose. The job bodies then open the
+    directory O_NOFOLLOW, which refuses exactly that link (ELOOP), so a restore or a self-update
+    reported STARTED and did nothing -- the restore leaving its staging directory, a plaintext
+    database and both keys, in place. Resolved once here, the bodies open the real directory. The
+    result is checked again, so a link swapped in between is refused rather than followed.
+    """
+    real = os.path.realpath(path)
+    if _refuse_conf_path_link(real, what) or not os.path.isdir(real):
+        return None
+    return real
+
+
 def _db_repair_account(db_path):
     """The account the offline repair runs as: whoever owns the directory the database lives in.
     None when that cannot be established, and the caller then does not repair at all.
@@ -3568,6 +3606,9 @@ def _restore_target():
     # _r23a_remove_stage). A link root made (data/ moved to another disk) is still followed.
     if _refuse_conf_path_link(data_dir, "data directory"):
         return None
+    data_dir = _r25a_resolved_dir(data_dir, "data directory")
+    if data_dir is None:
+        return None
     if not os.path.isdir(os.path.join(data_dir, RESTORE_STAGE)):
         sys.stderr.write("nothing staged to restore\n")
         return None
@@ -3744,8 +3785,14 @@ def _self_update_target():
     if not panel_dir or not os.path.isdir(panel_dir) or not data_dir or not os.path.isdir(data_dir):
         sys.stderr.write("panel.conf has no usable panel_dir/data_dir\n")
         return None
-    if _refuse_conf_path_link(os.path.dirname(data_dir), "data directory"):
-        return None              # the self-update log is created in it, as root
+    # data_dir itself too, as _restore_target does: the self-update log is created in it, as root,
+    # relative to it opened O_NOFOLLOW, so a link the panel user made there could only make the job
+    # do nothing after the verb had said UPDATE_STARTED. Refused here instead, with why.
+    if _refuse_conf_path_link(data_dir, "data directory"):
+        return None
+    data_dir = _r25a_resolved_dir(data_dir, "data directory")
+    if data_dir is None:
+        return None
     if not os.path.isfile(INSTALLER_PATH):
         sys.stderr.write("installer is not installed root-owned; re-run install.sh as root\n")
         return None
@@ -5204,8 +5251,11 @@ def run_job(job, args):
         print("panel-helper: --job %s: %s" % (job, exc), file=sys.stderr)
         return 2
 
-def _r24t_ts_json(*sub):
-    """`tailscale <sub...>`'s JSON output as a dict, or None when it could not be run or read."""
+def _r24t_ts_json(*sub, null_ok=False):
+    """`tailscale <sub...>`'s JSON output as a dict, or None when it could not be run or read.
+
+    `null_ok`: a JSON null is an empty dict (`serve status --json` prints null with no Serve config).
+    """
     try:
         argv = [resolve("tailscale")] + list(sub)      # `sub` is a literal at each call site
         p = subprocess.run(argv, shell=False,  # nosec B603 - fixed argv
@@ -5219,6 +5269,8 @@ def _r24t_ts_json(*sub):
         data = json.loads(p.stdout or "")
     except ValueError:
         return None
+    if data is None and null_ok:
+        return {}
     return data if isinstance(data, dict) else None
 
 
@@ -5231,6 +5283,273 @@ def _r24t_joined(status):
     if status is None:
         return True
     return status.get("BackendState") in R24T_JOINED_STATES or status.get("HaveNodeKey") is True
+
+
+def _r25a_ssh_opted_in():
+    """Whether the owner chose, at install, to let the panel turn Tailscale SSH on for this host.
+
+    With no choice recorded yet, whether _r25a_ssh_record_running just recorded "yes".
+    """
+    choice = panel_conf().get(R25A_SSH_CONF_KEY)
+    if choice is None:
+        return _r25a_ssh_record_running()
+    return choice == "yes"
+
+
+def _r25a_ssh_record_running():
+    """Record `tailscale_ssh=yes` when panel.conf records no choice and Tailscale SSH is on NOW.
+
+    The panel's self-update runs the root-owned PREVIOUS installer once, and that one writes no
+    choice at all, so a host running Tailscale SSH was left unrecorded until the next update: its
+    Disable then made Enable refused, with copy saying SSH "was not chosen". install.sh records such
+    a host "yes" (its "running" answer: SSH is already on, so nothing is granted). This is that
+    record, made the first time the helper is asked (the boot's panel-port-record, or an SSH verb),
+    and before an `off` would lose what it shows. Read as root (`tailscale debug prefs`); an
+    unreadable pref records nothing, and so does a missing panel.conf (an empty one: the installer
+    writes it, and this never creates it). Whether "yes" was recorded.
+    """
+    conf = panel_conf()
+    if not conf or R25A_SSH_CONF_KEY in conf:
+        return False
+    prefs = _r24t_ts_json("debug", "prefs")
+    if not prefs or prefs.get("RunSSH") is not True:
+        return False
+    why = _r25j_conf_set({R25A_SSH_CONF_KEY: "yes"})
+    if why:
+        sys.stderr.write("panel-helper: could not record the running Tailscale SSH choice (%s)\n" % why)
+        return False
+    sys.stderr.write("panel-helper: Tailscale SSH was on with no choice recorded; recorded "
+                     "tailscale_ssh=yes, as the installer does\n")
+    return True
+
+
+def _r25a_ssh_refusal(args):
+    """Why a verb that would turn Tailscale SSH ON must not run here, or "".
+
+    The tailnet this host joins decides who may log in as root over Tailscale SSH: its SSH policy,
+    not this host's accounts. A host not yet in a tailnet is joined through a login link (Connect),
+    and whoever opens that link picks the tailnet. So a compromised panel account that could ask for
+    SSH with the join, or switch it on afterwards, could hand some tailnet root logins here without
+    the owner ever choosing it. That choice is made at install instead (install.sh records it in
+    the root-owned panel.conf), and the panel's account cannot change it. Joining WITHOUT SSH and
+    turning SSH off stay open: neither grants a login.
+
+    `args` is the verb's checked arguments, whose first is the SSH choice in all three verbs: yes|no
+    for tailscale-up-login and tailscale-up-key (the key comes on stdin), on|off for tailscale-ssh.
+    """
+    wants = bool(args) and args[0] in ("yes", "on")
+    # Asked first, whatever the verb wants: an unrecorded choice with SSH on is recorded before an
+    # `off` loses it (_r25a_ssh_record_running).
+    opted = _r25a_ssh_opted_in()
+    if not wants or opted:
+        return ""
+    # Both install models: sudo resets the environment (a variable set before `sudo` is dropped),
+    # and a per-user install refuses a root run.
+    return ("Tailscale SSH on this host was not chosen at install; to allow it, re-run the "
+            "installer with PANEL_TAILSCALE_SSH=1 (sudo PANEL_TAILSCALE_SSH=1 bash install.sh, or "
+            "on a per-user install the same as the panel's user, without sudo)")
+
+
+def _r25j_listener_uids(port):
+    """The uids holding a TCP LISTEN socket on `port`, on any address, or None when unreadable.
+
+    Read from the kernel's own tables, which name each socket's owner, so nothing a caller runs can
+    answer for it. tcp6 is absent on a host booted with IPv6 off; one table read is enough.
+    """
+    uids, read = set(), False
+    for path in R25J_PROC_NET_TCP:
+        try:
+            with open(path, encoding="ascii", errors="replace") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue  # this table is not there; the other one still answers
+        read = True
+        for row in rows:
+            f = row.split()
+            # sl, local address:port (hex), remote, state (0A is LISTEN), queues, timer, retransmits, uid
+            if len(f) < 8 or f[3] != "0A" or ":" not in f[1]:
+                continue
+            try:
+                if int(f[1].rsplit(":", 1)[1], 16) == port:
+                    uids.add(int(f[7]))
+            except ValueError:
+                continue  # a malformed row names no socket
+    return uids if read else None
+
+
+def _r25j_foreign_listener(port):
+    """Why `port` is held by an account other than the one that invoked the helper, or "".
+
+    The caller is SUDO_UID (sudo sets it; the caller cannot); invoked by root directly, root.
+    """
+    uids = _r25j_listener_uids(port)
+    if uids is None:
+        return "this host's listening sockets could not be read"
+    caller = _int_or_none(os.environ.get("SUDO_UID"))
+    if caller is None:
+        caller = os.getuid()
+    if uids - {caller}:
+        return "another account's process is listening on port %d" % port
+    return ""
+
+
+def _r25j_recorded_port():
+    """panel.conf's record of the panel's port, or None when it records none."""
+    v = panel_conf().get(R25J_PORT_CONF_KEY, "")
+    try:
+        return int(v_r25j_panel_port(v))
+    except ValueError:
+        return None
+
+
+def _r25j_proxies_panel(handler, port):
+    """Whether one Serve handler (ipn.HTTPHandler) only proxies to loopback on `port`.
+
+    A file share (Path), a fixed reply (Text) or a redirect is another app's, whatever it names.
+    """
+    if not isinstance(handler, dict) or any(handler.get(k) for k in ("Path", "Text", "Redirect")):
+        return False
+    target = str(handler.get("Proxy") or "")
+    if "://" in target:
+        target = target.split("://", 1)[1]
+    host, sep, p = target.split("/", 1)[0].rpartition(":")
+    return bool(sep) and host.lower() in ("127.0.0.1", "localhost", "::1", "[::1]") and p == str(port)
+
+
+def _r25j_funnelled(*confs):
+    """The host:port keys any of these ServeConfigs has Funnel on for."""
+    return {hp for c in confs for hp, on in (c.get("AllowFunnel") or {}).items() if on is True}
+
+
+def _r25j_unfunnelled_others(conf, funnelled, port):
+    """The node's :443 routes in one ServeConfig that are not the panel's and are not on Funnel yet.
+
+    `funnelled` is the host:port keys with Funnel already on (_r25j_funnelled).
+    """
+    out = []
+    tcp = (conf.get("TCP") or {}).get("443") or {}
+    if isinstance(tcp, dict) and tcp.get("TCPForward"):
+        out.append("a TCP forward on :443")
+    for hostport, web in (conf.get("Web") or {}).items():
+        if str(hostport).endswith(":443") and hostport not in funnelled:
+            out += _r25j_other_mounts(web, port)
+    return out
+
+
+def _r25j_other_mounts(web, port):
+    """The mounts of one listener's WebServerConfig whose handler is not the panel's (loopback `port`)."""
+    handlers = (web.get("Handlers") if isinstance(web, dict) else None) or {}
+    return [str(m) for m, h in handlers.items() if not _r25j_proxies_panel(h, port)]
+
+
+def _r25j_funnel_refusal(port):
+    """Why a `funnel` write for the panel on loopback `port` must not run now, or "".
+
+    Funnel is a property of the node's :443 LISTENER, not of a mount: a `funnel` write turns it on
+    for every app on that listener (serve_v2.go setServe -> applyFunnel). So the port check alone
+    still let the panel's account put another app the owner serves at :443 on the public internet.
+    Refused, as the panel's own _r12a_serve_verb refuses it, while that listener has a route that
+    is not loopback on the panel's port (another app, a file share, a fixed reply, a raw TCP forward
+    on 443), in the background config or a foreground session's, unless Funnel is already on there:
+    then the write changes no one's exposure (the boot keeps a shared listener's Funnel as it is).
+    Tailscale Services (svc:) have listeners of their own, which this write never touches. Read as
+    root, fresh; a config this cannot read is refused.
+    """
+    sc = _r24t_ts_json("serve", "status", "--json", null_ok=True)
+    if sc is None:
+        return "this node's Tailscale Serve configuration could not be read"
+    others = []
+    for conf in [sc] + list((sc.get("Foreground") or {}).values()):
+        if isinstance(conf, dict):
+            others += _r25j_unfunnelled_others(conf, _r25j_funnelled(sc, conf), port)
+    if others:
+        return ("Funnel is set per listener, and turning it on would put %s on the internet too"
+                % ", ".join("the app at %s" % m if m.startswith("/") else m for m in sorted(set(others))))
+    return ""
+
+
+def _r25j_serve_port_refusal(args):
+    """Why `tailscale-serve` must not publish the port in `args`, or "".
+
+    Serve and Funnel put a local port on the tailnet, and Funnel on the public internet. The panel
+    only ever publishes itself, so the helper publishes only the panel's port as panel.conf records
+    it (root's file: the panel's account cannot change it except through panel-port-record), and
+    only while no other account's process holds that port. Nothing listening is allowed: the boot
+    re-points Serve before the panel has bound.
+
+    With no record (a panel.conf the previous, root-owned installer wrote: the self-update that
+    brings this helper runs that installer once), only a port the caller's own account is
+    listening on now, and no other account, is published: the running panel's. The next update
+    records the port.
+    """
+    port = int(args[4])
+    why = _r25j_port_refusal(port)
+    if why or args[0] != "funnel":
+        return why
+    return _r25j_funnel_refusal(port)
+
+
+def _r25j_port_refusal(port):
+    """_r25j_serve_port_refusal's port half: why `port` is not the panel's to publish, or ""."""
+    recorded = _r25j_recorded_port()
+    if recorded is None:
+        if _r25j_listener_uids(port) and not _r25j_foreign_listener(port):
+            return ""
+        return "panel.conf records no panel port; re-run the installer as root"
+    if port != recorded:
+        return "port %d is not the panel's port recorded in panel.conf" % port
+    return _r25j_foreign_listener(port)
+
+
+def do_r25j_panel_port_record(args, content):
+    """Record `args[0]` as the panel's port in panel.conf; refuse a port another account listens on.
+
+    The panel calls this when its port changes, before it restarts onto it. Only that one key is
+    rewritten; the file keeps its owner (root) and mode, and is replaced whole, never edited in place.
+    """
+    port = int(args[0])
+    why = _r25j_foreign_listener(port)
+    if why:
+        sys.stderr.write("panel-port-record refused: %s\n" % why)
+        return 1
+    why = _r25j_conf_set({R25J_PORT_CONF_KEY: str(port)})
+    if why:
+        sys.stderr.write("panel-port-record: %s\n" % why)
+        return 1
+    # The boot calls this while the previous installer's panel.conf records no Tailscale SSH choice
+    # either (system_ops.reconcile_panel_port): that record is made here too.
+    _r25a_ssh_record_running()
+    sys.stdout.write("recorded")
+    return 0
+
+
+def _r25j_conf_set(values):
+    """Set these keys in panel.conf, keeping its other lines and its mode: "" or why it failed.
+
+    The file is replaced whole (a temp file in its directory, then os.replace), never edited in
+    place, and never created: the installer writes it.
+    """
+    try:
+        with open(PANEL_CONF, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+            mode = stat.S_IMODE(os.fstat(fh.fileno()).st_mode)
+    except OSError:
+        return "panel.conf is missing; re-run the installer as root"
+    keys = tuple(k + "=" for k in values)
+    kept = [ln for ln in lines if not ln.strip().startswith(keys)]
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(PANEL_CONF), prefix=".panel.conf.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(kept + ["%s=%s" % kv for kv in values.items()]) + "\n")
+        os.chmod(tmp, mode)   # panel.conf's own mode (install.sh's 0644: it holds no secret)
+        os.replace(tmp, PANEL_CONF)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass  # already gone: nothing left to clean
+        return "failed (%s)" % e.__class__.__name__
+    return ""
 
 
 def _r24t_up_key_refusal():
@@ -5316,7 +5635,10 @@ def do_tailscale_up_login(args, content):
     A status this cannot read still proceeds, unlike tailscale-up-key: it reads as root, so it
     fails only when tailscaled is not answering, which is the first Connect right after an install
     (the daemon still starting). Refusing there would break first-run Connect, and an `up` against
-    a daemon that is not answering fails on its own; a node with a key answers status."""
+    a daemon that is not answering fails on its own; a node with a key answers status.
+
+    `yes` (with --ssh) has already been refused by PRECHECKS unless the owner chose Tailscale SSH at
+    install (_r25a_ssh_refusal): that link lets whoever opens it pick the tailnet that gets SSH."""
     ssh, routes = args[0], args[1]
     early = _r24t_up_login_early(_r24t_ts_json("status", "--json"))
     if early is not None:
@@ -5944,6 +6266,7 @@ ACTIONS = {
     "f2b-log-lines": do_f2b_log_lines,
     "tailscale-up-login": do_tailscale_up_login,
     "tailscale-release-operator": do_tailscale_release_operator,
+    "panel-port-record": do_r25j_panel_port_record,
     "os-update-run": do_os_update_run,
     "panel-db-repair": do_panel_db_repair,
     "panel-restore": do_panel_restore,
@@ -5981,8 +6304,14 @@ STDIN_VERBS = frozenset({"write-file", "content-cron-write"})
 # Verbs whose arguments are fine but which may still be refused by the state of the host, read
 # here as root: {verb: a function answering why not, or ""}. Run after validation and before the
 # verb's stdin is read.
+#
+# Each takes the verb's checked arguments. The Tailscale SSH opt-in (_r25a_ssh_refusal) is asked
+# first: it reads one root-owned file, where the joined-node read runs tailscale.
 PRECHECKS = {
-    "tailscale-up-key": _r24t_up_key_refusal,
+    "tailscale-up-key": lambda a: _r25a_ssh_refusal(a) or _r24t_up_key_refusal(),
+    "tailscale-up-login": _r25a_ssh_refusal,
+    "tailscale-ssh": _r25a_ssh_refusal,
+    "tailscale-serve": _r25j_serve_port_refusal,
 }
 
 # Argv verbs whose SECRET comes on stdin: {verb: (its validator, the text the tool reads)}.
@@ -6282,7 +6611,7 @@ def main(argv):
         # the panel UI, so repeating attacker-controlled text here would be a reflection.
         print("panel-helper: %s" % e, file=sys.stderr)
         return 2
-    refusal = PRECHECKS[verb]() if verb in PRECHECKS else ""
+    refusal = PRECHECKS[verb](checked) if verb in PRECHECKS else ""
     if refusal:
         # Fixed words: nothing the caller sent is in them.
         print("panel-helper: %s refused: %s" % (verb, refusal), file=sys.stderr)

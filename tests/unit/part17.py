@@ -827,7 +827,7 @@ def _sf17_raise(*_a, **_k):
 
 
 try:
-    _sf17.write_file = lambda remote, short, rel, raw: (
+    _sf17.write_file = lambda remote, short, rel, raw, selfname=None: (
         _sf17_calls.append(("write", rel, raw)), (True, ""))[1]
     _sf17.lgsm_write_config = lambda remote, short, lgsm, settings: (
         _sf17_calls.append(("settings", dict(settings))), (False, ""))[1]

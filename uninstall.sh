@@ -354,14 +354,27 @@ for hp, web in sorted((sc.get("Web") or {}).items()):
 # Tailscale answers `serve status` only to root or the operator, and the panel's account is no
 # longer the operator) reads again under sudo, as it removes; the re-read before each removal
 # comes through here too, so it reads the same way.
+#
+# Its stdout IS the answer, captured by every caller, so the sudo note goes to stderr here: on stdout
+# it was read as a route line ("Some pieces…" became a listener flag and a mount, and the script
+# ran `tailscale serve <colour code>Some --set-path=pieces off`). And every caller runs this in a
+# subshell, where the note's shown-once flag never reaches the parent, so the parent shows the note
+# itself before the first read that will need sudo (_ts_sudo_note_first); here it is a fallback.
 _ts_panel_routes() {
     local _js
     if ! _js="$(timeout 15 tailscale serve status --json 2>/dev/null)"; then
         [[ -n "${U_SUDO:-}" ]] || return 1
-        sudo_note
+        sudo_note >&2
         _js="$(${U_SUDO} timeout 15 tailscale serve status --json 2>/dev/null)" || return 1
     fi
     printf '%s' "${_js}" | python3 -I -c "${_TS_ROUTES_PY}" "$1" "$2" 2>/dev/null
+}
+# The note, in THIS shell, when the plain Serve read is refused and so the read below will ask
+# sudo: before its password prompt, and once (the subshells inherit the flag it sets). Always 0.
+_ts_sudo_note_first() {
+    [[ -n "${U_SUDO:-}" ]] || return 0
+    timeout 15 tailscale serve status --json >/dev/null 2>&1 || sudo_note
+    return 0
 }
 _ts_remove_routes() {
     local _flag _mount _fun _now _err _gone=0 _funnelled=""
@@ -412,7 +425,7 @@ if command -v tailscale >/dev/null 2>&1; then
             warn "  told apart as the panel's. Nothing was removed."
             warn "  See what this node still publishes with:  tailscale serve status"
         fi
-    elif ! _TS_ROUTES="$(_ts_panel_routes "${PANEL_PORT}" routes)"; then
+    elif _ts_sudo_note_first && ! _TS_ROUTES="$(_ts_panel_routes "${PANEL_PORT}" routes)"; then
         warn "Couldn't read this node's Tailscale Serve config, so no route to the panel was removed."
         warn "  See what this node still publishes with:  tailscale serve status"
     else
@@ -591,6 +604,27 @@ elif [[ -d /usr/local/lib/linuxgsm-panel ]] || [[ -f /etc/cron.d/lgsm-node-tools
     fi
 fi
 
+# A panel older than #435 made its account tailscaled's OPERATOR, and only an install or a start
+# of a newer one takes that back. Uninstalled straight from such a version, the role outlived the
+# account: tailscaled's prefs still named `lgsmpanel`, and any account later made with that name
+# (by anything other than this panel's installer, whose own release would clear it) could join the
+# host to another tailnet or turn Tailscale SSH on without root. Cleared here, before the account
+# goes, and only when the operator IS that dedicated account: one an owner chose is theirs.
+_r25a_release_ts_operator() {
+    command -v tailscale >/dev/null 2>&1 || return 0
+    local _op=""
+    _op="$(LC_ALL=C.UTF-8 timeout 10 tailscale debug prefs 2>/dev/null \
+        | python3 -I -c 'import json,sys;print(json.load(sys.stdin).get("OperatorUser") or "")' \
+        2>/dev/null)" || return 0
+    [[ -n "${_op}" && "${_op}" == "${PANEL_USER}" ]] || return 0
+    if LC_ALL=C.UTF-8 timeout 10 tailscale set --operator= >/dev/null 2>&1; then
+        ok "'${PANEL_USER}' is no longer the Tailscale operator"
+    else
+        warn "Could not take the Tailscale operator role back from '${PANEL_USER}'. Run:  sudo tailscale set --operator="
+    fi
+    return 0
+}
+
 if [[ "${MODE}" = "system" ]]; then
     # (The sudoers entries went straight after the service stopped — see there.)
 
@@ -603,6 +637,7 @@ if [[ "${MODE}" = "system" ]]; then
     fi
     # SAFETY: only ever remove the dedicated panel service user — NEVER a game-server user.
     if [[ "${PANEL_USER}" = "${SERVICE_USER}" ]] && id "${PANEL_USER}" >/dev/null 2>&1; then
+        _r25a_release_ts_operator
         loginctl disable-linger "${PANEL_USER}" >/dev/null 2>&1 || true
         # Read the home BEFORE the account goes — once userdel succeeds there is nothing left to
         # ask. It matters because `rm -rf "${PANEL_DIR}"` above only clears <home>/linuxgsm-panel,

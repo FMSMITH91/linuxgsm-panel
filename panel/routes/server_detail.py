@@ -29,12 +29,48 @@ import functools
 import re
 import threading
 from panel.core import i18n
+from sqlalchemy.exc import (SQLAlchemyError)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
     _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal)
+
+
+# Said when the host call was made but its audit row could not be written (the database was
+# locked past its busy timeout): the row's commit raised, and the route used to report the action
+# itself as failed. Or, from the failure path's own second write, answered with a 500.
+_R25B_AUDIT_UNWRITTEN = "The audit log entry for this could not be written. The panel's log has the details."
+_R25B_ACTION_UNSURE = ("That action may or may not have run: the panel's database refused a write during it. "
+                       "Check the server's state; the panel's log has the details.")
+
+
+def _r25b_audit(user, action, target, **kwargs):
+    """log_action, but a row that cannot be written is rolled back and logged, never raised.
+
+    True when the row was written. For the routes below, where the host call has already happened
+    by the time the row is written, so a raise here is not the action failing.
+    """
+    try:
+        log_action(user, action, target=target, **kwargs)
+        return True
+    except Exception:
+        db.session.rollback()
+        _log.warning("could not write the audit row for %s", str(target or "")[:80]
+                     .replace("\r", " ").replace("\n", " "), exc_info=True)
+        return False
+
+
+def _r25b_action_failed_flash(exc):
+    """(message, category) for a server action that raised `exc`.
+
+    A database error is a commit's (an audit row, a status), and by then the action may have run
+    or be running in the background: it was reported as failed.
+    """
+    if isinstance(exc, SQLAlchemyError):
+        return _R25B_ACTION_UNSURE, "warning"
+    return "That action failed. The audit log has the details.", "danger"
 
 
 def _summarise_action_output(detail):
@@ -749,14 +785,15 @@ def _register_actions(app):
             # session refusing every write, and the failure row below would raise in its turn.
             db.session.rollback()
             # Unless the host call's own wrapper already wrote the row (a short action's SSH that
-            # raised, _run_sync_action): one attempt, one row.
+            # raised, _run_sync_action): one attempt, one row. _r25b_audit: a second write that
+            # raised the same way turned the reply into a 500.
             if not _r21b_audited(e):
-                log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
-                           server=gs)
+                _r25b_audit(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
+                            server=gs)
             # The exception text is in the audit log above, not in the flash: echoing str(e) to the
             # browser is how internals leak into the UI (py/stack-trace-exposure), and this
             # codebase's rule is never to do it.
-            flash("That action failed. The audit log has the details.", "danger")
+            flash(*_r25b_action_failed_flash(e))
         return redirect(url_for("server_detail", server_id=server_id))
 
     @app.route("/api/server/<int:server_id>/action", methods=["POST"])
@@ -1303,8 +1340,9 @@ def _register_commands(app):
         except Exception:
             _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
             db.session.rollback()   # the commit above can be what raised (see server_action)
-            log_action(current_user, "refresh_commands", target=gs.name,
-                       detail="could not read the command list", success=False, server=gs)
+            # _r25b_audit: when the database is what refused, this second write raised too (a 500).
+            _r25b_audit(current_user, "refresh_commands", target=gs.name,
+                        detail="could not read the command list", success=False, server=gs)
             flash(i18n.tr("Could not read the command list for '{name}'.", name=gs.name), "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 
@@ -1332,21 +1370,21 @@ def _register_commands(app):
         try:
             # LinuxGSM runs each instance in a tmux session owned by its own user.
             _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
-            # Logged whatever happened, with success=(rc == 0), as the JSON sibling
-            # (server_files.api_send_command) does; this branch logged only on success, so an
-            # attempt that failed left no audit row at all. A send that RAISES is audited by the
-            # except below here, and by _r20b_audit_on_raise there.
-            log_action(current_user, "send_command", target=gs.name, detail=cmd_text,
-                       success=(rc == 0), server=gs)
-            if rc != 0:
-                flash(_console_send_failure(rc, err), "warning")
-                return redirect(url_for("server_detail", server_id=server_id))
-            flash(i18n.tr("Command sent: {command}", command=cmd_text), "success")
-
         except Exception as e:
-            db.session.rollback()   # the success row's commit can be what raised (see server_action)
-            log_action(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}", success=False,
-                       server=gs)
+            db.session.rollback()
+            _r25b_audit(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}",
+                        success=False, server=gs)
             flash("Failed to send that command. The audit log has the details.", "danger")
-
+            return redirect(url_for("server_detail", server_id=server_id))
+        # Logged whatever happened, with success=(rc == 0), as the JSON sibling
+        # (server_files.api_send_command) does; this branch logged only on success, so an attempt
+        # that failed left no audit row at all. Outside the send's try: a row whose commit raised
+        # was reported as a failed send, for a command the game had already been given.
+        if not _r25b_audit(current_user, "send_command", target=gs.name, detail=cmd_text,
+                           success=(rc == 0), server=gs):
+            flash(_R25B_AUDIT_UNWRITTEN, "warning")
+        if rc != 0:
+            flash(_console_send_failure(rc, err), "warning")
+            return redirect(url_for("server_detail", server_id=server_id))
+        flash(i18n.tr("Command sent: {command}", command=cmd_text), "success")
         return redirect(url_for("server_detail", server_id=server_id))

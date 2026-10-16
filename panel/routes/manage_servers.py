@@ -268,6 +268,57 @@ def prepare_install_account(remote, remote_id, short_name, fresh):
     return True, "", True
 
 
+# Step 1's two refusals of an account it found on the host and never used. Uninstalling such a
+# row must not delete the account (_r25b_left_account): it is not one the panel made, or not one
+# it can confirm it made. They used to send the operator to Remove, and Remove ran
+# `userdel -r -f` on exactly that account, home and all.
+_R25B_FOUND_FRESH = ("An account named '{name}' already exists on this host, and the panel only installs into an "
+                     "account it creates itself. It has been left alone — remove this server (that leaves the "
+                     "account on the host as it is) and pick a different name.")
+_R25B_FOUND_UNCONFIRMED = ("The account '{name}' is on this host but has no LinuxGSM install, and the panel can't "
+                           "confirm it created it (it may have restarted since), so it won't delete it or install "
+                           "into it. If it is this install's leftover, delete the account on the host yourself and "
+                           "retry; removing this server leaves the account on the host as it is.")
+# ...and the same two as rows written before they were reworded record them.
+_R25B_FOUND_TEMPLATES = frozenset((
+    _R25B_FOUND_FRESH, _R25B_FOUND_UNCONFIRMED,
+    "An account named '{name}' already exists on this host, and the panel only installs into an account it "
+    "creates itself. It has been left alone — remove this server and pick a different name.",
+    "The account '{name}' is on this host but has no LinuxGSM install, and the panel can't confirm it created "
+    "it (it may have restarted since), so it won't delete it or install into it. If it is this install's "
+    "leftover, delete the account on the host and retry, or remove the server (which deletes the account) "
+    "and install again."))
+_R25B_LEFT_ACCOUNT_WHY = i18n.Sentence("its install found the account already on the host and never used it")
+
+
+def _r25b_names_found_refusal(rec, depth=0):
+    """Whether a sentence record (i18n.sentence_record) holds one of _R25B_FOUND_TEMPLATES."""
+    if depth > 8:
+        return False
+    if isinstance(rec, dict):
+        return rec.get("t") in _R25B_FOUND_TEMPLATES or any(
+            _r25b_names_found_refusal(v, depth + 1) for v in rec.values())
+    if isinstance(rec, list):
+        return any(_r25b_names_found_refusal(v, depth + 1) for v in rec)
+    return False
+
+
+def _r25b_left_account(gs):
+    """Whether this row's install stopped at step 1, refusing an account it found on the host.
+
+    Read from install_error_i18n, which record_install_failure writes with the refusal's template
+    (nested under the step's "{step}: {detail}"), so no schema change is needed. Anything that
+    cannot be read is not this case, and the uninstall goes on to its other checks.
+    """
+    if gs.installed or not gs.install_error_i18n:
+        return False
+    try:
+        rec = json.loads(gs.install_error_i18n)
+    except (TypeError, ValueError):
+        return False
+    return _r25b_names_found_refusal(rec)
+
+
 def _existing_account_verdict(remote, key, fresh):
     """Step 1 for an account that is already on the host: use it, rebuild it, or refuse.
 
@@ -277,9 +328,7 @@ def _existing_account_verdict(remote, key, fresh):
     """
     short_name = key[1]
     if fresh:
-        return False, i18n.Sentence("An account named '{name}' already exists on this host, and the panel only "
-                                    "installs into an account it creates itself. It has been left alone — remove "
-                                    "this server and pick a different name.", name=short_name), False
+        return False, i18n.Sentence(_R25B_FOUND_FRESH, name=short_name), False
     # Probed AS the account: only that user can read a 0750 home. A probe that fails (rc != 0,
     # or no answer) is no evidence either way: it was taken as "its linuxgsm.sh is there", and the
     # install went on into an account nobody had looked at. It stops instead, retryable.
@@ -296,11 +345,7 @@ def _existing_account_verdict(remote, key, fresh):
     with _install_lock:
         ours = key in _accounts_created
     if not ours:
-        return False, i18n.Sentence("The account '{name}' is on this host but has no LinuxGSM install, and the "
-                                    "panel can't confirm it created it (it may have restarted since), so it "
-                                    "won't delete it or install into it. If it is this install's leftover, "
-                                    "delete the account on the host and retry, or remove the server (which "
-                                    "deletes the account) and install again.", name=short_name), True
+        return False, i18n.Sentence(_R25B_FOUND_UNCONFIRMED, name=short_name), True
     # A half-finished account an earlier attempt of THIS process made: rebuild it clean. Two
     # verbs, and the home path is built by the helper from the validated name.
     _remove_account_crontab(remote, short_name)
@@ -2315,7 +2360,7 @@ def _register_uninstall_and_edit(app):
             return _index_reply(i18n.tr("'{name}' is already being uninstalled or installed — wait for "
                                         "that to finish.", name=name), False, "warning", 409)
         try:
-            return _uninstall_claimed(app, gs, gs.remote, server_id, name)
+            return _r25b_uninstall_claimed(app, gs, gs.remote, server_id, name)
         finally:
             _release_uninstall(server_id)
 
@@ -2380,6 +2425,17 @@ def _release_uninstall(server_id):
     """Drop the hold _claim_uninstall took."""
     with _install_lock:
         _uninstalling.discard(server_id)
+
+
+def _r25b_uninstall_claimed(app, gs, remote, server_id, name):
+    """_uninstall_claimed, unless step 1 found the account on the host and left it alone.
+
+    Then the row goes and the host is untouched (see _R25B_FOUND_FRESH): an ordinary login passes
+    every check _uninstall_claimed makes, and its delete is exactly what step 1 refused to do.
+    """
+    if _r25b_left_account(gs):
+        return _remove_row_only(app, gs, remote, server_id, name, _R25B_LEFT_ACCOUNT_WHY)
+    return _uninstall_claimed(app, gs, remote, server_id, name)
 
 
 def _uninstall_claimed(app, gs, remote, server_id, name):

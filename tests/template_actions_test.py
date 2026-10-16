@@ -1207,12 +1207,30 @@ _R23D_OPERAND_KEYWORDS = frozenset(("return", "typeof", "instanceof", "in", "of"
 def _r23d_operand_due(before):
     """Is an operand due after JS text `before` (its previous token; see _r23d_regex_end)?"""
     _t = before.rstrip()
+    # A block comment is not a token: the one before it decides (review 1016b: `= /* c */ /'/`
+    # divided, so the regex's quote opened a string that hid what followed).
+    while _t.endswith("*/") and "/*" in _t[:-2]:
+        _t = _t[:_t.rindex("/*", 0, len(_t) - 2)].rstrip()
     if _t.endswith(("++", "--")):
         return False
+    if _t.endswith(")"):
+        # The `)` closing an if/while/for/with head is followed by a statement, not an operator
+        # (review 1016b: `if (x) /'/.test(s)` divided).
+        return _r25d_closes_head(_t)
     _word = re.search(r"(?<![\w$.])[A-Za-z_$][\w$]*$", _t)
     if _word:
         return _word.group(0) in _R23D_OPERAND_KEYWORDS
     return _t[-1:] in tuple("(,=:[!&|?{};+-*%<>~^") + ("",)
+
+
+def _r25d_closes_head(text):
+    """Does the `)` ending JS `text` close the head of an if, while, for or with?"""
+    _depth = 0
+    for _k in range(len(text) - 1, -1, -1):
+        _depth += {")": 1, "(": -1}.get(text[_k], 0)
+        if _depth == 0:
+            return bool(re.search(r"(?<![\w$.])(?:if|while|for|with)\s*$", text[:_k]))
+    return False
 
 
 def _r23d_regex_end(src, i):
@@ -1284,11 +1302,14 @@ def _js_expr_at(src, i):
 # A regex literal in a sink's expression is skipped, a division is not (control, review 1015d).
 _r23d_rx_ctl = [_js_expr_at(_x, 0) for _x in (
     "s.replace(/'/g, '') + d.name; x", "i++ / 2 + d.name + '</b>'; x", "a / b + d.name; x",
-    "(function(){ return /'/.test(s) })() ? '' : d.name; x")]
+    "(function(){ return /'/.test(s) })() ? '' : d.name; x",
+    # After a block comment, and after an if's head (review 1016b).
+    "/* c */ /'/.test(s) ? '' : d.name; x", "(function(){ if (x) /'/.test(s) })() ? '' : d.name; x")]
 # Exact: a quote opened at the regex runs to the end of the text, which still holds d.name and
 # hides it as string text, so "d.name in it" could not fail.
 check(_r23d_rx_ctl == ["s.replace(/r/g, '') + d.name", "i++ / 2 + d.name + '</b>'", "a / b + d.name",
-                       "(function(){ return /r/.test(s) })() ? '' : d.name"],
+                       "(function(){ return /r/.test(s) })() ? '' : d.name",
+                       " /r/.test(s) ? '' : d.name", "(function(){ if (x) /r/.test(s) })() ? '' : d.name"],
       "sinks: a regex literal's quote in a sink's expression does not hide the names after it (control)",
       repr(_r23d_rx_ctl))
 

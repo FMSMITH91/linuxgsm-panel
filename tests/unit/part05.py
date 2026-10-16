@@ -1349,6 +1349,7 @@ _VERB_SAMPLES = {
     "f2b-reload": [],
     "service-restart": ["ssh"],
     "panel-restart": ["2"],
+    "panel-port-record": ["5055"],
     "tailscale-release-operator": ["ubuntu"],
     "tailscale-ssh": ["on"],
     "tailscale-serve": ["serve", "modern", "/", "http", "5000"],
@@ -1593,7 +1594,9 @@ try:
           # generic-api-key rule flags, and the history it scans is not rewritten.
           and _sec_runs[0][1] == 'token: "%s"\n' % _SEC_ARGS["pro-attach"][0],
           repr((_sec_pro, _sec_runs)))
-    _sec_ts = _sec_helper(["tailscale-up-key", "yes", "-", "-"], "tskey-auth-SeCrEtKeY42\n")
+    # SSH "no": with "yes" the helper first asks whether the owner chose Tailscale SSH at install
+    # (part93), and this check is about where the key travels.
+    _sec_ts = _sec_helper(["tailscale-up-key", "no", "-", "-"], "tskey-auth-SeCrEtKeY42\n")
     check("secrets: the helper runs tailscale up reading the key from stdin, not its argv",
           _sec_ts[0] == 0 and len(_sec_runs) == 1
           and "file:/dev/stdin" in _sec_runs[0][0]
@@ -1937,7 +1940,10 @@ try:
     # orphan rule still has to free its slot, or the host stays wedged.
     _sd_removed[:] = []
     def _sd_missing(n): raise KeyError(n)
-    _helper.pwd.getpwnam = _sd_missing      # on this block's own proxy, not the pwd module
+    # A new proxy over the real module, not an attribute set on the current one: the gate exempted
+    # `_helper.pwd.getpwnam = …` by its text, which a later such line on the REAL pwd would share
+    # (review 1016b).
+    _helper.pwd = _R20dOver(_sd_orig[1], getpwuid=_sd_getpwuid, getpwnam=_sd_missing)
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: an already-deleted account's slot is still freed, as an orphan",
           "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
@@ -4323,6 +4329,8 @@ _BAD = {
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
     # The delay is the ONLY caller input to a verb that restarts the panel itself.
     "panel-restart": ["0", "301", "-1", "2; reboot", "", "abc", "1e3"],
+    # The port the helper's Serve may publish: one the panel itself may listen on, nothing below 1024.
+    "panel-port-record": ["80", "1023", "0", "65536", "5055; id", "", "-1", "5055 "],
     # These two are exported into a ROOT-run installer's environment.
     "panel-self-update": ["--upload-pack=x", "main; id", "a/../b", "HEAD~1", "'"],
     # The operator is a Linux user name; anything shaped like a flag or a shell fragment is out.
@@ -5473,25 +5481,88 @@ def _r17d_walk_of_root(node, is_root, os_names=_R19D_OS_ONLY):
     pattern built from the root. `os_names`: what the file binds to os, and to walk/fwalk.
     """
     if not isinstance(node, _smg_ast.Call):
-        return False
+        return _r25d_hidden_pattern_of_root(node, is_root)
     _kw = {_k.arg: _k.value for _k in node.keywords if _k.arg}
     _top = _r18d_walked(node, _kw, os_names)
     if _top is not None and is_root(_top):
         return True
-    return _r20d_hidden_glob_of_root(node, _kw, is_root) or _r23d_hidden_join_of_root(node, is_root)
+    return _r20d_hidden_glob_of_root(node, _kw, is_root) or _r25d_hidden_pattern_of_root(node, is_root)
 
 
-def _r23d_hidden_join_of_root(node, is_root):
-    """Is call `node` a join(<root>, '.*', ...) — a glob pattern that enters the root's hidden directories?
+def _r25d_hidden_pattern_of_root(node, is_root):
+    """Is `node` a path built from the root — join(<root>, …), <root> + "…" or f"{<root>}…" — that enters its hidden directories?
 
     A dot-leading wildcard component with more after it reads every hidden directory's contents
     whatever glob's include_hidden says, and the pattern may reach glob through a name the gate
     cannot follow (review 1015d: part05's npm scan read .claude/worktrees/* with the gate green).
+    Read across the whole built path, not one join argument (review 1016b: only a middle argument of
+    a 3+-argument join counted, so join(<root>, ".*/**/*.sh"), <root> + "/.*/**/*.sh" and the
+    f-string read the same directories unseen).
     """
-    if _r17d_call_name(node) != "join" or len(node.args) < 3 or not is_root(node.args[0]):
+    _rest = _r25d_built_from_root(node, is_root)
+    if _rest is None:
         return False
-    return any(isinstance(getattr(_a, "value", None), str) and _re.match(r"\.[^/]*[*?[]", _a.value)
-               for _a in node.args[1:-1])
+    _parts = [_c for _c in "".join(_rest).split("/") if _c]
+    return any(_re.match(r"\.[^/]*[*?[]", _c) for _c in _parts[:-1])
+
+
+def _r25d_txt(node):
+    """A string constant's text, else "X" (a piece the gate cannot read)."""
+    return node.value if isinstance(node, _smg_ast.Constant) and isinstance(node.value, str) else "X"
+
+
+def _r25d_built_from_root(node, is_root):
+    """The text after the root of a path `node` builds from it (a non-constant piece reads "X"), or None."""
+    for _reader in (_r25d_joined_from_root, _r25d_added_to_root, _r25d_fstring_from_root,
+                    _r25d_formatted_from_root):
+        _rest = _reader(node, is_root)
+        if _rest is not None:
+            return _rest
+    return None
+
+
+def _r25d_joined_from_root(node, is_root):
+    """join(<root>, …): the pieces after the root, each a path component."""
+    if isinstance(node, _smg_ast.Call) and _r17d_call_name(node) == "join" and node.args and is_root(node.args[0]):
+        return ["/" + _r25d_txt(_a) for _a in node.args[1:]]
+    return None
+
+
+def _r25d_added_to_root(node, is_root):
+    """<root> + "…" + …: the pieces after the root."""
+    _chain = []
+    while isinstance(node, _smg_ast.BinOp) and isinstance(node.op, _smg_ast.Add):
+        _chain.insert(0, node.right)
+        node = node.left
+    return [_r25d_txt(_a) for _a in _chain] if _chain and is_root(node) else None
+
+
+def _r25d_fstring_from_root(node, is_root):
+    """f"{<root>}…": the pieces after the root."""
+    _head = node.values[0] if isinstance(node, _smg_ast.JoinedStr) and node.values else None
+    if isinstance(_head, _smg_ast.FormattedValue) and is_root(_head.value):
+        return [_r25d_txt(_a) for _a in node.values[1:]]
+    return None
+
+
+def _r25d_formatted_from_root(node, is_root):
+    """The text after the root of `"%s/…" % <root>` or `"{}/…".format(<root>)`, or None."""
+    _fmt, _arg, _lead = _r25d_format_parts(node)
+    if isinstance(_fmt, _smg_ast.Constant) and isinstance(_fmt.value, str) and _fmt.value.startswith(_lead) \
+            and is_root(_arg):
+        return [_fmt.value[len(_lead):]]
+    return None
+
+
+def _r25d_format_parts(node):
+    """(format string node, its first argument, the placeholder it must start with) of a % or .format call."""
+    if isinstance(node, _smg_ast.BinOp) and isinstance(node.op, _smg_ast.Mod):
+        _right = node.right
+        return node.left, (_right.elts[0] if isinstance(_right, _smg_ast.Tuple) and _right.elts else _right), "%s"
+    if (isinstance(node, _smg_ast.Call) and isinstance(node.func, _smg_ast.Attribute)
+            and node.func.attr == "format" and node.args):
+        return node.func.value, node.args[0], "{}"
+    return None, None, ""
 
 
 def _r20d_hidden_glob_of_root(node, kw, is_root):
@@ -5644,6 +5715,15 @@ _r17d_walk_ctl = {
     "a '.*' pattern joined to the root": (
         "from unit import REPO_ROOT\nps = (os.path.join(REPO_ROOT, '.*', '**', '*.sh'),)\n"
         "x = [f for p in ps for f in glob.glob(p, recursive=True)]\n"),
+    # review 1016b: the same pattern as one string, built with +, or in an f-string.
+    "a '.*/…' pattern as one join argument": (
+        "from unit import REPO_ROOT\np = os.path.join(REPO_ROOT, '.*/**/*.sh')\nx = glob.glob(p, recursive=True)\n"),
+    "a '/.*/…' pattern added to the root": (
+        "from unit import REPO_ROOT\np = REPO_ROOT + '/.*/**/*.sh'\nx = glob.glob(p, recursive=True)\n"),
+    "a '/.*/…' pattern in an f-string": (
+        "from unit import REPO_ROOT\np = f'{REPO_ROOT}/.*/**/*.sh'\nx = glob.glob(p, recursive=True)\n"),
+    "a '/.*/…' pattern formatted with the root": (
+        "from unit import REPO_ROOT\np = '%s/.*/**/*.sh' % REPO_ROOT\nq = '{}/.*/x'.format(REPO_ROOT)\n"),
     "a skip set only in a comment": (
         "SKIP = {'x'}  # not .claude\nfrom unit import REPO_ROOT\nfor d, s, f in os.walk(REPO_ROOT):\n"
         "    s[:] = [x for x in s if x not in SKIP]\n"),
@@ -5658,7 +5738,8 @@ _r17d_walk_ctl["an rglob of a subtree, and a glob without hidden dirs (not one)"
     "y = list(pathlib.Path(REPO_ROOT, 'panel').rglob('*'))\n"
     "z = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True)\n"
     "w = list(pathlib.Path(REPO_ROOT).glob('*.py'))\nv = list(ast.walk(REPO_ROOT))\n"
-    "u = os.path.join(REPO_ROOT, '.*')\nt = os.path.join(REPO_ROOT, '.github', '*.yml')\n") == []
+    "u = os.path.join(REPO_ROOT, '.*')\nt = os.path.join(REPO_ROOT, '.github', '*.yml')\n"
+    "r = REPO_ROOT + '/.github/*.yml'\nq = f'{REPO_ROOT}/.*'\np = '%s/panel/*.py' % REPO_ROOT\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
       not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
 _r17d_walk_ctl["a .claude prune in code, with a comment beside it (not one)"] = _r16d_unpruned_walks(
@@ -6998,7 +7079,7 @@ try:
     # is in memory). It is not a dead end, and the Retry button it keeps is the second half of its
     # instruction: delete the leftover on the host, and the next retry creates the account afresh.
     check("install account: ...the refusal says how to get past it, and Retry stays offered",
-          _r[2] is True and "delete the account on the host and retry" in _r[1], repr(_r))
+          _r[2] is True and "delete the account on the host yourself and retry" in _r[1], repr(_r))
     _r = _acct_case(False, id="NOTEXISTS")
     check("install account: ...and once the leftover is gone, the retry creates the account",
           _r == (True, "", True) and ("create", "ubuntu") in _acct_sent
@@ -8124,8 +8205,6 @@ _R21D_STDLIB_OK = {
     # The runner tracks every temp path the suite makes: process-wide by nature.
     "tests/unit_test.py:tempfile.mkdtemp", "tests/unit_test.py:tempfile.mkstemp",
     "tests/unit_test.py:tempfile._mkstemp_inner",
-    # On the block's own _R20dOver proxy (set two lines up), not the pwd module.
-    "tests/unit/part05.py:_helper.pwd.getpwnam",
     # terminal_session imports pwd inside panel_account/sudo_hint/_login_shell, and _core inside
     # enrol_game_user: the module is the only seam.
     "tests/unit/part06.py:_pwd6.getpwuid", "tests/unit/part06.py:_pwd7.getpwuid",
@@ -8252,11 +8331,33 @@ def _r21d_patches_stdlib(node, aliases):
     if not (isinstance(node, _smg_ast.Call) and node.args):
         return False
     _fname = getattr(node.func, "id", getattr(node.func, "attr", "")) or ""
-    # mock's patch("os.replace", f) names its target as text (review 1015d).
-    if _fname == "patch" and (_r22d_str_arg(node) or "").split(".")[0] in _R21D_STDLIB:
+    # mock's patch("os.replace", f) names its target as text (review 1015d), also through a
+    # module that holds the stdlib one (review 1016b: "panel.ops.system_ops.os.replace").
+    if _fname == "patch" and _r25d_dotted_stdlib(_r22d_str_arg(node) or ""):
         return True
     return (_r23d_shaped_patcher(node, _fname) or bool(_R21D_PATCHER.search(_fname))) and (
         _r21d_is_stdlib_module(node.args[0], aliases) or _r23d_std_submodule(node.args[0], aliases))
+
+
+def _r25d_dotted_stdlib(target):
+    """Does mock.patch's dotted `target` set an attribute ON a stdlib module, reached by any path?
+
+    A component that is a stdlib module's name, with an attribute after it, counts unless the path
+    up to it is a module of its own (panel.core.http is the panel's, not the stdlib's http).
+    """
+    _parts = target.split(".")
+    for _k, _p in enumerate(_parts[:-1]):
+        if _p not in _R21D_STDLIB:
+            continue
+        if _k == 0:
+            return True
+        try:
+            _own = _ilu.find_spec(".".join(_parts[:_k + 1])) is not None
+        except (ImportError, ValueError, AttributeError):
+            _own = False        # its parent is a module, not a package: an attribute of that module
+        if not _own:
+            return True
+    return False
 
 
 def _r23d_shaped_patcher(node, fname):
@@ -8322,10 +8423,13 @@ _r21d_std_ctl = [_r21d_stdlib_stubs(_smg_ast.parse(_c)) for _c in (
     "import os as _o\n_p9_patch(_o.path, 'isdir', f)",
     "from unittest import mock\nimport os\nmock.patch.object(os, 'replace', new=f)",
     "from unittest import mock\nmock.patch('os.replace', f)",
+    # ...through the module that holds it, and not a panel module that shares a stdlib name (review 1016b).
+    "from unittest import mock\nmock.patch('panel.ops.system_ops.os.replace', f)",
+    "from unittest import mock\nmock.patch('panel.core.http._wants_json', f)",
     "import atexit, shutil\natexit.register(shutil.rmtree, d, True)")]
 check("tests: no test sets an attribute on a stdlib module other than sys/builtins (it would stand in for "
       "every module and thread); each listed exception still exists, and the reader finds each spelling "
       "and each (module, name, value) patcher whatever its name (control)",
       not _r21d_std_hits and _R21D_STDLIB_OK <= _r21d_std_seen
-      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 7 + [False],
+      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 8 + [False] * 2,
       repr((_r21d_std_hits, sorted(_R21D_STDLIB_OK - _r21d_std_seen), _r21d_std_ctl)))

@@ -6,7 +6,8 @@ from flask import (current_app, flash, jsonify, redirect, render_template, reque
 from flask_login import (current_user)
 from panel.core import i18n
 from panel.core.clock import (utcnow)
-from panel.core.config import (_r13a_cfg_text, encrypt_secret, load_config, remove_setup_token, set_config_keys)
+from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, encrypt_secret, load_config, remove_setup_token,
+                               set_config_keys)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
@@ -385,6 +386,14 @@ def _setup_welcome(state, data, cfg):
     if _bind_err:
         flash(i18n.tr(_bind_err), "danger")
         return redirect("/setup")
+    # A new port is recorded for the root helper first, as /api/panel/change-port does: it is the
+    # one port the helper's Serve publishes, and the helper refuses one another account listens on.
+    if _wiz_port != _r15a_cfg_int(cfg.get("port", 5000), 5000):
+        _rec_ok, _rec_why = so.record_panel_port(_wiz_port)
+        if not _rec_ok:
+            flash(i18n.tr("Port {port} could not be recorded as the panel's port, so nothing was "
+                          "changed ({why}).", port=_wiz_port, why=_rec_why), "danger")
+            return redirect("/setup")
     set_config_keys(cfg, site_title=_site_title, site_domain=_site_domain, port=_wiz_port,
                     bind_host=_wiz_bind)
     data["site_configured"] = True

@@ -2623,7 +2623,7 @@ import base64 as _wc_b64
 _wc_orig = (_sm_core.run_command, _sm_files._write_file_as_user)
 try:
     _wc = {"written": [], "read": None}
-    _sm_files._write_file_as_user = lambda s, u, p, b: (
+    _sm_files._write_file_as_user = lambda s, u, p, b, selfname=None: (
         _wc["written"].append((p, b.decode())), (True, ""))[1]
 
     def _wc_transport(resp):

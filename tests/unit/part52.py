@@ -167,7 +167,7 @@ def _secrets52_writes():
     """lgsm_write_config against the secrets files _secrets52 wrote, then with none at all."""
     written = []
     _p9_patch(_files52, "_write_file_as_user",
-              lambda s, u, p, b: (written.append((p, b.decode())), (True, ""))[1])
+              lambda s, u, p, b, selfname=None: (written.append((p, b.decode())), (True, ""))[1])
     ok, msg = _files52.lgsm_write_config(NS(), _USER52, _SELF52, {"discordwebhook": "https://new"})
     check("lgsm_write_config: changing a key secrets-<instance>.cfg also sets is refused, naming "
           "that file, and nothing is written",

@@ -589,12 +589,13 @@ def _check_tailscale_mount():
     #
     # Nothing is stored either way (the route only writes tailscale_mount when Serve succeeded),
     # so this is about the ANSWER, not about a bad value reaching the config.
-    # setup_tailscale_serve is a RECORDER here. The real one makes the current user the Tailscale
-    # operator, adds a UFW allow on tailscale0, and runs `tailscale serve --bg` UNPRIVILEGED first —
-    # which nosudo_runner cannot refuse, since it names no sudo. So the positive control below left
-    # a persistent Serve route publishing this machine's 127.0.0.1:5000 at <node>.ts.net/lgsm to
-    # every tailnet peer, on every developer box where the user is the operator. The recorder
-    # answers "not done" so nothing is stored, and what it received is asserted instead.
+    # setup_tailscale_serve is a RECORDER here. The real one adds a UFW allow on tailscale0 and
+    # writes Serve through the root helper's verb (since #435; before it, it made the current user
+    # the Tailscale operator and ran `tailscale serve --bg` unprivileged, which nosudo_runner could
+    # not refuse). On a machine with the helper installed that verb still runs for real, so the
+    # positive control below would publish this machine's 127.0.0.1:5000 at <node>.ts.net/lgsm to
+    # every tailnet peer. The recorder answers "not done" so nothing is stored, and what it
+    # received is asserted instead.
     _ts_calls = []
     _ts_mod.setup_tailscale_serve = lambda **kw: (_ts_calls.append(kw), (False, "stub: not run"))[1]
     _mount_before = load_config().get("tailscale_mount")

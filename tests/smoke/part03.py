@@ -825,14 +825,16 @@ try:
     _en_bad = _enc.post("/account/2fa/enable",
                         data={"password": "wrong-password", "totp_code": _en_code})
     with app.app_context():
+        # Refused (redirected back to the enrol page), not crashed: a 500 in the refusal branch
+        # also leaves 2FA off, and read as the password gate holding (review 1016b).
         check("2FA enrol: a valid code with the WRONG password does not enable 2FA",
-              not db.session.get(User, _en_id).totp_enabled,
+              _en_bad.status_code == 302 and not db.session.get(User, _en_id).totp_enabled,
               "status=%s — a live session alone installed a second factor"
               % _en_bad.status_code)
     _en_none = _enc.post("/account/2fa/enable", data={"totp_code": _en_code})
     with app.app_context():
         check("2FA enrol: ...nor does one with no password at all",
-              not db.session.get(User, _en_id).totp_enabled,
+              _en_none.status_code == 302 and not db.session.get(User, _en_id).totp_enabled,
               "status=%s" % _en_none.status_code)
     # Positive control: the same code, with the right password, still enrols — so the two
     # refusals above are a gate and not a broken route.
@@ -1950,11 +1952,14 @@ with app.app_context():
           auth.check_password(_issued, _hu_r.password_hash))
 
 # Wrong current password must not clear the flag — the gate is not a formality.
-hc.post("/account/password", data={"current_password": "not-the-one",
-                                   "new_password": "Ch0sen!pass1", "confirm_password": "Ch0sen!pass1"})
+# Refused (redirected back), not crashed: a 500 also leaves the flag set (review 1016b).
+_gate_r = hc.post("/account/password", data={"current_password": "not-the-one",
+                                             "new_password": "Ch0sen!pass1",
+                                             "confirm_password": "Ch0sen!pass1"})
 with app.app_context():
-    check("gate: a wrong current password leaves the account still flagged",
-          db.session.get(User, _hu_id).must_change_password is True)
+    check("gate: a wrong current password leaves the account still flagged (refused, not crashed)",
+          _gate_r.status_code == 302 and db.session.get(User, _hu_id).must_change_password is True,
+          "status %s" % _gate_r.status_code)
 
 _chg = hc.post("/account/password", data={"current_password": _issued,
                                           "new_password": "Ch0sen!pass1",

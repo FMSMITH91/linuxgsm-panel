@@ -34,7 +34,7 @@ _STATE54 = os.path.join(_TMP54, "ts-state.json")
 _P54 = "http://127.0.0.1:5000"
 _PS54 = "https+insecure://127.0.0.1:5000"
 _OTHER54 = "http://127.0.0.1:9180"
-_ENV54 = {k: os.environ.get(k) for k in ("PATH", "FAKE_TS_STATE", "FAKE_TS_LOG")}
+_ENV54 = {k: os.environ.get(k) for k in ("PATH", "FAKE_TS_STATE", "FAKE_TS_LOG", "FAKE_TS_UNPRIV_LOG")}
 
 
 def _seed54(web, funnel=()):
@@ -70,6 +70,11 @@ try:
     os.environ["PATH"] = os.path.join(_TMP54, "bin") + os.pathsep + os.environ.get("PATH", "")
     os.environ["FAKE_TS_STATE"] = _STATE54
     os.environ["FAKE_TS_LOG"] = os.path.join(_TMP54, "ts-calls.jsonl")
+    # Every change the panel's OWN account asks of the fake, logged apart: the verbs list alone
+    # cannot show a direct write beside them, and this part's state has no operator rule to refuse
+    # one (review 1016b).
+    _r25d_unpriv54 = os.path.join(_TMP54, "ts-unprivileged.jsonl")
+    os.environ["FAKE_TS_UNPRIV_LOG"] = _r25d_unpriv54
     _verbs54 = []
     with _patched():
         _patch(_ts54, "allow_tailscale_ufw", lambda: (True, ""))
@@ -227,9 +232,14 @@ try:
               repr((_sh54[2], _tn54[2])))
         check("debug report: the shared-listener Funnel is named as such, not 'switched on outside the "
               "panel'", "because another app on it uses Funnel" in _sh54[3], _sh54[3])
+        try:
+            with open(_r25d_unpriv54, encoding="utf-8") as _fh54:
+                _r25d_own54 = _fh54.read().splitlines()
+        except FileNotFoundError:
+            _r25d_own54 = []
         check("tailscale funnel: every write went through the helper's Tailscale verbs (never the panel's "
-              "own account)", bool(_verbs54) and all(v[0] in _fake54.ROOT_VERBS for v in _verbs54),
-              repr(_verbs54))
+              "own account)", bool(_verbs54) and all(v[0] in _fake54.ROOT_VERBS for v in _verbs54)
+              and _r25d_own54 == [], repr((_verbs54, _r25d_own54[:4])))
 finally:
     for _k54, _v54 in _ENV54.items():
         if _v54 is None:

@@ -109,7 +109,7 @@ def register(app, supervise):
             # only TimeoutExpired, so a checkout on a host with no `git` binary raises straight
             # through). A persistent failure there would have silently disabled both alerts, which
             # is the exact way the OS-update alert was dead before. Each swallows its own errors.
-            _maybe_alert_cert_expiring()   # periodic TLS-cert expiry check
+            _maybe_alert_cert_expiring(app.config)   # periodic TLS-cert expiry check
             _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             time.sleep(1800)
 

@@ -517,6 +517,9 @@ function loadPanelBranches(){
   var sel=document.getElementById('pu-branch-select'), cur=document.getElementById('pu-branch-current');
   if(!sel) return;
   fetch(MOUNT+'/api/panel/branches').then(function(r){return r.json();}).then(function(d){
+    // The route answers a failed listing {branches: [], current: "main", error}: its fallback
+    // shape, which named "main" as the tracked branch of a panel that may be on another.
+    if(!d || d.error) return;
     var branches=d.branches||[], current=d.current||'main';
     if(cur) cur.textContent=current;
     sel.innerHTML='';

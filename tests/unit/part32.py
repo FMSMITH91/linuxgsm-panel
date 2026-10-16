@@ -599,9 +599,18 @@ def _p32_remove_route():
 
 def _p32_remove_operator():
     _seed({"443": {"/lgsm": _PS}}, operator_required=True)
+    # Only the harness's own probe leaves the log: emptying it erased every unprivileged write the
+    # boot, wizard and Enable steps before this one had made, so the closing check never saw them
+    # (review 1016b).
+    try:
+        with open(_UNPRIV32, encoding="utf-8") as fh:
+            _kept = fh.read()
+    except FileNotFoundError:
+        _kept = ""
     denied = ts._run_ts(["serve", "--https=443", "--set-path=/lgsm", "off"], timeout=10)[2]
     readable = not ts.get_tailscale_info(force_refresh=True).serve_unreadable
-    open(_UNPRIV32, "w", encoding="utf-8").close()   # that `off` was the harness's own probe
+    with open(_UNPRIV32, "w", encoding="utf-8") as fh:
+        fh.write(_kept)      # that `off` was the harness's own probe
     check("p32 harness: a host where this account is not the operator READS Serve and may not change "
           "it (Tailscale's own split, which the fake models)", (denied, readable, _table())
           == (1, True, {"443": {"/lgsm": _PS}}), repr((denied, readable)))

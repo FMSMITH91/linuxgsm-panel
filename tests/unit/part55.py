@@ -121,7 +121,7 @@ def _secrets_copy55():
     _write55(_CFGDIR55 + "/secrets-%s.cfg" % _SELF55, 'discordwebhook="https://real"\n')
     written = []
     _p9_patch(_files55, "_write_file_as_user",
-              lambda s, u, p, b: (written.append(b.decode()), (True, ""))[1])
+              lambda s, u, p, b, selfname=None: (written.append(b.decode()), (True, ""))[1])
     ok, _msg = _files55.lgsm_write_config(NS(), _USER55, _SELF55,
                                           {"discordwebhook": "https://real", "emailalert": "on"})
     check("lgsm_write_config: a value posted unchanged from secrets-<instance>.cfg is not copied "

@@ -688,8 +688,16 @@
         {% set ts_up = status and status.tailscale_ssh and status.tailscale_ssh.running %}
         {% if status and status.tailscale_ssh.enabled %}
         <button class="btn btn-sm btn-outline-warning" data-action="tsSshDisable"><i class="bi bi-x-circle"></i> Disable Tailscale SSH</button>
-        {% elif ts_up %}
+        {% elif ts_up and status.tailscale_ssh_allowed %}
         <button class="btn btn-sm btn-success" data-action="tsSshEnable"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
+        {# Not chosen at install (system_ops.tailscale_ssh_allowed): the helper refuses `on`, so
+           the button is shown, read-only, with why and how to change it. #}
+        {% elif ts_up %}
+        <button class="btn btn-sm btn-success" disabled aria-describedby="ts-ssh-not-chosen"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
+        {# How to allow it on both install models: sudo drops a variable set before it, and a
+           per-user install refuses a root run. With no choice recorded at all (the previous
+           installer wrote panel.conf: system_ops.tailscale_ssh_choice), it says that instead. #}
+        <div class="small text-secondary mt-1" id="ts-ssh-not-chosen">{% if status.tailscale_ssh_unrecorded %}No Tailscale SSH choice is recorded for this host yet: an older installer wrote its settings, and the next update records one (no, unless Tailscale SSH is on by then).{% else %}Tailscale SSH on this host was not chosen when the panel was installed.{% endif %} With it on, the tailnet decides who may log in here as root. To allow it, re-run the installer with <code>PANEL_TAILSCALE_SSH=1</code>: <code>sudo PANEL_TAILSCALE_SSH=1 bash install.sh</code>, or on a per-user install the same command as the panel's user, without <code>sudo</code>.</div>
         {% else %}
         <button class="btn btn-sm btn-success" disabled title="Tailscale isn't installed/connected on this host"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
         <div class="small mt-1"><a href="{{ url_for('tailscale_page') }}"><i class="bi bi-box-arrow-in-down"></i> Set up Tailscale first</a></div>
@@ -715,21 +723,29 @@
            node is installed-but-not-linked (NeedsLogin), which would strand the user. #}
         {% set ssh_lockdown_safe = ts_up and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
+        {# Tailscale SSH is off unless the owner chose it at install (system_ops.tailscale_ssh_allowed),
+           so without it the way back in is sshd over the tailnet: the tailscale0 interface allowed. #}
+        {% if status and status.tailscale_ssh.enabled %}
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+        {% else %}
+        <p class="small text-secondary mb-1">With the tailscale0 interface allowed, SSH to this host's tailnet address keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+        {% endif %}
         {% if not ssh_lockdown_safe %}
         <p class="small text-warning mb-1">
           {% if not ts_up %}
           Connect Tailscale and link this machine before you disable public SSH, or you would lock yourself out.
           <a href="{{ url_for('tailscale_page') }}">Open Tailscale settings</a>
-          {% else %}
+          {% elif status.tailscale_ssh_allowed %}
           Enable Tailscale SSH, or allow the tailscale0 interface, before you disable public SSH — otherwise you would lock yourself out.
+          {% else %}
+          Allow the tailscale0 interface (SSH to this host's tailnet address) before you disable public SSH — otherwise you would lock yourself out.
           {% endif %}
         </p>
         {% endif %}
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
           <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% else %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %} data-action="sshMode" data-args='["off"]'>Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% elif status.tailscale_ssh_allowed %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% else %}No Tailscale path back in yet — allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %} data-action="sshMode" data-args='["off"]'>Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>

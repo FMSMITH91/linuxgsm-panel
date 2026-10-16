@@ -869,7 +869,8 @@ function uploadFiles(files, base){
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({path:base, names:arr.map(function(f){ return f.name; })})
     })
-    .then(r=>r.json()).then(function(d){ checked = d.checked !== false; return d.existing||[]; })
+    // An error reply ({error}: a denial, a bad path, the catch-all) checked nothing either.
+    .then(r=>r.json()).then(function(d){ checked = !!d && !d.error && d.checked !== false; return (d && d.existing)||[]; })
     // A failed check must not become a silent overwrite: fall through with no known conflicts and
     // let the server refuse (409), which surfaces as "already exists" rather than a clobbered file.
     .catch(function(){ checked = false; return []; })
@@ -1064,8 +1065,16 @@ if (_crumb) _crumb.addEventListener('click', function(ev){
       var out=[], miss={n:0};
       Promise.all(roots.map(function(r){ return _walkEntry(r, '', out, miss); }))
         .then(function(){
-          if(miss.n && window.toast) toast(tfn(miss.n, '1 dropped item could not be read and is not uploaded.',
-                                                 '{n} dropped items could not be read and are not uploaded.'), 'warning');
+          var missMsg = miss.n ? tfn(miss.n, '1 dropped item could not be read and is not uploaded.',
+                                     '{n} dropped items could not be read and are not uploaded.') : '';
+          if(missMsg && window.toast) toast(missMsg, 'warning');
+          // Nothing readable at all: say so on the status line too. uploadEntries' empty-list text
+          // ("no files in what you dropped") contradicted the toast — the drop HAD files, unreadable.
+          if(!out.length && missMsg){
+            _uploadStatus(missMsg, 'text-warning');
+            setTimeout(function(){ _uploadStatus(''); },5000);
+            return;
+          }
           uploadEntries(out, base);
         })
         .catch(function(){ _uploadStatus('Could not read the dropped folder.','text-danger'); });

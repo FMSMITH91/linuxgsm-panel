@@ -227,18 +227,46 @@ check("debug report posture gate: ...a section whose part is not a file part ('p
       repr(_r92p.get("error") or _pfile92[:400]))
 
 
+def _r25d_report_writer92(node):
+    """Is call `node` one that puts text in the report file: add()/find(), or an append to .lines/.findings?"""
+    _f = node.func
+    if not isinstance(_f, _ast92.Attribute):
+        return False
+    return _f.attr in ("add", "find") or (
+        _f.attr in ("append", "extend", "insert") and isinstance(_f.value, _ast92.Attribute)
+        and _f.value.attr in ("lines", "findings"))
+
+
+def _r25d_str_consts92(tree):
+    """The module-level `NAME = "text"` assignments of `tree`."""
+    return {n.targets[0].id: n.value.value for n in tree.body
+            if isinstance(n, _ast92.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], _ast92.Name)
+            and isinstance(n.value, _ast92.Constant) and isinstance(n.value.value, str)}
+
+
+def _r25d_call_text92(node, consts):
+    """The text call `node` is handed: its string literals, and the module constants it names."""
+    _out = []
+    for a in node.args:
+        for n in _ast92.walk(a):
+            if isinstance(n, _ast92.Constant) and isinstance(n.value, str):
+                _out.append(n.value)
+            elif isinstance(n, _ast92.Name) and n.id in consts:
+                _out.append(consts[n.id])
+    return " ".join(_out)
+
+
 def _r24r_add_offenders(src, name):
-    """[(file, line)] where a section prints posture vocabulary with add()/find(), not posture()."""
-    out = []
-    for node in _ast92.walk(_ast92.parse(src)):
-        if not (isinstance(node, _ast92.Call) and isinstance(node.func, _ast92.Attribute)
-                and node.func.attr in ("add", "find")):
-            continue
-        text = " ".join(n.value for a in node.args for n in _ast92.walk(a)
-                        if isinstance(n, _ast92.Constant) and isinstance(n.value, str))
-        if _b92.POSTURE_RE.search(text):
-            out.append((name, node.lineno))
-    return out
+    """[(file, line)] where a section prints posture vocabulary with add()/find(), not posture().
+
+    Also through a module-level string constant, and by appending to the result's lines or findings
+    itself (review 1016b: only string literals inside add()/find() were read).
+    """
+    tree = _ast92.parse(src)
+    consts = _r25d_str_consts92(tree)
+    return [(name, node.lineno) for node in _ast92.walk(tree)
+            if isinstance(node, _ast92.Call) and _r25d_report_writer92(node)
+            and _b92.POSTURE_RE.search(_r25d_call_text92(node, consts))]
 
 
 _DRDIR92 = os.path.join(_root, "panel", "ops", "debug_report")
@@ -250,10 +278,13 @@ for _fn92 in sorted(os.listdir(_DRDIR92)):
 _plantsrc92 = ("def section(ctx):\n    res = Result()\n"
                "    res.add(\"- **Ways in**: SSH %s from %s\" % (a, b))\n"
                "    res.find(\"fail\", AREA, \"the jail \"\n             \"can never ban\")\n"
-               "    res.posture(\"- **2FA on**: 0/1\")\n    return res\n")
+               "    res.posture(\"- **2FA on**: 0/1\")\n    return res\n"
+               "_WAYS = \"- **Ways in**: SSH open\"\ndef other(res):\n    res.add(_WAYS)\n"
+               "    res.lines.append(\"- **2FA on**: 0/1\")\n    res.posture(_WAYS)\n")
 check("debug report posture gate: no debug-report section prints posture vocabulary with add() or "
       "find() (posture() / posture_find() keep it on the page); a planted one is caught, line by line",
-      _off92 == [] and _r24r_add_offenders(_plantsrc92, "planted") == [("planted", 3), ("planted", 4)],
+      _off92 == [] and _r24r_add_offenders(_plantsrc92, "planted") == [("planted", 3), ("planted", 4), ("planted", 10),
+                                                       ("planted", 11)],
       repr((_off92, _r24r_add_offenders(_plantsrc92, "planted"))))
 
 

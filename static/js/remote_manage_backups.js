@@ -26,9 +26,14 @@ function bkReconcile(id, saved){
   el.value=String(saved);
   return (typed!=='' && String(saved)!==typed) ? (' — ' + tf('{typed} is out of range, kept {saved}', {typed: typed, saved: saved})) : '';
 }
+// A reply that is not a listing: none at all, or an error body (`error`, on every one since #435).
+function _r25c_bkUnread(d){ return !d || !!d.error; }
 function loadBackups(){
   if(!document.getElementById('bk-tbody')) return;   // the Backups card is a superadmin's (see loadIntegrity)
   fetch(MOUNT+'/api/panel/backups').then(r=>r.json()).then(function(d){
+    // The route answers a failed listing 200 {error}: read on, it said "No backups yet.", "No
+    // installed game servers." and ticked Daily backups on, about lists nobody had read.
+    if(_r25c_bkUnread(d)) throw new Error('not a reading');
     var s=d.settings||{};
     var en=document.getElementById('bk-enabled'); if(en) en.checked = s.enabled!==false;
     // Bounds come from the server, so the number box and the clamp behind it cannot disagree.
@@ -335,6 +340,8 @@ function saveBackupSettings(){
   fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
     .then(r=>r.json()).then(function(d){
+      // A refusal or an error reply carries no `settings`: it said "✓ Saved" about nothing saved.
+      if(!d || d.success!==true){ bkMsg((d && d.message) ? '✗ '+d.message : '✗ Could not save','text-danger'); return; }
       var note = bkReconcile('bk-keep', (d.settings||{}).keep_days)
                + bkReconcile('fb-keep', (d.full||{}).keep);
       bkMsg(t('✓ Saved')+note, note?'text-warning':'text-success');
@@ -348,7 +355,9 @@ function runFullBackup(btn){
   bkMsg('Checking for players…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/full/precheck').then(r=>r.json()).then(function(d){
     if(btn) btn.disabled=false;
-    var busy=(d&&d.busy)||[];
+    // An error reply has no `busy`: read as nobody online, it skipped the players warning.
+    if(!d || !Array.isArray(d.busy)) throw new Error('not a reading');
+    var busy=d.busy;
     if(!busy.length){
       bkMsg('','');
       confirmDialog({title:'Back up all servers', icon:'archive', confirmClass:'btn-primary', confirmLabel:'Back up all',

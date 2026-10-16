@@ -262,10 +262,12 @@ def _ssh_move89():
         "v6 list": opened(("2222,2223/tcp", "ALLOW IN", "Anywhere", False, True)),
         "v6 on lo": opened(("2222/tcp on lo", "ALLOW IN", "Anywhere", False, True)),
     }
-    check("ssh port move: an IPv6-only allow or LIMIT for exactly the new port still gets the v4 "
-          "rule, but it is not counted as the panel's to delete (the revert's `delete allow` took the "
-          "operator's v6 rule with it); no rule, a v6 list or a v6 rule on lo still count as added",
-          got == {"v6-only allow": ((False, None), [2222]), "v6-only LIMIT": ((False, None), [2222]),
+    check("ssh port move: an IPv6-only allow or LIMIT for exactly the new port gets only the v4 rule "
+          "(review 1016b: `allow port/tcp` rewrote it), counted as the v4 rule's own to delete (the "
+          "revert's `delete allow` took the operator's v6 rule with it); no rule, a v6 list or a v6 "
+          "rule on lo still count as added",
+          got == {"v6-only allow": ((_hosts89._R25B_V4_ADDED, None), []),
+                  "v6-only LIMIT": ((_hosts89._R25B_V4_ADDED, None), []),
                   "nothing": ((True, None), [2222]), "v6 list": ((True, None), [2222]),
                   "v6 on lo": ((True, None), [2222])}, repr(got))
 

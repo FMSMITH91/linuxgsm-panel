@@ -10,6 +10,7 @@ import logging
 
 from panel.core import i18n
 from panel.db.models import LOCAL_HOST_LABEL
+from panel.ops import system_ops as so
 from panel.ops import tailscale_integration as ts
 from panel.ops.debug_report import process as _dr_process
 from panel.security.auth import log_action
@@ -42,6 +43,28 @@ def _boot_audit(flask_app, detail, ok, action="tailscale_serve_leftover_removed"
             log_action(None, action, target=LOCAL_HOST_LABEL, detail=detail, success=ok)
     except Exception:
         _log.debug("boot audit row not written", exc_info=True)
+
+
+def _r25j_boot_host_records(app, port, audit=None):
+    """The boot's first two steps, whether or not Serve is set up. Never raises.
+
+    1. ts.release_operator: an earlier panel made its account the Tailscale operator, and that is
+       taken back at the first start on this code.
+    2. system_ops.reconcile_panel_port: the port this start is about to bind recorded as the
+       panel's own where panel.conf names another or none (a restored backup, the self-update
+       window, a failed save). The Tailscale page's Enable and the wizard pass this port too, and
+       the helper refuses Serve for any other.
+
+    `audit` is app.py's _boot_audit (this module's when None). A Tailscale SSH choice the helper
+    recorded with it is said, as install.sh says it: the first update to this code ran the previous
+    installer, which recorded no choice, and the helper recorded the one it found running.
+    """
+    ts.release_operator()
+    if so.reconcile_panel_port(port) == "recorded, tailscale ssh":
+        (audit or _boot_audit)(
+            app, "at boot: Tailscale SSH was already on and no choice was recorded for it, so it "
+                 "stays allowed: recorded that the panel may turn it on (re-run the installer with "
+                 "PANEL_TAILSCALE_SSH=0 to refuse)", True, action="tailscale_ssh_choice_recorded")
 
 
 def _boot_shared_funnel(app, cfg, port, audit=None):
@@ -95,8 +118,9 @@ def _remove_serve_leftovers(panel_port, mount, where, audit):
     The outcome is what app.config["BOOT_SERVE_LEFTOVERS"] holds: "none", "unread" (Serve could not
     be read, so nothing was removed), "removed:<mount>,<mount>" or "failed:<fixed reason class>".
     `audit(detail, ok)` writes one row per route removed, and one for a removal that failed — the
-    only privileged way to run `off` is the operator setting (the helper's Serve verb publishes,
-    it never removes), so a host where that did not take fails here, and that has to be on record.
+    `off` is the helper's `tailscale-serve-off` verb (the panel's account is never the Tailscale
+    operator), so a helper that sudo refuses, or one too old for that verb, fails here, and that
+    has to be on record.
     """
     try:
         state, removed, err = ts.remove_stale_panel_routes(panel_port, mount)

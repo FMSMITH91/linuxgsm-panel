@@ -215,7 +215,10 @@ function unbanIp(jail, ip, btn){
 function loadSecurityEvents(){
   var el=document.getElementById('sec-events'); if(!el) return;
   fetch(MOUNT+'/api/panel/security/events').then(function(r){return r.json();}).then(function(d){
-    var ev=d.events||[];
+    // The route answers a failed audit-log read 200 {events: [], error} — "could not read" first,
+    // as the bans/top-ips/log readers on this tab do, not "No security events yet."
+    if(!d || d.error || !Array.isArray(d.events)) throw new Error('not a reading');
+    var ev=d.events;
     if(!ev.length){ el.innerHTML='<div class="small text-secondary">No security events yet.</div>'; return; }
     var rows=ev.map(function(e){
       var t=e.time?new Date(e.time).toLocaleString():'';
@@ -485,6 +488,9 @@ function checkUpdates(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/updates-cached').then(function(r){ return r.json(); })
     .then(function(d){
       var el=document.getElementById('update-info'); if(!el || _updatesAsked) return;
+      // An error reply (a denial, the catch-all's 500) is not "never checked": leave the card empty,
+      // as a failed request does, rather than say "Not checked yet".
+      if(d && d.error) return;
       if(!d || !d.known){
         el.innerHTML='<span class="text-secondary">Not checked yet — press Check.</span>';  // nosemgrep
         // Never checked is not "up to date" — leave the button usable rather than disabling it

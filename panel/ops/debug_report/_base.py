@@ -65,7 +65,7 @@ POSTURE_RE = re.compile(
     r"\*\*2FA on\*\*|not every superadmin has 2FA|grant superadmin|setup token file|Must change password"
     r"|\*\*Ways in\*\*|default incoming|can never ban|which no jail can ban|jail file\*\*"
     r"|jail \(runtime\)\*\*|\*\*sshd jail\*\*|· jails:|without the panel-login jail"
-    r"|does not watch this install's auth\.log|no failed login reaches fail2ban"
+    r"|does not watch this install's auth\.log|no failed login reaches fail2ban|fail2ban ignores them"
     r"|auth\.log handler attached|\*\*UFW\*\*: (?:active|inactive|not installed)"
     r"|\*\*fail2ban\*\*: (?:running|not installed)|UFW (?:active|inactive)|fail2ban running"
     r"|Defence tools|defence tool missing|\*\*Ban gate \(|ban gate's fail2ban set"

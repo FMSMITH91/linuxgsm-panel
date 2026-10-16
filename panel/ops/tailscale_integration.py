@@ -138,7 +138,8 @@ def _r24t_release_operator():
         done = _r24t_release_via_helper(user)
         if done is not None:
             return done
-    # No helper (or one too old for the verb): the operator clears ITSELF, as install.sh does.
+    # No helper, one too old for the verb, or one that sudo refused (a password required): the
+    # operator clears ITSELF, as install.sh does.
     # tailscaled lets the operator edit its own prefs, and clearing the operator can only take
     # power away, so this is the one write the panel's account makes to tailscaled.
     _out, _err, rc = _run_ts(["set", "--operator="], timeout=10)
@@ -149,13 +150,21 @@ def _r24t_release_operator():
 
 
 def _r24t_release_via_helper(user):
-    """The release through the helper's verb: "released", "failed", or None for a stale helper."""
+    """The release through the helper's verb: "released", or None to clear the role as the account.
+
+    None on ANY failure, not only a helper too old for the verb. This answered "failed" for the
+    rest -- sudo refusing the helper (a sudoers.d rule sorting after the grant, a per-user install
+    without NOPASSWD), a timeout -- and the caller returned it, so the account kept the operator
+    role at every boot although the self-clear needs no privilege. Clearing can only take power
+    away, and the caller has already checked the role is this account's, so falling back is safe.
+    """
     out, err, rc = _so._run_verb("tailscale-release-operator", [user], timeout=20, merge_stderr=False)
     if rc == 0:
         return _r24t_released()
     if not (rc == 2 and "unknown verb" in (err or "") + (out or "")):
-        _log.warning("Tailscale operator release for the panel's account failed: rc %s", rc)
-        return "failed"
+        _log.warning("Tailscale operator release through the helper failed (rc %s); releasing it "
+                     "as the panel's own account instead", rc)
+        return None
     # The installed helper predates the verb: new code arrived without install.sh being run (a
     # plain git pull). Said apart, because the cure is not a retry. The caller then releases the
     # role as the panel's own account.
@@ -847,6 +856,9 @@ def tailscale_up_local(enable_ssh=True):
     `sudo bash -c` whole (a bare `sudo ` elevated only its leading `rm`, and `tailscale up` never
     started); only a host with no helper takes it, and its grant is the old broad one anyway.
     """
+    # SSH only where the owner chose it at install (system_ops.tailscale_ssh_allowed): the helper
+    # refuses `--ssh` otherwise, and Connect must still join, so it asks without it.
+    enable_ssh = enable_ssh and _so.tailscale_ssh_allowed()
     out, err, rc = _so._run_verb("tailscale-up-login",
                                  ["yes" if enable_ssh else "no", "-"],
                                  timeout=40, merge_stderr=False)

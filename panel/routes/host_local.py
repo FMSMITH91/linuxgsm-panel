@@ -125,6 +125,10 @@ def _register_host_tailscale(app):
             so.invalidate_server_status()   # tailscale-ssh state changed → next load re-probes
             log_action(current_user, "tailscale_ssh_enable", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
+        if msg is so.TS_SSH_NOT_CHOSEN or msg is so.TS_SSH_NOT_RECORDED:
+            # The owner's install-time choice, not a failure: a stable code beside the sentence.
+            return jsonify({"success": False, "code": "tailscale_ssh_not_chosen",
+                            "message": i18n.tr(msg)}), 403
         return jsonify({"success": False, "message": msg}), 500
 
     @app.route("/api/server-management/ts-ssh-disable", methods=["POST"])

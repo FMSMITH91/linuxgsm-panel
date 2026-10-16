@@ -221,9 +221,13 @@
     fetch(MOUNT + '/api/installs', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        // An error reply ({success:false, message, error} from the catch-all) is JSON too, and
+        // read as `installs || []` it was "nothing is installing": every live row settled, a
+        // still-running install's row was dropped, and stop() ended the poll. A miss, not an answer.
+        if (!d || !Array.isArray(d.installs)) throw new Error('not a reading');
         missed = 0;
         markStale(false);
-        var jobs = d.installs || [];
+        var jobs = d.installs;
         apply(jobs);
         // Only an ANSWER that says nothing is installing stops the poll.
         if (!jobs.length) stop();
