@@ -330,9 +330,14 @@ def _locked_write88(fn):
     _p9_patch(_so88, "_run_verb_once", once)
     _p9_patch(_so88, "detect_tailscale_interface", lambda: "tailscale0")
     lock.acquire()
-    t = _threading88.Thread(target=fn, daemon=True)
+    started = _threading88.Event()
+    t = _threading88.Thread(target=lambda: (started.set(), fn()), daemon=True)
     try:
         t.start()
+        # Timed from the thread's start, not from asking for it (review 1017a: a thread slow to
+        # start ran nothing in the window, with or without the lock, and read as waiting).
+        if not started.wait(10):
+            calls.append("thread never started")
         _time88.sleep(0.5)
         during = list(calls)
     finally:

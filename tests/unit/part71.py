@@ -226,6 +226,9 @@ def _card71(answer):
             "(typeof v[k] === 'object' ? v[k].html : esc(v[k])) : m);\n"
             "global.fetch = () => Promise.resolve({json: () => Promise.resolve(%s)});\n"
             % _json71.dumps(answer)
+            # the card's re-poll state and its job line (review 1017a), which loadGmodContent calls
+            + src[src.index("var _r30c_gmcRunning"):].split("\n", 1)[0] + "\n"
+            + _cut47(src, "function _r30c_gmcRepoll(") + "\n" + _cut47(src, "function _r30c_gmcWorking(") + "\n"
             + _cut47(src, "function loadGmodContent(") + "\n"
             # absent from a page that has no outcome line: the checks below fail by name, not crash
             + (_cut47(src, "function _gmcOutcome(") if "function _gmcOutcome(" in src else "") + "\n"

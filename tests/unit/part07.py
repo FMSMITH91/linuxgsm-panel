@@ -39,11 +39,13 @@ _GH_OPTS = (r"\bsudo(?:\s+(?:-[A-Za-z]*[CDghpRrTtU]\s+\S+|--?[A-Za-z][\w-]*(?:=\
 # quotes are no quoting at all against a name holding `'` (GHSA-hh39's own payload class), and
 # without the `['"]?` such a site was not seen as a site, by G1 or G2.
 # sudo's uid form `-u#<uid>` (`#0` is GHSA-hh39's own bad value) puts a `#` before the hole, and
-# was no site at all, by G1 or G2 (review 1016f).
-_GH_TAIL = re.compile(_GH_OPTS + r"['\"]?#?\Z")
-_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"['\"]?#?\{")
+# was no site at all, by G1 or G2 (review 1016f). The shell reads an escaped or quoted `#` (`\\#`,
+# `'#'`, `"#"`) as the same one, and those were still no site (review 1017a): any run of quotes,
+# backslashes and `#` may sit before the hole.
+_GH_TAIL = re.compile(_GH_OPTS + r"['\"\\#]*\Z")
+_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"['\"\\#]*\{")
 # An argv ELEMENT that carries the flag and the account together (`"--user=" + user`, f"-u{user}").
-_GH_ARGV_JOINED = re.compile(r"(?:-[A-Za-z]*u|--user=)['\"]?#?" + _GH_HOLE)
+_GH_ARGV_JOINED = re.compile(r"(?:-[A-Za-z]*u|--user=)['\"\\#]*" + _GH_HOLE)
 _GH_PCT = re.compile(r"%(?:\(([^)]*)\))?[#0\- +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?([diouxXeEfFgGcrsa%])")
 _GH_QUOTERS = {"_quote", "quote"}
 _GH_BUILDERS = {"game_user_cmd", "game_user_exec_cmd"}
@@ -862,6 +864,14 @@ _gh_ctl = {
     "G1 a -u#uid in a % format": _gh_plant('def f(uid):\n    return "sudo -u#%s bash" % uid\n'),
     "G1 a -u#uid in a .format": _gh_plant('def f(uid):\n    return "sudo -u#{} bash".format(uid)\n'),
     "G2 an argv with -u#uid joined by %": _gh_plant('def f(uid):\n    return ["sudo", "-u#%s" % uid, "cat"]\n'),
+    # ...and the same `#` escaped or quoted, which the shell reads alike (review 1017a).
+    "G1 an escaped -u \\#uid in an f-string": _gh_plant('def f(uid):\n    return f"sudo -u \\\\#{uid} bash -c x"\n'),
+    "G1 a quoted -u '#'uid in an f-string": _gh_plant('def f(uid):\n    return f"sudo -u \'#\'{uid} bash -c x"\n'),
+    "G1 an escaped -u \\#uid in a % format": _gh_plant('def f(uid):\n    return "sudo -u \\\\#%s bash" % uid\n'),
+    "G1 a quoted -u \"#\"uid in a .format": _gh_plant(
+        'def f(uid):\n    return \'sudo -u "#"{} bash\'.format(uid)\n'),
+    "G2 an argv with -u\\#uid joined by %": _gh_plant(
+        'def f(uid):\n    return ["sudo", "-u\\\\#%s" % uid, "cat"]\n'),
     "G2 an argv with --user= joined by .format()": _gh_plant(
         'def f(user):\n    return ["sudo", "--user={}".format(user), "cat"]\n'),
     "G2 an argv split by +": _gh_plant('def f(user):\n    return ["sudo", "-n"] + ["-u", user, "cat"]\n'),

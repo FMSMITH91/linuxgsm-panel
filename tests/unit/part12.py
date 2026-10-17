@@ -180,6 +180,20 @@ def _p9_patch(owner, name, value):
     setattr(owner, name, value)
 
 
+def _p9_patch_sm(name, value):
+    """_p9_patch on the ssh_manager SUBMODULE that defines `name`, where every caller sees it.
+
+    A stub set on the package itself (`_p9_patch_sm(…)`) shadowed its __getattr__: the routes'
+    `_sm.x` saw it and the package's own internal callers did not, half a stub that only the
+    tripwire stood behind (review 1017a: part05's package gate did not read patcher calls, so
+    fifty such stubs here and in parts 80-97 were never seen). On the defining module, both do.
+    """
+    _owner = next((_m for _m in _p9_sm._MODULES if name in vars(_m)), None)
+    if _owner is None:
+        raise AttributeError("no ssh_manager submodule defines %r" % name)
+    _p9_patch(_owner, name, value)
+
+
 def _p9_restore_all():
     for (_o, _n), _v in list(_P9_PATCHED.items()):
         if _v is _P9_ABSENT:
@@ -369,7 +383,7 @@ try:
     # GHSA-hh39-76g3-wxcx moved them onto shell_as_game_user, whose own run_command is _core's.
     # Left real, those reads went past every stub to the tripwire and still passed, on the
     # "couldn't tell" the tripwire's refusal reads as. The command is the real builder's.
-    _p9_patch(_p9_sm, "shell_as_game_user", _p9_shell_as)
+    _p9_patch_sm("shell_as_game_user", _p9_shell_as)
     # Rendering reads Tailscale state for the nav; _p9_arm above answers it with every field a
     # render reads (review 1013a: a thinner NS(dns_name=None) here dropped serve_config and
     # serve_unreadable, which 1012d had added for part43).
@@ -514,8 +528,8 @@ try:
         _cc_asked.append(short)
         return [{"cmd": "start", "desc": "Start"}, {"cmd": "monitor", "desc": "Monitor"}]
 
-    _p9_patch(_p9_sm, "list_server_commands", _cc_list)
-    _p9_patch(_p9_sm, "set_autostart", lambda *a, **k: (True, ""))
+    _p9_patch_sm("list_server_commands", _cc_list)
+    _p9_patch_sm("set_autostart", lambda *a, **k: (True, ""))
     _p9_set(P9_GS, autostart=False, commands="[]")
     _p9_sh._bg_cache_commands(_p9, [99902, P9_GS], autostart_ids=[P9_GS])
     _p9_drain()
@@ -565,7 +579,7 @@ try:
     eq("host timezone: no host at all reads as unknown (''), not UTC",
        _p9_sh._host_timezone_cached(None, _p9), "")
     _tz_calls = []
-    _p9_patch(_p9_sm, "host_timezone", lambda r: (_tz_calls.append(r.id), "Europe/Berlin")[1])
+    _p9_patch_sm("host_timezone", lambda r: (_tz_calls.append(r.id), "Europe/Berlin")[1])
     _p9_set_host(P9_HOST2, timezone="")
     _p9_sh._tz_resolve_attempts.pop(P9_HOST2, None)
     with _p9.app_context():
@@ -582,7 +596,7 @@ try:
     def _tz_raise(r):
         raise ConnectionError("down")
 
-    _p9_patch(_p9_sm, "host_timezone", _tz_raise)
+    _p9_patch_sm("host_timezone", _tz_raise)
     _p9_set_host(P9_HOST2, timezone="")
     _p9_sh._tz_resolve_attempts.pop(P9_HOST2, None)
     _p9_sh._maybe_resolve_host_timezone(_p9, P9_HOST2)
@@ -739,14 +753,14 @@ try:
     # ── _run_queued_action: the unattended stop/restart and its retry budget ─────────────────────
     _qa_rc = [0]
     _qa_prio = []
-    _p9_patch(_p9_sm, "run_as_game_user",
-              lambda remote, user, action, **k: ("", "LinuxGSM said no\n", _qa_rc[0]))
+    _p9_patch_sm("run_as_game_user",
+                 lambda remote, user, action, **k: ("", "LinuxGSM said no\n", _qa_rc[0]))
 
     def _qa_prio_raises(remote, user, *a, **k):
         _qa_prio.append(user)
         raise ConnectionError("renice failed")
 
-    _p9_patch(_p9_sm, "set_game_priority", _qa_prio_raises)
+    _p9_patch_sm("set_game_priority", _qa_prio_raises)
 
     def _qa_run(**flags):
         _p9_set(P9_GS, **flags)
@@ -834,7 +848,7 @@ try:
             return "?? garbage\n__DU_DONE__", "", 0
         return "", "", 0
 
-    _p9_patch(_p9_sm, "run_command", _li_run)
+    _p9_patch_sm("run_command", _li_run)
     with _p9.app_context():
         _li = _p9_sh._looks_installed(_p9, db.session.get(RemoteServer, P9_HOST), "csgoserver",
                                       "csgoserver")
@@ -1218,14 +1232,18 @@ try:
     _wl_rm = []
     for _wl_raw in ("fe80::1%x panel login failed from 203.0.113.9", "x y from 203.0.113.9",
                     " 198.51.100.24 "):
+        _wl_before = _p9_audit("whitelist_remove").id
         _d = _p9_json(_A.post("/api/panel/security/whitelist",
                               json={"ip": _wl_raw, "remove": True}))
         _p9_drain()
-        _wl_rm.append((_d.get("removed"), _p9_audit("whitelist_remove").target))
-    eq("whitelist remove: the audit target and the 'removed' answer are the parsed address or a "
-       "fixed text — never the request's own text", _wl_rm,
-       [("fe80::1", "fe80::1"), ("(not an IP address)", "(not an IP address)"),
-        ("198.51.100.24", "198.51.100.24")])
+        _wl_row = _p9_audit("whitelist_remove")
+        _wl_rm.append((_d.get("removed"), _d.get("code"), "203.0.113.9" in (_d.get("message") or ""),
+                       _wl_row.target if _wl_row.id != _wl_before else None))
+    # Text that is on no list is answered as such, and audited as nothing (it said "removed").
+    eq("whitelist remove: the audit target and the 'removed' answer are the parsed address, and "
+       "text on no list is refused with a fixed message — never the request's own text", _wl_rm,
+       [("fe80::1", None, False, "fe80::1"), (None, "not_whitelisted", False, None),
+        ("198.51.100.24", None, False, "198.51.100.24")])
     eq("whitelist remove: ...while the raw text still removed the stored zoned entry",
        _p9_app._security_whitelist(), [])
 
@@ -1243,11 +1261,11 @@ try:
         return r
 
     _sd_side = []
-    _p9_patch(_p9_sm, "run_as_game_user", _sd_run)
-    _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: _sd_side.append(("invalidate", rid)))
-    _p9_patch(_p9_sm, "invalidate_game_version", lambda rid, s: _sd_side.append(("version", rid, s)))
-    _p9_patch(_p9_sm, "set_game_priority", lambda remote, user, *a, **k: _sd_side.append(("prio", user)))
-    _p9_patch(_p9_sm, "server_live_metrics", lambda *a, **k: {"ram_total": 0})   # "can't tell"
+    _p9_patch_sm("run_as_game_user", _sd_run)
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: _sd_side.append(("invalidate", rid)))
+    _p9_patch_sm("invalidate_game_version", lambda rid, s: _sd_side.append(("version", rid, s)))
+    _p9_patch_sm("set_game_priority", lambda remote, user, *a, **k: _sd_side.append(("prio", user)))
+    _p9_patch_sm("server_live_metrics", lambda *a, **k: {"ram_total": 0})   # "can't tell"
     # The end of a long action reads its output once more (_drain_action_to_end): nothing here.
     _p9_patch(_p9_sh, "_drain_action_to_end", lambda app, remote, sid, entry: None)
 
@@ -1316,7 +1334,7 @@ try:
     def _prio_raises(remote, user, *a, **k):
         raise ConnectionError("renice refused")
 
-    _p9_patch(_p9_sm, "set_game_priority", _prio_raises)
+    _p9_patch_sm("set_game_priority", _prio_raises)
     with _p9.app_context():
         _sd_ok, _sd_msg = _p9._run_action(db.session.get(GameServer, P9_GS),
                                           db.session.get(RemoteServer, P9_HOST), "restart", None,
@@ -1332,8 +1350,8 @@ try:
           _sd_done == [(True, "restarted")], repr(_sd_done))
     check("power action: the bot that asked is named in the audit row",
           _p9_audit("restart_server").username == "telegram")
-    _p9_patch(_p9_sm, "set_game_priority",
-              lambda remote, user, *a, **k: _sd_side.append(("prio", user)))
+    _p9_patch_sm("set_game_priority",
+                 lambda remote, user, *a, **k: _sd_side.append(("prio", user)))
 
     _sd_done.clear()
     _sd_result[0] = OSError("channel closed")
@@ -1489,17 +1507,17 @@ try:
             return False, "no session"
         return True, "Done."
 
-    _p9_patch(_p9_sm, "moderate", _mod)
-    _p9_patch(_p9_sm, "ensure_persistent_bans", _raise_conn)
+    _p9_patch_sm("moderate", _mod)
+    _p9_patch_sm("ensure_persistent_bans", _raise_conn)
     _p9_patch(_p9_sd, "_resolve_from_console",
               lambda remote, short, gtype, target, lgsm: {"steamid": "STEAM_0:0:9001"})
-    _p9_patch(_p9_sm, "ensure_persistent_bans", lambda *a, **k: None)
+    _p9_patch_sm("ensure_persistent_bans", lambda *a, **k: None)
     _A.post("/api/server/%d/moderate" % P9_GS,
             json={"action": "ban", "target": "Named", "scope": "this"})
     check("moderate ban: a name-only Valve ban is issued against the SteamID the console resolved",
           _mod_calls == [("csgoserver", "ban", "STEAM_0:0:9001")], repr(_mod_calls))
     _mod_calls.clear()
-    _p9_patch(_p9_sm, "ensure_persistent_bans", _raise_conn)
+    _p9_patch_sm("ensure_persistent_bans", _raise_conn)
     _p9_patch(_p9_sd, "_resolve_from_console", _raise_conn)
     _sd_css = _p9_new_server(P9_HOST, "cssserver", "css", 27020, status="online")
     _p9_set(P9_GM, installed=True)
@@ -1570,7 +1588,7 @@ try:
               GlobalBan.query.filter_by(steamid="STEAM_0:1:777").first() is None)
     _p9_set(P9_GM, installed=True)
 
-    _p9_patch(_p9_sm, "moderate", _raise_conn)
+    _p9_patch_sm("moderate", _raise_conn)
     _r = _A.post("/api/server/%d/moderate" % P9_GS, json={"action": "kick", "target": "x"})
     check("moderate: a console that raises is a 500 saying the host is unreachable",
           _r.status_code == 500 and _p9_json(_r).get("message") == "Host unreachable")
@@ -1674,7 +1692,7 @@ try:
     _V.post("/server/%d/refresh-commands" % P9_GS)
     check("refresh commands: a viewer is refused before the host is asked",
           _p9_flashes(_V) == ["You don't have permission to refresh this server's commands."])
-    _p9_patch(_p9_sm, "list_server_commands", _raise_conn)
+    _p9_patch_sm("list_server_commands", _raise_conn)
     _p9_set(P9_GS, commands='[{"cmd": "start", "desc": "Start"}]')
     _A.post("/server/%d/refresh-commands" % P9_GS)
     check("refresh commands: a host that raises keeps the stored list and says it could not read",
@@ -1910,21 +1928,21 @@ try:
     # scheduled tasks (cron)
     _sf_sync = []
     _p9_patch(_p9_sf, "_sync_toggles_from_cron", lambda gs, jobs: _sf_sync.append(jobs))
-    _p9_patch(_p9_sm, "upgrade_managed_cron_tracking", lambda *a, **k: None)
-    _p9_patch(_p9_sm, "list_cron_jobs", _raise_conn)
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: None)
+    _p9_patch_sm("list_cron_jobs", _raise_conn)
     _r = _A.get(_sf_url + "/cron")
     check("cron GET: a listing that raises is a 500, and nothing is synced from it",
           _r.status_code == 500 and _sf_sync == [])
     # ...and one that could not be READ (list_cron_jobs answers None, which the non-raising
     # transports do) says so instead of "No scheduled tasks yet.", and syncs nothing from it —
     # Autostart would be switched off from a crontab the panel never saw. Undriven until now.
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda remote, user, lgsm: None)
+    _p9_patch_sm("list_cron_jobs", lambda remote, user, lgsm: None)
     _d = _p9_json(_A.get(_sf_url + "/cron"))
     check("cron GET: an unreadable crontab is reported as unknown, not as empty, and syncs nothing",
           "not the same as there being none" in (_d.get("error") or "") and "jobs" not in _d
           and _sf_sync == [], repr((_d, _sf_sync)))
     _sf_jobs = [{"raw": "0 5 * * * monitor", "schedule": "0 5 * * *"}]
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda remote, user, lgsm: list(_sf_jobs))
+    _p9_patch_sm("list_cron_jobs", lambda remote, user, lgsm: list(_sf_jobs))
     _sf_cron = [(True, "")]
 
     def _sf_cron_call(*a, **k):
@@ -1935,7 +1953,7 @@ try:
 
     _p9_patch(_p9_sf, "add_cron_job", _sf_cron_call)
     _p9_patch(_p9_sf, "update_cron_job", _sf_cron_call)
-    _p9_patch(_p9_sm, "delete_cron_job", _sf_cron_call)
+    _p9_patch_sm("delete_cron_job", _sf_cron_call)
     _p9_patch(_p9_sf, "run_cron_job_now", _sf_cron_call)
     _d = _p9_json(_A.post(_sf_url + "/cron", json={"schedule": "0 5 * * *", "command": "monitor"}))
     check("cron add: a job that was added re-syncs the Autostart toggles from the new crontab",
@@ -2153,9 +2171,9 @@ try:
     check("console: an account without VIEW_CONSOLE gets 403 and no lines",
           _r.status_code == 403 and _p9_json(_r).get("lines") == [])
     _sf_tail = []
-    _p9_patch(_p9_sm, "read_as_game_user",
-              lambda remote, user, sh, timeout=30, selfname=None:
-              (_sf_tail.append((sh, selfname)), ("B\nE", "", 0))[1])
+    _p9_patch_sm("read_as_game_user",
+                 lambda remote, user, sh, timeout=30, selfname=None:
+                 (_sf_tail.append((sh, selfname)), ("B\nE", "", 0))[1])
     _d = _p9_json(_A.get("/api/console/%d?lines=lots" % P9_GS))
     check("console: a non-numeric ?lines= falls back to the default window, not a 500",
           _d.get("readable") is True and _sf_tail and "tail -250 " in _sf_tail[-1][0], repr(_sf_tail))
@@ -2464,17 +2482,17 @@ try:
         _ms_boom("gmod")
         return _ms_next("cu")
 
-    _p9_patch(_p9_sm, "run_command", _ms_run_command)
-    _p9_patch(_p9_sm, "run_privileged", _ms_run_priv)
-    _p9_patch(_p9_sm, "run_as_game_user", _ms_run_as)
-    _p9_patch(_p9_sm, "create_game_user",
-              lambda remote, user, timeout=30: (_ms_log.append("useradd"), _ms_boom("useradd"),
-                                                ("", "", 0))[2])
-    _p9_patch(_p9_sm, "read_as_game_user",
-              lambda remote, user, sh, timeout=30, selfname=None: ("EXISTS", "", 0))
-    _p9_patch(_p9_sm, "list_server_commands", lambda r, s, l: (_ms_boom("cmds"), _ms_next("cmds"))[1])
-    _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
-    _p9_patch(_p9_sm, "host_os_slug", _raise_conn)
+    _p9_patch_sm("run_command", _ms_run_command)
+    _p9_patch_sm("run_privileged", _ms_run_priv)
+    _p9_patch_sm("run_as_game_user", _ms_run_as)
+    _p9_patch_sm("create_game_user",
+                 lambda remote, user, timeout=30: (_ms_log.append("useradd"), _ms_boom("useradd"),
+                                                   ("", "", 0))[2])
+    _p9_patch_sm("read_as_game_user",
+                 lambda remote, user, sh, timeout=30, selfname=None: ("EXISTS", "", 0))
+    _p9_patch_sm("list_server_commands", lambda r, s, l: (_ms_boom("cmds"), _ms_next("cmds"))[1])
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: None)
+    _p9_patch_sm("host_os_slug", _raise_conn)
     _p9_patch(_p9_ms, "install_game_dependencies",
               lambda remote, gt, extra=None, account=None, selfname=None: (
                   _ms_log.append("deps:%s" % (extra or "")),
@@ -2499,8 +2517,8 @@ try:
     # server's is listening until its first start, and step 6 scans right before it opens ports.
     _p9_patch(_p9_ms, "_remote_listening_ports",
               lambda r: _ms_next("listen" if "as:start" in _ms_log else "listen_pre"))
-    _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
-    _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: _ms_next("tagged"))
+    _p9_patch_sm("protected_host_ports", lambda r: {22})
+    _p9_patch_sm("remote_ufw_tagged_ports", lambda r, n: _ms_next("tagged"))
     _ms_legacy_fw = [(0, "", [])]     # what the legacy (untagged) cleanup answers
     _p9_patch(_p9_ms, "remote_ufw_close_game_port",
               lambda r, p, name="", legacy=False, ports=(): (
@@ -2511,7 +2529,7 @@ try:
     _p9_patch(_p9_ms, "set_autostart",
               lambda r, s, on, l=None: (_ms_log.append("autostart"), _ms_boom("autostart"),
                                         (True, ""))[2])
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, _lg: _ms_next("crontab"))
+    _p9_patch_sm("list_cron_jobs", lambda r, s, _lg: _ms_next("crontab"))
     _p9_patch(_p9_ms, "ensure_content_user", _ms_ensure_cu)
     _p9_patch(_p9_ms, "install_gmod_content", _ms_install_content)
     _p9_patch(_p9_ms, "gmod_mount_setup", lambda r, s, cu, games: _ms_next("mount"))
@@ -3770,7 +3788,8 @@ check("privileged: ...and the remote content removal's rm -rf runs as that accou
 _pb_rm = _pb_priv.remote_command("gmod-mount-read", ["gm"])
 check("privileged: ...and the remote mount.cfg read is the game account's (a link to /etc/shadow "
       "there is read with its rights, not root's)",
-      _pb_rm.startswith("runuser -u gm -- cat /home/gm/serverfiles/garrysmod/cfg/mount.cfg"), _pb_rm)
+      _pb_rm.startswith("runuser -u gm -- timeout 8 cat /home/gm/serverfiles/garrysmod/cfg/mount.cfg"),
+      _pb_rm)
 # Driven, where it can be: the rendered grant as root against a content tree whose game directory
 # is a link to a root-owned one. root's chmod -R used to follow it; the account's cannot touch it.
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):

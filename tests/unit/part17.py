@@ -881,9 +881,19 @@ try:
                "admin to install it, then mount it here.")}))
         eq("gmod content: ...while mounting what the host already has stays theirs",
            _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]), None)
+        # A read host with no content account: nothing is present, so "not on this host yet"; an
+        # unread scan is refused as unknown, never as absent (#443; review 1017a: the check named
+        # the pre-#443 rule, and its stub answered "read, no account" for both).
         _sf17.detect_content_user = lambda remote, games, **k: None
-        eq("gmod content: ...and an unreadable content account counts as nothing present",
-           _sf17_out(_sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]))[0], 403)
+        _sf17_r = _sf17_out(_sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]))
+        eq("gmod content: ...and a host with no content account counts as nothing present",
+           (_sf17_r[0], (_sf17_r[1] or {}).get("message", "").startswith("Not on this host yet: ")), (403, True))
+        _sf17.detect_content_user = lambda remote, games, **k: k.get("unread")
+        _sf17_r = _sf17_out(_sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]))
+        eq("gmod content: ...while a scan that was not read is refused as unknown, not as absent",
+           (_sf17_r[0],
+            (_sf17_r[1] or {}).get("message", "").startswith("Couldn't read what content is on this host")),
+           (403, True))
         _sf17.current_user = _sf17NS(is_superadmin=False, host=True)
         eq("gmod content: host access lifts the gate (uninstall)",
            _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "uninstall", ["cstrike"]), None)

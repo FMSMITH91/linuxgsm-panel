@@ -9,13 +9,14 @@
 # then semgrep-mcp.txt from semgrep-mcp.in (its header says how).
 #
 # mcp is left out of semgrep.txt (--unsafe-package) and pinned on its own in semgrep-mcp.txt.
-# semgrep 1.179.0, and 1.181.0 as well, declares mcp==1.29.0 exactly, and 1.29.0 has
-# GHSA-84m7-p3x7-pcfv (StreamableHTTP sessions without a bound; fixed in 1.30.0), so no set that
-# honours semgrep's pin is safe. mcp 1.30.0 declares the same dependencies as 1.29.0, all of them
-# in semgrep.txt; semgrep-mcp.txt repeats them at semgrep.txt's versions (its -c line holds them
-# there), so the two files together are the whole closure. The job installs both with --no-deps,
-# hash-checked, and then runs pip check, which may report only semgrep's own mcp pin against the
-# version semgrep-mcp.txt installs; a package either file lacks still fails the job, by name.
+# semgrep 1.180.0, the release semgrep.txt pins (1.179.0 and 1.181.0 alike), declares mcp==1.29.0
+# exactly, and 1.29.0 has GHSA-84m7-p3x7-pcfv (StreamableHTTP sessions without a bound; fixed in
+# 1.30.0), so no set that honours semgrep's pin is safe. mcp 1.30.0 declares the same dependencies
+# as 1.29.0, all of them in semgrep.txt; semgrep-mcp.txt repeats them at semgrep.txt's versions
+# (its -c line holds them there), so the two files together are the whole closure. The job
+# installs both with --no-deps, hash-checked, and then runs pip check, which may report only
+# semgrep's own mcp pin against the version semgrep-mcp.txt installs; a package either file lacks
+# still fails the job, by name.
 # semgrep scan runs on mcp 1.30.0: it imports mcp at startup for its MCP server, which a scan never
 # serves. Dependabot keeps --unsafe-package (it reads it back from the header) and updates
 # semgrep-mcp.txt on its own.

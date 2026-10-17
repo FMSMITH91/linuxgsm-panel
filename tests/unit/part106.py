@@ -92,7 +92,7 @@ _out106 = _js106(_name106, (
     "const fg = document.getElementById('fb-games'); fg.innerHTML = 'before';\n"
     "const field = tag => { const e = new E87(tag); e._in = fg; return e; };\n"), _BK106,
     ("function _r29c_bkEditing(", "function _r29c_bkSetIdle(", "var _r29j_bkUntyped", "function _r29c_bkFieldIn(",
-     "function _r25c_bkUnread(",
+     "function _r25c_bkUnread(", "var _r30c_bkSaving", "function _r30c_bkSave(",
      "function loadBackups(", "function bkRenderGames(", "function bkRenderFullSchedule(",
      "function _r20cIntervalOption(", "function bkShowEncState(", "function _r29c_bkPassDone(",
      "function saveBackupPassphrase(", "function clearBackupPassphrase(", "function setGameSchedule("), (
@@ -177,7 +177,7 @@ _out106 = _js106(_name106, (
     "const reply = how => { global.fetch = () => how === 'reject' ? Promise.reject(new Error('x'))\n"
     "  : Promise.resolve({json: () => how === 'text' ? Promise.reject(new SyntaxError('x'))\n"
     "                                               : Promise.resolve(how)}); };\n"), _RM106,
-    ("var _r29c_liveMiss", "function pollLive("), (
+    ("var _r29c_liveMiss", "var _r30c_liveSent", "function _r30c_liveOld(", "function pollLive("), (
     "  const st = document.getElementById('live-stale'), out = {};\n"
     "  const poll = async how => { reply(how); pollLive(); await settle();\n"
     "    return [st.style.display, st.textContent]; };\n"

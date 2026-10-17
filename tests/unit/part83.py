@@ -33,11 +33,10 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
-                         _p9_core, _p9_patch, _p9_restore_all, _p9_sd, _p9_sf, _p9_sh)
+                         _p9_core, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_sd, _p9_sf, _p9_sh)
 from panel.core import validation as _val83
 from panel.db import models as _m83
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
-from panel.ops import ssh_manager as _sm83
 from panel.ops.debug_report import hosts as _dbh83
 from panel.ops.ssh_manager import files as _files83, game as _game83, hosts as _hosts83
 from panel.security import auth as _auth83
@@ -450,7 +449,7 @@ def _down83(*a, **k):
 
 
 def _action_once83(client, sid):
-    _p9_patch(_sm83, "run_as_game_user", _down83)
+    _p9_patch_sm("run_as_game_user", _down83)
     _p9_patch(_p9_sd, "_after_power_action", lambda *a, **k: None)
     _p9_patch(_p9_sd, "_noop_power_refusal", lambda *a, **k: None)
     n = _p9_audit_count("details_server")
@@ -468,8 +467,8 @@ def _action_once83(client, sid):
 def _cron_readback83(client, sid):
     _p9_patch(_p9_sf, "_write_refused", lambda *a, **k: None)
     _p9_patch(_p9_sf, "add_cron_job", lambda *a, **k: (True, "Added"))
-    _p9_patch(_sm83, "list_cron_jobs", _down83)
-    _p9_patch(_sm83, "delete_cron_job", lambda *a, **k: (True, "Deleted"))
+    _p9_patch_sm("list_cron_jobs", _down83)
+    _p9_patch_sm("delete_cron_job", lambda *a, **k: (True, "Deleted"))
     got = {}
     for act, url, body in (("cron_add", "/api/server/%d/cron" % sid, {"schedule": "0 4 * * *", "command": "x"}),
                            ("cron_delete", "/api/server/%d/cron/delete" % sid, {"raw": "0 4 * * * x"})):
@@ -508,7 +507,7 @@ def _toggles83(client, sid):
 
 
 def _queued83(sid):
-    _p9_patch(_sm83, "run_as_game_user", _down83)
+    _p9_patch_sm("run_as_game_user", _down83)
     _p9_patch(_p9_sh, "_mark_expected_offline", lambda *a, **k: None)
     _p9_sh._queued_action_failures.pop(sid, None)
     seen = []

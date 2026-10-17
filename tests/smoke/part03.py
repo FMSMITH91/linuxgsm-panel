@@ -1384,11 +1384,12 @@ with app.app_context():
     check("debug report: seeded host, address, server, user, SSH account and journal host names are "
           "pseudonymised in the report, the summary and the issue body",
           not _dr_leaks and "[host-%d]" % _dr_rid in _dr["report"], "; ".join(_dr_leaks))
+    # Both files exist by now (the boot wrote the secret, the seeded hosts' ciphertext the key), so
+    # neither check may skip itself on an absent or short file (review 1017a).
     for _sf in (SECRET_FILE, CRED_KEY_FILE):
-        if _sf.exists():
-            _sv = _sf.read_text(errors="replace").strip()
-            if len(_sv) >= 12:
-                check("debug report: %s not leaked" % _sf.name, _sv not in _dr["report"])
+        _sv = _sf.read_text(errors="replace").strip() if _sf.exists() else ""
+        check("debug report: %s not leaked" % _sf.name, len(_sv) >= 12 and _sv not in _dr["report"],
+              "%s: %d chars to look for" % (_sf.name, len(_sv)))
 
 # ── Scenario: the database is FULL (like a full disk) ─────────
 # PRAGMA max_page_count caps the DB size on this one connection, so the next
@@ -1409,8 +1410,9 @@ with app.app_context():
             for _ in range(2000):
                 cur.execute("INSERT INTO _fulltest (b) VALUES (?)", ("x" * 900,))
             raw.commit()
-        except Exception:
-            _full = True
+        except Exception as _fe:
+            # SQLITE_FULL itself, not any error (review 1017a: a typo in the statement read as full).
+            _full = "full" in str(_fe).lower()
             raw.rollback()
         check("db-full: a write fails cleanly (SQLITE_FULL) when the DB is full", _full)
 
@@ -1834,10 +1836,12 @@ check("2fa disable: ...and the page says a code is needed",
       b"code didn&#39;t match" in _r.data or b"code didn't match" in _r.data,
       "no reason shown: %r" % _r.data[-200:])
 
-_tdc.post("/account/2fa/disable",
-          data={"password": "wrong-password", "totp_code": _td_codes[1]},
-          follow_redirects=True)
-check("2fa disable: ...nor does a code with the wrong password", _td_still_on())
+_r = _tdc.post("/account/2fa/disable",
+               data={"password": "wrong-password", "totp_code": _td_codes[1]},
+               follow_redirects=True)
+# Refused as a wrong password, not crashed: a 500 left 2FA on too (review 1017a).
+check("2fa disable: ...nor does a code with the wrong password",
+      _r.status_code == 200 and b"Password incorrect" in _r.data and _td_still_on(), "status=%d" % _r.status_code)
 with app.app_context():
     # Counted, not re-checked: use_backup_code CONSUMES, so asking "is it still valid" would
     # spend it. The password is verified first precisely so a one-time code is never burnt by
@@ -2170,10 +2174,13 @@ with app.app_context():
     db.session.add(_lu3)
     db.session.commit()
     _lu3_id = _lu3.id
-app.test_client().post("/login", data={"username": "legacyhash2", "password": "wrong-one"})
+_lw3 = app.test_client().post("/login", data={"username": "legacyhash2", "password": "wrong-one"})
 with app.app_context():
+    # ...and the attempt was refused as one, not crashed: a 500 left the hash as it was too
+    # (review 1017a).
     check("legacy login: a failed attempt leaves the old hash exactly as it was",
-          db.session.get(User, _lu3_id).password_hash == _legacy_hash)
+          _lw3.status_code == 200 and b"Invalid username or password." in _lw3.data
+          and db.session.get(User, _lu3_id).password_hash == _legacy_hash, "status=%d" % _lw3.status_code)
 
 # ── a password longer than bcrypt's 72 bytes survives the whole stack ────────────────────
 # The unit suite proves hash_password()/check_password() handle any length. This proves the
@@ -2221,8 +2228,9 @@ check("long password: signing in with the full passphrase works",
 _lpd = app.test_client().post("/login", data={"username": "longpw", "password": _DECOY_PW},
                               follow_redirects=False)
 check("long password: a password sharing its first 72 bytes is refused at login",
-      not (_lpd.status_code in (301, 302, 303)
-           and "/login" not in (_lpd.headers.get("Location") or "")),
+      # The login page's own refusal, not any answer short of a sign-in: a 500 read as refused
+      # (review 1017a). The text also tells it from the throttle page.
+      _lpd.status_code == 200 and b"Invalid username or password." in _lpd.data,
       "status=%d loc=%s" % (_lpd.status_code, _lpd.headers.get("Location") or ""))
 
 # ── hostnames, SSH usernames and session IPs are ciphertext at rest ──────────────────────

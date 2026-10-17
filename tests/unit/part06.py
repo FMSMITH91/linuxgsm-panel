@@ -3391,8 +3391,9 @@ try:
     open(_su_vpy, "w").close()
     os.chmod(_su_vpy, _su_stat.S_IRWXU)
 
-    # Prerequisites. The original apt line is unchanged: `sudo apt-get`, so a sudoers rule that
-    # allows only apt-get still covers it. tzdata is a step of its own: only when the zone database
+    # Prerequisites. One `sudo apt-get install` of the set, its non-interactive settings through
+    # `env` (a sudo allowing only apt-get falls back to plain apt-get: part107). tzdata is a step of
+    # its own: only when the zone database
     # is missing (minimal images; zoneinfo then rejects every time zone name), noninteractive (it
     # otherwise stops the install to ask for a region), and --no-upgrade.
     _su_pre = _su_find("# If anything's missing, install it automatically", "\nfi\n")
@@ -3400,9 +3401,10 @@ try:
     _su_pre_shim = ("info() { :; }\nid() { echo 1000; }\nsudo() { echo \"SUDO $*\"; }\n"
                     "command() { [ \"$2\" = apt-get ] || [ \"$2\" = git ] || [ \"$2\" = curl ]; }\n")
     _r = _su_run(_su_pre, "", extra=_su_pre_shim + "_venv_works() { return 1; }\n").stdout
-    check("install.sh: missing prerequisites are still one plain `sudo apt-get install`",
-          "SUDO apt-get install -y python3-venv python3-pip git curl wget cron ufw\n" in _r
-          and "SUDO env" not in _r and "tzdata" not in _r, repr(_r))
+    check("install.sh: missing prerequisites are still one `sudo apt-get install`, non-interactive",
+          "SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y python3-venv "
+          "python3-pip git curl wget cron ufw\n" in _r
+          and _r.count("apt-get install") == 1 and "tzdata" not in _r, repr(_r))
     # wget, cron and ufw are what the panel itself runs on its host, and Ubuntu's minimal images
     # lack them: any ONE missing (the venv, git and curl all present) installs the set; a host that
     # has every one of them runs no apt at all.
@@ -3411,7 +3413,7 @@ try:
             "command() { ", "command() { [ \"$2\" != %s ]; return; " % _su_tool)
             + "_venv_works() { return 0; }\n").stdout
         check("install.sh: a host missing only %s gets the prerequisites installed" % _su_tool,
-              "SUDO apt-get install -y python3-venv python3-pip git curl wget cron ufw\n" in _r,
+              " apt-get install -y python3-venv python3-pip git curl wget cron ufw\n" in _r,
               repr(_r))
     _r = _su_run(_su_pre, "", extra=_su_pre_shim.replace("command() { ", "command() { return 0; ")
                  + "_venv_works() { return 0; }\n").stdout
@@ -3431,6 +3433,8 @@ try:
     # and npm/gamedig exist only once something installed them. ensure_nodejs stops at npm now:
     # gamedig is install_gamedig's (driven below), from the pinned lockfile, never `npm install`.
     _eg = _su_find("ensure_nodejs() {", "\n}\n")
+    # Every apt-get in it goes through _r30a_apt_ni, defined at the top of install.sh.
+    _eg_apt = _su_find("APT_NI_ENV=(", "\n}\n")
     _eg_shim = ('info() { echo "INFO $*"; }\nok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\n'
                 'id() { echo 0; }\nnode() { echo v22.3.0; }\ntee() { cat >/dev/null; }\n'
                 'chmod() { :; }\napt-cache() { :; }\n'
@@ -3447,7 +3451,7 @@ try:
         _sb = _tempfile.mkdtemp(prefix="gamedig-", dir=_su_sb)
         if have_npm:
             open(os.path.join(_sb, "npm"), "w").close()
-        _out = _su_run(_eg + "\nensure_nodejs\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
+        _out = _su_run(_eg_apt + _eg + "\nensure_nodejs\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
                        % _su_shlex.quote(_sb), extra=shim).stdout
         _calls = os.path.join(_sb, "calls")
         return _out + (open(_calls, encoding="utf-8").read() if os.path.exists(_calls) else "")

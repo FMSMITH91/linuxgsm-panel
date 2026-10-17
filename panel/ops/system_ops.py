@@ -2395,6 +2395,9 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         _r12a_unmark(saved)
         return False, ("A backup restore is in progress — update once it has finished and the "
                        "panel has restarted.")
+    if _r30a_repair_starting():
+        _r12a_unmark(saved)
+        return False, R30A_REPAIR_STARTING_UPDATE
     _log_path = _update_log_path()
     # The update card finishes on the first "=== installer exit N ===" it reads while the panel has
     # not restarted (see _update_log_outcome). The PREVIOUS run's log ends in one, and it is still
@@ -2752,6 +2755,26 @@ def restart_panel(delay_seconds=2):
         return False, "Could not restart the panel — check the panel logs."
 
 
+# A database repair this process launched: the job stops the panel within seconds, and until it
+# does a restore or a self-update started here would run beside it (each replaces panel.db).
+# Announced BEFORE the repair asks about them, as they announce before asking about it, so of two
+# clicks in the same seconds one always sees the other. In memory: the repair restarts the panel.
+# Kept with the checkout it was launched for, as _update_launched keeps its log: a launch under
+# another PANEL_DIR (as the tests make) says nothing about this one.
+_r30a_repair_launched = {"ts": 0.0, "dir": ""}
+_R30A_REPAIR_GRACE = 120
+R30A_REPAIR_STARTING_RESTORE = ("A database repair is starting — restore once the panel has "
+                                "restarted.")
+R30A_REPAIR_STARTING_UPDATE = ("A database repair is starting — update once the panel has "
+                               "restarted.")
+
+
+def _r30a_repair_starting():
+    """Whether this process launched (or is launching) a database repair in the last grace."""
+    return (_r30a_repair_launched.get("dir") == PANEL_DIR
+            and (time.time() - _r30a_repair_launched["ts"]) < _R30A_REPAIR_GRACE)
+
+
 def _r29a_repair_refusal():
     """Why the database repair may not start now, or None.
 
@@ -2784,10 +2807,22 @@ def panel_repair_database():
     dbm = os.path.join(base, "db_maintenance.py")
     if not os.path.exists(py) or not os.path.exists(dbm):
         return False, "The repair tool isn't available on this install."
-    refusal = _r29a_repair_refusal()
-    if refusal:
-        return False, refusal
+    saved = dict(_r30a_repair_launched)
+    _r30a_repair_launched.update(ts=time.time(), dir=PANEL_DIR)   # announce first, then ask
+    ok = False
+    try:
+        refusal = _r29a_repair_refusal()
+        if refusal:
+            return False, refusal
+        ok, msg = _r30a_repair_launch(base, py, dbm)
+        return ok, msg
+    finally:
+        if not ok:
+            _r30a_repair_launched.update(saved)   # nothing was launched: take the record back
 
+
+def _r30a_repair_launch(base, py, dbm):
+    """panel_repair_database's launch, once nothing refuses it. (ok, message)."""
     if _is_system_service() and _helper_present():
         # The helper does the whole stop -> repair -> start itself, detached, as three argv calls
         # with no shell between them. It reads the database path from the root-owned panel.conf and

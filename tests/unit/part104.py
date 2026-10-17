@@ -252,7 +252,7 @@ check("privileged: ...while an absent mount.cfg is still rc 0 and empty (no moun
       _mr104["absent"] == (0, "") and _mr104["file"][0] == 0 and '"cstrike"' in _mr104["file"][1],
       repr(_mr104))
 check("privileged: ...and the file is still read as the game account (runuser first)",
-      _MOUNT104.startswith("runuser -u gm -- cat /home/gm/serverfiles/garrysmod/cfg/mount.cfg"),
+      _MOUNT104.startswith("runuser -u gm -- timeout 8 cat /home/gm/serverfiles/garrysmod/cfg/mount.cfg"),
       _MOUNT104)
 
 
@@ -358,7 +358,7 @@ def _block104(start, end="\nfi\n"):
     return _INS104[i:_INS104.index(end, i) + len(end)] if i >= 0 else "false\n"
 
 
-_apt_ni104 = _block104("APT_NI=(", "\n")
+_apt_ni104 = _block104("APT_NI_ENV=(", "\n}\n")   # the settings and _r30a_apt_ni, which uses them
 _fresh104 = _block104('if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; then\n'
                       '    UPG_SUDO=""')
 _au104 = _block104("if command -v apt-get >/dev/null 2>&1; then\n    AU_SUDO=")
@@ -387,7 +387,7 @@ _bare104 = [ln.strip() for ln in _INS104.splitlines()
             if ("${UPG_SUDO} apt-get" in ln or "${AU_SUDO} apt-get" in ln) and " -s " not in ln]
 check("install.sh: ...and no apt-get behind UPG_SUDO/AU_SUDO (the update path's included) is run "
       "without APT_NI, but the simulation",
-      _bare104 == [] and _INS104.count('${UPG_SUDO} "${APT_NI[@]}"') == 6, repr(_bare104))
+      _bare104 == [] and _INS104.count('_r30a_apt_ni "${UPG_SUDO}"') == 6, repr(_bare104))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

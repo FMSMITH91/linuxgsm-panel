@@ -601,6 +601,42 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **An eighteenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Changing the SSH port of a remote host on stock Ubuntu 24.04 or 26.04 works.** There SSH is
+    started by systemd's ssh.socket, and the folder the panel writes the new port into does not exist
+    on a fresh install, so the move wrote nothing and was then reverted as "sshd didn't come up". The
+    panel now creates that folder, as it already did on its own host. Proven on a stock Ubuntu 24.04
+    test server: the old code wrote nothing and blamed sshd, the new code writes the setting and
+    systemd reads the new port. If the setting still cannot be written, the panel says so and changes
+    nothing, before it checks or restarts SSH.
+  - **A panel port change whose restart could not be scheduled puts the old port back** in the
+    firewall and the login-attempt jail: the panel still listens there, and was left unreachable.
+  - **Installing updates twice no longer starts a second upgrade.** The "an update is already
+    running" check did not see the panel's own update job, so a second click ran apt again beside it.
+    A restore or a panel update is also refused while a database repair the panel just started is
+    getting under way.
+  - **Removing a hand-edited address from the security whitelist removes it.** An entry written in
+    another form ("10.0.0.5/24", upper-case IPv6) stayed in force while the panel said it was gone;
+    an address that is not on the list is now answered as such.
+  - **The installer never stops to ask a question it hides.** Every package it installs (Node.js,
+    npm, fail2ban, the prerequisites) now runs without prompts, not only the OS upgrade.
+  - **The downloadable debug report no longer describes the panel's privileges** (its sudo grant,
+    that it runs as root, which calls went through root). That stays on the in-panel report page.
+  - **Garry's Mod content held only in a game server's account is named as such** whichever account
+    holds the most content; it could read "Not on this host yet".
+  - **Smaller fixes.** A draft in the Raw config editor is kept when you save settings in the other
+    tab, even if you clicked away from it; the GMod content card keeps watching a running content job
+    when one read fails; an invite whose creator was deactivated can be revoked; the Backups card no
+    longer shows an out-of-date schedule after you change it, and the Live card no longer lets an old
+    answer overwrite a newer one; a file read on a game account can no longer be stalled by a pipe put
+    in its place; the install-status pass carries on past a row that fails; refusing to close the
+    public panel port because the firewall could not be read is recorded in the audit log; and the
+    OS-update start messages are in the viewer's language.
+  - **Tests.** The guard that keeps tests off the machine's own tailscale reads more ways a script
+    can reach it; fifty stand-ins that only half replaced what they named now replace it everywhere;
+    more refusal checks require the refusal itself, not just "no crash".
+
 - **A seventeenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
   its fix.
   - **A game server's account can no longer stall the server scan.** The scan read a file that

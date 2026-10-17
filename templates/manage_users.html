@@ -125,7 +125,7 @@
             <td data-no-i18n>{{ inv.note or "—" }}</td>
             <td>
               {% if inv.state == 'active' and not inv.authority_ok %}
-                <span class="badge bg-danger" title="The person who created it is no longer an active administrator, so the link will not work">Lapsed</span>
+                <span class="badge bg-danger" title="The person who created it is no longer an active administrator, so the link does not work now. It works again if they are reactivated or made an administrator again: revoke it to stop it for good.">Lapsed</span>
               {% elif inv.state == 'active' %}<span class="badge bg-success">Active</span>
               {% elif inv.state == 'used' %}<span class="badge bg-secondary">Used</span>
               {% elif inv.state == 'revoked' %}<span class="badge bg-warning text-dark">Revoked</span>
@@ -138,7 +138,11 @@
               {% else %}{{ inv.groups_wanted | length }} {% if inv.groups_wanted | length == 1 %}<span>group</span>{% else %}<span>groups</span>{% endif %}{% endif %}
             </td>
             <td class="text-end">
-              {% if inv.state == 'active' and inv.authority_ok %}
+              {# Every unused, unexpired link gets Revoke, Lapsed ones too: a lapsed link is not dead.
+                 Invite.authority_intact reads its creator's CURRENT row at redemption, so it works
+                 again once they are reactivated or re-promoted, and it counts toward Invite.MAX_LIVE,
+                 whose refusal tells the admin to revoke the links they no longer need. #}
+              {% if inv.state == 'active' %}
               <form method="POST" action="{{ url_for('revoke_invite', invite_id=inv.id) }}"
                     class="ajax-form" data-ajax-refresh="#users-list" style="display:inline;">
                 <button type="submit" class="btn btn-sm btn-outline-warning"

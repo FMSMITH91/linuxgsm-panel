@@ -940,6 +940,23 @@ def _cron_b64(s):
     return s
 
 
+# apt-upgrade-running's pgrep pattern: is an OS update already running? Its three ways of being one:
+#   * apt-get upgrading, OPTIONS ANYWHERE before the subcommand. It needed `upgrade` straight after
+#     `apt-get `, which the old foreground verb wrote; the panel's own os-update-run job puts its
+#     flags first (`apt-get -y -o … full-upgrade`), so a second Install updates started a second
+#     job: the shell form truncated the first one's log, and the helper's systemd unit refused
+#     ("Couldn't start the update.") for an update that was running. A `-s` option is the update
+#     check's simulation, never an update, and is not read as one;
+#   * the helper's job itself (`panel-helper --job os-update-run`, or its forked child), which is
+#     running while apt-get is still on `update` or `autoremove`;
+#   * the shell form's script (remotes without the helper), by the header it writes.
+# Each alternative starts with a bracket, so a remote's waiting `sudo bash -c 'pgrep -f …'`, whose
+# command line holds this text, never matches itself.
+_R30A_UPGRADE_RE = ("[a]pt-get( (-[^s -][^ ]*|--[^ ]+|[^- ][^ ]*))* "
+                    "(upgrade|dist-upgrade|full-upgrade)( |$)"
+                    "|[p]anel-helper( [^ ]+)* os-update-run( |$)"
+                    "|[O]S update started")
+
 _ARGV = {
     "ufw-status": ([_choice("plain", "numbered", "verbose")],
                    lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]], None),
@@ -1189,11 +1206,10 @@ _ARGV = {
     # `[a]pt-get`, not `apt-get`: on a remote this runs as `sudo bash -c 'pgrep -f …'`, and sudo
     # (with pam_session, Ubuntu's default) forks and WAITS, so its own process — whose command line
     # holds the pattern — was the match: "apt is running" on every remote, always. The bracket
-    # matches the same processes and never its own text. (apt-upgrade-running's pattern cannot
-    # match its own text: "apt-get (" is not "apt-get upgrade".)
+    # matches the same processes and never its own text.
     "apt-any-running": ([], lambda a: ["pgrep", "-f", "[a]pt-get"], None),
-    "apt-upgrade-running": ([], lambda a: ["pgrep", "-f",
-                                           "apt-get (upgrade|dist-upgrade|full-upgrade)"], None),
+    # "Is an OS update already running?", asked before os-update-run starts one: _R30A_UPGRADE_RE.
+    "apt-upgrade-running": ([], lambda a: ["pgrep", "-f", _R30A_UPGRADE_RE], None),
     "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
     "reboot": ([], lambda a: ["reboot"], None),
 
@@ -1452,15 +1468,23 @@ def _gamedig_install_remote(a):
     return "; ".join(parts)
 
 
+# Under the caller's 10 s (ssh_manager.gmod's gmod-mount-read call), so the read ends on the host.
+_R30A_MOUNT_READ_S = 8
+
+
 def _r29a_gmod_mount_read_remote(user, qpath):
     """The remote form of gmod-mount-read: the account's `cat` of mount.cfg (`qpath`, quoted).
 
     rc 0 with the file, or rc 0 and nothing when there is no file, which is "no mounts"; any other
     failure keeps cat's (or runuser's) non-zero rc, which gmod_current_mounts reads as "unknown".
     The `[ -e ]`/`[ -L ]` tests run only after cat failed, so a readable file is read once.
+    Under `timeout`: a FIFO the account parks at that name blocked cat's open with no end, past
+    the caller's own deadline (gmod.py waits 10 s), and every later read left one more blocked
+    process on the host. timeout's rc 124 is a failed read, "unknown", as the helper's refusal of
+    a file that is not regular is.
     """
-    return ("runuser -u %s -- cat %s 2>/dev/null || { _r=$?; [ ! -e %s ] && [ ! -L %s ] || (exit $_r); }"
-            % (shlex.quote(user), qpath, qpath, qpath))
+    return ("runuser -u %s -- timeout %d cat %s 2>/dev/null || { _r=$?; [ ! -e %s ] && [ ! -L %s ] "
+            "|| (exit $_r); }" % (shlex.quote(user), _R30A_MOUNT_READ_S, qpath, qpath, qpath))
 
 
 def _f2b_log_lines_remote(a):
@@ -1907,11 +1931,17 @@ def remote_write_command(name, content):
     A remote has no helper, so this is still `base64 -d > path` — but the path comes from
     WRITE_TARGETS rather than from a call site, and base64 keeps every byte of the content inert on
     the way through the shell.
+
+    The parent directory is created first, as the helper's write does (os.makedirs in
+    do_write_file). A stock socket-activated Ubuntu 24.04 has no /etc/systemd/system/ssh.socket.d,
+    so without it the redirect failed and an SSH port move on such a remote never wrote its drop-in.
+    The directory is the table path's own dirname, never anything a caller passed.
     """
     path, mode = write_target(name)
     b64 = base64.b64encode(content.encode()).decode()
-    return ("echo %s | base64 -d > %s && chmod %o %s"
-            % (shlex.quote(b64), shlex.quote(path), mode, shlex.quote(path)))
+    return ("mkdir -p -m 755 %s && echo %s | base64 -d > %s && chmod %o %s"
+            % (shlex.quote(os.path.dirname(path)), shlex.quote(b64), shlex.quote(path), mode,
+               shlex.quote(path)))
 
 
 def remote_content_cron_command(user, content):

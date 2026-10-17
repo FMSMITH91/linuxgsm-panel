@@ -2392,6 +2392,25 @@ def still_held(obj):
     return known is None or same_row(type(obj), known[0], known[1]) is not None
 
 
+def each_held_row(rows, fn, loop):
+    """fn(row) for each row still held (still_held), each on its own: one that raises is skipped.
+
+    For a pass over rows a worker loaded, where each call is an SSH round trip: a raise from one
+    row (still_held's RowReplaced for a row deleted and its id taken during an earlier row's trip,
+    a failed commit) ended the whole pass, and every row after it waited for the next tick. The
+    session is rolled back so the rows after it still read, and `loop`'s failure is counted.
+    """
+    from panel.core import runtime_stats
+    for row in rows:
+        try:
+            if still_held(row):
+                fn(row)
+        except Exception:
+            db.session.rollback()
+            runtime_stats.bump("loopfail", loop)
+            _log.debug("%s: one row failed; the pass goes on", loop, exc_info=True)
+
+
 def replaced_since_loaded(obj):
     """True when `obj`'s id now belongs to a different row than the one it was loaded from.
 

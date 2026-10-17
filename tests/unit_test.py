@@ -197,9 +197,24 @@ _R26D_SHIM = tempfile.mkdtemp(prefix="lgsm-unit-ts-shim-")
 # script itself, `command -p`, and `hash`, which can point the name at any file.
 _R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\s+)*-\w*p|\bhash\b")
 # A login shell: its profile sets PATH (Debian's /etc/profile resets it, ~/.profile prepends ~/bin).
-_R29D_LOGIN = re.compile(r"(?:^|[\s;&|(`/'\"])(?:ba|da|z|k|mk)?sh\s+(?:[-+]\w+\s+)*(?:-[a-km-zA-Z]*l\w*|--login)\b")
+# An interactive one (`bash -ic`) reads ~/.bashrc, which can set it as well; an option's value
+# (`bash -O extglob -l`) is skipped, and `exec -l` hands any shell a login name (review 1017a).
+_R29D_LOGIN = re.compile(r"(?:^|[\s;&|(`/'\"])(?:ba|da|z|k|mk)?sh\s+(?:[-+][oO]\s+\w+\s+|[-+]\w+\s+)*"
+                         r"(?:-[a-zA-Z]*[il][a-zA-Z]*|--login|--interactive)\b"
+                         r"|\bexec\s+(?:-a\s+\S+\s+|-\w+\s+)*-\w*l\w*\s")
+# The `.` builtin, where a command starts (review 1017a: any ` . ` word counted, so `find . -name x`
+# read as sourcing a file, moved its script off the shell production runs it under, and a wrapper
+# handed `find . …` was judged as possibly running the binary).
+_R30D_SOURCE_DOT = (r"(?:^|[;&|(){!\n]|\b(?:then|do|else|if|elif|while|until|time|builtin|command))"
+                    r"[ \t]*\.[ \t]+[^\s;&|]")
+# A sourced or eval'd text, which can set any name the script reads.
+_R30D_SETS_ANY = re.compile(r"\beval\b|\bsource\b|" + _R30D_SOURCE_DOT)
 # ...and what else can set it unseen (review 1016f): a sourced or eval'd text, a nested login shell.
-_R29D_SHIM_OFF = re.compile(r"\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s|" + _R29D_LOGIN.pattern)
+_R29D_SHIM_OFF = re.compile(_R30D_SETS_ANY.pattern + "|" + _R29D_LOGIN.pattern)
+# A nested shell, bash too, handed a -c script (review 1017a: `bash -c "${P}TH=<d>; tailscale"`
+# builds the name PATH only when the inner shell runs, where no reader of the outer text sees it).
+_R30D_NESTED_C = re.compile(r"(?:^|[\s;&|(`/'\"])(?:(?:ba|da|z|k|mk)?sh|busybox\s+sh)\s+(?:[-+]\w+\s+)*"
+                            r"-\w*c\w*\s+('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
 # Builtins that take a variable NAME as a word (`export 'PATH=…'`, `read ${P}TH`): one handed a
 # quoted or built name may be setting PATH. printf names it only after -v.
 _R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray",
@@ -709,15 +724,27 @@ def _r26d_strip_single(text):
     opened a string up to the next apostrophe, and the built word between read as nothing).
     A comment is kept the same way, not dropped (review 1016f: a `#` bash reads as part of a word,
     an escaped space before it or `$(:)#`, dropped the rest of its line, and a wrapper or a PATH= on it with it).
+    A `#` is a comment only where bash starts a word (review 1017a: after an escaped blank it was
+    taken for one, so a quote it opened was never seen and the reader's quoting ran inverted from
+    there). After a `)` it may be either (`(cd x)#…` starts a word, `$(:)#…` does not), so both
+    readings are returned, joined: a caller searching the text sees what either one holds.
     """
-    out, i, dq, bodies = [], 0, False, []
+    _as_comment = _r30d_strip_once(text, True)
+    _as_code = _r30d_strip_once(text, False)
+    return _as_comment if _as_comment == _as_code else _as_comment + "\n" + _as_code
+
+
+def _r30d_strip_once(text, paren_comment):
+    """_r26d_strip_single under one reading of a `#` right after a `)` (a comment when `paren_comment`)."""
+    out, i, dq, bodies, esc_end = [], 0, False, [], -1
     while i < len(text):
         ch = text[i]
         if ch == "\\":
             out.append(text[i:i + 2])
             i += 2
+            esc_end = i
             continue
-        _j = None if dq else _r28d_unquoted_step(text, i, out, bodies)
+        _j = None if dq else _r28d_unquoted_step(text, i, out, bodies, _r30d_word_start(text, i, esc_end, paren_comment))
         if _j is not None:
             i = _j
             continue
@@ -735,24 +762,38 @@ def _r26d_strip_single(text):
     return "".join(out)
 
 
+def _r30d_word_start(text, i, esc_end, paren_comment):
+    """Does a word start at text[i] (unquoted), as bash decides whether a `#` there opens a comment?
+
+    At the start, or after an unescaped blank or operator character; after a `)` only under the
+    reading `paren_comment` takes.
+    """
+    if i == 0:
+        return True
+    if i == esc_end:
+        return False        # the character before was escaped: the word goes on
+    return text[i - 1] in " \t\n;&|(<>" or (paren_comment and text[i - 1] == ")")
+
+
 # A here-document's operator: `<<WORD`, `<<-WORD`, the delimiter one shell word quoted any way
 # (`<<'EOF'`, `<<\\EOF`, `<<E"OF"`), and not `<<<`, a here-string (review 1016f: a backslash or a
 # part-quoted delimiter was no here-document, and `<<< END` matched at its second `<`).
 _R28D_HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*((?:\\.|'[^'\n]*'|\"[^\"\n]*\"|[^\s;&|<>()'\"\\])+)")
 
 
-def _r28d_unquoted_step(text, i, out, bodies):
+def _r28d_unquoted_step(text, i, out, bodies, word_start):
     """Past a `#` comment, a here-document operator or the bodies due at a newline, at text[i] (unquoted).
 
     The index after it, with what it leaves appended to `out`, or None when text[i] is none of them.
-    `bodies` holds the here-documents whose bodies start at the next newline.
+    `bodies` holds the here-documents whose bodies start at the next newline; `word_start`, whether
+    a word starts at text[i] (_r30d_word_start), which a `#` needs to open a comment.
     """
     if text[i] == "\n" and bodies:
         out.append("\n")
         _j = _r28d_heredoc_bodies(text, i + 1, bodies, out)
         bodies.clear()
         return _j
-    if text[i] == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+    if text[i] == "#" and word_start:
         _e = text.find("\n", i)
         _e = len(text) if _e < 0 else _e
         out.append(text[i:_e].replace("'", ""))
@@ -789,7 +830,7 @@ def _r28d_heredoc_bodies(text, i, bodies, out):
 # Also any `${…}` _R23D_SHELL_VAR does not take whole (review 1016e: `${T%x}`, `${T/X/tail}`,
 # `${T:0:4}`, `${T^^}` and `${A[0]}` were left as text, so the word read as spelling nothing),
 # and a `declare -n` nameref, which makes one name another's.
-_R26D_UNRESOLVED = re.compile(r"\$\(|`|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s|\\|\{[^}\s]*(?:,|\.\.)|"
+_R26D_UNRESOLVED = re.compile(r"\$\(|`|\beval\b|\bsource\b|" + _R30D_SOURCE_DOT + r"|\\|\{[^}\s]*(?:,|\.\.)|"
                               r"\$'|\$\{?[!#@*0-9?$-]|\$\{(?!\w+(?::?[-=+?][^}$`]*)?\})|"
                               r"\b(?:declare|typeset|local)\s+(?:[-+]\w+\s+)*-\w*n")
 # How a script sets a name other than by a plain `NAME=value` that _r25d_script_env reads (%s is the
@@ -819,7 +860,9 @@ def _r26d_may_spell(text, script, env):
     _env = _r25d_script_env(script, env)
     for _m in _R23D_SHELL_VAR.finditer(_text):
         _name = _m.group(1) or _m.group(5)
-        if (re.search(_R28D_SET_OTHERWISE % {"n": re.escape(_name)}, script)
+        # A sourced or eval'd text can set any name (review 1017a: `. <file>; timeout 5 ${T}scale`
+        # with T=tail in the file read T as unset).
+        if (_R30D_SETS_ANY.search(script) or re.search(_R28D_SET_OTHERWISE % {"n": re.escape(_name)}, script)
                 or re.search(r"[$`]", _env.get(_name) or "")):
             return True
     return _r20d_names_tailscale(_r23d_expand_vars(_text, _env), _env)
@@ -1121,33 +1164,60 @@ def _r29d_may_set_path(script):
     `bash -c 'PATH=<d>:$PATH; tailscale'`, `export 'PATH=<d>'` and `. file` each stepped past it.
     """
     return (any(_R28D_PATH_OWN.search(_t) for _t in (script, _r26d_strip_single(script), _r29d_unquoted(script)))
-            or bool(_R29D_SHIM_OFF.search(script)) or _r29d_names_built(script))
+            or bool(_R29D_SHIM_OFF.search(script)) or _r29d_names_built(script)
+            # A nested shell's -c script that builds a word may build PATH= itself (review 1017a).
+            or any(_r25d_builds(_a.strip("'\"")) for _a in _R30D_NESTED_C.findall(script)))
 
 
 def _r19d_path_candidates(script, env, cwd):
     """Each tailscale `script` names by a path that exists, read against `env` and `cwd`.
 
     Also once its variables are expanded, the script's own assignments included (review 1016b:
-    `d=/usr/bin; t=tail; $d/${t}scale` named no path the pattern could see).
+    `d=/usr/bin; t=tail; $d/${t}scale` named no path the pattern could see), and once its quotes are
+    dropped, as the shell drops them (review 1017a: `"<d>"/tailscale`, `<d>/tail'scale'` and
+    `"$D"/${T%x}` were read as `/tailscale` or as no path at all). A directory the reader cannot
+    resolve (`"$(…)"/tailscale`, `D=$(…); $D/tailscale`), or a relative path after a `cd` it cannot
+    follow, may be any directory: the default PATH's and the run PATH's tailscale are judged, as
+    _r29d_cd_bases judges an unresolved `cd`.
     """
     _out = []
     _senv = _r25d_script_env(script, env)
-    _expanded = _r23d_expand_vars(script, _senv)
-    _lits = (set(_R19D_SCRIPT_PATH.findall(script)) | set(_R19D_SCRIPT_PATH.findall(_expanded))
-             | _r29d_built_last(script, env))
-    _bases = _r29d_cd_bases(script, _senv, env, cwd or os.getcwd())
+    _lits, _open = _r30d_path_literals(script, env, _senv)
+    _bases, _cd_open = _r29d_cd_bases(script, _senv, env, cwd or os.getcwd())
     for _lit in _lits:
         # An unset variable is empty, as the shell reads it (review 1013a: `$PREFIX/bin/tailscale`
-        # with PREFIX unset runs /bin/tailscale, and was read as a path that does not exist).
-        _lit = re.sub(r"\$\{?(\w+)\}?", lambda _m: env.get(_m.group(1), ""), os.path.expanduser(_lit))
+        # with PREFIX unset runs /bin/tailscale, and was read as a path that does not exist); a set
+        # one is read with the script's own names (review 1017a: only the run's were).
+        _lit = re.sub(r"\$\{?(\w+)\}?", lambda _m: _senv.get(_m.group(1), ""), os.path.expanduser(_lit))
+        _open = _open or bool(re.search(r"[$`]", _lit)) or (_cd_open and not _lit.startswith("/"))
         for _base in _bases:
             _p = os.path.join(_base, _lit)
             _out.append(_p if os.path.exists(_p) else None)
+    if _open:
+        _out += [shutil.which("tailscale", path=_p)
+                 for _p in (_R19D_DEFAULT_PATH, _r28d_no_shim(env.get("PATH", os.defpath)))]
     return _out
 
 
-# A directory change a script makes, and its target if it names one.
-_R29D_CD = re.compile(r"(?:^|[\s;&|(])(?:cd|pushd)\b(?:[ \t]+(?:-[LPe@]+[ \t]+)*([^\s;&|)]+))?")
+def _r30d_path_literals(script, env, senv):
+    """(each `…/tailscale` literal `script` names, as written and unquoted, expanded or not; whether one is open).
+
+    Open: joined to what goes before it (`$(…)/tailscale`, `` `…`/tailscale ``), so no directory was read.
+    """
+    _lits, _open = set(), False
+    for _t in (script, _r29d_unquoted(script)):
+        for _x in (_t, _r23d_expand_vars(_t, senv)):
+            for _m in _R19D_SCRIPT_PATH.finditer(_x):
+                _lits.add(_m.group(1))
+                _open = _open or (_m.start() > 0 and _x[_m.start() - 1] not in " \t\n;&|(<>='\"")
+        _lits |= _r29d_built_last(_t, env)
+    return _lits, _open
+
+
+# A directory change a script makes, and its target if it names one (after `--`, review 1017a: the
+# `--` was read as the target, so `cd -- <d> && ./tailscale` was judged against `<start>/--`).
+_R29D_CD = re.compile(r"(?:^|[\s;&|(])(?:cd|pushd)\b(?:[ \t]+(?:-[LPe@]+[ \t]+)*(?:--(?=[\s;&|)]|$)[ \t]*)?"
+                      r"([^\s;&|)]+))?")
 # A path whose last word the script builds (`<d>/tail$(:)scale`, `<d>/${T%x}`): judged as `<d>/tailscale`.
 _R29D_BUILT_LAST = re.compile(r"(?<![\w.~$/:-])((?:~|\$\{?\w+\}?|\.{1,2})?[\w./~-]*)/([^\s/;&|<>]+)")
 
@@ -1160,23 +1230,34 @@ def _r29d_built_last(script, env):
             if _r25d_builds(_w) and _r26d_may_spell(_w, script, env)}
 
 
-def _r29d_cd_bases(script, senv, env, start):
-    """The directories a relative path in `script` may be read against: `start`, then each `cd`'s.
+def _r30d_cd_unresolved(target, cdpath):
+    """Is the (expanded) `cd` target one the reader cannot resolve: `-`, built, or relative under CDPATH?"""
+    return (target == "-" or bool(_R26D_UNRESOLVED.search(target)) or "$" in target
+            or (cdpath and not target.startswith(("/", "~"))))
 
-    Review 1016f: `cd <d> && ./tailscale` was read against the run's directory only. A target the
-    reader cannot resolve (`cd "$(…)"`, `cd -`) may be any directory, so the default PATH's and the
-    run PATH's directories, where the machine's binary would be, are judged as well.
+
+def _r29d_cd_bases(script, senv, env, start):
+    """(the directories a relative path in `script` may be read against, whether one is unresolved).
+
+    `start`, then each `cd`'s. Review 1016f: `cd <d> && ./tailscale` was read against the run's
+    directory only. A target the reader cannot resolve (`cd "$(…)"`, `cd -`) may be any directory,
+    so the default PATH's and the run PATH's directories, where the machine's binary would be, are
+    judged as well, and the caller judges any relative path's binary on those PATHs (review 1017a:
+    `cd "$(echo /usr)" && ./bin/tailscale` was joined to each of them, and found nowhere). So is a
+    relative target under CDPATH, which `cd` searches before the current directory.
     """
-    _bases, _cur = [start], start
+    _bases, _cur, _unresolved = [start], start, False
+    _cdpath = "CDPATH" in script or bool(env.get("CDPATH"))
     for _m in _R29D_CD.finditer(script):
         _t = _r23d_expand_vars(_r29d_unquote(_m.group(1) or "~"), senv)
-        if _t == "-" or _R26D_UNRESOLVED.search(_t) or "$" in _t:
+        if _r30d_cd_unresolved(_t, _cdpath):
             _bases += (_R19D_DEFAULT_PATH + os.pathsep + _r28d_no_shim(env.get("PATH", os.defpath))).split(os.pathsep)
+            _unresolved = True
             continue
         _t = (senv.get("HOME") or os.path.expanduser("~")) + _t[1:] if _t.startswith("~") else _t
         _cur = os.path.join(_cur, _t)
         _bases += [_cur, os.path.join(start, _t)]
-    return list(dict.fromkeys(_bases))
+    return list(dict.fromkeys(_bases)), _unresolved
 
 
 def _r20d_argv_programs(cmd, kw):
@@ -1553,6 +1634,16 @@ _r16d_wrap_ts_handles()
 # stand-ins and runs bash and node; imports part01, 12 and 71.
 # part106 (the seventeenth review's page and script fixes, builder C) drives part12's app and runs
 # node on part87's DOM; imports part01, 05, 12, 47 and 87.
+# part107 (review 1017a: a hand-edited whitelist entry removable, the OS-update guard sees the
+# panel's own job, install.sh's every apt-get non-interactive, the privilege model page-only in the
+# debug report, builder A) drives part12's app with stand-ins, real pgrep over stand-in processes,
+# install.sh under bash, and part92's report harness; imports part01, 05, 12, 43 and 92.
+# part108 (review 1017a: a remote root write creates its directory and change_ssh_port reads its rc,
+# GMod content held by a server's account named on any ordering, a failed panel restart keeps the
+# old port reachable, the unread-firewall close refusal audited, builder B) runs the rendered write
+# in bash under a temp root and drives part12's app with stand-ins; imports part01 and 12.
+# part109 (the eighteenth review's page and script fixes, builder C) drives part12's app and runs
+# node through part106's harness; imports part01, 12 and 106.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1564,7 +1655,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
           "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
-          "part101", "part102", "part103", "part104", "part105", "part106",
+          "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
+          "part109",
           "part15")
 
 
@@ -2157,7 +2249,51 @@ def _r29d_ts_shapes(d):
         ("run", ("%s/tail$(:)scale version" % d,), {"shell": True}),
         ("run", ("T=tailscalex; %s/${T%%x} version" % d,), {"shell": True}),
         ("run", ('T=ta"il"; env -i PATH=%s ${T}scale version' % d,), {"shell": True}),
-        ("run", ("T=ta'il'; env -i PATH=%s ${T}scale version" % d,), {"shell": True}))
+        ("run", ("T=ta'il'; env -i PATH=%s ${T}scale version" % d,), {"shell": True})) + _r30d_ts_shapes(d)
+
+
+def _r30d_ts_shapes(d):
+    """_r19d_ts_shapes' quoted-path, unresolved-directory, CDPATH, nested-PATH and `#` shapes (review 1017a).
+
+    Each reached the planted "machine's" binary in `d`: a path whose directory or last word is
+    quoted or cannot be resolved, a `cd` under CDPATH, past `--` or to a directory the reader cannot
+    name, a nested bash building the name PATH, a `#` that only looks like a comment opening a
+    quote the reader never saw, and a name set in a sourced file.
+    """
+    _up, _base = os.path.dirname(d), os.path.basename(d)
+    _src = os.path.join(_r15d_ts_ctl_dir, "r30d-env-%s.sh" % _base)
+    with open(_src, "w", encoding="utf-8") as _fh:
+        _fh.write("T=tail\n")
+    _nested = 'P=PA; bash -c "${P}TH=%s; tailscale version"' % d
+    return (
+        ("run", ("CDPATH=%s; cd %s && ./tailscale version" % (_up, _base),), {"shell": True}),
+        ("run", ("export CDPATH=%s; cd %s >/dev/null && ./tailscale version" % (_up, _base),), {"shell": True}),
+        ("run", ('cd "$(echo %s)" && ./%s/tailscale version' % (_up, _base),), {"shell": True}),
+        ("run", ("cd -- %s && ./tailscale version" % d,), {"shell": True}),
+        ("run", ("cd -P -- %s; ./tailscale version" % d,), {"shell": True}),
+        ("run", ("%s/tail'scale' version" % d,), {"shell": True}),
+        ("run", ('%s/tail""scale version' % d,), {"shell": True}),
+        ("run", ('cd %s && ./tail""scale version' % d,), {"shell": True}),
+        ("run", ('T=tailscalex; "%s"/${T%%x} version' % d,), {"shell": True}),
+        ("run", ("T=tailscalex; '%s'/${T%%x} version" % d,), {"shell": True}),
+        ("run", ('D=%s; T=tailscalex; "$D"/${T%%x} version' % d,), {"shell": True}),
+        ("run", ('"%s"/tailscale version' % d,), {"shell": True}),
+        ("run", ('D=%s; "$D"/tailscale version' % d,), {"shell": True}),
+        ("run", ('"$(echo %s)"/tailscale version' % d,), {"shell": True}),
+        ("run", ("D=$(echo %s); $D/tailscale version" % d,), {"shell": True}),
+        ("run", (["sh", "-c", 'D=$(echo %s); "$D/tailscale" version' % d],), {}),
+        ("run", (_nested,), {"shell": True}),
+        ("run", (["sh", "-c", _nested],), {}),
+        ("run", (["bash", "-c", _nested],), {}),
+        ("run", ('echo \\ #"\n"; echo "x\'"; T=tailscalex; env -i PATH=%s ${T%%x} version; echo "\'"' % d,),
+         {"shell": True}),
+        ("run", ('T=tailscalex; : $(:)#"\n"; echo "x\'"; env -i PATH=%s ${T%%x} version; echo "\'"' % d,),
+         {"shell": True}),
+        ("run", ("x=$(:)#'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,), {"shell": True}),
+        ("run", ("echo a\\ #'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,),
+         {"shell": True}),
+        ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
+        ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {}))
 
 
 def _r21d_spawn(how):
@@ -2288,6 +2424,16 @@ try:
         _r29d_static += [_r28d_guarded(_x, {"env": _r29d_env}) for _x in (
             ["sh", "-lc", "tailscale version"], ["sh", "-l", "-c", "T=tail; ${T}scale version"],
             ["sh", "-c", "tailscale version"])]
+        # An interactive shell or a login one past an option's value reads a profile too, and a
+        # directory the reader cannot resolve may be the default PATH's; beside a quoted directory
+        # that resolves to no tailscale, a `cd --` to one, and a `#` mid-word naming nothing
+        # (review 1017a).
+        _r30d_static = [_r28d_guarded(_x, {"shell": True, "env": _r29d_env}) for _x in (
+            "bash -ic 'tailscale version'", "bash -O extglob -lc 'tailscale version'",
+            '"$(mktemp -u)"/tailscale version', 'D=$(mktemp -u); "$D/tailscale" version',
+            'cd "$(mktemp -u)" && ./x/tailscale version', "CDPATH=/x; cd y && ./tailscale version",
+            'D=/x; "$D"/y version', "cd -- /x && ./x version", "x=$(:)#'\n'\necho 'y'",
+            'cd "$(mktemp -u)" && /x/tailscale version')]
     finally:
         _R19D_DEFAULT_PATH = _r21d_saved_default
     # A wrapper handed a word that cannot spell the binary is not judged as running it, and one
@@ -2349,6 +2495,10 @@ check("unit suite: a login shell is judged on its profile's PATH, a nested shell
       "own names, and a relative path after a cd the reader cannot follow; a cd, a built word or a "
       "quoted value that names no tailscale is not (control)",
       _r29d_static == [True] * 5 + [False] * 5 + [True] * 2 + [False], repr(_r29d_static))
+check("unit suite: ...an interactive shell, a login one past an option's value, a directory the reader "
+      "cannot resolve and a relative path after an unresolved or CDPATH cd are judged; a quoted directory, "
+      "`cd --` and a `#` mid-word that name no tailscale are not (control)",
+      _r30d_static == [True] * 6 + [False] * 4, repr(_r30d_static))
 # What keeps a script off the shim (review 1016f): any PATH it may set, read past every quote, and
 # none of the everyday shapes that set nothing (each keeps the shell production runs it under).
 _r29d_owns = [_r29d_may_set_path(_x) for _x in (
@@ -2361,6 +2511,16 @@ _r29d_owns = [_r29d_may_set_path(_x) for _x in (
 check("unit suite: a script that may set PATH however it spells it is kept off the shim, and one that "
       "does not keeps the shell it was given (control)",
       _r29d_owns == [True] * 13 + [False] * 8, repr(_r29d_owns))
+# ...and (review 1017a) a nested bash building the name, an interactive shell, a login shell behind an
+# option's value or `exec -l`, and a `.` where a command starts, beside a `.` that is only a word.
+_r30d_owns = [_r29d_may_set_path(_x) for _x in (
+    'P=PA; bash -c "${P}TH=/x; tailscale"', "P=PA; sh -c '${P}TH=/x; tailscale'", "bash -ic x",
+    "bash -O extglob -l -c x", "exec -l bash", "if . /x/env; then :; fi", "x; . /x/env",
+    'find . -name "$x"', "cp a . && echo \"$T\"", 'bash -c "echo hi"', 'sh -c "ls ."',
+    "OS=$(. /etc/os-release; printf '%s' \"$PRETTY_NAME\")")]
+check("unit suite: ...a nested shell building PATH, an interactive or `exec -l` shell and a `.` where a "
+      "command starts are kept off the shim; `find .`, `cp a .` and a nested shell building nothing are not "
+      "(control)", _r30d_owns == [True] * 7 + [False] * 4 + [True], repr(_r30d_owns))
 check("unit suite: ...nor past a comment, a here-document or a shift that only looks like one, while "
       "`command -p`, sudo, an expansion the reader cannot model, a name set other than by NAME=, and "
       "a wrapper's own NAME= are judged (control)",

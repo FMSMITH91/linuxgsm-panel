@@ -348,7 +348,9 @@ for _local78 in (True, False):
         "%s\n%s\n"
         "(async () => { pollLive(); await settle(); console.log(JSON.stringify(badge.textContent)); })();\n")
         % ("true" if _local78 else "false", _cut_or78(_RM78, "function _r18cPaintHostBadge("),
-           _cut_or78(_RM78, "function pollLive(")))
+           # the order guard pollLive calls (review 1017a): its counters' line and the guard
+           _RM78[_RM78.index("var _r30c_liveSent"):].split("\n", 1)[0] + "\n"
+           + _cut_or78(_RM78, "function _r30c_liveOld(") + "\n" + _cut_or78(_RM78, "function pollLive(")))
     _badge78[_local78] = _o78
 if None not in _badge78.values():
     check("host page: on the panel host's own page a failed local read leaves the header badge (it said "

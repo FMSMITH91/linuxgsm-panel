@@ -1,0 +1,5 @@
+{
+  "That entry is not on the whitelist.": "Esa entrada no está en la lista blanca.",
+  "A database repair is starting — restore once the panel has restarted.": "Una reparación de la base de datos está empezando: restaura cuando el panel se haya reiniciado.",
+  "A database repair is starting — update once the panel has restarted.": "Una reparación de la base de datos está empezando: actualiza cuando el panel se haya reiniciado."
+}

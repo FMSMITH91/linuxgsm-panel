@@ -170,6 +170,9 @@ check("install.sh: ...a first group shorter than four digits (fcd::, fe8::) is N
 # German 24.04 host read no candidate and was given NodeSource's third-party repo instead.
 _j81 = _INS81.find("\nensure_nodejs() {")
 _NODEJS81 = _INS81[_j81:_INS81.find("\n}\n", _j81)] + "\n}\n" if _j81 >= 0 else "exit 3\n"
+# Its apt-get goes through _r30a_apt_ni, defined at the top of install.sh (with the settings it uses).
+_k81 = _INS81.find("\nAPT_NI_ENV=(")
+_NODEJS81 = (_INS81[_k81:_INS81.find("\n}\n", _k81)] + "\n}\n" if _k81 >= 0 else "exit 3\n") + _NODEJS81
 _NODE_STUBS81 = r'''
 d="$1"; log="$d/log"; NODESOURCE_NODE_MAJOR=22
 id() { echo 0; }
@@ -365,7 +368,10 @@ _fb_prog81 = (
     "  relabel: [o.attrs['data-i18n-text'], o.attrs['data-i18n-vars']]}));\n") % (
         _cut_or81(_RB81, "function _r20cIntervalOption("), _cut_or81(_RB81, "function bkRenderFullSchedule("),
         _cut_or81(_RB81, "function saveBackupSettings("), _cut_or81(_RB81, "function _r29c_bkEditing(")
-        + "\n" + _cut_or81(_RB81, "function _r29c_bkSetIdle("))
+        + "\n" + _cut_or81(_RB81, "function _r29c_bkSetIdle(")
+        # the save goes through the card's in-flight counter (review 1017a); its release timer is not run
+        + "\nglobal.setTimeout = () => 0; global.clearTimeout = () => {};\n"
+        + _line81(_RB81, "var _r30c_bkSaving") + "\n" + _cut_or81(_RB81, "function _r30c_bkSave("))
 _fbi81 = _node81("remote_manage_backups.js: a stored interval the list lacks", _fb_prog81)
 if _fbi81 is not None:
     check("host page backups: a stored 3-day interval is shown (\"3 days\") and a later save keeps it "

@@ -2504,12 +2504,19 @@ def _r29b_server_held(remote, games):
 
     For the server-only admin's refusal: "Not on this host yet" was false for content that IS on
     the host, in a (legacy) panel server's account the panel never mounts from (review 1016f).
+
+    Asked per account. It used to read detect_content_user(servers_too=True), which names only the
+    account holding the MOST content games: with `css` holding cstrike and the panel's own content
+    account holding two other games, cstrike was "not on this host yet" (review 1017a).
     """
-    _any = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES), servers_too=True)
-    held = [g for g in games if g in set((_any or {}).get("present") or {})]
-    if not held or _r28b_content_owner(remote, _any["user"]) is None:
+    holders = _sm.gmod._r30b_content_holders(remote, tuple(GMOD_CONTENT_GAMES))
+    servers = _sm.gmod._r28j_server_accounts(remote)
+    if not holders or not servers:
         return []
-    return held
+    # ONLY in a server's account, as the refusal says: a game another account also holds is not.
+    held_by_servers = set().union(*(gs for u, gs in holders.items() if u in servers))
+    held_elsewhere = set().union(*(gs for u, gs in holders.items() if u not in servers))
+    return [g for g in games if g in held_by_servers and g not in held_elsewhere]
 
 
 def _sf_gmod_host_refusal(gs, remote, action, sel):

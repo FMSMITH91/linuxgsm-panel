@@ -275,7 +275,7 @@ def _register_panel_binding(app):
         # which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
         set_config_keys(cfg, port=new_port, bind_host=new_bind)
 
-        fw_notes, fw_ok = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
+        fw_notes, fw_ok, old_removed = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
         f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, new_port, cur_port)
 
         # The row says what HAPPENED. It used to be success=True whatever the firewall and the
@@ -293,11 +293,15 @@ def _register_panel_binding(app):
                    success=fw_ok and f2b_ok)
         ok, restart_msg = so.restart_panel()
         if not ok:
+            # The panel still listens where it did, and the steps above took that port's rule and
+            # jail away: put them back, or the page that says "restart it" is the last one served.
+            back_notes, back_audit = _r30b_keep_old_port(app, local, cur_bind, cur_port, new_port,
+                                                         old_removed)
             log_action(current_user, "panel_restart", target=LOCAL_HOST_LABEL,
-                       detail=f"after the binding change: {restart_msg}", success=False)
+                       detail=f"after the binding change: {restart_msg}; {back_audit}", success=False)
             return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
                 "Saved the new binding, but couldn't restart the panel automatically — restart it "
-                "(or reboot the host) to apply."), fw_notes)}), 200
+                "(or reboot the host) to apply."), fw_notes + back_notes)}), 200
         return jsonify({"success": True, "new_port": new_port, "old_port": cur_port,
                         "new_bind": new_bind, "port_changed": new_port != cur_port,
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
@@ -446,16 +450,16 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
 def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
     """Open or close the panel's port for the new binding's exposure.
 
-    -> (the reply's notes, whether the firewall now matches the binding). With no local host row
-    there is no firewall to follow, which is not a failure. Each note is a whole i18n.Sentence:
-    English in the audit row, translated in the reply.
+    -> (the reply's notes, whether the firewall now matches the binding, whether the old port's rule
+    was removed). With no local host row there is no firewall to follow, which is not a failure.
+    Each note is a whole i18n.Sentence: English in the audit row, translated in the reply.
     """
     # ── Bring the firewall in line with the resulting exposure ──
     # Reached on its port (the wildcard, or the host's own public/LAN address) → the port must
     # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
     # changed port also gets its old rule gone.
     now_public = _panel_bind_is_public(new_bind)
-    fw_notes, fw_ok = [], True
+    fw_notes, fw_ok, old_removed = [], True, False
     if local:
         # Each of these returns (ok, msg) and all three were called for effect, with fw_note
         # assigned on the next line regardless — so the panel could restart onto a port the
@@ -483,8 +487,41 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
                                 i18n.Sentence("The old rule for {port} is still there ({why}).",
                                               port=cur_port, why=_old_msg))
                 fw_ok = fw_ok and bool(_old_ok)
+                old_removed = bool(_old_ok)
         except Exception:
             app.logger.warning("change-port: firewall update failed", exc_info=True)
             fw_notes.append(i18n.Sentence("The firewall could not be updated."))
             fw_ok = False
-    return fw_notes, fw_ok
+    return fw_notes, fw_ok, old_removed
+
+
+def _r30b_keep_old_port(app, local, cur_bind, cur_port, new_port, old_removed):
+    """After a restart that could not be scheduled: keep the panel reachable where it still listens.
+
+    -> (the reply's notes, the audit row's words). The binding change removed `cur_port`'s rule and
+    pointed the login jail at `new_port` before restarting; with no restart, a publicly bound panel
+    kept listening on `cur_port` behind a firewall that now dropped it, and nothing in the panel
+    could be reached to restart it (review 1017a). The new port's rule stays: the saved binding
+    still needs it once the panel restarts, and the boot points the jail at that port again.
+    """
+    if new_port == cur_port:
+        return [], "binding port unchanged"
+    notes, audit = [], []
+    # Only for a binding reached on its port: ufw answers 0 to deleting a rule that is not there,
+    # so "removed" alone would open the port of a loopback/tailnet-bound panel that never had one.
+    if old_removed and local and _panel_bind_is_public(cur_bind):
+        try:
+            _ok, _why = remote_ufw_open_port(local, cur_port, "tcp", "LinuxGSM Panel")
+        except Exception:
+            app.logger.warning("change-port: the old port's rule could not be put back", exc_info=True)
+            _ok, _why = False, "error"
+        notes.append(i18n.Sentence("Put the rule for {port} back, so the panel stays reachable there until it "
+                                   "restarts.", port=cur_port) if _ok else
+                     i18n.Sentence("The rule for {port} could not be put back ({why}), and the panel still "
+                                   "listens there.", port=cur_port, why=_why))
+        audit.append("old rule for %s %s" % (cur_port, "put back" if _ok else "NOT put back"))
+    f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, cur_port, new_port)
+    if not f2b_ok:
+        notes.append(i18n.Sentence("fail2ban could not be pointed back at port {port}.", port=cur_port))
+    audit.append("fail2ban back on %s: %s" % (cur_port, f2b_msg))
+    return notes, "; ".join(audit)

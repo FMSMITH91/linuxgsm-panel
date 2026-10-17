@@ -413,8 +413,8 @@ check("dependabot: ...and an entry whose only cooldown is in a comment is caught
 
 
 # ── Semgrep: the lockfile, and mcp pinned apart ────────────────────────────────────────────────
-# semgrep 1.179.0 (and 1.181.0) declare mcp==1.29.0 exactly, and 1.29.0 has GHSA-84m7-p3x7-pcfv, so
-# mcp is compiled out of semgrep.txt (--unsafe-package) and pinned in semgrep-mcp.txt, the two
+# semgrep 1.180.0, the pinned release (1.179.0 and 1.181.0 alike), declares mcp==1.29.0 exactly, and
+# 1.29.0 has GHSA-84m7-p3x7-pcfv, so mcp is compiled out of semgrep.txt (--unsafe-package) and pinned in semgrep-mcp.txt, the two
 # installed together with --no-deps. The same split was made for PyJWT in #375 and undone in #391;
 # semgrep.in says when to undo this one.
 _SG27 = _job27(_SC27, "sast-semgrep")

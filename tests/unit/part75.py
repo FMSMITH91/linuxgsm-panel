@@ -580,6 +580,8 @@ _out75 = _run_js75(_name75, (
     "global.fetch = () => Promise.resolve({json: () => Promise.resolve(answer)});\n"
     "function _livePaintCpu(){} function _livePaintMemory(){} function _livePaintDisk(){}\n"
     + _cut_or75(_js75("remote_manage.js"), "function _r18cPaintHostBadge(") + "\n"
+    + _js75("remote_manage.js")[_js75("remote_manage.js").index("var _r30c_liveSent"):].split("\n", 1)[0] + "\n"
+    + _cut_or75(_js75("remote_manage.js"), "function _r30c_liveOld(") + "\n"
     + _cut_or75(_js75("remote_manage.js"), "function pollLive(") + "\n"
     "(async () => { pollLive(); await settle(); const down = [badge.className, badge.textContent];\n"
     "  answer = {error: 'read failed'}; pollLive(); await settle(); const failed = [badge.className, badge.textContent];\n"

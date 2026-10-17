@@ -128,7 +128,13 @@ def _whitelist_mutate(app, body):
         # The raw text only picks the entry to drop, so one stored with a zone id before the add
         # refused them can still go. What is audited and answered is the address or network it
         # names, read as the gate reads a stored entry, or a fixed text — never the request's own.
-        _security_whitelist_remove(raw)
+        removed = _security_whitelist_remove(raw)
+        if not removed:
+            # Nothing on the list reads as it, so nothing was taken off: say so, and audit nothing.
+            # This answered "removed" for any text at all, true or not.
+            return jsonify({"success": False, "code": "not_whitelisted",
+                            "message": i18n.tr("That entry is not on the whitelist."),
+                            "whitelist": _security_whitelist()})
         shown = unzoned_ip_or_network(raw) or NOT_AN_IP
         threading.Thread(target=_apply_whitelist_everywhere, args=(app,), daemon=True).start()
         _banlist.refresh_soon(0)

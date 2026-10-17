@@ -24,6 +24,7 @@ reaches this machine's sudo, tailscale or the checkout's data/.
 import atexit as _atexit97
 import fcntl as _fcntl97
 import os
+import select as _select97
 import shutil as _shutil97
 import subprocess as _sp97  # nosec B404 - bash over the repo's own install.sh, in a throwaway dir
 import sys
@@ -282,6 +283,7 @@ with open(_conf97, "w", encoding="utf-8") as _fh97:
 _CHILD97 = ("import importlib.machinery as m, importlib.util as u, sys\n"
             "s = u.spec_from_loader('h', m.SourceFileLoader('h', sys.argv[1]))\n"
             "h = u.module_from_spec(s)\ns.loader.exec_module(h)\nh.PANEL_CONF = sys.argv[2]\n"
+            "print('READY', flush=True)\n"
             "print(repr(h._r25j_conf_set({'panel_port': '8443'})))\n")
 _lk97 = os.open(_cd97, os.O_RDONLY | os.O_DIRECTORY)
 _child97 = None
@@ -290,8 +292,12 @@ try:
     _child97 = _sp97.Popen([sys.executable, "-I", "-c", _CHILD97,  # nosec B603 - the repo's helper
                             os.path.join(_root, "tools", "panel-helper"), _conf97],
                            stdout=_sp97.PIPE, stderr=_sp97.PIPE, text=True)
-    _time97.sleep(1.5)
-    _waited97 = _child97.poll() is None
+    # "Still waiting" is read only once the child is at the call (review 1017a: after a fixed
+    # sleep, a child still starting Python read as waiting, so the check held with no lock at all).
+    _ready97 = (_select97.select([_child97.stdout], [], [], 30)[0] != []
+                and _child97.stdout.readline().strip() == "READY")
+    _time97.sleep(1.0)
+    _waited97 = _ready97 and _child97.poll() is None
     with open(_conf97, encoding="utf-8") as _fh97:
         _held97 = _fh97.read()
 finally:
@@ -314,7 +320,7 @@ from pathlib import Path as _Path97  # noqa: E402
 from panel.core import config as _cfg97  # noqa: E402
 from panel.core import validation as _val97  # noqa: E402
 from panel.ops.ssh_manager import firewall as _fw97  # noqa: E402
-from unit.part12 import _p9_patch, _p9_restore_all  # noqa: E402
+from unit.part12 import _p9_patch, _p9_patch_sm, _p9_restore_all  # noqa: E402
 
 _PORTS97 = (0, 70000, -1, True, "5001", 5001, 5000.7, None)
 
@@ -416,7 +422,6 @@ check("install.sh: the fresh install's port probe stops at 65535 and answers 'no
 # 5. The monitor's reachability probe runs without sudo
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 from unit.part12 import _P9_TRIPPED, _p9, _p9_arm  # noqa: E402
-from panel.ops import ssh_manager as _sm97  # noqa: E402
 from panel.services import host_reboot as _hr97  # noqa: E402
 from panel.services import monitoring as _mon97  # noqa: E402
 
@@ -441,8 +446,8 @@ _trip97 = len(_P9_TRIPPED)
 try:
     _p9_arm(patch=_p9_patch, who="part97")
     _p9_patch(_mon97, "run_command", _r26a_rc)
-    _p9_patch(_sm97, "run_command", _r26a_rc)
-    _p9_patch(_sm97, "run_privileged", lambda *a, **k: ("", "", 1))
+    _p9_patch_sm("run_command", _r26a_rc)
+    _p9_patch_sm("run_privileged", lambda *a, **k: ("", "", 1))
     _p9_patch(_mon97, "_remote_listening_ports", lambda r: set())
     _p9_patch(_mon97, "_host_restart_flags", lambda r: None)
     _p9_patch(_mon97, "_host_disk_pct", lambda r: _read97.append("disk") or 12)

@@ -76,7 +76,14 @@ POSTURE_RE = re.compile(
     r"|trust_proxy is on but the panel listens beyond loopback|Automatic security updates"
     r"|\*\*Tailscale operator\*\*|panel account is the operator"
     r"|\*\*Privilege verdict\*\*|\*\*Passwordless `sudo -n true`\*\*"
-    r"|the helper boundary does not constrain|so nothing constrains its privileged actions")
+    r"|the helper boundary does not constrain|so nothing constrains its privileged actions"
+    # Any other line stating the privilege model: install.sh's grant lines in a self-update log
+    # ("sudo grant: WIDE (NOPASSWD:ALL)", "falls back to the pre-helper path"), and the panel's
+    # own words for running as root or for calls sudo ran as root ("shell as root ×5"; a REFUSED
+    # one, "COMMAND=(true as root)", is a fault and stays).
+    r"|sudo grant:|NOPASSWD|\bpre-helper\b|\bwide grant\b|\bruns as root\b|\bas root ×\d"
+    r"|\*\*Runs as\*\*"
+    r"|\*\*Privileged calls by path\*\*|\bsudo systemd-run\b|\bvia (?:shell|root) \d")
 
 
 def finding(level, area, text):

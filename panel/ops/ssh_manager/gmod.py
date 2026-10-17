@@ -183,24 +183,37 @@ def detect_content_user(server, games=("cstrike",), servers_too=False, unread=No
     skip = frozenset() if servers_too else _r28j_server_accounts(server)
     if skip is None:
         return unread
-    try:
-        # Was a shell loop over /home building its inner list by interpolating the game keys. The
-        # verb takes the keys as arguments and walks the directories itself.
-        out, _, rc = _core.run_privileged(server, "content-scan", wanted, timeout=30, merge_stderr=False)
-    except Exception:
-        _core._log.debug("detect_content_user scan failed", exc_info=True)
+    scanned = _r30b_content_holders(server, wanted)
+    if scanned is None:
         return unread
-    if rc != 0:
-        # The helper's verb always exits 0, and so does the remote form (it ends in `true`): a
-        # non-zero exit is sudo or the transport, and its empty output says nothing about /home.
-        _core._log.warning("detect_content_user: the content scan exited %s, so it was not read", rc)
-        return unread
-    by_user = {u: gs for u, gs in _parse_content_scan(out).items() if u not in skip}
+    by_user = {u: gs for u, gs in scanned.items() if u not in skip}
     if not by_user:
         return None
     user = max(by_user, key=lambda u: len(by_user[u]))
     return {"user": user, "group": _user_primary_group(server, user),
             "present": {g: f"/home/{user}/serverfiles/{g}" for g in sorted(by_user[user])}}
+
+
+def _r30b_content_holders(server, games):
+    """Every /home account holding any of `games`: {user: set of games}; None when the scan was not read.
+
+    Every account, panel servers' included, so a caller can ask about one account without the scan
+    having picked another (detect_content_user answers with the account holding the MOST games).
+    """
+    wanted = _valid_content_games(games) or list(GMOD_CONTENT_GAMES)
+    try:
+        # Was a shell loop over /home building its inner list by interpolating the game keys. The
+        # verb takes the keys as arguments and walks the directories itself.
+        out, _, rc = _core.run_privileged(server, "content-scan", wanted, timeout=30, merge_stderr=False)
+    except Exception:
+        _core._log.debug("the content scan failed", exc_info=True)
+        return None
+    if rc != 0:
+        # The helper's verb always exits 0, and so does the remote form (it ends in `true`): a
+        # non-zero exit is sudo or the transport, and its empty output says nothing about /home.
+        _core._log.warning("the content scan exited %s, so it was not read", rc)
+        return None
+    return _parse_content_scan(out)
 
 
 def _parse_content_scan(out):

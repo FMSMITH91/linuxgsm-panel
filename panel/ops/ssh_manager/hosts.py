@@ -4211,12 +4211,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
         body = "".join("ListenAddress %s:%s\n" % (_a, p) for p in ports)
     else:
         body = "".join("Port %s\n" % p for p in ports)
-    _core.write_root_file(server, _target, header + body, timeout=15)
-    if socket_mode:
-        # A changed unit file is inert until systemd re-reads it.
-        _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
 
-    def _revert(msg):
+    def _revert(msg, restart=True):
         # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
         # binding is untouched the whole time, so SSH keeps working.
         _core.run_privileged(server, _restore_verb, [], timeout=10, merge_stderr=False)
@@ -4227,8 +4223,23 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # message says "sshd rejected the new config — nothing changed". Best-effort, like the
         # open: a host without UFW no-ops either way. ONLY a rule step 1 added (see there).
         _r25b_close_added_ssh_rule(server, new_port, _ufw_added)
-        _restart_ssh_listener(server, socket_mode)
+        if restart:
+            _restart_ssh_listener(server, socket_mode)
         return False, msg
+
+    # The write's rc decides before anything validates or restarts. It used to be dropped: on a
+    # remote whose drop-in directory did not exist (stock socket-activated 24.04 has no
+    # /etc/systemd/system/ssh.socket.d) the write failed, `sshd -t` passed the UNCHANGED config,
+    # and a port move was reverted as "sshd didn't come up" — or a bind change on the current port
+    # reported "SSH now listens on <ip>:22, and only there" while sshd still answered everywhere.
+    # Nothing was restarted yet, so the running listener is still the old one: no restart.
+    _wr = _core.write_root_file(server, _target, header + body, timeout=15)
+    if _wr[2] != 0:
+        return _revert(i18n.Sentence("The new SSH port configuration could not be written ({why}) — "
+                                     "nothing changed.", why=_r11a_why(_wr)), restart=False)
+    if socket_mode:
+        # A changed unit file is inert until systemd re-reads it.
+        _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
 
     # 3. Validate the WHOLE sshd config; if the drop-in breaks it, roll back and abort (no restart).
     tout, terr, trc = _core.run_privileged(server, "sshd-validate", [], timeout=15)
