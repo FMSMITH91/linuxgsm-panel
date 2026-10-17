@@ -43,6 +43,7 @@ import subprocess as _sp40  # nosec B404 - runs bash on the rename command this 
 import tempfile as _tf40
 from types import SimpleNamespace as NS
 
+from unit.console_live import as_state as _console_state40
 from unit.part01 import check
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
                          _p9_restore_all, _p9_trip)
@@ -67,6 +68,7 @@ _VIA40 = []                           # the transports a command went through, i
 _SHELLS40 = []                        # every script a rename sent to the host
 _PROBES40 = []                        # every account the write gate asked the host about
 _PRELUDE40 = {"text": ""}             # bash run before the command: a stand-in `mv` for a race
+_CONSOLE_STATE40 = {"now": "live"}    # whether the server's console is attached (unit.console_live)
 _mine40 = {"hosts": [], "servers": [], "users": [], "groups": []}
 _RN40 = "/api/server/%d/rename-path"
 _TAKEN_MSG40 = ("Something with that name already exists in this folder. Nothing was renamed — "
@@ -86,7 +88,8 @@ _CONSOLE40 = "log/console/csgoserver-console.log"   # GameServer.console_log, fo
 def _bash40(server, user, sh, timeout=30, selfname=None):
     """shell_as_game_user, in a real bash, with /home/<account> pointing at the throwaway home."""
     _SHELLS40.append(sh)
-    script = _PRELUDE40["text"] + sh.replace("/home/" + _USER40, _HOME40)
+    script = _PRELUDE40["text"] + _console_state40(sh.replace("/home/" + _USER40, _HOME40),
+                                                   _CONSOLE_STATE40["now"], selfname or "csgoserver")
     p = _sp40.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607 - bash on this part's own command
                   timeout=30)
     return p.stdout, p.stderr, p.returncode
@@ -527,21 +530,27 @@ def _gone40(a_client, sid):
 
 
 def _console40(a_client, sid):
-    """The live console's log, and the folders it is in, are never renamed away."""
+    """The live console's log, and the folders it is in, are never renamed away while it runs."""
     _reset40()
     _write40(_CONSOLE40, "CONSOLE")
     _write40("log/console/other.log", "O")
     n_audit = len(_audits40())
     paths = ("log", "log/console", _CONSOLE40, "./log/", "cfg/../log/console")
-    want = (400, {"success": False, "message": _files40.RENAME_CONSOLE})
+    want = (200, {"success": False, "message": _files40.RENAME_CONSOLE})
     bad = ["%s: %r" % (p, r) for p, r in ((p, _post40(a_client, sid, p, "moved")) for p in paths)
            if r != want]
-    check("rename route: the live console's log, log/console and log/ itself are refused (400), "
-          "however the path is written", not bad, "; ".join(bad[:3]))
-    rows, refused = _refusal_rows40(n_audit, "")
-    check("rename route: ...nothing is sent, the log stays where the console reads it, and each "
-          "refusal is audited", not _SHELLS40 and _read40(_CONSOLE40) == "CONSOLE"
-          and len(rows) == len(paths) and refused, repr((_SHELLS40[:1], rows[:2])))
+    check("rename route (real bash): while the server's console is attached, the live console's log, "
+          "log/console and log/ itself are refused on the host, however the path is written",
+          not bad, "; ".join(bad[:3]))
+    rows = _audits40()[n_audit:]
+    check("rename route: ...the log stays where the console reads it, and each refusal is audited "
+          "as a failure with the console reason", _read40(_CONSOLE40) == "CONSOLE"
+          and len(rows) == len(paths)
+          and all(r.success is False and _files40.RENAME_CONSOLE in r.detail for r in rows), repr(rows[:2]))
+    _console_states40(a_client, sid)
+    _reset40()
+    _write40(_CONSOLE40, "CONSOLE")
+    _write40("log/console/other.log", "O")
     code, body = _post40(a_client, sid, "log/console/other.log", "other-old.log")
     check("rename route: ...another file in log/console is renamed (control)",
           (code, body.get("success"), _read40("log/console/other-old.log")) == (200, True, "O"),
@@ -563,6 +572,28 @@ def _console40(a_client, sid):
     check("rename route (real bash): ...a folder beside them is renamed (control)",
           (code, body.get("success"), _read40("disk/other2/x.txt")) == (200, True, "X"),
           repr((code, body)))
+
+
+def _console_states40(a_client, sid):
+    """Stopped (or a stale socket): the log and its folders rename like any; unreadable: refused."""
+    got = {}
+    for state in ("stopped", "stale", "unread"):
+        _CONSOLE_STATE40["now"] = state
+        try:
+            _reset40()
+            _write40(_CONSOLE40, "CONSOLE")
+            got[state] = [_post40(a_client, sid, p, "moved")
+                          for p in ("log/console/csgoserver-console.log", "log/console", "log")]
+            got[state].append(os.path.isfile(os.path.join(_HOME40, "moved/moved/moved")))
+        finally:
+            _CONSOLE_STATE40["now"] = "live"
+    done = (200, {"success": True, "message": "Renamed"})
+    check("rename route (real bash): with the server stopped (or only a stale tmux socket left), the "
+          "console's log, log/console and log rename like any file and folder — the next start makes "
+          "them again", all(got[s] == [done, done, done, True] for s in ("stopped", "stale")), repr(got))
+    unread = (200, {"success": False, "message": _files40.R31J_CONSOLE_UNREAD})
+    check("rename route (real bash): ...and when whether it runs cannot be read, they are refused, "
+          "saying so", got["unread"] == [unread, unread, unread, False], repr(got["unread"]))
 
 
 def _listing40():

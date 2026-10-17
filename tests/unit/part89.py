@@ -28,6 +28,7 @@ import subprocess as _sp89  # nosec B404 - runs bash over this part's own fixtur
 import tempfile as _tempfile89
 from types import SimpleNamespace as NS
 
+from unit.console_live import as_state as _console_state89
 from unit.part01 import check
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_patch, _p9_patch_sm,
                          _p9_restore_all,
@@ -287,6 +288,9 @@ _HOME89 = os.path.join(_TMP89, "home", "p89u")
 _CONSOLE89 = "log/console/p89srv-console.log"
 
 
+_CONSOLE_STATE89 = {"now": "live"}       # whether the console is attached (unit.console_live)
+
+
 def _bash89(script):
     r = _sp89.run(["/bin/bash", "-c", script], capture_output=True, text=True,  # nosec B603 - own text
                   timeout=30)
@@ -294,7 +298,10 @@ def _bash89(script):
 
 
 def _fshell89(server, user, script, timeout=30, **k):
-    return _bash89(script.replace("/home/p89u", _HOME89))
+    # The console attached (unit.console_live), as for a running server: the host refuses the
+    # console's log only then.
+    return _bash89(_console_state89(script.replace("/home/p89u", _HOME89), _CONSOLE_STATE89["now"],
+                                    k.get("selfname") or "nosuchserver"))
 
 
 def _put89(rel, data):
@@ -343,6 +350,24 @@ def _console_writes89():
         other = fh.read()
     check("files: ...while another file in the same folder still saves (control)",
           ok == (True, "") and other == b"new\n", repr((ok, other)))
+    got = {}
+    for state in ("stopped", "unread"):
+        _CONSOLE_STATE89["now"] = state
+        try:
+            _tree89()
+            got[state] = (_files89.write_file(NS(), "p89u", _CONSOLE89, "cleared\n", selfname="p89srv"),
+                          _files89.upload_file(NS(), "p89u", "log/console", "p89srv-console.log", b"up\n",
+                                               overwrite=True, selfname="p89srv"))
+            with open(log, "rb") as fh:
+                got[state] += (fh.read(),)
+        finally:
+            _CONSOLE_STATE89["now"] = "live"
+    check("files: with the server stopped, the console's log saves and uploads like any file (nothing "
+          "holds it open, and the next start moves it aside)",
+          got["stopped"] == ((True, ""), (True, ""), b"up\n"), repr(got["stopped"]))
+    unread = (False, _files89.R31J_CONSOLE_UNREAD)
+    check("files: ...and when whether the server runs cannot be read, both are refused, saying so, and "
+          "the log is untouched", got["unread"] == (unread, unread, b"line 1\n"), repr(got["unread"]))
 
 
 def _chunk_leftover89():

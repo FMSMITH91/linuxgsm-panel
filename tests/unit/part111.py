@@ -1,8 +1,8 @@
 """Part 111 of the unit suite: the nineteenth review's ssh_manager fixes (review 1017b, builder B).
 
-* The file browser's Delete refuses the live console's log, `log/console` and `log` — by their text
-  before the host is asked, and on the host by their RESOLVED path (a `log -> disk/logs` home, then
-  deleting `disk`). tmux pipe-pane goes on appending to the inode it opened, so a deleted log left
+* The file browser's Delete refuses the live console's log, `log/console` and `log` while the
+  server's console is attached — on the host, as named and by their RESOLVED path (a
+  `log -> disk/logs` home, then deleting `disk`). tmux pipe-pane goes on appending to the inode it opened, so a deleted log left
   the console reading a path nothing wrote to until the next start, and freed no space, under
   "Deleted". Write, upload, rename and create already refused it; delete was the one left out.
 * Rename refuses a NEW name the console reads (a file renamed to `log`), as create refuses it.
@@ -24,6 +24,7 @@ import sys as _sys111
 import time as _time111
 from types import SimpleNamespace as NS
 
+from unit.console_live import as_state as _console_state111
 from unit.part01 import check
 from unit.part05 import _helper as _helper111
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
@@ -48,13 +49,15 @@ _DEL111 = "/api/server/%d/delete-path"
 _LOG111 = "log/console/csgoserver-console.log"
 _WRITERS111 = []
 _PRELUDE111 = {"text": ""}            # bash run before a command: a stand-in for one host behaviour
+_CONSOLE_STATE111 = {"now": "live"}   # whether the server's console is attached (unit.console_live)
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────────────────────────
 def _bash111(server, user, sh, timeout=30, selfname=None):
     """shell_as_game_user, in a real bash, with /home/<account> pointing at the throwaway home."""
     _SHELLS111.append(sh)
-    script = _PRELUDE111["text"] + sh.replace("/home/" + _USER111, _HOME111)
+    script = _PRELUDE111["text"] + _console_state111(sh.replace("/home/" + _USER111, _HOME111),
+                                                     _CONSOLE_STATE111["now"], selfname or "csgoserver")
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     p = _sp111.run(["bash", "-c", script],  # nosec B603 B607
                    capture_output=True, text=True, timeout=30, check=False,
@@ -184,16 +187,16 @@ def _last_delete_row111():
 
 # ── delete: the console's paths by name ─────────────────────────────────────────────────────────
 def _by_name111(client, sid):
-    """The log, its folder and `log` are refused by their text, nothing is sent, the console goes on."""
+    """While the console is attached: the log, its folder and `log` are refused, the console goes on."""
     w, path = _console111()
     _say111(w, "p111 line one")
     cases = (_LOG111, "log/console", "log", "./log/", "log/console/", "cfg/../log")
     got = [(rel, _delete111(client, sid, rel)) for rel in cases]
     want = (200, {"success": False, "message": _files111.DELETE_CONSOLE})
     bad = [(rel, r) for rel, r in got if r != want]
-    check("delete route: the console's log, log/console and log (however written) are refused "
-          "with the console reason, and nothing is sent to the host",
-          not bad and not _SHELLS111, repr((bad[:3], _SHELLS111[:1])))
+    check("delete route (real bash): while the server's console is attached, the console's log, "
+          "log/console and log (however written) are refused on the host with the console reason",
+          not bad and len(_SHELLS111) == len(cases), repr((bad[:3], len(_SHELLS111))))
     row = _last_delete_row111()
     check("delete route: ...the refusal is audited, failed, with the console reason in the row",
           row is not None and row.success is False and _files111.DELETE_CONSOLE in row.detail,
@@ -212,17 +215,49 @@ def _by_name111(client, sid):
           (code, body.get("success")) == (200, True) and _seen111("p111 line three"), repr((code, body)))
 
 
+# ── delete: a stopped server's console paths are ordinary ───────────────────────────────────────
+def _stopped111(client, sid):
+    """Stopped (or a stale socket): the log, log/console and log delete; unreadable: refused, said."""
+    got = {}
+    for state in ("stopped", "stale", "unread"):
+        _CONSOLE_STATE111["now"] = state
+        try:
+            _stop_writers111()
+            _clear111()
+            os.makedirs(os.path.join(_HOME111, "log", "console"))
+            with open(os.path.join(_HOME111, _LOG111), "w", encoding="utf-8") as fh:
+                fh.write("old run\n")
+            got[state] = [_delete111(client, sid, rel) for rel in (_LOG111, "log/console", "log")]
+            got[state].append(os.path.exists(os.path.join(_HOME111, "log")))
+        finally:
+            _CONSOLE_STATE111["now"] = "live"
+    done = (200, {"success": True, "message": "Deleted"})
+    check("delete route (real bash): with the server stopped (or only a stale tmux socket left), the "
+          "console's log, log/console and log delete like any file and folder (the next start makes "
+          "them again) — the refusal said 'would stop the console' of a console that was not running",
+          all(got[s] == [done, done, done, False] for s in ("stopped", "stale")), repr(got))
+    unread = (200, {"success": False, "message": _files111.R31J_CONSOLE_UNREAD})
+    check("delete route (real bash): ...and when whether the server runs cannot be read, they are "
+          "refused, saying so, and nothing is deleted",
+          got["unread"] == [unread, unread, unread, True], repr(got["unread"]))
+    row = _last_delete_row111()
+    check("delete route: ...that refusal is audited, failed, with its reason in the row",
+          row is not None and row.success is False and _files111.R31J_CONSOLE_UNREAD in row.detail,
+          repr(row))
+
+
 # ── delete: the console's paths resolved on the host ────────────────────────────────────────────
 def _resolved111(client, sid):
     """With `log -> disk/logs`, deleting disk or disk/logs is refused ON THE HOST."""
     w, path = _console111("disk/logs")
     _say111(w, "p111 linked one")
-    got = [(rel, _delete111(client, sid, rel)) for rel in ("disk", "disk/logs", "disk/logs/console")]
+    got = [(rel, _delete111(client, sid, rel)) for rel in ("disk", "disk/logs", "disk/logs/console", "log")]
     want = (200, {"success": False, "message": _files111.DELETE_CONSOLE})
     bad = [(rel, r) for rel, r in got if r != want]
-    check("delete route (real bash): with log -> disk/logs, deleting disk, disk/logs or "
-          "disk/logs/console is refused on the host with the console reason",
-          not bad and len(_SHELLS111) == 3, repr((bad[:3], len(_SHELLS111))))
+    check("delete route (real bash): with log -> disk/logs, deleting disk, disk/logs, "
+          "disk/logs/console or the link `log` itself is refused on the host with the console reason",
+          not bad and len(_SHELLS111) == 4 and os.path.islink(os.path.join(_HOME111, "log")),
+          repr((bad[:3], len(_SHELLS111))))
     _say111(w, "p111 linked two")
     check("delete route (real bash): ...the log is still there and the console reads a line "
           "printed after them", os.path.isfile(path) and _seen111("p111 linked two"), repr(_poll111()))
@@ -641,6 +676,7 @@ try:
     _A111 = _p9_client(_ADMIN111)
     _by_name111(_A111, _S111)
     _resolved111(_A111, _S111)
+    _stopped111(_A111, _S111)
     _old_delete_silences111()
     _rename_dest111()
     _catalog111()

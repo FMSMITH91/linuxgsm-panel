@@ -37,6 +37,7 @@ from types import SimpleNamespace as NS
 
 from sqlalchemy.exc import OperationalError as _OpErr94
 
+from unit.console_live import as_state as _console_state94
 from unit.part01 import check
 from unit.part10 import _Over
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_flashes, _p9_json,
@@ -381,6 +382,9 @@ def _uninstall94(client, rid):
 _HOME94 = os.path.join(_TMP94, "home", "p94cfg")
 
 
+_CONSOLE_STATE94 = {"now": "live"}       # whether the console is attached (unit.console_live)
+
+
 def _bash94(script):
     r = _sp94.run(["/bin/bash", "-c", script], capture_output=True, text=True,  # nosec B603 - own text
                   timeout=30)
@@ -388,7 +392,10 @@ def _bash94(script):
 
 
 def _fshell94(server, user, script, timeout=30, **k):
-    return _bash94(script.replace("/home/p94cfg", _HOME94))
+    # The console attached (unit.console_live), as for a running server: the host refuses the
+    # console's log only then.
+    return _bash94(_console_state94(script.replace("/home/p94cfg", _HOME94), _CONSOLE_STATE94["now"],
+                                    k.get("selfname") or "nosuchserver"))
 
 
 def _console_cfg94(client, rid):
