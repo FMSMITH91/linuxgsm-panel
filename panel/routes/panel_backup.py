@@ -1016,6 +1016,14 @@ def _register_panel_host_os(app):
                                 "message": "The reboot delay must be a number of seconds (0-300)."}), 400
             code, body = _hr.request_reboot(_local, mode, current_user, "api", delay=secs)
             return jsonify(_hr.shown(body)), code
+        # No game servers to stop, but the panel's own work still holds the reboot, as it does
+        # through request_reboot: a database repair starting (it stops the panel and may put a
+        # backup back), a restore, a full backup or a self-update would be cut off mid-run. There
+        # is no host row to arm "when it's finished" on, so the sentence alone is the answer.
+        blockers = _hr._panel_host_blockers()
+        if blockers:
+            return jsonify(_hr.shown({"success": False, "error": "blocked", "blockers": blockers,
+                                      "message": _hr._blocked_sentence(blockers)})), 409
         success, msg = so.server_reboot(delay)
         if success:
             log_action(current_user, "server_reboot", target=LOCAL_HOST_LABEL, detail=f"delay={delay}s")

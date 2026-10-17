@@ -5,6 +5,8 @@
   exactly that upgrade, measured with the real pgrep over a stand-in named as the bootstrap.
 * A helper older than the `os-update-own-running` verb answers it "unknown verb" (rc 2): Install
   updates then says to re-run install.sh, not "try again", on the panel host and a local host row.
+* The panel-host reboot with no host row (no game servers on the panel's own host) is held by the
+  panel's own work, as the row path is: a database repair starting, a full backup running.
 
 HOW IT RUNS. As part111 does: on part12's Flask app and stand-ins, part12's transport tripwire re-armed
 for this part's duration, every stub undone in its finally. Real pgrep runs over sleeping stand-in
@@ -14,10 +16,15 @@ import json
 import os
 import subprocess as _sp113  # nosec B404 - real pgrep over this part's own sleeping stand-ins
 import sys as _sys113
+import time as _time113
 from types import SimpleNamespace as NS
 
 from unit.part01 import check
-from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_core, _p9_patch, _p9_restore_all, _p9_so
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
+                         _p9_restore_all, _p9_so)
+from unit.part110 import _Unread110
+from panel.core import panel_state as _ps113
+from panel.routes import panel_backup as _pb113
 from panel.ops.ssh_manager import hosts as _hosts113
 from panel.security import privileged as _priv113
 
@@ -110,11 +117,40 @@ def _old_helper113():
           all(_p9_so.R31J_UPDATE_OLD_HELPER in k for k in keys.values()), repr(sorted(keys)))
 
 
+# ── R4: the no-row reboot asks the panel's own blockers ─────────────────────────────────────────
+def _no_row_reboot113(client):
+    """No local host row: a repair starting or a full backup running holds the reboot (409), as the row path does."""
+    sent = []
+    _p9_patch(_p9_so, "server_reboot", lambda delay=5: (sent.append(delay), (True, "Server will reboot"))[1])
+    _p9_patch(_pb113, "RemoteServer", _Unread110(False))
+    got = {}
+    for case in ("repair starting", "full backup", "nothing running"):
+        _p9_patch(_p9_so, "_r30a_repair_launched",
+                  {"dir": _p9_so.PANEL_DIR, "ts": _time113.time()} if case == "repair starting" else {})
+        held = case == "full backup" and _ps113._full_backup_lock.acquire(blocking=False)
+        try:
+            n0 = len(sent)
+            r = client.post("/api/server-management/reboot", json={"delay": 5})
+            body = _p9_json(r)
+            got[case] = (r.status_code, body.get("error"),
+                         [b.get("kind") for b in body.get("blockers") or ()], len(sent) - n0)
+        finally:
+            if held:
+                _ps113._full_backup_lock.release()
+    check("reboot route (no host row): a database repair starting or a full backup running holds the "
+          "reboot with 409 blocked and sends none (the repair was killed mid-rebuild)",
+          got["repair starting"] == (409, "blocked", ["db_repair"], 0)
+          and got["full backup"] == (409, "blocked", ["full_backup"], 0), repr(got))
+    check("reboot route (no host row): ...and with nothing of the panel's running it reboots as before "
+          "(control)", got["nothing running"][0] == 200 and got["nothing running"][3] == 1, repr(got))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 try:
     _p9_arm(who="part113")
     _bootstrap_busy113()
     _old_helper113()
+    _no_row_reboot113(_p9_client(P9_ADMIN))
 finally:
     _p9_restore_all()
 
