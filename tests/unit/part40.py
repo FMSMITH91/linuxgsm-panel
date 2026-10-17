@@ -555,8 +555,11 @@ def _console40(a_client, sid):
     check("rename route: ...another file in log/console is renamed (control)",
           (code, body.get("success"), _read40("log/console/other-old.log")) == (200, True, "O"),
           repr((code, body)))
-    # The logs on another folder, reached through `log -> disk/logs`: only the host sees that
-    # disk/logs, or disk, is what the console reads.
+    _console_linked40(a_client, sid)
+
+
+def _console_linked40(a_client, sid):
+    """The logs on another folder, through `log -> disk/logs`: only the host sees what the console reads."""
     _reset40()
     _write40("disk/logs/console/csgoserver-console.log", "CONSOLE")
     _write40("disk/other/x.txt", "X")
