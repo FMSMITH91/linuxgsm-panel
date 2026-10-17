@@ -201,7 +201,8 @@ def run_shapes(blocked, shapes, mark):
         if os.path.exists(mark):
             os.unlink(mark)
         try:
-            _p = subprocess.run(_args, capture_output=True, timeout=10, **_kw)  # nosec B602 B603 - fixed shapes
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+            _p = subprocess.run(_args, capture_output=True, timeout=10, **_kw)  # nosec B602 B603 - the suite's own fixed shapes, handed over by the parent test process
             _stdout, _out = _p.stdout, _p.stdout + _p.stderr
         except (OSError, subprocess.TimeoutExpired) as _ex:
             _stdout, _out = b"", repr(_ex).encode()

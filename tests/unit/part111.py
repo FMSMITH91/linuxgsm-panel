@@ -345,17 +345,22 @@ def _start_answers111():
             "foreign apt": (False, _p9_so.R31B_UPDATE_BUSY),
             "own probe unread": (False, _p9_so.R31B_UPDATE_UNCHECKED),
             "upgrade probe unread": (False, _p9_so.R31B_UPDATE_UNCHECKED)}
+
+    def _verb_answers111(rcs, calls, started):
+        # Each case's own answers and call log (a factory, not dict/list default arguments).
+        def _rv(verb, args=(), **k):
+            calls.append(verb)
+            return started if verb == "os-update-run" else ("", "", rcs.get(verb, 97))
+        return _rv
+
     bad = []
     for name, rcs, may_start in cases:
         calls = []
 
-        def _rp(server, verb, args=(), _r=rcs, _c=calls, **k):
-            _c.append(verb)
-            return started if verb == "os-update-run" else ("", "", _r.get(verb, 97))
+        _rv = _verb_answers111(rcs, calls, started)
 
-        def _rv(verb, args=(), _r=rcs, _c=calls, **k):
-            _c.append(verb)
-            return started if verb == "os-update-run" else ("", "", _r.get(verb, 97))
+        def _rp(server, verb, *a, **k):
+            return _rv(verb, *a, **k)
         _p9_patch(_p9_core, "run_privileged", _rp)
         remote = _hosts111.remote_os_update_start(NS(id=None, is_local=False, host="p111.example.invalid"))
         remote_started = "os-update-run" in calls
