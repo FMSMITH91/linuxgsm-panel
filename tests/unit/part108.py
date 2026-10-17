@@ -23,8 +23,8 @@ import tempfile as _tf108
 from types import SimpleNamespace as NS
 
 from unit.part01 import check
-from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_client, _p9_core, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_sf, _p9_so)
+from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_app, _p9_arm, _p9_banlist, _p9_cfg, _p9_client,
+                         _p9_core, _p9_drain, _p9_json, _p9_patch, _p9_restore_all, _p9_sf, _p9_sh, _p9_so)
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.ops.ssh_manager import hosts as _hosts108
 from panel.routes import remote_vps as _rv108
@@ -364,6 +364,49 @@ def _panel_port108(client):
           repr((done, calls_d, f2b_d)))
 
 
+def _whitelist_jail108(client, boot_port, restart_ok):
+    """A port move 5000 -> 5077, then a whitelist edit, in a process bound to `boot_port`.
+
+    -> (move reply, the jail's ports during the move, the jail's ports from the whitelist edit, the
+    edit's reply).
+    """
+    _p9_patch(_p9_app, "remote_set_fail2ban_ignoreip", lambda remote, wl, unban_ip=None: (True, "p108"))
+    _p9_patch(_p9_so, "ensure_panel_host_whitelist", lambda wl: (True, "p108"))
+    _p9_patch(_p9_sh, "_autoblock_hosts", set)
+    # The edit's ban-list refresh reads the host's fail2ban and ufw in a thread of its own.
+    _p9_patch(_p9_banlist, "refresh_soon", lambda delay=3.0: None)
+    had, boot0 = "BOOT_PORT" in _p9.config, _p9.config.get("BOOT_PORT")
+    _p9.config["BOOT_PORT"] = boot_port
+    try:
+        moved, _calls, f2b, _after = _change_port108(client, _ANY108, restart_ok)
+        n = len(f2b)
+        # A network, so the edit lifts no single ban (no unban reaches fail2ban); the worker it queues
+        # is _shared's whitelist worker (_apply_whitelist_everywhere in the app's context), run here as
+        # its thread would.
+        r = _p9_json(client.post("/api/panel/security/whitelist", json={"ip": "198.51.100.0/24"}))
+        _p9_drain()
+        return moved, f2b[:n], f2b[n:], r
+    finally:
+        if had:
+            _p9.config["BOOT_PORT"] = boot0
+        else:
+            _p9.config.pop("BOOT_PORT", None)
+
+
+def _whitelist_port108(client):
+    failed, during, edit, r = _whitelist_jail108(client, 5000, False)
+    check("panel port: ...and a whitelist edit after that rolled-back move keeps the login jail on the port "
+          "the panel still serves (it rewrote the jail for config.json's saved port, which nothing serves "
+          "until the restart, so failed logins on the live port went unbanned)",
+          failed.get("success") is False and during[-1:] == [5000] and r.get("success") is True
+          and edit == [5000], repr((failed, during, edit, r)))
+    done, _d, edit_new, r_new = _whitelist_jail108(client, 5077, True)
+    check("panel port: ...while in a process bound to the new port (the restart ran) the edit keeps the jail "
+          "on that port (control)",
+          done.get("success") is True and r_new.get("success") is True and edit_new == [5077],
+          repr((done, edit_new, r_new)))
+
+
 def _close_panel_port108(client):
     _p9_patch(_rv108, "remote_ufw_status", lambda remote: {"installed": True, "unreachable": True, "groups": []})
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, tailscale_setup_done=True))
@@ -429,6 +472,7 @@ try:
     _gmod_held108()
     _A108 = _p9_client(P9_ADMIN)
     _panel_port108(_A108)
+    _whitelist_port108(_A108)
     _close_panel_port108(_A108)
     _os_update_es108()
 finally:

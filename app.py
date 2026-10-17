@@ -844,7 +844,12 @@ def _apply_whitelist_to_fail2ban():
     except Exception:
         _log.debug("applying whitelist to the host's other jails failed", exc_info=True)
     try:
-        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, _cfg.get("port", 5000), wl)
+        # The port this process serves, not config.json's: they differ while a saved port change
+        # waits for its restart, and after one whose restart could not be scheduled the change-port
+        # rollback pointed the jail back at the port still served. A whitelist edit then moved it
+        # onto the saved port, and failed logins on the live one went unbanned (review 1017a).
+        # Read in the app's context (the whitelist routes' worker gives one); config's port without.
+        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, ts._r13b_bound_port(_cfg), wl)
     except Exception:
         _log.debug("applying whitelist to fail2ban failed", exc_info=True)
         return False, "could not update fail2ban"
