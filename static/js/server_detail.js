@@ -2003,7 +2003,15 @@ if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='histo
 var _r30c_gmcRunning = false, _r30c_gmcMiss = 0;
 function _r30c_gmcRepoll(){
   _r30c_gmcMiss++;
-  setTimeout(loadGmodContent, Math.min(5000 * Math.pow(2, _r30c_gmcMiss - 1), 60000));
+  _r32c_gmcLater(Math.min(5000 * Math.pow(2, _r30c_gmcMiss - 1), 60000));
+}
+// One poll pending at most. Every read that finds a job running schedules the next, so a read begun
+// while a poll was already waiting (a second Uninstall confirmed before the card redrew, whose POST
+// re-reads whatever it answers) started a second chain, and each ran for as long as the job did.
+var _r32c_gmcTimer = null;
+function _r32c_gmcLater(ms){
+  clearTimeout(_r32c_gmcTimer);
+  _r32c_gmcTimer = setTimeout(loadGmodContent, ms);
 }
 // The running job's line: the card says what it is doing even when the list cannot be shown.
 function _r30c_gmcWorking(d, cls){
@@ -2108,7 +2116,7 @@ function loadGmodContent(){
       el.querySelectorAll('[data-gmc-uninstall]').forEach(function(b){
         b.onclick = function(){ uninstallGmodContent(b.getAttribute('data-gmc-uninstall'), b.getAttribute('data-gmc-label')); };
       });
-      if(running) setTimeout(loadGmodContent, 5000);
+      if(running) _r32c_gmcLater(5000);
     })
     .catch(function(){
       el.innerHTML = '<span class="text-danger">Could not load content status.</span>';
@@ -2142,7 +2150,7 @@ function _gmcPost(bodyObj, okMsg){
     // then), so without this the first poll after the start missing (the host busy with the
     // download it just began) re-polled nothing and the card never showed the job or its outcome.
     if(d.success){ _r30c_gmcRunning = true; _r30c_gmcMiss = 0; }
-    setTimeout(loadGmodContent, 1500);
+    _r32c_gmcLater(1500);
   }).catch(function(){
     if(window.toast) toast('Request failed','danger');
     // The card is drawn again, as after an answer: Apply had been disabled under a spinner, and a

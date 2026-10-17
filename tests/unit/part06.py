@@ -2311,8 +2311,10 @@ from shlex import quote as _rs_q
 
 
 def _rs_git(*a, cwd=None, inp=None):
-    return _rs_sub.run(["git", *a], cwd=cwd, input=inp, capture_output=True,
-                       text=True).stdout.strip()
+    # Without the developer's global or system git config (review 1017c lead: a global core.hooksPath
+    # or url.*.insteadOf would act on these temp repos; the other fixtures here clear it the same way).
+    return _rs_sub.run(["git", *a], cwd=cwd, input=inp, capture_output=True, text=True,
+                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")).stdout.strip()
 
 
 def _inst_shfn(name):
@@ -9977,7 +9979,9 @@ try:
     _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
 
     def _ru_git(*a):
-        return _sh_sub.run(["git", *a], capture_output=True, text=True).stdout.strip()
+        # Without the developer's global or system git config, as _rs_git (review 1017c lead).
+        return _sh_sub.run(["git", *a], capture_output=True, text=True, env=dict(
+            os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")).stdout.strip()
 
     _ru_git("init", "-q", "-b", "main", _ru_up)
     _ru_c = []

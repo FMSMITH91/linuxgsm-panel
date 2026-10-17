@@ -68,8 +68,10 @@ def _register_server_management(app):
         # check writes (system_ops.get_server_status).
         status = so.get_server_status()
         cfg = load_config()
+        # panel_bound_port: what the "Public panel access" label names (remote_vps.remote_manage).
         return render_template("remote_manage.html", remote=local, status=status, config=cfg,
-                               funnel_facts=ts.panel_funnel_facts(cfg))
+                               funnel_facts=ts.panel_funnel_facts(cfg),
+                               panel_bound_port=ts._r13b_bound_port(cfg))
 
     @app.route("/api/server-management")
     @login_required

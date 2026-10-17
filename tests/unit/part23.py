@@ -629,7 +629,7 @@ def _hosts23(ids):
     miss = _missing23(
         text, "- host %d · tailscale (system ssh, multiplexing" % ids["ts"],
         "- host %d · key (paramiko, pooled) · port custom · sudo no · address bare name (no dot) · "
-        "login non-root · host key pinned" % ids["key"],
+        "host key pinned" % ids["key"],
         "- host %d · local (panel host)" % ids["local"])
     check("hosts: each host's transport as run_command decides it, with classes, never values",
           not miss, "%r in %s" % (miss, text))

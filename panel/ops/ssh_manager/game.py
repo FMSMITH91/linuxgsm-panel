@@ -1539,9 +1539,22 @@ def _r13b_bkpart_judge(server, user, name, started):
     code = _r13b_bkverify_code(server, user, name, started)
     if code is None:
         return " Its archive (%s) reads to the end, so it was kept." % name
-    if code in _R13B_BKVERIFY_BROKEN and _bkpart_remove(server, user, name, started):
-        return " Removed the partial archive it left (%s)." % name
+    if code in _R13B_BKVERIFY_BROKEN:
+        return _r32b_bkpart_note(server, user, name, started)
     return ""
+
+
+def _r32b_bkpart_note(server, user, name, started):
+    """The note for a partial archive the read proved broken: removed, or kept and said so.
+
+    _bkpart_remove refuses while any tar runs as the account (a folder download is one), a backup
+    lock is held, or the file is not this run's — the safe side. The message then said nothing, and
+    a broken archive stayed in the backup list beside the good ones, looking like a backup.
+    """
+    if _bkpart_remove(server, user, name, started):
+        return " Removed the partial archive it left (%s)." % name
+    return (" The partial archive it left (%s) could not be removed just now — delete it from the "
+            "backup list." % name)
 
 
 # ── a backup that says it worked ───────────────────────────────────────────────────────────────
@@ -1663,9 +1676,8 @@ def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note)
                "reads to the end." % (reason, name))
         return True, (msg + " " + headroom_note if headroom_note else msg), False
     note = ""
-    if (code in _R13B_BKVERIFY_BROKEN and started is not None
-            and _bkpart_remove(server, user, name, started)):
-        note = " Removed the partial archive it left (%s)." % name
+    if code in _R13B_BKVERIFY_BROKEN and started is not None:
+        note = _r32b_bkpart_note(server, user, name, started)
     return False, reason + " (" + _BKVERIFY_WHY.get(code, "the host could not be asked") + ")." + note, False
 
 

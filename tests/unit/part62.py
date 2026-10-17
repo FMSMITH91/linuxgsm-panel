@@ -32,7 +32,7 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _helper
-from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
+from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch, _p9_patch_sm,
                          _p9_restore_all, _p9_sd, _p9_sf, _p9_trip)
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.ops.debug_report import logs as _logs62
@@ -456,7 +456,7 @@ def _daily_time62(client, sid):
 
 def _account_probe62():
     ans = {"v": ("", "timed out", -1)}
-    _p9_patch(_p9_ms._sm, "read_as_game_user", lambda *a, **k: ans["v"])
+    _p9_patch_sm("read_as_game_user", lambda *a, **k: ans["v"])
     got = {}
     for tag, v in (("no answer", ("", "timed out", -1)), ("empty", ("", "", 0)),
                    ("has linuxgsm.sh", ("motd\nEXISTS\n", "", 0))):

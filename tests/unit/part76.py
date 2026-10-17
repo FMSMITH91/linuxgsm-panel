@@ -323,10 +323,10 @@ try:
         _patch(_app76, "ensure_node_tools_cron", lambda r: None)
         _patch(_sh76, "game_account_write_refusal",
                lambda remote, user, **k: _i18n76.Sentence("refused") if user == "p76cron" else None)
-        _patch(_app76._sm, "upgrade_managed_cron_tracking",
+        _patch(_smcron76, "upgrade_managed_cron_tracking",
                lambda remote, short, lgsm, **k: _cp_upgraded76.append(short) or False)
         _app76._node_tools_cron_pass(_p9)
-        _patch(_gp76._sm, "upgrade_managed_cron_tracking",
+        _patch(_smcron76, "upgrade_managed_cron_tracking",
                lambda remote, short, lgsm, **k: _gp_upgraded76.append(short) or True)
         _gp_refused76 = _gp76._cron_follows(NS(id=-76), NS(short_name="p76cron", lgsm_name="p76cron",
                                                           game_type="csgo", query_type=None), 27978)

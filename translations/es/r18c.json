@@ -20,7 +20,6 @@
   "Restoring…": "Restaurando…",
   "Scanning…": "Escaneando…",
   "Sending…": "Enviando…",
-  "Still waiting — press the button again once you have approved the machine.": "Sigue esperando: pulsa el botón de nuevo cuando hayas aprobado la máquina.",
   "The request failed — the host may be unreachable, or your session may have expired. Refresh and check the rules.": "La solicitud falló: puede que el host no sea accesible o que tu sesión haya caducado. Recarga y revisa las reglas.",
   "Version {v} is available — click to update": "La versión {v} está disponible: haz clic para actualizar"
 }

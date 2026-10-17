@@ -695,6 +695,12 @@ def _branch_sleep35(stmt):
     return next((_s for _s in (_first_sleep35(stmt.body), _first_sleep35(stmt.orelse)) if _s is not None), None)
 
 
+def _r32d_guard_only35(stmt):
+    """Is `stmt` an if whose every branch only leaves or does nothing (return, break, continue, raise, pass)?"""
+    _leave = (_ast35.Return, _ast35.Break, _ast35.Continue, _ast35.Raise, _ast35.Pass)
+    return isinstance(stmt, _ast35.If) and all(isinstance(_s, _leave) for _s in stmt.body + stmt.orelse)
+
+
 def _first_sleep35(body):
     """The delay node of the sleep a body starts with (or a while whose body does), or None.
 
@@ -709,7 +715,11 @@ def _first_sleep35(body):
         if isinstance(stmt, (_ast35.While, _ast35.Try, _ast35.With)) and stmt.body:
             return _first_sleep35(stmt.body)
         if isinstance(stmt, (_ast35.If, _ast35.For)):
-            return _branch_sleep35(stmt)
+            # A guard that only leaves (`if stop.is_set(): return`) is not work: the scan goes on past
+            # it (review 1017c lead: the sleep after such a guard read as no sleep at all).
+            if _branch_sleep35(stmt) is not None or not _r32d_guard_only35(stmt):
+                return _branch_sleep35(stmt)
+            continue
         if _call_name35(stmt) == "sleep":
             return stmt.value.args[0] if stmt.value.args else None
         if not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom)):
@@ -728,10 +738,14 @@ _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src
     "while True:\n    if first:\n        time.sleep(30)\n    work()\n",
     "while True:\n    if x:\n        pass\n    else:\n        time.sleep(30)\n",
     "while True:\n    for _ in range(3):\n        time.sleep(1)\n",
-    "while True:\n    if x:\n        work()\n        time.sleep(30)\n")]
+    "while True:\n    if x:\n        work()\n        time.sleep(30)\n",
+    "while True:\n    if stop.is_set():\n        return\n    time.sleep(60)\n",
+    "while True:\n    if x:\n        work()\n    time.sleep(60)\n")]
 check("beating loops: a sleep after setup assignments heads a while body too (and a try or with "
-      "block's, or an if or for that starts with one), and one after real work does not (control)",
-      _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False], repr(_r15d_fs_ctl35))
+      "block's, or an if or for that starts with one, or one past a guard that only leaves), and one "
+      "after real work does not (control)",
+      _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False, True, False],
+      repr(_r15d_fs_ctl35))
 
 
 def _loop_first_pass35(fn_node):

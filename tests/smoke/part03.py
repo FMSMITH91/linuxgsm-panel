@@ -1028,13 +1028,12 @@ if os.name == "posix":
     import stat as _stat
     dmode = _stat.S_IMODE(os.stat(DATA_DIR).st_mode)
     check("perms: data/ is 0700 (owner-only)", dmode == 0o700, "got %o" % dmode)
-    if DB_PATH.exists():
-        dbmode = _stat.S_IMODE(os.stat(DB_PATH).st_mode)
-        check("perms: panel.db is 0600", dbmode == 0o600, "got %o" % dbmode)
-    for _kf in (SECRET_FILE, CRED_KEY_FILE):
-        if _kf.exists():
-            _km = _stat.S_IMODE(os.stat(_kf).st_mode)
-            check("perms: %s is 0600" % _kf.name, _km == 0o600, "got %o" % _km)
+    # Each file is there by now (the boot wrote secret_key, part02's encrypt_secret made cred_key), and
+    # one that is not FAILS its check by name (review 1017c): skipped on an absent file, a renamed or
+    # lazily made key took the owner-only gate away while the tally still read N/N.
+    for _kf in (DB_PATH, SECRET_FILE, CRED_KEY_FILE):
+        _km = _stat.S_IMODE(os.stat(_kf).st_mode) if _kf.exists() else None
+        check("perms: %s is 0600" % _kf.name, _km == 0o600, "absent" if _km is None else "got %o" % _km)
 
 # ── CSRF protection rejects a tokenless mutating POST ─────────
 # This client has CSRF disabled for convenience; flip it back on for one
@@ -2714,7 +2713,8 @@ check("install page: a user without install/manage permission is refused",
       "status=%d — a user who cannot install must not reach the form" % _denied.status_code)
 
 # ── Discover / import existing LinuxGSM servers on a host ──
-# The fixture host is a blackholed 192.0.2.x address, so the scan does not run — and an empty
+# The fixture host is 127.0.0.1:22 (refused under tools/smoke-local.sh by nosudo_runner's egress
+# guard), so the scan does not run — and an empty
 # scan is no longer reported as "no servers found". This check used to assert that old
 # behaviour, which is the bug: discover_linuxgsm_servers returns [] both for "nothing here"
 # and for "never ran", so the card printed a green tick about a host it had not read.

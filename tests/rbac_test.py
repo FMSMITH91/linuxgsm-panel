@@ -2,9 +2,12 @@
 
 It proves they cannot be bypassed by calling endpoints directly.
 
-Run it against a configured install (from anywhere):
+Run it on a checkout with no data/ (tools/smoke-local.sh tests/rbac_test.py copies one), as CI does:
 
     ./venv/bin/python tests/rbac_test.py      # exits 0 if all checks pass
+
+Against a configured install it still runs, but the checks that replay a migration on the run's own
+database record their premise as FAILED there (they must not alter a real one), so it exits 1.
 
 It creates a throwaway limited group + user (view-only, access to ONE host),
 exercises the real HTTP endpoints via Flask's test client, and deletes the fixtures

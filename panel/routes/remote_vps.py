@@ -471,7 +471,10 @@ def _register_ssh_settings(app):
             # the card said 22 while sshd served 2222. Read sshd's own ports, for every host: on a
             # key/password host the row is only the port the panel dials, and the card's line went
             # stale after a move until the page was reloaded. [] = unread, shown as unknown.
-            st["sshd_ports"] = _r26b_sshd_ports(remote)
+            # remote_public_ssh_status read them already, for the ports its mode is about; read
+            # again only when a stand-in status did not.
+            if not isinstance(st.get("sshd_ports"), list):
+                st["sshd_ports"] = _r26b_sshd_ports(remote)
             return jsonify(st)
         except Exception:
             return jsonify({"error": _log_and_generic("ssh-status failed")}), 200
@@ -675,7 +678,7 @@ def _r14a_close_refusal(remote, port, shared, read):
     if read == _R15C_INACTIVE:
         # The page's own tooltip for this state, word for word (remote_manage_host.js), which
         # disables the button; a direct call, or a status read that failed and left it enabled,
-        # reaches here. remote_set_public_ssh refuses the same state for port 22.
+        # reaches here. remote_set_public_ssh refuses the same state for public SSH.
         log_action(current_user, "close_panel_port", target=str(port), success=False,
                    remote=remote, detail="ufw is not active")
         return jsonify({"success": False, "message": (
@@ -1202,8 +1205,11 @@ def _register_host_pages(app):
         cfg = load_config()
         # Whether the panel is on Funnel (so "tailnet-only" may not be said): local host only.
         funnel_facts = ts.panel_funnel_facts(cfg) if remote.is_local else None
+        # The port the panel serves on now (ts._r13b_bound_port) for the "Public panel access" label:
+        # the Close button beside it acts on that one first, and config.json's is the next start's.
         return render_template("remote_manage.html", remote=remote, games=games,
-                               status=status, config=cfg, funnel_facts=funnel_facts)
+                               status=status, config=cfg, funnel_facts=funnel_facts,
+                               panel_bound_port=ts._r13b_bound_port(cfg))
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required

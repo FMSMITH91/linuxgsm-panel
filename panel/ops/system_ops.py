@@ -625,7 +625,7 @@ def ufw_allows_iface_in(rules, iface):
     inbound traffic in on `iface` — the `ufw allow in on <iface>` rule the panel's Allow button adds.
 
     This decides whether the management page may offer "Disable (tailnet-only)", which removes
-    public port 22, so every doubt answers False. It used to be a substring match over the raw
+    public SSH, so every doubt answers False. It used to be a substring match over the raw
     `ufw status verbose` text, and any row naming the interface counted: `ALLOW OUT ... on
     tailscale0` (which early installs added beside the IN rule, and which survives deleting it),
     `on tailscale0 DENY IN`, or a comment. Any of those read "Allowed" and unlocked the lockdown
@@ -3476,7 +3476,24 @@ def _panel_login_proxied():
         return True
     bind = _cfg._r13a_cfg_text(cfg, "bind_host").strip().lower()
     return bool(cfg.get("trust_proxy") or cfg.get("tailscale_setup_done")
-                or bind in ("127.0.0.1", "::1", "localhost"))
+                or bind in ("127.0.0.1", "::1", "localhost") or _r32a_bound_to_loopback())
+
+
+def _r32a_bound_to_loopback():
+    """Whether this process is bound to loopback NOW (app.config BOOT_BIND), whatever config.json says.
+
+    config.json's bind is the next start's. A move off loopback whose restart could not be scheduled
+    left the process on 127.0.0.1 (every login then logged as a proxy's client) while the jail went
+    back to banning the web port alone; an unset bind that boot resolved to loopback was never
+    read at all. Either way is the wider ban, which is the one sure to take effect.
+    """
+    try:
+        from flask import current_app, has_app_context
+        bound = current_app.config.get("BOOT_BIND") if has_app_context() else None
+    except Exception:  # noqa: BLE001 - no app to ask: config.json's answer stands
+        return False
+    addr = ip_address_or_none(str(bound)) if bound else None
+    return (addr is not None and addr.is_loopback) or str(bound or "").strip().lower() == "localhost"
 
 
 # Every tailnet peer's address: Tailscale's CGNAT IPv4 range and its IPv6 ULA prefix. These are

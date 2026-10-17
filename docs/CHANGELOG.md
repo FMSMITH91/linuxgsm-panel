@@ -601,6 +601,41 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A twentieth full review on 2026-10-17: fixes.** Every item below has a check that fails without
+  its fix.
+  - **The Public SSH card follows the SSH port the host really uses.** After the panel moved a host's
+    SSH off port 22, the card still read port 22's firewall rules, so it could say "tailnet only"
+    while the new port was open to the internet, and Limit, Disable and Close changed port 22
+    alone. The card now names the ports sshd serves and its buttons act on all of them, in IPv4 and
+    IPv6. Every lock-out guard stays: Disable is refused when the panel itself connects over the
+    public address, when there is no Tailscale way back in, or when the ports cannot be read.
+  - **Everywhere "now" is meant, the panel's own port is read from the running process,** not from
+    the settings file, which holds the port for the next start. While a port change waits for its
+    restart, a second port change, the Tailscale page's Disable guard and its direct links, the
+    "Public panel access" line, the login-attempt jail, the debug report, `manage.py setup-token`,
+    an update that restarts nothing and the uninstaller all act on the port the panel really
+    serves. The setup wizard keeps the Serve route the operator is using instead of pointing it at
+    a port nothing listens on yet.
+  - **The downloadable debug report no longer tells how the panel is privileged.** Which journal
+    read it made, and whether the panel logs in to each remote as root, are now on the in-panel
+    report page only. The file reads the same whichever way the panel runs.
+  - **A previous update's leftovers no longer read as "Updates installed."** When the panel could
+    not tell whether its own OS update was still running, it took an old result as the new one.
+  - **An SSH port move that loses its connection halfway is undone,** instead of leaving the new
+    port's firewall rule and a half-changed SSH setting behind.
+  - **Create and Rename refuse a name where the console's log folder will go** on a stopped server
+    whose log link points at a folder not made yet; a file there stopped the next start from
+    making its log folders.
+  - **Smaller fixes.** A folder download keeps working when a file shrinks while it is read, and
+    names that file inside the archive; two people redeeming invites under the same name at once
+    get "That username is taken." instead of an error page; a backup whose broken partial archive
+    could not be removed says so; the backup schedule shows the stored choice after a save that
+    failed; the dashboard's empty state no longer sends you to a page that does not exist; the
+    Garry's Mod content card keeps one watch per job; and the remote Tailscale sign-in offers
+    "Check again" after five minutes instead of a button that skipped the firewall step.
+  - **Tests.** The unit suite stops before any part runs when the kernel block on the machine's
+    tailscale cannot be set up. The smoke suite no longer opens SSH to this machine with the
+    developer's keys. Several gates that passed while reading nothing now fail by name.
 - **A nineteenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
   its fix.
   - **The file browser no longer deletes a running game server's console log.** Deleting it, or the

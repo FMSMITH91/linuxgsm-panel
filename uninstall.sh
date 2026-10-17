@@ -169,6 +169,23 @@ print(int(s) if ok else 5000)' 2>/dev/null || echo "")"
     # A pattern match, not `printf | grep -q`: grep's early exit is a SIGPIPE under pipefail.
     if [[ "${CONF_JSON}" == *'"tailscale_setup_done": true'* ]]; then TS_DONE=1; fi
 fi
+# ...and the port the root-owned panel.conf records as the panel's, when it is another one. That
+# is the port the panel SERVES on: after a port change whose restart could not be scheduled, the
+# panel put that port's rule and record back while config.json named the new port, and only the
+# new port's rule and Serve routes were removed here: the served port's ALLOW stayed open on a host
+# with no panel behind it. Only a record naming THIS install (panel_dir=, the same directory
+# however it is spelled): panel.conf is host-wide, and another install's port is not ours to close.
+_R32A_REC_PORT=""
+_r32a_conf="${SHARED_CONF:-/usr/local/lib/linuxgsm-panel/panel.conf}"
+if [[ -n "${PANEL_PORT}" ]] && [[ -r "${_r32a_conf}" ]]; then
+    _r32a_dir="$(sed -n 's/^panel_dir=//p' "${_r32a_conf}" 2>/dev/null | tail -n 1)" || _r32a_dir=""
+    _r32a_port="$(sed -n 's/^panel_port=//p' "${_r32a_conf}" 2>/dev/null | tail -n 1)" || _r32a_port=""
+    if [[ -n "${_r32a_dir}" ]] && [[ "$( (cd -P -- "${_r32a_dir}" 2>/dev/null && pwd -P) || true)" == "$( (cd -P -- "${PANEL_DIR}" 2>/dev/null && pwd -P) || true)" ]] \
+       && [[ "${_r32a_port}" =~ ^[1-9][0-9]{3,4}$ ]] && [[ "${_r32a_port}" -ge 1024 ]] && [[ "${_r32a_port}" -le 65535 ]] \
+       && [[ "${_r32a_port}" != "${PANEL_PORT}" ]]; then
+        _R32A_REC_PORT="${_r32a_port}"
+    fi
+fi
 
 # ── Stop + remove the service ──
 info "Stopping and removing the service…"
@@ -276,6 +293,9 @@ if [[ -z "${PANEL_PORT}" ]] && command -v ufw >/dev/null 2>&1; then
     warn "Could not read the panel's port from its config, so its UFW rule was left in place."
     warn "  Find and remove it with:  sudo ufw status numbered"
 fi
+# Once per port: config.json's, then the recorded one when it differs (_R32A_REC_PORT, above).
+_r32a_cfg_port="${PANEL_PORT}"
+for PANEL_PORT in "${_r32a_cfg_port}" ${_R32A_REC_PORT:-}; do
 if [[ -n "${PANEL_PORT}" ]] && command -v ufw >/dev/null 2>&1; then
     # Report what was actually deleted. The deletes end in `|| true` — a rule that was never
     # added must not abort the uninstall — and their exit code says nothing anyway: `ufw delete`
@@ -307,6 +327,8 @@ if [[ -n "${PANEL_PORT}" ]] && command -v ufw >/dev/null 2>&1; then
         warn "  not be read). Check with: sudo ufw status"
     fi
 fi
+done
+PANEL_PORT="${_r32a_cfg_port}"
 # Not gated on MODE. `tailscale_setup_done` is written by the RUNNING PANEL — routes/tailscale.py
 # and route_helpers.py set it once setup_tailscale_serve() succeeds, on any install mode, with no
 # root/user split anywhere in that path — so a per-user panel publishes a Serve mapping exactly
@@ -428,6 +450,9 @@ _ts_remove_routes() {
         ok "No Tailscale Serve route pointed at the panel's port ${PANEL_PORT}; nothing to remove"
     fi
 }
+# Once per port, as the firewall above: the recorded port's routes are the panel's too.
+_r32a_ts_port="${PANEL_PORT}"
+for PANEL_PORT in "${_r32a_ts_port}" ${_R32A_REC_PORT:-}; do
 if command -v tailscale >/dev/null 2>&1; then
     if [[ -z "${PANEL_PORT}" ]]; then
         # Without the port there is no telling which routes were the panel's, and every one this
@@ -445,6 +470,8 @@ if command -v tailscale >/dev/null 2>&1; then
         _ts_remove_routes "${_TS_ROUTES}"
     fi
 fi
+done
+PANEL_PORT="${_r32a_ts_port}"
 
 # ── Remove the panel files (with a guard against a catastrophic path) ──
 if [[ -n "${PANEL_DIR}" ]] && [[ "${PANEL_DIR}" != "/" ]] && [[ -d "${PANEL_DIR}" ]]; then

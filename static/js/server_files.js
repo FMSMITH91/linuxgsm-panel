@@ -1593,15 +1593,19 @@ function _bkShow(sel, field, v, label, named){
 // save reads again once it has answered, whether it saved or not: a failed save that did not left
 // the dropped read's update lost and the select showing the choice it never stored) and no newer
 // read has been drawn.
+// `settled` (true only from saveBkSchedule): this is the read a save sends once it has answered, and
+// it redraws the selects even the focused one. renderBackups skips a focused select so a poll does
+// not move the one being changed, but after a pick the select KEEPS focus: a failed save's re-read
+// left it showing the choice it never stored, and picking it again to retry fired no change.
 var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0;
-function loadBackups(){
+function loadBackups(settled){
   if(!document.getElementById('backup-card')) return;
   var mine = ++_r30c_sfBkSent, saves = _r30c_sfBkSaves;
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/info')
     .then(r=>r.json()).then(function(d){
       if(saves !== _r30c_sfBkSaves || mine < _r30c_sfBkDrawn) return;
       _r30c_sfBkDrawn = mine;
-      renderBackups(d);
+      renderBackups(d, settled === true);
     })
     .catch(function(){ /* transient error — keep whatever is already shown */ });
 }
@@ -1675,14 +1679,15 @@ function _bkRenderRows(d){
   }
 }
 
-function renderBackups(d){
-  // The two schedule selects. Don't clobber a select the user is actively changing.
+function renderBackups(d, settled){
+  // The two schedule selects. Don't clobber a select the user is actively changing — unless this is
+  // the read a settled save sent (loadBackups), which must show what is stored.
   function showSchedule(sc){
     var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
     var ivN={n: Number(sc.interval_days)};
-    if(iv && document.activeElement!==iv) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
+    if(iv && (settled || document.activeElement!==iv)) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
                                                   tf('Every {n} days', ivN), {key: 'Every {n} days', vars: ivN});
-    if(kp && document.activeElement!==kp) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
+    if(kp && (settled || document.activeElement!==kp)) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
   }
   if(!d || d.error) return;
   var loading=document.getElementById('bk-loading'), wrap=document.getElementById('bk-wrap');
@@ -1717,10 +1722,20 @@ function saveBkSchedule(){
     .then(r=>r.json()).then(function(d){
       if(d.success){
         Object.keys(body).forEach(function(k){ _bkShown[k]=body[k]; });
-        window.toast('Backup schedule saved','success'); loadBackups();
+        window.toast('Backup schedule saved','success'); loadBackups(true);
       }
-      else { window.toast('Could not save schedule','danger'); loadBackups(); }
-    }).catch(function(){ window.toast('Could not save schedule','danger'); loadBackups(); });
+      else { _r32c_sfBkPutBack(body); window.toast('Could not save schedule','danger'); loadBackups(true); }
+    }).catch(function(){ _r32c_sfBkPutBack(body); window.toast('Could not save schedule','danger'); loadBackups(true); });
+}
+
+// A save that did not store: each select it sent goes back to the value last drawn from the server
+// at once, not only when the re-read answers (it may not). _bkShow added an option for that value
+// when it drew it, so the assignment selects it.
+function _r32c_sfBkPutBack(body){
+  Object.keys(body).forEach(function(k){
+    var el=document.getElementById(k==='interval' ? 'bk-interval' : 'bk-keep');
+    if(el && _bkShown[k]!==null) el.value=_bkShown[k];
+  });
 }
 
 function backupNow(force){

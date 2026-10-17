@@ -1,0 +1,6 @@
+{
+  "Removed the rule for {port}, the port of the earlier change that never applied.": "La règle de {port}, le port de la modification précédente qui n'a jamais été appliquée, a été supprimée.",
+  "The rule for {port}, the port of the earlier change that never applied, is still there ({why}).": "La règle de {port}, le port de la modification précédente qui n'a jamais été appliquée, est toujours là ({why}).",
+  "The panel still listens on localhost only: the bind address you saved applies from its next restart. Disabling Serve now would lock you out. Restart the panel first, then disable Serve.": "Le panneau n'écoute encore que sur localhost : l'adresse d'écoute enregistrée s'applique à partir de son prochain redémarrage. Désactiver Serve maintenant vous bloquerait. Redémarrez d'abord le panneau, puis désactivez Serve.",
+  "saved for the next restart:": "enregistré pour le prochain redémarrage :"
+}

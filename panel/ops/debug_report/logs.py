@@ -141,14 +141,17 @@ _SUDO_REFUSED_RE = re.compile(r"a password is required|NOT in sudoers|not allowe
 _CGROUP_KILL_RE = re.compile(r"Failed to kill control group|remains running after unit stopped|"
                              r"Found left-over process")
 _SOURCE_LABEL = {"user-journal": "user journal (journalctl --user)",
-                 "user-unit": "system journal, this account's user unit",
-                 # ONE label for both privileged reads in the file. "read directly" is set exactly
-                 # when the panel runs as root with no helper, so a label of its own told the
-                 # downloadable file the privilege model (posture, _base.py); which of the two it
-                 # was is on the page only (_R31A_PRIV_HOW).
-                 "helper": "system journal (privileged read)",
-                 "root": "system journal (privileged read)"}
-_R31A_PRIV_HOW = {"helper": "via the privileged helper", "root": "read directly"}
+                 # ONE label for every system-journal read in the file. "read directly" is set
+                 # exactly when the panel runs as root with no helper, so a label of its own told
+                 # the downloadable file the privilege model (posture, _base.py). So did "(privileged
+                 # read)" beside install's "Privileged helper installed: no", and the unprivileged
+                 # read's own label by elimination. Which one it was is on the page only
+                 # (_R31A_PRIV_HOW); so is which one was TRIED when none had content (j["how"]).
+                 "user-unit": "system journal",
+                 "helper": "system journal",
+                 "root": "system journal"}
+_R31A_PRIV_HOW = {"helper": "via the privileged helper", "root": "read directly",
+                  "user-unit": "this account's user unit, without sudo"}
 
 
 def _journal(ctx):
@@ -552,7 +555,7 @@ def section_journal_digest(ctx):
     j = _journal(ctx)
     res = Result()
     if not j["lines"]:
-        return res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read"))
+        return _r32a_how_tried(res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read")), j)
     lines, _verbs, _sessions = _split_priv(j["lines"])
     bodies = [_body(ln) for ln in lines]
     if j.get("cut"):
@@ -693,6 +696,13 @@ def _render_kept(lines, chosen):
     return out
 
 
+def _r32a_how_tried(res, j):
+    """`res`, with (page only) which system-journal read was tried when none had content."""
+    if j.get("how") in _R31A_PRIV_HOW:
+        res.posture("- **Journal read tried**: %s" % _R31A_PRIV_HOW[j["how"]])
+    return res
+
+
 def _r31a_source_lines(res, source, tail):
     """The Recent log's Source line, and (page only) which privileged read it was."""
     res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
@@ -708,9 +718,9 @@ def section_recent_log(ctx):
     j = _journal(ctx)
     res = Result()
     if not j["lines"]:
-        return (res.add("- **Source**: none (%s)" % (j["why"] or "no journal read"))
-                .add("```").add("(no journal available)").add("```")
-                .find("unread", "Recent log", "no journal readable"))
+        return _r32a_how_tried(res.add("- **Source**: none (%s)" % (j["why"] or "no journal read"))
+                               .add("```").add("(no journal available)").add("```")
+                               .find("unread", "Recent log", "no journal readable"), j)
     kept, verbs, sessions = _split_priv(j["lines"])
     tail = kept[-TAIL_LINES:]
     scrubbed = privacy.scrub_lines(ctx, tail)

@@ -34,6 +34,7 @@ function loadSshStatus(){
     .then(d=>{
       el.textContent = sshModeLabel(d);
       _r26bSshPortNow(d);
+      _r32bPublicPorts(d);
       // Reflect the CURRENT public-SSH mode on the buttons: the active mode's button is
       // marked active + disabled (you're already in that state — clicking it is a no-op).
       // Other buttons become clickable again, EXCEPT the "off" button when it's disabled
@@ -72,7 +73,18 @@ function loadSshStatus(){
         }
       }
     })
-    .catch(()=>{ el.textContent='unknown'; _r26bSshPortNow(null); });
+    .catch(()=>{ el.textContent='unknown'; _r26bSshPortNow(null); _r32bPublicPorts(null); });
+}
+// The ports the Public SSH card acts on (hosts._r32b_public_ssh_ports: every port sshd serves, and
+// the one the panel dials it on). It said "port 22" whatever sshd served, and so did its actions.
+// Kept for the Disable question, which names them; '' until read, shown as unknown.
+var _r32bSshPorts = '';
+function _r32bPublicPorts(d){
+  var ps=(d && Array.isArray(d.ssh_ports)) ? d.ssh_ports : [];
+  _r32bSshPorts = ps.join(', ');
+  document.querySelectorAll('[data-ssh-public-ports]').forEach(function(sp){
+    sp.textContent = _r32bSshPorts || t('unknown');
+  });
 }
 // The SSH port card, on every host: the row's port is not sshd's. On a Tailscale-SSH host it stays
 // 22 (tailscaled's) after a move, the panel host's row is created with 22 and never read from sshd,
@@ -99,7 +111,7 @@ function sshMode(mode){
   };
   if(mode==='off'){
     confirmDialog({title:'Disable public SSH', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Disable public SSH',
-      bodyText:'Disable PUBLIC SSH (port 22)? SSH will only work over Tailscale after this. Make sure Tailscale SSH works first!',
+      bodyText:tf('Disable PUBLIC SSH (port {ports})? SSH will only work over Tailscale after this. Make sure Tailscale SSH works first!', {ports: _r32bSshPorts || t('unknown')}),
       onConfirm:run});
   } else { run(); }
 }

@@ -22,6 +22,7 @@ from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_client
 from unit.part20 import _patch, _patched
 from unit.part47 import _cut47, _node47
 from unit.part61 import _r15d_arm61
+from panel.ops.ssh_manager import cron as _cron64
 
 # The route blocks below run with part61's transport tripwire armed, and the part ends by reading
 # what it recorded (review 1012a): each stubs only the leaf it names, so a host call on a passing
@@ -126,7 +127,7 @@ try:
     with _patched():
         _r15d_arm61()
         _patch(_app64, "ensure_node_tools_cron", _ntc64)
-        _patch(_app64._sm, "upgrade_managed_cron_tracking", _upg64)
+        _patch(_cron64, "upgrade_managed_cron_tracking", _upg64)
         # The pass asks game_account_write_refusal before each rewrite (review 1012d), a host round
         # trip stood in for here as a plain game account.
         _patch(_sh64, "game_account_write_refusal", lambda *a, **k: None)
@@ -385,7 +386,9 @@ check("firewall: the panel's own port moves (change-port's two closes, the SSH p
       _rsec64.count('remote_ufw_close_port(local, new_port, "tcp", force=True)') == 1
       # The old port's close also reports what it deleted, for the rollback (review 1017a).
       and _rsec64.count('remote_ufw_close_port(local, cur_port, "tcp", force=True, deleted=_gone)') == 1
-      and _rsec64.count("remote_ufw_close_port(") == 2
+      # And the close of the port an earlier move saved but never applied (review 1017c).
+      and _rsec64.count('remote_ufw_close_port(local, stored_port, "tcp", force=True)') == 1
+      and _rsec64.count("remote_ufw_close_port(") == 3
       # The revert's close is _r25b_close_added_ssh_rule's (review 1016b), called with new_port.
       and _hsrc64.count('remote_ufw_close_port(server, port, "tcp", force=True)') == 1
       and _hsrc64.count("_r25b_close_added_ssh_rule(server, new_port, _ufw_added)") == 1)

@@ -33,7 +33,8 @@ from types import SimpleNamespace as NS
 from unit.part01 import check
 from unit.part05 import _helper
 from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_core, _p9_drain, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh, _p9_threading, _p9_trip)
+                         _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh,
+                         _p9_threading, _p9_trip)
 from panel.db.models import (_NO_UPDATE_GAMES, STEAM_CONNECT_GAMES, AuditLog, GameServer, RemoteServer,
                              User, db)
 from panel.ops.debug_report import logs as _logs65
@@ -349,8 +350,8 @@ def _completion_row65(rid, sid):
     _p9_patch(_p9_sd, "threading", _p9_threading(_P9Thread))
     _p9_patch(_p9_sd, "_run_teed",
               lambda *a, **k: ("\x1b[32m[  OK  ]\x1b[0m p65 update complete\x1b[K", "", 0))
-    _p9_patch(_p9_sd._sm, "_invalidate_port_scan", lambda *a, **k: None)
-    _p9_patch(_p9_sd._sm, "invalidate_game_version", lambda *a, **k: None)
+    _p9_patch_sm("_invalidate_port_scan", lambda *a, **k: None)
+    _p9_patch_sm("invalidate_game_version", lambda *a, **k: None)
     with _p9.app_context():
         gs, remote = db.session.get(GameServer, sid), db.session.get(RemoteServer, rid)
         _p9_sd._bg_action(_p9, gs, remote, "update")
@@ -401,8 +402,8 @@ def _cron_json65(client, sid):
     _p9_patch(_p9_sf, "add_cron_job", _cron65.add_cron_job)
     _p9_patch(_p9_sf, "update_cron_job", _cron65.update_cron_job)
     _p9_patch(_p9_sf, "run_cron_job_now", _cron65.run_cron_job_now)
-    _p9_patch(_p9_sf._sm, "delete_cron_job", _cron65.delete_cron_job)
-    _p9_patch(_p9_sf._sm, "list_cron_jobs", lambda *a, **k: [])
+    _p9_patch_sm("delete_cron_job", _cron65.delete_cron_job)
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
     base = "/api/server/%d/cron" % sid
     answers = {}
     for tag, path, body in (("add, a number", "", {"schedule": 5, "command": "restart"}),

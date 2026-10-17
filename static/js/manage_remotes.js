@@ -266,20 +266,32 @@ function tailscaleUp(remoteId) {
       + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener" class="d-inline-block my-1" style="word-break:break-all;">' + escapeHtml(d.url) + '</a>'
       + ' <button class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.url]) + '><i class="bi bi-clipboard"></i></button>'
       + '<br><strong>2.</strong> <span id="ts-wait-' + remoteId + '"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
-    // Poll for connection — with a deadline and a single live timer per host. Its only exit used
-    // to be the remote reporting running:true, so the ordinary path (open the link in another tab
-    // and come back later, close the modal, give up) left it polling for the life of the page, and
-    // each press of the button added another. /api/remote/<id>/tailscale-check is an SSH round
-    // trip to the remote host: measured, three clicks and 13s produced four live intervals and
-    // nine requests.
+    _tsUpWait(remoteId);
+  })
+  .catch(function() { el.innerHTML = '<span class="text-danger">Connection failed starting Tailscale.</span>'; });
+}
+
+// Poll for connection — with a deadline and a single live timer per host. Its only exit used to be
+// the remote reporting running:true, so the ordinary path (open the link in another tab and come
+// back later, close the modal, give up) left it polling for the life of the page, and each press of
+// the button added another. /api/remote/<id>/tailscale-check is an SSH round trip to the remote
+// host: measured, three clicks and 13s produced four live intervals and nine requests.
+// Also the deadline's "Check again": it said "press the button again", but that button runs
+// `tailscale up` once more, and on a machine approved meanwhile it answers "Already connected" and
+// stops there, so the UFW finalize and the switch-to-Tailscale offer below never came. Check again
+// waits on the host again, through this same path.
+function _tsUpWait(remoteId) {
+    var w0 = document.getElementById('ts-wait-' + remoteId);
+    if (w0) w0.innerHTML = '<i class="bi bi-hourglass-split"></i> Waiting for you to authorize…';
     if (_tsUpPolls[remoteId]) clearInterval(_tsUpPolls[remoteId]);
     var _tsDeadline = Date.now() + 5 * 60 * 1000;
     var t = setInterval(function() {
       if (Date.now() > _tsDeadline) {
         clearInterval(t); delete _tsUpPolls[remoteId];
         var wOut = document.getElementById('ts-wait-' + remoteId);
-        if (wOut) wOut.innerHTML = '<span class="text-secondary">Still waiting — press the button '
-          + 'again once you have approved the machine.</span>';
+        if (wOut) wOut.innerHTML = '<span class="text-secondary">Stopped waiting. Once you have approved '  // nosemgrep - literals only
+          + 'the machine:</span> <button type="button" class="btn btn-sm btn-outline-secondary py-0"'
+          + _da('_tsUpWait', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
         return;
       }
       fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-check').then(r => r.json()).then(s => {
@@ -311,8 +323,6 @@ function tailscaleUp(remoteId) {
       }).catch(function(){});
     }, 4000);
     _tsUpPolls[remoteId] = t;   // so the next press replaces this one instead of adding to it
-  })
-  .catch(function() { el.innerHTML = '<span class="text-danger">Connection failed starting Tailscale.</span>'; });
 }
 
 // `btn` is the Install button: disabled while the request runs, and for good once it succeeded. A
@@ -413,7 +423,7 @@ function _migrateToTailscale(remoteId) {
           + '</p>'
           + '<div class="d-flex gap-2 mt-2">'
           + '<button class="btn btn-primary btn-sm"' + _da('refreshRemotesAndClose') + '><i class="bi bi-check-lg"></i> Done</button>'
-          + '<button class="btn btn-danger btn-sm"' + _da('closePort22', [remoteId]) + '><i class="bi bi-shield-lock"></i> Close Port 22 (UFW)</button>'
+          + '<button class="btn btn-danger btn-sm"' + _da('closePort22', [remoteId]) + '><i class="bi bi-shield-lock"></i> Close public SSH (UFW)</button>'
           + '</div>');
       } else {
         setModalBody('<div class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</div>');
@@ -425,12 +435,12 @@ function _migrateToTailscale(remoteId) {
 }
 
 function closePort22(remoteId) {
-  confirmDialog({title:'Close port 22', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close port 22',
-    bodyText:'Remove port 22 from UFW? This disables public SSH access. Only do this if Tailscale SSH is working.',
+  confirmDialog({title:'Close public SSH', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public SSH',
+    bodyText:'Remove the public SSH rules from UFW? This disables public SSH access. Only do this if Tailscale SSH is working.',
     onConfirm:function(){ _closePort22(remoteId); }});
 }
 function _closePort22(remoteId) {
-  setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Removing port 22 rule...</div>');
+  setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Removing the public SSH rules...</div>');
   fetch(MOUNT + '/api/remote/' + remoteId + '/close-port-22', {method: 'POST'})
     .then(r => r.json())
     .then(data => {
@@ -438,7 +448,7 @@ function _closePort22(remoteId) {
         + '<button class="btn btn-primary btn-sm mt-2"' + _da('refreshRemotesAndClose') + '><i class="bi bi-check-lg"></i> Done</button>');
     })
     .catch(function() {
-      setModalBody('<div class="text-danger"><i class="bi bi-x-circle"></i> Failed to close port 22</div>');
+      setModalBody('<div class="text-danger"><i class="bi bi-x-circle"></i> Failed to close public SSH</div>');
     });
 }
 

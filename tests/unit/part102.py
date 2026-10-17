@@ -706,7 +706,10 @@ def _off102(host, auth="key", port=22, local=False, resolves=()):
     _p9_patch(_hosts102, "_tailnet_ssh_state", lambda server: (True, True, True))
     _p9_patch(_hosts102, "_r28b_resolve", lambda name: list(resolves))
     _p9_patch(_hosts102, "remote_public_ssh_status", lambda server, panel_port=None: {"active": True, "mode": "off"})
-    _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: ran.append(verb) or ("", "", 0))
+    # sshd's ports (review 1017c: the card acts on what sshd serves) answer 22, and are no ufw change.
+    _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))
+    _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: ("port 22\n", "", 0)
+              if verb == "sshd-effective-config" else (ran.append(verb) or ("", "", 0)))
     ok, msg = _hosts102.remote_set_public_ssh(NS(id=-10206, name="p102", host=host, port=port, is_local=local,
                                                  auth_method="local" if local else auth), "off")
     return ok, bool(ran), "connects to this host at" in str(msg)
@@ -717,27 +720,29 @@ def _public_off102(client, key_rid):
            "public v6": _off102("2001:db8::7"),
            "name, public": _off102("vps.example.com", resolves=("203.0.113.7",)),
            "name, mixed": _off102("vps.example.com", resolves=("100.64.0.7", "203.0.113.7")),
-           "name, unresolved": _off102("vps.example.invalid")}
+           "name, unresolved": _off102("vps.example.invalid"),
+           # On another port too (review 1017c): "off" now removes every port sshd serves and the
+           # one the panel dials, so the panel's own port is always among them.
+           "other port": _off102("203.0.113.7", port=2222)}
     kept = {"tailnet IP": _off102("100.64.0.7"), "tailnet v6": _off102("fd7a:115c:a1e0::7"),
             "MagicDNS FQDN": _off102("vps.tail1234.ts.net"),
             "name, tailnet": _off102("vps", resolves=("100.101.102.103",)),
             "Tailscale SSH": _off102("203.0.113.7", auth="tailscale"),
-            "other port": _off102("203.0.113.7", port=2222),
             "panel host": _off102("127.0.0.1", local=True)}
-    check("public SSH off: a host the panel itself reaches over public SSH on port 22 (a public "
+    check("public SSH off: a host the panel itself reaches over public SSH, on 22 or another port (a public "
           "address, or a name that resolves to one, or does not resolve) is refused before any rule "
           "is removed — the operator's Tailscale way back passed the gate, and the panel's next "
           "connection was dropped",
           all(v == (False, False, True) for v in cut.values()), repr(cut))
     check("public SSH off: ...while a host the panel reaches over the tailnet (address, MagicDNS name, "
-          "a name resolving there), over Tailscale SSH, on another port, or the panel host itself "
+          "a name resolving there), over Tailscale SSH, or the panel host itself "
           "goes ahead as before (controls)",
           all(v == (True, True, False) for v in kept.values()), repr(kept))
     _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: ("", "", 0))
     _p9_patch(_hosts102, "_r28b_resolve", lambda name: ["203.0.113.8"])
     _p9_patch(_cp102, "_tailnet_ssh_state", lambda server: (True, True, True))
     deleted = []
-    _p9_patch(_hosts102, "_r15c_delete_port_22", lambda server: deleted.append(server.id))
+    _p9_patch(_hosts102, "_r15c_delete_port_22", lambda server, ports=None: deleted.append(server.id))
     d = _p9_json(client.post("/api/remote/%d/close-port-22" % key_rid))
     check("close port 22: ...and the Close Port 22 button refuses the same host the same way, removing "
           "nothing", d.get("success") is False and "connects to this host at" in (d.get("message") or "")

@@ -17,6 +17,7 @@ from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from panel.services import host_reboot as _hr
 from datetime import (timedelta)
+from sqlalchemy.exc import IntegrityError
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
@@ -446,14 +447,9 @@ def _register_invites(app):
         # every server on a host the minter had just lost. /users (grantable_groups) and /groups
         # (grantable_object_ids) both refuse that same grant to that same person; the invite was
         # the one door left open. Both helpers take an explicit user, so ask it about the creator.
-        _groups = _invited_groups(inv)
-        if _groups is not None:
-            if _beyond_creator_reach(_creator, _groups):
-                db.session.rollback()
-                return render_template("invite.html", invalid=True), 404
-            user.groups = _groups
-        db.session.add(user)
-        db.session.flush()
+        refused = _r32a_add_redeemed_user(user, inv, _creator, token)
+        if refused is not None:
+            return refused
         inv.used_by_id = user.id
         db.session.commit()
         log_action(user, "invite_redeemed", target=username,
@@ -614,6 +610,30 @@ def _audit_user_edit(user, _old_username, _pending_audit):
         log_action(current_user, "rename_user", target=_old_username,
                    detail="renamed to '%s'" % user.username)
     log_action(current_user, "edit_user", target=user.username)
+
+
+def _r32a_add_redeemed_user(user, inv, creator, token):
+    """Give the new account the invite's groups and insert it: None, or the refusal to answer.
+
+    The groups are re-validated against the creator's reach (see redeem_invite). The insert can
+    still meet the same username, redeemed from another invite between _invite_form's "taken"
+    check and here: the unique constraint answered a bare 500. The claim rolls back with it, so
+    this invite stays usable for another name.
+    """
+    groups = _invited_groups(inv)
+    if groups is not None:
+        if _beyond_creator_reach(creator, groups):
+            db.session.rollback()
+            return render_template("invite.html", invalid=True), 404
+        user.groups = groups
+    db.session.add(user)
+    try:
+        db.session.flush()
+    except IntegrityError:
+        db.session.rollback()
+        return render_template("invite.html", invalid=False, token=token, invite=inv,
+                               error="That username is taken."), 400
+    return None
 
 
 def _claim_invite(inv):

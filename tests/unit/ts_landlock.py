@@ -55,14 +55,20 @@ NAMES = ("tailscale", "tailscaled")
 # only when they existed at login, and `go install` writes ~/go/bin.
 _HOME_DIRS = ("bin", ".local/bin", "go/bin")
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+# A snap install's real binaries, in every revision kept (canonical/tailscale-snap builds both into the
+# snap's bin/). /snap/bin/tailscale resolves to /usr/bin/snap, the launcher, so blocking only what PATH
+# finds left the CLI itself readable by its own path (review 1017c lead).
+SNAP_BINS = "/snap/tailscale/*/bin"
 
 
-def machine_binaries(path=None, home=None):
+def machine_binaries(path=None, home=None, snap=SNAP_BINS):
     """Every `tailscale`/`tailscaled` file the machine has where a command could find it, resolved."""
+    import glob
     _dirs = (path if path is not None else os.environ.get("PATH", os.defpath)).split(os.pathsep)
     _dirs += DEFAULT_PATH.split(os.pathsep)
     _home = home if home is not None else os.path.expanduser("~")
     _dirs += [os.path.join(_home, _d) for _d in _HOME_DIRS]
+    _dirs += sorted(glob.glob(snap))
     _found = set()
     for _d in _dirs:
         for _n in NAMES:
@@ -507,7 +513,8 @@ def _shapes_1017a(d, ctl):
         ("run", ("echo a\\ #'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,),
          {"shell": True}),
         ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
-        ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {})) + _shapes_1017b(d, ctl)
+        ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {})) + _shapes_1017b(d, ctl) \
+        + _shapes_1017c(d, ctl)
 
 
 def _shapes_1017b(d, ctl):
@@ -535,6 +542,32 @@ def _shapes_1017b(d, ctl):
                 ("run", (["sh", "-c", 'x=`. %s; tailscale version`; echo "$x"' % _src],), {"env": _env}),
                 ("run", (["bash", "-c", "tailscale version"],), {"env": dict(_env, BASH_ENV=_src)})]
     return tuple(_shapes)
+
+
+def _shapes_1017c(d, ctl):
+    """shapes(): the partly quoted builtin, unset-function and --rcfile shapes (review 1017c).
+
+    Each reached the planted "machine's" binary in `d`: a `.`, `source` or `cd` spelled with quotes
+    or a backslash inside the word (still the builtin to the shell), a script on the bash route that
+    unsets the guard's own `tailscale` function, and a nested bash whose -c script builds PATH behind
+    `--rcfile <f>`. POSIX shapes only where /bin/sh runs them (dash has no `source`).
+    """
+    _src = os.path.join(ctl, "r31d-path-%s.sh" % os.path.basename(d))
+    _env, _first = {"PATH": "/usr/bin:/bin"}, {"PATH": d + ":/usr/bin:/bin"}
+    _shapes = [("run", (_x,), {"shell": True, "env": _env}) for _x in (
+        "'.' %s; tailscale version" % _src, '"." %s; tailscale version' % _src, "\\. %s; tailscale version" % _src,
+        "X=1 '.' %s; tailscale version" % _src, "c''d %s && ./tailscale version" % d,
+        '"c"d %s && ./tailscale version' % d, 'P=PA; bash --rcfile /x -c "${P}TH=%s; tailscale version"' % d)]
+    _shapes += [("run", (_x,), {"shell": True, "env": _first}) for _x in (
+        "PATH=$PATH; unset -f tailscale; tailscale version", "PATH=$PATH; unset tailscale; tailscale version")]
+    _shapes += [("run", (["bash", "-c", "so''urce %s; tailscale version" % _src],), {"env": _env}),
+                ("run", (["env", "X=1", "bash", "-c", "unset -f tailscale; tailscale version"],), {"env": _first})]
+    return tuple(_shapes)
+
+
+def shapes_1017c(d, ctl):
+    """The review-1017c shapes alone (each must reach the planted binary unblocked)."""
+    return _with_env(_shapes_1017c(d, ctl))
 
 
 def _kernel_table(ctl):
@@ -605,6 +638,16 @@ def run_shapes(ctl, blocked, late=False):
 def run_mode(mode, ctl):
     """One child run in planted tree `ctl`: "free" (unblocked), "held" or "late" (planted binary blocked)."""
     _planted = [os.path.realpath(os.path.join(ctl, _SYS, "tailscale"))]
+    # The table runs with no reader in front, and one shape (whereis) finds the machine's own binary
+    # whatever PATH says: it runs only where that binary is already blocked (inherited from the
+    # runner), never by hand on a machine with tailscale and no block (review 1017c). A part's stand-in
+    # (the run's temp area, tests/) and the planted tree are not the machine's.
+    import tempfile
+    _ours = tuple(os.path.realpath(_d) + os.sep for _d in (ctl, tempfile.gettempdir(),
+                                                           os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    _open = held([_b for _b in machine_binaries() if not _b.startswith(_ours)])
+    if _open:
+        return "the machine's own %s is not blocked here: refusing to run the shapes" % ", ".join(_open), [], []
     if mode == "free":
         return run_shapes(ctl, [])
     if mode in ("held", "late"):

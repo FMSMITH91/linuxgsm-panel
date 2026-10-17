@@ -731,11 +731,15 @@ def _scheme_line(conf, cfg):
     """'process serves http · routes would point Serve at http ✓'.
 
     The session cookie's Secure flag is not here: it is posture, on the page (config_section).
+    "Would point" is what every in-process Serve write uses (app._serve_scheme_now, from BOOT_TLS),
+    not _ts_backend_scheme of config.json: that is the next start's scheme, and a saved bind or TLS
+    change waiting for its restart (or TLS that failed to start) read as a MISMATCH warning about
+    routes the panel points correctly.
     """
     serves = "https" if conf.get("BOOT_TLS") else "http"
     mod = _app_module()
     try:
-        backend = mod._ts_backend_scheme(cfg) if mod is not None else None
+        backend = mod._serve_scheme_now(cfg, conf) if mod is not None else None
     except Exception:  # noqa: BLE001 - a scheme that cannot be worked out is said to be unknown
         backend = None
     want = "https+insecure" if serves == "https" else "http"

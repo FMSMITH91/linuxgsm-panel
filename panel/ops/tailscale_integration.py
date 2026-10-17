@@ -1021,16 +1021,21 @@ def panel_route(serve_config, port, mount, scheme=None):
     return hits[0] if hits else None
 
 
-def _r13a_taken_on_443(serve_config, port):
-    """The mounts other apps hold on the node's own :443 listener (a Tailscale Service's is not it)."""
+def _r13a_taken_on_443(serve_config, port, also=()):
+    """The mounts other apps hold on the node's own :443 listener (a Tailscale Service's is not it).
+
+    A route to `port`, or to any port in `also` (the panel's other port while a port change waits
+    for its restart, _r13b_panel_ports), is the panel's own and holds nothing.
+    """
+    ports = (port,) + tuple(also)
     return {norm_mount(r.get("mount"))
             for svc in (serve_config or {}).get("services") or []
             if _serve_port_flag(svc.get("url")) == "--https=443" and not svc.get("svc")
             for r in svc.get("routes") or []
-            if not route_targets_port(r.get("target"), port)}
+            if not any(route_targets_port(r.get("target"), p) for p in ports)}
 
 
-def free_panel_mount(serve_config, port, mount):
+def free_panel_mount(serve_config, port, mount, also=()):
     """Where to publish the panel: `mount`, unless ANOTHER app holds it on :443; then /lgsm.
 
     None when both belong to other apps. A mount the panel's own route holds counts as free: that
@@ -1038,7 +1043,7 @@ def free_panel_mount(serve_config, port, mount):
     it. Counting it as taken is how the setup wizard published the panel twice, at "/" and then at
     /lgsm, and left the "/" route behind to answer 502 at the next flip of the panel's scheme.
     """
-    taken = _r13a_taken_on_443(serve_config, port)
+    taken = _r13a_taken_on_443(serve_config, port, also)
     for cand in dict.fromkeys((norm_mount(mount), "/lgsm")):
         if cand not in taken:
             return cand

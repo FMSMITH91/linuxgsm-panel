@@ -30,7 +30,7 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _helper as _helper96, _root
-from unit.part12 import P9_ADMIN, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
 import app as _app96
 from panel.core import config as _cfg96
 from panel.db.models import User as _U96, db as _db96
@@ -40,6 +40,9 @@ from panel.routes import remote_security as _rs96
 from panel.routes import route_helpers as _rh96
 from panel.security import privileged as _priv96
 
+# The armed sections below answer any host call the routes they drive gain with a refusal; the part ends
+# by reading what the tripwire recorded, so such a call fails here rather than read as "unknown" (review 1017c).
+_TRIP96_START = len(_P9_TRIPPED)
 _TMP96 = _tf96.mkdtemp(prefix="p96-")
 _atexit96.register(_shutil96.rmtree, _TMP96, True)
 _ME96 = os.getuid()
@@ -726,7 +729,7 @@ def _public_ssh96(allowed, enabled=False, ufw_allowed=False):
         body = resp.get_data(as_text=True)
     finally:
         _p9_restore_all()
-    i = body.find("Public SSH (port 22 from the internet)")
+    i = body.find("<span>Public SSH from the internet</span>")
     return resp.status_code, body[i:body.find('id="ssh-msg"', i)] if i >= 0 else ""
 
 
@@ -742,3 +745,6 @@ check("System page, Public SSH: ...where it may be enabled, the card offers both
       "Enable Tailscale SSH, or allow the tailscale0 interface" in _pub_yes96[1]
       and "enable Tailscale SSH or allow the tailscale0 interface first" in _pub_yes96[1]
       and "Tailscale SSH keeps working regardless" in _pub_on96[1], repr((_pub_yes96, _pub_on96)))
+
+check("part96: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP96_START, repr(_P9_TRIPPED[_TRIP96_START:][:6]))

@@ -452,7 +452,7 @@ def _transport_word(row, mux):
 
 
 def _host_head(row, det, mux):
-    """'- host 3 · tailscale (…) · port 22 · sudo yes · address MagicDNS name · login root · …'.
+    """'- host 3 · tailscale (…) · port 22 · sudo yes · address MagicDNS name · host key …'.
 
     `det` is the classes per host id, or a fixed string saying why they were not read.
     """
@@ -467,7 +467,9 @@ def _host_head(row, det, mux):
 
 
 def _detail_parts(row, d):
-    parts = ["address %s" % d["addr"], "login %s" % d["login"], "host key %s" % d["hostkey"]]
+    # No "login root / non-root" here: which account the panel logs in as is the privilege model on
+    # that host, so it is page-only (_r32j_login_posture), like every other privilege line.
+    parts = ["address %s" % d["addr"], "host key %s" % d["hostkey"]]
     if d["cred"]:
         parts.append("credential %s" % d["cred"])
     if d["addr"] == "bare name (no dot)" and row["transport"] in ("key", "password"):
@@ -652,8 +654,23 @@ def section_hosts(ctx):
              "peers": _safe(lambda: peers_by_host(ctx, res), "tailscale peers", res)}
     for row in rows:
         res.lines += _host_block(ctx, row, det, mux, extra)
+    _r32j_login_posture(res, rows, det)
     _transport_summary(res, mux, rows)
     return res
+
+
+def _r32j_login_posture(res, rows, det):
+    """Each remote's login class (root / non-root), for the in-panel report page only.
+
+    Owner's rule (2026-10-16): a privilege fact is never in the downloadable file, which is meant to
+    be attached to a public issue; whether the panel logs in to a host as root is one.
+    """
+    if not isinstance(det, dict):
+        return
+    for row in rows:
+        d = det.get(row["id"])
+        if d and row["transport"] != "local":
+            res.posture("- **Host %d login**: %s" % (row["id"], d["login"]))
 
 
 def _transport_summary(res, mux, rows):

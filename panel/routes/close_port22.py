@@ -13,7 +13,7 @@ from panel.routes._shared import (_r20b_audit_on_raise)
 # Word-for-word the refusal remote_set_public_ssh(..., "off") gives, because it is the same
 # change asked for from a different button and a user who sees one and then the other should not
 # have to work out whether they mean the same thing.
-_NO_WAY_BACK = ("Refused — there's no Tailscale way back into this host, so closing port 22 would "
+_NO_WAY_BACK = ("Refused — there's no Tailscale way back into this host, so closing public SSH would "
                 "lock you out. Enable Tailscale SSH, or make sure Tailscale is running and the "
                 "tailscale0 interface is allowed in UFW, first.")
 

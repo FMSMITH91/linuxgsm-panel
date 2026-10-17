@@ -2,6 +2,5 @@
   "File not found": "Fichier introuvable",
   "File is too large to edit in the browser": "Le fichier est trop volumineux pour être modifié dans le navigateur",
   "Binary file — download/replace via upload instead": "Fichier binaire : téléchargez-le ou remplacez-le par un envoi",
-  "The game account can't read this file, so it can't be opened or downloaded here.": "Le compte du jeu ne peut pas lire ce fichier, il ne peut donc pas être ouvert ni téléchargé ici.",
-  "Connections to port 22 meet `{rule}` first — remove or narrow that rule.": "Les connexions au port 22 rencontrent d’abord `{rule}` : supprimez ou restreignez cette règle."
+  "The game account can't read this file, so it can't be opened or downloaded here.": "Le compte du jeu ne peut pas lire ce fichier, il ne peut donc pas être ouvert ni téléchargé ici."
 }

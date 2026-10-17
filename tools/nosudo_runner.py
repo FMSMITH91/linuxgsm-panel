@@ -208,7 +208,7 @@ def _greenify_first():
 
 
 def _install_egress_guard():
-    """Refuse outbound connections to anything but loopback, and record them.
+    """Refuse outbound connections to anything but loopback (and its SSH port), and record them.
 
     smoke_test's own docstring says it "needs no configured install and no network" — this turns
     that from a claim into something enforced. It is not hypothetical: the query-budget fixture
@@ -227,7 +227,13 @@ def _install_egress_guard():
         host = str(addr[0])
         # "0.0.0.0" is a DESTINATION here, not a bind address: connecting to it reaches this
         # host, so it belongs with loopback in the allowlist. B104 is about binding a listener.
-        return host.startswith("127.") or host in ("::1", "localhost", "0.0.0.0", "")  # nosec B104
+        if not (host.startswith("127.") or host in ("::1", "localhost", "0.0.0.0", "")):  # nosec B104
+            return False
+        # ...but not this machine's own SSH port (review 1017c): the suites' "unreachable" fixture
+        # hosts are 127.0.0.1:22, written for a box with nothing listening there, and their SSH
+        # calls log in with the developer's own keys as root. On a box whose sshd takes one, the
+        # unreachable-host sweep and discover/import would run for real, as root, here.
+        return len(addr) < 2 or addr[1] != 22
 
     def connect(self, addr):
         if not _local(addr):

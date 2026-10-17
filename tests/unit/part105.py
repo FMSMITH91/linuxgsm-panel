@@ -434,16 +434,20 @@ def _mint_bound105(client, admin_id):
         db.session.commit()
     at = _live105()
     hdr = {"X-Requested-With": "XMLHttpRequest"}
-    r = client.post("/users/invite", data={"hours": "1", "note": "p105-mint-over"}, headers=hdr)
-    refused = (r.status_code, _p9_json(r), _live105())
-    with _p9.app_context():
-        one = db.session.get(Invite, _mine105["invites"][-1])
-        one.revoked_at = _now105()
-        db.session.commit()
-    r = client.post("/users/invite", data={"hours": "1", "note": "p105-mint-after"}, headers=hdr)
-    after = (r.status_code, (_p9_json(r) or {}).get("success"), _live105())
-    with _p9.app_context():
-        _mine105["invites"] += [i.id for i in Invite.query.filter(Invite.note.like("p105-mint-%")).all()]
+    try:
+        r = client.post("/users/invite", data={"hours": "1", "note": "p105-mint-over"}, headers=hdr)
+        refused = (r.status_code, _p9_json(r), _live105())
+        with _p9.app_context():
+            one = db.session.get(Invite, _mine105["invites"][-1])
+            one.revoked_at = _now105()
+            db.session.commit()
+        r = client.post("/users/invite", data={"hours": "1", "note": "p105-mint-after"}, headers=hdr)
+        after = (r.status_code, (_p9_json(r) or {}).get("success"), _live105())
+    finally:
+        # Collected however the block ends (review 1017c lead): a raise between the two posts left a
+        # live minted invite counted toward a later part's MAX_LIVE.
+        with _p9.app_context():
+            _mine105["invites"] += [i.id for i in Invite.query.filter(Invite.note.like("p105-mint-%")).all()]
     _mint_checks105(at, refused, after)
 
 

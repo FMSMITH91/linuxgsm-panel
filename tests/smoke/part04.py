@@ -1619,7 +1619,8 @@ with app.app_context():
             _rw_ps._reboot_when_empty.update(_rw_saved_reg)
 
 # ── An unreachable host is a normal condition, not a panel fault ──────────────────────────────
-# The fixture hosts point at 127.0.0.1:22 with nothing listening, so every endpoint below has to
+# The fixture hosts point at 127.0.0.1:22 (refused under tools/smoke-local.sh by nosudo_runner's
+# egress guard), so every endpoint below has to
 # reach a host it cannot open a connection to — exactly what happens when a real VPS is powered
 # off, rebooting, or behind a broken link.
 #

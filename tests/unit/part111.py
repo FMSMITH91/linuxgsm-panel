@@ -438,10 +438,12 @@ def _status_stale111():
             (done_log, "", 0) if verb == "os-update-log" else ("", "", _o)))
         st = _hosts111.remote_os_update_status(NS(id=None, is_local=False, host="p111.example.invalid"))
         got[name] = (st.get("done"), st.get("running"), st.get("log"))
+    # An unanswered probe is not "the job has gone" (review 1017c): it read as done, and the popup said
+    # "Updates installed." from the previous run's sentinel (part114 has the whole table).
     check("os update status: a sentinel read while the panel's own job runs is the previous run's — not "
-          "done, no old log; with the job gone it is done (control)",
+          "done, no old log; with the job gone it is done (control); unanswered, it is not done",
           got["starting"] == (False, True, "") and got["finished"][0] is True
-          and got["unread"][0] is True and "old run" in got["finished"][2], repr(got))
+          and got["unread"] == (False, None, "") and "old run" in got["finished"][2], repr(got))
 
 
 # ── LinuxGSM config and file reads: a file that is there and unreadable is not an empty file ────
@@ -607,6 +609,57 @@ def _names_used_up111():
           repr((name2, n2, short, refused)))
 
 
+def _r32d_host_names_used_up111():
+    """_r31b_free_host_name, the CALLER of _next_default_name, with the host holding the one free name.
+
+    Review 1017c (A08): only the helper was driven, so the guard that stops the host-account loop when
+    the default names run out could go and every gate stayed green; without it the loop asked the host
+    about the account None (shlex.quote(None) raised inside the install lock, and the form answered 500).
+    """
+    asked, held = [], {"xserver2"}
+
+    def _state(remote, name):
+        asked.append(name)
+        return "exists" if name in held else "absent"
+
+    with _p9.app_context():
+        r = RemoteServer(name="p111-h", host="p111-h.example.invalid", port=22, username="admin",
+                         auth_method="key", auth_credential="", is_online=True)
+        db.session.add(r)
+        db.session.commit()
+        _mine111["hosts"].append(r.id)
+        # Rows hold xserver and xserver3..xserver100; the host holds the account xserver2.
+        rows = [GameServer(remote_id=r.id, name="p111h%d" % n, short_name="xserver%s" % (n if n > 1 else ""),
+                           game_type="mc", port=31000 + n, installed=True, status="offline")
+                for n in [1] + list(range(3, 101))]
+        db.session.add_all(rows)
+        db.session.commit()
+        _mine111["servers"] += [g.id for g in rows]
+        _p9_patch(_p9_ms, "host_account_state", _state)
+        with _p9.test_request_context("/", headers={"Accept": "application/json"}):
+            out = _p9_ms._r31b_free_host_name(r, ("xserver2", "exists"), "", (r.id, "xserver", 2))
+            answer = out[2][0].get_json() if out[2] else None
+        asked_used_up = list(asked)
+        db.session.delete(rows[-1])                   # xserver100 is free again
+        db.session.commit()
+        _mine111["servers"].remove(rows[-1].id)
+        with _p9.test_request_context("/", headers={"Accept": "application/json"}):
+            freed = _p9_ms._r31b_free_host_name(r, ("xserver2", "exists"), "", (r.id, "xserver", 2))
+    _r32d_host_names_checks111(out, answer, asked_used_up, freed)
+
+
+def _r32d_host_names_checks111(out, answer, asked_used_up, freed):
+    """_r32d_host_names_used_up111's two checks, on what it saw."""
+    check("install: a blank-name install whose one free default name is an account the host already has "
+          "is refused as names used up, and the host is never asked about no name (it was asked about None, "
+          "and the form answered 500)",
+          out[0] is None and out[1] is False and answer is not None and answer.get("success") is False
+          and "Every default name" in (answer.get("message") or "") and None not in asked_used_up,
+          repr((out[:2], answer, asked_used_up)))
+    check("install: ...with a default name free on the host too, it is taken and said to have moved (control)",
+          freed[:2] == ("xserver100", True) and freed[2] is None, repr(freed))
+
+
 def _discord_echo111():
     said = []
     _p9_patch(_dc111, "_dc_reply", lambda tok, ch, text: said.append(text))
@@ -704,6 +757,7 @@ try:
     _gmod_where111()
     _tick_forgotten111()
     _names_used_up111()
+    _r32d_host_names_used_up111()
     _discord_echo111()
     _lock_sweep111()
     _deps_retry111()

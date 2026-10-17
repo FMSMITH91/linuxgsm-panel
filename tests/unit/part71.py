@@ -229,6 +229,8 @@ def _card71(answer):
             # the card's re-poll state and its job line (review 1017a), which loadGmodContent calls
             + src[src.index("var _r30c_gmcRunning"):].split("\n", 1)[0] + "\n"
             + _cut47(src, "function _r30c_gmcRepoll(") + "\n" + _cut47(src, "function _r30c_gmcWorking(") + "\n"
+            # its one pending poll (review 1017c): every scheduled re-read goes through it
+            + "var _r32c_gmcTimer = null;\n" + _cut47(src, "function _r32c_gmcLater(") + "\n"
             + _cut47(src, "function loadGmodContent(") + "\n"
             # absent from a page that has no outcome line: the checks below fail by name, not crash
             + (_cut47(src, "function _gmcOutcome(") if "function _gmcOutcome(" in src else "") + "\n"
