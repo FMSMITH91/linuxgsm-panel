@@ -91,7 +91,8 @@ _out106 = _js106(_name106, (
     "fi.appendChild = o => fi.options.push(o);\n"
     "const fg = document.getElementById('fb-games'); fg.innerHTML = 'before';\n"
     "const field = tag => { const e = new E87(tag); e._in = fg; return e; };\n"), _BK106,
-    ("function _r29c_bkEditing(", "function _r29c_bkSetIdle(", "function _r29c_bkFieldIn(", "function _r25c_bkUnread(",
+    ("function _r29c_bkEditing(", "function _r29c_bkSetIdle(", "var _r29j_bkUntyped", "function _r29c_bkFieldIn(",
+     "function _r25c_bkUnread(",
      "function loadBackups(", "function bkRenderGames(", "function bkRenderFullSchedule(",
      "function _r20cIntervalOption(", "function bkShowEncState(", "function _r29c_bkPassDone(",
      "function saveBackupPassphrase(", "function clearBackupPassphrase(", "function setGameSchedule("), (
@@ -115,11 +116,17 @@ _out106 = _js106(_name106, (
     "  const leave = () => { if (fg._on && fg._on.focusout) fg._on.focusout(); };\n"
     "  fg.innerHTML = 'before'; const box = field('INPUT');\n"
     "  sent = []; await refresh(box); out.rowsFocused = fg.innerHTML;\n"
-    "  document.activeElement = field('SELECT'); leave(); await wait(); await settle();\n"
+    "  document.activeElement = field('TEXTAREA'); leave(); await wait(); await settle();\n"
     "  out.rowsStillIn = [fg.innerHTML, sent.length];\n"
     "  document.activeElement = null; leave(); await wait(); await settle();\n"
     "  out.rowsLeft = [fg.innerHTML, sent.length];\n"
     "  fg.innerHTML = 'before'; await refresh(field('BUTTON')); out.rowsButton = fg.innerHTML;\n"
+    # a committed pick holds nothing back: the interval select, a checkbox (focus stays on them)
+    "  const pick = (tag, type) => { const e = field(tag); if (type) e.type = type; return e; };\n"
+    "  out.rowsPicked = [];\n"
+    "  for (const [tag, type] of [['SELECT'], ['INPUT', 'checkbox'], ['INPUT', 'number'], ['TEXTAREA']]) {\n"
+    "    fg.innerHTML = 'before'; await refresh(pick(tag, type)); out.rowsPicked.push(fg.innerHTML.startsWith('<div') ? 'drawn' : fg.innerHTML); }\n"
+    "  document.activeElement = null; fg._r29cPending = false;\n"
     # a schedule saved: written into the row on the page now, not the element read before the save
     "  const oldKp = new E87('input'); oldKp.value = '6'; oldKp.validity = {}; els['gsk-4'] = oldKp;\n"
     "  const iv = $('gsi-4'); iv.value = '3'; iv.options = [{value: 'default'}, {value: '3'}, {value: '7'}];\n"
@@ -148,6 +155,10 @@ if _out106 is not None:
           and isinstance(_out106.get("rowsLeft"), list) and _out106["rowsLeft"][1] == 2
           and _out106["rowsLeft"][0].startswith("<div") and _out106.get("rowsButton", "").startswith("<div"),
           repr(_out106))
+    check("Backups card: a focused per-server interval select or checkbox holds no refresh back (its pick "
+          "is already sent, and Chrome keeps focus on it: every refresh after Back up now froze until "
+          "something else was tapped); a number box or textarea still does",
+          _out106.get("rowsPicked") == ["drawn", "drawn", "before", "before"], repr(_out106))
     check("Backups card: a saved per-server schedule is written into the row now on the page (looked up "
           "by id), so a row redrawn meanwhile from an older read shows what was stored",
           _out106.get("saved") == ["6", "3"], repr(_out106))

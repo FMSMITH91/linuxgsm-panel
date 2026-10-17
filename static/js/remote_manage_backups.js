@@ -38,12 +38,17 @@ function _r29c_bkSetIdle(id, v){
   var el=document.getElementById(id);
   if(el && !_r29c_bkEditing(el)) el.value=String(v);
 }
-// The field being typed in inside `box`, or null. Fields only: a "Back up now" or Delete button
+// The field being typed in inside `box`, or null. Typed fields only: a "Back up now" or Delete button
 // inside the rows keeps focus after its click (Chrome), and holding the refresh back for that would
-// freeze the very progress the click started.
+// freeze the very progress the click started. A <select> (the per-server interval) is the same case:
+// its pick is sent on `change` at once and written back by id (setGameSchedule), and Chrome keeps
+// focus on it, so counting it froze every refresh after "Back up now" until something else was
+// tapped. A checkbox or radio commits on its click too.
+var _r29j_bkUntyped = /^(button|submit|reset|checkbox|radio|file|range|color|image|hidden)$/;
 function _r29c_bkFieldIn(box){
-  var a=document.activeElement;
-  return (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName || '') && box.contains(a)) ? a : null;
+  var a=document.activeElement, tag=(a && a.tagName) || '';
+  var typed = tag === 'TEXTAREA' || (tag === 'INPUT' && !_r29j_bkUntyped.test(String(a.type || 'text').toLowerCase()));
+  return (typed && box.contains(a)) ? a : null;
 }
 // A reply that is not a listing: none at all, or an error body (`error`, on every one since #435).
 function _r25c_bkUnread(d){ return !d || !!d.error; }
