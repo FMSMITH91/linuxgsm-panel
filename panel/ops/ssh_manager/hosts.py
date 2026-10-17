@@ -4498,10 +4498,14 @@ def remote_public_ssh_status(server, panel_port=None):
 
 
 def _r31a_port_list(panel_port):
-    """remote_public_ssh_status's `panel_port` as a tuple of ports: () for none."""
+    """remote_public_ssh_status's `panel_port` as a list of ports: [] for none.
+
+    A list whichever shape it came in, so every return is one type (CodeQL py/mixed-tuple-returns
+    read the one- and zero-element tuples as two).
+    """
     if isinstance(panel_port, (list, tuple)):
-        return tuple(p for p in panel_port if p)
-    return (panel_port,) if panel_port else ()
+        return [p for p in panel_port if p]
+    return [panel_port] if panel_port else []
 
 
 def _r31a_holds_any_open(line, ports):
