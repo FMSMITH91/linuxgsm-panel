@@ -4172,8 +4172,19 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    dropping the brute-force brake, whether the move succeeded or not.
     #    Decided by the firewall's rules, never by what listens (see _open_ssh_port_rule): only the
     #    port the panel's own connection uses right now is left as it is.
-    _ufw_added, _ufw_refused = _open_ssh_port_rule(
-        server, new_port, [str(int(getattr(server, "port", 22) or 22))] if _r26b_dials_after_bind(server) else [])
+    #
+    #    ...and a BIND change on a port sshd already serves opens nothing on any row. It narrows
+    #    who reaches that port; it never needs the firewall to let in more than it does today. On
+    #    the panel host and a Tailscale-SSH row (no stored port in the way-in list) with public SSH
+    #    turned "off" — only `on tailscale0` left, no public 22 rule — binding 22 to an address
+    #    added `allow 22/tcp`, which stayed after the move worked: public SSH silently back on, the
+    #    card reading "on", and nothing in the message saying so (review 1016e, adversarial F1).
+    #    A move ONTO the port is a request to reach SSH there and is still decided by the rules
+    #    (the move back to 22 after 22/tcp was closed must open it).
+    _way_in = [str(int(getattr(server, "port", 22) or 22))] if _r26b_dials_after_bind(server) else []
+    if bind_addr and str(new_port) in served:
+        _way_in = _way_in + [str(new_port)]
+    _ufw_added, _ufw_refused = _open_ssh_port_rule(server, new_port, _way_in)
     if _ufw_refused:
         return False, _ufw_refused
 

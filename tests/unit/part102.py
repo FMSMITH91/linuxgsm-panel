@@ -322,7 +322,8 @@ def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
     An open adds its rule to `ufw_rules` (a later status read lists it) unless `opens` is False:
     ufw answered 0 and the rule is not there. The drop-in written is kept in _DROPIN102 and the ports
     closed again (the revert at the stop, or a refused open) in _CLOSED102. `opt`: socket_mode (True),
-    auth ("key"), bind (""), opens (True), listening (`ss` showing 2222).
+    auth ("key"), bind (""), opens (True), listening (`ss` showing 2222), local (False: the panel host).
+    A bind address is one of the host's own (`ip -o addr show` lists it).
     """
     socket_mode, opens = opt.get("socket_mode", True), opt.get("opens", True)
     listening = opt.get("listening", "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:*\n")
@@ -346,6 +347,8 @@ def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
     def _cmd(server, cmd, **k):
         if "systemctl show ssh.socket" in cmd:
             return socket_show
+        if "ip -o addr show" in cmd and opt.get("bind"):
+            return "2: eth0    inet %s/24 brd + scope global eth0\n" % opt["bind"], "", 0
         return "", "p102: unexpected command", 1
     _p9_patch(_p9_core, "run_privileged", _priv)
     _p9_patch(_p9_core, "run_command", _cmd)
@@ -363,7 +366,8 @@ def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
     _p9_patch(_hosts102, "remote_ufw_close_port",
               lambda server, port, proto=None, force=False: _CLOSED102.append(int(port)) or (True, ""))
     _ok, msg = _hosts102.change_ssh_port(NS(id=-10203, name="p102", host="p102.example.invalid", port=stored,
-                                           is_local=False, auth_method=opt.get("auth", "key")), new_port,
+                                           is_local=opt.get("local", False), auth_method=opt.get("auth", "key")),
+                                        new_port,
                                         opt.get("bind", ""))
     refused = (str(msg) if "blocked by the firewall rule" in str(msg) or "did not show port" in str(msg)
                else None)
@@ -466,6 +470,36 @@ def _ufw_reread102():
     check("ssh port: the port the panel's own key/password connection uses is not opened again; a "
           "Tailscale-SSH row's sshd port is decided by the rules (controls)",
           keep[0] == [] and ts[0] == [22], repr((keep, ts)))
+    _bind_only102()
+
+
+def _bind_only102():
+    # Public SSH "off" on a Tailscale-SSH row and on the panel host: only `on tailscale0` lets SSH in,
+    # no public 22 rule. A bind change on 22 (sshd serves it) must add no allow; a move onto 22 that
+    # sshd does not serve yet is still decided by the rules (control, the VPS sequence's direction).
+    from panel.ops import system_ops as _so102
+    _p9_patch(_so102, "host_has_ip", lambda addr: True)
+    off = [_TJ102 % ("Anywhere on tailscale0", "ALLOW IN", "Anywhere"),
+           _TJ102 % ("Anywhere (v6) on tailscale0", "ALLOW IN", "Anywhere (v6)")]
+    sock_22 = ("ActiveState=active\nListen=0.0.0.0:22 (Stream)\nListen=[::]:22 (Stream)\n", "", 0)
+    got = {
+        "ts sshd_config": _move102(("", "", 1), off, new_port=22, stored=22, auth="tailscale", bind="192.0.2.10",
+                                   socket_mode=False),
+        "ts socket": _move102(sock_22, off, new_port=22, stored=22, auth="tailscale", bind="192.0.2.10"),
+        "local sshd_config": _move102(("", "", 1), off, new_port=22, stored=22, auth="local", local=True,
+                                      bind="192.0.2.10", socket_mode=False),
+        "local socket": _move102(sock_22, off, new_port=22, stored=22, auth="local", local=True,
+                                 bind="192.0.2.10"),
+        "ts move onto 2222": _move102(sock_22, off, new_port=2222, stored=22, auth="tailscale",
+                                      listening="LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\n"),
+    }
+    check("ssh port: with public SSH off (only tailscale0 allowed), a bind change on the port sshd already "
+          "serves adds no firewall rule on a Tailscale-SSH row or the panel host, socket-activated or not "
+          "(it added `allow 22/tcp` and left public SSH back on, adversarial F1); a move onto a port sshd "
+          "does not serve still opens it (control)",
+          all(got[k][0] == [] and got[k][2] is None for k in ("ts sshd_config", "ts socket", "local sshd_config",
+                                                              "local socket"))
+          and got["ts move onto 2222"][0] == [2222], repr(got))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
