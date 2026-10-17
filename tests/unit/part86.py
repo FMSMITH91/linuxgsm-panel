@@ -408,21 +408,24 @@ def _v6_86():
           "LIMIT in both, or no v6 rule at all, is still limited (controls)",
           got == {"v6 allow above": "allow", "v6 only allow": "allow", "both limit": "limit",
                   "no v6 rule": "limit"}, repr(got))
+
+    def _ufw_listing86(rows, opened):
+        # Each case gets its own listing (a factory, not a list default argument).
+        def _run86(*a, **kw):
+            # The IPv4-only allow lands in the listing, as ufw's does: step 1 re-reads it.
+            if a[1] == "ufw-allow-from-port":
+                opened.append(a[1])
+                rows.insert(0, _ALLOW_ROW83 % ("%s/%s" % (a[2][1], a[2][2])))
+            return _UFW_HEAD86 + "".join(r + "\n" for r in rows), "", 0
+        return _run86
+
     opened = []
     _p9_patch(_hosts86, "remote_ufw_open_port", lambda *a, **k: opened.append(a[1]) or (True, ""))
     res = {}
     for k, rows in (("v6 deny", (_ALLOW_ROW83 % "2286/tcp", _V6ROW86 % ("2286/tcp (v6)", "DENY IN"))),
                     ("v4 allow only", (_ALLOW_ROW83 % "2286/tcp",)),
                     ("v6 allow only", (_V6ROW86 % ("2286/tcp (v6)", "ALLOW IN"),))):
-        rows = list(rows)
-
-        def _run86(*a, _rows=rows, **kw):
-            # The IPv4-only allow lands in the listing, as ufw's does: step 1 re-reads it.
-            if a[1] == "ufw-allow-from-port":
-                opened.append(a[1])
-                _rows.insert(0, _ALLOW_ROW83 % ("%s/%s" % (a[2][1], a[2][2])))
-            return _UFW_HEAD86 + "".join(r + "\n" for r in _rows), "", 0
-        _p9_patch(_p9_core, "run_privileged", _run86)
+        _p9_patch(_p9_core, "run_privileged", _ufw_listing86(list(rows), opened))
         del opened[:]
         _added, refusal = _hosts86._open_ssh_port_rule(NS(id=-86, name="p86"), 2286, ["22"])
         res[k] = (bool(refusal), list(opened))
