@@ -1080,7 +1080,7 @@ finally:
 # remote_ufw_close_port_22 checks nothing either; "safe if Tailscale SSH is active" is its
 # docstring, not a guard.
 import panel.routes.close_port22 as _cpmod
-_cp_saved = (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22)
+_cp_saved = (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22, _cpmod._r28b_panel_way_in_refusal)
 _cp_closed = []
 try:
     _cpmod.remote_ufw_close_port_22 = lambda r: (_cp_closed.append(getattr(r, "id", "?")),
@@ -1105,6 +1105,9 @@ try:
     # The control: a host that really can be reached over the tailnet still closes, so the two
     # checks above cannot be passing on a route that refuses everything.
     _cpmod._tailnet_ssh_state = lambda r: (True, True, False)
+    # ...one the panel reaches over the tailnet, too (review 1016e refuses a host the panel itself
+    # reaches on public port 22; unit part102 covers that side).
+    _cpmod._r28b_panel_way_in_refusal = lambda r: None
     _cpj3 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
     check("close port 22: a host with Tailscale SSH working still closes (positive control)",
           _cpj3.get("success") is True and _cp_closed == [remote_id],
@@ -1118,7 +1121,7 @@ try:
           _cpj4.get("success") is True and _cp_closed == [remote_id],
           "answered %s and called ufw for %s" % (str(_cpj4)[:120], _cp_closed))
 finally:
-    (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22) = _cp_saved
+    (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22, _cpmod._r28b_panel_way_in_refusal) = _cp_saved
 
 # ── deleting a UFW rule by number, which nothing entered either ───────────────────────────
 # The route hands `num` to a helper whose whole job is refusing a delete that would lock the

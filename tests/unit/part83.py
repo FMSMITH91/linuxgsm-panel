@@ -200,7 +200,9 @@ def _ssh_move83():
     def opened(*rows):
         ufw, asked = _Ufw83(*rows), []
         _p9_patch(_p9_core, "run_privileged", ufw.run)
-        _p9_patch(_hosts83, "remote_ufw_open_port", lambda s, p, proto, comment="": asked.append(p) or (True, ""))
+        # The allow lands in the listing, as ufw's does: step 1 re-reads it to confirm the open.
+        _p9_patch(_hosts83, "remote_ufw_open_port", lambda s, p, proto, comment="": asked.append(p) or ufw.rows.append(
+            _ALLOW_ROW83 % ("%s/%s" % (p, proto))) or (True, ""))
         res = _hosts83._open_ssh_port_rule(NS(id=-83, name="p83"), 2222, ["22"])
         return res, asked
     got = {

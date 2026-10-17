@@ -864,7 +864,7 @@ try:
         # gmod: host-wide content needs the host, for anyone who is not a superadmin
         _sf17_access = []
         _sf17.can_access_remote = lambda user, rid: (_sf17_access.append(rid), user.host)[1]
-        _sf17.detect_content_user = lambda remote, games: {"user": "gmc", "present": {"cstrike": 1}}
+        _sf17.detect_content_user = lambda remote, games, **k: {"user": "gmc", "present": {"cstrike": 1}}
         _sf17.current_user = _sf17NS(is_superadmin=False, host=False)
         _sf17_r = _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "uninstall", ["cstrike"])
         eq("gmod content: a server-only admin may not uninstall host-wide content",
@@ -881,7 +881,7 @@ try:
                "admin to install it, then mount it here.")}))
         eq("gmod content: ...while mounting what the host already has stays theirs",
            _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]), None)
-        _sf17.detect_content_user = lambda remote, games: None
+        _sf17.detect_content_user = lambda remote, games, **k: None
         eq("gmod content: ...and an unreadable content account counts as nothing present",
            _sf17_out(_sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]))[0], 403)
         _sf17.current_user = _sf17NS(is_superadmin=False, host=True)

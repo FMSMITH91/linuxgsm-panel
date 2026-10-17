@@ -1602,6 +1602,9 @@ def _ufw_says(mode, tailscale_iface=False):
     _sm_core.run_privileged = _rp
 
 
+# A key host the panel reaches at its TAILNET address: "off" never cuts the panel's own connection
+# (review 1016e refuses a host it reaches on public port 22; part102 covers that side).
+_TS_HOST02 = NS(id=-2, name="p02", host="100.64.0.9", port=22, auth_method="key", is_local=False)
 try:
     def _rc_no_tailnet(server, cmd, **kw):
         if "status --json" in cmd:
@@ -1609,7 +1612,7 @@ try:
         return ("", "", 0)
     _sm_core.run_command = _rc_no_tailnet
     _ufw_says("off")
-    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "off")
     check("ssh off REFUSED when no Tailscale path (anti-lockout)",
           _ok is False and "lock you out" in _msg.lower(), str(_msg))
 
@@ -1622,7 +1625,7 @@ try:
     _sm_core.run_command = _rc_ts_ssh
     _ufw_says("off")
     check("ssh off ALLOWED when Tailscale SSH enabled",
-          _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+          _sm_hosts.remote_set_public_ssh(_TS_HOST02, "off")[0] is True)
 
     def _rc_iface(server, cmd, **kw):
         if "status --json" in cmd:
@@ -1637,7 +1640,7 @@ try:
     _sm_core.run_command = _rc_iface
     _ufw_says("off", tailscale_iface=True)
     check("ssh off ALLOWED when tailscale0 allowed in UFW",
-          _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+          _sm_hosts.remote_set_public_ssh(_TS_HOST02, "off")[0] is True)
 
     # ── the tailscale0 rule is READ as a rule, not found as a word ───────────────────────────
     # _tailnet_ssh_state matched "tailscale" anywhere in `ufw status verbose`, so each row below
@@ -1668,7 +1671,7 @@ try:
                 return (_TSIF_HDR + _rows, "", 0)
             return ("", "", 0)
         _sm_core.run_privileged = _tsif_rp
-        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "off")
         check("ssh off REFUSED with %s and Tailscale SSH off (tailnet lockout)" % _tsif_name,
               _ok is False and "lock you out" in _msg.lower()
               and not [v for v in _tsif_sent if v.startswith("ufw-delete")], "%s %r" % (_msg, _tsif_sent))
@@ -1707,21 +1710,21 @@ try:
     _sm_core.run_command = lambda *a, **k: ("", "", 0)
     _ufw_says("allow")
     check("ssh allow is never lockout-guarded",
-          _sm_hosts.remote_set_public_ssh(object(), "allow")[0] is True)
+          _sm_hosts.remote_set_public_ssh(_TS_HOST02, "allow")[0] is True)
     _ufw_says("limit")
     check("ssh limit is never lockout-guarded",
-          _sm_hosts.remote_set_public_ssh(object(), "limit")[0] is True)
+          _sm_hosts.remote_set_public_ssh(_TS_HOST02, "limit")[0] is True)
 
     # A host with no ufw: every verb fails and the firewall reports nothing. This used to answer
     # (True, "Public SSH is now rate-limited").
     _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "ufw: command not found", 127)
-    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "limit")
     check("ssh mode: a host with no active UFW is refused, not reported as hardened",
           _ok is False and "not active" in _msg.lower(), str(_msg))
 
     # ...and a host where UFW is up but the rule did not take.
     _ufw_says("allow")
-    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "limit")
     check("ssh mode: a rule that did not take is reported as the failure it is",
           _ok is False and "still reports" in _msg.lower(), str(_msg))
 
@@ -1734,7 +1737,7 @@ try:
     _st = _sm_hosts.remote_public_ssh_status(object())
     check("public ssh: an unreadable firewall is 'unknown', never 'off'",
           _st.get("unreachable") is True and _st.get("mode") != "off", str(_st))
-    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "limit")
     check("public ssh: ...and setting it then says the state is unknown, not 'UFW is not active'",
           _ok is False and "unknown" in _msg.lower(), str(_msg))
     # ufw ABSENT is a reading, not a failed read — it keeps its own answer, and it is still not
@@ -1812,13 +1815,13 @@ try:
     for _start in (["OpenSSH"], ["22"]):
         _rules = [(_t, "ALLOW") for _t in _start]
         _fake_ufw(_rules)
-        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "limit")
         check("public ssh: 'limit' on a host opened with `ufw allow %s` is really limited" % _start[0],
               _ok is True and _rules and _rules[0] == ("22/tcp", "LIMIT"),
               "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
     _rules = [("22/tcp", "ALLOW")]
     _fake_ufw(_rules)
-    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, "limit")
     check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
           _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
     # ...and the new rule is the GATE for those deletes. The loop ignored every exit code, so when
@@ -1832,7 +1835,7 @@ try:
         _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, _add=_add_g, **k:
                                    ("", "ERROR: Could not acquire lock", 1) if v == _add
                                    else _i(s, v, a, **k))
-        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), _mode_g)
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(_TS_HOST02, _mode_g)
         check("public ssh: '%s' whose new 22/tcp rule fails removes no rule that lets SSH in" % _mode_g,
               _ok is False and _rules == _start_g and "Could not acquire lock" in _msg,
               "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))

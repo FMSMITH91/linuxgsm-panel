@@ -809,7 +809,7 @@
     </div>
     <div class="row g-3 mt-1">
       <div class="col-md-8">
-        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code>{{ remote.port }}</code></span></div>
+        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port once you've confirmed the new one.
           <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Open the Firewall page</a></p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
@@ -871,7 +871,7 @@
     </div>
     <div class="row g-3 mt-1">
       <div class="col-12">
-        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: {% if remote.auth_method == 'tailscale' %}<code id="ssh-port-now" data-live="1">…</code>{% else %}<code>{{ remote.port }}</code>{% endif %}</span></div>
+        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         {% if remote.auth_method == 'tailscale' %}<p class="small text-secondary mb-1">The panel itself connects over Tailscale SSH on port 22, whatever port sshd uses.</p>{% endif %}
         <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port once you've confirmed the new one.
           <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Open the Firewall page</a></p>

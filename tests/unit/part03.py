@@ -467,8 +467,10 @@ check("runtime-path: ...and a file named on neither side counts as one a host ru
 
 # ── no committed file names the owner's real infrastructure ─────────────────────────────────────
 # Fixtures once carried the live host's name, its tailnet name, the test VPS's name and addresses
-# (review 1016c). They were replaced with synthetic values of the same shape (node.taile00000.ts.net,
-# 100.64.0.10, 203.0.113.x); this keeps them from coming back.
+# (review 1016c), and a journal line kept the tailnet address of the device that connected to the
+# test VPS (review 1016e), and a public address taken from a live debug report into the redactor's
+# fixtures (#393; now a public resolver's). They were replaced with synthetic values of the same shape
+# (node.taile00000.ts.net, 100.64.0.10, 203.0.113.x); this keeps them from coming back.
 #
 # HOW THEY ARE STORED, so the gate does not publish them itself. Each value is one entry: a random
 # salt of its own, a 14-bit tag (salted SHA-256) and PBKDF2-HMAC-SHA256 at 600000 rounds, with no
@@ -491,10 +493,16 @@ _R26D_FORBIDDEN = (
      "be3db78240b7a0e6bdc7327096d62b9b7e1ec4eded924cfc99ea1bb218aaa5a8"),
     ("474878c9ccd7feef8c0ee502f30e4923", 3993,
      "f7f17b0c729f5c3a1ec852c565251f8ce1be07aaa350e3eebb8631fae839968a"),
+    ("4ccae02dce3602914a571ce2483b3019", 7288,
+     "8d439a8371f35685bc553357ea52bd29014d529535aca1ae0f9f4cb4aef33229"),
     ("6215853ec779fd83f1d0757d46895d9b", 11269,
      "b5def33f1f041f3a49c0857b5616c01a2caa60bf1480f745d427bcc38bc8ed95"),
+    ("6541bcbc68a5fa044ed9fd7c9d185588", 3424,
+     "b36d0a19dbdf491db06c251f016c8fff786ed67310236a9aa1509dc8c8fcf43c"),
     ("6c8c0cab85e2c4c3bcfe5607a6515a9a", 747,
      "bb10def418d1e9a4d455837d65b061e1867d475741dcfec911a8b0a3b2a0b627"),
+    ("79b5112feb3441c1514aac6c63b500ce", 3659,
+     "44259630bbb13c08702ae99811a8762ceef60ac95c123a42b7b6a394ff390eda"),
     ("a317806187aca28fc0b14a4d5bb4fefe", 14120,
      "47e4238a0bbdfb6376229c039272efc7b8a8cae4bf29a48d6f267b07414047e3"),
 )
@@ -583,7 +591,7 @@ with open(os.path.join(_root, "tests", "unit", "part03.py"), encoding="utf-8") a
 check("privacy: a candidate sharing only an entry's tag is no hit, and every forbidden value is stored "
       "under its own 16-byte salt at >= 600000 PBKDF2 rounds, with no label naming it",
       not _r26d_hits("100.64.0.101", _r26d_tagonly) and _R26D_ROUNDS >= 600000
-      and len(_R26D_FORBIDDEN) == 5 and len({_e[0] for _e in _R26D_FORBIDDEN}) == 5
+      and len(_R26D_FORBIDDEN) == 8 and len({_e[0] for _e in _R26D_FORBIDDEN}) == 8
       and all(len(bytes.fromhex(_e[0])) == 16 and len(_e[2]) == 64 for _e in _R26D_FORBIDDEN)
       and _r26d_block is not None and "#" not in _r26d_block.group(1),
       repr((_R26D_ROUNDS, len(_R26D_FORBIDDEN), _r26d_block is not None)))
@@ -2726,14 +2734,14 @@ from panel.ops.tailscale_integration import TailscaleInfo   # noqa: E402
 _orig_gti = _tsi.get_tailscale_info
 try:
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
-        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.64.0.12"],
         dns_name="host.example.ts.net", serve_config={"services": [], "raw": "No serve config"})
     _tsi._cache["info"] = None
     _bns = _tsi.suggest_best_bind(5000)
     check("tailscale: up + DNS name but Serve NOT set up -> does NOT bind loopback",
           _bns["bind_host"] != "127.0.0.1")
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
-        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.64.0.12"],
         dns_name="host.example.ts.net",
         serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
             {"mount": "/lgsm", "target": "http://127.0.0.1:5000"}]}], "raw": "x"})
@@ -2748,7 +2756,7 @@ try:
     # takes this answer — to 127.0.0.1 with nothing proxying to it: the first-run wizard, the only
     # way to create the first admin, was unreachable except through an SSH tunnel.
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
-        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.64.0.12"],
         dns_name="host.example.ts.net",
         serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
             {"mount": "/", "target": "http://127.0.0.1:3000"}]}], "raw": "x"})
@@ -2759,13 +2767,13 @@ try:
     # The direct URLs were hardcoded http:// while the panel serves self-signed TLS by default, so
     # the page linked the operator to plain HTTP on a port that only speaks TLS.
     eq("tailscale: the direct URL uses the scheme the panel is actually serving",
-       _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.90.141.12:5000")
+       _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.64.0.12:5000")
     eq("tailscale: ...and http only when the panel serves http (control)",
-       _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.90.141.12:5000")
+       _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.64.0.12:5000")
     # The URL above names the tailnet IP whatever bind_host says, so it cannot catch a suggestion
     # that tells the panel to bind to every interface instead of that one address.
     eq("tailscale: the tailnet-direct answer binds to the node's own Tailscale IP",
-       _tsi.suggest_best_bind(5000)["bind_host"], "100.90.141.12")
+       _tsi.suggest_best_bind(5000)["bind_host"], "100.64.0.12")
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
@@ -3121,6 +3129,9 @@ _so_workers = []
 _so_threads = NS(Thread=lambda target=None, daemon=None: NS(
     start=lambda: _so_workers.append(target.__name__)))
 SO._SUDO_PROBE.update(at=0.0, ok=None)
+# The runner pins the cache before each part; restored to that value below, not to None ("unread"),
+# which had the rest of this part ask the machine's real helper (review 1016e).
+_r28d_helper03 = SO._HELPER_STATE["present"]
 SO._HELPER_STATE["present"] = True
 with _so_stub(threading=_so_threads,
               _run=lambda c, **k: (_so_calls.append(c), ("NOPASS", "", 0))[1],
@@ -3153,7 +3164,7 @@ with _so_stub(threading=_so_threads, _run=lambda c, **k: ("NOPASS", "", 0),
           SO.os_run_update()[0] is False and SO.server_reboot()[0] is False)
 check("system_ops: ...and neither refusal started a worker",
       _so_workers[_so_workers_before:] == [], repr(_so_workers[_so_workers_before:]))
-SO._HELPER_STATE["present"] = None
+SO._HELPER_STATE["present"] = _r28d_helper03
 
 # 14. Both background workers threw the privileged verb's (out, err, rc) away. _run_verb NEVER
 #     raises — it turns a refusal into a non-zero rc (a general sudoers.d rule sorting after the
@@ -3208,7 +3219,7 @@ try:
               str((_rb_calls, _rb_errs)))
 finally:
     SO._log.error = _rb_saved_log
-    SO._HELPER_STATE["present"] = None
+    SO._HELPER_STATE["present"] = _r28d_helper03
 
 # 4. Tailscale on Linux is USERSPACE WireGuard over a TUN, so `ip link show type wireguard` can
 #    never list tailscale0 — the first detection method matched any name containing "wg" and could

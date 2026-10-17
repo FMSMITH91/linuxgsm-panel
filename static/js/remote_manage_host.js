@@ -74,8 +74,10 @@ function loadSshStatus(){
     })
     .catch(()=>{ el.textContent='unknown'; _r26bSshPortNow(null); });
 }
-// The SSH port card on a host the panel reaches over Tailscale SSH: the row's port is 22 there
-// (tailscaled's), so the server render cannot say what sshd listens on — ssh-status reads it.
+// The SSH port card, on every host: the row's port is not sshd's. On a Tailscale-SSH host it stays
+// 22 (tailscaled's) after a move, the panel host's row is created with 22 and never read from sshd,
+// and on any host the server-rendered number went stale after a move until a reload. ssh-status
+// reads sshd's own ports; [] or no answer is "unknown", never the row's port.
 function _r26bSshPortNow(d){
   var pn=document.getElementById('ssh-port-now');
   if(!pn || !pn.hasAttribute('data-live')) return;
@@ -208,7 +210,7 @@ function changeSshPort(){
           busy(false);
           if(m) m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message||''):(d.message||''))+'</span>';  // nosemgrep
           if(window.toast) toast(d.message||(d.success?'SSH port changed':'Failed'), d.success?'success':'danger');
-          if(d.success) loadSshStatus();   // the card's live port (a Tailscale-SSH host) moved too
+          if(d.success) loadSshStatus();   // the card's live port moved too
         })
         .catch(function(){ busy(false); if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
     }});

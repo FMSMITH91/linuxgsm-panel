@@ -414,9 +414,15 @@ def _v6_86():
     for k, rows in (("v6 deny", (_ALLOW_ROW83 % "2286/tcp", _V6ROW86 % ("2286/tcp (v6)", "DENY IN"))),
                     ("v4 allow only", (_ALLOW_ROW83 % "2286/tcp",)),
                     ("v6 allow only", (_V6ROW86 % ("2286/tcp (v6)", "ALLOW IN"),))):
-        out = _UFW_HEAD86 + "".join(r + "\n" for r in rows)
-        _p9_patch(_p9_core, "run_privileged", lambda *a, _o=out, **kw: (
-            opened.append(a[1]) if a[1] == "ufw-allow-from-port" else None, (_o, "", 0))[1])
+        rows = list(rows)
+
+        def _run86(*a, _rows=rows, **kw):
+            # The IPv4-only allow lands in the listing, as ufw's does: step 1 re-reads it.
+            if a[1] == "ufw-allow-from-port":
+                opened.append(a[1])
+                _rows.insert(0, _ALLOW_ROW83 % ("%s/%s" % (a[2][1], a[2][2])))
+            return _UFW_HEAD86 + "".join(r + "\n" for r in _rows), "", 0
+        _p9_patch(_p9_core, "run_privileged", _run86)
         del opened[:]
         _added, refusal = _hosts86._open_ssh_port_rule(NS(id=-86, name="p86"), 2286, ["22"])
         res[k] = (bool(refusal), list(opened))
@@ -453,7 +459,8 @@ def _named_rule86():
     out = _UFW_HEAD86 + _ALLOW_ROW83 % "22,80/tcp" + "\n"
     _p9_patch(_p9_core, "run_privileged", lambda *a, **k: (out, "", 0))
     _p9_patch(_hosts86, "_tailnet_ssh_state", lambda s: (True, True, True))
-    ok, msg = _hosts86.remote_set_public_ssh(NS(id=-86, name="p86"), "off")
+    ok, msg = _hosts86.remote_set_public_ssh(NS(id=-86, name="p86", host="100.64.0.86", port=22, auth_method="key",
+                                                is_local=False), "off")
     check("public ssh: a change that cannot take names the rule connections meet first (it said "
           "only that the firewall still reports it open)",
           not ok and "meet `22,80/tcp" in str(msg), str(msg))

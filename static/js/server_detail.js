@@ -1575,7 +1575,15 @@ function sendCommand(ev) {  // NOSONAR - the constant false is the data-action p
     body: JSON.stringify({ command: cmd })
   })
   .then(r => r.json())
-  .then(d => { if (d.error) { echo.style.color = '#f85149'; echo.textContent = '> ' + cmd + '  — ' + d.error; } })
+  .then(d => {
+    if (d.error) { echo.style.color = '#f85149'; echo.textContent = '> ' + cmd + '  — ' + d.error; }
+    // The game has the command, but /logs has no row for it (the database was locked past its
+    // timeout). The command form flashes this and a custom command says it in its toast; this box
+    // read only `error`, so the send looked audited when it was not.
+    if (d.audit_unwritten && window.toast) {
+      toast(t('The audit log entry for this could not be written. The panel\'s log has the details.'), 'warning');
+    }
+  })
   .catch(() => { echo.style.color = '#f85149'; });
   input.focus();
   return false;

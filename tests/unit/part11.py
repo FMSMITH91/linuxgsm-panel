@@ -2497,9 +2497,23 @@ try:
 
     def _csp_wire(**v):
         # An active ufw that opens 22 only: the new port is one step 1 ADDS, so it is also the one
-        # the revert closes (change_ssh_port closes only a rule it added).
-        base = {"ufw-status": ("Status: active\n\n     To     Action     From\n"
-                               "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0),
+        # the revert closes (change_ssh_port closes only a rule it added). The listing follows the
+        # allows and deletes made, as ufw's does: step 1 re-reads it to confirm its open.
+        _rules = ["22/tcp"]
+
+        def _status(_a):
+            return ("Status: active\n\n     To     Action     From\n"
+                    + "".join("[%2d] %-27sALLOW IN    Anywhere\n" % (i + 1, r) for i, r in enumerate(_rules)), "", 0)
+
+        def _allow(a):
+            _rules.append("%s/%s" % (a[1], a[0]))
+            return "Rule added", "", 0
+
+        def _delete(a):
+            if "%s/%s" % (a[1], a[0]) in _rules:
+                _rules.remove("%s/%s" % (a[1], a[0]))
+            return "Rule deleted", "", 0
+        base = {"ufw-status": _status, "ufw-allow-proto-port": _allow, "ufw-delete-allow-proto-port": _delete,
                 "sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
                 "listening-sockets": [(_SS_22, "", 0), (_SS_BOTH, "", 0)]}
         base.update(v)

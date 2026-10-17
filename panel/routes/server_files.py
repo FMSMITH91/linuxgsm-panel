@@ -1173,8 +1173,43 @@ def _split_on_disk(cu, installed, games):
     return _mountable, _missing
 
 
+def _r28b_content_owner(remote, user):
+    """The panel GameServer whose game account `user` is on `remote`, or None.
+
+    detect_content_user took ANY /home account holding a content game, so on a host with a
+    panel-managed CS:S server and no separate content box, that server's account (`css`) was the
+    "content user": Remove deleted the server's game files, its LinuxGSM script and its config
+    (passwords, ports), and the weekly `update` cron restarted it unannounced. It now skips the
+    panel's servers' accounts (gmod._r28j_server_accounts); every caller that would write under
+    the content user still asks this first, as a backstop.
+    """
+    if not user:
+        return None
+    return GameServer.query.filter_by(remote_id=remote.id, short_name=user).first()
+
+
+def _r28b_owner_untouched(owner):
+    """Why nothing was mounted: the only content account found is the panel server `owner`'s."""
+    return i18n.Sentence("The content on this host is in the account of the panel server {server}, and the panel "
+                         "never mounts from, downloads into or updates a server's account. Nothing was mounted.",
+                         server=owner.name)
+
+
+def _r28b_owner_remove(owner):
+    """The uninstall refusal when the content account is the panel server `owner`'s."""
+    return i18n.Sentence("The content on this host is in the account of the panel server {server}, so the panel "
+                         "won't remove it: that would delete the server's own game files, script and config. "
+                         "Nothing was removed.", server=owner.name)
+
+
 def _install_and_mount(remote, gmod_user, cu, games):
     """Fetch the games not yet on the host into content user `cu`, then mount what is: the state."""
+    _owner = _r28b_content_owner(remote, cu["user"])
+    if _owner is not None:
+        # A panel server's account (backstop: ensure_content_user never picks one). Not even a
+        # read-only mount: that adds the GMod account to the server's group, which can read its
+        # configs (RCON password included). Nothing on the host is touched.
+        return {"status": "error", "msg": _r28b_owner_untouched(_owner), "ts": time.time()}
     # KEEP the result. `installed` is the games install_gmod_content verified
     # are on disk afterwards (it re-runs content_present after SteamCMD), and
     # throwing it away meant the mount was written for every game the operator
@@ -1205,6 +1240,15 @@ def _uninstall_gmod_selection(remote, gmod_user, games):
     # this could have failed to confirm — `asked` stays empty rather than turning
     # every game into an unconfirmed removal.
     _asked, removed = [], []
+    # detect_content_user never answers with a panel server's account. When the only content is in
+    # one (a host set up before that rule, whose mounts still point there), say so instead of
+    # reporting an empty removal: the server's files are not the panel's to delete.
+    _owner = _r28b_content_owner(remote, (cu or detect_content_user(
+        remote, tuple(GMOD_CONTENT_GAMES), servers_too=True) or {}).get("user"))
+    if _owner is not None:
+        # Refused before anything is touched, this server's mount.cfg included: the operator asked
+        # for a removal, and nothing about it happened.
+        return {"status": "error", "msg": _r28b_owner_remove(_owner), "ts": time.time()}
     if cu:
         _asked = list(games)
         _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
@@ -2309,21 +2353,30 @@ def _register_cron_jobs(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        data = _json_body()
-        refused = _write_refused(gs, "cron_update")
-        if refused is not None:
-            return refused
-        schedule = _json_str(data, "schedule")      # as cron_add reads them
-        try:
-            with _r20b_audit_on_raise("cron_update", detail=schedule[:120], target=gs.name, server=gs):
-                ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
-                                          schedule, _json_str(data, "command"), gs.lgsm_name)
-            log_action(current_user, "cron_update", target=gs.name, success=ok,
-                       detail=schedule[:120], server=gs)
-            return jsonify({"success": ok,
-                            "message": i18n.tr(msg) if msg else ("Updated" if ok else "Failed")})
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
+        return _r28b_cron_update(gs, _json_body())
+
+
+def _r28b_cron_update(gs, data):
+    """The cron/update route's work once access is checked: rewrite one task, then re-sync the switches."""
+    refused = _write_refused(gs, "cron_update")
+    if refused is not None:
+        return refused
+    schedule = _json_str(data, "schedule")      # as cron_add reads them
+    try:
+        with _r20b_audit_on_raise("cron_update", detail=schedule[:120], target=gs.name, server=gs):
+            ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                      schedule, _json_str(data, "command"), gs.lgsm_name)
+        log_action(current_user, "cron_update", target=gs.name, success=ok,
+                   detail=schedule[:120], server=gs)
+        if ok:
+            # As add and delete do: every line is editable, the `monitor` one included, so an
+            # edit can take away (or give) the Autostart or Daily-restart line, and the switches
+            # kept saying what the crontab no longer did until the card was listed again.
+            _r21b_sync_after_cron_write(gs)
+        return jsonify({"success": ok,
+                        "message": i18n.tr(msg) if msg else ("Updated" if ok else "Failed")})
+    except Exception:
+        return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
 
 
 def _r21b_sync_after_cron_write(gs):

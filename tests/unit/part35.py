@@ -102,7 +102,7 @@ def _installer_lines35(data):
         "stay": ("  Keeping %s: it is on main and already contains the verified commit %s"
                  % (_SHA35, _PIN35), "Keeping 8139d8bc4f0e: it is on main and already contains the "
                                      "verified commit 86843af0bbbb"),
-        "ip": ("  Panel: https://81.2.13.77:5000 (and https://127.0.0.1:5000 here)",
+        "ip": ("  Panel: https://9.9.9.9:5000 (and https://127.0.0.1:5000 here)",
                "https://[ip:public]:5000 (and https://127.0.0.1:5000 here)"),
     }
 
@@ -137,7 +137,7 @@ def _p35_installer_musts():
           all("[redacted]" in v for v in out.values()) and "abcdefghijklmn" not in out["split"]
           and "0123456789abcdef" not in out["hex"] and "qZ3vT8" not in out["b64"], repr(out))
     eq("installer lines: without the report's ctx the old reduction stands ([userinfo], [ip])",
-       UP.clean_line("fetch https://bob:pw@example.org/x from 81.2.13.77"),
+       UP.clean_line("fetch https://bob:pw@example.org/x from 9.9.9.9"),
        "fetch https://[userinfo]@example.org/x from [ip]")
 
 
@@ -221,7 +221,7 @@ def _p35_footer_installer():
     ctx, _st = _ctx_with()
     data = "/home/zephyracct/linuxgsm-panel/data"
     lines = ["  Updating to verified commit %s" % _SHA35, "→ %s/.backups/20261003-084009" % data,
-             "  Panel: https://81.2.13.77:5000", "  key qZ3vT8rW1yX5uA9sD2fG7hJ4kL6mN0pQ"]
+             "  Panel: https://9.9.9.9:5000", "  key qZ3vT8rW1yX5uA9sD2fG7hJ4kL6mN0pQ"]
     with _patched():
         _patch(config, "DATA_DIR", _pathlib35.Path(data))
         _said, text = _tail35(lines, ctx)
@@ -248,7 +248,7 @@ def _health_v35():
     health = ["Some peers are advertising routes but --accept-routes is false",
               "node zephyrbox7731 owned by alicezz7731@example.com",
               "likely intercepted connection; certificate is self-signed by CN=p,O=Zephyr Holdings",
-              "connection to derp7731.zephyr-family.net failed:\n   dial tcp 81.2.13.77:443: timeout",
+              "connection to derp7731.zephyr-family.net failed:\n   dial tcp 9.9.9.9:443: timeout",
               _LONGX35 + "Alice Quokkason is logged out", "six", "seven"]
     status = {"BackendState": "Running", "Health": health,
               "Self": {"HostName": "zephyrbox7731", "InNetworkMap": True,
@@ -281,7 +281,7 @@ def _health_checks35(final, shown, res):
           "certificate issuer, an address by class, and a two-word display name at the cut never "
           "leaves a fragment",
           not any(w in low for w in ("zephyrbox", "alice", "quokkason", "zephyr-family", "holdings",
-                                     "81.2.13.77")) and "[ip:public]" in final
+                                     "9.9.9.9")) and "[ip:public]" in final
           and "[domain]" in final, final)
     check("tailscale health: a non-empty list raises no finding (Health carries no severity)",
           not any("health" in f["text"].lower() for f in res.findings), repr(res.findings))
@@ -338,8 +338,9 @@ def _p35_health_footer():
 
 
 # tailscaled's Tailscale SSH line from the test VPS's journal (the proof of #393), the account
-# changed from root to one the report does not know, and a second connection to a known host.
-_SSH_LINE35 = ("Sep 26 19:28:03 h tailscaled[1010]: handling conn: 100.69.18.95:32914->"
+# changed from root to one the report does not know, both addresses synthetic (100.64.0.x), and a
+# second connection to a known host.
+_SSH_LINE35 = ("Sep 26 19:28:03 h tailscaled[1010]: handling conn: 100.64.0.11:32914->"
                "quokka7731@100.64.0.10:22; ->root@100.64.0.10:22; "
                "->quokka7731@zephyrhost7731:22")
 
@@ -362,7 +363,7 @@ def _p35_account_at_address():
 
 # The name in plain text BEFORE its 'name@<IPv4>': the name pass had run when the account rule
 # mapped it, so the plain one printed beside its own token and linked the two.
-_SSH_TWO35 = ("Sep 26 19:28:01 h sshd[901]: Accepted publickey for quokka7731 from 100.69.18.95\n"
+_SSH_TWO35 = ("Sep 26 19:28:01 h sshd[901]: Accepted publickey for quokka7731 from 100.64.0.11\n"
               "Sep 26 19:28:03 h tailscaled[1010]: handling conn: ->quokka7731@100.64.0.10:22")
 _SECS35 = (("header", "Header", "header", "worker", "header"),
            ("brief", "Brief", "m", "worker", "summary"),
@@ -796,13 +797,13 @@ def _p35_trust_proxy():
         _auth35._ignored_proxy_warned.clear()
         with _patched():
             _patch(_auth35, "_loopback_peer_uid_memo", lambda: 1001)
-            with app.test_request_context("/", headers={"X-Forwarded-For": "81.2.13.77"},
+            with app.test_request_context("/", headers={"X-Forwarded-For": "9.9.9.9"},
                                           environ_base=env):
                 refused = _auth35._request_came_through_proxy("127.0.0.1")
             peers = CS._ignored_peers()
             _patch(_auth35, "_loopback_peer_uid_memo", lambda: 0)
             res = Result()
-            with app.test_request_context("/", headers={"X-Forwarded-For": "81.2.13.77"},
+            with app.test_request_context("/", headers={"X-Forwarded-For": "9.9.9.9"},
                                           environ_base=env):
                 believed = _auth35._request_came_through_proxy("127.0.0.1")
                 NW._request_lines(res, app.config)

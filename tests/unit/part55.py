@@ -177,7 +177,8 @@ def _gmod_install55():
               lambda remote, short, cu, games: (mounted.append(list(games)), (True, "ok"))[1])
     job = NS(short_name="gm55", game_type="gmod", content_games=["cstrike", "tf"],
              p=lambda *a, **k: None)
-    step = _p9_ms._install_gmod_content(job, NS(name="p55-host", id=-55))
+    with _p9.app_context():     # the install job runs its steps inside one (the owner lookup reads the DB)
+        step = _p9_ms._install_gmod_content(job, NS(name="p55-host", id=-55))
     check("gmod install: a game the content step found already on the host is mounted (the scan "
           "came back empty); one it could not check is not",
           mounted == [["cstrike"]] and step == 9, repr((mounted, step)))
@@ -188,7 +189,8 @@ def _gmod_install55():
     del mounted[:]
     _p9_sf._claim_gmod_content_host(-55)          # a Content-card job is running on this host
     try:
-        step = _p9_ms._install_gmod_content(job, NS(name="p55-host", id=-55))
+        with _p9.app_context():
+            step = _p9_ms._install_gmod_content(job, NS(name="p55-host", id=-55))
     finally:
         _p9_sf._release_gmod_content_host(-55)
     check("gmod install: with another content job running on the host, the step downloads and "

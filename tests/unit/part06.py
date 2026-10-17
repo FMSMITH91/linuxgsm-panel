@@ -1238,13 +1238,16 @@ try:
     _dbo_me = _pwd_dbo.getpwuid(os.getuid())
     eq("db-repair: the repair account is the owner of the database's directory",
        getattr(_dbo._db_repair_account(_dbo_db), "pw_uid", None), _dbo_me.pw_uid)
-    # A data/ the panel user swapped for a link to a root-owned directory: the LINK's owner decides,
-    # or the link would hand the repair back to root.
+    # A data/ the panel user swapped for a link to a root-owned directory must not hand the repair
+    # back to root. It ran as the LINK's owner; since review 1016e data/ is walked as restore and
+    # self-update walk theirs, so a link root did not make decides no account at all (no repair).
+    # As root the link is root's own, an operator's, and the directory it names decides.
     _dbo_link = os.path.join(_dbo_dir, "linked")
     os.symlink("/", _dbo_link)
-    eq("db-repair: a data dir replaced by a link to a root-owned dir still runs as the link's owner",
+    eq("db-repair: a data dir replaced by the panel user's link to a root-owned dir is not repaired "
+       "as root",
        getattr(_dbo._db_repair_account(os.path.join(_dbo_link, "panel.db")), "pw_uid", None),
-       _dbo_me.pw_uid)
+       0 if os.geteuid() == 0 else None)
     check("db-repair: no directory to ask means no account (the repair does not run)",
           _dbo._db_repair_account(os.path.join(_dbo_dir, "absent", "panel.db")) is None)
     check("db-repair: a root-owned data directory runs as root, with nothing to drop",

@@ -138,15 +138,44 @@ def _user_primary_group(server, user):
     return (grp or "").strip()
 
 
-def detect_content_user(server, games=("cstrike",)):
+def _r28j_server_accounts(server):
+    """The Linux accounts of the panel's GameServer rows on `server`: a frozenset, or None if unread.
+
+    A server's account is never a GMod content user, not even to mount from read-only: mounting
+    runs `content-grant-read`, which puts the GMod account in that account's primary group, and
+    that group can read the server's other files too (its LinuxGSM configs, RCON password
+    included). Read at call time from the database, so a server added a moment ago counts.
+    """
+    rid = getattr(server, "id", None)
+    if rid is None:
+        # Not a host row (a bare stand-in): there are no panel servers on it.
+        return frozenset()
+    try:
+        from panel.db.models import GameServer   # lazy: the models import ssh_manager
+        return frozenset(g.short_name for g in GameServer.query.filter_by(remote_id=rid))
+    except Exception:
+        _core._log.warning("could not read the panel's servers on host %s", rid, exc_info=True)
+        return None
+
+
+def detect_content_user(server, games=("cstrike",), servers_too=False):
     """Find a host user whose serverfiles already hold the wanted game content.
 
     E.g. an existing srcds / LinuxGSM cssserver. Returns {"user", "group", "present": {game: path}}
     for the user with the MOST wanted games present, else None — so a GMod install can reuse
     content already on the host instead of re-downloading gigabytes. One sudo scan; only constant
     game keys reach the shell.
+
+    A panel-managed game server's own account is never the answer (_r28j_server_accounts says
+    why), so a host whose only content sits in such an account gets the panel's own content account
+    instead (ensure_content_user). When the panel's servers cannot be read, nobody is: None.
+    `servers_too=True` is ONLY for naming such an account in a refusal; nothing may write under,
+    or mount from, what it returns.
     """
     wanted = _valid_content_games(games) or list(GMOD_CONTENT_GAMES)
+    skip = frozenset() if servers_too else _r28j_server_accounts(server)
+    if skip is None:
+        return None
     try:
         # Was a shell loop over /home building its inner list by interpolating the game keys. The
         # verb takes the keys as arguments and walks the directories itself.
@@ -154,7 +183,7 @@ def detect_content_user(server, games=("cstrike",)):
     except Exception:
         _core._log.debug("detect_content_user scan failed", exc_info=True)
         return None
-    by_user = _parse_content_scan(out)
+    by_user = {u: gs for u, gs in _parse_content_scan(out).items() if u not in skip}
     if not by_user:
         return None
     user = max(by_user, key=lambda u: len(by_user[u]))
@@ -183,6 +212,12 @@ def ensure_content_user(server):
     if found:
         return found
     u = _CONTENT_USER
+    _servers = _r28j_server_accounts(server)
+    if _servers is None or u in _servers:
+        # A panel server runs under the content account's name (or the servers could not be read):
+        # its account is not ours to install into, so there is no content storage.
+        _core._log.warning("ensure_content_user: %s is a panel server's account on this host", u)
+        return None
     exists, _, _ = _core.run_command(server, f"id {_core._quote(u)} >/dev/null 2>&1 && echo Y || echo N", timeout=10,
                                      sudo=False)
     if "Y" not in (exists or ""):

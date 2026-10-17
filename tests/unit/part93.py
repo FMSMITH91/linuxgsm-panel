@@ -605,7 +605,7 @@ _p93_swap() { [ -e "$P93/swapped" ] && return 0; : > "$P93/swapped"
               mv -- "$PANEL_DIR" "$P93/moved"; ln -s -- "$P93/other" "$PANEL_DIR"; }
 cd() { [ "$P93_AT" = cd ] && _p93_swap; builtin cd "$@"; }
 readlink() { [ "$P93_AT" = readlink ] && _p93_swap; command readlink "$@"; }
-stat() { if [ -n "$P93_ROOTLINK" ] && [ ! -e "$P93/swapped" ]; then echo 0;
+stat() { if [ -n "$P93_ROOTLINK" ] && [ ! -e "$P93/swapped" ]; then echo 0 1;
          else command stat "$@"; fi; }
 '''
 

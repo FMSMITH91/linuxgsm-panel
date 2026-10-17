@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
-from panel.ops.ssh_manager import (_tailnet_ssh_state, remote_ufw_close_port_22)
+from panel.ops.ssh_manager import (_r28b_panel_way_in_refusal, _tailnet_ssh_state, remote_ufw_close_port_22)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, log_action, permission_required)
 from panel.core import i18n
 from panel.core.http import (_log_and_generic, _unreachable)
@@ -38,6 +38,12 @@ def register(app):
                 log_action(current_user, "remote_close_port_22", target=remote.name,
                            detail=_NO_WAY_BACK, success=False, remote=remote)
                 return jsonify({"success": False, "message": i18n.tr(_NO_WAY_BACK)})
+            # ...nor while the panel's own connection comes in through it (remote_set_public_ssh).
+            _cut = _r28b_panel_way_in_refusal(remote)
+            if _cut is not None:
+                log_action(current_user, "remote_close_port_22", target=remote.name, detail=str(_cut),
+                           success=False, remote=remote)
+                return jsonify({"success": False, "message": i18n.tr(_cut)})
             with _r20b_audit_on_raise("remote_close_port_22", target=remote.name, remote=remote):
                 success, msg = remote_ufw_close_port_22(remote)
             log_action(current_user, "remote_close_port_22", target=remote.name, detail=msg, success=success,

@@ -1992,7 +1992,7 @@ try:
 
     _p9_patch(_p9_sf, "gmod_current_mounts", _gmc_mounts)
     _p9_patch(_p9_sf, "gmod_mount_setup", _gmc_setup)
-    _p9_patch(_p9_sf, "detect_content_user", lambda remote, games: _gmc["cu"])
+    _p9_patch(_p9_sf, "detect_content_user", lambda remote, games, **k: _gmc["cu"])
     _p9_patch(_p9_sf, "ensure_content_user", _gmc_ensure)
     _p9_patch(_p9_sf, "uninstall_gmod_content",
               lambda remote, cu_user, games: (True, list(_gmc["removed"]), ""))

@@ -1199,6 +1199,13 @@ def _ensure_backup_headroom(server, user, keep):
             return ""
         if not backups:
             return ""   # first backup — nothing to prune; let LinuxGSM/disk decide
+        if any(b.get("in_progress") for b in backups):
+            # Another backup of this server is being written right now (the control bar, a bot or
+            # a host cron run LinuxGSM's backup outside the panel's lock). This run will meet that
+            # backup's lock and fail, so pruning cannot make room for anything: it only deleted
+            # finished backups, and on a tight disk all of them, behind an archive that may never
+            # finish.
+            return ""
         short = _backup_shortfall(server, user, backups)
         if short is None:
             return ""   # plenty of room, or we could not measure — keep full safety
@@ -1240,7 +1247,9 @@ def _prune_for_headroom(server, user, backups, keep, free, need):
     """
     # 0-byte archives are failed backups (junk) — delete them first and never protect one.
     # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
-    valid = [b for b in backups if b.get("size", 0) > 0]        # newest first
+    # An archive still being written is neither: grown past 0 bytes it took a protected slot as
+    # the newest VALID backup, and every finished one became a candidate.
+    valid = [b for b in backups if b.get("size", 0) > 0 and not b.get("in_progress")]   # newest first
     # ...but not the archive a backup is writing right now (list_game_backups' in_progress): one
     # started outside the panel (the control bar, a bot, a host cron) is 0 bytes for its first
     # moments, and this runs before the panel's own run meets that backup's lock. Unlinked then,

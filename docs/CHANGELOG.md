@@ -601,6 +601,36 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A sixteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Garry's Mod content no longer touches another game server's account.** On a host where a
+    panel-managed CS:S server held the only CS:S content, the GMod content card used that server's
+    account: Remove deleted the server's own game files, script and config, the weekly content update
+    restarted it unannounced, and even mounting it gave the GMod account read access to that server's
+    configs (RCON password included). A panel server's account is now never used; the panel's own
+    content account is used instead. A host already mounting from such an account is left as it is:
+    the card shows the game mounted but not on the host, and Remove refuses and names the server.
+  - **Moving SSH back to port 22 opens it in the firewall again.** After the panel moved SSH to 2222
+    and you closed 22 as advised, moving back to 22 opened nothing, because 22 was still listening
+    behind the firewall, and the panel lost the host. The move now goes by the firewall's rules, checks
+    the rule is really there afterwards, and refuses if it is not.
+  - **Turning public SSH off, or Close port 22, refuses a host the panel itself reaches on public
+    port 22**, instead of cutting the panel off. Move that host to Tailscale SSH or its Tailscale
+    address first.
+  - **A backup is no longer pruned while another backup is still being written**, so the archive in
+    progress can't take a kept backup's place.
+  - **The SSH port card shows the port sshd really listens on** for every host, the panel's own
+    included; it showed the stored 22. The audit row for a move names the old port sshd really used.
+  - **Smaller fixes.** The console's send box warns when the command's audit row could not be written;
+    editing a scheduled task re-syncs the Autostart and Daily-restart switches; a retried install
+    forgets a stale "found an account" note; the maintenance check works on hosts that need a sudo
+    password; uninstall reads the panel port the way install does; the installer refuses to overwrite
+    an unreadable config.json; and the root helper's database repair checks the real data folder,
+    not the link to it.
+  - **Tests.** The guard that keeps tests off the machine's own tailscale now also catches scripts
+    that set their own PATH; four checks no longer pass on a server error; the JS sink scanners read
+    `//` inside comments, templates and regexes correctly.
+
 - **OS updates respect Ubuntu's phased rollout.** Ubuntu releases some updates to a share of machines
   at a time; `apt full-upgrade` holds the rest back. The panel used to count those as waiting and
   forced them in on remote hosts. It now never forces them: what apt's own upgrade would not
@@ -2215,6 +2245,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **Test fixtures carry no real addresses.** A connecting device's tailnet address and a public address
+  copied from a live debug report were replaced with made-up or well-known public ones, and the
+  privacy check now refuses them.
 
 - **The repository no longer names the maintainer's own hosts.** Test fixtures that used a real host
   label, tailnet name and addresses now use made-up values, and a check keeps them out.

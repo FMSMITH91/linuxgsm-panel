@@ -1995,9 +1995,10 @@ try:
     check("add_remote: the row is created (the checks below need it)",
           _ar_new_id is not None, "no RemoteServer row was written")
     if _ar_new_id is not None:
-        check("add_remote: a non-superadmin creator can reach the host they just added",
-              mrc.get("/remote/%d/manage" % _ar_new_id).status_code != 403,
-              "the creator is 403'd from their own new host")
+        # Reached is rendered (200), not "anything but 403": a 500 passed (review 1016e).
+        _ar_page = mrc.get("/remote/%d/manage" % _ar_new_id)
+        check("add_remote: a non-superadmin creator can reach the host they just added (200)",
+              _ar_page.status_code == 200, "got %d from their own new host" % _ar_page.status_code)
         check("add_remote: ...and it is listed on the page the flash sends them to",
               b"smoke-added-by-mr" in mrc.get("/remotes").data,
               "the card the success message points at does not exist")

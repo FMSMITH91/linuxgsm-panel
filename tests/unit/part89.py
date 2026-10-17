@@ -96,6 +96,9 @@ class _Ufw89:
             return self._delete(a[0], "LIMIT IN")
         if verb == "ufw-delete-allow-proto-port":
             return self._delete("%s/%s" % (a[1], a[0]), "ALLOW IN")
+        if verb == "ufw-allow-from-port" and a[0] == "0.0.0.0/0":   # NOSONAR(S1313) - ufw's IPv4 "any"
+            # ufw lists an IPv4-only allow from 0.0.0.0/0 as "Anywhere", in the v4 family only.
+            self.rules.append(["%s/%s" % (a[1], a[2]), "ALLOW IN", "Anywhere", True, False])
         return "", "", 0
 
     def left(self):
@@ -255,8 +258,9 @@ def _ssh_move89():
     def opened(*rows):
         ufw, asked = _Ufw89(*rows), []
         _p9_patch(_p9_core, "run_privileged", ufw.run)
-        _p9_patch(_hosts89, "remote_ufw_open_port",
-                  lambda s, p, proto, comment="": asked.append(p) or (True, ""))
+        # The allow lands in the table, as ufw's does: step 1 re-reads it to confirm the open.
+        _p9_patch(_hosts89, "remote_ufw_open_port", lambda s, p, proto, comment="": asked.append(p) or ufw.rules.append(
+            ["%s/%s" % (p, proto), "ALLOW IN", "Anywhere", True, True]) or (True, ""))
         return _hosts89._open_ssh_port_rule(NS(id=-89, name="p89"), 2222, ["22"]), asked
     got = {
         "v6-only allow": opened(("2222/tcp", "ALLOW IN", "Anywhere", False, True)),

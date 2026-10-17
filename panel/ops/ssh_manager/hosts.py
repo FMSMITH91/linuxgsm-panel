@@ -3798,16 +3798,21 @@ def _r22b_ssh_port_reading(status_out, port):
     return blocking is None and firsts[0] is not None, blocking
 
 
-def _open_ssh_port_rule(server, port, old_ports):
+def _open_ssh_port_rule(server, port, panel_way_in):
     """Step 1 of change_ssh_port: let `port`/tcp through ufw. (added, refusal).
 
     `added` is truthy only when THIS call put the allow there, which is what makes it the revert's
     to delete (_R25B_V4_ADDED when that was only the IPv4 rule; see _r25b_close_added_ssh_rule).
     Nothing is opened when:
-      * sshd already serves `port` (it is in `old_ports`): whatever lets it in today is what the
-        panel's own connection is using, and re-allowing would rewrite a LIMIT into an ALLOW;
+      * `port` is in `panel_way_in`: the port the panel's own SSH connection to this host is made
+        on right now. Whatever lets that connection in works today (it may be a tailscale0 rule,
+        and a public allow would widen it);
       * the first public rule a TCP connection to it meets already allows it (ALLOW or LIMIT, a
         bare `N`, `N/tcp` or a range): the operator's rule stays as it is.
+    It used to skip any port sshd LISTENS on (review 1016e). After the panel's own 22 -> 2222 move
+    on a socket-activated host, ssh.socket keeps 22 listening beside 2222; the operator closes
+    22/tcp as the move advises; the move back to 22 then opened nothing and the panel was pointed at
+    a port UFW drops. Listening says nothing about the firewall: only the rules read below do.
     `refusal` is a message when that first rule DENIES or REJECTS it: the move would have
     "succeeded" (the listening check does not go through the firewall) onto a port nobody can
     reach, and the advice that follows is to close the old one. Nothing has been changed by then.
@@ -3817,7 +3822,7 @@ def _open_ssh_port_rule(server, port, old_ports):
     an inactive one whose stored rules cannot be read either, is opened as it always was — but NOT
     counted as added: a rule that may have been there before is not one to delete on the way out.
     """
-    if str(port) in old_ports:
+    if str(port) in panel_way_in:
         return False, None
     with _core.ufw_lock(server):
         before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
@@ -3829,7 +3834,28 @@ def _open_ssh_port_rule(server, port, old_ports):
             return False, None
         if first is not None:
             return False, _r26j_blocked(port, first["detail"])
-        return _r25b_add_ssh_rule(server, port, known, before), None
+        added = _r25b_add_ssh_rule(server, port, known, before)
+        return added, (_r28j_open_unconfirmed(server, port, added) if known else None)
+
+
+def _r28j_open_unconfirmed(server, port, added):
+    """After the open on an ACTIVE firewall: None when a re-read shows `port`/tcp let in, else the refusal.
+
+    ufw can answer 0 and still not hold the rule (a refused verb on an old helper, a transport that
+    timed out without raising). Unconfirmed, the move went on and the route pointed the panel at a
+    port the firewall may drop. A rule this call did add is taken back before refusing.
+    """
+    after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    if arc == 0 and _r22b_ssh_port_reading(after, port)[0]:
+        return None
+    _r25b_close_added_ssh_rule(server, port, added)
+    return _r28j_not_opened(port)
+
+
+def _r28j_not_opened(port):
+    """The refusal when the firewall does not show `port`/tcp open after the panel opened it."""
+    return i18n.Sentence("The firewall did not show port {port}/tcp open after the panel opened it, so SSH moved "
+                         "there could be unreachable. Nothing was changed.", port=port)
 
 
 def _r26j_blocked(port, rule):
@@ -3893,7 +3919,14 @@ def _r26j_inactive_open(server, port):
     if stored:
         return False, None
     ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
-    return bool(ok and stored is False), None
+    added = bool(ok and stored is False)
+    if stored is False:
+        # Re-read: a stored rule that is not there shuts the port the moment UFW is enabled.
+        out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
+        if not _r26j_stored_reading(out if rc == 0 else "", port)[0]:
+            _r25b_close_added_ssh_rule(server, port, added)
+            return False, _r28j_not_opened(port)
+    return added, None
 
 
 def _r26j_stored_reading(out, port):
@@ -4057,13 +4090,23 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # backups and their monitoring were connected on — while reporting "The previous port is still
     # available as a fallback" about a port that had just stopped listening.
     socket_mode = _sshd_socket_activated(server)
-    old_ports = _sshd_current_ports(server)
+    # Two lists. `served` is what sshd really serves now, and decides the "already served" skips of
+    # steps 0 and 1. `old_ports` is what the new drop-in keeps beside the new port, where one port
+    # too many is the safe direction. They differ under socket activation: `sshd -T`'s Port, which
+    # systemd ignores, belongs in the drop-in but is NOT served. Counted as served, a move back onto
+    # it (2222 -> 22, after the operator had closed 22/tcp as the move advised) skipped opening it
+    # in UFW and skipped the free-port check, reported success, and the route pointed the panel at a
+    # port the firewall drops.
     if socket_mode:
-        # ...and `sshd -T`'s with them, though systemd ignores them: _sshd_current_ports answers
-        # ssh.socket's ports alone, which is right for deciding what is protected, and here keeping
-        # one port too many in the drop-in is the safe direction (as before ssh.socket was read).
-        old_ports = old_ports + [p for p in _r26b_sshd_t_ports(server) if p not in old_ports]
+        # ssh.socket's own ports only. Unread, nothing is known to be served but the stored port
+        # (added below): step 1 then opens the port (the safe direction), and a port sshd really
+        # holds fails step 0's free-port check instead of being "moved onto".
+        served = list(_r26b_socket_ports(server) or [])
+        old_ports = served + [p for p in _r26b_sshd_t_ports(server) if p not in served]
+    else:
+        served = old_ports = _sshd_current_ports(server)
     old_ports = old_ports or [str(int(getattr(server, "port", 22) or 22))]
+    served = served or [str(int(getattr(server, "port", 22) or 22))]
     if socket_mode:
         # _sshd_current_ports reads ssh.socket's own listen ports (systemd's answer, after
         # the drop-in) — but that read can fail, and the port the panel is CONNECTED ON is known for
@@ -4075,6 +4118,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
         _stored = str(int(getattr(server, "port", 22) or 22))
         if _stored not in old_ports:
             old_ports = old_ports + [_stored]
+        if _stored not in served:
+            served = served + [_stored]
     if not bind_addr and old_ports == [str(new_port)]:
         return False, i18n.Sentence("SSH is already on port {port}.", port=new_port)
     # The panel's own host is checked above. A socket-activated host the panel reaches over Tailscale
@@ -4102,7 +4147,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    0.0.0.0:8080, the snapshot was discarded, the route repointed the panel at a port that
     #    answers HTTP, and the message told the operator to close the one real SSH port. A port sshd
     #    already serves (a bind change on the current port) is its own listener and passes.
-    if str(new_port) not in old_ports:
+    if str(new_port) not in served:
         pre, _, pre_rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
                                               merge_stderr=False)
         if pre_rc != 0 or not (pre or "").strip():
@@ -4125,7 +4170,10 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    REPLACES a rule that differs only in action or comment (see remote_ufw_allow_game_ports),
     #    so `allow 22/tcp` turned the bootstrap's `LIMIT 22/tcp` into a plain ALLOW, silently
     #    dropping the brute-force brake, whether the move succeeded or not.
-    _ufw_added, _ufw_refused = _open_ssh_port_rule(server, new_port, old_ports)
+    #    Decided by the firewall's rules, never by what listens (see _open_ssh_port_rule): only the
+    #    port the panel's own connection uses right now is left as it is.
+    _ufw_added, _ufw_refused = _open_ssh_port_rule(
+        server, new_port, [str(int(getattr(server, "port", 22) or 22))] if _r26b_dials_after_bind(server) else [])
     if _ufw_refused:
         return False, _ufw_refused
 
@@ -4555,6 +4603,58 @@ def _r11a_off_tailnet_addr(a):
     return not (ip is None or any(ip.version == n.version and ip in n for n in _r11a_tailnet_nets))
 
 
+def _r28b_resolve(host):
+    """Every address `host` resolves to on the panel host, as text; [] when it does not resolve."""
+    try:
+        return sorted({info[4][0] for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)})
+    except (OSError, UnicodeError):
+        return []
+
+
+def _r28b_panel_dials_public_22(server):
+    """True when the panel's OWN connection to `server` comes in through its public port-22 rules.
+
+    The "off"/close-22 gate asks only whether the OPERATOR has a Tailscale way back in. A key or
+    password host the panel reaches at a public address on port 22 passed it, and removing the
+    public 22/tcp rules dropped the panel's next connection (the one open now survives as
+    established, so the read-back still said it worked): the host read unreachable from then on.
+    Not the panel host (it does not SSH), a Tailscale-SSH host (tailscaled answers on the tailnet),
+    or a host the panel dials on another port. A name is resolved here: a tailnet name passes, and
+    one that does not resolve counts as public, the side that keeps the rule.
+    """
+    if _core.is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
+        return False
+    try:
+        if int(getattr(server, "port", 22) or 22) != 22:
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return True
+    return not _r28b_host_on_tailnet((getattr(server, "host", "") or "").strip().strip("[]"))
+
+
+def _r28b_host_on_tailnet(host):
+    """True when `host` (an address or a name) is reached over the tailnet; an unresolved name is not."""
+    if host.lower().rstrip(".").endswith(".ts.net"):
+        return True
+    addrs = [host] if ip_address_or_none(host) is not None else _r28b_resolve(host)
+    return bool(addrs) and all(_r28b_tailnet_addr(a) for a in addrs)
+
+
+def _r28b_tailnet_addr(a):
+    """True when address `a` is a Tailscale one (CGNAT 100.64/10 or Tailscale's IPv6 prefix)."""
+    ip = ip_address_or_none(a.split("%", 1)[0])
+    return ip is not None and any(ip.version == n.version and ip in n for n in _r11a_tailnet_nets)
+
+
+def _r28b_panel_way_in_refusal(server):
+    """The refusal for removing public port 22 while the panel itself comes in through it, else None."""
+    if not _r28b_panel_dials_public_22(server):
+        return None
+    return i18n.Sentence("Refused — the panel itself connects to this host at {host} on port 22 through the public "
+                         "SSH rule, so removing it would cut the panel off. Move this host to Tailscale SSH (or "
+                         "point it at its Tailscale address) first.", host=getattr(server, "host", ""))
+
+
 def remote_set_public_ssh(server, mode):
     """Control PUBLIC (non-tailnet) SSH on port 22 via UFW:
       allow → `ufw allow 22/tcp`  (open to the internet)
@@ -4581,6 +4681,9 @@ def remote_set_public_ssh(server, mode):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
+        _cut = _r28b_panel_way_in_refusal(server)
+        if _cut is not None:
+            return False, _cut
         steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     else:
         return False, "Invalid mode"

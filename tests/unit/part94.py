@@ -109,6 +109,8 @@ def _cleanup94():
 def _ssh_port94(client, ts_rid, key_rid):
     moved = []
     _p9_patch(_p9_rv, "change_ssh_port", lambda remote, port, bind="": moved.append(remote.id) or (True, "moved"))
+    # The audit row reads a Tailscale-SSH host's sshd ports before the move (review 1016e).
+    _p9_patch(_p9_rv, "_r26b_sshd_ports", lambda remote: [])
     d_ts = _p9_json(client.post("/api/remote/%d/ssh-port" % ts_rid, json={"port": 2222}))
     d_key = _p9_json(client.post("/api/remote/%d/ssh-port" % key_rid, json={"port": 2222}))
     with _p9.app_context():

@@ -1052,8 +1052,11 @@ try:
     # it claims, which is what makes the reasoning above check out.)
     _cookieless = app.test_client().post("/api/server/1/action", json={"action": "start"},
                                          headers={"Authorization": "Bearer not-a-real-token"})
-    check("CSRF: a genuinely cookie-less Bearer POST is exempt (not a 400)",
-          _cookieless.status_code != 400, "got %d" % _cookieless.status_code)
+    # Exempt means it passed CSRF and reached authentication, which refuses the unknown token
+    # with the API's 401 (review 1016e: "not a 400" passed a 500 from the exemption itself).
+    check("CSRF: a genuinely cookie-less Bearer POST is exempt: it reaches authentication (401)",
+          _cookieless.status_code == 401 and _cookieless.headers.get("X-Auth-Required") == "1",
+          "got %d %r" % (_cookieless.status_code, _cookieless.headers.get("X-Auth-Required")))
 
     _with_cookie = client_as(admin_id)
     _both = _with_cookie.post("/api/server/1/action", json={"action": "start"},

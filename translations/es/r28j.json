@@ -1,0 +1,3 @@
+{
+  "The firewall did not show port {port}/tcp open after the panel opened it, so SSH moved there could be unreachable. Nothing was changed.": "El cortafuegos no mostró el puerto {port}/tcp abierto después de que el panel lo abriera, así que SSH movido allí podría quedar inaccesible. No se cambió nada."
+}

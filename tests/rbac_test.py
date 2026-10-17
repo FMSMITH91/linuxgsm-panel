@@ -1185,8 +1185,9 @@ def _check_retry_install_matches_its_route():
                             headers={"X-Requested-With": "XMLHttpRequest"})
         check("MANAGE_SERVERS: the dashboard offers Retry install on a failed row", _shown,
               "the button was not rendered, so this proves nothing about the route")
+        # Accepted is a 2xx/3xx answer, not "anything but 403" (review 1016e: a 500 passed).
         check("MANAGE_SERVERS: ...and the route it posts to accepts them",
-              _posted.status_code != 403, "got %d" % _posted.status_code)
+              200 <= _posted.status_code < 400, "got %d" % _posted.status_code)
         check("MANAGE_SERVERS: ...starting the install job, which is trapped and never run",
               _trapped.count("install job") == 1, "trapped: %r" % (_trapped,))
     finally:

@@ -1101,7 +1101,11 @@ def _register_custom_commands(app):
             if rc != 0:
                 # 200, not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
                 # page, so the reason never reached the toast. The page reads `success`.
-                return jsonify(dict(note, success=False, message=_console_send_failure(rc, err)))
+                # The audit note too: the toast shows only `message`, and on this path it said only
+                # why the send failed, so a send /logs has no row for read as audited.
+                fail = _console_send_failure(rc, err)
+                return jsonify(dict(note, success=False, message=fail if audited else i18n.tr(
+                    i18n.Sentences(fail, _R25B_AUDIT_UNWRITTEN))))
             ran = i18n.Sentence("Ran '{name}'.", name=cmd.name)
             return jsonify(dict(note, success=True, message=i18n.tr(
                 ran if audited else i18n.Sentences(ran, _R25B_AUDIT_UNWRITTEN))))
