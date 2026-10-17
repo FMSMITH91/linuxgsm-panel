@@ -21,7 +21,11 @@ under it cannot gain root, which a unit check must never do anyway.
 Landlock only ALLOWS, so "deny these files" is written as "allow everything else": every entry of
 every directory on the way to a blocked file, other than that way itself, is allowed beneath. An
 entry created later directly in one of those directories (/, /usr, /usr/bin for a packaged CLI) is
-not allowed; nothing in the suite creates one.
+not allowed: a package update during the run that writes `bash` or `python3.x` as a new file and
+renames it in makes every later run of it fail with EACCES, and a CLI in ~/bin makes $HOME a way.
+That limit cannot be narrowed without allowing the blocked file (a rule allows a whole tree), so it
+is SAID: the runner prints header() once when the block is on, and a failing check whose detail is
+a permission error gets failure_note() (both name Landlock).
 
     python -I tests/unit/ts_landlock.py <job.json> <result.json>   # run_shapes, in its own process
 """
@@ -172,6 +176,46 @@ def block(blocked, refer=True):
     return ""
 
 
+# A failing check's detail that reads as the kernel's refusal (EACCES).
+_EACCES_WORDS = ("Permission denied", "PermissionError", "EACCES", "Errno 13")
+
+
+def header(blocked):
+    """The run's one line when the block is on: what it denies, and the limit _allowed_paths has."""
+    _way = sorted(_ways({os.path.realpath(_b) for _b in blocked}))
+    return ("Landlock block active: %s cannot be run or read by this run or anything it starts. A file "
+            "created or replaced after now directly in %s is denied the same way (EACCES) until the run "
+            "ends: a package update during the run does that, so re-run the suite after one."
+            % (", ".join(blocked), ", ".join(_way)))
+
+
+def failure_note(detail, blocked):
+    """What a failing check's `detail` gets when it is a permission error under the block, else ""."""
+    if not blocked or not any(_w in str(detail) for _w in _EACCES_WORDS):
+        return ""
+    return ("  (Landlock block active: a file created or replaced since the run began directly in %s "
+            "is denied, which may be this; see the run's first line)"
+            % ", ".join(sorted(_ways({os.path.realpath(_b) for _b in blocked}))))
+
+
+def late_entry(directory):
+    """Make a script directly in `directory` and run it: "ran", or the error it met (the block's limit)."""
+    import subprocess  # nosec B404 - runs only the script it has just written
+    _p = os.path.join(directory, "late-entry")
+    with open(_p, "w", encoding="utf-8") as _fh:
+        _fh.write("#!/bin/sh\necho late\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700, owner-only
+    os.chmod(_p, 0o700)  # nosec B103 - the test's own temp dir
+    try:
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        _r = subprocess.run([_p], capture_output=True, timeout=10, check=False)  # nosec B603
+        return "ran" if b"late" in _r.stdout else "rc %d" % _r.returncode
+    except OSError as _ex:
+        return repr(_ex)
+    finally:
+        os.unlink(_p)
+
+
 def held(blocked):
     """The blocked files this process can still open for reading (empty: the block holds on all)."""
     _open = []
@@ -186,29 +230,32 @@ def held(blocked):
     return _open
 
 
-def run_shapes(blocked, shapes, mark):
+def run_shapes(blocked, shapes, mark, late=None):
     """Run each shape (args, kw) after blocking `blocked` (none: unblocked); which reached the planted binary.
 
     Reached: the planted binary left `mark`, or printed its "stand-in" line. Returns (why the block
-    did not hold or "", [reached?, ...], [output, ...]).
+    did not hold or "", [reached?, ...], [output, ...]); with `late` (a directory), the output list
+    ends with late_entry(late), run after the block.
     """
     import subprocess  # nosec B404 - the shapes are the suite's own fixed scripts
     _err = block(blocked, refer=False) if blocked else ""
     if _err:
         return _err, [], []
+    _late = [late_entry(late)] if late else []
     _reached, _outs = [], []
     for _args, _kw in shapes:
         if os.path.exists(mark):
             os.unlink(mark)
         try:
             # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-            _p = subprocess.run(_args, capture_output=True, timeout=10, **_kw)  # nosec B602 B603 - the suite's own fixed shapes, handed over by the parent test process
+            _p = subprocess.run(  # nosec B602 B603 - fixed shapes from the parent test
+                _args, capture_output=True, timeout=10, **_kw)
             _stdout, _out = _p.stdout, _p.stdout + _p.stderr
         except (OSError, subprocess.TimeoutExpired) as _ex:
             _stdout, _out = b"", repr(_ex).encode()
         _reached.append(os.path.exists(mark) or b"stand-in" in _stdout.splitlines())
         _outs.append(_out.decode("utf-8", "replace")[-300:])
-    return "", _reached, _outs
+    return "", _reached, _outs + _late
 
 
 if __name__ == "__main__":
@@ -216,6 +263,6 @@ if __name__ == "__main__":
     import json
     with open(sys.argv[1], encoding="utf-8") as _fh:
         _job = json.load(_fh)
-    _res = run_shapes(_job["blocked"], _job["shapes"], _job["mark"])
+    _res = run_shapes(_job["blocked"], _job["shapes"], _job["mark"], _job.get("late"))
     with open(sys.argv[2], "w", encoding="utf-8") as _fh:
         json.dump(_res, _fh)

@@ -190,6 +190,21 @@ _r31d_ts_machine = _r31d_ts_landlock.machine_binaries()
 # CI's runners have no tailscale, so there is nothing to block (the shapes below prove the block
 # itself on a planted binary there too).
 _r31d_ts_block_err = _r31d_ts_landlock.block(_r31d_ts_machine) if _r31d_ts_machine else ""
+# Said at the start, once: the block also denies anything created later directly in a directory on
+# the way to the binary (ts_landlock's docstring), and a check failing on that must not look like a
+# panel bug. A failing check whose detail is a permission error says so too (_r31j_result_line).
+_r31j_ts_header = (_r31d_ts_landlock.header(_r31d_ts_machine)
+                   if _r31d_ts_machine and not _r31d_ts_block_err else "")
+_r31j_said = []         # what the run said at its start (the check below reads it)
+
+
+def _r31j_say(line):
+    print(line, flush=True)
+    _r31j_said.append(line)
+
+
+if _r31j_ts_header:
+    _r31j_say(_r31j_ts_header)
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
@@ -2584,12 +2599,12 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
 # The shapes run as the kernel sees them, through the real spawner, with no reader in front.
 
 
-def _r31d_landlock_run(blocked, shapes):
+def _r31d_landlock_run(blocked, shapes, late=None):
     """ts_landlock.run_shapes in a child process: (why the block did not hold, reached?, outputs)."""
     _job = os.path.join(_r15d_ts_ctl_dir, "r31d-job.json")
     _res = os.path.join(_r15d_ts_ctl_dir, "r31d-res.json")
     with open(_job, "w", encoding="utf-8") as _fh:
-        _r26d_json.dump({"blocked": blocked, "shapes": shapes, "mark": _r16d_ts_mark}, _fh)
+        _r26d_json.dump({"blocked": blocked, "shapes": shapes, "mark": _r16d_ts_mark, "late": late}, _fh)
     _p = _R15D_SP_REAL["run"]([sys.executable, "-I", _r31d_ts_spec.origin, _job, _res],
                               capture_output=True, text=True, timeout=600)
     if _p.returncode != 0:
@@ -2630,6 +2645,43 @@ check("unit suite: the kernel refuses the machine's own tailscale to this run an
       and _r31d_held[0] == "" and len(_r31d_held[1]) == len(_r31d_shapes) and not _r31d_let,
       repr((_r31d_ts_machine, _r31d_ts_block_err, _r31d_ts_landlock.held(_r31d_ts_machine), _r21d_ts_at_start,
             _r31d_held[0], _r31d_let[:5])))
+
+
+def _r31j_result_line(ok, name, detail):
+    """One result as the tally prints it; a failure that reads as EACCES under the block names Landlock."""
+    line = ("PASS" if ok is True else "FAIL" if ok is False else "SKIP") + "  " + name
+    if detail and ok is not True:
+        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+        #     THIS line raise ('not all arguments converted'), so a
+        #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
+    if ok is False and _r31j_ts_header:
+        line += _r31d_ts_landlock.failure_note(detail, _r31d_ts_machine)
+    return line
+
+
+# The block's limit, measured on the planted binary: a script made after the block, directly in the
+# binary's own folder (a way), is refused; that is what a package update mid-run does to /usr/bin.
+_r31j_planted = [os.path.realpath(os.path.join(_r17d_ts_sys, "tailscale"))]
+_r31j_late = _r31d_landlock_run(_r31j_planted, [], late=_r17d_ts_sys)
+_r31j_late_err = (_r31j_late[2] or ["?"])[-1]
+_r31j_note = _r31d_ts_landlock.failure_note(_r31j_late_err, _r31j_planted)
+check("unit suite: the Landlock block's limit is said — a file made after the block beside the blocked "
+      "binary is refused (EACCES), and a check failing with that names Landlock; one that does not, does not",
+      _r31j_late[0] == "" and "Permission" in _r31j_late_err and "Landlock block active" in _r31j_note
+      and _r31d_ts_landlock.failure_note("got 3 want 4", _r31j_planted) == ""
+      and _r31d_ts_landlock.failure_note(_r31j_late_err, []) == "",
+      repr((_r31j_late, _r31j_note)))
+check("unit suite: ...the run says at its start when the block is on (which files, which folders), and "
+      "the tally adds the note to a failure only while it is on",
+      _r31j_said == ([_r31d_ts_landlock.header(_r31d_ts_machine)]
+                     if _r31d_ts_machine and not _r31d_ts_block_err else [])
+      and (not _r31j_ts_header or ("Landlock block active" in _r31j_ts_header
+                                   and all(_b in _r31j_ts_header for _b in _r31d_ts_machine)))
+      and ("Landlock" in _r31j_result_line(False, "x", "[Errno 13] Permission denied")) == bool(_r31j_ts_header)
+      and "Landlock" not in _r31j_result_line(True, "x", "[Errno 13] Permission denied"),
+      repr((_r31j_ts_header, _r31j_result_line(False, "x", "[Errno 13] Permission denied"))))
 check("unit suite: ...the planted binary is reached unblocked by its path, a copy and every review-1017b "
       "shape, and a part's stand-in on its own PATH still runs blocked (control)",
       _r31d_free[0] == "" and _r31d_free[1][-3:-1] == [True, True] and not _r31d_new
@@ -2927,14 +2979,7 @@ passed = sum(1 for ok, _, _ in results if ok is True)
 failed = sum(1 for ok, _, _ in results if ok is False)
 skipped = [(name, detail) for ok, name, detail in results if ok is None]
 for ok, name, detail in results:
-    line = ("PASS" if ok is True else "FAIL" if ok is False else "SKIP") + "  " + name
-    if detail and ok is not True:
-        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
-        #     THIS line raise ('not all arguments converted'), so a
-        #     FAILING check printed a traceback instead of its name
-        #     and killed the tally and cleanup. Lists and ints are fine
-        #     here; the concat-style printer elsewhere breaks on those.
-    print(line)
+    print(_r31j_result_line(ok, name, detail))
 print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
 # Loud, and after the tally, because a skip is a hole in the run rather than a result in it. It
 # does not fail the suite (the environment is not the code's fault) but it must never be mistaken
