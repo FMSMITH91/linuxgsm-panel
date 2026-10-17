@@ -320,24 +320,71 @@ def _ps106(src):
 
 
 _name106p = "credential field after a restored auth select"
+_MR106 = _read106("static", "js", "manage_remotes.js")
 _outp106 = _js106(_name106p, (
-    "const calls = [], on = {}; window.addEventListener = (ev, fn) => { on[ev] = fn; };\n"
-    "const sel = {value: 'key', dispatchEvent: e => calls.push('change:' + sel.value)};\n"
-    "document.getElementById = id => (id === 'manage-remotes-auth_method' || id === 'auth-method') ? sel : null;\n"
-    "function toggleCreds(s){ calls.push('toggle:' + s.value); }\n"
+    "const on = []; window.addEventListener = (ev, fn) => { if (ev === 'pageshow') on.push(fn); };\n"
     "global.Event = function(t){ this.type = t; };\n"
-    + _ps106(_read106("static", "js", "manage_remotes.js")) + "\nconst addForm = on.pageshow; delete on.pageshow;\n"
-    + _ps106(_read106("static", "js", "setup_remote.js")) + "\nconst wizard = on.pageshow;\n"), "", (), (
+    "E87.prototype.removeAttribute = function(k){ delete this.attrs[k]; };\n"
+    "const $ = id => document.getElementById(id);\n"
+    # the Add form, one host's Edit form (id 7) and the wizard's step, each select with its field
+    "const field = () => { const e = new E87('input'); e.type = 'text'; e.value = ''; return e; };\n"
+    "const addIn = field(), edIn = field(), wizIn = field();\n"
+    "const addSel = $('manage-remotes-auth_method'), edSel = $('manage-remotes-auth_method-7');\n"
+    "edSel.id = 'manage-remotes-auth_method-7';\n"
+    "addSel.form = {querySelector: () => addIn}; addSel.closest = () => addSel.form;\n"
+    "edSel.closest = () => ({querySelector: () => edIn});\n"
+    "document.querySelectorAll = q => q === '[id^=\"manage-remotes-auth_method-\"]' ? [edSel] : [];\n"
+    "document.querySelector = q => q === '[name=\"credential\"]' ? wizIn : null;\n"
+    "const wizSel = $('auth-method');\n"
+    "wizSel.addEventListener = (ev, fn) => { wizSel._change = fn; };\n"
+    "wizSel.dispatchEvent = e => wizSel._change.call(wizSel, e);\n"), "", (), (
     "  const out = {};\n"
-    "  for (const v of ['password', 'tailscale', 'key']) { sel.value = v; calls.length = 0;\n"
-    "    if (addForm) addForm(); if (wizard) wizard(); out[v] = calls.slice(); }\n"
+    + "\n".join("  " + _piece106(_MR106, h) for h in (
+        "function toggleCreds(", "function toggleEditCreds(", "function _r29j_credsOff(")) + "\n"
+    + "  " + _ps106(_MR106) + "\n"
+    + "  " + _read106("static", "js", "setup_remote.js") + "\n"
+    # set: [select value, field type, field value, group hidden] per form; then the page is shown
+    "  const show = (sel, grp, inp, st) => { sel.value = st[0]; inp.type = st[1]; inp.value = st[2];\n"
+    "    grp.style.display = st[3] ? 'none' : ''; };\n"
+    "  const read = (grp, inp) => [inp.type, inp.value, grp.style.display === 'none'];\n"
+    "  const forms = {add: [addSel, $('credential-group'), addIn], edit: [edSel, $('edit-cred-group-7'), edIn],\n"
+    "                 wizard: [wizSel, $('credential-field'), wizIn]};\n"
+    "  const cases = {\n"
+    "    reloadPassword: ['password', 'text', 'typed-in-clear', false],\n"
+    "    cachedPassword: ['password', 'password', 'typed-p106', false],\n"
+    "    reloadTailscale: ['tailscale', 'text', 'kept-p106', false],\n"
+    "    cachedTailscale: ['tailscale', 'text', '', true],\n"
+    "    offTailscale: ['password', 'password', 'typed-p106', true],\n"
+    "    key: ['key', 'text', '/k/p106', false] };\n"
+    "  for (const [f, [sel, grp, inp]] of Object.entries(forms)) for (const [c, st] of Object.entries(cases)) {\n"
+    "    const st2 = f === 'edit' ? [st[0], 'password', st[2], st[3]] : st;\n"
+    "    show(sel, grp, inp, st2); on.forEach(fn => fn()); out[f + '.' + c] = read(grp, inp); }\n"
+    "  edSel.value = 'key'; edIn.value = ''; $('edit-cred-group-7').style.display = 'none';\n"
+    "  on.forEach(fn => fn()); out['edit.keyHidden'] = read($('edit-cred-group-7'), edIn);\n"
     "  console.log(JSON.stringify(out));\n"))
 if _outp106 is not None:
+    _o106 = _outp106
     check("credential field: a page shown with its auth select restored to Password or Tailscale SSH "
           "(no `change` fired) sets the field for that method, on the Add Remote form and the setup "
           "wizard alike; a restored SSH Key is left alone",
-          _outp106 == {"password": ["toggle:password", "change:password"],
-                       "tailscale": ["toggle:tailscale", "change:tailscale"], "key": []}, repr(_outp106))
+          all(_o106.get(f + ".reloadPassword") == ["password", "", False]
+              and _o106.get(f + ".reloadTailscale") == ["text", "", True]
+              and _o106.get(f + ".key") == ["text", "/k/p106", False] for f in ("add", "wizard")), repr(_o106))
+    check("credential field: each host's Edit form follows a restored auth select too (onto Tailscale SSH "
+          "the box stayed shown and its text was stored for a transport that never reads it; off it, "
+          "the box stayed hidden)",
+          _o106.get("edit.reloadTailscale") == ["password", "", True]
+          and _o106.get("edit.offTailscale") == ["password", "typed-p106", False]
+          and _o106.get("edit.keyHidden") == ["password", "", False]
+          and _o106.get("edit.key") == ["password", "/k/p106", False], repr(_o106))
+    check("credential field: a page shown with the field already matching its select (a back/forward "
+          "page from the cache) is left as it is: a password typed before leaving it is not emptied, on "
+          "the Add form, the Edit form and the wizard",
+          all(_o106.get(f + ".cachedPassword") == [("password"), "typed-p106", False]
+              and _o106.get(f + ".cachedTailscale", [None, None, None])[2] is True
+              for f in ("add", "edit", "wizard"))
+          and _o106.get("add.offTailscale") == ["password", "", False]
+          and _o106.get("wizard.offTailscale") == ["password", "", False], repr(_o106))
 
 check("part106: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP106_START, repr(_P9_TRIPPED[_TRIP106_START:][:6]))
