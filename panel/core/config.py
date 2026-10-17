@@ -207,6 +207,25 @@ def _r26a_port(config):
     return config
 
 
+def bound_port():
+    """The port this process is bound to (app.config BOOT_PORT), or None outside an app or before boot.
+
+    The ONE reading of "the port the panel serves on now". config.json's port is the port the next
+    start binds: the two differ while a saved port change waits for its restart, and after one whose
+    restart could not be scheduled. Serve, the firewall's guard and close, the login jail and the
+    debug report each read config.json's while the panel still listened on the old port.
+    tailscale_integration._r13b_bound_port and _r13b_panel_ports are built on this.
+    """
+    try:
+        from flask import current_app, has_app_context
+        boot = current_app.config.get("BOOT_PORT") if has_app_context() else None
+    except Exception:  # noqa: BLE001 - no app to ask is "not known", as before boot
+        boot = None
+    if isinstance(boot, int) and not isinstance(boot, bool) and 0 < boot < 65536:
+        return boot
+    return None
+
+
 def _r29a_whitelist(config):
     """Make config["security_whitelist"] a list of strings, in place, when the key is there.
 

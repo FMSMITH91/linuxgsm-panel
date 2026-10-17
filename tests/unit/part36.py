@@ -57,7 +57,7 @@ import sqlalchemy as _sa36
 from unit import REPO_ROOT as _ROOT36
 from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_app, _p9_audit, _p9_client, _p9_core,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_row, _p9_sm)
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_row, _p9_patch_sm)
 from panel.db.models import GameServer, RemoteServer, db
 from panel.ops.ssh_manager import cron as _cron36
 from panel.ops.ssh_manager import files as _files36
@@ -332,12 +332,12 @@ def _stub_install36():
     _p9_patch(_ms36, "set_autostart", lambda r, s, on, _lg=None: _h36_next("cron7"))
     _p9_patch(_ms36, "time", NS(time=__import__("time").time, sleep=lambda s: None,
                                 monotonic=__import__("time").monotonic))
-    _p9_patch(_p9_sm, "list_server_commands", lambda r, s, _lg: _h36_next("cmds"))
-    _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
-    _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: set())
-    _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
-    _p9_patch(_p9_sm, "run_as_game_user", _run_as36)
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, _lg: _h36_next("cron_list"))
+    _p9_patch_sm("list_server_commands", lambda r, s, _lg: _h36_next("cmds"))
+    _p9_patch_sm("protected_host_ports", lambda r: {22})
+    _p9_patch_sm("remote_ufw_tagged_ports", lambda r, n: set())
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: None)
+    _p9_patch_sm("run_as_game_user", _run_as36)
+    _p9_patch_sm("list_cron_jobs", lambda r, s, _lg: _h36_next("cron_list"))
 
 
 def _install36(rid, name, port, **host):

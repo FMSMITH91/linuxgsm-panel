@@ -28,7 +28,8 @@ _BLOCKER_WORDS = {"install": i18n.Sentence("an install of {name}"),
                   "apt": i18n.Sentence("a package install on {name}"),
                   "self_update": i18n.Sentence("an update of {name}"),
                   "restore": i18n.Sentence("a restore of {name}"),
-                  "full_backup": i18n.Sentence("a full backup of {name}")}
+                  "full_backup": i18n.Sentence("a full backup of {name}"),
+                  "db_repair": i18n.Sentence("a database repair of {name}")}
 _BLOCKER_OTHER = i18n.Sentence("work on {name}")
 
 
@@ -39,7 +40,8 @@ PANEL_NAME = i18n.Sentence("the panel")
 # and "une mise à jour de le panneau", where Spanish says "del" and French "du" (review 1012b).
 _PANEL_BLOCKER_WORDS = {"self_update": i18n.Sentence("an update of the panel"),
                         "restore": i18n.Sentence("a restore of the panel"),
-                        "full_backup": i18n.Sentence("a full backup of the panel")}
+                        "full_backup": i18n.Sentence("a full backup of the panel"),
+                        "db_repair": i18n.Sentence("a database repair of the panel")}
 
 # A running job's phase as words. The raw token ("stopping", "arming") went into the translated
 # "{host} is already being rebooted ({phase})." as written.

@@ -621,8 +621,11 @@ def _complete_facts(cfg):
     private = (bool(running) and _bind_is_loopback(running)
                and not cfg.get("tailscale_use_funnel") and not cfg.get("trust_proxy")
                and not _r12a_funnel_maybe(cfg))
+    # The page prints running_bind:panel_port as where the panel "still answers" until it restarts,
+    # so the port is the one this process is bound to: a port the wizard's first step changed is
+    # config.json's from the next start only.
     return {"rebind_pending": _rebind_pending(cfg), "running_bind": running or "",
-            "panel_port": cfg.get("port", 5000), "tailnet_private": private}
+            "panel_port": ts._r13b_bound_port(cfg), "tailnet_private": private}
 
 
 def _complete_page(cfg, restarting=False, restart_ok=None):

@@ -459,8 +459,11 @@ def _register_ssh_settings(app):
         try:
             # On the panel host, also report whether the panel's own public web port is
             # still open, so the UI can disable "Close public panel port" once it's closed.
-            panel_port = load_config().get("port", 5000) if remote.is_local else None
-            st = remote_public_ssh_status(remote, panel_port=panel_port)
+            # Every port the panel's own: the one it serves on now and, while a port change waits
+            # for its restart, the saved one (ts._r13b_panel_ports). The button stays enabled while
+            # either is open, since Close takes both.
+            ports = [_r15a_cfg_int(p, 5000) for p in ts._r13b_panel_ports(load_config())] if remote.is_local else []
+            st = remote_public_ssh_status(remote, panel_port=ports or None)
             st["auth_method"] = remote.auth_method
             # The SSH port card printed the row's port as "the port sshd listens on". On a host the
             # panel reaches over Tailscale SSH that stays 22 after a move (it is the port tailscaled
@@ -560,34 +563,64 @@ def _register_panel_port(app):
         if not cfg.get("tailscale_setup_done"):
             return jsonify({"success": False, "message": "Set up Tailscale Serve first — "
                             "otherwise closing the public port would lock you out of the panel."}), 400
+        # The port this process serves on first, then config.json's when a port change waits for
+        # its restart (ts._r13b_panel_ports). This read config.json's alone: after a change whose
+        # restart could not be scheduled it closed the new port's rule, left the port the panel
+        # still served open, and said the panel was reachable only over the tailnet. Both are the
+        # panel's, so both close, and every refusal is asked before anything is deleted.
         # _r15a_cfg_int, not int() under (TypeError, ValueError): a hand-edited `Infinity` raised
         # OverflowError past that except.
-        port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
-
-        nums, shared, read = _r14a_panel_port_rules(remote, port)
-        refusal = _r14a_close_refusal(remote, port, shared, read)
-        if refusal is not None:
-            return refusal
-        if not nums:
+        ports = [_r15a_cfg_int(p, 5000) for p in ts._r13b_panel_ports(cfg)]
+        found = []
+        for p in ports:
+            nums, shared, read = _r14a_panel_port_rules(remote, p)
+            refusal = _r14a_close_refusal(remote, p, shared, read)
+            if refusal is not None:
+                return refusal
+            found.append((p, nums))
+        port = ports[0]
+        if not any(nums for _p, nums in found):
             return jsonify({"success": True,
                             "message": i18n.tr("Public port {port} is already closed.", port=port)})
-        # Delete by rule NUMBER (reliable across any rule format), force=True since this is
-        # the intentional guided close and Serve is already confirmed as the way in.
-        # Each with the rule's KEY: highest-first keeps the numbers valid only against this loop's
-        # own deletes, and the auto-block reconcile inserts its denies at 1 from another thread —
-        # one insert mid-loop and a forced delete by number took the rule above the panel port's
-        # (an attacker's deny, a game port). A moved number is refused; the verify read reports it.
-        with _r20b_audit_on_raise("close_panel_port", target=str(port), remote=remote):
-            for n, key in nums:
-                remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
-            _left, _left_shared, _verify = _r14a_panel_port_rules(remote, port)
-        # A verify read that FAILED cannot say the port is closed either.
-        ok = _verify == _R15C_READ and not _left and not _left_shared
-        log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
-        if not ok:
+        failed = _r31a_close_each(remote, found)
+        if failed is not None:
             return jsonify({"success": False, "message": i18n.tr(
-                "Couldn't remove every rule for port {port}; check the firewall page.", port=port)})
+                "Couldn't remove every rule for port {port}; check the firewall page.", port=failed)})
         return jsonify({"success": True, "message": _r13c_closed_port_message(port)})
+
+
+def _r31a_close_each(remote, found):
+    """Close each port's rules, `found` [(port, rule numbers as read)]: None, or the port left open."""
+    renumbered = False
+    for port, nums in found:
+        if renumbered:
+            # The deletes above renumbered the rules: this port's are read again (a number read
+            # before them is refused by its key, or names another rule).
+            nums, _shared, read = _r14a_panel_port_rules(remote, port)
+            if read != _R15C_READ:
+                return port
+        if nums and not _r31a_close_port_rules(remote, port, nums):
+            return port
+        renumbered = renumbered or bool(nums)
+    return None
+
+
+def _r31a_close_port_rules(remote, port, nums):
+    """Delete the rules `nums` that hold `port` open, verify, audit: whether none is left."""
+    # Delete by rule NUMBER (reliable across any rule format), force=True since this is
+    # the intentional guided close and Serve is already confirmed as the way in.
+    # Each with the rule's KEY: highest-first keeps the numbers valid only against this loop's
+    # own deletes, and the auto-block reconcile inserts its denies at 1 from another thread —
+    # one insert mid-loop and a forced delete by number took the rule above the panel port's
+    # (an attacker's deny, a game port). A moved number is refused; the verify read reports it.
+    with _r20b_audit_on_raise("close_panel_port", target=str(port), remote=remote):
+        for n, key in nums:
+            remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
+        _left, _left_shared, _verify = _r14a_panel_port_rules(remote, port)
+    # A verify read that FAILED cannot say the port is closed either.
+    ok = _verify == _R15C_READ and not _left and not _left_shared
+    log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
+    return ok
 
 
 # How _r14a_panel_port_rules read the firewall: read, not read, or read and not filtering anything.

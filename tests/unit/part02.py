@@ -1188,8 +1188,10 @@ try:
         open(_bl_lock, "w").close()
         _bl_old = _bl_time.time() - 600
         os.utime(_bl_lock, (_bl_old, _bl_old))
+        # A match prints its pid, as pgrep does: the sweep's own shell, whose command line is not
+        # a folder download's `tar czf -`, so it reads as a backup's tar.
         with open(os.path.join(_bl_bin, "pgrep"), "w") as _bl_f:
-            _bl_f.write("#!/bin/sh\nexit %d\n" % _bl_rc)
+            _bl_f.write("#!/bin/sh\n%sexit %d\n" % ("echo $PPID\n" if _bl_rc == 0 else "", _bl_rc))
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
         os.chmod(os.path.join(_bl_bin, "pgrep"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         _bl_sp.run(["bash", "-c", _sm_game._stale_backup_lock_sweep("gm", home=_bl_home) + "true"],

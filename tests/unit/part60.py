@@ -34,6 +34,7 @@ import subprocess as _sp60  # nosec B404 - runs bash on the create command this 
 import tempfile as _tf60
 from types import SimpleNamespace as NS
 
+from unit.console_live import as_state as _console_state60
 from unit.part01 import check
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
                          _p9_restore_all, _p9_trip)
@@ -68,7 +69,10 @@ _ACTIONS60 = ("create_file", "create_folder")
 def _bash60(server, user, sh, timeout=30, selfname=None):
     """shell_as_game_user, in a real bash, with /home/<account> pointing at the throwaway home."""
     _SHELLS60.append(sh)
-    script = _PRELUDE60["text"] + sh.replace("/home/" + _USER60, _HOME60)
+    # The console attached (unit.console_live), as for a running server: the host's refusal of the
+    # console's resolved path is live-only.
+    script = _PRELUDE60["text"] + _console_state60(sh.replace("/home/" + _USER60, _HOME60), "live",
+                                                   selfname or "csgoserver")
     p = _sp60.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607 - bash on this part's own command
                   timeout=30)
     return p.stdout, p.stderr, p.returncode
@@ -317,15 +321,20 @@ def _protected60(a_client, sid):
 
 
 def _console60(a_client, sid):
-    """A name the live console reads is refused — by its text, and on the host when resolved."""
+    """A name the live console reads is refused — by its text, and on the host when resolved.
+
+    By its text whether or not the server runs (a file at `log` stops LinuxGSM making its log
+    folders on the next start), so with the reserved wording, which is true in every state.
+    """
     _reset60()
     n_audit = len(_audits60())
     cases = (("", "log", "folder"), ("log", "console", "folder"),
              ("log/console", "csgoserver-console.log", "file"), ("./log/", "console", "folder"))
-    want = (400, {"success": False, "message": _files60.CREATE_CONSOLE})
+    want = (400, {"success": False, "message": _files60.CREATE_RESERVED})
     bad = [(c, r) for c, r in ((c, _post60(a_client, sid, *c)) for c in cases) if r != want]
-    check("create route: log, log/console and the console's own log are refused (400) by name, "
-          "and nothing is sent", not bad and not _SHELLS60, repr(bad[:3]))
+    check("create route: log, log/console and the console's own log are refused (400) by name as "
+          "reserved — never 'the live console', which is false of a stopped server — and nothing is "
+          "sent", not bad and not _SHELLS60, repr(bad[:3]))
     rows, refused = _refusal_rows60(n_audit)
     check("create route: ...each is audited", len(rows) == len(cases) and refused, repr(rows))
     # The logs on another folder, through `log -> disk/logs`, not made yet: only the host sees

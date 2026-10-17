@@ -22,6 +22,7 @@ exists to catch, so it is not allowed to be the shape of the suite itself.
 import functools
 import glob
 import importlib
+import importlib.util
 import os
 import re
 import sys
@@ -172,6 +173,38 @@ for _attr, _fns in _WATCHED.items():
 # `tailscale` and a `which` make the same call at the moment of use. In the shell it was given,
 # from a shim directory first on its PATH (_R26D_SHIM); under bash with them as functions where
 # the shim cannot hold (a shell behind a wrapper, a script that sets its own PATH).
+#
+# Under all of that, the KERNEL refuses the machine's own binaries (review 1017b): reading shell
+# text to predict what a shell will run leaked new shapes every pass, each one running the real CLI
+# against the developer's live node. tests/unit/ts_landlock.py (Landlock) denies running or reading
+# the machine's `tailscale`/`tailscaled` to this process and everything it starts, whatever handle,
+# wrapper or shell reaches them. Applied here, while the process has one thread (Landlock restricts
+# the calling thread and what it starts), and before any panel module can start one. The readers
+# below stay in front: they answer "not installed" (FileNotFoundError) as CI's runner does, where the
+# block answers "permission denied"; a shape they misread now fails a check, not the node.
+_r31d_ts_spec = importlib.util.spec_from_file_location(
+    "_r31d_ts_landlock", os.path.join(_root, "tests", "unit", "ts_landlock.py"))
+_r31d_ts_landlock = importlib.util.module_from_spec(_r31d_ts_spec)
+_r31d_ts_spec.loader.exec_module(_r31d_ts_landlock)
+_r31d_ts_machine = _r31d_ts_landlock.machine_binaries()
+# CI's runners have no tailscale, so there is nothing to block (the shapes below prove the block
+# itself on a planted binary there too).
+_r31d_ts_block_err = _r31d_ts_landlock.block(_r31d_ts_machine) if _r31d_ts_machine else ""
+# Said at the start, once: the block also denies anything created later directly in a directory on
+# the way to the binary (ts_landlock's docstring), and a check failing on that must not look like a
+# panel bug. A failing check whose detail is a permission error says so too (_r31j_result_line).
+_r31j_ts_header = (_r31d_ts_landlock.header(_r31d_ts_machine)
+                   if _r31d_ts_machine and not _r31d_ts_block_err else "")
+_r31j_said = []         # what the run said at its start (the check below reads it)
+
+
+def _r31j_say(line):
+    print(line, flush=True)
+    _r31j_said.append(line)
+
+
+if _r31j_ts_header:
+    _r31j_say(_r31j_ts_header)
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
@@ -194,27 +227,38 @@ _R19D_DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 # behind a wrapper (env -i, sudo, runuser) keeps the bash route: its PATH is the wrapper's to set.
 _R26D_SHIM = tempfile.mkdtemp(prefix="lgsm-unit-ts-shim-")
 # What keeps a script off the shim route: PATH set, appended, exported, unset or defaulted by the
-# script itself, `command -p`, and `hash`, which can point the name at any file.
-_R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\s+)*-\w*p|\bhash\b")
+# script itself, `command -p`, and `hash`, which can point the name at any file; and BASH_ENV, a
+# file every non-interactive bash sources before its script (review 1017b: `BASH_ENV=<f> bash -c
+# 'tailscale'` put the machine's directory ahead of the shim from that file).
+_R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\s+)*-\w*p|\bhash\b|\bBASH_ENV\b")
+# The options a shell takes before (or after) its -c or login flag: one with a value (`-o pipefail`,
+# `-O extglob`), a long one (`--norc`) or `--`, and a cluster of flags (review 1017b: only the last
+# was skipped, so `bash -o pipefail -c "${P}TH=<d>; tailscale"` and `bash --norc -lc` went unread).
+# (A value never starts with a dash, so no text reads two ways and the pattern cannot backtrack
+# exponentially.)
+_R31D_SH_OPTS = r"(?:[-+][oO]\s+[^\s-]\S*\s+|--[\w-]*\s+|[-+]\w+\s+)*"
 # A login shell: its profile sets PATH (Debian's /etc/profile resets it, ~/.profile prepends ~/bin).
 # An interactive one (`bash -ic`) reads ~/.bashrc, which can set it as well; an option's value
 # (`bash -O extglob -l`) is skipped, and `exec -l` hands any shell a login name (review 1017a).
-_R29D_LOGIN = re.compile(r"(?:^|[\s;&|(`/'\"])(?:ba|da|z|k|mk)?sh\s+(?:[-+][oO]\s+\w+\s+|[-+]\w+\s+)*"
-                         r"(?:-[a-zA-Z]*[il][a-zA-Z]*|--login|--interactive)\b"
+_R29D_LOGIN = re.compile(r"(?:^|[\s;&|(`/'\"])(?:ba|da|z|k|mk)?sh\s+" + _R31D_SH_OPTS
+                         + r"(?:-[a-zA-Z]*[il][a-zA-Z]*|--login|--interactive)\b"
                          r"|\bexec\s+(?:-a\s+\S+\s+|-(?!a\s)\w+\s+)*(?:-\w*l\w*\s|-a\s+-)")
 # The `.` builtin, where a command starts (review 1017a: any ` . ` word counted, so `find . -name x`
 # read as sourcing a file, moved its script off the shell production runs it under, and a wrapper
-# handed `find . …` was judged as possibly running the binary).
-_R30D_SOURCE_DOT = (r"(?:^|[;&|(){!\n]|\b(?:then|do|else|if|elif|while|until|time|builtin|command))"
-                    r"[ \t]*\.[ \t]+[^\s;&|]")
+# handed `find . …` was judged as possibly running the binary). A command starts inside backticks
+# too, and may carry assignments and redirections before its `.` (review 1017b: `X=1 . <f>`,
+# `2>/dev/null . <f>` and `` `. <f>; …` `` each sourced a PATH change the reader did not see).
+_R30D_SOURCE_DOT = (r"(?:^|[;&|(){!\n`]|\b(?:then|do|else|if|elif|while|until|time|builtin|command))"
+                    r"[ \t]*(?:(?:\w+=(?:'[^']*'|\"[^\"]*\"|[^\s;&|)'\"])*|(?:\d*|&)[<>]{1,2}&?[ \t]*[^\s;&|<>()]+)"
+                    r"[ \t]+)*\.[ \t]+[^\s;&|]")
 # A sourced or eval'd text, which can set any name the script reads.
 _R30D_SETS_ANY = re.compile(r"\beval\b|\bsource\b|" + _R30D_SOURCE_DOT)
 # ...and what else can set it unseen (review 1016f): a sourced or eval'd text, a nested login shell.
 _R29D_SHIM_OFF = re.compile(_R30D_SETS_ANY.pattern + "|" + _R29D_LOGIN.pattern)
 # A nested shell, bash too, handed a -c script (review 1017a: `bash -c "${P}TH=<d>; tailscale"`
 # builds the name PATH only when the inner shell runs, where no reader of the outer text sees it).
-_R30D_NESTED_C = re.compile(r"(?:^|[\s;&|(`/'\"])(?:(?:ba|da|z|k|mk)?sh|busybox\s+sh)\s+(?:[-+]\w+\s+)*"
-                            r"-\w*c\w*\s+('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
+_R30D_NESTED_C = re.compile(r"(?:^|[\s;&|(`/'\"])(?:(?:ba|da|z|k|mk)?sh|busybox\s+sh)\s+" + _R31D_SH_OPTS
+                            + r"-\w*c\w*\s+" + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
 # Builtins that take a variable NAME as a word (`export 'PATH=…'`, `read ${P}TH`): one handed a
 # quoted or built name may be setting PATH. printf names it only after -v.
 _R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray",
@@ -702,7 +746,9 @@ def _r23d_expand_vars(text, env):
 # is judged as one that may name `tailscale` (review 1016b: `T=tail; ${T}scale`, `tail$(:)scale`,
 # `$'tail\x73cale'` and `tail${X:+scale}` each ran the machine's binary under a shell the guard
 # reads statically; a fifth spelling would always remain, so the construct is what is judged).
-_R25D_BUILDS = re.compile(r"[$`\\{]|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s")
+# (The `.` where a command starts, review 1017b: any ` . ` counted, so `sh -c "find . -name x"` was
+# read as building PATH and taken off the shim.)
+_R25D_BUILDS = re.compile(r"[$`\\{]|\beval\b|\bsource\b|" + _R30D_SOURCE_DOT)
 
 
 def _r25d_builds(text):
@@ -736,15 +782,22 @@ def _r26d_strip_single(text):
 
 def _r30d_strip_once(text, paren_comment):
     """_r26d_strip_single under one reading of a `#` right after a `)` (a comment when `paren_comment`)."""
-    out, i, dq, bodies, esc_end = [], 0, False, [], -1
+    out, i, dq, bodies, esc_end, conts = [], 0, False, [], -1, set()
     while i < len(text):
         ch = text[i]
         if ch == "\\":
             out.append(text[i:i + 2])
             i += 2
-            esc_end = i
+            # A backslash-newline is a line continuation, which bash removes before it reads words:
+            # it escapes nothing (review 1017b: `echo \⏎#'` read the `#` as mid-word, where bash
+            # reads it as a comment, and the quote in it inverted the reader's quoting).
+            if text[i - 1:i] == "\n":
+                conts.add(i)
+            else:
+                esc_end = i
             continue
-        _j = None if dq else _r28d_unquoted_step(text, i, out, bodies, _r30d_word_start(text, i, esc_end, paren_comment))
+        _ws = _r30d_word_start(text, i, esc_end, paren_comment, conts)
+        _j = None if dq else _r28d_unquoted_step(text, i, out, bodies, _ws)
         if _j is not None:
             i = _j
             continue
@@ -762,12 +815,16 @@ def _r30d_strip_once(text, paren_comment):
     return "".join(out)
 
 
-def _r30d_word_start(text, i, esc_end, paren_comment):
+def _r30d_word_start(text, i, esc_end, paren_comment, conts=()):
     """Does a word start at text[i] (unquoted), as bash decides whether a `#` there opens a comment?
 
     At the start, or after an unescaped blank or operator character; after a `)` only under the
-    reading `paren_comment` takes.
+    reading `paren_comment` takes. Judged where the character before any line continuations (each
+    ending at an index in `conts`) is, since bash removes them (review 1017b): `echo a<backslash-newline>#`
+    is mid-word, `echo <backslash-newline>#` starts one.
     """
+    while i in conts:
+        i -= 2
     if i == 0:
         return True
     if i == esc_end:
@@ -908,9 +965,10 @@ _R25D_SCRIPT_WRAPPED_BUILT = re.compile(
     r"(?:^|[\s;&|(`/])(?:%s)\s[^;&|\n]*?(?:[$`]|\beval\b)"
     % "|".join(sorted(set(_R19D_WRAPPERS) | set(_R20D_SCRIPT_ONLY))))
 # A shell the functions never reach (dash, zsh, …) handed a quoted script of its own: that script
-# is judged by what it can build, not by the quotes that make it literal to the outer shell.
+# is judged by what it can build, not by the quotes that make it literal to the outer shell. Past
+# any option the shell takes (_R31D_SH_OPTS, review 1017b: `zsh -o noglob -c '…'` was not read).
 _R25D_NESTED_SHELL = re.compile(r"(?:^|[\s;&|(`/])(?:sh|dash|zsh|ksh|mksh|busybox)\s+(?:busybox\s+)?"
-                                r"(?:[-+]\w+\s+)*-\w*c\w*\s+('[^']*'|\"[^\"]*\")")
+                                + _R31D_SH_OPTS + r"-\w*c\w*\s+" + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\")")
 # env's clearing options anywhere among its options, and by a long name's prefix (review 1015d:
 # only one right after `env` was read, so `env -v -i x`, `env -u PATH x` and `env --unse PATH x`
 # were judged on the PATH the script started with).
@@ -1216,7 +1274,8 @@ def _r30d_path_literals(script, env, senv):
 
 # A directory change a script makes, and its target if it names one (after `--`, review 1017a: the
 # `--` was read as the target, so `cd -- <d> && ./tailscale` was judged against `<start>/--`).
-_R29D_CD = re.compile(r"(?:^|[\s;&|(])(?:cd|pushd)\b(?:[ \t]+(?:-[LPe@]+[ \t]+)*(?:--(?=[\s;&|)]|$)[ \t]*)?"
+# The builtin's word quoted or escaped is still the builtin (review 1017b: `"cd" <d> && ./tailscale`).
+_R29D_CD = re.compile(r"(?:^|[\s;&|(])(?:\\?(?:cd|pushd)|\"(?:cd|pushd)\"|'(?:cd|pushd)')(?![\w-])(?:[ \t]+(?:-[LPe@]+[ \t]+)*(?:--(?=[\s;&|)]|$)[ \t]*)?"
                       r"([^\s;&|)]+))?")
 # A path whose last word the script builds (`<d>/tail$(:)scale`, `<d>/${T%x}`): judged as `<d>/tailscale`.
 _R29D_BUILT_LAST = re.compile(r"(?<![\w.~$/:-])((?:~|\$\{?\w+\}?|\.{1,2})?[\w./~-]*)/([^\s/;&|<>]+)")
@@ -1355,6 +1414,10 @@ class _R15dNoSystemTailscale:
         if _r29d_may_set_path(_r16d_shell_text(cmd, kw)) or (not kw.get("shell") and _r29d_login(cmd)):
             return None
         _env = _r20d_run_env(kw)
+        # ...and a bash handed BASH_ENV in its environment, which it sources before the script
+        # (review 1017b: that file's PATH= stepped past the shim, as a sourced one does).
+        if _env.get("BASH_ENV"):
+            return None
         return cmd, dict(kw, env=dict(_env, PATH=_R26D_SHIM + os.pathsep + _env.get("PATH", os.defpath),
                                       R26D_TS_ROOTS=os.pathsep.join(_R19D_STAND_IN_ROOTS)))
 
@@ -1644,6 +1707,19 @@ _r16d_wrap_ts_handles()
 # in bash under a temp root and drives part12's app with stand-ins; imports part01 and 12.
 # part109 (the eighteenth review's page and script fixes, builder C) drives part12's app and runs
 # node through part106's harness; imports part01, 12 and 106.
+# part110 (review 1017b: no bare reboot on an unread host row, the bound port wherever the panel's
+# current port is meant, one database repair at a time, the helper never blocking on a fifo, the
+# privilege model page-only in the debug report, builder A) drives part12's app with stand-ins, the
+# helper in a bounded child python, and the debug report's sections; imports part01, 05, 12, 20, 43 and 108.
+# part111 (review 1017b: the file browser's Delete refuses the live console's log and the folders
+# above it, an OS update is "watched" only when it is the panel's own job, an unreadable LinuxGSM
+# config never reads as empty, builder B) drives part12's app with the host side in a real bash over
+# a temp home, a `cat >> log` pipe-pane stand-in, and real pgrep and tar over stand-in processes;
+# imports part01, 05 and 12.
+# part112 (the nineteenth review's page fixes, builder C) runs node through part106's harness and
+# drives part12's app; imports part01, 12, 106 and 109.
+# part113 (the pre-merge adversarial review of review 1017b, fixer J) drives part12's app with
+# stand-ins and real pgrep over sleeping stand-in processes; imports part01, 12 and 110.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1656,7 +1732,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
           "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
-          "part109",
+          "part109", "part110", "part111", "part112", "part113",
           "part15")
 
 
@@ -2053,247 +2129,17 @@ _r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a, _s in _R16D
 _r21d_own_first = dict(os.environ, PATH=os.path.join(_r15d_ts_ctl_dir, "own") + os.pathsep + "/usr/bin:/bin")
 
 
+# The shapes live in ts_landlock (its own table, which the kernel block's child runs too); the files
+# they source are written once here, before any of them runs.
+_r31d_ts_landlock.write_shape_sources(_r15d_ts_ctl_dir, (_r17d_ts_sys, _r18d_ts_sysl, _r19d_ts_lnk))
+
+
 def _r19d_ts_shapes(d):
-    """Every shape a handle sees, with the binary found in directory `d`.
+    """Every shape a handle sees, with the binary found in directory `d` (ts_landlock.shapes).
 
     A shape that brings its own `env` keeps it; every other one starts with `d` first on PATH.
     """
-    _ts, _p = os.path.join(d, "tailscale"), "PATH=%s:/usr/bin:/bin" % d
-    return (("run", (["tailscale", "version"],), {}),
-            ("Popen", (["tailscale", "status"],), {}),
-            ("run", ("tailscale status --json 2>/dev/null || echo '{}'",), {"shell": True}),
-            ("run", ("tailscale set --ssh 2>&1",), {"shell": True}),
-            # WHICH-FOUND: `which` letting the binary's path through is a let-through too (the
-            # path has no "stand-in" in it, review 1012b).
-            ("Popen", (["/bin/bash", "-c", "which tailscale && echo WHICH-FOUND; tailscale version"],), {}),
-            # An option before -c, an `env` prefix, a bare string with no shell and the binary
-            # named by its path ran unjudged (review 1012c).
-            ("run", (["/bin/bash", "-e", "-c", "tailscale version"],), {}),
-            ("run", (["/usr/bin/env", "X=1", "sh", "-o", "errexit", "-c", "tailscale version"],), {}),
-            ("run", ("tailscale",), {}),
-            ("run", ([_ts, "version"],), {}),
-            # Behind wrapper commands, and past the shell's function by a wrapper or a path, it
-            # ran unjudged too (review 1012d); `env -i` drops the exported functions.
-            ("run", (["timeout", "5", "tailscale", "version"],), {}),
-            ("run", (["nice", "-n", "5", "/usr/bin/env", "-i", _p, "tailscale"],), {}),
-            ("run", (["env", "-i", _p, "bash", "-c", "tailscale version"],), {}),
-            ("run", (["setsid", "env", "-u", "X", "sh", "-c", "tailscale version"],), {}),
-            ("run", ("timeout 5 tailscale version",), {"shell": True}),
-            ("run", ("command tailscale version",), {"shell": True}),
-            ("run", (["/bin/bash", "-c", "%s version" % _ts],), {}),
-            # Behind a wrapper only the script form knew, as a command line held in one option
-            # value, as a tuple, through check_output/call, and past the function by `type -P`, a
-            # nested sh, a wrapper named by its path or an unset variable (review 1013a).
-            ("run", (["taskset", "1", "tailscale", "version"],), {}),
-            ("run", (["flock", "-w", "5", d, "tailscale"],), {}),
-            ("run", (["chrt", "-o", "0", "tailscale"],), {}),
-            ("run", (["/usr/bin/time", "-o", "/dev/null", "tailscale"],), {}),
-            ("run", (["xargs", "-a", "/dev/null", "tailscale"],), {}),
-            ("run", (["xargs", "-a", "/dev/null", "bash", "-c", "tailscale version"],), {}),
-            ("run", (["env", "-S", "tailscale version"],), {}),
-            ("run", (["env", "--split-string=tailscale version"],), {}),
-            # A long option by its prefix, as getopt_long takes it (review 1015c).
-            ("run", (["env", "--split-str=tailscale version"],), {}),
-            ("run", (["env", "--spl=tailscale"],), {}),
-            ("run", (["env", "-S", "tail'scale' version"],), {}),
-            ("run", (["env", "-Stailscale\\_version"],), {}),
-            ("run", (["zsh", "-c", "tailscale version"],), {}),
-            ("run", (("env", "--", "tailscale", "version"),), {}),
-            ("run", (("env", "--", "bash", "-c", "tailscale version"),), {}),
-            ("check_output", (["tailscale", "version"],), {}),
-            ("call", (["tailscale", "version"],), {}),
-            ("run", ('"$(type -P tailscale)" version',), {"shell": True}),
-            ("run", ("sh -c 'tailscale version'",), {"shell": True}),
-            ("run", ("/usr/bin/env tailscale version",), {"shell": True}),
-            ("run", ("$R20D_UNSET%s version" % _ts,), {"shell": True}),
-            ("run", ('t=$(which -a tailscale | head -n 1); [ -n "$t" ] && "$t" version',), {"shell": True}),
-            ("run", ('t=$(whereis -b tailscale | cut -d" " -f2); [ -x "$t" ] && "$t" version',), {"shell": True}),
-            # -S/-c grouped or attached, and a command line naming the binary by its path while a
-            # part's own stand-in is first on PATH (review 1015a).
-            ("run", (["env", "-Stailscale version"],), {}),
-            ("run", (["env", "-vS", "tailscale version"],), {}),
-            ("run", (["zsh", "-ec", "tailscale"],), {}),
-            ("run", (["env", "-S", "%s version" % _ts],), {"env": _r21d_own_first}),
-            ("run", (["zsh", "-c", "%s version" % _ts],), {"env": _r21d_own_first})) + _r23d_ts_shapes(d)
-
-
-def _r23d_ts_shapes(d):
-    """_r19d_ts_shapes' long-option and variable shapes (review 1015d)."""
-    return (
-        # flock reads -c/--command only as the word after the lock file, and by its value in
-        # the next word: `--comm=x` was refused by flock itself, so it could not fail; this one
-        # runs the binary unless the separate-word reading judges it.
-        ("run", (["flock", d, "--command", "tailscale"],), {}),
-        ("run", (["env", "--spl", "tailscale\\_version"],), {}),
-        # A value-taking long option by its prefix: its value is not the program.
-        ("run", (["env", "--ch", d, "tailscale", "version"],), {}),
-        ("run", (["timeout", "--sig", "TERM", "5", "tailscale", "version"],), {}),
-        ("run", (["xargs", "--arg", "/dev/null", "tailscale"],), {}),
-        # A variable env -S or a shell expands to nothing, unset or empty.
-        ("run", (["env", "-S", "tail${R23D_UNSET}scale version"],), {}),
-        ("run", (["zsh", "-c", "tail$R23D_UNSET'scale' version"],), {})) + _r25d_ts_shapes(d)
-
-
-def _r25d_ts_shapes(d):
-    """_r19d_ts_shapes' mixed-reading, built-word and which -a shapes (review 1016b)."""
-    _own_then_d = dict(os.environ, PATH=os.pathsep.join((os.path.join(_r15d_ts_ctl_dir, "own"), d, "/usr/bin:/bin")))
-    return (
-        # --f is timeout's --foreground (a flag) and a prefix of --format; --sig needs its value.
-        ("run", (["timeout", "--f", "--sig", "KILL", "5", "tailscale", "version"],), {}),
-        # A name the script builds: bash, sh and a shell-less shell the guard reads statically.
-        ("run", (["bash", "-c", "T=tail; ${T}scale version"],), {}),
-        ("run", ("T=tail; ${T}scale version",), {"shell": True}),
-        ("run", (["sh", "-c", "T=tail; ${T}scale version"],), {}),
-        ("run", (["zsh", "-c", "T=tail; ${T}scale version"],), {}),
-        ("run", (["zsh", "-c", "tail${HOME:+scale} version"],), {}),
-        ("run", (["zsh", "-c", "tail$(:)scale version"],), {}),
-        # ...past the function: a wrapper given the built word, and a path the script builds.
-        ("run", ("T=tail; command ${T}scale version",), {"shell": True}),
-        ("run", ("sh -c 'T=tail; ${T}scale version'",), {"shell": True}),
-        ("run", ('p=%s; t=tail; "$p/${t}scale" version' % d,), {"shell": True}),
-        # `which -a` past a part's stand-in first on PATH listed the machine's binary after it.
-        ("run", ('t=$(which -a tailscale | grep -v /own/ | head -n 1); [ -n "$t" ] && "$t" version',),
-         {"shell": True, "env": _own_then_d})) + _r26d_ts_shapes(d)
-
-
-def _r26d_ts_shapes(d):
-    """_r19d_ts_shapes' quoted-name, apostrophe and argv0 shapes, and built words behind the shim (review 1016c)."""
-    _apos = 'echo "it\'s" >/dev/null; T=tail; ${T}scale version; echo "don\'t" >/dev/null'
-    return (
-        # An apostrophe inside "…" opened no string, but was read as one hiding the built word.
-        ("run", (_apos,), {"shell": True}),
-        ("run", (["bash", "-c", _apos],), {}),
-        ("run", (["zsh", "-c", _apos],), {}),
-        # The name spelled with quotes: no literal word, so no function was handed over.
-        ("run", (["bash", "-c", "tail'scale' version"],), {}),
-        ("run", ('tail"scale" version',), {"shell": True}),
-        ("run", (["sh", "-c", "ta''ilscale version"],), {}),
-        # env's -a/--argv0 takes a value, which was read as the program.
-        ("run", (["env", "-a", "x", "tailscale", "version"],), {}),
-        ("run", (["env", "--argv0", "x", "tailscale", "version"],), {}),
-        # A built word a wrapper execs from PATH, and one `which` finds, in the shell it was given.
-        ("run", ("T=tail; timeout 5 ${T}scale version",), {"shell": True}),
-        ("run", (["sh", "-c", "T=tail; command ${T}scale version"],), {}),
-        ("run", ('T=tail; t=$(which ${T}scale) && "$t" version',), {"shell": True}),
-        ("run", (["sh", "-c", 'T=tail; t=$(which -a ${T}scale | tail -n 1) && "$t" version'],), {})
-    ) + _r28d_ts_shapes(d)
-
-
-def _r28d_ts_shapes(d):
-    """_r19d_ts_shapes' PATH-setting, comment, here-document and set-otherwise shapes (review 1016e).
-
-    Each puts the planted "machine's" directory `d` where the script searches, never the real
-    default PATH: a shape that escaped would otherwise run this machine's own binary.
-    """
-    _hd = "cat >/dev/null <<EOF\nit's\nEOF\nT=tail; ${T}scale version\necho 'x'"
-    return (
-        # A script that only builds the name and sets its own PATH stepped past the shim.
-        ("run", ("PATH=%s:$PATH; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", ("export PATH=%s:$PATH; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", (["sh", "-c", "PATH=%s:$PATH; T=tail; ${T}scale version" % d],), {}),
-        ("run", ("T=tail; PATH=%s ${T}scale version" % d,), {"shell": True}),
-        # ...and a wrapper execs from the PATH the script gives it, which was never judged.
-        ("run", ("T=tail; env PATH=%s ${T}scale version" % d,), {"shell": True}),
-        ("run", ("T=tail; PATH=%s:$PATH; timeout 5 ${T}scale version" % d,), {"shell": True}),
-        ("run", (["env", "PATH=%s:/usr/bin:/bin" % d, "bash", "-c", "T=tail; timeout 5 ${T}scale version"],), {}),
-        # An expansion the reader cannot model, behind a wrapper given a PATH.
-        ("run", ("T=tailx; env PATH=%s ${T%%x}scale version" % d,), {"shell": True}),
-        ("run", ("T=X; env PATH=%s ${T/X/tail}scale version" % d,), {"shell": True}),
-        ("run", ("A=(tail); env PATH=%s ${A[0]}scale version" % d,), {"shell": True}),
-        ("run", ("T=xtailscale; env -i PATH=%s:/usr/bin:/bin ${T#x} version" % d,), {"shell": True}),
-        # A name set other than by a plain NAME=, under the bash route (the script names the word).
-        ("run", (["bash", "-c", "echo tailscale >/dev/null; printf -v T tail; timeout 5 ${T}scale version"],), {}),
-        ("run", (["bash", "-c", "echo tailscale >/dev/null; : ${T:=tail}; timeout 5 ${T}scale version"],), {}),
-        ("run", (["bash", "-c", "echo tailscale >/dev/null; T=tail; T+=scale; timeout 5 $T version"],), {}),
-        ("run", (["env", "T=tailscale", "bash", "-c", "timeout 5 $T version"],), {}),
-        # An apostrophe in a comment or a here-document's body opened no string.
-        ("run", ("# it's a comment\nT=tail; ${T}scale version\necho 'x'",), {"shell": True}),
-        ("run", (_hd,), {"shell": True}),
-        ("run", (["sh", "-c", _hd],), {})) + _r29d_ts_shapes(d)
-
-
-def _r29d_ts_shapes(d):
-    """_r19d_ts_shapes' PATH set past the reader, cd-relative and built-path shapes (review 1016f).
-
-    Each reached the planted "machine's" binary in `d` through every handle: a PATH the stripped
-    reader could not see (single-quoted inside a nested bash, a quoted or built name, a sourced or
-    eval'd text, hidden by `$'…'`, a `#` inside a word or a here-document it did not know), a path
-    read against the run's directory instead of the script's `cd`, a path whose last word is built,
-    and a value quoted in part.
-    """
-    _src = os.path.join(_r15d_ts_ctl_dir, "r29d-path-%s.sh" % os.path.basename(d))
-    with open(_src, "w", encoding="utf-8") as _fh:
-        _fh.write("PATH=%s:$PATH\n" % d)
-    _tail = "T=$(echo tail); PATH=%s:$PATH; timeout 5 ${T}scale version; echo 'x'" % d
-    return (
-        ("run", ("bash -c 'PATH=%s:$PATH; tailscale version'" % d,), {"shell": True}),
-        ("run", ("bash -c 'export PATH=%s; tailscale version'" % d,), {"shell": True}),
-        ("run", ("export 'PATH=%s:/usr/bin:/bin'; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", (["bash", "-c", "declare -x 'PATH=%s:/usr/bin'; T=tail; ${T}scale version" % d],), {}),
-        ("run", ("T=tail; export 'PATH=%s'; tailscale version" % d,), {"shell": True}),
-        ("run", ("P=PA; export ${P}TH=%s; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", (". %s; T=tail; ${T}scale version" % _src,), {"shell": True}),
-        ("run", (["sh", "-c", ". %s; T=tail; ${T}scale version" % _src],), {}),
-        ("run", ('eval "PA""TH=%s:$PATH"; T=tail; ${T}scale version' % d,), {"shell": True}),
-        ("run", (["bash", "-c", "x=$'it\\'s'; PATH=%s:$PATH; T=tail; ${T}scale version; echo 'y'" % d],), {}),
-        ("run", ("T=tailscalex; echo \\ #; env -i PATH=%s ${T%%x} version" % d,), {"shell": True}),
-        ("run", ("T=tailscalex; : $(:)#; env -i PATH=%s ${T%%x} version" % d,), {"shell": True}),
-        ("run", ("T=tailscalex; echo a\\\n#; env -i PATH=%s ${T%%x} version" % d,), {"shell": True}),
-        ("run", ("echo \\ #; PATH=%s; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", ("cat >/dev/null <<\\EOF\nit's\nEOF\n" + _tail,), {"shell": True}),
-        ("run", ('cat >/dev/null <<E"OF"\nit\'s\nEOF\n' + _tail,), {"shell": True}),
-        ("run", (["bash", "-c", "T=tail; cat <<< END\necho 'abc\nEND\ndef' ; ${T}scale version; echo 'z'\n"],), {}),
-        ("run", ("cd %s && ./tailscale version" % d,), {"shell": True}),
-        ("run", ("cd %s; T=tail; ./${T}scale version" % d,), {"shell": True}),
-        ("run", (["sh", "-c", "cd %s; T=tail; ./${T}scale version" % d],), {}),
-        ("run", ("%s/tail$(:)scale version" % d,), {"shell": True}),
-        ("run", ("T=tailscalex; %s/${T%%x} version" % d,), {"shell": True}),
-        ("run", ('T=ta"il"; env -i PATH=%s ${T}scale version' % d,), {"shell": True}),
-        ("run", ("T=ta'il'; env -i PATH=%s ${T}scale version" % d,), {"shell": True})) + _r30d_ts_shapes(d)
-
-
-def _r30d_ts_shapes(d):
-    """_r19d_ts_shapes' quoted-path, unresolved-directory, CDPATH, nested-PATH and `#` shapes (review 1017a).
-
-    Each reached the planted "machine's" binary in `d`: a path whose directory or last word is
-    quoted or cannot be resolved, a `cd` under CDPATH, past `--` or to a directory the reader cannot
-    name, a nested bash building the name PATH, a `#` that only looks like a comment opening a
-    quote the reader never saw, and a name set in a sourced file.
-    """
-    _up, _base = os.path.dirname(d), os.path.basename(d)
-    _src = os.path.join(_r15d_ts_ctl_dir, "r30d-env-%s.sh" % _base)
-    with open(_src, "w", encoding="utf-8") as _fh:
-        _fh.write("T=tail\n")
-    _nested = 'P=PA; bash -c "${P}TH=%s; tailscale version"' % d
-    return (
-        ("run", ("CDPATH=%s; cd %s && ./tailscale version" % (_up, _base),), {"shell": True}),
-        ("run", ("export CDPATH=%s; cd %s >/dev/null && ./tailscale version" % (_up, _base),), {"shell": True}),
-        ("run", ('cd "$(echo %s)" && ./%s/tailscale version' % (_up, _base),), {"shell": True}),
-        ("run", ("cd -- %s && ./tailscale version" % d,), {"shell": True}),
-        ("run", ("cd -P -- %s; ./tailscale version" % d,), {"shell": True}),
-        ("run", ("%s/tail'scale' version" % d,), {"shell": True}),
-        ("run", ('%s/tail""scale version' % d,), {"shell": True}),
-        ("run", ('cd %s && ./tail""scale version' % d,), {"shell": True}),
-        ("run", ('T=tailscalex; "%s"/${T%%x} version' % d,), {"shell": True}),
-        ("run", ("T=tailscalex; '%s'/${T%%x} version" % d,), {"shell": True}),
-        ("run", ('D=%s; T=tailscalex; "$D"/${T%%x} version' % d,), {"shell": True}),
-        ("run", ('"%s"/tailscale version' % d,), {"shell": True}),
-        ("run", ('D=%s; "$D"/tailscale version' % d,), {"shell": True}),
-        ("run", ('"$(echo %s)"/tailscale version' % d,), {"shell": True}),
-        ("run", ("D=$(echo %s); $D/tailscale version" % d,), {"shell": True}),
-        ("run", (["sh", "-c", 'D=$(echo %s); "$D/tailscale" version' % d],), {}),
-        ("run", (_nested,), {"shell": True}),
-        ("run", (["sh", "-c", _nested],), {}),
-        ("run", (["bash", "-c", _nested],), {}),
-        ("run", ('echo \\ #"\n"; echo "x\'"; T=tailscalex; env -i PATH=%s ${T%%x} version; echo "\'"' % d,),
-         {"shell": True}),
-        ("run", ('T=tailscalex; : $(:)#"\n"; echo "x\'"; env -i PATH=%s ${T%%x} version; echo "\'"' % d,),
-         {"shell": True}),
-        ("run", ("x=$(:)#'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,), {"shell": True}),
-        ("run", ("echo a\\ #'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,),
-         {"shell": True}),
-        ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
-        ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {}))
+    return _r31d_ts_landlock.shapes(d, _r15d_ts_ctl_dir)
 
 
 def _r21d_spawn(how):
@@ -2488,6 +2334,92 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
                            True, "stand-in\n"),
       repr(([type(_w).__name__ for _w in _r16d_ts_wraps], _r15d_ts_ctl, _r15d_ts_refused[:3])))
 
+# The kernel's block (top of this file), proven on the planted "machine's" binary in a process of
+# its own (a block cannot be lifted): every shape above that reaches it unblocked must not reach it
+# blocked, and a part's stand-in elsewhere must still run. On CI too, where the machine has none.
+# The shapes run as the kernel sees them, through the real spawner, with no reader in front.
+
+
+def _r31d_landlock_run(mode):
+    """ts_landlock.run_mode in a child process: (why the block did not hold, reached?, outputs).
+
+    The child is started in the planted tree and runs only ts_landlock's own table there, so it is
+    handed a mode word and nothing else (no command comes from its arguments).
+    """
+    _p = _R15D_SP_REAL["run"]([sys.executable, "-I", _r31d_ts_spec.origin, mode], cwd=_r15d_ts_ctl_dir,
+                              capture_output=True, text=True, timeout=600)
+    if _p.returncode != 0:
+        return "child exited %d: %s" % (_p.returncode, _p.stderr[-500:]), [], []
+    return tuple(_r26d_json.loads(_p.stdout))
+
+
+# Made before the block: allowed beneath. The table's shapes get it as TMPDIR, and the copy lands there.
+os.makedirs(os.path.join(_r15d_ts_ctl_dir, _r31d_ts_landlock.TMP), exist_ok=True)
+# Every shape above on sys/ and lnk/ (how a handle runs it is not the kernel's), then a copy of the
+# binary run from elsewhere (READ_FILE is denied as well as EXECUTE), the planted binary itself by
+# its path (control: it must reach it unblocked), and a part's stand-in on its own PATH, which must
+# run blocked as unblocked.
+_r31d_names = _r31d_ts_landlock.kernel_names(_r15d_ts_ctl_dir)
+_r31d_free = _r31d_landlock_run("free")
+_r31d_held = _r31d_landlock_run("held")
+# Every review-1017b shape reaches it unblocked (each needs only sh, bash, env and timeout).
+_r31d_mine = {"%r %s" % (_sh[1][0], os.path.basename(_r31d_d)) for _r31d_d in (_r17d_ts_sys, _r19d_ts_lnk)
+              for _sh in _r31d_ts_landlock.shapes_1017b(_r31d_d, _r15d_ts_ctl_dir)}
+_r31d_new = [_n for _n, _r in zip(_r31d_names, _r31d_free[1]) if _n in _r31d_mine and not _r]
+_r31d_let = [_n for _n, _r in zip(_r31d_names, _r31d_held[1]) if _r]
+check("unit suite: the kernel refuses the machine's own tailscale to this run and all it starts "
+      "(Landlock), whatever a script does to reach it",
+      _r31d_ts_block_err == "" and not _r31d_ts_landlock.held(_r31d_ts_machine)
+      and not [_f for _f in _r21d_ts_at_start if _f and os.path.realpath(_f) not in _r31d_ts_machine]
+      and _r31d_held[0] == "" and len(_r31d_held[1]) == len(_r31d_names) and not _r31d_let,
+      repr((_r31d_ts_machine, _r31d_ts_block_err, _r31d_ts_landlock.held(_r31d_ts_machine), _r21d_ts_at_start,
+            _r31d_held[0], _r31d_let[:5])))
+
+
+def _r31j_result_line(ok, name, detail):
+    """One result as the tally prints it; a failure that reads as EACCES under the block names Landlock."""
+    line = ("PASS" if ok is True else "FAIL" if ok is False else "SKIP") + "  " + name
+    if detail and ok is not True:
+        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+        #     THIS line raise ('not all arguments converted'), so a
+        #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
+    if ok is False and _r31j_ts_header:
+        line += _r31d_ts_landlock.failure_note(detail, _r31d_ts_machine)
+    return line
+
+
+# The block's limit, measured on the planted binary: a script made after the block, directly in the
+# binary's own folder (a way), is refused; that is what a package update mid-run does to /usr/bin.
+_r31j_planted = [os.path.realpath(os.path.join(_r17d_ts_sys, "tailscale"))]
+_r31j_late = _r31d_landlock_run("late")
+_r31j_late_err = (_r31j_late[2] or ["?"])[-1]
+_r31j_note = _r31d_ts_landlock.failure_note(_r31j_late_err, _r31j_planted)
+check("unit suite: the Landlock block's limit is said — a file made after the block beside the blocked "
+      "binary is refused (EACCES), and a check failing with that names Landlock; one that does not, does not",
+      _r31j_late[0] == "" and "Permission" in _r31j_late_err and "Landlock block active" in _r31j_note
+      and _r31d_ts_landlock.failure_note("got 3 want 4", _r31j_planted) == ""
+      and _r31d_ts_landlock.failure_note(_r31j_late_err, []) == "",
+      repr((_r31j_late, _r31j_note)))
+check("unit suite: ...the run says at its start when the block is on (which files, which folders), and "
+      "the tally adds the note to a failure only while it is on",
+      _r31j_said == ([_r31d_ts_landlock.header(_r31d_ts_machine)]
+                     if _r31d_ts_machine and not _r31d_ts_block_err else [])
+      and (not _r31j_ts_header or ("Landlock block active" in _r31j_ts_header
+                                   and all(_b in _r31j_ts_header for _b in _r31d_ts_machine)))
+      and ("Landlock" in _r31j_result_line(False, "x", "[Errno 13] Permission denied")) == bool(_r31j_ts_header)
+      and "Landlock" not in _r31j_result_line(True, "x", "[Errno 13] Permission denied"),
+      repr((_r31j_ts_header, _r31j_result_line(False, "x", "[Errno 13] Permission denied"))))
+check("unit suite: ...the planted binary is reached unblocked by its path, a copy and every review-1017b "
+      "shape, and a part's stand-in on its own PATH still runs blocked (control)",
+      _r31d_free[0] == "" and _r31d_free[1][-3:-1] == [True, True] and not _r31d_new
+      and sum(_r31d_free[1]) > len(_r31d_names) // 2
+      and "own stand-in" in _r31d_free[2][-1] and "own stand-in" in (_r31d_held[2] or [""])[-1]
+      and _r31d_held[1][-2] is False,
+      repr((_r31d_free[0], sum(_r31d_free[1]), len(_r31d_names), _r31d_new[:5], _r31d_free[2][-2:],
+            (_r31d_held[2] or [""])[-2:])))
+
 check("unit suite: a wrapper handed a word that cannot spell tailscale is not judged as running it "
       "(the console read, a file under $HOME, an unset name), and one that can still is (control)",
       _r26d_static == [False] * 4 + [True] * 4, repr(_r26d_static))
@@ -2521,6 +2453,34 @@ _r30d_owns = [_r29d_may_set_path(_x) for _x in (
 check("unit suite: ...a nested shell building PATH, an interactive or `exec -l` shell and a `.` where a "
       "command starts are kept off the shim; `find .`, `cp a .` and a nested shell building nothing are not "
       "(control)", _r30d_owns == [True] * 7 + [False] * 4 + [True], repr(_r30d_owns))
+# ...and (review 1017b) a nested shell past an option's value, a long option or `--`, a `.` behind an
+# assignment or a redirection or in backticks, BASH_ENV and a login shell past a long option, beside
+# a nested shell whose script only holds a `.` word and an option value that is not a -c.
+_r31d_owns = [_r29d_may_set_path(_x) for _x in (
+    'P=PA; bash -o pipefail -c "${P}TH=/x"', 'P=PA; bash -O extglob -c "${P}TH=/x"', 'P=PA; bash --norc -c "${P}TH=/x"',
+    'P=PA; bash -c -- "${P}TH=/x"', "X=1 . /x/env", "2>/dev/null . /x/env", "LC_ALL=C . /x/env && y",
+    "x=`. /x/env`", "BASH_ENV=/x/env bash -c y", "bash --norc -lc x",
+    'sh -c "find . -name x"', 'bash -c "cp a . && echo hi"', 'sh -c "ls . -l"', "bash -o c x",
+    "X=1 echo . y")]
+# A `#` after a line continuation that follows a blank is a comment (its quote opens nothing); after a
+# word it is not (control).
+_r31d_strip = [_r26d_strip_single(_x) for _x in ("echo \\\n#'\nX; echo 'y'", "echo a\\\n#'\nX; echo 'y'",
+                                                  "echo \\\\\n#'\nX; echo 'y'")]
+# ...and an argv bash handed BASH_ENV in its environment keeps the bash route, where an empty one does not.
+# (Whether each is shimmed, not the environment itself, which would print the runner's in a failure.)
+_r31d_shim_bash_env = [_R15dNoSystemTailscale._r26d_shim(["bash", "-c", "tailscale version"], {"env": dict(
+    os.environ, BASH_ENV=_v)}) is not None for _v in ("/x/env", "")]
+# The same grammar where a shell the functions never reach is handed a script that builds the name.
+_r31d_nested_built = [_r26d_runs_built(_x, {"PATH": "/usr/bin:/bin"}) for _x in (
+    "zsh -o noglob -c 'T=tail; ${T}scale version'", "dash --norc -c 'T=tail; ${T}scale version'",
+    "ksh -c -- 'T=tail; ${T}scale version'", "zsh -o noglob -c 'echo hi'")]
+check("unit suite: ...an option's value, a long option or `--` before a nested -c, a prefixed or backticked "
+      "`.`, BASH_ENV and a login shell past a long option are kept off the shim; a `.` word in a nested "
+      "script is not, and a `#` after a continuation is read as bash reads it (control)",
+      _r31d_owns == [True] * 10 + [False] * 5
+      and ["X;" in _t for _t in _r31d_strip] == [True, False, True]
+      and _r31d_shim_bash_env == [False, True] and _r31d_nested_built == [True, True, True, False],
+      repr((_r31d_owns, _r31d_strip, _r31d_shim_bash_env, _r31d_nested_built)))
 check("unit suite: ...nor past a comment, a here-document or a shift that only looks like one, while "
       "`command -p`, sudo, an expansion the reader cannot model, a name set other than by NAME=, and "
       "a wrapper's own NAME= are judged (control)",
@@ -2748,14 +2708,7 @@ passed = sum(1 for ok, _, _ in results if ok is True)
 failed = sum(1 for ok, _, _ in results if ok is False)
 skipped = [(name, detail) for ok, name, detail in results if ok is None]
 for ok, name, detail in results:
-    line = ("PASS" if ok is True else "FAIL" if ok is False else "SKIP") + "  " + name
-    if detail and ok is not True:
-        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
-        #     THIS line raise ('not all arguments converted'), so a
-        #     FAILING check printed a traceback instead of its name
-        #     and killed the tally and cleanup. Lists and ints are fine
-        #     here; the concat-style printer elsewhere breaks on those.
-    print(line)
+    print(_r31j_result_line(ok, name, detail))
 print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
 # Loud, and after the tally, because a skip is a hole in the run rather than a result in it. It
 # does not fail the suite (the environment is not the code's fault) but it must never be mistaken

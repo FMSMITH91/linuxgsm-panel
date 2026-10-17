@@ -142,9 +142,13 @@ _CGROUP_KILL_RE = re.compile(r"Failed to kill control group|remains running afte
                              r"Found left-over process")
 _SOURCE_LABEL = {"user-journal": "user journal (journalctl --user)",
                  "user-unit": "system journal, this account's user unit",
-                 "helper": "system journal via the privileged helper",
-                 # Not "the panel runs as root": that is the privilege model, posture (_base.py).
-                 "root": "system journal (read directly)"}
+                 # ONE label for both privileged reads in the file. "read directly" is set exactly
+                 # when the panel runs as root with no helper, so a label of its own told the
+                 # downloadable file the privilege model (posture, _base.py); which of the two it
+                 # was is on the page only (_R31A_PRIV_HOW).
+                 "helper": "system journal (privileged read)",
+                 "root": "system journal (privileged read)"}
+_R31A_PRIV_HOW = {"helper": "via the privileged helper", "root": "read directly"}
 
 
 def _journal(ctx):
@@ -689,6 +693,15 @@ def _render_kept(lines, chosen):
     return out
 
 
+def _r31a_source_lines(res, source, tail):
+    """The Recent log's Source line, and (page only) which privileged read it was."""
+    res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
+        _SOURCE_LABEL.get(source, "journal"), len(tail), _span(tail),
+        time.strftime("%H:%M:%S", time.gmtime())))
+    if source in _R31A_PRIV_HOW:
+        res.posture("- **Journal read**: %s" % _R31A_PRIV_HOW[source])
+
+
 def section_recent_log(ctx):
     """The newest journal lines: source, span, zone, starts and crashes, then a budgeted body."""
     from panel.ops import system_ops as so
@@ -701,9 +714,7 @@ def section_recent_log(ctx):
     kept, verbs, sessions = _split_priv(j["lines"])
     tail = kept[-TAIL_LINES:]
     scrubbed = privacy.scrub_lines(ctx, tail)
-    res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
-        _SOURCE_LABEL.get(j["source"], "journal"), len(tail), _span(tail),
-        time.strftime("%H:%M:%S", time.gmtime())))
+    _r31a_source_lines(res, j["source"], tail)
     if j.get("cut"):
         # The block below ends at the newest of what was read, which is not the newest there is.
         res.add("- **Read**: %s" % _cut_words(j))

@@ -690,8 +690,10 @@ try:
           _r26d_lo.status_code == 302 and "/login" in _r26d_lo.headers.get("Location", ""),
           "the session outlived a sign-out the user was told had happened: %s %r"
           % (_r26d_lo.status_code, _r26d_lo.headers.get("Location")))
+    # The message itself, not only the refusal's absence: a crash after the revoke answers an error
+    # page, which lacks "could not revoke" too (review 1017b).
     check("logout: ...and that user is still told plainly that they were logged out",
-          "could not revoke" not in _lo_body_a, _lo_body_a[:200])
+          "could not revoke" not in _lo_body_a and "You have been logged out." in _lo_body_a, _lo_body_a[:200])
     # (b) both attempts fail: say so, rather than asserting the revocation anyway.
     _lo_b = app.test_client()
     _lo_b.post("/login", data={"username": _lo_name, "password": _lo_pw, "remember": "on"})

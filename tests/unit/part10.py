@@ -1546,6 +1546,10 @@ try:
                     enable_unattended_upgrades=lambda: (True, "Automatic security updates are now enabled."),
                     os_run_update=lambda: (False, "Sudo access required."),
                     server_reboot=lambda d: (True, "Server will reboot in %s seconds." % d))
+    # A panel with no servers on its own host: the host-row read WORKS and finds nothing, so the
+    # route reboots plainly. (This harness's database has no such table, and a read that raises is
+    # now refused, 503, rather than rebooted bare: review 1017b, part110.)
+    _pb7.RemoteServer = _P7NS(query=_P7NS(filter_by=lambda **k: _P7NS(first=lambda: None)))
     _dr = _pb7_c.get("/api/panel/debug-report")
     _au = _pb7_c.get("/api/panel/auto-updates")
     eq("panel_backup/debug-report and auto-updates: a failure is a 500 with a generic error",
@@ -2143,6 +2147,9 @@ def _so7_panel_repair_database():
     SO._run_verb = _p7_verb_by({"panel-db-repair": ("", "", 0)}, log=_pr_v)
     _pr_ok = _p7_call(SO.panel_repair_database)
     SO._run_verb = _p7_verb_by({"panel-db-repair": ("", "denied", 1)})
+    # Each launch below is a first click of its own: a second one while the first is starting is
+    # refused (review 1017b, part110), and these check the launcher, not that.
+    SO._r30a_repair_launched.update(ts=0.0, dir="")
     _pr_no = _p7_call(SO.panel_repair_database)
     check("so/panel_repair_database (helper): the verb starts it; a refusal is reported as one",
           isinstance(_pr_ok, tuple) and _pr_ok[0] is True and _pr_v == [("panel-db-repair", [])]
@@ -2151,6 +2158,7 @@ def _so7_panel_repair_database():
     SO._helper_present = lambda: False
     _pr_sp = []
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run(_pr_sp))
+    SO._r30a_repair_launched.update(ts=0.0, dir="")
     _pr_leg = _p7_call(SO.panel_repair_database)
     _pr_want = ("sudo systemctl stop linuxgsm-panel.service; ( cd %s && %s %s update ); "
                 "sudo systemctl start linuxgsm-panel.service"
@@ -2161,6 +2169,7 @@ def _so7_panel_repair_database():
           and _pr_sp[0][0] == ["sudo", "systemd-run", "--collect", "--on-active=2", "bash", "-c", _pr_want],
           "%r %r" % (_pr_leg, _pr_sp[:1]))
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], exc=OSError("ENOENT")))
+    SO._r30a_repair_launched.update(ts=0.0, dir="")
     eq("so/panel_repair_database: a launcher that cannot run is a failure",
        _p7_call(SO.panel_repair_database), (False, "Couldn't start the repair job — check the panel logs."))
     for _k in ("subprocess", "_run_verb", "_helper_present"):
@@ -2867,7 +2876,7 @@ def _so7_generate_debug_report():
           _rep_text[:900])
     check("so/debug report: the system journal is used when the user journal is empty, redacted",
           all(("hunter2" not in _rep_text, "password=[redacted]" in _rep_log, "line 0599" in _rep_log,
-               "system journal via the privileged helper" in _rep_text,
+               "system journal (privileged read)" in _rep_text,
                _p7_journal_verbs() == _P7_HELPER_JOURNAL)), _rep_log[-200:])
     check("so/debug report: the recent log is the newest 400 lines, in order, and no older one",
           all((_rep_log.startswith("line 0200 "), "line 0199" not in _rep_log,

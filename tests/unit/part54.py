@@ -620,8 +620,11 @@ with _patched():
     _patch(_rv54, "remote_ufw_delete_rule", _cpp54_delete)
     _patch(_rv54, "log_action", lambda *a, **k: None)
     for _funnel54 in (True, False):
+        # _r13b_panel_ports: the ports Close takes (review 1017b) — here config.json's alone, no
+        # bound port known.
         _patch(_rv54, "ts", NS(panel_funnel_facts=lambda cfg, f=_funnel54: {"funnelled": f,
-                                                                             "shared_funnel": []}))
+                                                                             "shared_funnel": []},
+                               _r13b_panel_ports=lambda cfg: [cfg.get("port", 5000)]))
         _cpp54["groups"] = [{"port_num": "5000", "nums": [7], "key": "k7", "action": "ALLOW",
                              "direction": "IN"},
                             {"port_num": "5000", "nums": [3], "key": "k3", "action": "ALLOW",

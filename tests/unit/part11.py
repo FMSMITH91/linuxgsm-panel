@@ -2007,7 +2007,7 @@ try:
     _wire(verbs={"apt-upgrade-running": ("", "", 1), "os-update-run": ("", "E: Could not get lock", 1)})
     eq("os run: a job that did not start is a failure", _H.remote_os_run_updates(_p8_srv()),
        (False, "Couldn't start the update."))
-    _w = _wire(verbs={"apt-upgrade-running": ("", "", 0)})
+    _w = _wire(verbs={"apt-upgrade-running": ("", "", 0), "os-update-own-running": ("", "", 0)})
     eq("os update start: one already running is watched, not started again",
        (_H.remote_os_update_start(_p8_srv()), _w.verbs_called("os-update-run")),
        ((True, "An update is already running — watching it."), []))

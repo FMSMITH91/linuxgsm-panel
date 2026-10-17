@@ -601,6 +601,47 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A nineteenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
+  its fix.
+  - **The file browser no longer deletes a running game server's console log.** Deleting it, or the
+    `log/console` or `log` folder above it, silenced the live console until the next restart and
+    freed no space, because the server keeps writing to the deleted file. Delete now refuses and
+    says why: each start begins a fresh log anyway. A file renamed to `log` is refused too. Proven
+    with a real tmux console on Ubuntu 22.04, 24.04 and 26.04: after the refused delete the console
+    keeps showing new lines, and after the old delete it showed nothing more.
+  - **A panel-host reboot that cannot first stop the game servers is refused, not done anyway.**
+    When the panel could not read its own host's record, Reboot skipped stopping the game servers
+    and restoring them afterwards and rebooted the machine bare. It now says the host could not be
+    read and reboots nothing. A reboot is also refused while a database repair is starting.
+  - **"An update is already running — watching it" only for the panel's own update.** An upgrade
+    someone started over SSH was "watched" through the panel's previous log, which could say
+    "Updates installed." while apt was still working. The panel now says another update is running
+    and to wait for it, both in the popup and on the OS Updates card, and starts nothing when it
+    cannot tell.
+  - **After a panel port change, everything acts on the port the panel really serves on until it
+    restarts:** Tailscale Serve's Enable and Disable, the firewall's lock-out guard, closing the
+    public panel port (which now closes both the old and the new port), the SSH status card, the
+    debug report's login-attempt jail and port-conflict lines, and the setup wizard's last page.
+  - **An unreadable LinuxGSM config is never shown or saved as empty.** A settings save could write
+    only the changed lines over a config the panel could not read.
+  - **Clicking Repair database twice no longer starts two repairs.**
+  - **A restore or a folder download run by the panel's helper can no longer be stalled** by a pipe
+    put in place of a file.
+  - **The downloadable debug report no longer says the panel runs as root** in its log's source
+    line, or lists the panel account's groups. Both stay on the in-panel report page.
+  - **Smaller fixes.** A game's dependencies are reported installed when every package installed on
+    retry; Garry's Mod content held by another account, or a scan that failed, gets a true sentence;
+    a folder download no longer holds a game's backup lock; a Discord "unknown command" reply no
+    longer echoes formatting; a new server whose every default name is taken asks for a name; a
+    failed backup-schedule save re-reads the card; the GMod content card keeps watching a job it
+    just started when the first read fails; and the Tailscale peer check shows why a check was
+    refused instead of "not responding".
+  - **Tests.** The machine's own tailscale is now blocked from the unit tests by the kernel
+    (Landlock), whatever a test's script does; until now a guard read each script's text to predict
+    it, and every review found a new way past it. That guard still runs and reads more shapes.
+    Forty-two stand-ins that only half replaced what they named now replace it everywhere, and two
+    smoke checks could pass on an error page or a skipped premise.
+
 - **An eighteenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
   its fix.
   - **Changing the SSH port of a remote host on stock Ubuntu 24.04 or 26.04 works.** There SSH is

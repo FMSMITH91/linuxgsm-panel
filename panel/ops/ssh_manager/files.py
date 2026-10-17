@@ -192,16 +192,10 @@ def _r23b_console_frag(user, selfname):
     pipe-pane goes on appending to the old one it opened: saving the console log (to clear it) or
     uploading over it, directly or through a link to it, left the panel's live console showing
     nothing new until the server restarted, under "Saved". Rename and create already refuse it.
-    Empty without `selfname`, which the console's path is built from.
+    Only while the server's console is attached (_console_guard): a stopped server's log is
+    written like any file. Empty without `selfname`, which the console's path is built from.
     """
     return ('t="$p"; ' + _console_guard(user, selfname)) if selfname else ""
-
-
-def _r23b_console_write_refusal(user, ap, selfname):
-    """WRITE_CONSOLE when `ap` names the console log as typed, else None (the host checks links)."""
-    if selfname and _pp.relpath(ap, f"/home/{user}") == f"log/console/{selfname}-console.log":
-        return WRITE_CONSOLE
-    return None
 
 
 def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
@@ -242,6 +236,8 @@ def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
         ok, msg = _write_chunked(server, user, abspath, b64, tmp, mk, selfname)
     if not ok and _RENAME_CONSOLE_MARK in (msg or ""):
         return False, WRITE_CONSOLE
+    if not ok and _R31J_CONSOLE_UNREAD_MARK in (msg or ""):
+        return False, R31J_CONSOLE_UNREAD
     return ok, msg
 
 
@@ -260,8 +256,9 @@ def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
                                           selfname=selfname)
     if _r12b_outside_home(out):
         return False, "Invalid path"
-    if _RENAME_CONSOLE_MARK in (out or ""):
-        return False, _RENAME_CONSOLE_MARK
+    for mark in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK):
+        if mark in (out or ""):
+            return False, mark
     return (rc == 0), (e or out or "")
 
 
@@ -284,8 +281,8 @@ def _r23b_send_chunks(server, user, abspath, payload, selfname):
         out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60, selfname=selfname)
         if op == ">" and _r12b_outside_home(out):
             return False, "Invalid path"
-        if op == ">" and _RENAME_CONSOLE_MARK in (out or ""):
-            return False, _RENAME_CONSOLE_MARK
+        if op == ">" and _r31j_console_mark(out):
+            return False, _r31j_console_mark(out)
         if rc != 0:
             # A chunk that failed part-way leaves what came before it staged in the user's folder,
             # where the browser lists it as `<name>.paneltmp`.
@@ -310,9 +307,9 @@ def _r23b_chunk_finish(server, user, abspath, tmp, selfname):
     fin = _r23b_console_frag(user, selfname) + fin
     o, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, fin), timeout=60,
                                         selfname=selfname)
-    if _r12b_outside_home(o) or _RENAME_CONSOLE_MARK in (o or ""):
+    if _r12b_outside_home(o) or _r31j_console_mark(o):
         _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30, selfname=selfname)
-        return False, ("Invalid path" if _r12b_outside_home(o) else _RENAME_CONSOLE_MARK)
+        return False, ("Invalid path" if _r12b_outside_home(o) else _r31j_console_mark(o))
     return (rc == 0), (e or o or "")
 
 
@@ -334,10 +331,22 @@ def _lgsm_cfg_dir(user, selfname):
 
 
 def _lgsm_frame(path, tag):
-    """Shell printing `path` base64'd between this tag's begin/end sentinels (see lgsm_read_config)."""
-    b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
-    return (f"printf %s {_core._quote(b)}; base64 {_core._quote(path)} 2>/dev/null | tr -d '\n'; "
-            f"printf %s {_core._quote(e)}; ")
+    """Shell printing `path` base64'd between this tag's begin/end sentinels (see lgsm_read_config).
+
+    A file that is not there is an empty frame (LinuxGSM has not written it). A file that IS there
+    and could not be read prints no frame at all, but _r31b_unread_mark(tag): it was `base64 … |
+    tr` with base64's failure hidden by the pipe, so an instance cfg the account cannot read came
+    back as an empty frame — "an empty file" — and the Raw tab's Save wrote "" over it.
+    """
+    b, e, q = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag, _core._quote(path)
+    return (f"x=; if [ -e {q} ]; then x=$(base64 {q} 2>/dev/null) || x={_r31b_unread_mark(tag)}; fi; "
+            f"case \"$x\" in __LGSMP_*) printf %s \"$x\" ;; *) printf %s {_core._quote(b)}; "
+            f"printf %s \"$x\" | tr -d '\n'; printf %s {_core._quote(e)} ;; esac; ")
+
+
+def _r31b_unread_mark(tag):
+    """What _lgsm_frame prints for a file that is there and could not be read."""
+    return "__LGSMP_%s_UNREAD__" % tag
 
 
 def _unframe_lgsm_sections(body, inst, optional=()):
@@ -467,8 +476,10 @@ def lgsm_read_config(server, user, selfname):
     out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
     sect = _unframe_lgsm_sections(out or "", inst, optional=("SECRETS_COMMON", "SECRETS_INSTANCE"))
     if sect is None:
+        unread = any(_r31b_unread_mark(t) in (out or "") for t in ("DEFAULT", "COMMON", "INSTANCE"))
         return {"settings": {}, "raw": "", "merged": {}, "instance": {},
-                "error": "Could not read the config — the host did not answer."}
+                "error": R31B_CFG_UNREADABLE if unread else
+                "Could not read the config — the host did not answer."}
     defaults = _parse_cfg(sect["DEFAULT"])
     # "overridden" means set anywhere above _default.cfg; the secrets files count with their pair.
     common = {**_parse_cfg(sect["COMMON"]), **_parse_cfg(sect["SECRETS_COMMON"])}
@@ -482,6 +493,13 @@ def lgsm_read_config(server, user, selfname):
     settings = _curated_cfg_settings(merged, defaults, instance, common)
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
     return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
+
+
+# lgsm_read_config's answer when a LinuxGSM config file is there and the game's account cannot read
+# it: the host did answer, so "the host did not answer" was not the reason.
+R31B_CFG_UNREADABLE = ("A LinuxGSM config file for this server is there but the game's account can't "
+                       "read it, so the config can't be shown or saved here. Check its owner and "
+                       "permissions.")
 
 
 # Printed by the `details` script AFTER LinuxGSM has finished, so its presence is the one thing
@@ -679,8 +697,11 @@ def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
     # is not. The sentinels tell those apart — the same fix, for the same reason, as read_file.
     _probe = (
         _lgsm_frame(f"{_pp.dirname(inst)}/secrets-{selfname}.cfg", "SECRETS_INSTANCE")
-        + f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; else "
-        f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(inst)} | tr -d '\n'; "
+        + f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; "
+        # base64's own status: piped into tr, a file the account cannot read printed an EMPTY
+        # frame, read as an empty config, and the updates alone were written over it.
+        f"elif x=$(base64 {_core._quote(inst)} 2>/dev/null); then "
+        f"printf %s {_core._quote(_READ_BEGIN)}; printf %s \"$x\" | tr -d '\n'; "
         f"printf %s {_core._quote(_READ_END)}; fi"
     )
     out, _, _ = _core.shell_as_game_user(server, user, _probe, timeout=15, selfname=selfname)
@@ -693,6 +714,9 @@ def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
 def _take_secrets_frame(body, inst, secrets):
     """`body` without its secrets-<selfname>.cfg frame, whose settings fill `secrets` (a dict)."""
     _sb, _se = "__LGSMP_SECRETS_INSTANCE_B__", "__LGSMP_SECRETS_INSTANCE_E__"
+    # A secrets file that could not be read is no settings, as a missing frame always was; its mark
+    # must not be left in `body`, where it would hide the instance read's __NOFILE__.
+    body = body.replace(_r31b_unread_mark("SECRETS_INSTANCE"), "")
     _si, _sj = body.find(_sb), body.find(_se)
     if _si == -1 or _sj <= _si:
         return body
@@ -1132,8 +1156,12 @@ def read_file(server, user, relpath, max_bytes=1048576):
         # matches any line; -I still makes a file with a NUL in it no match (1); 2 is a read error.
         f"if [ ! -r {_core._quote(ap)} ]; then echo __UNREADABLE__; exit 0; fi; "
         f"rc=0; [ ! -s {_core._quote(ap)} ] || {{ grep -qI '' {_core._quote(ap)} 2>/dev/null; rc=$?; }}; "
-        f"case $rc in 0) printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "
-        f"printf %s {_core._quote(_READ_END)};; 1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
+        # base64's own status decides the frame (see _lgsm_frame): piped into tr, a read that failed
+        # after grep's printed an empty frame, which the editor showed, and saved, as an empty file.
+        f"case $rc in 0) if x=$(base64 {_core._quote(ap)} 2>/dev/null); then "
+        f"printf %s {_core._quote(_READ_BEGIN)}; printf %s \"$x\" | tr -d '\\n'; "
+        f"printf %s {_core._quote(_READ_END)}; else echo __UNREADABLE__; fi;; "
+        f"1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
     )
     out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     return _read_file_reply(out, ap, _rc)
@@ -1288,15 +1316,15 @@ R14B_NOT_TEXT = "The file contents must be text."
 def write_file(server, user, relpath, content, selfname=None):
     """Write text content to a file in the game user's home.
 
-    `selfname` (the LinuxGSM script name) refuses the live console's log, by name and resolved.
+    `selfname` (the LinuxGSM script name) refuses the live console's log, by name and resolved,
+    while the server's console is attached (_r23b_console_frag).
     """
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return False, "Invalid path"
     if not _is_text(content or ""):
         return False, R14B_NOT_TEXT        # a lone surrogate: .encode() below raised, a 500
-    refusal = (_r23b_console_write_refusal(user, ap, selfname)
-               or _rawlts_refusal(server, user, ap, content or ""))
+    refusal = _rawlts_refusal(server, user, ap, content or "")
     if refusal:
         return False, refusal
     return _write_file_as_user(server, user, ap, (content or "").encode(), selfname)
@@ -1403,12 +1431,12 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True, self
 def _r23b_upload_refusal(server, user, target, upload, selfname):
     """Why upload_file must not write `upload` = (bytes, overwrite) at `target`, else None.
 
-    In order: the live console's log, a logtimestamp the console cannot survive, and (without
-    overwrite) a name already taken or a check that did not run.
+    In order: a logtimestamp the console cannot survive, and (without overwrite) a name already
+    taken or a check that did not run. The live console's log is refused on the host, while the
+    server runs (_r23b_console_frag); `selfname` is kept for the callers.
     """
     data_bytes, overwrite = upload
-    return (_r23b_console_write_refusal(user, target, selfname)
-            or _rawlts_refusal(server, user, target, data_bytes or b"")
+    return (_rawlts_refusal(server, user, target, data_bytes or b"")
             or (None if overwrite else _existing_target_refusal(server, user, target)))
 
 
@@ -1431,10 +1459,23 @@ def _existing_target_refusal(server, user, target):
 
 DELETE_REFUSED = "Refusing to delete this path"
 DELETE_PROTECTED = "This file/folder is protected — deleting it would break the server."
+# Deleting the console's log does not stop tmux pipe-pane: it goes on appending to the inode it
+# opened, so the console reads a path nothing writes to until the next start, and the space is not
+# freed while the server runs. LinuxGSM's start moves the old log aside and begins a new one.
+# Shown only while the server's console is attached (_console_guard): a stopped server's log and
+# its folders are deleted like any other, and its next start makes them again (install_logs.sh).
+DELETE_CONSOLE = ("The live console reads this path — deleting it would stop the console until the "
+                  "server restarts, and would not free its space while the server runs. Each start "
+                  "begins a fresh console log.")
 
 
 def _delete_refusal(user, relpath, selfname, ap):
-    """Why delete_path must refuse this path (the home root, outside it, protected), else None."""
+    """Why delete_path must refuse this path, else None.
+
+    The home root, anything outside it and a protected path. The live console's log and the
+    folders above it are the host's to refuse (_console_guard), because only the host can say
+    whether the server is running: a stopped server's are deleted like any other.
+    """
     home = f"/home/{user}"
     if ap is None or ap == home or not (relpath or "").strip("/"):
         return DELETE_REFUSED
@@ -1446,7 +1487,8 @@ def _delete_refusal(user, relpath, selfname, ap):
 def delete_path(server, user, relpath, selfname=None):
     """Delete a file or directory (recursively) in the game user's home.
 
-    Refuses the home root, anything outside it, and protected LinuxGSM/game paths.
+    Refuses the home root, anything outside it, protected LinuxGSM/game paths (_delete_refusal)
+    and, while the server runs, the live console's log or a folder above it (_console_guard).
     """
     ap = _safe_abspath(user, relpath)
     refusal = _delete_refusal(user, relpath, selfname, ap)
@@ -1454,7 +1496,9 @@ def delete_path(server, user, relpath, selfname=None):
         return False, refusal
     # `"$t"`: the path _protected_resolved checked — the real parent plus this name — so what is
     # removed is exactly what was judged.
-    inner = 'rm -rf -- "$t" && echo __OK__'
+    # _console_guard: the console's path as named and RESOLVED, so a folder the logs reach through
+    # a link (`log -> disk/logs`, then deleting disk) is refused as `log` is, while the server runs.
+    inner = _console_guard(user, selfname) + 'rm -rf -- "$t" && echo __OK__'
     # The most destructive of the six, so it gets a host-side resolution check: a symlink under
     # the home dir must not turn `rm -rf` loose on whatever it points at — nor on a protected tree
     # reached through a symlinked directory. _protected_resolved is that check, and its containment
@@ -1472,8 +1516,11 @@ def _files_delete_outcome(out, e, rc):
     """delete_path's (ok, message) from what its guarded host-side `rm -rf` printed."""
     if _r12b_outside_home(out):
         return False, DELETE_REFUSED
-    if _PROTECTED_MARK in (out or ""):
-        return False, DELETE_PROTECTED
+    # The two host-side refusals, by their marks (_protected_resolved, _console_guard).
+    for mark, message in ((_PROTECTED_MARK, DELETE_PROTECTED), (_RENAME_CONSOLE_MARK, DELETE_CONSOLE),
+                          (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD)):
+        if mark in (out or ""):
+            return False, message
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
@@ -1481,7 +1528,7 @@ def _files_delete_outcome(out, e, rc):
 
 def delete_failure_reason(msg):
     """`msg` when it is one of delete_path's fixed refusals, else None (it may be the host's text)."""
-    return msg if msg in (DELETE_REFUSED, DELETE_PROTECTED) else None
+    return msg if msg in (DELETE_REFUSED, DELETE_PROTECTED, DELETE_CONSOLE, R31J_CONSOLE_UNREAD) else None
 
 
 def write_failure_reason(msg):
@@ -1518,6 +1565,11 @@ RENAME_REFUSED = "Refusing to rename this path."
 RENAME_CONSOLE = ("The live console reads this path — renaming it would stop the console until the "
                   "server restarts.")
 _RENAME_CONSOLE_MARK = "__RENAME_CONSOLE__"
+# _console_guard's answer when the path is the console's and whether the server runs could not be
+# read: refused, since "no session found" from a read that did not run is not a measurement.
+_R31J_CONSOLE_UNREAD_MARK = "__CONSOLE_UNREAD__"
+R31J_CONSOLE_UNREAD = ("Couldn't check whether the server is running, and the live console reads this "
+                       "path while it runs, so nothing was changed. Try again in a moment.")
 WRITE_CONSOLE = ("The live console reads this file — replacing it would stop the console until the "
                  "server restarts. Nothing was saved.")
 RENAME_EDGE_SPACE = ("A name can't start or end with a space — it would look just like the name "
@@ -1602,8 +1654,9 @@ def rename_refusal(user, relpath, new_name, selfname=None):
 
     The home itself, anything outside it, a path that is not valid text, a protected path (by
     delete_path's rules: renaming `lgsm` or `serverfiles` away breaks the server exactly as deleting
-    it does), the live console's log or a folder above it (_console_paths), a bad new name, the name
-    it already has, and a new name that is itself protected where it would land.
+    it does), a bad new name, the name it already has, and a new name that is itself protected or
+    the console's where it would land. The live console's log or a folder above it is the host's to
+    refuse, while the server runs (_console_guard).
     """
     ap = _safe_abspath(user, relpath) if isinstance(relpath, str) else None
     if ap is None or ap == f"/home/{user}" or not relpath.strip("/") or not _is_text(relpath):
@@ -1617,11 +1670,13 @@ def _rename_ends_refusal(user, relpath, ap, new_name, selfname):
     home = f"/home/{user}"
     if _is_protected_path(relpath, selfname):
         return RENAME_PROTECTED
-    if _pp.relpath(ap, home) in _console_paths(selfname):
-        return RENAME_CONSOLE
     if new_name == _pp.basename(ap):
         return "That is already its name."
-    if _is_protected_path(_pp.relpath(_pp.join(_pp.dirname(ap), new_name), home), selfname):
+    # A name the console reads, too, as create_refusal refuses it: a FILE renamed to `log` (the
+    # name is free only while there is no log folder) leaves LinuxGSM unable to open the console's
+    # on the next start, so this holds whether or not the server runs.
+    dest = _pp.relpath(_pp.join(_pp.dirname(ap), new_name), home)
+    if _is_protected_path(dest, selfname) or dest in _console_paths(selfname):
         return "That name is reserved for LinuxGSM or the game's account — choose another."
     return None
 
@@ -1641,7 +1696,9 @@ def _console_paths(selfname):
     GameServer.console_log is log/console/<lgsm_name>-console.log, a fixed path. tmux pipe-pane
     keeps appending to the file it opened, so renaming the log or a folder above it while the
     server runs leaves the console reading a path nothing writes to, until the next restart.
-    Delete has the same reach; this is rename's own refusal, and leaves delete's rules unchanged.
+    Delete has the same reach. Write, upload, rename and delete refuse these while the server's
+    console is attached (_console_guard); create, and rename's new name, refuse them always (a
+    file at `log` stops LinuxGSM making its log folders on the next start).
     """
     paths = {"log", "log/console"}
     if selfname:
@@ -1650,18 +1707,54 @@ def _console_paths(selfname):
 
 
 def _console_guard(user, selfname):
-    """Host-side: refuse when "$t" is the console's path, or a folder above it, once RESOLVED.
+    """Host-side: refuse when "$t" is the console's path, or a folder above it, while the server runs.
 
-    rename_refusal's check reads the path's text, and a home can move its logs through a symlink
-    (`log -> disk/logs`): renaming disk/logs breaks the console as surely as renaming log, and
-    only the host can see that. realpath -m resolves each console path, and "$t" (the real parent
-    plus the name, pinned by the linked-parent refusal before this) is refused when it is one of
-    them or above one.
+    A home can move its logs through a symlink (`log -> disk/logs`): renaming disk/logs breaks the
+    console as surely as renaming log, and only the host can see that. Each console path is taken
+    twice: RESOLVED (realpath -m, what a folder the logs reach through a link is) and with only
+    its folder resolved (how "$t" is formed: the real parent plus the name, so the link `log`
+    itself is the console's too). "$t" is refused when it is one of them or above one.
+
+    Only while the server's console is attached (_r31j_console_live_sh): pipe-pane holds the log
+    open only then. A stopped server's log, `log/console` and `log` are an ordinary file and
+    folders, and its next start makes them again (LinuxGSM's install_logs.sh), so refusing them
+    then freed nothing and said something false. A running state that cannot be read refuses.
     """
     q = _core._quote
     paths = " ".join(q(f"/home/{user}/{p}") for p in sorted(_console_paths(selfname)))
-    return (f'for c in {paths}; do c=$(realpath -m "$c" 2>/dev/null || printf %s "$c"); '
-            f'case "$c" in "$t"|"$t"/*) echo {_RENAME_CONSOLE_MARK}; exit 11 ;; esac; done; ')
+    return (f'for c in {paths}; do r=$(realpath -m "$c" 2>/dev/null || printf %s "$c"); '
+            'b=$(realpath -m "${c%/*}" 2>/dev/null || printf %s "${c%/*}")/"${c##*/}"; '
+            f'for x in "$r" "$b"; do case "$x" in "$t"|"$t"/*) {_r31j_console_live_sh(selfname)} ;; '
+            'esac; done; done; ')
+
+
+def _r31j_console_live_sh(selfname):
+    """Shell for a console path that was hit: refuse while the console is attached, or unread.
+
+    Exit 11 (refused) while the server's console is attached, 12 when that cannot be read, and
+    carry on when it is not.
+
+    Attached is the console's own test (_core._tmux_live_socket_sh): a live `<selfname>` session
+    on one of the account's `<selfname>-*` tmux sockets, which is what pipe-pane writes the log
+    from. Also the bare `<selfname>` socket a LinuxGSM older than its uid file made
+    (core_legacy.sh), as host_reboot's _session_sh counts it: refusing there too is the safe
+    side. It runs in a subshell, so "none live" (3) is an answer here rather than the end of the
+    command. A tmux folder that exists but cannot be listed, or any other exit, is no answer.
+    """
+    if not selfname:
+        return f"echo {_R31J_CONSOLE_UNREAD_MARK}; exit 12"
+    q = _core._quote(selfname)
+    return ('( D=/tmp/tmux-$(id -u); { [ ! -e "$D" ] || { [ -r "$D" ] && [ -x "$D" ]; }; } || exit 4; '
+            f'[ -e "$D"/{q} ] && tmux -L {q} list-sessions -F "#{{session_name}}" 2>/dev/null '
+            f'| grep -Fxq -- {q} && exit 0; '
+            + _core._tmux_live_socket_sh(selfname) + 'exit 0 ) >/dev/null 2>&1; lv=$?; '
+            f'if [ "$lv" = 0 ]; then echo {_RENAME_CONSOLE_MARK}; exit 11; fi; '
+            f'if [ "$lv" != 3 ]; then echo {_R31J_CONSOLE_UNREAD_MARK}; exit 12; fi')
+
+
+def _r31j_console_mark(out):
+    """_console_guard's mark in `out` (refused while running, or unread), else ""."""
+    return next((m for m in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK) if m in (out or "")), "")
 
 
 def _r21b_named_folder(user, folder):
@@ -1735,6 +1828,7 @@ _RENAME_OUTCOMES = (
     (_OUTSIDE_HOME, RENAME_REFUSED),
     (_PROTECTED_MARK, RENAME_PROTECTED),
     (_RENAME_CONSOLE_MARK, RENAME_CONSOLE),
+    (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
     (_RENAME_LINKED, "Refusing to rename through a symbolic link: open the folder it points to "
                      "and rename it there."),
     (_RENAME_GONE, _RENAME_GONE_MSG),
@@ -1810,7 +1904,10 @@ def create_refusal(user, reldir, name, kind, selfname=None):
     if _is_protected_path(rel, selfname):
         return CREATE_RESERVED
     if rel in _console_paths(selfname):
-        return CREATE_CONSOLE
+        # Whether or not the server runs: a file at `log` or `log/console` stops LinuxGSM making
+        # the log folders on its next start, so the reserved wording, true in every state.
+        # CREATE_CONSOLE is the host's answer while the console is attached (_console_guard).
+        return CREATE_RESERVED
     return None
 
 
@@ -1866,6 +1963,7 @@ _CREATE_OUTCOMES = (
     (_OUTSIDE_HOME, CREATE_REFUSED),
     (_PROTECTED_MARK, CREATE_RESERVED),
     (_RENAME_CONSOLE_MARK, CREATE_CONSOLE),
+    (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
     (_CREATE_LINKED, CREATE_LINKED),
     (_CREATE_TAKEN, CREATE_EXISTS),
     (_CREATE_FAIL, CREATE_HOST_REFUSED),
@@ -2152,5 +2250,5 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
 _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
     _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
-    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE,
+    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE, R31J_CONSOLE_UNREAD,
 })

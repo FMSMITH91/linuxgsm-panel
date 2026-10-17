@@ -424,7 +424,7 @@ try:
     for _k104, _ans104 in (
             ("start", {"apt-upgrade-running": ("", "", 1),
                        "os-update-run": ("launching\n" + _priv104.OS_UPDATE_STARTED, "", 0)}),
-            ("running", {"apt-upgrade-running": ("", "", 0)}),
+            ("running", {"apt-upgrade-running": ("", "", 0), "os-update-own-running": ("", "", 0)}),
             ("refused", {"apt-upgrade-running": ("", "", 1),
                          "os-update-run": ("", "sudo: a password is required", 1)})):
         del _ou_calls104[:]
@@ -442,7 +442,7 @@ check("system_ops: the panel host's legacy OS update starts the helper's DETACHE
 check("system_ops: ...an update already running is watched, not started again, and a job that did "
       "not start is answered as not started",
       _ou104["running"] == ((True, "An update is already running — watching it."),
-                            ["apt-upgrade-running"])
+                            ["apt-upgrade-running", "os-update-own-running"])
       and _ou104["refused"][0] == (False, "Couldn't start the update."), repr(_ou104))
 
 

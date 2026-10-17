@@ -37,10 +37,11 @@ from types import SimpleNamespace as NS
 
 from sqlalchemy.exc import OperationalError as _OpErr94
 
+from unit.console_live import as_state as _console_state94
 from unit.part01 import check
 from unit.part10 import _Over
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_flashes, _p9_json,
-                         _p9_ms, _p9_patch, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh, _p9_sm)
+                         _p9_ms, _p9_patch, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh, _p9_patch_sm)
 from unit.part89 import _HEAD89 as _HEAD89_94, _Ufw89
 from panel.core import i18n as _i18n94
 from panel.core.panel_state import _game_backup_status as _gbs94
@@ -322,7 +323,7 @@ def _lgsm_qtype94():
 def _refused_row94(rid, short, fresh):
     """A failed row recorded exactly as the install's step 1 records its refusal."""
     sid = _new_server94(rid, short, installed=False, status="failed")
-    _p9_patch(_p9_sm, "read_as_game_user", lambda *a, **k: ("NOTEXISTS\n", "", 0))
+    _p9_patch_sm("read_as_game_user", lambda *a, **k: ("NOTEXISTS\n", "", 0))
     with _p9.app_context():
         gs = db.session.get(GameServer, sid)
         ok, why, retry = _p9_ms._existing_account_verdict(gs.remote, (rid, short), fresh)
@@ -349,7 +350,7 @@ def _uninstall94(client, rid):
     _p9_patch(_p9_ms, "_stop_game_processes", lambda *a, **k: host.append(("stop",)))
     _p9_patch(_p9_ms, "_close_game_firewall", lambda remote, gs: host.append(("firewall",)) or ([], False))
     _p9_patch(_p9_ms, "_remove_account_crontab", lambda *a, **k: host.append(("crontab",)))
-    _p9_patch(_p9_sm, "run_privileged", lambda server, verb, args=(), **k: host.append((verb,)) or ("", "", 0))
+    _p9_patch_sm("run_privileged", lambda server, verb, args=(), **k: host.append((verb,)) or ("", "", 0))
     rows = {"fresh": _refused_row94(rid, "p94fresh", True), "unconfirmed": _refused_row94(rid, "p94unc", False),
             "old wording": (_old_row94(rid, "p94old"), False)}
     xhr = {"X-Requested-With": "XMLHttpRequest"}
@@ -381,6 +382,9 @@ def _uninstall94(client, rid):
 _HOME94 = os.path.join(_TMP94, "home", "p94cfg")
 
 
+_CONSOLE_STATE94 = {"now": "live"}       # whether the console is attached (unit.console_live)
+
+
 def _bash94(script):
     r = _sp94.run(["/bin/bash", "-c", script], capture_output=True, text=True,  # nosec B603 - own text
                   timeout=30)
@@ -388,7 +392,10 @@ def _bash94(script):
 
 
 def _fshell94(server, user, script, timeout=30, **k):
-    return _bash94(script.replace("/home/p94cfg", _HOME94))
+    # The console attached (unit.console_live), as for a running server: the host refuses the
+    # console's log only then.
+    return _bash94(_console_state94(script.replace("/home/p94cfg", _HOME94), _CONSOLE_STATE94["now"],
+                                    k.get("selfname") or "nosuchserver"))
 
 
 def _console_cfg94(client, rid):

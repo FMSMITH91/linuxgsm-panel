@@ -658,7 +658,7 @@ def _recent_journal():
 def _p20_recent_log():
     text, finds = _section_text(LG.section_recent_log, _recent_journal())
     check("debug report recent log: the header names the source, the line count, the span and the zone",
-          "- **Source**: system journal via the privileged helper · 9 lines · Oct 02 11:00:00 → "
+          "- **Source**: system journal (privileged read) · 9 lines · Oct 02 11:00:00 → "
           "Oct 02 11:00:09 host time (UTC" in text and not finds, text)
     check("debug report recent log: starts with their pids, crashes and OOM kills in the window, and a "
           "restart marker inline",

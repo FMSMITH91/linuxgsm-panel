@@ -538,6 +538,12 @@ def _panel_host_blockers():
         out.append(_rw.panel_blocker("restore"))
     if _full_backup_lock.locked():
         out.append(_rw.panel_blocker("full_backup"))
+    # A database repair this process launched in the last two minutes: it stops the panel and may
+    # put the rolling backup back, which predates a plan made now. The reboot_restore rows were then
+    # gone, the stopped servers stayed stopped and their Autostart locks aside. The repair already
+    # refuses the other direction (@_r23a_not_while_panel_host_reboots).
+    if so._r30a_repair_starting():
+        out.append(_rw.panel_blocker("db_repair"))
     return out
 
 

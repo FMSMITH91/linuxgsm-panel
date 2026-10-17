@@ -910,6 +910,12 @@ with app.app_context():
         except Exception as _e:
             db.session.rollback()
             check("migration: a dropped column is restored by _run_light_migrations", False, repr(_e))
+    else:
+        # Not silently absent from the tally when its premise fails (review 1017b): a renamed column
+        # or a SQLite older than 3.35 (no DROP COLUMN) would otherwise drop this check unseen.
+        check("migration: a dropped column is restored by _run_light_migrations", False,
+              "premise failed: SQLite %s, game_server columns %r"
+              % (_sqlite_mig.sqlite_version, sorted(_cols.get("game_server", set()))))
 
 # ── A deleted row must not leave its history for the next row to inherit ──────────────────────
 # MetricSample and HostSample carry no FK — deliberately, so the ~1/min write stays cheap — and

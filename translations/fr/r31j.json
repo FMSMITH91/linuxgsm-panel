@@ -1,0 +1,4 @@
+{
+  "The panel's privileged helper on this host is older than the panel and can't check whether an update is already running, so none was started. Re-run install.sh as root to update the helper.": "L'assistant privilégié du panel sur cet hôte est plus ancien que le panel et ne peut pas vérifier si une mise à jour est déjà en cours, donc aucune n'a été lancée. Relancez install.sh en tant que root pour mettre à jour l'assistant.",
+  "Couldn't check whether the server is running, and the live console reads this path while it runs, so nothing was changed. Try again in a moment.": "Impossible de vérifier si le serveur est en marche, et la console en direct lit ce chemin pendant qu'il tourne, donc rien n'a été modifié. Réessayez dans un instant."
+}

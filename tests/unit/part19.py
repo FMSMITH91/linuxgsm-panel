@@ -25,7 +25,7 @@ from unit.part01 import _r13d_window, _r21d_urlopen_of, check
 from unit.part01 import skip as _skip18
 from unit.part05 import _helper as _helper18, _priv as _priv18
 from unit.part12 import (_p9, _p9_arm, _p9_app, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all,
-                         _p9_sm)
+                         _p9_patch_sm)
 from unit.part18 import (_A18, _XHR18, _audits18, _ctx18, _forget_sids18, _host18, _mine18,
                          _server18)
 from panel.core.config import decrypt_secret as _decrypt18
@@ -136,12 +136,12 @@ def _p18b_write_gate():
     _wg18_host = _host18("p18-wg-host", "192.0.2.170")
     _wg18_admin = _server18(_wg18_host, "adminacct", 27700)
     _wg18_plain = _server18(_wg18_host, "plaingame", 27701)
-    _p9_patch(_p9_sm, "run_command", _wg18_run)
+    _p9_patch_sm("run_command", _wg18_run)
     for _n18 in ("write_file", "add_cron_job", "update_cron_job", "run_cron_job_now",
                  "delete_path", "upload_file"):
         _p9_patch(_sf18, _n18, _wg18_rec(_n18))
-    _p9_patch(_p9_sm, "delete_cron_job", _wg18_rec("delete_cron_job"))
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda *a, **k: [])
+    _p9_patch_sm("delete_cron_job", _wg18_rec("delete_cron_job"))
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
     _sh18._ACCOUNT_VERDICTS.clear()
     _wg18_reply["out"] = ("ACCT adminacct 1000 adminacct adm sudo\nACCT plaingame 1001 plaingame\n"
                           "LGSM_ACCT_PROBE_DONE\n")

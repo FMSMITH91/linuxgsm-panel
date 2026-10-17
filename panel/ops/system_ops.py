@@ -1099,6 +1099,56 @@ def _r27p_local_probe():
     return out, rc
 
 
+# Said without naming who started it: the panel's own host bootstrap runs `apt-get full-upgrade`
+# through the apt-full-upgrade verb, which is a package upgrade the OS Updates card did not start,
+# but one the panel did. Refusing is right either way (a second run would race dpkg).
+R31B_UPDATE_BUSY = ("Another package upgrade is already running on this host (not one started from "
+                    "this card). Wait for it to finish, then check for updates again.")
+R31B_UPDATE_UNCHECKED = ("Couldn't check whether an update is already running on this host, so none was "
+                         "started. Try again in a moment.")
+# A helper older than the os-update-own-running verb answers it "unknown verb" (rc 2) every time,
+# so "try again" could never succeed: the cure is the helper update a git pull does not bring.
+R31J_UPDATE_OLD_HELPER = ("The panel's privileged helper on this host is older than the panel and "
+                          "can't check whether an update is already running, so none was started. "
+                          "Re-run install.sh as root to update the helper.")
+
+
+def r31j_own_update_answer(res, path="helper"):
+    """os-update-own-running's (out, err, rc) as its rc, or "unknown_verb" from a helper without it."""
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    out, err, rc = res
+    if _smc.privileged_outcome(path, out, err, rc) == "unknown_verb":
+        return "unknown_verb"
+    return rc
+
+
+def _r31b_own_update_rc():
+    """os-update-own-running's answer on the panel host: 0 while the panel's own job runs."""
+    return r31j_own_update_answer(_run_verb("os-update-own-running", [], timeout=10, merge_stderr=False))
+
+
+def r31b_update_running_answer(upgrade_rc, own_rc):
+    """Start's answer when an OS update may already be running, else None (go on and start one).
+
+    `upgrade_rc` is apt-upgrade-running's exit code; `own_rc()` asks os-update-own-running's
+    (r31j_own_update_answer: its rc, or "unknown_verb" from a helper older than the verb).
+    Only the panel's OWN job is "watching it": its log is the one the popup reads. An `apt-get
+    upgrade` someone started over SSH matched too, and the popup read the panel's previous run's
+    log, said "Updates installed." and stopped watching while apt was still working. pgrep answers
+    0 or 1; anything else is no answer, and starting then could truncate a running job's log.
+    """
+    if upgrade_rc == 1:
+        return None
+    if upgrade_rc != 0:
+        return False, R31B_UPDATE_UNCHECKED
+    own = own_rc()
+    if own == 0:
+        return True, "An update is already running — watching it."
+    if own == "unknown_verb":
+        return False, R31J_UPDATE_OLD_HELPER
+    return False, (R31B_UPDATE_BUSY if own == 1 else R31B_UPDATE_UNCHECKED)
+
+
 def os_run_update():
     """Start the panel host's OS update as the detached job the OS Updates card starts. (ok, message).
 
@@ -1114,8 +1164,9 @@ def os_run_update():
     if not _can_escalate():
         return False, "Sudo access required. Configure passwordless sudo for the panel user."
     _out, _err, rc = _run_verb("apt-upgrade-running", [], timeout=10, merge_stderr=False)
-    if rc == 0:
-        return True, "An update is already running — watching it."
+    busy = r31b_update_running_answer(rc, _r31b_own_update_rc)
+    if busy is not None:
+        return busy
     out, err, rc = _run_verb("os-update-run", [], timeout=20)
     if _priv.OS_UPDATE_STARTED in (out or ""):
         return True, "OS update started in background. This may take several minutes."
@@ -2767,6 +2818,8 @@ R30A_REPAIR_STARTING_RESTORE = ("A database repair is starting — restore once 
                                 "restarted.")
 R30A_REPAIR_STARTING_UPDATE = ("A database repair is starting — update once the panel has "
                                "restarted.")
+R31A_REPAIR_STARTING_REPAIR = ("A database repair is already starting — give it about a minute, then "
+                               "reload the page.")
 
 
 def _r30a_repair_starting():
@@ -2807,6 +2860,14 @@ def panel_repair_database():
     dbm = os.path.join(base, "db_maintenance.py")
     if not os.path.exists(py) or not os.path.exists(dbm):
         return False, "The repair tool isn't available on this install."
+    # Asked of the record itself, before this call announces: a second click (another tab, another
+    # superadmin) in the seconds before the timer stopped the panel passed every check, and on a
+    # per-user or pre-helper install, whose launcher has no fixed unit name, scheduled a second
+    # job running db_maintenance on the same database at the same time (each deletes the other's
+    # `.rebuilt` file before claiming it). Nothing yields between this test and the update below,
+    # so of two calls exactly one launches. A refused call leaves the first one's record alone.
+    if _r30a_repair_starting():
+        return False, R31A_REPAIR_STARTING_REPAIR
     saved = dict(_r30a_repair_launched)
     _r30a_repair_launched.update(ts=time.time(), dir=PANEL_DIR)   # announce first, then ask
     ok = False

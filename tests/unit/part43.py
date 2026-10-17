@@ -51,7 +51,7 @@ from types import SimpleNamespace as _NS43
 from unit import REPO_ROOT as _ROOT43
 from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_app, _p9_client, _p9_core,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_sh, _p9_sm, _p9_so)
+                         _p9_json, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_sh, _p9_sm, _p9_so)
 from panel.core.panel_state import forget_rows
 from panel.db.models import AuditLog, GameServer, RemoteServer, db
 from panel.routes import discover as _disc43
@@ -323,9 +323,9 @@ def _arm43():
               lambda s, u, grep, add, extra_pre="": (_CRON_WRITTEN43.setdefault(u, []).extend(add),
                                                      (True, "ok"))[1])
     _p9_patch(_p9_core, "_gamedig_host", lambda server: server.host)
-    _p9_patch(_p9_sm, "remote_ufw_close_game_port",
-              lambda r, port, name="", legacy=False, ports=(): (
-                  _CLOSED43.append((port, name)), (1, "Port %s: 1 rule(s) removed" % port, []))[1])
+    _p9_patch_sm("remote_ufw_close_game_port",
+                 lambda r, port, name="", legacy=False, ports=(): (
+                     _CLOSED43.append((port, name)), (1, "Port %s: 1 rule(s) removed" % port, []))[1])
     _p9_patch(_disc43, "privileged_accounts", lambda remote, users: {})
     _p9_patch(_disc43, "_bg_cache_commands", lambda *a, **k: None)
     _p9_patch(_notif43, "notify", lambda key, title, body="": _NOTIFIED43.append((key, body)))
@@ -789,7 +789,7 @@ def _heal_run43(want, hosts):
     # check is a host round trip, stood in for here as a plain game account.
     _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_gp43, "read_reported_ports", _read_then_delete)
-    _p9_patch(_p9_sm, "protected_host_ports", _protected)
+    _p9_patch_sm("protected_host_ports", _protected)
     if orig_audit is not None:
         _p9_patch(_gp43, "_audit_moves", _moved_before_audit)
     try:
@@ -798,7 +798,7 @@ def _heal_run43(want, hosts):
         check("startup port re-read: runs without raising", False, repr(exc))
     finally:
         _p9_patch(_gp43, "read_reported_ports", orig_read)
-        _p9_patch(_p9_sm, "protected_host_ports", orig_protected)
+        _p9_patch_sm("protected_host_ports", orig_protected)
         if orig_audit is not None:
             _p9_patch(_gp43, "_audit_moves", orig_audit)
     forget_rows(server_ids=(want["del43"],))

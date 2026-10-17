@@ -34,7 +34,7 @@ from types import SimpleNamespace as NS
 from unit.part01 import check, skip
 from unit.part05 import _helper
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
-                         _p9_restore_all, _p9_sf, _p9_sh, _p9_sm, _p9_trip)
+                         _p9_restore_all, _p9_sf, _p9_sh, _p9_patch_sm, _p9_trip)
 from panel.core import config as _cfg52
 from panel.db.models import GameServer, RemoteServer, User, db
 from panel.ops import system_ops as _so52
@@ -467,7 +467,7 @@ def _console52():
         p = _sp52.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30, check=False)  # nosec B603 B607 - bash on this part's own command
         return p.stdout, p.stderr, p.returncode
 
-    _p9_patch(_p9_sm, "read_as_game_user", read)
+    _p9_patch_sm("read_as_game_user", read)
     rows = {}
     for name, text in (("partial", "line1\nline2\nline3\npartial"), ("whole", "line1\nline2\nline3\n")):
         with open(log, "w", encoding="utf-8") as fh:
@@ -485,9 +485,9 @@ def _console52():
 
 def _cron_get52(client, sid):
     upgrades = []
-    _p9_patch(_p9_sm, "upgrade_managed_cron_tracking",
-              lambda *a, **k: upgrades.append(a[1]))
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda remote, user, lgsm: [])
+    _p9_patch_sm("upgrade_managed_cron_tracking",
+                 lambda *a, **k: upgrades.append(a[1]))
+    _p9_patch_sm("list_cron_jobs", lambda remote, user, lgsm: [])
     _p9_patch(_p9_sh, "privileged_accounts", lambda remote, users: {u: "is in the sudo group" for u in users})
     with _p9_sh._ACCOUNT_VERDICTS_LOCK:
         _p9_sh._ACCOUNT_VERDICTS.clear()
@@ -508,7 +508,7 @@ def _looks_installed52():
     for name, text in (("both", "Status: STOPPED\ncat: server.cfg: No such file or directory\n"),
                        ("missing", "cat: x: No such file or directory\n"),
                        ("not", "Server is not installed\nStatus: ")):
-        _p9_patch(_p9_sm, "shell_as_game_user", lambda *a, _t=text, **k: (_t, "", 0))
+        _p9_patch_sm("shell_as_game_user", lambda *a, _t=text, **k: (_t, "", 0))
         _p9_patch(_p9_sh, "_serverfiles_verdict", lambda remote, user: None)
         outs[name] = _p9_sh._looks_installed(_p9, NS(), _USER52, _SELF52)
     check("install reconcile: `details` that printed its Status block is installed even when it "

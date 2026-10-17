@@ -952,10 +952,14 @@ def _cron_b64(s):
 #   * the shell form's script (remotes without the helper), by the header it writes.
 # Each alternative starts with a bracket, so a remote's waiting `sudo bash -c 'pgrep -f …'`, whose
 # command line holds this text, never matches itself.
+# The last two alternatives on their own: is the PANEL's OS update running? os-update-own-running
+# asks it when apt-upgrade-running has matched, because an `apt-get upgrade` someone started over
+# SSH matches the first alternative too, and the panel's log of its own last run then read as this
+# one's outcome ("Updates installed." while apt was still working).
+_R31B_OWN_UPDATE_RE = ("[p]anel-helper( [^ ]+)* os-update-run( |$)"
+                       "|[O]S update started")
 _R30A_UPGRADE_RE = ("[a]pt-get( (-[^s -][^ ]*|--[^ ]+|[^- ][^ ]*))* "
-                    "(upgrade|dist-upgrade|full-upgrade)( |$)"
-                    "|[p]anel-helper( [^ ]+)* os-update-run( |$)"
-                    "|[O]S update started")
+                    "(upgrade|dist-upgrade|full-upgrade)( |$)|" + _R31B_OWN_UPDATE_RE)
 
 _ARGV = {
     "ufw-status": ([_choice("plain", "numbered", "verbose")],
@@ -1210,6 +1214,8 @@ _ARGV = {
     "apt-any-running": ([], lambda a: ["pgrep", "-f", "[a]pt-get"], None),
     # "Is an OS update already running?", asked before os-update-run starts one: _R30A_UPGRADE_RE.
     "apt-upgrade-running": ([], lambda a: ["pgrep", "-f", _R30A_UPGRADE_RE], None),
+    # ...and whether that is the panel's own job (_R31B_OWN_UPDATE_RE).
+    "os-update-own-running": ([], lambda a: ["pgrep", "-f", _R31B_OWN_UPDATE_RE], None),
     "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
     "reboot": ([], lambda a: ["reboot"], None),
 

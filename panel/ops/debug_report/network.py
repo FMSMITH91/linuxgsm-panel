@@ -749,7 +749,14 @@ def panel_jail_health(auth_log, web_port, ignore_ips=None):
     return so.panel_jail_health(auth_log, web_port, ignore_ips)
 
 
-def _jail_file_text(cfg):
+def _jail_file_text(cfg, port):
+    """The jail file's checks as one line, and their {check: bool}; `port` is the port served now.
+
+    The jail follows the port this process is bound to (app._apply_whitelist_to_fail2ban asks
+    ts._r13b_bound_port), so that is the port it is checked against: config.json's marked a correct
+    jail ✗ after a port change whose restart could not be scheduled, and a jail on that unserved
+    port ✓, the one state in which failed logins on the live port go unbanned.
+    """
     path = so._F2B_PANEL_JAIL
     try:
         with open(path, encoding="utf-8"):
@@ -758,9 +765,8 @@ def _jail_file_text(cfg):
         return "jail file absent", None
     except OSError as exc:
         return "jail file unreadable (%s)" % type(exc).__name__, None
-    h = panel_jail_health(auth_log_path(), cfg.get("port", 5000),
-                          list(cfg.get("security_whitelist", []) or []))
-    labels = (("logpath", "watching the panel's auth.log"), ("port", "port = config"),
+    h = panel_jail_health(auth_log_path(), port, list(cfg.get("security_whitelist", []) or []))
+    labels = (("logpath", "watching the panel's auth.log"), ("port", "port = served port"),
               ("backend", "backend auto"), ("banaction", "banaction %s" % (
                   "all-ports (proxied)" if h["allports"] else "web port")),
               ("ignoreip", "ignoreip tailnet + whitelist"), ("filter", "filter current"))
@@ -895,10 +901,10 @@ def _panel_jail_findings(res, c):
                                        "install's auth.log, so it can never ban")
 
 
-def _f2b_lines(res, facts, got, cfg, readable):
+def _f2b_lines(res, facts, got, cfg, readable, port):
     status, rt = got
     if readable:
-        text, health = _jail_file_text(cfg)
+        text, health = _jail_file_text(cfg, port)
         res.posture("- **%s jail file**: %s" % (PANEL_JAIL, text))
         if health is not None and not health["logpath"]:
             res.posture_find("fail", AREA,
@@ -928,7 +934,7 @@ def section_network(ctx):
     parts = (("Tailscale", lambda: _tailscale_lines(ctx, res, facts, got["tailscale"])),
              ("UFW", lambda: _ufw_lines(res, facts, got["ufw"], cfg,
                                         running_port(ctx, cfg if readable else {}), sshd)),
-             ("fail2ban", lambda: _f2b_lines(res, facts, got["f2b"], cfg, readable)))
+             ("fail2ban", lambda: _f2b_lines(res, facts, got["f2b"], cfg, readable, running_port(ctx, cfg))))
     for title, part in parts:
         try:
             part()

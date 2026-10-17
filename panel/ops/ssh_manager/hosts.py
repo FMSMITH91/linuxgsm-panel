@@ -1,5 +1,6 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
+import functools
 import ipaddress as _ipaddress
 import re
 import socket
@@ -1385,12 +1386,12 @@ def protected_host_ports(server):
         _core._log.debug("protected ports: sshd's effective config could not be read",
                          exc_info=True)
     try:
-        web = firewall._panel_web_port(server)
+        # Each of the panel's ports: the one it serves on now, and a saved one waiting for its restart.
+        web = firewall._r31a_panel_web_ports(server)
     except Exception:
         _core._log.debug("protected ports: the panel's web port could not be read", exc_info=True)
-        web = None
-    if web:
-        ports.add(int(web))
+        web = []
+    ports.update(int(p) for p in web if p)
     return ports
 
 
@@ -1754,12 +1755,17 @@ def install_game_dependencies(server, game_type=None, extra="", account=None, se
         c_out, c_err, c_rc = _verb("apt-install-minimal", chunk, timeout=1800)
         out, err = (out + (c_out or ""))[-4000:], (err + (c_err or ""))[-2000:]
         if c_rc != 0:
-            rc = c_rc
-            for one in chunk:
-                _verb("apt-install-minimal", [one], timeout=600, merge_stderr=False)
+            # The batch failed; the chunk still counts as installed when every package in it then
+            # installed on its own (the retries' results were dropped, and a batch that failed for
+            # a reason a retry got past reported "some dependencies did not install").
+            failed = [one for one in chunk
+                      if _verb("apt-install-minimal", [one], timeout=600, merge_stderr=False)[2] != 0]
+            if failed:
+                rc = c_rc
 
-    # rc now reports the BATCH. It used to report `echo deps-done`, the last command in the
-    # pipeline, so this function returned True however badly the install had gone — which is the
+    # rc now reports the packages: a batch that failed, unless each of its packages then installed
+    # on its own. It used to report `echo deps-done`, the last command in the pipeline, so this
+    # function returned True however badly the install had gone — which is the
     # other half of why a refused step never surfaced. A refused name fails it too: LinuxGSM will
     # still report that package missing, and the result is where the refusal is said.
     return (rc == 0 and steam_ok and not refused), refusal + (out or err or "")
@@ -1952,9 +1958,11 @@ def remote_os_update_start(server):
     # Don't launch a second run on top of one already going.
     # pgrep exits 0 when it matched something, 1 when it did not — the `&& echo RUN || echo IDLE`
     # only translated that into text for a string check.
+    from panel.ops import system_ops
     _, _, chk_rc = _core.run_privileged(server, "apt-upgrade-running", [], timeout=10, merge_stderr=False)
-    if chk_rc == 0:
-        return True, "An update is already running — watching it."
+    busy = system_ops.r31b_update_running_answer(chk_rc, functools.partial(_r31b_own_update_rc, server))
+    if busy is not None:
+        return busy
     # Was one `setsid bash -c '<script>'` wrapping seven shell statements. It took no caller input
     # at all — the only variables in it were two constants — which is what lets it be a
     # zero-argument verb rather than a command the panel composes.
@@ -1962,6 +1970,31 @@ def remote_os_update_start(server):
     if _priv.OS_UPDATE_STARTED in (out or ""):
         return True, "Update started."
     return False, "Couldn't start the update."
+
+
+def _r31b_own_update_rc(server):
+    """os-update-own-running's answer: 0 while the panel's own OS-update job runs, 1 when not.
+
+    "unknown_verb" from a local row's helper older than the verb (system_ops.r31j_own_update_answer).
+    """
+    from panel.ops import system_ops
+    return system_ops.r31j_own_update_answer(
+        _core.run_privileged(server, "os-update-own-running", [], timeout=10, merge_stderr=False),
+        "helper" if getattr(server, "is_local", False) else "remote")
+
+
+def _r31b_finished(server, log):
+    """remote_os_update_status's answer when `log` ends in the job's sentinel, else None."""
+    m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
+    if m is None:
+        return None
+    if _r31b_own_update_rc(server) == 0:
+        # The sentinel is the LAST thing the job writes, so with the job still running it is the
+        # previous run's: the new job has not truncated the log yet (it is only just starting).
+        # Read as finished, the popup said "Updates installed." for a run that had just begun.
+        return {"running": True, "done": False, "rc": None, "log": ""}
+    log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
+    return {"running": False, "done": True, "rc": int(m.group(1)), "log": log}
 
 
 def remote_os_update_status(server):
@@ -1987,12 +2020,9 @@ def remote_os_update_status(server):
     elif lrc != 0:
         return {"running": None, "done": False, "rc": None, "log": "", "unread": True}
     log = out or ""
-    m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
-    done = m is not None
-    rc = int(m.group(1)) if m else None
-    if done:
-        log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
-        return {"running": False, "done": True, "rc": rc, "log": log}
+    finished = _r31b_finished(server, log)
+    if finished is not None:
+        return finished
     # No sentinel yet — is apt still working? pgrep answers 0 (yes) or 1 (no); anything else is no
     # answer, which is not "apt has stopped".
     _, _, alive_rc = _core.run_privileged(server, "apt-any-running", [], timeout=10, merge_stderr=False)
@@ -4385,7 +4415,11 @@ def remote_public_ssh_status(server, panel_port=None):
     reachable only over tailscale0), plus whether UFW is active at all. When
     `panel_port` is given, also report whether that port has a public ALLOW rule
     (`panel_port_open`) so the UI can disable "Close public panel port" once it's
-    already closed."""
+    already closed. `panel_port` may be a list of the panel's ports (the one it serves
+    on, then a saved one waiting for its restart): reported as the first, and open
+    while any of them is, as Close closes them all."""
+    ports = _r31a_port_list(panel_port)
+    panel_port = ports[0] if ports else None
     # rc, and an answer at all — do not describe a firewall you could not read. (This required
     # the literal "Status:" line, as firewall.remote_ufw_status does; ufw translates that line
     # whole, so a French host — `État : actif` — read as unreachable and _ufw_is_active's
@@ -4451,7 +4485,7 @@ def remote_public_ssh_status(server, panel_port=None):
         # open to the internet. An IPv6-only rule is open too, and a comment that happens to say
         # "tailscale" is no interface.
         # (Parsed, not searched for the number first: a range `4000:6000` never contains "5000".)
-        if panel_port and _r14a_holds_port_open(line, panel_port):
+        if panel_port and _r31a_holds_any_open(line, ports):
             panel_open = True
     res = {"active": active, "mode": mode}
     if first:
@@ -4461,6 +4495,22 @@ def remote_public_ssh_status(server, panel_port=None):
         res["panel_port"] = int(panel_port)
         res["panel_port_open"] = panel_open
     return res
+
+
+def _r31a_port_list(panel_port):
+    """remote_public_ssh_status's `panel_port` as a list of ports: [] for none.
+
+    A list whichever shape it came in, so every return is one type (CodeQL py/mixed-tuple-returns
+    read the one- and zero-element tuples as two).
+    """
+    if isinstance(panel_port, (list, tuple)):
+        return [p for p in panel_port if p]
+    return [panel_port] if panel_port else []
+
+
+def _r31a_holds_any_open(line, ports):
+    """Whether one `ufw status` row lets the public in on any of `ports` (_r14a_holds_port_open)."""
+    return any(_r14a_holds_port_open(line, p) for p in ports)
 
 
 def _r14a_holds_port_open(line, port):

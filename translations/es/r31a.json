@@ -1,0 +1,8 @@
+{
+  "The panel's host could not be read from the database, so nothing was rebooted — try again in a moment.": "No se pudo leer el host del panel en la base de datos, así que no se reinició nada; inténtalo de nuevo en un momento.",
+  "Port {port} could not be recorded back as the panel's port for Tailscale Serve ({why}).": "No se pudo volver a registrar el puerto {port} como el puerto del panel para Tailscale Serve ({why}).",
+  "A database repair is already starting — give it about a minute, then reload the page.": "Ya se está iniciando una reparación de la base de datos: espera alrededor de un minuto y vuelve a cargar la página.",
+  "a database repair of {name}": "una reparación de la base de datos de {name}",
+  "a database repair of the panel": "una reparación de la base de datos del panel",
+  "a database repair is starting": "se está iniciando una reparación de la base de datos"
+}
