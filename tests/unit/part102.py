@@ -28,6 +28,7 @@ from panel.routes import api as _api102, close_port22 as _cp102, remote_vps as _
 from panel.security import auth as _auth102
 
 _TRIP102_START = len(_P9_TRIPPED)
+_LIST_BACKUPS102 = _cron102.list_game_backups
 _mine102 = {"hosts": [], "servers": [], "users": []}
 
 
@@ -316,7 +317,7 @@ def _gmod_es102(client, gid, rid):
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _headroom102(backups):
     gone = []
-    _p9_patch(_cron102, "list_game_backups", lambda server, user: [dict(b) for b in backups])
+    _p9_patch(_cron102, "list_game_backups", lambda server, user, **k: [dict(b) for b in backups])
     _p9_patch(_cron102, "backup_disk_info", lambda server, user: {"free": 10, "total": 10 ** 9})
     _p9_patch(_cron102, "delete_game_backup", lambda server, user, name: gone.append(name) or True)
     note = _cron102._ensure_backup_headroom(NS(id=-10201), "p102u", 2)
@@ -338,6 +339,39 @@ def _prune_running102():
           "being written is never counted as a kept backup",
           got["growing"] == ([], "") and got["none running"][0] == ["b1.tar.zst"]
           and got["direct"] == ["b1.tar.zst"], repr(got))
+    _prune_locked102()
+
+
+def _prune_locked102():
+    # LinuxGSM's own order: take backup.lock, stop the server (a graceful stop, tens of seconds),
+    # only then write the archive. In that window the lock exists and no archive is newer than it.
+    # The real listing runs on a game-user shell stand-in; the disk is tight; four finished backups.
+    sent = []
+
+    def _listing(lock):
+        def _as_user(server, user, sh, timeout=30, **k):
+            sent.append(sh)
+            out = "".join("F\tb%d.tar.zst\t500\t%d\n" % (i, 1000 + i) for i in range(4))
+            return out + ("LOCK\t%s\n" % lock if lock else "") + _cron102._BACKUP_LIST_DONE + "\n", "", 0
+        return _as_user
+    gone = []
+    _p9_patch(_cron102, "list_game_backups", _LIST_BACKUPS102)   # the real one: _headroom102 stubbed it
+    _p9_patch(_cron102, "backup_disk_info", lambda server, user: {"free": 10, "total": 10 ** 9})
+    _p9_patch(_cron102, "delete_game_backup", lambda server, user, name: gone.append(name) or True)
+    got = {}
+    for k, lock in (("lock, no archive yet", "2000.5"), ("lock time unreadable", "?"), ("no lock", None)):
+        del gone[:]
+        _p9_patch(_p9_core, "shell_as_game_user", _listing(lock))
+        note = _cron102._ensure_backup_headroom(NS(id=-10204), "p102u", 2)
+        got[k] = (list(gone), note)
+    check("backup headroom: while LinuxGSM holds a fresh backup.lock and has not created its archive yet "
+          "(it is still stopping the server), the prune deletes nothing (it removed finished backups, "
+          "then failed on the lock: adversarial F3); with no lock it frees space as before (control)",
+          got["lock, no archive yet"] == ([], "") and got["lock time unreadable"] == ([], "")
+          and got["no lock"][0][:1] == ["b0.tar.zst"], repr(got))
+    check("backup listing: a lock counts as stale exactly when LinuxGSM's fn_backup_check_lockfile says so "
+          "(`find backup.lock -mmin +60`), so the listing reads every lock that test keeps",
+          bool(sent) and all('-name "*backup.lock" ! -mmin +60 ' in sh for sh in sent), repr(sent[:1]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

@@ -1367,7 +1367,7 @@ _hs_saved = (_sm_cron._ensure_backup_headroom, _sm_cron.list_game_backups, _sm_c
 try:
     _GB2 = 1024 ** 3
     _sm_cron._ensure_backup_headroom = lambda s, u, k: ""       # nothing left to free
-    _sm_cron.list_game_backups = lambda s, u: [{"name": "b-1", "size": int(1.2 * _GB2), "created": 1}]
+    _sm_cron.list_game_backups = lambda s, u, **k: [{"name": "b-1", "size": int(1.2 * _GB2), "created": 1}]
     _sm_cron.backup_disk_info = lambda s, u: {"free": 22 * 1024 * 1024, "total": 23 * _GB2}   # ~22 MB free
     _pf_cmds = []
     _sm_core.run_command = lambda s, c, **k: (_pf_cmds.append(c), ("", "", 0))[1]
@@ -1403,7 +1403,7 @@ try:
     _three = [{"name": "g-3", "size": 4 * _GB, "created": 300},
               {"name": "g-2", "size": 4 * _GB, "created": 200},
               {"name": "g-1", "size": 4 * _GB, "created": 100}]
-    _sm_cron.list_game_backups = lambda s, u: list(_three)
+    _sm_cron.list_game_backups = lambda s, u, **k: list(_three)
     # plenty of room -> no deletion
     _sm_cron.backup_disk_info = lambda s, u: {"free": 57 * _GB, "total": 60 * _GB}
     _hr_deleted[:] = []
@@ -1416,12 +1416,12 @@ try:
     check("headroom: tight disk frees the OLDEST backup first, protects newest",
           _hr_deleted[:1] == ["g-1"] and "g-3" not in _hr_deleted and _n2)
     # no backups yet -> nothing to free
-    _sm_cron.list_game_backups = lambda s, u: []
+    _sm_cron.list_game_backups = lambda s, u, **k: []
     _hr_deleted[:] = []
     check("headroom: no backups yet -> no deletion", _sm_cron._ensure_backup_headroom(None, "gm", 2) == "" and _hr_deleted == [])
     # 0-byte newest is a failed backup (junk): delete it first, protect the good older one, and
     # estimate from the LARGEST (so a 0-byte newest doesn't make it skip on a full disk).
-    _sm_cron.list_game_backups = lambda s, u: [{"name": "junk", "size": 0, "created": 300},
+    _sm_cron.list_game_backups = lambda s, u, **k: [{"name": "junk", "size": 0, "created": 300},
                                          {"name": "good", "size": 226 * _GB, "created": 200}]
     _sm_cron.backup_disk_info = lambda s, u: {"free": 50 * 1024 * 1024, "total": 25 * _GB}
     _hr_deleted[:] = []
@@ -3413,7 +3413,7 @@ try:
             {"name": "s-2026-09-17-100000.tar.zst", "size": 1000},
             {"name": "s-2026-09-16-100000.tar.zst", "size": 1000},
             {"name": "s-2026-09-15-100000.tar.zst", "size": 1000}]
-    _sm_cron.list_game_backups = lambda s, u: list(_BKS)
+    _sm_cron.list_game_backups = lambda s, u, **k: list(_BKS)
     _sm_cron.backup_disk_info = lambda s, u: _hr["disk"]
     _sm_cron.delete_game_backup = lambda s, u, n: (_hr["deleted"].append(n), True)[1]
 
