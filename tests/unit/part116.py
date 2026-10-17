@@ -21,6 +21,7 @@ sudo or the checkout's data/.
 import contextlib as _ctx116
 import io as _io116
 import os
+import runpy as _runpy116
 import shutil as _shutil116
 import socket as _sock116
 import subprocess as _sp116  # nosec B404 - bash over this checkout's own scripts, fixed argv
@@ -317,10 +318,11 @@ def _manage116():
     link = [n for n in _ast116.walk(fns["cmd_setup_token"]) if isinstance(n, _ast116.BoolOp)
             and isinstance(n.op, _ast116.Or) and isinstance(n.values[0], _ast116.Call)
             and getattr(n.values[0].func, "id", "") == "_r32a_running_port"]
-    ns = {"os": os}
-    code = compile(_ast116.Module(body=keep, type_ignores=[]), "manage.py", "exec")
-    exec(code, ns)  # nosec B102 - this checkout's own file  # pylint: disable=exec-used
-    return NS(**ns), link
+    # Only those functions, written out and run as a file of their own (runpy), with manage.py's `os`.
+    only = os.path.join(_TMP116, "manage_r32a.py")
+    with open(only, "w", encoding="utf-8") as fh:
+        fh.write(_ast116.unparse(_ast116.Module(body=keep, type_ignores=[])))
+    return NS(**_runpy116.run_path(only, init_globals={"os": os})), link
 
 
 def _setup_link116():
