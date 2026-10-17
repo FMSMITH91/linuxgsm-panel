@@ -76,7 +76,7 @@ _SELF117 = "p117srv"
 def _home_tree117():
     """A stopped server's home: `log -> disk/logs`, which does not exist yet, and a plain file."""
     _shutil117.rmtree(os.path.join(_TMP117, "home"), ignore_errors=True)
-    os.makedirs(os.path.join(_HOME117, "disk"))
+    os.makedirs(os.path.join(_HOME117, "disk", "sub"))
     os.symlink("disk/logs", os.path.join(_HOME117, "log"))
     with open(os.path.join(_HOME117, "disk", "notes.txt"), "w", encoding="utf-8") as fh:
         fh.write("n")
@@ -102,8 +102,17 @@ def _dangling117():
             ("create elsewhere", lambda: _f117.create_path(None, "p117u", "disk", "other", "file", _SELF117),
              "disk/other"),
             ("rename elsewhere", lambda: _f117.rename_path(None, "p117u", "disk/notes.txt", "n2", _SELF117),
-             "disk/n2")):
+             "disk/n2"),
+            ("folder logs", lambda: _f117.create_path(None, "p117u", "disk", "logs", "folder", _SELF117),
+             "disk/logs"),
+            ("rename folder onto", lambda: _f117.rename_path(None, "p117u", "disk/sub", "logs", _SELF117),
+             "disk/logs"),
+            ("folder at log", lambda: _f117.create_path(None, "p117u", "disk/logs/console",
+                                                        _SELF117 + "-console.log", "folder", _SELF117),
+             "disk/logs/console/%s-console.log" % _SELF117)):
         _home_tree117()
+        if case == "folder at log":
+            os.makedirs(os.path.join(_HOME117, "disk", "logs", "console"))
         ok, msg = call()
         got[case] = (ok, msg, os.path.lexists(os.path.join(_HOME117, made)) if made else None)
     want_ref = (False, _f117.CREATE_RESERVED, False)
@@ -114,6 +123,12 @@ def _dangling117():
     check("files: ...and a name off the console's path is still created and renamed (controls)",
           got["create elsewhere"] == (True, "Created", True) and got["rename elsewhere"][0] is True
           and got["rename elsewhere"][2] is True and got["create beside"][0] is True, repr(got))
+    check("files: ...but a FOLDER created at disk/logs, or a folder renamed onto it, is made: it is what repairs the "
+          "dangling link (LinuxGSM's own mkdir fails on one), so only a folder at the console log's own path stays "
+          "refused",
+          got["folder logs"] == (True, "Created", True) and got["rename folder onto"][0] is True
+          and got["rename folder onto"][2] is True
+          and got["folder at log"] == want_ref, repr(got))
 
 
 # ── 3. the wizard's Serve keeps the working route while a port change waits ───────────────────────
