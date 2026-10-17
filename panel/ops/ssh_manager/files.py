@@ -1732,14 +1732,21 @@ def _r31j_console_live_sh(selfname):
     """Shell for a console path that was hit: refuse while the console is attached, or unread.
 
     Exit 11 (refused) while the server's console is attached, 12 when that cannot be read, and
-    carry on when it is not. Attached is the console's own test (_core._tmux_live_socket_sh): a live `<selfname>` session on
-    one of the account's `<selfname>-*` tmux sockets, which is what pipe-pane writes the log from.
-    It runs in a subshell, so its "none live" exit (3) is an answer here rather than the end of the
+    carry on when it is not.
+
+    Attached is the console's own test (_core._tmux_live_socket_sh): a live `<selfname>` session
+    on one of the account's `<selfname>-*` tmux sockets, which is what pipe-pane writes the log
+    from. Also the bare `<selfname>` socket a LinuxGSM older than its uid file made
+    (core_legacy.sh), as host_reboot's _session_sh counts it: refusing there too is the safe
+    side. It runs in a subshell, so "none live" (3) is an answer here rather than the end of the
     command. A tmux folder that exists but cannot be listed, or any other exit, is no answer.
     """
     if not selfname:
         return f"echo {_R31J_CONSOLE_UNREAD_MARK}; exit 12"
+    q = _core._quote(selfname)
     return ('( D=/tmp/tmux-$(id -u); { [ ! -e "$D" ] || { [ -r "$D" ] && [ -x "$D" ]; }; } || exit 4; '
+            f'[ -e "$D"/{q} ] && tmux -L {q} list-sessions -F "#{{session_name}}" 2>/dev/null '
+            f'| grep -Fxq -- {q} && exit 0; '
             + _core._tmux_live_socket_sh(selfname) + 'exit 0 ) >/dev/null 2>&1; lv=$?; '
             f'if [ "$lv" = 0 ]; then echo {_RENAME_CONSOLE_MARK}; exit 11; fi; '
             f'if [ "$lv" != 3 ]; then echo {_R31J_CONSOLE_UNREAD_MARK}; exit 12; fi')

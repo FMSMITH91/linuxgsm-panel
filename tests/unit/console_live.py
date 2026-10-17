@@ -10,6 +10,7 @@ function answering for that state. Nothing here starts tmux or reads the real /t
     live     a `<selfname>-p` socket whose session answers has-session (pipe-pane is writing)
     stopped  the folder exists, no socket: nothing is attached (LinuxGSM has not started it)
     stale    a `<selfname>-p` socket left by an earlier start, whose server is gone
+    legacy   the bare `<selfname>` socket an older LinuxGSM made, its session live
     unread   a FILE where the folder is: it cannot be listed, so the state cannot be read
 """
 import os
@@ -18,6 +19,7 @@ import tempfile
 _TMUX_D = "D=/tmp/tmux-$(id -u)"  # nosec B108 - the text replaced, not a path used
 _ANSWERS = {"live": 'tmux() { [ "$1" = -L ] && [ "$3" = has-session ]; }; ',
             "stale": "tmux() { return 1; }; ",
+            "legacy": 'tmux() { [ "$1" = -L ] && [ "$3" = list-sessions ] && printf "%s\\n" "$2"; }; ',
             "stopped": "tmux() { return 1; }; ",
             "unread": "tmux() { return 1; }; "}
 STATES = tuple(_ANSWERS)
@@ -38,8 +40,8 @@ def _folder(state, selfname):
                 pass
         return d
     os.makedirs(d, exist_ok=True)
-    if state in ("live", "stale"):
-        with open(os.path.join(d, selfname + "-p"), "a", encoding="utf-8"):
+    if state in ("live", "stale", "legacy"):
+        with open(os.path.join(d, selfname + ("" if state == "legacy" else "-p")), "a", encoding="utf-8"):
             pass
     return d
 

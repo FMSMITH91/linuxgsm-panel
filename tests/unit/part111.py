@@ -2,9 +2,10 @@
 
 * The file browser's Delete refuses the live console's log, `log/console` and `log` while the
   server's console is attached — on the host, as named and by their RESOLVED path (a
-  `log -> disk/logs` home, then deleting `disk`). tmux pipe-pane goes on appending to the inode it opened, so a deleted log left
-  the console reading a path nothing wrote to until the next start, and freed no space, under
-  "Deleted". Write, upload, rename and create already refused it; delete was the one left out.
+  `log -> disk/logs` home, then deleting `disk`). tmux pipe-pane goes on appending to the inode it
+  opened, so a deleted log left the console reading a path nothing wrote to until the next start,
+  and freed no space, under "Deleted". Write, upload, rename and create already refused it; delete
+  was the one left out. A stopped server's are deleted like any other (the next start remakes them).
 * Rename refuses a NEW name the console reads (a file renamed to `log`), as create refuses it.
 
 HOW IT RUNS. As part60 does: on part12's Flask app and client helpers, part12's transport tripwire
@@ -244,6 +245,21 @@ def _stopped111(client, sid):
     check("delete route: ...that refusal is audited, failed, with its reason in the row",
           row is not None and row.success is False and _files111.R31J_CONSOLE_UNREAD in row.detail,
           repr(row))
+
+
+def _legacy111(client, sid):
+    """A console attached on the bare `<selfname>` socket (a LinuxGSM older than its uid file) is live too."""
+    _CONSOLE_STATE111["now"] = "legacy"
+    try:
+        w, path = _console111()
+        got = [_delete111(client, sid, rel) for rel in (_LOG111, "log/console", "log")]
+        _say111(w, "p111 legacy line")
+    finally:
+        _CONSOLE_STATE111["now"] = "live"
+    want = (200, {"success": False, "message": _files111.DELETE_CONSOLE})
+    check("delete route (real bash): a console attached on LinuxGSM's older bare-name tmux socket counts "
+          "as running — the log and its folders are refused and the console reads on",
+          got == [want] * 3 and os.path.isfile(path) and _seen111("p111 legacy line"), repr(got))
 
 
 # ── delete: the console's paths resolved on the host ────────────────────────────────────────────
@@ -677,6 +693,7 @@ try:
     _by_name111(_A111, _S111)
     _resolved111(_A111, _S111)
     _stopped111(_A111, _S111)
+    _legacy111(_A111, _S111)
     _old_delete_silences111()
     _rename_dest111()
     _catalog111()
