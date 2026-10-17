@@ -982,7 +982,8 @@ def _register_panel_host_os(app):
         players on and no mode it answers 409 needs_choice. The delay is waited out by the job,
         which then reads the host again: a server started in the meantime is in the plan too. With
         no local host row (a panel with no servers on its own host) there is nothing to stop, and
-        it reboots as before.
+        it reboots as before. A row that could not be READ is not that case (a host with servers
+        always has a row), so that answers 503 and reboots nothing.
         """
         from panel.services import host_reboot as _hr
         data = _json_body()
@@ -998,10 +999,15 @@ def _register_panel_host_os(app):
         try:
             _local = RemoteServer.query.filter_by(is_local=True).first()
         except Exception:
-            # A reboot the operator asked for is not refused because the row could not be read.
+            # Refused, not rebooted bare. The no-row branch below is for a panel with no servers on
+            # its own host; a row that exists but could not be read (a database locked past its busy
+            # timeout) is a host whose game servers a bare reboot would kill mid-game and never
+            # bring back. The operator's retry is the clean reboot.
             import logging
-            logging.getLogger("panel").debug("reboot: no local host row", exc_info=True)
-            _local = None
+            logging.getLogger("panel").warning("reboot: the panel host's row could not be read", exc_info=True)
+            return jsonify({"success": False, "error": "host_unread",
+                            "message": i18n.tr("The panel's host could not be read from the database, so nothing "
+                                               "was rebooted — try again in a moment.")}), 503
         if _local is not None:
             try:
                 secs = max(0, min(300, int(delay)))

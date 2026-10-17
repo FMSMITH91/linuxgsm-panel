@@ -2138,6 +2138,10 @@ function _gmcPost(bodyObj, okMsg){
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(bodyObj)
   }).then(function(r){ return r.json(); }).then(function(d){
     if(window.toast) toast(d.message || (d.success?okMsg:'Failed'), d.success?'success':'danger');
+    // A success started a job. The card last read none running (Apply and Uninstall are drawn only
+    // then), so without this the first poll after the start missing (the host busy with the
+    // download it just began) re-polled nothing and the card never showed the job or its outcome.
+    if(d.success){ _r30c_gmcRunning = true; _r30c_gmcMiss = 0; }
     setTimeout(loadGmodContent, 1500);
   }).catch(function(){
     if(window.toast) toast('Request failed','danger');

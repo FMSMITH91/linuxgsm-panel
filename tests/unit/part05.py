@@ -516,12 +516,41 @@ def _r23d_shaped_patcher(node, fname):
 _R30D_PKG_IMPORTS = ((_smg_ast.Import, None, "panel.ops.ssh_manager"), (_smg_ast.ImportFrom, "panel.ops", "ssh_manager"))
 
 
-def _r30d_pkg_aliases(tree):
-    """The names `tree` binds the ssh_manager PACKAGE to (`import … as sm`, `from panel.ops import …`)."""
-    return {_a.asname or "ssh_manager"
+def _r30d_pkg_aliases(tree, exported=None):
+    """The names `tree` binds the ssh_manager PACKAGE to (`import … as sm`, `from panel.ops import …`).
+
+    ...and, given `exported` (test module name -> the names it binds the package to), a name it
+    imports from another test module that binds it there (review 1017b: parts 16-98 get `_p9_sm` from
+    unit.part12, and reboot41_a/b `_sm41` from unit.reboot41_fixtures, so their package stubs were
+    never seen).
+    """
+    _own = {_a.asname or "ssh_manager"
             for _n in _smg_ast.walk(tree) for _cls, _mod, _name in _R30D_PKG_IMPORTS
             if isinstance(_n, _cls) and getattr(_n, "module", None) == _mod
             for _a in _n.names if _a.name == _name}
+    return _own | _r31d_imported_aliases(tree, exported or {})
+
+
+def _r31d_imported_aliases(tree, exported):
+    """The names `tree` imports from a test module in `exported` that binds the package to them there."""
+    return {_a.asname or _a.name for _n in _smg_ast.walk(tree)
+            if isinstance(_n, _smg_ast.ImportFrom) and _n.module in exported
+            for _a in _n.names if _a.name in exported[_n.module]}
+
+
+def _r31d_test_module(f):
+    """The module name a test file is imported as (tests/ is on the path): unit.part12, smoke.part01."""
+    return f[len("tests/"):-len(".py")].replace("/", ".") if f.startswith("tests/") else None
+
+
+def _r31d_pkg_exported(trees):
+    """Map each test module's name to the names it binds the package to, through other test modules too."""
+    _exp = {}
+    while True:
+        _next = {_m: _r30d_pkg_aliases(_t, _exp) for _m, _t in trees.items()}
+        if _next == _exp:
+            return _exp
+        _exp = _next
 
 
 def _r30d_pkg_patcher(node, is_pkg):
@@ -532,7 +561,7 @@ def _r30d_pkg_patcher(node, is_pkg):
     return _r23d_shaped_patcher(node, _fn) or (bool(_R21D_PATCHER.search(_fn)) and len(node.args) >= 2)
 
 
-def _r30d_pkg_stubs(f, src):
+def _r30d_pkg_stubs(f, src, exported=None):
     """Each attribute file `f` (text `src`) sets on the ssh_manager PACKAGE, as `file:line alias.name`.
 
     Assigned (`sm.x = f`), or through a patcher call handed the package (review 1017a: `_patch(sm,
@@ -540,7 +569,7 @@ def _r30d_pkg_stubs(f, src):
     _patch/setattr/_swap, or any call shaped (module, "name", value), as the stdlib gate reads them.
     """
     _tree = _smg_ast.parse(src)
-    _aliases = _r30d_pkg_aliases(_tree)
+    _aliases = _r30d_pkg_aliases(_tree, exported)
 
     def _is_pkg(e):
         return ((isinstance(e, _smg_ast.Name) and e.id in _aliases)
@@ -555,8 +584,11 @@ def _r30d_pkg_stubs(f, src):
     return _out
 
 
+_r31d_srcs = {_f: open(os.path.join(_root, _f), encoding="utf-8").read() for _f in _r30d_smg_files}
+_r31d_exported = _r31d_pkg_exported({_r31d_test_module(_f): _smg_ast.parse(_s)
+                                     for _f, _s in _r31d_srcs.items() if _r31d_test_module(_f)})
 for _f in _r30d_smg_files:
-    _smg_pkg_stubs += _r30d_pkg_stubs(_f, open(os.path.join(_root, _f), encoding="utf-8").read())
+    _smg_pkg_stubs += _r30d_pkg_stubs(_f, _r31d_srcs[_f], _r31d_exported)
 check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
       not _smg_pkg_stubs, "; ".join(_smg_pkg_stubs[:4]))
 _r30d_pkg_ctl = [bool(_r30d_pkg_stubs("ctl.py", _c)) for _c in (
@@ -573,6 +605,15 @@ check("ssh_manager: ...a patcher call or setattr handed the package counts, in a
       "submodule's stub and a plain call do not (control)",
       _r30d_pkg_ctl == [True] * 5 + [False] * 4 and "tests/unit/reboot41_fixtures.py" in _r30d_smg_files,
       repr(_r30d_pkg_ctl))
+# ...and a package name imported from another test module, as the real files bind it (review 1017b).
+_r31d_pkg_ctl = [bool(_r30d_pkg_stubs("ctl.py", _c, _r31d_exported)) for _c in (
+    "from unit.part12 import _p9_patch, _p9_sm\n_p9_patch(_p9_sm, 'run_command', f)",
+    "from unit.reboot41_fixtures import (_patch, _sm41)\n_patch(_sm41, 'run_command', f)",
+    "from unit.part01 import sm as other\nother.run_command = f",
+    "from unit.part12 import _p9_patch_sm\n_p9_patch_sm('run_command', f)",
+    "from unit.part12 import _p9_patch, _p9_core\n_p9_patch(_p9_core, 'run_command', f)")]
+check("ssh_manager: ...a package name imported from another test module counts too; a submodule's does "
+      "not (control)", _r31d_pkg_ctl == [True] * 3 + [False] * 2, repr(_r31d_pkg_ctl))
 
 # The positive half: the no-sudo wrapper must actually INTERCEPT, which the check above cannot
 # say — "does not stub the package" is satisfied by stubbing nothing at all. Run its _install()
@@ -1455,6 +1496,7 @@ _VERB_SAMPLES = {
     "dpkg-add-arch": ["i386"],
     "apt-any-running": [],
     "apt-upgrade-running": [],
+    "os-update-own-running": [],
     "dpkg-lock-held": [],
     "reboot": [],
     "journal": ["ssh", "400"],
@@ -7067,9 +7109,11 @@ try:
     # apt-get install is ATOMIC — one unavailable package aborts the batch — so a failed batch has
     # to retry one at a time, which is what the shell `|| for p in …` loop did.
     _dep_calls.clear()
+    # One package is unavailable: the batch fails, and so does its own retry.
     _sm_core.run_privileged = lambda server, verb, args=(), **k: (
         _dep_calls.append((verb, list(args))),
-        ("", "E: Unable to locate package", 1) if verb == "apt-install-minimal" and len(args) > 1
+        ("", "E: Unable to locate package", 1)
+        if verb == "apt-install-minimal" and (len(args) > 1 or args == ["curl"])
         else ("ok", "", 0))[1]
     _ok2, _ = _hh.install_game_dependencies(NS(is_local=True), "gmod")
     _singles = [a for v, a in _dep_calls if v == "apt-install-minimal" and len(a) == 1]

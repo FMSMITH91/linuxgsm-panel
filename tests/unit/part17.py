@@ -805,7 +805,7 @@ from panel.routes import server_files as _sf17  # noqa: E402
 _sf17_app = _ZFlask("p17-server-files")
 _sf17_app.logger.disabled = True
 _sf17_names = ("write_file", "lgsm_write_config", "log_action", "current_user", "can_access_remote",
-               "detect_content_user")
+               "detect_content_user", "_r29b_server_held")
 _sf17_saved = {_sf17n: getattr(_sf17, _sf17n) for _sf17n in _sf17_names}
 _sf17_calls = []
 
@@ -865,6 +865,11 @@ try:
         _sf17_access = []
         _sf17.can_access_remote = lambda user, rid: (_sf17_access.append(rid), user.host)[1]
         _sf17.detect_content_user = lambda remote, games, **k: {"user": "gmc", "present": {"cstrike": 1}}
+        # The per-account scan read, and nobody else holds the missing games (part111 drives the rest).
+        # Recorded (review 1017b: left real, it ran gmod's content scan on the stand-in remote "R",
+        # answered only by that string raising inside its except).
+        _sf17_held = []
+        _sf17._r29b_server_held = lambda remote, games: (_sf17_held.append((remote, list(games))), ([], []))[1]
         _sf17.current_user = _sf17NS(is_superadmin=False, host=False)
         _sf17_r = _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "uninstall", ["cstrike"])
         eq("gmod content: a server-only admin may not uninstall host-wide content",
@@ -879,6 +884,8 @@ try:
                "Not on this host yet: Team Fortress 2, Half-Life 2: Deathmatch. Downloading "
                "content for every Garry's Mod server here needs access to the host — ask its "
                "admin to install it, then mount it here.")}))
+        eq("gmod content: ...after asking whether a server's own account holds what is missing (control)",
+           _sf17_held, [("R", ["tf", "hl2mp"])])
         eq("gmod content: ...while mounting what the host already has stays theirs",
            _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]), None)
         # A read host with no content account: nothing is present, so "not on this host yet"; an

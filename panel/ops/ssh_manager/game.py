@@ -1298,9 +1298,18 @@ def _stale_backup_lock_sweep(user, home=None):
     (-x), never the command line — this snippet's own `bash -c` line contains the word `backup`,
     and a -f match would always find itself and never clear a stale lock again. `home` exists for
     the test; the panel always passes the account's own.
+
+    One `tar` is not a backup: the file browser's folder download on a remote is `tar czf - …` as
+    the account (files.stream_path), which writes the archive to its stdout. Any OTHER tar of the
+    account's — LinuxGSM's writes a file (`tar … -hcf <backupdir>/…`), and one whose command line
+    cannot be read is counted too — keeps the lock; a download alone no longer does (it kept an
+    orphaned lock, and so refused the backup, for as long as someone was downloading a folder).
     """
     home = home or "/home/%s" % user
-    return (f"pgrep -u {user} -x tar >/dev/null 2>&1 || "
+    return (f"b=; for p in $(pgrep -u {user} -x tar 2>/dev/null); do "
+            "a=$(tr '\\0' ' ' < /proc/$p/cmdline 2>/dev/null) || a=; "
+            'case "$a" in "tar czf - "*) ;; *) b=1 ;; esac; done; '
+            f'[ -n "$b" ] || '
             f"find {home} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; ")
 
 

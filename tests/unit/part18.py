@@ -31,7 +31,7 @@ from unit import idreuse_support as _reuse18
 from unit.part01 import check
 from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_app, _p9_auth,
                          _p9_banlist, _p9_cfg, _p9_client, _p9_drain, _p9_fake_time, _p9_json, _p9_notif,
-                         _p9_patch, _p9_queue, _p9_restore_all, _p9_sm, _p9_state, _p9_supervised,
+                         _p9_patch, _p9_queue, _p9_restore_all, _p9_patch_sm, _p9_state, _p9_supervised,
                          _p9_threading, _p9_ts)
 import db_maintenance as _dbm18
 from panel.db import models as _m18
@@ -668,7 +668,7 @@ try:
     _p9_patch(_p9_notif, "notify", lambda key, title, body="": _N18.append((key, title, body)))
     _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: None)
     # A long action's console tail reads the host's output file through this.
-    _p9_patch(_p9_sm, "shell_as_game_user", lambda server, user, sh, **k: ("", "", 1))
+    _p9_patch_sm("shell_as_game_user", lambda server, user, sh, **k: ("", "", 1))
     _A18 = _p9_client(P9_ADMIN)
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -818,12 +818,12 @@ try:
     _ps18 = _server18(_ph18, "powserver", 27520, name="p18-power", status="online")
     _pw18 = {"runs": [], "prio": [], "mods": []}
 
-    _p9_patch(_p9_sm, "run_as_game_user", _gameuser18)
-    _p9_patch(_p9_sm, "set_game_priority", lambda remote, user, *a, **k: _pw18["prio"].append(user))
-    _p9_patch(_p9_sm, "server_live_metrics", lambda *a, **k: {"ram_total": 1, "port_open": True,
-                                                              "game_procs": 3})
-    _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
-    _p9_patch(_p9_sm, "invalidate_game_version", lambda rid, short: None)
+    _p9_patch_sm("run_as_game_user", _gameuser18)
+    _p9_patch_sm("set_game_priority", lambda remote, user, *a, **k: _pw18["prio"].append(user))
+    _p9_patch_sm("server_live_metrics", lambda *a, **k: {"ram_total": 1, "port_open": True,
+                                                         "game_procs": 3})
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: None)
+    _p9_patch_sm("invalidate_game_version", lambda rid, short: None)
     _p9_patch(_sd18, "_apply_mod_restart", lambda gs, remote: _pw18["mods"].append(gs.short_name))
 
     _pw18["swap"] = True
@@ -845,7 +845,7 @@ try:
     _ps18b = _server18(_ph18, "longserver", 27521, name="p18-long")
     _pw18["mods"].clear()
 
-    _p9_patch(_p9_sm, "run_as_game_user", _gameuser18_long)
+    _p9_patch_sm("run_as_game_user", _gameuser18_long)
     with _ctx18():
         _p9._run_action(db.session.get(GameServer, _ps18b), db.session.get(RemoteServer, _ph18),
                         "mods-update", None)
@@ -869,7 +869,7 @@ try:
 
     # Bulk: the request checks access to each row and queues a worker per server.
     _pw18["runs"].clear()
-    _p9_patch(_p9_sm, "run_as_game_user", _gameuser18)
+    _p9_patch_sm("run_as_game_user", _gameuser18)
     _pb18_sid = _server18(_ph18, "bulkserver", 27523, name="p18-bulk")
     _r = _A18.post("/api/servers/bulk-action", json={"action": "details",
                                                      "server_ids": [_pb18_sid]})
@@ -882,7 +882,7 @@ try:
     # A synchronous action inside the request: its reply and its audit row.
     _ps18d = _server18(_ph18, "syncserver", 27524, name="p18-sync")
 
-    _p9_patch(_p9_sm, "run_as_game_user", _gameuser18_sync)
+    _p9_patch_sm("run_as_game_user", _gameuser18_sync)
     _r = _A18.post("/server/%d/action" % _ps18d, data={"action": "details"})
     with _A18.session_transaction() as _s18:
         _fl18 = [m for _c, m in _s18.get("_flashes", [])]
@@ -905,8 +905,8 @@ try:
     _b218 = _server18(_bh18, "bantwo", 27532, game_type="csgo")
     _bans18 = []
 
-    _p9_patch(_p9_sm, "moderate", _moderate18)
-    _p9_patch(_p9_sm, "ensure_persistent_bans", lambda *a, **k: None)
+    _p9_patch_sm("moderate", _moderate18)
+    _p9_patch_sm("ensure_persistent_bans", lambda *a, **k: None)
     _p9_patch(_sd18, "concurrent", _SYNC18)
     _other_valve18 = _only_installed18({_bo18, _b118, _b218})   # just this block's three
     _r = _A18.post("/api/server/%d/moderate" % _bo18,
@@ -925,9 +925,9 @@ try:
     _c218 = _server18(_ch18, "cmdtwo", 27541)
     _cmds18, _auto18 = [], []
 
-    _p9_patch(_p9_sm, "list_server_commands", _list18)
-    _p9_patch(_p9_sm, "set_autostart",
-              lambda remote, short, on, selfname=None: (_auto18.append(short), (True, ""))[1])
+    _p9_patch_sm("list_server_commands", _list18)
+    _p9_patch_sm("set_autostart",
+                 lambda remote, short, on, selfname=None: (_auto18.append(short), (True, ""))[1])
     with _ctx18():
         _cache18([db.session.get(GameServer, _c118), db.session.get(GameServer, _c218)])
     _p9_drain()
@@ -950,7 +950,7 @@ try:
 
     _tzh18 = _host18("p18-tz-host", "192.0.2.189")
 
-    _p9_patch(_p9_sm, "host_timezone", _tz18)
+    _p9_patch_sm("host_timezone", _tz18)
     _sh18._tz_resolve_attempts.pop(_tzh18, None)
     _sh18._maybe_resolve_host_timezone(_p9, _tzh18)
     _p9_drain()
@@ -1097,7 +1097,7 @@ try:
     _p9_patch(_sh18, "sm_player_count", lambda *a, **k: 0)
     _rs18 = []
 
-    _p9_patch(_p9_sm, "run_as_game_user", _gameuser18_queued)
+    _p9_patch_sm("run_as_game_user", _gameuser18_queued)
     _rs18_err = _raises18(_sh18._run_due_restarts, _p9)
     check("queued restart: the server that took the id keeps its queued restart",
           _row18(GameServer, _r118).restart_pending is True, repr(_row18(GameServer, _r118)))
@@ -1112,7 +1112,7 @@ try:
     _x218 = _server18(_xh18, "xtwo", 27581, installed=False, status="installing")
     _xs18 = []
 
-    _p9_patch(_p9_sm, "shell_as_game_user", _shell18)
+    _p9_patch_sm("shell_as_game_user", _shell18)
     _only_status18({_x118, _x218}, ("installing", "configuring", "failed"), "offline")
     _x18_ran = _reconcile18 is not None and _one_pass18(_reconcile18, 600)
     _xr118, _xr218 = _row18(GameServer, _x118), _row18(GameServer, _x218)
@@ -1240,7 +1240,7 @@ try:
     # The pass asks game_account_write_refusal before a crontab rewrite (review 1012d); the account
     # check is a host round trip, stood in for here as a plain game account.
     _p9_patch(_sh18, "game_account_write_refusal", lambda *a, **k: None)
-    _p9_patch(_p9_sm, "upgrade_managed_cron_tracking", lambda *a, **k: None)
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: None)
     _p9_app._node_tools_cron_pass(_p9)
     check("node-tools pass: a host whose id was taken during the pass is skipped, not acted on "
           "as the new host", "192.0.2.176" not in _nt18 and "192.0.2.174" in _nt18, repr(_nt18))

@@ -4199,12 +4199,29 @@ try:
             raise RuntimeError("ufw exploded")
 
         _app10mod._autoblock_reconcile = _abr_now10
-        _app10mod._run_autoblock_now(_dbapp10, 424242)          # a host that does not exist
-        _app10mod._run_autoblock_now(_dbapp10, _E10["we"])
-        _abn_done10.wait(5)
-        time.sleep(0.05)
+        # Both threads joined before reading (review 1017b: only the named host's was waited for,
+        # and 50 ms after it, so an unknown id that regressed into a late reconcile could land after
+        # the read and pass).
+        _abn_threads10, _abn_mod_thr10 = [], _app10mod.threading
+        _abn_real_thread10 = _abn_mod_thr10.Thread
+
+        class _AbnThread10(_abn_real_thread10):
+            def start(self):
+                _abn_threads10.append(self)
+                super().start()
+
+        _app10mod.threading = NS(Thread=_AbnThread10)
+        try:
+            _app10mod._run_autoblock_now(_dbapp10, 424242)          # a host that does not exist
+            _app10mod._run_autoblock_now(_dbapp10, _E10["we"])
+        finally:
+            _app10mod.threading = _abn_mod_thr10
+        for _abn_t10 in _abn_threads10:
+            _join13(_abn_t10)
         check("app autoblock now: the named host is reconciled in the background (and a failure "
-              "there is contained); an unknown id does nothing", _abn10 == ["west"], repr(_abn10))
+              "there is contained); an unknown id does nothing",
+              _abn10 == ["west"] and len(_abn_threads10) == 2
+              and not any(_t.is_alive() for _t in _abn_threads10), repr((_abn10, _abn_threads10)))
 
         _abw_hosts10 = [set(), {_E10["ea"], 424242, _E10["we"], _E10["lo"]}]
         _app10mod._autoblock_hosts = lambda: _abw_hosts10.pop(0) if _abw_hosts10 else set()

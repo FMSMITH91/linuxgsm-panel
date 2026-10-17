@@ -222,7 +222,10 @@ def _identity_lines(res, facts):
     if "NO" in conf.split():
         res.find("warn", AREA, "the helper's panel.conf points at a different install")
     try:
-        res.add("- **Groups (of the panel's fixed list)**: %s" % (", ".join(_groups()) or "none"))
+        # Page-only, like **Runs as**: sudo/admin/wheel on the panel's own account is the privilege
+        # verdict in all but name (a cloud image's login account gets NOPASSWD with sudo), and the
+        # downloadable file is attached to public issues.
+        res.posture("- **Groups (of the panel's fixed list)**: %s" % (", ".join(_groups()) or "none"))
     except OSError as exc:
         res.add(unread_line("Groups", exc))
     facts["scope"] = scope

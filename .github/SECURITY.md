@@ -134,7 +134,7 @@ Steam's per-account crash-dump slots, configuring NodeSource's repository on a r
 signing key pinned, installing gamedig on a remote from its hash-locked lockfile, deleting a
 ufw rule by number only while it is still the rule that was checked, a scheduled task's "Run now",
 moving game servers and the local terminal's shell out of the panel's own cgroup, and removing an
-uninstalled server's crontab** — 113 verbs. (`tests/unit_test.py` asserts
+uninstalled server's crontab** — 114 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **Where what the helper starts runs (cgroups).** sudo opens no session on Ubuntu (its PAM stack

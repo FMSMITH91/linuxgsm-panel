@@ -1507,7 +1507,7 @@ try:
     def _osu_stub(log_ans, alive_rc):
         return lambda s, verb, args=(), **k: (
             log_ans if verb == "os-update-log" else ("", "", alive_rc) if verb == "apt-any-running"
-            else ("", "", 0))
+            else ("", "", 1) if verb == "os-update-own-running" else ("", "", 0))
     _sm_core.run_privileged = _osu_stub(("", "ssh: connect timed out", -1), -1)
     _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
     check("os-update status: an unread log is flagged unread, not an empty running-less log",

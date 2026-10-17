@@ -183,7 +183,7 @@ def _p9_patch(owner, name, value):
 def _p9_patch_sm(name, value):
     """_p9_patch on the ssh_manager SUBMODULE that defines `name`, where every caller sees it.
 
-    A stub set on the package itself (`_p9_patch_sm(…)`) shadowed its __getattr__: the routes'
+    A stub set on the package itself (`_p9_patch(_p9_sm, …)`) shadowed its __getattr__: the routes'
     `_sm.x` saw it and the package's own internal callers did not, half a stub that only the
     tripwire stood behind (review 1017a: part05's package gate did not read patcher calls, so
     fifty such stubs here and in parts 80-97 were never seen). On the defining module, both do.
@@ -378,8 +378,8 @@ try:
 
     # The transports. Everything above them is stubbed per check; these catch what is not.
     _p9_arm()
-    # shell_as_game_user, sending through the PACKAGE's run_command: the checks below stub that
-    # name on the package, and the routes' game-account shell reads went through it until
+    # shell_as_game_user, sending through the PACKAGE's run_command: the checks below once stubbed
+    # that name on the package, and the routes' game-account shell reads went through it until
     # GHSA-hh39-76g3-wxcx moved them onto shell_as_game_user, whose own run_command is _core's.
     # Left real, those reads went past every stub to the tripwire and still passed, on the
     # "couldn't tell" the tripwire's refusal reads as. The command is the real builder's.

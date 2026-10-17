@@ -510,12 +510,10 @@ def _register_install(app):
             # is someone else's, whatever the table says. The job used to find it, delete it as
             # a "half-finished leftover" when its home had no linuxgsm.sh, and bind the row to it.
             # A typed name is refused; the default name skips past it, the same courtesy as above.
-            _acct = host_account_state(remote, short_name)
-            while _acct == "exists" and not server_name and _n < 100:
-                short_name, _n = _next_default_name(remote_id, lgsm_name, _n)
-                name_changed = True
-                _acct = host_account_state(remote, short_name)
-            _refused = _host_account_refusal(remote, short_name, _acct)
+            short_name, _skipped, _refused = _r31b_free_host_name(
+                remote, (short_name, host_account_state(remote, short_name)), server_name,
+                (remote_id, lgsm_name, _n))
+            name_changed = name_changed or _skipped
             if _refused is not None:
                 return _refused
 
@@ -808,12 +806,40 @@ def _install_name_taken(remote_id, n):
 def _next_default_name(remote_id, lgsm_name, n):
     """The first "{lgsm_name}{n}" past `n` that no row on this host uses (n stops at 100).
 
-    -> (name, n).
+    -> (name, n), with name None when every one up to 100 is taken: the loop used to stop there
+    and hand back the 100th, taken or not, and a second row was made on the same account.
     """
     n += 1
     while _install_name_taken(remote_id, f"{lgsm_name}{n}") and n < 100:
         n += 1
-    return f"{lgsm_name}{n}", n
+    name = f"{lgsm_name}{n}"
+    return (None if _install_name_taken(remote_id, name) else name), n
+
+
+def _r31b_free_host_name(remote, named, server_name, default):
+    """install_game_server's account check on the HOST. -> (short_name, skipped, refusal).
+
+    `named` is (short_name, its host_account_state). The default name skips past an account the
+    host already has, the same courtesy as a taken row; a typed name is refused. `default` is
+    (remote_id, lgsm_name, n), n being the suffix _dedupe_install_name reached. `skipped` says the
+    name moved; refusal is the form answer.
+    """
+    remote_id, lgsm_name, n = default
+    short_name, acct = named
+    skipped = False
+    while acct == "exists" and not server_name and n < 100:
+        short_name, n = _next_default_name(remote_id, lgsm_name, n)
+        if short_name is None:
+            return None, skipped, _r31b_names_used_up()
+        skipped = True
+        acct = host_account_state(remote, short_name)
+    return short_name, skipped, _host_account_refusal(remote, short_name, acct)
+
+
+def _r31b_names_used_up():
+    """The install form's refusal when every default name is taken (_next_default_name)."""
+    return _form_err(i18n.tr("Every default name for this game on this host is taken — type a name for the "
+                             "server."), "manage_servers")
 
 
 def _dedupe_install_name(remote_id, short_name, server_name, lgsm_name):
@@ -828,7 +854,7 @@ def _dedupe_install_name(remote_id, short_name, server_name, lgsm_name):
                 "A server named '{name}' already exists on this remote — pick a different name.",
                 name=short_name), "manage_servers")
         short_name, n = _next_default_name(remote_id, lgsm_name, 1)
-        return short_name, True, n, None
+        return short_name, True, n, (None if short_name else _r31b_names_used_up())
     return short_name, False, 1, None
 
 

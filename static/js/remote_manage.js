@@ -585,11 +585,19 @@ function _startOsUpdate(){
   var info=document.getElementById('update-info'); if(info) info.textContent='Installing updates… (watch the popup)';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/os-update/start',{method:'POST'}).then(function(r){return r.json();})
     .then(function(d){
-      if(!d.success){ if(spin) spin.style.display='none';
-        if(stEl){ stEl.className='small mb-2 text-danger'; stEl.textContent=d.message||'Couldn\'t start.'; } return; }
+      if(!d.success){ _r31j_osuNotStarted(spin, stEl, d.message||'Couldn\'t start.'); return; }
       _pollOsUpdate();
-    }).catch(function(){ if(spin) spin.style.display='none';
-      if(stEl){ stEl.className='small mb-2 text-danger'; stEl.textContent='Couldn\'t start the update.'; } });
+    }).catch(function(){ _r31j_osuNotStarted(spin, stEl, 'Couldn\'t start the update.'); });
+}
+// A start the route refused (an update the panel did not start is running, the "is one running"
+// probe went unanswered, a reboot is under way, the host is unreachable) or never answered: the
+// popup says why, and so does the card. The card's "Installing updates… (watch the popup)" was
+// written before the request and stayed, about an update the panel never started.
+function _r31j_osuNotStarted(spin, stEl, said){
+  if(spin) spin.style.display='none';
+  if(stEl){ stEl.className='small mb-2 text-danger'; stEl.textContent=said; }
+  var info=document.getElementById('update-info');
+  if(info) info.textContent=said;
 }
 function _pollOsUpdate(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/os-update/status').then(function(r){return r.json();})

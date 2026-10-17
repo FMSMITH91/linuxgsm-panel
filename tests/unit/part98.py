@@ -17,7 +17,7 @@ from sqlalchemy.exc import OperationalError as _OpErr98
 
 from unit.part01 import _root as _root98, check
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
-                         _p9_restore_all, _p9_sd, _p9_sf, _p9_sm)
+                         _p9_restore_all, _p9_sd, _p9_sf, _p9_patch_sm)
 from panel.core import i18n as _i18n98
 from panel.core.panel_state import _install_jobs as _jobs98, _install_lock as _jlock98
 from panel.db.models import AuditLog, CustomCommand, GameServer, RemoteServer, User, db
@@ -377,7 +377,7 @@ def _unblock98():
 def _unconfirmed_row98(rid, short):
     """A failed row recorded as step 1's UNCONFIRMED refusal records it (retryable)."""
     sid = _new_server98(rid, short)
-    _p9_patch(_p9_sm, "read_as_game_user", lambda *a, **k: ("NOTEXISTS\n", "", 0))
+    _p9_patch_sm("read_as_game_user", lambda *a, **k: ("NOTEXISTS\n", "", 0))
     with _p9.app_context():
         gs = db.session.get(GameServer, sid)
         ok, why, retry = _p9_ms._existing_account_verdict(gs.remote, (rid, short), False)
@@ -421,7 +421,7 @@ def _retry_marker98(client, rid):
     _p9_patch(_p9_ms, "_stop_game_processes", lambda *a, **k: host.append(("stop",)))
     _p9_patch(_p9_ms, "_close_game_firewall", lambda remote, gs: host.append(("firewall",)) or ([], False))
     _p9_patch(_p9_ms, "_remove_account_crontab", lambda *a, **k: host.append(("crontab",)))
-    _p9_patch(_p9_sm, "run_privileged", lambda server, verb, args=(), **k: host.append((verb,)) or ("", "", 0))
+    _p9_patch_sm("run_privileged", lambda server, verb, args=(), **k: host.append((verb,)) or ("", "", 0))
     sid, kept = _retry_then_fail98(client, rid, "p98unc", created=False)
     d = _p9_json(client.post("/servers/%d/delete" % sid, headers={"X-Requested-With": "XMLHttpRequest"}))
     check("install retry: a row whose step 1 refused an account it could not confirm it made, retried "

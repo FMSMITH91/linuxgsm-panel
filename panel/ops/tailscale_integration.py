@@ -740,17 +740,10 @@ def _r13b_panel_ports(cfg):
 
 
 def _r13b_bound_port(cfg):
-    """The port this process is bound to (app.config BOOT_PORT), else config.json's."""
-    boot = None
-    try:
-        from flask import current_app, has_app_context
-        if has_app_context():
-            boot = current_app.config.get("BOOT_PORT")
-    except Exception:  # noqa: BLE001 - no app to ask: config.json's port, as before
-        boot = None
-    if isinstance(boot, int) and not isinstance(boot, bool) and 0 < boot < 65536:
-        return boot
-    return cfg.get("port", 5000)
+    """The port this process is bound to (config.bound_port: app.config BOOT_PORT), else config.json's."""
+    from panel.core.config import bound_port
+    boot = bound_port()
+    return boot if boot is not None else cfg.get("port", 5000)
 
 
 def panel_funnelled(serve_config, port):

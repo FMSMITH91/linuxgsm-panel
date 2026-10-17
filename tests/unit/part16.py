@@ -45,7 +45,7 @@ from unit.part05 import _helper, _helper_path
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread,
                          _p9, _p9_arm, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg, _p9_client, _p9_core,
                          _p9_drain, _p9_fake_time, _p9_json, _p9_new_server, _p9_notif, _p9_patch, _p9_queue,
-                         _p9_restore_all, _p9_sm, _p9_so, _p9_state, _p9_threading, _p9_ts)
+                         _p9_restore_all, _p9_patch_sm, _p9_so, _p9_state, _p9_threading, _p9_ts)
 from panel.db.models import AuditLog, GameServer, Group, RemoteServer, User, db
 from panel.routes import _shared as _sh16
 from panel.routes import manage_servers as _ms16
@@ -165,8 +165,8 @@ try:
     _p9_patch(_rm16, "ssh_test_connection", lambda *a, **k: (True, "Connected."))
     _p9_patch(_rm16, "close_connection", lambda server: None)
     _SHELL16 = []
-    _p9_patch(_p9_sm, "shell_as_game_user",
-              lambda server, user, sh, **k: (_SHELL16.append((server.host, user)), ("", "", 1))[1])
+    _p9_patch_sm("shell_as_game_user",
+                 lambda server, user, sh, **k: (_SHELL16.append((server.host, user)), ("", "", 1))[1])
     _p9_patch(_sf16, "_read_console_window", lambda remote, gs, want, tz: (True, [], None))
     _p9_patch(_sf16, "_host_timezone_cached", lambda remote, app=None: "UTC")
 
@@ -341,7 +341,7 @@ try:
     # ════════════════════════════════════════════════════════════════════════════════════════
     _p9_patch(_ms16, "_stop_game_processes", lambda *a, **k: None)
     _p9_patch(_ms16, "_close_game_firewall", lambda *a, **k: ([], False))
-    _p9_patch(_p9_sm, "run_privileged", lambda *a, **k: ("", "", 0))
+    _p9_patch_sm("run_privileged", lambda *a, **k: ("", "", 0))
     _p9_patch(_p9_bk, "remove_game_schedule", lambda sid: None)
     # The uninstall asks the host whether the account is root-capable before it deletes anything
     # (privileged_accounts); here it is a plain game account, as the probe would find it.
@@ -426,7 +426,7 @@ try:
     _OSU16 = {"ok": True, "count": 2,
               "packages": [{"name": "openssl-SECRET", "suite": "noble-security"},
                            {"name": "bash", "suite": "noble-updates"}]}
-    _p9_patch(_p9_sm, "remote_os_check_updates", lambda r: dict(_OSU16))
+    _p9_patch_sm("remote_os_check_updates", lambda r: dict(_OSU16))
     _s16 = _new_host("secret-host", "192.0.2.90")
     _r = _A16.get("/api/remote/%d/check-updates" % _s16)
     check("os-update reuse: a check on the superadmin's host is recorded",
@@ -485,7 +485,7 @@ try:
             headers=_XHR16)
         return dict(_OSU16)
 
-    _p9_patch(_p9_sm, "remote_os_check_updates", _osu16_inflight)
+    _p9_patch_sm("remote_os_check_updates", _osu16_inflight)
     _A16.get("/api/remote/%d/check-updates" % _s16)
     _mine16 = _newest_remote("p16-mine2")
     _cj = _p9_json(_D16.get("/api/remote/%d/updates-cached" % _s16))
@@ -496,7 +496,7 @@ try:
           and not any(h.get("id") == _s16 for h in _sj.get("hosts") or []),
           repr((_mine16, _s16, _cj, _sj)))
     # ...and a check of the host that IS there still shows (control).
-    _p9_patch(_p9_sm, "remote_os_check_updates", lambda r: dict(_OSU16))
+    _p9_patch_sm("remote_os_check_updates", lambda r: dict(_OSU16))
     _A16.get("/api/remote/%d/check-updates" % _s16)
     _cj = _p9_json(_D16.get("/api/remote/%d/updates-cached" % _s16))
     _sj = _p9_json(_D16.get("/api/os-updates/summary"))

@@ -95,6 +95,16 @@ function checkPeer() {
   })
   .then(r => r.json())
   .then(data => {
+    // A refusal (the route's 400 for a host it will not ping, a 403, a 500) is not a reading: it was
+    // printed as "<host> is not responding", about a peer nobody pinged. Say the route's own reason.
+    if (!data || data.success === false) {
+      var why = document.createElement('span');
+      why.className = 'text-danger';
+      why.textContent = (data && data.message) || t('Error checking host');
+      resultEl.textContent = '';
+      resultEl.appendChild(why);
+      return;
+    }
     if (data.reachable) {
       // tfHtml escapes the host (a text field) and the latency; the sentence is translated whole.
       resultEl.innerHTML = '<span class="text-success">✓ ' + (data.latency_ms

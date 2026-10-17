@@ -2290,10 +2290,14 @@ def v_cron_b64(s):
 #   * the shell form's script (remotes without the helper), by the header it writes.
 # Each alternative starts with a bracket, so a remote's waiting `sudo bash -c 'pgrep -f …'`, whose
 # command line holds this text, never matches itself.
+# The last two alternatives on their own: is the PANEL's OS update running? os-update-own-running
+# asks it when apt-upgrade-running has matched, because an `apt-get upgrade` someone started over
+# SSH matches the first alternative too, and the panel's log of its own last run then read as this
+# one's outcome ("Updates installed." while apt was still working).
+_R31B_OWN_UPDATE_RE = ("[p]anel-helper( [^ ]+)* os-update-run( |$)"
+                       "|[O]S update started")
 _R30A_UPGRADE_RE = ("[a]pt-get( (-[^s -][^ ]*|--[^ ]+|[^- ][^ ]*))* "
-                    "(upgrade|dist-upgrade|full-upgrade)( |$)"
-                    "|[p]anel-helper( [^ ]+)* os-update-run( |$)"
-                    "|[O]S update started")
+                    "(upgrade|dist-upgrade|full-upgrade)( |$)|" + _R31B_OWN_UPDATE_RE)
 
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv, stdin or None)
@@ -2564,6 +2568,8 @@ VERBS = {
     # command line), and the two tables must build the same argv.
     "apt-any-running": ([], lambda a: ["pgrep", "-f", "[a]pt-get"], None),
     "apt-upgrade-running": ([], lambda a: ["pgrep", "-f", _R30A_UPGRADE_RE], None),
+    # ...and whether that is the panel's own job (_R31B_OWN_UPDATE_RE).
+    "os-update-own-running": ([], lambda a: ["pgrep", "-f", _R31B_OWN_UPDATE_RE], None),
     "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
 
     "reboot": ([], lambda a: ["reboot"], None),
@@ -3516,7 +3522,10 @@ def _copy_one_regular(src, dst, src_dir_fd=None, dst_dir_fd=None):
     between checking and opening for the link to be swapped in.
 
     S_ISREG as well, because O_NOFOLLOW alone still opens a fifo or a device node — a fifo would
-    hang the restore holding the panel down, and /dev/zero would fill the disk.
+    hang the restore holding the panel down, and /dev/zero would fill the disk. And O_NONBLOCK, or
+    that S_ISREG test never runs for a fifo: the open itself waited for a writer that never came,
+    after the job had stopped the panel and before the `finally` that starts it again. A regular
+    file reads the same with it.
 
     HARD LINKS are handled here too, not left to the kernel. This used to say they were "covered
     by the kernel instead — fs.protected_hardlinks is 1 by default", but a sysctl is host state,
@@ -3534,7 +3543,7 @@ def _copy_one_regular(src, dst, src_dir_fd=None, dst_dir_fd=None):
     Every restored member is now 0600 and owned by the data directory's owner.
     """
     try:
-        sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_dir_fd)
+        sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=src_dir_fd)
     except OSError:
         # ENOENT (nothing staged for this member) and ELOOP (it is a symlink) are both "do not
         # copy this one", and neither is worth failing the whole restore over.
@@ -4279,7 +4288,7 @@ def _emit_dir_tar(path, buf):
     # destination. "w:gz" seeks, and would fail on one.
     with tarfile.open(fileobj=buf, mode="w|gz") as tf:
         try:
-            tf.add(path, arcname=base, recursive=False)
+            _r31a_tar_add(tf, path, base)
         except OSError:
             # The directory's OWN entry — its mode and mtime. Losing it costs the archive nothing
             # a caller notices: tar recreates a missing parent when the members below are
@@ -4290,10 +4299,34 @@ def _emit_dir_tar(path, buf):
             for name in dirs + files:
                 full = os.path.join(root, name)
                 try:
-                    tf.add(full, arcname=os.path.join(base, os.path.relpath(full, path)),
-                           recursive=False)
+                    _r31a_tar_add(tf, full, os.path.join(base, os.path.relpath(full, path)))
                 except OSError:
                     continue
+
+
+def _r31a_tar_add(tf, full, arcname):
+    """Add ONE entry to `tf` as tarfile.add(recursive=False) would, never opening a fifo.
+
+    tarfile.add lstats the entry and then plain-opens it when that said "regular file", so a file
+    swapped for a fifo between the two parked the download (and the helper waiting on it) until the
+    transport gave up. A regular file is opened O_NONBLOCK | O_NOFOLLOW and described from its OWN
+    descriptor (fstat), so what is archived is what was opened; anything else is archived from its
+    lstat and never opened. An entry that is no longer what the first look said is skipped.
+    """
+    if not stat.S_ISREG(os.lstat(full).st_mode):
+        ti = tf.gettarinfo(full, arcname)
+        if ti is not None and not ti.isreg():   # None: a socket, which tarfile.add skips too
+            tf.addfile(ti)
+        return
+    fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    # open(), not os.fdopen: gettarinfo reads the file object's `name`, which an eventlet-patched
+    # fdopen's object (a test process loading this file) does not have.
+    with open(fd, "rb") as fh:
+        ti = tf.gettarinfo(full, arcname, fileobj=fh)
+        if ti is not None and ti.isreg():
+            tf.addfile(ti, fh)
+        elif ti is not None and ti.islnk():
+            tf.addfile(ti)      # a second name of an inode already archived: a link, no data
 
 
 # ── A game server's own scope ─────────────────────────────────────────────────────────────────
@@ -6511,8 +6544,8 @@ READ_VERBS = frozenset({
     "content-script-present", "crontab-list", "disk-free", "dpkg-lock-held", "f2b-log-lines",
     "f2b-status", "f2b-status-jail", "game-backup-read", "game-dir-tar", "game-file-read",
     "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
-    "listening-sockets-owner", "log-tail", "os-update-log", "pro-status", "restart-flags",
-    "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
+    "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running", "pro-status",
+    "restart-flags", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
     "ufw-show-added", "ufw-status",
 })
 # ...of which these stream a download for as long as it takes, so they have no deadline: they end

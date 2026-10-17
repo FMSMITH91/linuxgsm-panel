@@ -504,7 +504,15 @@ def _console_tick(app, socketio, gs, server_id):
         _feed_tick(server_id, "read-failed" if rc != 0 else "stat-unparseable")
         return
     ino, size, started, diff, framed = reply
-    state, pos = _console_read_start(server_id, ino, size)
+    start = _console_read_start(server_id, ino, size)
+    if start is None:
+        # The offsets were forgotten while this read was out (the last viewer left the console:
+        # _forget_unwatched_consoles). _console_read_start then took the reply as a first sight —
+        # the log's end recorded, nothing read — exactly as a new one would be. Unpacking its None
+        # raised, and the tick was counted as failed.
+        _feed_tick(server_id)
+        return
+    state, pos = start
     verdict = _console_reply_verdict(size, pos, started, diff)
     if verdict is not None:
         _feed_tick(server_id, verdict or None)
@@ -2500,10 +2508,13 @@ def _sf_gmod_missing(remote, sel):
 
 
 def _r29b_server_held(remote, games):
-    """Those of `games` held on `remote` only in a panel server's own account, else [].
+    """Where on `remote` those of `games` are held: (only in panel servers' accounts, in another account).
 
-    For the server-only admin's refusal: "Not on this host yet" was false for content that IS on
-    the host, in a (legacy) panel server's account the panel never mounts from (review 1016f).
+    None when either read failed. For the server-only admin's refusal: "Not on this host yet" was
+    false for content that IS on the host, in a (legacy) panel server's account the panel never
+    mounts from (review 1016f) — and in a second non-server account that is not the one the panel
+    picked to mount from (review 1017b). And a read that failed answered [], which printed the same
+    sentence about a scan that never ran.
 
     Asked per account. It used to read detect_content_user(servers_too=True), which names only the
     account holding the MOST content games: with `css` holding cstrike and the panel's own content
@@ -2511,12 +2522,13 @@ def _r29b_server_held(remote, games):
     """
     holders = _sm.gmod._r30b_content_holders(remote, tuple(GMOD_CONTENT_GAMES))
     servers = _sm.gmod._r28j_server_accounts(remote)
-    if not holders or not servers:
-        return []
-    # ONLY in a server's account, as the refusal says: a game another account also holds is not.
-    held_by_servers = set().union(*(gs for u, gs in holders.items() if u in servers))
-    held_elsewhere = set().union(*(gs for u, gs in holders.items() if u not in servers))
-    return [g for g in games if g in held_by_servers and g not in held_elsewhere]
+    if holders is None or servers is None:
+        return None
+    # ONLY in a server's account, as that refusal says: a game another account also holds is not.
+    by_servers, elsewhere = set(), set()
+    for user, held in holders.items():
+        (by_servers if user in servers else elsewhere).update(held)
+    return [g for g in games if g in by_servers - elsewhere], [g for g in games if g in elsewhere]
 
 
 def _sf_gmod_host_refusal(gs, remote, action, sel):
@@ -2539,21 +2551,43 @@ def _sf_gmod_host_refusal(gs, remote, action, sel):
     _missing = _sf_gmod_missing(remote, sel)
     if _missing is None:
         # Refused, as before, but not as "not on this host yet": nobody knows (review 1016f).
-        return jsonify({"success": False, "message": i18n.tr(
-            "Couldn't read what content is on this host, so mounting it here could not be checked. "
-            "Check the host is reachable, then try again.")}), 403
-    _held = _r29b_server_held(remote, _missing) if _missing else []
-    if _held:
+        return jsonify({"success": False, "message": i18n.tr(_R31B_CONTENT_UNREAD)}), 403
+    _where = _r29b_server_held(remote, _missing) if _missing else ([], [])
+    if _where is None:
+        return jsonify({"success": False, "message": i18n.tr(_R31B_CONTENT_UNREAD)}), 403
+    return _r31b_missing_refusal(_missing, *_where)
+
+
+# The server-only admin's refusal when what is on the host could not be read.
+_R31B_CONTENT_UNREAD = ("Couldn't read what content is on this host, so mounting it here could not be checked. "
+                        "Check the host is reachable, then try again.")
+
+
+def _r31b_missing_refusal(missing, held, other):
+    """_sf_gmod_host_refusal's 403 for content not in the account the panel mounts from, else None.
+
+    `held`: held only in panel servers' accounts; `other`: in another account; the rest of
+    `missing` is on the host nowhere.
+    """
+    label = ", ".join
+    if held:
         return jsonify({"success": False, "message": i18n.tr(
             "Only a panel server's own account on this host holds {games}, and the panel never mounts from "
             "a server's account. Installing it for every Garry's Mod server here needs access to the host — "
             "ask its admin to install it, then mount it here.",
-            games=", ".join(GMOD_CONTENT_GAMES[g][0] for g in _held))}), 403
-    if _missing:
+            games=label(GMOD_CONTENT_GAMES[g][0] for g in held))}), 403
+    if other:
+        # In an account the panel does not mount from: the one it picked holds more content games.
+        return jsonify({"success": False, "message": i18n.tr(
+            "On this host, but not in the account the panel mounts content from: {games}. Installing it "
+            "for every Garry's Mod server here needs access to the host — ask its admin to install it, "
+            "then mount it here.",
+            games=label(GMOD_CONTENT_GAMES[g][0] for g in other))}), 403
+    if missing:
         return jsonify({"success": False, "message": i18n.tr(
             "Not on this host yet: {games}. Downloading content for every Garry's Mod server here "
             "needs access to the host — ask its admin to install it, then mount it here.",
-            games=", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
+            games=label(GMOD_CONTENT_GAMES[g][0] for g in missing))}), 403
     return None
 
 

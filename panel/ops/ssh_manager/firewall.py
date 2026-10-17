@@ -262,6 +262,23 @@ def _panel_web_port(server, ts_running=None):
         return DEFAULT_CONFIG["port"]
 
 
+def _r31a_panel_web_ports(server, ts_running=None):
+    """Every port _panel_web_port's guard covers: the one this process serves on, then config.json's.
+
+    _panel_web_port reads config.json, which is the port the NEXT start binds. After a port change
+    whose restart could not be scheduled the panel still listened on the old port, and the rule
+    holding that one open (the way in right now) was an ordinary delete ×, while the guard protected
+    a port nothing listened on yet. Both are the panel's: the one in use now, and the one the restart
+    moves to. [] where _panel_web_port answers None (a remote, or the UI served over a live tailnet).
+    """
+    stored = _panel_web_port(server, ts_running=ts_running)
+    if stored is None:
+        return []
+    from panel.core.config import bound_port     # lazy, as every config read here
+    bound = bound_port()
+    return [stored] if bound in (None, stored) else [bound, stored]
+
+
 def _config_unreadable():
     """True when config.json EXISTS but cannot be parsed into an object.
 
@@ -612,6 +629,11 @@ def _is_panel_rule(g, panel_port):
     return panel_port is not None and bool(_r14a_panel_port_scope(g, panel_port))
 
 
+def _r31a_panel_port_of(g, panel_ports):
+    """The first of the panel's ports group `g` holds open (the reason names that one), or None."""
+    return next((p for p in panel_ports if _is_panel_rule(g, p)), None)
+
+
 def _r14a_ports_word(g):
     """The port part of a rule's To column: `22` of "<addr> 22", `47100:47199`, `22,80`."""
     words = str(g.get("port_num", "")).split()
@@ -781,7 +803,7 @@ def _annotate_firewall_protection(server, enabled, groups):
 
     ts_running, ts_ssh_enabled = _live_tailscale_state(server, enabled, groups)
 
-    panel_port = _panel_web_port(server, ts_running=ts_running)
+    panel_ports = _r31a_panel_web_ports(server, ts_running=ts_running)
     served_over_ts = _panel_served_over_tailscale(server)
     ts_ssh_ok = ts_running and ts_ssh_enabled    # Tailscale SSH → a way in regardless of UFW
     ts_iface_ok = ts_running and _r13a_tailnet_ssh_ok(server, groups, ssh_ports)
@@ -792,7 +814,8 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protect_reason"] = ""
         g["protect_reason_key"] = ""
         g["protect_reason_params"] = {}
-        g["is_panel"] = _is_panel_rule(g, panel_port)
+        panel_port = _r31a_panel_port_of(g, panel_ports)
+        g["is_panel"] = panel_port is not None
         if not enabled:
             continue
         _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok)

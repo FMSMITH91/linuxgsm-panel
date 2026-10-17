@@ -532,4 +532,12 @@ def _r30b_keep_old_port(app, local, cur_port, new_port, old_removed):
     if not f2b_ok:
         notes.append(i18n.Sentence("fail2ban could not be pointed back at port {port}.", port=cur_port))
     audit.append("fail2ban back on %s: %s" % (cur_port, f2b_msg))
+    # The helper's record too: it publishes only the port panel.conf names, and the move recorded
+    # new_port, so Enable on the Tailscale page (which publishes the port this process serves on)
+    # was refused until the restart. The boot records the port it binds (reconcile_panel_port).
+    rec_ok, rec_why = so.record_panel_port(cur_port)
+    if not rec_ok:
+        notes.append(i18n.Sentence("Port {port} could not be recorded back as the panel's port for Tailscale "
+                                   "Serve ({why}).", port=cur_port, why=rec_why))
+    audit.append("helper port record back on %s: %s" % (cur_port, "ok" if rec_ok else rec_why))
     return notes, "; ".join(audit)

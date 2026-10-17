@@ -334,10 +334,22 @@ def _lgsm_cfg_dir(user, selfname):
 
 
 def _lgsm_frame(path, tag):
-    """Shell printing `path` base64'd between this tag's begin/end sentinels (see lgsm_read_config)."""
-    b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
-    return (f"printf %s {_core._quote(b)}; base64 {_core._quote(path)} 2>/dev/null | tr -d '\n'; "
-            f"printf %s {_core._quote(e)}; ")
+    """Shell printing `path` base64'd between this tag's begin/end sentinels (see lgsm_read_config).
+
+    A file that is not there is an empty frame (LinuxGSM has not written it). A file that IS there
+    and could not be read prints no frame at all, but _r31b_unread_mark(tag): it was `base64 … |
+    tr` with base64's failure hidden by the pipe, so an instance cfg the account cannot read came
+    back as an empty frame — "an empty file" — and the Raw tab's Save wrote "" over it.
+    """
+    b, e, q = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag, _core._quote(path)
+    return (f"x=; if [ -e {q} ]; then x=$(base64 {q} 2>/dev/null) || x={_r31b_unread_mark(tag)}; fi; "
+            f"case \"$x\" in __LGSMP_*) printf %s \"$x\" ;; *) printf %s {_core._quote(b)}; "
+            f"printf %s \"$x\" | tr -d '\n'; printf %s {_core._quote(e)} ;; esac; ")
+
+
+def _r31b_unread_mark(tag):
+    """What _lgsm_frame prints for a file that is there and could not be read."""
+    return "__LGSMP_%s_UNREAD__" % tag
 
 
 def _unframe_lgsm_sections(body, inst, optional=()):
@@ -467,8 +479,10 @@ def lgsm_read_config(server, user, selfname):
     out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
     sect = _unframe_lgsm_sections(out or "", inst, optional=("SECRETS_COMMON", "SECRETS_INSTANCE"))
     if sect is None:
+        unread = any(_r31b_unread_mark(t) in (out or "") for t in ("DEFAULT", "COMMON", "INSTANCE"))
         return {"settings": {}, "raw": "", "merged": {}, "instance": {},
-                "error": "Could not read the config — the host did not answer."}
+                "error": R31B_CFG_UNREADABLE if unread else
+                "Could not read the config — the host did not answer."}
     defaults = _parse_cfg(sect["DEFAULT"])
     # "overridden" means set anywhere above _default.cfg; the secrets files count with their pair.
     common = {**_parse_cfg(sect["COMMON"]), **_parse_cfg(sect["SECRETS_COMMON"])}
@@ -482,6 +496,13 @@ def lgsm_read_config(server, user, selfname):
     settings = _curated_cfg_settings(merged, defaults, instance, common)
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
     return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
+
+
+# lgsm_read_config's answer when a LinuxGSM config file is there and the game's account cannot read
+# it: the host did answer, so "the host did not answer" was not the reason.
+R31B_CFG_UNREADABLE = ("A LinuxGSM config file for this server is there but the game's account can't "
+                       "read it, so the config can't be shown or saved here. Check its owner and "
+                       "permissions.")
 
 
 # Printed by the `details` script AFTER LinuxGSM has finished, so its presence is the one thing
@@ -679,8 +700,11 @@ def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
     # is not. The sentinels tell those apart — the same fix, for the same reason, as read_file.
     _probe = (
         _lgsm_frame(f"{_pp.dirname(inst)}/secrets-{selfname}.cfg", "SECRETS_INSTANCE")
-        + f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; else "
-        f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(inst)} | tr -d '\n'; "
+        + f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; "
+        # base64's own status: piped into tr, a file the account cannot read printed an EMPTY
+        # frame, read as an empty config, and the updates alone were written over it.
+        f"elif x=$(base64 {_core._quote(inst)} 2>/dev/null); then "
+        f"printf %s {_core._quote(_READ_BEGIN)}; printf %s \"$x\" | tr -d '\n'; "
         f"printf %s {_core._quote(_READ_END)}; fi"
     )
     out, _, _ = _core.shell_as_game_user(server, user, _probe, timeout=15, selfname=selfname)
@@ -693,6 +717,9 @@ def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
 def _take_secrets_frame(body, inst, secrets):
     """`body` without its secrets-<selfname>.cfg frame, whose settings fill `secrets` (a dict)."""
     _sb, _se = "__LGSMP_SECRETS_INSTANCE_B__", "__LGSMP_SECRETS_INSTANCE_E__"
+    # A secrets file that could not be read is no settings, as a missing frame always was; its mark
+    # must not be left in `body`, where it would hide the instance read's __NOFILE__.
+    body = body.replace(_r31b_unread_mark("SECRETS_INSTANCE"), "")
     _si, _sj = body.find(_sb), body.find(_se)
     if _si == -1 or _sj <= _si:
         return body
@@ -1132,8 +1159,12 @@ def read_file(server, user, relpath, max_bytes=1048576):
         # matches any line; -I still makes a file with a NUL in it no match (1); 2 is a read error.
         f"if [ ! -r {_core._quote(ap)} ]; then echo __UNREADABLE__; exit 0; fi; "
         f"rc=0; [ ! -s {_core._quote(ap)} ] || {{ grep -qI '' {_core._quote(ap)} 2>/dev/null; rc=$?; }}; "
-        f"case $rc in 0) printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "
-        f"printf %s {_core._quote(_READ_END)};; 1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
+        # base64's own status decides the frame (see _lgsm_frame): piped into tr, a read that failed
+        # after grep's printed an empty frame, which the editor showed, and saved, as an empty file.
+        f"case $rc in 0) if x=$(base64 {_core._quote(ap)} 2>/dev/null); then "
+        f"printf %s {_core._quote(_READ_BEGIN)}; printf %s \"$x\" | tr -d '\\n'; "
+        f"printf %s {_core._quote(_READ_END)}; else echo __UNREADABLE__; fi;; "
+        f"1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
     )
     out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     return _read_file_reply(out, ap, _rc)
@@ -1431,22 +1462,35 @@ def _existing_target_refusal(server, user, target):
 
 DELETE_REFUSED = "Refusing to delete this path"
 DELETE_PROTECTED = "This file/folder is protected — deleting it would break the server."
+# Deleting the console's log does not stop tmux pipe-pane: it goes on appending to the inode it
+# opened, so the console reads a path nothing writes to until the next start, and the space is not
+# freed while the server runs. LinuxGSM's start moves the old log aside and begins a new one.
+DELETE_CONSOLE = ("The live console reads this path — deleting it would stop the console until the "
+                  "server restarts, and would not free its space while the server runs. Each start "
+                  "begins a fresh console log.")
 
 
 def _delete_refusal(user, relpath, selfname, ap):
-    """Why delete_path must refuse this path (the home root, outside it, protected), else None."""
+    """Why delete_path must refuse this path, else None.
+
+    The home root, anything outside it, a protected path, and the live console's log or a folder
+    above it (_console_paths), as rename, write, upload and create refuse it.
+    """
     home = f"/home/{user}"
     if ap is None or ap == home or not (relpath or "").strip("/"):
         return DELETE_REFUSED
     if _is_protected_path(relpath, selfname):
         return DELETE_PROTECTED
+    if _pp.relpath(ap, home) in _console_paths(selfname):
+        return DELETE_CONSOLE
     return None
 
 
 def delete_path(server, user, relpath, selfname=None):
     """Delete a file or directory (recursively) in the game user's home.
 
-    Refuses the home root, anything outside it, and protected LinuxGSM/game paths.
+    Refuses the home root, anything outside it, protected LinuxGSM/game paths and the live
+    console's log or a folder above it (_delete_refusal, then _console_guard on the host).
     """
     ap = _safe_abspath(user, relpath)
     refusal = _delete_refusal(user, relpath, selfname, ap)
@@ -1454,7 +1498,9 @@ def delete_path(server, user, relpath, selfname=None):
         return False, refusal
     # `"$t"`: the path _protected_resolved checked — the real parent plus this name — so what is
     # removed is exactly what was judged.
-    inner = 'rm -rf -- "$t" && echo __OK__'
+    # _console_guard: the console's path RESOLVED, so a folder the logs reach through a link
+    # (`log -> disk/logs`, then deleting disk) is refused on the host as `log` is by name.
+    inner = _console_guard(user, selfname) + 'rm -rf -- "$t" && echo __OK__'
     # The most destructive of the six, so it gets a host-side resolution check: a symlink under
     # the home dir must not turn `rm -rf` loose on whatever it points at — nor on a protected tree
     # reached through a symlinked directory. _protected_resolved is that check, and its containment
@@ -1472,8 +1518,10 @@ def _files_delete_outcome(out, e, rc):
     """delete_path's (ok, message) from what its guarded host-side `rm -rf` printed."""
     if _r12b_outside_home(out):
         return False, DELETE_REFUSED
-    if _PROTECTED_MARK in (out or ""):
-        return False, DELETE_PROTECTED
+    # The two host-side refusals, by their marks (_protected_resolved, _console_guard).
+    for mark, message in ((_PROTECTED_MARK, DELETE_PROTECTED), (_RENAME_CONSOLE_MARK, DELETE_CONSOLE)):
+        if mark in (out or ""):
+            return False, message
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
@@ -1481,7 +1529,7 @@ def _files_delete_outcome(out, e, rc):
 
 def delete_failure_reason(msg):
     """`msg` when it is one of delete_path's fixed refusals, else None (it may be the host's text)."""
-    return msg if msg in (DELETE_REFUSED, DELETE_PROTECTED) else None
+    return msg if msg in (DELETE_REFUSED, DELETE_PROTECTED, DELETE_CONSOLE) else None
 
 
 def write_failure_reason(msg):
@@ -1621,7 +1669,10 @@ def _rename_ends_refusal(user, relpath, ap, new_name, selfname):
         return RENAME_CONSOLE
     if new_name == _pp.basename(ap):
         return "That is already its name."
-    if _is_protected_path(_pp.relpath(_pp.join(_pp.dirname(ap), new_name), home), selfname):
+    # A name the console reads, too, as create_refusal refuses it: a FILE renamed to `log` (the
+    # name is free only while there is no log folder) leaves LinuxGSM unable to open the console's.
+    dest = _pp.relpath(_pp.join(_pp.dirname(ap), new_name), home)
+    if _is_protected_path(dest, selfname) or dest in _console_paths(selfname):
         return "That name is reserved for LinuxGSM or the game's account — choose another."
     return None
 
@@ -1641,7 +1692,7 @@ def _console_paths(selfname):
     GameServer.console_log is log/console/<lgsm_name>-console.log, a fixed path. tmux pipe-pane
     keeps appending to the file it opened, so renaming the log or a folder above it while the
     server runs leaves the console reading a path nothing writes to, until the next restart.
-    Delete has the same reach; this is rename's own refusal, and leaves delete's rules unchanged.
+    Delete has the same reach, and write, upload, rename, create and delete all refuse these.
     """
     paths = {"log", "log/console"}
     if selfname:

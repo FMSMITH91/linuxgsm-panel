@@ -1590,7 +1590,9 @@ function _bkShow(sel, field, v, label, named){
 // requests nothing orders (the 4 s poll runs while a backup does): a read served before the save
 // committed, answering after it, put the old schedule back in the selects and in _bkShown beside
 // "Backup schedule saved". A reply is drawn only if no save started after its read was sent (the
-// save's own success reads again) and no newer read has been drawn.
+// save reads again once it has answered, whether it saved or not: a failed save that did not left
+// the dropped read's update lost and the select showing the choice it never stored) and no newer
+// read has been drawn.
 var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0;
 function loadBackups(){
   if(!document.getElementById('backup-card')) return;
@@ -1717,8 +1719,8 @@ function saveBkSchedule(){
         Object.keys(body).forEach(function(k){ _bkShown[k]=body[k]; });
         window.toast('Backup schedule saved','success'); loadBackups();
       }
-      else window.toast('Could not save schedule','danger');
-    }).catch(function(){ window.toast('Could not save schedule','danger'); });
+      else { window.toast('Could not save schedule','danger'); loadBackups(); }
+    }).catch(function(){ window.toast('Could not save schedule','danger'); loadBackups(); });
 }
 
 function backupNow(force){

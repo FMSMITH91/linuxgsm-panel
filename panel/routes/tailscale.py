@@ -256,7 +256,10 @@ def _register_tailscale_setup(app):
         """Tailscale status and management page."""
         info = ts.get_tailscale_info(force_refresh=request.args.get("refresh") == "1")
         cfg = load_config()
-        port = cfg.get("port", 5000)
+        # The port this process serves on (ts._r13b_bound_port), not config.json's: the two differ
+        # after a port change whose restart could not be scheduled, and every route Serve has to
+        # this panel then targets the bound one.
+        port = ts._r13b_bound_port(cfg)
         suggestion = ts.suggest_best_bind(port, scheme=_panel_scheme(cfg),
                                           mount=cfg.get("tailscale_mount"))
         # The Serve mappings that proxy THIS panel, read from the host. The Disable button removes
@@ -303,9 +306,7 @@ def _register_tailscale_setup(app):
                 "tailscale_ips": info.tailscale_ips,
                 "peer_count": len(info.peers),
                 "serve": info.serve_config,
-                "suggestion": ts.suggest_best_bind(load_config().get("port", 5000),
-                                                   scheme=_panel_scheme(load_config()),
-                                                   mount=load_config().get("tailscale_mount")),
+                "suggestion": _r31a_suggestion(load_config()),
             })
         return jsonify(out)
 
@@ -355,6 +356,12 @@ def _register_tailscale_setup(app):
         return jsonify({"success": True, "connected": False, "auth_url": res})
 
 
+def _r31a_suggestion(cfg):
+    """The page's suggested address for the panel, on the port this process serves on."""
+    return ts.suggest_best_bind(ts._r13b_bound_port(cfg), scheme=_panel_scheme(cfg),
+                                mount=cfg.get("tailscale_mount"))
+
+
 def _register_tailscale_serve(app):
     """Tailscale Serve for the panel, and the peer check."""
     @app.route("/api/tailscale/serve", methods=["POST"])
@@ -364,7 +371,11 @@ def _register_tailscale_serve(app):
         """Enable/disable Tailscale Serve for the panel."""
         data = _json_body()
         action = data.get("action", "enable")
-        port = load_config().get("port", 5000)
+        # The port this process serves on: Serve's routes to the panel target it, so Disable found
+        # none at config.json's port after a port change whose restart could not be scheduled (a
+        # Funnelled panel could not be taken off the internet) and Enable published a port nothing
+        # listened on. The boot re-points Serve at the new port once the panel restarts.
+        port = ts._r13b_bound_port(load_config())
         if action == "remove-route":
             return _serve_remove_route(port, data)
         if action not in ("enable", "disable"):

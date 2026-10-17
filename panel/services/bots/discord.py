@@ -15,6 +15,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
 from panel.db.models import (LOCAL_HOST_LABEL)
 import functools
 import logging
+import re
 import time
 
 # Same logger name app.py used, so existing log filters and greps keep working.
@@ -335,7 +336,11 @@ def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
         else:
             _discord_do_update(app, bot_token, channel_id, sender)
     elif cmd:
-        _dc_reply(bot_token, channel_id, "Unknown command '%s'. Send !help." % cmd[:24])
+        # Echoed as letters, digits, `.`, `_` and `-` only, as _find_server echoes a name: Discord
+        # renders the bot's message as markdown, so `![Sign in again](https://…)` came back as a
+        # masked link posted by the operator's bot.
+        _dc_reply(bot_token, channel_id,
+                  "Unknown command '%s'. Send !help." % re.sub(r"[^\w.-]", "", cmd)[:24])
 
 
 def _discord_do_update(app, bot_token, channel_id, sender=None):

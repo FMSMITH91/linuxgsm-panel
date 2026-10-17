@@ -137,9 +137,13 @@ def stranded_ids(rows, jobs):
                   and (jobs.get(r["id"]) or {}).get("status") != "running")
 
 
-def _panel_port():
-    """The panel's own port, from config (read once per report)."""
-    return mod("panel.core.config").load_config().get("port", 5000)
+def _panel_port(ctx):
+    """The port the panel listens on now (network.running_port: BOOT_PORT, else config.json's).
+
+    A game server claiming it is what makes a crashed server look healthy (#291: online is "the port
+    is listening"), and the panel listens on the bound port until a saved port change's restart.
+    """
+    return mod("panel.ops.debug_report.network").running_port(ctx, mod("panel.core.config").load_config())
 
 
 def _claims_by_host(gs_rows):
@@ -172,7 +176,7 @@ def port_conflicts(ctx):
     """
     def _compute():
         hosts = host_cols(ctx)
-        reserved = _reserved_ports(hosts, _panel_port())
+        reserved = _reserved_ports(hosts, _panel_port(ctx))
         out = []
         for rid, ports in sorted(_claims_by_host(gs_cols(ctx)).items()):
             for port, owners in sorted(ports.items()):

@@ -686,6 +686,15 @@ def _call_name35(node):
     return None
 
 
+def _branch_sleep35(stmt):
+    """The sleep an if's or a for's body (or else) starts with, or None.
+
+    Such a branch or loop may sleep before the first pass: `if x: time.sleep(30)` read as none
+    (review 1017b). Otherwise it is work, as before.
+    """
+    return next((_s for _s in (_first_sleep35(stmt.body), _first_sleep35(stmt.orelse)) if _s is not None), None)
+
+
 def _first_sleep35(body):
     """The delay node of the sleep a body starts with (or a while whose body does), or None.
 
@@ -693,14 +702,14 @@ def _first_sleep35(body):
     statement alone was read, so `last = None; time.sleep(30)` slept before its first pass unseen.
     """
     for stmt in body:
-        if isinstance(stmt, _ast35.While) and stmt.body:
-            # The whole while body under the same rule, not its first statement alone: `while
-            # True: now = x; time.sleep(30)` read as no sleep before the first pass (review 1011e).
+        # The whole while body under the same rule, not its first statement alone: `while True: now
+        # = x; time.sleep(30)` read as no sleep before the first pass (review 1011e). A try or with
+        # block runs its body first: `while True: try: time.sleep(30)` sleeps before its first pass
+        # as plainly (review 1012a: read as no sleep at all).
+        if isinstance(stmt, (_ast35.While, _ast35.Try, _ast35.With)) and stmt.body:
             return _first_sleep35(stmt.body)
-        if isinstance(stmt, (_ast35.Try, _ast35.With)) and stmt.body:
-            # A try or with block runs its body first: `while True: try: time.sleep(30)` sleeps
-            # before its first pass as plainly (review 1012a: read as no sleep at all).
-            return _first_sleep35(stmt.body)
+        if isinstance(stmt, (_ast35.If, _ast35.For)):
+            return _branch_sleep35(stmt)
         if _call_name35(stmt) == "sleep":
             return stmt.value.args[0] if stmt.value.args else None
         if not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom)):
@@ -715,10 +724,14 @@ _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src
     "while True:\n    try:\n        time.sleep(30)\n        work()\n    except Exception:\n        pass\n",
     "while True:\n    with lock:\n        n = 1\n        time.sleep(5)\n",
     "while True:\n    try:\n        _t0 = time.time()\n        work()\n        time.sleep(5)\n"
-    "    except Exception:\n        pass\n")]
+    "    except Exception:\n        pass\n",
+    "while True:\n    if first:\n        time.sleep(30)\n    work()\n",
+    "while True:\n    if x:\n        pass\n    else:\n        time.sleep(30)\n",
+    "while True:\n    for _ in range(3):\n        time.sleep(1)\n",
+    "while True:\n    if x:\n        work()\n        time.sleep(30)\n")]
 check("beating loops: a sleep after setup assignments heads a while body too (and a try or with "
-      "block's), and one after real work does not (control)",
-      _r15d_fs_ctl35 == [True, True, False, True, True, False], repr(_r15d_fs_ctl35))
+      "block's, or an if or for that starts with one), and one after real work does not (control)",
+      _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False], repr(_r15d_fs_ctl35))
 
 
 def _loop_first_pass35(fn_node):
