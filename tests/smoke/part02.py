@@ -1490,10 +1490,16 @@ check("backups: ...and changing only keep leaves the interval override (both dir
       str(_sch.get("schedule")))
 c.post("/api/panel/backup/game/%d/schedule" % gs_id, json={"interval": "", "keep": ""})
 
+# Each refusal is a 200 answering success: false; a 500 has no JSON, and `not {}.get(...)` read
+# that crash as the refusal (review 1016f).
 bdel = c.post("/api/panel/backup/delete", json={"name": "../../etc/passwd"})
-check("backups: delete rejects a traversal name", not (bdel.get_json() or {}).get("success"))
+check("backups: delete rejects a traversal name",
+      bdel.status_code == 200 and (bdel.get_json() or {}).get("success") is False,
+      "status=%s body=%r" % (bdel.status_code, bdel.get_data(as_text=True)[:200]))
 bres = c.post("/api/panel/backup/restore", json={"name": "nope.tar.gz"})
-check("backups: restore rejects an invalid name", not (bres.get_json() or {}).get("success"))
+check("backups: restore rejects an invalid name",
+      bres.status_code == 200 and (bres.get_json() or {}).get("success") is False,
+      "status=%s body=%r" % (bres.status_code, bres.get_data(as_text=True)[:200]))
 check("backups: download 404s on a bad name", c.get("/api/panel/backup/download/..%2f..%2fetc%2fpasswd").status_code in (400, 404))
 
 # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
@@ -2118,7 +2124,7 @@ try:
                            auth_credential=_enr_encrypt("s3cret"))
         _tr = RemoteServer(name="smoke-test-unreadable", host="198.51.100.64", port=22,
                            username="root", auth_method="password",
-                           auth_credential=_enr_encrypt("s3cret"), is_online=False)
+                           auth_credential=_enr_encrypt("s3cret"), is_online=True)
         db.session.add_all([_tu, _tr])
         db.session.commit()
         _tu_id, _tr_id = _tu.id, _tr.id
@@ -2139,8 +2145,11 @@ try:
         _tr_row = db.session.get(RemoteServer, _tr_id)
         _tr_after = (type(_tr_row.host_key).__name__, _tr_row.is_online)
     _tr_sent = [m.kw for m in _EnrSSH.made[_made_before:] if m.kw]
+    # Seeded online, so the committed False shows the route ran to its end; the refusal is the
+    # route's 400 JSON, where a crash (500) also sent nothing and left the row (review 1016f).
     check("remote test: an UNREADABLE pin refuses the Test login before the password is sent",
-          _tr_sent == [] and _tr_after == ("UnreadableSecret", False),
+          _tr_sent == [] and _tr_after == ("UnreadableSecret", False) and _tr_resp.status_code == 400
+          and (_tr_resp.get_json() or {}).get("success") is False,
           "connect calls=%r row=%r status=%s" % (_tr_sent, _tr_after, _tr_resp.status_code))
 
     # create_app registers the app the pin is stored with from a WORKER thread (no app

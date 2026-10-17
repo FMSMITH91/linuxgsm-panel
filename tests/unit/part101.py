@@ -313,7 +313,7 @@ check("uninstall.sh: ...and a config.json that is not an object, or not JSON, st
 # maintenance": every LinuxGSM cron update paged "went offline unexpectedly". Stubbed at the
 # transport (Tailscale SSH's, which returns rather than raises), so run_command's own sudo default
 # is the one judged.
-from unit.part12 import _p9_patch, _p9_restore_all  # noqa: E402
+from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_patch, _p9_restore_all  # noqa: E402
 from panel.ops.ssh_manager import _core as _smc101  # noqa: E402
 from panel.services import monitoring as _mon101  # noqa: E402
 
@@ -335,7 +335,11 @@ _srv101 = NS(id=-10101, name="p101", display_name="p101", host="p101.example.inv
 _gs101 = NS(id=-10102, name="p101 gmod", short_name="p101gmod", game_type="gmod",
             lgsm_name="gmodserver")
 _maint101, _downs101 = None, None
+# Armed first: the stub below replaces one transport, and any other the probe reached is recorded,
+# not run (review 1016f lead: this part had no tripwire at all).
+_trip101 = len(_P9_TRIPPED)
 try:
+    _p9_arm(who="part101")
     _p9_patch(_smc101, "_run_via_ssh_cli", _ts_cli101)
     _p9_patch(_mon101, "notifications", NS(notify=lambda *a, **k: _sent101.append(a[0])))
     _maint101 = _mon101._lgsm_maintenance_running(_srv101, _gs101)
@@ -345,6 +349,8 @@ except Exception as _e101:  # noqa: BLE001 - recorded: a raise fails the checks 
 finally:
     _p9_restore_all()
     _mon101._monitor_state["server_misses"].pop(_gs101.id, None)
+check("monitoring: the maintenance probe reaches no transport but the stubbed Tailscale SSH one",
+      len(_P9_TRIPPED) == _trip101, repr(_P9_TRIPPED[_trip101:][:4]))
 check("monitoring: on a remote whose sudo needs a password, the maintenance probe asks again "
       "without sudo and sees the running LinuxGSM update (it read the refusal as 'not in maintenance')",
       _maint101 is True and _cmds101[:2] == [True, False], repr((_maint101, _cmds101)))

@@ -45,8 +45,8 @@ def register(app):
         groups = [g for g in groups if g.id in _grantable]
         # Outstanding invites, newest first — superadmin-only in the template. Only a superadmin
         # can mint or revoke one, and the list is how you notice a link you no longer want live.
-        # Bounded: used and expired ones accumulate forever otherwise, and the useful part of the
-        # list is what is still redeemable.
+        # Every redeemable one is listed (each has its Revoke button here and nowhere else); the
+        # finished ones, which accumulate forever, are bounded.
         invites = _invite_listing() if current_user.is_superadmin else []
         return render_template("manage_users.html", users=users, groups=groups, invites=invites,
                                administrable=administrable)
@@ -61,11 +61,15 @@ def _invite_listing():
     # its whole TTL with no way to stop it. Same three conditions Invite.is_usable tests.
     # ONE `now` for both halves: two calls would let a row expiring between them land in
     # both lists, or in neither.
+    #
+    # And it is no bound at all: the live half was still `.limit(25)`, so a 26th live invite
+    # (a batch onboarding) had no Revoke button for up to 30 days (review 1016f). Live rows
+    # bound themselves — each is a superadmin's deliberate mint, and each expires.
     _now = utcnow()
     _live = (Invite.query
              .filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
                      Invite.expires_at > _now)
-             .order_by(Invite.created_at.desc()).limit(25).all())
+             .order_by(Invite.created_at.desc()).all())
     # ...plus a short tail of finished ones, for context only: they carry no action.
     _done = (Invite.query
              .filter(or_(Invite.used_at.isnot(None), Invite.revoked_at.isnot(None),

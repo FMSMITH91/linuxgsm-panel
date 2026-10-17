@@ -841,9 +841,10 @@ def _check_backup31():
           "server it restarts gets a scope — never a `sudo -u … ./gmodserver backup` of its own",
           res[0] is True and rec["argv"] == [["sudo", "-n", _priv31.HELPER_PATH, "lgsm-command", "gm",
                                               "gmodserver", "backup", "y,y,y", "no"]]
-          and not any("gmodserver backup" in c for c in rec["cmd"])
-          and any("backup.lock" in c and c.startswith("sudo -u gm bash -c") for c in rec["cmd"]),
+          and not any("gmodserver backup" in c for c in rec["cmd"]),
           repr(rec))
+    # The stale-lock sweep is no longer part of this function: run_game_backup runs it ahead of the
+    # headroom prune (review 1016f). part02 and part105 check it there.
 
 
 def _check_run_now31():

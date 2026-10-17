@@ -4055,21 +4055,29 @@ def _discover_user(user, cfg_dir, cron_lines, autostart):
                               if re.search(r"\.(tar|tgz|zip)", f))
             except OSError:
                 backups = 0
-            try:
-                with open(os.path.join(HOME_ROOT, user, "lgsm", "mods", "installed-mods.txt"),
-                          encoding="utf-8", errors="replace") as fh:
-                    mods = sum(1 for ln in fh if ln.strip())
-            except OSError:
-                mods = 0
+            # Read as the .cfg files are (_discover_cfg_text): a regular file only, never through
+            # a link or into a fifo, and at most LGSM_CFG_READ_MAX of it. The account owns this
+            # path too: a link to /dev/zero grew one line until the host's memory was gone, and a
+            # fifo blocked open() until the panel's timeout ended the scan for every account.
+            mods = sum(1 for ln in _discover_cfg_text(
+                os.path.join(HOME_ROOT, user, "lgsm", "mods", "installed-mods.txt")).split("\n")
+                if ln.strip())
             sys.stdout.write("FOUND|%s|%s|%d|%d|%d|%d|%d\n"
                              % (user, inst, port, backups, mods, len(cron_lines), autostart))
 
+    if os.getuid() != 0:
+        _emit()                       # nothing to drop FROM: unprivileged, there is no boundary
+        return
     try:
         pw = pwd.getpwnam(user)
     except KeyError:
         pw = None
-    if os.getuid() != 0 or pw is None or pw.pw_uid == 0:
-        _emit()                       # nothing to drop to, or nothing to drop FROM
+    if pw is None or pw.pw_uid == 0:
+        # As root with no account to drop to (a home left by `userdel` without -r, whose old uid
+        # useradd hands to the next account; an LDAP user while NSS is down) or one that IS root:
+        # reading in-process would read AS ROOT, following links the directory's owner made into
+        # places only root can see. No such account can be imported either, so report nothing,
+        # as _probe_as and content-scan already skip a name with no account.
         return
     sys.stdout.flush()                # the child gets a copy of this buffer; do not double-print
     pid = os.fork()

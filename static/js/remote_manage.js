@@ -339,8 +339,11 @@ function buildCores(n){
   }
   coresBuilt=n;
 }
+// Consecutive /live requests that got no JSON answer at all (see the .catch below).
+var _r29c_liveMiss = 0;
 function pollLive(){
   fetch(MOUNT + '/api/remote/'+REMOTE_ID+'/live').then(r=>r.json()).then(d=>{
+    _r29c_liveMiss = 0;
     // A read that failed used to arrive as zeros and render an idle-looking host. The route
     // refuses to publish those now, so `error` is what a dead host looks like here — and the
     // card has to SAY so: silently leaving the last good numbers on screen is a live display
@@ -366,7 +369,16 @@ function pollLive(){
     _livePaintCpu(d);
     _livePaintMemory(d);
     _livePaintDisk(d);
-  }).catch(function(){});
+  }).catch(function(){
+    // No answer at all — the panel restarting (an update, Apply & restart) answers the proxy's 502
+    // text, which is not JSON, and a phone that lost its network rejects the fetch. Only an
+    // `error` reply reached the note, so through either the card kept the last figures beside its
+    // "realtime" dot. Said on the second miss in a row, as install_progress.js does, so a single
+    // dropped request does not flicker it.
+    _r29c_liveMiss += 1;
+    var stale = document.getElementById('live-stale');
+    if(stale && _r29c_liveMiss >= 2){ stale.textContent = t('Live figures are paused — the last read failed.'); stale.style.display=''; }
+  });
 }
 // The header's reachability badge, from what this page's own live read just found. Rendered once,
 // it kept saying "Reachable" for as long as the page stayed open on a host that had since died.

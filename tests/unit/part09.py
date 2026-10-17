@@ -454,9 +454,9 @@ finally:
     _gh_so._update_in_progress = _gh_upd_saved
     # The successful restores above stamped restore_pending's 120 s grace window, and part10 runs
     # next: zero it, or every stage under backup.DATA_DIR reads as a pending restore (review 1011e).
+    # Whether they did is held first: it is the premise of the check at this part's end.
+    _r29d_stamped09 = _gh_bk._r12a_restore_dispatched.get("ts", 0) > 0
     _gh_bk._r12a_restore_dispatched["ts"] = 0.0
-check("backup: part09's restores leave no restore-dispatch stamp for the parts after it",
-      _gh_bk._r12a_restore_dispatched.get("ts") == 0.0, repr(_gh_bk._r12a_restore_dispatched))
 
 # ── load: a row @validates never saw is FLAGGED, not fatal, and not rewritten ────────────────────
 _gh_logdb = os.path.join(_gh_dir, "load.db")
@@ -937,3 +937,10 @@ finally:
     for _k, _v in _rv_tg_saved.items():
         setattr(_rv_tags, _k, _v)
     _gh_shutil.rmtree(_rv_tmpdir, ignore_errors=True)
+
+# What part09 leaves for part10, read at its END, after its last restore (review 1016f: it was read
+# one line after the reset, where it could not fail, and the restores below that were never
+# covered). The successful restores above did stamp it, or the reset was never exercised.
+check("backup: part09's restores leave no restore-dispatch stamp for the parts after it",
+      _r29d_stamped09 and _gh_bk._r12a_restore_dispatched.get("ts") == 0.0,
+      repr((_r29d_stamped09, _gh_bk._r12a_restore_dispatched)))

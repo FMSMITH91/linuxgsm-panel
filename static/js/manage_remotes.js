@@ -696,6 +696,16 @@ function removeRemote(btn){
   if (!sel || !sel.form) return;
   sel.form.addEventListener('reset', function(){ setTimeout(function(){ toggleCreds(sel); }, 0); });
 })();
+// A browser that restores a form's state on reload or on back/forward (Firefox does, for a select
+// with no autocomplete="off") puts the select back on Password or Tailscale SSH without a `change`:
+// the field stayed a visible text box labelled for a key path, and a password typed into it showed
+// in clear, which toggleCreds' type switch exists to stop. `pageshow` comes after that restore, so
+// the field is matched to the select then. "SSH Key" is the markup's own state: a restored path is
+// left alone.
+window.addEventListener('pageshow', function(){
+  var sel = document.getElementById('manage-remotes-auth_method');
+  if (sel && sel.value !== 'key') toggleCreds(sel);
+});
 
 window.afterRemotesRefresh = function(){
   document.querySelectorAll('[id^="live-stats-"]').forEach(function(el){

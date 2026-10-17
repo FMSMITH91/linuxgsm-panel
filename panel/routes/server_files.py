@@ -1258,22 +1258,41 @@ def _r28j_remount_rest(remote, gmod_user, cu, rest):
                      kept={g: p for g, p in _paths.items() if g in _others})
 
 
+_R29B_SCAN_UNREAD = i18n.Sentence("Couldn't read what content is on this host — it did not answer. Nothing "
+                                  "was removed or unmounted; check the host is reachable, then try again.")
+
+
+def _r29b_removal_refusal(remote, cu):
+    """Why the uninstall worker refuses before touching anything (a Sentence), else None.
+
+    `cu` is detect_content_user's answer with unread=False.
+    """
+    # detect_content_user never answers with a panel server's account. When the only content is in
+    # one (a host set up before that rule, whose mounts still point there), say so instead of
+    # reporting an empty removal: the server's files are not the panel's to delete.
+    _any = cu if cu is not None else detect_content_user(remote, tuple(GMOD_CONTENT_GAMES), servers_too=True,
+                                                         unread=False)
+    if cu is False or _any is False:
+        # A scan that did not run was read as "no content account": the game was dropped from this
+        # server's mount.cfg, nothing on the host was touched, and the card said "Removed from host:
+        # (none)" with the content still on disk (review 1016f).
+        return _R29B_SCAN_UNREAD
+    _owner = _r28b_content_owner(remote, (_any or {}).get("user"))
+    return _r28b_owner_remove(_owner) if _owner is not None else None
+
+
 def _uninstall_gmod_selection(remote, gmod_user, games):
     """Remove content from the host, then drop it from THIS server's mounts: the job's state."""
-    cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+    cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES), unread=False)
+    _refusal = _r29b_removal_refusal(remote, cu)
+    if _refusal is not None:
+        # Refused before anything is touched, this server's mount.cfg included: the operator asked
+        # for a removal, and nothing about it happened.
+        return {"status": "error", "msg": _refusal, "ts": time.time()}
     # No content user at all: nothing was asked of the host, so there is nothing
     # this could have failed to confirm — `asked` stays empty rather than turning
     # every game into an unconfirmed removal.
     _asked, removed = [], []
-    # detect_content_user never answers with a panel server's account. When the only content is in
-    # one (a host set up before that rule, whose mounts still point there), say so instead of
-    # reporting an empty removal: the server's files are not the panel's to delete.
-    _owner = _r28b_content_owner(remote, (cu or detect_content_user(
-        remote, tuple(GMOD_CONTENT_GAMES), servers_too=True) or {}).get("user"))
-    if _owner is not None:
-        # Refused before anything is touched, this server's mount.cfg included: the operator asked
-        # for a removal, and nothing about it happened.
-        return {"status": "error", "msg": _r28b_owner_remove(_owner), "ts": time.time()}
     if cu:
         _asked = list(games)
         _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
@@ -1375,7 +1394,9 @@ def _gmod_content_status(remote, gs, server_id):
         # guards the same call for the same reason.
         _mounts = gmod_current_mounts(remote, gs.short_name)
         mounted = _mounts or []
-        cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+        # unread=False: a scan that did not answer painted every game "not on the host" — CS:S read
+        # "installs 13 GB" with no Uninstall while 13 GB of it sat on the disk (review 1016f).
+        cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES), unread=False)
         present = set((cu or {}).get("present", {}))
         games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
                   "present": (k in present), "mounted": (k in mounted),
@@ -1391,6 +1412,8 @@ def _gmod_content_status(remote, gs, server_id):
                         # False = the host did not answer. The card must not offer an
                         # Apply built on ticks it could not read.
                         "mounts_readable": _mounts is not None,
+                        # The same for what content is on the host: the card says it could not read it.
+                        "content_readable": cu is not False,
                         "disk_free": disk_free, "disk_total": disk_total,
                         # The message in the viewer's language: every worker stores a Sentence
                         # (English as a str, for the logs), and the card shows a finished job's.
@@ -2469,9 +2492,24 @@ def _register_cron_actions(app):
 
 
 def _sf_gmod_missing(remote, sel):
-    """The selected content games that are not on the host yet."""
-    _cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+    """The selected content games that are not on the host yet; None when the host's scan was not read."""
+    _cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES), unread=False)
+    if _cu is False:
+        return None
     return [g for g in sel if g not in set((_cu or {}).get("present") or {})]
+
+
+def _r29b_server_held(remote, games):
+    """Those of `games` held on `remote` only in a panel server's own account, else [].
+
+    For the server-only admin's refusal: "Not on this host yet" was false for content that IS on
+    the host, in a (legacy) panel server's account the panel never mounts from (review 1016f).
+    """
+    _any = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES), servers_too=True)
+    held = [g for g in games if g in set((_any or {}).get("present") or {})]
+    if not held or _r28b_content_owner(remote, _any["user"]) is None:
+        return []
+    return held
 
 
 def _sf_gmod_host_refusal(gs, remote, action, sel):
@@ -2492,6 +2530,18 @@ def _sf_gmod_host_refusal(gs, remote, action, sel):
             "Removing content affects every Garry's Mod server on this host, so it needs "
             "access to the host, not just this server.")}), 403
     _missing = _sf_gmod_missing(remote, sel)
+    if _missing is None:
+        # Refused, as before, but not as "not on this host yet": nobody knows (review 1016f).
+        return jsonify({"success": False, "message": i18n.tr(
+            "Couldn't read what content is on this host, so mounting it here could not be checked. "
+            "Check the host is reachable, then try again.")}), 403
+    _held = _r29b_server_held(remote, _missing) if _missing else []
+    if _held:
+        return jsonify({"success": False, "message": i18n.tr(
+            "Only a panel server's own account on this host holds {games}, and the panel never mounts from "
+            "a server's account. Installing it for every Garry's Mod server here needs access to the host — "
+            "ask its admin to install it, then mount it here.",
+            games=", ".join(GMOD_CONTENT_GAMES[g][0] for g in _held))}), 403
     if _missing:
         return jsonify({"success": False, "message": i18n.tr(
             "Not on this host yet: {games}. Downloading content for every Garry's Mod server here "

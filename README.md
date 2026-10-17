@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
 4. Picks a free port (5000 by default) and records it in `data/config.json`.
 5. Sets up the service — **and never runs the panel as root**:
    - **As a normal user** → a `systemd --user` service with linger, so it survives logout/reboot.
-   - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Also installs the `linuxgsm-panel-recover` command. Remove the sudoers entry if this panel only ever manages *remote* servers.
+   - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Also installs the `linuxgsm-panel-recover` command. Remove the sudoers entry if this panel only ever manages *remote* servers — but that also turns off the in-panel **Update** (and the bot's `/update`), panel backup restore and the database repair, so you then update by hand over SSH with `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
 6. Leaves the **host terminal**'s `sudo` alone. The panel user's grant names only its privileged
    helper and the game-server accounts the panel manages, so in a terminal on the panel host
    `sudo` to root *refuses* rather than prompting, while `sudo -u <game account>` (an account the

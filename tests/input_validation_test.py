@@ -318,11 +318,14 @@ def _check_servers_add_refuses_existing_accounts():
         # ...and a host that does not answer is refused, not read as "no such account".
         _ms_mod.host_account_state = lambda remote, n: None
         before = servers_count()
-        c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
-                                     "server_name": "ivnoanswer", "port": "28960"},
-               follow_redirects=False)
+        _r29d_r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                               "server_name": "ivnoanswer", "port": "28960"},
+                         follow_redirects=False)
+        # The refusal is the form's redirect with a flash; a crash (500) also adds no row, and read
+        # as the refusal (review 1016f).
         check("/servers/add refuses when the host cannot say whether the account exists",
-              servers_count() == before, "row count went %d -> %d" % (before, servers_count()))
+              servers_count() == before and _r29d_r.status_code in (302, 303),
+              "row count went %d -> %d, answered %d" % (before, servers_count(), _r29d_r.status_code))
     finally:
         _ms_mod.host_account_state = _o_has
         _ms_mod.resolve_free_port = _o_rfp2

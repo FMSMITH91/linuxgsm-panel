@@ -1431,7 +1431,7 @@ def _backup_bodies34():
         _patch(_core34, "shell_as_game_user", _rec)
         _cron34.prune_game_backups(srv, "mcsrv7731", keep=3)
         _game34._steam_build(srv, "mcsrv7731", selfname="mcserver")
-    # The sweep runs ahead of the backup itself, in _run_linuxgsm_backup; its body is built here.
+    # The sweep runs ahead of the backup, in run_game_backup; its body is built here.
     return got[:2] + [_game34._stale_backup_lock_sweep("mcsrv7731") + "true"]
 
 

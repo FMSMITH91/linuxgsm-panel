@@ -99,10 +99,16 @@ def verdict_text(euid, helper, sudo_ok):
 def _privilege_lines(res, facts):
     helper = bool(so._helper_present())
     ok, age = _sudo_probe()
+    # The verdict, and the sudo probe it is read from, are security posture (the owner's rule of
+    # 2026-10-16): "passwordless sudo works, so the helper boundary does not constrain this panel"
+    # tells a reader of the public issue that whoever takes this panel has root. So both are on the
+    # in-panel page only, like the 2FA and firewall lines, and the verdict is no longer one of the
+    # file's Verdicts. A panel that can do nothing privileged is a fault, not posture: that finding
+    # below stays in the file.
     facts["verdict"] = verdict_text(os.geteuid(), helper, ok)
-    res.add("- **Verdict**: " + facts["verdict"])
+    res.posture("- **Privilege verdict**: " + facts["verdict"])
     res.add("- **Privileged helper installed**: %s" % ("yes" if helper else "no"))
-    res.add("- **Passwordless `sudo -n true`**: %s" % (
+    res.posture("- **Passwordless `sudo -n true`**: %s" % (
         "not probed in this process" if ok is None
         else "%s (cached, probed %s ago)" % ("works" if ok else "refused", ago(age))))
     if os.geteuid() != 0 and not helper and ok is False:
@@ -292,5 +298,4 @@ def section_install(ctx):
         except Exception as exc:  # noqa: BLE001 - one part's failure is printed, not fatal
             res.add(unread_line(title, exc))
             res.find("unread", AREA, "%s could not be read" % title.lower())
-    res.verdict = "Privilege: " + facts.get("verdict", "could not be read")
     return res

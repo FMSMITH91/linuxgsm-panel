@@ -38,10 +38,12 @@ _GH_OPTS = (r"\bsudo(?:\s+(?:-[A-Za-z]*[CDghpRrTtU]\s+\S+|--?[A-Za-z][\w-]*(?:=\
 # An opening quote may sit between the flag and the account (`sudo -u '{user}'`): hand-typed
 # quotes are no quoting at all against a name holding `'` (GHSA-hh39's own payload class), and
 # without the `['"]?` such a site was not seen as a site, by G1 or G2.
-_GH_TAIL = re.compile(_GH_OPTS + r"['\"]?\Z")
-_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"['\"]?\{")
+# sudo's uid form `-u#<uid>` (`#0` is GHSA-hh39's own bad value) puts a `#` before the hole, and
+# was no site at all, by G1 or G2 (review 1016f).
+_GH_TAIL = re.compile(_GH_OPTS + r"['\"]?#?\Z")
+_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"['\"]?#?\{")
 # An argv ELEMENT that carries the flag and the account together (`"--user=" + user`, f"-u{user}").
-_GH_ARGV_JOINED = re.compile(r"(?:-[A-Za-z]*u|--user=)['\"]?" + _GH_HOLE)
+_GH_ARGV_JOINED = re.compile(r"(?:-[A-Za-z]*u|--user=)['\"]?#?" + _GH_HOLE)
 _GH_PCT = re.compile(r"%(?:\(([^)]*)\))?[#0\- +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?([diouxXeEfFgGcrsa%])")
 _GH_QUOTERS = {"_quote", "quote"}
 _GH_BUILDERS = {"game_user_cmd", "game_user_exec_cmd"}
@@ -855,6 +857,11 @@ _gh_ctl = {
         'def f(user):\n    return ["sudo", f"-u{user}", "cat"]\n'),
     # Review 1011d: each of these was no site at all, so G2 never fired.
     "G2 an argv with -u joined by %": _gh_plant('def f(user):\n    return ["sudo", "-u%s" % user, "cat"]\n'),
+    # The uid form, `-u#<uid>` (review 1016f): no site at all before.
+    "G1 a -u#uid in an f-string": _gh_plant('def f(uid):\n    return f"sudo -u#{uid} bash -c x"\n'),
+    "G1 a -u#uid in a % format": _gh_plant('def f(uid):\n    return "sudo -u#%s bash" % uid\n'),
+    "G1 a -u#uid in a .format": _gh_plant('def f(uid):\n    return "sudo -u#{} bash".format(uid)\n'),
+    "G2 an argv with -u#uid joined by %": _gh_plant('def f(uid):\n    return ["sudo", "-u#%s" % uid, "cat"]\n'),
     "G2 an argv with --user= joined by .format()": _gh_plant(
         'def f(user):\n    return ["sudo", "--user={}".format(user), "cat"]\n'),
     "G2 an argv split by +": _gh_plant('def f(user):\n    return ["sudo", "-n"] + ["-u", user, "cat"]\n'),

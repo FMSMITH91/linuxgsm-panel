@@ -3340,7 +3340,7 @@ check(re.search(r"_appendConsoleRows\(rows\)\s*;", _rc_body),
 check('id="console-ts-notice"' in _sd_src,
       "console times: an all-history console carries the notice explaining the empty column",
       "no #console-ts-notice in server_detail.html")
-check("updateTsNotice" in _js_function_body(_sd_js, "applyTsVisible") or "",
+check("updateTsNotice" in (_js_function_body(_sd_js, "applyTsVisible") or ""),
       "console times: ...and the notice is re-evaluated when the column is toggled",
       "applyTsVisible does not call updateTsNotice")
 
@@ -5260,6 +5260,8 @@ function load(file){
     setInterval(fn){ const id = t.next++; t.live[id] = fn; return id; },
     clearInterval(id){ t.cleared.push(id); delete t.live[id]; },
     setTimeout(){ return 0; }, clearTimeout(){}, pollWhenVisible(){ return 0; },
+    // window IS this context: a page script's window.addEventListener('pageshow', …) lands here.
+    addEventListener(){},
     escapeHtml: s => String(s), toast(){}, confirmDialog(){},
     // i18n.js's tf/tfHtml (not `t`: that name is this harness's timer table)
     tf: (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => (v && k in v) ? String(v[k]) : m),

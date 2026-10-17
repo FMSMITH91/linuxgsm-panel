@@ -1090,6 +1090,11 @@ class Invite(db.Model):
     note = db.Column(db.String(120), default="")
 
     INVITE_TTL_HOURS = 48
+    # How many redeemable invites may exist at once. The Users page lists every live one, because
+    # its Revoke button is rendered nowhere else (review 1016f), so this is what keeps that page
+    # bounded: minting has no rate limit and a link lives up to 30 days. Far above any batch of
+    # people a panel onboards at once; past it, some are revoked (or expire) before more are made.
+    MAX_LIVE = 100
 
     @staticmethod
     def mint(creator, hours=None, superadmin=False, group_ids=(), note=""):

@@ -320,6 +320,13 @@ def _register_invites(app):
         # Through grantable_groups, exactly like add_user: a superadmin minting an invite still
         # cannot hand out a group the escalation guard would refuse them directly.
         groups = grantable_groups(group_ids)
+        # Bounded, so the list that holds every live invite's Revoke button stays a page.
+        _live = Invite.query.filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
+                                    Invite.expires_at > utcnow()).count()
+        if _live >= Invite.MAX_LIVE:
+            return _form_err(i18n.tr("There are already {n} invite links that still work. Revoke the "
+                                     "ones you no longer need, or let them expire, before making "
+                                     "another.", n=_live), "manage_users", code=409)
         inv, token = Invite.mint(current_user, hours=hours, superadmin=want_super,
                                  group_ids=[g.id for g in groups],
                                  note=request.form.get("note", ""))

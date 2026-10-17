@@ -1368,11 +1368,10 @@ def _backup_failure_reason(out, err):
 
 
 def _run_linuxgsm_backup(server, user, selfname):
-    """Run LinuxGSM's `backup` as the game user: (ok, lock_refused, out, err, rc)."""
-    # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
-    # which every backup refuses with "Lockfile found: Backup is currently running". See
-    # _stale_backup_lock_sweep for when a lock counts as orphaned.
-    _core.shell_as_game_user(server, user, _stale_backup_lock_sweep(user) + "true", timeout=60)
+    """Run LinuxGSM's `backup` as the game user: (ok, lock_refused, out, err, rc).
+
+    The orphaned-lock sweep has already run, in run_game_backup, ahead of the headroom prune.
+    """
     # When the instance is running, LinuxGSM's `backup` warns + counts down, then STOPS the
     # server, archives it, and RESTARTS it (verified on a live box: ~1.5 min outage for a 6.5G
     # GMod install). It doesn't strictly need a y/N answer, but we feed a few harmless "y"s as a
@@ -1688,6 +1687,14 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         skip = _backup_players_online(server, user, game_type, port, query_type)
         if skip:
             return False, skip, True
+    # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
+    # which every backup refuses with "Lockfile found: Backup is currently running". See
+    # _stale_backup_lock_sweep for when a lock counts as orphaned. It runs BEFORE the headroom
+    # prune, not just before LinuxGSM: the prune skips while any lock is listed (another backup
+    # may be running), and an orphaned lock the sweep was about to delete made it skip too — on
+    # a tight disk the backup was then refused for space, "lower 'keep'", for up to an hour over
+    # a lock problem (review 1016f). A lock that survives the sweep is one LinuxGSM honours.
+    _core.shell_as_game_user(server, user, _stale_backup_lock_sweep(user) + "true", timeout=60)
     # Smart retention: if the disk is nearly full, delete old backups BEFORE creating the new one
     # so the backup succeeds instead of aborting for lack of space.
     headroom_note = cron._ensure_backup_headroom(server, user, keep)

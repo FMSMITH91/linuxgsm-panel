@@ -33,6 +33,16 @@ document.getElementById('auth-method').addEventListener('change', function() {
   }
 });
 
+// A browser that restores a form's state on reload or on back/forward (Firefox does, for a select
+// with no autocomplete="off") puts the select back on Password or Tailscale SSH without a `change`:
+// the field stayed a visible text box labelled for a key path, and the password typed into it showed
+// in clear. `pageshow` comes after that restore, so the field is matched to the select then. "SSH
+// Key" is the markup's own state: a restored path is left alone.
+window.addEventListener('pageshow', function(){
+  var sel = document.getElementById('auth-method');
+  if (sel && sel.value !== 'key') sel.dispatchEvent(new Event('change'));
+});
+
 function toggleSetupCreds() {
   // trigger the same logic from the select's onchange
   document.getElementById('auth-method').dispatchEvent(new Event('change'));

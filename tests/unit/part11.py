@@ -1997,13 +1997,16 @@ try:
        _H.remote_os_check_updates(_p8_srv()),
        {"ok": False, "count": 0, "packages": [], "updates_available": False,
         "deferred": [], "deferred_known": False})
-    _wire(verbs={"apt-full-upgrade": ("x" * 500 + "done", "", 0)})
-    _ru = _H.remote_os_run_updates(_p8_srv())
-    check("os run: success returns the tail of apt's output",
-          _ru[0] is True and len(_ru[1]) == 300 and _ru[1].endswith("done"), repr(_ru)[:80])
-    _wire(verbs={"apt-full-upgrade": ("", "E: Could not get lock", 100)})
-    eq("os run: a failure returns the error", _H.remote_os_run_updates(_p8_srv()),
-       (False, "E: Could not get lock"))
+    # The one-shot route starts the detached job too (review 1016f): a blocking full-upgrade over
+    # SSH was killed mid-dpkg by its 600 s timeout or a dropped connection.
+    _w = _wire(verbs={"apt-upgrade-running": ("", "", 1),
+                      "os-update-run": ("launching\n" + _p8_priv.OS_UPDATE_STARTED, "", 0)})
+    eq("os run: the one-shot starts the detached os-update-run job, never a blocking apt-full-upgrade",
+       (_H.remote_os_run_updates(_p8_srv()), _w.verbs_called("apt-full-upgrade")),
+       ((True, "Update started."), []))
+    _wire(verbs={"apt-upgrade-running": ("", "", 1), "os-update-run": ("", "E: Could not get lock", 1)})
+    eq("os run: a job that did not start is a failure", _H.remote_os_run_updates(_p8_srv()),
+       (False, "Couldn't start the update."))
     _w = _wire(verbs={"apt-upgrade-running": ("", "", 0)})
     eq("os update start: one already running is watched, not started again",
        (_H.remote_os_update_start(_p8_srv()), _w.verbs_called("os-update-run")),

@@ -158,7 +158,7 @@ def _r28j_server_accounts(server):
         return None
 
 
-def detect_content_user(server, games=("cstrike",), servers_too=False):
+def detect_content_user(server, games=("cstrike",), servers_too=False, unread=None):
     """Find a host user whose serverfiles already hold the wanted game content.
 
     E.g. an existing srcds / LinuxGSM cssserver. Returns {"user", "group", "present": {game: path}}
@@ -171,18 +171,30 @@ def detect_content_user(server, games=("cstrike",), servers_too=False):
     instead (ensure_content_user). When the panel's servers cannot be read, nobody is: None.
     `servers_too=True` is ONLY for naming such an account in a refusal; nothing may write under,
     or mount from, what it returns.
+
+    `unread` is what comes back when the scan (or the panel's server list) could not be read. None
+    by default, which is also "no content account", so a caller for whom the two differ passes
+    something else. They differ for anything that acts on the answer: the Remove worker read a
+    scan that timed out as "no content here", rewrote this server's mount.cfg without the game and
+    reported "Removed from host: (none)" with the content still on disk (review 1016f). An empty
+    read is not a measurement: a failed transport answers ("", …, -1) without raising.
     """
     wanted = _valid_content_games(games) or list(GMOD_CONTENT_GAMES)
     skip = frozenset() if servers_too else _r28j_server_accounts(server)
     if skip is None:
-        return None
+        return unread
     try:
         # Was a shell loop over /home building its inner list by interpolating the game keys. The
         # verb takes the keys as arguments and walks the directories itself.
-        out, _, _ = _core.run_privileged(server, "content-scan", wanted, timeout=30, merge_stderr=False)
+        out, _, rc = _core.run_privileged(server, "content-scan", wanted, timeout=30, merge_stderr=False)
     except Exception:
         _core._log.debug("detect_content_user scan failed", exc_info=True)
-        return None
+        return unread
+    if rc != 0:
+        # The helper's verb always exits 0, and so does the remote form (it ends in `true`): a
+        # non-zero exit is sudo or the transport, and its empty output says nothing about /home.
+        _core._log.warning("detect_content_user: the content scan exited %s, so it was not read", rc)
+        return unread
     by_user = {u: gs for u, gs in _parse_content_scan(out).items() if u not in skip}
     if not by_user:
         return None
@@ -208,7 +220,13 @@ def ensure_content_user(server):
     content into. Returns {"user", "group", "present"} or None on failure. Never downloads here —
     just guarantees a home.
     """
-    found = detect_content_user(server, tuple(GMOD_CONTENT_GAMES))
+    found = detect_content_user(server, tuple(GMOD_CONTENT_GAMES), unread=False)
+    if found is False:
+        # The scan did not answer. Falling through set up the panel's own account and downloaded
+        # gigabytes into it beside content another account already holds (or, with the host not
+        # answering, failed further on with a less true reason).
+        _core._log.warning("ensure_content_user: the content scan was not read; nothing prepared")
+        return None
     if found:
         return found
     u = _CONTENT_USER

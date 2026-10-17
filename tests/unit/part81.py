@@ -356,7 +356,7 @@ _fb_prog81 = (
     "  createElement: () => ({attrs: {}, setAttribute(k, v){ this.attrs[k] = v; }})};\n"
     "global.fetch = (u, o) => { posted = JSON.parse(o.body); return new Promise(() => {}); };\n"
     "function fbSummary(){}\n"
-    "%s\n%s\n%s\n"
+    "%s\n%s\n%s\n%s\n"
     "bkRenderFullSchedule({interval_days: 3, keep: 2});\n"
     "const sel = els['fb-interval'];\n"
     "saveBackupSettings();\n"
@@ -364,7 +364,8 @@ _fb_prog81 = (
     "console.log(JSON.stringify({value: sel.value, label: o.textContent, posted: posted && posted.full_interval_days,\n"
     "  relabel: [o.attrs['data-i18n-text'], o.attrs['data-i18n-vars']]}));\n") % (
         _cut_or81(_RB81, "function _r20cIntervalOption("), _cut_or81(_RB81, "function bkRenderFullSchedule("),
-        _cut_or81(_RB81, "function saveBackupSettings("))
+        _cut_or81(_RB81, "function saveBackupSettings("), _cut_or81(_RB81, "function _r29c_bkEditing(")
+        + "\n" + _cut_or81(_RB81, "function _r29c_bkSetIdle("))
 _fbi81 = _node81("remote_manage_backups.js: a stored interval the list lacks", _fb_prog81)
 if _fbi81 is not None:
     check("host page backups: a stored 3-day interval is shown (\"3 days\") and a later save keeps it "

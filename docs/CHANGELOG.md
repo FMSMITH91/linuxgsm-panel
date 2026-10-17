@@ -601,6 +601,40 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A seventeenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
+  its fix.
+  - **A game server's account can no longer stall the server scan.** The scan read a file that
+    account controls (its installed-mods list) whole, as root, through links and pipes, on the panel
+    host and on remote hosts; a link to an endless device could hang it or run it out of memory. That
+    file is now read only as an ordinary file of bounded size, and a /home folder with no account
+    behind it is skipped.
+  - **Garry's Mod content: a host that did not answer is no longer read as "no content".** Remove
+    reported success having done nothing, the card showed every game as not on the host, and Apply
+    could download into a new account beside content it never saw. Each now says the host could not
+    be read. On a remote host, a mount list that could not be read no longer reads as "mounts
+    nothing", which made Remove drop every other mount.
+  - **OS updates started through the older API routes now run as the same background job as the
+    OS Updates card**, so a long upgrade or a panel restart no longer stops apt part-way. Repairing
+    the database is refused while a panel update or a backup restore is in progress.
+  - **Every invite link that still works can be revoked.** The list stopped at 25, so an older link
+    had no Revoke button for up to 30 days. All of them are listed now, and the panel stops making
+    new ones while 100 still work.
+  - **The downloadable debug report no longer says whether passwordless sudo makes the panel root.**
+    Like 2FA and the firewall, that is shown on the in-panel report page only.
+  - **A leftover backup lock no longer stops old backups being pruned**, and a download whose size
+    could not be read no longer saves an empty file under the real name.
+  - **Smaller fixes.** The Backups card no longer wipes what you are typing when it refreshes; the
+    Live card marks its figures stale when the panel stops answering; the Raw config editor will not
+    save text from before a settings save made while you were typing in it; the add-host forms keep
+    the password box hidden when the browser restores the form; the GMod install text says what
+    happens to content only a game server holds; a hand-edited `security_whitelist` written as one
+    address is read as that address; the weekly gamedig check no longer runs the package as root;
+    per-user installs keep apt from stopping to ask questions; and `manage.py setup-token` prints an
+    http link behind a proxy.
+  - **Tests.** The guard that keeps tests off the machine's own tailscale now catches a script that
+    sets PATH however it spells it; several refusal checks no longer pass on a server error; a few
+    gates now read what they guard. The docs say what deleting the panel's sudoers grant also stops.
+
 - **A sixteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
   its fix.
   - **Garry's Mod content no longer touches another game server's account.** On a host where a

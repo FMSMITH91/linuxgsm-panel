@@ -1698,8 +1698,13 @@ with app.app_context():
         _gb = GlobalBan.query.filter_by(steamid="STEAM_0:1:99").first()
         check("global-ban: add persists the SteamID + reason", _gb is not None and _gb.reason == "cheating")
         _cnt = GlobalBan.query.count()
-        _gc.post("/global-bans/add", data={"steamid": "not-a-steamid"})
-        check("global-ban: an invalid SteamID is rejected (not stored)", GlobalBan.query.count() == _cnt)
+        _r29d_bad = _gc.post("/global-bans/add", data={"steamid": "not-a-steamid"})
+        # The refusal is a redirect back to the list with a flash: a crash (500) also stores
+        # nothing, and was read as the refusal (review 1016f).
+        check("global-ban: an invalid SteamID is rejected (not stored)",
+              GlobalBan.query.count() == _cnt and _r29d_bad.status_code in (302, 303)
+              and _r29d_bad.headers.get("Location", "").endswith("/global-bans"),
+              "status=%s location=%r" % (_r29d_bad.status_code, _r29d_bad.headers.get("Location")))
         _pg = _gc.get("/global-bans")
         check("global-ban: page lists the ban", _pg.status_code == 200 and b"STEAM_0:1:99" in _pg.data)
         # The fan-out goes through each server's LIVE console, so a server stopped when the

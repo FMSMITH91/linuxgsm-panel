@@ -415,7 +415,7 @@ check("install.sh: the fresh install's port probe stops at 65535 and answers 'no
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. The monitor's reachability probe runs without sudo
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-from unit.part12 import _p9  # noqa: E402
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm  # noqa: E402
 from panel.ops import ssh_manager as _sm97  # noqa: E402
 from panel.services import host_reboot as _hr97  # noqa: E402
 from panel.services import monitoring as _mon97  # noqa: E402
@@ -436,7 +436,10 @@ _srv97 = NS(id=-9701, name="p97", host="p97.example.invalid", port=22, is_local=
             auth_method="key", sudo_enabled=True, username="admin")
 _read97 = []
 _probe97, _reboot97 = None, None
+# Armed first, so a path that grows a call past the stubs below is recorded, not run (review 1016f lead).
+_trip97 = len(_P9_TRIPPED)
 try:
+    _p9_arm(patch=_p9_patch, who="part97")
     _p9_patch(_mon97, "run_command", _r26a_rc)
     _p9_patch(_sm97, "run_command", _r26a_rc)
     _p9_patch(_sm97, "run_privileged", lambda *a, **k: ("", "", 1))
@@ -452,6 +455,8 @@ except Exception as _e97:  # noqa: BLE001 - recorded: a raise fails the checks b
 finally:
     _p9_restore_all()
     _mon97._probe_record.pop(_srv97.id, None)
+check("monitoring: the reachability probe and the reboot request reach no real transport",
+      len(_P9_TRIPPED) == _trip97, repr(_P9_TRIPPED[_trip97:][:4]))
 check("monitoring: a sudo-enabled remote whose sudo asks for a password answers the reachability "
       "probe (it ran `echo ok` under sudo: 'Host unreachable', marked offline, and its disk, load "
       "and port checks never ran)",
@@ -501,7 +506,7 @@ check("debug report: once the pattern pass has failed, the final pass withholds 
 # B's A09 lead named panel/routes/tailscale.py's `cfg.get("port", 5000)` reads as raw. Each one is
 # a load_config read, so section 4's reader is theirs too; this drives the routes themselves with a
 # hand-edited port, so a route that went back to reading config.json raw fails here by name.
-from unit.part12 import P9_ADMIN, _p9_arm, _p9_client  # noqa: E402
+from unit.part12 import P9_ADMIN, _p9_client  # noqa: E402
 from panel.ops import tailscale_integration as _tsi97  # noqa: E402
 from panel.routes import tailscale as _tsr97  # noqa: E402
 

@@ -16,8 +16,9 @@ import os
 from types import SimpleNamespace as _NS75
 
 from unit.part01 import check
-from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_drain,
-                         _p9_host_row, _p9_json, _p9_new_server, _p9_patch, _p9_restore_all, _p9_row, _p9_set)
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_delete_server,
+                         _p9_drain, _p9_host_row, _p9_json, _p9_new_server, _p9_patch, _p9_restore_all, _p9_row,
+                         _p9_set, _p9_threading)
 from panel.core import i18n as _i18n75
 from panel.core.panel_state import _install_jobs as _install_jobs75, _install_lock as _install_lock75
 from panel.db.models import User as _U75, db as _db75
@@ -134,13 +135,17 @@ try:
                       (c.cell_contents for c in _rv75.__closure__)))["_run_install_job"]
     _empty75 = _p9_new_server(P9_HOST, "p75empty", "csgo", 27951, installed=False, status="installing")
     _sids75.append(_empty75)
+    # Its thread is queued and run by the drain, so the job has ended before the banner is read
+    # (review 1016f: the module's real threading ran it, and the drain ran nothing).
+    _p9_patch(_ms75, "threading", _p9_threading(_P9Thread))
     _rij75(_empty75, P9_HOST, "", "csgo", "csgoserver", 27951, [])
-    _p9_drain()
+    _drained75 = _p9_drain()
     _fr_empty75 = _banner75(_A75, _empty75)
     check("install failure: the job's own 'missing instance name' detail is French too (a fixed "
           "sentence, not the host's words)",
-          _fr_empty75 == "%s : %s" % (_FR75["Preparing user account"],
-                                      _FR75["internal error: missing instance name"]), repr(_fr_empty75))
+          _drained75 >= 1 and _fr_empty75 == "%s : %s" % (_FR75["Preparing user account"],
+                                                          _FR75["internal error: missing instance name"]),
+          repr((_drained75, _fr_empty75)))
 
     # A recorded build that no longer says what install_error says is not shown: something wrote
     # the English column alone. Nor is a record the panel could not have written.

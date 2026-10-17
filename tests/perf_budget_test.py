@@ -184,6 +184,10 @@ app.config.update(WTF_CSRF_ENABLED=False, SESSION_PROTECTION=None, SESSION_COOKI
 # target is seen by the route modules AND by ssh_manager's own internal call sites.
 for _name in ("run_command", "run_privileged", "run_as_game_user"):
     setattr(_sm_core, _name, lambda *a, **k: ("", "", 0))
+# ...and the tripwire in front of _core's own local transport: _run_local and _exec_local_shell start
+# their process through _real_subprocess, and the file and content-cron writers reach them past the
+# three stubs above, so a page that did would have run sudo unseen (review 1016f lead).
+_sm_core._real_subprocess = _PbTrip(_sm_core._real_subprocess, _sm_core.__name__)
 
 HOSTS = 4
 SERVERS_SMALL = 20
@@ -349,8 +353,10 @@ def _check_the_sweep_ran(small, large):
     _trip_before = len(_PB_TRIPPED)
     _so.subprocess.run(["sudo", "-n", "true"])
     _so._run("true", sudo=True)
-    check("perf: the tripwire catches a sudo argv and a sudo shell run (its positive control)",
-          len(_PB_TRIPPED) == _trip_before + 2, repr(_PB_TRIPPED[_trip_before:]))
+    _sm_core._real_subprocess.Popen(["sudo", "-n", "true"]).wait()
+    check("perf: the tripwire catches a sudo argv and a sudo shell run, and one through _core's local "
+          "transport (its positive control)",
+          len(_PB_TRIPPED) == _trip_before + 3, repr(_PB_TRIPPED[_trip_before:]))
 
 
 # Host-bounded pages do not move at all. Allow a couple of queries of slack for pagination and

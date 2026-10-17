@@ -78,7 +78,6 @@
   "File integrity could not be verified on this host.": "No se pudo verificar la integridad de los archivos en este host.",
   "Files & Config": "Archivos y configuración",
   "Finishing setup…": "Finalizando la configuración…",
-  "GMod needs another game's content to draw its maps and props — without it you get missing-texture ERROR signs. The panel reuses content already on the host, else downloads it into a shared content user.": "GMod necesita el contenido de otro juego para dibujar sus mapas y objetos: sin él aparecen carteles ERROR de textura ausente. El panel reutiliza el contenido que ya esté en el host y, si no, lo descarga en un usuario de contenido compartido.",
   "Game": "Juego",
   "Game CPU % · RAM (MB)": "CPU del juego % · RAM (MB)",
   "Game Config File": "Archivo de configuración del juego",

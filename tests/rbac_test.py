@@ -2471,27 +2471,29 @@ def _check_group_edit_refusals():
     _grant = [auth.VIEW_SERVERS, auth.SEND_COMMAND, auth.USE_TERMINAL]
     # 1. A group outside her reach gains use_terminal: vic, a tenant-B viewer, would get a shell on
     #    hostB from an admin who cannot reach hostB.
-    _gsx_edit(_dc, "b_view", _grant)
+    # Each refusal is the form's redirect back to the list: a crash (500) also changes nothing, and
+    # read as the refusal (review 1016f lead); the audited-row count below misses a crash after it.
+    _r29d_st = [_gsx_edit(_dc, "b_view", _grant).status_code]
     check("group scope: a delegated admin cannot add a permission to a group outside their reach",
           auth.USE_TERMINAL not in _gsx_perms("vic") and _gsx_row("b_view")[1] == "orig",
           "vic now holds %s; group reads %r" % (sorted(_gsx_perms("vic")), _gsx_row("b_view")))
     # 2. ...nor strip one: permissions=[] would take send_command off tenant B's admins.
-    _gsx_edit(_dc, "b_adm", [])
+    _r29d_st.append(_gsx_edit(_dc, "b_adm", []).status_code)
     check("group scope: ...nor strip a permission they hold off a group outside their reach",
           auth.SEND_COMMAND in _gsx_perms("vera"), "vera lost send_command")
     # 2b. An out-of-reach group with NO members: only the group's own reach refuses it.
-    _gsx_edit(_dc, "b_empty", _grant)
+    _r29d_st.append(_gsx_edit(_dc, "b_empty", _grant).status_code)
     check("group scope: ...nor edit an out-of-reach group that has no members yet",
           _gsx_row("b_empty") == (tag + "_gsx_b_empty", "orig", [auth.VIEW_SERVERS]),
           "b_empty now reads %r" % (_gsx_row("b_empty"),))
     # 3. A group WITHIN her reach, whose member also sits in a tenant-B group: permissions are
     #    flat, so mia would hold use_terminal on hostB.
-    _gsx_edit(_dc, "a_view", _grant, hosts=[granted_remote])
+    _r29d_st.append(_gsx_edit(_dc, "a_view", _grant, hosts=[granted_remote]).status_code)
     check("group scope: ...nor a within-reach group whose member reaches more than they do",
           auth.USE_TERMINAL not in _gsx_perms("mia"),
           "mia holds %s — use_terminal on hostB" % sorted(_gsx_perms("mia")))
     # 5. An EMPTY within-reach group that a live superadmin invite names beside a tenant-B group.
-    _gsx_edit(_dc, "a_inv", _grant)
+    _r29d_st.append(_gsx_edit(_dc, "a_inv", _grant).status_code)
     check("group scope: ...nor an empty group a live invite names beside an out-of-reach group",
           _gsx_row("a_inv")[2] == [],
           "a_inv now holds %s — the invitee would redeem it on hostB" % (_gsx_row("a_inv")[2],))
@@ -2499,8 +2501,9 @@ def _check_group_edit_refusals():
         from panel.db.models import AuditLog as _GAL
         _refused_rows = _GAL.query.filter_by(user_id=_gsx["dana"], action="edit_group",
                                              success=False).count()
-    check("group scope: ...and each refusal is audited", _refused_rows >= 5,
-          "%d refused edit_group rows" % _refused_rows)
+    check("group scope: ...and each refusal is audited, and answered with the form's redirect (no crash)",
+          _refused_rows >= 5 and _r29d_st == [302] * 5,
+          "%d refused edit_group rows; statuses %r" % (_refused_rows, _r29d_st))
     # Positive control: a group whose members she can administer still edits.
     _gsx_edit(_dc, "a_free", _grant, hosts=[granted_remote])
     check("group scope: an in-reach group whose members are in reach still edits, a superadmin "

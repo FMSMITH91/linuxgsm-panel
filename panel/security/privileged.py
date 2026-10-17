@@ -1452,6 +1452,17 @@ def _gamedig_install_remote(a):
     return "; ".join(parts)
 
 
+def _r29a_gmod_mount_read_remote(user, qpath):
+    """The remote form of gmod-mount-read: the account's `cat` of mount.cfg (`qpath`, quoted).
+
+    rc 0 with the file, or rc 0 and nothing when there is no file, which is "no mounts"; any other
+    failure keeps cat's (or runuser's) non-zero rc, which gmod_current_mounts reads as "unknown".
+    The `[ -e ]`/`[ -L ]` tests run only after cat failed, so a readable file is read once.
+    """
+    return ("runuser -u %s -- cat %s 2>/dev/null || { _r=$?; [ ! -e %s ] && [ ! -L %s ] || (exit $_r); }"
+            % (shlex.quote(user), qpath, qpath, qpath))
+
+
 def _f2b_log_lines_remote(a):
     """The remote form of f2b-log-lines: the helper's read, and the helper's ceiling, in one awk.
 
@@ -1676,12 +1687,15 @@ _REMOTE_ACTIONS = {
     # Each home is looked at AS ITS ACCOUNT (runuser), as do_content_scan does through _probe_as:
     # as root, `[ -d ]` follows a link the account made, so `~/serverfiles -> /root` answered
     # whether /root/<game> exists. A /home entry no account has, or a uid-0 one, is skipped.
+    # It ends in `true`, as the helper's verb always exits 0: the loop's status was its last
+    # `test`'s, so a host whose last account held no content exited 1, and the panel reads a
+    # non-zero exit as a scan that did not run (gmod.detect_content_user).
     "content-scan": lambda a: (
         'for u in $(ls -1 %s 2>/dev/null); do '
         '  i=$(id -u -- "$u" 2>/dev/null) || continue; [ "$i" = 0 ] && continue; '
         '  d="%s/$u/%s"; runuser -u "$u" -- test -d "$d" || continue; '
         '  for g in %s; do runuser -u "$u" -- test -d "$d/$g" && echo "HIT|$u|$g"; done; '
-        'done' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
+        'done; true' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
     #
@@ -1734,9 +1748,14 @@ _REMOTE_ACTIONS = {
     # ~/serverfiles/garrysmod/cfg/mount.cfg` had root print the remote host's password hashes into
     # the panel — and the mount editor writes what it parsed back into that same account's
     # mount.cfg. The helper closed this locally; the remote form was still `cat` as root.
-    "gmod-mount-read": lambda a: (
-        "runuser -u %s -- cat %s 2>/dev/null || true"
-        % (shlex.quote(a[0]), shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"))),
+    #
+    # And with the helper's rc (do_gmod_mount_read, _emit_mount_cfg): only a mount.cfg that is not
+    # there is "no mounts", rc 0. `|| true` made every failed read rc 0 too (EACCES, a directory at
+    # the name, runuser refusing or missing), which gmod_current_mounts reads as "mounts nothing",
+    # and the remove path then rewrote mount.cfg without every other mount. A failed cat keeps its
+    # rc unless the file is absent; the absence test is root's, and a dangling link is not absent.
+    "gmod-mount-read": lambda a: _r29a_gmod_mount_read_remote(
+        a[0], shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg")),
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: _R18B_RESTART_FLAGS_REMOTE,
     "ufw-delete-num-if": _ufw_delete_num_if_remote,

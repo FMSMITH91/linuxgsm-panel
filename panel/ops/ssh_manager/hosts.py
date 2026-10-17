@@ -1905,10 +1905,14 @@ def remote_os_check_updates(server):
 
 
 def remote_os_run_updates(server):
-    """Run apt upgrade on the remote server (blocking; kept for callers that want a one-shot).
-    The UI uses the streaming remote_os_update_start/_status pair instead."""
-    out, err, rc = _core.run_privileged(server, "apt-full-upgrade", [], timeout=600)
-    return rc == 0, out[-300:] if out else err[:300]
+    """Start the remote's OS update: remote_os_update_start's detached job. (ok, message).
+
+    It was a blocking `apt-get full-upgrade` over SSH with a 600 s kill. An upgrade that took
+    longer, or a connection that dropped, ended root's shell on the host and apt with it, mid-dpkg
+    ("dpkg was interrupted"). The card has used the detached job for that reason since #122; this,
+    reached only by POST .../run-updates (no page calls it), now starts the same job.
+    """
+    return remote_os_update_start(server)
 
 
 # The panel no longer names the OS-update log at all. Until #122 the detached runner lived here and

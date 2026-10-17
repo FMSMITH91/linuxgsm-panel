@@ -38,6 +38,7 @@ from panel.core import config as _cfg92
 from panel.ops import system_ops as _so92
 from panel.ops.debug_report import _base as _b92
 from panel.ops.debug_report import assemble as _as92
+from panel.ops.debug_report import install as _in92
 from panel.ops.debug_report import network as _nw92
 from panel.ops.debug_report import privacy as _pv92
 from panel.ops.debug_report import root_pieces as _rp92
@@ -445,5 +446,55 @@ check("debug report posture gate: the backstop (POSTURE_RE) withholds the Funnel
           (_rpm92["rep"].get(k) or "") for k in ("report", "summary", "issue_body"))
       and (_rpm92["rep"].get("posture") or "").count("planted-p92") == 5,
       repr(_rpm92.get("error") or _rpm92["rep"].get("report", "")[-800:]))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 6. The privilege verdict is posture (the session lead, applying the owner's 2026-10-16 rule)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# "passwordless sudo works for this account, so the helper boundary does not constrain this panel"
+# was a line of the install section AND one of the file's public Verdicts (the summary and the
+# GitHub issue body): it tells a reader that whoever takes this panel has root. The real
+# section_install, on an install where passwordless sudo works (its other two parts stood in for:
+# they read the host), assembled: neither the verdict nor the sudo probe it rests on is in the file,
+# the summary or the issue body; both are on the page; the helper line stays in the file.
+_PRIV92 = ("helper boundary does not constrain", "**Privilege verdict**",
+           "**Passwordless `sudo -n true`**: works", "Privilege: ")
+_rpv92 = {}
+try:
+    with _r24r_patched(_so92, _helper_present=lambda: True, _SUDO_PROBE={"at": _time92.time(), "ok": True}), \
+            _r24r_patched(_in92, _identity_lines=lambda res, facts: None,
+                          _sudo_line=lambda res, facts: None, os=NS(geteuid=lambda: 1000, path=os.path)):
+        _secpv92 = _in92.section_install(None)
+    _rpv92["rep"] = _r24r_assemble(extra={"install": ("ok", 0.01, _secpv92)})[0]
+except Exception as _e92:  # noqa: BLE001 - a harness failure fails by name below
+    _rpv92["error"] = "%s: %s" % (type(_e92).__name__, _e92)
+_pvrep92 = _rpv92.get("rep") or {}
+_pvfile92 = "\n".join(_pvrep92.get(k) or "" for k in ("report", "summary", "issue_body"))
+_pvpage92 = _pvrep92.get("posture") or ""
+check("debug report posture: the privilege verdict ('passwordless sudo works … the helper boundary "
+      "does not constrain this panel') and the sudo probe it rests on are in neither the file, the "
+      "summary, the issue body nor the Verdicts block; both are on the page, and the section kept "
+      "them apart itself (nothing held back); the helper line stays in the file",
+      bool(_pvrep92) and not [p for p in _PRIV92 if p in _pvfile92]
+      and all(p in _pvpage92 for p in _PRIV92[:3]) and _as92.WITHHELD_LINE not in _pvfile92
+      and "- **Privileged helper installed**: yes" in (_pvrep92.get("report") or ""),
+      repr(_rpv92.get("error") or ([p for p in _PRIV92 if p in _pvfile92], _pvpage92[-600:])))
+_plpv92 = _b92.Result(lines=["- **Privilege verdict**: planted-p92",
+                             "- **Passwordless `sudo -n true`**: works (planted-p92)",
+                             "- Privilege: passwordless sudo works for this account, so the helper "
+                             "boundary does not constrain this panel (planted-p92)",
+                             "- Privilege: the panel runs as root, so nothing constrains its privileged "
+                             "actions (planted-p92)"])
+_rpp92 = {}
+try:
+    _rpp92["rep"] = _r24r_assemble(extra={"planted92": ("ok", 0.01, _plpv92)},
+                                   sections=(("planted92", "Planted", "header", "request", "full"),))[0]
+except Exception as _e92:  # noqa: BLE001 - a harness failure fails by name below
+    _rpp92["error"] = "%s: %s" % (type(_e92).__name__, _e92)
+check("debug report posture gate: ...and the backstop (POSTURE_RE) withholds both lines, and the "
+      "old public verdict's wording, when a section prints them with add()",
+      bool(_rpp92.get("rep")) and "planted-p92" not in "\n".join(
+          (_rpp92["rep"].get(k) or "") for k in ("report", "summary", "issue_body"))
+      and (_rpp92["rep"].get("posture") or "").count("planted-p92") == 4,
+      repr(_rpp92.get("error") or _rpp92["rep"].get("report", "")[-800:]))
 
 _sh92.rmtree(_TMP92, ignore_errors=True)
