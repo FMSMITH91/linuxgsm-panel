@@ -247,7 +247,7 @@ def run_shapes(blocked, shapes, mark, late=None):
         if os.path.exists(mark):
             os.unlink(mark)
         try:
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+            # nosemgrep  (dangerous-subprocess-use-tainted-env-args: the shapes are fixed)
             _p = subprocess.run(  # nosec B602 B603 - fixed shapes from the parent test
                 _args, capture_output=True, timeout=10, **_kw)
             _stdout, _out = _p.stdout, _p.stdout + _p.stderr
