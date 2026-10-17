@@ -90,10 +90,9 @@ def _shell117(server, user, cmd, timeout=30, selfname=None):
     return r.stdout, r.stderr, r.returncode
 
 
-def _dangling117():
-    _p9_patch(_p9_core, "shell_as_game_user", _shell117)
-    got = {}
-    for case, call, made in (
+def _dangling_cases117():
+    """(case, call, the path it would make) for _dangling117."""
+    return (
             ("create file", lambda: _f117.create_path(None, "p117u", "disk", "logs", "file", _SELF117),
              "disk/logs"),
             ("create beside", lambda: _f117.create_path(None, "p117u", "", "dsk", "file", _SELF117), None),
@@ -109,7 +108,13 @@ def _dangling117():
              "disk/logs"),
             ("folder at log", lambda: _f117.create_path(None, "p117u", "disk/logs/console",
                                                         _SELF117 + "-console.log", "folder", _SELF117),
-             "disk/logs/console/%s-console.log" % _SELF117)):
+             "disk/logs/console/%s-console.log" % _SELF117))
+
+
+def _dangling117():
+    _p9_patch(_p9_core, "shell_as_game_user", _shell117)
+    got = {}
+    for case, call, made in _dangling_cases117():
         _home_tree117()
         if case == "folder at log":
             os.makedirs(os.path.join(_HOME117, "disk", "logs", "console"))
@@ -121,14 +126,13 @@ def _dangling117():
           "folders, as one at `log` does)",
           got["create file"] == want_ref and got["rename onto"] == want_ref, repr(got))
     check("files: ...and a name off the console's path is still created and renamed (controls)",
-          got["create elsewhere"] == (True, "Created", True) and got["rename elsewhere"][0] is True
-          and got["rename elsewhere"][2] is True and got["create beside"][0] is True, repr(got))
+          (got["create elsewhere"], got["rename elsewhere"][0::2], got["create beside"][0])
+          == ((True, "Created", True), (True, True), True), repr(got))
     check("files: ...but a FOLDER created at disk/logs, or a folder renamed onto it, is made: it is what repairs the "
           "dangling link (LinuxGSM's own mkdir fails on one), so only a folder at the console log's own path stays "
           "refused",
-          got["folder logs"] == (True, "Created", True) and got["rename folder onto"][0] is True
-          and got["rename folder onto"][2] is True
-          and got["folder at log"] == want_ref, repr(got))
+          (got["folder logs"], got["rename folder onto"][0::2], got["folder at log"])
+          == ((True, "Created", True), (True, True), want_ref), repr(got))
 
 
 # ── 3. the wizard's Serve keeps the working route while a port change waits ───────────────────────
@@ -189,6 +193,10 @@ def _wizard117(client):
         _p9.config.pop("BOOT_PORT", None)
         if had[0]:
             _p9.config["BOOT_PORT"] = had[1]
+    _wizard_checks117(got)
+
+
+def _wizard_checks117(got):
     kept = [got[k][:3] for k in ("step kept", "finish kept")]
     check("setup wizard: with a saved port change waiting for its restart, the Serve step and the finish keep "
           "the panel's '/' route to the port it serves now, mark Serve set up there, and write nothing (it was "
