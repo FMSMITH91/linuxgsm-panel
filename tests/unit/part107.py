@@ -240,8 +240,16 @@ def _apt_lines107():
             and _RUNS_APT107.search(ln)]
 
 
+# The settings install.sh's apt calls carry, which these checks read as apt-get and the script see them.
+# GitHub's runners export DEBIAN_FRONTEND=noninteractive in the job environment, so inherited, "they do
+# not leak into the script" read the runner's own variable as a leak on every Ubuntu leg.
+_APT_VARS107 = ("DEBIAN_FRONTEND", "NEEDRESTART_MODE")
+
+
 def _bash107(script):
-    r = _sp107.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)  # nosec B603 B607
+    """`script`'s stdout under bash, started without the apt settings the caller's environment may hold."""
+    env = {k: v for k, v in os.environ.items() if k not in _APT_VARS107}
+    r = _sp107.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, env=env)  # nosec B603 B607
     return r.stdout
 
 
