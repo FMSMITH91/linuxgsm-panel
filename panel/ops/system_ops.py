@@ -1099,8 +1099,11 @@ def _r27p_local_probe():
     return out, rc
 
 
-R31B_UPDATE_BUSY = ("An update the panel did not start is running on this host. Wait for it to finish, "
-                    "then check for updates again.")
+# Said without naming who started it: the panel's own host bootstrap runs `apt-get full-upgrade`
+# through the apt-full-upgrade verb, which is a package upgrade the OS Updates card did not start,
+# but one the panel did. Refusing is right either way (a second run would race dpkg).
+R31B_UPDATE_BUSY = ("Another package upgrade is already running on this host (not one started from "
+                    "this card). Wait for it to finish, then check for updates again.")
 R31B_UPDATE_UNCHECKED = ("Couldn't check whether an update is already running on this host, so none was "
                          "started. Try again in a moment.")
 

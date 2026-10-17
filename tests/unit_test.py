@@ -1703,6 +1703,8 @@ _r16d_wrap_ts_handles()
 # imports part01, 05 and 12.
 # part112 (the nineteenth review's page fixes, builder C) runs node through part106's harness and
 # drives part12's app; imports part01, 12, 106 and 109.
+# part113 (the pre-merge adversarial review of review 1017b, fixer J) drives part12's app with
+# stand-ins and real pgrep over sleeping stand-in processes; imports part01 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1715,7 +1717,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
           "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
-          "part109", "part110", "part111", "part112",
+          "part109", "part110", "part111", "part112", "part113",
           "part15")
 
 
