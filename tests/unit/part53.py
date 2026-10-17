@@ -381,6 +381,9 @@ try:
           "notes.txt" in _ans53 and "serverfiles" in _ans53, repr((_sent53[-1:], _ans53[:120])))
     # The rename flow's taken name: the fake host read the new name up to `; if [`, and the console
     # path guard that went in after it became part of the name ("server.cfg;"), so nothing was taken.
+    # Wrapped as the transport sends it (game_user_cmd): the fake host reads the script's last word.
+    _p9_patch(_core53, "shell_as_game_user", lambda server, user, sh, timeout=30, selfname=None:
+              (_sent53.append(_core53.game_user_cmd(user, sh, selfname=selfname)) or ("", "", 0)))
     _rn53 = {}
     for _new53 in ("server.cfg", "fresh 53.txt"):
         _sent53.clear()
