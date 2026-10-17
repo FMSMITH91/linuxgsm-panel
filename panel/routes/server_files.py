@@ -11,7 +11,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
     RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
-    gmod_current_mounts, gmod_mount_setup, install_gmod_content, lgsm_game_config,
+    gmod_current_mounts, gmod_mount_paths, gmod_mount_setup, install_gmod_content, lgsm_game_config,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
     console_has_control, stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
@@ -1233,6 +1233,31 @@ def _install_and_mount(remote, gmod_user, cu, games):
     return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
 
 
+def _r28j_remount_rest(remote, gmod_user, cu, rest):
+    """After a Remove: mount.cfg mounts `rest` (the games still mounted), each from where it really is.
+
+    Only the games content user `cu` ({} when there is none) holds are pointed at it. This wrote every remaining mount as
+    the content user's: on a host whose GMod server mounted CS:S from a panel CS:S server's account
+    (set up before that was refused) while a `gmodcontent` account held TF2, removing TF2 rewrote
+    the CS:S line to /home/gmodcontent/serverfiles/cstrike, where there is no CS:S, granted read on
+    it, and reported "Removed from host: tf" (review 1016e, adversarial F2). A mount the content
+    user does not hold keeps its line as it stood; when those lines cannot be read, mount.cfg is
+    left alone.
+    """
+    _held = cu.get("present") or {}
+    _others = [g for g in rest if g not in _held]
+    if not _others:
+        gmod_mount_setup(remote, gmod_user, cu.get("user", ""), rest)
+        return
+    _paths = gmod_mount_paths(remote, gmod_user)
+    if _paths is None:
+        _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
+                     "mount.cfg alone", gmod_user)
+        return
+    gmod_mount_setup(remote, gmod_user, cu.get("user", ""), [g for g in rest if g in _held],
+                     kept={g: p for g, p in _paths.items() if g in _others})
+
+
 def _uninstall_gmod_selection(remote, gmod_user, games):
     """Remove content from the host, then drop it from THIS server's mounts: the job's state."""
     cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
@@ -1261,8 +1286,7 @@ def _uninstall_gmod_selection(remote, gmod_user, games):
         _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
                      "mount.cfg alone", gmod_user)
     else:
-        gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
-                         [g for g in _cur if g not in games])
+        _r28j_remount_rest(remote, gmod_user, cu or {}, [g for g in _cur if g not in games])
     _st, _msg = _gmod_removal_result(_asked, removed)
     return {"status": _st, "msg": _msg, "ts": time.time()}
 

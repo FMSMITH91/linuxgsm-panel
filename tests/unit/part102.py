@@ -15,6 +15,7 @@ HOW IT RUNS. Stand-ins behind ssh_manager's _core (run_privileged, run_command, 
 write_content_cron), and routes on part12's app with recorders. Nothing reaches a host, sudo or
 the checkout's data/.
 """
+import base64 as _b64_102
 from types import SimpleNamespace as NS
 
 from unit.part01 import check
@@ -84,7 +85,7 @@ def _cleanup102():
 # 1. GMod content never writes under a panel-managed server's account
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # What the host holds: user -> content games present in its ~/serverfiles.
-_HOST102 = {"content": {}, "calls": [], "mounts": ""}
+_HOST102 = {"content": {}, "calls": [], "mounts": "", "written": None}
 
 # What counts as writing under an account: removing its games, installing into it (a LinuxGSM run
 # as it), its update cron.
@@ -123,6 +124,7 @@ def _gmod_host102():
             return "", "", 0
         if "mount.cfg" in sh:
             calls.append(("mount-write", user))
+            _HOST102["written"] = _b64_102.b64decode(sh.split("echo ", 2)[1].split()[0]).decode()
             return "__OK__\n", "", 0
         return "NO_SESSION\n", "", 3
 
@@ -161,6 +163,7 @@ def _gmod_owner102(client, rid):
     _gmod_mounted102(client, gid, rid)
     _gmod_named102(rid)
     _gmod_es102(client, gid, rid)
+    _gmod_mixed102(client, gid, rid)
 
 
 def _says102(state, *parts):
@@ -192,6 +195,36 @@ def _gmod_remove102(client, gid, rid):
           == ("done", "done", [("p102box", "cstrike", "cssserver")], [("p102box", "cstrike", "cssserver")])
           and not any("p102css" in str(w) for w in both_writes),
           repr((box, b_writes, both, both_writes)))
+
+
+def _gmod_mixed102(client, gid, rid):
+    # A host set up before a server's account was refused: GMod mounts CS:S from the panel CS:S
+    # server's account, while the panel's `gmodcontent` holds TF2. Removing TF2 must leave the CS:S
+    # line as it stood (it re-pointed it at /home/gmodcontent, where there is no CS:S).
+    got = {}
+    for k, content, cs_from in (("mixed", {"p102css": {"cstrike"}, "gmodcontent": {"tf"}}, "p102css"),
+                                ("all held", {"gmodcontent": {"tf", "cstrike"}}, "gmodcontent")):
+        _HOST102["mounts"] = ('"mountcfg"\n{\n\t"cstrike"\t"/home/%s/serverfiles/cstrike"\n'
+                              '\t"tf"\t"/home/gmodcontent/serverfiles/tf"\n}\n' % cs_from)
+        _HOST102["written"] = None
+        st, writes, calls = _gmod_job102(client, gid, rid, "uninstall", ["tf"], content)
+        got[k] = (st.get("status"), str(st.get("msg")), _removes102(writes), _HOST102["written"],
+                  [c[1] for c in calls if c[0] == "content-grant-read"])
+    _HOST102["mounts"] = ""
+    mixed, held = got["mixed"], got["all held"]
+    m_cfg, h_cfg = mixed[3] or "", held[3] or ""
+    check("GMod content removal: on a host whose GMod server mounts CS:S from a panel server's account "
+          "while `gmodcontent` holds TF2, removing TF2 keeps the CS:S mount line as it stood and grants "
+          "nothing for it (it rewrote it to /home/gmodcontent/serverfiles/cstrike, where there is no "
+          "CS:S, and reported success: adversarial F2); the TF2 line goes",
+          all([mixed[:3] == ("done", "Removed from host: tf", [("gmodcontent", "tf", "tf2server")]),
+               '"cstrike"\t"/home/p102css/serverfiles/cstrike"' in m_cfg,
+               "gmodcontent/serverfiles/cstrike" not in m_cfg, '"tf"' not in m_cfg, mixed[4] == []]),
+          repr(mixed))
+    check("GMod content removal: ...when the content account holds every remaining game, they are mounted "
+          "from it and read granted as before (control)",
+          all([held[0] == "done", '"cstrike"\t"/home/gmodcontent/serverfiles/cstrike"' in h_cfg,
+               '"tf"' not in h_cfg, [a[3:] for a in held[4]] == [("cstrike",)]]), repr(held))
 
 
 def _no_server_account102(calls):

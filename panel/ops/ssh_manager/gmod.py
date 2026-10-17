@@ -597,17 +597,20 @@ def _content_uninstall_message(removed, unverified, cron, content_user):
     return _msg
 
 
-def _gmod_mount_files(content_user, games):
+def _gmod_mount_files(content_user, games, kept=None):
     """Build the (mount.cfg, mountdepots.txt) text GMod reads to mount each game's content.
 
     Mounted from the content user's serverfiles. Pure — content_user is a validated Linux username
     and every game is a constant key, so the output is safe to write verbatim. hl2 depot is always
-    enabled (base content).
+    enabled (base content). `kept` ({game: path}, from gmod_mount_paths) are mount lines kept as
+    they stood: their paths were read out of this same file, with no quote or line break in them.
     """
+    kept = kept or {}
     mountcfg = '"mountcfg"\n{\n' + "".join(
-        '\t"%s"\t"/home/%s/serverfiles/%s"\n' % (g, content_user, g) for g in games) + "}\n"
+        '\t"%s"\t"/home/%s/serverfiles/%s"\n' % (g, content_user, g) for g in games) + "".join(
+        '\t"%s"\t"%s"\n' % (g, p) for g, p in kept.items()) + "}\n"
     depots = ('"gamedepotsystem"\n{\n\t"hl2"\t\t"1"\n'
-              + "".join('\t"%s"\t\t"1"\n' % g for g in games) + "}\n")
+              + "".join('\t"%s"\t\t"1"\n' % g for g in list(games) + list(kept)) + "}\n")
     return mountcfg, depots
 
 
@@ -676,13 +679,13 @@ def _grant_content_read(server, gmod_user, content_user, games):
     return None
 
 
-def _write_mount_files(server, gmod_user, content_user, games):
+def _write_mount_files(server, gmod_user, content_user, games, kept=None):
     """Write mount.cfg + mountdepots.txt AS the GMod user; an error message, or None on success.
 
     base64 so there is no quoting/interpolation risk.
     """
     import base64
-    mountcfg, depots = _gmod_mount_files(content_user or "", games)
+    mountcfg, depots = _gmod_mount_files(content_user or "", games, kept)
     cfgdir = f"/home/{gmod_user}/serverfiles/garrysmod/cfg"
     b64c = base64.b64encode(mountcfg.encode()).decode()
     b64d = base64.b64encode(depots.encode()).decode()
@@ -694,14 +697,27 @@ def _write_mount_files(server, gmod_user, content_user, games):
     return None
 
 
-def gmod_mount_setup(server, gmod_user, content_user, games):
+def _r28j_kept_lines(kept, games):
+    """gmod_mount_setup's `kept` lines worth writing back, as {game: path}.
+
+    Known games not mounted from the content user anyway, whose path stays one KeyValues string
+    (_R28J_KEPT_PATH_RE).
+    """
+    return {g: p for g, p in (kept or {}).items()
+            if g in GMOD_CONTENT_GAMES and g not in games and _R28J_KEPT_PATH_RE.match(p or "")}
+
+
+def gmod_mount_setup(server, gmod_user, content_user, games, kept=None):
     """Write a GMod server's mount config to mount exactly `games` from the content user.
 
     Grants the GMod user read access first. An EMPTY `games` writes an empty mount.cfg (unmounts
     everything). Idempotent. Returns (ok, msg). Group membership takes effect when the GMod server
-    (re)starts.
+    (re)starts. `kept` ({game: path}) are mount lines written back as they stood, from wherever
+    they pointed; nothing is granted for them (Remove keeps the mounts the content user does not
+    hold this way).
     """
     games = _valid_content_games(games)
+    kept = _r28j_kept_lines(kept, games)
     bad = _mount_users_error(gmod_user, content_user, games)
     if bad:
         return False, bad
@@ -709,11 +725,12 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
         bad = _grant_content_read(server, gmod_user, content_user, games)
         if bad:
             return False, bad
-    bad = _write_mount_files(server, gmod_user, content_user, games)
+    bad = _write_mount_files(server, gmod_user, content_user, games, kept)
     if bad:
         return False, bad
     # Whole Sentences, one per wording: the GMod Content card shows this to the viewer in their
     # language, and a clause appended to the English matched no catalog key.
+    games = games + list(kept)
     _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games)
     if _mount_needs_restart(server, gmod_user):
         return True, (i18n.Sentence("Mounted: {games} — restart the server to apply", games=_labels)
@@ -723,6 +740,41 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
 
 
 _MOUNT_LINE_RE = re.compile(r'"([a-z0-9_]+)"\s+"/')
+# A mount line's game and path, the path up to its closing quote. A kept path is written back into
+# mount.cfg, so it must stay one KeyValues string: absolute, and no quote, backslash or control
+# character (a line break would start a line of its own).
+_R28J_MOUNT_PATH_RE = re.compile(r'"([a-z0-9_]+)"\s+"(/[^"]*)"')
+_R28J_KEPT_PATH_RE = re.compile(r'^/[^"\\\x00-\x1f\x7f]*\Z')
+
+
+def _r28j_mount_lines(server, gmod_user):
+    """mount.cfg's active lines, stripped (a `//` comment line is not a mount), or None when unread."""
+    out, _, rc = _core.run_privileged(server, "gmod-mount-read", [gmod_user], timeout=10,
+                                      merge_stderr=False)
+    if rc != 0:
+        _core._log.warning("gmod_current_mounts: could not read mounts for %s — reporting unknown",
+                           gmod_user)
+        return None
+    return [s for s in (line.strip() for line in (out or "").splitlines()) if not s.startswith("//")]
+
+
+def gmod_mount_paths(server, gmod_user):
+    """{game: path} for each content game a GMod server mounts now, as written; None when unread.
+
+    gmod_current_mounts' read, with the path each line points at. Remove keeps the lines for games
+    the content user does not hold with these, instead of re-pointing them at the content user.
+    """
+    if not _CU_NAME_RE.match(gmod_user or ""):
+        return {}
+    lines = _r28j_mount_lines(server, gmod_user)
+    if lines is None:
+        return None
+    found = {}
+    for s in lines:
+        m = _R28J_MOUNT_PATH_RE.search(s)
+        if m and m.group(1) in GMOD_CONTENT_GAMES and m.group(1) not in found:
+            found[m.group(1)] = m.group(2)
+    return found
 
 
 def gmod_current_mounts(server, gmod_user):
@@ -744,17 +796,11 @@ def gmod_current_mounts(server, gmod_user):
     """
     if not _CU_NAME_RE.match(gmod_user or ""):
         return []
-    out, _, rc = _core.run_privileged(server, "gmod-mount-read", [gmod_user], timeout=10,
-                               merge_stderr=False)
-    if rc != 0:
-        _core._log.warning("gmod_current_mounts: could not read mounts for %s — reporting unknown",
-                           gmod_user)
+    lines = _r28j_mount_lines(server, gmod_user)
+    if lines is None:
         return None
     found = []
-    for line in (out or "").splitlines():
-        s = line.strip()
-        if s.startswith("//"):
-            continue   # a commented-out mount (Valve KeyValues // comment) is NOT active
+    for s in lines:
         m = _MOUNT_LINE_RE.search(s)
         if m and m.group(1) in GMOD_CONTENT_GAMES and m.group(1) not in found:
             found.append(m.group(1))

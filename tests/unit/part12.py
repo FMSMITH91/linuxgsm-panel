@@ -1971,7 +1971,7 @@ try:
     check("gmod content GET: a status read that raises is an error with no games to tick",
           _d.get("games") == [] and _d.get("error") == "Host unreachable", repr(_d))
 
-    _gmc = {"mounts": ["cstrike", "tf"], "cu": {"user": "gmcontent", "present": {"cstrike": 1}},
+    _gmc = {"mounts": ["cstrike", "tf"], "cu": {"user": "gmcontent", "present": {"cstrike": 1, "tf": 1}},
             "removed": ["cstrike"], "installed": [], "setup": []}
 
     def _gmc_mounts(remote, user):
