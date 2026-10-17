@@ -5027,40 +5027,48 @@ import getpass as _gp2
 import grp as _grp2
 import pwd as _pwd2
 import stat as _st2
+# Only the lookups of this machine's account and group may skip: an OSError or KeyError from the
+# verbs under test was a SKIP too, and a skip does not fail the run (review 1016e).
 try:
     _me2 = _gp2.getuser()
     _mygrp2 = _grp2.getgrgid(_pwd2.getpwnam(_me2).pw_gid).gr_name
-    _cbox = _tempfile.mkdtemp(prefix="panel-content-")
-    # A fresh copy of the helper module, so redirecting its home root cannot leak into any other
-    # test — _sandboxed_helper() is defined further down, after the sshd block.
-    _spec_c = _ilu.spec_from_loader("ph_content",
-                                    _machinery.SourceFileLoader("ph_content", _helper_path))
-    _hc = _ilu.module_from_spec(_spec_c)
-    _spec_c.loader.exec_module(_hc)
-    _hc.HOME_ROOT = _cbox
-    _hc.home_of = lambda u, _r=_cbox: _r + "/" + _hc.v_username(u)
-    os.makedirs(_cbox + "/" + _me2, exist_ok=True)
-    _hc.do_content_dir_create([_me2], None)
-    _sf = _cbox + "/" + _me2 + "/serverfiles"
-    check("content box: serverfiles is created PRIVATE, not group-readable",
-          _st2.S_IMODE(os.stat(_sf).st_mode) == 0o700,
-          oct(_st2.S_IMODE(os.stat(_sf).st_mode)))
-    os.makedirs(_sf + "/cstrike/sub", exist_ok=True)
-    open(_sf + "/cstrike/plain", "w").write("x")
-    os.chmod(_sf + "/cstrike/plain", 0o600)
-    _hc.do_content_grant_read([_me2, _mygrp2, _me2, "cstrike"], None)
-    check("content box: the grant makes serverfiles traversable by the group",
-          _st2.S_IMODE(os.stat(_sf).st_mode) & _st2.S_IXGRP,
-          oct(_st2.S_IMODE(os.stat(_sf).st_mode)))
-    _pm = _st2.S_IMODE(os.stat(_sf + "/cstrike/plain").st_mode)
-    check("content box: g+rX gives a plain file g+r and NOT g+x",
-          (_pm & _st2.S_IRGRP) and not (_pm & _st2.S_IXGRP), oct(_pm))
-    _dm = _st2.S_IMODE(os.stat(_sf + "/cstrike/sub").st_mode)
-    check("content box: g+rX gives a directory both bits, because it was already u+x",
-          (_dm & _st2.S_IRGRP) and (_dm & _st2.S_IXGRP), oct(_dm))
-    _shutil.rmtree(_cbox, ignore_errors=True)
 except (KeyError, OSError) as _e:
+    _me2 = None
     skip("content box: grant semantics", _e)
+if _me2 is not None:
+    _cbox = _tempfile.mkdtemp(prefix="panel-content-")
+    try:
+        # A fresh copy of the helper module, so redirecting its home root cannot leak into any other
+        # test — _sandboxed_helper() is defined further down, after the sshd block.
+        _spec_c = _ilu.spec_from_loader("ph_content",
+                                        _machinery.SourceFileLoader("ph_content", _helper_path))
+        _hc = _ilu.module_from_spec(_spec_c)
+        _spec_c.loader.exec_module(_hc)
+        _hc.HOME_ROOT = _cbox
+        _hc.home_of = lambda u, _r=_cbox: _r + "/" + _hc.v_username(u)
+        os.makedirs(_cbox + "/" + _me2, exist_ok=True)
+        _hc.do_content_dir_create([_me2], None)
+        _sf = _cbox + "/" + _me2 + "/serverfiles"
+        check("content box: serverfiles is created PRIVATE, not group-readable",
+              _st2.S_IMODE(os.stat(_sf).st_mode) == 0o700,
+              oct(_st2.S_IMODE(os.stat(_sf).st_mode)))
+        os.makedirs(_sf + "/cstrike/sub", exist_ok=True)
+        open(_sf + "/cstrike/plain", "w").write("x")
+        os.chmod(_sf + "/cstrike/plain", 0o600)
+        _hc.do_content_grant_read([_me2, _mygrp2, _me2, "cstrike"], None)
+        check("content box: the grant makes serverfiles traversable by the group",
+              _st2.S_IMODE(os.stat(_sf).st_mode) & _st2.S_IXGRP,
+              oct(_st2.S_IMODE(os.stat(_sf).st_mode)))
+        _pm = _st2.S_IMODE(os.stat(_sf + "/cstrike/plain").st_mode)
+        check("content box: g+rX gives a plain file g+r and NOT g+x",
+              (_pm & _st2.S_IRGRP) and not (_pm & _st2.S_IXGRP), oct(_pm))
+        _dm = _st2.S_IMODE(os.stat(_sf + "/cstrike/sub").st_mode)
+        check("content box: g+rX gives a directory both bits, because it was already u+x",
+              (_dm & _st2.S_IRGRP) and (_dm & _st2.S_IXGRP), oct(_dm))
+    except (KeyError, OSError) as _e:
+        check("content box: the creation and the grant ran to the end", False, repr(_e))
+    finally:
+        _shutil.rmtree(_cbox, ignore_errors=True)
 
 # content_path() is the second line of defence and the vector tests above never reach it: they go
 # through check_args, whose per-verb validators reject a bad identifier first. So it is exercised
@@ -5089,40 +5097,45 @@ import getpass as _getpass
 import grp as _grp
 import pwd as _pwd
 import types as _types_gr
-_gr_box = _tempfile.mkdtemp(prefix="panel-grant-")
 try:
     _me = _getpass.getuser()
     _my_group = _grp.getgrgid(_pwd.getpwnam(_me).pw_gid).gr_name
-    _spec_gr = _ilu.spec_from_loader("ph_grant", _machinery.SourceFileLoader("ph_grant", _helper_path))
-    _hgr = _ilu.module_from_spec(_spec_gr)
-    _spec_gr.loader.exec_module(_hgr)
-    _hgr.HOME_ROOT = _gr_box
-    _hgr.home_of = lambda u, _r=_gr_box: _r + "/" + _hgr.v_username(u)
-    _gr_runs = []
-    _hgr.subprocess = _types_gr.SimpleNamespace(
-        run=lambda argv, **kw: (_gr_runs.append(list(argv)),
-                                _sp.CompletedProcess(argv, 0, b"", b""))[1])
-    _hgr.resolve = lambda name: "/usr/sbin/" + name
-    os.makedirs(_gr_box + "/" + _me, mode=0o700)
-    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
-    os.chmod(_gr_box + "/" + _me, 0o700)
-    _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
-                                        None)
-    check("content-grant-read refuses a group that is not the content user's",
-          _gr_rc == 2 and not _gr_runs
-          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) == 0o700,
-          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
-    # Control: the user's OWN group goes through — usermod recorded, the traversal bit set — and
-    # both land in the sandbox, so the refusal above is the check and not a copy that does nothing.
-    _gr_rc = _hgr.do_content_grant_read([_me, _my_group, _me], None)
-    check("content-grant-read: ...the content user's own group is granted, inside the sandbox",
-          _gr_rc == 0 and [a[1:] for a in _gr_runs] == [["-aG", _my_group, _me]]
-          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) & _st2.S_IXGRP,
-          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
 except (KeyError, OSError) as _e:
+    _me = None
     skip("content-grant-read group check", _e)
-finally:
-    _shutil.rmtree(_gr_box, ignore_errors=True)
+if _me is not None:
+    _gr_box = _tempfile.mkdtemp(prefix="panel-grant-")
+    try:
+        _spec_gr = _ilu.spec_from_loader("ph_grant", _machinery.SourceFileLoader("ph_grant", _helper_path))
+        _hgr = _ilu.module_from_spec(_spec_gr)
+        _spec_gr.loader.exec_module(_hgr)
+        _hgr.HOME_ROOT = _gr_box
+        _hgr.home_of = lambda u, _r=_gr_box: _r + "/" + _hgr.v_username(u)
+        _gr_runs = []
+        _hgr.subprocess = _types_gr.SimpleNamespace(
+            run=lambda argv, **kw: (_gr_runs.append(list(argv)),
+                                    _sp.CompletedProcess(argv, 0, b"", b""))[1])
+        _hgr.resolve = lambda name: "/usr/sbin/" + name
+        os.makedirs(_gr_box + "/" + _me, mode=0o700)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
+        os.chmod(_gr_box + "/" + _me, 0o700)
+        _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
+                                            None)
+        check("content-grant-read refuses a group that is not the content user's",
+              _gr_rc == 2 and not _gr_runs
+              and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) == 0o700,
+              "rc=%r ran=%r" % (_gr_rc, _gr_runs))
+        # Control: the user's OWN group goes through — usermod recorded, the traversal bit set — and
+        # both land in the sandbox, so the refusal above is the check and not a copy that does nothing.
+        _gr_rc = _hgr.do_content_grant_read([_me, _my_group, _me], None)
+        check("content-grant-read: ...the content user's own group is granted, inside the sandbox",
+              _gr_rc == 0 and [a[1:] for a in _gr_runs] == [["-aG", _my_group, _me]]
+              and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) & _st2.S_IXGRP,
+              "rc=%r ran=%r" % (_gr_rc, _gr_runs))
+    except (KeyError, OSError) as _e:
+        check("content-grant-read: the group check ran to the end", False, repr(_e))
+    finally:
+        _shutil.rmtree(_gr_box, ignore_errors=True)
 
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.

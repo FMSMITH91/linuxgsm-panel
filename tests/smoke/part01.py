@@ -118,6 +118,12 @@ from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupStat
 from panel.security import auth  # noqa: F401  # pylint: disable=unused-import
 from panel.ops import backup as bk  # noqa: F401  # pylint: disable=unused-import
 
+# No root helper, as on CI's runner: on a machine with the panel installed, the boot step and the
+# port change (record_panel_port) ran its verbs against that install's own panel.conf (review
+# 1016e; the unit runner pins the same, before every part).
+for _r28d_mod in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"):
+    if _r28d_mod in sys.modules:
+        sys.modules[_r28d_mod]._HELPER_STATE["present"] = False
 app = create_app()
 # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token

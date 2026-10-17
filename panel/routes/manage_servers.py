@@ -178,6 +178,21 @@ def _r26b_clear_for_retry(gs):
         gs.install_error_i18n = None
 
 
+def _r28b_drop_left_account(gs, remote_id, short_name):
+    """Forget a kept "found an account, left it alone" record once step 1 made the account itself.
+
+    _r26b_clear_for_retry keeps that record through a retry, and _r26b_keep_left_account stops
+    carrying it only while _accounts_created remembers this process made the account. That set
+    dies with a restart: a retry that created the account and was then cut short (the daily
+    self-update restart) left the old promise on the row, and Remove then kept the panel's own
+    account on the host and said the panel had not created it. Written to the row as soon as the
+    account is the panel's, so no restart can bring the promise back.
+    """
+    if (remote_id, short_name) in _accounts_created and _r25b_left_account(gs):
+        gs.install_error_i18n = None
+        db.session.commit()
+
+
 def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
     """Should the install adopt the port LinuxGSM reports? -> (adopt, taken_by, unreadable).
 
@@ -975,6 +990,7 @@ def _install_job_runner(app):
                     if not _acct_ok:
                         _fail("Preparing user account", _acct_why, retryable=_acct_retry)
                         return
+                    _r28b_drop_left_account(gs, remote_id, short_name)
 
                     # Dependencies BEFORE LinuxGSM: fetching it needs wget and LinuxGSM itself
                     # runs curl, and on a minimal host (Ubuntu's minimal and cloud images have
@@ -2020,12 +2036,18 @@ def _r12b_gmod_content_step(remote, short_name, content_games, _p):
     if not cu:
         _log.warning("gmod content: no content user could be prepared on %s", remote.name)
         return _R13B_CONTENT_FAILED
+    from panel.routes.server_files import _r28b_content_owner, _r28b_owner_untouched, _split_on_disk
+    # Backstop: ensure_content_user never answers with another panel server's account (a managed
+    # CS:S server's `css`). Were it to, nothing is installed into it, written to its cron or even
+    # mounted from it (see _r28b_content_owner and gmod._r28j_server_accounts).
+    _owner = _r28b_content_owner(remote, cu["user"])
+    if _owner is not None:
+        return _r28b_owner_untouched(_owner)
     _ok_i, on_disk, _imsg = install_gmod_content(remote, cu["user"], content_games,
                                                  on_progress=lambda m: _p(8, m))
     # Mount only what is on disk, as the Content tab does (_split_on_disk): a game whose download
     # failed (out of disk) would otherwise be written into mount.cfg pointing at a directory that
     # is not there.
-    from panel.routes.server_files import _split_on_disk
     _mountable, _missing = _split_on_disk(cu, on_disk, content_games)
     if _missing:
         _log.warning("gmod content for %s: not confirmed on disk, so not mounted: %s",

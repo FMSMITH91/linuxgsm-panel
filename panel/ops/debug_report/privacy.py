@@ -91,8 +91,8 @@ _IPV4_RE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d])")
 # trailing ':' or ':port' and a glued prefix before it gives up.
 _IPV6_RE = re.compile(r"(?<![0-9A-Fa-f:.%])[0-9A-Fa-f:]{2,45}(?:(?<=:)\d{1,3}(?:\.\d{1,3}){3})?"
                       r"(?:%[\w.-]{1,32})?")
-# An address carried inside a provider's reverse-DNS name, dotted (static.77.13.2.81.clients...,
-# often reversed) or dashed (ec2-81-2-13-77..., ip-51-38-12-34...): four octets between hostname
+# An address carried inside a provider's reverse-DNS name, dotted (static.9.9.9.9.clients...,
+# often reversed) or dashed (ec2-9-9-9-9..., ip-51-38-12-34...): four octets between hostname
 # labels. Each octet is checked to be 0-255 before it is replaced.
 _IP_DOTTED_NAME_RE = re.compile(r"(?<=[A-Za-z]\.)()(\d{1,3}(?:\.\d{1,3}){3})(?=\.[A-Za-z])")
 _IP_DASHED_NAME_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]{0,15}-)(\d{1,3}(?:-\d{1,3}){3})"
@@ -657,7 +657,7 @@ def _ip_class(ip):
 
 
 def _v4(raw):
-    """An IPv4 address written with zero-padded octets ('081.002.013.077'), or None."""
+    """An IPv4 address written with zero-padded octets ('009.009.009.009'), or None."""
     parts = raw.split(".")
     if len(parts) != 4 or not all(p.isdecimal() and int(p) <= 255 for p in parts):
         return None

@@ -3184,23 +3184,34 @@ def _os_update_run():
 def _conf_path_link(path):
     """The first component of absolute `path` that is a symlink root did not make, or "".
 
-    Callers pass the directory ABOVE data/. panel.conf's db_path and data_dir are root's, but the
-    directories below the panel user's home on the way to them are the PANEL USER'S: it can swap
+    Callers pass data/ itself (restore and self-update; the repair walks data/ through
+    _r25a_resolved_dir, which is the same walk). panel.conf's db_path and data_dir are root's, but
+    the directories below the panel user's home on the way to them are the PANEL USER'S: it can swap
     ~/linuxgsm-panel for a link to a tree of its own holding data/panel.db. Every check on these
     paths covered the LAST component only — islink on the database, an lstat of data/ (whose
     owner then decides the account), O_NOFOLLOW on the final open — so the repair ran as root on a
     database the panel user chose (_db_repair_account read the owner THROUGH the link: root's
     tree, so root's repair), and restore and the self-update log followed it too. A link root
-    owns is an operator's (data/ moved to another disk) and is followed; the panel user cannot
-    make one. Followed INTO its target, too (_r26a_walk): judged only by its own components, a
+    owns, under its only name, is an operator's (data/ moved to another disk) and is followed; the
+    panel user cannot make one (_r26a_link_root_made says why a hard-linked copy does not count).
+    Followed INTO its target, too (_r26a_walk): judged only by its own components, a
     root-made link let realpath follow a link of the panel user's beyond it.
     """
     return _r26a_walk(path)[1]
 
 
 def _r26a_link_root_made(path):
-    """Is the link at `path` root's (an operator's), judged by lstat, never through it?"""
-    return os.lstat(path).st_uid == 0
+    """Is the link at `path` root's (an operator's), judged by lstat, never through it?
+
+    Root's AND its only name. The owner alone was not enough: a HARD link to a symlink is a symlink
+    entry carrying the original inode's owner, and with fs.protected_hardlinks=0 (the kernel's own
+    default, see _chmod_nofollow) the panel user may hard-link any root-owned symlink on the same
+    filesystem, `/var/run` -> `/run` say, into its own tree in place of data/. That entry read as
+    an operator's link, and restore, self-update and the repair followed it into a root directory
+    the panel user picked. A link root made itself has one name; a second one is somebody's copy.
+    """
+    st = os.lstat(path)
+    return st.st_uid == 0 and st.st_nlink == 1
 
 
 def _r26a_entry(path):
@@ -3317,23 +3328,27 @@ def _db_repair_account(db_path):
     does not rest on the script. The one thing that drop skips — db_maintenance's reclaim of files
     an older, root-run repair left root-owned — the helper does itself (_db_repair_reclaim).
 
-    lstat, not stat: that directory entry is one the panel user can replace, and a symlink it put
-    there must not borrow the owner of whatever it points at — a root-owned target would hand the
-    repair back to root. A link ROOT made (an operator who moved data/ to another disk) is
-    followed, because then the directory it names is the panel's."""
-    d = os.path.dirname(db_path)
-    # ...and the same for every directory ABOVE it (_conf_path_link): the lstat below covers only
-    # data/ itself, so ~/linuxgsm-panel swapped for a link to a root-owned tree lent its owner too.
-    # Checked here as well as in _db_repair_target, because this is where the account is decided.
-    if _conf_path_link(os.path.dirname(d)):
+    The directory is resolved as restore and self-update resolve theirs (_r26a_walk): a link ROOT
+    made (an operator who moved data/ to another disk) is followed, a link anyone else made, at ANY
+    depth, refuses. Then its owner is read by DESCRIPTOR from that resolved directory, opened one
+    component at a time (_r26a_open_pinned_dir). This lstat'd data/ and, for a root-made link,
+    os.stat'd it, which followed the link's whole chain: a link of the panel user's inside the
+    operator's target (/srv/disk/data swapped for a link to another account's directory holding a
+    panel.db) chose the account the repair ran as, and a root-owned target would hand it to root.
+    Checked here as well as in _db_repair_target, because this is where the account is decided."""
+    real, link = _r26a_walk(os.path.dirname(db_path))
+    if link or real is None:
         return None
     try:
-        st = os.lstat(d)
-        if stat.S_ISLNK(st.st_mode) and st.st_uid == 0:
-            st = os.stat(d)
-        return pwd.getpwuid(st.st_uid)
+        dfd = _r26a_open_pinned_dir(real)
+    except OSError:
+        return None
+    try:
+        return pwd.getpwuid(os.fstat(dfd).st_uid)
     except (OSError, KeyError):
         return None
+    finally:
+        os.close(dfd)
 
 
 def _db_repair_as(account):
@@ -3389,11 +3404,13 @@ def _db_repair_reclaim(db_path, account):
 
     The directory is opened once and checked by DESCRIPTOR to still belong to `account`: the
     directory entry is one the panel user can swap after _db_repair_account looked, and a link to
-    somebody else's directory must not get that directory's files handed to the panel user."""
+    somebody else's directory must not get that directory's files handed to the panel user. Opened
+    one component at a time (_r26a_open_pinned_dir), never through a link: `db_path` is the resolved
+    one _db_repair_target hands on, so a link anywhere in it now is one swapped in since."""
     if account.pw_uid == 0:
         return                # a root-owned data directory: root keeps its files, nothing to give
     try:
-        dfd = os.open(os.path.dirname(db_path), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        dfd = _r26a_open_pinned_dir(os.path.dirname(db_path))
     except OSError:
         return
     try:
@@ -5231,12 +5248,19 @@ def _db_repair_target():
     if os.path.islink(db_path):
         sys.stderr.write("refusing: the database path is a symlink\n")
         return None
-    if _refuse_conf_path_link(os.path.dirname(os.path.dirname(db_path)), "database"):
+    # data/ ITSELF as well as every directory above it, resolved as restore and self-update resolve
+    # theirs (_r25a_resolved_dir). Only the directory ABOVE data/ was checked, so a root-made data/
+    # link was followed with everything beyond it, a link of the panel user's in its target too,
+    # and the repair ran on, and as the owner of, whatever directory that chain ended in.
+    real = _r25a_resolved_dir(os.path.dirname(db_path), "database")
+    if real is None:
         return None
     if not os.path.isfile(DBM_PATH):
         sys.stderr.write("db_maintenance is not installed root-owned; re-run install.sh as root\n")
         return None
-    return db_path
+    # The resolved path is what the job works on: its account, reclaim and repair then name the
+    # directory that was checked, not the chain, which the panel user could change afterwards.
+    return os.path.join(real, os.path.basename(db_path))
 
 
 def do_panel_db_repair(args, content):

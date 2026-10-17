@@ -1,0 +1,3 @@
+{
+  "The firewall did not show port {port}/tcp open after the panel opened it, so SSH moved there could be unreachable. Nothing was changed.": "Le pare-feu n'a pas montré le port {port}/tcp ouvert après que le panneau l'a ouvert, donc SSH déplacé là pourrait être injoignable. Rien n'a été modifié."
+}

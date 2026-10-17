@@ -134,7 +134,7 @@ _GMC71 = {"cu": None, "installed": [], "removed": []}
 def _gmc_stubs71():
     _p9_patch(_p9_sf, "threading", _p9_threading(_P9Thread))
     _p9_patch(_p9_sf, "gmod_current_mounts", lambda remote, user: [])
-    _p9_patch(_p9_sf, "detect_content_user", lambda remote, games: _GMC71["cu"])
+    _p9_patch(_p9_sf, "detect_content_user", lambda remote, games, **k: _GMC71["cu"])
     _p9_patch(_p9_sf, "ensure_content_user", lambda remote: _GMC71["cu"])
     _p9_patch(_p9_sf, "path_disk_free", lambda remote, path: (50 * 2 ** 30, 100 * 2 ** 30))
     _p9_patch(_p9_sf, "install_gmod_content",

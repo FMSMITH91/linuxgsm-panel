@@ -530,12 +530,21 @@ if os.path.islink(data_dir) or os.path.islink(cfg_path):
     sys.stderr.write("Refusing to record the port: %s or its config.json is a symbolic link.\n"
                      % data_dir)
     raise SystemExit(3)
+# A config.json that is there but does not read as an object is refused, as the panel's own
+# save_config refuses it. It was read as {} and replaced by {"port": N}: every setting in a file
+# with one hand-edit typo (setup_complete, the Tailscale keys) was gone, where the panel keeps the
+# file for a one-character fix. And a valid non-object (`[]`) died in a traceback here.
 cfg = {}
-try:
-    with open(cfg_path) as f:
-        cfg = json.load(f)
-except Exception:
-    cfg = {}
+if os.path.lexists(cfg_path):
+    try:
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = None
+    if not isinstance(cfg, dict):
+        sys.stderr.write("Refusing to record the port: %s is not a settings file the panel can "
+                         "read. Fix it, or move it aside, and re-run.\n" % cfg_path)
+        raise SystemExit(4)
 cfg["port"] = port
 try:
     os.chmod(data_dir, 0o700)   # owner-only: keep the DB/keys/config out of other local users' reach
@@ -1444,11 +1453,19 @@ restore_service_unit() {
 }
 
 # Is link $1 one the operator made: root's, or the running account's own ($2, its uid)? On a root
-# run the two are the same test, so the panel user's link is never followed.
+# run the two are the same test, so the panel user's link is never followed. Root's only under its
+# one name: a HARD link to a root-owned symlink is a symlink entry with root as its owner, and with
+# fs.protected_hardlinks=0 the panel user can make one in its home (the helper's
+# _r26a_link_root_made has the same rule). The running account's own link needs no such test.
 _r26a_link_trusted() {
-    local _o
-    _o="$(stat -c '%u' -- "$1" 2>/dev/null)" || return 1
-    [[ "${_o}" = "0" || "${_o}" = "$2" ]]
+    local _o _u _n
+    _o="$(stat -c '%u %h' -- "$1" 2>/dev/null)" || return 1
+    read -r _u _n <<< "${_o}"
+    if [[ "${_u}" = "0" ]]; then
+        [[ "${_n}" = "1" ]]
+    else
+        [[ "${_u}" = "$2" ]]
+    fi
 }
 
 # The directory root-made link $1 names, printed only when the panel user can never make that path

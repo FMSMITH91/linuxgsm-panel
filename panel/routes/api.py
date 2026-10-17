@@ -739,6 +739,10 @@ def _settle_lost_install(app, gs):
     if verdict is True:
         gs.installed = True
         gs.status = "offline"   # live metrics will flip it to online if it's running
+        # The recorded failure goes too, as app.py's reconciler and InstallJob.finish clear it: a
+        # kept step-1 record ("found an account, left it alone") came back as Remove's answer once
+        # the row read installed=False again.
+        gs.install_error, gs.install_error_i18n, gs.install_retryable = "", None, True
         db.session.commit()
         _notify_servers_changed(app)
         return jsonify({"status": "done", "step": 8, "total": 8, "percent": 100,

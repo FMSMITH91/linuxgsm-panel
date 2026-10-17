@@ -770,9 +770,84 @@ def _r22d_skip_at(src, i):
     if src.startswith("/*", i):
         _j = src.find("*/", i + 2)
         return len(src) if _j < 0 else _j + 2
-    if src[i] != "/" or not _r23d_operand_due(src[:i]):
+    if src[i] != "/" or not _r23d_operand_due(_r28d_neutral20(src)[:i]):
         return None
     return _r22d_regex_end(src, i)
+
+
+# What the previous token is, read off a copy of the source in which every comment, string,
+# template literal's text and regex literal is blanked: built FORWARD once per source, so a `//`
+# in a block comment, in a template literal that began lines earlier, or in a regex's [class] is
+# never taken for a line comment (review 1016e: reading only the last line before a `/` cut the
+# text at those; it then ended in `:` or `[`, and the division after it read as a regex that
+# swallowed the names up to the next `/`).
+_R28D_NEUTRAL20 = {}
+
+
+def _r28d_neutral20(src):
+    """`src`, the same length, with each comment, string, template text and regex literal blanked.
+
+    A string or a regex reads as `0` (a value) followed by spaces, a comment as spaces, and a
+    template literal's ${…} stays code.
+    """
+    if src not in _R28D_NEUTRAL20:
+        out, i, tpl, text = [], 0, [], False
+        while i < len(src):
+            i, text = _r28d_text_step20(src, i, out, tpl) if text else _r28d_code_step20(src, i, out, tpl)
+        _R28D_NEUTRAL20[src] = "".join(out)
+    return _R28D_NEUTRAL20[src]
+
+
+def _r28d_text_step20(src, i, out, tpl):
+    """One step through a template literal's text at src[i]: (the next index, still in its text?)."""
+    if src.startswith("${", i):
+        out.append("${")
+        tpl.append(0)
+        return i + 2, False
+    if src[i] == "\\":
+        out.append(" " * len(src[i:i + 2]))
+        return i + 2, True
+    out.append(" ")
+    return i + 1, src[i] != "`"
+
+
+def _r28d_code_step20(src, i, out, tpl):
+    """One step through code at src[i]: (the next index, now in a template literal's text?)."""
+    c, j = src[i], _r28d_span_end20(src, i, out)
+    if j is not None:
+        out.append((" " if src.startswith(("//", "/*"), i) else "0") + " " * (j - i - 1))
+        return j, False
+    if c == "`":
+        out.append("0")
+        return i + 1, True
+    if tpl and c == "}" and tpl[-1] == 0:
+        tpl.pop()
+        out.append(" ")
+        return i + 1, True
+    if tpl and c in "{}":
+        tpl[-1] += 1 if c == "{" else -1
+    out.append(c)
+    return i + 1, False
+
+
+def _r28d_text_end20(src, i):
+    """The index past the comment or the '…'/"…" string opened at src[i] (or at its line's end)."""
+    if src[i] != "/":
+        _j = i + 1
+        while _j < len(src) and src[_j] not in (src[i], "\n"):
+            _j += 2 if src[_j] == "\\" else 1
+        return min(_j + 1, len(src))
+    _j = src.find("\n" if src[i + 1] == "/" else "*/", i + 2)
+    return len(src) if _j < 0 else _j + (0 if src[i + 1] == "/" else 2)
+
+
+def _r28d_span_end20(src, i, out):
+    """The index past a comment, a '…' or "…" string, or a regex literal opened at src[i], else None."""
+    if src.startswith(("//", "/*"), i) or src[i] in "'\"":
+        return _r28d_text_end20(src, i)
+    if src[i] == "/" and _r23d_operand_due("".join(out)):
+        return _r22d_regex_end(src, i)
+    return None
 
 
 # Keywords after which an expression starts: a `/` there opens a regex (`return /'/.test(s)`).
@@ -930,7 +1005,7 @@ def _r21d_err_sink(src):
     return None
 
 
-# Eighteen sinks the reader must find, then three it must not (review 1012d, 1013a, 1015a, 1015c).
+# Twenty-five sinks the reader must find, then five it must not (review 1012d, 1013a, 1015a, 1015c).
 _R21D_SINK_CTL20 = (
     "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;",
     'msg.innerHTML = "&mdash; " + d.error;', "msg.outerHTML = d.error;",
@@ -951,6 +1026,11 @@ _R21D_SINK_CTL20 = (
     "msg.innerHTML = (function(){ if (x) { y(); } /'/.test(s) })() ? '' : d.error;",
     "msg.innerHTML = (function(){ if (s == ')') /'/.test(s) })() ? '' : d.error;",
     "msg.innerHTML = // c\n /'/.test(s) ? '' : d.error;",
+    # A `//` that is no comment before a division: in a block comment, in a template literal begun
+    # on an earlier line, and in a regex's class (review 1016e).
+    "msg.innerHTML = a /* see http://x */ / d.error / 2;",
+    "msg.innerHTML = `<a href=\"\nhttps://x/\">` + n / d.error / 2;",
+    "msg.innerHTML = s.match(/[//]/) ? a / d.error / 2 : 0;",
     "msg.textContent = d.error;", "msg.innerHTML = `x`; y.textContent = d.error;",
     "msg.innerHTML = x /* d.error */;", "msg.innerHTML = (function(){ y(); })(); z = d.error;",
     "msg.insertAdjacentHTML('beforeend', x); y(d.error);")
@@ -972,7 +1052,7 @@ def _p20_js():
     _r21d_sink_ctl = [bool(_r21d_err_sink(_x)) for _x in _R21D_SINK_CTL20]
     check("debug report page: ...a server error reaching any HTML sink is found in any spacing, past a "
           "`;` inside a string or a template literal, a quoted brace, a comment or a regex (control)",
-          _r21d_sink_ctl == [True] * 22 + [False] * 5, repr(_r21d_sink_ctl))
+          _r21d_sink_ctl == [True] * 25 + [False] * 5, repr(_r21d_sink_ctl))
 
 
 try:

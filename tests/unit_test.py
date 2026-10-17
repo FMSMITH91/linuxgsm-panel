@@ -168,8 +168,10 @@ for _attr, _fns in _WATCHED.items():
 # (`tailscale status --json`, `debug prefs`, and `set --ssh`, a WRITE to the node, behind every
 # /server-management render); and _core's local transport, whose bash runs `tailscale status`
 # and `which tailscale` for the panel host. A shell can set its own PATH before it calls tailscale
-# (part05's secret rendering puts a stand-in first), so a shell is not judged from outside: it runs
-# under bash with `tailscale` and `which` as functions that make the same call at the moment of use.
+# (part05's secret rendering puts a stand-in first), so a shell is not judged from outside: a
+# `tailscale` and a `which` make the same call at the moment of use. In the shell it was given,
+# from a shim directory first on its PATH (_R26D_SHIM); under bash with them as functions where
+# the shim cannot hold (a shell behind a wrapper, a script that sets its own PATH).
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
@@ -191,6 +193,9 @@ _R19D_DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 # A `command -v` of a built name finds the shim, as the bash route's finds the function. A shell
 # behind a wrapper (env -i, sudo, runuser) keeps the bash route: its PATH is the wrapper's to set.
 _R26D_SHIM = tempfile.mkdtemp(prefix="lgsm-unit-ts-shim-")
+# What keeps a script off the shim route: PATH set, appended, exported, unset or defaulted by the
+# script itself, `command -p`, and `hash`, which can point the name at any file.
+_R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\s+)*-\w*p|\bhash\b")
 _R26D_SHIM_JUDGE = r'''
 _r26d_standin() {
   case "$1" in /*) _r26d_f=$1;; *) _r26d_f=$PWD/$1;; esac
@@ -690,14 +695,21 @@ def _r26d_strip_single(text):
     """`text` with each '…' string the shell reads literally emptied to '', and only those.
 
     An apostrophe inside "…" or after a backslash opens nothing (review 1016c: `echo "it's"` read
-    as opening a string up to the next apostrophe hid the `${T}scale` between them).
+    as opening a string up to the next apostrophe hid the `${T}scale` between them). Nor does one
+    in a `#` comment, which is dropped to its line's end, or in a here-document's body, which is
+    kept as text with its apostrophes taken out (review 1016e: `# it's` and a body line `it's`
+    opened a string up to the next apostrophe, and the built word between read as nothing).
     """
-    out, i, dq = [], 0, False
+    out, i, dq, bodies = [], 0, False, []
     while i < len(text):
         ch = text[i]
         if ch == "\\":
             out.append(text[i:i + 2])
             i += 2
+            continue
+        _j = None if dq else _r28d_unquoted_step(text, i, out, bodies)
+        if _j is not None:
+            i = _j
             continue
         if ch == "'" and not dq:
             j = text.find("'", i + 1)
@@ -713,20 +725,79 @@ def _r26d_strip_single(text):
     return "".join(out)
 
 
+# A here-document's operator: `<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"` (not `<<<`, a here-string).
+_R28D_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)(\w+)\2")
+
+
+def _r28d_unquoted_step(text, i, out, bodies):
+    """Past a `#` comment, a here-document operator or the bodies due at a newline, at text[i] (unquoted).
+
+    The index after it, with what it leaves appended to `out`, or None when text[i] is none of them.
+    `bodies` holds the here-documents whose bodies start at the next newline.
+    """
+    if text[i] == "\n" and bodies:
+        out.append("\n")
+        _j = _r28d_heredoc_bodies(text, i + 1, bodies, out)
+        bodies.clear()
+        return _j
+    if text[i] == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+        _e = text.find("\n", i)
+        return len(text) if _e < 0 else _e
+    _hd = _R28D_HEREDOC.match(text, i)
+    if _hd:
+        bodies.append((_hd.group(1) == "-", _hd.group(3)))
+        out.append(_hd.group(0))
+        return _hd.end()
+    return None
+
+
+def _r28d_heredoc_bodies(text, i, bodies, out):
+    """Append the bodies of the here-documents `bodies` that start at text[i] to `out`; where they end.
+
+    Each body runs to the line that is its delimiter (after leading tabs for `<<-`). A delimiter
+    with no such line (`$((1<<2))`, which only looks like one) takes nothing, so no text is hidden.
+    """
+    for _tabs, _delim in bodies:
+        j = i
+        while j < len(text):
+            _e = text.find("\n", j)
+            _e = len(text) if _e < 0 else _e
+            if (text[j:_e].lstrip("\t") if _tabs else text[j:_e]) == _delim:
+                out.append(text[i:j].replace("'", ""))
+                i = j
+                break
+            j = _e + 1
+    return i
+
+
 # What a static reading cannot resolve: a command's output, eval or a sourced file, an escape or a
 # brace expansion that joins letters, and the shell's own parameters.
+# Also any `${…}` _R23D_SHELL_VAR does not take whole (review 1016e: `${T%x}`, `${T/X/tail}`,
+# `${T:0:4}`, `${T^^}` and `${A[0]}` were left as text, so the word read as spelling nothing),
+# and a `declare -n` nameref, which makes one name another's.
 _R26D_UNRESOLVED = re.compile(r"\$\(|`|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s|\\|\{[^}\s]*(?:,|\.\.)|"
-                              r"\$'|\$\{?[!#@*0-9?$-]")
+                              r"\$'|\$\{?[!#@*0-9?$-]|\$\{(?!\w+(?::?[-=+?][^}$`]*)?\})|"
+                              r"\b(?:declare|typeset|local)\s+(?:[-+]\w+\s+)*-\w*n")
+# How a script sets a name other than by a plain `NAME=value` that _r25d_script_env reads (%s is the
+# name): a loop, read, getopts, an append, an element or an array, printf -v, mapfile, a declare
+# with options (-u, -l change the value), and the assigning defaults ${NAME=…} and ${NAME:=…}
+# (review 1016e: each left the name unset to the reader, so `T+=scale`, `printf -v T tail` and
+# `: ${T:=tail}` ahead of `timeout 5 ${T}scale` read as `timeout 5 scale`).
+_R28D_SET_OTHERWISE = (r"\b(?:for|select)\s+%(n)s\b|\bread\b[^;&|\n]*\b%(n)s\b|\bgetopts\s+\S+\s+%(n)s\b"
+                       r"|(?:^|[\s;&|(])%(n)s(?:\+=|\[|=\()|\bprintf\s+(?:-\S+\s+)*-v\s*%(n)s\b"
+                       r"|\b(?:mapfile|readarray)\b[^;&|\n]*\b%(n)s\b"
+                       r"|\b(?:declare|typeset|local|readonly|export)\s+(?:[-+]\w+\s+)+(?:\w+(?:=\S*)?\s+)*%(n)s\b"
+                       r"|\$\{%(n)s:?=")
 
 
 def _r26d_may_spell(text, script, env):
     """Can the command line `text` (a part of `script`) spell `tailscale` when it runs?
 
-    Only what stays unresolved (_R26D_UNRESOLVED, or a name `script` sets from a loop, `read` or
-    another expansion) or what expands to the word (review 1016c: any wrapper followed by a `$`
-    was judged as possibly running it, so `exec 3<"$L"`, `timeout 5 cat "$HOME/x"` and the console
-    reads were refused on a machine with tailscale on PATH and ran on CI). A name nothing sets is
-    empty, as the shell reads it.
+    Only what stays unresolved (_R26D_UNRESOLVED, a name `script` sets other than plainly
+    (_R28D_SET_OTHERWISE) or from another expansion) or what expands to the word (review 1016c:
+    any wrapper followed by a `$` was judged as possibly running it, so `exec 3<"$L"`, `timeout 5
+    cat "$HOME/x"` and the console reads were refused on a machine with tailscale on PATH and ran
+    on CI). A name nothing sets is empty, as the shell reads it.
     """
     _text = _r26d_strip_single(text)
     if _R26D_UNRESOLVED.search(_text):
@@ -734,8 +805,7 @@ def _r26d_may_spell(text, script, env):
     _env = _r25d_script_env(script, env)
     for _m in _R23D_SHELL_VAR.finditer(_text):
         _name = _m.group(1) or _m.group(5)
-        if (re.search(r"\b(?:for|select)\s+%s\b|\bread\b[^;&|\n]*\b%s\b|\bgetopts\s+\S+\s+%s\b"
-                      % ((re.escape(_name),) * 3), script)
+        if (re.search(_R28D_SET_OTHERWISE % {"n": re.escape(_name)}, script)
                 or re.search(r"[$`]", _env.get(_name) or "")):
             return True
     return _r20d_names_tailscale(_r23d_expand_vars(_text, _env), _env)
@@ -806,7 +876,9 @@ def _r25j_long(w, nxt):
     --argv0 take a value (review 1016c: --argv0's was read as env's command).
     """
     name, eq, val = w[2:].partition("=")
-    if name[:1] in ("i", "s"):
+    # --ignore-signal (coreutils 9) is not --ignore-environment; a shorter --i still reads as it,
+    # which older env takes it for (review 1016e lead: every --i… counted, an over-strict reading).
+    if name[:1] == "s" or (name[:1] == "i" and not name.startswith("ignore-s")):
         return True, 1
     if name[:1] not in ("u", "c", "a"):
         return False, 1
@@ -864,30 +936,71 @@ _R19D_SCRIPT_RESETS = _R25JResets()
 # Commands that find a program somewhere other than PATH: `whereis` searches the system's own
 # directories whatever PATH says, and `find` walks them (review 1015a: with a part's stand-in first
 # on PATH, `whereis -b tailscale` handed the script the machine's binary and was judged on PATH).
-_R21D_SCRIPT_SEARCHES = re.compile(r"\b(?:whereis|find)\b")
+# `command -p` searches the shell's default PATH whatever $PATH holds (review 1016e).
+_R21D_SCRIPT_SEARCHES = re.compile(r"\b(?:whereis|find)\b|\bcommand\s+(?:-\w+\s+)*-\w*p")
 # ...and one that names the binary by a path is judged by that path: ~, $VAR and a relative path
 # are read against the run's environment and directory.
 _R19D_SCRIPT_PATH = re.compile(r"(?<![\w.~$/:-])((?:~|\$\{?\w+\}?|\.{1,2})?[\w./~-]*/tailscale)(?![\w.-])")
 
 
-def _r19d_script_candidates(script, kw):
-    """The tailscale binaries a script could run past the shell's `tailscale` function."""
-    _env = _r20d_run_env(kw)
-    _found = _r19d_wrapped_candidates(script, _env) + _r19d_path_candidates(script, _env, kw.get("cwd"))
+def _r19d_script_candidates(script, kw, cmd=None):
+    """The tailscale binaries a script could run past the shell's `tailscale` function.
+
+    `cmd`, the argv that runs a `-c` script, adds what its wrappers set for the shell
+    (_r28d_argv_env).
+    """
+    _env, _extra = _r28d_argv_env(cmd, _r20d_run_env(kw))
+    _found = (_r19d_wrapped_candidates(script, _env, _extra)
+              + _r19d_path_candidates(script, _env, kw.get("cwd")))
     return [_f for _f in _found if _f is not None]
 
 
-def _r19d_wrapped_candidates(script, env):
+def _r28d_argv_env(cmd, env):
+    """(`env` plus the NAME=value words the wrappers in front of argv `cmd`'s shell set, more PATHs).
+
+    Review 1016e: `env T=tailscale bash -c 'timeout 5 $T version'` read $T as unset, and a shell
+    behind `env PATH=<dir>` or sudo was judged only on the PATH the run started with, while what
+    its script execs from PATH is found on the wrapper's. The extra PATHs: the one a wrapper sets,
+    and the default one behind a wrapper that resets it, under every reading of its options.
+    """
+    if not isinstance(cmd, (list, tuple)):
+        return env, []
+    _i = _r18d_dash_c(cmd)[0]
+    if not _i:
+        return env, []
+    _env, _extra = dict(env), []
+    for _w in cmd[:_i]:
+        _m = re.fullmatch(r"([A-Za-z_]\w*)=(.*)", _w, re.S) if isinstance(_w, str) else None
+        if _m and _m.group(1) != "PATH":
+            _env[_m.group(1)] = _m.group(2)
+    for _pv in _r25d_readings(cmd):
+        _p = _r19d_unwrap(cmd, env.get("PATH", os.defpath), _pv)[1]
+        _extra.append(_R19D_DEFAULT_PATH if _p is None else _p)
+    return _env, _extra
+
+
+def _r28d_no_shim(path):
+    """`path` without the guard's own shim directory: what the script searches past it."""
+    return os.pathsep.join(_d for _d in path.split(os.pathsep) if _d != _R26D_SHIM)
+
+
+def _r19d_wrapped_candidates(script, env, extra=()):
     """The tailscale a wrapper in `script` could exec from PATH: the starting one, and the default.
 
     A wrapper given a built word, or a nested shell given a building script, counts only when what
     it builds may spell the binary (_r26d_may_spell), judged over that command up to its end.
+    Also every PATH the script assigns, read against the one it starts with (review 1016e:
+    `PATH=<dir>:$PATH; timeout 5 ${T}scale` was judged on the starting PATH, never on <dir>), and
+    the starting one without the shim, which counts as a stand-in and would answer for any PATH.
     """
     if not (_R19D_SCRIPT_WRAPPED.search(script) or _r26d_runs_built(script, env)
             or _R19D_SCRIPT_WRAPPED.search(_r23d_expand_vars(script, _r25d_script_env(script, env)))):
         return []
-    _paths = [env.get("PATH", os.defpath)] + ([_R19D_DEFAULT_PATH] if _R19D_SCRIPT_RESETS.search(script)
-                                              or _R21D_SCRIPT_SEARCHES.search(script) else [])
+    _start = _r28d_no_shim(env.get("PATH", os.defpath))
+    _paths = [_start] + list(extra) + ([_R19D_DEFAULT_PATH] if _R19D_SCRIPT_RESETS.search(script)
+                                       or _R21D_SCRIPT_SEARCHES.search(script) else [])
+    _paths += [_r23d_expand_vars(_v.strip("'\""), dict(env, PATH=_start))
+               for _v in re.findall(r"(?<![\w$])PATH\+?=('[^']*'|\"[^\"]*\"|[^\s;&|)]*)", script)]
     return [shutil.which("tailscale", path=_p) for _p in _paths]
 
 
@@ -973,7 +1086,7 @@ class _R15dNoSystemTailscale:
             return False
         _sh = _r16d_shell_text(cmd, kw)
         if _sh is not None:
-            _hits = _r19d_script_candidates(_sh, kw)
+            _hits = _r19d_script_candidates(_sh, kw, None if kw.get("shell") else cmd)
             return any(not _r19d_stand_in(_h) for _h in _hits)
         _hits = _r20d_cmdline_candidates(cmd, kw) + _r20d_argv_programs(cmd, kw)
         return any(_h is not None and not _r19d_stand_in(_h) for _h in _hits)
@@ -989,14 +1102,16 @@ class _R15dNoSystemTailscale:
         if _sh is None or getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
             return cmd, kw
         # Named, also once unquoted or expanded (review 1016c: `tail'scale' version` and
-        # `tail"scale"` named it with no literal word, so the shell got no function): bash and the
-        # functions. Only built: the shell it was given, behind the shim (_R26D_SHIM).
-        if "tailscale" not in _sh and not _r20d_names_tailscale(_sh, _r20d_run_env(kw)):
-            if not _r25d_builds(_sh):
-                return cmd, kw
-            _shimmed = self._r26d_shim(cmd, kw)
-            if _shimmed is not None:
-                return _shimmed
+        # `tail"scale"` named it with no literal word), or only built: the shell it was given,
+        # behind the shim (_R26D_SHIM), as production runs it (review 1016e: a named one ran under
+        # bash, so a bashism in system_ops' `tailscale status --json || echo '{}'` would pass here
+        # and fail under /bin/sh). Bash and the functions where the shim cannot hold (_r26d_shim).
+        if ("tailscale" not in _sh and not _r20d_names_tailscale(_sh, _r20d_run_env(kw))
+                and not _r25d_builds(_sh)):
+            return cmd, kw
+        _shimmed = self._r26d_shim(cmd, kw)
+        if _shimmed is not None:
+            return _shimmed
         kw = dict(kw, env=_r16d_ts_shell_env(_r20d_run_env(kw)))
         if kw.get("shell"):
             kw["executable"] = "/bin/bash"      # only bash reads exported functions; dash does not
@@ -1011,13 +1126,19 @@ class _R15dNoSystemTailscale:
 
     @staticmethod
     def _r26d_shim(cmd, kw):
-        """(cmd, kw) for a shell that only builds words: its own shell, with _R26D_SHIM first on PATH.
+        """(cmd, kw) for a shell that may name tailscale: its own shell, with _R26D_SHIM first on PATH.
 
         On the run's own environment, so only for a shell=True run or a shell that is the argv's
         first word: behind a wrapper (env -i, sudo, runuser) the PATH it would search is that
         wrapper's to set, so such a shell keeps the bash route (None).
         """
         if not kw.get("shell") and _r18d_dash_c(cmd)[0] != 0:
+            return None
+        # ...and a script that sets PATH itself or looks the name up past it: the shim is found
+        # only while it is first on the PATH searched (review 1016e: `PATH=<dir>:$PATH; ${T}scale`,
+        # `export PATH=…` and `command -p ${T}scale` ran the machine's binary). The functions
+        # answer a name whatever PATH holds.
+        if _R28D_PATH_OWN.search(_r26d_strip_single(_r16d_shell_text(cmd, kw))):
             return None
         _env = _r20d_run_env(kw)
         return cmd, dict(kw, env=dict(_env, PATH=_R26D_SHIM + os.pathsep + _env.get("PATH", os.defpath),
@@ -1090,6 +1211,33 @@ def _r16d_wrap_ts_handles():
     return _unloaded
 
 
+# A module's helper cache, pinned: it records a read that finds it unread while the module's `os`
+# is the real one, which is the machine's disk answering (review 1016e: part03 reset the cache to
+# None, and the rest of the part asked the disk; on a machine without the helper that read cached
+# False, so "what each part left" alone could not see it). A part that stubs the module's os to
+# drive the read itself (part10) is not recorded.
+_r28d_disk_reads = []      # (part, module) whose pinned cache answered from the disk
+_r28d_part = [None]        # the part running now
+
+
+def _r28d_pinned_state(modname, value):
+    """A `_HELPER_STATE` dict for module `modname` holding `value`, recording disk reads (above)."""
+    class _R28dPinned(dict):
+        def __getitem__(self, key):
+            _v = dict.__getitem__(self, key)
+            if key == "present" and _v is None and getattr(sys.modules.get(modname), "os", None) is os:
+                _r28d_disk_reads.append((_r28d_part[0], modname))
+            return _v
+    return _R28dPinned(present=value)
+
+
+def _r28d_pin(module):
+    """Pin `module`'s helper cache as absent, in a recording dict (_r28d_pinned_state)."""
+    if type(module._HELPER_STATE).__name__ != "_R28dPinned":
+        module._HELPER_STATE = _r28d_pinned_state(module.__name__, False)
+    module._HELPER_STATE["present"] = False
+
+
 class _R16dWrapOnLoad:
     """Wraps a handle the moment its module finishes loading, so no part runs before it."""
 
@@ -1107,6 +1255,10 @@ class _R16dWrapOnLoad:
         def _exec_then_wrap(module):
             _exec(module)
             _r16d_wrap_ts_handles()
+            # _core is first loaded inside part01, after that part's pin: pinned here too, or part01
+            # ran with its helper cache unread and the first read asked the disk (review 1016e).
+            if isinstance(getattr(module, "_HELPER_STATE", None), dict):
+                _r28d_pin(module)
         _spec.loader.exec_module = _exec_then_wrap
         return _spec
 
@@ -1249,6 +1401,15 @@ _r16d_wrap_ts_handles()
 # on its own fixtures; imports part01, 05, 12, 47 and 87 (part87's DOM).
 # part100 (Ubuntu's phased updates respected, never forced) runs bash over its own stand-ins, drives
 # part12's app with every host call stubbed, and node for the card; imports part01, 05, 12 and 47.
+# part101 (review 1016e: the helper's DB repair walks data/ itself, a hard-linked root symlink is no
+# operator's link, install's port picker and uninstall's port reader, the monitor's maintenance probe
+# without sudo, builder A) runs the helper on stand-ins and install.sh/uninstall.sh text under bash;
+# imports part01, 05 and 12.
+# part102 (review 1016e: GMod content never written under a panel server's account, the backup
+# prune beside a running backup, SSH ports, builder B) drives part12's app with stand-ins; imports
+# part01 and 12.
+# part103 (the sixteenth review's page and script fixes, builder C) drives part12's app and runs node
+# on part87's DOM; imports part01, 05, 12, 47 and 87.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1260,6 +1421,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
           "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
+          "part101", "part102", "part103",
           "part15")
 
 
@@ -1314,6 +1476,10 @@ _path_moved = []           # (part, what it added to / took off sys.path)
 # change read the machine's real helper and panel.conf; the cache starts unread, so the first
 # read decided for the whole run, and on a host with the panel installed parts 22, 54, 75 and 91
 # took the helper's branch and ran its verbs). A part that wants the helper's branch patches it.
+# The panel.conf pinned is system_ops' (_R25A_PANEL_CONF, which the port and boot paths act on).
+# The debug report's two readers of it (install.panel_conf_text, root_pieces._panel_conf_line)
+# find it beside the helper's path, and only print yes/no from it: a check that asserts on that
+# line passes its own path or patches _root_dir (part21, part22).
 # Read from sys.modules, not imported: importing ssh_manager here, before part01, would change
 # what is loaded ahead of eventlet's patching.
 _R26D_NO_CONF = os.path.join(_RUN_DATA, "no-helper", "panel.conf")
@@ -1324,9 +1490,10 @@ def _r26d_pin_helper(part):
     """Pin the helper as absent for `part` in each loaded module; record what the part before left."""
     _mods = [sys.modules.get(_m) for _m in ("panel.ops.system_ops", "panel.ops.ssh_manager._core")]
     _found = tuple(getattr(_m, "_HELPER_STATE", {}).get("present", "not loaded") for _m in _mods)
+    _r28d_part[0] = part
     for _m in _mods:
         if _m is not None:
-            _m._HELPER_STATE["present"] = False
+            _r28d_pin(_m)
     if _mods[0] is not None:
         _mods[0]._R25A_PANEL_CONF = _R26D_NO_CONF
     _r26d_pins.append((part, _found, tuple(getattr(_m, "_HELPER_STATE", {}).get("present", False)
@@ -1363,12 +1530,19 @@ from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
 # A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
 # a top-level name in it — `run`, `walk`, `flows`, `serve` — that directory's file. part14, part53
 # and part56 each put it back and say so; this names any part, present or future, that does not.
-check("unit suite: every part ran as on a machine without the root helper; the run started with the "
-      "cache unread, which the disk would have answered (control)",
+# ...and what each part LEFT is held too, not only what the pin wrote (review 1016e: the check
+# read the values set one line before it, so part03 resetting the cache to "unread" mid-part, and
+# answering the rest of its checks from the machine's real helper, passed). What part N left is
+# what the pin before part N+1 found: still False in both modules, as a part that saved and
+# restored the pinned value leaves it.
+_r28d_left = [(_PARTS[_i - 1], _p[1]) for _i, _p in enumerate(_r26d_pins) if _i and _p[1] != (False, False)]
+check("unit suite: every part ran as on a machine without the root helper, and left the cache as "
+      "pinned; the run started with the cache unread, which the disk would have answered (control)",
       all(_p[2] == (False, False) and _p[3] in (None, _R26D_NO_CONF) for _p in _r26d_pins)
       and len(_r26d_pins) == len(_PARTS) and _r26d_pins[-1][3] == _R26D_NO_CONF
-      and _r26d_pins[0][1][0] is None,
-      repr([_p for _p in _r26d_pins if _p[1] != (False, False)][:6]))
+      and _r26d_pins[0][1][0] is None and not _r28d_left and not _r28d_disk_reads,
+      "parts that left the helper cache other than pinned (system_ops, _core): %r; parts whose "
+      "cache was read from the disk: %r" % (_r28d_left[:6], sorted(set(_r28d_disk_reads))[:6]))
 check("unit suite: no part leaves sys.path changed for the parts after it",
       not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
 
@@ -1387,9 +1561,12 @@ _R26D_ROWS = (
     # A value letter inside a cluster takes the next word, and -a/--argv0 takes one (review 1016c).
     "env -vu X -i y", "env -vC /x -i y", "env -0u X -i y", "env -vuPATH y", "env -a x -i y",
     "env --argv0 x -i y", "env --arg x -i y", "env -va x -i y",
+    # --ig is --ignore-environment to an env older than --ignore-signal (coreutils 9), and refused
+    # as ambiguous by a newer one; --ignore-signal itself resets nothing (review 1016e).
+    "env --ig x",
     "env -u X y", "env -C /x y", "env --debug x", "env FOO=1 x", "env -u -u PATH x", "env -vu X y",
-    "env -a x y", "env -vC /x y", "env -va -i y")
-_R26D_RESETTING = 18     # the rows above `env -u X y` reset; the rest do not
+    "env -a x y", "env -vC /x y", "env -va -i y", "env --ignore-signal x", "env --ignore-s=INT x")
+_R26D_RESETTING = 19     # the rows above `env -u X y` reset; the rest do not
 
 
 def _r26d_reader_child(timeout=10):
@@ -1434,19 +1611,23 @@ check("unit suite: the env-reset reader answers 4000 `-C!` or `--` options at on
 # 51 and 57), so now read: every note that lists a part's imports must list exactly its
 # `from unit.partNN import` lines.
 def _r14d_noted_imports(text):
-    """{part: set of two-digit numbers its note says it imports}, from the comment block's text."""
+    """{part: set of the numbers its note says it imports}, from the comment block's text.
+
+    Two digits or more (review 1016e: a reader of exactly two digits never matched part100, so its
+    note was folded into part99's and never compared, nor named unreadable).
+    """
     _re = re
     flat = " ".join(_ln.lstrip("#").strip() for _ln in text.splitlines())
     # A note starts at a part named at a sentence (or clause) start; "part12's app" mid-sentence
     # is not one.
     out = {}
-    for _seg in _re.split(r"(?:^|(?<=[.;])\s+)(?=part\d\d\b)", flat):
-        _m = _re.match(r"(part\d\d)\b", _seg)
-        _l = _re.search(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d\d(?:(?:\s*,\s*|\s+and\s+|,\s+and\s+)"
-                        r"(?:part)?\d\d)*)", _seg)
+    for _seg in _re.split(r"(?:^|(?<=[.;])\s+)(?=part\d{2,}\b)", flat):
+        _m = _re.match(r"(part\d{2,})\b", _seg)
+        _l = _re.search(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d{2,}(?:(?:\s*,\s*|\s+and\s+|,\s+and\s+)"
+                        r"(?:part)?\d{2,})*)", _seg)
         if _m and _l:
-            out[_m.group(1)] = set(_re.findall(r"\d\d", _l.group(1)))
-        elif _m and _re.search(r"\bimport(?:s|ing)\b[^.;]*?(?<!\d)\d\d\b", _seg):
+            out[_m.group(1)] = set(_re.findall(r"\d{2,}", _l.group(1)))
+        elif _m and _re.search(r"\bimport(?:s|ing)\b[^.;]*?(?<!\d)\d{2,}\b", _seg):
             # A note that names imports in a wording the reader does not take ("imports parts 01
             # and 12") was dropped silently, not judged (review 1011e): named instead. The digits
             # may follow "part" ("imports from part01"): a word boundary before them read only
@@ -1511,6 +1692,13 @@ _ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 c
 check("unit suite: ...and a note listing imports in a wording it cannot read is named, not dropped "
       "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73"]
       and all(next(iter(_v)).startswith("unreadable") for _v in _ctl2_r14d.values()), repr(_ctl2_r14d))
+_ctl4_r14d = _r14d_noted_imports("# part99 (x) imports part01 and 87.\n# part100 (x) imports part01, 99 "
+                                 "and 100.\n# part101 (x) imports from part100.")
+check("unit suite: ...a three-digit part's note is read, and lists a three-digit import, as a "
+      "two-digit one's is (control)",
+      _ctl4_r14d.get("part99") == {"01", "87"} and _ctl4_r14d.get("part100") == {"01", "99", "100"}
+      and next(iter(_ctl4_r14d.get("part101", {""}))).startswith("unreadable")
+      and "part100" in _notes_r14d, repr((_ctl4_r14d, sorted(_notes_r14d)[-3:])))
 _ctl3_r18d = _r18d_parts_imported("from unit.part12 import a\nfrom unit import part05, idreuse_support\n"
                                   "from .part01 import b\nfrom . import part20\nimport unit.part30\n"
                                   "from unit.part61_ufw import c\n")
@@ -1748,7 +1936,41 @@ def _r26d_ts_shapes(d):
         ("run", ("T=tail; timeout 5 ${T}scale version",), {"shell": True}),
         ("run", (["sh", "-c", "T=tail; command ${T}scale version"],), {}),
         ("run", ('T=tail; t=$(which ${T}scale) && "$t" version',), {"shell": True}),
-        ("run", (["sh", "-c", 'T=tail; t=$(which -a ${T}scale | tail -n 1) && "$t" version'],), {}))
+        ("run", (["sh", "-c", 'T=tail; t=$(which -a ${T}scale | tail -n 1) && "$t" version'],), {})
+    ) + _r28d_ts_shapes(d)
+
+
+def _r28d_ts_shapes(d):
+    """_r19d_ts_shapes' PATH-setting, comment, here-document and set-otherwise shapes (review 1016e).
+
+    Each puts the planted "machine's" directory `d` where the script searches, never the real
+    default PATH: a shape that escaped would otherwise run this machine's own binary.
+    """
+    _hd = "cat >/dev/null <<EOF\nit's\nEOF\nT=tail; ${T}scale version\necho 'x'"
+    return (
+        # A script that only builds the name and sets its own PATH stepped past the shim.
+        ("run", ("PATH=%s:$PATH; T=tail; ${T}scale version" % d,), {"shell": True}),
+        ("run", ("export PATH=%s:$PATH; T=tail; ${T}scale version" % d,), {"shell": True}),
+        ("run", (["sh", "-c", "PATH=%s:$PATH; T=tail; ${T}scale version" % d],), {}),
+        ("run", ("T=tail; PATH=%s ${T}scale version" % d,), {"shell": True}),
+        # ...and a wrapper execs from the PATH the script gives it, which was never judged.
+        ("run", ("T=tail; env PATH=%s ${T}scale version" % d,), {"shell": True}),
+        ("run", ("T=tail; PATH=%s:$PATH; timeout 5 ${T}scale version" % d,), {"shell": True}),
+        ("run", (["env", "PATH=%s:/usr/bin:/bin" % d, "bash", "-c", "T=tail; timeout 5 ${T}scale version"],), {}),
+        # An expansion the reader cannot model, behind a wrapper given a PATH.
+        ("run", ("T=tailx; env PATH=%s ${T%%x}scale version" % d,), {"shell": True}),
+        ("run", ("T=X; env PATH=%s ${T/X/tail}scale version" % d,), {"shell": True}),
+        ("run", ("A=(tail); env PATH=%s ${A[0]}scale version" % d,), {"shell": True}),
+        ("run", ("T=xtailscale; env -i PATH=%s:/usr/bin:/bin ${T#x} version" % d,), {"shell": True}),
+        # A name set other than by a plain NAME=, under the bash route (the script names the word).
+        ("run", (["bash", "-c", "echo tailscale >/dev/null; printf -v T tail; timeout 5 ${T}scale version"],), {}),
+        ("run", (["bash", "-c", "echo tailscale >/dev/null; : ${T:=tail}; timeout 5 ${T}scale version"],), {}),
+        ("run", (["bash", "-c", "echo tailscale >/dev/null; T=tail; T+=scale; timeout 5 $T version"],), {}),
+        ("run", (["env", "T=tailscale", "bash", "-c", "timeout 5 $T version"],), {}),
+        # An apostrophe in a comment or a here-document's body opened no string.
+        ("run", ("# it's a comment\nT=tail; ${T}scale version\necho 'x'",), {"shell": True}),
+        ("run", (_hd,), {"shell": True}),
+        ("run", (["sh", "-c", _hd],), {}))
 
 
 def _r21d_spawn(how):
@@ -1780,6 +2002,14 @@ def _r20d_ts_drive(w, how, args, kw):
 
 
 _r16d_ts_let = []      # the shapes that ran the planted machine's binary
+
+
+def _r28d_guarded(cmd, kw):
+    """Whether handle 0 refuses `cmd` as a run does: the guard's rewrite first, then the judge."""
+    _c, _k = _r16d_ts_wraps[0]._guard_shell(cmd, kw, "run")
+    return _r16d_ts_wraps[0]._system_tailscale(_c, _k, "run")
+
+
 _r19d_ts_saved_roots = _R19D_STAND_IN_ROOTS
 _R19D_STAND_IN_ROOTS = tuple(os.path.join(_r15d_ts_ctl_dir, _d) + os.sep for _d in ("own", "tgt", "lnk"))
 try:
@@ -1845,6 +2075,13 @@ try:
         # xargs' --interactive tty cannot run here (review 1016b).
         _r21d_static.append(_r16d_ts_wraps[0]._system_tailscale(
             ["xargs", "--in", "--arg", "/dev/null", "tailscale"], {"env": dict(os.environ, PATH=_r17d_ts_sys)}))
+        # Through the guard, as a run is: `command -p` and a wrapper behind sudo search the default
+        # PATH, and the shim first on the run's PATH answered for every PATH (review 1016e).
+        _r28d_static = [_r28d_guarded(_x, {"shell": True, "env": dict(os.environ, PATH=_r21d_none)})
+                        for _x in ("T=tail; command -p ${T}scale version",
+                                   "T=tail; command -pv ${T}scale >/dev/null && echo x")]
+        _r28d_static.append(_r28d_guarded(["sudo", "bash", "-c", "T=tail; timeout 5 ${T}scale version"],
+                                          {"env": dict(os.environ, PATH=_r21d_none)}))
     finally:
         _R19D_DEFAULT_PATH = _r21d_saved_default
     # A wrapper handed a word that cannot spell the binary is not judged as running it, and one
@@ -1856,6 +2093,23 @@ try:
             'find "$NOPE26D" -name x', 'nice -n 5 echo "it\'s"; timeout 5 cat "$HOME"',
             "T=tail; timeout 5 ${T}scale version", "for t in tail; do timeout 5 ${t}scale; done",
             'timeout 5 "$(printf tail)scale"', "sh -c 'T=tail; ${T}scale version'")]
+    # ...and what can spell it however the script sets or shapes the name (review 1016e), with the
+    # misreads that hid one (a comment, a here-document) beside forms that still spell nothing.
+    _r28d_env = dict(os.environ, PATH=_r17d_ts_sys + os.pathsep + "/usr/bin:/bin", HOME="/home/x")
+    _r28d_static += [_r28d_guarded(_x, {"shell": True, "env": _r28d_env}) for _x in (
+        "cat <<EOF\nit's $HOME\nEOF\ntimeout 5 cat \"$HOME/x\"", "# don't\nT=x; timeout 5 cat \"$T\"",
+        "n=$((1<<2)); timeout 5 cat \"$HOME\"", "D=/x; timeout 5 cat \"${D}/y\"",
+        "T=tailscalex; env -i ${T%x} version", "T=xailscale; env -i ${T/x/t} version",
+        "T=tailscalexx; env -i ${T:0:9} version", "T=tail; T+=scale; env -i $T version",
+        "printf -v T %s tail; timeout 5 ${T}scale version", ": ${T:=tail}; timeout 5 ${T}scale version",
+        "T[0]=tail; timeout 5 ${T}scale version", "declare -l T=TAIL; timeout 5 ${T}scale version",
+        "mapfile -t T <<<tail; timeout 5 ${T}scale version",
+        "# it's\nT=tail; timeout 5 ${T}scale version; echo 'x'",
+        "cat <<EOF\nit's\nEOF\nT=tail; timeout 5 ${T}scale version; echo 'x'")]
+    _r28d_static += [_r28d_guarded(_x, {"env": _r28d_env}) for _x in (
+        ["env", "T=tailscale", "bash", "-c", "timeout 5 $T version"],
+        ["env", "X=1", "bash", "-c", "T=tail; T+=scale; timeout 5 $T version"],
+        ["bash", "-c", "printf -v T %s tail; env -i ${T}scale version"])]
     _r21d_saved_path = os.environ.get("PATH", "")
     os.environ["PATH"] = _r17d_ts_sys + os.pathsep + _r21d_saved_path
     try:
@@ -1885,6 +2139,10 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
 check("unit suite: a wrapper handed a word that cannot spell tailscale is not judged as running it "
       "(the console read, a file under $HOME, an unset name), and one that can still is (control)",
       _r26d_static == [False] * 4 + [True] * 4, repr(_r26d_static))
+check("unit suite: ...nor past a comment, a here-document or a shift that only looks like one, while "
+      "`command -p`, sudo, an expansion the reader cannot model, a name set other than by NAME=, and "
+      "a wrapper's own NAME= are judged (control)",
+      _r28d_static == [True] * 3 + [False] * 4 + [True] * 14, repr(_r28d_static))
 
 # What the guard hands a shell must not change what the shell answers (review 1016c): `which
 # tailscale` with no tailscale anywhere fails, as on CI, through the functions and the shim; a
@@ -1903,14 +2161,17 @@ _r26d_answers = [
         "T=tail; which ${T}scale >/dev/null 2>&1 && echo INSTALLED || echo NOTINSTALLED")]
 _r26d_answers += [_r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
     'echo "$0"', shell=True, capture_output=True, text=True).stdout,
+    # ...and so does one that names the binary (review 1016e: it ran under bash for the functions).
+    _r16d_ts_wraps[0].run(["sh", "-c", 'tailscale version >/dev/null 2>&1; echo "$0"'],
+                          capture_output=True, text=True).stdout,
     _r16d_ts_wraps[0].run(["sh", "-c", 'echo "$0"'], capture_output=True, text=True).stdout,
     _r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
         "T=tail; ${T}scale", shell=True, env=_r26d_own_env, capture_output=True, text=True).stdout,
     _r16d_ts_wraps[0].run(["sh", "-c", "T=tail; timeout 5 ${T}scale"], env=_r26d_own_env,
                           capture_output=True, text=True).stdout]
-check("unit suite: the guard's `which` fails with no tailscale anywhere, a script that only builds "
-      "words keeps its own shell, and a stand-in first on PATH still runs behind the shim (control)",
-      _r26d_answers == ["NOTINSTALLED\n", "NOTINSTALLED\n", "/bin/sh\n", "sh\n", "own stand-in\n",
+check("unit suite: the guard's `which` fails with no tailscale anywhere, a script that builds or "
+      "names the word keeps its own shell, and a stand-in first on PATH still runs behind the shim (control)",
+      _r26d_answers == ["NOTINSTALLED\n", "NOTINSTALLED\n", "/bin/sh\n", "sh\n", "sh\n", "own stand-in\n",
                         "own stand-in\n"], repr(_r26d_answers))
 
 # The shapes a shell comes in (control, review 1012b): a grouped `-lc` and a list run with
@@ -1974,12 +2235,17 @@ check("unit suite: ...a wrapped program is found on the PATH its wrappers leave 
                           (3, "/p"), (4, "/p"), (3, None), (2, None)],
       repr(_r19d_unwrapped))
 # An explicit empty environment is empty: the program is found on os.defpath, as Popen finds it,
-# and a shell gets the guard's functions in an otherwise empty environment (review 1013a).
+# and a shell gets the guard's functions, or its shim before os.defpath, in an otherwise empty
+# environment (review 1013a; the shim since review 1016e routes a named script there too).
 _r20d_empty_env = (_r18d_ts_program(["tailscale"], {"env": {}}),
                    sorted(_R15dNoSystemTailscale(sys.modules["subprocess"])._guard_shell(
-                       "tailscale up", {"shell": True, "env": {}}, "run")[1]["env"]))
+                       "PATH=/x; tailscale up", {"shell": True, "env": {}}, "run")[1]["env"]),
+                   _R15dNoSystemTailscale(sys.modules["subprocess"])._guard_shell(
+                       "tailscale up", {"shell": True, "env": {}}, "run")[1]["env"])
 check("unit suite: ...an explicit empty environment is judged as empty, not as the runner's own (control)",
-      _r20d_empty_env == (("tailscale", os.defpath), ["BASH_FUNC_tailscale%%", "BASH_FUNC_which%%"]),
+      _r20d_empty_env == (("tailscale", os.defpath), ["BASH_FUNC_tailscale%%", "BASH_FUNC_which%%"],
+                          {"PATH": _R26D_SHIM + os.pathsep + os.defpath,
+                           "R26D_TS_ROOTS": os.pathsep.join(_R19D_STAND_IN_ROOTS)}),
       repr(_r20d_empty_env))
 
 

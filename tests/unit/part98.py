@@ -203,11 +203,12 @@ def _ssh_port_card98(client, ts_rid, key_rid):
     page_key = client.get("/remote/%d/manage" % key_rid).get_data(as_text=True)
     check("ssh port card: on a host the panel reaches over Tailscale SSH, ssh-status reports the ports "
           "sshd serves (ssh.socket's, or sshd -T's when the socket is not in use) and the card shows "
-          "those, not the row's 22; a key-auth host keeps its stored port (control)",
+          "those, not the row's 22; a key-auth host's answer carries them too and its card is filled the "
+          "same way (review 1016e: it printed the row's port, stale after a move)",
           d_ts.get("sshd_ports") == [2222, 22] and d_plain.get("sshd_ports") == [22]
-          and "sshd_ports" not in d_key and d_ts.get("mode") == "limit"
-          and 'id="ssh-port-now"' in page_ts and 'id="ssh-port-now"' not in page_key
-          and "Currently: <code>22</code>" in page_key,
+          and d_key.get("sshd_ports") == [2222, 22] and d_ts.get("mode") == "limit"
+          and 'id="ssh-port-now" data-live="1"' in page_ts and 'id="ssh-port-now" data-live="1"' in page_key
+          and "Currently: <code>22</code>" not in page_key,
           repr((d_ts, d_key, d_plain)))
 
 
@@ -550,19 +551,27 @@ def _prune_running98():
 _ADDED98 = "Added user rules (see 'ufw status' for running firewall):\n"
 
 
-def _inactive_open98(added, added_rc=0, status="Status: inactive\n"):
-    asked, opened = [], []
+def _inactive_open98(added, added_rc=0, status="Status: inactive\n", lands=True):
+    asked, opened, _landed = [], [], []
 
     def run(server, verb, args=(), **k):
+        # The allow lands in what the firewall lists, as ufw's does: the open re-reads it (review
+        # 1016e integration).
         asked.append(verb)
         if verb == "ufw-status":
-            return status, "", 0
+            return status + ("\n     To                         Action      From\n"
+                             "     --                         ------      ----\n"
+                             "[ 1] %-27sALLOW IN    Anywhere\n" % "2222/tcp"
+                             if _landed and "inactive" not in status else ""), "", 0
         if verb == "ufw-show-added":
-            return added, ("panel-helper: unknown verb 'ufw-show-added'" if added_rc else ""), added_rc
+            return (added + ("ufw allow 2222/tcp comment 'SSH panel'\n" if _landed and added else ""),
+                    ("panel-helper: unknown verb 'ufw-show-added'" if added_rc else ""), added_rc)
         return "", "", 0
     _p9_patch(_p9_core, "run_privileged", run)
     _p9_patch(_hosts98, "remote_ufw_open_port",
-              lambda s, p, proto, comment="": opened.append((p, proto)) or (True, ""))
+              lambda s, p, proto, comment="": opened.append((p, proto)) or (lands and _landed.append(p))
+              or (True, ""))
+    _p9_patch(_hosts98, "remote_ufw_close_port", lambda *a, **k: (True, ""))
     got = _hosts98._open_ssh_port_rule(NS(id=-9808, name="p98"), 2222, ["22"])
     return got, opened, [v for v in asked if v.startswith("ufw-show")]
 
@@ -609,8 +618,14 @@ def _r26j_inactive_opened98():
           "rewrite or a TCP connection would be refused by (none, other ports, a bare both-protocol "
           "allow, an outbound rule, a source-scoped one, a UDP deny, a range beside it) the allow goes "
           "in and is the panel's own (counted as added, so a revert deletes it)",
-          all(v == ((True, None), [(2222, "tcp")], ["ufw-show-added"]) for v in opened.values()),
+          all(v == ((True, None), [(2222, "tcp")], ["ufw-show-added"] * 2) for v in opened.values()),
           repr(opened))
+    lost = _inactive_open98(_ADDED98 + "(None)\n", lands=False)
+    check("ssh port move on a host whose UFW is inactive: ...an allow `ufw show added` does not list "
+          "afterwards refuses the move (it went on, and the stored rules shut the port the moment UFW "
+          "came on); review 1016e integration",
+          lost[0][0] is False and "did not show port 2222/tcp open" in str(lost[0][1])
+          and lost[2] == ["ufw-show-added"] * 2, repr(lost))
     unread = {"unknown verb": _inactive_open98("", added_rc=2), "empty": _inactive_open98("")}
     active = _inactive_open98(_ADDED98 + "ufw limit 2222/tcp\n", status="Status: active\n")
     check("ssh port move on a host whose UFW is inactive: ...stored rules that cannot be read (an "

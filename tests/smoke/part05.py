@@ -2740,12 +2740,13 @@ try:
                              selfname=_gv_gs.lgsm_name, force=True)
     check("game version: (setup) there is a cached answer for the update to drop",
           bool(_gv_mod._version_cache), "nothing cached — the next check proves nothing")
-    _gv_done = []
+    _gv_done, _gv_fin = [], []
     _sm_core.run_as_game_user = lambda *a, **k: (_gv_done.append(1), ("Update complete", "", 0))[1]
     try:
         with app.app_context():
             _gv_gs = db.session.get(GameServer, gs_id)
-            app._run_action(_gv_gs, _gv_gs.remote, "update", None)
+            app._run_action(_gv_gs, _gv_gs.remote, "update", None,
+                            on_done=lambda ok, detail: _gv_fin.append(ok))
         _pa_wait(_gv_done)
         _gv_dl = _pt.time() + 5.0
         while _pt.time() < _gv_dl and _gv_mod._version_cache:
@@ -2753,6 +2754,11 @@ try:
         check("game version: running an update drops the cached build it just changed",
               not _gv_mod._version_cache,
               "still cached after the update: %s" % dict(_gv_mod._version_cache))
+        # The worker goes on past the drop (the action's tail, the mods restart): it has to have
+        # FINISHED before its stubs are put back, or the rest runs on the real ones, or on a
+        # later check's (review 1016e). on_done is its last statement.
+        check("game version: ...and the update worker finished before its stubs were restored",
+              _pa_wait(_gv_fin), "the worker was still running")
     finally:
         _sm_core.run_as_game_user = _gv_rag_saved
 

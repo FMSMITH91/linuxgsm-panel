@@ -920,8 +920,11 @@ def delete_cron_job(server, user, old_raw, selfname=None):
 _BACKUP_LIST_DONE = "__LGSMP_BK_DONE__"
 
 
-def list_game_backups(server, user):
+def list_game_backups(server, user, locks=None):
     """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.*): [{name, size, created}], newest first.
+
+    `locks`, a list, gets the backup.lock's start time (0 when unreadable) appended when a backup
+    holds the lock now: also before its archive exists, which `in_progress` cannot say.
 
     Read as the game user; best-effort (empty on error). LinuxGSM compresses with zstd when
     available (.tar.zst), else gzip (.tar.gz) — match all archive types like LinuxGSM's own tooling
@@ -936,12 +939,14 @@ def list_game_backups(server, user):
     # Also report the backup.lock's start time (LinuxGSM holds it only while a backup runs, and
     # writes the archive under its final name while it's still growing). We report the lock's mtime
     # (= backup start) so we can flag ONLY an archive written AFTER the backup began as in-progress —
-    # not a pre-existing backup that merely happens to be the newest. Bound to the last 60 min so a
-    # stale lock from a crash doesn't hide a real backup forever.
+    # not a pre-existing backup that merely happens to be the newest. A lock is stale exactly when
+    # LinuxGSM's own fn_backup_check_lockfile says so — `find backup.lock -mmin +60`, which it then
+    # removes and runs anyway — so a crashed run's lock doesn't hide a real backup forever. (It was
+    # `-mmin -60`, not quite that test's complement: a lock aged exactly 60 was in neither.)
     cmd = ('for f in %s/*.tar.*; do [ -e "$f" ] || continue; '
            'printf "F\\t%%s\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%s "$f")" "$(stat -c%%Y "$f")"; '
            'done; '
-           'find /home/%s -maxdepth 4 -name "*backup.lock" -mmin -60 -printf "LOCK\\t%%T@\\n" '
+           'find /home/%s -maxdepth 4 -name "*backup.lock" ! -mmin +60 -printf "LOCK\\t%%T@\\n" '
            '2>/dev/null | head -1; printf "%%s\\n" ' + _BACKUP_LIST_DONE) % (bdir, user)
     out, _, rc = _core.shell_as_game_user(server, user, cmd, timeout=20)
     # A host that did not answer prints nothing, and so does a server with no backups yet.
@@ -951,6 +956,8 @@ def list_game_backups(server, user):
     if rc != 0 or _BACKUP_LIST_DONE not in (out or ""):
         return None
     res, lock_mtime = _parse_backup_listing(out)
+    if lock_mtime is not None and locks is not None:
+        locks.append(lock_mtime)
     res.sort(key=lambda b: b["created"], reverse=True)
     # Only the archive being written NOW is in-progress: a backup is running (lock present) AND the
     # newest file was created at/after the backup started (2s slack for clock granularity). A backup
@@ -1190,7 +1197,8 @@ def _ensure_backup_headroom(server, user, keep):
     Returns a short note.
     """
     try:
-        backups = list_game_backups(server, user)   # newest first, or None if unreadable
+        locks = []
+        backups = list_game_backups(server, user, locks=locks)   # newest first, or None if unreadable
         if backups is None:
             # This function DELETES backups. A listing that could not be read tells us
             # nothing about what is on the host, and "nothing to prune" is the only safe
@@ -1199,6 +1207,15 @@ def _ensure_backup_headroom(server, user, keep):
             return ""
         if not backups:
             return ""   # first backup — nothing to prune; let LinuxGSM/disk decide
+        if locks or any(b.get("in_progress") for b in backups):
+            # Another backup of this server is running right now (the control bar, a bot or a host
+            # cron run LinuxGSM's backup outside the panel's lock). This run will meet that
+            # backup's lock and fail, so pruning cannot make room for anything: it only deleted
+            # finished backups, and on a tight disk all of them, behind an archive that may never
+            # finish. The LOCK decides, not the archive: LinuxGSM takes it, then stops the server
+            # (a graceful stop, tens of seconds) and only then starts writing, and for that whole
+            # window there is no archive to flag (review 1016e, adversarial F3).
+            return ""
         short = _backup_shortfall(server, user, backups)
         if short is None:
             return ""   # plenty of room, or we could not measure — keep full safety
@@ -1240,7 +1257,9 @@ def _prune_for_headroom(server, user, backups, keep, free, need):
     """
     # 0-byte archives are failed backups (junk) — delete them first and never protect one.
     # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
-    valid = [b for b in backups if b.get("size", 0) > 0]        # newest first
+    # An archive still being written is neither: grown past 0 bytes it took a protected slot as
+    # the newest VALID backup, and every finished one became a candidate.
+    valid = [b for b in backups if b.get("size", 0) > 0 and not b.get("in_progress")]   # newest first
     # ...but not the archive a backup is writing right now (list_game_backups' in_progress): one
     # started outside the panel (the control bar, a bot, a host cron) is 0 bytes for its first
     # moments, and this runs before the panel's own run meets that backup's lock. Unlinked then,

@@ -689,6 +689,21 @@ _EXPECT_OFFLINE_WINDOW = 180    # a panel restart holds "server down" this long 
 _LGSM_MAINTENANCE_CMDS = ("update", "force-update", "validate", "mods-update", "restart", "backup")
 
 
+def _r28a_busy_words(remote, cmd):
+    """The words maintenance probe `cmd` printed on `remote`: under the row's sudo, else without.
+
+    Under the row's sudo first, as before: with /proc mounted hidepid=2 an unprivileged pgrep sees
+    no other account's processes and answers a definitive IDLE. A remote whose sudo asks for a
+    password answers neither word, and since _host_reachable stopped needing sudo the probe runs
+    there: every LinuxGSM cron update paged "went offline unexpectedly". So, when the first run
+    said nothing, it asks once more without sudo.
+    """
+    words = (run_command(remote, cmd, timeout=10)[0] or "").split()
+    if "BUSY" not in words and "IDLE" not in words:
+        words = (run_command(remote, cmd, timeout=10, sudo=False)[0] or "").split()
+    return words
+
+
 def _lgsm_maintenance_running(remote, gs):
     """True if LinuxGSM is mid-maintenance for this server right now.
 
@@ -725,14 +740,11 @@ def _lgsm_maintenance_running(remote, gs):
         # (No bracket needed against the asking shell: it is not the game account's, and its
         # command line has "(" after the name, not a command.)
         pattern = "/%s (%s)( |$)" % (selfname.replace(".", "[.]"), "|".join(_LGSM_MAINTENANCE_CMDS))
-        out, _, _ = run_command(
-            remote,
-            "pgrep -u %s -f %s >/dev/null 2>&1 && echo BUSY || echo IDLE"
-            % (shlex.quote(user), shlex.quote(pattern)),
-            timeout=10)
         # Exact token, not a substring: the command line itself contains the word BUSY, so anything
         # that echoes it back on stdout would otherwise mute this server's alerts permanently.
-        return "BUSY" in (out or "").split()
+        return "BUSY" in _r28a_busy_words(
+            remote, "pgrep -u %s -f %s >/dev/null 2>&1 && echo BUSY || echo IDLE"
+            % (shlex.quote(user), shlex.quote(pattern)))
     except Exception:
         # row_label, not getattr: a server another row took the id of raises from this read too.
         _log.debug("maintenance probe failed for %s", row_label(gs, "name"), exc_info=True)

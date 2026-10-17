@@ -82,6 +82,19 @@ def _r26b_sshd_ports(remote):
         return []
 
 
+def _r28b_old_ssh_port(remote):
+    """What a port move's audit row names as the port sshd moved FROM.
+
+    The row's port for a host the panel dials over sshd: it is the port that connection uses. Not
+    for a Tailscale-SSH row (its port stays 22, tailscaled's, after every move) or the panel host
+    (created with 22, never read from sshd): there it is sshd's own ports, read before the move,
+    and "unknown" when they cannot be read. "22 -> 3333" recorded a move that was 2222 -> 3333.
+    """
+    if remote.auth_method not in ("tailscale", "local") and not remote.is_local:
+        return remote.port
+    return ",".join(str(p) for p in _r26b_sshd_ports(remote)) or "unknown"
+
+
 def _resync_game_port(gs, info, withheld=()):
     """Store the game port LinuxGSM reports when it differs from the stored one; return that port.
 
@@ -449,11 +462,13 @@ def _register_ssh_settings(app):
             panel_port = load_config().get("port", 5000) if remote.is_local else None
             st = remote_public_ssh_status(remote, panel_port=panel_port)
             st["auth_method"] = remote.auth_method
-            if remote.auth_method == "tailscale":
-                # The SSH port card printed the row's port as "the port sshd listens on". On a host
-                # the panel reaches over Tailscale SSH that stays 22 after a move (it is the port
-                # tailscaled answers on), so the card said 22 while sshd served 2222. Read sshd's.
-                st["sshd_ports"] = _r26b_sshd_ports(remote)
+            # The SSH port card printed the row's port as "the port sshd listens on". On a host the
+            # panel reaches over Tailscale SSH that stays 22 after a move (it is the port tailscaled
+            # answers on), and the panel host's row is created with 22 and never read from sshd, so
+            # the card said 22 while sshd served 2222. Read sshd's own ports, for every host: on a
+            # key/password host the row is only the port the panel dials, and the card's line went
+            # stale after a move until the page was reloaded. [] = unread, shown as unknown.
+            st["sshd_ports"] = _r26b_sshd_ports(remote)
             return jsonify(st)
         except Exception:
             return jsonify({"error": _log_and_generic("ssh-status failed")}), 200
@@ -500,7 +515,6 @@ def _register_ssh_port(app):
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
         bind = _json_str(body, "bind")
-        old = remote.port
         # Held across the move AND the port commit that follows it, so a second change cannot read
         # the port the first is about to replace.
         lock = _ssh_port_locks[remote_id]
@@ -508,6 +522,8 @@ def _register_ssh_port(app):
             return jsonify({"success": False,
                             "message": "An SSH port change is already running for this host."}), 409
         try:
+            # Read under the lock: a move still running elsewhere would change what sshd serves.
+            old = _r28b_old_ssh_port(remote)
             try:
                 with _r20b_audit_on_raise("change_ssh_port", detail=f"{old} -> {new_port}",
                                           target=remote.name, remote=remote):

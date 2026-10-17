@@ -1971,7 +1971,7 @@ try:
     check("gmod content GET: a status read that raises is an error with no games to tick",
           _d.get("games") == [] and _d.get("error") == "Host unreachable", repr(_d))
 
-    _gmc = {"mounts": ["cstrike", "tf"], "cu": {"user": "gmcontent", "present": {"cstrike": 1}},
+    _gmc = {"mounts": ["cstrike", "tf"], "cu": {"user": "gmcontent", "present": {"cstrike": 1, "tf": 1}},
             "removed": ["cstrike"], "installed": [], "setup": []}
 
     def _gmc_mounts(remote, user):
@@ -1992,7 +1992,7 @@ try:
 
     _p9_patch(_p9_sf, "gmod_current_mounts", _gmc_mounts)
     _p9_patch(_p9_sf, "gmod_mount_setup", _gmc_setup)
-    _p9_patch(_p9_sf, "detect_content_user", lambda remote, games: _gmc["cu"])
+    _p9_patch(_p9_sf, "detect_content_user", lambda remote, games, **k: _gmc["cu"])
     _p9_patch(_p9_sf, "ensure_content_user", _gmc_ensure)
     _p9_patch(_p9_sf, "uninstall_gmod_content",
               lambda remote, cu_user, games: (True, list(_gmc["removed"]), ""))

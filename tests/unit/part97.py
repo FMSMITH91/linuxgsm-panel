@@ -65,7 +65,7 @@ _STAMPS97 = ["20260101-00000%d" % i for i in range(5)]
 # <other> before the prune starts, which is what readlink -f then resolved.
 _HOOKS97 = r'''
 id() { if [ -n "$P97_ROOT" ] && [ "$*" = "-u" ]; then echo 0; else command id "$@"; fi; }
-stat() { if [ -n "$P97_ROOTLINK" ] && [ "${!#}" = "$PANEL_DIR" ]; then echo 0;
+stat() { if [ -n "$P97_ROOTLINK" ] && [ "${!#}" = "$PANEL_DIR" ]; then echo 0 1;
          else command stat "$@"; fi; }
 _panel_ids() { _PR_UID=4242; }
 _panel_cannot_write() { case "$1" in "$P97"/home|"$P97"/home/*) return 1 ;; *) return 0 ;; esac; }

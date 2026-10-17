@@ -138,7 +138,20 @@ CONF_READ_PY
 CONF_JSON=""
 if [[ -f "${PANEL_DIR}/data/config.json" ]]; then
     CONF_JSON="$(_conf_read "${PANEL_DIR}/data/config.json")"
-    PANEL_PORT="$(printf '%s' "${CONF_JSON}" | python3 -I -c "import json,sys;print(int(json.load(sys.stdin).get('port',5000)))" 2>/dev/null || echo "")"
+    # The port as the panel binds it: install.sh's _r26a_cfg_port rule (panel.core.config's
+    # _r26a_port). int() of the raw value made a hand-edited `true`, 0 or 70000, which the panel
+    # never binds (it binds 5000), into 1, 0 or 70000: the installer's rule for the real port was
+    # left open, an operator's rule for port 1 removed, and the Serve route to the real port kept.
+    # A config.json that does not parse, or is not an object, still prints nothing (warned below).
+    PANEL_PORT="$(printf '%s' "${CONF_JSON}" | python3 -I -c '
+import json, re, sys
+c = json.load(sys.stdin)
+if not isinstance(c, dict):
+    sys.exit(1)
+v = c.get("port")
+s = "" if v is None or isinstance(v, bool) else str(v).strip()
+ok = re.fullmatch(r"[+-]?[0-9]+", s) is not None and 1 <= int(s) <= 65535
+print(int(s) if ok else 5000)' 2>/dev/null || echo "")"
     # The mount the panel published ITSELF at (config.py defaults "tailscale_mount" to "/"). Read
     # here, beside the port, because data/config.json is deleted a few lines below — and validated
     # with the same shape the panel validates it with (privileged.py's _ts_mount). The Serve

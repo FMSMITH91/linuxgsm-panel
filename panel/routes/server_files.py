@@ -11,7 +11,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
     RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
-    gmod_current_mounts, gmod_mount_setup, install_gmod_content, lgsm_game_config,
+    gmod_current_mounts, gmod_mount_paths, gmod_mount_setup, install_gmod_content, lgsm_game_config,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
     console_has_control, stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
@@ -1173,8 +1173,43 @@ def _split_on_disk(cu, installed, games):
     return _mountable, _missing
 
 
+def _r28b_content_owner(remote, user):
+    """The panel GameServer whose game account `user` is on `remote`, or None.
+
+    detect_content_user took ANY /home account holding a content game, so on a host with a
+    panel-managed CS:S server and no separate content box, that server's account (`css`) was the
+    "content user": Remove deleted the server's game files, its LinuxGSM script and its config
+    (passwords, ports), and the weekly `update` cron restarted it unannounced. It now skips the
+    panel's servers' accounts (gmod._r28j_server_accounts); every caller that would write under
+    the content user still asks this first, as a backstop.
+    """
+    if not user:
+        return None
+    return GameServer.query.filter_by(remote_id=remote.id, short_name=user).first()
+
+
+def _r28b_owner_untouched(owner):
+    """Why nothing was mounted: the only content account found is the panel server `owner`'s."""
+    return i18n.Sentence("The content on this host is in the account of the panel server {server}, and the panel "
+                         "never mounts from, downloads into or updates a server's account. Nothing was mounted.",
+                         server=owner.name)
+
+
+def _r28b_owner_remove(owner):
+    """The uninstall refusal when the content account is the panel server `owner`'s."""
+    return i18n.Sentence("The content on this host is in the account of the panel server {server}, so the panel "
+                         "won't remove it: that would delete the server's own game files, script and config. "
+                         "Nothing was removed.", server=owner.name)
+
+
 def _install_and_mount(remote, gmod_user, cu, games):
     """Fetch the games not yet on the host into content user `cu`, then mount what is: the state."""
+    _owner = _r28b_content_owner(remote, cu["user"])
+    if _owner is not None:
+        # A panel server's account (backstop: ensure_content_user never picks one). Not even a
+        # read-only mount: that adds the GMod account to the server's group, which can read its
+        # configs (RCON password included). Nothing on the host is touched.
+        return {"status": "error", "msg": _r28b_owner_untouched(_owner), "ts": time.time()}
     # KEEP the result. `installed` is the games install_gmod_content verified
     # are on disk afterwards (it re-runs content_present after SteamCMD), and
     # throwing it away meant the mount was written for every game the operator
@@ -1198,6 +1233,31 @@ def _install_and_mount(remote, gmod_user, cu, games):
     return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
 
 
+def _r28j_remount_rest(remote, gmod_user, cu, rest):
+    """After a Remove: mount.cfg mounts `rest` (the games still mounted), each from where it really is.
+
+    Only the games content user `cu` ({} when there is none) holds are pointed at it. This wrote every remaining mount as
+    the content user's: on a host whose GMod server mounted CS:S from a panel CS:S server's account
+    (set up before that was refused) while a `gmodcontent` account held TF2, removing TF2 rewrote
+    the CS:S line to /home/gmodcontent/serverfiles/cstrike, where there is no CS:S, granted read on
+    it, and reported "Removed from host: tf" (review 1016e, adversarial F2). A mount the content
+    user does not hold keeps its line as it stood; when those lines cannot be read, mount.cfg is
+    left alone.
+    """
+    _held = cu.get("present") or {}
+    _others = [g for g in rest if g not in _held]
+    if not _others:
+        gmod_mount_setup(remote, gmod_user, cu.get("user", ""), rest)
+        return
+    _paths = gmod_mount_paths(remote, gmod_user)
+    if _paths is None:
+        _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
+                     "mount.cfg alone", gmod_user)
+        return
+    gmod_mount_setup(remote, gmod_user, cu.get("user", ""), [g for g in rest if g in _held],
+                     kept={g: p for g, p in _paths.items() if g in _others})
+
+
 def _uninstall_gmod_selection(remote, gmod_user, games):
     """Remove content from the host, then drop it from THIS server's mounts: the job's state."""
     cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
@@ -1205,6 +1265,15 @@ def _uninstall_gmod_selection(remote, gmod_user, games):
     # this could have failed to confirm — `asked` stays empty rather than turning
     # every game into an unconfirmed removal.
     _asked, removed = [], []
+    # detect_content_user never answers with a panel server's account. When the only content is in
+    # one (a host set up before that rule, whose mounts still point there), say so instead of
+    # reporting an empty removal: the server's files are not the panel's to delete.
+    _owner = _r28b_content_owner(remote, (cu or detect_content_user(
+        remote, tuple(GMOD_CONTENT_GAMES), servers_too=True) or {}).get("user"))
+    if _owner is not None:
+        # Refused before anything is touched, this server's mount.cfg included: the operator asked
+        # for a removal, and nothing about it happened.
+        return {"status": "error", "msg": _r28b_owner_remove(_owner), "ts": time.time()}
     if cu:
         _asked = list(games)
         _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
@@ -1217,8 +1286,7 @@ def _uninstall_gmod_selection(remote, gmod_user, games):
         _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
                      "mount.cfg alone", gmod_user)
     else:
-        gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
-                         [g for g in _cur if g not in games])
+        _r28j_remount_rest(remote, gmod_user, cu or {}, [g for g in _cur if g not in games])
     _st, _msg = _gmod_removal_result(_asked, removed)
     return {"status": _st, "msg": _msg, "ts": time.time()}
 
@@ -2309,21 +2377,30 @@ def _register_cron_jobs(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        data = _json_body()
-        refused = _write_refused(gs, "cron_update")
-        if refused is not None:
-            return refused
-        schedule = _json_str(data, "schedule")      # as cron_add reads them
-        try:
-            with _r20b_audit_on_raise("cron_update", detail=schedule[:120], target=gs.name, server=gs):
-                ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
-                                          schedule, _json_str(data, "command"), gs.lgsm_name)
-            log_action(current_user, "cron_update", target=gs.name, success=ok,
-                       detail=schedule[:120], server=gs)
-            return jsonify({"success": ok,
-                            "message": i18n.tr(msg) if msg else ("Updated" if ok else "Failed")})
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
+        return _r28b_cron_update(gs, _json_body())
+
+
+def _r28b_cron_update(gs, data):
+    """The cron/update route's work once access is checked: rewrite one task, then re-sync the switches."""
+    refused = _write_refused(gs, "cron_update")
+    if refused is not None:
+        return refused
+    schedule = _json_str(data, "schedule")      # as cron_add reads them
+    try:
+        with _r20b_audit_on_raise("cron_update", detail=schedule[:120], target=gs.name, server=gs):
+            ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                      schedule, _json_str(data, "command"), gs.lgsm_name)
+        log_action(current_user, "cron_update", target=gs.name, success=ok,
+                   detail=schedule[:120], server=gs)
+        if ok:
+            # As add and delete do: every line is editable, the `monitor` one included, so an
+            # edit can take away (or give) the Autostart or Daily-restart line, and the switches
+            # kept saying what the crontab no longer did until the card was listed again.
+            _r21b_sync_after_cron_write(gs)
+        return jsonify({"success": ok,
+                        "message": i18n.tr(msg) if msg else ("Updated" if ok else "Failed")})
+    except Exception:
+        return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
 
 
 def _r21b_sync_after_cron_write(gs):

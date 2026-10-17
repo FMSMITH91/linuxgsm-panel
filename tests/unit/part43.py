@@ -1357,9 +1357,13 @@ def _rv43_totp():
     r = late.post("/login", data={"totp_code": totp.now()})
     with late.session_transaction() as s:
         signed_in, pending = s.get("_user_id"), s.get("_2fa_pending")
+    # Refused BY the budget, its page saying so (review 1016e: "not 302" and no user also held for
+    # a 500 from the step itself).
     check("sign-in 2FA: wrong codes from many addresses use up the ACCOUNT's budget — a right code "
           "after them does not sign in",
-          r.status_code != 302 and signed_in is None, "%d user=%r" % (r.status_code, signed_in))
+          r.status_code == 200 and signed_in is None
+          and _sh43.REAUTH_BLOCKED_MSG[:40] in r.get_data(as_text=True),
+          "%d user=%r" % (r.status_code, signed_in))
     check("sign-in 2FA: ...and the pending login is dropped, so the password step comes first again",
           pending is None, repr(pending))
     with _sh43._REAUTH_LOCK:

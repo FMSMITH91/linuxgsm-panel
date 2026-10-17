@@ -135,7 +135,8 @@ def _gmod_install52():
               lambda remote, short, cu, games: (mounted.append(list(games)), (True, "ok"))[1])
     job = NS(short_name="gm52", game_type="gmod", content_games=["cstrike", "tf"],
              p=lambda *a, **k: None)
-    step = _p9_ms._install_gmod_content(job, NS(name="p52-host", id=-52))
+    with _p9.app_context():     # the install job runs its steps inside one (the owner lookup reads the DB)
+        step = _p9_ms._install_gmod_content(job, NS(name="p52-host", id=-52))
     check("gmod install: the mount is written for the games on disk only (a failed TF2 download is "
           "not mounted; the CS:S already there is)",
           mounted == [["cstrike"]] and step == 9, repr((mounted, step)))

@@ -111,8 +111,8 @@ def _p25_addresses():
        got, ["listening on [ip:public]: ok", "ban [ip:public]:", "Error: [ip:private]:22 refused",
              "src[ip:public] x", "Type::bad [ip:public]", "peer ::ffff:[ip:private] up"])
     got = [PV._generic(t, st) for t in (
-        "ipv4 zero-padded 081.002.013.077", "rDNS static.77.13.2.81.clients.your-server.de",
-        "ec2-81-2-13-77.eu-west-1.compute.amazonaws.com", "ns1234.ip-51-38-12-34.eu",
+        "ipv4 zero-padded 009.009.009.009", "rDNS static.9.9.9.9.clients.your-server.de",
+        "ec2-9-9-9-9.eu-west-1.compute.amazonaws.com", "ns1234.ip-51-38-12-34.eu",
         "backup-2026-10-02-12-30.tar v1.2.3")]
     eq("review fix privacy: a zero-padded IPv4 and an address inside a provider's reverse-DNS name "
        "are replaced; dates and versions are not",
