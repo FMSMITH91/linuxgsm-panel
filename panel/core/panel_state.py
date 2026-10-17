@@ -185,7 +185,7 @@ _max_players_cache = register_server_state({})   # server_id -> int  (capacity i
 #
 # Written by the sweep AND by every explicit check, so installing updates from the panel clears the
 # banner right away instead of leaving it up until tomorrow's sweep.
-_os_update_seen = register_remote_state({})   # remote.id -> {name, count, security, packages, at}
+_os_update_seen = register_remote_state({})   # remote.id -> {name, count, security, packages, deferred, at}
 
 # A gamedig query per server is far too slow to run on every dashboard status poll (every 8s), so a
 # background poller refreshes the counts on a slower cadence and the request path just reads this

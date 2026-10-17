@@ -554,8 +554,10 @@ def _os_update_note(remote, result, born=None):
         "name": name,
         "count": len(pkgs),
         "security": sum(1 for p in pkgs if _is_security_pkg(p)),
-        "packages": pkgs,
-        "at": time.time(),
+        # What apt holds back (Ubuntu's phased rollout, or kept back): shown on the card, never in
+        # the count above, so it raises no banner or alert of its own (system_ops.split_held).
+        "packages": pkgs, "deferred": result.get("deferred") or [],
+        "deferred_known": bool(result.get("deferred_known")), "at": time.time(),
         "created": created,
     }
 

@@ -193,6 +193,7 @@ _name90 = "OS updates card: the count at the innerHTML sink"
 _out90 = _node90(_name90, _DOM87 + (
     "function isSecurityPkg(){ return false; } global.setInstallUpdatesState = () => {};\n"
     + _cut_or90(_RM90, "function renderUpdates(") + "\n"
+    + _cut_or90(_RM90, "function renderDeferred(") + "\n"
     "const out = [];\n"
     "for (const c of ['<b>x</b>', '2']) { renderUpdates({count: c, packages: []}, '');\n"
     "  out.push(document.getElementById('update-info').innerHTML); }\n"

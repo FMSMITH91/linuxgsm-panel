@@ -1166,10 +1166,11 @@ _ARGV = {
     # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
-    "apt-full-upgrade": ([_choice("phased", "standard")],
-                         lambda a: [APT, "full-upgrade", "-y"]
-                         + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]
-                            if a[0] == "phased" else []) + APT_CONFOLD, None),
+    # apt's default set, and nothing more: Ubuntu's phased rollouts are never forced (it took a
+    # "phased" choice that told apt to always include phased updates, until the owner's
+    # "respect deferred updates"). A deferred update installs once its rollout reaches the host;
+    # the OS Updates card lists it apart until then (system_ops.split_held).
+    "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
     "apt-upgrade": ([], lambda a: [APT, "upgrade", "-y"] + APT_CONFOLD, None),
     "apt-autoremove": ([], lambda a: [APT, "autoremove", "-y"], None),
     "apt-install": ([Rest(_package)], lambda a: [APT, "install", "-y"] + a, None),
@@ -1631,7 +1632,7 @@ _REMOTE_ACTIONS = {
             "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
             "export DEBIAN_FRONTEND=noninteractive; "
             "apt-get update >> {L} 2>&1; "
-            "apt-get -y -o APT::Get::Always-Include-Phased-Updates=true "
+            "apt-get -y "
             "-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "
             "full-upgrade >> {L} 2>&1; "
             "rc=$?; "

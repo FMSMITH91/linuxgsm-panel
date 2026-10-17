@@ -940,6 +940,127 @@ def _r18a_label_arch(pkgs):
         p["label"] = "%s (%s)" % (p["name"], p["arch"]) if shown else p["name"]
 
 
+# ── What an upgrade installs now, and what apt holds back ──
+# Ubuntu releases some updates to a growing share of machines at a time, so a bad one can be pulled
+# before it reaches everyone. `apt list --upgradable` lists such an update on every machine, but
+# `apt-get full-upgrade` installs it only once the rollout reaches THIS one. Counting it made the
+# card and the banner announce updates that "Install updates" then did not install, run after run.
+# The panel never forces them (no apt option to always include phased updates, anywhere: the
+# phasing is the safety net); it lists them apart, and counts only what an upgrade installs now.
+#
+# "Installs now" is read from apt's own simulation of the upgrade Install updates runs: one line
+#   Inst <name>[:arch] [<old>] (<new> <origin> [<arch>])
+# per package it WOULD install. That line is not translated and has the same shape on every apt
+# the panel supports — 22.04's apt 2.4 included, which has no "deferred due to phasing" heading and
+# lists phased updates under "kept back" with other holds. So held back = what `apt list` lists
+# minus what the simulation installs, matched by name AND architecture (libapparmor1 amd64 and
+# i386 are two packages). Measured on the test VPS (24.04, apt 2.8): 8 upgradable, 4 Inst lines,
+# and the 4 left over were exactly apt's own deferred list. A package an operator pinned with
+# `apt-mark hold`, or one apt keeps back, is in the same set, which is why the card says "held
+# back by apt", not "phased". No heading or summary line is read, so apt.conf output options
+# (APT::Get::Show-Versions, APT::Output-Version) cannot add rows.
+#
+# The native architecture is printed first (the R27P-ARCH line): an Inst line that names no
+# architecture is the native build's, and a probe whose output lacks that line did not run.
+_R27P_ARCH_TAG = "R27P-ARCH"
+# The probe itself is ssh_manager.hosts._R27P_UPGRADE_SIM (a remote runs it), spelled out again,
+# literally, in _r27p_local_probe below (system_ops' _run takes only literals, part06's shell
+# gate); part100 holds the two equal.
+# Debian policy's package-name and architecture alphabets. Checked one token at a time (no nested
+# quantifier), so an odd line cannot make the scan slow.
+_R27P_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]*")
+_R27P_ARCH = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _r27p_inst(line):
+    """(name, arch or "") of one simulation `Inst` line; None for anything that is not one.
+
+    The architecture is the bracketed one closing the candidate's "(… [amd64])"; a line without it
+    falls back to the name's ":arch", and "" (the native build) when neither is there.
+    """
+    words = line.split()
+    if not line.startswith("Inst ") or len(words) < 2:
+        return None
+    name, _colon, arch = words[1].partition(":")
+    if not _R27P_NAME.fullmatch(name) or (arch and not _R27P_ARCH.fullmatch(arch)):
+        return None
+    for word in words[2:]:
+        if word.startswith("[") and word.endswith("])") and _R27P_ARCH.fullmatch(word[1:-2]):
+            arch = word[1:-2]
+    return name, arch
+
+
+def parse_inst(out):
+    """{(name, arch)} of every package apt's simulation would install; None when it was not read.
+
+    None — not an empty set — whenever the probe's own arch line is missing, so a failed read can
+    never be taken for "an upgrade installs nothing", which would hold every update back.
+    """
+    native, inst = "", set()
+    for line in (out or "").splitlines():
+        if line.startswith(_R27P_ARCH_TAG + " "):
+            native = line[len(_R27P_ARCH_TAG):].strip()
+        else:
+            got = _r27p_inst(line)
+            if got:
+                inst.add(got)
+    if not _R27P_ARCH.fullmatch(native):
+        return None
+    return {(name, arch or native) for name, arch in inst}
+
+
+def _r27p_installs(pkg, inst, single):
+    """Whether parse_upgradable's entry `pkg` is one the simulation installs.
+
+    By name and architecture. An Architecture: all package (or an entry whose arch apt list did
+    not give) matches by name alone, but only when it is the one entry of that name — so an i386
+    build never borrows its amd64 twin's Inst line.
+    """
+    if (pkg["name"], pkg["arch"]) in inst:
+        return True
+    loose = ("all", "")
+    return single and any(name == pkg["name"] and (arch in loose or pkg["arch"] in loose)
+                          for name, arch in inst)
+
+
+def split_held(pkgs, inst):
+    """(installed by an upgrade now, held back by apt) from parse_upgradable's list and parse_inst.
+
+    With an unread simulation (None) nothing is held apart: every package stays counted, as
+    before, and the caller reports the split as unknown.
+    """
+    if inst is None:
+        return pkgs, []
+    names = [p["name"] for p in pkgs]
+    now, held = [], []
+    for p in pkgs:
+        (now if _r27p_installs(p, inst, names.count(p["name"]) == 1) else held).append(p)
+    return now, held
+
+
+def r27p_updates_result(list_out, list_rc, probe):
+    """The OS-update check's answer, shared by the panel host and remotes.
+
+    `probe` runs the simulation and returns its (out, rc); it is called only when its answer can
+    change something — the list read worked and found packages. A failed list read does not wait
+    on a second apt command, and an up-to-date host does not pay for one.
+
+    "count" and "packages" are what an upgrade installs now; "deferred" is what apt holds back
+    (Ubuntu's phased rollout, or kept back), listed apart and never counted; "deferred_known" is
+    False when the simulation could not be read, so the card says the split is unknown.
+    """
+    packages = parse_upgradable(list_out)
+    held, known = [], list_rc == 0
+    if list_rc == 0 and packages:
+        p_out, p_rc = probe()
+        inst = parse_inst(p_out) if p_rc == 0 else None
+        packages, held = split_held(packages, inst)
+        known = inst is not None
+    return {"ok": list_rc == 0, "updates_available": len(packages) > 0,
+            "count": len(packages), "packages": packages,
+            "deferred": held, "deferred_known": known}
+
+
 def os_update_available(refresh=True):
     """Check if OS updates are available (apt list --upgradable).
     refresh=False skips the network `apt update` (uses the cached package lists),
@@ -963,9 +1084,19 @@ def os_update_available(refresh=True):
     # the two equal.
     out, _, rc = _run("export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; "
                       "apt list --upgradable 2>/dev/null", timeout=30)
-    packages = parse_upgradable(out)
-    return {"ok": rc == 0, "updates_available": len(packages) > 0,
-            "count": len(packages), "packages": packages}
+    return r27p_updates_result(out, rc, _r27p_local_probe)
+
+
+def _r27p_local_probe():
+    """(out, rc) of apt's upgrade simulation on this machine: what an upgrade installs now.
+
+    hosts._R27P_UPGRADE_SIM after the same C-locale prefix as the list read above, which this
+    literal must equal (part100). Run only by the update check, never by a page render.
+    """
+    out, _, rc = _run("export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; "
+                      "echo R27P-ARCH $(dpkg --print-architecture 2>/dev/null); "
+                      "apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null", timeout=60)
+    return out, rc
 
 
 def os_run_update():
@@ -1175,16 +1306,17 @@ _STATUS_TTL = 15   # ufw/tailscale/sudo state changes rarely (and via the panel)
 
 def get_server_status(force=False):
     """Get combined server status for the management page.
-    Uses the cached update list (no network apt-update) so the page loads fast;
-    the user can trigger a fresh check separately. The whole result is cached ~15s so a page
-    render + its follow-up poll don't each re-run the sudo ufw / tailscale probes."""
+    No apt at all: the OS Updates card and the banner read the update check's cache
+    (app._os_update_seen, filled by the daily sweep and the card's Check), because the check now
+    simulates the upgrade too, ~2.4 s measured, which a page render must not wait on. The whole
+    result is cached ~15s so a page render + its follow-up poll don't each re-run the sudo ufw /
+    tailscale probes."""
     now = time.time()
     if not force and _status_cache["data"] is not None and (now - _status_cache["ts"]) < _STATUS_TTL:
         return _status_cache["data"]
     ufw = ufw_status()
     ts_ssh = tailscale_ssh_status()
     ts_ssh_choice = tailscale_ssh_choice()
-    updates = os_update_available(refresh=False)
     uptime = server_uptime()
     has_sudo = _check_sudo()
     ts_iface = detect_tailscale_interface()
@@ -1201,7 +1333,6 @@ def get_server_status(force=False):
         "tailscale_ssh_unrecorded": ts_ssh_choice == "unrecorded",
         "tailscale_interface": ts_iface,
         "tailscale_ufw_allowed": tailscale_ufw_allowed,
-        "updates": updates,
         "uptime": uptime,
     }
     _status_cache["ts"] = now

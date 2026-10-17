@@ -885,7 +885,10 @@ def _register_os_update_checks(app):
         # date" for a host nobody managed to ask.
         _os_update_note(remote, result, born)
         return jsonify({"ok": bool(result.get("ok")), "count": result["count"],
-                        "packages": result["packages"]})
+                        "packages": result["packages"],
+                        # Held back by apt (phased rollout, or kept back): listed apart, never counted.
+                        "deferred": result.get("deferred") or [],
+                        "deferred_known": bool(result.get("deferred_known"))})
 
     @app.route("/api/os-updates/summary")
     @login_required
@@ -948,7 +951,9 @@ def _register_os_update_checks(app):
         if not _os_update_current(seen, remote.created_at):
             return jsonify({"known": False})
         return jsonify({"known": True, "count": seen["count"], "security": seen["security"],
-                        "at": seen["at"], "packages": seen["packages"]})
+                        "at": seen["at"], "packages": seen["packages"],
+                        "deferred": seen.get("deferred") or [],
+                        "deferred_known": bool(seen.get("deferred_known"))})
 
     @app.route("/api/remote/<int:remote_id>/run-updates", methods=["POST"])
     @login_required

@@ -374,6 +374,7 @@ _out59 = _node59(_name59, (
     "function escapeHtml(s){ return String(s); } function isSecurityPkg(p){ return !!p.sec; }\n"
     "function setInstallUpdatesState(){}\n"
     + _cut47(_RMJ59, "function renderUpdates(") + "\n"
+    + _cut47(_RMJ59, "function renderDeferred(") + "\n"
     "renderUpdates({count: 12, packages: [{name: 'a', version: '1', sec: true}]});\n"
     "console.log(JSON.stringify(el.innerHTML));\n"))
 if _out59 is not None:

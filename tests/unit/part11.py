@@ -1994,7 +1994,9 @@ try:
           and _w.calls[0] == ("verb", "apt-update", []), repr(_cu))
     _wire(cmds=[("apt list --upgradable", ("", "SSH command timed out", -1))])
     eq("os check: a list that was not read is ok=False — NOT a clean host",
-       _H.remote_os_check_updates(_p8_srv()), {"ok": False, "count": 0, "packages": []})
+       _H.remote_os_check_updates(_p8_srv()),
+       {"ok": False, "count": 0, "packages": [], "updates_available": False,
+        "deferred": [], "deferred_known": False})
     _wire(verbs={"apt-full-upgrade": ("x" * 500 + "done", "", 0)})
     _ru = _H.remote_os_run_updates(_p8_srv())
     check("os run: success returns the tail of apt's output",
