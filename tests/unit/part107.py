@@ -384,6 +384,71 @@ def _debug_report107():
           bool(rep) and not lost, err + repr(lost))
 
 
+def _ins_warn107(start):
+    """install.sh's `warn "<start>..."` text, as the self-update log prints it ("[!] ..."); "" if gone."""
+    m = _re107.search(r'warn "(%s[^"]*)"' % _re107.escape(start), _INS107)
+    return "[!] " + m.group(1) if m else ""
+
+
+def _r9_detail107():
+    """Privileged helper's real detail on a host without the helper, as section_diagnostics prints it."""
+    from panel.ops.ssh_manager import _core as _smc107
+    with _r24r_patched(_so107, _helper_present=lambda: False), \
+            _r24r_patched(_smc107, helper_on_disk=lambda: False):
+        level, detail = _so107._diag_privileged_helper()
+    return "- [%s] **Privileged helper**: %s" % (level, detail)
+
+
+_DIAG_SAID107 = ("**Privileged helper**: Not installed — privileged actions fall back to the pre-helper path",
+                 "pre-helper repair path until you re-run this as root",
+                 "visudo rejected the grant line: p107 ALL=(root) NOPASSWD:")
+_MODEL_SAID107 = ("sudo grant: WIDE (NOPASSWD:", "falls back to the pre-helper path, which needs the wide grant",
+                  "once the helper can be placed to narrow it again")
+
+
+def _diag_report107(diag, model):
+    """(part92's assemble, or {}; the harness's error, or "").
+
+    `diag[0]` is the Diagnostics section's line; the rest are a self-update log's lines.
+    """
+    os.makedirs(_TMP92, exist_ok=True)
+    try:
+        up, dg = _b107.Result(), _b107.Result(lines=[diag[0]])
+        _up107._tail_lines(up, {"lines": ["=== self-update ==="] + diag[1:] + model}, "canonical-https")
+        return _r24r_assemble(extra={"updates": ("ok", 0.01, up), "diagnostics": ("ok", 0.01, dg)})[0], ""
+    except Exception as exc:  # noqa: BLE001 - a harness failure fails by name below
+        return {}, "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        _shutil107.rmtree(_TMP92, ignore_errors=True)
+
+
+def _diagnosis_kept107():
+    """The privilege model is held back by its own lines, never by a word that diagnosis shares (F3, #444).
+
+    A bare `pre-helper` or `NOPASSWD` in POSTURE_RE also held back the Privileged helper check's "Not
+    installed — privileged actions fall back to the pre-helper path", install.sh's db_maintenance warning
+    and a sudoers error naming its grant: the lines that explain a host's failing privileged actions.
+    """
+    diag = [_r9_detail107(), _ins_warn107("The panel falls back to the pre-helper repair path"),
+            "[ERROR] visudo rejected the grant line: p107 ALL=(root) NOPASSWD: /p107/panel-helper"]
+    model = [_ins_warn107("sudo grant: ${SUDO_SCOPE}").replace("${SUDO_SCOPE}", "WIDE (NOPASSWD:ALL)"),
+             _ins_warn107("  The panel falls back to the pre-helper path"),
+             _ins_warn107("  Re-run this installer as root once the helper can be placed")]
+    rep, err = _diag_report107(diag, model)
+    # The file, and the page's held-back block (empty when the harness failed, which then fails below).
+    report, held = str(rep.get("report", "")), str(rep.get("posture", "")).partition("### Held back from the file")[2]
+    found = all(diag + model)
+    # By words each line holds that the report's redaction leaves alone (it rewrites a path or a token).
+    lost = [t for t in _DIAG_SAID107 if t not in report or t in held]
+    leaked = [t for t in _MODEL_SAID107 if t in report or t not in held]
+    check("debug report: diagnosis that names the pre-helper path or NOPASSWD stays in the downloadable file "
+          "(Privileged helper's 'Not installed', install.sh's db_maintenance warning, a sudoers error)",
+          found and not lost, err + repr((lost, diag)))
+    check("debug report: ...while install.sh's three grant-block lines are still held back from the file and "
+          "shown on the in-panel page",
+          found and not leaked, err + repr((leaked, model)))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. One raising row does not end the install-reconcile pass
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -554,6 +619,7 @@ finally:
 _upgrade_running107()
 _install_sh107()
 _debug_report107()
+_diagnosis_kept107()
 
 check("part107: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP107_START, repr(_P9_TRIPPED[_TRIP107_START:][:6]))
