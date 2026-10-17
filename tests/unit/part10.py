@@ -2135,6 +2135,10 @@ def _so7_panel_repair_database():
     open(os.path.join(_pd, "db_maintenance.py"), "w").close()
     SO._is_system_service = lambda: True
     SO._helper_present = lambda: True
+    # An update this part launched earlier would be refused beside (review 1016f); this checks the
+    # repair's launcher, so none is running for it. Put back below.
+    _pr_uip = SO._update_in_progress
+    SO._update_in_progress = lambda: False
     _pr_v = []
     SO._run_verb = _p7_verb_by({"panel-db-repair": ("", "", 0)}, log=_pr_v)
     _pr_ok = _p7_call(SO.panel_repair_database)
@@ -2161,6 +2165,7 @@ def _so7_panel_repair_database():
        _p7_call(SO.panel_repair_database), (False, "Couldn't start the repair job — check the panel logs."))
     for _k in ("subprocess", "_run_verb", "_helper_present"):
         setattr(SO, _k, _so7_saved[_k])
+    SO._update_in_progress = _pr_uip
     SO._is_system_service = lambda: False
     SO.PANEL_DIR = _so7_saved["PANEL_DIR"]
 

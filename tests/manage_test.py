@@ -233,6 +233,18 @@ try:
     _ex, _msg, _human = _run_setup_token(raw=False)
     check("setup-token: without --raw it prints the /setup?token= link",
           not _ex and ("/setup?token=" + _tok1) in _human, _human[:200])
+    # The link's scheme is the one the panel serves (review 1016f): behind a reverse proxy
+    # (trust_proxy) it serves plain HTTP, and the raw use_https printed https:// for it.
+    save_config(dict(load_config(), trust_proxy=True, use_https=True))
+    _ex, _msg, _proxied = _run_setup_token(raw=False)
+    save_config(dict(load_config(), trust_proxy=False))
+    check("setup-token: behind a proxy (trust_proxy) the printed link is http://, the scheme the "
+          "panel serves, not the raw use_https",
+          not _ex and ("http://<this-server>:%s/setup?token=%s" % (load_config().get("port"), _tok1))
+          in _proxied, _proxied[:200])
+    _ex, _msg, _direct = _run_setup_token(raw=False)
+    check("setup-token: ...and a panel serving its own TLS still prints https:// (control)",
+          not _ex and "https://<this-server>:" in _direct, _direct[:200])
     # An empty file (a truncated write, a full disk) is not a token: it is replaced, not printed.
     _TOKEN_FILE.write_text("", encoding="ascii")
     _ex, _msg, _tok3 = _run_setup_token()

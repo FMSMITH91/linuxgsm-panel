@@ -26,6 +26,30 @@ function bkReconcile(id, saved){
   el.value=String(saved);
   return (typed!=='' && String(saved)!==typed) ? (' — ' + tf('{typed} is out of range, kept {saved}', {typed: typed, saved: saved})) : '';
 }
+// The field the operator is typing in. A refresh of this card lands up to a dozen times in the two
+// minutes after "Back up now" (_backupOneGame's and backupAllGames' timers), and every one rewrote
+// the Keep boxes and rebuilt the per-server rows: the typed value and focus went, and a box rewritten
+// while focused equals its value at focus, so no `change` fired on blur and the retention typed was
+// silently not saved. Files & Config's twin card has the same guard (server_files.js, "Don't clobber
+// a select the user is actively changing").
+function _r29c_bkEditing(el){ return !!el && el === document.activeElement; }
+// Write a stored value into a box, unless it is the one being typed in.
+function _r29c_bkSetIdle(id, v){
+  var el=document.getElementById(id);
+  if(el && !_r29c_bkEditing(el)) el.value=String(v);
+}
+// The field being typed in inside `box`, or null. Typed fields only: a "Back up now" or Delete button
+// inside the rows keeps focus after its click (Chrome), and holding the refresh back for that would
+// freeze the very progress the click started. A <select> (the per-server interval) is the same case:
+// its pick is sent on `change` at once and written back by id (setGameSchedule), and Chrome keeps
+// focus on it, so counting it froze every refresh after "Back up now" until something else was
+// tapped. A checkbox or radio commits on its click too.
+var _r29j_bkUntyped = /^(button|submit|reset|checkbox|radio|file|range|color|image|hidden)$/;
+function _r29c_bkFieldIn(box){
+  var a=document.activeElement, tag=(a && a.tagName) || '';
+  var typed = tag === 'TEXTAREA' || (tag === 'INPUT' && !_r29j_bkUntyped.test(String(a.type || 'text').toLowerCase()));
+  return (typed && box.contains(a)) ? a : null;
+}
 // A reply that is not a listing: none at all, or an error body (`error`, on every one since #435).
 function _r25c_bkUnread(d){ return !d || !!d.error; }
 function loadBackups(){
@@ -38,7 +62,7 @@ function loadBackups(){
     var en=document.getElementById('bk-enabled'); if(en) en.checked = s.enabled!==false;
     // Bounds come from the server, so the number box and the clamp behind it cannot disagree.
     bkApplyLimits(d.limits);
-    var kp=document.getElementById('bk-keep'); if(kp && s.keep_days) kp.value = String(s.keep_days);
+    if(s.keep_days) _r29c_bkSetIdle('bk-keep', s.keep_days);
     bkShowEncState(s.encrypt===true);
     var tb=document.getElementById('bk-tbody'); if(!tb) return;
     bkRenderList(d, tb);
@@ -56,7 +80,26 @@ function loadBackups(){
   }).catch(function(){ var l=document.getElementById('bk-loading'); if(l) l.innerHTML='<span class="text-danger">Could not load backups.</span>'; });
 }
 // Every game server's backup block: its schedule, disk, last run and finished backups.
+// Not rebuilt under a field the operator is in (a per-server Schedule or Keep): the card is read
+// again once focus leaves the rows. Read again, not drawn from the listing held back: that field's
+// own `change` has been sent by then, and the held listing predates it.
 function bkRenderGames(fg, d){
+  if(_r29c_bkFieldIn(fg)){
+    fg._r29cPending = true;
+    if(!fg._r29cWaits){
+      fg._r29cWaits = true;
+      fg.addEventListener('focusout', function(){
+        // focusout fires before the next element takes focus; look where it went once it has.
+        setTimeout(function(){
+          if(!fg._r29cPending || _r29c_bkFieldIn(fg)) return;
+          fg._r29cPending = false;
+          loadBackups();
+        }, 0);
+      });
+    }
+    return;
+  }
+  fg._r29cPending = false;
   var gh='';
   (d.games||[]).forEach(function(g){
     var rows=bkGameRows(g);
@@ -129,8 +172,8 @@ function bkRenderFullSchedule(f){
   var autoOn=(f.interval_days||0)>0;
   var fen=document.getElementById('fb-auto-enabled'); if(fen) fen.checked=autoOn;
   var fi=document.getElementById('fb-interval');
-  if(fi){ _r20cIntervalOption(fi, autoOn?f.interval_days:7); fi.disabled=!autoOn; }
-  var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+  if(fi && !_r29c_bkEditing(fi)){ _r20cIntervalOption(fi, autoOn?f.interval_days:7); fi.disabled=!autoOn; }
+  _r29c_bkSetIdle('fb-keep', f.keep||2);
 }
 // Select a stored interval, adding an <option> for it when the list has none (the API takes 0-365;
 // the list offers 1, 7, 14 and 30). Assigned a value no <option> carries, the select had NO
@@ -528,7 +571,12 @@ function setGameSchedule(id){
         // in it looking like it still applies.
         var saved=d.schedule.keep_set?String(d.schedule.keep):'';
         var note=(kp!=='' && d.schedule.keep_set && saved!==kp) ? (' — '+tf('{typed} is out of range, kept {saved}', {typed: kp, saved: saved})) : '';
-        kpEl.value=saved;
+        // By id, not the element captured above: the row is redrawn when focus leaves it after a
+        // refresh was held back (bkRenderGames), from a read that may have raced this save.
+        var kpNow=document.getElementById('gsk-'+id)||kpEl;
+        kpNow.value=saved;
+        var ivNow=document.getElementById('gsi-'+id);
+        if(ivNow) _r20cIntervalOption(ivNow, d.schedule.interval_set?d.schedule.interval_days:'default');
         bkMsg(t('✓ Schedule saved')+note, note?'text-warning':'text-success');
       } else {
         bkMsg('✗ Save failed','text-danger');
@@ -656,14 +704,16 @@ function bkShowEncState(on){
   if(badge){ badge.textContent = on?'On':'Off'; badge.className = 'badge '+(on?'bg-success':'bg-secondary'); }
   var off=document.getElementById('bk-pass-off'); if(off) off.style.display = on?'':'none';
   var box=document.getElementById('bk-pass');
-  // Never repopulated from the server — it is never sent there. Cleared so a saved passphrase is
+  // Never repopulated from the server — it is never sent there. NOT cleared here: this runs on every
+  // refresh of the card, a dozen of them after a "Back up now", and wiped a passphrase mid-typing.
+  // Saving or turning encryption off clears it (_r29c_bkPassDone), so a saved passphrase is still
   // not left sitting in a form field for the next person at this screen.
-  if(box) box.value='';
   // A placeholder cannot wrap, so it has to fit the box: at 375px the field holds ~267px, and
   // "Set a new passphrase to replace the current one" needed 293px in English (more in es/fr).
   if(box) box.placeholder = on ? 'Enter a new passphrase to change it'
                                : 'Passphrase — at least 12 characters';
 }
+function _r29c_bkPassDone(){ var box=document.getElementById('bk-pass'); if(box) box.value=''; }
 function saveBackupPassphrase(btn){
   var box=document.getElementById('bk-pass'); var pass=(box&&box.value)||'';
   if(pass.length<12){ bkMsg('✗ Use at least 12 characters','text-danger'); if(box) box.focus(); return; }
@@ -675,7 +725,7 @@ function saveBackupPassphrase(btn){
             body:JSON.stringify({passphrase:pass})})
         .then(r=>r.json()).then(function(d){
           if(btn) btn.disabled=false;
-          if(d.success){ bkMsg('✓ New backups will be encrypted','text-success'); loadBackups(); }
+          if(d.success){ _r29c_bkPassDone(); bkMsg('✓ New backups will be encrypted','text-success'); loadBackups(); }
           else bkMsg('✗ '+(d.message||'Could not save'),'text-danger');
         }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not save','text-danger'); });
     }});
@@ -690,6 +740,7 @@ function clearBackupPassphrase(btn){
             body:JSON.stringify({passphrase:''})})
         .then(r=>r.json()).then(function(d){
           if(btn) btn.disabled=false;
+          if(d.success) _r29c_bkPassDone();
           bkMsg(d.success?'✓ Encryption off':'✗ Could not save', d.success?'text-warning':'text-danger');
           loadBackups();
         }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not save','text-danger'); });

@@ -1998,22 +1998,34 @@ if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='histo
 function loadGmodContent(){
   var el = document.getElementById('gmod-content-body');
   if(!el) return;
+  // The card's alert when the host did not answer one of its two reads, else ''.
+  function _gmcUnreadAlert(d){
+    // The host did not answer when asked what this server currently mounts. Every checkbox
+    // would render unticked — indistinguishable from "mounts nothing" — and Apply rewrites
+    // mount.cfg to exactly the ticks, so applying that card unmounts whatever it really had.
+    // The route refuses such an apply as well; this is so the card never offers it.
+    if(d.mounts_readable === false){
+      return '<div class="alert alert-warning py-2 px-3 mb-0 small">'
+        + '<i class="bi bi-exclamation-triangle"></i> Couldn\'t read what this server currently '
+        + 'mounts, so the list isn\'t shown — ticking from a blank card would unmount its '
+        + 'existing content. Check the host is reachable, then reload.</div>';
+    }
+    // Likewise for what content is on the host: an unread scan reads as "nothing here", so every
+    // game would show "installs …" with no Uninstall while its content sits on the disk.
+    if(d.content_readable === false){
+      return '<div class="alert alert-warning py-2 px-3 mb-0 small">'
+        + '<i class="bi bi-exclamation-triangle"></i> '
+        + escapeHtml(t('Couldn\'t read what content is on this host, so the list isn\'t shown. '
+        + 'Check the host is reachable, then reload.'))+'</div>';
+    }
+    return '';
+  }
   fetch(MOUNT + '/api/server/' + serverId + '/gmod-content')
     .then(function(r){ return r.json(); })
     .then(function(d){
       if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }  // nosemgrep
-      // The host did not answer when asked what this server currently mounts. Every checkbox
-      // would render unticked — indistinguishable from "mounts nothing" — and Apply rewrites
-      // mount.cfg to exactly the ticks, so applying that card unmounts whatever it really had.
-      // The route refuses such an apply as well; this is so the card never offers it.
-      if(d.mounts_readable === false){
-        el.innerHTML =  // nosemgrep
-          '<div class="alert alert-warning py-2 px-3 mb-0 small">'
-          + '<i class="bi bi-exclamation-triangle"></i> Couldn\'t read what this server currently '
-          + 'mounts, so the list isn\'t shown — ticking from a blank card would unmount its '
-          + 'existing content. Check the host is reachable, then reload.</div>';
-        return;
-      }
+      var unread = _gmcUnreadAlert(d);
+      if(unread){ el.innerHTML = unread; return; }  // nosemgrep
       var running = d.job && d.job.status === 'running';
       // Installable games always show; owned/mount-only games only once their content is on the host
       // (or already mounted). Mount-only content that isn't present can't be added by the panel.

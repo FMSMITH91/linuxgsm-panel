@@ -207,6 +207,28 @@ def _r26a_port(config):
     return config
 
 
+def _r29a_whitelist(config):
+    """Make config["security_whitelist"] a list of strings, in place, when the key is there.
+
+    Every reader iterates it (`list(cfg.get(...) or [])`, banlist, the monitor), and config.json is
+    hand-editable: `"security_whitelist": "203.0.113.5"` read as the characters '2', '0', '3', ...,
+    none of which is an address, so fail2ban, every remote's jail, the auto-block and the Funnel
+    ban gate all dropped the operator's own address without a word; the next Settings add then
+    wrote those characters back as entries. A string is plainly one entry, as trusted_proxies
+    reads it (auth._trusted_proxy_networks); any other non-list is no entry; a non-string item in
+    a list names no address and is dropped.
+    """
+    if "security_whitelist" not in config:
+        return config
+    value = config["security_whitelist"]
+    if isinstance(value, str):
+        value = [value] if value.strip() else []
+    elif not isinstance(value, list):
+        value = []
+    config["security_whitelist"] = [w for w in value if isinstance(w, str)]
+    return config
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:
@@ -230,6 +252,7 @@ def load_config():
         config.update(copy.deepcopy(_cfg_cache["data"]))
         _r16a_flags(config)
         _r26a_port(config)
+        _r29a_whitelist(config)
     except FileNotFoundError:
         _cfg_cache["key"] = None   # no config.json yet: defaults ARE the configuration
     except (json.JSONDecodeError, ValueError, OSError):

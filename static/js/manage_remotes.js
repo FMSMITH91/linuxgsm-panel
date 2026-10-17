@@ -696,6 +696,34 @@ function removeRemote(btn){
   if (!sel || !sel.form) return;
   sel.form.addEventListener('reset', function(){ setTimeout(function(){ toggleCreds(sel); }, 0); });
 })();
+// A browser that restores a form's state on reload or on back/forward (Firefox does, for a select
+// with no autocomplete="off") puts the select back on Password or Tailscale SSH without a `change`:
+// the field stayed a visible text box labelled for a key path, and a password typed into it showed
+// in clear, which toggleCreds' type switch exists to stop. `pageshow` comes after that restore, so
+// the field is matched to the select then. "SSH Key" is the markup's own state: a restored path is
+// left alone. Each host's Edit form has the same select (toggleEditCreds): restored onto Tailscale
+// SSH its credential box stayed shown, and what was typed there was stored for a transport that
+// never reads it; restored off it, the box stayed hidden and no credential could be entered.
+// Only a field that DISAGREES with its select is switched: a back/forward page comes back from the
+// cache already matched, and toggleCreds empties the box, so a password typed before leaving the
+// page was wiped.
+function _r29j_credsOff(sel, group, input) {
+  if (!group || !input) return false;
+  var hidden = group.style.display === 'none';
+  if (sel.value === 'password') return hidden || input.type !== 'password';
+  return sel.value === 'tailscale' && !hidden;
+}
+window.addEventListener('pageshow', function(){
+  var sel = document.getElementById('manage-remotes-auth_method');
+  if (sel && sel.form && _r29j_credsOff(sel, document.getElementById('credential-group'),
+                                        sel.form.querySelector('[name="credential"]'))) toggleCreds(sel);
+  document.querySelectorAll('[id^="manage-remotes-auth_method-"]').forEach(function(s){
+    var id = s.id.slice('manage-remotes-auth_method-'.length);
+    var group = document.getElementById('edit-cred-group-' + id);
+    // The Edit field is a password box whatever the method; only its shown/hidden state follows it.
+    if (group && (s.value === 'tailscale') !== (group.style.display === 'none')) toggleEditCreds(s, id);
+  });
+});
 
 window.afterRemotesRefresh = function(){
   document.querySelectorAll('[id^="live-stats-"]').forEach(function(el){

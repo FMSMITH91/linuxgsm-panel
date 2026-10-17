@@ -756,9 +756,12 @@ rise, so the boundary cannot quietly erode.
 What you can do today:
 
 - **If you only manage remote servers from this panel**, delete
-  `/etc/sudoers.d/linuxgsm-panel`. The panel keeps working; the grant disappears. Only
-  local-host management (panel-host OS updates, its firewall, its game-server users)
-  stops working.
+  `/etc/sudoers.d/linuxgsm-panel`. The panel keeps working; the grant disappears. Local-host
+  management (panel-host OS updates, its firewall, its game-server users) stops working, and so
+  do the panel's own root jobs: **Panel Server → Update** (and the bot's `/update`), restoring a
+  panel backup, and the database repair. Without the in-panel Update, security fixes reach the
+  panel only when you update it by hand, over SSH:
+  `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
 - **If you do manage the local host**, treat the panel host as you would any machine
   where a network service can become root: keep it off the public internet, keep 2FA on,
   and keep it updated.

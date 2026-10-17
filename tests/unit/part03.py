@@ -3133,9 +3133,13 @@ SO._SUDO_PROBE.update(at=0.0, ok=None)
 # which had the rest of this part ask the machine's real helper (review 1016e).
 _r28d_helper03 = SO._HELPER_STATE["present"]
 SO._HELPER_STATE["present"] = True
+# The OS update starts the helper's detached os-update-run job (review 1016f): no update running
+# (apt-upgrade-running rc 1), and the job's STARTED marker.
 with _so_stub(threading=_so_threads,
               _run=lambda c, **k: (_so_calls.append(c), ("NOPASS", "", 0))[1],
-              _run_verb=lambda v, a=(), **k: (_so_calls.append(v), ("", "", 0))[1]):
+              _run_verb=lambda v, a=(), **k: (_so_calls.append(v), (
+                  SO._priv.OS_UPDATE_STARTED if v == "os-update-run" else "", "",
+                  1 if v == "apt-upgrade-running" else 0))[1]):
     check("system_ops: the OS update works under the NARROW sudoers grant (helper, not sudo -n true)",
           SO.os_run_update()[0] is True, str(SO.os_run_update()))
     check("system_ops: ...and so does the reboot", SO.server_reboot(0)[0] is True)
@@ -3149,8 +3153,9 @@ with _so_stub(threading=_so_threads,
     check("system_ops: ...and an absurd one is clamped rather than slept on",
           SO.server_reboot(99999) == (True, "Server will reboot in 300 seconds."),
           str(SO.server_reboot(99999)))
-check("system_ops: the update and reboot workers those calls start were recorded, none left running",
-      sorted(set(_so_workers)) == ["_bg_update", "_do_reboot"], repr(_so_workers))
+check("system_ops: the reboot worker those calls start was recorded, none left running (the OS "
+      "update starts a detached job, no thread of the panel's)",
+      sorted(set(_so_workers)) == ["_do_reboot"], repr(_so_workers))
 # ...and with no helper and no sudo it still refuses, which is the whole point of the gate.
 SO._HELPER_STATE["present"] = False
 SO._SUDO_PROBE.update(at=0.0, ok=None)
@@ -3178,7 +3183,7 @@ SO._HELPER_STATE["present"] = _r28d_helper03
 import threading as _rbt  # noqa: E402
 
 _rb_errs = []
-_rb_reboot_done, _rb_apt_done = _rbt.Event(), _rbt.Event()
+_rb_reboot_done = _rbt.Event()
 
 
 def _rb_err(msg, *a, **k):
@@ -3186,8 +3191,6 @@ def _rb_err(msg, *a, **k):
     _rb_errs.append(line)
     if line.startswith("reboot verb failed"):
         _rb_reboot_done.set()
-    if line.startswith("apt-upgrade verb failed"):
-        _rb_apt_done.set()
 
 
 _rb_saved_log = SO._log.error
@@ -3203,10 +3206,11 @@ try:
         check("system_ops: a REFUSED reboot verb is logged, not dropped on the floor",
               _rb_reboot_done.wait(5) and any("reboot verb failed" in e for e in _rb_errs),
               str(_rb_errs))
-        SO.os_run_update()
-        check("system_ops: ...and so is a refused apt-upgrade",
-              _rb_apt_done.wait(5) and any("apt-upgrade verb failed" in e for e in _rb_errs),
-              str(_rb_errs))
+        _rb_upd = SO.os_run_update()
+        check("system_ops: ...and a refused OS-update job is logged and answered as not started",
+              _rb_upd == (False, "Couldn't start the update.")
+              and any("os-update-run verb did not start" in e for e in _rb_errs),
+              str((_rb_upd, _rb_errs)))
     # Positive control: the verb still RUNS, and a successful one logs nothing.
     _rb_errs.clear()
     _rb_calls, _rb_ran = [], _rbt.Event()

@@ -975,7 +975,7 @@ try:
     _gms18 = _server18(_gmh18, "gmodp18server", 27550, game_type="gmod")
     _gmops18 = []
     _p9_patch(_sf18, "detect_content_user",
-              lambda remote, games: (_gmops18.append(("detect", remote.host)),
+              lambda remote, games, **k: (_gmops18.append(("detect", remote.host)),
                                      {"user": "gmcontent"})[1])
     _p9_patch(_sf18, "uninstall_gmod_content",
               lambda remote, user, games: (_gmops18.append(("uninstall", remote.host)),

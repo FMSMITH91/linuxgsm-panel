@@ -37,8 +37,10 @@ cd "$WORK"
 # run into a silent pass that tested nothing. That has already happened once (the runner used to
 # import `manage`, which builds the DB on import). Make it loud instead.
 set -o pipefail
-"$PY" tools/nosudo_runner.py "$SUITE" "${@:2}" 2>&1 | tee "$WORK/.run.log"
-rc=$?
+# `|| rc=$?`: under set -e a bare `rc=$?` on the next line never saw a failure (the script had
+# already exited on it), so it was always 0. The exit status was right either way; this says so.
+rc=0
+"$PY" tools/nosudo_runner.py "$SUITE" "${@:2}" 2>&1 | tee "$WORK/.run.log" || rc=$?
 if grep -q "^SKIP:" "$WORK/.run.log"; then
     echo "" >&2
     echo "ERROR: the suite SKIPPED — it never ran. Something created data/ in the throwaway tree" >&2

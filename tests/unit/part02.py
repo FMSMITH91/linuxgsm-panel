@@ -2888,6 +2888,7 @@ _li_dir = _li_tmp.mkdtemp(prefix="panel-launch-")
 with open(os.path.join(_li_dir, "install.sh"), "w") as _li_fh:
     _li_fh.write("#!/bin/bash\n")
 _li_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess)
+_li_uip = SO._update_in_progress
 _li_rc, _li_popen = {"rc": 1}, []
 try:
     SO.PANEL_DIR = _li_dir
@@ -2919,6 +2920,9 @@ try:
         with open(_li_p, "w") as _li_fh2:
             _li_fh2.write("")
     _li_rc["rc"] = 1
+    # The launches above are an update in progress, which the repair now refuses (review 1016f):
+    # what is checked here is its launcher, so no update is running for it.
+    SO._update_in_progress = lambda: False
     _li_rok, _li_rmsg = SO.panel_repair_database()
     check("db-repair: a repair job that never started is not reported as a repair in progress",
           _li_rok is False and "Couldn't start the repair job" in _li_rmsg,
@@ -2928,6 +2932,7 @@ try:
           SO.panel_repair_database()[0] is True, str(SO.panel_repair_database()))
 finally:
     (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess) = _li_saved
+    SO._update_in_progress = _li_uip
     _li_sh.rmtree(_li_dir, ignore_errors=True)
 
 # ── remote_uptime says whether the host actually ANSWERED ────────────────────────────────────

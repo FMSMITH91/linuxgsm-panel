@@ -2154,6 +2154,9 @@ def _discover_scan_script(home="/home"):
     the 45 s timeout — and a scan that times out finds nothing, for every account on the host.
     The test and the read are two steps, so a file swapped for a FIFO between them still blocked
     root's `head` in open(): each read is bounded by `timeout` where the host has it (coreutils).
+    ~/lgsm/mods/installed-mods.txt is the account's too and is read the same way: a plain
+    `grep -c .` of it hung root's scan on a FIFO, read /dev/zero through a link until memory ran
+    out, and through a link to any root-readable file answered that file's line count.
     """
     cfgs = " ".join('"%s"' % f.format(inst="$g") for f in LGSM_CFG_ORDER)
     return (
@@ -2172,7 +2175,9 @@ def _discover_scan_script(home="/home"):
         '    sp=$(printf "%s\\n" "$cf" | grep -E "^[[:space:]]*startparameters=" | tail -n 1); '
         '    case "$sp" in *"\\${port}"*|*"\\$port"|*"\\$port"[!A-Za-z0-9_]*) ;; *) p=0;; esac; '
         '    b=$(ls -1 "$h/$u/lgsm/backup/" 2>/dev/null | grep -cE "\\.(tar|tgz|zip)"); '
-        '    m=$(grep -c . "$h/$u/lgsm/mods/installed-mods.txt" 2>/dev/null); '
+        '    mf="$h/$u/lgsm/mods/installed-mods.txt"; m=0; ' +
+        ('    [ -f "$mf" ] && [ ! -L "$mf" ] && m=$($T head -c %d "$mf" 2>/dev/null | grep -c .); '
+         % LGSM_CFG_READ_MAX) +
         '    c=$(printf "%s\\n" "$cj" | grep -vE "^[[:space:]]*(#|$)" | grep -c .); '
         '    a=$(printf "%s\\n" "$cj" | grep -cE "@reboot|monitor"); '
         '    echo "FOUND|$u|$g|${p:-0}|${b:-0}|${m:-0}|${c:-0}|${a:-0}"; '

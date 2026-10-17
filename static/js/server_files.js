@@ -24,7 +24,15 @@ var gameCfgLoaded=false, gameCfgRel=null;
 // 'stale' when a later re-read (after a settings save) failed. Its Save writes the box over the
 // instance .cfg byte for byte, so it is refused in the other two states: an unread box is "" (or
 // whatever was typed into it), and a stale one would put back the settings the save just changed.
+// 'behind': a settings save changed the file while the operator was typing in the box (the re-read
+// below leaves a focused box alone), so its text predates that save; refused for the same reason.
 var _r26c_rawRead='unread';
+// The text a read last put in the box: a focused box still holding it has not been typed into.
+// Read back from the box after each fill, not the reply's text: a textarea's value turns CR and CRLF
+// into LF, so a cfg with CRs never equalled the reply, and an untouched box read as typed-into
+// (refused Save as 'behind'). A reply is compared after the same normalisation (_r29j_rawText).
+var _r29j_rawShown=null;
+function _r29j_rawText(s){ return String(s).replace(/\r\n?/g, '\n'); }
 var _el_cfg_tabs = document.getElementById('cfg-tabs');
 if (_el_cfg_tabs) _el_cfg_tabs.addEventListener('click', function(ev){
   var b=ev.target.closest('[data-tab]'); if(!b) return;
@@ -73,7 +81,9 @@ function loadConfig(){
     });
     if(!(d.groups||[]).length) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
-    document.getElementById('cfg-raw').value = d.raw||'';
+    var ta=document.getElementById('cfg-raw');
+    ta.value = d.raw||'';
+    _r29j_rawShown = ta.value;
     _r26c_rawRead='ok';
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
 }
@@ -125,12 +135,25 @@ function refreshRawConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(function(d){
     var ta=document.getElementById('cfg-raw');
     if(!d || d.error || typeof d.raw !== 'string'){ _r26c_rawStale(); return; }
-    if(ta && document.activeElement!==ta){
-      // A good read clears a stale mark a failed earlier one left.
-      if(_r26c_rawRead==='stale') document.getElementById('cfg-raw-msg').textContent='';
-      ta.value = d.raw; _r26c_rawRead='ok';
+    if(!ta) return;
+    // A box the operator is typing in is left alone. It used to be left marked 'ok' as well, so
+    // when they had clicked into it before this re-read came back (a slow host), its Save wrote
+    // the pre-save text back over the settings just saved. Typed-in and now behind the file: its
+    // Save is refused until the page is reloaded. Focused but untouched: it is simply refilled.
+    if(document.activeElement===ta && ta.value!==_r29j_rawShown){
+      if(_r29j_rawText(d.raw)!==_r29j_rawShown) _r29j_rawBehind();
+      return;
     }
+    // A good read clears a stale mark a failed earlier one left.
+    if(_r26c_rawRead==='stale') document.getElementById('cfg-raw-msg').textContent='';
+    ta.value = d.raw; _r29j_rawShown = ta.value; _r26c_rawRead='ok';
   }).catch(function(){ _r26c_rawStale(); });
+}
+function _r29j_rawBehind(){
+  _r26c_rawRead='behind';
+  var msg=document.getElementById('cfg-raw-msg');
+  msg.textContent=_tr('The settings save changed this config while you were typing here, so saving this text would undo it. Reload the page before saving it.');
+  msg.className='small ms-2 text-warning';
 }
 function _r26c_rawStale(){
   if(_r26c_rawRead!=='ok') return;
@@ -165,7 +188,9 @@ function saveGameCfg(){
 function saveRaw(){
   var msg=document.getElementById('cfg-raw-msg');
   if(_r26c_rawRead!=='ok'){
-    msg.textContent=_tr(_r26c_rawRead==='stale'
+    msg.textContent=_tr(_r26c_rawRead==='behind'
+      ? 'The settings save changed this config while you were typing here, so saving this text would undo it. Reload the page before saving it.'
+      : _r26c_rawRead==='stale'
       ? 'The config could not be re-read after the settings save, so this text may be out of date. Reload the page before saving it.'
       : 'The config has not been read, so there is nothing safe to save. Reload the page and try again.');
     msg.className='small ms-2 text-danger';

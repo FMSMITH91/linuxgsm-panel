@@ -247,9 +247,13 @@ def cmd_setup_token(args):
     if getattr(args, "raw", False):
         print(tok)
         return
+    from app import _effective_https
     from panel.core.config import load_config
     cfg = load_config()
-    scheme = "https" if cfg.get("use_https", True) else "http"
+    # The scheme the panel SERVES, as the boot decides it: behind a proxy (trust_proxy) or Tailscale
+    # Serve on loopback it serves plain HTTP whatever use_https says, and a raw use_https printed
+    # an https:// link to a panel that answers only http.
+    scheme = "https" if _effective_https(cfg) else "http"
     print("Open the setup wizard with this link, using this server's address:")
     print("    %s://<this-server>:%s/setup?token=%s" % (scheme, cfg.get("port", 5000), tok))
     print("or open /setup and paste the token:  %s" % tok)

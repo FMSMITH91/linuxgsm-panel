@@ -714,8 +714,10 @@ try:
     _fr_r = c.post("/api/remote/%d/close-panel-port" % _fr_rid,
                    headers={"X-Requested-With": "XMLHttpRequest"})
     _fr_j = _fr_r.get_json() or {}
+    # The refusal is a 200 answering success: false; `is not True` also read a crash (500) as it
+    # (review 1016f, the same class as the backup and remote-test refusals).
     check("failed read: an unreadable firewall is NOT reported as 'port already closed'",
-          _fr_j.get("success") is not True,
+          _fr_r.status_code == 200 and _fr_j.get("success") is False,
           "answered %r — the panel is still listening on that port"
           % (_fr_j.get("message"),))
     check("failed read: ...and nothing was deleted from a firewall it could not read",
@@ -1057,10 +1059,13 @@ try:
 
     # ssh-mode: its whole job is the audit row, since the outcome is on the host.
     _shmod.remote_set_public_ssh = lambda r, m: (False, "ufw refused")
-    c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "limit"})
+    _r29d_sm = c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "limit"})
+    # ...answered as the route's refusal: a crash (500) left the last row, maybe an earlier failure,
+    # reading the same (review 1016f).
     check("ssh mode: a refused change is audited as a failure",
-          (_al_last("remote_ssh_mode") or {}).get("success") is False,
-          "audited %r" % ((_al_last("remote_ssh_mode") or {}).get("success"),))
+          (_al_last("remote_ssh_mode") or {}).get("success") is False and _r29d_sm.status_code == 200
+          and (_r29d_sm.get_json() or {}).get("success") is False,
+          "audited %r, answered %d" % ((_al_last("remote_ssh_mode") or {}).get("success"), _r29d_sm.status_code))
     _shmod.remote_set_public_ssh = lambda r, m: (True, "ok")
     c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "off"})
     check("ssh mode: ...and one that worked is audited as a success (positive control)",

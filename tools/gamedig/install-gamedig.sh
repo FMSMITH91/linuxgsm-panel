@@ -64,10 +64,23 @@ TREE="${HERE}/${HASH}"
 # short timeouts, about a second and a half. gamedig reports that on stdout as {"error":...}.
 # Anything else (a stack trace from a missing module, a Node too old for it, no output at all) is a
 # tree that does not work.
+# Run as nobody, never as root. --ignore-scripts keeps every package's install hook from running as
+# root; running the installed tree here as root handed a dependency's import-time code root on
+# every host, weekly from the cron, which only ever runs as the game accounts and the panel user
+# otherwise. The tree is 0755 under a 0755 directory, so nobody can run it. runuser is
+# util-linux's, on every host useradd is; with no nobody account the check fails, which keeps the
+# gamedig already in place rather than run the new one as root. It lives in /usr/sbin, which the
+# weekly cron's PATH (/usr/bin:/bin) does not search, hence the lookup with the sbin directories
+# added AFTER the caller's (npm and node are still found where they were).
 works() {
-    local out
-    out="$(cd / && timeout 60 "$1" --type minecraft 127.0.0.1:1 --givenPortOnly --maxRetries 1 \
-             --socketTimeout 1000 --attemptTimeout 3000 2>/dev/null)" || return 1
+    local out ru
+    local -a as=()
+    if [[ "${EUID}" -eq 0 ]]; then
+        ru="$(PATH="${PATH}:/usr/sbin:/sbin" command -v runuser)" || return 1
+        as=("${ru}" -u nobody --)
+    fi
+    out="$(cd / && "${as[@]}" timeout 60 "$1" --type minecraft 127.0.0.1:1 --givenPortOnly \
+             --maxRetries 1 --socketTimeout 1000 --attemptTimeout 3000 2>/dev/null)" || return 1
     case "${out}" in '{"error":'*) return 0 ;; esac
     return 1
 }

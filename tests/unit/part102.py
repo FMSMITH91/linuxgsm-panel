@@ -659,10 +659,14 @@ def _retry_created102(rid, short, creates):
         raise _p9_ms._InstallAbandoned("p102: the panel restarted here")
     _p9_patch(_p9_ms, "prepare_install_account", _prepare)
     _p9_patch(_p9_ms, "_install_dependencies", _deps)
+    # The job's thread is queued and run by the drain below, so it has ended before the "restart"
+    # (review 1016f: part12's finally gives the route modules their real threading back, the job
+    # ran on a real thread, and the drain ran nothing; a yield before step 2 would have raced it).
+    _p9_patch(_p9_ms, "threading", _p9_threading(_P9Thread))
     with _p9.app_context():
         _p9_ms._queue_install_job(db.session.get(GameServer, sid), [])
     _p9_ms._install_job_runner(_p9)(sid, rid, short, "css", "cssserver", 27102, [], fresh=False)
-    _p9_drain()
+    _drained = _p9_drain()
     # The restart: the job, and this process's memory of the accounts it made, are gone.
     with _p9_state._install_lock:
         _p9_state._install_jobs.pop(sid, None)
@@ -671,7 +675,7 @@ def _retry_created102(rid, short, creates):
         gs = db.session.get(GameServer, sid)
         gs.status = "failed"            # what the restart reconcilers write, and nothing else
         db.session.commit()
-        return seen.get("left"), _p9_ms._r25b_left_account(db.session.get(GameServer, sid))
+        return seen.get("left"), _p9_ms._r25b_left_account(db.session.get(GameServer, sid)), _drained >= 1
 
 
 def _retry_restart102(rid):
@@ -687,7 +691,7 @@ def _retry_restart102(rid):
           "account, left it alone\" record as soon as it did, so a restart mid-install no longer "
           "brings it back (Remove then kept the panel's own account and said it had not made it); "
           "a retry that reused the account keeps it (control)",
-          got == {"created": (False, False), "reused": (True, True)}, repr(got))
+          got == {"created": (False, False, True), "reused": (True, True, True)}, repr(got))
     check("install status: a lost install the host shows as installed clears the recorded failure, as "
           "the reconcile ticker does (the kept record came back once the row read uninstalled)",
           settled == (True, None, ""), repr(settled))

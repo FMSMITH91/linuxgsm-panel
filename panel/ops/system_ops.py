@@ -1100,25 +1100,28 @@ def _r27p_local_probe():
 
 
 def os_run_update():
-    """Run apt upgrade in background. Returns (success, message)."""
+    """Start the panel host's OS update as the detached job the OS Updates card starts. (ok, message).
+
+    This ran the helper's foreground `apt upgrade` from a thread of the panel, with a 600 s kill:
+    a child of the panel, in its service's cgroup. An upgrade that took longer (a kernel and many
+    packages on a slow VPS) was killed at 600 s, and any panel restart while it ran (a self-update,
+    a port change) stopped the whole cgroup: apt died mid-dpkg either way, and the host was left
+    "dpkg was interrupted". The helper's os-update-run job exists for exactly that (the helper's
+    job-unit comment says so), and the card on the panel host uses it: the same job, the same
+    "already running" check and the same STARTED marker as hosts.remote_os_update_start.
+    _run_verb never raises, so a refusal is a non-zero rc and no marker: "Couldn't start".
+    """
     if not _can_escalate():
         return False, "Sudo access required. Configure passwordless sudo for the panel user."
-
-    # Run in background thread
-    def _bg_update():
-        # The tuple used to be dropped. _run_verb never raises — it turns every failure into a
-        # non-zero rc or ("", "...", -1) — so apt failing on a held dpkg lock, a full disk, a
-        # missing helper verb or a sudo refusal left NO trace anywhere: the route had already
-        # answered "OS update started in background" and written an os_update_run audit row.
-        # This thread outlives the HTTP response, so the log is the only place the outcome can
-        # still be reported; every other _run_verb call site in this file already checks rc.
-        _out, _err, _rc = _run_verb("apt-upgrade", [], timeout=600)
-        if _rc != 0:
-            _log.error("apt-upgrade verb failed: rc=%s %s", _rc, (_err or _out or "")[:200])
-
-    thread = threading.Thread(target=_bg_update, daemon=True)
-    thread.start()
-    return True, "OS update started in background. This may take several minutes."
+    _out, _err, rc = _run_verb("apt-upgrade-running", [], timeout=10, merge_stderr=False)
+    if rc == 0:
+        return True, "An update is already running — watching it."
+    out, err, rc = _run_verb("os-update-run", [], timeout=20)
+    if _priv.OS_UPDATE_STARTED in (out or ""):
+        return True, "OS update started in background. This may take several minutes."
+    _log.error("os-update-run verb did not start: rc=%s %s", rc,
+               (err or out or "")[:200].replace("\r", " ").replace("\n", " "))
+    return False, "Couldn't start the update."
 
 
 def os_update_log():
@@ -2749,6 +2752,25 @@ def restart_panel(delay_seconds=2):
         return False, "Could not restart the panel — check the panel logs."
 
 
+def _r29a_repair_refusal():
+    """Why the database repair may not start now, or None.
+
+    Not beside a self-update or a backup restore, which refuse each other for the same reason: each
+    replaces panel.db (install.sh's snapshot and rollback, the restore's detached swap), and the
+    repair stops the panel and rewrites or replaces it too, in a unit of its own that systemd does
+    not serialise with theirs. Only this direction needs asking: the repair stops the panel, so
+    nothing can launch an update or a restore while it runs.
+    """
+    from panel.ops import backup as _bk
+    if _update_in_progress():
+        return ("A panel update is being installed right now — repair the database once it has "
+                "finished.")
+    if _bk.restore_pending():
+        return ("A backup restore is in progress — repair the database once it has finished and "
+                "the panel has restarted.")
+    return None
+
+
 def panel_repair_database():
     """Repair the panel database on-demand, OFFLINE and safely. A live DB can't be rebuilt while the
     running panel holds it open, so a DETACHED transient job stops the panel service, runs
@@ -2762,6 +2784,9 @@ def panel_repair_database():
     dbm = os.path.join(base, "db_maintenance.py")
     if not os.path.exists(py) or not os.path.exists(dbm):
         return False, "The repair tool isn't available on this install."
+    refusal = _r29a_repair_refusal()
+    if refusal:
+        return False, refusal
 
     if _is_system_service() and _helper_present():
         # The helper does the whole stop -> repair -> start itself, detached, as three argv calls

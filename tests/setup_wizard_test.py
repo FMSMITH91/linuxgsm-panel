@@ -158,6 +158,16 @@ def _is_token_page(resp):
     return b'name="setup_token"' in resp.data and b'name="step"' not in resp.data
 
 
+def _r29d_redirect(resp, where):
+    """Is `resp` a redirect to a URL holding `where`? A refusal here is one; a crash (500) is not."""
+    return resp.status_code in (301, 302, 303) and where in (resp.headers.get("Location") or "")
+
+
+def _r29d_answer(resp):
+    """What `resp` answered, for a failing check's detail."""
+    return "%d -> %s" % (resp.status_code, resp.headers.get("Location"))
+
+
 def _wiz_step():
     with app.app_context():
         _st = SetupState.query.first()
@@ -492,6 +502,20 @@ def _check_admin_race():
           "%d -> %s" % (r.status_code, r.headers.get("Location")))
 
 
+def _r29d_remote_refused(c, label, over):
+    """POST one remote step that must be refused; check it connected to nothing and added nothing.
+
+    The refusal is the step's redirect back to itself: a crash (500) also connects to nothing and
+    adds no host, and read as the refusal (review 1016f).
+    """
+    _before_calls = len(_ssh_calls)
+    _r = c.post("/setup", data=dict(_SSH_ADD, **over))
+    check("remote step: %s is refused before any connection, and adds no host" % label,
+          len(_ssh_calls) == _before_calls and _remote_names() == [] and _r29d_redirect(_r, "/setup"),
+          "%d call(s), hosts %r, answered %s" % (len(_ssh_calls) - _before_calls, _remote_names(),
+                                                 _r29d_answer(_r)))
+
+
 def _check_remote_step():
     """Step 4's add-a-host form runs the Hosts page's checks before any connection."""
     # ── Step 4: the first remote host is checked like the Hosts page's own add form ───────────
@@ -507,11 +531,7 @@ def _check_remote_step():
                           ("a name with markup", {"name": "<b>box</b>"}),
                           ("an SSH user that is not a Linux user", {"name": "User box",
                                                                     "ssh_user": "root;id"})):
-        _before_calls = len(_ssh_calls)
-        c.post("/setup", data=dict(_SSH_ADD, **_over))
-        check("remote step: %s is refused before any connection, and adds no host" % _label,
-              len(_ssh_calls) == _before_calls and _remote_names() == [],
-              "%d call(s), hosts %r" % (len(_ssh_calls) - _before_calls, _remote_names()))
+        _r29d_remote_refused(c, _label, _over)
     # Positive control: an ordinary host, in order, as the owner, is tested and added.
     c.post("/setup", data=dict(_SSH_ADD, name="Wizard box"))
     check("remote step: the owner's in-order add still tests the connection and adds the host",
@@ -914,14 +934,17 @@ try:
               "got %d" % rr.status_code)
     check("owner: ...and nothing was run on the host for it", _ts_calls == [], repr(_ts_calls))
     _bind_owner = load_config().get("bind_host")
-    _att.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5099",
-                              "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
+    _r29d_r = _att.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5099",
+                                        "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
     check("owner: another browser cannot rewrite the bind or port",
-          load_config().get("bind_host") == _bind_owner and load_config().get("port") != 5099,
-          "%s %s" % (load_config().get("bind_host"), load_config().get("port")))
-    _att.post("/setup", data={"step": "tailscale"})
-    check("owner: another browser cannot advance the wizard", _wiz_step() == "tailscale",
-          _wiz_step())
+          load_config().get("bind_host") == _bind_owner and load_config().get("port") != 5099
+          and _r29d_redirect(_r29d_r, "/login"),
+          "%s %s, answered %s" % (load_config().get("bind_host"), load_config().get("port"),
+                                  _r29d_answer(_r29d_r)))
+    _r29d_r = _att.post("/setup", data={"step": "tailscale"})
+    check("owner: another browser cannot advance the wizard",
+          _wiz_step() == "tailscale" and _r29d_redirect(_r29d_r, "/login"),
+          "%s, answered %s" % (_wiz_step(), _r29d_answer(_r29d_r)))
     # The owner's own browser carries on (positive control for every refusal above)...
     rr = c.get("/api/setup/tailscale/status")
     check("owner: the creating browser still reaches the Tailscale step's API",
@@ -956,10 +979,11 @@ try:
 
     # A second admin_user POST must be refused even while the wizard is still open — the wizard
     # creates the FIRST admin only (defence in depth behind the completion lock).
-    c.post("/setup", data={"step": "admin_user", "username": "sneak",
-                           "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
+    _r29d_r = c.post("/setup", data={"step": "admin_user", "username": "sneak",
+                                     "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
     check("open: step=admin_user refuses once a superadmin exists",
-          superadmins() == ["firstadmin"], str(superadmins()))
+          superadmins() == ["firstadmin"] and _r29d_redirect(_r29d_r, "/login"),
+          "%s, answered %s" % (superadmins(), _r29d_answer(_r29d_r)))
 
     _check_remote_step()
 
@@ -982,12 +1006,13 @@ try:
           r.status_code in (301, 302, 303) and "login" in (r.headers.get("Location") or ""),
           "%d -> %s" % (r.status_code, r.headers.get("Location")))
     _before_o = load_config()
-    _owner.post("/setup", data={"step": "welcome", "site_title": "OwnerHijack",
-                                "port": "1235", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
+    _r29d_r = _owner.post("/setup", data={"step": "welcome", "site_title": "OwnerHijack",
+                                          "port": "1235", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
     _after_o = load_config()
     check("locked: POST step=welcome cannot rewrite the binding, even from the browser that ran "
           "the wizard", (_after_o.get("bind_host"), _after_o.get("port"), _after_o.get("site_title"))
-          == (_before_o.get("bind_host"), _before_o.get("port"), _before_o.get("site_title")),
+          == (_before_o.get("bind_host"), _before_o.get("port"), _before_o.get("site_title"))
+          and _r29d_redirect(_r29d_r, "/login"),
           "%r -> %r" % ((_before_o.get("bind_host"), _before_o.get("port")),
                         (_after_o.get("bind_host"), _after_o.get("port"))))
     rr = _owner.post("/api/setup/tailscale/up", json={})
@@ -1023,14 +1048,15 @@ try:
                                "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD},
                follow_redirects=False)
     check("locked: POST step=admin_user cannot create a superadmin",
-          "backdoor" not in superadmins(), str(superadmins()))
+          "backdoor" not in superadmins() and _r29d_redirect(r, "/login"),
+          "%s, answered %s" % (superadmins(), _r29d_answer(r)))
 
     _before = load_config()
-    c.post("/setup", data={"step": "welcome", "site_title": "Hijacked",
-                           "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
+    _r29d_r = c.post("/setup", data={"step": "welcome", "site_title": "Hijacked",
+                                     "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
     _after = load_config()
     check("locked: POST step=welcome cannot rewrite the panel's binding",
-          _after.get("bind_host") == _before.get("bind_host")
+          _r29d_redirect(_r29d_r, "/login") and _after.get("bind_host") == _before.get("bind_host")
           and _after.get("port") == _before.get("port")
           and _after.get("site_title") == _before.get("site_title"),
           "%s:%s -> %s:%s" % (_before.get("bind_host"), _before.get("port"),
@@ -1050,23 +1076,24 @@ try:
         check("locked: with config.json %s, GET /setup STAYS locked" % _label,
               r.status_code in (301, 302, 303) and "login" in (r.headers.get("Location") or ""),
               "%d -> %s" % (r.status_code, r.headers.get("Location")))
-        c2.post("/setup", data={"step": "admin_user", "username": "cfgbreak-%s" % _label[:4],
-                                "password": _ADMIN_PASSWORD,
-                                "confirm_password": _ADMIN_PASSWORD}, follow_redirects=False)
+        _r29d_r = c2.post("/setup", data={"step": "admin_user", "username": "cfgbreak-%s" % _label[:4],
+                                          "password": _ADMIN_PASSWORD,
+                                          "confirm_password": _ADMIN_PASSWORD}, follow_redirects=False)
         check("locked: with config.json %s, POST still creates NO superadmin" % _label,
-              not any(u.startswith("cfgbreak") for u in superadmins()), str(superadmins()))
+              not any(u.startswith("cfgbreak") for u in superadmins()) and _r29d_redirect(_r29d_r, "/login"),
+              "%s, answered %s" % (superadmins(), _r29d_answer(_r29d_r)))
 
         # THE ACTUAL EXPLOIT from regression #2, and the reason the two above are not enough:
         # step=admin_user is additionally guarded by "a superadmin already exists", so it stays
         # shut even when the outer lock is broken. step=welcome has no such inner guard — it just
         # writes. On a live install that turns a loopback-only panel into 0.0.0.0 at the next
         # restart, from an unauthenticated request, with no credential involved.
-        c2.post("/setup", data={"step": "welcome", "site_title": "Hijacked-%s" % _label[:4],
-                                "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
+        _r29d_r = c2.post("/setup", data={"step": "welcome", "site_title": "Hijacked-%s" % _label[:4],
+                                          "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
         _cfg_now = load_config()
         check("locked: with config.json %s, POST step=welcome cannot rewrite the binding" % _label,
               not str(_cfg_now.get("site_title", "")).startswith("Hijacked")
-              and _cfg_now.get("port") != 1234,
+              and _cfg_now.get("port") != 1234 and _r29d_redirect(_r29d_r, "/login"),
               "config now says %s / %s" % (_cfg_now.get("site_title"), _cfg_now.get("port")))
 
         # The setup-only Tailscale endpoints share that lock for the same reason — they are

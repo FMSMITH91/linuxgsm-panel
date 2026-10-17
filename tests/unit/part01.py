@@ -2367,11 +2367,12 @@ try:
     _sm_core.run_command = lambda *a, **k: ("__NOFILE__", "", 0)
     check("stat_path: a missing path is None, not a zero-byte file",
           _sm_files.stat_path(_FakeSrv(), "csgoserver", "gone.cfg") is None)
-    # An unreadable size must not silently become a Content-Length of 0: a wrong Content-Length
-    # truncates the download at that many bytes, which is worse than no progress bar.
+    # An unreadable size must not become a Content-Length at all: a wrong Content-Length truncates
+    # the download at that many bytes, and 0 (what this fell back to) sent an EMPTY file under the
+    # real name with a 200 (review 1016f). No size read is no answer.
     _sm_core.run_command = lambda *a, **k: ("f", "", 0)
-    eq("stat_path: an unreadable size falls back to 0 rather than garbage",
-       _sm_files.stat_path(_FakeSrv(), "csgoserver", "odd")["size"], 0)
+    eq("stat_path: an unreadable size is no answer (None), never a 0-byte file",
+       _sm_files.stat_path(_FakeSrv(), "csgoserver", "odd"), None)
     _stat_cmds = []
     _sm_core.run_command = lambda s, c, **k: (_stat_cmds.append(c), ("f 1", "", 0))[1]
     _sm_files.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")

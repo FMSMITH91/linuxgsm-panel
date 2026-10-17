@@ -375,19 +375,42 @@ import ast as _smg_ast                                                          
 import glob as _smg_glob                                                           # noqa: E402
 _SMPKG = os.path.join(_root, "panel", "ops", "ssh_manager")
 _smg_mods = {f[:-3] for f in os.listdir(_SMPKG) if f.endswith(".py") and f != "__init__.py"}
+
+
+def _r29d_smg_by_name(f, text):
+    """Each name submodule file `f` (source `text`) imports from the package by NAME, not as a module.
+
+    A relative import is resolved against the package first (review 1016f: `from ._core import
+    run_command` has module "_core" at level 1, and `from . import run_command` none at all, so
+    only the absolute spelling was read and either binds a function with the gate green).
+    """
+    _bad = []
+    for _n in _smg_ast.walk(_smg_ast.parse(text)):
+        if not isinstance(_n, _smg_ast.ImportFrom):
+            continue
+        _mod = _n.module or ""
+        if _n.level:
+            _mod = "panel.ops.ssh_manager".rsplit(".", _n.level - 1)[0] + ("." + _mod if _mod else "")
+        if _mod.startswith("panel.ops.ssh_manager"):
+            _bad += ["%s imports %s by NAME (must go through the module)" % (f, _a.name)
+                     for _a in _n.names if _a.name not in _smg_mods]
+    return _bad
+
+
 _smg_bad = []
 for _f in sorted(os.listdir(_SMPKG)):
     if not _f.endswith(".py"):
         continue
-    _tree = _smg_ast.parse(open(os.path.join(_SMPKG, _f), encoding="utf-8").read())
-    for _n in _smg_ast.walk(_tree):
-        if isinstance(_n, _smg_ast.ImportFrom) and (_n.module or "").startswith("panel.ops.ssh_manager"):
-            for _a in _n.names:
-                if _a.name not in _smg_mods:
-                    _smg_bad.append("%s imports %s by NAME (must go through the module)"
-                                    % (_f, _a.name))
+    _smg_bad += _r29d_smg_by_name(_f, open(os.path.join(_SMPKG, _f), encoding="utf-8").read())
 check("ssh_manager: no submodule binds another's function by name (the stub seam)",
       not _smg_bad, "; ".join(_smg_bad[:4]))
+check("ssh_manager: ...a relative import is read as the package's, and binding a submodule is not "
+      "binding a name (control)",
+      [bool(_r29d_smg_by_name("x.py", _t)) for _t in (
+          "from ._core import run_command", "from . import run_command", "from ..ssh_manager import run_command",
+          "from panel.ops.ssh_manager import run_command", "from . import _core",
+          "from panel.ops.ssh_manager import _core", "from .. import ssh_manager", "from os import path")]
+      == [True] * 4 + [False] * 4)
 
 # Nor may two submodules define the same top-level NAME differently. The package's __getattr__
 # answers with the FIRST submodule in _MODULES order that has it, so a helper added to an earlier
@@ -2657,6 +2680,23 @@ finally:
 # with the legitimate call it must not break, because a verb that refuses everything is not a fix.
 import grp as _cs_grp
 import stat as _cs_stat
+
+
+def _r29d_grant_read(mod, args, content):
+    """(rc, usermod argvs) of helper module `mod`'s content-grant-read, its usermod recorded, not run.
+
+    It ran this machine's real `usermod -aG` on the developer's own account (review 1016f lead): the
+    group-check block below was moved to a recording copy for that hazard, and these were not.
+    """
+    _saved, _ran = mod.subprocess, []
+    mod.subprocess = _sec_types.SimpleNamespace(
+        run=lambda argv, **kw: (_ran.append(list(argv)), _sp.CompletedProcess(argv, 0, b"", b""))[1])
+    try:
+        return mod.do_content_grant_read(args, content), _ran
+    finally:
+        mod.subprocess = _saved
+
+
 from panel.ops.ssh_manager import gmod as _sm_gmod  # noqa: E402
 _cs_tmp = _tempfile.mkdtemp(prefix="content-sym-")
 _cs_me = __import__("pwd").getpwuid(os.getuid()).pw_name
@@ -2715,11 +2755,11 @@ try:
     os.chmod(_cs_td, _cs_stat.S_IRWXU)
     os.symlink(_cs_tf, os.path.join(_cs_tree, "a"))
     os.symlink(_cs_td, os.path.join(_cs_tree, "b"))
-    _helper.do_content_grant_read(
-        [_cs_me, _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name,
-         _cs_me, "cstrike"], "")
+    _r29d_gr = _r29d_grant_read(
+        _helper, [_cs_me, _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name, _cs_me, "cstrike"], "")
     check("helper content-grant-read: a symlink's 0777 does not land on its target",
-          _cs_stat.S_IMODE(os.stat(_cs_tf).st_mode) == 0o640
+          [_a[1:2] for _a in _r29d_gr[1]] == [["-aG"]]
+          and _cs_stat.S_IMODE(os.stat(_cs_tf).st_mode) == 0o640
           and _cs_stat.S_IMODE(os.stat(_cs_td).st_mode) == 0o700,
           "file=%s dir=%s" % (oct(_cs_stat.S_IMODE(os.stat(_cs_tf).st_mode)),
                               oct(_cs_stat.S_IMODE(os.stat(_cs_td).st_mode))))
@@ -2918,7 +2958,7 @@ try:
     os.rename(_cs_sf, _cs_sf + ".real2")
     os.symlink(os.path.join(_cs_o2, "serverfiles"), _cs_sf)
     _cs_grpname = _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name
-    _helper.do_content_grant_read([_cs_me, _cs_grpname, _cs_me, "cstrike"], "")
+    _r29d_grant_read(_helper, [_cs_me, _cs_grpname, _cs_me, "cstrike"], "")
     check("helper content-grant-read: a symlinked ~/serverfiles is not walked into another tree",
           _cs_stat.S_IMODE(os.stat(_cs_o2_file).st_mode) == 0o600
           and _cs_stat.S_IMODE(os.stat(os.path.join(_cs_o2, "serverfiles", "cstrike")).st_mode)
@@ -4534,9 +4574,11 @@ _REMOTE_EXPECTED = {
         "runuser -u srcds -- rm -rf /home/srcds/serverfiles/hl2",
     ("content-cron-remove", ("gmodcontent",)):
         "rm -f /etc/cron.d/lgsm-gmod-content-gmodcontent",
+    # A failed read keeps its rc unless the file is absent (review 1016f: `|| true` was "no mounts").
     ("gmod-mount-read", ("gmodserver",)):
         "runuser -u gmodserver -- cat /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg"
-        " 2>/dev/null || true",
+        " 2>/dev/null || { _r=$?; [ ! -e /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg ]"
+        " && [ ! -L /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg ] || (exit $_r); }",
     ("crontab-list", ("codserver",)): "crontab -u codserver -l 2>&1",
     ("user-create", ("codserver",)): "useradd -m -s /bin/bash codserver 2>&1",
     ("user-lock-password", ("codserver",)): "passwd -l codserver 2>&1",
@@ -5055,7 +5097,7 @@ if _me2 is not None:
         os.makedirs(_sf + "/cstrike/sub", exist_ok=True)
         open(_sf + "/cstrike/plain", "w").write("x")
         os.chmod(_sf + "/cstrike/plain", 0o600)
-        _hc.do_content_grant_read([_me2, _mygrp2, _me2, "cstrike"], None)
+        _r29d_grant_read(_hc, [_me2, _mygrp2, _me2, "cstrike"], None)
         check("content box: the grant makes serverfiles traversable by the group",
               _st2.S_IMODE(os.stat(_sf).st_mode) & _st2.S_IXGRP,
               oct(_st2.S_IMODE(os.stat(_sf).st_mode)))

@@ -1922,7 +1922,12 @@ def stat_path(server, user, relpath):
     parts = (out or "").strip().split()
     if not parts or parts[0] not in ("d", "f"):
         return None
-    size = int(parts[1]) if len(parts) > 1 and parts[1].isdecimal() else 0
+    if parts[0] == "f" and not (len(parts) > 1 and parts[1].isdecimal()):
+        # A file whose size stat could not read (gone between the two tests, or stat failing) was
+        # sized 0, and the download became an EMPTY file under the real name, with a 200 and a
+        # Content-Length of 0 (review 1016f). Not a measurement: no answer, as for a missing path.
+        return None
+    size = int(parts[1]) if len(parts) > 1 else 0
     return {"type": parts[0], "size": size, "name": _pp.basename(ap),
             "rel": _pp.relpath(ap, f"/home/{user}")}
 

@@ -1,0 +1,4 @@
+{
+  "A panel update is being installed right now — repair the database once it has finished.": "Une mise à jour du panneau est en cours d'installation — réparez la base de données une fois qu'elle est terminée.",
+  "A backup restore is in progress — repair the database once it has finished and the panel has restarted.": "Une restauration de sauvegarde est en cours — réparez la base de données une fois qu'elle est terminée et que le panneau a redémarré."
+}

@@ -112,8 +112,10 @@
         <div class="border rounded p-2" style="border-color:var(--border)!important;">
           <div class="small mb-1"><strong><i class="bi bi-hdd-stack"></i> Mount game content</strong></div>
           <div class="small mb-1">GMod needs another game's content to draw its maps and props — without
-            it you get missing-texture ERROR signs. The panel reuses content already on the host, else
-            downloads it into a shared content user.</div>
+            it you get missing-texture ERROR signs. The panel reuses a copy already on the host that no
+            panel game server owns; otherwise it downloads the content into a shared content account. A
+            panel game server's own files are never shared, so a copy only one of them holds is
+            downloaded again.</div>
           <div class="d-flex flex-wrap gap-3">
             {% for g in gmod_games %}
             <div class="form-check mb-0">

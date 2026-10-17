@@ -175,6 +175,13 @@ if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/
     fi
 fi
 
+# apt-get for the OS upgrade and unattended-upgrades, with its non-interactive settings ON ITS
+# COMMAND LINE. An `export` reaches apt-get on a root install only: sudo's env_reset strips
+# DEBIAN_FRONTEND and NEEDRESTART_MODE (Ubuntu's sudoers keeps neither; sudo-rs the same), so a
+# per-user install run from a terminal stopped at a debconf, ucf or needrestart dialog in the
+# upgrade it calls fully non-interactive. Through `env`, as the tzdata step below does.
+APT_NI=(env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get)
+
 # The time zone database. Only minimal images (Docker, some LXC) lack it — on 24.04 and later
 # python3 itself depends on it — and without it zoneinfo rejects every time zone name the panel
 # is given. A step of its own, and best-effort: noninteractive, because tzdata otherwise stops the
@@ -3219,13 +3226,13 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; then
             UPG_SUDO=""; [[ "$(id -u)" -ne 0 ]] && UPG_SUDO="sudo"
             export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-            ${UPG_SUDO} apt-get update -qq || true
+            ${UPG_SUDO} "${APT_NI[@]}" update -qq || true
             if [[ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]]; then
                 echo ""
                 info "System updates are available — applying them now…"
-                ${UPG_SUDO} apt-get -y -o Dpkg::Options::="--force-confold" full-upgrade \
+                ${UPG_SUDO} "${APT_NI[@]}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
                     || warn "Some packages could not be upgraded — continuing."
-                ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
+                ${UPG_SUDO} "${APT_NI[@]}" -y autoremove --purge >/dev/null 2>&1 || true
                 if [[ ! -f /var/run/reboot-required ]]; then
                     ok "System updated — no reboot required."
                 elif [[ "${PANEL_NO_REBOOT:-0}" == "1" ]]; then
@@ -3314,10 +3321,10 @@ if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; 
     UPG_SUDO=""; [[ "$(id -u)" -ne 0 ]] && UPG_SUDO="sudo"
     info "Bringing the OS fully up to date (one-time — set PANEL_NO_UPGRADE=1 to skip)…"
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-    ${UPG_SUDO} apt-get update -qq || true
-    ${UPG_SUDO} apt-get -y -o Dpkg::Options::="--force-confold" full-upgrade \
+    ${UPG_SUDO} "${APT_NI[@]}" update -qq || true
+    ${UPG_SUDO} "${APT_NI[@]}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
         || warn "Some packages could not be upgraded — continuing with the install."
-    ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
+    ${UPG_SUDO} "${APT_NI[@]}" -y autoremove --purge >/dev/null 2>&1 || true
     ok "System packages up to date"
 fi
 
@@ -3329,7 +3336,7 @@ if command -v apt-get >/dev/null 2>&1; then
     AU_SUDO=""; [[ "$(id -u)" -ne 0 ]] && AU_SUDO="sudo"
     info "Enabling automatic security updates (unattended-upgrades)…"
     export DEBIAN_FRONTEND=noninteractive
-    ${AU_SUDO} apt-get install -y unattended-upgrades >/dev/null 2>&1 \
+    ${AU_SUDO} "${APT_NI[@]}" install -y unattended-upgrades >/dev/null 2>&1 \
         || warn "Could not install unattended-upgrades — enable it later from the panel."
     if dpkg -s unattended-upgrades >/dev/null 2>&1; then
         # Turn on APT's daily package-list refresh + unattended security upgrade.

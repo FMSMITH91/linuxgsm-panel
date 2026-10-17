@@ -8,7 +8,8 @@ same as "nothing there" (empty-is-not-a-measurement).
 
 Privacy is the rule every section is held to: the report is meant to be pasted on a PUBLIC issue.
 Security POSTURE -- what tells a reader which of this panel's defences is weak (2FA counts, invites
-that grant superadmin, the setup-token file, the firewall's ways in, fail2ban jails that cannot ban)
+that grant superadmin, the setup-token file, the firewall's ways in, fail2ban jails that cannot ban,
+whether passwordless sudo makes the panel root)
 -- never goes in it: a section records those with Result.posture()/posture_find(), and
 assemble.py shows them only on the in-panel report page (_page_only there, POSTURE_RE below).
 A section prints counts, classes, booleans, ids, fixed-vocabulary tokens and exception CLASS names.
@@ -73,7 +74,9 @@ POSTURE_RE = re.compile(
     r"|Tailscale-Funnel-Request|\*\*tailscale_use_funnel\*\*|Tailscale \w+, Funnel (?:on|off)"
     r"|\*\*Session cookie\*\*|Secure cookies while|session cookie Secure|\*\*cookie_secure\*\*"
     r"|trust_proxy is on but the panel listens beyond loopback|Automatic security updates"
-    r"|\*\*Tailscale operator\*\*|panel account is the operator")
+    r"|\*\*Tailscale operator\*\*|panel account is the operator"
+    r"|\*\*Privilege verdict\*\*|\*\*Passwordless `sudo -n true`\*\*"
+    r"|the helper boundary does not constrain|so nothing constrains its privileged actions")
 
 
 def finding(level, area, text):
