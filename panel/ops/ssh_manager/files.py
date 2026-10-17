@@ -1729,10 +1729,10 @@ def _console_guard(user, selfname):
 
 
 def _r31j_console_live_sh(selfname):
-    """Shell for a console path that was hit: exit 11 (refused) while the server's console is
-    attached, 12 when that cannot be read, and carry on when it is not.
+    """Shell for a console path that was hit: refuse while the console is attached, or unread.
 
-    Attached is the console's own test (_core._tmux_live_socket_sh): a live `<selfname>` session on
+    Exit 11 (refused) while the server's console is attached, 12 when that cannot be read, and
+    carry on when it is not. Attached is the console's own test (_core._tmux_live_socket_sh): a live `<selfname>` session on
     one of the account's `<selfname>-*` tmux sockets, which is what pipe-pane writes the log from.
     It runs in a subshell, so its "none live" exit (3) is an answer here rather than the end of the
     command. A tmux folder that exists but cannot be listed, or any other exit, is no answer.
