@@ -1973,8 +1973,14 @@ def remote_os_update_start(server):
 
 
 def _r31b_own_update_rc(server):
-    """os-update-own-running's exit code: 0 while the panel's own OS-update job runs, 1 when not."""
-    return _core.run_privileged(server, "os-update-own-running", [], timeout=10, merge_stderr=False)[2]
+    """os-update-own-running's answer: 0 while the panel's own OS-update job runs, 1 when not.
+
+    "unknown_verb" from a local row's helper older than the verb (system_ops.r31j_own_update_answer).
+    """
+    from panel.ops import system_ops
+    return system_ops.r31j_own_update_answer(
+        _core.run_privileged(server, "os-update-own-running", [], timeout=10, merge_stderr=False),
+        "helper" if getattr(server, "is_local", False) else "remote")
 
 
 def _r31b_finished(server, log):

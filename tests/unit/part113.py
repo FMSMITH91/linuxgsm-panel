@@ -3,6 +3,8 @@
 * The OS Updates card's "another upgrade is running" refusal no longer says the panel did not start
   it: the panel's own host bootstrap (`apt-get full-upgrade`, the apt-full-upgrade verb) reads as
   exactly that upgrade, measured with the real pgrep over a stand-in named as the bootstrap.
+* A helper older than the `os-update-own-running` verb answers it "unknown verb" (rc 2): Install
+  updates then says to re-run install.sh, not "try again", on the panel host and a local host row.
 
 HOW IT RUNS. As part111 does: on part12's Flask app and stand-ins, part12's transport tripwire re-armed
 for this part's duration, every stub undone in its finally. Real pgrep runs over sleeping stand-in
@@ -12,9 +14,11 @@ import json
 import os
 import subprocess as _sp113  # nosec B404 - real pgrep over this part's own sleeping stand-ins
 import sys as _sys113
+from types import SimpleNamespace as NS
 
 from unit.part01 import check
-from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_restore_all, _p9_so
+from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_core, _p9_patch, _p9_restore_all, _p9_so
+from panel.ops.ssh_manager import hosts as _hosts113
 from panel.security import privileged as _priv113
 
 _TRIP113_START = len(_P9_TRIPPED)
@@ -66,10 +70,51 @@ def _bootstrap_busy113():
           and all(msg in k for k in keys.values()), repr((msg, {lg: msg in k for lg, k in keys.items()})))
 
 
+# ── R3: a helper older than os-update-own-running ───────────────────────────────────────────────
+def _old_helper_answers113(own_answer, calls):
+    """A verb runner as a host answers: upgrade probe matched, own probe `own_answer`, start recorded."""
+    def _rv(verb, args=(), **k):
+        calls.append(verb)
+        if verb == "apt-upgrade-running":
+            return "", "", 0
+        if verb == "os-update-own-running":
+            return own_answer
+        return _priv113.OS_UPDATE_STARTED, "", 0
+    return _rv
+
+
+def _old_helper113():
+    """unknown_verb from the own-job probe: re-run install.sh, never "try again"; nothing is started."""
+    unknown = ("", "panel-helper: unknown verb 'os-update-own-running'", 2)
+    want = (False, _p9_so.R31J_UPDATE_OLD_HELPER)
+    got = {}
+    for where in ("panel host", "local host row", "remote (control)"):
+        calls = []
+        rv = _old_helper_answers113(unknown, calls)
+        if where == "panel host":
+            _p9_patch(_p9_so, "_run_verb", rv)
+            _p9_patch(_p9_so, "_can_escalate", lambda: True)
+            ans = _p9_so.os_run_update()
+        else:
+            _p9_patch(_p9_core, "run_privileged", lambda server, verb, *a, _rv=rv, **k: _rv(verb, *a, **k))
+            ans = _hosts113.remote_os_update_start(NS(id=None, is_local=where == "local host row",
+                                                      host="p113.example.invalid"))
+        got[where] = (ans, "os-update-run" in calls)
+    check("os update start: a helper older than os-update-own-running (unknown verb, rc 2) says to "
+          "re-run install.sh, on the panel host and a local host row, and starts nothing",
+          got["panel host"] == (want, False) and got["local host row"] == (want, False), repr(got))
+    check("os update start: ...a remote's rc 2 (no helper there) is still 'couldn't check' (control)",
+          got["remote (control)"] == ((False, _p9_so.R31B_UPDATE_UNCHECKED), False), repr(got))
+    keys = _catalogs113()
+    check("os update start: ...the install.sh refusal is in the Spanish and French catalogs",
+          all(_p9_so.R31J_UPDATE_OLD_HELPER in k for k in keys.values()), repr(sorted(keys)))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 try:
     _p9_arm(who="part113")
     _bootstrap_busy113()
+    _old_helper113()
 finally:
     _p9_restore_all()
 

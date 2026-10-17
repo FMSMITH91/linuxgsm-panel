@@ -1106,17 +1106,32 @@ R31B_UPDATE_BUSY = ("Another package upgrade is already running on this host (no
                     "this card). Wait for it to finish, then check for updates again.")
 R31B_UPDATE_UNCHECKED = ("Couldn't check whether an update is already running on this host, so none was "
                          "started. Try again in a moment.")
+# A helper older than the os-update-own-running verb answers it "unknown verb" (rc 2) every time,
+# so "try again" could never succeed: the cure is the helper update a git pull does not bring.
+R31J_UPDATE_OLD_HELPER = ("The panel's privileged helper on this host is older than the panel and "
+                          "can't check whether an update is already running, so none was started. "
+                          "Re-run install.sh as root to update the helper.")
+
+
+def r31j_own_update_answer(res, path="helper"):
+    """os-update-own-running's (out, err, rc) as its rc, or "unknown_verb" from a helper without it."""
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    out, err, rc = res
+    if _smc.privileged_outcome(path, out, err, rc) == "unknown_verb":
+        return "unknown_verb"
+    return rc
 
 
 def _r31b_own_update_rc():
-    """os-update-own-running's exit code on the panel host: 0 while the panel's own job runs."""
-    return _run_verb("os-update-own-running", [], timeout=10, merge_stderr=False)[2]
+    """os-update-own-running's answer on the panel host: 0 while the panel's own job runs."""
+    return r31j_own_update_answer(_run_verb("os-update-own-running", [], timeout=10, merge_stderr=False))
 
 
 def r31b_update_running_answer(upgrade_rc, own_rc):
     """Start's answer when an OS update may already be running, else None (go on and start one).
 
-    `upgrade_rc` is apt-upgrade-running's exit code; `own_rc()` asks os-update-own-running's.
+    `upgrade_rc` is apt-upgrade-running's exit code; `own_rc()` asks os-update-own-running's
+    (r31j_own_update_answer: its rc, or "unknown_verb" from a helper older than the verb).
     Only the panel's OWN job is "watching it": its log is the one the popup reads. An `apt-get
     upgrade` someone started over SSH matched too, and the popup read the panel's previous run's
     log, said "Updates installed." and stopped watching while apt was still working. pgrep answers
@@ -1129,6 +1144,8 @@ def r31b_update_running_answer(upgrade_rc, own_rc):
     own = own_rc()
     if own == 0:
         return True, "An update is already running — watching it."
+    if own == "unknown_verb":
+        return False, R31J_UPDATE_OLD_HELPER
     return False, (R31B_UPDATE_BUSY if own == 1 else R31B_UPDATE_UNCHECKED)
 
 
