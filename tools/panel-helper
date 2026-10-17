@@ -2523,15 +2523,9 @@ VERBS = {
     "terminal-scope": ([v_pid], lambda a: [], None),
     # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
     "gameuser-group": ([v_managed_user], lambda a: [], None),
-    # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
-    # phased rollouts so an explicit "install updates" applies everything the Check list showed;
-    # "standard" is apt's default set, used when bootstrapping a host.
-    "apt-full-upgrade": (
-        [v_choice("phased", "standard")],
-        lambda a: [APT, "full-upgrade", "-y"]
-        + (["-o", "APT::Get::Always-Include-Phased-Updates=true"] if a[0] == "phased" else [])
-        + APT_CONFOLD,
-        None),
+    # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
+    # once its rollout reaches this host; the OS Updates card lists it apart until then.
+    "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
     "apt-upgrade": ([], lambda a: [APT, "upgrade", "-y"] + APT_CONFOLD, None),
     "apt-autoremove": ([], lambda a: [APT, "autoremove", "-y"], None),
     "apt-install": ([Rest(v_package)], lambda a: [APT, "install", "-y"] + a, None),
@@ -3158,11 +3152,11 @@ def _os_update_run():
             log.flush()
             subprocess.run([apt, "update"], shell=False, env=env,  # nosec B603 - fixed argv
                            stdout=log, stderr=subprocess.STDOUT, timeout=1800)
-            # The same flags apt-full-upgrade uses, for the same reasons: include Ubuntu's phased
-            # rollouts so an explicit "install updates" actually reaches zero, and keep any config
-            # file the operator has edited.
-            rc = subprocess.run([apt, "-y", "-o", "APT::Get::Always-Include-Phased-Updates=true"]
-                                + APT_CONFOLD + ["full-upgrade"], shell=False, env=env,  # nosec B603
+            # The same flags apt-full-upgrade uses, for the same reasons: keep any config file
+            # the operator has edited, and never force Ubuntu's phased rollouts (an update phasing
+            # holds back stays back until its rollout reaches this host).
+            rc = subprocess.run([apt, "-y"] + APT_CONFOLD + ["full-upgrade"],  # nosec B603
+                                shell=False, env=env,
                                 stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
             subprocess.run([apt, "-y", "autoremove"], shell=False, env=env,  # nosec B603
                            stdout=log, stderr=subprocess.STDOUT, timeout=1800)

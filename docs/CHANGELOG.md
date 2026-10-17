@@ -601,6 +601,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **OS updates respect Ubuntu's phased rollout.** Ubuntu releases some updates to a share of machines
+  at a time; `apt full-upgrade` holds the rest back. The panel used to count those as waiting and
+  forced them in on remote hosts. It now never forces them: what apt's own upgrade would not
+  install yet (the phased rollout, or a package apt keeps back) is listed separately on the OS
+  Updates card and left out of the update count and the banner, on every Ubuntu release the panel
+  supports. Phased updates install on their own once released to the machine. The update check
+  no longer runs when the panel host's page loads; the card shows the last check.
+
 - **A fifteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
   its fix.
   - **The Raw config editor can no longer blank a server's config.** If re-reading the config after a

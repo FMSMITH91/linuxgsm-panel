@@ -1360,7 +1360,7 @@ _VERB_SAMPLES = {
     "service-enable-now": ["fail2ban"],
     "service-disable-now": ["cups"],
     "apt-update": [],
-    "apt-full-upgrade": ["phased"],
+    "apt-full-upgrade": [],
     "apt-upgrade": [],
     "apt-autoremove": [],
     "apt-install": ["curl", "lib32gcc-s1", "libsdl2-2.0-0:i386"],
@@ -4344,7 +4344,6 @@ _BAD = {
     "apt-install": ["curl; id", "$(id)", "--reinstall", "-o", "Curl", "pkg name", ""],
     "dpkg-add-arch": ["amd64", "i386; id", ""],
     "apt-add-repo": ["ppa:someone/ppa", "universe; id", "restricted"],
-    "apt-full-upgrade": ["phased; id", "everything", ""],
     # The log verbs take a SOURCE NAME, never a path or a unit — so a traversal is not rejected by
     # a filter, it is simply not expressible.
     "log-tail": ["/etc/shadow", "../../etc/shadow", "syslog", "auth; id", ""],
@@ -4511,11 +4510,7 @@ _REMOTE_EXPECTED = {
         "DEBIAN_FRONTEND=noninteractive apt-get install -y curl 2>&1",
     ("apt-install", ("python3", "libsdl2-2.0-0:i386")):
         "DEBIAN_FRONTEND=noninteractive apt-get install -y python3 libsdl2-2.0-0:i386 2>&1",
-    ("apt-full-upgrade", ("phased",)):
-        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
-        "-o APT::Get::Always-Include-Phased-Updates=true "
-        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold 2>&1",
-    ("apt-full-upgrade", ("standard",)):
+    ("apt-full-upgrade", ()):
         "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
         "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold 2>&1",
     ("dpkg-add-arch", ("i386",)): "dpkg --add-architecture i386 2>&1",

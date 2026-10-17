@@ -87,6 +87,11 @@ _STANDINS76 = {
         'if [ "$de" = 1 ]; then echo "Auflistung…"; w="aktualisierbar von"; '
         'else echo "Listing..."; w="upgradable from"; fi; '
         'echo "p76lib/noble-updates 2.0-1 amd64 [$w: 1.0-1]"'),
+    # The OS-update check's upgrade simulation (part100 drives its German reading): it installs
+    # p76lib, so nothing is held back — and never the real apt-get or dpkg of the suite's machine.
+    "apt-get": ('echo "NOTE: This is only a simulation!"; '
+                'echo "Inst p76lib [1.0-1] (2.0-1 Ubuntu:24.04/noble-updates [amd64])"'),
+    "dpkg": "echo amd64",
     # sudo's catalog (the language pack's sudo.mo): an account created a moment ago is not yet
     # resolvable on the first try. Logs each call to sudo.log and refuses only the first one.
     "sudo": _GETTEXT76 + (
@@ -177,7 +182,7 @@ check("OS updates: on a German host `apt list --upgradable` is read with each pa
       and [(p["name"], p["version"], p["from"]) for p in _osu_remote76["packages"]]
       == [("p76lib", "2.0-1", "1.0-1")] and _osu_local76["ok"] and _osu_remote76["ok"]
       # the panel host spells the prefix out (its _run takes only literals): it must stay _core's
-      and _osu_cmds76 == [_smc76._R19A_C_LOCALE + "apt list --upgradable 2>/dev/null"],
+      and _osu_cmds76[:1] == [_smc76._R19A_C_LOCALE + "apt list --upgradable 2>/dev/null"],
       repr((_osu_local76, _osu_remote76, _osu_cmds76)))
 
 _sudo_log76 = _os76.path.join(_TMP76, "sudo.log")

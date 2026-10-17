@@ -1859,9 +1859,19 @@ def _parse_upgradable(out):
     return system_ops.parse_upgradable(out)
 
 
+# apt's own simulation of the upgrade Install updates runs, after the C-locale prefix: its Inst lines
+# are what an upgrade installs now (system_ops.parse_inst). The native architecture first, for an
+# Inst line that names none. -s: a simulation, installs nothing; Debug::NoLocking: it needs no lock,
+# so it runs without root and never waits on unattended-upgrades. The last command's status is
+# apt's, so `rc` is apt's. The panel host runs the same text (system_ops._r27p_local_probe).
+_R27P_UPGRADE_SIM = ("echo R27P-ARCH $(dpkg --print-architecture 2>/dev/null); "
+                     "apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null")
+
+
 def remote_os_check_updates(server):
     """Check for OS updates on the remote server.
-    Returns {ok, count, packages:[{name,version,from,suite}]}.
+    Returns {ok, count, packages:[{name,version,from,suite}], deferred:[...], deferred_known} —
+    system_ops.r27p_updates_result's shape, the panel host's too.
 
     "ok" is apt's own exit status, and it matters: a check that FAILED (the apt lock held by
     unattended-upgrades, the host mid-reboot) produces no output, which reads exactly like a clean
@@ -1874,14 +1884,30 @@ def remote_os_check_updates(server):
     # sudo=False: the package lists are world-readable, as every read #436 moved off sudo.
     out, _, rc = _core.run_command(server, _core._R19A_C_LOCALE + "apt list --upgradable 2>/dev/null",
                                    timeout=30, sudo=False)
-    pkgs = _parse_upgradable(out)
-    return {"ok": rc == 0, "count": len(pkgs), "packages": pkgs}
+    from panel.ops import system_ops
+
+    def _probe():
+        """What an upgrade installs now: apt's own simulation, in the same locale, without sudo.
+
+        _R27P_UPGRADE_SIM, run only when the list read found packages. A probe that raised
+        (paramiko does; the other transports return rc -1) after the list read worked is an unread
+        split, not a failed check: the list stands, every package counted.
+        """
+        try:
+            p_out, _, p_rc = _core.run_command(
+                server, _core._R19A_C_LOCALE + _R27P_UPGRADE_SIM, timeout=60, sudo=False)
+        except Exception:
+            _core._log.debug("upgrade simulation failed on host %s", getattr(server, "id", "?"),
+                             exc_info=True)
+            return "", -1
+        return p_out, p_rc
+    return system_ops.r27p_updates_result(out, rc, _probe)
 
 
 def remote_os_run_updates(server):
     """Run apt upgrade on the remote server (blocking; kept for callers that want a one-shot).
     The UI uses the streaming remote_os_update_start/_status pair instead."""
-    out, err, rc = _core.run_privileged(server, "apt-full-upgrade", ["phased"], timeout=600)
+    out, err, rc = _core.run_privileged(server, "apt-full-upgrade", [], timeout=600)
     return rc == 0, out[-300:] if out else err[:300]
 
 
@@ -2330,7 +2356,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     _core.run_privileged(server, "apt-update", [], timeout=180)
 
     emit("Full-upgrading all packages (apt full-upgrade — may take several minutes)")
-    out, _, _ = _core.run_privileged(server, "apt-full-upgrade", ["standard"], timeout=1800)
+    out, _, _ = _core.run_privileged(server, "apt-full-upgrade", [], timeout=1800)
     out = _core._last_lines(out, 8)
     note(out or "OK")
 

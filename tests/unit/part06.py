@@ -620,8 +620,10 @@ if _osu:
           _olog[:60])
     check("os update: apt update, full-upgrade and autoremove all ran",
           "fake apt: update" in _olog and "full-upgrade" in _olog and "autoremove" in _olog, _olog)
-    check("os update: phased updates are included, so a re-check actually reaches zero",
-          "Always-Include-Phased-Updates=true" in _olog, _olog)
+    # Never forced (owner, 2026-10-16: "respect deferred updates"): the phasing is the safety
+    # net, and the OS Updates card lists what it holds back apart instead (part100).
+    check("os update: Ubuntu's phased updates are not forced",
+          "Always-Include-Phased-Updates" not in _olog and "full-upgrade" in _olog, _olog)
     check("os update: a config file the operator edited is kept",
           "--force-confold" in _olog and "--force-confdef" in _olog, _olog)
     check("os update: the sentinel carries the REAL exit code, not a fixed one",

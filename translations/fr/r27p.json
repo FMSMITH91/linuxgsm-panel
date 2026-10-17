@@ -1,0 +1,4 @@
+{
+  "Couldn't read which of these apt is holding back.": "Impossible de savoir lesquelles apt retient.",
+  "Held back by apt (Ubuntu's phased rollout, or kept back) — an upgrade does not install these yet.": "Retenues par apt (le déploiement progressif d'Ubuntu, ou des paquets conservés) : une mise à niveau ne les installe pas encore."
+}

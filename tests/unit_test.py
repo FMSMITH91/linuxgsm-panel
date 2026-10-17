@@ -1247,6 +1247,8 @@ _r16d_wrap_ts_handles()
 # and 12.
 # part99 (the fifteenth review's page and script fixes, builder C) drives part12's app and runs node
 # on its own fixtures; imports part01, 05, 12, 47 and 87 (part87's DOM).
+# part100 (Ubuntu's phased updates respected, never forced) runs bash over its own stand-ins, drives
+# part12's app with every host call stubbed, and node for the card; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1257,7 +1259,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
           "part75", "part76", "part77", "part78", "part79", "part80", "part81", "part82", "part83",
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
-          "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99",
+          "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
           "part15")
 
 

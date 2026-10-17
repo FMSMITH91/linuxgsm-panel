@@ -31,7 +31,7 @@
   "remote_manage.js": [
     "Number,_da,body,head,j.banned_ips.map,j.currently_banned,return",
     "_da,return",
-    "head,rows",
+    "head,renderDeferred,rows",
     "i",
     "rows"
   ],

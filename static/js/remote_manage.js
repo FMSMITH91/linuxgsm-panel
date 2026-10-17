@@ -437,11 +437,31 @@ function renderUpdates(d, note){
          + '<span class="'+(isSecurityPkg(p)?'text-danger':'text-info')+'">'
          + escapeHtml(p.label||p.name)+'</span> '+ver+'</div>';   // label: "libx11-6 (i386)" beside its amd64 row
   }).join('') + '</div>';
-  el.innerHTML=head+rows;   // nosemgrep — head/rows are composed above from escapeHtml()'d values
+  el.innerHTML=head+rows+renderDeferred(d, n);   // nosemgrep — composed from escapeHtml()'d values
   // ...and the button follows the count. Offering "Install updates" on a host the panel has just
   // reported as up to date is an action whose only possible outcome is a progress modal that says
   // "0 upgraded, 0 newly installed" — the control should carry what the card already knows.
   setInstallUpdatesState(n > 0 ? 'available' : 'uptodate');
+}
+// What apt holds back from this host (Ubuntu's phased rollout, or kept back): listed apart, under
+// the count, because an upgrade will not install them yet and the panel never forces them. They are
+// not in `n`, so a host with only these reads "up to date" and Install stays disabled. A simulation
+// that could not be read leaves every package counted (as before) and says the split is unknown.
+function renderDeferred(d, n){
+  var held=d.deferred||[];
+  if(!held.length){
+    return (d.deferred_known===false && n)
+      ? '<div class="text-secondary mt-1" style="font-size:.68rem;"><span>'
+        + "Couldn't read which of these apt is holding back."
+        + '</span></div>' : '';
+  }
+  return '<div class="mt-2" id="update-deferred"><div class="text-secondary" style="font-size:.72rem;">'
+       + '<i class="bi bi-hourglass-split"></i> <span>'
+       + "Held back by apt (Ubuntu's phased rollout, or kept back) — an upgrade does not install these yet."
+       + '</span></div><div style="max-height:120px;overflow:auto;">' + held.map(function(p){
+    return '<div class="text-secondary" style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
+         + escapeHtml(p.label||p.name) + (p.version ? ' '+escapeHtml(p.version) : '') + '</div>';
+  }).join('') + '</div></div>';
 }
 // available → enabled. uptodate → disabled, saying why. unknown → enabled, because a check that
 // failed is not evidence there is nothing to do, and forcing the upgrade by hand is a legitimate

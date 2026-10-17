@@ -17,7 +17,7 @@ from types import (SimpleNamespace)
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, canonical_ip)
-from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
+from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_r23a_not_while_panel_host_reboots, _whitelist_mutate)
 
@@ -64,11 +64,9 @@ def _register_server_management(app):
             )
             db.session.add(local)
             db.session.commit()
+        # No apt on this path: the OS Updates card fills from updates-cached, which the update
+        # check writes (system_ops.get_server_status).
         status = so.get_server_status()
-        # get_server_status already read the panel host's pending packages off the cached apt lists
-        # (no network) — hand that to the shared snapshot so the banner reflects it immediately
-        # rather than waiting for the next daily sweep.
-        _os_update_note(local, status.get("updates") or {})
         cfg = load_config()
         return render_template("remote_manage.html", remote=local, status=status, config=cfg,
                                funnel_facts=ts.panel_funnel_facts(cfg))
