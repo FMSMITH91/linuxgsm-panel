@@ -606,8 +606,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
   - **A game server's account can no longer stall the server scan.** The scan read a file that
     account controls (its installed-mods list) whole, as root, through links and pipes, on the panel
     host and on remote hosts; a link to an endless device could hang it or run it out of memory. That
-    file is now read only as an ordinary file of bounded size, and a /home folder with no account
-    behind it is skipped.
+    file is now read only as an ordinary file of bounded size, and on the panel host a /home folder
+    with no account behind it is skipped.
   - **Garry's Mod content: a host that did not answer is no longer read as "no content".** Remove
     reported success having done nothing, the card showed every game as not on the host, and Apply
     could download into a new account beside content it never saw. Each now says the host could not
@@ -625,8 +625,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
     could not be read no longer saves an empty file under the real name.
   - **Smaller fixes.** The Backups card no longer wipes what you are typing when it refreshes; the
     Live card marks its figures stale when the panel stops answering; the Raw config editor will not
-    save text from before a settings save made while you were typing in it; the add-host forms keep
-    the password box hidden when the browser restores the form; the GMod install text says what
+    save text from before a settings save made while you were typing in it; the add-host and
+    edit-host forms keep the credential box masked, or hidden for Tailscale SSH, when the browser
+    restores the form, without emptying a password already typed; the GMod install text says what
     happens to content only a game server holds; a hand-edited `security_whitelist` written as one
     address is read as that address; the weekly gamedig check no longer runs the package as root;
     per-user installs keep apt from stopping to ask questions; and `manage.py setup-token` prints an

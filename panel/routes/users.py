@@ -62,9 +62,10 @@ def _invite_listing():
     # ONE `now` for both halves: two calls would let a row expiring between them land in
     # both lists, or in neither.
     #
-    # And it is no bound at all: the live half was still `.limit(25)`, so a 26th live invite
-    # (a batch onboarding) had no Revoke button for up to 30 days (review 1016f). Live rows
-    # bound themselves — each is a superadmin's deliberate mint, and each expires.
+    # And the live half has no `.limit()` here: it was still `.limit(25)`, so a 26th live invite
+    # (a batch onboarding) had no Revoke button for up to 30 days (review 1016f). It is bounded
+    # where invites are made instead: create_invite refuses a new one while Invite.MAX_LIVE
+    # still work, so every live row, and its Revoke button, is listed.
     _now = utcnow()
     _live = (Invite.query
              .filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
