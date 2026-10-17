@@ -4321,7 +4321,14 @@ def _r31a_tar_add(tf, full, arcname):
     fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     # open(), not os.fdopen: gettarinfo reads the file object's `name`, which an eventlet-patched
     # fdopen's object (a test process loading this file) does not have.
-    with open(fd, "rb") as fh:
+    # The descriptor is closed here when open() itself fails (`with` never received it, so it
+    # would leak for the rest of a long walk); from then on the file object owns it.
+    try:
+        fh = open(fd, "rb")
+    except Exception:   # open() on a valid descriptor raises only Exception subclasses
+        os.close(fd)
+        raise
+    with fh:
         ti = tf.gettarinfo(full, arcname, fileobj=fh)
         if ti is not None and ti.isreg():
             tf.addfile(ti, fh)
