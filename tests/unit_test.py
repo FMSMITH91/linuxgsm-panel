@@ -2129,276 +2129,17 @@ _r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a, _s in _R16D
 _r21d_own_first = dict(os.environ, PATH=os.path.join(_r15d_ts_ctl_dir, "own") + os.pathsep + "/usr/bin:/bin")
 
 
+# The shapes live in ts_landlock (its own table, which the kernel block's child runs too); the files
+# they source are written once here, before any of them runs.
+_r31d_ts_landlock.write_shape_sources(_r15d_ts_ctl_dir, (_r17d_ts_sys, _r18d_ts_sysl, _r19d_ts_lnk))
+
+
 def _r19d_ts_shapes(d):
-    """Every shape a handle sees, with the binary found in directory `d`.
+    """Every shape a handle sees, with the binary found in directory `d` (ts_landlock.shapes).
 
     A shape that brings its own `env` keeps it; every other one starts with `d` first on PATH.
     """
-    _ts, _p = os.path.join(d, "tailscale"), "PATH=%s:/usr/bin:/bin" % d
-    return (("run", (["tailscale", "version"],), {}),
-            ("Popen", (["tailscale", "status"],), {}),
-            ("run", ("tailscale status --json 2>/dev/null || echo '{}'",), {"shell": True}),
-            ("run", ("tailscale set --ssh 2>&1",), {"shell": True}),
-            # WHICH-FOUND: `which` letting the binary's path through is a let-through too (the
-            # path has no "stand-in" in it, review 1012b).
-            ("Popen", (["/bin/bash", "-c", "which tailscale && echo WHICH-FOUND; tailscale version"],), {}),
-            # An option before -c, an `env` prefix, a bare string with no shell and the binary
-            # named by its path ran unjudged (review 1012c).
-            ("run", (["/bin/bash", "-e", "-c", "tailscale version"],), {}),
-            ("run", (["/usr/bin/env", "X=1", "sh", "-o", "errexit", "-c", "tailscale version"],), {}),
-            ("run", ("tailscale",), {}),
-            ("run", ([_ts, "version"],), {}),
-            # Behind wrapper commands, and past the shell's function by a wrapper or a path, it
-            # ran unjudged too (review 1012d); `env -i` drops the exported functions.
-            ("run", (["timeout", "5", "tailscale", "version"],), {}),
-            ("run", (["nice", "-n", "5", "/usr/bin/env", "-i", _p, "tailscale"],), {}),
-            ("run", (["env", "-i", _p, "bash", "-c", "tailscale version"],), {}),
-            ("run", (["setsid", "env", "-u", "X", "sh", "-c", "tailscale version"],), {}),
-            ("run", ("timeout 5 tailscale version",), {"shell": True}),
-            ("run", ("command tailscale version",), {"shell": True}),
-            ("run", (["/bin/bash", "-c", "%s version" % _ts],), {}),
-            # Behind a wrapper only the script form knew, as a command line held in one option
-            # value, as a tuple, through check_output/call, and past the function by `type -P`, a
-            # nested sh, a wrapper named by its path or an unset variable (review 1013a).
-            ("run", (["taskset", "1", "tailscale", "version"],), {}),
-            ("run", (["flock", "-w", "5", d, "tailscale"],), {}),
-            ("run", (["chrt", "-o", "0", "tailscale"],), {}),
-            ("run", (["/usr/bin/time", "-o", "/dev/null", "tailscale"],), {}),
-            ("run", (["xargs", "-a", "/dev/null", "tailscale"],), {}),
-            ("run", (["xargs", "-a", "/dev/null", "bash", "-c", "tailscale version"],), {}),
-            ("run", (["env", "-S", "tailscale version"],), {}),
-            ("run", (["env", "--split-string=tailscale version"],), {}),
-            # A long option by its prefix, as getopt_long takes it (review 1015c).
-            ("run", (["env", "--split-str=tailscale version"],), {}),
-            ("run", (["env", "--spl=tailscale"],), {}),
-            ("run", (["env", "-S", "tail'scale' version"],), {}),
-            ("run", (["env", "-Stailscale\\_version"],), {}),
-            ("run", (["zsh", "-c", "tailscale version"],), {}),
-            ("run", (("env", "--", "tailscale", "version"),), {}),
-            ("run", (("env", "--", "bash", "-c", "tailscale version"),), {}),
-            ("check_output", (["tailscale", "version"],), {}),
-            ("call", (["tailscale", "version"],), {}),
-            ("run", ('"$(type -P tailscale)" version',), {"shell": True}),
-            ("run", ("sh -c 'tailscale version'",), {"shell": True}),
-            ("run", ("/usr/bin/env tailscale version",), {"shell": True}),
-            ("run", ("$R20D_UNSET%s version" % _ts,), {"shell": True}),
-            ("run", ('t=$(which -a tailscale | head -n 1); [ -n "$t" ] && "$t" version',), {"shell": True}),
-            ("run", ('t=$(whereis -b tailscale | cut -d" " -f2); [ -x "$t" ] && "$t" version',), {"shell": True}),
-            # -S/-c grouped or attached, and a command line naming the binary by its path while a
-            # part's own stand-in is first on PATH (review 1015a).
-            ("run", (["env", "-Stailscale version"],), {}),
-            ("run", (["env", "-vS", "tailscale version"],), {}),
-            ("run", (["zsh", "-ec", "tailscale"],), {}),
-            ("run", (["env", "-S", "%s version" % _ts],), {"env": _r21d_own_first}),
-            ("run", (["zsh", "-c", "%s version" % _ts],), {"env": _r21d_own_first})) + _r23d_ts_shapes(d)
-
-
-def _r23d_ts_shapes(d):
-    """_r19d_ts_shapes' long-option and variable shapes (review 1015d)."""
-    return (
-        # flock reads -c/--command only as the word after the lock file, and by its value in
-        # the next word: `--comm=x` was refused by flock itself, so it could not fail; this one
-        # runs the binary unless the separate-word reading judges it.
-        ("run", (["flock", d, "--command", "tailscale"],), {}),
-        ("run", (["env", "--spl", "tailscale\\_version"],), {}),
-        # A value-taking long option by its prefix: its value is not the program.
-        ("run", (["env", "--ch", d, "tailscale", "version"],), {}),
-        ("run", (["timeout", "--sig", "TERM", "5", "tailscale", "version"],), {}),
-        ("run", (["xargs", "--arg", "/dev/null", "tailscale"],), {}),
-        # A variable env -S or a shell expands to nothing, unset or empty.
-        ("run", (["env", "-S", "tail${R23D_UNSET}scale version"],), {}),
-        ("run", (["zsh", "-c", "tail$R23D_UNSET'scale' version"],), {})) + _r25d_ts_shapes(d)
-
-
-def _r25d_ts_shapes(d):
-    """_r19d_ts_shapes' mixed-reading, built-word and which -a shapes (review 1016b)."""
-    _own_then_d = dict(os.environ, PATH=os.pathsep.join((os.path.join(_r15d_ts_ctl_dir, "own"), d, "/usr/bin:/bin")))
-    return (
-        # --f is timeout's --foreground (a flag) and a prefix of --format; --sig needs its value.
-        ("run", (["timeout", "--f", "--sig", "KILL", "5", "tailscale", "version"],), {}),
-        # A name the script builds: bash, sh and a shell-less shell the guard reads statically.
-        ("run", (["bash", "-c", "T=tail; ${T}scale version"],), {}),
-        ("run", ("T=tail; ${T}scale version",), {"shell": True}),
-        ("run", (["sh", "-c", "T=tail; ${T}scale version"],), {}),
-        ("run", (["zsh", "-c", "T=tail; ${T}scale version"],), {}),
-        ("run", (["zsh", "-c", "tail${HOME:+scale} version"],), {}),
-        ("run", (["zsh", "-c", "tail$(:)scale version"],), {}),
-        # ...past the function: a wrapper given the built word, and a path the script builds.
-        ("run", ("T=tail; command ${T}scale version",), {"shell": True}),
-        ("run", ("sh -c 'T=tail; ${T}scale version'",), {"shell": True}),
-        ("run", ('p=%s; t=tail; "$p/${t}scale" version' % d,), {"shell": True}),
-        # `which -a` past a part's stand-in first on PATH listed the machine's binary after it.
-        ("run", ('t=$(which -a tailscale | grep -v /own/ | head -n 1); [ -n "$t" ] && "$t" version',),
-         {"shell": True, "env": _own_then_d})) + _r26d_ts_shapes(d)
-
-
-def _r26d_ts_shapes(d):
-    """_r19d_ts_shapes' quoted-name, apostrophe and argv0 shapes, and built words behind the shim (review 1016c)."""
-    _apos = 'echo "it\'s" >/dev/null; T=tail; ${T}scale version; echo "don\'t" >/dev/null'
-    return (
-        # An apostrophe inside "…" opened no string, but was read as one hiding the built word.
-        ("run", (_apos,), {"shell": True}),
-        ("run", (["bash", "-c", _apos],), {}),
-        ("run", (["zsh", "-c", _apos],), {}),
-        # The name spelled with quotes: no literal word, so no function was handed over.
-        ("run", (["bash", "-c", "tail'scale' version"],), {}),
-        ("run", ('tail"scale" version',), {"shell": True}),
-        ("run", (["sh", "-c", "ta''ilscale version"],), {}),
-        # env's -a/--argv0 takes a value, which was read as the program.
-        ("run", (["env", "-a", "x", "tailscale", "version"],), {}),
-        ("run", (["env", "--argv0", "x", "tailscale", "version"],), {}),
-        # A built word a wrapper execs from PATH, and one `which` finds, in the shell it was given.
-        ("run", ("T=tail; timeout 5 ${T}scale version",), {"shell": True}),
-        ("run", (["sh", "-c", "T=tail; command ${T}scale version"],), {}),
-        ("run", ('T=tail; t=$(which ${T}scale) && "$t" version',), {"shell": True}),
-        ("run", (["sh", "-c", 'T=tail; t=$(which -a ${T}scale | tail -n 1) && "$t" version'],), {})
-    ) + _r28d_ts_shapes(d)
-
-
-def _r28d_ts_shapes(d):
-    """_r19d_ts_shapes' PATH-setting, comment, here-document and set-otherwise shapes (review 1016e).
-
-    Each puts the planted "machine's" directory `d` where the script searches, never the real
-    default PATH: a shape that escaped would otherwise run this machine's own binary.
-    """
-    _hd = "cat >/dev/null <<EOF\nit's\nEOF\nT=tail; ${T}scale version\necho 'x'"
-    return (
-        # A script that only builds the name and sets its own PATH stepped past the shim.
-        ("run", ("PATH=%s:$PATH; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", ("export PATH=%s:$PATH; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", (["sh", "-c", "PATH=%s:$PATH; T=tail; ${T}scale version" % d],), {}),
-        ("run", ("T=tail; PATH=%s ${T}scale version" % d,), {"shell": True}),
-        # ...and a wrapper execs from the PATH the script gives it, which was never judged.
-        ("run", ("T=tail; env PATH=%s ${T}scale version" % d,), {"shell": True}),
-        ("run", ("T=tail; PATH=%s:$PATH; timeout 5 ${T}scale version" % d,), {"shell": True}),
-        ("run", (["env", "PATH=%s:/usr/bin:/bin" % d, "bash", "-c", "T=tail; timeout 5 ${T}scale version"],), {}),
-        # An expansion the reader cannot model, behind a wrapper given a PATH.
-        ("run", ("T=tailx; env PATH=%s ${T%%x}scale version" % d,), {"shell": True}),
-        ("run", ("T=X; env PATH=%s ${T/X/tail}scale version" % d,), {"shell": True}),
-        ("run", ("A=(tail); env PATH=%s ${A[0]}scale version" % d,), {"shell": True}),
-        ("run", ("T=xtailscale; env -i PATH=%s:/usr/bin:/bin ${T#x} version" % d,), {"shell": True}),
-        # A name set other than by a plain NAME=, under the bash route (the script names the word).
-        ("run", (["bash", "-c", "echo tailscale >/dev/null; printf -v T tail; timeout 5 ${T}scale version"],), {}),
-        ("run", (["bash", "-c", "echo tailscale >/dev/null; : ${T:=tail}; timeout 5 ${T}scale version"],), {}),
-        ("run", (["bash", "-c", "echo tailscale >/dev/null; T=tail; T+=scale; timeout 5 $T version"],), {}),
-        ("run", (["env", "T=tailscale", "bash", "-c", "timeout 5 $T version"],), {}),
-        # An apostrophe in a comment or a here-document's body opened no string.
-        ("run", ("# it's a comment\nT=tail; ${T}scale version\necho 'x'",), {"shell": True}),
-        ("run", (_hd,), {"shell": True}),
-        ("run", (["sh", "-c", _hd],), {})) + _r29d_ts_shapes(d)
-
-
-def _r29d_ts_shapes(d):
-    """_r19d_ts_shapes' PATH set past the reader, cd-relative and built-path shapes (review 1016f).
-
-    Each reached the planted "machine's" binary in `d` through every handle: a PATH the stripped
-    reader could not see (single-quoted inside a nested bash, a quoted or built name, a sourced or
-    eval'd text, hidden by `$'…'`, a `#` inside a word or a here-document it did not know), a path
-    read against the run's directory instead of the script's `cd`, a path whose last word is built,
-    and a value quoted in part.
-    """
-    _src = os.path.join(_r15d_ts_ctl_dir, "r29d-path-%s.sh" % os.path.basename(d))
-    with open(_src, "w", encoding="utf-8") as _fh:
-        _fh.write("PATH=%s:$PATH\n" % d)
-    _tail = "T=$(echo tail); PATH=%s:$PATH; timeout 5 ${T}scale version; echo 'x'" % d
-    return (
-        ("run", ("bash -c 'PATH=%s:$PATH; tailscale version'" % d,), {"shell": True}),
-        ("run", ("bash -c 'export PATH=%s; tailscale version'" % d,), {"shell": True}),
-        ("run", ("export 'PATH=%s:/usr/bin:/bin'; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", (["bash", "-c", "declare -x 'PATH=%s:/usr/bin'; T=tail; ${T}scale version" % d],), {}),
-        ("run", ("T=tail; export 'PATH=%s'; tailscale version" % d,), {"shell": True}),
-        ("run", ("P=PA; export ${P}TH=%s; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", (". %s; T=tail; ${T}scale version" % _src,), {"shell": True}),
-        ("run", (["sh", "-c", ". %s; T=tail; ${T}scale version" % _src],), {}),
-        ("run", ('eval "PA""TH=%s:$PATH"; T=tail; ${T}scale version' % d,), {"shell": True}),
-        ("run", (["bash", "-c", "x=$'it\\'s'; PATH=%s:$PATH; T=tail; ${T}scale version; echo 'y'" % d],), {}),
-        ("run", ("T=tailscalex; echo \\ #; env -i PATH=%s ${T%%x} version" % d,), {"shell": True}),
-        ("run", ("T=tailscalex; : $(:)#; env -i PATH=%s ${T%%x} version" % d,), {"shell": True}),
-        ("run", ("T=tailscalex; echo a\\\n#; env -i PATH=%s ${T%%x} version" % d,), {"shell": True}),
-        ("run", ("echo \\ #; PATH=%s; T=tail; ${T}scale version" % d,), {"shell": True}),
-        ("run", ("cat >/dev/null <<\\EOF\nit's\nEOF\n" + _tail,), {"shell": True}),
-        ("run", ('cat >/dev/null <<E"OF"\nit\'s\nEOF\n' + _tail,), {"shell": True}),
-        ("run", (["bash", "-c", "T=tail; cat <<< END\necho 'abc\nEND\ndef' ; ${T}scale version; echo 'z'\n"],), {}),
-        ("run", ("cd %s && ./tailscale version" % d,), {"shell": True}),
-        ("run", ("cd %s; T=tail; ./${T}scale version" % d,), {"shell": True}),
-        ("run", (["sh", "-c", "cd %s; T=tail; ./${T}scale version" % d],), {}),
-        ("run", ("%s/tail$(:)scale version" % d,), {"shell": True}),
-        ("run", ("T=tailscalex; %s/${T%%x} version" % d,), {"shell": True}),
-        ("run", ('T=ta"il"; env -i PATH=%s ${T}scale version' % d,), {"shell": True}),
-        ("run", ("T=ta'il'; env -i PATH=%s ${T}scale version" % d,), {"shell": True})) + _r30d_ts_shapes(d)
-
-
-def _r30d_ts_shapes(d):
-    """_r19d_ts_shapes' quoted-path, unresolved-directory, CDPATH, nested-PATH and `#` shapes (review 1017a).
-
-    Each reached the planted "machine's" binary in `d`: a path whose directory or last word is
-    quoted or cannot be resolved, a `cd` under CDPATH, past `--` or to a directory the reader cannot
-    name, a nested bash building the name PATH, a `#` that only looks like a comment opening a
-    quote the reader never saw, and a name set in a sourced file.
-    """
-    _up, _base = os.path.dirname(d), os.path.basename(d)
-    _src = os.path.join(_r15d_ts_ctl_dir, "r30d-env-%s.sh" % _base)
-    with open(_src, "w", encoding="utf-8") as _fh:
-        _fh.write("T=tail\n")
-    _nested = 'P=PA; bash -c "${P}TH=%s; tailscale version"' % d
-    return (
-        ("run", ("CDPATH=%s; cd %s && ./tailscale version" % (_up, _base),), {"shell": True}),
-        ("run", ("export CDPATH=%s; cd %s >/dev/null && ./tailscale version" % (_up, _base),), {"shell": True}),
-        ("run", ('cd "$(echo %s)" && ./%s/tailscale version' % (_up, _base),), {"shell": True}),
-        ("run", ("cd -- %s && ./tailscale version" % d,), {"shell": True}),
-        ("run", ("cd -P -- %s; ./tailscale version" % d,), {"shell": True}),
-        ("run", ("%s/tail'scale' version" % d,), {"shell": True}),
-        ("run", ('%s/tail""scale version' % d,), {"shell": True}),
-        ("run", ('cd %s && ./tail""scale version' % d,), {"shell": True}),
-        ("run", ('T=tailscalex; "%s"/${T%%x} version' % d,), {"shell": True}),
-        ("run", ("T=tailscalex; '%s'/${T%%x} version" % d,), {"shell": True}),
-        ("run", ('D=%s; T=tailscalex; "$D"/${T%%x} version' % d,), {"shell": True}),
-        ("run", ('"%s"/tailscale version' % d,), {"shell": True}),
-        ("run", ('D=%s; "$D"/tailscale version' % d,), {"shell": True}),
-        ("run", ('"$(echo %s)"/tailscale version' % d,), {"shell": True}),
-        ("run", ("D=$(echo %s); $D/tailscale version" % d,), {"shell": True}),
-        ("run", (["sh", "-c", 'D=$(echo %s); "$D/tailscale" version' % d],), {}),
-        ("run", (_nested,), {"shell": True}),
-        ("run", (["sh", "-c", _nested],), {}),
-        ("run", (["bash", "-c", _nested],), {}),
-        ("run", ('echo \\ #"\n"; echo "x\'"; T=tailscalex; env -i PATH=%s ${T%%x} version; echo "\'"' % d,),
-         {"shell": True}),
-        ("run", ('T=tailscalex; : $(:)#"\n"; echo "x\'"; env -i PATH=%s ${T%%x} version; echo "\'"' % d,),
-         {"shell": True}),
-        ("run", ("x=$(:)#'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,), {"shell": True}),
-        ("run", ("echo a\\ #'\n'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,),
-         {"shell": True}),
-        ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
-        ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {})) + _r31d_ts_shapes(d)
-
-
-def _r31d_ts_shapes(d):
-    """_r19d_ts_shapes' nested-option, continuation, prefixed-dot, BASH_ENV and backtick shapes (review 1017b).
-
-    Each reached the planted "machine's" binary in `d` from a PATH without it: a nested shell with
-    an option's value, a long option or `--` before its -c script, a quoted or escaped `cd`, a `#`
-    after a line continuation opening a quote the reader never saw, a `.` behind an assignment or a
-    redirection, a file BASH_ENV has bash source first, and a `.` that starts a backtick command.
-    """
-    _src = os.path.join(_r15d_ts_ctl_dir, "r31d-path-%s.sh" % os.path.basename(d))
-    with open(_src, "w", encoding="utf-8") as _fh:
-        _fh.write("PATH=%s:$PATH\n" % d)
-    _env = dict(os.environ, PATH="/usr/bin:/bin")
-    _nested = ['P=PA; bash %s "${P}TH=%s; tailscale version"' % (_o, d)
-               for _o in ("-o pipefail -c", "-O extglob -c", "--norc -c", "-c --")]
-    _shapes = [("run", (_x,), {"shell": True, "env": _env}) for _x in _nested + [
-        '"cd" %s && ./tailscale version' % d, "\\cd %s && ./tailscale version" % d,
-        "echo \\\n#'\nPATH=%s:$PATH; timeout 5 tail$(:)scale version; echo 'y'" % d,
-        "echo a \\\n#it's\nT=tailscalex; env -i PATH=%s ${T%%x} version; echo 'x'" % d,
-        "X=1 . %s; T=tail; ${T}scale version" % _src, "true && X=1 . %s; tailscale version" % _src,
-        "LC_ALL=C . %s && tailscale version" % _src, "2>/dev/null . %s; tailscale version" % _src,
-        "BASH_ENV=%s bash -c 'tailscale version'" % _src, "export BASH_ENV=%s; bash -c 'tailscale version'" % _src,
-        'x=`. %s; tailscale version`; echo "$x"' % _src]]
-    _shapes += [("run", (["sh", "-c", _nested[0]],), {"env": _env}),
-                ("run", (["bash", "-c", _nested[2]],), {"env": _env}),
-                ("run", (["sh", "-c", 'x=`. %s; tailscale version`; echo "$x"' % _src],), {"env": _env}),
-                ("run", (["bash", "-c", "tailscale version"],), {"env": dict(_env, BASH_ENV=_src)})]
-    return tuple(_shapes)
+    return _r31d_ts_landlock.shapes(d, _r15d_ts_ctl_dir)
 
 
 def _r21d_spawn(how):
@@ -2599,50 +2340,38 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
 # The shapes run as the kernel sees them, through the real spawner, with no reader in front.
 
 
-def _r31d_landlock_run(blocked, shapes, late=None):
-    """ts_landlock.run_shapes in a child process: (why the block did not hold, reached?, outputs)."""
-    _job = os.path.join(_r15d_ts_ctl_dir, "r31d-job.json")
-    _res = os.path.join(_r15d_ts_ctl_dir, "r31d-res.json")
-    with open(_job, "w", encoding="utf-8") as _fh:
-        _r26d_json.dump({"blocked": blocked, "shapes": shapes, "mark": _r16d_ts_mark, "late": late}, _fh)
-    _p = _R15D_SP_REAL["run"]([sys.executable, "-I", _r31d_ts_spec.origin, _job, _res],
+def _r31d_landlock_run(mode):
+    """ts_landlock.run_mode in a child process: (why the block did not hold, reached?, outputs).
+
+    The child is started in the planted tree and runs only ts_landlock's own table there, so it is
+    handed a mode word and nothing else (no command comes from its arguments).
+    """
+    _p = _R15D_SP_REAL["run"]([sys.executable, "-I", _r31d_ts_spec.origin, mode], cwd=_r15d_ts_ctl_dir,
                               capture_output=True, text=True, timeout=600)
     if _p.returncode != 0:
         return "child exited %d: %s" % (_p.returncode, _p.stderr[-500:]), [], []
-    with open(_res, encoding="utf-8") as _fh:
-        return tuple(_r26d_json.load(_fh))
+    return tuple(_r26d_json.loads(_p.stdout))
 
 
-_r31d_tmp = os.path.join(_r15d_ts_ctl_dir, "r31d-tmp")     # made before the block: allowed beneath
-os.makedirs(_r31d_tmp, exist_ok=True)
-_r31d_shapes, _r31d_names = [], []
-for _r31d_d in (_r17d_ts_sys, _r19d_ts_lnk):
-    for _r31d_shape in _r19d_ts_shapes(_r31d_d):      # (how, args, kw): how a handle runs it is not the kernel's
-        _r31d_kw = dict(_r31d_shape[2], env=dict(_r31d_shape[2].get("env") or dict(
-            os.environ, PATH=_r31d_d + os.pathsep + os.environ.get("PATH", "")), TMPDIR=_r31d_tmp))
-        _r31d_shapes.append([_r31d_shape[1][0], _r31d_kw])
-        _r31d_names.append("%r %s" % (_r31d_shape[1][0], os.path.basename(_r31d_d)))
-# A copy of the binary run from elsewhere (READ_FILE is denied as well as EXECUTE), the planted
-# binary itself by its path (control: it must reach it unblocked), and a part's stand-in on its own
-# PATH, which must run blocked as unblocked.
-_r31d_shapes.append([["sh", "-c", 'cp "$1" "$2" && sh "$2"', "sh", os.path.join(_r17d_ts_sys, "tailscale"),
-                      os.path.join(_r31d_tmp, "copied")], {}])
-_r31d_names.append("a copy run from the run's temp area")
-_r31d_shapes.append([[os.path.join(_r17d_ts_sys, "tailscale")], {}])
-_r31d_shapes.append([["sh", "-c", "tailscale"], {"env": dict(os.environ, PATH=os.path.join(
-    _r15d_ts_ctl_dir, "own") + os.pathsep + "/usr/bin:/bin")}])
-_r31d_free = _r31d_landlock_run([], _r31d_shapes)
-_r31d_held = _r31d_landlock_run([os.path.realpath(os.path.join(_r17d_ts_sys, "tailscale"))], _r31d_shapes)
+# Made before the block: allowed beneath. The table's shapes get it as TMPDIR, and the copy lands there.
+os.makedirs(os.path.join(_r15d_ts_ctl_dir, _r31d_ts_landlock.TMP), exist_ok=True)
+# Every shape above on sys/ and lnk/ (how a handle runs it is not the kernel's), then a copy of the
+# binary run from elsewhere (READ_FILE is denied as well as EXECUTE), the planted binary itself by
+# its path (control: it must reach it unblocked), and a part's stand-in on its own PATH, which must
+# run blocked as unblocked.
+_r31d_names = _r31d_ts_landlock.kernel_names(_r15d_ts_ctl_dir)
+_r31d_free = _r31d_landlock_run("free")
+_r31d_held = _r31d_landlock_run("held")
 # Every review-1017b shape reaches it unblocked (each needs only sh, bash, env and timeout).
 _r31d_mine = {"%r %s" % (_sh[1][0], os.path.basename(_r31d_d)) for _r31d_d in (_r17d_ts_sys, _r19d_ts_lnk)
-              for _sh in _r31d_ts_shapes(_r31d_d)}
+              for _sh in _r31d_ts_landlock.shapes_1017b(_r31d_d, _r15d_ts_ctl_dir)}
 _r31d_new = [_n for _n, _r in zip(_r31d_names, _r31d_free[1]) if _n in _r31d_mine and not _r]
 _r31d_let = [_n for _n, _r in zip(_r31d_names, _r31d_held[1]) if _r]
 check("unit suite: the kernel refuses the machine's own tailscale to this run and all it starts "
       "(Landlock), whatever a script does to reach it",
       _r31d_ts_block_err == "" and not _r31d_ts_landlock.held(_r31d_ts_machine)
       and not [_f for _f in _r21d_ts_at_start if _f and os.path.realpath(_f) not in _r31d_ts_machine]
-      and _r31d_held[0] == "" and len(_r31d_held[1]) == len(_r31d_shapes) and not _r31d_let,
+      and _r31d_held[0] == "" and len(_r31d_held[1]) == len(_r31d_names) and not _r31d_let,
       repr((_r31d_ts_machine, _r31d_ts_block_err, _r31d_ts_landlock.held(_r31d_ts_machine), _r21d_ts_at_start,
             _r31d_held[0], _r31d_let[:5])))
 
@@ -2664,7 +2393,7 @@ def _r31j_result_line(ok, name, detail):
 # The block's limit, measured on the planted binary: a script made after the block, directly in the
 # binary's own folder (a way), is refused; that is what a package update mid-run does to /usr/bin.
 _r31j_planted = [os.path.realpath(os.path.join(_r17d_ts_sys, "tailscale"))]
-_r31j_late = _r31d_landlock_run(_r31j_planted, [], late=_r17d_ts_sys)
+_r31j_late = _r31d_landlock_run("late")
 _r31j_late_err = (_r31j_late[2] or ["?"])[-1]
 _r31j_note = _r31d_ts_landlock.failure_note(_r31j_late_err, _r31j_planted)
 check("unit suite: the Landlock block's limit is said — a file made after the block beside the blocked "
@@ -2685,10 +2414,10 @@ check("unit suite: ...the run says at its start when the block is on (which file
 check("unit suite: ...the planted binary is reached unblocked by its path, a copy and every review-1017b "
       "shape, and a part's stand-in on its own PATH still runs blocked (control)",
       _r31d_free[0] == "" and _r31d_free[1][-3:-1] == [True, True] and not _r31d_new
-      and sum(_r31d_free[1]) > len(_r31d_shapes) // 2
+      and sum(_r31d_free[1]) > len(_r31d_names) // 2
       and "own stand-in" in _r31d_free[2][-1] and "own stand-in" in (_r31d_held[2] or [""])[-1]
       and _r31d_held[1][-2] is False,
-      repr((_r31d_free[0], sum(_r31d_free[1]), len(_r31d_shapes), _r31d_new[:5], _r31d_free[2][-2:],
+      repr((_r31d_free[0], sum(_r31d_free[1]), len(_r31d_names), _r31d_new[:5], _r31d_free[2][-2:],
             (_r31d_held[2] or [""])[-2:])))
 
 check("unit suite: a wrapper handed a word that cannot spell tailscale is not judged as running it "
