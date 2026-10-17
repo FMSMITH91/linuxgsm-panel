@@ -125,7 +125,8 @@ _out106 = _js106(_name106, (
     "  const pick = (tag, type) => { const e = field(tag); if (type) e.type = type; return e; };\n"
     "  out.rowsPicked = [];\n"
     "  for (const [tag, type] of [['SELECT'], ['INPUT', 'checkbox'], ['INPUT', 'number'], ['TEXTAREA']]) {\n"
-    "    fg.innerHTML = 'before'; await refresh(pick(tag, type)); out.rowsPicked.push(fg.innerHTML.startsWith('<div') ? 'drawn' : fg.innerHTML); }\n"
+    "    fg.innerHTML = 'before'; await refresh(pick(tag, type));\n"
+    "    out.rowsPicked.push(fg.innerHTML.startsWith('<div') ? 'drawn' : fg.innerHTML); }\n"
     "  document.activeElement = null; fg._r29cPending = false;\n"
     # a schedule saved: written into the row on the page now, not the element read before the save
     "  const oldKp = new E87('input'); oldKp.value = '6'; oldKp.validity = {}; els['gsk-4'] = oldKp;\n"
