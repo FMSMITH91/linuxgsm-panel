@@ -619,6 +619,7 @@ CI-verified commit regardless of this file — this changelog is for humans.
     address first.
   - **A backup is no longer pruned while another backup is still being written**, so the archive in
     progress can't take a kept backup's place.
+  - **Also:** binding SSH never re-opens public SSH; GMod Remove keeps mounts it does not hold; prune waits on the lock.
   - **The SSH port card shows the port sshd really listens on** for every host, the panel's own
     included; it showed the stored 22. The audit row for a move names the old port sshd really used.
   - **Smaller fixes.** The console's send box warns when the command's audit row could not be written;
