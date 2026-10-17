@@ -481,9 +481,9 @@ check("debug report posture: the privilege verdict ('passwordless sudo works …
 _plpv92 = _b92.Result(lines=["- **Privilege verdict**: planted-p92",
                              "- **Passwordless `sudo -n true`**: works (planted-p92)",
                              "- Privilege: passwordless sudo works for this account, so the helper "
-                             "boundary does not constrain this panel (planted-p92)",
+                             + "boundary does not constrain this panel (planted-p92)",
                              "- Privilege: the panel runs as root, so nothing constrains its privileged "
-                             "actions (planted-p92)"])
+                             + "actions (planted-p92)"])
 _rpp92 = {}
 try:
     _rpp92["rep"] = _r24r_assemble(extra={"planted92": ("ok", 0.01, _plpv92)},
