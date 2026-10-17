@@ -598,6 +598,9 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
         if _so._update_in_progress():
             return False, ("A panel update is being installed right now — restore once it has "
                            "finished.")
+        # Nor beside a database repair launched in the seconds before the panel stops for it.
+        if _so._r30a_repair_starting():
+            return False, _so.R30A_REPAIR_STARTING_RESTORE
         ok, msg = _restore_backup_locked(name, passphrase, skip_safety_backup)
         if ok:
             _r12a_restore_dispatched["ts"] = time.time()

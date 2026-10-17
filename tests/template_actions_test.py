@@ -4822,7 +4822,9 @@ check(_rbk.count("_bkShow(") == 2 and not re.search(r"\b(?:iv|kp)\.value\s*=", _
       "backups: ...and a stored value with no <option> gets one, so the select is never blank",
       "renderBackups assigns .value directly — a keep of 14 leaves the select with no selection")
 _gss = _js_code_only(_js_function_body(_bk_js2, "setGameSchedule"))
-check("JSON.stringify(body)" in _gss and "{interval:iv,keep:kp}" not in _gss.replace(" ", ""),
+# The body is posted as it is, through the card's save counter (_r30c_bkSave, review 1017a) or directly.
+check(("JSON.stringify(body)" in _gss or "/schedule',body)" in _gss.replace(" ", ""))
+      and "{interval:iv,keep:kp}" not in _gss.replace(" ", ""),
       "backups: the Backups page posts only the schedule field that changed, too",
       "setGameSchedule still posts {interval, keep} — a keep edit resets a 3-day interval")
 _gsch = _js_code_only(_js_function_body(_bk_js2, "gameSchedule"))

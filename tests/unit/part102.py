@@ -427,7 +427,7 @@ def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
         return True, "opened"
     _DROPIN102[:] = []
     _CLOSED102[:] = []
-    _p9_patch(_p9_core, "write_root_file", lambda server, target, body, **k: _DROPIN102.append(body))
+    _p9_patch(_p9_core, "write_root_file", lambda server, target, body, **k: _DROPIN102.append(body) or ("", "", 0))
     _p9_patch(_hosts102, "_restart_ssh_listener", lambda *a, **k: None)
     _p9_patch(_hosts102, "remote_ufw_open_port", _open)
     _p9_patch(_hosts102, "remote_ufw_close_port",

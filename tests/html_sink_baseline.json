@@ -53,7 +53,8 @@
   ],
   "server_detail.js": [
     "d.disk_free",
-    "disk,rows,running"
+    "disk,rows,running",
+    "unread"
   ],
   "server_files.js": [
     "_da",

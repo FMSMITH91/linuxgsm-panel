@@ -83,9 +83,12 @@ def _privileged_lines(res):
     if not outcomes:
         res.add("- **Privileged calls since start**: none yet")
         return
-    res.add("- **Privileged calls since start**: %s · ok %d · refused by sudo %d · 'unknown verb' "
+    # Which PATH the calls took is the privilege model ("via root": the panel is root; "via shell":
+    # sudo runs a shell for it), posture on the in-panel page only. The outcomes are diagnosis.
+    res.posture("- **Privileged calls by path**: %s" % (
+        " · ".join("via %s %d" % (p, n) for p, n in sorted(via.items())) or "via ?"))
+    res.add("- **Privileged calls since start**: ok %d · refused by sudo %d · 'unknown verb' "
             "%d · timed out %d · failed %d" % (
-                " · ".join("via %s %d" % (p, n) for p, n in sorted(via.items())) or "via ?",
                 outcomes.get("ok", 0), outcomes.get("refused", 0),
                 outcomes.get("unknown_verb", 0), outcomes.get("timeout", 0),
                 outcomes.get("failed", 0)))
@@ -211,7 +214,13 @@ def _pieces_lines(res):
             % (_panel_conf_line(), "yes" if os.path.isdir(priv.GAMEDIG_DIR) else "no",
                "yes" if os.path.lexists(_RECOVER_LINK) else "no"))
     res.add("- **Root's source floor**: %s · root's fetched tip: %s" % (_floor_line(), _tip_line()))
-    res.add("- **A self-update here runs**: %s" % _launcher_line())
+    # Through sudo, the launcher is the privilege model (`sudo systemd-run` is the pre-helper path,
+    # which needs passwordless sudo for everything): posture, on the in-panel page only.
+    launcher = "- **A self-update here runs**: %s" % _launcher_line()
+    if "sudo" in launcher:
+        res.posture(launcher)
+    else:
+        res.add(launcher)
 
 
 # ── R28 ───────────────────────────────────────────────────────────────────────────────────────────

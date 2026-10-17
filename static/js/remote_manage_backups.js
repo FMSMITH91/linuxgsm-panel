@@ -52,9 +52,33 @@ function _r29c_bkFieldIn(box){
 }
 // A reply that is not a listing: none at all, or an error body (`error`, on every one since #435).
 function _r25c_bkUnread(d){ return !d || !!d.error; }
+// This card's settings saves still unanswered, how many have started, and whether a re-read is owed.
+// A re-read and a save are two requests nothing orders: the listing reads the stored settings and
+// schedules after its SSH listings, so a quick save usually commits first, but a read served before
+// the save committed redrew the old Keep/Schedule (and reset window._bkSched to it) beside
+// "✓ Schedule saved". A blur sends both at once: the field's `change` save, then the held-back
+// re-read (bkRenderGames). So a re-read asked for while a save is unanswered is sent once it has
+// answered, and a reply from a read sent before a save started is dropped and read again. A save
+// that never answers (fetch has no timeout) stops holding re-reads back after _r30c_bkSaveMs.
+var _r30c_bkSaving = 0, _r30c_bkSaves = 0, _r30c_bkReread = false, _r30c_bkSaveMs = 15000;
+function _r30c_bkSave(url, body){
+  _r30c_bkSaving++; _r30c_bkSaves++;
+  var settled = false, timer = null;
+  var done = function(){
+    if(settled) return;
+    settled = true; _r30c_bkSaving--; clearTimeout(timer);
+    if(_r30c_bkSaving === 0 && _r30c_bkReread){ _r30c_bkReread = false; loadBackups(); }
+  };
+  timer = setTimeout(done, _r30c_bkSaveMs);
+  return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+    .then(function(r){ done(); return r; }, function(e){ done(); throw e; });
+}
 function loadBackups(){
   if(!document.getElementById('bk-tbody')) return;   // the Backups card is a superadmin's (see loadIntegrity)
+  if(_r30c_bkSaving > 0){ _r30c_bkReread = true; return; }
+  var saves = _r30c_bkSaves;
   fetch(MOUNT+'/api/panel/backups').then(r=>r.json()).then(function(d){
+    if(saves !== _r30c_bkSaves){ loadBackups(); return; }   // a save started meanwhile: this read may predate it
     // The route answers a failed listing 200 {error}: read on, it said "No backups yet.", "No
     // installed game servers." and ticked Daily backups on, about lists nobody had read.
     if(_r25c_bkUnread(d)) throw new Error('not a reading');
@@ -380,8 +404,7 @@ function saveBackupSettings(){
   var fk=Number.parseInt(document.getElementById('fb-keep').value,10);
   if(Number.isNaN(fk)) fk=null;
   fbSummary();
-  fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
+  _r30c_bkSave(MOUNT+'/api/panel/backup/settings', {enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})
     .then(r=>r.json()).then(function(d){
       // A refusal or an error reply carries no `settings`: it said "✓ Saved" about nothing saved.
       if(!d || d.success!==true){ bkMsg((d && d.message) ? '✗ '+d.message : '✗ Could not save','text-danger'); return; }
@@ -561,7 +584,7 @@ function setGameSchedule(id){
   if(kp!==(cur.keep_set?String(cur.keep):'')) body.keep=kp;
   if(!Object.keys(body).length) return;
   bkMsg('Saving schedule…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/game/'+id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  _r30c_bkSave(MOUNT+'/api/panel/backup/game/'+id+'/schedule', body)
     .then(r=>r.json()).then(function(d){
       if(d.success&&d.schedule){
         if(window._bkSched) window._bkSched[id]=d.schedule;
@@ -721,8 +744,7 @@ function saveBackupPassphrase(btn){
     bodyText:'From now on every new backup is encrypted with this passphrase.\n\nWrite it down somewhere other than this machine FIRST. There is no reset and no recovery — if you lose it, every backup written with it is permanently unreadable, including the one you would restore from.',
     onConfirm:function(){
       if(btn) btn.disabled=true;
-      fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({passphrase:pass})})
+      _r30c_bkSave(MOUNT+'/api/panel/backup/settings', {passphrase:pass})
         .then(r=>r.json()).then(function(d){
           if(btn) btn.disabled=false;
           if(d.success){ _r29c_bkPassDone(); bkMsg('✓ New backups will be encrypted','text-success'); loadBackups(); }
@@ -736,8 +758,7 @@ function clearBackupPassphrase(btn){
     bodyText:'New backups will be written unencrypted — database, settings and BOTH encryption keys in one openable file.\n\nArchives already encrypted stay encrypted, and still need their passphrase to restore.',
     onConfirm:function(){
       if(btn) btn.disabled=true;
-      fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({passphrase:''})})
+      _r30c_bkSave(MOUNT+'/api/panel/backup/settings', {passphrase:''})
         .then(r=>r.json()).then(function(d){
           if(btn) btn.disabled=false;
           if(d.success) _r29c_bkPassDone();

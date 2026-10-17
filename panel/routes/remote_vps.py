@@ -649,6 +649,10 @@ def _r14a_close_refusal(remote, port, shared, read):
             "UFW is not active on this host, so no firewall rule keeps the panel port closed — the "
             "panel is reachable on its public port.")})
     if read != _R15C_READ:
+        # Audited like every other refusal here: an unreadable firewall left /logs with no trace of
+        # the attempt (review 1017a).
+        log_action(current_user, "close_panel_port", target=str(port), success=False,
+                   remote=remote, detail="firewall could not be read")
         return jsonify({"success": False, "message": i18n.tr(
             "Couldn't read the firewall on this host, so port {port} can't be closed from here. Check "
             "the host is reachable and that UFW is installed, then try again.", port=port)})
@@ -983,7 +987,9 @@ def _register_os_update_checks(app):
             success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success,
                    remote=remote)
-        return jsonify({"success": success, "message": msg})
+        # The start function's English is the audit's; the reply is the viewer's language (an es
+        # or fr caller read "Couldn't start the update." in English).
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
 
 def _register_os_update_jobs(app):
@@ -1002,7 +1008,7 @@ def _register_os_update_jobs(app):
             if ok:
                 log_action(current_user, "remote_os_update", target=remote.name, detail="started",
                            remote=remote)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             # A host that is down or refused the panel is not a fault in it: _unreachable's answer
             # (200, `unreachable`, a `code`); anything else is the generic 500.

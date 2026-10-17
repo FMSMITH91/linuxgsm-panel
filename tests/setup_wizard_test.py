@@ -264,26 +264,41 @@ def _check_unclaimed_wizard():
     check("token: ...and answers the token page, not a redirect (no /setup <-> /login loop)",
           r.status_code == 403 and _is_token_page(r),
           "%d -> %s" % (r.status_code, r.headers.get("Location")))
-    _anon.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5099",
-                               "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
+    _r30d_check_unclaimed_posts(_anon)
+
+
+def _r30d_token_refused(resp):
+    """Is `resp` the token page's refusal (403)? A crash (500) also writes nothing, and is not one."""
+    return resp.status_code == 403 and _is_token_page(resp)
+
+
+def _r30d_check_unclaimed_posts(_anon):
+    """...and every unclaimed POST, or a wrong token, is that refusal and writes nothing."""
+    # Each refusal keeps its answer: a crash (500) also writes nothing, and read as the refusal
+    # (review 1017a).
+    r = _anon.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5099",
+                                   "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
     check("token: an unclaimed POST step=welcome writes nothing",
-          load_config().get("port") != 5099 and load_config().get("site_title") != "Hijacked",
-          "%s %s" % (load_config().get("port"), load_config().get("site_title")))
-    _anon.post("/setup", data=_SSH_ADD)
+          _r30d_token_refused(r)
+          and load_config().get("port") != 5099 and load_config().get("site_title") != "Hijacked",
+          "%s %s %s" % (_r29d_answer(r), load_config().get("port"), load_config().get("site_title")))
+    r = _anon.post("/setup", data=_SSH_ADD)
     check("token: an unclaimed POST step=remote_server makes no SSH connection and adds no host",
-          _ssh_calls == [] and _remote_names() == [], "%r %r" % (_ssh_calls, _remote_names()))
+          _r30d_token_refused(r) and _ssh_calls == [] and _remote_names() == [],
+          "%s %r %r" % (_r29d_answer(r), _ssh_calls, _remote_names()))
     r = _anon.get("/setup?token=" + "x" * len(_TOKEN))
     check("token: a wrong ?token= is refused with the token page",
-          r.status_code == 403 and _is_token_page(r), "got %d" % r.status_code)
-    for _bad in ("", _TOKEN[:-1], _TOKEN + "x", "\u00e9" * 8):
-        _anon.post("/setup", data={"setup_token": _bad})
+          _r30d_token_refused(r), "got %d" % r.status_code)
+    _bad_answers = [_anon.post("/setup", data={"setup_token": _bad})
+                    for _bad in ("", _TOKEN[:-1], _TOKEN + "x", "\u00e9" * 8)]
     # Step 1 is the one step the wizard's order allows here, so it is what shows a claim.
-    _anon.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5098",
-                               "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
+    r = _anon.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5098",
+                                   "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
     check("token: ...and a wrong, empty, truncated or non-ASCII one grants nothing",
-          load_config().get("port") != 5098 and superadmins() == [],
-          "%s %s" % (load_config().get("port"), superadmins()))
-
+          all(_r30d_token_refused(_b) for _b in _bad_answers)
+          and _r30d_token_refused(r)
+          and load_config().get("port") != 5098 and superadmins() == [],
+          "%s %s %s" % (_r29d_answer(r), load_config().get("port"), superadmins()))
 
 
 def _check_unclaimed_tailscale():
@@ -370,12 +385,13 @@ def _check_step_order():
     # AHEAD of the stored one is refused; an earlier one (a browser Back resubmit) still works.
     check("order: (precondition) the wizard is at the admin step", _wiz_step() == "admin_user",
           _wiz_step())
-    c.post("/setup", data=_SSH_ADD)
+    r = c.post("/setup", data=_SSH_ADD)
     check("order: step=remote_server posted ahead of the wizard makes no SSH connection",
-          _ssh_calls == [] and _remote_names() == [], "%r %r" % (_ssh_calls, _remote_names()))
-    c.post("/setup", data={"step": "tailscale"})
+          _r29d_redirect(r, "/setup") and _ssh_calls == [] and _remote_names() == [],
+          "%s %r %r" % (_r29d_answer(r), _ssh_calls, _remote_names()))
+    r = c.post("/setup", data={"step": "tailscale"})
     check("order: step=tailscale posted ahead does not advance the wizard",
-          _wiz_step() == "admin_user", _wiz_step())
+          _r29d_redirect(r, "/setup") and _wiz_step() == "admin_user", "%s %s" % (_r29d_answer(r), _wiz_step()))
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
     check("order: re-posting an earlier step works, and does not move the wizard backwards",
@@ -477,8 +493,8 @@ def _check_admin_race():
     _rh.hash_password = _racing_hash
     _rh._superadmin_exists = _lock["exists"]
     try:
-        _racer.post("/setup", data={"step": "admin_user", "username": "racer",
-                                    "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
+        _race_r = _racer.post("/setup", data={"step": "admin_user", "username": "racer",
+                                              "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
     finally:
         _rh.hash_password = _real_hash
         _rh._superadmin_exists = _lock["real_exists"]
@@ -488,7 +504,8 @@ def _check_admin_race():
     # Also the check that a valid step=admin_user creates the first superadmin: a separate one
     # asserted the same expression on the same state just after it (removed, tests1015b).
     check("race: two admin_user POSTs interleaved create exactly ONE superadmin",
-          superadmins() == ["firstadmin"], str(superadmins()))
+          _race_r.status_code < 500 and superadmins() == ["firstadmin"],
+          "%s %s" % (_r29d_answer(_race_r), superadmins()))
     _check_lock_held(_lock)
     check("token: the token file is deleted once the first admin exists",
           not _TOKEN_FILE.exists(), "still on disk")
@@ -589,8 +606,8 @@ def _check_restart_now():
     """The complete page's Restart now: the owner's alone, and only when there is a bind to apply."""
     # "Restart now" is the owner's explicit choice, and nobody else's.
     rr = _att.post("/setup/restart")
-    check("complete: another browser cannot restart the panel", _restarts == [],
-          "%d %r" % (rr.status_code, _restarts))
+    check("complete: another browser cannot restart the panel",
+          _r29d_redirect(rr, "/login") and _restarts == [], "%s %r" % (_r29d_answer(rr), _restarts))
     rr = c.post("/setup/restart")
     check("complete: the owner's Restart now restarts the panel once",
           _restarts == [1] and rr.status_code == 200, "%d %r" % (rr.status_code, _restarts))
@@ -599,9 +616,9 @@ def _check_restart_now():
           and "127.0.0.1" in _audit("panel_restart")[0][2], repr(_audit("panel_restart")))
     # Once the running bind is the stored one there is nothing to apply, so no restart...
     app.config["_BOOT_BIND"] = "127.0.0.1"
-    c.post("/setup/restart")
-    check("complete: with nothing to apply, Restart now does nothing", _restarts == [1],
-          repr(_restarts))
+    rr = c.post("/setup/restart")
+    check("complete: with nothing to apply, Restart now does nothing",
+          _r29d_redirect(rr, "/login") and _restarts == [1], "%s %r" % (_r29d_answer(rr), _restarts))
     check("audit: ...and writes no row", len(_audit("panel_restart")) == 1,
           repr(_audit("panel_restart")))
     # ...and the private claim is back, because it is true now (positive control). This is the
@@ -664,7 +681,7 @@ def _check_setup_rows_by_account():
         return False, "systemd-run: refused"
     _so_mod.restart_panel = _refusing_restart
     try:
-        _rec.post("/setup/restart")
+        _rec_r = _rec.post("/setup/restart")
     finally:
         _so_mod.restart_panel = _recorder
         app.config.pop("_BOOT_BIND", None)
@@ -677,8 +694,8 @@ def _check_setup_rows_by_account():
           "process before a later write lands", _at_call == [_n_before + 1],
           "rows when restart_panel ran: %r (before: %d)" % (_at_call, _n_before))
     check("audit: ...and a restart that could not be scheduled is a row of its own, saying why",
-          [r[2] for r in _rows] == [True, False] and "systemd-run: refused" in _rows[-1][3],
-          repr(_rows))
+          _rec_r.status_code == 200 and [r[2] for r in _rows] == [True, False]
+          and "systemd-run: refused" in _rows[-1][3], "%s %r" % (_r29d_answer(_rec_r), _rows))
     check("audit: a signed-in superadmin's rows name that account, not 'setup wizard'",
           {r[:2] for r in _rows} == {("firstadmin", _admin_id)}, repr(_rows))
 
@@ -717,8 +734,8 @@ def _check_claim_follows_current_token():
     try:
         _TOKEN_FILE.write_text(_secrets.token_urlsafe(24) + "\n", encoding="ascii")   # rotated
         _rot = _held.get("/setup")
-        _held.post("/setup", data={"step": "welcome", "site_title": "Stale claim", "port": "5097",
-                                   "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input
+        _stale = _held.post("/setup", data={"step": "welcome", "site_title": "Stale claim", "port": "5097",
+                                            "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input
         _TOKEN_FILE.unlink()                                                     # deleted
         _gone = _held.get("/setup")
     finally:
@@ -726,8 +743,9 @@ def _check_claim_follows_current_token():
     check("token: (control) the browser below had claimed the wizard", _claimed,
           "got %d" % _was.status_code)
     check("token: a claim made with a token that has since been replaced opens nothing",
-          _rot.status_code == 200 and _is_token_page(_rot) and load_config().get("port") != 5097,
-          "%d %s" % (_rot.status_code, load_config().get("port")))
+          _rot.status_code == 200 and _is_token_page(_rot) and _stale.status_code == 403 and _is_token_page(_stale)
+          and load_config().get("port") != 5097,
+          "%d %s %s" % (_rot.status_code, _r29d_answer(_stale), load_config().get("port")))
     check("token: ...nor once the token file is deleted",
           _is_token_page(_gone), "got %d" % _gone.status_code)
     _back = _held.get("/setup")
@@ -874,9 +892,9 @@ try:
             ("a mismatched confirmation", {"username": "admin1", "password": _ADMIN_PASSWORD,
                                            "confirm_password": "Different1!pass"},  # nosec B105
              "mismatch")):
-        c.post("/setup", data=dict(step="admin_user", **_form))
-        check("open: %s creates no account (%s)" % (_name, _why), superadmins() == [],
-              str(superadmins()))
+        r = c.post("/setup", data=dict(step="admin_user", **_form))
+        check("open: %s creates no account (%s)" % (_name, _why),
+              r.status_code < 500 and superadmins() == [], "%s %s" % (_r29d_answer(r), superadmins()))
 
     # ── setup must not be able to FINISH before it has produced an admin ──────────────────────
     # The handler dispatches on the `step` field from the FORM, so nothing makes a caller walk the
@@ -888,13 +906,13 @@ try:
     # so an unauthenticated POST reconfigured the host.
     check("open: nobody has been created yet (the precondition for the next check)",
           superadmins() == [], str(superadmins()))
-    c.post("/setup", data={"step": "remote_server", "action": "skip"})
+    _jump = c.post("/setup", data={"step": "remote_server", "action": "skip"})
     with app.app_context():
         _st_jump = SetupState.query.first()
         _complete_jump = bool(getattr(_st_jump, "complete", False))
     check("open: a jump straight to the last step does NOT complete setup with no admin",
-          not _complete_jump,
-          "setup closed itself with %s admins — the panel is now unreachable without the CLI"
+          _r29d_redirect(_jump, "/setup") and not _complete_jump,
+          _r29d_answer(_jump) + ": setup closed itself with %s admins — the panel is now unreachable without the CLI"
           % len(superadmins()))
     check("open: ...and the config flag is not set either",
           not load_config().get("setup_complete", False),
@@ -951,10 +969,10 @@ try:
           rr.status_code == 200, "got %d" % rr.status_code)
     # A Back-button resubmit of step 1 is harmless, and must not move the wizard back to the admin
     # step: that page's POST now refuses (an admin exists), so the owner would be stuck on it.
-    c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
-                           "port": "5052", "bind_host": "127.0.0.1"})
+    r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                               "port": "5052", "bind_host": "127.0.0.1"})
     check("order: the owner re-posting step 1 does not send the wizard back to the admin step",
-          _wiz_step() == "tailscale", _wiz_step())
+          _r29d_redirect(r, "/setup") and _wiz_step() == "tailscale", "%s %s" % (_r29d_answer(r), _wiz_step()))
     # ...and the way back in from any other browser is to sign in as the admin.
     r = _att.get("/login", follow_redirects=False)
     check("owner: /login is reachable once an admin exists (not bounced into the wizard)",
@@ -1108,14 +1126,15 @@ try:
               rr.status_code in (401, 403, 301, 302, 303), "got %d" % rr.status_code)
         # ...and to the owner, whom only the lock can refuse. "deleted" is the case that tests
         # the lock for welcome: with the file truncated or invalid, save_config refuses on its own.
-        _owner.post("/setup", data={"step": "welcome", "site_title": "OwnerHijack-%s" % _label[:4],
-                                    "port": "1236", "bind_host": "0.0.0.0"},  # nosec B104 - hostile input
-                    follow_redirects=False)
+        rr = _owner.post("/setup", data={"step": "welcome", "site_title": "OwnerHijack-%s" % _label[:4],
+                                         "port": "1236", "bind_host": "0.0.0.0"},  # nosec B104 - hostile input
+                         follow_redirects=False)
         _cfg_now = load_config()
         check("locked: with config.json %s, the wizard's own browser cannot rewrite the binding"
-              % _label, not str(_cfg_now.get("site_title", "")).startswith("OwnerHijack")
+              % _label, rr.status_code in (401, 403, 301, 302, 303)
+              and not str(_cfg_now.get("site_title", "")).startswith("OwnerHijack")
               and _cfg_now.get("port") != 1236,
-              "config now says %s / %s" % (_cfg_now.get("site_title"), _cfg_now.get("port")))
+              "%s; config now says %s / %s" % (_r29d_answer(rr), _cfg_now.get("site_title"), _cfg_now.get("port")))
         rr = _owner.post("/api/setup/tailscale/up", json={})
         check("locked: with config.json %s, tailscale/up is refused to the wizard's own browser"
               % _label, rr.status_code in (401, 403, 301, 302, 303), "got %d" % rr.status_code)

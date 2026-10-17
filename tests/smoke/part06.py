@@ -485,11 +485,14 @@ try:
           "drops this ban at the next map change")
     # ...and a NON-ban action must not pay for it — this runs an SSH round trip.
     _ban_ensured.clear()
-    c.post("/api/server/%d/moderate" % gs_id,
-           json={"action": "kick", "target": "someone"},
-           headers={"X-Requested-With": "XMLHttpRequest"})
+    _kick_r = c.post("/api/server/%d/moderate" % gs_id,
+                     json={"action": "kick", "target": "someone"},
+                     headers={"X-Requested-With": "XMLHttpRequest"})
+    # ...and the kick itself went through: a crash called nothing either (review 1017a).
     check("ban: ...but a kick does not, since nothing is being persisted",
-          not _ban_ensured, "called on a kick: %s" % (_ban_ensured,))
+          (_kick_r.get_json(silent=True) or {}).get("success") is True and not _ban_ensured,
+          "answered %d %r, called on a kick: %s" % (_kick_r.status_code, _kick_r.get_json(silent=True),
+                                                     _ban_ensured))
 finally:
     _bn_game.ensure_persistent_bans = _ban_saved["ensure"]
     _bn_game.moderate = _ban_saved["moderate"]
@@ -2281,14 +2284,15 @@ check("commands: the test's own pattern really does widen when cut (not a vacuou
       % (_wide[-20:], _cut[-20:]))
 _cf = {"name": "smoke-trunc-cmd", "command_template": "say {}", "argument_label": "Map",
        "scope": "all|", "enabled": "on", "argument_pattern": _wide}
-_lc.post("/commands/add", data=_cf, follow_redirects=False)
+_cf_r = _lc.post("/commands/add", data=_cf, follow_redirects=False)
 with app.app_context():
     _stored = CustomCommand.query.filter_by(name="smoke-trunc-cmd").first()
     _stored_pat = _stored.argument_pattern if _stored else None
+# Answered, not crashed: a 500 stored nothing either (review 1017a).
 check("commands: an over-long validation pattern is refused, not truncated",
-      _stored is None or _stored_pat == _wide,
-      "stored a %d-char pattern from a %d-char one — %r"
-      % (len(_stored_pat or ""), len(_wide), (_stored_pat or "")[-30:]))
+      _cf_r.status_code in (200, 302, 303) and (_stored is None or _stored_pat == _wide),
+      "status %d; stored a %d-char pattern from a %d-char one — %r"
+      % (_cf_r.status_code, len(_stored_pat or ""), len(_wide), (_stored_pat or "")[-30:]))
 # Positive control: a pattern that FITS is still accepted, in full.
 _ok_pat = "^(?:de_dust2|de_inferno|de_nuke)$"
 _lc.post("/commands/add", data=dict(_cf, name="smoke-ok-cmd", argument_pattern=_ok_pat),

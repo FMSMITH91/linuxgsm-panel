@@ -376,12 +376,19 @@ def _stat105(client, rid):
     _p9_patch(_p9_sf, "stream_path", lambda *a, **k: iter([b""]))
     _p9_patch(_p9_sf, "game_account_write_refusal", lambda *a, **k: None)   # as part62 drives it
     resp = client.get("/server/%d/download?path=cfg/server.cfg" % gid)
+    # ...and the same route with a size the stat did read serves the file, so the 302 above is that
+    # refusal and not any other (review 1017a: the part kept no route-level control).
+    _p9_patch(_p9_core, "shell_as_game_user", lambda server, user, sh, timeout=30, **k: ("f 4\n", "", 0))
+    _p9_patch(_p9_sf, "stream_path", lambda *a, **k: iter([b"abcd"]))
+    _p9_patch(_p9_sf, "log_action", lambda *a, **k: None)   # this part's viewer is a stand-in with no id
+    resp_ok = client.get("/server/%d/download?path=cfg/server.cfg" % gid)
     check("file download: a file whose size stat could not read is no answer (the route redirects back "
           "saying the host did not return it), never a 200 with an EMPTY file under the real name; a "
           "sized file and a folder still answer (controls)",
           answers["no size"] is None and resp.status_code == 302
+          and resp_ok.status_code == 200 and resp_ok.get_data() == b"abcd"
           and (answers["sized"] or {}).get("size") == 4096 and (answers["dir"] or {}).get("type") == "d",
-          repr((answers, resp.status_code)))
+          repr((answers, resp.status_code, resp_ok.status_code)))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

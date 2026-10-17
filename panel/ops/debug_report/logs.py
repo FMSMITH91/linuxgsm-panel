@@ -143,7 +143,8 @@ _CGROUP_KILL_RE = re.compile(r"Failed to kill control group|remains running afte
 _SOURCE_LABEL = {"user-journal": "user journal (journalctl --user)",
                  "user-unit": "system journal, this account's user unit",
                  "helper": "system journal via the privileged helper",
-                 "root": "system journal (the panel runs as root)"}
+                 # Not "the panel runs as root": that is the privilege model, posture (_base.py).
+                 "root": "system journal (read directly)"}
 
 
 def _journal(ctx):
@@ -463,12 +464,41 @@ def _priv_entry(label, n):
     return "%s ×%d [%s]" % (label, _priv_total(n), ", ".join("%s ×%d" % kv for kv in subs))
 
 
+def _r30a_root_calls(verbs):
+    """{label: n} of the calls sudo ran AS ROOT outside the helper ('shell as root', …)."""
+    return {k: v for k, v in verbs.items() if str(k).endswith(" as root")}
+
+
+def _r30a_not_root(verbs):
+    """`verbs` without the calls sudo ran as root outside the helper (those are posture)."""
+    root = _r30a_root_calls(verbs)
+    return {k: v for k, v in verbs.items() if k not in root}
+
+
+def _r30a_root_line(verbs, span_of):
+    """The posture line for the calls sudo ran as root outside the helper, or None.
+
+    A successful 'shell as root ×5' says sudo gives this panel a root shell: the privilege model
+    (whether passwordless sudo makes the panel root), so it is on the in-panel page only. A refused
+    one is a fault, and stays in the file where the refusal is printed.
+    """
+    root = _r30a_root_calls(verbs)
+    if not root:
+        return None
+    total = sum(root.values())
+    top = sorted(root.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ("- **Privileged calls as root**: %d successful sudo call%s in %s (%s)"
+            % (total, "" if total == 1 else "s", span_of, ", ".join(_priv_entry(k, v) for k, v in top)))
+
+
 def _priv_line(verbs, sessions, span_of, title="Privileged calls (left out below)"):
     """'- **Privileged calls (left out below)**: N sudo calls ... (verb ×n, ...) · M session lines'.
 
     The game-account work is ONE entry with its kinds nested, so a thousand gamedig runs cannot
-    push the helper's verbs out of the six shown.
+    push the helper's verbs out of the six shown. Calls sudo ran as root outside the helper are
+    not in it: they are posture (_r30a_root_line).
     """
+    verbs = _r30a_not_root(verbs)
     if not verbs and not sessions:
         return None
     total = sum(_priv_total(n) for n in verbs.values())
@@ -480,16 +510,30 @@ def _priv_line(verbs, sessions, span_of, title="Privileged calls (left out below
 
 
 def _priv_summary(j):
-    """The privileged-call line for this report, from the separate sudo read when there was one."""
+    """(the privileged-call line for this report, its posture line); either may be None.
+
+    From the separate sudo read when there was one.
+    """
     if j.get("sudo"):
         _kept, verbs, sessions = _split_priv(j["sudo"])
-        return _priv_line(verbs, sessions, "the %d sudo lines of the panel's unit from %s, %s"
-                          % (len(j["sudo"]), _src_journal.window_words("panel-sudo"),
-                             _span(j["sudo"])), title="Privileged calls")
+        span_of = "the %d sudo lines of the panel's unit from %s, %s" % (
+            len(j["sudo"]), _src_journal.window_words("panel-sudo"), _span(j["sudo"]))
+        return (_priv_line(verbs, sessions, span_of, title="Privileged calls"),
+                _r30a_root_line(verbs, span_of))
     if j.get("filtered"):
-        return "- **Privileged calls**: not counted (%s)" % (j.get("sudo_why") or "no sudo lines read")
+        return ("- **Privileged calls**: not counted (%s)" % (j.get("sudo_why") or "no sudo lines read"),
+                None)
     _kept, verbs, sessions = _split_priv(j["lines"])
-    return _priv_line(verbs, sessions, "this window")
+    return _priv_line(verbs, sessions, "this window"), _r30a_root_line(verbs, "this window")
+
+
+def _r30a_priv_lines(res, j):
+    """The digest's privileged-call line in the file, and the as-root one on the page only."""
+    priv, root_calls = _priv_summary(j)
+    if priv:
+        res.add(priv)
+    if root_calls:
+        res.posture(root_calls)
 
 
 def _cut_words(j):
@@ -515,9 +559,7 @@ def section_journal_digest(ctx):
                                 _span(j["lines"])))
     else:
         res.add("- **Window**: the last %d lines, %s" % (len(j["lines"]), _span(j["lines"])))
-    priv = _priv_summary(j)
-    if priv:
-        res.add(priv)
+    _r30a_priv_lines(res, j)
     tbs = _tracebacks(bodies, [_stamp(ln) for ln in lines])
     res.lines.extend(_traceback_lines(ctx, tbs))
     res.add(_levels_line(bodies))

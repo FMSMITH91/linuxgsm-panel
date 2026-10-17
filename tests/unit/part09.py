@@ -755,6 +755,14 @@ _rv_staged = []
 _rv_stage_saved = _gh_bk._stage_archive
 _gh_bk._stage_archive = lambda src: (_rv_staged.append(src), None)[1]
 _gh_so._update_in_progress = lambda: False       # as above: not this machine's self-update log
+# An empty data dir of its own: the redirect above was put back by then, so these restores read
+# the checkout's real data/backups, where a name that existed went on to its real panel.db
+# (review 1017a).
+_r30d_rv_data = type(_gh_bk_saved["DATA_DIR"])(_gh_tmp.mkdtemp(prefix="lgsm-unit-p09-rv-"))
+for _r30d_a, _r30d_p in (("DATA_DIR", ""), ("BACKUP_DIR", "backups"), ("DB_PATH", "panel.db"),
+                         ("CONFIG_FILE", "config.json"), ("SECRET_FILE", "secret_key"),
+                         ("CRED_KEY_FILE", "cred_key")):
+    setattr(_gh_bk, _r30d_a, _r30d_rv_data / _r30d_p if _r30d_p else _r30d_rv_data)
 try:
     with _gh_bk._restore_lock:
         _rv_rr = _gh_bk.restore_backup("panel-backup-20260101-000000-manual.tar.gz")
@@ -773,6 +781,8 @@ try:
 finally:
     _gh_bk._stage_archive = _rv_stage_saved
     _gh_so._update_in_progress = _gh_upd_saved
+    for _r30d_a in ("DATA_DIR", "BACKUP_DIR", "DB_PATH", "CONFIG_FILE", "SECRET_FILE", "CRED_KEY_FILE"):
+        setattr(_gh_bk, _r30d_a, _gh_bk_saved[_r30d_a])
 
 # ── a block/unban on the PANEL host through its row id refreshes the panel's own ban gate ────────
 import panel.routes.remote_security as _rv_rs  # noqa: E402

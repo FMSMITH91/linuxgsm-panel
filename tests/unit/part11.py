@@ -3343,10 +3343,12 @@ try:
     eq("live stats: an unanswered read is NOT written over the last-known values", len(_r.cached), _n_cached)
 
     # ── OS updates ─────────────────────────────────────────────────────────────────────────────
-    _rv.remote_os_run_updates = lambda remote: (False, "E: Could not get lock")
+    # An answer the function can give since #443 started the detached job (review 1017a: apt's own
+    # lock error, which it can no longer return).
+    _rv.remote_os_run_updates = lambda remote: (False, "Couldn't start the update.")
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/run-updates" % _r.id))
     check("run updates: the helper's answer is returned and audited with its success flag",
-          _body == {"success": False, "message": "E: Could not get lock"}
+          _body == {"success": False, "message": "Couldn't start the update."}
           and _rv_log[-1] == ("remote_os_update", _r.name, None, False), repr(_body))
     _rv.remote_os_update_start = lambda remote: (True, "Update started.")
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/os-update/start" % _r.id))

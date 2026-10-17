@@ -204,6 +204,30 @@ def unzoned_ip_or_network(value):
     return str(type(net)((int(net.network_address), net.prefixlen)))
 
 
+def same_whitelist_entry(stored, requested):
+    """Whether a STORED whitelist entry is the one a removal request names.
+
+    Its text equals the request's, or it reads as the same address or network (unzoned_ip_or_network
+    on both sides). The canonical form alone left a hand-edited entry (a network written with a
+    host's address, upper-case IPv6, surrounding spaces) in force while the panel answered and
+    audited it as removed. The raw text still matches on its own, so an entry stored before the
+    add refused it (a zone id) can be taken out.
+    """
+    raw = "" if requested is None else str(requested).strip()
+    target = unzoned_ip_or_network(raw)
+    return str(stored).strip() == raw or (target is not None and unzoned_ip_or_network(stored) == target)
+
+
+def whitelist_without(listed, requested, removed):
+    """`listed` without every entry same_whitelist_entry matches to `requested`.
+
+    Each one taken is appended to `removed`, so the caller can say what was taken (nothing, for
+    text on no list).
+    """
+    removed.extend(w for w in (listed or []) if same_whitelist_entry(w, requested))
+    return [w for w in (listed or []) if w not in removed]
+
+
 # nosec B104 - the set of wildcard addresses to RECOGNISE, so callers can tell "listening
 # everywhere" from loopback. Naming a value is not binding to it.
 BIND_WILDCARD = frozenset({"0.0.0.0", "::"})  # nosec B104

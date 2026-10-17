@@ -76,7 +76,18 @@ POSTURE_RE = re.compile(
     r"|trust_proxy is on but the panel listens beyond loopback|Automatic security updates"
     r"|\*\*Tailscale operator\*\*|panel account is the operator"
     r"|\*\*Privilege verdict\*\*|\*\*Passwordless `sudo -n true`\*\*"
-    r"|the helper boundary does not constrain|so nothing constrains its privileged actions")
+    r"|the helper boundary does not constrain|so nothing constrains its privileged actions"
+    # Any other line stating the privilege model: install.sh's grant block in a self-update log
+    # ("sudo grant: WIDE (NOPASSWD:ALL)" and the two lines under it), and the panel's own words for
+    # running as root or for calls sudo ran as root ("shell as root ×5"; a REFUSED one,
+    # "COMMAND=(true as root)", is a fault and stays). Each install.sh line by its own words, not
+    # by a term: a bare "pre-helper" or "NOPASSWD" also held back diagnosis — Privileged helper's
+    # "Not installed — privileged actions fall back to the pre-helper path", install.sh's
+    # db_maintenance warning, a sudoers syntax error — the lines that explain a host's failures.
+    r"|sudo grant:|falls back to the pre-helper path, which needs the wide grant"
+    r"|once the helper can be placed to narrow it again|\bruns as root\b|\bas root ×\d"
+    r"|\*\*Runs as\*\*"
+    r"|\*\*Privileged calls by path\*\*|\bsudo systemd-run\b|\bvia (?:shell|root) \d")
 
 
 def finding(level, area, text):

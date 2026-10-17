@@ -1,0 +1,6 @@
+{
+  "The new SSH port configuration could not be written ({why}) — nothing changed.": "La nouvelle configuration du port SSH n'a pas pu être écrite ({why}) — rien n'a été modifié.",
+  "Put the rule for {port} back, so the panel stays reachable there until it restarts.": "La règle pour {port} a été remise, donc le panneau reste joignable là jusqu'à son redémarrage.",
+  "The rule for {port} could not be put back ({why}), and the panel still listens there.": "La règle pour {port} n'a pas pu être remise ({why}), et le panneau écoute toujours là.",
+  "fail2ban could not be pointed back at port {port}.": "fail2ban n'a pas pu être redirigé vers le port {port}."
+}

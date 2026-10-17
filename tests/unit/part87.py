@@ -427,6 +427,9 @@ _RM87 = _read87("static", "js", "remote_manage.js")
 _name87 = "remote page: the reachability badge's tooltip on a changed host key"
 _out87 = _node87(_name87, _DOM87 + _SETTLE47 + (
     "global.REMOTE_ID = 7; global.IS_LOCAL = false;\n"
+    # the order guard pollLive calls (review 1017a): its counters' line and the guard
+    + _RM87[_RM87.index("var _r30c_liveSent"):].split("\n", 1)[0] + "\n"
+    + _cut_or87(_RM87, "function _r30c_liveOld(") + "\n"
     + _cut_or87(_RM87, "function pollLive(") + "\n" + _cut_or87(_RM87, "function _r18cPaintHostBadge(") + "\n"
     "(async () => {\n"
     "  const out = {}, b = document.getElementById('remote-status');\n"

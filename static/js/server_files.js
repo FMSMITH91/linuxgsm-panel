@@ -24,10 +24,10 @@ var gameCfgLoaded=false, gameCfgRel=null;
 // 'stale' when a later re-read (after a settings save) failed. Its Save writes the box over the
 // instance .cfg byte for byte, so it is refused in the other two states: an unread box is "" (or
 // whatever was typed into it), and a stale one would put back the settings the save just changed.
-// 'behind': a settings save changed the file while the operator was typing in the box (the re-read
-// below leaves a focused box alone), so its text predates that save; refused for the same reason.
+// 'behind': a settings save changed the file while the box held the operator's typing (the re-read
+// below leaves a typed-in box alone), so its text predates that save; refused for the same reason.
 var _r26c_rawRead='unread';
-// The text a read last put in the box: a focused box still holding it has not been typed into.
+// The text a read last put in the box: a box still holding it has not been typed into.
 // Read back from the box after each fill, not the reply's text: a textarea's value turns CR and CRLF
 // into LF, so a cfg with CRs never equalled the reply, and an untouched box read as typed-into
 // (refused Save as 'behind'). A reply is compared after the same normalisation (_r29j_rawText).
@@ -127,7 +127,7 @@ function saveConfig(ev){
   return false;
 }
 // Re-read just the raw instance cfg and update the Raw tab, WITHOUT re-rendering the settings
-// form (which would collapse the accordion). Skipped if the user is actively editing the raw box.
+// form (which would collapse the accordion). A box the user has typed in is not overwritten.
 // A read that did not happen answers {raw: "", error: ...} (a host blip; the tailscale and local
 // transports return "" without raising): that is not the file's text. It used to empty the box,
 // and the Raw tab's Save then wrote "" over the cfg. The last good text stays, marked stale.
@@ -136,23 +136,28 @@ function refreshRawConfig(){
     var ta=document.getElementById('cfg-raw');
     if(!d || d.error || typeof d.raw !== 'string'){ _r26c_rawStale(); return; }
     if(!ta) return;
-    // A box the operator is typing in is left alone. It used to be left marked 'ok' as well, so
-    // when they had clicked into it before this re-read came back (a slow host), its Save wrote
-    // the pre-save text back over the settings just saved. Typed-in and now behind the file: its
-    // Save is refused until the page is reloaded. Focused but untouched: it is simply refilled.
-    if(document.activeElement===ta && ta.value!==_r29j_rawShown){
+    // A box the operator typed in is left alone. It used to be left marked 'ok' as well, so when
+    // they had clicked into it before this re-read came back (a slow host), its Save wrote the
+    // pre-save text back over the settings just saved. Typed-in and now behind the file: its Save
+    // is refused until the page is reloaded. Untouched (still what the last fill put there): it is
+    // simply refilled. Decided by the text, not by focus: the Raw and settings tabs are separate
+    // panes, so the box is almost never focused when a settings save is made, and a draft typed
+    // there before switching tabs was replaced with no word. (A box no read ever filled holds no
+    // draft of the file: it is filled.)
+    if(_r29j_rawShown!==null && ta.value!==_r29j_rawShown){
       if(_r29j_rawText(d.raw)!==_r29j_rawShown) _r29j_rawBehind();
       return;
     }
-    // A good read clears a stale mark a failed earlier one left.
-    if(_r26c_rawRead==='stale') document.getElementById('cfg-raw-msg').textContent='';
+    // A good read clears a stale or behind mark an earlier one left (the box is refilled, and its
+    // Save works again).
+    if(_r26c_rawRead==='stale' || _r26c_rawRead==='behind') document.getElementById('cfg-raw-msg').textContent='';
     ta.value = d.raw; _r29j_rawShown = ta.value; _r26c_rawRead='ok';
   }).catch(function(){ _r26c_rawStale(); });
 }
 function _r29j_rawBehind(){
   _r26c_rawRead='behind';
   var msg=document.getElementById('cfg-raw-msg');
-  msg.textContent=_tr('The settings save changed this config while you were typing here, so saving this text would undo it. Reload the page before saving it.');
+  msg.textContent=_tr('A settings save changed this config after you edited the text here, so saving this text would undo it. Copy your edits, reload the page, and make them again.');
   msg.className='small ms-2 text-warning';
 }
 function _r26c_rawStale(){
@@ -189,7 +194,7 @@ function saveRaw(){
   var msg=document.getElementById('cfg-raw-msg');
   if(_r26c_rawRead!=='ok'){
     msg.textContent=_tr(_r26c_rawRead==='behind'
-      ? 'The settings save changed this config while you were typing here, so saving this text would undo it. Reload the page before saving it.'
+      ? 'A settings save changed this config after you edited the text here, so saving this text would undo it. Copy your edits, reload the page, and make them again.'
       : _r26c_rawRead==='stale'
       ? 'The config could not be re-read after the settings save, so this text may be out of date. Reload the page before saving it.'
       : 'The config has not been read, so there is nothing safe to save. Reload the page and try again.');
@@ -1581,10 +1586,21 @@ function _bkShow(sel, field, v, label, named){
   _bkShown[field]=v;
 }
 
+// Schedule saves started, reads sent, and the newest read drawn. A read and a schedule save are two
+// requests nothing orders (the 4 s poll runs while a backup does): a read served before the save
+// committed, answering after it, put the old schedule back in the selects and in _bkShown beside
+// "Backup schedule saved". A reply is drawn only if no save started after its read was sent (the
+// save's own success reads again) and no newer read has been drawn.
+var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0;
 function loadBackups(){
   if(!document.getElementById('backup-card')) return;
+  var mine = ++_r30c_sfBkSent, saves = _r30c_sfBkSaves;
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/info')
-    .then(r=>r.json()).then(renderBackups)
+    .then(r=>r.json()).then(function(d){
+      if(saves !== _r30c_sfBkSaves || mine < _r30c_sfBkDrawn) return;
+      _r30c_sfBkDrawn = mine;
+      renderBackups(d);
+    })
     .catch(function(){ /* transient error — keep whatever is already shown */ });
 }
 
@@ -1693,6 +1709,7 @@ function saveBkSchedule(){
     if(el && el.value!=='' && el.value!==_bkShown[f[0]]) body[f[0]]=el.value;
   });
   if(!Object.keys(body).length) return;
+  _r30c_sfBkSaves++;
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){

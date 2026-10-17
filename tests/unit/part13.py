@@ -3959,8 +3959,9 @@ try:
     _wl_rm_raw10 = _app10mod._security_whitelist_remove("  not-an-ip  ")
     _app10mod._security_whitelist_add("2001:db8::1")
     _wl_rm_v6_10 = _app10mod._security_whitelist_remove("2001:DB8:0::1")   # typed differently
-    check("app whitelist: removal takes the canonical form, or the raw text for a stale entry",
-          _wl_rm10 == "203.0.113.7" and _wl_rm_raw10 == "not-an-ip" and _wl_rm_v6_10 == "2001:db8::1"
+    check("app whitelist: removal takes the entry by its address, typed any way, and reports what it took "
+          "(nothing for text that is not on the list)",
+          _wl_rm10 == ["203.0.113.7"] and _wl_rm_raw10 == [] and _wl_rm_v6_10 == ["2001:db8::1"]
           and _app10mod._security_whitelist() == ["198.51.100.0/24"],
           repr(_acfg10.get("security_whitelist")))
 

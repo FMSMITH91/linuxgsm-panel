@@ -179,11 +179,13 @@ try:
         db.session.commit()
         _before_status = _gs0.status
     _apimod._remote_listening_ports = lambda r: None          # the scan failed
-    c.get("/api/servers")
+    _ap_r = c.get("/api/servers")
     with app.app_context():
         _after = db.session.get(GameServer, gs_id).status
+    # ...by a poll that answered: one that crashed wrote nothing either (review 1017a).
     check("api/servers: a failed port scan leaves the stored status alone",
-          _after == _before_status, "%s -> %s" % (_before_status, _after))
+          _ap_r.status_code == 200 and _after == _before_status,
+          "%d: %s -> %s" % (_ap_r.status_code, _before_status, _after))
     # positive control: a scan that really answered still updates the status, so the check
     # above is measuring the guard and not an endpoint that stopped writing at all.
     _apimod._remote_listening_ports = lambda r: set()         # answered: nothing listening
@@ -634,11 +636,13 @@ check("tiles: a restore control appears for each hidden tile",
       and '["dash_tiles","host","@self"]' in _bar,
       "bar=%r" % _bar[:200])
 # The safety property, end to end: a stored key the page never declared cannot add a panel.
-c.post("/api/account/ui-order", json={"panels": {"dash_tiles": ["evil", "total"]},
-                                      "hidden": {"dash_tiles": []}})
+_evil_r = c.post("/api/account/ui-order", json={"panels": {"dash_tiles": ["evil", "total"]},
+                                                "hidden": {"dash_tiles": []}})
 _evil = _tile_order(c.get("/").get_data(as_text=True))
-check("tiles: an unknown stored key renders no panel", "evil" not in _evil and len(_evil) == 5,
-      str(_evil))
+# The save was taken (a crash stored nothing, and the default order passed too; review 1017a).
+check("tiles: an unknown stored key renders no panel",
+      _evil_r.status_code == 200 and "evil" not in _evil and len(_evil) == 5,
+      "%d %s" % (_evil_r.status_code, _evil))
 # Drag handles: the reorder LOGIC is JS (verified separately in a browser harness against the
 # real makeSortable), but these assert the wiring exists — a handle with no makeSortable call, or
 # a call with no handle, is a control that silently does nothing.
@@ -2938,7 +2942,7 @@ _bind_port = _bind_cfg0.get("port", 5000)
 try:
     _rs_bind.remote_ufw_open_port = lambda srv, port, proto=None, comment="": (
         _bind_fw.append(("open", port)), (True, ""))[1]
-    _rs_bind.remote_ufw_close_port = lambda srv, port, proto=None, force=False: (
+    _rs_bind.remote_ufw_close_port = lambda srv, port, proto=None, force=False, **_k: (
         _bind_fw.append(("close", port)), (True, ""))[1]
     _am.so.host_has_ip = lambda ip: True
     _am.so.restart_panel = lambda *a, **k: (True, "stubbed")

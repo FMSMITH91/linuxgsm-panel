@@ -160,10 +160,17 @@ function removeWhitelist(ip){
       // A refusal (403 for anyone but a superadmin) has no whitelist in it: rendering `[]` painted
       // "Nothing whitelisted" and the toast said removed, while the address stayed exempt from
       // every ban and auto-block on every host.
-      if(!d || !d.success){ if(window.toast) toast((d && d.message)||'Could not remove it','danger'); return; }
+      if(!d || !d.success){ _r30aWhitelistRemoveRefused(d); return; }
       if('whitelist' in d) renderWhitelist(d.whitelist||[]);
       if(window.toast) toast(tf('{ip} removed from the whitelist', {ip: d.removed||ip}),'info');
     }).catch(function(){ if(window.toast) toast('Could not remove it','danger'); });
+}
+// A removal the panel refused. An entry no longer on the list (another tab took it off) is
+// refused WITH the list as it is now, so the page stops showing it; a refusal without one (a 403)
+// leaves the list as drawn.
+function _r30aWhitelistRemoveRefused(d){
+  if(d && d.whitelist) renderWhitelist(d.whitelist);
+  if(window.toast) toast((d && d.message)||'Could not remove it','danger');
 }
 function loadSecurityBans(){
   var el=document.getElementById('sec-bans'); if(!el) return;
@@ -341,8 +348,28 @@ function buildCores(n){
 }
 // Consecutive /live requests that got no JSON answer at all (see the .catch below).
 var _r29c_liveMiss = 0;
+// Polls sent, and the newest one whose answer was used. The poll runs every 2 s whether or not the
+// last one has answered, so on a slow host the answers can come back out of order: an older good
+// reading landing after a newer failure hid the paused note and painted the host Reachable, and
+// reset the miss count between two misses. An answer older than one already used is dropped.
+var _r30c_liveSent = 0, _r30c_liveUsed = 0;
+function _r30c_liveOld(mine){
+  if(mine < _r30c_liveUsed) return true;
+  _r30c_liveUsed = mine;
+  return false;
+}
 function pollLive(){
+  var mine = ++_r30c_liveSent;
+  // The paused note for an `error` reply: the route's own sentence for a cause other than "the host
+  // did not answer" (a changed host key), else which of the two failures it was.
+  function said(d){
+    if(d.code && d.code !== 'host_unreachable' && d.message) return d.message;
+    return d.unreachable
+      ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
+      : t('Live figures are paused — the last read failed.');
+  }
   fetch(MOUNT + '/api/remote/'+REMOTE_ID+'/live').then(r=>r.json()).then(d=>{
+    if(_r30c_liveOld(mine)) return;
     _r29c_liveMiss = 0;
     // A read that failed used to arrive as zeros and render an idle-looking host. The route
     // refuses to publish those now, so `error` is what a dead host looks like here — and the
@@ -354,14 +381,9 @@ function pollLive(){
       // SSH" about the machine that is serving this page (a good read still paints it Reachable).
       // A changed host key or a cut-off read is flagged unreachable too, and `code` says which:
       // "the host did not answer" sent the operator to wait when they need Re-trust host key.
-      var why = d.code;
       // The badge's tooltip too: "cannot reach this host over SSH" about a host the panel refused.
       if(d.unreachable && !window.IS_LOCAL) _r18cPaintHostBadge(false, d);
-      if(stale){ stale.textContent = (why && why !== 'host_unreachable' && d.message)
-        ? d.message
-        : d.unreachable
-        ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
-        : t('Live figures are paused — the last read failed.'); stale.style.display=''; }
+      if(stale){ stale.textContent = said(d); stale.style.display=''; }
       return;
     }
     if(stale){ stale.textContent=''; stale.style.display='none'; }
@@ -375,6 +397,7 @@ function pollLive(){
     // `error` reply reached the note, so through either the card kept the last figures beside its
     // "realtime" dot. Said on the second miss in a row, as install_progress.js does, so a single
     // dropped request does not flicker it.
+    if(_r30c_liveOld(mine)) return;
     _r29c_liveMiss += 1;
     var stale = document.getElementById('live-stale');
     if(stale && _r29c_liveMiss >= 2){ stale.textContent = t('Live figures are paused — the last read failed.'); stale.style.display=''; }

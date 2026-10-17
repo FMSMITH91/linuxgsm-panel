@@ -961,8 +961,9 @@ def _register_panel_host_os(app):
         success, msg = so.os_run_update()
         if success:
             log_action(current_user, "os_update_run", target=LOCAL_HOST_LABEL, detail=msg)
-            return jsonify({"success": True, "message": msg})
-        return jsonify({"success": False, "message": msg}), 500
+            return jsonify({"success": True, "message": i18n.tr(msg)})
+        # system_ops' English is the audit's; the reply is in the viewer's language.
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
 
     @app.route("/api/server-management/os-update-log")
     @login_required

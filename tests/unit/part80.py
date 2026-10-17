@@ -28,10 +28,9 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
-                         _p9_core, _p9_patch, _p9_rv, _p9_restore_all, _p9_sd, _p9_sf, _p9_so)
+                         _p9_core, _p9_patch, _p9_patch_sm, _p9_rv, _p9_restore_all, _p9_sd, _p9_sf, _p9_so)
 from panel.core import i18n as _i18n80
 from panel.db.models import AuditLog, CustomCommand, GameServer, RemoteServer, User, db
-from panel.ops import ssh_manager as _sm80
 from panel.ops.debug_report import network as _net80
 from panel.ops.ssh_manager import cron as _cron80, game as _game80
 from panel.routes import _shared as _sh80
@@ -153,13 +152,13 @@ def _cron_note80():
     why = _i18n80.Sentence("p80: the account can become root.")
     asked = []
     _p9_patch(_sh80, "game_account_write_refusal", lambda remote, user, **k: why)
-    _p9_patch(_sm80, "upgrade_managed_cron_tracking",
-              lambda *a, **k: asked.append(a) or True)
+    _p9_patch_sm("upgrade_managed_cron_tracking",
+                 lambda *a, **k: asked.append(a) or True)
     row = NS(name="p80-css", short_name="p80css", lgsm_name="p80css", game_type="css",
              query_type=None, port=27080)
     refused = _gp80._cron_follows(NS(id=-80), row, 27081)
     _p9_patch(_sh80, "game_account_write_refusal", lambda remote, user, **k: None)
-    _p9_patch(_sm80, "upgrade_managed_cron_tracking", lambda *a, **k: asked.append(a) or False)
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: asked.append(a) or False)
     plain = _gp80._cron_follows(NS(id=-80), row, 27081)
     check("port resync: an account the panel may not write as says, in the port_resync row, that "
           "its restart-when-empty check was not pointed at the new port, and why (it returned \"\", "
@@ -194,7 +193,7 @@ def _raised_rows80(client, rid, sid, cid):
     before = {a: _p9_audit_count(a) for a in actions}
     _p9_patch(_p9_sf, "send_console_command", _down80)
     _p9_patch(_p9_sd, "send_console_command", _down80)
-    _p9_patch(_sm80, "moderate", _down80)
+    _p9_patch_sm("moderate", _down80)
     _p9_patch(_p9_rv, "remote_ufw_open_port", _down80)
     _p9_patch(_p9_sf, "_write_refused", lambda *a, **k: None)
     _p9_patch(_p9_sf, "add_cron_job", _down80)
@@ -238,7 +237,7 @@ def _audit_raise80(client, rid, sid, cid):
 def _audit_sync80(sid):
     with _p9.app_context():
         gs = db.session.get(GameServer, sid)
-        _p9_patch(_sm80, "run_as_game_user", _down80)
+        _p9_patch_sm("run_as_game_user", _down80)
         _p9_patch(_p9_sd, "_after_power_action", lambda *a, **k: None)
         m = _p9_audit_count("details_server")
         try:
@@ -259,7 +258,7 @@ def _audit_queued80(sid):
         gs = db.session.get(GameServer, sid)
         gs.stop_pending, gs.restart_pending = True, False
         db.session.commit()
-        _p9_patch(_sm80, "run_as_game_user", _down80)
+        _p9_patch_sm("run_as_game_user", _down80)
         _p9_patch(_sh80, "_mark_expected_offline", lambda *a, **k: None)
         m = _p9_audit_count("stop_server")
         try:

@@ -171,6 +171,10 @@ _out56 = _node56(_name56, (
     "global.document = {getElementById: id => id.startsWith('gsk-')\n"
     "  ? {value: '', validity: {badInput: bad}} : {value: ''}};\n"
     "window._bkSched = {7: {keep_set: true, keep: 5, interval_set: false}};\n"
+    # the save goes through the card's in-flight counter (review 1017a); its 15 s release timer is not run
+    "global.setTimeout = () => 0; global.clearTimeout = () => {};\n"
+    + _RMB56[_RMB56.index("var _r30c_bkSaving"):].split("\n", 1)[0] + "\n"
+    + _cut47(_RMB56, "function _r30c_bkSave(") + "\n"
     + _cut47(_RMB56, "function setGameSchedule(") + "\n"
     "setGameSchedule(7); const out = {bad: [sent.splice(0), msgs.splice(0)]};\n"
     "bad = false; setGameSchedule(7); out.empty = sent.splice(0);\n"
@@ -606,7 +610,9 @@ _out56 = _node56(_name56, _DOM56 + (
 if _out56 is not None:
     check("tag list: each row's words are whole nodes the catalog has (\"3 server(s) · alerts muted\" was one "
           "node no key matched), and the tag's own name is kept from the translator",
+          # The row rendered, its count and phrases each a node (review 1017a: an empty render passed).
           isinstance(_out56, list) and "Admin" not in _out56
+          and {"3", "server(s)", "alerts muted"} <= {str(_v).strip() for _v in _out56}
           and all(_v in _ES56 or not _re56.search(r"[A-Za-z]{2}", _v) for _v in _out56), repr(_out56))
 
 # ── the host page's Maintenance tab and its loaders, for a delegated host admin ──────────────────

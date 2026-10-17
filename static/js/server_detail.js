@@ -1995,6 +1995,20 @@ document.addEventListener('click', function(e){
 
 if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='history') window.loadHistory(); }, 30000);
 
+// The card re-polls only while a content job runs. A poll the host did not answer (its content scan
+// or mount read, an error reply, no reply at all) used to return before scheduling the next one, so
+// one slow read during a 13 GB install stopped the card for good: the job's finished outcome, kept
+// by the server for 15 minutes, was never shown without a reload. While the last answered job was
+// running, a missed poll now re-polls, backing off 5 s, 10 s, 20 s … up to a minute.
+var _r30c_gmcRunning = false, _r30c_gmcMiss = 0;
+function _r30c_gmcRepoll(){
+  _r30c_gmcMiss++;
+  setTimeout(loadGmodContent, Math.min(5000 * Math.pow(2, _r30c_gmcMiss - 1), 60000));
+}
+// The running job's line: the card says what it is doing even when the list cannot be shown.
+function _r30c_gmcWorking(d, cls){
+  return '<div class="text-info small' + cls + '"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>';
+}
 function loadGmodContent(){
   var el = document.getElementById('gmod-content-body');
   if(!el) return;
@@ -2020,13 +2034,26 @@ function loadGmodContent(){
     }
     return '';
   }
+  // A reply that cannot draw the list (the host unread): the alert, with the job said above it — its
+  // line while it runs, its outcome once it ended — and, while it runs, the next poll.
+  function _gmcUnreadCard(d, running, unread){
+    el.innerHTML = (running ? _r30c_gmcWorking(d, ' mb-2') : '<div id="gmc-outcome-slot"></div>') + unread;  // nosemgrep
+    _gmcOutcome(el.querySelector('#gmc-outcome-slot'), d.job);
+    if(running) _r30c_gmcRepoll();
+  }
   fetch(MOUNT + '/api/server/' + serverId + '/gmod-content')
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }  // nosemgrep
+      if(d.error){
+        el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>';  // nosemgrep
+        if(_r30c_gmcRunning) _r30c_gmcRepoll();
+        return;
+      }
+      var running = !!(d.job && d.job.status === 'running');
+      _r30c_gmcRunning = running;
       var unread = _gmcUnreadAlert(d);
-      if(unread){ el.innerHTML = unread; return; }  // nosemgrep
-      var running = d.job && d.job.status === 'running';
+      if(unread){ _gmcUnreadCard(d, running, unread); return; }
+      _r30c_gmcMiss = 0;
       // Installable games always show; owned/mount-only games only once their content is on the host
       // (or already mounted). Mount-only content that isn't present can't be added by the panel.
       var visible = (d.games||[]).filter(function(g){ return g.downloadable || g.present || g.mounted; });
@@ -2070,7 +2097,7 @@ function loadGmodContent(){
         + disk
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
-            ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
+            ? _r30c_gmcWorking(d, '')
             : '<div id="gmc-outcome-slot"></div>'
               + '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
@@ -2083,7 +2110,10 @@ function loadGmodContent(){
       });
       if(running) setTimeout(loadGmodContent, 5000);
     })
-    .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
+    .catch(function(){
+      el.innerHTML = '<span class="text-danger">Could not load content status.</span>';
+      if(_r30c_gmcRunning) _r30c_gmcRepoll();
+    });
 }
 
 // A FINISHED content job's outcome, kept by the server for 15 minutes so the card can say it

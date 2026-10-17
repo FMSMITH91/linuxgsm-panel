@@ -112,6 +112,16 @@ def _bg_cache_commands(app, server_ids, autostart_ids=(), births=None):
     threading.Thread(target=_run, daemon=True).start()
 
 
+def _r30j_whitelist_worker(app, unban_ip=None):
+    """_apply_whitelist_everywhere, in the app's context.
+
+    The panel-login jail follows the port this process is bound to (app.config BOOT_PORT), which only
+    the app can say (review 1017a).
+    """
+    with app.app_context():
+        _apply_whitelist_everywhere(app, unban_ip)
+
+
 def _whitelist_mutate(app, body):
     """Shared add/remove for the global security whitelist.
 
@@ -128,9 +138,15 @@ def _whitelist_mutate(app, body):
         # The raw text only picks the entry to drop, so one stored with a zone id before the add
         # refused them can still go. What is audited and answered is the address or network it
         # names, read as the gate reads a stored entry, or a fixed text — never the request's own.
-        _security_whitelist_remove(raw)
+        removed = _security_whitelist_remove(raw)
+        if not removed:
+            # Nothing on the list reads as it, so nothing was taken off: say so, and audit nothing.
+            # This answered "removed" for any text at all, true or not.
+            return jsonify({"success": False, "code": "not_whitelisted",
+                            "message": i18n.tr("That entry is not on the whitelist."),
+                            "whitelist": _security_whitelist()})
         shown = unzoned_ip_or_network(raw) or NOT_AN_IP
-        threading.Thread(target=_apply_whitelist_everywhere, args=(app,), daemon=True).start()
+        threading.Thread(target=_r30j_whitelist_worker, args=(app,), daemon=True).start()
         _banlist.refresh_soon(0)
         log_action(current_user, "whitelist_remove", target=shown)
         return jsonify({"success": True, "removed": shown, "whitelist": _security_whitelist()})
@@ -139,7 +155,7 @@ def _whitelist_mutate(app, body):
         return jsonify({"success": False, "message": "Enter a valid IP address or CIDR (e.g. 1.2.3.4 or 10.0.0.0/8)."})
     # A single address (not a CIDR range) also gets any existing ban lifted immediately.
     _unban = canon if "/" not in canon else None
-    threading.Thread(target=_apply_whitelist_everywhere, args=(app, _unban), daemon=True).start()
+    threading.Thread(target=_r30j_whitelist_worker, args=(app, _unban), daemon=True).start()
     _banlist.refresh_soon(0)
     for rid in _autoblock_hosts():      # release any auto-block for the now-whitelisted address
         _run_autoblock_now(app, rid)

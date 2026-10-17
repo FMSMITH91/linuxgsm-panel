@@ -254,9 +254,11 @@ _out95 = _js95(_name95, (
     "function bkRefreshDefaultNotes(){} function fbStart(){}\n"
     "global.confirmDialog = o => dialogs.push(o.title); function fbPlayersDialog(b){ players.push(b.length); }\n"
     "['bk-tbody', 'bk-enabled', 'bk-keep', 'fb-auto-enabled', 'fb-interval', 'fb-keep']\n"
-    "  .forEach(id => { const e = document.getElementById(id); e.value = '7'; e.checked = true; });\n"),
-    ("function bkMsg(", "function bkReconcile(", "function _r25c_bkUnread(", "function loadBackups(",
-     "function runFullBackup(", "function saveBackupSettings("), (
+    "  .forEach(id => { const e = document.getElementById(id); e.value = '7'; e.checked = true; });\n"
+    # the card's in-flight save counter (review 1017a): loadBackups and the saves read it
+    + _RB95[_RB95.index("var _r30c_bkSaving"):].split("\n", 1)[0] + "\n"),
+    ("function bkMsg(", "function bkReconcile(", "function _r25c_bkUnread(", "function _r30c_bkSave(",
+     "function loadBackups(", "function runFullBackup(", "function saveBackupSettings("), (
     "  const out = {}, l = document.getElementById('bk-loading'), m = document.getElementById('bk-msg');\n"
     "  reply(" + _J95["backups"] + "); loadBackups(); await settle();\n"
     "  out.list = {loading: l.innerHTML || '', listed};\n"

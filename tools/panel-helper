@@ -2278,6 +2278,23 @@ def v_cron_b64(s):
     return s
 
 
+# apt-upgrade-running's pgrep pattern: is an OS update already running? Its three ways of being one:
+#   * apt-get upgrading, OPTIONS ANYWHERE before the subcommand. It needed `upgrade` straight after
+#     `apt-get `, which the old foreground verb wrote; the panel's own os-update-run job puts its
+#     flags first (`apt-get -y -o … full-upgrade`), so a second Install updates started a second
+#     job: the shell form truncated the first one's log, and the helper's systemd unit refused
+#     ("Couldn't start the update.") for an update that was running. A `-s` option is the update
+#     check's simulation, never an update, and is not read as one;
+#   * the helper's job itself (`panel-helper --job os-update-run`, or its forked child), which is
+#     running while apt-get is still on `update` or `autoremove`;
+#   * the shell form's script (remotes without the helper), by the header it writes.
+# Each alternative starts with a bracket, so a remote's waiting `sudo bash -c 'pgrep -f …'`, whose
+# command line holds this text, never matches itself.
+_R30A_UPGRADE_RE = ("[a]pt-get( (-[^s -][^ ]*|--[^ ]+|[^- ][^ ]*))* "
+                    "(upgrade|dist-upgrade|full-upgrade)( |$)"
+                    "|[p]anel-helper( [^ ]+)* os-update-run( |$)"
+                    "|[O]S update started")
+
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv, stdin or None)
 #
@@ -2546,8 +2563,7 @@ VERBS = {
     # `[a]pt-get`: the panel's table has it so (a remote's sudo, waiting, would match its own
     # command line), and the two tables must build the same argv.
     "apt-any-running": ([], lambda a: ["pgrep", "-f", "[a]pt-get"], None),
-    "apt-upgrade-running": (
-        [], lambda a: ["pgrep", "-f", "apt-get (upgrade|dist-upgrade|full-upgrade)"], None),
+    "apt-upgrade-running": ([], lambda a: ["pgrep", "-f", _R30A_UPGRADE_RE], None),
     "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
 
     "reboot": ([], lambda a: ["reboot"], None),
@@ -4132,7 +4148,11 @@ def do_game_backup_read(args, content):
             # with uid 0 still cannot read as root.
             if os.getuid() == 0 or os.geteuid() == 0:
                 os._exit(1)
-            with open(path, "rb") as fh:
+            # O_NONBLOCK and judged by what was opened, as _emit_file: a FIFO the account put at
+            # the backup's name blocked this open, and the parent's waitpid, with no end.
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC), "rb") as fh:
+                if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                    os._exit(1)
                 buf = sys.stdout.buffer
                 while True:
                     chunk = fh.read(262144)
@@ -4231,7 +4251,12 @@ def _emit_file(path, buf):
     """Copy a regular file to `buf` in chunks. Raises on anything that is not a regular file."""
     if not os.path.isfile(path):
         raise ValueError("not a regular file")   # a directory, a device, a socket, a FIFO
-    with open(path, "rb") as fh:
+    # The check above and the open are two looks at a name the game account controls: swapped
+    # for a FIFO between them, a plain open blocked with no end (mount.cfg, a download). Opened
+    # O_NONBLOCK and judged by what was OPENED; a regular file reads the same either way.
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC), "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise ValueError("not a regular file")
         while True:
             chunk = fh.read(262144)
             if not chunk:

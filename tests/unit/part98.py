@@ -107,7 +107,8 @@ def _second_move98(show):
         return show
     _p9_patch(_p9_core, "run_privileged", _priv)
     _p9_patch(_p9_core, "run_command", _rc)
-    _p9_patch(_p9_core, "write_root_file", lambda server, target, body, **k: written.append((target, body)))
+    _p9_patch(_p9_core, "write_root_file",
+              lambda server, target, body, **k: written.append((target, body)) or ("", "", 0))
     _p9_patch(_hosts98, "_restart_ssh_listener", lambda *a, **k: None)
     _p9_patch(_hosts98, "remote_ufw_open_port", lambda *a, **k: (True, "opened"))
     res = _hosts98.change_ssh_port(NS(id=-9801, name="p98", host="p98-ts.example.invalid", port=22,
@@ -234,7 +235,7 @@ def _bind_move98(auth):
         return ("", "", 0)
     _p9_patch(_p9_core, "run_privileged", _priv)
     _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))
-    _p9_patch(_p9_core, "write_root_file", lambda *a, **k: state.update(written=True))
+    _p9_patch(_p9_core, "write_root_file", lambda *a, **k: state.update(written=True) or ("", "", 0))
     _p9_patch(_hosts98, "_restart_ssh_listener", lambda *a, **k: None)
     _p9_patch(_hosts98, "remote_ufw_open_port", lambda *a, **k: (True, "opened"))
     _p9_patch(_hosts98, "_point_f2b_sshd_at", lambda server, ports: ("updated", ""))
@@ -285,7 +286,7 @@ def _r26j_socket_bind98(addr, ip_out, ip_rc=0):
         return ("", "", 1)
     _p9_patch(_p9_core, "run_privileged", _priv)
     _p9_patch(_p9_core, "run_command", _cmd)
-    _p9_patch(_p9_core, "write_root_file", lambda *a, **k: state.update(written=True))
+    _p9_patch(_p9_core, "write_root_file", lambda *a, **k: state.update(written=True) or ("", "", 0))
     _p9_patch(_hosts98, "_restart_ssh_listener", lambda *a, **k: None)
     _p9_patch(_hosts98, "remote_ufw_open_port", lambda *a, **k: (True, "opened"))
     _p9_patch(_hosts98, "_point_f2b_sshd_at", lambda server, ports: ("updated", ""))

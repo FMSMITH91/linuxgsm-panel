@@ -127,7 +127,7 @@ from panel.security import banlist as _banlist
 # here is what let the cycle grow in the first place. See the docstrings in panel/core/validation.py
 # and panel/core/http.py.
 from panel.core.validation import (MAX_PORT, MIN_PORT, _port_or, _valid_hex_color, canonical_ip,
-                                   canonical_ip_or_network, ip_address_or_none)
+                                   canonical_ip_or_network, ip_address_or_none, whitelist_without)
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
 from panel.core.http import (_r23c_error_json, _wants_json, http_error_page, http_error_sentence,
                               unreachable_error)
@@ -139,7 +139,7 @@ from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
-    row_birth, row_label, still_held, _r21c_host_label, _r21c_host_text)
+    row_birth, row_label, still_held, each_held_row, _r21c_host_label, _r21c_host_text)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
@@ -817,12 +817,11 @@ def _security_whitelist_add(value):
 
 
 def _security_whitelist_remove(value):
-    # The raw text is the fallback on purpose: it only ever removes an entry EQUAL to it, which is
-    # how one stored before the add refused it (a zone id, say) can still be taken out.
-    canon = _valid_ip_or_cidr(value) or (str(value) or "").strip()
+    """Take `value` off the whitelist (validation.same_whitelist_entry); the entries it took ([] when none)."""
+    removed = []
     update_config(lambda cfg: cfg.update(
-        {"security_whitelist": [w for w in (cfg.get("security_whitelist", []) or []) if w != canon]}))
-    return canon
+        security_whitelist=whitelist_without(cfg.get("security_whitelist", []), value, removed)))
+    return removed
 
 
 def _apply_whitelist_to_fail2ban():
@@ -845,7 +844,12 @@ def _apply_whitelist_to_fail2ban():
     except Exception:
         _log.debug("applying whitelist to the host's other jails failed", exc_info=True)
     try:
-        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, _cfg.get("port", 5000), wl)
+        # The port this process serves, not config.json's: they differ while a saved port change
+        # waits for its restart, and after one whose restart could not be scheduled the change-port
+        # rollback pointed the jail back at the port still served. A whitelist edit then moved it
+        # onto the saved port, and failed logins on the live one went unbanned (review 1017a).
+        # Read in the app's context (the whitelist routes' worker gives one); config's port without.
+        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, ts._r13b_bound_port(_cfg), wl)
     except Exception:
         _log.debug("applying whitelist to fail2ban failed", exc_info=True)
         return False, "could not update fail2ban"
@@ -1158,6 +1162,12 @@ def _reconcile_stranded_install(app, gs):
         _reconcile_checked_install(app, gs)
     finally:
         _end_install_reconcile(gs.id)
+
+
+def _r30a_reconcile_pass(app):
+    """One pass of the install-reconcile ticker: every stranded row, each on its own (each_held_row)."""
+    each_held_row(GameServer.query.filter(GameServer.status.in_(("installing", "configuring", "failed"))).all(),
+                  lambda gs: _reconcile_stranded_install(app, gs), "install-reconcile")
 
 
 def _reconcile_checked_install(app, gs):
@@ -3015,12 +3025,7 @@ def register_routes(app):
             try:
                 _t0 = time.time()
                 with app.app_context():
-                    for gs in GameServer.query.filter(
-                            GameServer.status.in_(("installing", "configuring", "failed"))).all():
-                        # Each check is an SSH round trip, so a later row can have been deleted
-                        # (and its id taken) since the query: skipped without reading it.
-                        if still_held(gs):
-                            _reconcile_stranded_install(app, gs)
+                    _r30a_reconcile_pass(app)
                 runtime_stats.beat("install-reconcile", 600, time.time() - _t0)
             except Exception:
                 runtime_stats.bump("loopfail", "install-reconcile")

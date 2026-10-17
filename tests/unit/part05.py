@@ -494,21 +494,85 @@ check("smoke suite: the runner runs every tests/smoke/part*.py, in order (part01
 _SMG_STUB_FILES = _UNIT_SUITE_FILES + _SMOKE_SUITE_FILES + ["tests/rbac_test.py",
                                        "tests/setup_wizard_test.py", "tools/perf_bench.py",
                                        "tools/nosudo_runner.py"]
-for _f in _SMG_STUB_FILES:
-    _src = open(os.path.join(_root, _f), encoding="utf-8").read()
-    _tree = _smg_ast.parse(_src)
-    _pkg_aliases = {a.asname or a.name.split(".")[-1]
-                    for n in _smg_ast.walk(_tree) if isinstance(n, _smg_ast.Import)
-                    for a in n.names if a.name == "panel.ops.ssh_manager"}
-    _pkg_aliases |= {a.asname or a.name
-                     for n in _smg_ast.walk(_tree) if isinstance(n, _smg_ast.ImportFrom)
-                     and n.module == "panel.ops" for a in n.names if a.name == "ssh_manager"}
+# ...and every other test file: the unit suite's helper modules (reboot41_*.py hold ~260 checks, and
+# reboot41_fixtures.py binds the package itself) were not read (review 1017a).
+_r30d_smg_files = list(dict.fromkeys(_SMG_STUB_FILES + sorted(
+    os.path.relpath(_p, _root).replace(os.sep, "/")
+    for _p in _smg_glob.glob(os.path.join(_root, "tests", "**", "*.py"), recursive=True))))
+_R21D_PATCHER = _re.compile(r"patch|setattr|swap|^_p\d+$")
+
+
+def _r23d_shaped_patcher(node, fname):
+    """Is call `node` shaped (module, "name", value), its value third or as new=?
+
+    mock's patch.object(os, "replace", new=f) gives it by keyword (review 1015d). getattr only reads.
+    """
+    _n_args = len(node.args) + any(_k.arg == "new" for _k in node.keywords)
+    return (_n_args >= 3 and len(node.args) >= 2
+            and isinstance(node.args[1], (_smg_ast.Constant, _smg_ast.Name)) and fname != "getattr")
+
+
+# The two ways a file binds the ssh_manager package: (node type, module it imports from, name).
+_R30D_PKG_IMPORTS = ((_smg_ast.Import, None, "panel.ops.ssh_manager"), (_smg_ast.ImportFrom, "panel.ops", "ssh_manager"))
+
+
+def _r30d_pkg_aliases(tree):
+    """The names `tree` binds the ssh_manager PACKAGE to (`import … as sm`, `from panel.ops import …`)."""
+    return {_a.asname or "ssh_manager"
+            for _n in _smg_ast.walk(tree) for _cls, _mod, _name in _R30D_PKG_IMPORTS
+            if isinstance(_n, _cls) and getattr(_n, "module", None) == _mod
+            for _a in _n.names if _a.name == _name}
+
+
+def _r30d_pkg_patcher(node, is_pkg):
+    """Is `node` a patcher call handed the package first (_patch/setattr/_swap, or (module, "name", value))?"""
+    if not (isinstance(node, _smg_ast.Call) and node.args and is_pkg(node.args[0])):
+        return False
+    _fn = getattr(node.func, "id", getattr(node.func, "attr", "")) or ""
+    return _r23d_shaped_patcher(node, _fn) or (bool(_R21D_PATCHER.search(_fn)) and len(node.args) >= 2)
+
+
+def _r30d_pkg_stubs(f, src):
+    """Each attribute file `f` (text `src`) sets on the ssh_manager PACKAGE, as `file:line alias.name`.
+
+    Assigned (`sm.x = f`), or through a patcher call handed the package (review 1017a: `_patch(sm,
+    "x", f)` and `setattr(sm, "x", f)` set it all the same, and were not seen): one named like
+    _patch/setattr/_swap, or any call shaped (module, "name", value), as the stdlib gate reads them.
+    """
+    _tree = _smg_ast.parse(src)
+    _aliases = _r30d_pkg_aliases(_tree)
+
+    def _is_pkg(e):
+        return ((isinstance(e, _smg_ast.Name) and e.id in _aliases)
+                or _smg_ast.unparse(e) == "panel.ops.ssh_manager")
+
+    _out = []
     for _n in _smg_ast.walk(_tree):
-        if (isinstance(_n, _smg_ast.Attribute) and isinstance(_n.ctx, _smg_ast.Store)
-                and isinstance(_n.value, _smg_ast.Name) and _n.value.id in _pkg_aliases):
-            _smg_pkg_stubs.append("%s:%d %s.%s" % (_f, _n.lineno, _n.value.id, _n.attr))
+        if isinstance(_n, _smg_ast.Attribute) and isinstance(_n.ctx, _smg_ast.Store) and _is_pkg(_n.value):
+            _out.append("%s:%d %s.%s" % (f, _n.lineno, _smg_ast.unparse(_n.value), _n.attr))
+        elif _r30d_pkg_patcher(_n, _is_pkg):
+            _out.append("%s:%d %s(…)" % (f, _n.lineno, _smg_ast.unparse(_n.func)))
+    return _out
+
+
+for _f in _r30d_smg_files:
+    _smg_pkg_stubs += _r30d_pkg_stubs(_f, open(os.path.join(_root, _f), encoding="utf-8").read())
 check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
       not _smg_pkg_stubs, "; ".join(_smg_pkg_stubs[:4]))
+_r30d_pkg_ctl = [bool(_r30d_pkg_stubs("ctl.py", _c)) for _c in (
+    "from panel.ops import ssh_manager as _sm41\n_patch(_sm41, 'run_command', f)",
+    "import panel.ops.ssh_manager as sm\nsetattr(sm, 'run_command', f)",
+    "from panel.ops import ssh_manager\nssh_manager.run_command = f",
+    "import panel.ops.ssh_manager\npanel.ops.ssh_manager.run_command = f",
+    "from panel.ops import ssh_manager as sm\n_set34(sm, 'run_command', f)",
+    "from panel.ops import ssh_manager as sm\ngetattr(sm, 'run_command')",
+    "from panel.ops import ssh_manager as sm\n_patch(sm.portscan, 'run_command', f)",
+    "from panel.ops.ssh_manager import _core\nsetattr(_core, 'run_command', f)",
+    "from panel.ops import ssh_manager as sm\n_held(sm, 'run_command')")]
+check("ssh_manager: ...a patcher call or setattr handed the package counts, in any test file; a read, a "
+      "submodule's stub and a plain call do not (control)",
+      _r30d_pkg_ctl == [True] * 5 + [False] * 4 and "tests/unit/reboot41_fixtures.py" in _r30d_smg_files,
+      repr(_r30d_pkg_ctl))
 
 # The positive half: the no-sudo wrapper must actually INTERCEPT, which the check above cannot
 # say — "does not stub the package" is satisfied by stubbing nothing at all. Run its _install()
@@ -3903,6 +3967,9 @@ def _ns_fn(name):
 
 
 _ns_code_lines = [_l for _l in _ntc_sh.splitlines() if not _l.lstrip().startswith("#")]
+# nodesource_setup's apt-get goes through _r30a_apt_ni, with the settings it uses.
+_ns_apt_ni = "".join(_l + "\n" for _l in _ns_code_lines if _l.startswith("APT_NI_ENV=(")) \
+    + _ns_fn("_r30a_apt_ni")
 _ns_code = "\n".join(_ns_code_lines)
 check("install.sh: no downloaded script is run — NodeSource's setup script is gone",
       "setup_lts.x" not in _ns_code and not _re_ntc.search(r'bash "\$\{?ns\}?"', _ns_code)
@@ -3920,7 +3987,7 @@ try:
     _ns_argv_log = os.path.join(_ns_argv_dir, "argv")
     _ns_argv_p = _sp_ns.run(["bash", "-c", "\n".join([
         "\n".join(_l for _l in _ns_code_lines if _l.startswith("NODESOURCE_")),
-        _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+        _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"), _ns_apt_ni,
         "dpkg() { echo amd64; }", "apt-get() { :; }",
         "curl() { printf '%%s\\n' \"$@\" > %s; return 22; }" % _shlex_q(_ns_argv_log),
         "nodesource_setup ''; echo \"RC=$?\""])], capture_output=True, text=True, timeout=60)
@@ -4096,7 +4163,7 @@ else:
             os.makedirs(os.path.join(_out, "preferences.d"))
             _q = _shlex_ns.quote
             _script = "\n".join([
-                _ns_globals, _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+                _ns_globals, _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"), _ns_apt_ni,
                 "NODESOURCE_KEY_FPR=%s" % _q(fpr),
                 "NODESOURCE_KEYRING=%s" % _q(os.path.join(_out, "keyrings", "nodesource.gpg")),
                 "NODESOURCE_SOURCES=%s" % _q(os.path.join(_out, "sources.list.d", "nodesource.sources")),
@@ -4556,7 +4623,8 @@ _REMOTE_EXPECTED = {
     ("dpkg-add-arch", ("i386",)): "dpkg --add-architecture i386 2>&1",
     ("apt-add-repo", ("universe",)): "add-apt-repository -y universe 2>&1",
     ("apt-upgrade-running", ()):
-        "pgrep -f 'apt-get (upgrade|dist-upgrade|full-upgrade)' 2>&1",
+        "pgrep -f '[a]pt-get( (-[^s -][^ ]*|--[^ ]+|[^- ][^ ]*))* (upgrade|dist-upgrade|full-upgrade)( |$)"
+        "|[p]anel-helper( [^ ]+)* os-update-run( |$)|[O]S update started' 2>&1",
     ("reboot", ()): "reboot 2>&1",
     ("journal", ("ssh", "400")): "journalctl -u ssh -u sshd --no-pager -n 400 2>&1",
     ("journal", ("fail2ban", "4000")): "journalctl -u fail2ban --no-pager -n 4000 2>&1",
@@ -4574,9 +4642,10 @@ _REMOTE_EXPECTED = {
         "runuser -u srcds -- rm -rf /home/srcds/serverfiles/hl2",
     ("content-cron-remove", ("gmodcontent",)):
         "rm -f /etc/cron.d/lgsm-gmod-content-gmodcontent",
-    # A failed read keeps its rc unless the file is absent (review 1016f: `|| true` was "no mounts").
+    # A failed read keeps its rc unless the file is absent (review 1016f: `|| true` was "no mounts"),
+    # and ends within its bound (review 1017a: a FIFO there blocked it past the caller).
     ("gmod-mount-read", ("gmodserver",)):
-        "runuser -u gmodserver -- cat /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg"
+        "runuser -u gmodserver -- timeout 8 cat /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg"
         " 2>/dev/null || { _r=$?; [ ! -e /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg ]"
         " && [ ! -L /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg ] || (exit $_r); }",
     ("crontab-list", ("codserver",)): "crontab -u codserver -l 2>&1",
@@ -5058,7 +5127,7 @@ _tricky = "a'b\"c$d`e\\f\n[DEFAULT]\nignoreip = 10.0.0.1/8\n"
 import base64 as _b64t
 _rc = _priv.remote_write_command("fail2ban-panel-whitelist", _tricky)
 check("privileged: remote write round-trips content containing shell metacharacters",
-      _b64t.b64decode(_rc.split()[1]).decode() == _tricky)
+      _b64t.b64decode(_rc.split("echo ", 1)[1].split()[0]).decode() == _tricky)
 check("privileged: remote write targets the table's path, not a caller's",
       "/etc/fail2ban/jail.d/zz-panel-whitelist.local" in _rc)
 
@@ -6202,6 +6271,12 @@ try:
         else ""
     check("run_as_game_user: (control) the tee_log remote form is `sudo -u <user> bash -c <script>`",
           bool(_tl_inner), _cmd[:200])
+    _r30d_tl_checks = (
+        "run_as_game_user: tee_log streams the action's output WHILE it runs",
+        "run_as_game_user: ...hands back the whole of this run's output, and none of the last",
+        "run_as_game_user: ...keeps LinuxGSM's exit code rather than the follower's",
+        "run_as_game_user: ...and writes it where the console tails it",
+        "run_as_game_user: a closed channel does not kill the action; it runs to the end")
     _tl_home = _tl_tmp.mkdtemp(prefix="tee-log-")
     try:
         with open(os.path.join(_tl_home, "gmodserver"), "w") as _tl_f:
@@ -6213,50 +6288,61 @@ try:
         with open(os.path.join(_tl_home, ".panel-update.log"), "w") as _tl_f:
             _tl_f.write("STALE output of the previous run\n")
         _tl_script = _tl_inner.replace("/home/gmodserver", _tl_home)
+        # The script runs in bash for real, so only once the replace is proven to have moved it:
+        # its `cd` lands in the temp home, and no spelling of the real one is left (review 1017a: a
+        # `_quote` that quotes the safe word, `cd /home/'gmodserver'`, missed the replace, and the
+        # drive ran `./gmodserver update` in the machine's real home, as root on a root run).
+        # Otherwise nothing runs, and the drive's checks fail by name, as _r13d_run_redirected's do.
+        _tl_safe = (bool(_re.search(r"\bcd\s+['\"]?%s['\"]?\s*&&" % _re.escape(_tl_home), _tl_script))
+                    and not _re.search(r"/home/['\"\\]*gmodserver|~['\"\\]*gmodserver", _tl_script))
 
         def _tl_start():
             return _sub.Popen(["bash", "-c", _tl_script], stdout=_sub.PIPE, stderr=_sub.PIPE,
                               stdin=_sub.DEVNULL)
 
-        _tl_p = _tl_start()
-        _tl_first = _tl_p.stdout.readline()
-        _tl_running = _tl_p.poll() is None
-        _tl_rest, _ = _tl_p.communicate(timeout=20)
-        check("run_as_game_user: tee_log streams the action's output WHILE it runs",
-              _tl_first.strip() == b"first-line" and _tl_running,
-              "first line %r arrived with the action %s" % (
-                  _tl_first, "still running" if _tl_running else "already EXITED"))
-        _tl_all = (_tl_first + _tl_rest).decode()
-        check("run_as_game_user: ...hands back the whole of this run's output, and none of the last",
-              "first-line" in _tl_all and "last-line" in _tl_all and "STALE" not in _tl_all,
-              repr(_tl_all))
-        check("run_as_game_user: ...keeps LinuxGSM's exit code rather than the follower's",
-              _tl_p.returncode == 3, "rc=%r" % _tl_p.returncode)
-        with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
-            _tl_log = _tl_f.read()
-        check("run_as_game_user: ...and writes it where the console tails it",
-              "first-line" in _tl_log and "last-line" in _tl_log and "STALE" not in _tl_log,
-              repr(_tl_log))
+        if not _tl_safe:
+            for _tl_name in _r30d_tl_checks:
+                check(_tl_name, False, "not run: the rendering's home was not redirected: %r" % _tl_script[:200])
+        else:
+            _tl_p = _tl_start()
+            _tl_first = _tl_p.stdout.readline()
+            _tl_running = _tl_p.poll() is None
+            _tl_rest, _ = _tl_p.communicate(timeout=20)
+            check("run_as_game_user: tee_log streams the action's output WHILE it runs",
+                  _tl_first.strip() == b"first-line" and _tl_running,
+                  "first line %r arrived with the action %s" % (
+                      _tl_first, "still running" if _tl_running else "already EXITED"))
+            _tl_all = (_tl_first + _tl_rest).decode()
+            check("run_as_game_user: ...hands back the whole of this run's output, and none of the last",
+                  "first-line" in _tl_all and "last-line" in _tl_all and "STALE" not in _tl_all,
+                  repr(_tl_all))
+            check("run_as_game_user: ...keeps LinuxGSM's exit code rather than the follower's",
+                  _tl_p.returncode == 3, "rc=%r" % _tl_p.returncode)
+            with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
+                _tl_log = _tl_f.read()
+            check("run_as_game_user: ...and writes it where the console tails it",
+                  "first-line" in _tl_log and "last-line" in _tl_log and "STALE" not in _tl_log,
+                  repr(_tl_log))
 
-        # The channel going away (the drain giving up, a panel restart) must not take LinuxGSM
-        # with it — `tee` in the action's own pipeline would SIGPIPE it on its next line.
-        os.remove(os.path.join(_tl_home, "finished"))
-        _tl_p = _tl_start()
-        _tl_p.stdout.readline()
-        _tl_p.stdout.close()                 # the channel closes mid-action
-        _tl_p.wait(timeout=20)
-        # Its stderr pipe too, now the action is done. `_tl_p` is a module global, so an open
-        # pipe here stayed open until interpreter shutdown, where its green file object's
-        # finalizer ran after eventlet's own module globals were cleared and printed "Exception
-        # ignored while finalizing file ... 'NoneType' object is not callable".
-        _tl_p.stderr.close()
-        with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
-            _tl_log = _tl_f.read()
-        check("run_as_game_user: a closed channel does not kill the action; it runs to the end",
-              os.path.exists(os.path.join(_tl_home, "finished")) and "last-line" in _tl_log
-              and _tl_p.returncode == 3,
-              "finished=%s rc=%r log=%r" % (os.path.exists(os.path.join(_tl_home, "finished")),
-                                            _tl_p.returncode, _tl_log))
+            # The channel going away (the drain giving up, a panel restart) must not take LinuxGSM
+            # with it — `tee` in the action's own pipeline would SIGPIPE it on its next line.
+            os.remove(os.path.join(_tl_home, "finished"))
+            _tl_p = _tl_start()
+            _tl_p.stdout.readline()
+            _tl_p.stdout.close()                 # the channel closes mid-action
+            _tl_p.wait(timeout=20)
+            # Its stderr pipe too, now the action is done. `_tl_p` is a module global, so an open
+            # pipe here stayed open until interpreter shutdown, where its green file object's
+            # finalizer ran after eventlet's own module globals were cleared and printed "Exception
+            # ignored while finalizing file ... 'NoneType' object is not callable".
+            _tl_p.stderr.close()
+            with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
+                _tl_log = _tl_f.read()
+            check("run_as_game_user: a closed channel does not kill the action; it runs to the end",
+                  os.path.exists(os.path.join(_tl_home, "finished")) and "last-line" in _tl_log
+                  and _tl_p.returncode == 3,
+                  "finished=%s rc=%r log=%r" % (os.path.exists(os.path.join(_tl_home, "finished")),
+                                                _tl_p.returncode, _tl_log))
     finally:
         import shutil as _tl_sh
         _tl_sh.rmtree(_tl_home, ignore_errors=True)
@@ -8428,9 +8514,6 @@ def _r21d_names_stdlib(expr, aliases):
     return _r21d_is_stdlib_module(expr, aliases)
 
 
-_R21D_PATCHER = _re.compile(r"patch|setattr|swap|^_p\d+$")
-
-
 def _r21d_stdlib_stubs(tree):
     """`expr` text of each attribute set on a stdlib module: assigned, or by a patcher call."""
     _al, _out = _r21d_std_aliases(tree), []
@@ -8486,16 +8569,6 @@ def _r25d_dotted_stdlib(target):
         if not _own:
             return True
     return False
-
-
-def _r23d_shaped_patcher(node, fname):
-    """Is call `node` shaped (module, "name", value), its value third or as new=?
-
-    mock's patch.object(os, "replace", new=f) gives it by keyword (review 1015d). getattr only reads.
-    """
-    _n_args = len(node.args) + any(_k.arg == "new" for _k in node.keywords)
-    return (_n_args >= 3 and len(node.args) >= 2
-            and isinstance(node.args[1], (_smg_ast.Constant, _smg_ast.Name)) and fname != "getattr")
 
 
 def _r23d_std_module_name(expr):

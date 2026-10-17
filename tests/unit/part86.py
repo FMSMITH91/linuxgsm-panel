@@ -34,10 +34,10 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part47 import _node47
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
-                         _p9_core, _p9_patch, _p9_restore_all, _p9_rs, _p9_rv, _p9_sd, _p9_sf, _p9_sh)
+                         _p9_core, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_rs,
+                         _p9_rv, _p9_sd, _p9_sf, _p9_sh)
 from unit.part83 import _ALLOW_ROW83, _limit83
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
-from panel.ops import ssh_manager as _sm86
 from panel.ops.ssh_manager import cron as _cron86, files as _files86, game as _game86, hosts as _hosts86
 from panel.routes import panel_backup as _pb86, route_helpers as _rh86
 from panel.security import auth as _auth86
@@ -503,7 +503,7 @@ def _cron_readback86():
             with db.engine.begin() as conn:
                 conn.execute(_text86("DELETE FROM game_server WHERE id = :i"), {"i": sid})
             raise ConnectionError("p86: dropped")
-        _p9_patch(_sm86, "list_cron_jobs", _gone)
+        _p9_patch_sm("list_cron_jobs", _gone)
         try:
             _p9_sf._r21b_sync_after_cron_write(gs)
             raised = None

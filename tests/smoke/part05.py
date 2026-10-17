@@ -3244,22 +3244,25 @@ check("account page (2FA): ...and the code box has a name a screen reader can re
       'aria-label="Code or backup code"' in _at2_form,
       "its only accessible name is the placeholder, which disappears as soon as you type")
 # The password alone, with 2FA on — the proof account_2fa_disable refuses on the same page.
-_at2_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"},
-            follow_redirects=True)
+_at2_r = _at2_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"},
+                     follow_redirects=True)
 _at2_tok, _at2_step, _at2_left = _at2_row()
-check("api token (2FA): the password alone mints nothing", _at2_tok is None,
-      "a token was stored anyway: %r" % (_at2_tok,))
+# Each refusal is the route's own, not a crash, which mints nothing too (review 1017a).
+check("api token (2FA): the password alone mints nothing",
+      _at2_r.status_code == 200 and b"no API token was minted" in _at2_r.data and _at2_tok is None,
+      "status=%d, stored=%r" % (_at2_r.status_code, _at2_tok))
 check("api token (2FA): ...and nothing was written to the account either",
       _at2_step == 0 and _at2_left == len(_at2_codes),
       "last_totp_step=%r, %d of %d backup codes left" % (_at2_step, _at2_left, len(_at2_codes)))
 # A REAL backup code with the wrong password. Counted, not re-checked: use_backup_code
 # CONSUMES, so asking "is it still valid" would spend the thing being asked about.
-_at2_c.post("/account/api-token/generate",
-            data={"password": "wrong-password", "totp_code": _at2_codes[1]},
-            follow_redirects=True)
+_at2_r = _at2_c.post("/account/api-token/generate",
+                     data={"password": "wrong-password", "totp_code": _at2_codes[1]},
+                     follow_redirects=True)
 _at2_tok, _, _at2_left = _at2_row()
 check("api token (2FA): a valid code with the wrong password mints nothing",
-      _at2_tok is None, "stored=%r" % (_at2_tok,))
+      _at2_r.status_code == 200 and b"Password incorrect" in _at2_r.data and _at2_tok is None,
+      "status=%d, stored=%r" % (_at2_r.status_code, _at2_tok))
 check("api token (2FA): ...and that backup code was NOT spent on the failed attempt",
       _at2_left == len(_at2_codes),
       "%d of %d left — a one-time code was burnt by a request that failed for another reason"

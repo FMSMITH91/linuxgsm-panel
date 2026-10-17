@@ -163,24 +163,47 @@ _venv_works() {
 #   cron  — crontab: autostart/monitor, scheduled restarts and updates, the weekly gamedig repair
 #   ufw   — the Firewall page, auto-blocking, and the ports a game install opens. Installing the
 #           package does not turn the firewall on; the panel never enables it unasked.
+# apt-get with its non-interactive settings, for EVERY apt-get this script runs (a unit gate holds
+# it): `_r30a_apt_ni <sudo prefix, "" as root> <apt-get arguments…>`. Through sudo they go ON ITS
+# COMMAND LINE, by `env`: an `export` reaches apt-get on a root install only, since sudo's
+# env_reset strips DEBIAN_FRONTEND and NEEDRESTART_MODE (Ubuntu's sudoers keeps neither; sudo-rs
+# the same), so a per-user install run from a terminal stopped at a debconf, ucf or needrestart
+# dialog in the upgrade it calls fully non-interactive. Not only the upgrade: needrestart's apt hook
+# runs after every install (Node.js, npm, fail2ban, …), those send their output to /dev/null, and
+# its dialog waited on a screen nobody could see — on the update path as root too, where they run
+# before any `export` in this script. As root the settings are exported to apt-get alone, in a
+# subshell, so the apt-get run is the one this shell resolves.
+APT_NI_ENV=(DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a)
+_r30a_apt_ni() {
+    local s="$1"
+    shift
+    if [[ -n "${s}" ]]; then
+        "${s}" env "${APT_NI_ENV[@]}" apt-get "$@"
+    else
+        ( export "${APT_NI_ENV[@]}"; apt-get "$@" )
+    fi
+}
+
+# The prerequisites' apt-get. This step is the one whose sudo has only ever needed to allow apt-get
+# itself, and a sudo that allows apt-get and nothing else refuses `env`: then plain apt-get, whose
+# output is on screen here, so a dialog can at least be seen and answered.
+_r30a_prereq_apt() {
+    _r30a_apt_ni "${SUDO}" "$@" && return 0
+    [[ -n "${SUDO}" ]] || return 1
+    ${SUDO} apt-get "$@"
+}
+
 if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 \
         || ! command -v wget >/dev/null 2>&1 || ! command -v crontab >/dev/null 2>&1 \
         || ! command -v ufw >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
         SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
         info "Installing prerequisites (python3-venv, python3-pip, git, curl, wget, cron, ufw)…"
-        ${SUDO} apt-get update -qq || true
-        ${SUDO} apt-get install -y python3-venv python3-pip git curl wget cron ufw \
+        _r30a_prereq_apt update -qq || true
+        _r30a_prereq_apt install -y python3-venv python3-pip git curl wget cron ufw \
             || warn "apt-get reported an error — re-checking prerequisites anyway."
     fi
 fi
-
-# apt-get for the OS upgrade and unattended-upgrades, with its non-interactive settings ON ITS
-# COMMAND LINE. An `export` reaches apt-get on a root install only: sudo's env_reset strips
-# DEBIAN_FRONTEND and NEEDRESTART_MODE (Ubuntu's sudoers keeps neither; sudo-rs the same), so a
-# per-user install run from a terminal stopped at a debconf, ucf or needrestart dialog in the
-# upgrade it calls fully non-interactive. Through `env`, as the tzdata step below does.
-APT_NI=(env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get)
 
 # The time zone database. Only minimal images (Docker, some LXC) lack it — on 24.04 and later
 # python3 itself depends on it — and without it zoneinfo rejects every time zone name the panel
@@ -192,7 +215,7 @@ TZ_DB="/usr/share/zoneinfo/UTC"
 if [[ ! -e "${TZ_DB}" ]] && command -v apt-get >/dev/null 2>&1; then
     SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
     info "Installing tzdata (the time zone database)…"
-    ${SUDO} apt-get update -qq || true
+    _r30a_apt_ni "${SUDO}" update -qq || true
     ${SUDO} env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 \
         apt-get install -y --no-upgrade tzdata || true
 fi
@@ -1215,7 +1238,7 @@ nodesource_setup() {
     local S="$1" arch key gh rc=1
     arch="$(dpkg --print-architecture 2>/dev/null || true)"
     case "${arch}" in amd64|arm64) ;; *) return 1 ;; esac   # the only two NodeSource builds
-    command -v gpg >/dev/null 2>&1 || ${S} apt-get install -y gnupg >/dev/null 2>&1 || true
+    command -v gpg >/dev/null 2>&1 || _r30a_apt_ni "${S}" install -y gnupg >/dev/null 2>&1 || true
     key="$(mktemp 2>/dev/null)" || return 1
     gh="$(mktemp -d 2>/dev/null)" || { rm -f "${key}"; return 1; }
     if curl --proto '=https' -fsSL --connect-timeout 15 --max-time 60 "${NODESOURCE_KEY_URL}" -o "${key}" 2>/dev/null \
@@ -1230,7 +1253,7 @@ nodesource_setup() {
                 | ${S} tee "${NODESOURCE_SOURCES}" >/dev/null 2>&1 \
             && printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' \
                 | ${S} tee "${NODESOURCE_PREFS}" >/dev/null 2>&1 \
-            && ${S} apt-get update >/dev/null 2>&1; then
+            && _r30a_apt_ni "${S}" update >/dev/null 2>&1; then
             rc=0
         fi
     fi
@@ -1245,10 +1268,10 @@ ensure_nodejs() {
     local S=""
     [[ "$(id -u)" -eq 0 ]] || S="sudo"
     if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-        ${S} apt-get install -y jq curl >/dev/null 2>&1 || true
+        _r30a_apt_ni "${S}" install -y jq curl >/dev/null 2>&1 || true
     fi
     # pigz (parallel gzip) makes the update snapshot ~3.5x faster on a multi-core host — tiny, optional.
-    command -v pigz >/dev/null 2>&1 || ${S} apt-get install -y pigz >/dev/null 2>&1 || true
+    command -v pigz >/dev/null 2>&1 || _r30a_apt_ni "${S}" install -y pigz >/dev/null 2>&1 || true
     # Read Node's major version ONLY if node exists: `node -v` on a host without node fails the pipe
     # under `set -o pipefail`, which would kill install.sh. Absent/unparseable => 0 => (re)install.
     # Each read goes through 10# once: [[ -lt ]] below reads its operands as arithmetic, where a
@@ -1273,7 +1296,7 @@ ensure_nodejs() {
         cand="$((10#${cand:-0}))"
         if [[ "${cand:-0}" -ge 18 ]] 2>/dev/null; then
             info "Installing Node.js ${cand} from the distro (gamedig needs it for player queries)…"
-            ${S} apt-get install -y nodejs >/dev/null 2>&1 || true
+            _r30a_apt_ni "${S}" install -y nodejs >/dev/null 2>&1 || true
             if command -v node >/dev/null 2>&1; then
                 nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
                 nmaj="$((10#${nmaj:-0}))"
@@ -1285,7 +1308,7 @@ ensure_nodejs() {
         # NodeSource's repository with its signing key pinned by fingerprint — see nodesource_setup.
         # Their setup script is no longer downloaded and run as root.
         if nodesource_setup "${S}"; then
-            ${S} apt-get install -y nodejs >/dev/null 2>&1 \
+            _r30a_apt_ni "${S}" install -y nodejs >/dev/null 2>&1 \
                 || warn "Node.js install failed — player queries stay unavailable until installed."
         else
             warn "NodeSource's repository could not be set up with its pinned signing key — Node.js was not installed, and player queries stay unavailable until Node.js 18+ is."
@@ -1296,7 +1319,7 @@ ensure_nodejs() {
     # and no gamedig, silently. Also reached on an update, for a host installed that way already.
     if [[ "${nmaj:-0}" -ge 18 ]] 2>/dev/null && ! command -v npm >/dev/null 2>&1; then
         info "Installing npm (gamedig is installed with it)…"
-        ${S} apt-get install -y npm >/dev/null 2>&1 \
+        _r30a_apt_ni "${S}" install -y npm >/dev/null 2>&1 \
             || warn "npm install failed — player queries stay unavailable until npm is installed."
     fi
     # The weekly cron that re-runs install-gamedig.sh (install_gamedig places it). It fetches
@@ -1329,7 +1352,7 @@ ensure_fail2ban() {
     local S=""
     [[ "$(id -u)" -eq 0 ]] || S="sudo"
     info "Installing fail2ban (brute-force protection for the panel login)…"
-    ${S} apt-get install -y fail2ban >/dev/null 2>&1 \
+    _r30a_apt_ni "${S}" install -y fail2ban >/dev/null 2>&1 \
         || warn "fail2ban install failed — panel-login brute-force protection stays off until it's installed."
     return 0
 }
@@ -3226,13 +3249,13 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; then
             UPG_SUDO=""; [[ "$(id -u)" -ne 0 ]] && UPG_SUDO="sudo"
             export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-            ${UPG_SUDO} "${APT_NI[@]}" update -qq || true
+            _r30a_apt_ni "${UPG_SUDO}" update -qq || true
             if [[ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]]; then
                 echo ""
                 info "System updates are available — applying them now…"
-                ${UPG_SUDO} "${APT_NI[@]}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
+                _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
                     || warn "Some packages could not be upgraded — continuing."
-                ${UPG_SUDO} "${APT_NI[@]}" -y autoremove --purge >/dev/null 2>&1 || true
+                _r30a_apt_ni "${UPG_SUDO}" -y autoremove --purge >/dev/null 2>&1 || true
                 if [[ ! -f /var/run/reboot-required ]]; then
                     ok "System updated — no reboot required."
                 elif [[ "${PANEL_NO_REBOOT:-0}" == "1" ]]; then
@@ -3321,10 +3344,10 @@ if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; 
     UPG_SUDO=""; [[ "$(id -u)" -ne 0 ]] && UPG_SUDO="sudo"
     info "Bringing the OS fully up to date (one-time — set PANEL_NO_UPGRADE=1 to skip)…"
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-    ${UPG_SUDO} "${APT_NI[@]}" update -qq || true
-    ${UPG_SUDO} "${APT_NI[@]}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
+    _r30a_apt_ni "${UPG_SUDO}" update -qq || true
+    _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
         || warn "Some packages could not be upgraded — continuing with the install."
-    ${UPG_SUDO} "${APT_NI[@]}" -y autoremove --purge >/dev/null 2>&1 || true
+    _r30a_apt_ni "${UPG_SUDO}" -y autoremove --purge >/dev/null 2>&1 || true
     ok "System packages up to date"
 fi
 
@@ -3336,7 +3359,7 @@ if command -v apt-get >/dev/null 2>&1; then
     AU_SUDO=""; [[ "$(id -u)" -ne 0 ]] && AU_SUDO="sudo"
     info "Enabling automatic security updates (unattended-upgrades)…"
     export DEBIAN_FRONTEND=noninteractive
-    ${AU_SUDO} "${APT_NI[@]}" install -y unattended-upgrades >/dev/null 2>&1 \
+    _r30a_apt_ni "${AU_SUDO}" install -y unattended-upgrades >/dev/null 2>&1 \
         || warn "Could not install unattended-upgrades — enable it later from the panel."
     if dpkg -s unattended-upgrades >/dev/null 2>&1; then
         # Turn on APT's daily package-list refresh + unattended security upgrade.

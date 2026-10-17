@@ -164,7 +164,10 @@ try:
         "  const plain = els['update-info'].innerHTML, live = els['live-stale'].textContent;\n"
         "  answer = %s; checkUpdates(); await settle();\n"
         "  console.log(JSON.stringify({upd: plain, live: live, down: els['update-info'].innerHTML})); })();\n"
-    ) % (_cut47(_rmjs82, "function checkUpdates("), _cut47(_rmjs82, "function pollLive("),
+    ) % (_cut47(_rmjs82, "function checkUpdates("),
+         # the order guard pollLive calls (review 1017a): its counters' line and the guard
+         _rmjs82[_rmjs82.index("var _r30c_liveSent"):].split("\n", 1)[0] + "\n"
+         + _cut47(_rmjs82, "function _r30c_liveOld(") + "\n" + _cut47(_rmjs82, "function pollLive("),
          _json82.dumps(_upd82[1]), _json82.dumps(_fr_key82), _json82.dumps(_upd82[1]),
          _json82.dumps(_fw82["down"][1])))
     if _rm_out82 is not None:

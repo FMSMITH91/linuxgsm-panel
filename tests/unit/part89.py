@@ -29,7 +29,8 @@ import tempfile as _tempfile89
 from types import SimpleNamespace as NS
 
 from unit.part01 import check
-from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_patch, _p9_restore_all,
+from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_patch, _p9_patch_sm,
+                         _p9_restore_all,
                          _p9_sd, _p9_sf)
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.ops.ssh_manager import files as _files89, hosts as _hosts89
@@ -421,10 +422,9 @@ def _audited89(sid, action):
 
 
 def _rollback_routes89(client, sid):
-    from panel.ops import ssh_manager as _sm89
     _p9_patch(_p9_sd, "_run_action", _break_session89)
     _p9_patch(_p9_sd, "send_console_command", _break_session89)
-    _p9_patch(_sm89, "list_server_commands", _break_session89)
+    _p9_patch_sm("list_server_commands", _break_session89)
     got = {
         "action": client.post("/server/%d/action" % sid, data={"action": "details"}).status_code,
         "command": client.post("/server/%d/command" % sid, data={"command": "say p89"}).status_code,

@@ -296,9 +296,15 @@ def _check_servers_add_refuses_existing_accounts():
     r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
                                      "server_name": "root", "port": "28960"},
                follow_redirects=False)
+    # Refused because the account EXISTS, not because the host did not answer: both refusals add
+    # no row (review 1017a: a runner whose local probe failed passed this for the wrong reason).
+    with c.session_transaction() as _sess:
+        _flashed = " ".join(str(_m) for _cat, _m in _sess.get("_flashes", []))
     check("/servers/add refuses a name that is already an account on the host (root)",
-          servers_count() == before and r.status_code < 500,
-          "row count went %d -> %d, status %d" % (before, servers_count(), r.status_code))
+          servers_count() == before and r.status_code < 500
+          and "already exists on this host" in _flashed,
+          "row count went %d -> %d, status %d, said %r" % (before, servers_count(), r.status_code,
+                                                          _flashed[:120]))
     # A typed name the host has no account for still installs: the ivgood/ivtaken rows above are
     # the positive control. The DEFAULT name skips past an existing account instead of refusing,
     # the courtesy it already gets for a panel row of the same name.

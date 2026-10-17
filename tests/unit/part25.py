@@ -581,7 +581,8 @@ _VPS25_LOG = "\n".join(
 def _p25_vps():
     with _patched():
         _env(journal=_VPS25_LOG)
-        rep = _gen25()["report"]
+        full = _gen25()
+    rep, page = full["report"], full.get("posture") or ""
     log = rep.split("### Recent log", 1)[-1]
     digest = rep.split("### Errors in the journal", 1)[-1].split("### Recent log", 1)[0]
     body = log.split("```", 1)[-1].replace(
@@ -594,10 +595,13 @@ def _p25_vps():
                "restart-flags ×150" not in log,
                "pam_unix(sudo:session)" not in log, "COMMAND=" not in body,
                "a password is required" in log, "canary panel line 7731" in log]), log[:1500])
+    # A call sudo ran AS ROOT outside the helper is the privilege model: counted on the in-panel
+    # page only (review 1017a), never in the file.
     check("VPS fix: ...the digest's 'most repeated lines' are not the panel's own sudo calls, and a "
           "sudo COMMAND's argument (an account, for su) is never printed as a verb",
           all(["pam_unix(sudo:session)" not in digest, "restart-flags ×150" in digest,
-               "su as root ×1" in digest, "canarygameacct7731" not in rep]), digest[:1200])
+               "su as root ×1" in page, "as root ×" not in rep, "canarygameacct7731" not in rep,
+               "canarygameacct7731" not in page]), digest[:1200] + page[-600:])
     check("VPS fix: ...sudo-rs's spacing ('user :  PWD=... plain ', two blanks and a trailing one) "
           "is counted too, as the verb it ran",
           all(["ufw-status ×1" in digest, "ufw-status ×1" not in log]), digest[:600])

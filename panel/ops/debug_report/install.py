@@ -61,14 +61,19 @@ def _role(scope):
 
 
 def _model():
-    """(scope, the Install model line)."""
+    """(scope, the Install model line, the account it runs as).
+
+    The account is posture: "system service as root" says, on the public issue, that whoever takes
+    this panel has root (the verdict #443 moved to the page, in other words). So it is a line of
+    its own, on the in-panel page only.
+    """
     if so._is_system_service():
         scope, text = "system", "system service"
     elif os.path.exists(os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")):
         scope, text = "user", "per-user (systemd --user)"
     else:
         scope, text = None, "no unit file (started by hand?)"
-    return scope, "%s as %s" % (text, _role(scope))
+    return scope, text, _role(scope)
 
 
 def _sudo_probe():
@@ -207,8 +212,9 @@ def panel_conf_text(path=None):
 
 
 def _identity_lines(res, facts):
-    scope, model = _model()
+    scope, model, role = _model()
     res.add("- **Install model**: " + model)
+    res.posture("- **Runs as**: " + role)
     res.add("- **Interpreter**: " + _interpreter())
     res.add("- **Under the unit**: " + _under_unit())
     conf = panel_conf_text()

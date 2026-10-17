@@ -239,12 +239,14 @@ try:
     _gb.refresh_soon = lambda delay=3.0: _gb_calls.append(delay)
     for _proxied in (True, False):
         _gb_calls.clear()
-        app.test_client().post("/login", data={"username": "nobody-here", "password": "x"},
-                               headers={"X-Forwarded-For": "192.0.2.77"} if _proxied else {})
+        _gb_r = app.test_client().post("/login", data={"username": "nobody-here", "password": "x"},
+                                       headers={"X-Forwarded-For": "192.0.2.77"} if _proxied else {})
+        # A refused login, not a crash, which asks for nothing either (review 1017a).
         check("funnel gate: a failed login %s a refresh (%s)"
               % ("asks for" if _proxied else "does not ask for",
                  "it came through a proxy" if _proxied else "it came straight in"),
-              bool(_gb_calls) is _proxied, repr(_gb_calls))
+              _gb_r.status_code == 200 and b"Invalid username or password." in _gb_r.data
+              and bool(_gb_calls) is _proxied, "%d %r" % (_gb_r.status_code, _gb_calls))
     from panel.ops import system_ops as _gb_so
     _gb_deny = _gb_so.ufw_deny_ip
     try:
@@ -2743,11 +2745,17 @@ try:
     def _retry_under_gate():
         with _install_seam_closed("retry"):
             _resp = c.post("/servers/%d/retry-install" % gs_id)
+            # The worker the retry started is alive (held at the gate) here, so the enumerator
+            # the seam waits on must see it: one matching no thread (a renamed or wrapped _run)
+            # reopened the seam at once and passed (review 1017a).
+            _seen = len(_live_install_workers())
             with app.app_context():
                 _row = db.session.get(GameServer, gs_id)
-                return _resp, (_row.status, _row.install_error)
+                return _resp, (_row.status, _row.install_error), _seen
 
-    _rr, _rr_state = _retry_under_gate()
+    _rr, _rr_state, _rr_seen = _retry_under_gate()
+    check("install seam: (control) the worker enumerator sees the job the retry started",
+          _rr_seen >= 1, "it saw %d live install workers" % _rr_seen)
     check("failed install: retry is accepted for a retryable failure",
           _rr.status_code in (200, 302), _rr.status_code)
     check("failed install: ...and the row goes back to installing, with the reason cleared",
@@ -2791,7 +2799,7 @@ try:
     check("failed install: a failed row still marked installed is offered Retry",
           ("/servers/%d/retry-install" % gs_id) in _dash_ri,
           "the card is keyed on status alone, so this is the row the guard has to accept")
-    _rr_i, _rr_i_state = _retry_under_gate()
+    _rr_i, _rr_i_state, _rr_i_seen = _retry_under_gate()
     check("failed install: ...and the route accepts it instead of answering its own button",
           _rr_i.status_code in (200, 302) and _rr_i_state[0] == "installing",
           "status=%r http=%r — 'that server's install didn't fail' on a row that says failed"
