@@ -50,6 +50,12 @@ updates:
     groups:
       ci-python-tools:
         patterns: ["*"]
+    # semgrep is written against mcp 1.x and pins mcp==1.29.0 (semgrep-mcp.in says why it is
+    # split out); mcp 2 is a new major with different dependencies, and installing it stopped
+    # Semgrep from scanning at all (#441). Patch/minor 1.x security releases still come through.
+    ignore:
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   # The test matrix's tools (flake8, esprima), which run on 3.10 as well: pip-compile lockfiles
   # like the above, compiled on 3.10. A sibling of ci-requirements, not inside it, because a
