@@ -379,6 +379,16 @@ try:
     check("js coverage: the fake host answers the file browser's real listing command with the "
           "home's files (it listed nothing for `find -H`)",
           "notes.txt" in _ans53 and "serverfiles" in _ans53, repr((_sent53[-1:], _ans53[:120])))
+    # The rename flow's taken name: the fake host read the new name up to `; if [`, and the console
+    # path guard that went in after it became part of the name ("server.cfg;"), so nothing was taken.
+    _rn53 = {}
+    for _new53 in ("server.cfg", "fresh 53.txt"):
+        _sent53.clear()
+        _files53.rename_path(_NS53(host="h", is_local=False), "mcserver", "notes.txt", _new53)
+        _rn53[_new53] = _fh53.answer(_sent53[-1])[0] if _sent53 else ""
+    check("js coverage: the fake host reads the real rename command's new name, so a taken name is answered "
+          "taken, and a free one (with a space, shell-quoted) is renamed (control)",
+          _rn53 == {"server.cfg": "__RENAME_TAKEN__", "fresh 53.txt": "__RENAME_DONE__"}, repr(_rn53))
 finally:
     _p9_restore_all()
     with _p9.app_context():
