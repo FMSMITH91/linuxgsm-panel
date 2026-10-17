@@ -239,7 +239,7 @@ def _register_setup_tailscale(app):
             _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
                        detail="port %s: %s" % (port, why), success=False)
             return jsonify({"success": False, "message": why})
-        kept = _r32j_kept_route(cfg, mount)
+        kept = _r32j_kept_route(cfg, mount, False)
         ok, msg = kept or ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
                                                    backend_scheme=_serve_scheme_now(cfg, current_app.config))
         _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
@@ -695,11 +695,12 @@ def _auto_tailscale_serve(cfg):
         if mount is None:
             _record_auto_serve(cfg, cfg.get("tailscale_mount") or "/", False, why)
             return
-        kept = _r32j_kept_route(cfg, mount)
+        funnel = bool(cfg.get("tailscale_use_funnel", False))
+        kept = _r32j_kept_route(cfg, mount, funnel)
         ok, msg = kept or ts.setup_tailscale_serve(
             port=port,
             mount=mount,
-            funnel=cfg.get("tailscale_use_funnel", False),
+            funnel=funnel,
             backend_scheme=_serve_scheme_now(cfg, current_app.config),
         )
         _record_auto_serve(cfg, mount, ok, msg)
@@ -707,7 +708,7 @@ def _auto_tailscale_serve(cfg):
             _remove_serve_leftovers(port, mount, "at the end of setup", _wizard_audit)
 
 
-def _r32j_kept_route(cfg, mount):
+def _r32j_kept_route(cfg, mount, funnel):
     """(True, why) to keep the panel's own Serve route at `mount` as it is, else None (write one).
 
     Only while a port change the welcome step saved waits for its restart. The wizard publishes the
@@ -719,10 +720,18 @@ def _r32j_kept_route(cfg, mount):
     boot re-points it at the new port when the panel restarts (app._boot_serve), as it does after
     any port change; a write was never needed for that. Read fresh: _wizard_serve_mount has just
     refreshed the Serve read this asks.
+
+    Only when the :443 listener's Funnel is already what this caller would write (`funnel`): the
+    boot re-point asks for the stored Funnel, and on a listener that differs it counts the panel's
+    own route at the old port as another app's and refuses, leaving Serve on a port nothing
+    listens on and the panel bound to loopback. Not kept, the write below refuses that now, with
+    nothing stored, as it did before routes were kept.
     """
     bound = ts._r13b_bound_port(cfg)
     stored = _r15a_cfg_int(cfg.get("port", 5000), 5000)
-    if bound == stored or not ts._r12a_panel_on_443(ts.get_tailscale_info().serve_config, bound, mount):
+    sc = ts.get_tailscale_info().serve_config
+    if (bound == stored or not ts._r12a_panel_on_443(sc, bound, mount)
+            or ts._r12a_listener_funnel(sc, bound)[0] != bool(funnel)):
         return None
     return True, i18n.Sentence("Tailscale Serve already reaches the panel at {mount}; it moves to port {port} "
                                "when the panel restarts.", mount=mount, port=stored)

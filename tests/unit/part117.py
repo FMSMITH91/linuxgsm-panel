@@ -117,25 +117,37 @@ def _dangling117():
 
 
 # ── 3. the wizard's Serve keeps the working route while a port change waits ───────────────────────
-def _serve_table117(routes):
+def _serve_table117(routes, funnel=False):
     """A parsed `tailscale serve status` whose :443 holds `routes` ({mount: loopback port})."""
-    text = "https://h.tail.ts.net (tailnet only)\n" + "".join(
+    text = "https://h.tail.ts.net (%s)\n" % ("Funnel on" if funnel else "tailnet only") + "".join(
         "|-- %s proxy http://127.0.0.1:%d\n" % (m, p) for m, p in routes.items())
     return _p9_ts._parse_serve_status(text) if routes else {"services": []}
 
 
-def _wizard_case117(client, bound, stored, routes, finish):
-    """(Serve writes, stored mount, setup done, answer) of the Serve step, or of the finish."""
+def _write117(writes, listener_funnel):
+    """setup_tailscale_serve's stand-in: records the write, and refuses a Funnel change as the real one does.
+
+    The real one refuses on a listener another app shares: here the panel's own route at the old port.
+    """
+    def write(port=5000, mount="/", funnel=False, **_k):
+        writes.append((port, mount))
+        if bool(funnel) != listener_funnel:
+            return False, "Funnel is set per listener. Nothing was changed."
+        return True, "Serve on"
+    return write
+
+
+def _wizard_case117(client, bound, stored, routes, finish, funnel=False):
+    """(Serve writes, stored mount, setup done, answer, bind_host) of the Serve step, or of the finish."""
     writes = []
     info = NS(installed=True, running=True, dns_name="h.tail.ts.net", serve_unreadable=False,
-              serve_config=_serve_table117(routes))
+              serve_config=_serve_table117(routes, funnel))
     _p9_patch(_p9_ts, "get_tailscale_info", lambda force_refresh=False: info)
-    _p9_patch(_p9_ts, "setup_tailscale_serve",
-              lambda port=5000, mount="/", **k: writes.append((port, mount)) or (True, "Serve on"))
+    _p9_patch(_p9_ts, "setup_tailscale_serve", _write117(writes, funnel))
     _p9_patch(_p9_ts, "remove_stale_panel_routes", lambda port, mount: ("none", [], None))
     _p9_patch(_rh117, "_setup_ts_ok", lambda: True)   # the route's gate is the wizard's state, not this
     cfg = dict(_CFG117, port=stored, setup_complete=False, tailscale_setup_done=False, tailscale_mount="/",
-               tailscale_auto_setup=True)
+               tailscale_auto_setup=True, bind_host="unset-117")
     _p9_cfg.save_config(cfg)
     _p9.config["BOOT_PORT"] = bound
     if finish:
@@ -145,7 +157,7 @@ def _wizard_case117(client, bound, stored, routes, finish):
     else:
         said = _p9_json(client.post("/api/setup/tailscale/serve")).get("message", "")
     now = _p9_cfg.load_config()
-    return writes, now.get("tailscale_mount"), now.get("tailscale_setup_done"), said
+    return writes, now.get("tailscale_mount"), now.get("tailscale_setup_done"), said, now.get("bind_host")
 
 
 def _wizard117(client):
@@ -157,6 +169,7 @@ def _wizard117(client):
             got[step + " kept"] = _wizard_case117(client, 5000, 5100, {"/": 5000}, finish)
             got[step + " none yet"] = _wizard_case117(client, 5000, 5100, {}, finish)
             got[step + " no change"] = _wizard_case117(client, 5100, 5100, {"/": 5100}, finish)
+            got[step + " funnel"] = _wizard_case117(client, 5000, 5100, {"/": 5000}, finish, funnel=True)
     finally:
         _p9.config.pop("BOOT_PORT", None)
         if had[0]:
@@ -170,6 +183,11 @@ def _wizard117(client):
           "it writes as before (controls)",
           [got[k][:3] for k in ("step none yet", "finish none yet", "step no change", "finish no change")]
           == [([(5100, "/")], "/", True)] * 2 + [([(5100, "/")], "/", True)] * 2, repr(got))
+    check("setup wizard: ...but a route on a listener with Funnel on is not kept by the tailnet-only Serve step or a "
+          "finish without Funnel: the write runs and refuses, and nothing is marked set up or bound to loopback (kept, "
+          "the boot's re-point refused and stranded Serve on a port nothing listens on)",
+          [got[k][:3] for k in ("step funnel", "finish funnel")] == [([(5100, "/")], "/", False)] * 2
+          and got["step funnel"][4] == "unset-117" and "moves to port" not in got["step funnel"][3], repr(got))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
