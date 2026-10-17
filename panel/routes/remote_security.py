@@ -9,7 +9,7 @@ from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
     remote_fail2ban_unban, remote_security_log, remote_ufw_close_port, remote_ufw_deny_ip,
-    remote_ufw_open_port, remote_ufw_undeny_ip, tailnet_exempt_ips)
+    remote_ufw_open_port, remote_ufw_put_back_tcp, remote_ufw_undeny_ip, tailnet_exempt_ips)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
@@ -295,8 +295,7 @@ def _register_panel_binding(app):
         if not ok:
             # The panel still listens where it did, and the steps above took that port's rule and
             # jail away: put them back, or the page that says "restart it" is the last one served.
-            back_notes, back_audit = _r30b_keep_old_port(app, local, cur_bind, cur_port, new_port,
-                                                         old_removed)
+            back_notes, back_audit = _r30b_keep_old_port(app, local, cur_port, new_port, old_removed)
             log_action(current_user, "panel_restart", target=LOCAL_HOST_LABEL,
                        detail=f"after the binding change: {restart_msg}; {back_audit}", success=False)
             return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
@@ -450,8 +449,9 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
 def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
     """Open or close the panel's port for the new binding's exposure.
 
-    -> (the reply's notes, whether the firewall now matches the binding, whether the old port's rule
-    was removed). With no local host row there is no firewall to follow, which is not a failure.
+    -> (the reply's notes, whether the firewall now matches the binding, the address families whose
+    public rule for the old port the close really removed). With no local host row there is no
+    firewall to follow, which is not a failure.
     Each note is a whole i18n.Sentence: English in the audit row, translated in the reply.
     """
     # ── Bring the firewall in line with the resulting exposure ──
@@ -459,7 +459,7 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
     # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
     # changed port also gets its old rule gone.
     now_public = _panel_bind_is_public(new_bind)
-    fw_notes, fw_ok, old_removed = [], True, False
+    fw_notes, fw_ok, old_removed = [], True, ()
     if local:
         # Each of these returns (ok, msg) and all three were called for effect, with fw_note
         # assigned on the next line regardless — so the panel could restart onto a port the
@@ -481,13 +481,17 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
                                               port=new_port, why=_fw_msg))
             fw_ok = bool(_fw_ok)
             if new_port != cur_port:
-                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp", force=True)
+                _gone = []
+                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp", force=True, deleted=_gone)
                 fw_notes.append(i18n.Sentence("Removed the old rule for {port}.", port=cur_port)
                                 if _old_ok else
                                 i18n.Sentence("The old rule for {port} is still there ({why}).",
                                               port=cur_port, why=_old_msg))
                 fw_ok = fw_ok and bool(_old_ok)
-                old_removed = bool(_old_ok)
+                # What the delete removed, by ufw's words, not its answer: that answer is "no public
+                # rule lets the port in now", True too for a port the operator had already closed
+                # or opened only from one address, and the rollback re-opened those to everyone.
+                old_removed = tuple(_gone)
         except Exception:
             app.logger.warning("change-port: firewall update failed", exc_info=True)
             fw_notes.append(i18n.Sentence("The firewall could not be updated."))
@@ -495,23 +499,27 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
     return fw_notes, fw_ok, old_removed
 
 
-def _r30b_keep_old_port(app, local, cur_bind, cur_port, new_port, old_removed):
+def _r30b_keep_old_port(app, local, cur_port, new_port, old_removed):
     """After a restart that could not be scheduled: keep the panel reachable where it still listens.
 
-    -> (the reply's notes, the audit row's words). The binding change removed `cur_port`'s rule and
-    pointed the login jail at `new_port` before restarting; with no restart, a publicly bound panel
-    kept listening on `cur_port` behind a firewall that now dropped it, and nothing in the panel
-    could be reached to restart it (review 1017a). The new port's rule stays: the saved binding
+    -> (the reply's notes, the audit row's words). The binding change removed `cur_port`'s rule (in
+    the address families `old_removed` names) and pointed the login jail at `new_port` before
+    restarting; with no restart, a publicly bound panel kept listening on `cur_port` behind a
+    firewall that now dropped it, and nothing in the panel could be reached to restart it (review
+    1017a). The new port's rule stays: the saved binding
     still needs it once the panel restarts, and the boot points the jail at that port again.
     """
     if new_port == cur_port:
         return [], "binding port unchanged"
     notes, audit = [], []
-    # Only for a binding reached on its port: ufw answers 0 to deleting a rule that is not there,
-    # so "removed" alone would open the port of a loopback/tailnet-bound panel that never had one.
-    if old_removed and local and _panel_bind_is_public(cur_bind):
+    # Exactly what the close removed and nothing more: a port the operator had closed, rate limited
+    # or opened only from one address was not removed, so nothing is added for it, and an IPv4-only
+    # rule comes back without an IPv6 twin. (This used to be gated on a publicly reached binding,
+    # because "removed" was the close's answer and ufw answers 0 to deleting a rule that is not
+    # there; what ufw said it deleted needs no such stand-in.)
+    if old_removed and local:
         try:
-            _ok, _why = remote_ufw_open_port(local, cur_port, "tcp", "LinuxGSM Panel")
+            _ok, _why = remote_ufw_put_back_tcp(local, cur_port, old_removed, "LinuxGSM Panel")
         except Exception:
             app.logger.warning("change-port: the old port's rule could not be put back", exc_info=True)
             _ok, _why = False, "error"

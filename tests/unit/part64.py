@@ -383,7 +383,8 @@ with open(_os64.path.join(_ROOT64, "panel", "ops", "ssh_manager", "hosts.py"), e
 check("firewall: the panel's own port moves (change-port's two closes, the SSH port change's revert) "
       "pass force, so the guard does not refuse closing the port the config just stopped naming",
       _rsec64.count('remote_ufw_close_port(local, new_port, "tcp", force=True)') == 1
-      and _rsec64.count('remote_ufw_close_port(local, cur_port, "tcp", force=True)') == 1
+      # The old port's close also reports what it deleted, for the rollback (review 1017a).
+      and _rsec64.count('remote_ufw_close_port(local, cur_port, "tcp", force=True, deleted=_gone)') == 1
       and _rsec64.count("remote_ufw_close_port(") == 2
       # The revert's close is _r25b_close_added_ssh_rule's (review 1016b), called with new_port.
       and _hsrc64.count('remote_ufw_close_port(server, port, "tcp", force=True)') == 1

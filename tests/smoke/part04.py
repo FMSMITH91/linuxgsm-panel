@@ -2942,7 +2942,7 @@ _bind_port = _bind_cfg0.get("port", 5000)
 try:
     _rs_bind.remote_ufw_open_port = lambda srv, port, proto=None, comment="": (
         _bind_fw.append(("open", port)), (True, ""))[1]
-    _rs_bind.remote_ufw_close_port = lambda srv, port, proto=None, force=False: (
+    _rs_bind.remote_ufw_close_port = lambda srv, port, proto=None, force=False, **_k: (
         _bind_fw.append(("close", port)), (True, ""))[1]
     _am.so.host_has_ip = lambda ip: True
     _am.so.restart_panel = lambda *a, **k: (True, "stubbed")

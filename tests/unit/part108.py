@@ -27,7 +27,7 @@ from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg,
                          _p9_patch, _p9_restore_all, _p9_sf, _p9_so)
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.ops.ssh_manager import hosts as _hosts108
-from panel.routes import remote_security as _rs108, remote_vps as _rv108
+from panel.routes import remote_vps as _rv108
 from panel.security import privileged as _priv108
 
 _TRIP108_START = len(_P9_TRIPPED)
@@ -234,13 +234,72 @@ def _audit108(action):
                 for a in AuditLog.query.filter_by(action=action).order_by(AuditLog.id).all()]
 
 
-def _change_port108(client, cfg_bind, restart_ok):
-    """POST a panel port move 5000 -> 5077 from `cfg_bind`: (reply, ufw calls, fail2ban ports)."""
-    ufw, f2b = [], []
-    _p9_patch(_rs108, "remote_ufw_open_port", lambda local, port, proto, comment="": (
-        ufw.append(("open", int(port))) or (True, "ok")))
-    _p9_patch(_rs108, "remote_ufw_close_port", lambda local, port, proto=None, force=False: (
-        ufw.append(("close", int(port))) or (True, "ok")))
+_ONE108 = "203.0.113.5"  # NOSONAR(S1313) - a documentation address in a stand-in ufw rule, never dialled
+_UFW_HEAD108 = ("Status: active\n\nTo                         Action      From\n"
+                "--                         ------      ----\n")
+
+
+def _ufw108(rules):
+    """A stand-in ufw over `rules` [(to, v6, action, source)], the list edited in place: (run_privileged, calls).
+
+    Answers what ufw 0.36 answers (measured on Ubuntu 24.04): a by-spec `delete allow proto tcp to any port
+    N` removes only `N/tcp ALLOW Anywhere`, says "Rule deleted[ (v6)]" or "Could not delete non-existent
+    rule[ (v6)]" per family and exits 0 either way; `allow proto tcp to any port N` adds both families;
+    `allow from 0.0.0.0/0` (or ::/0) adds that family's rule alone, listed "Anywhere".
+    """
+    calls = []
+
+    def add(rule):
+        if rule not in rules:
+            rules.append(rule)
+
+    def status():
+        tail = {False: "", True: " (v6)"}
+        return _UFW_HEAD108 + "".join(
+            "%-27s%-12s%s\n" % (to + tail[v6], action, src + (tail[v6] if src == "Anywhere" else ""))
+            for to, v6, action, src in rules)
+
+    def deleted(args):
+        said = []
+        for v6, tail in ((False, ""), (True, " (v6)")):
+            rule = (args[1] + "/tcp", v6, "ALLOW", "Anywhere")
+            said.append(("Rule deleted" if rule in rules else "Could not delete non-existent rule") + tail)
+            if rule in rules:
+                rules.remove(rule)
+        return "\n".join(said) + "\n"
+
+    def allowed(args):
+        for v6 in (False, True):
+            add((args[1] + "/tcp", v6, "ALLOW", "Anywhere"))
+        return "Rule added\nRule added (v6)\n"
+
+    def allowed_from(args):
+        v6 = ":" in args[0]
+        add((args[1] + "/tcp", v6, "ALLOW", "Anywhere" if args[0] in ("0.0.0.0/0", "::/0") else args[0]))
+        return "Rule added" + (" (v6)" if v6 else "") + "\n"
+
+    verbs = {"ufw-status": lambda args: status(), "ufw-allow-proto-port": allowed,
+             "ufw-delete-allow-proto-port": deleted, "ufw-allow-from-port": allowed_from}
+
+    def run(server, verb, args=(), **k):
+        args = [str(a) for a in args]
+        calls.append((verb, args))
+        if verb not in verbs:
+            return "", "p108: unexpected verb " + verb, 1
+        return verbs[verb](args), "", 0
+    return run, calls
+
+
+def _change_port108(client, cfg_bind, restart_ok, rules=None):
+    """POST a panel port move 5000 -> 5077 from `cfg_bind`: (reply, ufw verbs run, fail2ban ports, 5000's rules).
+
+    Against a stand-in ufw holding `rules` (default: 5000/tcp open to everyone in both families); the
+    rules returned are 5000's after the move.
+    """
+    f2b = []
+    rules = [("5000/tcp", v6, "ALLOW", "Anywhere") for v6 in (False, True)] if rules is None else list(rules)
+    run, calls = _ufw108(rules)
+    _p9_patch(_p9_core, "run_privileged", run)
     _p9_patch(_p9_so, "ensure_panel_fail2ban", lambda log, port, wl=None: f2b.append(int(port)) or (True, "jail"))
     _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": True})
     _p9_patch(_p9_so, "restart_panel", lambda *a, **k: (True, "scheduled") if restart_ok
@@ -249,29 +308,60 @@ def _change_port108(client, cfg_bind, restart_ok):
     _p9_patch(_p9_so, "record_panel_port", lambda port: (True, ""))
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, bind_host=cfg_bind, tailscale_setup_done=True))
     r = client.post("/api/panel/change-port", json={"port": 5077, "bind_host": cfg_bind})
-    return _p9_json(r), ufw, f2b
+    return _p9_json(r), calls, f2b, sorted(x[1:] for x in rules if x[0] == "5000/tcp")
+
+
+def _opened108(calls, port):
+    """The ufw verbs that ADDED a rule for `port`."""
+    return [c for c in calls if c[0].startswith("ufw-allow") and str(port) in c[1]]
+
+
+# 5000's rules before a move whose restart fails, and so after it: the rollback puts back exactly what the
+# move's close removed. (to, v6, action, source) as the stand-in ufw keeps them.
+_KEEP108 = (
+    ("open to everyone over both families", [("5000/tcp", v6, "ALLOW", "Anywhere") for v6 in (False, True)]),
+    ("open to everyone over IPv4 only", [("5000/tcp", False, "ALLOW", "Anywhere")]),
+    ("open to everyone over IPv6 only", [("5000/tcp", True, "ALLOW", "Anywhere")]),
+    ("closed (the panel's own 'Close the panel's public port')", []),
+    ("open only from one address", [("5000/tcp", False, "ALLOW", _ONE108)]),
+    ("rate limited (LIMIT)", [("5000/tcp", v6, "LIMIT", "Anywhere") for v6 in (False, True)]),
+)
 
 
 def _panel_port108(client):
     n0 = len(_audit108("panel_restart"))
-    failed, ufw, f2b = _change_port108(client, _ANY108, False)
+    failed, calls, f2b, after = _change_port108(client, _ANY108, False)
     rows = _audit108("panel_restart")[n0:]
     check("panel port: a move whose restart could not be scheduled puts the old port's rule back after "
           "removing it, and points the login jail back at it (the panel still listens there, and UFW "
           "dropped it: nothing in the panel could then be reached to restart it)",
-          all((failed.get("success") is False, ufw[-1:] == [("open", 5000)], ("close", 5000) in ufw,
+          all((failed.get("success") is False, ("ufw-delete-allow-proto-port", ["tcp", "5000"]) in calls,
+               after == [(False, "ALLOW", "Anywhere"), (True, "ALLOW", "Anywhere")],
                f2b[-1:] == [5000], "Put the rule for 5000 back" in str(failed.get("message")),
                [r.detail.count("old rule for 5000 put back") for r in rows] == [1])),
-          repr((failed, ufw, f2b, rows)))
-    loop, ufw_l, _f = _change_port108(client, "127.0.0.1", False)
-    check("panel port: ...a loopback-bound panel (reached through Serve) gets no public rule for its old "
-          "port from that (ufw answers 0 to removing one that is not there) (control)",
-          loop.get("success") is False and ("open", 5000) not in ufw_l, repr((loop, ufw_l)))
-    done, ufw_d, f2b_d = _change_port108(client, _ANY108, True)
+          repr((failed, calls, f2b, after, rows)))
+    got = {}
+    for case, before in _KEEP108:
+        reply, calls, _f, after = _change_port108(client, _ANY108, False, before)
+        got[case] = (after == sorted(x[1:] for x in before), _opened108(calls, 5000), after, reply.get("message"))
+    check("panel port: ...and puts back exactly the rules the move removed, never one the host did not have: "
+          "a port already closed, open from one address only, or rate limited gets no public ALLOW, and an "
+          "IPv4-only (or IPv6-only) rule comes back without its other-family twin",
+          all(g[0] for g in got.values()), repr(got))
+    check("panel port: ...and a port whose rule the move did not remove gets no ufw allow at all, nor a "
+          "reply saying it was put back",
+          all(not got[c][1] and "Put the rule" not in str(got[c][3]) for c, _b in _KEEP108[3:]),
+          repr({c: got[c] for c, _b in _KEEP108[3:]}))
+    loop, calls_l, _f, after_l = _change_port108(client, "127.0.0.1", False, [])
+    check("panel port: ...a loopback-bound panel (reached through Serve) with no rule for its old port gets "
+          "none from that (ufw answers 0 to removing one that is not there) (control)",
+          loop.get("success") is False and not _opened108(calls_l, 5000) and after_l == [],
+          repr((loop, calls_l)))
+    done, calls_d, f2b_d, after_d = _change_port108(client, _ANY108, True)
     check("panel port: ...and a move whose restart was scheduled leaves the old port closed and the jail "
           "on the new one (control)",
-          all((done.get("success") is True, ("open", 5000) not in ufw_d, f2b_d == [5077])),
-          repr((done, ufw_d, f2b_d)))
+          all((done.get("success") is True, not _opened108(calls_d, 5000), after_d == [], f2b_d == [5077])),
+          repr((done, calls_d, f2b_d)))
 
 
 def _close_panel_port108(client):

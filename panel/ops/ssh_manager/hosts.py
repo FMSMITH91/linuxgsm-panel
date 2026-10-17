@@ -728,14 +728,18 @@ def _r16c_protect_refusal(g):
                                                     "removed here.")
 
 
-def remote_ufw_close_port(server, port, protocol=None, force=False):
+def remote_ufw_close_port(server, port, protocol=None, force=False, deleted=None):
     """Close a port on the remote server via UFW. With protocol=None (or 'both'/'any'),
     deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule.
 
     Unless force=True, refuses when the rule it would remove is protected (the host's only SSH
     rule, the panel's own web port), as remote_ufw_delete_rule does: `POST /firewall/close` for 22
     deleted the rule the Firewall page's x refuses. force=True is for the panel's own moves, which
-    close a port they opened themselves or one the config no longer names."""
+    close a port they opened themselves or one the config no longer names.
+
+    `deleted`, a list, is told the address families whose rule the delete really removed ("v4",
+    "v6"), from ufw's own words: the answer is whether the port is closed NOW, which is not whether
+    anything was removed (a port already closed, or open only from one address, answers True too)."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
@@ -751,9 +755,23 @@ def remote_ufw_close_port(server, port, protocol=None, force=False):
         server, verb, vargs, None if force else (lambda g: _r15a_spec_names(g, port, label)))
     if refusal:
         return False, refusal
+    if deleted is not None:
+        deleted.extend(_r30j_deleted_families(out))
     if rc != 0:
         return False, err or out or "Unknown error"
     return _r23b_closed_answer(server, port, proto, out)
+
+
+def _r30j_deleted_families(out):
+    """The address families ("v4", "v6") whose rule a by-spec `ufw delete` removed.
+
+    ufw prints "Rule deleted" for the IPv4 rule and "Rule deleted (v6)" for the IPv6 one, and "Could
+    not delete non-existent rule[ (v6)]" for a family that had none (C locale: run_privileged's;
+    measured with ufw 0.36 on Ubuntu 24.04). A delete by spec removes only its own shape, so a LIMIT
+    or a rule for one source address is never among them.
+    """
+    lines = {ln.strip() for ln in (out or "").splitlines()}
+    return [fam for fam, said in (("v4", "Rule deleted"), ("v6", "Rule deleted (v6)")) if said in lines]
 
 
 def _r23b_closed_answer(server, port, proto, out=""):
@@ -3976,6 +3994,27 @@ def _r25b_close_added_ssh_rule(server, port, added):
     elif added:
         # force: the rule step 1 added, for a port sshd may already be listening on.
         remote_ufw_close_port(server, port, "tcp", force=True)
+
+
+# Every IPv6 source, as _R25B_V4_ANYWHERE is every IPv4 one: `allow from ::/0` is an IPv6-only rule
+# listed "Anywhere (v6)".
+_R30J_V6_ANYWHERE = "::/0"
+
+
+def remote_ufw_put_back_tcp(server, port, families, comment=""):
+    """Re-add the public `port`/tcp ALLOW that remote_ufw_close_port removed, in exactly `families`.
+
+    -> (ok, msg). One rule per family, from that family's every-source network. `ufw allow proto
+    tcp to any port N` adds BOTH families on a host with IPv6 on, so an IPv4-only rule put back that
+    way also opened the port over IPv6. ufw stores the same rule the delete removed (`N/tcp ALLOW
+    Anywhere`, or its `(v6)` twin), and the same by-spec delete removes it again.
+    """
+    for fam in families:
+        ok, msg = remote_ufw_allow_from(server, _R25B_V4_ANYWHERE if fam == "v4" else _R30J_V6_ANYWHERE,
+                                        port, "tcp", comment)
+        if not ok:
+            return False, msg
+    return True, ""
 
 
 def _r23b_v6_exact_open(status_out, port):
