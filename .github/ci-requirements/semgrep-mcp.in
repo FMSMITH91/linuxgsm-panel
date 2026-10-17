@@ -11,4 +11,4 @@
 # semgrep-pins: mcp==1.29.0
 # 1.30.0 is the first release with GHSA-84m7-p3x7-pcfv fixed; below 2 because semgrep is written
 # against mcp 1.x (2.0 is a new major whose dependencies differ: mcp-types and httpx2, for two).
-mcp>=2.3.0,<3
+mcp>=1.30.0,<2
