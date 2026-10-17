@@ -109,6 +109,7 @@ def _gmod47():
             "global.window = global; global.MOUNT = ''; global.serverId = 1;\n"
             "global.toast = (m, k) => toasts.push([m, k]);\n"
             "function loadGmodContent(){ reloads++; }\n"
+            "var _r32c_gmcTimer = null;\n" + _cut47(src, "function _r32c_gmcLater(") + "\n"
             + _cut47(src, "function _gmcPost(") + "\n"
             "(async () => {\n"
             "  const out = {};\n"

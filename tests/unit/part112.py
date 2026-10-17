@@ -38,7 +38,8 @@ _name112f = "Files & Config backup card: a schedule save that failed"
 _outf112 = _js106(_name112f, _PEND109 + (
     "var serverId = 1; const seen = []; global.renderBackups = d => seen.push(d.tag);\n"
     "document.getElementById('bk-interval').value = '3'; document.getElementById('bk-keep').value = '';\n"), _SF112, (
-    "var _bkShown", "var _r30c_sfBkSaves", "function loadBackups(", "function saveBkSchedule("), (
+    "var _bkShown", "var _r30c_sfBkSaves", "function loadBackups(", "function saveBkSchedule(",
+    "function _r32c_sfBkPutBack("), (
     "  const out = {};\n"
     # a read on its way (a delete's re-read), then a save that the route refuses
     "  loadBackups(); saveBkSchedule();\n"
@@ -70,8 +71,8 @@ _outg112 = _js106(_name112g, _PEND109 + (
     "var serverId = 1; global._esc = escapeHtml; global.tfHtml = (k, v) => k;\n"
     "const el = document.getElementById('gmod-content-body');\n"
     "el.querySelector = () => null; el.querySelectorAll = () => [];\n"), _SD112, (
-    "var _r30c_gmcRunning", "function _r30c_gmcRepoll(", "function _r30c_gmcWorking(",
-    "function loadGmodContent(", "function _gmcOutcome(", "function _gmcPost("), (
+    "var _r30c_gmcRunning", "function _r30c_gmcRepoll(", "var _r32c_gmcTimer", "function _r32c_gmcLater(",
+    "function _r30c_gmcWorking(", "function loadGmodContent(", "function _gmcOutcome(", "function _gmcPost("), (
     "  const out = {};\n"
     # the card was last drawn with no job running: that is when Apply is offered
     "  loadGmodContent(); take('gmod-content').ok({games: []}); await settle();\n"

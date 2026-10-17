@@ -176,6 +176,8 @@ def _status110(client):
     _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: (plain, "", 0)
               if verb == "ufw-status" else ("", "p110: unexpected verb", 1))
     _p9_patch(_rv110, "_r26b_sshd_ports", lambda remote: [])
+    # The status reads sshd's ports itself now (review 1017c): ssh.socket answers nothing here.
+    _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))
     _saved_port110(5077)
     got = {}
     for case, bound in (("bound 5000", 5000), ("no bound port", None)):
@@ -400,7 +402,7 @@ def _report_privilege110():
         got[source] = ("\n".join(res.lines), "\n".join(res.page_lines))
     check("debug report: the Recent log's source line in the file is the same for the helper and for a "
           "panel running as root ('read directly' named the privilege model in a public attachment)",
-          all("system journal (privileged read)" in f and "read directly" not in f and "helper" not in f
+          all("- **Source**: system journal · " in f and "read directly" not in f and "helper" not in f
               for f, _p in got.values()), repr(got))
     check("debug report: ...and which privileged read it was is on the page only",
           "read directly" in got["root"][1] and "via the privileged helper" in got["helper"][1], repr(got))

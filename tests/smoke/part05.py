@@ -3065,8 +3065,11 @@ check("account page: the mint form asks for the password",
       'name="password"' in _acct.split("api-token/generate", 1)[1][:800],
       "the form posts with nothing but the session")
 _bare = c.post("/account/api-token/generate", follow_redirects=True)
+# ...and is refused, not crashed: the token's absence alone also read true on an error page, and the
+# audit-row check below misses a crash after the refusal is logged (review 1017c lead).
 check("api token: a POST with no password mints nothing",
-      _re_as.search(r"(lgsm_[0-9a-f]{48})", _bare.get_data(as_text=True) or "") is None,
+      _bare.status_code == 200
+      and _re_as.search(r"(lgsm_[0-9a-f]{48})", _bare.get_data(as_text=True) or "") is None,
       "status=%d" % _bare.status_code)
 # ...and the refusal is RECORDED. log_action fired on the mint alone, so the one thing this
 # gate produces that is worth watching — somebody in a borrowed session trying passwords

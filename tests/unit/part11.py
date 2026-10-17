@@ -906,10 +906,14 @@ try:
     # On an active firewall (the close reads it first: an inactive UFW filters nothing). Read
     # again afterwards: success is port 22 off, never the deletes' exit codes (review 1015d).
     _active11 = ("Status: active\n\nTo  Action  From\n--  ------  ----\n22/tcp  ALLOW  Anywhere\n", "", 0)
-    _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-status": [_active11, _NO_RULES]})
+    # sshd's own ports answered (`sshd -T`): the close acts on what sshd serves (review 1017c).
+    _sshd22_11 = ("port 22\n", "", 0)
+    _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-status": [_active11, _NO_RULES],
+                 "sshd-effective-config": _sshd22_11})
     eq("ufw close port 22: removes the 22/tcp allow", _H.remote_ufw_close_port_22(_p8_srv()),
-       (True, "Port 22 rule removed from UFW"))
-    _wire(verbs={"ufw-delete-allow-port": ("", "", 1), "ufw-status": _active11})
+       (True, "Public SSH rules removed from UFW (port 22)"))
+    _wire(verbs={"ufw-delete-allow-port": ("", "", 1), "ufw-status": _active11,
+                 "sshd-effective-config": _sshd22_11})
     eq("ufw close port 22: a failure still says it failed, naming the rule left",
        _H.remote_ufw_close_port_22(_p8_srv()),
        (False, "Port 22 is still open to the public: connections meet `22/tcp  ALLOW  Anywhere` first — "

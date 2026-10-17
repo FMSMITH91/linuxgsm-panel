@@ -2250,6 +2250,15 @@ _r25j_panel_port_to_record() {
     _cfg="$(_r26a_cfg_port)" || _cfg=""
     _r25j_is_panel_port "${_cfg}" || _cfg=""
     _owner_uid="$(stat -c '%u' "${PANEL_DIR}" 2>/dev/null)" || _owner_uid=""
+    # A panel still RUNNING on the recorded port keeps it. config.json's port is the next start's:
+    # after a port change whose restart could not be scheduled the panel put the record back on the
+    # port it still serves, and a re-run that updates nothing (no restart) wrote config.json's over
+    # it, so the helper refused Serve for the port the panel listened on. The full update stops
+    # the panel before this runs, and its restart binds config.json's, which is then taken.
+    if [[ -n "${_prev}" ]] && [[ -n "${_cfg}" ]] && [[ "${_cfg}" != "${_prev}" ]] && [[ -n "${_owner_uid}" ]] \
+            && _r32a_owner_listens "${_prev}" "${_owner_uid}" && ! _r32a_owner_listens "${_cfg}" "${_owner_uid}"; then
+        echo "${_prev}"; return 0
+    fi
     if [[ -n "${_cfg}" ]] && { [[ "${_cfg}" == "${_prev}" ]] \
             || { [[ -n "${_owner_uid}" ]] && ! _r25j_port_held_by_other "${_cfg}" "${_owner_uid}"; }; }; then
         echo "${_cfg}"
@@ -2288,6 +2297,29 @@ for path in ("/proc/net/tcp", "/proc/net/tcp6"):
             except ValueError:
                 pass  # a malformed row names no socket
 sys.exit(0 if (not read or uids - {owner}) else 1)
+PYEOF
+}
+
+# Whether uid $2 itself holds a TCP LISTEN socket on port $1 (unreadable counts as no: the answer
+# then is config.json's port, as before this was asked). From the same kernel tables.
+_r32a_owner_listens() {
+    python3 -I - "$1" "$2" <<'PYEOF'
+import sys
+port, owner = int(sys.argv[1]), int(sys.argv[2])
+for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+    try:
+        with open(path, encoding="ascii", errors="replace") as fh:
+            rows = fh.read().splitlines()[1:]
+    except OSError:
+        continue
+    for row in rows:
+        f = row.split()
+        try:
+            if len(f) >= 8 and f[3] == "0A" and int(f[1].rsplit(":", 1)[1], 16) == port and int(f[7]) == owner:
+                sys.exit(0)
+        except ValueError:
+            continue  # a malformed row names no socket
+sys.exit(1)
 PYEOF
 }
 

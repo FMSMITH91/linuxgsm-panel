@@ -1732,6 +1732,12 @@ def _power_guard_checks41():
           "(control)", not _POWER41.search("${RB_SUDO} reboot\n${UPG_SUDO} reboot"))
 
 
+# The directory the look's lock is taken on: the filesystem root, the one directory every run on the
+# machine shares (review 1017c lead: the temp directory was, and two runs started with different TMPDIRs
+# each took a lock of their own and looked at once).
+_R32D_LOCK41 = os.sep
+
+
 def _probe_alone41(wait=120.0):
     """Take the machine-wide lock for a look at the process table; whether it was taken in `wait` s.
 
@@ -1739,17 +1745,16 @@ def _probe_alone41(wait=120.0):
     'tmux: server'. Two runs of this suite at once (CI runs it as the runner and as root side by
     side, tests1015b; agents on a dev box run it concurrently too) would each see the other's
     stand-in: an idle look that reads busy fails the idle control, or skips the busy checks. So
-    the look is taken alone: an exclusive flock on the temp directory itself, which every run on
-    the machine can open whoever it runs as, and which leaves nothing behind. Released when the
-    descriptor closes (_session_probe_checks41).
+    the look is taken alone: an exclusive flock on the filesystem root (_R32D_LOCK41), which every run
+    on the machine can open whoever it runs as and whatever its TMPDIR, and which leaves nothing behind.
+    Released when the descriptor closes (_session_probe_checks41).
 
     The lock covers only this section's 'tmux: server'. Parts 58/62/65/67 run stand-in scripts
     named `tmux`, which the probe's `pgrep -x '…|tmux|…'` matches too while one runs, for a few
     milliseconds; the idle reads are taken again to see past one of those (_steady41).
     """
     import fcntl as _fcntl41
-    import tempfile as _tempfile41
-    fd = os.open(_tempfile41.gettempdir(), os.O_RDONLY)
+    fd = os.open(_R32D_LOCK41, os.O_RDONLY)
     deadline = _time41.monotonic() + wait
     while True:
         try:
@@ -1777,8 +1782,7 @@ _HOLD41 = ("import fcntl, os, sys, time; fd = os.open(sys.argv[1], os.O_RDONLY);
 def _probe_lock_control41():
     """(the holder held it, taken while it did, taken once it is gone): (True, False, True)."""
     import select as _select41
-    import tempfile as _tempfile41
-    holder = _popen41([sys.executable, "-c", _HOLD41, _tempfile41.gettempdir()],
+    holder = _popen41([sys.executable, "-c", _HOLD41, _R32D_LOCK41],
                       stdout=-1, text=True)     # -1: subprocess.PIPE
     try:
         held = (bool(_select41.select([holder.stdout], [], [], 125)[0])
@@ -1802,7 +1806,7 @@ def _session_probe_checks41():
     try:
         check("game-session probe: the look at this machine's processes is taken alone (no other "
               "run of this suite has its 'tmux: server' stand-in up meanwhile)", alone,
-              "the lock on the temp directory was not free within 120 s")
+              "the lock on / was not free within 120 s")
         _session_probe_body41()
     finally:
         os.close(fd)

@@ -1,5 +1,6 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
+import contextvars
 import functools
 import ipaddress as _ipaddress
 import re
@@ -1983,16 +1984,37 @@ def _r31b_own_update_rc(server):
         "helper" if getattr(server, "is_local", False) else "remote")
 
 
+def _r32b_own_job_ended(server):
+    """Whether the panel's own OS-update job has ended: True, False (still running), None (unread).
+
+    os-update-own-running answers 0 (running) or 1 (not). A panel-host helper older than that verb
+    ("unknown_verb") never will, so there apt-upgrade-running answers instead, the start gate's
+    probe and what the job runs: unread forever would have reported every finished update on such a
+    host as a lost contact. Anything else is no answer.
+    """
+    own = _r31b_own_update_rc(server)
+    if own == "unknown_verb":
+        own = _core.run_privileged(server, "apt-upgrade-running", [], timeout=10, merge_stderr=False)[2]
+    return {0: False, 1: True}.get(own)
+
+
 def _r31b_finished(server, log):
     """remote_os_update_status's answer when `log` ends in the job's sentinel, else None."""
     m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
     if m is None:
         return None
-    if _r31b_own_update_rc(server) == 0:
+    own = _r32b_own_job_ended(server)
+    if own is False:
         # The sentinel is the LAST thing the job writes, so with the job still running it is the
         # previous run's: the new job has not truncated the log yet (it is only just starting).
         # Read as finished, the popup said "Updates installed." for a run that had just begun.
         return {"running": True, "done": False, "rc": None, "log": ""}
+    if own is None:
+        # No answer is not "the job has ended". This read anything but 0 as ended, so a probe that
+        # did not run (rc -1 from the Tailscale and local transports, an SSH blip) in that same
+        # window painted "Updates installed." from the previous run's sentinel and stopped watching.
+        # Unread: the popup counts it as a miss and keeps polling.
+        return {"running": None, "done": False, "rc": None, "log": "", "unread": True}
     log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
     return {"running": False, "done": True, "rc": int(m.group(1)), "log": log}
 
@@ -3046,7 +3068,7 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     _running, _ssh_enabled = _tailscale_conn_state(server)
     if not _ssh_enabled:
         return None, ("Tailscale is running on this host, but its SSH server is not enabled, so "
-                      "the panel would have no way back in once port 22 is closed. Run "
+                      "the panel would have no way back in once public SSH is closed. Run "
                       "`tailscale set --ssh` on the host, then try again.")
     _login_ok, _login_msg = ssh_test_connection(new_host, 22, server.username,
                                                 auth_method="tailscale")
@@ -3087,50 +3109,62 @@ def remote_tailscale_finalize(server):
 
 
 def remote_ufw_close_port_22(server):
-    """Remove port 22/tcp UFW rule (safe if Tailscale SSH is active).
+    """Remove the public UFW rules for every port sshd serves (safe if Tailscale SSH is active).
 
     Only on a firewall that is on: with UFW inactive (or unread) this answered "Port 22 rule removed
     from UFW", true of the stored rules, while nothing filtered port 22 and it stayed open.
     remote_set_public_ssh refuses the same state with the same words.
+
+    Every port sshd serves, not 22: after the panel's own port move (change_ssh_port) the port the
+    public reaches sshd on is the new one, and closing only 22 answered "removed" with SSH still open
+    to the internet on it (_r32b_public_ssh_ports has the details). Refused when those ports cannot
+    be read, rather than closing a guessed 22.
     """
     state = remote_public_ssh_status(server)
     if state.get("unreachable"):
-        return False, ("Could not read this host's firewall, so port 22 was not closed — check the "
+        return False, ("Could not read this host's firewall, so public SSH was not closed — check the "
                        "host and try again.")
     if not state.get("active"):
         return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
-                       "here — port 22 is governed by whatever else is in front of it.")
-    _r15c_delete_port_22(server)
+                       "here — the SSH port is governed by whatever else is in front of it.")
+    ports = state.get("ssh_ports") or []
+    if not ports:
+        return False, _R32B_PORTS_UNREAD
+    _r15c_delete_port_22(server, ports)
     # ASK THE HOST, as remote_set_public_ssh(..., "off") does. This answered from the delete's exit
     # code, and ufw exits 0 deleting a rule that is not there ("Could not delete non-existent
     # rule", measured on the test VPS). Every host the panel bootstrapped holds SSH open with
     # `22/tcp LIMIT`, which no `delete allow` matches, so "Close Port 22" said "Port 22 rule removed
     # from UFW", wrote a success audit row, and left port 22 open to the internet.
     after = remote_public_ssh_status(server)
-    if after.get("unreachable"):
-        return False, ("Could not read this host's firewall afterwards, so whether public SSH "
-                       "changed is unknown — check the host and try again.")
-    if not after.get("active"):
-        return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
-                       "here — port 22 is governed by whatever else is in front of it.")
+    refused = _r32b_after_refusal(after)
+    if refused is not None:
+        return False, refused
     if after.get("mode") != "off":
         # The rule still in the way is one the panel does not remove: a port list, a destination,
         # an every-port allow. Named, so the operator can find it on the Firewall page.
-        return False, i18n.Sentence("Port 22 is still open to the public: connections meet `{rule}` first — "
-                                    "remove or narrow that rule.", rule=after.get("rule") or "?")
-    return True, "Port 22 rule removed from UFW"
+        return False, i18n.Sentence("Port {port} is still open to the public: connections meet `{rule}` first — "
+                                    "remove or narrow that rule.", port=after.get("rule_port") or "?",
+                                    rule=after.get("rule") or "?")
+    return True, i18n.Sentence("Public SSH rules removed from UFW (port {ports})",
+                               ports=", ".join(str(p) for p in ports))
 
 
-
-def _r15c_delete_port_22(server):
-    """Delete every public rule the panel knows opens 22/tcp, unchecked; the caller reads back.
+def _r15c_delete_port_22(server, ports=None):
+    """Delete every public rule the panel knows opens SSH, unchecked; the caller reads back.
 
     Also the Tailscale migration's last step, which has proved its own way back in and removes the
     stored rules whether or not UFW is on. It deleted only `allow 22/tcp`, so a bootstrapped host
     (`22/tcp LIMIT`) kept its public door after a migration that said it closed it. Exit codes are
     not read: ufw answers 0 for a rule that was never there, so they say nothing either way.
+
+    `ports`: the SSH ports to close (_r32b_public_ssh_ports). Read here when not given, and 22 when
+    that read fails: the migration, which closes behind a proven tailnet login, closed 22 before
+    this read existed, and closing less than it did is not what an unread port list should do.
     """
-    for verb, vargs in _R23B_SSH22_DELETES:
+    if ports is None:
+        ports = _r32b_public_ssh_ports(server)[1] or [22]
+    for verb, vargs in _r32b_ssh_rule_steps(ports, "off"):
         _core.run_privileged(server, verb, vargs, timeout=15)
 
 
@@ -4088,6 +4122,63 @@ def _r26j_remote_has_ip(server, addr):
     return (want in have) if have else None
 
 
+# The running SSH port move's record of what it changed, for _r32b_undo_on_raise: per greenlet (each
+# request runs in its own), so two moves on two hosts never share one.
+_R32B_MOVE_UNDO = contextvars.ContextVar("r32b_move_undo", default=None)
+
+
+def _r32b_undo_on_raise(move):
+    """Wrap change_ssh_port: a step that RAISES undoes what the move had changed, then raises on.
+
+    Every failure the move can SEE reverts itself (_revert). A transport that raises instead
+    (paramiko does, mid-step) left the step-1 allow for the new port in UFW, and from step 2 on a
+    changed drop-in, with the route answering only "failed": a firewall more open than before for a
+    port nothing may be serving. Undone best effort; a move that succeeded clears its record first.
+    """
+    @functools.wraps(move)
+    def _wrapped(server, new_port, bind_addr=""):
+        undo = {}
+        token = _R32B_MOVE_UNDO.set(undo)
+        try:
+            return move(server, new_port, bind_addr)
+        except Exception:
+            if undo:
+                _r32b_undo_ssh_move(server, undo)
+            raise
+        finally:
+            _R32B_MOVE_UNDO.reset(token)
+    return _wrapped
+
+
+def _r32b_move_undo():
+    """The running move's undo record (a scratch dict when change_ssh_port's body runs unwrapped)."""
+    undo = _R32B_MOVE_UNDO.get()
+    return {} if undo is None else undo
+
+
+def _r32b_undo_ssh_move(server, undo):
+    """change_ssh_port's _revert, for a step that RAISED, in its order: each part best effort."""
+    restore = undo.get("restore")
+    if restore:
+        _r32b_quietly(server, _core.run_privileged, server, restore, [], timeout=10, merge_stderr=False)
+        if undo.get("socket"):
+            _r32b_quietly(server, _core.run_privileged, server, "systemd-daemon-reload", [], timeout=20,
+                          merge_stderr=False)
+    _r32b_quietly(server, _r25b_close_added_ssh_rule, server, undo["port"], undo["added"])
+    if restore:
+        _r32b_quietly(server, _restart_ssh_listener, server, undo.get("socket"))
+
+
+def _r32b_quietly(server, fn, *args, **kw):
+    """fn(*args, **kw) for _r32b_undo_ssh_move: a raise is logged, never passed on (one is in flight)."""
+    try:
+        fn(*args, **kw)
+    except Exception:
+        _core._log.warning("ssh port move: undoing a step that raised also failed on %s",
+                           getattr(server, "name", "?"), exc_info=True)
+
+
+@_r32b_undo_on_raise
 def change_ssh_port(server, new_port, bind_addr=""):
     """Move this host's sshd onto `new_port`, optionally restricting it to a single `bind_addr` IP
     (for hosts with several IPs), WITHOUT risking a lockout.
@@ -4104,6 +4195,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
     back automatically; the operator must include the address the panel connects on.
 
     Works for a remote (over SSH) and the panel host itself. Returns (ok, message)."""
+    undo = _r32b_move_undo()
     try:
         new_port = int(new_port)
     except (TypeError, ValueError, OverflowError):
@@ -4260,6 +4352,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
     _ufw_added, _ufw_refused = _open_ssh_port_rule(server, new_port, _way_in)
     if _ufw_refused:
         return False, _ufw_refused
+    undo.update(port=new_port, added=_ufw_added, socket=socket_mode)
 
     # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
     #    then write the new one. Ubuntu 22.04/24.04 Include /etc/ssh/sshd_config.d/*.conf by default.
@@ -4269,6 +4362,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if socket_mode else
         ("sshd-backup-dropin", "sshd-restore-dropin", "sshd-discard-backup", "sshd-port-dropin"))
     _core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False)
+    undo["restore"] = _restore_verb     # a snapshot exists now: a raise from here restores it
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
               "# from the panel's Firewall page once you've confirmed the new port works.\n")
     if socket_mode:
@@ -4367,6 +4461,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
 
     _core.run_privileged(server, _discard_verb, [], timeout=10,
                    merge_stderr=False)   # success — drop the snapshot
+    undo.clear()                         # ...and the move stands: nothing below is a reason to undo it
     if _f2b == "updated":
         _done = i18n.Sentence("firewall + fail2ban updated")
     elif _f2b == "absent":
@@ -4400,19 +4495,132 @@ def change_ssh_port(server, new_port, bind_addr=""):
 _SSH22_SHADOWING = (("ufw-delete-allow-app", ["OpenSSH"]), ("ufw-delete-allow-port", ["22"]))
 
 
-# Every rule shape that opens 22/tcp to the public which the panel removes by spec: the 22/tcp ALLOW,
-# the 22/tcp LIMIT a panel bootstrap leaves (hosts' step 5), and the OpenSSH profile and bare 22 that
-# Ubuntu's own setup leaves. Each family goes with its rule: ufw deletes the (v6) twin of a spec too.
-_R23B_SSH22_DELETES = ((("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"]))
-                       + _SSH22_SHADOWING)
-
-
 _R22B_OPENNESS = {"off": 0, "limit": 1, "allow": 2}
 
 
+# The Public SSH card's refusal when it cannot tell which ports sshd serves (_r32b_public_ssh_ports).
+_R32B_PORTS_UNREAD = ("Could not read which port sshd serves on this host, so public SSH was not changed — "
+                      "check the host and try again.")
+_R32B_PORTS_UNREAD_AFTER = ("Could not read which port sshd serves on this host afterwards, so whether public "
+                            "SSH changed is unknown — check the host and try again.")
+
+
+def _r32b_after_refusal(state):
+    """What a public-SSH change says when the read-back cannot say what it did, else None.
+
+    "I could not read the firewall" is not "UFW is not active" — both refuse, but only one of them
+    is a fact about the host, and the other message sends the operator to check a setting that may
+    be fine. Nor is an unread port list "off".
+    """
+    if state.get("unreachable"):
+        return ("Could not read this host's firewall afterwards, so whether public SSH changed is "
+                "unknown — check the host and try again.")
+    if not state.get("active"):
+        return ("UFW is not active on this host, so public SSH cannot be controlled from here — the "
+                "SSH port is governed by whatever else is in front of it.")
+    return _R32B_PORTS_UNREAD_AFTER if state.get("ports_unread") else None
+
+
+def _r32b_dial_port(server):
+    """The port the panel dials sshd on, as an int, or None when the panel does not dial sshd.
+
+    None on the panel's own host (it does not SSH to itself) and on a Tailscale-SSH host, where the
+    stored port is tailscaled's 22 whatever sshd serves (sshd_listen_ports says why).
+    """
+    if _core.is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
+        return None
+    try:
+        port = int(getattr(server, "port", 22) or 22)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+def _r32b_public_ssh_ports(server):
+    """(sshd's own ports, the ports the Public SSH card manages): ints in sshd's order, [] when unread.
+
+    The card and its actions acted on port 22 whatever sshd served. After the panel's own move
+    (change_ssh_port, which tells the operator to close the old port) sshd answered on 2222, the
+    card reported "disabled — tailnet only" from 22's rules while 2222 stayed open to the internet,
+    and Limit / Disable / Close changed 22 alone. These are the ports sshd really serves
+    (sshd_listen_ports: ssh.socket's while it holds the socket, else `sshd -T`'s), plus the one the
+    panel dials it on, as _bootstrap_ssh_ports does: under socket activation an unread systemd falls
+    back to `sshd -T`, which names sshd_config's Port and not the socket's. Not on a host the panel
+    does not dial sshd on (_r32b_dial_port): there an unread sshd leaves [], and the card refuses
+    rather than act on a guessed 22.
+    """
+    try:
+        sshd = sshd_listen_ports(server)
+    except Exception:
+        _core._log.debug("public SSH: sshd's ports could not be read", exc_info=True)
+        sshd = []
+    dial = _r32b_dial_port(server)
+    return sshd, sshd + ([dial] if dial and dial not in sshd else [])
+
+
+# Public SSH's allow/limit: (the add that gates, the other action's delete), per port.
+_R32B_SET_VERBS = {"allow": ("ufw-allow-port", "ufw-delete-limit-port"),
+                   "limit": ("ufw-limit-port", "ufw-delete-allow-port")}
+
+
+def _r32b_ssh_rule_steps(ports, mode):
+    """The ufw steps that set public SSH on `ports` to `mode`: (gates, then the rest), flattened for "off".
+
+    allow/limit: the adds for every port come first and are the gate (remote_set_public_ssh runs the
+    rest only once all of them took); then the other action's rule for each port and the rules that
+    shadow it. off: every port's ALLOW and LIMIT, and the shadowing rules.
+    """
+    specs = ["%d/tcp" % int(p) for p in ports]
+    if mode in _R32B_SET_VERBS:
+        add, drop = _R32B_SET_VERBS[mode]
+        extra = [""] if add == "ufw-allow-port" else []     # ufw-allow-port's (empty) comment
+        return ([(add, [sp] + extra) for sp in specs],
+                [(drop, [sp]) for sp in specs] + _r32b_shadowing(ports))
+    return ([("ufw-delete-allow-port", [sp]) for sp in specs]
+            + [("ufw-delete-limit-port", [sp]) for sp in specs] + _r32b_shadowing(ports))
+
+
+def _r32b_shadowing(ports):
+    """The deletes of the rules that open `ports` without being `N/tcp` to ufw (_SSH22_SHADOWING's).
+
+    The OpenSSH profile is port 22's alone (ufw's profile fixes it), so it goes only when 22 is one
+    of `ports`; a bare `N` (any protocol) is removed for every port, as `22` was.
+    """
+    nums = [int(p) for p in ports]
+    return ([("ufw-delete-allow-app", ["OpenSSH"])] if 22 in nums else []) + \
+        [("ufw-delete-allow-port", [str(n)]) for n in nums]
+
+
+def _r32b_run_gates(server, gates):
+    """Run every gating add in turn; at the first refused one stop: "<spec>: <ufw's words>", else None."""
+    for verb, vargs in gates:
+        out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
+        if rc != 0:
+            # The spec that failed, then ufw's own words (host text, not translated).
+            return "%s: %s" % (vargs[0], (err or out or "exit %s" % rc).replace("\n", " ").strip()[:160])
+    return None
+
+
+def _r32b_public_mode(out, ports):
+    """(mode, first rule, its port) of public SSH across `ports`: the most open port's answer.
+
+    One port's answer is its first public rule in each family (_r22b_first_rules), the more open one
+    standing; across ports the same, since public SSH is as open as its most open door.
+    """
+    first, mode, at = None, "off", None
+    for port in ports:
+        for f in _r22b_first_rules(out, port, "tcp"):
+            m = {"LIMIT": "limit", "ALLOW": "allow"}.get(f["action"], "off") if f else "off"
+            if first is None or _R22B_OPENNESS[m] > _R22B_OPENNESS[mode]:
+                first, mode, at = f, m, port
+    return mode, first, at
+
+
 def remote_public_ssh_status(server, panel_port=None):
-    """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
-    reachable only over tailscale0), plus whether UFW is active at all. When
+    """Report public SSH state: 'allow', 'limit', or 'off' (no rule — reachable only over
+    tailscale0), plus whether UFW is active at all, on every port sshd serves (`ssh_ports`,
+    _r32b_public_ssh_ports; sshd's own as `sshd_ports`). An unread port list is mode 'unknown'
+    with `ports_unread`. When
     `panel_port` is given, also report whether that port has a public ALLOW rule
     (`panel_port_open`) so the UI can disable "Close public panel port" once it's
     already closed. `panel_port` may be a list of the panel's ports (the one it serves
@@ -4420,6 +4628,7 @@ def remote_public_ssh_status(server, panel_port=None):
     while any of them is, as Close closes them all."""
     ports = _r31a_port_list(panel_port)
     panel_port = ports[0] if ports else None
+    sshd_ports, ssh_ports = _r32b_public_ssh_ports(server)
     # rc, and an answer at all — do not describe a firewall you could not read. (This required
     # the literal "Status:" line, as firewall.remote_ufw_status does; ufw translates that line
     # whole, so a French host — `État : actif` — read as unreachable and _ufw_is_active's
@@ -4444,6 +4653,7 @@ def remote_public_ssh_status(server, panel_port=None):
     else:
         res = None
     if res is not None:
+        res.update(ssh_ports=ssh_ports, sshd_ports=sshd_ports)
         if panel_port:
             res["panel_port"] = int(panel_port)
             res["panel_port_open"] = False
@@ -4470,11 +4680,12 @@ def remote_public_ssh_status(server, panel_port=None):
     # success with every connection still meeting that rule.
     # Each family read on its own, and the more open answer stands: a `(v6)` ALLOW above the v6
     # LIMIT is public SSH unthrottled for every IPv6 client, whatever the IPv4 list says.
-    first, mode = None, "off"
-    for f in _r22b_first_rules(out, 22, "tcp"):
-        m = {"LIMIT": "limit", "ALLOW": "allow"}.get(f["action"], "off") if f else "off"
-        if first is None or _R22B_OPENNESS[m] > _R22B_OPENNESS[mode]:
-            first, mode = f, m
+    # And every port sshd serves, the most open one standing (_r32b_public_mode): 22 alone read
+    # "off" on a host whose sshd the panel had moved to 2222, with 2222 open to the internet.
+    if ssh_ports:
+        mode, first, first_port = _r32b_public_mode(out, ssh_ports)
+    else:
+        mode, first, first_port = "unknown", None, None
     panel_open = False
     for line in (out or "").splitlines():
         # A rule that holds the panel port open to the public, read the way the close route
@@ -4487,10 +4698,13 @@ def remote_public_ssh_status(server, panel_port=None):
         # (Parsed, not searched for the number first: a range `4000:6000` never contains "5000".)
         if panel_port and _r31a_holds_any_open(line, ports):
             panel_open = True
-    res = {"active": active, "mode": mode}
+    res = {"active": active, "mode": mode, "ssh_ports": ssh_ports, "sshd_ports": sshd_ports}
+    if not ssh_ports:
+        res["ports_unread"] = True
     if first:
         # The row itself, so a change that could not take (remote_set_public_ssh) names it.
         res["rule"] = first["detail"]
+        res["rule_port"] = first_port
     if panel_port:
         res["panel_port"] = int(panel_port)
         res["panel_port_open"] = panel_open
@@ -4726,24 +4940,24 @@ def _r28b_resolve(host):
         return []
 
 
-def _r28b_panel_dials_public_22(server):
-    """True when the panel's OWN connection to `server` comes in through its public port-22 rules.
+def _r32b_panel_dials_public(server):
+    """True when the panel's OWN connection to `server` comes in through its public SSH rules.
 
-    The "off"/close-22 gate asks only whether the OPERATOR has a Tailscale way back in. A key or
-    password host the panel reaches at a public address on port 22 passed it, and removing the
-    public 22/tcp rules dropped the panel's next connection (the one open now survives as
-    established, so the read-back still said it worked): the host read unreachable from then on.
-    Not the panel host (it does not SSH), a Tailscale-SSH host (tailscaled answers on the tailnet),
-    or a host the panel dials on another port. A name is resolved here: a tailnet name passes, and
-    one that does not resolve counts as public, the side that keeps the rule.
+    The "off"/close gate asks only whether the OPERATOR has a Tailscale way back in. A key or
+    password host the panel reaches at a public address passed it, and removing the public SSH
+    rules dropped the panel's next connection (the one open now survives as established, so the
+    read-back still said it worked): the host read unreachable from then on.
+    Not the panel host (it does not SSH), a Tailscale-SSH host (tailscaled answers on the tailnet).
+    A name is resolved here: a tailnet name passes, and one that does not resolve counts as public,
+    the side that keeps the rule.
+
+    Whatever port it dials: this was "port 22 only" while "off" removed 22 alone, and "off" now
+    removes the rules for every port sshd serves AND the one the panel dials (_r32b_public_ssh_ports),
+    so the panel's port is always among them — and a dial port sshd does not list is a forward to
+    one that it does, whose rule goes too.
     """
     if _core.is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
         return False
-    try:
-        if int(getattr(server, "port", 22) or 22) != 22:
-            return False
-    except (TypeError, ValueError, OverflowError):
-        return True
     return not _r28b_host_on_tailnet((getattr(server, "host", "") or "").strip().strip("[]"))
 
 
@@ -4762,35 +4976,34 @@ def _r28b_tailnet_addr(a):
 
 
 def _r28b_panel_way_in_refusal(server):
-    """The refusal for removing public port 22 while the panel itself comes in through it, else None."""
-    if not _r28b_panel_dials_public_22(server):
+    """The refusal for removing public SSH while the panel itself comes in through it, else None."""
+    if not _r32b_panel_dials_public(server):
         return None
-    return i18n.Sentence("Refused — the panel itself connects to this host at {host} on port 22 through the public "
-                         "SSH rule, so removing it would cut the panel off. Move this host to Tailscale SSH (or "
-                         "point it at its Tailscale address) first.", host=getattr(server, "host", ""))
+    return i18n.Sentence("Refused — the panel itself connects to this host at {host} on port {port} through the "
+                         "public SSH rule, so removing it would cut the panel off. Move this host to Tailscale SSH "
+                         "(or point it at its Tailscale address) first.", host=getattr(server, "host", ""),
+                         port=getattr(server, "port", "") or 22)
 
 
 def remote_set_public_ssh(server, mode):
-    """Control PUBLIC (non-tailnet) SSH on port 22 via UFW:
-      allow → `ufw allow 22/tcp`  (open to the internet)
-      limit → `ufw limit 22/tcp`  (rate-limited brute-force protection; recommended)
+    """Control PUBLIC (non-tailnet) SSH via UFW, on every port sshd serves (_r32b_public_ssh_ports):
+      allow → `ufw allow N/tcp`  (open to the internet)
+      limit → `ufw limit N/tcp`  (rate-limited brute-force protection; recommended)
       off   → remove the allow/limit rules (SSH only via the tailscale0 interface)
     tailscale0 SSH is unaffected either way. `off` is REFUSED unless there is a working
     Tailscale path back in (Tailscale running + SSH enabled or the tailscale0 interface
-    allowed in UFW) — otherwise it would strand you with no way to reach the host."""
+    allowed in UFW) — otherwise it would strand you with no way to reach the host. Every
+    mode is refused when sshd's ports cannot be read: a guessed 22 is the bug this replaced."""
     mode = (mode or "").lower()
+    if mode not in ("allow", "limit", "off"):
+        return False, "Invalid mode"
     # The new rule goes in FIRST: ufw rewrites a rule that differs only in its action where it
     # stands (`ufw limit 22/tcp` turns `22/tcp ALLOW` into `22/tcp LIMIT` in place), so there is
-    # no moment with nothing letting SSH in. Then everything else that would match port 22 AHEAD
+    # no moment with nothing letting SSH in. Then everything else that would match the port AHEAD
     # of it goes — `ufw allow OpenSSH` and a bare `ufw allow 22` are how most Ubuntu hosts opened
     # SSH, neither is the same rule as `22/tcp` to ufw, and whichever sorts first is the one a
     # connection meets. Leaving them made 'limit' a rule nothing ever reached.
-    _shadowing = list(_SSH22_SHADOWING)
-    if mode == "allow":
-        steps = [("ufw-allow-port", ["22/tcp", ""]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
-    elif mode == "limit":
-        steps = [("ufw-limit-port", ["22/tcp"]), ("ufw-delete-allow-port", ["22/tcp"])] + _shadowing
-    elif mode == "off":
+    if mode == "off":
         running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
         if not (running and (ssh_enabled or iface_allowed)):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
@@ -4799,23 +5012,22 @@ def remote_set_public_ssh(server, mode):
         _cut = _r28b_panel_way_in_refusal(server)
         if _cut is not None:
             return False, _cut
-        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
+    ports = _r32b_public_ssh_ports(server)[1]
+    if not ports:
+        return False, _R32B_PORTS_UNREAD
+    if mode == "off":
+        gates, steps = [], _r32b_ssh_rule_steps(ports, "off")
     else:
-        return False, "Invalid mode"
+        gates, steps = _r32b_ssh_rule_steps(ports, mode)
     # ...but only once it IS in. The loop below ignores every exit code, because a delete's says
     # nothing (ufw exits 0 for a rule that is not there, and non-zero for a held lock) — and it ignored the add's too, so when `ufw limit 22/tcp`
     # failed (a timeout, a held lock) it went on to delete the OpenSSH and bare-22 allows anyway,
     # and a host opened only by `ufw allow OpenSSH` was left with nothing letting SSH in. The
     # read-back below reported the failure after the lockout. The add is the gate: if it fails,
-    # nothing that lets SSH in is removed.
-    gate_err = None
-    if mode in ("allow", "limit"):
-        _g_out, _g_err, _g_rc = _core.run_privileged(server, steps[0][0], steps[0][1], timeout=15)
-        if _g_rc != 0:
-            gate_err = ((_g_err or _g_out or "exit %s" % _g_rc).replace("\n", " ").strip()[:160])
-            steps = []
-        else:
-            steps = steps[1:]
+    # nothing that lets SSH in is removed. Every port's add, before any delete.
+    gate_err = _r32b_run_gates(server, gates)
+    if gate_err:
+        steps = []
     for verb, vargs in steps:
         _core.run_privileged(server, verb, vargs, timeout=15)  # deletes of absent rules are harmless
     labels = {"allow": i18n.Sentence("open (allow)"), "limit": i18n.Sentence("rate-limited"),
@@ -4826,26 +5038,22 @@ def remote_set_public_ssh(server, mode):
     # internet. The exit codes cannot answer it either: ufw exits 0 deleting a rule that is not
     # there ("Could not delete non-existent rule"), so a delete's rc never says a rule went.
     state = remote_public_ssh_status(server)
-    # "I could not read the firewall" is not "UFW is not active" — both refuse, but only one of
-    # them is a fact about the host, and the other message sends the operator to check a setting
-    # that may be fine.
-    if state.get("unreachable"):
-        return False, ("Could not read this host's firewall afterwards, so whether public SSH "
-                       "changed is unknown — check the host and try again.")
-    if not state.get("active"):
-        return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
-                       "here — port 22 is governed by whatever else is in front of it.")
+    refused = _r32b_after_refusal(state)
+    if refused is not None:
+        return False, refused
     if state.get("mode") != mode:
         return False, i18n.Sentences(
             i18n.Sentence("Could not set public SSH to {mode} — the firewall still reports it as {now}.",
                           mode=labels[mode], now=labels.get(state.get("mode"), state.get("mode"))),
-            i18n.Sentence("The new 22/tcp rule was refused ({why}), so no other SSH rule was removed.",
+            i18n.Sentence("The new SSH rule was refused ({why}), so no other SSH rule was removed.",
                           why=gate_err) if gate_err else "",
             # Which rule is in the way: one the panel does not remove (a port list, a destination,
             # an every-port allow), as remote_ufw_limit_port names it in the same situation.
-            i18n.Sentence("Connections to port 22 meet `{rule}` first — remove or narrow that rule.",
-                          rule=state["rule"]) if state.get("rule") and not gate_err else "")
-    return True, i18n.Sentence("Public SSH is now {mode}", mode=labels[mode])
+            i18n.Sentence("Connections to port {port} meet `{rule}` first — remove or narrow that rule.",
+                          port=state.get("rule_port") or "?", rule=state["rule"])
+            if state.get("rule") and not gate_err else "")
+    return True, i18n.Sentence("Public SSH is now {mode} (port {ports})", mode=labels[mode],
+                               ports=", ".join(str(p) for p in state.get("ssh_ports") or ports))
 
 
 def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",

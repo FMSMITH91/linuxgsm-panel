@@ -1887,7 +1887,10 @@ def create_app():
         # X-Forwarded-Proto, or Tailscale. NOT for our own self-signed TLS: HSTS turns the
         # one-time "not private" warning into a hard, un-clickable-through block on a named
         # host, which would lock the user out of their own panel.
-        self_tls = _effective_https(cfg)
+        # Recorded as this header decided it, for the debug report's HSTS line (network._self_tls):
+        # `cfg` is the config this process started from, and the report's own read of config.json
+        # is the next start's once a bind or TLS change is saved.
+        self_tls = app.config["_R32A_SELF_TLS"] = _effective_https(cfg)
         if (request.headers.get("X-Forwarded-Proto", "") == "https"
                 or (request.is_secure and not self_tls)):
             resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")

@@ -573,7 +573,9 @@ def _r30d_pkg_stubs(f, src, exported=None):
 
     def _is_pkg(e):
         return ((isinstance(e, _smg_ast.Name) and e.id in _aliases)
-                or _smg_ast.unparse(e) == "panel.ops.ssh_manager")
+                or _smg_ast.unparse(e) == "panel.ops.ssh_manager"
+                # ...or reached through another module's name for it (`_p9_sd._sm`, review 1017c).
+                or (isinstance(e, _smg_ast.Attribute) and e.attr in _R32D_PKG_ATTRS))
 
     _out = []
     for _n in _smg_ast.walk(_tree):
@@ -587,6 +589,14 @@ def _r30d_pkg_stubs(f, src, exported=None):
 _r31d_srcs = {_f: open(os.path.join(_root, _f), encoding="utf-8").read() for _f in _r30d_smg_files}
 _r31d_exported = _r31d_pkg_exported({_r31d_test_module(_f): _smg_ast.parse(_s)
                                      for _f, _s in _r31d_srcs.items() if _r31d_test_module(_f)})
+# Every name a module binds the package to (routes: `from panel.ops import ssh_manager as _sm`; the test
+# modules': `_p9_sm`, `_sm41`, …). A check handed `<module>._sm` sets the attribute on the package all the
+# same (review 1017c: 17 `_p9_patch(_p9_sd._sm, …)` sites went unseen, since only a bare name was read).
+_R32D_PKG_ATTRS = set().union(*_r31d_exported.values(), *(
+    _r30d_pkg_aliases(_smg_ast.parse(open(_p, encoding="utf-8").read()))
+    for _p in [os.path.join(_root, "app.py")]
+    + _smg_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+    + _smg_glob.glob(os.path.join(_root, "tools", "*.py"))))
 for _f in _r30d_smg_files:
     _smg_pkg_stubs += _r30d_pkg_stubs(_f, _r31d_srcs[_f], _r31d_exported)
 check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
@@ -611,9 +621,16 @@ _r31d_pkg_ctl = [bool(_r30d_pkg_stubs("ctl.py", _c, _r31d_exported)) for _c in (
     "from unit.reboot41_fixtures import (_patch, _sm41)\n_patch(_sm41, 'run_command', f)",
     "from unit.part01 import sm as other\nother.run_command = f",
     "from unit.part12 import _p9_patch_sm\n_p9_patch_sm('run_command', f)",
-    "from unit.part12 import _p9_patch, _p9_core\n_p9_patch(_p9_core, 'run_command', f)")]
-check("ssh_manager: ...a package name imported from another test module counts too; a submodule's does "
-      "not (control)", _r31d_pkg_ctl == [True] * 3 + [False] * 2, repr(_r31d_pkg_ctl))
+    "from unit.part12 import _p9_patch, _p9_core\n_p9_patch(_p9_core, 'run_command', f)",
+    # ...and through a route module's own name for the package (review 1017c).
+    "from unit.part12 import _p9_patch\nfrom panel.routes import server_detail as _sd\n"
+    "_p9_patch(_sd._sm, 'run_command', f)",
+    "from panel.routes import server_detail as _sd\n_sd._sm.run_command = f",
+    "from panel.routes import server_detail as _sd\n_p9_patch(_sd._core, 'run_command', f)")]
+check("ssh_manager: ...a package name imported from another test module, or a module's own name for it "
+      "(`_sd._sm`), counts too; a submodule's does not (control)",
+      _r31d_pkg_ctl == [True] * 3 + [False] * 2 + [True] * 2 + [False] and "_sm" in _R32D_PKG_ATTRS,
+      repr(_r31d_pkg_ctl))
 
 # The positive half: the no-sudo wrapper must actually INTERCEPT, which the check above cannot
 # say — "does not stub the package" is satisfied by stubbing nothing at all. Run its _install()
@@ -634,6 +651,37 @@ _nsr_connect = sys.modules["socket"].socket.connect
 check("no-sudo runner: its egress guard is installed for the rest of the run",
       _nsr_connect.__qualname__.startswith("_install_egress_guard"),
       "socket.connect is %s" % _nsr_connect.__qualname__)
+# ...and it refuses this machine's own SSH port on loopback, where the suites' "unreachable" fixture hosts
+# (127.0.0.1:22) would otherwise log in with the developer's keys as root wherever an sshd listens
+# (review 1017c); another loopback port is still reached (control: a listener of this check's own).
+_r32d_sock = sys.modules["socket"]
+_r32d_listen = _r32d_sock.socket()
+_r32d_listen.bind(("127.0.0.1", 0))
+_r32d_listen.listen(1)
+_r32d_ssh, _r32d_other = [], None
+for _r32d_how in ("connect", "connect_ex"):
+    _r32d_c = _r32d_sock.socket()
+    _r32d_c.settimeout(5)
+    try:
+        _r32d_ssh.append(getattr(_r32d_c, _r32d_how)(("127.0.0.1", 22)))
+    except OSError as _r32d_ex:
+        _r32d_ssh.append(str(_r32d_ex))
+    finally:
+        _r32d_c.close()
+_r32d_c = _r32d_sock.socket()
+try:
+    _r32d_other = _r32d_c.connect_ex(_r32d_listen.getsockname())
+finally:
+    _r32d_c.close()
+    _r32d_listen.close()
+# The two refusals were recorded; taken back out, so the end-of-run "nothing reached the network" gate
+# reads only what the parts did.
+_r32d_rec = [_b for _b in _nsr_ns["BLOCKED"] if _b[1] == str(("127.0.0.1", 22))]
+_nsr_ns["BLOCKED"][:] = [_b for _b in _nsr_ns["BLOCKED"] if _b not in _r32d_rec]
+check("no-sudo runner: ...it refuses loopback's SSH port (connect and connect_ex) and records it, while "
+      "another loopback port is reached (control)",
+      len(_r32d_ssh) == 2 and "egress blocked" in str(_r32d_ssh[0]) and _r32d_ssh[1] == 111
+      and len(_r32d_rec) == 2 and _r32d_other == 0, repr((_r32d_ssh, _r32d_rec, _r32d_other)))
 from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
 from panel.ops import system_ops as _nsr_so
 check("no-sudo runner: it stubs the DEFINITION site of _run_local, not just the package",

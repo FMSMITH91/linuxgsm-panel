@@ -360,7 +360,7 @@ _PAGE107 = ("NOPASSWD", "pre-helper path", "**Runs as**: root", "via root 1 · v
             "shell as root ×2")
 # What stays in the file, from the sections' own lines.
 _KEPT107 = ("- **Install model**: system service\n", "- **Privileged calls since start**: ok 3 · refused by sudo 0",
-            "- **Source**: system journal (privileged read), 3 lines",
+            "- **Source**: system journal, 3 lines",
             "- **Privileged calls (left out below)**: 1 successful sudo call in this window (ufw-status ×1) · ")
 
 

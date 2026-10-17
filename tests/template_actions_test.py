@@ -3610,6 +3610,14 @@ for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsU
     check(_needle in _src and "Date.now()" in _src,
           "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
           "no single-poll registry or no deadline")
+# ...and manage_remotes.js's deadline is read where it acts, as the other two files' are below: the
+# whole-file `Date.now()` above would pass on any unrelated use of it (review 1017c lead).
+_mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+_mr_dl = _js_code_only(_js_block_after(_mr, "if (Date.now() > _tsDeadline)") or "")
+check("var _tsDeadline = Date.now() +" in _mr and "clearInterval(t)" in _mr_dl
+      and "delete _tsUpPolls[remoteId]" in _mr_dl,
+      "js: manage_remotes.js's tailscale-up poll stops itself and leaves the registry at its deadline",
+      " ".join(_mr_dl.split())[:200])
 
 # ...and reaching that deadline has to leave the operator a way ON. tailscale.js told them to "press
 # the button again" — a button this flow had disabled and never re-enabled — and setup_tailscale.js
@@ -3625,6 +3633,18 @@ for _sf, _anchor, _fn in (("tailscale.js", "if (Date.now() > _deadline)", "tsChe
           " ".join(_dl.split())[:200])
     check(re.search(r"(?m)^function\s+%s\s*\(" % _fn, _src) is not None,
           "js: ...and %s is a global function the dispatcher can call" % _fn, _sf)
+# manage_remotes.js's deadline said "press the button again": that button runs `tailscale up` again,
+# which on a machine approved meanwhile answers "Already connected" and stops, so the UFW finalize and
+# the switch-to-Tailscale offer never came (review 1017c). Its Check again waits on the host again,
+# through the same function the button's flow waits in.
+_mr_dl2 = _js_code_only(_js_block_after(_mr, "if (Date.now() > _tsDeadline)") or "")
+_mr_up = _js_code_only(_js_function_body(_mr, "tailscaleUp") or "")
+check("ts-wait-" in _mr_dl2 and "_da('_tsUpWait', [remoteId])" in _mr_dl2 and "Check again" in _mr_dl2
+      and "press the button" not in _mr_dl2 and re.search(r"(?m)^function\s+_tsUpWait\s*\(", _mr) is not None
+      and "_tsUpWait(remoteId);" in _mr_up,
+      "js: manage_remotes.js's tailscale-up deadline offers a 'Check again' that waits on the host again "
+      "(it said 'press the button again', whose rerun of `tailscale up` skips the finalize)",
+      " ".join(_mr_dl2.split())[:200])
 _tsc = (ROOT / "static" / "js" / "tailscale.js").read_text(encoding="utf-8")
 check("refreshSection('#ts-page'" in (_js_function_body(_tsc, "tsCheckAgain") or ""),
       "js: tailscale.js's Check again re-renders the page from the host",
@@ -3647,8 +3667,9 @@ check(-1 not in (_str_named, _str_running, _str_absent)
 # ── "UFW now allows tailscale0" only when the finalize says it did ────────────────────────────
 # The route answers ufw_allowed=false when UFW was inactive, absent, unreadable or refused the
 # rule (and a refused/unreachable finalize has no such key), yet the sentence printed on all of them.
+# The wait (and its finalize) is _tsUpWait since review 1017c's "Check again", called by tailscaleUp.
 _mr_ts = _js_code_only(_js_function_body(
-    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "tailscaleUp") or "")
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "_tsUpWait") or "")
 _ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
 _ufw_line_i = _mr_ts.find("'UFW now allows the tailscale0 interface.'")
 check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,

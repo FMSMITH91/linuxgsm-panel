@@ -1728,6 +1728,41 @@ def _console_guard(user, selfname):
             'esac; done; done; ')
 
 
+# A new name (create's, rename's) that IS the console's log path or a folder above it once links are
+# resolved: refused in every state, as create_refusal and rename_refusal refuse `log` by its text.
+_R32J_RESERVED_MARK = "__R32J_RESERVED__"
+
+
+def _r32j_console_dest_guard(user, selfname, var, folder=False):
+    """Host-side: refuse when the NEW name "$<var>" is a console path, or above one, once resolved.
+
+    create_refusal and rename_refusal refuse `log`, `log/console` and the console log by their TEXT
+    whether or not the server runs: a FILE there stops LinuxGSM making its log folders on the next
+    start. A home whose `log` is a link (`log -> disk/logs`) moves those paths, and while the link
+    dangles (a stopped server whose log folder is not made yet) `disk/logs` is free: a file created
+    or renamed there blocked the next start the same way, and _console_guard only refuses while the
+    console is attached. Resolved as _console_guard does, by the game account (never as root), and
+    nothing is followed: the name is only compared.
+
+    A FOLDER (`folder`) is refused only at the console log's own path. At `disk/logs` or above it a
+    folder is what LinuxGSM makes itself, and it is what repairs the dangling link: LinuxGSM's
+    `mkdir -p log` fails on one.
+    """
+    q = _core._quote
+    if folder:
+        names = [p for p in _console_paths(selfname) if p.endswith(".log")]
+        hit = '"${%s}"' % var
+    else:
+        names, hit = sorted(_console_paths(selfname)), '"${%s}"|"${%s}"/*' % (var, var)
+    if not names:
+        return ""
+    paths = " ".join(q(f"/home/{user}/{p}") for p in names)
+    return (f'for c in {paths}; do r=$(realpath -m "$c" 2>/dev/null || printf %s "$c"); '
+            'b=$(realpath -m "${c%/*}" 2>/dev/null || printf %s "${c%/*}")/"${c##*/}"; '
+            f'for x in "$r" "$b"; do case "$x" in {hit}) echo {_R32J_RESERVED_MARK}; exit 8 ;; '
+            'esac; done; done; ')
+
+
 def _r31j_console_live_sh(selfname):
     """Shell for a console path that was hit: refuse while the console is attached, or unread.
 
@@ -1793,6 +1828,10 @@ def _rename_inner(ap, new_name, user, selfname=None):
             + _console_guard(user, selfname) +
             f'si=$(stat -c %d:%i -- "$t" 2>/dev/null) || {{ echo {_RENAME_GONE}; exit 7; }}; '
             f'n="$d"/{q(new_name)}; '
+            # A folder renamed onto the link's target repairs it, as create's folder does.
+            + 'if [ -d "$t" ] && [ ! -L "$t" ]; then :; '
+            + _r32j_console_dest_guard(user, selfname, "n", folder=True)
+            + 'else :; ' + _r32j_console_dest_guard(user, selfname, "n") + 'fi; ' +
             f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
             'm=mv; command -v gnumv >/dev/null 2>&1 && m=gnumv; '
             '"$m" -n -T -- "$t" "$n"; '
@@ -1827,6 +1866,7 @@ def rename_path(server, user, relpath, new_name, selfname=None):
 _RENAME_OUTCOMES = (
     (_OUTSIDE_HOME, RENAME_REFUSED),
     (_PROTECTED_MARK, RENAME_PROTECTED),
+    (_R32J_RESERVED_MARK, "That name is reserved for LinuxGSM or the game's account — choose another."),
     (_RENAME_CONSOLE_MARK, RENAME_CONSOLE),
     (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
     (_RENAME_LINKED, "Refusing to rename through a symbolic link: open the folder it points to "
@@ -1929,7 +1969,8 @@ def _create_inner(dest, kind, user, selfname=None):
     else:
         make, is_kind = '( set -o noclobber; : > "$t" ) 2>/dev/null', '[ -f "$t" ] && [ ! -L "$t" ]'
     return (f'{_r21b_named_folder(user, _pp.dirname(dest))} || {{ echo {_CREATE_LINKED}; exit 10; }}; '
-            + _console_guard(user, selfname) +
+            + _console_guard(user, selfname)
+            + _r32j_console_dest_guard(user, selfname, "t", folder=kind == "folder") +
             f'if {taken}; then echo {_CREATE_TAKEN}; exit 6; fi; '
             f'if {make} && {is_kind}; then echo {_CREATE_DONE}; exit 0; fi; '
             f'if {taken}; then echo {_CREATE_TAKEN}; exit 6; fi; '
@@ -1962,6 +2003,7 @@ def create_path(server, user, reldir, name, kind, selfname=None):
 _CREATE_OUTCOMES = (
     (_OUTSIDE_HOME, CREATE_REFUSED),
     (_PROTECTED_MARK, CREATE_RESERVED),
+    (_R32J_RESERVED_MARK, CREATE_RESERVED),
     (_RENAME_CONSOLE_MARK, CREATE_CONSOLE),
     (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
     (_CREATE_LINKED, CREATE_LINKED),

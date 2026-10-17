@@ -722,7 +722,8 @@
            Running) — `enabled` is just the RunSSH pref flag and stays true even when the
            node is installed-but-not-linked (NeedsLogin), which would strand the user. #}
         {% set ssh_lockdown_safe = ts_up and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
-        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
+        {# The ports sshd serves, filled from ssh-status (remote_manage_host.js): the card acts on those, not on 22. #}
+        <div class="small text-secondary mb-1"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
         {# Tailscale SSH is off unless the owner chose it at install (system_ops.tailscale_ssh_allowed),
            so without it the way back in is sshd over the tailnet: the tailscale0 interface allowed. #}
         {% if status and status.tailscale_ssh.enabled %}
@@ -743,14 +744,18 @@
         </p>
         {% endif %}
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
-          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% elif status.tailscale_ssh_allowed %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% else %}No Tailscale path back in yet — allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %} data-action="sshMode" data-args='["off"]'>Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open the SSH port to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit the SSH port (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% elif status.tailscale_ssh_allowed %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% else %}No Tailscale path back in yet — allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove the public SSH rules — SSH only over Tailscale"{% endif %} data-action="sshMode" data-args='["off"]'>Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
       <div class="col-md-6">
-        <div class="small text-secondary mb-1"><span>Public panel access</span> (<span>port</span> {{ (config.port if config else 5000) }})</div>
+        {# The port the panel serves on NOW (the route's panel_bound_port), which the Close button acts on
+           first; config.json's beside it while a saved change waits for its restart. #}
+        {% set _saved_port = config.port if config else 5000 %}
+        {% set _live_port = panel_bound_port or _saved_port %}
+        <div class="small text-secondary mb-1"><span>Public panel access</span> (<span>port</span> {{ _live_port }}{% if _live_port != _saved_port %}; <span>saved for the next restart:</span> {{ _saved_port }}{% endif %})</div>
         {% if config and config.tailscale_setup_done %}
         {# Never "tailnet-only" while the panel's Serve route is on Funnel: it is on the internet
            whatever this port does (tailscale_integration.panel_funnel_facts). #}
@@ -859,12 +864,13 @@
       </div>
       {% endif %}
       <div class="col-md-6">
-        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
+        {# The ports sshd serves, filled from ssh-status (remote_manage_host.js): the card acts on those, not on 22. #}
+        <div class="small text-secondary mb-1"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
-          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" data-action="sshMode" data-args='["off"]' title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open the SSH port to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit the SSH port (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" data-action="sshMode" data-args='["off"]' title="Remove the public SSH rules — SSH only over Tailscale">Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>

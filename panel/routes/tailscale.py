@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from urllib.parse import urlsplit
 
-from flask import (current_app, jsonify, render_template, request)
+from flask import (current_app, has_app_context, jsonify, render_template, request)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config, set_config_keys)
 from panel.security import privileged as _priv
@@ -34,8 +34,17 @@ def _sees_panel_host_tailnet(user):
 
 
 def _panel_scheme(cfg):
-    """How the panel is serving its own port right now — self-signed https by default."""
-    return "https" if _effective_https(cfg) else "http"
+    """How the panel is serving its own port right now — self-signed https by default.
+
+    What this process serves since boot (BOOT_TLS, as app._serve_scheme_now reads it), not what config.json
+    says the next start will: the direct links it builds go to the port it serves on now
+    (ts._r13b_bound_port), and a saved bind or TLS change waiting for its restart gave that port
+    the next start's scheme (an http:// link to a port that speaks TLS, or the reverse).
+    """
+    tls = current_app.config.get("BOOT_TLS") if has_app_context() else None
+    if tls is None:      # no boot record (a test app): the stored answer stands, as _serve_scheme_now's
+        return "https" if _effective_https(cfg) else "http"
+    return "https" if tls else "http"
 
 
 def _serve_default_mount(info, cfg, port):
@@ -61,12 +70,21 @@ def _disable_would_strand_panel(cfg):
     localhost only would lock you out unless Tailscale Serve is set up"); this is that rule seen
     from the other side. The bind is the RESOLVED one: an unset bind_host that boot resolved to
     127.0.0.1 is just as stranded until someone restarts the panel from the host.
+
+    And the bind this process is bound to NOW (app.config BOOT_BIND), not only config.json's: after
+    a move off loopback whose restart could not be scheduled, the stored bind read 0.0.0.0 while the
+    process still listened on 127.0.0.1 alone, and Disable removed the only way in.
     """
-    if not _bind_is_loopback(_resolved_bind(cfg)):
-        return ""
-    return ("The panel is bound to localhost only, so Tailscale Serve is the only way to reach it. "
-            "Disabling Serve would lock you out. Change the panel's bind address to 0.0.0.0 "
-            "(all interfaces) under System → Panel Server first, then disable Serve.")
+    if _bind_is_loopback(_resolved_bind(cfg)):
+        return ("The panel is bound to localhost only, so Tailscale Serve is the only way to reach it. "
+                "Disabling Serve would lock you out. Change the panel's bind address to 0.0.0.0 "
+                "(all interfaces) under System → Panel Server first, then disable Serve.")
+    bound = current_app.config.get("BOOT_BIND")
+    if bound and _bind_is_loopback(bound):
+        return ("The panel still listens on localhost only: the bind address you saved applies from its "
+                "next restart. Disabling Serve now would lock you out. Restart the panel first, then "
+                "disable Serve.")
+    return ""
 
 
 def _serve_audit(detail, ok):

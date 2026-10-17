@@ -190,6 +190,15 @@ _r31d_ts_machine = _r31d_ts_landlock.machine_binaries()
 # CI's runners have no tailscale, so there is nothing to block (the shapes below prove the block
 # itself on a planted binary there too).
 _r31d_ts_block_err = _r31d_ts_landlock.block(_r31d_ts_machine) if _r31d_ts_machine else ""
+# A machine that HAS tailscale and could not be blocked (no Landlock in the kernel's LSM list, ABI 1,
+# a second thread) stops here, before any part runs (review 1017c): the run would otherwise go on
+# behind the text reader alone, which every pass from 1011e to 1017b found a new way past, and the
+# check that names the failure (below the parts) would say so only after the node had been reached.
+if _r31d_ts_machine and _r31d_ts_block_err:
+    print("unit suite NOT RUN: the machine's own %s could not be blocked (%s). No part ran; the run "
+          "needs a kernel with Landlock (ABI 2 or later) to keep them from the suite."
+          % (", ".join(_r31d_ts_machine), _r31d_ts_block_err), file=sys.stderr, flush=True)
+    sys.exit(1)
 # Said at the start, once: the block also denies anything created later directly in a directory on
 # the way to the binary (ts_landlock's docstring), and a check failing on that must not look like a
 # panel bug. A failing check whose detail is a permission error says so too (_r31j_result_line).
@@ -231,12 +240,16 @@ _R26D_SHIM = tempfile.mkdtemp(prefix="lgsm-unit-ts-shim-")
 # file every non-interactive bash sources before its script (review 1017b: `BASH_ENV=<f> bash -c
 # 'tailscale'` put the machine's directory ahead of the shim from that file).
 _R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\s+)*-\w*p|\bhash\b|\bBASH_ENV\b")
-# The options a shell takes before (or after) its -c or login flag: one with a value (`-o pipefail`,
-# `-O extglob`), a long one (`--norc`) or `--`, and a cluster of flags (review 1017b: only the last
-# was skipped, so `bash -o pipefail -c "${P}TH=<d>; tailscale"` and `bash --norc -lc` went unread).
-# (A value never starts with a dash, so no text reads two ways and the pattern cannot backtrack
-# exponentially.)
-_R31D_SH_OPTS = r"(?:[-+][oO]\s+[^\s-]\S*\s+|--[\w-]*\s+|[-+]\w+\s+)*"
+# The options a shell takes before (or after) its -c or login flag: a long one that takes the next
+# word (`--rcfile <f>`, `--init-file <f>`, as _r18d_shell_opts reads an argv; review 1017c), one with
+# a value (`-o pipefail`, `-O extglob`), a long one (`--norc`) or `--`, and a cluster of flags
+# (review 1017b: only the last was skipped, so `bash -o pipefail -c "${P}TH=<d>; tailscale"` and
+# `bash --norc -lc` went unread).
+# Each word reads ONE way, or a run of them backtracks exponentially (CodeQL py/redos; review 1017c:
+# `-o +a ` read as an option and its value, and as two flag clusters): a value never starts with a
+# dash or a plus, and the bare long option is never --rcfile or --init-file followed by its value.
+_R31D_SH_OPTS = (r"(?:--(?:rcfile|init-file)\s+\S+\s+|[-+][oO]\s+[^\s+-]\S*\s+"
+                 r"|--(?!(?:rcfile|init-file)\s)[\w-]*\s+|[-+]\w+\s+)*")
 # A login shell: its profile sets PATH (Debian's /etc/profile resets it, ~/.profile prepends ~/bin).
 # An interactive one (`bash -ic`) reads ~/.bashrc, which can set it as well; an option's value
 # (`bash -O extglob -l`) is skipped, and `exec -l` hands any shell a login name (review 1017a).
@@ -1053,6 +1066,11 @@ _R19D_SCRIPT_RESETS = _R25JResets()
 # on PATH, `whereis -b tailscale` handed the script the machine's binary and was judged on PATH).
 # `command -p` searches the shell's default PATH whatever $PATH holds (review 1016e).
 _R21D_SCRIPT_SEARCHES = re.compile(r"\b(?:whereis|find)\b|\bcommand\s+(?:-\w+\s+)*-\w*p")
+# A script that takes away the guard's own `tailscale` or `which` function on the bash route (`unset -f
+# tailscale`, `unset which`, or a definition of its own): its next `tailscale` is found on PATH past the
+# function (review 1017c), so it is judged as a wrapper's is, on every PATH it may search.
+_R32D_FUNC_OFF = re.compile(r"\bunset\b[^;&|\n]*\b(?:tailscale|which)\b"
+                            r"|\b(?:tailscale|which)\s*\(\s*\)|\bfunction\s+(?:tailscale|which)\b")
 # ...and one that names the binary by a path is judged by that path: ~, $VAR and a relative path
 # are read against the run's environment and directory.
 _R19D_SCRIPT_PATH = re.compile(r"(?<![\w.~$/:-])((?:~|\$\{?\w+\}?|\.{1,2})?[\w./~-]*/tailscale)(?![\w.-])")
@@ -1126,7 +1144,8 @@ def _r19d_wrapped_candidates(script, env, extra=()):
     the starting one without the shim, which counts as a stand-in and would answer for any PATH.
     """
     if not (_R19D_SCRIPT_WRAPPED.search(script) or _r26d_runs_built(script, env)
-            or _R19D_SCRIPT_WRAPPED.search(_r23d_expand_vars(script, _r25d_script_env(script, env)))):
+            or _R19D_SCRIPT_WRAPPED.search(_r23d_expand_vars(script, _r25d_script_env(script, env)))
+            or any(_R32D_FUNC_OFF.search(_t) for _t in (script, _r29d_unquoted(script)))):
         return []
     return [shutil.which("tailscale", path=_p) for _p in _r29d_script_paths(script, env, extra)]
 
@@ -1222,7 +1241,9 @@ def _r29d_may_set_path(script):
     `bash -c 'PATH=<d>:$PATH; tailscale'`, `export 'PATH=<d>'` and `. file` each stepped past it.
     """
     return (any(_R28D_PATH_OWN.search(_t) for _t in (script, _r26d_strip_single(script), _r29d_unquoted(script)))
-            or bool(_R29D_SHIM_OFF.search(script)) or _r29d_names_built(script)
+            # ...also with its quotes dropped: a builtin's word quoted or escaped in part is still the
+            # builtin (review 1017c: `'.' <f>`, `\. <f>` and `so''urce <f>` sourced a PATH change unread).
+            or any(_R29D_SHIM_OFF.search(_t) for _t in (script, _r29d_unquoted(script))) or _r29d_names_built(script)
             # A nested shell's -c script that builds a word may build PATH= itself (review 1017a).
             or any(_r25d_builds(_a.strip("'\"")) for _a in _R30D_NESTED_C.findall(script)))
 
@@ -1305,17 +1326,22 @@ def _r29d_cd_bases(script, senv, env, start):
     `cd "$(echo /usr)" && ./bin/tailscale` was joined to each of them, and found nowhere). So is a
     relative target under CDPATH, which `cd` searches before the current directory.
     """
-    _bases, _cur, _unresolved = [start], start, False
+    _bases, _unresolved = [start], False
     _cdpath = "CDPATH" in script or bool(env.get("CDPATH"))
-    for _m in _R29D_CD.finditer(script):
-        _t = _r23d_expand_vars(_r29d_unquote(_m.group(1) or "~"), senv)
-        if _r30d_cd_unresolved(_t, _cdpath):
-            _bases += (_R19D_DEFAULT_PATH + os.pathsep + _r28d_no_shim(env.get("PATH", os.defpath))).split(os.pathsep)
-            _unresolved = True
-            continue
-        _t = (senv.get("HOME") or os.path.expanduser("~")) + _t[1:] if _t.startswith("~") else _t
-        _cur = os.path.join(_cur, _t)
-        _bases += [_cur, os.path.join(start, _t)]
+    # As written, and with its quotes dropped (review 1017c: `c''d <d>` and `"c"d <d>` are `cd` to the
+    # shell, and only the whole word quoted or escaped was read), each from the start directory.
+    for _text in dict.fromkeys((script, _r29d_unquoted(script))):
+        _cur = start
+        for _m in _R29D_CD.finditer(_text):
+            _t = _r23d_expand_vars(_r29d_unquote(_m.group(1) or "~"), senv)
+            if _r30d_cd_unresolved(_t, _cdpath):
+                _bases += (_R19D_DEFAULT_PATH + os.pathsep
+                           + _r28d_no_shim(env.get("PATH", os.defpath))).split(os.pathsep)
+                _unresolved = True
+                continue
+            _t = (senv.get("HOME") or os.path.expanduser("~")) + _t[1:] if _t.startswith("~") else _t
+            _cur = os.path.join(_cur, _t)
+            _bases += [_cur, os.path.join(start, _t)]
     return list(dict.fromkeys(_bases)), _unresolved
 
 
@@ -1720,6 +1746,19 @@ _r16d_wrap_ts_handles()
 # drives part12's app; imports part01, 12, 106 and 109.
 # part113 (the pre-merge adversarial review of review 1017b, fixer J) drives part12's app with
 # stand-ins and real pgrep over sleeping stand-in processes; imports part01, 12 and 110.
+# part114 (the twentieth review's ssh_manager fixes, builder B: the Public SSH card on the ports sshd
+# serves, an unread own-job probe is not a finished OS update) drives hosts.py over a stand-in ufw
+# rule table on part12's stand-ins and tripwire, and node through part106's harness; imports part01,
+# 12 and 106.
+# part115 (the twentieth review's page fixes, builder C) runs node through part106's harness and
+# drives part12's app; imports part01, 12, 106 and 109.
+# part116 (review 1017c: the panel's port, bind and scheme from this process wherever "now" is meant, the
+# debug report's journal lines the same under every privilege model, a shrinking file padded in the
+# helper's folder download, builder A) drives part12's app with stand-ins, the debug report's sections,
+# the helper in-process, and install.sh/uninstall.sh text under bash; imports part01, 05, 12, 20 and 108.
+# part117 (review 1017c's integration fixes, integrator J: the Hosts section's login class page-only,
+# create/rename never at a dangling log link's target) drives the debug report's Hosts section and the
+# file browser's host-side commands under bash on part12's stand-ins and tripwire; imports part01 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1732,7 +1771,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91",
           "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
-          "part109", "part110", "part111", "part112", "part113",
+          "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part15")
 
 
@@ -1860,6 +1899,13 @@ check("unit suite: every part ran as on a machine without the root helper, and l
       "cache was read from the disk: %r" % (_r28d_left[:6], sorted(set(_r28d_disk_reads))[:6]))
 check("unit suite: no part leaves sys.path changed for the parts after it",
       not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
+# part12's transport tripwire answers a host call it catches with a refusal, which a check may read as
+# "unknown" and still pass; only a part's own closing check turned a trip into a failure, and parts 93,
+# 96 and 97's Serve section had none (review 1017c). Read once more over the whole run, for the next
+# part that forgets.
+from unit.part12 import _P9_TRIPPED as _r32d_tripped  # noqa: E402
+check("unit suite: no part reached a real transport while part12's tripwire was armed",
+      not _r32d_tripped, repr(_r32d_tripped[:6]))
 
 # The env-reset reader against a run of value-taking options: it backtracked exponentially there
 # (CodeQL py/redos), so 40 `-C!` words would not finish. Run in a child with a time limit, so a
@@ -1918,6 +1964,50 @@ check("unit suite: the env-reset reader answers 4000 `-C!` or `--` options at on
       and all(_resets_rows[c] for c in _R26D_ROWS[:_R26D_RESETTING])
       and not any(_resets_rows[c] for c in _R26D_ROWS[_R26D_RESETTING:]),
       repr((_redos_ok, _child_rows, _resets_rows)))
+
+# The shell-option grammar the same way (review 1017c: `-o +a ` read as an option with its value and as
+# two flag clusters, so 40 such words before no -c never finished, while its comment said it could not
+# backtrack), and `--rcfile <f>` beside a bare long option. The child runs the four readers built on
+# it, cut out of this file by name, and answers the rows too, so it is shown to be the same grammar.
+_R32D_OPTS_READERS = ("_R31D_SH_OPTS", "_R29D_LOGIN", "_R30D_NESTED_C", "_R25D_NESTED_SHELL")
+_R32D_OPTS_ROWS = ('bash --rcfile /x -c "y"', "bash --init-file /x -c y", "bash -o pipefail -c y",
+                   "bash -O extglob -lc y", "sh --norc -c 'y'", "bash -o c x", "bash --rcfile -c")
+_R32D_OPTS_SLOW = ("-o +a ", "--rcfile -x ", "+O +x ", "--init-file --x ", "-o -o ")
+
+
+def _r32d_opts_child(timeout=10):
+    """(finished in time?, the child's row answers) for the shell-option readers run in a child process."""
+    import ast as _ast
+    with open(os.path.abspath(__file__), encoding="utf-8") as _fh:
+        _src = _fh.read()
+    _defs = [_n for _n in _ast.parse(_src).body if isinstance(_n, _ast.Assign)
+             and any(getattr(_t, "id", None) in _R32D_OPTS_READERS for _t in _n.targets)]
+    _code = "\n".join(["import json, re, sys"] + [_ast.get_source_segment(_src, _n) for _n in _defs] + [
+        "R = (_R29D_LOGIN, _R30D_NESTED_C, _R25D_NESTED_SHELL)",
+        "[_r.search(_s + _w * 4000 + 'x') for _r in R for _s in ('bash ', 'sh ') for _w in json.loads(sys.argv[2])]",
+        "print(json.dumps([[bool(_r.search(c)) for _r in R] for c in json.loads(sys.argv[1])]))"])
+    try:
+        # The real run the runner captured: this file's own readers, in this interpreter.
+        _p = _R15D_SP_REAL["run"]([sys.executable, "-c", _code, _r26d_json.dumps(_R32D_OPTS_ROWS),  # nosec B603
+                                   _r26d_json.dumps(_R32D_OPTS_SLOW)],
+                                  capture_output=True, text=True, timeout=timeout, check=False)
+    except Exception as _ex:  # noqa: BLE001 - TimeoutExpired, of whichever subprocess module ran it
+        if type(_ex).__name__ != "TimeoutExpired":
+            raise
+        return False, None
+    return _p.returncode == 0, (_r26d_json.loads(_p.stdout) if _p.returncode == 0 else _p.stderr[-300:])
+
+
+_r32d_opts_ok, _r32d_opts_rows = _r32d_opts_child()
+_r32d_opts_here = [[bool(_r.search(_c)) for _r in (_R29D_LOGIN, _R30D_NESTED_C, _R25D_NESTED_SHELL)]
+                   for _c in _R32D_OPTS_ROWS]
+check("unit suite: the shell-option readers answer 4000 `-o +a `, `--rcfile -x ` or `+O +x ` words at once "
+      "in a child with a time limit (no exponential backtracking), and still read a -c past --rcfile's "
+      "value, an option's value and a long option, and not an option value that is only `c` (control)",
+      _r32d_opts_ok and _r32d_opts_rows == _r32d_opts_here
+      and [_r[1] for _r in _r32d_opts_here] == [True] * 5 + [False] * 2
+      and [_r[0] for _r in _r32d_opts_here] == [False] * 3 + [True] + [False] * 3,
+      repr((_r32d_opts_ok, _r32d_opts_rows, _r32d_opts_here)))
 
 
 # ── the ordering notes above _PARTS name what each part imports ─────────────────────────────────
@@ -2362,9 +2452,10 @@ os.makedirs(os.path.join(_r15d_ts_ctl_dir, _r31d_ts_landlock.TMP), exist_ok=True
 _r31d_names = _r31d_ts_landlock.kernel_names(_r15d_ts_ctl_dir)
 _r31d_free = _r31d_landlock_run("free")
 _r31d_held = _r31d_landlock_run("held")
-# Every review-1017b shape reaches it unblocked (each needs only sh, bash, env and timeout).
+# Every review-1017b and 1017c shape reaches it unblocked (each needs only sh, bash, env and timeout).
 _r31d_mine = {"%r %s" % (_sh[1][0], os.path.basename(_r31d_d)) for _r31d_d in (_r17d_ts_sys, _r19d_ts_lnk)
-              for _sh in _r31d_ts_landlock.shapes_1017b(_r31d_d, _r15d_ts_ctl_dir)}
+              for _shapes in (_r31d_ts_landlock.shapes_1017b, _r31d_ts_landlock.shapes_1017c)
+              for _sh in _shapes(_r31d_d, _r15d_ts_ctl_dir)}
 _r31d_new = [_n for _n, _r in zip(_r31d_names, _r31d_free[1]) if _n in _r31d_mine and not _r]
 _r31d_let = [_n for _n, _r in zip(_r31d_names, _r31d_held[1]) if _r]
 check("unit suite: the kernel refuses the machine's own tailscale to this run and all it starts "
@@ -2412,13 +2503,81 @@ check("unit suite: ...the run says at its start when the block is on (which file
       and "Landlock" not in _r31j_result_line(True, "x", "[Errno 13] Permission denied"),
       repr((_r31j_ts_header, _r31j_result_line(False, "x", "[Errno 13] Permission denied"))))
 check("unit suite: ...the planted binary is reached unblocked by its path, a copy and every review-1017b "
-      "shape, and a part's stand-in on its own PATH still runs blocked (control)",
+      "and 1017c shape, and a part's stand-in on its own PATH still runs blocked (control)",
       _r31d_free[0] == "" and _r31d_free[1][-3:-1] == [True, True] and not _r31d_new
       and sum(_r31d_free[1]) > len(_r31d_names) // 2
       and "own stand-in" in _r31d_free[2][-1] and "own stand-in" in (_r31d_held[2] or [""])[-1]
       and _r31d_held[1][-2] is False,
       repr((_r31d_free[0], sum(_r31d_free[1]), len(_r31d_names), _r31d_new[:5], _r31d_free[2][-2:],
             (_r31d_held[2] or [""])[-2:])))
+
+# A snap install's own binaries are found in every revision, by their path under the snap (review 1017c:
+# only /snap/bin/tailscale was, and it resolves to the snap launcher); measured on a planted snap tree.
+_r32d_snap = tempfile.mkdtemp(prefix="lgsm-unit-r32d-snap-")
+for _r32d_rev in ("7", "8"):
+    os.makedirs(os.path.join(_r32d_snap, "tailscale", _r32d_rev, "bin"))
+    for _r32d_n in ("tailscale", "tailscaled"):
+        with open(os.path.join(_r32d_snap, "tailscale", _r32d_rev, "bin", _r32d_n), "w", encoding="utf-8") as _fh:
+            _fh.write("#!/bin/sh\n")
+        # 0o700, owner-only, in this run's own temp dir: a stand-in that is never run.
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(os.path.join(_r32d_snap, "tailscale", _r32d_rev, "bin", _r32d_n), 0o700)  # nosec B103
+os.symlink("8", os.path.join(_r32d_snap, "tailscale", "current"))
+_r32d_snap_found = [_b for _b in _r31d_ts_landlock.machine_binaries(
+    path="", home=_r32d_snap, snap=os.path.join(_r32d_snap, "tailscale", "*", "bin"))
+    if _b.startswith(os.path.realpath(_r32d_snap))]
+check("unit suite: a snap install's tailscale and tailscaled are found for the block in every revision it "
+      "keeps, resolved (the launcher /snap/bin points at is not the CLI)",
+      _r32d_snap_found == sorted(os.path.join(os.path.realpath(_r32d_snap), "tailscale", _r, "bin", _n)
+                                 for _r in ("7", "8") for _n in ("tailscale", "tailscaled")),
+      repr(_r32d_snap_found))
+# A machine WITH tailscale whose block did not take stops the run before any part (review 1017c), with
+# the reason: the runner's own head, run in a child up to where the parts begin, its two Landlock calls
+# swapped for answers (a machine binary that does not exist, and a refusal), never the real block.
+_R32D_GATE_CUT = 'importlib.import_module("panel.ops.tailscale_integration")'
+_R32D_GATE_SWAPS = (("_r31d_ts_landlock.machine_binaries()", repr(["/r32d-none/tailscale"])),
+                    ("_r31d_ts_landlock.block(_r31d_ts_machine)", "%s"))
+
+
+def _r32d_gate_child(refusal):
+    """(the child's exit code, its output) for this file's head with the block answering `refusal`."""
+    with open(os.path.abspath(__file__), encoding="utf-8") as _fh:
+        _head = _fh.read().split(_R32D_GATE_CUT, 1)[0]
+    for _old, _new in _R32D_GATE_SWAPS:
+        if _head.count(_old) != 1:
+            return None, "the head no longer holds %r" % (_old,)
+        _head = _head.replace(_old, _new % (repr(refusal),) if "%s" in _new else _new)
+    _code = ("import sys\n__file__ = sys.argv[1]\nexec(compile(sys.argv[2], sys.argv[1], 'exec'))\n"
+             "print('r32d: past the gate')")
+    # Its throwaway data dir lands in a temp dir of this run, removed with the rest.
+    _p = _R15D_SP_REAL["run"]([sys.executable, "-c", _code, os.path.abspath(__file__), _head],  # nosec B603
+                              capture_output=True, text=True, timeout=120, check=False,
+                              env=dict(os.environ, TMPDIR=tempfile.mkdtemp(prefix="lgsm-unit-r32d-gate-")))
+    return _p.returncode, _p.stdout + _p.stderr
+
+
+_r32d_gate = [_r32d_gate_child(_x) for _x in ("r32d: no Landlock here", "")]
+check("unit suite: a machine with tailscale whose Landlock block fails stops before any part runs, naming "
+      "the binary and the reason; with the block held the run goes on (control)",
+      _r32d_gate[0][0] == 1 and "NOT RUN" in _r32d_gate[0][1] and "r32d: no Landlock here" in _r32d_gate[0][1]
+      and "/r32d-none/tailscale" in _r32d_gate[0][1] and "past the gate" not in _r32d_gate[0][1]
+      and _r32d_gate[1][0] == 0 and "past the gate" in _r32d_gate[1][1] and "NOT RUN" not in _r32d_gate[1][1],
+      repr([(_c, _o[-400:]) for _c, _o in _r32d_gate]))
+# ...and the shape table's child refuses to run on a machine whose tailscale is not blocked, before it
+# reads its mode (an unknown mode, so a refusal taken away runs nothing here either).
+_r32d_saved_mb = _r31d_ts_landlock.machine_binaries
+try:
+    _r31d_ts_landlock.machine_binaries = lambda: [os.path.realpath("/bin/sh")]
+    _r32d_refused = _r31d_ts_landlock.run_mode("r32d-none", _r15d_ts_ctl_dir)
+    _r31d_ts_landlock.machine_binaries = lambda: [os.path.realpath(os.path.join(_r17d_ts_sys, "tailscale"))]
+    _r32d_planted_ok = _r31d_ts_landlock.run_mode("r32d-none", _r15d_ts_ctl_dir)
+finally:
+    _r31d_ts_landlock.machine_binaries = _r32d_saved_mb
+check("unit suite: ...the shape table's child refuses to run where the machine's tailscale is readable, "
+      "and the planted tree's own binary is not taken for the machine's (control)",
+      "not blocked here" in _r32d_refused[0] and _r32d_refused[1:] == ([], [])
+      and _r32d_planted_ok[0] == "unknown mode 'r32d-none'",
+      repr((_r32d_refused, _r32d_planted_ok)))
 
 check("unit suite: a wrapper handed a word that cannot spell tailscale is not judged as running it "
       "(the console read, a file under $HOME, an unset name), and one that can still is (control)",
@@ -2481,6 +2640,27 @@ check("unit suite: ...an option's value, a long option or `--` before a nested -
       and ["X;" in _t for _t in _r31d_strip] == [True, False, True]
       and _r31d_shim_bash_env == [False, True] and _r31d_nested_built == [True, True, True, False],
       repr((_r31d_owns, _r31d_strip, _r31d_shim_bash_env, _r31d_nested_built)))
+# ...and (review 1017c) a nested shell past `--rcfile <f>` or `--init-file <f>`, and a `.` or `source`
+# spelled with quotes or a backslash inside it, beside a quoted dot that is only a word.
+_r32d_owns = [_r29d_may_set_path(_x) for _x in (
+    'P=PA; bash --rcfile /x -c "${P}TH=/x"', 'P=PA; bash --init-file /x -c "${P}TH=/x"', "'.' /x/env",
+    '"." /x/env', "\\. /x/env", "so''urce /x/env", "X=1 '.' /x/env", "echo '.' x", 'find "." -name x')]
+# A `cd` spelled with quotes inside its word is a directory change (the relative path after it is read
+# there too); a quoted `cd` that is only an echo's word adds nothing past the start (control).
+_r32d_cd = [_r29d_cd_bases(_x, {}, {}, "/r32d")[0] for _x in (
+    "c''d /x/y && ./tailscale", '"c"d /x/y && ./tailscale', "echo cdx /x/y")]
+# A script that takes away the guard's own function is judged on its PATH, and one that names the
+# function only as a word is not (control).
+_r32d_func_off = [bool(_R32D_FUNC_OFF.search(_x)) for _x in (
+    "unset -f tailscale; tailscale version", "unset which; which tailscale", "tailscale() { :; }",
+    "function which { :; }", "echo unset; tailscale version", "tailscale status")]
+check("unit suite: ...a nested shell past --rcfile's value and a `.`, `source` or `cd` quoted inside its "
+      "word are kept off the shim or followed, a script that unsets the guard's function is judged; a "
+      "quoted dot or cd that is only a word is not (control)",
+      _r32d_owns == [True] * 7 + [False] * 2
+      and [("/x/y" in _b) for _b in _r32d_cd] == [True, True, False]
+      and _r32d_func_off == [True] * 4 + [False] * 2,
+      repr((_r32d_owns, _r32d_cd, _r32d_func_off)))
 check("unit suite: ...nor past a comment, a here-document or a shift that only looks like one, while "
       "`command -p`, sudo, an expansion the reader cannot model, a name set other than by NAME=, and "
       "a wrapper's own NAME= are judged (control)",

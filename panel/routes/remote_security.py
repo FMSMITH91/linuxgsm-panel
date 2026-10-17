@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
-from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, load_config, set_config_keys)
+from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, bound_port, load_config, set_config_keys)
 from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
@@ -254,7 +254,14 @@ def _register_panel_binding(app):
         cfg = load_config()
         # _r15a_cfg_int: a hand-edited `port` that is not a number ("5000x", Infinity) made this
         # form answer a bare 500, the same hand-edit class as bind_host below.
-        cur_port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
+        stored_port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
+        # The port the panel serves on NOW (config.bound_port), not config.json's: after a move whose
+        # restart could not be scheduled the two differ, and the old port's rule, the jail and the
+        # helper's record were put back on the port still served (_r30b_keep_old_port). Read from
+        # config.json, a second move closed the rule of a port nothing served and left the live
+        # one's open, pointed the jail and the record at the unserved port when its own restart
+        # failed too, and a move back to the served port was refused as "in use" (by the panel).
+        cur_port = _r32a_served_port(stored_port)
         # nosec B104 - not a bind: the stored value, defaulted for a config written
         # before bind_host existed. The operator chooses it; this only reads it back. A non-string
         # (a hand edit) reads as unset, as the boot reads it (_r13a_cfg_text): .strip() on it made
@@ -264,10 +271,12 @@ def _register_panel_binding(app):
         new_bind = _r11c_canonical_bind(str(data.get("bind_host") or cur_bind).strip())
 
         local = RemoteServer.query.filter_by(is_local=True).first()
-        refusal = _r25j_binding_refusal(local, cfg, cur_port, new_port, new_bind)
+        refusal = _r25j_binding_refusal(local, cfg, cur_port, new_port, new_bind, stored_port)
         if refusal:
             return jsonify({"success": False, "message": refusal}), 400
-        if new_port == cur_port and new_bind == cur_bind:
+        # With a move still waiting for its restart, asking for the served port (to undo it) or for
+        # the saved one again (to retry it) is a change, not the binding the panel already has.
+        if new_port == cur_port == stored_port and new_bind == cur_bind:
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
         # ── Save the new binding ──
@@ -276,6 +285,7 @@ def _register_panel_binding(app):
         set_config_keys(cfg, port=new_port, bind_host=new_bind)
 
         fw_notes, fw_ok, old_removed = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
+        fw_ok = _r32a_close_unapplied_port(app, local, stored_port, cur_port, new_port, fw_notes) and fw_ok
         f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, new_port, cur_port)
 
         # The row says what HAPPENED. It used to be success=True whatever the firewall and the
@@ -309,6 +319,11 @@ def _register_panel_binding(app):
                             address=_r18a_bracketed(new_bind), port=new_port), fw_notes)})
 
 
+def _r32a_served_port(stored_port):
+    """The port this process is bound to (config.bound_port), else config.json's `stored_port`."""
+    return bound_port() or stored_port
+
+
 def _r18a_bracketed(host):
     """`host` as it reads before a `:port`: an IPv6 address in brackets (`:::5000` names nothing)."""
     return "[%s]" % host if ":" in (host or "") and not host.startswith("[") else host
@@ -340,26 +355,28 @@ def _port_refusal(local, cur_port, new_port):
     return None
 
 
-def _r25j_binding_refusal(local, cfg, cur_port, new_port, new_bind):
+def _r25j_binding_refusal(local, cfg, cur_port, new_port, new_bind, stored_port=None):
     """Why the panel must not move to `new_bind`:`new_port`, or None when it may.
 
+    `cur_port` is the port the panel serves on now, `stored_port` config.json's (None: the same).
     The record last: it is the one refusal that writes (root's panel.conf), so only a move every
     other check allowed is recorded.
     """
     return (_port_refusal(local, cur_port, new_port)
             or _bind_refusal(bool(cfg.get("tailscale_setup_done")), new_bind)
-            or _r25j_port_not_recorded(cur_port, new_port))
+            or _r25j_port_not_recorded(cur_port, new_port, stored_port))
 
 
-def _r25j_port_not_recorded(cur_port, new_port):
+def _r25j_port_not_recorded(cur_port, new_port, stored_port=None):
     """Why the move to `new_port` must stop here, or None: the helper would not record it.
 
     Before anything is saved. The helper publishes only the port it has recorded as the panel's,
     so an unrecorded move would come back up behind a Serve route the helper refuses to re-point.
     It also refuses a port another account is listening on, which _port_refusal's `ss` read can
-    miss (that read answers "free" when it cannot run).
+    miss (that read answers "free" when it cannot run). A move back to the served port while
+    another one is saved is recorded too: the record may still name the saved one.
     """
-    if new_port == cur_port:
+    if new_port == cur_port and stored_port in (None, cur_port):
         return None
     ok, why = so.record_panel_port(new_port)
     if ok:
@@ -497,6 +514,29 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
             fw_notes.append(i18n.Sentence("The firewall could not be updated."))
             fw_ok = False
     return fw_notes, fw_ok, old_removed
+
+
+def _r32a_close_unapplied_port(app, local, stored_port, cur_port, new_port, fw_notes):
+    """Close the rule a move that never applied opened, when this move leaves its port behind.
+
+    -> whether that went as it should (True when there was nothing to do). A move whose restart
+    could not be scheduled keeps the rule it opened for the saved port (_r30b_keep_old_port: the
+    restart still needs it). Once a later move replaces that saved port, nothing will ever listen
+    there, and its rule was left open for good. The served port is not this one: the move's own
+    close handles it (and puts it back if this restart fails as well).
+    """
+    if not local or stored_port in (cur_port, new_port):
+        return True
+    try:
+        ok, why = remote_ufw_close_port(local, stored_port, "tcp", force=True)
+    except Exception:
+        app.logger.warning("change-port: the unapplied port's rule could not be removed", exc_info=True)
+        ok, why = False, "error"
+    fw_notes.append(i18n.Sentence("Removed the rule for {port}, the port of the earlier change that never "
+                                  "applied.", port=stored_port) if ok else
+                    i18n.Sentence("The rule for {port}, the port of the earlier change that never applied, "
+                                  "is still there ({why}).", port=stored_port, why=why))
+    return bool(ok)
 
 
 def _r30b_keep_old_port(app, local, cur_port, new_port, old_removed):

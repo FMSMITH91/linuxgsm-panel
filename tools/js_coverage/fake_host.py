@@ -401,10 +401,13 @@ def _account_probe(command):
 
 # The file browser's rename (ssh_manager.files.rename_path): the folder, the name and the new name,
 # out of the shell-quoted script; a name already in the folder is taken, otherwise the entry in the
-# tree is renamed, so the listing that follows shows it under its new name.
+# tree is renamed, so the listing that follows shows it under its new name. The new name is read as
+# the one shell word _core._quote makes of it, not up to a following command: the script after it
+# changes (the console-path guard went in between), and reading up to `; if [` took that guard into
+# the name, so a taken name was "renamed" to "server.cfg;" and the flow saw no error.
 _RN_PARTS = (re.compile(r"cd -P -- (.*?) 2>/dev/null && pwd -P"),
              re.compile(r't="\$d"/(.*?); case "\$t"'),
-             re.compile(r'n="\$d"/(.*?); if \['))
+             re.compile(r'n="\$d"/((?:\'[^\']*\'|"[^"]*"|[^\s;\'"])+);'))
 
 
 def _rename(command):

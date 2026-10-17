@@ -289,7 +289,8 @@ try:
     _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (False, False, False))
     _es3["no_way_back"] = _p9_json(_c69.post("/api/remote/%d/close-port-22" % P9_HOST)).get("message")
     _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (True, True, True))
-    _p9_patch(_cp69, "remote_ufw_close_port_22", lambda remote: (True, "Port 22 rule removed from UFW"))
+    _p9_patch(_cp69, "remote_ufw_close_port_22", lambda remote: (True, _i18n69.Sentence(
+        "Public SSH rules removed from UFW (port {ports})", ports="22")))
     _p9_patch(_cp69, "_r28b_panel_way_in_refusal", lambda remote: None)   # reached over the tailnet
     _es3["closed"] = _p9_json(_c69.post("/api/remote/%d/close-port-22" % P9_HOST)).get("message")
     # The lockout guard, for real: remote_ufw_close_port → _r15a_guarded_spec_delete, whose firewall
@@ -320,7 +321,7 @@ finally:
 check("close port 22 (es): the no-way-back refusal and the removed-rule answer are Spanish (both were "
       "English in every language)",
       (_es3.get("no_way_back") or "").startswith("Rechazado: no hay una vía de vuelta por Tailscale")
-      and _es3.get("closed") == "Regla del puerto 22 eliminada de UFW", repr(_es3))
+      and _es3.get("closed") == "Reglas de SSH público eliminadas de UFW (puerto 22)", repr(_es3))
 check("firewall close (es): the lockout guard's \"couldn't read the firewall\" refusal is Spanish",
       (_es3.get("guard") or "").startswith("No se pudo leer el cortafuegos para comprobar si esta regla"),
       repr(_es3.get("guard")))

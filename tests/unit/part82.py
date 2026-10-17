@@ -25,7 +25,7 @@ from types import SimpleNamespace as NS
 from unit.part01 import check, skip
 from unit.part05 import _helper, _root
 from unit.part47 import _SETTLE47, _cut47, _node47
-from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_patch_sm,
                          _p9_restore_all)
 from panel.core import i18n as _i18n82
 from panel.db.models import User as _U82, db as _db82
@@ -104,7 +104,7 @@ try:
         _p9_patch(_rv82, "remote_ufw_status", _fn82)
         _r82 = _c82.get("/api/remote/%d/firewall" % P9_HOST)
         _fw82[_k82] = (_r82.status_code, _p9_json(_r82))
-    _p9_patch(_rv82._sm, "remote_os_check_updates", _key82)
+    _p9_patch_sm("remote_os_check_updates", _key82)
     _r82 = _c82.get("/api/remote/%d/check-updates" % P9_HOST)
     _upd82 = (_r82.status_code, _p9_json(_r82))
     _as82(_LANG82_WAS)

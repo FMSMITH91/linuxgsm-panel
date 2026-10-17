@@ -96,8 +96,8 @@ _outg109 = _js106(_name109g, _PEND109 + (
     "el.querySelector = q => q === '#gmc-outcome-slot'\n"
     "  && el.innerHTML.indexOf('gmc-outcome-slot') >= 0 ? slot : null;\n"
     "el.querySelectorAll = () => [];\n"), _SD109, (
-    "var _r30c_gmcRunning", "function _r30c_gmcRepoll(", "function _r30c_gmcWorking(",
-    "function loadGmodContent(", "function _gmcOutcome("), (
+    "var _r30c_gmcRunning", "function _r30c_gmcRepoll(", "var _r32c_gmcTimer", "function _r32c_gmcLater(",
+    "function _r30c_gmcWorking(", "function loadGmodContent(", "function _gmcOutcome("), (
     "  const out = {};\n"
     "  const RUN = {status: 'running', msg: 'p109 downloading'};\n"
     "  const poll = async how => { const n = timers.length; loadGmodContent(); const p = take('gmod-content');\n"

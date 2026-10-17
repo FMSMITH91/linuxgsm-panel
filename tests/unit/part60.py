@@ -46,6 +46,15 @@ from panel.routes import server_files as _sf60
 from panel.security import auth as _auth60
 
 _TRIP60_START = len(_P9_TRIPPED)
+# unit.console_live stands the console's state in by rewriting the guard's tmux folder line, and leaves a
+# command without that line as it is; were the panel's wording to change, every console-state check
+# would run unrewritten and fail without naming why (review 1017c lead). Named here instead.
+from unit import console_live as _cl60  # noqa: E402
+check("console states: the console guard and the console's socket lookup still name the tmux folder in "
+      "the words unit.console_live rewrites",
+      _cl60._TMUX_D in _files60._console_guard("cr60", "csgoserver")
+      and _cl60._TMUX_D in _p9_core._tmux_live_socket_sh("csgoserver"),
+      repr(_cl60._TMUX_D))
 _ROOT60 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _USER60 = "cr60"                      # the game account; its "home" is _HOME60
 _HOME60 = os.path.realpath(_tf60.mkdtemp(prefix="lgsm-unit-p60-home-"))

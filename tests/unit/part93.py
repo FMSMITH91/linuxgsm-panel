@@ -26,13 +26,16 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _helper as _helper93, _root
-from unit.part12 import P9_ADMIN, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
 from panel.core import validation as _val93
 from panel.db.models import User as _U93, db as _db93
 from panel.ops import system_ops as _so93
 from panel.ops import tailscale_integration as _ts93
 from panel.routes import remotes as _rem93
 
+# The armed sections below answer any host call the routes they drive gain with a refusal; the part ends
+# by reading what the tripwire recorded, so such a call fails here rather than read as "unknown" (review 1017c).
+_TRIP93_START = len(_P9_TRIPPED)
 _TMP93 = _tf93.mkdtemp(prefix="p93-")
 _atexit93.register(_shutil93.rmtree, _TMP93, True)
 
@@ -721,3 +724,6 @@ check("uninstall.sh: a system uninstall takes the Tailscale operator role back f
       _unop93 == {"the panel's account": (0, True, ["set --operator="]),
                   "someone else's": (0, True, []), "none": (0, True, [])}
       and 0 <= _blk93.find("_r25a_release_ts_operator") < _blk93.find("userdel"), repr(_unop93))
+
+check("part93: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP93_START, repr(_P9_TRIPPED[_TRIP93_START:][:6]))

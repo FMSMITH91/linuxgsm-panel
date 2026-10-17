@@ -548,3 +548,5 @@ _tsp97 = _r26j_ts_ports()
 check("tailscale routes: with a hand-edited port 0 in config.json, Serve's enable and the status "
       "page's bind suggestion are handed 5000, the port the boot binds (never 0)",
       _tsp97 == ((204, 200), [("serve", 5000), ("suggest", 5000)]), repr(_tsp97))
+check("part97: ...nor did the Serve and status routes it drove since (every host call was stubbed)",
+      len(_P9_TRIPPED) == _trip97, repr(_P9_TRIPPED[_trip97:][:6]))

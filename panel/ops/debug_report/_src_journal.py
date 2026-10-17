@@ -3,7 +3,12 @@
 read(max_lines=5000, timeout=10) -> dict
     {"source": "user-journal"|"user-unit"|"helper"|"root"|None, "lines": [str, ...],
      "why": fixed reason or None, "filtered": bool, "cut": bool, "sudo": [str, ...] or None,
-     "sudo_why": ...}
+     "sudo_why": ..., "how": the system-journal read tried, when none had content}
+
+    "why" is printed in the downloadable file, so it never says WHICH system-journal read was
+    tried: a privileged read with no helper happens exactly when the panel runs as root, and "via
+    root" (or "no journal readable without sudo") stated the privilege model there. That is "how"
+    ("helper", "root" or "user-unit"), which the report puts on its page only.
 
     1. A per-user install's own journal: `journalctl --user` with the matches `-u linuxgsm-panel`
        would add, minus the sudo noise (see below). Falling back to `--user -u linuxgsm-panel`
@@ -221,7 +226,8 @@ def read(max_lines=5000, timeout=10):
         got = _first_lines([(True, verb("panel-own", share)), (False, verb("panel"))], int(n))
         if got[0]:
             return _found(source, got, verb("panel-sudo"))
-        tried.append("system journal via %s: %s" % (source, got[2]))
+        tried.append("system journal: %s" % got[2])
+        how = source
     else:
         got = _first_lines(
             [(True, jctl([], user_unit_matches(uid), "panel-own")),
@@ -230,7 +236,7 @@ def read(max_lines=5000, timeout=10):
                           since=_PLAIN_FIELD_SINCE), True)], int(n))
         if got[0]:
             return _found("user-unit", got, jctl([], user_unit_sudo_matches(uid), "panel-sudo"))
-        tried.append("system journal for this account's unit: " + got[2])
-        tried.append("no journal readable without sudo")
+        tried.append("system journal: " + got[2])
+        how = "user-unit"
     return {"source": None, "lines": [], "why": "; ".join(tried), "filtered": False, "cut": False,
-            "sudo": None, "sudo_why": None}
+            "sudo": None, "sudo_why": None, "how": how}

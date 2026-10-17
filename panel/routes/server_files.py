@@ -506,8 +506,10 @@ def _console_tick(app, socketio, gs, server_id):
     ino, size, started, diff, framed = reply
     start = _console_read_start(server_id, ino, size)
     if start is None:
-        # The offsets were forgotten while this read was out (the last viewer left the console:
-        # _forget_unwatched_consoles). _console_read_start then took the reply as a first sight —
+        # The offsets were forgotten while this read was out: the server was deleted (or its id
+        # taken by a new row) mid-read, and panel_state.forget_rows dropped them. (Not
+        # _forget_unwatched_consoles: it runs in this same poller greenlet, before the ticks, so it
+        # cannot fire while a read is out.) _console_read_start then took the reply as a first sight —
         # the log's end recorded, nothing read — exactly as a new one would be. Unpacking its None
         # raised, and the tick was counted as failed.
         _feed_tick(server_id)

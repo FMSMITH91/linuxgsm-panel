@@ -968,9 +968,13 @@ def _peer_text(env):
 def _self_tls(conf):
     """Whether the panel terminates TLS itself, asked as app.py's after_request asks it.
 
-    That is the current config through _effective_https; the boot record when that module is not
-    loaded.
+    That is what the header itself decided (app.config _R32A_SELF_TLS, recorded at each response
+    from the config the process started from); else the current config through _effective_https;
+    the boot record when that module is not loaded. The current config alone said the next start's
+    answer while a saved bind or TLS change waited for its restart.
     """
+    if isinstance(conf.get("_R32A_SELF_TLS"), bool):
+        return conf["_R32A_SELF_TLS"]
     mod = sys.modules.get("app")
     if mod is not None and hasattr(mod, "_effective_https"):
         cfg, readable = _load_cfg()

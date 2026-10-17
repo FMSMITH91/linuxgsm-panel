@@ -3388,7 +3388,8 @@ _o_rp_h = _sm_hosts._core.run_privileged
 try:
     _sm_hosts._core.run_privileged = lambda *a, **k: (_SSH_UFW, "", 0)
     check("hosts: a rule for 2222 is not read as a rule for port 22",
-          _sm_hosts.remote_public_ssh_status(object()) == {"active": True, "mode": "off"},
+          {k: v for k, v in _sm_hosts.remote_public_ssh_status(object()).items()
+           if k in ("active", "mode", "ssh_ports")} == {"active": True, "mode": "off", "ssh_ports": [22]},
           str(_sm_hosts.remote_public_ssh_status(object())))
     _SSH_UFW = _SSH_UFW.replace("2222/tcp                   LIMIT IN",
                                 "22/tcp                     LIMIT IN")

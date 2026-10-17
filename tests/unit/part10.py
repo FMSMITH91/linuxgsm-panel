@@ -2876,7 +2876,7 @@ def _so7_generate_debug_report():
           _rep_text[:900])
     check("so/debug report: the system journal is used when the user journal is empty, redacted",
           all(("hunter2" not in _rep_text, "password=[redacted]" in _rep_log, "line 0599" in _rep_log,
-               "system journal (privileged read)" in _rep_text,
+               "- **Source**: system journal · " in _rep_text,
                _p7_journal_verbs() == _P7_HELPER_JOURNAL)), _rep_log[-200:])
     check("so/debug report: the recent log is the newest 400 lines, in order, and no older one",
           all((_rep_log.startswith("line 0200 "), "line 0199" not in _rep_log,
@@ -2905,7 +2905,7 @@ def _so7_generate_debug_report_2():
 def _so7_generate_debug_report_3():
     check("so/debug report: no journal anywhere says so, with what was tried, rather than an empty block",
           all(("```\n(no journal available)\n```" in _p7_text(_rep_none),
-               "- **Source**: none (user journal: no entries, rc 0; system journal via helper: no "
+               "- **Source**: none (user journal: no entries, rc 0; system journal: no "
                "entries, rc 0)" in _p7_text(_rep_none))), _p7_text(_rep_none)[:300])
     # R68: journalctl answers '-- No entries --' with rc 0; that is EMPTY, so the helper journal is read.
     _r68_log = _p7_log_block(_p7_text(_p7_call(_p7_report, journal_user="-- No entries --\n")))
@@ -2928,8 +2928,11 @@ def _so7_generate_debug_report_4():
     check("so/debug report: without the helper and not root, the journal verb (a password sudo) is never "
           "run; this account's unit is read unprivileged",
           all((not _verbs, not _dr_calls["verb"], "_UID=4242" in _unit[0], "-q" in _unit[0],
-               "unit line" in _r69, "this account's user unit" in _r69,
-               "no journal readable without sudo" in _r69_none)), repr((_verbs, _unit, _r69[:200])))
+               # The file names no journal read by privilege (review 1017c): which one it was is
+               # on the page only, so the file says "system journal" for this read as for the others.
+               "unit line" in _r69, "- **Source**: system journal · " in _r69,
+               "; system journal: " in _r69_none, "without sudo" not in _r69_none)),
+          repr((_verbs, _unit, _r69[:200])))
     # The update outcome is the updates section's: whatever it returns is printed under its heading.
     _upd = _p7_text(_p7_call(_p7_report, updates=lambda ctx: _P7Result(lines=["- **Outcome**: FAILED — p7"])))
     check("so/debug report: the updates section's outcome is printed under its own heading",

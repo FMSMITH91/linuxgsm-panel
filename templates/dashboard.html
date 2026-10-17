@@ -84,12 +84,17 @@
       {% if current_user.is_superadmin %}No game servers are configured yet.{% else %}<span>No game servers have been shared with you yet.</span>
       <span>If you expected to see some, ask an administrator to give your group access.</span>{% endif %}
       {% if current_user.is_superadmin or has_permission('manage_remotes') %}
-        <br>Start by adding a remote server, then install a game server from the Game Servers page.
+        {# There is no "Game Servers page" any more (/servers/manage folded into this one), and the
+           sidebar names the install page "Install a Server": the sentence sent a new operator to
+           look for a page that is not there. It names no page now; the links below are the way
+           there, and the install step is said only to whoever gets its link. #}
+        {% set _r32c_can_install = current_user.is_superadmin or has_permission('install_server') or has_permission('manage_servers') %}
+        <br>{% if _r32c_can_install %}Start by adding a remote server, then install a game server on it.{% else %}Start by adding a remote server.{% endif %}
         <br><a href="{{ url_for('manage_remotes') }}">Add a remote server</a>
         {# install_server_page, not manage_servers: that route is now a pure redirect to this
            very page (kept for bookmarks), so the empty state's own call to action reloaded the
            empty state. It also needs install/manage rights, which this branch does not test. #}
-        {% if current_user.is_superadmin or has_permission('install_server') or has_permission('manage_servers') %}
+        {% if _r32c_can_install %}
         <a href="{{ url_for('install_server_page') }}" class="ms-3">Install a game server</a>
         {% endif %}
       {% endif %}

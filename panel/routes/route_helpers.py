@@ -239,13 +239,14 @@ def _register_setup_tailscale(app):
             _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
                        detail="port %s: %s" % (port, why), success=False)
             return jsonify({"success": False, "message": why})
-        ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
-                                           backend_scheme=_serve_scheme_now(cfg, current_app.config))
+        kept = _r32j_kept_route(cfg, mount, False)
+        ok, msg = kept or ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
+                                                   backend_scheme=_serve_scheme_now(cfg, current_app.config))
         _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
                    detail="port %s, mount %s" % (port, mount), success=ok)
         if not ok:
             return jsonify({"success": False, "message": i18n.tr(msg)})
-        left = _remove_serve_leftovers(port, mount, "setup wizard", _wizard_audit)
+        left = "none" if kept else _remove_serve_leftovers(port, mount, "setup wizard", _wizard_audit)
         info = ts.get_tailscale_info(force_refresh=True)
         # Only the keys this step sets, onto the file as it is now: `cfg` was read before the
         # tailscale commands above, which yield, and saving it whole reverted what was written
@@ -641,9 +642,13 @@ def _wizard_audit(detail, ok):
 
 def _wizard_serve_url(info, cfg):
     """The panel's own Serve address (ts.route_url), or None when no route at its mount works now."""
-    route = ts.panel_route(info.serve_config, cfg.get("port", 5000), cfg.get("tailscale_mount"),
-                           _serve_scheme_now(cfg, current_app.config))
-    return ts.route_url(route) if route is not None else None
+    # Either of the panel's ports: a route the wizard kept (_r32j_kept_route) reaches the bound one.
+    for port in ts._r13b_panel_ports(cfg):
+        route = ts.panel_route(info.serve_config, port, cfg.get("tailscale_mount"),
+                               _serve_scheme_now(cfg, current_app.config))
+        if route is not None:
+            return ts.route_url(route)
+    return None
 
 
 def _wizard_serve_mount(cfg, port):
@@ -660,7 +665,11 @@ def _wizard_serve_mount(cfg, port):
         return None, ("Couldn't read this host's Tailscale Serve configuration, so the panel can't "
                       "tell whether another app is published where it would go. Nothing was "
                       "changed; set Serve up on the Tailscale page once it can be read.")
-    mount = ts.free_panel_mount(info.serve_config, port, cfg.get("tailscale_mount") or "/")
+    # A route to either of the panel's ports is its own, not another app's: while a port change the
+    # welcome step saved waits for its restart, the route the operator may be using reaches the port
+    # this process is bound to, and counting it as taken published a second route at /lgsm.
+    mount = ts.free_panel_mount(info.serve_config, port, cfg.get("tailscale_mount") or "/",
+                                also=ts._r13b_panel_ports(cfg))
     if mount is None:
         return None, ("Other apps hold both / and /lgsm on this host's Tailscale Serve, so the "
                       "panel was not published. Choose a mount on the Tailscale page.")
@@ -686,15 +695,46 @@ def _auto_tailscale_serve(cfg):
         if mount is None:
             _record_auto_serve(cfg, cfg.get("tailscale_mount") or "/", False, why)
             return
-        ok, msg = ts.setup_tailscale_serve(
+        funnel = bool(cfg.get("tailscale_use_funnel", False))
+        kept = _r32j_kept_route(cfg, mount, funnel)
+        ok, msg = kept or ts.setup_tailscale_serve(
             port=port,
             mount=mount,
-            funnel=cfg.get("tailscale_use_funnel", False),
+            funnel=funnel,
             backend_scheme=_serve_scheme_now(cfg, current_app.config),
         )
         _record_auto_serve(cfg, mount, ok, msg)
-        if ok:
+        if ok and not kept:
             _remove_serve_leftovers(port, mount, "at the end of setup", _wizard_audit)
+
+
+def _r32j_kept_route(cfg, mount, funnel):
+    """(True, why) to keep the panel's own Serve route at `mount` as it is, else None (write one).
+
+    Only while a port change the welcome step saved waits for its restart. The wizard publishes the
+    stored port, the one the root helper publishes and the panel serves from its next start; but a
+    route at `mount` that already reaches the port this process is bound to is the one working now,
+    and on a panel bound to loopback behind Serve it is how the operator reached the wizard.
+    Pointing it at the stored port, where nothing listens yet, cut that operator off with no
+    restart offered (only a bind change offers one). Kept, and marked set up with this mount, the
+    boot re-points it at the new port when the panel restarts (app._boot_serve), as it does after
+    any port change; a write was never needed for that. Read fresh: _wizard_serve_mount has just
+    refreshed the Serve read this asks.
+
+    Only when the :443 listener's Funnel is already what this caller would write (`funnel`): the
+    boot re-point asks for the stored Funnel, and on a listener that differs it counts the panel's
+    own route at the old port as another app's and refuses, leaving Serve on a port nothing
+    listens on and the panel bound to loopback. Not kept, the write below refuses that now, with
+    nothing stored, as it did before routes were kept.
+    """
+    bound = ts._r13b_bound_port(cfg)
+    stored = _r15a_cfg_int(cfg.get("port", 5000), 5000)
+    sc = ts.get_tailscale_info().serve_config
+    if (bound == stored or not ts._r12a_panel_on_443(sc, bound, mount)
+            or ts._r12a_listener_funnel(sc, bound)[0] != bool(funnel)):
+        return None
+    return True, i18n.Sentence("Tailscale Serve already reaches the panel at {mount}; it moves to port {port} "
+                               "when the panel restarts.", mount=mount, port=stored)
 
 
 def _record_auto_serve(cfg, mount, ok, msg):

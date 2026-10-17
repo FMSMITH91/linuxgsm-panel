@@ -87,7 +87,12 @@ POSTURE_RE = re.compile(
     r"|sudo grant:|falls back to the pre-helper path, which needs the wide grant"
     r"|once the helper can be placed to narrow it again|\bruns as root\b|\bas root ×\d"
     r"|\*\*Runs as\*\*"
-    r"|\*\*Privileged calls by path\*\*|\bsudo systemd-run\b|\bvia (?:shell|root) \d")
+    r"|\*\*Privileged calls by path\*\*|\bsudo systemd-run\b|\bvia (?:shell|root) \d"
+    # Which system-journal read the report made or tried, in the words it once used for them
+    # (_src_journal.read's "why" said "via root" exactly when the panel runs as root).
+    r"|\bsystem journal via (?:helper|root)\b|no journal readable without sudo|\(privileged read\)"
+    # Which account the panel logs in to a remote as (the Hosts section's old "login root" part).
+    r"|\blogin (?:non-)?root\b|\*\*Host \d+ login\*\*")
 
 
 def finding(level, area, text):

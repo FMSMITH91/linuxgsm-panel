@@ -634,7 +634,8 @@ try:
                                    ("Status: active\n\nTo  Action  From\n--  ------  ----\n", "", 0)]}.items():
         with _patched():
             _r15d_arm61()
-            _w66 = _wire66(verbs={"ufw-status": _st66, "ufw-delete-allow-port": ("", "", 0)})
+            _w66 = _wire66(verbs={"ufw-status": _st66, "ufw-delete-allow-port": ("", "", 0),
+                                  "sshd-effective-config": ("port 22\n", "", 0)})
             _c22[_k66] = (_H66.remote_ufw_close_port_22(_p8_srv66())[0],
                           [v for v, _a in _w66.verbs_called() if v == "ufw-delete-allow-port"])
 finally:

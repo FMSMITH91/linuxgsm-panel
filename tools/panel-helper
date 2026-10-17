@@ -51,6 +51,7 @@ import fcntl
 import glob
 import grp
 import gzip
+import io
 import ipaddress
 import json
 import os
@@ -4286,6 +4287,7 @@ def _emit_dir_tar(path, buf):
     base = os.path.basename(path.rstrip("/")) or "download"
     # "w|gz" is the STREAMING writer: it never seeks, which is what makes a pipe a valid
     # destination. "w:gz" seeks, and would fail on one.
+    short = []      # members whose file gave less than its size while being read (_R32aPadded)
     with tarfile.open(fileobj=buf, mode="w|gz") as tf:
         try:
             _r31a_tar_add(tf, path, base)
@@ -4298,10 +4300,68 @@ def _emit_dir_tar(path, buf):
         for root, dirs, files in os.walk(path, onerror=lambda _e: None):
             for name in dirs + files:
                 full = os.path.join(root, name)
+                arc = os.path.join(base, os.path.relpath(full, path))
                 try:
-                    _r31a_tar_add(tf, full, os.path.join(base, os.path.relpath(full, path)))
+                    if _r31a_tar_add(tf, full, arc):
+                        short.append(arc)
                 except OSError:
                     continue
+        _r32a_tar_notes(tf, path, base, short)
+
+
+_R32A_TAR_NOTES = "PANEL-DOWNLOAD-NOTES.txt"
+
+
+def _r32a_tar_notes(tf, path, base, short):
+    """Name, inside the archive itself, every file that changed size while it was being read.
+
+    The archive is already streaming to the browser, so the one place left to say so is a member of
+    its own, as GNU tar says "File shrank by N bytes; padding with zeros" (and still writes a
+    readable archive). Nothing is added when every file read whole.
+    """
+    if not short:
+        return
+    body = ("These files changed while the panel was reading them (a running game server rewrites\n"
+            "some files in place). Each was cut short and padded with zero bytes to the size it had\n"
+            "when its read began, so the rest of this archive stays readable. Download them again\n"
+            "with the server stopped for an intact copy:\n\n" + "".join("  %s\n" % n for n in short))
+    data = body.encode("utf-8", "replace")
+    name = _R32A_TAR_NOTES
+    while os.path.lexists(os.path.join(path, name)):    # never over a file of the folder's own
+        name = "_" + name
+    ti = tarfile.TarInfo(os.path.join(base, name))
+    ti.size, ti.mtime, ti.mode = len(data), int(time.time()), 0o644
+    tf.addfile(ti, io.BytesIO(data))
+
+
+class _R32aPadded(object):
+    """A regular file's reader that always gives tarfile the `size` bytes its header promised.
+
+    tarfile writes a member's header from the fstat taken when the read began, then copies exactly
+    that many bytes, and raises ("unexpected end of data") when the file gives fewer: a game file
+    truncated and rewritten in place, a log rotated by copytruncate. The header and part of the data
+    were already in the gzip stream by then, so _emit_dir_tar's skip appended every later member at
+    the wrong offset: a .tar.gz no tool could open, served as a successful download. Short (or a
+    read error partway) is padded with zero bytes to the promised size, as GNU tar does, and noted
+    (`short`) for the archive's notes member. A file that GREW is already cut at the size by tarfile.
+    """
+
+    def __init__(self, fh, size):
+        self.fh, self.left, self.short = fh, size, False
+
+    def read(self, n=-1):
+        n = self.left if n is None or n < 0 else min(n, self.left)
+        data = b""
+        if not self.short:
+            try:
+                data = self.fh.read(n) or b""
+            except OSError:
+                data = b""      # an I/O error partway: the same short read, said the same way
+        if len(data) < n:
+            self.short = True
+            data += b"\0" * (n - len(data))
+        self.left -= n
+        return data
 
 
 def _r31a_tar_add(tf, full, arcname):
@@ -4312,12 +4372,13 @@ def _r31a_tar_add(tf, full, arcname):
     transport gave up. A regular file is opened O_NONBLOCK | O_NOFOLLOW and described from its OWN
     descriptor (fstat), so what is archived is what was opened; anything else is archived from its
     lstat and never opened. An entry that is no longer what the first look said is skipped.
+    -> True when a regular file gave less than its size and was padded (_R32aPadded), else False.
     """
     if not stat.S_ISREG(os.lstat(full).st_mode):
         ti = tf.gettarinfo(full, arcname)
         if ti is not None and not ti.isreg():   # None: a socket, which tarfile.add skips too
             tf.addfile(ti)
-        return
+        return False
     fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     # open(), not os.fdopen: gettarinfo reads the file object's `name`, which an eventlet-patched
     # fdopen's object (a test process loading this file) does not have.
@@ -4331,9 +4392,12 @@ def _r31a_tar_add(tf, full, arcname):
     with fh:
         ti = tf.gettarinfo(full, arcname, fileobj=fh)
         if ti is not None and ti.isreg():
-            tf.addfile(ti, fh)
-        elif ti is not None and ti.islnk():
+            data = _R32aPadded(fh, ti.size)
+            tf.addfile(ti, data)
+            return data.short
+        if ti is not None and ti.islnk():
             tf.addfile(ti)      # a second name of an inode already archived: a link, no data
+    return False
 
 
 # ── A game server's own scope ─────────────────────────────────────────────────────────────────

@@ -411,23 +411,37 @@ _ZZ_IGNORES42 = {
 }
 _zz_yaml42 = sorted(_f for _f in _cls_files42 if _f.endswith((".yml", ".yaml")))
 _zz_ign42, _zz_ign_bad42 = set(), []
-# Rule names only: the workflows' prose writes the form as `ignore[<rule>]`, which is not one. In any
-# case (review 1017b: only a lower-case rule list was read, so an ignore spelled otherwise, which a
-# case-insensitive matcher would honour, was not held to the list below).
-_ZZ_RE42 = _re42.compile(r"#\s*zizmor\s*:\s*ignore\[([a-z0-9][a-z0-9, _-]*)\](.*)$", _re42.I)
+# Read as zizmor reads it (crates/zizmor/src/finding/location.rs: `# zizmor: ignore\[(.+)\](?:\s+.*)?$`,
+# the list split on "," and each entry trimmed; review 1017c: a list that starts with a blank or a comma,
+# `ignore[ dangerous-triggers]`, is honoured by zizmor and was not read here). Wider than zizmor in case
+# and spacing, which only reads more. The workflows' prose writes the form as `ignore[<rule>] <reason>`,
+# which names no rule.
+_ZZ_RE42 = _re42.compile(r"#\s*zizmor\s*:\s*ignore\[(.+)\]((?:\s+.*)?)$", _re42.I)
+
+
+def _zz_rules42(line):
+    """The rules an inline ignore on `line` names, as zizmor splits them (prose `<rule>` is none), and its reason."""
+    _m = _ZZ_RE42.search(line)
+    if not _m:
+        return [], ""
+    return [_r.strip().lower() for _r in _m.group(1).split(",") if _r.strip() and "<" not in _r], _m.group(2)
+
+
 for _f42 in _zz_yaml42:
     for _ln42 in open(os.path.join(_root, _f42), encoding="utf-8").read().splitlines():
-        _m42 = _ZZ_RE42.search(_ln42)
-        if not _m42:
+        _rules42, _why42 = _zz_rules42(_ln42)
+        if not _rules42:
             continue
-        if len(_m42.group(2).strip()) < 25:
+        if len(_why42.strip()) < 25:
             _zz_ign_bad42.append("%s: no reason: %s" % (_f42, _ln42.strip()))
-        _zz_ign42 |= {(_f42, _r.strip().lower()) for _r in _m42.group(1).split(",")}
-_zz_re_ctl42 = [bool(_ZZ_RE42.search(_x)) for _x in (
+        _zz_ign42 |= {(_f42, _r) for _r in _rules42}
+_zz_re_ctl42 = [_zz_rules42(_x)[0] for _x in (
     "  # zizmor: ignore[dangerous-triggers] x", "  # Zizmor: Ignore[Dangerous-Triggers] x",
-    "  # zizmor: ignore[<rule>] <reason>", "  # zizmor ignore[x] y")]
-check("zizmor: ...an inline ignore is read in any case; the prose's `ignore[<rule>]` is not one (control)",
-      _zz_re_ctl42 == [True, True, False, False], repr(_zz_re_ctl42))
+    "  # zizmor: ignore[ dangerous-triggers] x", "  # zizmor: ignore[,dangerous-triggers]",
+    "  # zizmor: ignore[a, b ] x", "  # zizmor: ignore[<rule>] <reason>", "  # zizmor ignore[x] y")]
+check("zizmor: ...an inline ignore is read as zizmor splits it (a blank or a comma first included) and in any "
+      "case; the prose's `ignore[<rule>]` is not one (control)",
+      _zz_re_ctl42 == [["dangerous-triggers"]] * 4 + [["a", "b"], [], []], repr(_zz_re_ctl42))
 _zz_cfg42 = [c for c in (".github/zizmor.yml", ".github/zizmor.yaml", "zizmor.yml", "zizmor.yaml")
              if os.path.exists(os.path.join(_root, c))]
 _zz_wf_read42 = [os.path.relpath(_p, _root).replace(os.sep, "/") for _p in _hr_files42]

@@ -225,6 +225,78 @@ def cmd_create_admin(args):
         print("Superadmin '%s' created." % _tty_safe(username))
 
 
+def _r32a_running_port(proc="/proc", app_py=None):
+    """The TCP port the running panel (this checkout's app.py, under this account) listens on, or None.
+
+    config.json's port is the one the NEXT start binds: the wizard's first step saves a new port
+    that applies only once the panel restarts, and a link printed with it ("Lost the link? Print it
+    again") opened a port nothing listened on. Read from the kernel: the LISTEN sockets among the
+    panel process's own descriptors (readable by its own account, which this runs as). None when
+    no such process is found or it holds other than exactly one listening port: the caller then
+    names config.json's, as before.
+    """
+    app_py = os.path.realpath(app_py or os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"))
+    ports = set()
+    for base in _r32a_panel_procs(proc, app_py):
+        try:
+            ports |= _r32a_listen_ports(base, _r32a_socket_inodes(base))
+        except OSError:
+            continue    # gone meanwhile, or not ours to read
+    return ports.pop() if len(ports) == 1 else None
+
+
+def _r32a_panel_procs(proc, app_py):
+    """The /proc/<pid> directories of this account's processes running `app_py` (resolved)."""
+    try:
+        pids = [d for d in os.listdir(proc) if d.isdecimal()]
+    except OSError:
+        return []
+    return [os.path.join(proc, pid) for pid in pids if _r32a_runs(os.path.join(proc, pid), app_py)]
+
+
+def _r32a_runs(base, app_py):
+    """Whether the process at /proc/<pid> `base` is this account's and runs `app_py`."""
+    try:
+        if os.stat(base).st_uid != os.getuid():
+            return False
+        with open(os.path.join(base, "cmdline"), "rb") as fh:
+            argv = [a.decode("utf-8", "replace") for a in fh.read().split(b"\0") if a]
+        # A relative app.py is the process's, resolved against its own working directory.
+        cwd = os.readlink(os.path.join(base, "cwd"))
+    except OSError:
+        return False    # gone meanwhile, or not ours to read
+    return any(a.endswith("app.py") and os.path.realpath(os.path.join(cwd, a)) == app_py for a in argv)
+
+
+def _r32a_socket_inodes(base):
+    """The socket inodes among /proc/<pid>/fd's descriptors."""
+    inodes = set()
+    for fd in os.listdir(os.path.join(base, "fd")):
+        target = os.readlink(os.path.join(base, "fd", fd))
+        if target.startswith("socket:["):
+            inodes.add(target[8:-1])
+    return inodes
+
+
+def _r32a_listen_ports(base, inodes):
+    """The ports of the LISTEN rows of `base`/net/tcp{,6} whose socket inode is one of `inodes`."""
+    out = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            with open(os.path.join(base, "net", name), encoding="ascii", errors="replace") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            f = row.split()
+            if len(f) >= 10 and f[3] == "0A" and f[9] in inodes:
+                try:
+                    out.add(int(f[1].rsplit(":", 1)[1], 16))
+                except (IndexError, ValueError):
+                    continue    # a malformed row names no socket
+    return out
+
+
 def cmd_setup_token(args):
     """Print the first-run wizard's one-time setup token, creating it if there is none yet.
 
@@ -255,7 +327,7 @@ def cmd_setup_token(args):
     # an https:// link to a panel that answers only http.
     scheme = "https" if _effective_https(cfg) else "http"
     print("Open the setup wizard with this link, using this server's address:")
-    print("    %s://<this-server>:%s/setup?token=%s" % (scheme, cfg.get("port", 5000), tok))
+    print("    %s://<this-server>:%s/setup?token=%s" % (scheme, _r32a_running_port() or cfg.get("port", 5000), tok))
     print("or open /setup and paste the token:  %s" % tok)
 
 

@@ -47,7 +47,7 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _helper
-from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
+from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch, _p9_patch_sm,
                          _p9_restore_all, _p9_sd, _p9_sf, _p9_sh, _p9_trip)
 from flask import session as _session68
 from panel.core import i18n as _i18n68
@@ -147,8 +147,8 @@ def _restart_written68(host):
 def _restart_callers68(client, sid, host):
     # 3. Every caller of the heal hands the override over: the page, the daily pass, a port move.
     calls = []
-    _p9_patch(_p9_sd._sm, "upgrade_managed_cron_tracking",
-              lambda *a, **k: (calls.append(k.get("query_type")), False)[1])
+    _p9_patch_sm("upgrade_managed_cron_tracking",
+                 lambda *a, **k: (calls.append(k.get("query_type")), False)[1])
     # The port move asks game_account_write_refusal before its rewrite (review 1012d), a host round
     # trip stood in for here as a plain game account.
     _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
@@ -166,13 +166,13 @@ def _restart_callers68(client, sid, host):
     # check is a host round trip, stood in for here as a plain game account.
     _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_app68, "ensure_node_tools_cron", lambda r: None)
-    _p9_patch(_p9_sd._sm, "upgrade_managed_cron_tracking",
-              lambda remote, user, *a, **k: seen.append((user, k.get("query_type"))))
+    _p9_patch_sm("upgrade_managed_cron_tracking",
+                 lambda remote, user, *a, **k: seen.append((user, k.get("query_type"))))
     _app68._node_tools_cron_pass(_p9)
     check("daily restart (re-type): ...and so does the daily pass over every server",
           (_USER68, _QT68) in seen, repr(seen))
-    _p9_patch(_p9_sd._sm, "upgrade_managed_cron_tracking",
-              lambda *a, **k: (calls.append(k.get("query_type")), False)[1])
+    _p9_patch_sm("upgrade_managed_cron_tracking",
+                 lambda *a, **k: (calls.append(k.get("query_type")), False)[1])
     with _p9.app_context():
         db.session.get(GameServer, sid).daily_restart = False
         db.session.commit()
@@ -265,7 +265,7 @@ def _cron_stale_pipeline68(gone):
 def _cron_stale_route68(client, sid, gone):
     # The route says it in the viewer's language.
     _p9_patch(_p9_sf, "game_account_write_refusal", lambda *a, **k: None)
-    _p9_patch(_p9_sf._sm, "delete_cron_job", _cron68.delete_cron_job)
+    _p9_patch_sm("delete_cron_job", _cron68.delete_cron_job)
     _p9_patch(_p9_core, "_rewrite_crontab", lambda *a, **k: (False, _p9_core.CRON_DROP_GONE))
     resp = _as_lang68("es", lambda: client.post("/api/server/%d/cron/delete" % sid,
                                                 json={"raw": gone}))
@@ -349,7 +349,7 @@ def _rtcw_ban68(client, sid):
     check("moderation (iortcw): ...a ban the server added, or a reply not seen yet, is \"Done.\" "
           "(control)", got["added"] == (True, "Done.") and got["no reply yet"] == (True, "Done."),
           repr(got))
-    _p9_patch(_p9_sd._sm, "moderate", lambda *a, **k: got["bot"])
+    _p9_patch_sm("moderate", lambda *a, **k: got["bot"])
     resp = _as_lang68("fr", lambda: client.post("/api/server/%d/moderate" % sid,
                                                 json={"action": "kick", "num": "2"}))
     msg = (_p9_json(resp) or {}).get("message") or ""
@@ -449,8 +449,8 @@ def _ts_refusal68(client, sid):
 def _cron_read_refused68(client, sid):
     why = _p9_sh._privileged_write_msg("ubuntu", "it is in the sudo group", reading=True)
     listed, upgraded = [], []
-    _p9_patch(_p9_sf._sm, "list_cron_jobs", lambda *a, **k: (listed.append(a), [])[1])
-    _p9_patch(_p9_sf._sm, "upgrade_managed_cron_tracking", lambda *a, **k: upgraded.append(a))
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: (listed.append(a), [])[1])
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: upgraded.append(a))
     _p9_patch(_p9_sf, "game_account_write_refusal",
               lambda remote, user, now=None, reading=False: why if reading else None)
     resp = client.get("/api/server/%d/cron" % sid)
@@ -514,8 +514,8 @@ def _holders_translated68():
 
 def _install_output_clean68():
     _p9_patch(_p9_ms, "host_account_state", lambda remote, user: "absent")
-    _p9_patch(_p9_ms._sm, "create_game_user",
-              lambda remote, user, timeout=15: ("", "\x1b[31museradd: group 'g' does not exist\x1b[0m\r\n"
+    _p9_patch_sm("create_game_user",
+                 lambda remote, user, timeout=15: ("", "\x1b[31museradd: group 'g' does not exist\x1b[0m\r\n"
                                                 "  try again\n", 9))
     ok, why, _retry = _p9_ms.prepare_install_account(None, -68, _USER68 + "x", True)
     check("install: useradd's colour codes, carriage returns and padding are cleaned out of the "

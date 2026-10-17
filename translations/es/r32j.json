@@ -1,0 +1,4 @@
+{
+  "Stopped waiting. Once you have approved the machine:": "Se dejó de esperar. Cuando hayas aprobado la máquina:",
+  "Tailscale Serve already reaches the panel at {mount}; it moves to port {port} when the panel restarts.": "Tailscale Serve ya llega al panel en {mount}; pasará al puerto {port} cuando el panel se reinicie."
+}

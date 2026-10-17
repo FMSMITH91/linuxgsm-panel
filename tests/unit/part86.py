@@ -357,6 +357,7 @@ _UFW_HEAD86 = ("Status: active\n\n     To                         Action      Fr
 def _public_mode86(*rows):
     out = _UFW_HEAD86 + "".join(r + "\n" for r in rows)
     _p9_patch(_p9_core, "run_privileged", lambda *a, **k: (out, "", 0))
+    _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))   # ssh.socket: not read
     return _hosts86.remote_public_ssh_status(NS(id=-86, name="p86")).get("mode")
 
 
@@ -461,6 +462,8 @@ def _v6_split86():
 def _named_rule86():
     out = _UFW_HEAD86 + _ALLOW_ROW83 % "22,80/tcp" + "\n"
     _p9_patch(_p9_core, "run_privileged", lambda *a, **k: (out, "", 0))
+    # ssh.socket's read (sshd's ports, review 1017c) answers nothing: a key host's dial port stands.
+    _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))
     _p9_patch(_hosts86, "_tailnet_ssh_state", lambda s: (True, True, True))
     ok, msg = _hosts86.remote_set_public_ssh(NS(id=-86, name="p86", host="100.64.0.86", port=22, auth_method="key",
                                                 is_local=False), "off")
