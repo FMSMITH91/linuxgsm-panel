@@ -239,15 +239,18 @@ _outr106 = _js106(_name106r, (
     "var serverId = 1; function _tr(s){ return s; }\n"
     "let sent = [];\n"
     "const reply = d => { global.fetch = (u, o) => { sent.push(o && o.body ? JSON.parse(o.body) : null);\n"
-    "  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve(d)}); }; };\n"), _SF106, (
-    "var _r26c_rawRead", "var _r29j_rawShown", "function loadConfig(", "function refreshRawConfig(",
+    "  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve(d)}); }; };\n"
+    # a textarea's value: CR and CRLF read back as LF (the HTML spec's API value)
+    "Object.defineProperty(document.getElementById('cfg-raw'), 'value', {get(){ return this._v; },\n"
+    "  set(v){ this._v = String(v).replace(/\\r\\n?/g, '\\n'); }});\n"), _SF106, (
+    "var _r26c_rawRead", "var _r29j_rawShown", "function _r29j_rawText(", "function loadConfig(", "function refreshRawConfig(",
     "function _r26c_rawStale(", "function _r29j_rawBehind(", "function saveRaw("), (
     "  const out = {}, ta = document.getElementById('cfg-raw'), msg = document.getElementById('cfg-raw-msg');\n"
     "  const save = async () => { sent = []; reply({success: true}); saveRaw(); await settle();\n"
     "    return sent.filter(Boolean).map(b => b.raw); };\n"
-    "  const run = async (focus, typed, after) => {\n"
+    "  const run = async (focus, typed, after, first) => {\n"
     "    msg.textContent = ''; msg.className = '';\n"
-    "    reply({groups: [], raw: 'a=1\\n'}); loadConfig(); await settle();\n"
+    "    reply({groups: [], raw: first || 'a=1\\n'}); loadConfig(); await settle();\n"
     "    document.activeElement = focus ? ta : null;\n"
     "    if (typed) ta.value = 'a=1\\nb=9\\n';\n"
     "    reply({groups: [], raw: after}); refreshRawConfig(); await settle();\n"
@@ -257,6 +260,17 @@ _outr106 = _js106(_name106r, (
     "  out.untouched = await run(true, false, 'a=2\\n');\n"
     "  out.same = await run(true, true, 'a=1\\n');\n"
     "  out.blurred = await run(false, false, 'a=2\\n');\n"
+    # a cfg with CR line ends: the box holds it with LF, so an untouched focused box is still untouched
+    "  out.crUntouched = await run(true, false, 'a=2\\r\\n', 'a=1\\r\\n');\n"
+    "  out.crSame = await run(true, false, 'a=1\\r\\n', 'a=1\\r\\n');\n"
+    "  out.crBehind = await run(true, true, 'a=2\\r\\n', 'a=1\\r\\n');\n"
+    "  out.crTypedSame = await run(true, true, 'a=1\\r\\n', 'a=1\\r\\n');\n"
+    # a box a re-read refilled (unfocused) from a CR file, then focused untouched for the next re-read
+    "  msg.textContent = ''; msg.className = '';\n"
+    "  reply({groups: [], raw: 'a=1\\n'}); loadConfig(); await settle();\n"
+    "  reply({groups: [], raw: 'a=2\\r\\n'}); refreshRawConfig(); await settle();\n"
+    "  document.activeElement = ta; reply({groups: [], raw: 'a=3\\r\\n'}); refreshRawConfig(); await settle();\n"
+    "  out.crTwice = {text: ta.value, posted: await save(), msg: msg.className}; document.activeElement = null;\n"
     "  console.log(JSON.stringify(out));\n"))
 if _outr106 is not None:
     check("Raw config editor: a box typed into while a settings save's re-read came back keeps the "
@@ -272,6 +286,20 @@ if _outr106 is not None:
                                        "posted": ["a=1\nb=9\n"]}
           and _outr106.get("blurred") == {"text": "a=2\n", "msg": "small ms-2 text-success",
                                           "posted": ["a=2\n"]}, repr(_outr106))
+    check("Raw config editor: a cfg with CR line ends does not mark a focused, untouched box 'behind' "
+          "(the box holds it with LF, so it never equalled the reply and its Save was refused); it is "
+          "refilled and saves, and a box typed into while that file changed is still refused",
+          _outr106.get("crUntouched") == {"text": "a=2\n", "msg": "small ms-2 text-success", "posted": ["a=2\n"]}
+          and _outr106.get("crSame") == {"text": "a=1\n", "msg": "small ms-2 text-success", "posted": ["a=1\n"]}
+          and _outr106.get("crBehind", {}).get("posted") == []
+          and _outr106["crBehind"].get("msg") == "small ms-2 text-danger", repr(_outr106))
+    check("Raw config editor: ...with CR line ends, a box typed into while the file did not change saves "
+          "the typing, and a box a re-read refilled is still untouched at the next re-read (the stored "
+          "text is what the box holds, not the reply)",
+          _outr106.get("crTypedSame") == {"text": "a=1\nb=9\n", "msg": "small ms-2 text-success",
+                                          "posted": ["a=1\nb=9\n"]}
+          and _outr106.get("crTwice") == {"text": "a=3\n", "posted": ["a=3\n"], "msg": "small ms-2 text-success"},
+          repr(_outr106))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. A restored auth select brings its credential field with it (integrator, A12 lead)

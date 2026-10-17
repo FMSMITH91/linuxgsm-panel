@@ -28,7 +28,11 @@ var gameCfgLoaded=false, gameCfgRel=null;
 // below leaves a focused box alone), so its text predates that save; refused for the same reason.
 var _r26c_rawRead='unread';
 // The text a read last put in the box: a focused box still holding it has not been typed into.
+// Read back from the box after each fill, not the reply's text: a textarea's value turns CR and CRLF
+// into LF, so a cfg with CRs never equalled the reply, and an untouched box read as typed-into
+// (refused Save as 'behind'). A reply is compared after the same normalisation (_r29j_rawText).
 var _r29j_rawShown=null;
+function _r29j_rawText(s){ return String(s).replace(/\r\n?/g, '\n'); }
 var _el_cfg_tabs = document.getElementById('cfg-tabs');
 if (_el_cfg_tabs) _el_cfg_tabs.addEventListener('click', function(ev){
   var b=ev.target.closest('[data-tab]'); if(!b) return;
@@ -77,8 +81,9 @@ function loadConfig(){
     });
     if(!(d.groups||[]).length) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
-    document.getElementById('cfg-raw').value = d.raw||'';
-    _r29j_rawShown = d.raw||'';
+    var ta=document.getElementById('cfg-raw');
+    ta.value = d.raw||'';
+    _r29j_rawShown = ta.value;
     _r26c_rawRead='ok';
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
 }
@@ -136,12 +141,12 @@ function refreshRawConfig(){
     // the pre-save text back over the settings just saved. Typed-in and now behind the file: its
     // Save is refused until the page is reloaded. Focused but untouched: it is simply refilled.
     if(document.activeElement===ta && ta.value!==_r29j_rawShown){
-      if(d.raw!==_r29j_rawShown) _r29j_rawBehind();
+      if(_r29j_rawText(d.raw)!==_r29j_rawShown) _r29j_rawBehind();
       return;
     }
     // A good read clears a stale mark a failed earlier one left.
     if(_r26c_rawRead==='stale') document.getElementById('cfg-raw-msg').textContent='';
-    ta.value = d.raw; _r29j_rawShown = d.raw; _r26c_rawRead='ok';
+    ta.value = d.raw; _r29j_rawShown = ta.value; _r26c_rawRead='ok';
   }).catch(function(){ _r26c_rawStale(); });
 }
 function _r29j_rawBehind(){
