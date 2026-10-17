@@ -201,7 +201,7 @@ _R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\
 # (`bash -O extglob -l`) is skipped, and `exec -l` hands any shell a login name (review 1017a).
 _R29D_LOGIN = re.compile(r"(?:^|[\s;&|(`/'\"])(?:ba|da|z|k|mk)?sh\s+(?:[-+][oO]\s+\w+\s+|[-+]\w+\s+)*"
                          r"(?:-[a-zA-Z]*[il][a-zA-Z]*|--login|--interactive)\b"
-                         r"|\bexec\s+(?:-a\s+\S+\s+|-\w+\s+)*-\w*l\w*\s")
+                         r"|\bexec\s+(?:-a\s+\S+\s+|-(?!a\s)\w+\s+)*(?:-\w*l\w*\s|-a\s+-)")
 # The `.` builtin, where a command starts (review 1017a: any ` . ` word counted, so `find . -name x`
 # read as sourcing a file, moved its script off the shell production runs it under, and a wrapper
 # handed `find . …` was judged as possibly running the binary).
