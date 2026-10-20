@@ -1673,10 +1673,29 @@ _REMOTE_ACTIONS = {
             "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
             "export DEBIAN_FRONTEND=noninteractive; "
             "apt-get update >> {L} 2>&1; "
+            # Packages the upgrade would DOWNGRADE (the host's own pinning prefers an older
+            # version) are kept at the installed version for this run: under -y apt refuses the
+            # whole run otherwise, and the panel never downgrades by itself. The helper's
+            # _r33_keep_installed_opts does the same on the panel host; see its docstring.
+            # No temp dir (mktemp failed): no file is written anywhere and apt runs as before.
+            "kd=$(mktemp -d 2>/dev/null); po=''; kept=''; "
+            "if [ -n \"$kd\" ] && [ -d \"$kd\" ]; then pf=$kd/preferences; : > $pf; "
+            "[ -f /etc/apt/preferences ] && cat /etc/apt/preferences >> $pf && echo >> $pf; "
+            "po=\"-o Dir::Etc::Preferences=$pf\"; "
+            "while read -r p o n; do "
+            "if dpkg --compare-versions \"$n\" lt \"$o\"; then "
+            "printf 'Package: %s\\nPin: version %s\\nPin-Priority: 32000\\n\\n' \"$p\" \"$o\" >> $pf; "
+            "kept=\"$kept $p $o,\"; fi; "
+            "done < <(LC_ALL=C.UTF-8 apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null"
+            " | sed -n 's/^Inst \\([^ ]*\\) \\[\\([^] ]*\\)\\] (\\([^ ]*\\) .*/\\1 \\2 \\3/p'); fi; "
+            "[ -n \"$kept\" ] && echo \"Kept at the installed version (this host's apt pinning "
+            "would DOWNGRADE them, which the panel never does by itself; run apt by hand if you "
+            "want that):${{kept%,}}\" >> {L}; "
             "apt-get -y "
             "-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "
+            "$po "
             "full-upgrade >> {L} 2>&1; "
-            "rc=$?; "
+            "rc=$?; [ -n \"$kd\" ] && rm -rf \"$kd\"; "
             "apt-get -y autoremove >> {L} 2>&1 || true; "
             "echo \"{S}$rc\" >> {L} 2>&1".format(L=OS_UPDATE_LOG, S=OS_UPDATE_DONE)),
            OS_UPDATE_STARTED)),

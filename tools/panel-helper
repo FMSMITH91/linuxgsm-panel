@@ -3161,6 +3161,50 @@ def _os_update_detached():
     os._exit(_os_update_run())
 
 
+# `Inst <pkg> [<installed>] (<candidate> ...` in a C-locale `apt-get -s` run: the upgrade apt plans.
+_R33_INST_RE = re.compile(r"^Inst (\S+) \[([^\]\s]+)\] \((\S+) ", re.M)
+
+
+def _r33_is_older(new, old, env):
+    """Whether dpkg orders version `new` before `old` (apt would DOWNGRADE to it)."""
+    return subprocess.run(["dpkg", "--compare-versions", new, "lt", old],  # nosec B603 B607
+                          shell=False, env=env, capture_output=True, timeout=30).returncode == 0
+
+
+def _r33_keep_installed_opts(apt, env, tmpdir, log):
+    """Return the apt -o options that keep, for THIS run only, every package it would downgrade.
+
+    A host whose apt pinning prefers an older version (a Pin-Priority over 1000, often left by a
+    third-party repo's setup) makes `full-upgrade` plan a DOWNGRADE, and under -y apt then refuses
+    the whole run ("Packages were downgraded and -y was used without --allow-downgrades"), so not
+    one of the real updates installed and the card said only "Finished with errors". The panel
+    never downgrades by itself; it keeps those packages at the version installed, for this run,
+    through a preferences file of its own (the host's /etc/apt/preferences is copied into it, and
+    preferences.d is still read: nothing the operator set is lost or changed on disk), installs
+    every real update, and says in the log which packages it kept and why.
+    """
+    sim = subprocess.run([apt, "-s", "-o", "Debug::NoLocking=1", "full-upgrade"],  # nosec B603
+                         shell=False, env=env, capture_output=True, text=True, timeout=600)
+    kept = [(p, old) for p, old, new in _R33_INST_RE.findall(sim.stdout or "")
+            if _r33_is_older(new, old, env)]
+    if not kept:
+        return []
+    prefs = os.path.join(tmpdir, "preferences")
+    with open(prefs, "w", encoding="utf-8") as fh:
+        try:
+            with open("/etc/apt/preferences", encoding="utf-8") as own:
+                fh.write(own.read().rstrip("\n") + "\n\n")
+        except FileNotFoundError:
+            pass    # no main preferences file: nothing of the operator's to carry over
+        for pkg, old in kept:
+            fh.write("Package: %s\nPin: version %s\nPin-Priority: 32000\n\n" % (pkg, old))
+    log.write("Kept at the installed version (this host's apt pinning would DOWNGRADE them, which "
+              "the panel never does by itself; run apt by hand if you want that): %s\n"
+              % ", ".join("%s %s" % k for k in kept))
+    log.flush()
+    return ["-o", "Dir::Etc::Preferences=" + prefs]
+
+
 def _os_update_run():
     """Run the OS update itself: apt update, full-upgrade, autoremove, then the UI's sentinel.
 
@@ -3178,9 +3222,14 @@ def _os_update_run():
             # The same flags apt-full-upgrade uses, for the same reasons: keep any config file
             # the operator has edited, and never force Ubuntu's phased rollouts (an update phasing
             # holds back stays back until its rollout reaches this host).
-            rc = subprocess.run([apt, "-y"] + APT_CONFOLD + ["full-upgrade"],  # nosec B603
-                                shell=False, env=env,
-                                stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
+            keep_dir = tempfile.mkdtemp(prefix="lgsm-os-update-")
+            try:
+                keep = _r33_keep_installed_opts(apt, env, keep_dir, log)
+                rc = subprocess.run([apt, "-y"] + APT_CONFOLD + keep + ["full-upgrade"],  # nosec B603
+                                    shell=False, env=env,
+                                    stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
+            finally:
+                shutil.rmtree(keep_dir, ignore_errors=True)
             subprocess.run([apt, "-y", "autoremove"], shell=False, env=env,  # nosec B603
                            stdout=log, stderr=subprocess.STDOUT, timeout=1800)
             log.write("%s%d\n" % (OS_UPDATE_DONE, rc))
