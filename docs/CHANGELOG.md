@@ -601,6 +601,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Installing OS updates no longer stops on a package apt would downgrade.** On a host whose apt
+  pinning prefers an older version of a package (here proftpd, often left by a third-party repo's
+  setup), apt refused the whole upgrade ("Packages were downgraded and -y was used without
+  --allow-downgrades", exit 100) and none of the real updates installed. The panel never
+  downgrades by itself: it now keeps such packages at the version installed, for that run only and
+  without changing the host's apt settings, installs every real update, and names the kept packages
+  in the log. On the panel host and on remote hosts; proven on the test VPS.
+
 - **A twentieth full review on 2026-10-17: fixes.** Every item below has a check that fails without
   its fix.
   - **The Public SSH card follows the SSH port the host really uses.** After the panel moved a host's

@@ -1759,6 +1759,8 @@ _r16d_wrap_ts_handles()
 # part117 (review 1017c's integration fixes, integrator J: the Hosts section's login class page-only,
 # create/rename never at a dangling log link's target) drives the debug report's Hosts section and the
 # file browser's host-side commands under bash on part12's stand-ins and tripwire; imports part01 and 12.
+# part118 (an OS update keeps a package apt would DOWNGRADE at its installed version, panel host and
+# remote) drives the helper in-process and the remote job's shell under bash; imports part01 and 05.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1772,7 +1774,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part92", "part93", "part94", "part95", "part96", "part97", "part98", "part99", "part100",
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
-          "part15")
+          "part118", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
