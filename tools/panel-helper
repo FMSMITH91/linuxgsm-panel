@@ -3172,7 +3172,7 @@ def _r33_is_older(new, old, env):
 
 
 def _r33_keep_installed_opts(apt, env, tmpdir, log):
-    """apt -o options that keep, for THIS run only, every package the upgrade would downgrade.
+    """Return the apt -o options that keep, for THIS run only, every package it would downgrade.
 
     A host whose apt pinning prefers an older version (a Pin-Priority over 1000, often left by a
     third-party repo's setup) makes `full-upgrade` plan a DOWNGRADE, and under -y apt then refuses
