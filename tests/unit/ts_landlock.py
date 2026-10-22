@@ -514,7 +514,7 @@ def _shapes_1017a(d, ctl):
          {"shell": True}),
         ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
         ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {})) + _shapes_1017b(d, ctl) \
-        + _shapes_1017c(d, ctl)
+        + _shapes_1017c(d, ctl) + _shapes_1022a(d)
 
 
 def _shapes_1017b(d, ctl):
@@ -568,6 +568,38 @@ def _shapes_1017c(d, ctl):
 def shapes_1017c(d, ctl):
     """The review-1017c shapes alone (each must reach the planted binary unblocked)."""
     return _with_env(_shapes_1017c(d, ctl))
+
+
+def _shapes_1022a(d):
+    """shapes(): the built-name, un-exporting and privileged-bash shapes (review 1022a).
+
+    Each reached the planted "machine's" binary in `d` on the bash route, where the guard's own
+    functions are all that stands before PATH: a script that unsets the function by a name it builds
+    or by a command word it builds, one that un-exports it before a nested `bash -c`, a nested bash in
+    privileged mode (which imports no function), and a nested bash building PATH behind `-euo pipefail`.
+    """
+    _env, _first = {"PATH": "/usr/bin:/bin"}, {"PATH": d + ":/usr/bin:/bin"}
+    _shapes = [("run", (_x,), {"shell": True, "env": _first}) for _x in (
+        "T=tail; unset -f ${T}scale; tailscale version", 'U=un; eval "${U}set -f tailscale"; tailscale version',
+        "f=tailscale; unset -f $f; tailscale version", 'PATH=$PATH; X=tailscale; unset -f "$X"; tailscale version',
+        "PATH=$PATH; u=unset; $u -f tailscale; tailscale version",
+        "PATH=$PATH; $(echo unset) -f tailscale; tailscale version",
+        "PATH=$PATH; export -fn tailscale; bash -c 'tailscale version'",
+        "PATH=$PATH; declare +x -f tailscale; bash -c 'tailscale version'",
+        "PATH=$PATH; typeset +x -f tailscale; bash -c 'tailscale version'",
+        "PATH=$PATH; bash -p -c 'tailscale version'", "PATH=$PATH; bash -o privileged -c 'tailscale version'")]
+    _shapes += [("run", (_x,), {"shell": True, "env": _env}) for _x in (
+        'P=PA; bash -euo pipefail -c "${P}TH=%s; tailscale version"' % d,
+        'P=PA; bash -eo pipefail -c "${P}TH=%s; tailscale version"' % d)]
+    _shapes += [("run", (["env", "X=1", "bash"] + _o + ["tailscale version"],), {"env": _first})
+                for _o in (["-p", "-c"], ["-pc"], ["-o", "privileged", "-c"])]
+    return tuple(_shapes)
+
+
+def shapes_1022a(d, ctl):
+    """The review-1022a shapes alone (each must reach the planted binary unblocked); `ctl` is unused."""
+    del ctl
+    return _with_env(_shapes_1022a(d))
 
 
 def _kernel_table(ctl):

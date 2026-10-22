@@ -184,6 +184,59 @@ _r30a_apt_ni() {
     fi
 }
 
+# The apt options that keep, for ONE full-upgrade, every package this host's apt pinning would
+# DOWNGRADE (a Pin-Priority over 1000 preferring an older version, often left by a third-party
+# repo's setup): under -y apt refuses the WHOLE run otherwise ("Packages were downgraded and -y was
+# used without --allow-downgrades"), so not one security update installed and this script said
+# only "Some packages could not be upgraded" (review 1022a). The OS update job does the same
+# (tools/panel-helper _r33_keep_installed_opts, privileged.py's remote form): a preferences file of
+# its own, the keeps first and the host's /etc/apt/preferences after them, preferences.d still read. Sets
+# _R34A_KEEP_OPTS (empty when nothing would be downgraded, or the check could not run: apt then
+# runs as before) and _R34A_KEEP_DIR, for the caller to remove. Never fails, and never stops the
+# upgrade: no temp dir, no dpkg, or a simulation that failed or ran past its time is said on screen
+# and the upgrade goes ahead without the keep (a failed simulation read as "nothing to keep", with
+# nothing said, and a hung one held the install with it).
+_R34A_KEEP_OPTS=()
+_R34A_KEEP_DIR=""
+_r34a_keep_installed() {
+    local pf p o n kept="" why=""
+    _R34A_KEEP_OPTS=()
+    _R34A_KEEP_DIR="$(mktemp -d 2>/dev/null)" || _R34A_KEEP_DIR=""
+    # The C locale for a plan read by its words; a simulation needs no root.
+    if [[ -z "${_R34A_KEEP_DIR}" ]] || [[ ! -d "${_R34A_KEEP_DIR}" ]]; then
+        _R34A_KEEP_DIR=""
+        why="no temp dir"
+    elif ! command -v dpkg >/dev/null 2>&1; then
+        why="no dpkg"
+    elif ! env -u LANGUAGE LC_ALL=C.UTF-8 timeout 600 apt-get -s -o Debug::NoLocking=1 full-upgrade \
+            > "${_R34A_KEEP_DIR}/plan" 2>/dev/null; then
+        why="the simulation failed or timed out"
+    fi
+    if [[ -n "${why}" ]]; then
+        warn "Could not check for packages apt would downgrade (${why}); running the upgrade as before."
+        return 0
+    fi
+    pf="${_R34A_KEEP_DIR}/preferences"
+    : > "${pf}"
+    while read -r p o n; do
+        if dpkg --compare-versions "${n}" lt "${o}" 2>/dev/null; then
+            printf 'Package: %s\nPin: version %s\nPin-Priority: 32000\n\n' "${p}" "${o}" >> "${pf}"
+            kept+=" ${p} ${o},"
+        fi
+    done < <(sed -n 's/^Inst \([^ ]*\) \[\([^] ]*\)\] (\([^ ]*\) .*/\1 \2 \3/p' "${_R34A_KEEP_DIR}/plan" || true)
+    # The host's own records AFTER the keeps: apt takes a version's FIRST matching record, and an
+    # operator's record that also matched the installed version would otherwise undo the keep.
+    if [[ -f /etc/apt/preferences ]]; then
+        cat /etc/apt/preferences >> "${pf}" 2>/dev/null || true
+    fi
+    if [[ -n "${kept}" ]]; then
+        _R34A_KEEP_OPTS=(-o "Dir::Etc::Preferences=${pf}")
+        warn "Kept at the installed version (this host's apt pinning would DOWNGRADE them, which the"
+        warn "  installer never does by itself; run apt by hand if you want that):${kept%,}"
+    fi
+    return 0
+}
+
 # The prerequisites' apt-get. This step is the one whose sudo has only ever needed to allow apt-get
 # itself, and a sudo that allows apt-get and nothing else refuses `env`: then plain apt-get, whose
 # output is on screen here, so a dialog can at least be seen and answered.
@@ -3285,8 +3338,10 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
             if [[ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]]; then
                 echo ""
                 info "System updates are available — applying them now…"
-                _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
-                    || warn "Some packages could not be upgraded — continuing."
+                _r34a_keep_installed
+                _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" "${_R34A_KEEP_OPTS[@]}" \
+                    full-upgrade || warn "Some packages could not be upgraded — continuing."
+                [[ -z "${_R34A_KEEP_DIR}" ]] || rm -rf -- "${_R34A_KEEP_DIR}"
                 _r30a_apt_ni "${UPG_SUDO}" -y autoremove --purge >/dev/null 2>&1 || true
                 if [[ ! -f /var/run/reboot-required ]]; then
                     ok "System updated — no reboot required."
@@ -3377,10 +3432,17 @@ if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; 
     info "Bringing the OS fully up to date (one-time — set PANEL_NO_UPGRADE=1 to skip)…"
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
     _r30a_apt_ni "${UPG_SUDO}" update -qq || true
-    _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" full-upgrade \
-        || warn "Some packages could not be upgraded — continuing with the install."
+    _r34a_keep_installed
+    # Up to date only when the upgrade said so: a refused run printed the warning AND this.
+    if _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" "${_R34A_KEEP_OPTS[@]}" full-upgrade; then
+        _r34a_upg_ok=1
+    else
+        _r34a_upg_ok=0
+        warn "Some packages could not be upgraded — continuing with the install."
+    fi
+    [[ -z "${_R34A_KEEP_DIR}" ]] || rm -rf -- "${_R34A_KEEP_DIR}"
     _r30a_apt_ni "${UPG_SUDO}" -y autoremove --purge >/dev/null 2>&1 || true
-    ok "System packages up to date"
+    [[ "${_r34a_upg_ok}" -eq 0 ]] || ok "System packages up to date"
 fi
 
 # ── Automatic OS security updates (FRESH install only). A panel meant to run

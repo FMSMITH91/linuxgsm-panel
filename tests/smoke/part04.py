@@ -1020,7 +1020,11 @@ with app.app_context():
         _ps._monitor_state["servers"][_mon_id] = True
         _monmod._mark_expected_offline(_mon_id, "stop")      # what the Stop button marks
         _monmod._remote_listening_ports = lambda r: set()
-        _rec.clear(); _monmod._monitor_pass()
+        _rec.clear()
+        # Enough sweeps to CONFIRM a down (review 1022a): one sweep is silent whatever the stop
+        # says, so with the suppression deleted a single pass still passed this check.
+        for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
+            _monmod._monitor_pass()
         check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
         # ...and it is recorded DOWN at once, marked as the panel's own. It used to stay recorded
         # UP for the whole window (so its return would not page "Server back online" for an
@@ -1164,6 +1168,9 @@ with app.app_context():
         _rec.clear(); _monmod._monitor_pass()          # baseline: up
         _monmod._remote_listening_ports = lambda r: None    # the read FAILED
         _st_blip = _status_after_pass("online")
+        # ...and as many failed reads as CONFIRM a down (review 1022a: one is silent anyway).
+        for _ in range(_monmod._DOWN_CONFIRM_SWEEPS - 1):
+            _monmod._monitor_pass()
         check("monitor: a failed port scan does not fire server_down",
               "server_down" not in _rec, "fired: %s" % _rec)
         check("monitor: ...and does not write the server offline",
@@ -1455,7 +1462,11 @@ with app.app_context():
             # A stop the PANEL issued is already known locally — that must not cost a probe either.
             _monmod._remote_listening_ports = lambda r: set()
             _monmod._mark_expected_offline(_mon_id, "stop")
-            _probes.clear(); _rec.clear(); _monmod._monitor_pass()
+            _probes.clear(); _rec.clear()
+            # As many sweeps as CONFIRM a down (review 1022a): the probe waits for a confirmed one,
+            # so a single sweep made no probe with the local handling deleted too.
+            for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
+                _monmod._monitor_pass()
             check("maintenance: a panel-issued stop is handled locally, with no probe",
                   _mon_id not in _probes and "server_down" not in _rec,
                   "probed %s / fired %s" % (_probes, _rec))

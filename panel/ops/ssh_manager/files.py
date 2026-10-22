@@ -194,8 +194,16 @@ def _r23b_console_frag(user, selfname):
     nothing new until the server restarted, under "Saved". Rename and create already refuse it.
     Only while the server's console is attached (_console_guard): a stopped server's log is
     written like any file. Empty without `selfname`, which the console's path is built from.
+
+    ...and in EVERY state, a FILE strictly above a console path once resolved (`log`, `log/console`,
+    or `disk/logs` while `log -> disk/logs` dangles): it stops LinuxGSM making its log folders on the
+    next start, which create and rename already refuse (_r32j_console_dest_guard). The console's
+    log file itself is not above anything, so a stopped server's log is still written.
     """
-    return ('t="$p"; ' + _console_guard(user, selfname)) if selfname else ""
+    if not selfname:
+        return ""
+    return 't="$p"; ' + _console_guard(user, selfname) + _r32j_console_dest_guard(user, selfname, "p",
+                                                                                   above=True)
 
 
 def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
@@ -234,11 +242,18 @@ def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
         ok, msg = _write_one_shot(server, user, abspath, b64, mk, selfname)
     else:
         ok, msg = _write_chunked(server, user, abspath, b64, tmp, mk, selfname)
-    if not ok and _RENAME_CONSOLE_MARK in (msg or ""):
-        return False, WRITE_CONSOLE
-    if not ok and _R31J_CONSOLE_UNREAD_MARK in (msg or ""):
-        return False, R31J_CONSOLE_UNREAD
+    if not ok:
+        # A host-side refusal's mark (_r31j_console_mark), as its fixed text.
+        said = next((text for mark, text in _r34b_write_marks() if mark in (msg or "")), None)
+        if said:
+            return False, said
     return ok, msg
+
+
+def _r34b_write_marks():
+    """(mark, fixed text) of each host-side write refusal (_r23b_console_frag), in its order."""
+    return ((_RENAME_CONSOLE_MARK, WRITE_CONSOLE), (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
+            (_R32J_RESERVED_MARK, R34B_WRITE_RESERVED))
 
 
 def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
@@ -256,9 +271,9 @@ def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
                                           selfname=selfname)
     if _r12b_outside_home(out):
         return False, "Invalid path"
-    for mark in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK):
-        if mark in (out or ""):
-            return False, mark
+    mark = _r31j_console_mark(out)
+    if mark:
+        return False, mark
     return (rc == 0), (e or out or "")
 
 
@@ -1572,6 +1587,9 @@ R31J_CONSOLE_UNREAD = ("Couldn't check whether the server is running, and the li
                        "path while it runs, so nothing was changed. Try again in a moment.")
 WRITE_CONSOLE = ("The live console reads this file — replacing it would stop the console until the "
                  "server restarts. Nothing was saved.")
+# A save or upload whose resolved target is a folder the console's log goes in (_r23b_console_frag).
+R34B_WRITE_RESERVED = ("LinuxGSM keeps the server's log folders at this path — a file here would stop "
+                       "the next start from making them. Nothing was saved.")
 RENAME_EDGE_SPACE = ("A name can't start or end with a space — it would look just like the name "
                      "without one.")
 # Unicode's Bidi_Control characters. Each makes the text after it display in another order, so a
@@ -1733,7 +1751,7 @@ def _console_guard(user, selfname):
 _R32J_RESERVED_MARK = "__R32J_RESERVED__"
 
 
-def _r32j_console_dest_guard(user, selfname, var, folder=False):
+def _r32j_console_dest_guard(user, selfname, var, folder=False, above=False):
     """Host-side: refuse when the NEW name "$<var>" is a console path, or above one, once resolved.
 
     create_refusal and rename_refusal refuse `log`, `log/console` and the console log by their TEXT
@@ -1747,11 +1765,16 @@ def _r32j_console_dest_guard(user, selfname, var, folder=False):
     A FOLDER (`folder`) is refused only at the console log's own path. At `disk/logs` or above it a
     folder is what LinuxGSM makes itself, and it is what repairs the dangling link: LinuxGSM's
     `mkdir -p log` fails on one.
+
+    `above`: only a name strictly ABOVE a console path (a file write's target, _r23b_console_frag),
+    so the console log's own path, a file that may be written while the server is stopped, passes.
     """
     q = _core._quote
     if folder:
         names = [p for p in _console_paths(selfname) if p.endswith(".log")]
         hit = '"${%s}"' % var
+    elif above:
+        names, hit = sorted(_console_paths(selfname)), '"${%s}"/*' % var
     else:
         names, hit = sorted(_console_paths(selfname)), '"${%s}"|"${%s}"/*' % (var, var)
     if not names:
@@ -1788,8 +1811,9 @@ def _r31j_console_live_sh(selfname):
 
 
 def _r31j_console_mark(out):
-    """_console_guard's mark in `out` (refused while running, or unread), else ""."""
-    return next((m for m in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK) if m in (out or "")), "")
+    """A write's host-side console mark in `out` (refused while running, unread, or above a console path)."""
+    return next((m for m in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK, _R32J_RESERVED_MARK)
+                 if m in (out or "")), "")
 
 
 def _r21b_named_folder(user, folder):
@@ -2292,5 +2316,5 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
 _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
     _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
-    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE, R31J_CONSOLE_UNREAD,
+    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE, R31J_CONSOLE_UNREAD, R34B_WRITE_RESERVED,
 })

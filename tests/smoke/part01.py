@@ -71,13 +71,15 @@ _atexit.register(_restore_files)
 from panel.core.config import load_config, save_config
 _cfg = load_config()
 _cfg["setup_complete"] = True
-# Fixture hosts are 192.0.2.0/24 (TEST-NET-1) — reserved, and therefore BLACKHOLED rather than
-# refused. Every connection to one costs the full ssh_timeout instead of returning instantly,
-# and this suite makes 175 of them (5 hosts x 35 probes from the background watchers). At the
-# 10s default that was the entire cost of CI: the "run all checks" step took 729s on a runner
-# against ~21s locally, where tools/smoke-local.sh refuses egress and the same connects fail at
-# once. Three matrix jobs made it ~37 minutes a push, spent waiting on addresses that are
-# guaranteed unreachable BY DESIGN.
+# The two seeded fixture hosts (smoke-host, smoke-host-2, part02) are 127.0.0.1:22, refused under
+# tools/smoke-local.sh by nosudo_runner's egress guard; on CI they reach the runner's own sshd and
+# fail to log in. The quick-connect hosts (part04's qc-host*) and a few one-off rows are
+# 192.0.2.0/24 (TEST-NET-1) — reserved, and therefore BLACKHOLED rather than refused. Every
+# connection to one of those costs the full ssh_timeout instead of returning instantly, and the
+# background watchers made 175 of them (5 hosts x 35 probes). At the 10s default that was the
+# entire cost of CI: the "run all checks" step took 729s on a runner against ~21s locally, where
+# the same connects fail at once. Three matrix jobs made it ~37 minutes a push, spent waiting on
+# addresses that are guaranteed unreachable BY DESIGN.
 #
 # Nothing here asserts on how LONG a host takes to be unreachable, only that it is — so 1s (the
 # floor _ssh_connect_timeout() clamps to) buys the identical outcome. Set before the app loads,
@@ -134,9 +136,10 @@ app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-i
 from panel.security import banlist as _smoke_banlist
 _smoke_banlist.refresh_soon = lambda *a, **k: None
 # An uninstall asks the HOST whether the account it is about to `userdel` is root-capable there
-# (privileged_accounts) and refuses when the host cannot answer. This suite's hosts are blackholed,
-# so every uninstall would stop at "couldn't check"; the probe is answered "a plain game account"
-# suite-wide, and the real one is driven — with the host's reply scripted — where it is tested.
+# (privileged_accounts) and refuses when the host cannot answer. This suite's hosts cannot be logged
+# in to (127.0.0.1:22 with no key, part02), so every uninstall would stop at "couldn't check"; the
+# probe is answered "a plain game account" suite-wide, and the real one is driven — with the host's
+# reply scripted — where it is tested.
 import panel.routes.manage_servers as _smoke_ms  # noqa: E402
 _smoke_priv_real = _smoke_ms.privileged_accounts
 _smoke_ms.privileged_accounts = lambda _remote, _users: {}

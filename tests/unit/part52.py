@@ -324,17 +324,24 @@ def _cred_key52():
 
 # ── A06: an unreadable config.json prints no retention values ───────────────────────────────────
 def _retention52():
+    orig = (_cfg52.load_config, _srcdb52.run_ro)
     _p9_patch(_cfg52, "load_config", lambda *a, **k: _cfg52.UnreadableConfig({}))
     try:
-        _data52._retention_conf()
-        raised = False
-    except ValueError:
-        raised = True
+        try:
+            _data52._retention_conf()
+            raised = False
+        except ValueError:
+            raised = True
+        _p9_patch(_srcdb52, "run_ro", lambda queries, timeout=None: {
+            "audit_log": [(5, None)], "metric_sample": [(0, None)], "host_sample": [(0, None)]})
+        res = _data52.section_database(_base52.Ctx(app=None, deadline_s=5.0))
+    finally:
+        # Back now, not at part52's final restore (review 1022a lead): a section added after this one
+        # would otherwise read an unreadable config.json and the stub database.
+        _p9_patch(_cfg52, "load_config", orig[0])
+        _p9_patch(_srcdb52, "run_ro", orig[1])
     check("debug report database: retention is not read out of an unreadable config.json",
           raised, "")
-    _p9_patch(_srcdb52, "run_ro", lambda queries, timeout=None: {
-        "audit_log": [(5, None)], "metric_sample": [(0, None)], "host_sample": [(0, None)]})
-    res = _data52.section_database(_base52.Ctx(app=None, deadline_s=5.0))
     line = [ln for ln in res.lines if "**audit_log**" in ln]
     check("debug report database: ...and the audit_log line says it is not known rather than "
           "printing the defaults as the operator's settings",

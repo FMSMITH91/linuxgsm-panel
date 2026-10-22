@@ -452,14 +452,15 @@ def _transport_word(row, mux):
 
 
 def _host_head(row, det, mux):
-    """'- host 3 · tailscale (…) · port 22 · sudo yes · address MagicDNS name · host key …'.
+    """'- host 3 · tailscale (…) · port 22 · address MagicDNS name · host key …'.
 
-    `det` is the classes per host id, or a fixed string saying why they were not read.
+    `det` is the classes per host id, or a fixed string saying why they were not read. No "sudo
+    yes/no": whether the panel escalates with sudo on a host is the privilege model there, as its
+    login class is, so it is page-only (_r32j_login_posture) like every other privilege line.
     """
     parts = ["- host %d" % row["id"], _transport_word(row, mux)]
     if row["transport"] != "local":
         parts.append("port %s" % ("22" if row["port"] == 22 else "custom"))
-        parts.append("sudo %s" % ("yes" if row["sudo"] else "no"))
         d = det.get(row["id"]) if isinstance(det, dict) else None
         parts += _detail_parts(row, d) if d else [det if isinstance(det, str) else
                                                    "address/login: row not read"]
@@ -660,17 +661,19 @@ def section_hosts(ctx):
 
 
 def _r32j_login_posture(res, rows, det):
-    """Each remote's login class (root / non-root), for the in-panel report page only.
+    """Each remote's login class (root / non-root) and sudo use, for the in-panel report page only.
 
     Owner's rule (2026-10-16): a privilege fact is never in the downloadable file, which is meant to
-    be attached to a public issue; whether the panel logs in to a host as root is one.
+    be attached to a public issue; whether the panel logs in to a host as root is one, and whether
+    it runs that host's commands under sudo (`sudo yes`, which the file still said: review 1022a)
+    is the other half of the same fact.
     """
-    if not isinstance(det, dict):
-        return
     for row in rows:
-        d = det.get(row["id"])
-        if d and row["transport"] != "local":
-            res.posture("- **Host %d login**: %s" % (row["id"], d["login"]))
+        if row["transport"] == "local":
+            continue
+        d = det.get(row["id"]) if isinstance(det, dict) else None
+        said = ([d["login"]] if d else []) + ["sudo %s" % ("yes" if row["sudo"] else "no")]
+        res.posture("- **Host %d login**: %s" % (row["id"], " · ".join(said)))
 
 
 def _transport_summary(res, mux, rows):

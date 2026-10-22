@@ -1,0 +1,3 @@
+{
+  "LinuxGSM keeps the server's log folders at this path — a file here would stop the next start from making them. Nothing was saved.": "LinuxGSM guarda en esta ruta las carpetas de registro del servidor: un archivo aquí impediría que el próximo inicio las creara. No se guardó nada."
+}

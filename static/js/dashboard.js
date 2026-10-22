@@ -417,6 +417,10 @@ window.afterDashRefresh = function(){
   // one, while both bulk bars live OUTSIDE #server-cards and kept their "N selected" and their
   // buttons — which then found nothing checked and did nothing, with no message at all.
   restoreBulkSelection();
+  // The swap took every install-progress row with the old tbody. A live one comes back on the next
+  // poll; an ending ("Installed, with a warning", shown nowhere else) has no poll to bring it back,
+  // so install_progress.js puts it back now — before the filter, which hides it with its server.
+  if (window._r34c_ipRedraw) window._r34c_ipRedraw();
   if (typeof filterServers === 'function') filterServers();
   _r20cIdsLanded();   // before refreshStatus, which compares against the baseline
   refreshStatus();

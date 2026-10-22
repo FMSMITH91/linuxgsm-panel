@@ -2,7 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-from flask import (jsonify, request)
+from flask import (current_app, jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, bound_port, load_config, set_config_keys)
 from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
@@ -275,8 +275,11 @@ def _register_panel_binding(app):
         if refusal:
             return jsonify({"success": False, "message": refusal}), 400
         # With a move still waiting for its restart, asking for the served port (to undo it) or for
-        # the saved one again (to retry it) is a change, not the binding the panel already has.
-        if new_port == cur_port == stored_port and new_bind == cur_bind:
+        # the saved one again (to retry it) is a change, not the binding the panel already has. The
+        # same for the bind: after a bind change whose restart could not be scheduled the process
+        # still listens on the old one, and re-asking for the saved bind was refused as "already",
+        # leaving no way to apply it short of a host reboot (review 1022a).
+        if new_port == cur_port == stored_port and new_bind == cur_bind == _r34a_served_bind(cur_bind):
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
         # ── Save the new binding ──
@@ -322,6 +325,12 @@ def _register_panel_binding(app):
 def _r32a_served_port(stored_port):
     """The port this process is bound to (config.bound_port), else config.json's `stored_port`."""
     return bound_port() or stored_port
+
+
+def _r34a_served_bind(stored_bind):
+    """The bind this process listens on (app.config BOOT_BIND, canonical), else `stored_bind`."""
+    bound = str(current_app.config.get("BOOT_BIND") or "").strip()
+    return _r11c_canonical_bind(bound) if bound else stored_bind
 
 
 def _r18a_bracketed(host):

@@ -1597,13 +1597,18 @@ function _bkShow(sel, field, v, label, named){
 // it redraws the selects even the focused one. renderBackups skips a focused select so a poll does
 // not move the one being changed, but after a pick the select KEEPS focus: a failed save's re-read
 // left it showing the choice it never stored, and picking it again to retry fired no change.
-var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0;
+// ...and nor is a read sent while another save was still unanswered: it can be served before that
+// save commits, and a settled one draws even the focused select. Pick the Interval, then the Keep
+// before the first save answers: the first save's re-read put the old Keep back in the select and
+// in _bkShown until the second's re-read came (and kept it there if that read never answered).
+// Every save sends its own settled read once it has answered, so the last one always draws.
+var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0, _r34c_sfBkPending = 0;
 function loadBackups(settled){
   if(!document.getElementById('backup-card')) return;
-  var mine = ++_r30c_sfBkSent, saves = _r30c_sfBkSaves;
+  var mine = ++_r30c_sfBkSent, saves = _r30c_sfBkSaves, pending = _r34c_sfBkPending;
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/info')
     .then(r=>r.json()).then(function(d){
-      if(saves !== _r30c_sfBkSaves || mine < _r30c_sfBkDrawn) return;
+      if(saves !== _r30c_sfBkSaves || pending || mine < _r30c_sfBkDrawn) return;
       _r30c_sfBkDrawn = mine;
       renderBackups(d, settled === true);
     })
@@ -1717,15 +1722,19 @@ function saveBkSchedule(){
   });
   if(!Object.keys(body).length) return;
   _r30c_sfBkSaves++;
+  _r34c_sfBkPending++;
+  var answered = false;
+  var done = function(){ if(!answered){ answered = true; _r34c_sfBkPending--; } };
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){
+      done();
       if(d.success){
         Object.keys(body).forEach(function(k){ _bkShown[k]=body[k]; });
         window.toast('Backup schedule saved','success'); loadBackups(true);
       }
       else { _r32c_sfBkPutBack(body); window.toast('Could not save schedule','danger'); loadBackups(true); }
-    }).catch(function(){ _r32c_sfBkPutBack(body); window.toast('Could not save schedule','danger'); loadBackups(true); });
+    }).catch(function(){ done(); _r32c_sfBkPutBack(body); window.toast('Could not save schedule','danger'); loadBackups(true); });
 }
 
 // A save that did not store: each select it sent goes back to the value last drawn from the server

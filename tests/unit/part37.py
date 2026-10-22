@@ -317,6 +317,10 @@ _DOUBLE_SHELL37 = {
     # by check_args, and part06's injection sweep drives every verb with shell metacharacters — the
     # same reason part06's shell gate accepts remote_command().
     ("panel/ops/system_ops.py", "_r20a_verb_shell"): None,
+    # privileged._r34a_keep_installed_cmd: apt-full-upgrade's remote form under bash, after the
+    # keep-installed step (review 1022a). The quoted text is constants and the verb's own rendering,
+    # which takes no argument at all.
+    ("panel/security/privileged.py", "_r34a_keep_installed_cmd"): None,
 }
 # The helpers that wrap run_command's text for a second shell. A caller outside _core.py would reach
 # one past every entry-point row, so outside it they may only be handed a constant command.

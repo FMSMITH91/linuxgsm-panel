@@ -601,6 +601,43 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A twenty-first full review on 2026-10-22: fixes.** Every item below has a check that fails
+  without its fix.
+  - **Undoing a failed SSH port move no longer deletes the SSH setting it has just put back.** When
+    a move failed and the restart in its undo failed too, the undo ran a second time. That second
+    run deleted the restored SSH port setting, so sshd fell back to its default port, which could
+    lock you out of the host. Each part of the undo now runs exactly once. A move that fails right
+    after the new port's firewall rule went in now also removes that rule.
+  - **The Public SSH card's Limit and Allow no longer re-open a port you closed.** After a port
+    move, closing the old port as the panel advised and then pressing Limit or Allow opened it
+    again. They now act only on the ports that are open and the one the panel connects on, and the
+    message names them.
+  - **Full upgrades keep a package apt would downgrade, and the check never stops the upgrade.**
+    #447's fix for the OS update now also covers the host setup's full upgrade, on the panel host
+    and on remotes, and the installer's two. A host's own apt preference that also matched the
+    installed version no longer undoes the keep. If the check cannot finish (the simulation fails
+    or takes too long, or there is no dpkg), the upgrade runs as before and the log says so. The
+    installer no longer prints "System packages up to date" after a refused upgrade.
+  - **The login-attempt jail written at startup matches the one a whitelist edit writes.** On a
+    panel reached through Tailscale Serve with no address saved, each start banned the web port
+    only, and undid the all-ports jail that editing the whitelist had written.
+  - **Saving or uploading a file refuses a name where the console's log folders will go,** as
+    Create and Rename already did, on a stopped server whose log link points at a folder not made
+    yet.
+  - **Smaller fixes.** Re-applying a saved address whose restart could not be scheduled now
+    applies it, instead of answering "already the panel's binding". The uninstaller closes the
+    port the panel's settings record when the settings file cannot be read. The dashboard keeps an
+    "Installed, with a warning" row when the server cards refresh. Two quick backup-schedule saves
+    no longer show the first value again. The Tailscale page's buttons no longer act twice after
+    a refresh. Its Enable form counts a route to a port change still waiting for its restart as
+    the panel's own. The downloadable debug report no longer says, per remote, whether the panel
+    uses sudo there; that is on the in-panel page only. The helper reads a cron file's lines the
+    way cron does.
+  - **Tests.** The unit suite's guard on the machine's tailscale now catches a script that removes
+    it by a built name, un-exports it or runs a privileged bash, and option clusters such as
+    `-euo pipefail`. Three monitor checks now run enough sweeps to be able to fail. Several checks
+    that leaked state or could not fail are fixed.
+
 - **Installing OS updates no longer stops on a package apt would downgrade.** On a host whose apt
   pinning prefers an older version of a package (here proftpd, often left by a third-party repo's
   setup), apt refused the whole upgrade ("Packages were downgraded and -y was used without

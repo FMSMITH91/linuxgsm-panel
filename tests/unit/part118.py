@@ -50,7 +50,13 @@ def _keep118(sim_out):
         _standin118(os.path.join(tmp, "dpkg"), _DPKG118)
         env = dict(_h118._clean_env(), PATH=tmp + ":/usr/bin:/bin", SIM118=sim_out)
         log = __import__("io").StringIO()
-        opts = _h118._r33_keep_installed_opts(apt, env, tmp, log)
+        # dpkg by the helper's own lookup (resolve), pointed at the stand-in for this call.
+        real_resolve = _h118.resolve
+        _h118.resolve = lambda prog: os.path.join(tmp, prog) if prog == "dpkg" else real_resolve(prog)
+        try:
+            opts = _h118._r33_keep_installed_opts(apt, env, tmp, log)
+        finally:
+            _h118.resolve = real_resolve
         prefs = os.path.join(tmp, "preferences")
         text = open(prefs, encoding="utf-8").read() if os.path.exists(prefs) else None
         return opts, text, log.getvalue()
@@ -69,6 +75,55 @@ check("os update (panel host): a package the plan would DOWNGRADE is kept at its
 _opts2, _prefs2, _log2 = _keep118(_SIM118.splitlines()[0] + "\n")
 check("os update (panel host): ...and a plan with no downgrade adds nothing (control)",
       _opts2 == [] and _prefs2 is None and _log2 == "", repr((_opts2, _prefs2, _log2)))
+
+
+def _r34d_job118(sim_out):
+    """Run the helper's OS-update job body (_os_update_run) with a stand-in apt-get and dpkg.
+
+    (rc, apt-get calls, the preferences file full-upgrade was handed, log): the CALLER of the planner
+    driven end to end (review 1022a: the checks above call the planner alone, and part06's runner
+    prints no plan, so `+ keep` could be dropped from the full-upgrade argv with every check green).
+    """
+    tmp = _tf118.mkdtemp(prefix="p118j-")
+    calls, plan, log = (os.path.join(tmp, _n) for _n in ("calls", "plan", "os-update.log"))
+    with open(plan, "w", encoding="utf-8") as fh:
+        fh.write(sim_out)
+    _standin118(os.path.join(tmp, "apt-get"),
+                "#!/bin/bash\n"
+                "for a in \"$@\"; do [ \"$a\" = -s ] && { cat %s; exit 0; }; done\n"
+                "echo \"$*\" >> %s\n"
+                "for a in \"$@\"; do case $a in Dir::Etc::Preferences=*) cp \"${a#*=}\" %s/prefs.seen;; "
+                "esac; done\nexit 0\n" % (plan, calls, tmp))
+    _standin118(os.path.join(tmp, "dpkg"), _DPKG118)
+    saved = (_h118.resolve, _h118.OS_UPDATE_LOG, _h118.CHILD_PATH)
+    # apt-get and dpkg both by the helper's own lookup (resolve), as the job finds them: dpkg was looked
+    # up on PATH when this was written, and a PATH stand-in alone left the job with no dpkg once it no
+    # longer was (review 1022a).
+    _h118.resolve = (lambda prog: os.path.join(tmp, prog) if prog in ("apt-get", "dpkg")
+                     else saved[0](prog))
+    _h118.OS_UPDATE_LOG = log
+    _h118.CHILD_PATH = tmp + ":/usr/bin:/bin"
+    try:
+        rc = _h118._os_update_run()
+    finally:
+        _h118.resolve, _h118.OS_UPDATE_LOG, _h118.CHILD_PATH = saved
+    read = (lambda p: open(p, encoding="utf-8").read() if os.path.exists(p) else "")
+    out = (rc, read(calls), read(os.path.join(tmp, "prefs.seen")), read(log))
+    _shutil118.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+_jrc, _jcalls, _jprefs, _jlog = _r34d_job118(_SIM118)
+_jup = [ln for ln in _jcalls.splitlines() if ln.endswith("full-upgrade")]
+_jrc2, _jcalls2, _jprefs2, _ = _r34d_job118(_SIM118.splitlines()[0] + "\n")
+_jup2 = [ln for ln in _jcalls2.splitlines() if ln.endswith("full-upgrade")]
+check("os update (panel host): the job itself hands full-upgrade the preferences file that keeps the "
+      "package the plan would DOWNGRADE, and finishes; with no downgrade planned it hands none (control)",
+      _jrc == 0 and len(_jup) == 1 and "-o Dir::Etc::Preferences=" in _jup[0]
+      and "Package: proftpd-core\nPin: version 1.3.8.b+dfsg-4ubuntu1\nPin-Priority: 32000" in _jprefs
+      and _h118.OS_UPDATE_DONE + "0" in _jlog
+      and _jrc2 == 0 and len(_jup2) == 1 and "Preferences" not in _jup2[0] and _jprefs2 == "",
+      repr((_jrc, _jcalls, _jprefs, _jlog[-300:], _jrc2, _jcalls2)))
 
 
 def _remote118(mktemp_ok=True):

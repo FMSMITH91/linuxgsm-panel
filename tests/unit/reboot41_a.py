@@ -1551,9 +1551,13 @@ def _flush_checks41():
         busy_before = sender[0]
         sender[0] = True
     t0 = _time41.monotonic()
-    waited = _REAL_FLUSH41(timeout=0.3)
-    with lock:
-        sender[0] = busy_before
+    try:
+        waited = _REAL_FLUSH41(timeout=0.3)
+    finally:
+        # Put back whatever the flush does, or a raise leaves the sender marked busy for every later
+        # check that flushes (review 1022a lead).
+        with lock:
+            sender[0] = busy_before
     check("flush: it waits for the sender to stand down, and says so when it did not in time",
           _all41(waited is False, _time41.monotonic() - t0 >= 0.3))
     check("flush: an empty queue with no sender is flushed at once",

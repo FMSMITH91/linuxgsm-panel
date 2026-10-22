@@ -309,7 +309,8 @@ with open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-
 _diag92 = _TPL92.split('<div id="diag-report"', 1)[-1].split("{% endif %}", 1)[0]
 check("debug report page: the posture block sits in the report card, under the report's own text "
       "(no tab or gate of its own), labelled as not in the download or the issue",
-      _diag92.find('id="diag-report-text"') < _diag92.find('id="diag-report-posture-wrap"')
+      # The textarea must be there: a missing one's -1 is "before" anything (review 1022a).
+      0 <= _diag92.find('id="diag-report-text"') < _diag92.find('id="diag-report-posture-wrap"')
       and 'id="diag-report-posture"' in _diag92 and "{%" not in _diag92
       and "not in the download or the GitHub issue" in _diag92, _diag92[-900:])
 _name92 = "debug report page: genDebugReport shows the posture"

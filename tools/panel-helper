@@ -188,6 +188,10 @@ APT_CONFOLD = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=-
 # can answer. Set as an environment variable on the child rather than as a `VAR=value cmd` prefix,
 # which would need a shell.
 NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install", "apt-install-minimal"}
+# Upgrade verbs that keep, for their run only, a package this host's apt pinning would DOWNGRADE
+# (see _r34a_keep_installed_soft). apt-upgrade has no caller in the panel; the host bootstrap's
+# apt-full-upgrade does. privileged.py's remote rendering of the same verb does the same.
+_R34A_KEEP_INSTALLED_VERBS = frozenset({"apt-full-upgrade"})
 
 # The only extra apt sources the panel adds.
 # steamcmd and libstdc++5:i386 are in multiverse; the rest of the game deps in universe.
@@ -598,13 +602,25 @@ def _apt_conf_ok(content):
 _APT_CONF_RULE = _WholeFile(_apt_conf_ok)
 
 
+# A character a line-by-line grammar must never see: a control character other than tab and the
+# newline, and the Unicode line breaks. str.splitlines breaks on \x0c, \x0b, \x1c-\x1e, \r, \x85 and
+# \u2028/9, which cron, sshd and systemd do not, so `<valid entry>\x0c#;<cmd>` read here as an entry
+# and a skipped comment and to cron as ONE line whose command runs `<cmd>` (review 1022a).
+_R34A_LINE_BREAKERS = re.compile("[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]")
+
+
 def _lines_match(content, pattern):
     """Every non-blank, non-comment line is accepted by `pattern`.
 
-    `pattern` is a compiled regex (matched in FULL) or a callable taking the line."""
+    `pattern` is a compiled regex (matched in FULL) or a callable taking the line. Lines are split
+    on the newline alone, as the files' readers split them, and any other line break or control
+    character refuses the whole content.
+    """
     check = pattern if callable(pattern) and not hasattr(pattern, "fullmatch") \
         else pattern.fullmatch
-    for line in (content or "").splitlines():
+    if _R34A_LINE_BREAKERS.search(content or ""):
+        return False
+    for line in (content or "").split("\n"):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -3162,12 +3178,20 @@ def _os_update_detached():
 
 
 # `Inst <pkg> [<installed>] (<candidate> ...` in a C-locale `apt-get -s` run: the upgrade apt plans.
+# The host's own main apt preferences file, carried into the keep's (after the keeps).
+_R34A_APT_PREFS = "/etc/apt/preferences"
+# How long the keep step's `apt-get -s` may take before the upgrade goes ahead without it.
+_R34J_SIM_TIMEOUT = 600
 _R33_INST_RE = re.compile(r"^Inst (\S+) \[([^\]\s]+)\] \((\S+) ", re.M)
 
 
 def _r33_is_older(new, old, env):
-    """Whether dpkg orders version `new` before `old` (apt would DOWNGRADE to it)."""
-    return subprocess.run(["dpkg", "--compare-versions", new, "lt", old],  # nosec B603 B607
+    """Whether dpkg orders version `new` before `old` (apt would DOWNGRADE to it).
+
+    dpkg by its TOOLS path, as every tool here is run: the bare name was the one place the helper
+    looked a tool up on PATH (review 1022a).
+    """
+    return subprocess.run([resolve("dpkg"), "--compare-versions", new, "lt", old],  # nosec B603
                           shell=False, env=env, capture_output=True, timeout=30).returncode == 0
 
 
@@ -3183,26 +3207,66 @@ def _r33_keep_installed_opts(apt, env, tmpdir, log):
     preferences.d is still read: nothing the operator set is lost or changed on disk), installs
     every real update, and says in the log which packages it kept and why.
     """
+    # Bytes, decoded with errors="replace": a third-party Release label is printed raw in the Inst
+    # line, and one byte that is not UTF-8 raised here (text=True decodes strictly) instead of
+    # being read past.
     sim = subprocess.run([apt, "-s", "-o", "Debug::NoLocking=1", "full-upgrade"],  # nosec B603
-                         shell=False, env=env, capture_output=True, text=True, timeout=600)
-    kept = [(p, old) for p, old, new in _R33_INST_RE.findall(sim.stdout or "")
+                         shell=False, env=env, capture_output=True, timeout=_R34J_SIM_TIMEOUT)
+    if sim.returncode != 0:
+        # A simulation apt could not finish is no plan: read as one, it kept nothing and the log
+        # said nothing, as though the check had run and found no downgrade (review 1022a). The
+        # caller's soft wrapper says the check could not run, and the upgrade goes ahead without it.
+        raise subprocess.CalledProcessError(sim.returncode, "apt-get -s full-upgrade")
+    plan = (sim.stdout or b"").decode("utf-8", "replace")
+    kept = [(p, old) for p, old, new in _R33_INST_RE.findall(plan)
             if _r33_is_older(new, old, env)]
     if not kept:
         return []
     prefs = os.path.join(tmpdir, "preferences")
     with open(prefs, "w", encoding="utf-8") as fh:
-        try:
-            with open("/etc/apt/preferences", encoding="utf-8") as own:
-                fh.write(own.read().rstrip("\n") + "\n\n")
-        except FileNotFoundError:
-            pass    # no main preferences file: nothing of the operator's to carry over
+        # The keeps FIRST: apt gives a version the priority of the FIRST specific record matching
+        # it, and reads this file before preferences.d. After the operator's records, one of theirs
+        # that also matched the installed version (by release, say) won, and the keep did nothing
+        # (review 1022a). Each keep matches only that package's installed version, so the
+        # operator's records still decide every other version.
         for pkg, old in kept:
             fh.write("Package: %s\nPin: version %s\nPin-Priority: 32000\n\n" % (pkg, old))
+        try:
+            with open(_R34A_APT_PREFS, encoding="utf-8", errors="replace") as own:
+                fh.write(own.read().rstrip("\n") + "\n")
+        except FileNotFoundError:
+            pass    # no main preferences file: nothing of the operator's to carry over
     log.write("Kept at the installed version (this host's apt pinning would DOWNGRADE them, which "
               "the panel never does by itself; run apt by hand if you want that): %s\n"
               % ", ".join("%s %s" % k for k in kept))
     log.flush()
     return ["-o", "Dir::Etc::Preferences=" + prefs]
+
+
+def _r34a_keep_installed_soft(apt, env, log):
+    """(_r33_keep_installed_opts' options, the temp dir to remove after the run, or None).
+
+    Never raises. The keep is a refinement of the upgrade, not a condition of it: a temp dir that
+    cannot be made (/tmp full or read-only), a simulation or a dpkg compare that times out, no
+    dpkg, made the OS update end at the failure sentinel with full-upgrade never run and nothing in
+    the log saying why (review 1022a). Now the run goes ahead as it did before the keep existed, and
+    says so; a simulation apt could not finish (it raises CalledProcessError) is said the same way,
+    as the remote job and install.sh say each of these.
+    """
+    keep_dir = None
+    try:
+        keep_dir = tempfile.mkdtemp(prefix="lgsm-os-update-")
+        return _r33_keep_installed_opts(apt, env, keep_dir, log), keep_dir
+    except Exception as e:  # noqa: BLE001 - any failure: the upgrade runs without the keep
+        if keep_dir:
+            shutil.rmtree(keep_dir, ignore_errors=True)
+        try:
+            log.write("Could not check for packages apt would downgrade (%s); running the upgrade "
+                      "as before.\n" % e.__class__.__name__)
+            log.flush()
+        except (OSError, ValueError):
+            pass    # the note is the only casualty; the upgrade still runs
+        return [], None
 
 
 def _os_update_run():
@@ -3222,14 +3286,14 @@ def _os_update_run():
             # The same flags apt-full-upgrade uses, for the same reasons: keep any config file
             # the operator has edited, and never force Ubuntu's phased rollouts (an update phasing
             # holds back stays back until its rollout reaches this host).
-            keep_dir = tempfile.mkdtemp(prefix="lgsm-os-update-")
+            keep, keep_dir = _r34a_keep_installed_soft(apt, env, log)
             try:
-                keep = _r33_keep_installed_opts(apt, env, keep_dir, log)
                 rc = subprocess.run([apt, "-y"] + APT_CONFOLD + keep + ["full-upgrade"],  # nosec B603
                                     shell=False, env=env,
                                     stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
             finally:
-                shutil.rmtree(keep_dir, ignore_errors=True)
+                if keep_dir:
+                    shutil.rmtree(keep_dir, ignore_errors=True)
             subprocess.run([apt, "-y", "autoremove"], shell=False, env=env,  # nosec B603
                            stdout=log, stderr=subprocess.STDOUT, timeout=1800)
             log.write("%s%d\n" % (OS_UPDATE_DONE, rc))
@@ -6946,8 +7010,17 @@ def main(argv):
     env = _clean_env()
     if verb in NONINTERACTIVE:
         env["DEBIAN_FRONTEND"] = "noninteractive"
+    keep_dir = None
     try:
         argv[0] = resolve(argv[0])
+        if verb in _R34A_KEEP_INSTALLED_VERBS:
+            # The OS update's rule (_r33_keep_installed_opts) for the host bootstrap's full-upgrade
+            # too: a package this host's pinning would DOWNGRADE is kept as installed for this run,
+            # or apt under -y refuses the WHOLE run and the bootstrap carried on as though the host
+            # were upgraded (review 1022a). Options go before the subcommand; the argv is otherwise
+            # the verb's own, which privileged.py's table mirrors.
+            keep, keep_dir = _r34a_keep_installed_soft(argv[0], env, sys.stdout)
+            argv[1:1] = keep
         # A read is bounded here as well as by run()'s watch, a few seconds later so the watch
         # (which ends the tool's children too) goes first. This one holds when main() is called
         # without run(), as the tests do, and ends the tool's own process.
@@ -6960,6 +7033,9 @@ def main(argv):
     except subprocess.TimeoutExpired:
         print("panel-helper: %s timed out" % verb, file=sys.stderr)
         return 124
+    finally:
+        if keep_dir:
+            shutil.rmtree(keep_dir, ignore_errors=True)
     sys.stdout.write(p.stdout or "")
     sys.stderr.write(p.stderr or "")
     if verb == "user-create" and p.returncode == 0:

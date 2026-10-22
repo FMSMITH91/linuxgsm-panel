@@ -2,6 +2,14 @@
 from unit.part01 import (N, NS, SO, _R20dOver, _r21d_urlopen_of, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 
 from unit.part05 import (_SMOKE_SUITE_FILES, _ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
+
+# Every git this part runs, its own fixtures' and install.sh's under bash alike, reads no global or
+# system config, as on CI's runner (review 1022a lead: 1017c cleared it in _rs_git/_ru_git only, and
+# _rs_case's install.sh, _pad_history, _ru_target and the direct premise runs still read the
+# developer's ~/.gitconfig, where a hooksPath or url.*.insteadOf would act on these temp repos).
+# Put back at the end of the part.
+_r34d_git_saved = {_k: os.environ.get(_k) for _k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+os.environ["GIT_CONFIG_GLOBAL"], os.environ["GIT_CONFIG_NOSYSTEM"] = os.devnull, "1"
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
       _sm_firewall._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
@@ -12970,3 +12978,17 @@ check("self-update card: an installer the helper stopped at its timeout, or coul
       _rit_to.get("outcome") == "failed" and _rit_to.get("exit_code") == 124
       and _rit_nr.get("outcome") == "failed" and _rit_nr.get("exit_code") == 127,
       repr((_rit_to, _rit_nr)))
+
+# ...and every git above read only the repository's own config (the control: on a machine with a
+# ~/.gitconfig, as a developer's, it is listed without the line at the top of this part).
+_r34d_git_origins = sorted({_l.split("\t", 1)[0] for _l in _sp.run(
+    ["git", "config", "--list", "--show-origin"], capture_output=True, text=True,
+    cwd="/").stdout.splitlines()})
+check("part06: the git it runs reads no global or system config, as on CI's runner",
+      _r34d_git_origins == [] or all(_o.startswith("command line:") for _o in _r34d_git_origins),
+      repr(_r34d_git_origins))
+for _r34d_k, _r34d_v in _r34d_git_saved.items():
+    if _r34d_v is None:
+        os.environ.pop(_r34d_k, None)
+    else:
+        os.environ[_r34d_k] = _r34d_v

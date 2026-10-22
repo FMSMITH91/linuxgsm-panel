@@ -168,6 +168,9 @@ check("SSH port card: the panel host's card and a key host's are filled from ssh
 
 _RMH103 = _read103("static", "js", "remote_manage_host.js")
 _m103 = re.search(r"^var SSH_LABELS=.*$", _RMH103, re.M)
+# A one-line `var`, taken as its line (review 1022a lead: cut by _cut47 it ran on to the next `{`, so it
+# carried the whole of _r32bPublicPorts with it, declared a second time by the cut after it).
+_m103p = re.search(r"^var _r32bSshPorts\b.*$", _RMH103, re.M)
 _name103 = "SSH port card: the script that fills it"
 _out103 = _js103(_name103, (
     "var REMOTE_ID = 1; let sent = [];\n"
@@ -177,10 +180,11 @@ _out103 = _js103(_name103, (
     "global.confirmDialog = o => o.onConfirm();\n"
     "function _r13c_closedPortTitle(){ return ''; }\n"
     + (_m103.group(0) if _m103 else "/* MISSING var SSH_LABELS */") + "\n"
+    + (_m103p.group(0) if _m103p else "/* MISSING var _r32bSshPorts */") + "\n"
     "const reply = d => { global.fetch = u => { sent.push(u);\n"
     "  if (d === undefined) return Promise.reject(new Error('x'));\n"
     "  return Promise.resolve({json: () => Promise.resolve(d)}); }; };\n"), _RMH103,
-    ("function sshModeLabel(", "function loadSshStatus(", "function _r26bSshPortNow(", "var _r32bSshPorts",
+    ("function sshModeLabel(", "function loadSshStatus(", "function _r26bSshPortNow(",
      "function _r32bPublicPorts(", "function changeSshPort("), (
     "  const out = {}, pn = document.getElementById('ssh-port-now'); document.getElementById('ssh-mode');\n"
     "  const run = async d => { pn.setAttribute('data-live', '1'); pn.textContent = '\u2026';\n"
