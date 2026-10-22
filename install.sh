@@ -217,17 +217,29 @@ _r34a_keep_installed() {
         return 0
     fi
     pf="${_R34A_KEEP_DIR}/preferences"
-    : > "${pf}"
-    while read -r p o n; do
+    # Every write to the file is tested: under set -e a failed one (a full or unwritable temp dir)
+    # aborted the whole install. One that fails means no keep pins and the upgrade as before, and a
+    # file missing the host's own records is never used.
+    if ! : 2>/dev/null > "${pf}"; then
+        why="its preferences file could not be written"
+    fi
+    while [[ -z "${why}" ]] && read -r p o n; do
         if dpkg --compare-versions "${n}" lt "${o}" 2>/dev/null; then
-            printf 'Package: %s\nPin: version %s\nPin-Priority: 32000\n\n' "${p}" "${o}" >> "${pf}"
+            if ! printf 'Package: %s\nPin: version %s\nPin-Priority: 32000\n\n' "${p}" "${o}" \
+                    2>/dev/null >> "${pf}"; then
+                why="its preferences file could not be written"
+            fi
             kept+=" ${p} ${o},"
         fi
     done < <(sed -n 's/^Inst \([^ ]*\) \[\([^] ]*\)\] (\([^ ]*\) .*/\1 \2 \3/p' "${_R34A_KEEP_DIR}/plan" || true)
     # The host's own records AFTER the keeps: apt takes a version's FIRST matching record, and an
     # operator's record that also matched the installed version would otherwise undo the keep.
-    if [[ -f /etc/apt/preferences ]]; then
-        cat /etc/apt/preferences >> "${pf}" 2>/dev/null || true
+    if [[ -z "${why}" ]] && [[ -f /etc/apt/preferences ]] && ! cat /etc/apt/preferences 2>/dev/null >> "${pf}"; then
+        why="its preferences file could not be written"
+    fi
+    if [[ -n "${why}" ]]; then
+        warn "Could not check for packages apt would downgrade (${why}); running the upgrade as before."
+        return 0
     fi
     if [[ -n "${kept}" ]]; then
         _R34A_KEEP_OPTS=(-o "Dir::Etc::Preferences=${pf}")

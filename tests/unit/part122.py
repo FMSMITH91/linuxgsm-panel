@@ -222,6 +222,34 @@ def _install_checks122():
           "finishes still keeps (control)", got == want, repr(got))
 
 
+def _install_write_checks122():
+    """A preferences file that cannot be written (a full or unwritable temp dir) under set -euo pipefail."""
+    text = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+    i = text.index("\n_r34a_keep_installed() {\n") + 1
+    fn = _bounded122(text[i:text.index("\n}\n", i) + 3])
+    got = {}
+    # Root-proof: a directory where the file goes refuses the create, and /dev/full takes the create
+    # (a device truncates) but refuses every write after it, for root as for anyone.
+    for case, make in (("file cannot be created", "mkdir \"$t/preferences\""),
+                       ("disk full", "ln -s /dev/full \"$t/preferences\"")):
+        d = _bin122("install-write-" + case.replace(" ", "-"), "ok")
+        real = os.path.realpath(os.path.join(d, "mktemp"))
+        os.unlink(os.path.join(d, "mktemp"))
+        _standin122(os.path.join(d, "mktemp"), "#!%s\nt=\"$(%s \"$@\")\" || exit 1\nPATH=%s\n%s\necho \"$t\"\n"
+                    % (os.path.realpath(_shutil122.which("bash")), real,
+                       os.path.dirname(os.path.realpath(_shutil122.which("ln"))), make))
+        r = _sp122.run([os.path.join(d, "bash"), "-c",  # nosec B603
+                        "set -euo pipefail\nwarn() { echo \"WARN $*\"; }\n_R34A_KEEP_OPTS=()\n"
+                        + fn.replace("/etc/apt/preferences", os.path.join(d, "none"))
+                        + "_r34a_keep_installed\necho \"OPTS<${_R34A_KEEP_OPTS[*]:-}>\"\n"],
+                       env=_env122(d), capture_output=True, text=True, timeout=60)
+        got[case] = (r.returncode, "OPTS<>" in r.stdout, ("WARN " + _SAID122) in r.stdout, _KEPT122 in r.stdout)
+    check("install.sh: a keep-pins file that cannot be written (created, or written once the disk is full) "
+          "leaves the upgrade with no keep pins and says so, and the installer goes on (under set -e the "
+          "failed write aborted the whole install)",
+          got == dict.fromkeys(("file cannot be created", "disk full"), (0, True, True, False)), repr(got))
+
+
 # ── 5. SECURITY.md says what the keep step is, on the verb too, with the bound the code has ───────
 def _security_doc_checks122():
     text = " ".join(open(os.path.join(_root, ".github", "SECURITY.md"), encoding="utf-8").read().split())
@@ -242,6 +270,7 @@ try:
     _helper_verb_checks122()
     _remote_checks122()
     _install_checks122()
+    _install_write_checks122()
     _security_doc_checks122()
 finally:
     _shutil122.rmtree(_TMP122, ignore_errors=True)
