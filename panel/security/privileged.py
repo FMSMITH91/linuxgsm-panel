@@ -1639,7 +1639,7 @@ _R34A_KEPT_SAID = ("Kept at the installed version (this host's apt pinning would
 _R34A_KEEP_INSTALLED_VERBS = frozenset({"apt-full-upgrade"})
 
 
-# The snapshot verbs' answer when they keep a snapshot rather than replace it (_r35b_snapshot_sh).
+# The snapshot verbs' answer when they keep a snapshot that differs from the drop-in (_r35b_snapshot_sh).
 R35J_SNAPSHOT_HELD = 3
 
 
@@ -1652,12 +1652,16 @@ def _r35b_snapshot_sh(dropin, bak):
     a copy that failed (a full disk) exited 0 with no snapshot or half of one, a stale snapshot was put
     back by a later undo, and either way the undo took sshd off ports it served before the move.
 
-    A snapshot that is already there while `sshd -t` rejects the live config is kept, and the verb
-    answers R35J_SNAPSHOT_HELD: an earlier move's restore was not confirmed, so the snapshot may be the
-    last good copy and the drop-in the one sshd rejected (review 1022b's integration).
+    A snapshot already there that DIFFERS from the drop-in is kept, and the verb answers
+    R35J_SNAPSHOT_HELD: an earlier move neither committed nor confirmed its revert (or its discard
+    failed after it committed), so the snapshot may be the last good copy. Whatever `sshd -t` says:
+    on a socket-activated host it never reads the drop-in. One IDENTICAL to the drop-in is what every
+    confirmed restore leaves (the restore copies and keeps it), so it is replaced as usual; holding
+    on `sshd -t` alone refused every move over an unrelated sshd_config error (review 1022b, L1/L2).
+    `cmp` failing to read either file counts as differing.
     """
     d, b, t = (shlex.quote(x) for x in (dropin, bak, bak + ".tmp"))
-    return ("if [ -f {d} ]; then if [ -f {b} ] && ! sshd -t >/dev/null 2>&1; then r={held}; else "
+    return ("if [ -f {d} ]; then if [ -f {b} ] && ! cmp -s {d} {b}; then r={held}; else "
             "rm -f {t} && cp -fp {d} {t} && mv -f {t} {b}; r=$?; rm -f {t}; fi; ( exit \"$r\" ); "
             "else rm -f {b}; fi").format(d=d, b=b, t=t, held=R35J_SNAPSHOT_HELD)
 

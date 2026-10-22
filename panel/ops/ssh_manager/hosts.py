@@ -4324,18 +4324,22 @@ def _r35j_unconfirmed_message(socket_mode):
                          "and `sshd -t` must accept the config).", path=path, bak=bak)
 
 
-# The snapshot verbs' answer when they refuse: a snapshot is already there and `sshd -t` rejects the
-# config that is live, so the snapshot may be the last good copy (privileged.py's _r35b_snapshot_sh,
-# the helper's _r35b_snapshot).
+# The snapshot verbs' answer when they refuse: a snapshot is already there and DIFFERS from the drop-in,
+# so an earlier move did not finish (privileged.py's _r35b_snapshot_sh, the helper's _r35b_snapshot).
 _R35J_SNAPSHOT_HELD = _priv.R35J_SNAPSHOT_HELD
 
 
 def _r35j_held_message(socket_mode):
-    """2a's message when the snapshot verb refused to replace a snapshot (_R35J_SNAPSHOT_HELD)."""
+    """2a's message when the snapshot verb kept a snapshot that differs from the drop-in.
+
+    It held only while `sshd -t` rejected the config and blamed the snapshot for that; the verb now
+    holds on the difference alone, so this names the two files and how to clear it, and nothing else.
+    """
     path, bak = _r35j_dropin_paths(socket_mode)
-    return i18n.Sentence("`sshd -t` rejects this host's SSH configuration, and an earlier port change left its "
-                         "snapshot at {bak}, which may be the last good copy — check {path} and run `sshd -t` "
-                         "before changing the port again. Nothing changed.", path=path, bak=bak)
+    return i18n.Sentence("{bak} differs from {path}: an earlier SSH port change on this host was not undone, or "
+                         "its snapshot was not removed after it worked. If {path} is the configuration you want, "
+                         "delete {bak}; otherwise copy {bak} over {path} to go back to the one before that "
+                         "change. Then try again. Nothing changed.", path=path, bak=bak)
 
 
 # The undo's parts, in the order they run (the table above).
@@ -4345,7 +4349,9 @@ _R35B_UNDO_ORDER = ("restore", "reload", "added", "relisten")
 
 
 def _r35b_after_commit(server, ports, discard_verb):
-    """Steps 7 and 8, after COMMIT: each best effort, and neither can raise. -> fail2ban's (state, why).
+    """Steps 7 and 8, after COMMIT: each best effort, and neither can raise.
+
+    -> (fail2ban's (state, why), whether the snapshot was removed).
 
     The move is verified by now. A raise here used to reach the undo wrapper, which restored from a
     snapshot the discard had already removed: the restore verb then deleted the new drop-in, sshd fell
@@ -4357,12 +4363,33 @@ def _r35b_after_commit(server, ports, discard_verb):
         _core._log.warning("ssh port move: fail2ban could not be repointed on %s", _r34j_log_name(server),
                            exc_info=True)
         f2b = ("failed", i18n.Sentence("the host did not answer"))
-    try:
-        _core.run_privileged(server, discard_verb, [], timeout=10, merge_stderr=False)
-    except Exception:
-        _core._log.warning("ssh port move on %s: its drop-in snapshot could not be removed; the move stands, "
-                           "and the next move replaces the snapshot", _r34j_log_name(server), exc_info=True)
-    return f2b
+    return f2b, _r35j_discard_snapshot(server, discard_verb)
+
+
+def _r35j_discard_snapshot(server, discard_verb):
+    """Step 8: remove the snapshot, tried once more when the answer was not 0. -> True when it is gone.
+
+    One left behind differs from the drop-in the move just wrote, and the next move's snapshot verb
+    refuses over it (_R35J_SNAPSHOT_HELD) until it is removed, so the success message has to say so.
+    """
+    for _ in range(2):
+        try:
+            if _rc_of(_core.run_privileged(server, discard_verb, [], timeout=10, merge_stderr=False)) == 0:
+                return True
+        except Exception:
+            _core._log.warning("ssh port move on %s: its drop-in snapshot could not be removed",
+                               _r34j_log_name(server), exc_info=True)
+    return False
+
+
+def _r35j_snapshot_left_note(socket_mode, gone):
+    """The success message's note when step 8 could not remove the snapshot; "" when it was removed."""
+    if gone:
+        return ""
+    path, bak = _r35j_dropin_paths(socket_mode)
+    return i18n.Sentence("The snapshot {bak} may not have been removed: while it is there, the next SSH port "
+                         "change refuses until you delete it ({path} is the configuration in use).",
+                         path=path, bak=bak)
 
 
 def _r35b_moved_message(new_port, bind_addr, f2b, unchecked):
@@ -4690,8 +4717,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
     _r35b_commit(undo)
     # 7 + 8. Point fail2ban's sshd jail at the new + old ports so its bans cover the port now served,
     #    and drop the snapshot: best effort, after the commit.
-    _f2b = _r35b_after_commit(server, ports, _discard_verb)
-    return True, _r35b_moved_message(new_port, bind_addr, _f2b, _unchecked)
+    _f2b, _gone = _r35b_after_commit(server, ports, _discard_verb)
+    return True, _r35b_moved_message(new_port, bind_addr, _f2b,
+                                     i18n.Sentences(_unchecked, _r35j_snapshot_left_note(socket_mode, _gone)))
 
 
 # The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`

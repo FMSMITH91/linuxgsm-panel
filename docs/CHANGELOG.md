@@ -612,6 +612,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
     putting the old setting back cannot be confirmed, the panel tries once more. If it still
     cannot, it says so and names the file to check, instead of "nothing changed", and the next
     move keeps the old setting's copy rather than overwriting it.
+  - **An SSH port move refuses only over an unfinished earlier move, and names both files.** It
+    refuses when the old setting's copy differs from the current setting, whatever `sshd -t` says,
+    and tells you which file to copy or delete. An unrelated `sshd_config` error no longer blocks
+    every move with a message blaming that copy. If the copy cannot be removed after a move that
+    worked, the panel tries once more, and then says the next move will refuse until you delete it.
   - **The console no longer shows an update's lines twice.** Lines written while the panel was
     reading an action's output were sent again on the next read.
   - **A failed OpenSSF Scorecard run no longer holds back panel updates.** Scorecard rates the

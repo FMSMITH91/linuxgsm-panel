@@ -105,7 +105,13 @@ def _whitelist107(client, client_es):
     try:
         _r35d_whitelist107(client, client_es)
     finally:
-        _p9_app.update_config(lambda cfg: cfg.update(security_whitelist=_was))
+        _p9_app.update_config(_whitelist_as107(_was))
+
+
+def _whitelist_as107(was):
+    """update_config's mutator putting the whitelist back to `was`. Made here, not in the finally:
+    CodeQL's py/exit-from-finally reads a lambda's implicit return there as a 'return' in it."""
+    return lambda cfg: cfg.update(security_whitelist=was)
 
 
 def _r35d_whitelist107(client, client_es):

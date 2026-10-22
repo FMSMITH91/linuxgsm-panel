@@ -186,9 +186,6 @@ def _helper125(d):
     m.SSHD_DROPIN_BAK = m.SSHD_DROPIN + ".bak"
     m.SSHD_SOCKET_DROPIN = os.path.join(d, "sock.conf")
     m.SSHD_SOCKET_DROPIN_BAK = m.SSHD_SOCKET_DROPIN + ".bak"
-    # No sshd config here: `sshd -t` (the guard on a snapshot already there) reads as accepting it,
-    # as on a host whose config is good. part127 drives the refusal.
-    m._r35j_sshd_t_ok = lambda: True
     return m
 
 
@@ -223,9 +220,10 @@ def _helper_snapshot125():
     _put125(h.SSHD_DROPIN, "Port 2022\n")
     h.do_sshd_restore([], None)
     got["undo after it"] = _read125(h.SSHD_DROPIN)
-    # a copy that fails part-way: an error, no half snapshot where the undo would read one
+    # a copy that fails part-way: an error, no half snapshot where the undo would read one. The snapshot
+    # there is identical to the drop-in (what a confirmed restore leaves; part127 has one that differs).
     _put125(h.SSHD_DROPIN, "Port 2222\n")
-    _put125(h.SSHD_DROPIN_BAK, "PREV\n")
+    _put125(h.SSHD_DROPIN_BAK, "Port 2222\n")
     h.shutil = NS(copy2=_half_copy125)
     try:
         h.do_sshd_backup([], None)
@@ -240,19 +238,8 @@ def _helper_snapshot125():
           "drop-in (the undo put it back), and a copy that fails raises with no half snapshot left (one was the "
           "file the undo restored); a drop-in is still copied whole (control)",
           got == {"stale removed": (None, None), "undo after it": None, "copy fails": "raised",
-                  "after the failed copy": ("PREV\n", ["99-panel-sshport.conf", "99-panel-sshport.conf.bak"]),
+                  "after the failed copy": ("Port 2222\n", ["99-panel-sshport.conf", "99-panel-sshport.conf.bak"]),
                   "control: copied": "Port 2222\n"}, repr(got))
-
-
-def _sshd_ok125():
-    """A directory holding an `sshd` stand-in whose `-t` accepts the config."""
-    d = os.path.join(_TMP125, "sshd-ok")
-    if not os.path.isdir(d):
-        os.makedirs(d)
-        _put125(os.path.join(d, "sshd"), "#!/bin/sh\nexit 0\n")
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- stand-in
-        os.chmod(os.path.join(d, "sshd"), 0o700)
-    return d
 
 
 def _shell_snapshot_case125(sh, case):
@@ -263,17 +250,18 @@ def _shell_snapshot_case125(sh, case):
         _put125(drop, "Port 2222\nPort 22\n")
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a temp file
         os.chmod(drop, 0o600)
-    _put125(bak, "STALE\n")
+    # A snapshot already there: identical to the drop-in (what a confirmed restore leaves) but 0o644, so
+    # its mode says whether it was replaced; with no drop-in, one an earlier move left. part127 has one
+    # that differs, which the verb keeps.
+    _put125(bak, "STALE\n" if case == "no drop-in" else "Port 2222\nPort 22\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a temp file
+    os.chmod(bak, 0o644)
     if case == "copy fails":
         # The temp name is taken by a directory: the copy cannot land (as root too, unlike a read-only dir).
         os.makedirs(bak + ".tmp/x")
     form = _priv125._r35b_snapshot_sh(drop, bak)
-    # `sshd -t` (the guard on a snapshot already there) is a stand-in that accepts, as on a host whose
-    # config is good; part127 drives the refusal.
-    env = dict(os.environ, PATH=_sshd_ok125() + os.pathsep + os.environ.get("PATH", ""))
-    rc = _sp125.run([sh, "-c", form], capture_output=True, timeout=20, check=False,  # nosec B603
-                    env=env).returncode
-    mode = oct(os.stat(bak).st_mode & 0o777) if case == "drop-in" and os.path.exists(bak) else None
+    rc = _sp125.run([sh, "-c", form], capture_output=True, timeout=20, check=False).returncode  # nosec B603
+    mode = oct(os.stat(bak).st_mode & 0o777) if case != "no drop-in" and os.path.exists(bak) else None
     return rc == 0, _read125(bak), mode
 
 
@@ -281,7 +269,7 @@ def _shell_snapshot125():
     got = {sh: {case: _shell_snapshot_case125(sh, case) for case in ("drop-in", "no drop-in", "copy fails")}
            for sh in _SHELLS125}
     want = {"drop-in": (True, "Port 2222\nPort 22\n", "0o600"), "no drop-in": (True, None, None),
-            "copy fails": (False, "STALE\n", None)}
+            "copy fails": (False, "Port 2222\nPort 22\n", "0o644")}
     check("ssh port move snapshot (remote shell form, bash and dash): exits non-zero when the copy fails, "
           "leaving the snapshot as it was (`|| true` exited 0, and the move went on with none), removes an "
           "earlier move's snapshot when there is no drop-in, and copies a drop-in whole with its mode",

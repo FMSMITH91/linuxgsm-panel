@@ -48,6 +48,7 @@ USAGE
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
 import fcntl
+import filecmp
 import glob
 import grp
 import gzip
@@ -2649,17 +2650,16 @@ VERBS = {
 
 
 
-# The snapshot verbs' answer when they keep a snapshot rather than replace it (privileged.py's).
+# The snapshot verbs' answer when they keep a snapshot that differs from the drop-in (privileged.py's).
 R35J_SNAPSHOT_HELD = 3
 
 
-def _r35j_sshd_t_ok():
-    """True only when `sshd -t` accepts the config; sshd missing, a hang or a refusal is False."""
+def _r35j_same_file(a, b):
+    """True only when `a` and `b` hold the same bytes; either unreadable is False (cmp -s's answer)."""
+    filecmp.clear_cache()       # its cache keys on size + mtime, which copy2 carries across
     try:
-        return subprocess.run([resolve("sshd"), "-t"], shell=False, env=_clean_env(),  # nosec B603 - fixed argv
-                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              timeout=30, check=False).returncode == 0
-    except (OSError, subprocess.SubprocessError):
+        return filecmp.cmp(a, b, shallow=False)
+    except OSError:
         return False
 
 
@@ -2696,12 +2696,13 @@ def _r35b_snapshot(dropin, bak):
     drop-in before us" — so a snapshot an earlier move left behind is removed, or a later undo would
     put back a file this move never saw. The copy goes to a temp name and is renamed over `bak`, so a
     copy that fails (a full disk) raises (rc 1) and leaves no half snapshot for the undo to restore.
-    Mirrors privileged.py's _r35b_snapshot_sh, including its refusal: a snapshot that is already
-    there while `sshd -t` rejects the live config is kept (R35J_SNAPSHOT_HELD), because an earlier
-    move's restore was not confirmed and the snapshot may be the last good copy.
+    Mirrors privileged.py's _r35b_snapshot_sh, including its refusal: a snapshot already there that
+    DIFFERS from the drop-in is kept (R35J_SNAPSHOT_HELD), whatever `sshd -t` says, because an earlier
+    move did not finish and the snapshot may be the last good copy. One identical to the drop-in (what
+    every confirmed restore leaves) is replaced as usual.
     """
     if os.path.isfile(dropin):
-        if os.path.isfile(bak) and not _r35j_sshd_t_ok():
+        if os.path.isfile(bak) and not _r35j_same_file(dropin, bak):
             return R35J_SNAPSHOT_HELD
         tmp = bak + ".tmp"
         try:

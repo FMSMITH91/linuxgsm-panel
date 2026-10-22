@@ -39,9 +39,6 @@ def _sandboxed_helper():
 
 
 _h = _sandboxed_helper()
-# The sandbox has no sshd config of its own: `sshd -t` (the snapshot's guard for a snapshot already
-# there) is read as accepting it, as on a host whose config is good. part127 drives the refusal.
-_h._r35j_sshd_t_ok = lambda: True
 
 # (a) No drop-in before -> a failed change must leave no drop-in. Getting this wrong leaves an
 #     empty file that sshd reads, which is how a "rollback" locks someone out.
