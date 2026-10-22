@@ -380,7 +380,17 @@ types rather than in the command names:
 - **The detached OS-update job** was `setsid bash -c '<seven statements>' &` — truncate, header,
   `export`, `apt-get update`, `full-upgrade` with four `-o` flags, `autoremove`, and a sentinel
   carrying the exit code. It took no caller input at all, which is what lets it be a zero-argument
-  verb rather than a command the panel composes.
+  verb rather than a command the panel composes. The job now runs one more step before
+  `full-upgrade`, and so does the host bootstrap's `apt-full-upgrade` verb, on the panel host and on
+  a remote: a read-only `apt-get -s` simulation, bounded to 600 seconds. Any package the host's own
+  apt pinning would DOWNGRADE is kept at its installed version for that run only. The keep goes in
+  a preferences file in a fresh `mktemp -d` directory, with the keeps first and the host's
+  `/etc/apt/preferences` copied after them, because apt takes a version's first matching record.
+  The upgrade is pointed at that file with `-o Dir::Etc::Preferences=`, and the directory is
+  removed when it ends. Nothing on disk that the operator set is changed, and the step takes no
+  caller input either. If the check cannot finish (no temp dir, no `dpkg`, or a simulation that
+  fails or runs out of time), the upgrade runs exactly as before, with no keep, and the log says
+  so. `install.sh` runs the same step before each of its two full-upgrades.
 - **Tailscale's join** took the auth key, the advertised routes and the tags straight from the
   request and shell-quoted them into a root command. They are validated arguments now: routes are
   *parsed* as networks, each tag must be `tag:name`, and the auth key is charset-checked and never

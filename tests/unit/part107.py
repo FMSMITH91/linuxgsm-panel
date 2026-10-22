@@ -159,6 +159,8 @@ _PROCS107 = (
     ("the shell form's script", ["bash", "-c", _shell_job_script107()], True),
     ("the update check's simulation",
      ["apt-get", "-s", "-o", "Debug::NoLocking=1", "full-upgrade"], False),
+    ("the keep step's simulation, under its time bound (review 1022a)",
+     ["timeout", "600", "apt-get", "-s", "-o", "Debug::NoLocking=1", "full-upgrade"], False),
     ("the update check's apt-get update", ["apt-get", "update", "-qq"], False),
     ("an install of unattended-upgrades", ["apt-get", "install", "-y", "unattended-upgrades"], False),
     ("the helper answering this very probe", [_priv107.HELPER_PATH, "apt-upgrade-running"], False),
@@ -224,10 +226,12 @@ def _ins_block107(start, end):
 # apt-get run as a command (not `command -v apt-get`, not a message naming it), in code lines.
 _RUNS_APT107 = _re107.compile(r"(?<![\w/-])apt-get\b(?! reported)")
 # The only places apt-get may be run by name: the shared function's two branches, the
-# prerequisites' fallback, tzdata's own env line (its continuation), and the read-only simulation.
+# prerequisites' fallback, tzdata's own env line (its continuation), and the read-only simulations.
 _APT_ALLOWED107 = [
     '"${s}" env "${APT_NI_ENV[@]}" apt-get "$@"',
     '( export "${APT_NI_ENV[@]}"; apt-get "$@" )',
+    # _r34a_keep_installed's read-only plan (review 1022a), in the C locale it is read by.
+    "elif ! env -u LANGUAGE LC_ALL=C.UTF-8 timeout 600 apt-get -s -o Debug::NoLocking=1 full-upgrade \\",
     '${SUDO} apt-get "$@"',
     "apt-get install -y --no-upgrade tzdata || true",
     "if [[ \"$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')\" -gt 0 ]]; then",

@@ -510,11 +510,13 @@ try:
         _fn116()
         _p9_restore_all()
         _p9_arm(who="part116")
-    _tar_shrink116()
-    _setup_link116()
-    _install_record116()
-    _uninstall116()
-    _invite_race116()
+    # Re-armed after each, as above (review 1022a): _shrunk_archive116's and _invite_race116's own
+    # `_p9_restore_all()` also disarm the tripwire, so the four after the archive ran unarmed while
+    # the closing check said every host call was stubbed.
+    for _fn116 in (_tar_shrink116, _setup_link116, _install_record116, _uninstall116, _invite_race116):
+        _fn116()
+        _p9_restore_all()
+        _p9_arm(who="part116")
 finally:
     _p9_restore_all()
     _p9_cfg.save_config(_CFG116)

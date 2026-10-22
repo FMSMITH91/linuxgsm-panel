@@ -15,6 +15,15 @@
 (function () {
   var POLL_MS = 3000;
   var timer = null, settling = {};
+  // Endings still meant to be on screen, by server id: {kind, message}. The row lives inside
+  // #server-cards, which the dashboard swaps wholesale when another server appears or goes or
+  // another install fails — and nothing rebuilt it, because /api/installs lists only running jobs.
+  // A caveat ("Installed, with a warning") is shown nowhere else, so it vanished undismissed.
+  var endings = {};
+  // Ids the last answered poll listed as running. An install that ended between a swap (which took
+  // its row) and the next poll (which would have rebuilt it) had no row left to settle, so its
+  // ending was never read at all.
+  var wasLive = {};
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -44,18 +53,25 @@
   }
 
   // ── the dashboard: a row under the server ───────────────────────────────────────────────────
+  function srvRowOf(id) { return document.querySelector('tr[data-server-id="' + id + '"]'); }
+
+  function newDashRow(srvRow, id) {
+    var row = el('tr', 'install-progress-row');
+    row.setAttribute('data-progress-for', String(id));
+    var td = el('td');
+    td.className = 'pt-0';
+    td.colSpan = srvRow.children.length;   // span whatever this table actually has
+    row.appendChild(td);
+    srvRow.parentNode.insertBefore(row, srvRow.nextSibling);
+    return row;
+  }
+
   function dashRow(job) {
-    var srvRow = document.querySelector('tr[data-server-id="' + job.id + '"]');
+    var srvRow = srvRowOf(job.id);
     if (!srvRow) return null;
     var row = document.querySelector('tr[data-progress-for="' + job.id + '"]');
     if (!row) {
-      row = el('tr', 'install-progress-row');
-      row.setAttribute('data-progress-for', String(job.id));
-      var td = el('td');
-      td.className = 'pt-0';
-      td.colSpan = srvRow.children.length;   // span whatever this table actually has
-      row.appendChild(td);
-      srvRow.parentNode.insertBefore(row, srvRow.nextSibling);
+      row = newDashRow(srvRow, job.id);
     } else if (row.hasAttribute('data-settled')) {
       // The same server is installing again (a retry) while its last ending is still on screen.
       // That line has an .ip-step and no bar, so fill() would find the step, skip building, and
@@ -124,10 +140,47 @@
   // a failure stays until the card region re-renders with the banner that can act on it, and a
   // caveat stays until the operator dismisses it, because this row is the only place it appears.
   var SETTLED = {
-    ok:   { cls: 'text-success', text: 'Installed', drop: 8000 },
-    warn: { cls: 'text-warning', text: 'Installed, with a warning', dismiss: true },
+    ok:   { cls: 'text-success', text: 'Installed', drop: 8000, keep: true },
+    warn: { cls: 'text-warning', text: 'Installed, with a warning', dismiss: true, keep: true },
     bad:  { cls: 'text-danger', text: 'Install failed' }
   };
+
+  // Write one ending into its row. `keep` endings (a clean one until its timer, a caveat until
+  // Dismiss) are remembered in `endings`, so a swap of the card region that took the row does not
+  // take the ending: drawEndings() puts it back. A failure is not kept — the swap that takes it is
+  // the one that brings up the banner which says the same and can act on it.
+  function drawEnding(row, id, end) {
+    var view = SETTLED[end.kind], td = row.firstChild;
+    td.textContent = '';
+    var line = el('div', 'ip-step ' + view.cls, end.message || view.text);
+    // Only the job's own text is kept from the translator. The fallback ("Installed",
+    // "Install failed") is the panel's, a catalog key, and was left English with it.
+    if (end.message) line.setAttribute('data-no-i18n', '');
+    td.appendChild(line);
+    if (view.dismiss) {
+      var btn = el('button', 'btn btn-sm btn-outline-secondary mt-1', 'Dismiss');
+      btn.type = 'button';
+      btn.addEventListener('click', function () {
+        if (endings[id] === end) delete endings[id];
+        dropDashRow(id);
+      });
+      td.appendChild(btn);
+    }
+  }
+
+  // Put back every kept ending whose row is missing: after the dashboard swapped #server-cards
+  // (afterDashRefresh calls this) and on every poll. A server that is gone takes its ending with it.
+  function drawEndings() {
+    Object.keys(endings).forEach(function (id) {
+      if (document.querySelector('tr[data-progress-for="' + id + '"]')) return;
+      var srvRow = srvRowOf(id);
+      if (!srvRow) { delete endings[id]; return; }
+      var row = newDashRow(srvRow, id);
+      drawEnding(row, id, endings[id]);
+      row.setAttribute('data-settled', endings[id].kind);   // as settle() marks it
+    });
+  }
+  window._r34c_ipRedraw = drawEndings;
 
   // An install that has left the live list has finished or failed. The dashboard already re-renders
   // its card region when the failed set changes (that is what brings up the reason and its
@@ -136,36 +189,39 @@
     if (settling[id]) return;
     settling[id] = true;
     var release = function () { delete settling[id]; };
+    // One verdict, shown: remembered when it is a kept kind, drawn in its row (rebuilt if a swap
+    // took the row while this was being asked), and a clean one removed on its timer.
+    function show(res) {
+      var row = document.querySelector('tr[data-progress-for="' + id + '"]');
+      var view = SETTLED[res.kind];
+      if (!view) {
+        // No verdict to show, so show none: the card region says what state the server is in.
+        if (row) dropDashRow(id);
+        return;
+      }
+      var end = { kind: res.kind, message: res.s.message || '' };
+      if (view.keep) endings[id] = end;
+      if (!row && view.keep && srvRowOf(id)) row = newDashRow(srvRowOf(id), id);
+      if (row) {
+        drawEnding(row, id, end);
+        // Settled once, for good: the row keeps data-progress-for, so without this every later
+        // poll (while any other install keeps the timer alive) fetched install-status again —
+        // for a lost job, another SSH probe of the host each time — and rewrote the row.
+        row.setAttribute('data-settled', res.kind);
+      }
+      if (view.drop) {
+        setTimeout(function () {
+          if (endings[id] === end) delete endings[id];
+          dropSettledRow(id);
+        }, view.drop);
+      }
+    }
     fetch(MOUNT + '/api/server/' + id + '/install-status')
       .then(function (r) {
         return r.json().then(function (s) { return { kind: outcome(r.ok, s), s: s || {} }; });
       })
       .then(function (res) {
-        var row = document.querySelector('tr[data-progress-for="' + id + '"]');
-        var view = SETTLED[res.kind];
-        if (row && !view) {
-          // No verdict to show, so show none: the card region says what state the server is in.
-          dropDashRow(id);
-        } else if (row) {
-          var td = row.firstChild;
-          td.textContent = '';
-          var line = el('div', 'ip-step ' + view.cls, res.s.message || view.text);
-          // Only the job's own text is kept from the translator. The fallback ("Installed",
-          // "Install failed") is the panel's, a catalog key, and was left English with it.
-          if (res.s.message) line.setAttribute('data-no-i18n', '');
-          td.appendChild(line);
-          // Settled once, for good: the row keeps data-progress-for, so without this every later
-          // poll (while any other install keeps the timer alive) fetched install-status again —
-          // for a lost job, another SSH probe of the host each time — and rewrote the row.
-          row.setAttribute('data-settled', res.kind);
-          if (view.drop) setTimeout(function () { dropSettledRow(id); }, view.drop);
-          if (view.dismiss) {
-            var btn = el('button', 'btn btn-sm btn-outline-secondary mt-1', 'Dismiss');
-            btn.type = 'button';
-            btn.addEventListener('click', function () { dropDashRow(id); });
-            td.appendChild(btn);
-          }
-        }
+        show(res);
         pagePanel([]);   // the page panel only ever shows what is RUNNING
       })
       .catch(function () { dropDashRow(id); })
@@ -176,11 +232,21 @@
 
   function apply(jobs) {
     var live = {};
-    jobs.forEach(function (j) { live[j.id] = true; dashRow(j); });
+    // A server installing again is live progress, not its last ending.
+    jobs.forEach(function (j) { live[j.id] = true; delete endings[j.id]; dashRow(j); });
     Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'), function (r) {
       var id = r.getAttribute('data-progress-for');
       if (!live[id] && !r.hasAttribute('data-settled')) settle(id);
     });
+    // ...and one that was running at the last answer and has no row now (a swap took it). Only
+    // where its server's row is: Install a Server has none, and settle() empties its page panel.
+    Object.keys(wasLive).forEach(function (id) {
+      if (live[id] || !srvRowOf(id)) return;
+      var r = document.querySelector('tr[data-progress-for="' + id + '"]');
+      if (!r || !r.hasAttribute('data-settled')) settle(id);
+    });
+    wasLive = live;
+    drawEndings();
     pagePanel(jobs);
   }
 

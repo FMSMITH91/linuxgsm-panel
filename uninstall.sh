@@ -175,15 +175,22 @@ fi
 # new port's rule and Serve routes were removed here: the served port's ALLOW stayed open on a host
 # with no panel behind it. Only a record naming THIS install (panel_dir=, the same directory
 # however it is spelled): panel.conf is host-wide, and another install's port is not ours to close.
+# With config.json's port unreadable (missing, or a hand edit that will not parse) the record is
+# the only port known, so it is THE port: it was skipped then, and the served port's ALLOW and its
+# Serve/Funnel routes stayed on a host with no panel behind them (review 1022a).
 _R32A_REC_PORT=""
 _r32a_conf="${SHARED_CONF:-/usr/local/lib/linuxgsm-panel/panel.conf}"
-if [[ -n "${PANEL_PORT}" ]] && [[ -r "${_r32a_conf}" ]]; then
+if [[ -r "${_r32a_conf}" ]]; then
     _r32a_dir="$(sed -n 's/^panel_dir=//p' "${_r32a_conf}" 2>/dev/null | tail -n 1)" || _r32a_dir=""
     _r32a_port="$(sed -n 's/^panel_port=//p' "${_r32a_conf}" 2>/dev/null | tail -n 1)" || _r32a_port=""
     if [[ -n "${_r32a_dir}" ]] && [[ "$( (cd -P -- "${_r32a_dir}" 2>/dev/null && pwd -P) || true)" == "$( (cd -P -- "${PANEL_DIR}" 2>/dev/null && pwd -P) || true)" ]] \
        && [[ "${_r32a_port}" =~ ^[1-9][0-9]{3,4}$ ]] && [[ "${_r32a_port}" -ge 1024 ]] && [[ "${_r32a_port}" -le 65535 ]] \
        && [[ "${_r32a_port}" != "${PANEL_PORT}" ]]; then
-        _R32A_REC_PORT="${_r32a_port}"
+        if [[ -n "${PANEL_PORT}" ]]; then
+            _R32A_REC_PORT="${_r32a_port}"
+        else
+            PANEL_PORT="${_r32a_port}"
+        fi
     fi
 fi
 

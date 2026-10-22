@@ -3921,7 +3921,18 @@ def _open_ssh_port_rule(server, port, panel_way_in):
         if first is not None:
             return False, _r26j_blocked(port, first["detail"])
         added = _r25b_add_ssh_rule(server, port, known, before)
+        _r34b_note_added(port, added)
         return added, (_r28j_open_unconfirmed(server, port, added) if known else None)
+
+
+def _r34b_note_added(port, added):
+    """Record step 1's own rule in the running move's undo record the moment it is in UFW.
+
+    change_ssh_port recorded it only after step 1 returned, so a transport that RAISED in step 1's
+    re-read (_r28j_open_unconfirmed, _r26j_inactive_open) left a public allow for a port nothing
+    serves: the exact leftover _r32b_undo_on_raise exists to remove.
+    """
+    _r32b_move_undo().update(port=port, added=added)
 
 
 def _r28j_open_unconfirmed(server, port, added):
@@ -4006,6 +4017,7 @@ def _r26j_inactive_open(server, port):
         return False, None
     ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
     added = bool(ok and stored is False)
+    _r34b_note_added(port, added)
     if stored is False:
         # Re-read: a stored rule that is not there shuts the port the moment UFW is enabled.
         out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
@@ -4157,16 +4169,65 @@ def _r32b_move_undo():
 
 
 def _r32b_undo_ssh_move(server, undo):
-    """change_ssh_port's _revert, for a step that RAISED, in its order: each part best effort."""
-    restore = undo.get("restore")
+    """change_ssh_port's _revert, for a step that RAISED, in its order: each part best effort.
+
+    Only the parts still owed. _revert retires each part as it does it, so a raise part-way
+    through _revert leaves this the rest and never a part again: the restore verb is NOT
+    idempotent (with its snapshot already moved back it DELETES the drop-in), so run twice it
+    removed the drop-in _revert had just put back and sshd fell back to sshd_config's port alone.
+    """
+    restore = undo.pop("restore", None)
     if restore:
         _r32b_quietly(server, _core.run_privileged, server, restore, [], timeout=10, merge_stderr=False)
+    if undo.get("added"):
+        _r32b_quietly(server, _r25b_close_added_ssh_rule, server, undo["port"], undo["added"])
+    if undo.get("relisten"):
         if undo.get("socket"):
             _r32b_quietly(server, _core.run_privileged, server, "systemd-daemon-reload", [], timeout=20,
                           merge_stderr=False)
-    _r32b_quietly(server, _r25b_close_added_ssh_rule, server, undo["port"], undo["added"])
-    if restore:
-        _r32b_quietly(server, _restart_ssh_listener, server, undo.get("socket"))
+        # Only onto a config sshd accepts. A restore that raised once its command went out is retired
+        # as run (_r34b_restore_once), but it may not have run: the drop-in can still be the one
+        # step 3 rejected, and a restart stops the serving daemon and cannot start a new one.
+        if _r34j_sshd_config_ok(server):
+            _r32b_quietly(server, _restart_ssh_listener, server, undo.get("socket"))
+        else:
+            _core._log.warning(
+                "ssh port move: NOT restarting ssh on %s after undoing a step that raised: `sshd -t` "
+                "does not accept the config now (or could not be run), so the sshd that is running was "
+                "left as it is. Check /etc/ssh/sshd_config.d/ (and ssh.socket.d on a socket-activated "
+                "host), then run `sshd -t` before restarting ssh.", _r34j_log_name(server))
+
+
+def _r34j_sshd_config_ok(server):
+    """True only when the host's `sshd -t` (the sshd-validate verb) accepts the config; a raise is False."""
+    try:
+        return _core.run_privileged(server, "sshd-validate", [], timeout=15)[2] == 0
+    except Exception:
+        _core._log.debug("sshd-validate could not be run", exc_info=True)
+        return False
+
+
+def _r34j_log_name(server):
+    """The host's name for a log line, with line breaks taken out (a name is operator-entered)."""
+    return str(getattr(server, "name", "?")).replace("\r", " ").replace("\n", " ")
+
+
+def _r34b_restore_once(server, verb, undo):
+    """change_ssh_port's restore of its drop-in snapshot, retired from `undo` once it may have run.
+
+    The restore verb is not idempotent: with its snapshot already moved back it DELETES the drop-in
+    (privileged.py's `else rm -f`). So once it has reached the host it is never run again by
+    _r32b_undo_on_raise, even when its answer was lost on the way back (paramiko marks that raise
+    `command_started`). One that raised before the command went out (no connection, a refused
+    session) is still owed, and the wrapper's retry is what puts the snapshot back.
+    """
+    try:
+        _core.run_privileged(server, verb, [], timeout=10, merge_stderr=False)
+    except Exception as e:
+        if getattr(e, "command_started", False):
+            undo.pop("restore", None)
+        raise
+    undo.pop("restore", None)
 
 
 def _r32b_quietly(server, fn, *args, **kw):
@@ -4362,7 +4423,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if socket_mode else
         ("sshd-backup-dropin", "sshd-restore-dropin", "sshd-discard-backup", "sshd-port-dropin"))
     _core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False)
-    undo["restore"] = _restore_verb     # a snapshot exists now: a raise from here restores it
+    undo.update(restore=_restore_verb, relisten=True)   # a snapshot exists now: a raise from here restores it
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
               "# from the panel's Firewall page once you've confirmed the new port works.\n")
     if socket_mode:
@@ -4378,7 +4439,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
     def _revert(msg, restart=True):
         # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
         # binding is untouched the whole time, so SSH keeps working.
-        _core.run_privileged(server, _restore_verb, [], timeout=10, merge_stderr=False)
+        # Each part is retired from `undo` as it is done, so a raise later in here leaves
+        # _r32b_undo_on_raise only what is still owed (see _r32b_undo_ssh_move).
+        _r34b_restore_once(server, _restore_verb, undo)
         if socket_mode:
             _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
         # ...and close the hole step 1 opened. It only restored the drop-in before, so every revert
@@ -4386,6 +4449,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # message says "sshd rejected the new config — nothing changed". Best-effort, like the
         # open: a host without UFW no-ops either way. ONLY a rule step 1 added (see there).
         _r25b_close_added_ssh_rule(server, new_port, _ufw_added)
+        undo["added"] = False
         if restart:
             _restart_ssh_listener(server, socket_mode)
         return False, msg
@@ -4985,6 +5049,24 @@ def _r28b_panel_way_in_refusal(server):
                          port=getattr(server, "port", "") or 22)
 
 
+def _r34b_ports_to_open(server, ports):
+    """Allow/Limit's share of `ports` (_r32b_public_ssh_ports'): the ones public SSH is open on now.
+
+    That is each port whose first public rule lets TCP in (ALLOW or LIMIT), plus the port the panel
+    dials sshd on, in `ports`' order. Every port sshd listens on was re-opened: after the panel's own
+    move 22 -> 2222 sshd keeps 22 as a fallback, the operator closes 22/tcp as the move advises, and
+    Limit put `22/tcp LIMIT` back, public again. A port with no public rule stays closed. With none
+    open at all (public SSH "off", or a listing that cannot be read) there is no way to tell a
+    deliberately closed port from the one meant, so sshd's first port only: the one the panel's own
+    move writes first.
+    """
+    out, _err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=12)
+    listed = rc == 0 and bool((out or "").strip())
+    dial = _r32b_dial_port(server)
+    keep = [p for p in ports if p == dial or (listed and _r32b_public_mode(out, [p])[0] != "off")]
+    return keep or ports[:1]
+
+
 def remote_set_public_ssh(server, mode):
     """Control PUBLIC (non-tailnet) SSH via UFW, on every port sshd serves (_r32b_public_ssh_ports):
       allow → `ufw allow N/tcp`  (open to the internet)
@@ -5018,6 +5100,7 @@ def remote_set_public_ssh(server, mode):
     if mode == "off":
         gates, steps = [], _r32b_ssh_rule_steps(ports, "off")
     else:
+        ports = _r34b_ports_to_open(server, ports)
         gates, steps = _r32b_ssh_rule_steps(ports, mode)
     # ...but only once it IS in. The loop below ignores every exit code, because a delete's says
     # nothing (ufw exits 0 for a rule that is not there, and non-zero for a held lock) — and it ignored the add's too, so when `ufw limit 22/tcp`
@@ -5053,7 +5136,7 @@ def remote_set_public_ssh(server, mode):
                           port=state.get("rule_port") or "?", rule=state["rule"])
             if state.get("rule") and not gate_err else "")
     return True, i18n.Sentence("Public SSH is now {mode} (port {ports})", mode=labels[mode],
-                               ports=", ".join(str(p) for p in state.get("ssh_ports") or ports))
+                               ports=", ".join(str(p) for p in ports))     # the ports acted on
 
 
 def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",

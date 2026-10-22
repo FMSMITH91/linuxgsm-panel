@@ -1597,6 +1597,42 @@ def _r13b_probe_as_remote(user, test):
             "if runuser -u {u} -- true; then exit 1; fi; exit 2").format(u=u, t=test)
 
 
+# The keep-installed step of a remote full-upgrade, for bash (`< <(…)`): leaves `$po` holding the
+# apt options that keep, for this run only, every package the host's pinning would DOWNGRADE, `$kept`
+# naming them, `$kd` the temp dir to remove, and `$kw` saying why the check could not run (empty when
+# it ran). The keeps go first and the host's /etc/apt/preferences after them: apt takes a version's
+# FIRST matching record. The helper's _r33_keep_installed_opts does the same on the panel host; see
+# its docstring. Shared by os-update-run and apt-full-upgrade so the two cannot drift.
+# The check never stops the upgrade: no temp dir, no dpkg, or a simulation that failed or ran past
+# its time leaves `$po` empty, so apt runs as before the keep existed, and `$kw` says so. A failed
+# simulation used to read as an empty plan, the same as "no downgrade", with nothing said, and one
+# that hung held the whole update with it (review 1022a).
+_R34J_SIM_SECONDS = 600
+_R34A_KEEP_SH = (
+    "kd=$(mktemp -d 2>/dev/null); po=''; kept=''; kw=''; "
+    "if [ -z \"$kd\" ] || [ ! -d \"$kd\" ]; then kd=''; kw='no temp dir'; "
+    "elif ! command -v dpkg >/dev/null 2>&1; then kw='no dpkg'; "
+    "elif ! env -u LANGUAGE LC_ALL=C.UTF-8 timeout " + str(_R34J_SIM_SECONDS) + " apt-get -s"
+    " -o Debug::NoLocking=1 full-upgrade > \"$kd/plan\" 2>/dev/null; then"
+    " kw='the simulation failed or timed out'; "
+    "else pf=$kd/preferences; : > \"$pf\"; "
+    "po=\"-o Dir::Etc::Preferences=$pf\"; "
+    "while read -r p o n; do "
+    "if dpkg --compare-versions \"$n\" lt \"$o\"; then "
+    "printf 'Package: %s\\nPin: version %s\\nPin-Priority: 32000\\n\\n' \"$p\" \"$o\" >> \"$pf\"; "
+    "kept=\"$kept $p $o,\"; fi; "
+    "done < <(sed -n 's/^Inst \\([^ ]*\\) \\[\\([^] ]*\\)\\] (\\([^ ]*\\) .*/\\1 \\2 \\3/p' \"$kd/plan\"); "
+    # The host's own records AFTER the keeps (the helper's _r33_keep_installed_opts says why).
+    "[ -f /etc/apt/preferences ] && cat /etc/apt/preferences >> \"$pf\"; fi; ")
+# The line saying the check could not run (the helper's _r34a_keep_installed_soft writes the same).
+_R34J_KEEP_SKIPPED = ("[ -n \"$kw\" ] && echo \"Could not check for packages apt would downgrade ($kw);"
+                      " running the upgrade as before.\"")
+_R34A_KEPT_SAID = ("Kept at the installed version (this host's apt pinning would DOWNGRADE them, which "
+                   "the panel never does by itself; run apt by hand if you want that)")
+# Upgrade verbs whose remote form keeps such packages (the helper's _R34A_KEEP_INSTALLED_VERBS).
+_R34A_KEEP_INSTALLED_VERBS = frozenset({"apt-full-upgrade"})
+
+
 _REMOTE_ACTIONS = {
     "sshd-backup-dropin": lambda a: (
         "[ -f %s ] && cp -f %s %s || true"
@@ -1668,7 +1704,7 @@ _REMOTE_ACTIONS = {
            TS_UP_LOG, TS_UP_LOG)),
     "os-update-run": lambda a: (
         "setsid bash -c %s </dev/null >/dev/null 2>&1 & echo %s"
-        % (shlex.quote(
+        % (shlex.quote((
             ": > {L} 2>/dev/null || true; "
             "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
             "export DEBIAN_FRONTEND=noninteractive; "
@@ -1678,26 +1714,15 @@ _REMOTE_ACTIONS = {
             # whole run otherwise, and the panel never downgrades by itself. The helper's
             # _r33_keep_installed_opts does the same on the panel host; see its docstring.
             # No temp dir (mktemp failed): no file is written anywhere and apt runs as before.
-            "kd=$(mktemp -d 2>/dev/null); po=''; kept=''; "
-            "if [ -n \"$kd\" ] && [ -d \"$kd\" ]; then pf=$kd/preferences; : > $pf; "
-            "[ -f /etc/apt/preferences ] && cat /etc/apt/preferences >> $pf && echo >> $pf; "
-            "po=\"-o Dir::Etc::Preferences=$pf\"; "
-            "while read -r p o n; do "
-            "if dpkg --compare-versions \"$n\" lt \"$o\"; then "
-            "printf 'Package: %s\\nPin: version %s\\nPin-Priority: 32000\\n\\n' \"$p\" \"$o\" >> $pf; "
-            "kept=\"$kept $p $o,\"; fi; "
-            "done < <(LC_ALL=C.UTF-8 apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null"
-            " | sed -n 's/^Inst \\([^ ]*\\) \\[\\([^] ]*\\)\\] (\\([^ ]*\\) .*/\\1 \\2 \\3/p'); fi; "
-            "[ -n \"$kept\" ] && echo \"Kept at the installed version (this host's apt pinning "
-            "would DOWNGRADE them, which the panel never does by itself; run apt by hand if you "
-            "want that):${{kept%,}}\" >> {L}; "
+            + _R34A_KEEP_SH + _R34J_KEEP_SKIPPED + " >> {L}; "
+            "[ -n \"$kept\" ] && echo \"" + _R34A_KEPT_SAID + ":${{kept%,}}\" >> {L}; "
             "apt-get -y "
             "-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "
             "$po "
             "full-upgrade >> {L} 2>&1; "
             "rc=$?; [ -n \"$kd\" ] && rm -rf \"$kd\"; "
             "apt-get -y autoremove >> {L} 2>&1 || true; "
-            "echo \"{S}$rc\" >> {L} 2>&1".format(L=OS_UPDATE_LOG, S=OS_UPDATE_DONE)),
+            "echo \"{S}$rc\" >> {L} 2>&1").format(L=OS_UPDATE_LOG, S=OS_UPDATE_DONE)),
            OS_UPDATE_STARTED)),
     # `sed -i` exits 0 when its pattern matches nothing, leaving the file untouched — so on a host
     # whose sshd_config does not already carry the directive (a CIS-hardened image, a file written
@@ -1914,6 +1939,21 @@ def helper_argv(verb, args):
     return ["sudo", "-n", HELPER_PATH, verb] + checked
 
 
+def _r34a_keep_installed_cmd(cmd):
+    """`cmd` (an `… apt-get <subcommand> …` line) under bash, after the keep-installed step.
+
+    A host whose apt pinning prefers an older version made the bootstrap's `apt-get full-upgrade -y`
+    plan a downgrade, which apt refuses WHOLE under -y: not one update installed and the bootstrap
+    carried on as though the host were upgraded (review 1022a). The options go straight after
+    `apt-get`, unquoted on purpose so `$po` splits into `-o` and its value (a mktemp path). The
+    exit status is apt's.
+    """
+    head, sep, tail = cmd.partition("apt-get ")
+    return "bash -c %s" % shlex.quote(
+        _R34A_KEEP_SH + _R34J_KEEP_SKIPPED + "; [ -n \"$kept\" ] && echo \"" + _R34A_KEPT_SAID + ":${kept%,}\"; "
+        + head + sep + "$po " + tail + "; rc=$?; [ -n \"$kd\" ] && rm -rf \"$kd\"; exit $rc")
+
+
 def remote_command(verb, args, merge_stderr=True):
     """The shell command that runs `verb` on a REMOTE host over SSH.
 
@@ -1937,6 +1977,8 @@ def remote_command(verb, args, merge_stderr=True):
         # The helper sets this on the child's environment; over SSH there is a shell, so the
         # familiar prefix is what goes on the wire — the same thing these commands always sent.
         cmd = "DEBIAN_FRONTEND=noninteractive " + cmd
+    if verb in _R34A_KEEP_INSTALLED_VERBS:
+        cmd = _r34a_keep_installed_cmd(cmd)
     if stdin_for(verb) is not None:
         # No helper on the far side to feed stdin, so the prompt is answered the old way.
         cmd = "yes | " + cmd

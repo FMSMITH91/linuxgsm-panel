@@ -296,7 +296,14 @@ try:
     # sleep, a child still starting Python read as waiting, so the check held with no lock at all).
     _ready97 = (_select97.select([_child97.stdout], [], [], 30)[0] != []
                 and _child97.stdout.readline().strip() == "READY")
-    _time97.sleep(1.0)
+    # Then given time to write, watched rather than slept (review 1022a lead: one fixed second on a
+    # loaded machine could read an UNLOCKED child that had not yet written as one still waiting).
+    _end97 = _time97.monotonic() + 2.0
+    while _ready97 and _child97.poll() is None and _time97.monotonic() < _end97:
+        with open(_conf97, encoding="utf-8") as _fh97:
+            if _fh97.read() != "panel_dir=/x\npanel_port=5000\n":
+                break
+        _time97.sleep(0.05)
     _waited97 = _ready97 and _child97.poll() is None
     with open(_conf97, encoding="utf-8") as _fh97:
         _held97 = _fh97.read()

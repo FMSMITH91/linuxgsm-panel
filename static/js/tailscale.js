@@ -50,10 +50,19 @@ function tsCheckAgain(){ window.refreshSection('#ts-page','wireTsButtons'); }
 // Wire the buttons/inputs that use direct listeners (install / connect / peer-check Enter). Called
 // on load AND after the page is swapped in place via refreshSection('#ts-page', ...), so the fresh
 // elements get their handlers back — the alternative to a full-page reload.
+//
+// Once per element. refreshSection runs its after-hook even when the page it fetched had no
+// #ts-page to swap in (a proxy's 502, the login page after the session expired), so the SAME
+// elements were wired again: two listeners, and Enter in the peer box pinged the peer twice.
+function _r34c_tsOnce(el) {
+  if (!el || el._r34c_wired) return false;
+  el._r34c_wired = true;
+  return true;
+}
 function wireTsButtons(){
   // First-time install button: install Tailscale on the panel host, then bring it up.
   var tsInstallBtn = document.getElementById('ts-install-btn');
-  if (tsInstallBtn) {
+  if (_r34c_tsOnce(tsInstallBtn)) {
     var tsInstallOut = document.getElementById('ts-install-out');
     tsInstallBtn.addEventListener('click', function(){
       tsInstallBtn.disabled = true;
@@ -67,7 +76,7 @@ function wireTsButtons(){
   }
   // "Link this machine" button: Tailscale already installed but not authorized — just bring it up.
   var tsConnectBtn = document.getElementById('ts-connect-btn');
-  if (tsConnectBtn) {
+  if (_r34c_tsOnce(tsConnectBtn)) {
     var tsConnectOut = document.getElementById('ts-connect-out');
     tsConnectBtn.addEventListener('click', function(){
       tsConnectBtn.disabled = true;
@@ -76,7 +85,7 @@ function wireTsButtons(){
   }
   // Enter key triggers the peer check (the peer-host input only exists when Tailscale is installed).
   var tsPeerHost = document.getElementById('peer-host');
-  if (tsPeerHost) {
+  if (_r34c_tsOnce(tsPeerHost)) {
     tsPeerHost.addEventListener('keydown', function(e){ if (e.key === 'Enter') checkPeer(); });
   }
 }

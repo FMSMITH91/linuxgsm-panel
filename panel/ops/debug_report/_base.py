@@ -92,7 +92,9 @@ POSTURE_RE = re.compile(
     # (_src_journal.read's "why" said "via root" exactly when the panel runs as root).
     r"|\bsystem journal via (?:helper|root)\b|no journal readable without sudo|\(privileged read\)"
     # Which account the panel logs in to a remote as (the Hosts section's old "login root" part).
-    r"|\blogin (?:non-)?root\b|\*\*Host \d+ login\*\*")
+    r"|\blogin (?:non-)?root\b|\*\*Host \d+ login\*\*"
+    # ...and whether it runs that host's commands under sudo (the same line's old "sudo yes").
+    r"|· sudo (?:yes|no)\b")
 
 
 def finding(level, area, text):

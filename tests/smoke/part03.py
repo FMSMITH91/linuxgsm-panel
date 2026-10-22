@@ -2745,11 +2745,12 @@ check("import: empty selection -> 400", imp_empty.status_code == 400)
 from panel.routes import discover as _imp_mod  # pylint: disable=reimported
 _imp_orig = _imp_mod.discover_linuxgsm_servers
 # The import also asks the host whether each selected account is root-capable before it adopts
-# it (privileged_accounts). The fixture host is blackholed, so that question is answered here
+# it (privileged_accounts). The fixture host is 127.0.0.1:22 (refused under tools/smoke-local.sh by
+# nosudo_runner's egress guard), so that question is answered here
 # — "a plain game account" — for the checks about everything else, and driven for real below.
 _imp_priv_orig = _imp_mod.privileged_accounts
 # The import refuses a port that is this host's SSH or the panel's: it asks the host's sshd for
-# its ports, which the blackholed fixture host would only answer with a connect timeout.
+# its ports, which the fixture host (127.0.0.1:22, refused) would only answer with a failed connect.
 _imp_prot_orig = _sm_hosts.protected_host_ports
 # An import starts _bg_cache_commands for what it added: a real worker on the live transport
 # (list_server_commands, then set_autostart), which outlived this block and called whatever a
@@ -2997,11 +2998,12 @@ check("import: caller without manage_servers is denied",
 # ── A host's servers are keyed on the Linux user, so one account can only ever be one server.
 # Seven games under one account (what a GMod content box looks like) used to import the first
 # and silently drop six as duplicates — a panel row for whichever game happened to sort first.
-# The scan is stubbed to REPORT all three games under the account: unstubbed, the blackholed
-# fixture host scans to [], every game is skipped as "not scanned" before the per-account rule is
-# consulted, and these checks passed with that rule deleted. Three non-content games, so the
-# account is not filtered out as a GMod content box either; the per-account rule is then the
-# only thing that can refuse them. The control below imports ONE of them from the same scan.
+# The scan is stubbed to REPORT all three games under the account: unstubbed, the fixture host
+# (127.0.0.1:22, refused under tools/smoke-local.sh) scans to [], every game is skipped as "not
+# scanned" before the per-account rule is consulted, and these checks passed with that rule
+# deleted. Three non-content games, so the account is not filtered out as a GMod content box
+# either; the per-account rule is then the only thing that can refuse them. The control below
+# imports ONE of them from the same scan.
 _imm_saved = (_imp_mod.discover_linuxgsm_servers, _imp_mod.privileged_accounts,
               _sm_hosts.protected_host_ports, _imp_mod._bg_cache_commands)
 try:

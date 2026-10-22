@@ -2490,15 +2490,18 @@ check("helper: _game_home_path refuses uid 0 even if a name got past the validat
 # A uid FLOOR would be the tidier rule and is the wrong one: install.sh creates the panel's own
 # account with `useradd --system`, so the panel user is legitimately uid < 1000 and is the argument
 # to tailscale-release-operator. Only uid 0 has no legitimate caller.
+# Recorded on every machine (review 1022a lead: with no such account the check was silently left out
+# of the tally); every supported host has one (daemon, bin, ...), so its absence fails by name.
 _sys_name = next((_p.pw_name for _p in __import__("pwd").getpwall() if 0 < _p.pw_uid < 1000), None)
+_sys_why = "this machine has no account with 0 < uid < 1000 to try"
 if _sys_name:
     try:
         _helper.validate("tailscale-release-operator", [_sys_name])
         _sys_why = ""
     except Exception as _sys_exc:
         _sys_why = repr(_sys_exc)
-    check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
-          "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
+check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
+      "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
 
 # ── The offline DB repair runs as ROOT and must not be steerable through a symlink ────────────
 # db_maintenance.repair() is exec'd as root by panel-helper's panel-db-repair. Both paths it
@@ -4707,9 +4710,15 @@ _REMOTE_EXPECTED = {
         "DEBIAN_FRONTEND=noninteractive apt-get install -y curl 2>&1",
     ("apt-install", ("python3", "libsdl2-2.0-0:i386")):
         "DEBIAN_FRONTEND=noninteractive apt-get install -y python3 libsdl2-2.0-0:i386 2>&1",
+    # Under bash, after the keep-installed step (review 1022a; part119 runs it): `$po` straight after
+    # apt-get, the verb's own argv after that.
     ("apt-full-upgrade", ()):
-        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
-        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold 2>&1",
+        "bash -c " + _shlex_ns.quote(
+            _priv._R34A_KEEP_SH + _priv._R34J_KEEP_SKIPPED + "; [ -n \"$kept\" ] && echo \""
+            + _priv._R34A_KEPT_SAID + ":${kept%,}\"; "
+            "DEBIAN_FRONTEND=noninteractive apt-get $po full-upgrade -y "
+            "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold; "
+            "rc=$?; [ -n \"$kd\" ] && rm -rf \"$kd\"; exit $rc") + " 2>&1",
     ("dpkg-add-arch", ("i386",)): "dpkg --add-architecture i386 2>&1",
     ("apt-add-repo", ("universe",)): "add-apt-repository -y universe 2>&1",
     ("apt-upgrade-running", ()):
@@ -7622,11 +7631,11 @@ finally:
      _cu_app.remote_set_fail2ban_ignoreip, _cu_so.ensure_panel_host_whitelist) = _cu_saved
     _cu_cfg._cfg_cache["key"] = None
 
-# The boot-time jail sync is a closure under __main__, so it is pinned by what it CALLS: the guarded
-# helper, and never ensure_panel_fail2ban directly (which is what rewrote the jail from defaults).
+# The boot-time jail sync (app._r34a_f2b_autostart, started from __main__) is pinned by what it CALLS:
+# the guarded helper, and never ensure_panel_fail2ban directly (which rewrote the jail from defaults).
 _cu_src = open(os.path.join(_UNIT_ROOT, "app.py"), encoding="utf-8").read()
 _cu_fn = next((n for n in _cu_ast.walk(_cu_ast.parse(_cu_src))
-               if isinstance(n, _cu_ast.FunctionDef) and n.name == "_f2b_autostart"), None)
+               if isinstance(n, _cu_ast.FunctionDef) and n.name == "_r34a_f2b_autostart"), None)
 _cu_calls = set()
 for _n in _cu_ast.walk(_cu_fn) if _cu_fn else ():
     if isinstance(_n, _cu_ast.Call):
@@ -7828,15 +7837,16 @@ check("load_user: a DB error DENIES the request instead of returning the user",
 # 1. _is_panel_account: the two structural tests are skipped when panel.conf cannot answer, and
 #    the verb behind them is `userdel -r` plus an rm of that home. SUDO_UID alone is inert whenever
 #    the helper is invoked directly as root rather than through the panel's own sudo.
-_o_pc, _o_env = _helper.panel_conf, os.environ.get("SUDO_UID")
+# home_of and the temp tree are put back in the finally too (review 1022a lead): a raise inside
+# _is_panel_account left the stub in place for every later part.
+import tempfile as _pa_tmp  # noqa: E402
+_o_pc, _o_env, _o_home = _helper.panel_conf, os.environ.get("SUDO_UID"), _helper.home_of
+_root_dir = _pa_tmp.mkdtemp(prefix="panelacct-")
 try:
     _helper.panel_conf = lambda: {}          # the case that used to leave this wide open
     os.environ.pop("SUDO_UID", None)
-    _o_home = _helper.home_of
     _homes = {"lgsmpanel": "/panelhome", "gmodserver": "/gamehome", "gone": "/notthere"}
     _helper.home_of = lambda n: _homes.get(n, "/notthere")
-    import tempfile as _pa_tmp
-    _root_dir = _pa_tmp.mkdtemp(prefix="panelacct-")
     # a panel home: app.py beside panel/ and data/, one level down
     _p_home = os.path.join(_root_dir, "panelhome", "linuxgsm-panel")
     os.makedirs(os.path.join(_p_home, "panel")); os.makedirs(os.path.join(_p_home, "data"))
@@ -7865,9 +7875,9 @@ try:
           _helper._is_panel_account("gmodserver") is True)
     check("panel account: ...and a home that does not exist is not a panel",
           _helper._is_panel_account("gone") is False)
+finally:
     _shutil.rmtree(_root_dir, ignore_errors=True)
     _helper.home_of = _o_home
-finally:
     _helper.panel_conf = _o_pc
     if _o_env is not None:
         os.environ["SUDO_UID"] = _o_env

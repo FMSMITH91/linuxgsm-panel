@@ -218,11 +218,17 @@ try:
 
         def _smoke63(*args):
             """Run the copied smoke-local.sh; (rc, argv the runner got, baseline text)."""
+            # Each run's own record, never the one before it (review 1022a lead: a run that never
+            # reached the runner read the previous run's argv as its own).
+            if os.path.exists(os.path.join(_sb63, "argv.json")):
+                os.unlink(os.path.join(_sb63, "argv.json"))
             r = _sp63.run([_bash63, "tools/smoke-local.sh", *args], cwd=_sb63, env=_env63,  # nosec B603
                           capture_output=True, text=True, timeout=60, check=False)
             # The runner wrote argv.json one level above the throwaway tree, i.e. into TMPDIR.
-            with open(os.path.join(_sb63, "argv.json"), encoding="utf-8") as fh:
-                got = _json63.load(fh)
+            got = None
+            if os.path.exists(os.path.join(_sb63, "argv.json")):
+                with open(os.path.join(_sb63, "argv.json"), encoding="utf-8") as fh:
+                    got = _json63.load(fh)
             with open(os.path.join(_sb63, "tests", "url_map_baseline.json"), encoding="utf-8") as fh:
                 return r.returncode, got, fh.read()
 
@@ -237,7 +243,8 @@ try:
         check("smoke-local: ...without --update, or when the suite failed, the repository's baseline is "
               "left alone (control)",
               _r63[0] == (0, ["tests/url_map_test.py", "--allow-egress"], "OLD\n")
-              and _r63[1][0] != 0 and _r63[1][2] == "OLD\n", repr(_r63))
+              and _r63[1][0] != 0 and _r63[1][1:] == (["tests/url_map_test.py", "--update", "--fail"], "OLD\n"),
+              repr(_r63))
 finally:
     _shutil63.rmtree(_sb63, ignore_errors=True)
 

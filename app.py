@@ -855,6 +855,29 @@ def _apply_whitelist_to_fail2ban():
         return False, "could not update fail2ban"
 
 
+def _r34a_f2b_autostart(app):
+    """The boot self-heal of the panel-login jail, then the whitelist on every remote."""
+    # In the app's context, so the jail is written for the bind and port this process listens on
+    # (app.config BOOT_BIND / BOOT_PORT, recorded before this thread starts), not config.json's
+    # alone. Without one, an unset bind that boot resolved to loopback (logins arriving through
+    # Tailscale Serve) got the web-port-only ban on every start, which matches none of the proxied
+    # clients, and it undid the all-ports jail a whitelist edit had written (review 1022a).
+    # Through _apply_whitelist_to_fail2ban, not a direct ensure_panel_fail2ban: that is where
+    # an unreadable config.json is refused, instead of rewriting the jail from defaults.
+    try:
+        with app.app_context():
+            _log.info("panel fail2ban: %s", _apply_whitelist_to_fail2ban()[1])
+    except Exception:
+        _log.debug("panel fail2ban autostart failed", exc_info=True)
+    # Re-sync the whitelist into every remote's fail2ban too, so a remote that was offline or
+    # newly added during a whitelist change catches up. Only when there's something to apply.
+    if _security_whitelist():
+        try:
+            _apply_whitelist_to_remotes(app)
+        except Exception:
+            _log.debug("remote fail2ban whitelist sync failed", exc_info=True)
+
+
 def _apply_whitelist_to_remotes(app, unban_ip=None):
     """Push the whitelist into every remote host's fail2ban over SSH, so a whitelisted IP is never
     banned on a remote either (parity with the panel host). Best-effort and backgrounded — one SSH
@@ -3382,26 +3405,23 @@ if __name__ == "__main__":
     # reads as unset too.
     port = _port_or(cfg.get("port", 5000), 5000)
 
+    # Not explicitly configured: bind where the panel is actually reachable — 127.0.0.1 if
+    # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
+    # reachable over the network on a plain VPS. The SAME answer _effective_https reads.
+    host = _resolved_bind(cfg)
+    # What this process really listens on, for pages that must not claim more than that: the
+    # wizard's complete page (a stored loopback bind applies only from the next start).
+    app.config["_BOOT_BIND"] = host
+    # The same, under the names the debug report reads (R19), with the port beside it. Recorded
+    # BEFORE the first background thread starts: the login jail's self-heal below reads them.
+    app.config["BOOT_BIND"] = host
+    app.config["BOOT_PORT"] = port
+
     # Make sure the fail2ban panel-login jail is up and pointed at the current port. fail2ban is
     # installed by the panel installer; this self-heals the jail on every boot (and after a port
     # change) so it's protected by default — no manual "enable" click. Backgrounded so it never
     # delays startup, and idempotent so a healthy jail just costs a quick status read.
-    def _f2b_autostart():
-        # Through _apply_whitelist_to_fail2ban, not a direct ensure_panel_fail2ban: that is where
-        # an unreadable config.json is refused, instead of rewriting the jail from defaults.
-        try:
-            _ok, _msg = _apply_whitelist_to_fail2ban()
-            _log.info("panel fail2ban: %s", _msg)
-        except Exception:
-            _log.debug("panel fail2ban autostart failed", exc_info=True)
-        # Re-sync the whitelist into every remote's fail2ban too, so a remote that was offline or
-        # newly added during a whitelist change catches up. Only when there's something to apply.
-        if _security_whitelist():
-            try:
-                _apply_whitelist_to_remotes(app)
-            except Exception:
-                _log.debug("remote fail2ban whitelist sync failed", exc_info=True)
-    threading.Thread(target=_f2b_autostart, name="f2b-autostart", daemon=True).start()
+    threading.Thread(target=_r34a_f2b_autostart, args=(app,), name="f2b-autostart", daemon=True).start()
 
     # Game servers a previous run of the panel started may still be in this unit's cgroup — where
     # every stop signals them — from before the helper gave each its own scope. Move them out once.
@@ -3478,16 +3498,6 @@ if __name__ == "__main__":
                 _log.debug("bot pending-update report failed", exc_info=True)
     threading.Thread(target=_bot_update_report, name="bot-update-report", daemon=True).start()
 
-    # Not explicitly configured: bind where the panel is actually reachable — 127.0.0.1 if
-    # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
-    # reachable over the network on a plain VPS. The SAME answer _effective_https reads.
-    host = _resolved_bind(cfg)
-    # What this process really listens on, for pages that must not claim more than that: the
-    # wizard's complete page (a stored loopback bind applies only from the next start).
-    app.config["_BOOT_BIND"] = host
-    # The same, under the names the debug report reads (R19), with the port beside it.
-    app.config["BOOT_BIND"] = host
-    app.config["BOOT_PORT"] = port
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     _proxy_bind_note = _trust_proxy_bind_warning(cfg, host)

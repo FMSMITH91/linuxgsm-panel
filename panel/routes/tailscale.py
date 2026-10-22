@@ -53,10 +53,11 @@ def _serve_default_mount(info, cfg, port):
     Enabling Serve at a mount another app already holds REPLACES that app's mapping, and the form
     offered "/" without looking — the setup wizard already moves the panel to /lgsm when "/" is
     taken, and this is the same rule (ts.free_panel_mount, which both use). When both are another
-    app's, the stored mount is offered and the operator chooses.
+    app's, the stored mount is offered and the operator chooses. A route to config.json's port
+    (a saved port change waiting for its restart) is the panel's own too, as the wizard reads it.
     """
     mount = cfg.get("tailscale_mount") or "/"
-    return ts.free_panel_mount(info.serve_config, port, mount) or mount
+    return ts.free_panel_mount(info.serve_config, port, mount, also=ts._r13b_panel_ports(cfg)) or mount
 
 
 def _disable_would_strand_panel(cfg):

@@ -628,7 +628,7 @@ def _hosts23(ids):
     text = _text23(res)
     miss = _missing23(
         text, "- host %d · tailscale (system ssh, multiplexing" % ids["ts"],
-        "- host %d · key (paramiko, pooled) · port custom · sudo no · address bare name (no dot) · "
+        "- host %d · key (paramiko, pooled) · port custom · address bare name (no dot) · "
         "host key pinned" % ids["key"],
         "- host %d · local (panel host)" % ids["local"])
     check("hosts: each host's transport as run_command decides it, with classes, never values",
@@ -636,7 +636,7 @@ def _hosts23(ids):
     check("hosts: a bare name on a key host is flagged; on a tailscale host it is not",
           "FLAG: a bare name on a key host" in text and text.count("FLAG:") == 1, text)
     check("hosts: a password that does not decrypt under this cred_key is named, not printed",
-          not _missing23(text, "- host %d · password (paramiko, pooled) · port 22 · sudo no · "
+          not _missing23(text, "- host %d · password (paramiko, pooled) · port 22 · "
                                "address private IPv4" % ids["pw"],
                          "credential UNREADABLE under this cred_key"), text)
     miss = _missing23(text, "monitor DOWN (declared) · DB is_online no",

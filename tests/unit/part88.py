@@ -232,7 +232,7 @@ check("run-tests: when a lane hangs and the run is cancelled, the finished lanes
 check("run-tests: ...each lane's log is printed as that lane ends, before the hung lane 0 is "
       "stopped (not held back in lane order)",
       _hl88[0].find("OTHER-FAILED") < _hl88[0].find("stopping the lanes")
-      and _hl88[0].find("SMOKE-OUT") < _hl88[0].find("stopping the lanes")
+      and -1 < _hl88[0].find("SMOKE-OUT") < _hl88[0].find("stopping the lanes")
       and "OTHER-FAILED" in _hl88[0], repr(_hl88))
 
 

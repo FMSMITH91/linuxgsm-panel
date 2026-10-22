@@ -696,9 +696,22 @@ def _branch_sleep35(stmt):
 
 
 def _r32d_guard_only35(stmt):
-    """Is `stmt` an if whose every branch only leaves or does nothing (return, break, continue, raise, pass)?"""
-    _leave = (_ast35.Return, _ast35.Break, _ast35.Continue, _ast35.Raise, _ast35.Pass)
-    return isinstance(stmt, _ast35.If) and all(isinstance(_s, _leave) for _s in stmt.body + stmt.orelse)
+    """Is `stmt` an if whose every branch, down its elif chain, ends by leaving or does nothing?
+
+    Leaving is a return, break, continue or raise as the branch's LAST statement, so a guard that logs
+    before it leaves, or an `if … elif …` chain of leaves, is still a guard (review 1022a: each read as
+    work, and the sleep after it as no sleep before the first pass). Only an if is a guard.
+    """
+    return isinstance(stmt, _ast35.If) and _r34d_branch_leaves35(stmt.body) and _r34d_branch_leaves35(stmt.orelse)
+
+
+def _r34d_branch_leaves35(body):
+    """Does branch `body` end by leaving (return, break, continue, raise), or do nothing (empty, only pass)?"""
+    if all(isinstance(_s, _ast35.Pass) for _s in body):
+        return True
+    if isinstance(body[-1], _ast35.If):         # an elif: each of its own branches must
+        return _r32d_guard_only35(body[-1])
+    return isinstance(body[-1], (_ast35.Return, _ast35.Break, _ast35.Continue, _ast35.Raise))
 
 
 def _first_sleep35(body):
@@ -740,11 +753,17 @@ _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src
     "while True:\n    for _ in range(3):\n        time.sleep(1)\n",
     "while True:\n    if x:\n        work()\n        time.sleep(30)\n",
     "while True:\n    if stop.is_set():\n        return\n    time.sleep(60)\n",
-    "while True:\n    if x:\n        work()\n    time.sleep(60)\n")]
+    "while True:\n    if x:\n        work()\n    time.sleep(60)\n",
+    "while True:\n    if stop.is_set():\n        _log.debug('stopping')\n        return\n    time.sleep(60)\n",
+    "while True:\n    if a:\n        return\n    elif b:\n        continue\n    time.sleep(60)\n",
+    "while True:\n    if a:\n        return\n    elif b:\n        work()\n    time.sleep(60)\n",
+    "while True:\n    if a:\n        work()\n        pass\n    time.sleep(60)\n")]
 check("beating loops: a sleep after setup assignments heads a while body too (and a try or with "
-      "block's, or an if or for that starts with one, or one past a guard that only leaves), and one "
-      "after real work does not (control)",
-      _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False, True, False],
+      "block's, or an if or for that starts with one, or one past a guard that leaves, logging first or "
+      "down an elif chain), and one after real work or an elif that works and falls through does not "
+      "(control)",
+      _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False, True, False,
+                         True, True, False, False],
       repr(_r15d_fs_ctl35))
 
 
