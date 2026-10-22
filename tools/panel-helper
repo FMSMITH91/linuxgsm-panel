@@ -606,7 +606,10 @@ _APT_CONF_RULE = _WholeFile(_apt_conf_ok)
 # newline, and the Unicode line breaks. str.splitlines breaks on \x0c, \x0b, \x1c-\x1e, \r, \x85 and
 # \u2028/9, which cron, sshd and systemd do not, so `<valid entry>\x0c#;<cmd>` read here as an entry
 # and a skipped comment and to cron as ONE line whose command runs `<cmd>` (review 1022a).
-_R34A_LINE_BREAKERS = re.compile("[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]")
+# Raw, and \x0b..\x1f spelled out: CodeQL 1291 read that span as a suspicious range (it mixes
+# whitespace and other controls); the set is the same.
+_R34A_LINE_BREAKERS = re.compile(r"[\x00-\x08\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15"
+                                 + r"\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f\x85\u2028\u2029]")
 
 
 def _lines_match(content, pattern):
