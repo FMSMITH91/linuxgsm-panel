@@ -279,7 +279,7 @@ def _register_panel_binding(app):
         # same for the bind: after a bind change whose restart could not be scheduled the process
         # still listens on the old one, and re-asking for the saved bind was refused as "already",
         # leaving no way to apply it short of a host reboot (review 1022a).
-        if new_port == cur_port == stored_port and new_bind == cur_bind == _r34a_served_bind(cur_bind):
+        if new_port == cur_port == stored_port and new_bind == cur_bind == _r34j_bind_now(cfg, cur_bind):
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
         # ── Save the new binding ──
@@ -331,6 +331,16 @@ def _r34a_served_bind(stored_bind):
     """The bind this process listens on (app.config BOOT_BIND, canonical), else `stored_bind`."""
     bound = str(current_app.config.get("BOOT_BIND") or "").strip()
     return _r11c_canonical_bind(bound) if bound else stored_bind
+
+
+def _r34j_bind_now(cfg, cur_bind):
+    """The bind an unchanged change-port form is compared with: the served one only when bind_host is STORED.
+
+    Unset, the form shows the 0.0.0.0 default while the boot may have resolved loopback (Serve), and
+    compared with the served bind an unchanged Apply restarted the panel onto every interface. Unset
+    keeps the rule from before: the default again is already the binding.
+    """
+    return _r34a_served_bind(cur_bind) if _r13a_cfg_text(cfg, "bind_host") else cur_bind
 
 
 def _r18a_bracketed(host):
