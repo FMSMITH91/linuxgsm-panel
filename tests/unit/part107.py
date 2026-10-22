@@ -109,8 +109,11 @@ def _whitelist107(client, client_es):
 
 
 def _whitelist_as107(was):
-    """update_config's mutator putting the whitelist back to `was`. Made here, not in the finally:
-    CodeQL's py/exit-from-finally reads a lambda's implicit return there as a 'return' in it."""
+    """Return update_config's mutator that puts the whitelist back to `was`.
+
+    Made here, not in the finally: CodeQL's py/exit-from-finally reads a lambda's implicit return
+    there as a 'return' in it.
+    """
     return lambda cfg: cfg.update(security_whitelist=was)
 
 
