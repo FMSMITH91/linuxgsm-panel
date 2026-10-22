@@ -584,10 +584,15 @@ def _shapes_1022a(d):
         "f=tailscale; unset -f $f; tailscale version", 'PATH=$PATH; X=tailscale; unset -f "$X"; tailscale version',
         "PATH=$PATH; u=unset; $u -f tailscale; tailscale version",
         "PATH=$PATH; $(echo unset) -f tailscale; tailscale version",
+        "PATH=$PATH; bash -p -c 'tailscale version'", "PATH=$PATH; bash -o privileged -c 'tailscale version'")]
+    # The un-exporting shapes are bash's own (`export -f`, `declare`, `typeset`), so bash runs them: as
+    # shell=True they ran under /bin/sh, which is dash on Ubuntu, and dash's `export` exits the shell on
+    # `-f` ("Illegal option"), so the control never reached the binary on CI's runners (this machine's
+    # /bin/sh is bash). A bash -c over the guard's exported function is the route they were written for.
+    _shapes += [("run", (["bash", "-c", _x],), {"env": _first}) for _x in (
         "PATH=$PATH; export -fn tailscale; bash -c 'tailscale version'",
         "PATH=$PATH; declare +x -f tailscale; bash -c 'tailscale version'",
-        "PATH=$PATH; typeset +x -f tailscale; bash -c 'tailscale version'",
-        "PATH=$PATH; bash -p -c 'tailscale version'", "PATH=$PATH; bash -o privileged -c 'tailscale version'")]
+        "PATH=$PATH; typeset +x -f tailscale; bash -c 'tailscale version'")]
     _shapes += [("run", (_x,), {"shell": True, "env": _env}) for _x in (
         'P=PA; bash -euo pipefail -c "${P}TH=%s; tailscale version"' % d,
         'P=PA; bash -eo pipefail -c "${P}TH=%s; tailscale version"' % d)]
