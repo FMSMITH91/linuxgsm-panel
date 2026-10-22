@@ -1589,7 +1589,7 @@ function _bkShow(sel, field, v, label, named){
 // Schedule saves started, reads sent, and the newest read drawn. A read and a schedule save are two
 // requests nothing orders (the 4 s poll runs while a backup does): a read served before the save
 // committed, answering after it, put the old schedule back in the selects and in _bkShown beside
-// "Backup schedule saved". A reply is drawn only if no save started after its read was sent (the
+// "Backup schedule saved". A reply's schedule is drawn only if no save started after its read was sent (the
 // save reads again once it has answered, whether it saved or not: a failed save that did not left
 // the dropped read's update lost and the select showing the choice it never stored) and no newer
 // read has been drawn.
@@ -1602,15 +1602,20 @@ function _bkShow(sel, field, v, label, named){
 // before the first save answers: the first save's re-read put the old Keep back in the select and
 // in _bkShown until the second's re-read came (and kept it there if that read never answered).
 // Every save sends its own settled read once it has answered, so the last one always draws.
-var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0, _r34c_sfBkPending = 0;
+// Such a reply is still drawn, all but the two schedule selects: only the schedule is in question.
+// Dropping the whole reply froze the card while a save was unanswered, and fetch has no timeout:
+// a stalled save left a backup started meanwhile on "Backing up…" with Back up now disabled and the
+// list never updating, and a deleted backup still listed. And a save stops counting as unanswered
+// after _r35c_sfBkSaveMs, as the host page's Backups card does (_r30c_bkSaveMs).
+var _r30c_sfBkSaves = 0, _r30c_sfBkSent = 0, _r30c_sfBkDrawn = 0, _r34c_sfBkPending = 0, _r35c_sfBkSaveMs = 15000;
 function loadBackups(settled){
   if(!document.getElementById('backup-card')) return;
   var mine = ++_r30c_sfBkSent, saves = _r30c_sfBkSaves, pending = _r34c_sfBkPending;
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/info')
     .then(r=>r.json()).then(function(d){
-      if(saves !== _r30c_sfBkSaves || pending || mine < _r30c_sfBkDrawn) return;
+      if(mine < _r30c_sfBkDrawn) return;
       _r30c_sfBkDrawn = mine;
-      renderBackups(d, settled === true);
+      renderBackups(d, settled === true, saves !== _r30c_sfBkSaves || pending > 0);
     })
     .catch(function(){ /* transient error — keep whatever is already shown */ });
 }
@@ -1684,9 +1689,10 @@ function _bkRenderRows(d){
   }
 }
 
-function renderBackups(d, settled){
+function renderBackups(d, settled, noSchedule){
   // The two schedule selects. Don't clobber a select the user is actively changing — unless this is
-  // the read a settled save sent (loadBackups), which must show what is stored.
+  // the read a settled save sent (loadBackups), which must show what is stored. `noSchedule`: this
+  // reply may predate a schedule save (loadBackups), so it leaves both selects as they are.
   function showSchedule(sc){
     var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
     var ivN={n: Number(sc.interval_days)};
@@ -1700,7 +1706,7 @@ function renderBackups(d, settled){
   if(wrap) wrap.style.display='';
   _bkDefault = d.default || _bkDefault;
   var sc = d.schedule || {interval_days:0, keep:2, interval_set:false, keep_set:false};
-  showSchedule(sc);
+  if(!noSchedule) showSchedule(sc);
   _bkRenderDisk(d, sc);
   var s=d.status;
   _bkRenderStatus(s);
@@ -1723,8 +1729,9 @@ function saveBkSchedule(){
   if(!Object.keys(body).length) return;
   _r30c_sfBkSaves++;
   _r34c_sfBkPending++;
-  var answered = false;
-  var done = function(){ if(!answered){ answered = true; _r34c_sfBkPending--; } };
+  var answered = false, timer = null;
+  var done = function(){ if(!answered){ answered = true; _r34c_sfBkPending--; clearTimeout(timer); } };
+  timer = setTimeout(done, _r35c_sfBkSaveMs);
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){

@@ -513,8 +513,9 @@ def _cron_readback86():
         except Exception as e:  # noqa: BLE001 - what is checked is that nothing escapes
             raised = type(e).__name__
         db.session.rollback()
+        gone = db.session.get(GameServer, sid) is None     # the premise: the row did go mid-run
     check("cron: the read-back after a crontab write never raises, even when the server's row went "
-          "while it ran (its except reloaded the expired row)", raised is None, repr(raised))
+          "while it ran (its except reloaded the expired row)", raised is None and gone, repr((raised, gone)))
 
 
 # server_detail's `db` with a commit that raises (a locked database).

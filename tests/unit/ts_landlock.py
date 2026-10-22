@@ -245,7 +245,7 @@ def held(blocked):
 # directly in a directory on the way to the blocked binary is denied (the limit above), and shapes()
 # writes nothing, so the reader's checks and the child see the same text.
 _SOURCES = (("r29d-path-%s.sh", "PATH=%s:$PATH\n"), ("r30d-env-%s.sh", "T=tail\n"),
-            ("r31d-path-%s.sh", "PATH=%s:$PATH\n"))
+            ("r31d-path-%s.sh", "PATH=%s:$PATH\n"), ("r35d-script-%s.sh", "tailscale version\n"))
 # The planted tree (the child's working directory): the "machine's" binary, the directory a link to
 # it is found in, a part's own stand-in, the temp area the shapes get, and the mark a run leaves.
 _SYS, _LNK, _OWN, TMP, _MARK = "sys", "lnk", "own", "r31d-tmp", "ran"
@@ -514,7 +514,7 @@ def _shapes_1017a(d, ctl):
          {"shell": True}),
         ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
         ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {})) + _shapes_1017b(d, ctl) \
-        + _shapes_1017c(d, ctl) + _shapes_1022a(d)
+        + _shapes_1017c(d, ctl) + _shapes_1022a(d) + _shapes_1022b(d, ctl)
 
 
 def _shapes_1017b(d, ctl):
@@ -605,6 +605,46 @@ def shapes_1022a(d, ctl):
     """The review-1022a shapes alone (each must reach the planted binary unblocked); `ctl` is unused."""
     del ctl
     return _with_env(_shapes_1022a(d))
+
+
+def _shapes_1022b(d, ctl):
+    """shapes(): the stdin and script-file, quoted-wrapper, `-co`, restricted and exec-wrapper shapes (review 1022b).
+
+    Each reached the planted "machine's" binary in `d`: a shell reading its script from stdin or a file
+    (no -c, so no reader), a wrapper word quoted or escaped inside (`"command"`, a backslash before
+    `command`, `c''ommand`, `"env"`, an alias body), a nested bash building PATH behind `-co pipefail`
+    or `-oc pipefail`, a restricted bash (`-r`, `--restricted`, `rbash`), which imports no function, and a program that execs
+    its argv from PATH but was on no wrapper list (setpriv, prlimit, perl's exec). Only what every runner
+    has (unshare is refused in a container, zsh is not on CI's image: those are judged by the static rows).
+    """
+    _env, _first = {"PATH": "/usr/bin:/bin"}, {"PATH": d + ":/usr/bin:/bin"}
+    _file = os.path.join(ctl, "r35d-script-%s.sh" % os.path.basename(d))
+    _shapes = [("run", (["bash"],), {"input": b"tailscale version\n", "env": _first}),
+               ("run", (["bash", "-s"],), {"input": b"tailscale version\n", "env": _first}),
+               ("run", (["bash", _file],), {"env": _first}), ("run", (["sh", _file],), {"env": _first}),
+               ("run", (["env", "X=1", "bash", _file],), {"env": _first})]
+    _shapes += [("run", (_x,), {"shell": True, "env": _first}) for _x in (
+        "PATH=$PATH; \\command tailscale version", "PATH=$PATH; c''ommand tailscale version",
+        'PATH=$PATH; "timeout" 5 tailscale version', "PATH=$PATH; ti''meout 5 tailscale version",
+        'PATH=$PATH; "exec" tailscale version', "PATH=$PATH; bash -r -c 'tailscale version'",
+        "PATH=$PATH; bash --restricted -c 'tailscale version'", "PATH=$PATH; rbash -c 'tailscale version'",
+        "PATH=$PATH; setpriv tailscale version", "PATH=$PATH; perl -e 'exec \"tailscale\", \"version\"'")]
+    _shapes += [("run", (_x,), {"shell": True, "env": _env}) for _x in (
+        '"env" PATH=%s tailscale version' % d, "\\env PATH=%s tailscale version" % d,
+        'P=PA; bash -co pipefail "${P}TH=%s; tailscale version"' % d,
+        'P=PA; bash -oc pipefail "${P}TH=%s; tailscale version"' % d)]
+    _shapes += [("run", (_a,), {"env": _first}) for _a in (
+        ["env", "X=1", "bash", "-c", '"command" tailscale version'],
+        ["bash", "-c", "PATH=$PATH; shopt -s expand_aliases\nalias x='command tailscale'\nx version"],
+        ["env", "X=1", "bash", "-r", "-c", "tailscale version"], ["env", "X=1", "bash", "-rc", "tailscale version"],
+        ["env", "X=1", "bash", "--restricted", "-c", "tailscale version"],
+        ["setpriv", "tailscale", "version"], ["prlimit", "tailscale", "version"])]
+    return tuple(_shapes)
+
+
+def shapes_1022b(d, ctl):
+    """The review-1022b shapes alone (each must reach the planted binary unblocked)."""
+    return _with_env(_shapes_1022b(d, ctl))
 
 
 def _kernel_table(ctl):

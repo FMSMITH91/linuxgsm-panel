@@ -273,6 +273,11 @@ def _put(cells, col, ch, style):
         return 0
     if ch == "\b":
         return max(0, col - 1)
+    if ch != "\t" and _C0_RE.match(ch):
+        # NUL, BEL and the rest take no column, as render_line drops them BEFORE its \r arithmetic.
+        # Dropped only afterwards (below), one in a player's name shifted every later `\r` overwrite
+        # on that line one column right, so the colour console and render_line disagreed.
+        return col
     if col < len(cells):
         cells[col] = (ch, style)
     else:

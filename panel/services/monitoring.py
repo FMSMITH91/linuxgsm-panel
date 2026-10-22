@@ -26,7 +26,7 @@ from panel.services import notifications
 from panel.ops import system_ops as so
 from panel.core.clock import utcnow
 from panel.core.config import _r15a_cfg_int, load_config
-from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
+from panel.core.validation import _int_or, ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
 from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer, db,
     row_label, rows_still_held)
 from panel.core.panel_state import (
@@ -1574,8 +1574,12 @@ def _read_max_config(gs):
         return False, None
     for key in ("maxplayers", "slots"):
         v = (vals.get(key) or "").strip()
-        if v.isdecimal():
-            return True, int(v)
+        # _int_or, not int(): the config is the game account's to write, and a value past 4300
+        # digits made int() raise, so the server's whole player count read as unknown (and a
+        # reboot waiting on it as busy) even when gamedig had read it. Not a number: no capacity.
+        n = _int_or(v, None) if v.isdecimal() else None
+        if n is not None:
+            return True, n
     return True, None
 
 

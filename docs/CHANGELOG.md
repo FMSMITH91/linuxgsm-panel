@@ -601,6 +601,42 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A twenty-second full review on 2026-10-22: fixes.** Every item below has a check that fails
+  without its fix.
+  - **An SSH port move is now one transaction with a single commit point,** proven on the test VPS.
+    Once the panel has confirmed sshd answers on the new port, nothing undoes the move. Before, a
+    failure after that point (removing the old-setting snapshot, or repointing fail2ban) undid it
+    and deleted the new SSH port setting, which could lock you out of the host. The move now stops
+    before changing anything when it cannot take an exact snapshot of the current setting (a full
+    disk left half of one). Its undo restarts sshd only onto a configuration `sshd -t` accepts. If
+    putting the old setting back cannot be confirmed, the panel tries once more. If it still
+    cannot, it says so and names the file to check, instead of "nothing changed", and the next
+    move keeps the old setting's copy rather than overwriting it.
+  - **The console no longer shows an update's lines twice.** Lines written while the panel was
+    reading an action's output were sent again on the next read.
+  - **A failed OpenSSF Scorecard run no longer holds back panel updates.** Scorecard rates the
+    repository's practices, not a commit's code, and a GitHub-side error in it kept an update from
+    every panel. Every check that tests the code still has to pass.
+  - **An uninstall and a clean reboot of its host no longer overlap.** An uninstall is refused
+    while the reboot is stopping the host's servers, and a reboot waits while an uninstall runs.
+  - **An over-long number in a game server's own files no longer breaks a port or player-count
+    read.** A sibling server's port, the max-players setting, or a console player count thousands
+    of digits long stopped the read instead of being skipped.
+  - **The installer's update says the OS was not fully updated when the upgrade was refused,**
+    instead of "System updated".
+  - **OS updates hand apt a keep file only when it was written in full.** On the panel host, the
+    host's own apt preferences are copied into it byte for byte. Changing an sshd setting keeps
+    every other line of `sshd_config` byte for byte too, including characters that are not UTF-8.
+  - **Smaller fixes.** A backup-schedule save that never answers no longer freezes the whole
+    Backups card on Files & Config; it stops waiting after 15 seconds and holds only the schedule.
+    An install's progress row now stays hidden for a server the dashboard filter hides. A finished
+    install's row is no longer removed by an earlier install's timer. In the coloured console, a
+    NUL or bell character no longer shifts the text that overwrites it.
+  - **Tests.** The unit suite's guard on the machine's tailscale now also reads scripts given on
+    stdin or as a file, quoted wrapper words, `-co` option clusters, restricted bash and more
+    exec-wrappers. Several checks that left state behind or did not check their own premise are
+    fixed.
+
 - **A twenty-first full review on 2026-10-22: fixes.** Every item below has a check that fails
   without its fix.
   - **Undoing a failed SSH port move no longer deletes the SSH setting it has just put back.** When

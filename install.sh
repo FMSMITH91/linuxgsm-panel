@@ -3351,12 +3351,19 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
                 echo ""
                 info "System updates are available — applying them now…"
                 _r34a_keep_installed
+                # Updated only when the upgrade said so, as the fresh path: a refused run printed the
+                # warning AND "System updated". A pending reboot is real either way, so that stays.
+                _r35a_upg_ok=1
                 _r30a_apt_ni "${UPG_SUDO}" -y -o Dpkg::Options::="--force-confold" "${_R34A_KEEP_OPTS[@]}" \
-                    full-upgrade || warn "Some packages could not be upgraded — continuing."
+                    full-upgrade || { _r35a_upg_ok=0; warn "Some packages could not be upgraded — continuing."; }
                 [[ -z "${_R34A_KEEP_DIR}" ]] || rm -rf -- "${_R34A_KEEP_DIR}"
                 _r30a_apt_ni "${UPG_SUDO}" -y autoremove --purge >/dev/null 2>&1 || true
                 if [[ ! -f /var/run/reboot-required ]]; then
-                    ok "System updated — no reboot required."
+                    if [[ "${_r35a_upg_ok}" -eq 1 ]]; then
+                        ok "System updated — no reboot required."
+                    else
+                        warn "The OS was not fully updated (see apt's output above); no reboot is pending."
+                    fi
                 elif [[ "${PANEL_NO_REBOOT:-0}" == "1" ]]; then
                     # The fresh-install path honours it (below), and an operator who set it on an
                     # update was rebooted anyway: PANEL_NO_UPGRADE was this path's only off switch.

@@ -190,7 +190,7 @@ if _outb109 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _name109f = "Files & Config backup card: reads and a schedule save"
 _outf109 = _js106(_name109f, _PEND109 + (
-    "var serverId = 1; const seen = []; global.renderBackups = d => seen.push(d.tag);\n"
+    "var serverId = 1; const seen = []; global.renderBackups = (d, s, keep) => { if (!keep) seen.push(d.tag); };\n"
     "document.getElementById('bk-interval').value = '3'; document.getElementById('bk-keep').value = '';\n"), _SF109, (
     "var _bkShown", "var _r30c_sfBkSaves", "function loadBackups(", "function saveBkSchedule("), (
     "  const out = {};\n"

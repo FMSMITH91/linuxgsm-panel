@@ -168,10 +168,10 @@ _P57 = "http://%s:5000" % _LB57
 _SHARE57 = ("https://h.tail.ts.net (%s)\n|-- /     path  /srv/share\n|-- /lgsm proxy " + _P57
             + "\n|-- /t    text  \"hello world\"\n")
 _svc57 = _ts57._parse_serve_status(_SHARE57 % "tailnet only")
-_types57 = [(r["mount"], r.get("type")) for s in _svc57["services"] for r in s["routes"]]
+_routes57 = [(r["mount"], r.get("type")) for s in _svc57["services"] for r in s["routes"]]
 check("serve status: a path (file share) and a text handler are parsed as routes beside the proxy "
       "(only `proxy` lines were kept, so another app's file share was invisible)",
-      _types57 == [("/", "path"), ("/lgsm", "proxy"), ("/t", "text")], repr(_types57))
+      _routes57 == [("/", "path"), ("/lgsm", "proxy"), ("/t", "text")], repr(_routes57))
 _lf57 = _ts57._r12a_listener_funnel(_svc57, 5000)
 check("serve status: the shared :443 listener counts the file share and the text handler as other "
       "apps", _lf57 == (False, ["/", "/t"]), repr(_lf57))

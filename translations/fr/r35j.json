@@ -1,0 +1,4 @@
+{
+  "The SSH port change did not work, and putting the previous configuration back could not be confirmed — check {path} before restarting ssh (the previous one is kept at {bak}, and `sshd -t` must accept the config).": "Le changement du port SSH n'a pas fonctionné, et la remise en place de la configuration précédente n'a pas pu être confirmée : vérifiez {path} avant de redémarrer ssh (la précédente est conservée dans {bak}, et `sshd -t` doit accepter la configuration).",
+  "`sshd -t` rejects this host's SSH configuration, and an earlier port change left its snapshot at {bak}, which may be the last good copy — check {path} and run `sshd -t` before changing the port again. Nothing changed.": "`sshd -t` rejette la configuration SSH de cet hôte, et un changement de port précédent a laissé sa copie dans {bak}, qui est peut-être la dernière copie valide : vérifiez {path} et lancez `sshd -t` avant de changer à nouveau le port. Rien n'a été modifié."
+}

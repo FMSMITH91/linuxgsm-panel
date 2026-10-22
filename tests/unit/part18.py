@@ -1286,6 +1286,10 @@ try:
     _p9_patch(_osu18, "_os_updates_for", _osucheck18)
     _p9_state._os_update_state["hosts"].pop(_oh18, None)
     _p9_state._os_update_seen.pop(_oh18, None)
+    # Emptied for the sweep, so the control below reads what THIS sweep recorded (review 1022b: an entry
+    # an earlier part left would have passed it); what was there is put back after, where not re-recorded.
+    _r35d_hosts18 = dict(_p9_state._os_update_state["hosts"])
+    _p9_state._os_update_state["hosts"].clear()
     _p9._maybe_alert_os_updates(force=True)
     check("os-update sweep: the host that took a checked host's id inherits none of its counts",
           _oh18 not in _p9_state._os_update_state["hosts"]
@@ -1295,6 +1299,8 @@ try:
     check("os-update sweep: the other hosts are still recorded (control)",
           any(h != _oh18 for h in _p9_state._os_update_state["hosts"]),
           repr(sorted(_p9_state._os_update_state["hosts"])))
+    for _r35d_k18, _r35d_v18 in _r35d_hosts18.items():
+        _p9_state._os_update_state["hosts"].setdefault(_r35d_k18, _r35d_v18)
 
     _tmh18 = _host18("p18-term-host", "192.0.2.165")
     _p9_patch(_ht18._ts, "open_session", lambda sid, remote, is_local, **k: None)

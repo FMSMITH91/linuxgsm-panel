@@ -39,6 +39,9 @@ def _sandboxed_helper():
 
 
 _h = _sandboxed_helper()
+# The sandbox has no sshd config of its own: `sshd -t` (the snapshot's guard for a snapshot already
+# there) is read as accepting it, as on a host whose config is good. part127 drives the refusal.
+_h._r35j_sshd_t_ok = lambda: True
 
 # (a) No drop-in before -> a failed change must leave no drop-in. Getting this wrong leaves an
 #     empty file that sshd reads, which is how a "rollback" locks someone out.
@@ -60,8 +63,11 @@ check("sshd: the new drop-in is what got written",
 _h.do_sshd_restore([], None)
 check("sshd: rolling back restores the previous drop-in byte for byte",
       open(_h.SSHD_DROPIN).read() == _ORIGINAL)
-check("sshd: and the snapshot is consumed, not left lying in sshd_config.d",
-      not os.path.exists(_h.SSHD_DROPIN_BAK))
+# The restore COPIES the snapshot back and keeps it (review 1022b's integration), so a second run
+# is the first again; it is not a *.conf, so sshd never reads it, and the next backup replaces it.
+check("sshd: and the snapshot is kept, so the restore run again restores the same file",
+      os.path.exists(_h.SSHD_DROPIN_BAK) and _h.do_sshd_restore([], None) == 0
+      and open(_h.SSHD_DROPIN).read() == _ORIGINAL)
 
 # A rollback that changes permissions is not a rollback. There was a chmod 0o644 on the restore
 # path, which both widened the file and threw away whatever mode the operator had set.
@@ -12979,11 +12985,18 @@ check("self-update card: an installer the helper stopped at its timeout, or coul
       and _rit_nr.get("outcome") == "failed" and _rit_nr.get("exit_code") == 127,
       repr((_rit_to, _rit_nr)))
 
-# ...and every git above read only the repository's own config (the control: on a machine with a
-# ~/.gitconfig, as a developer's, it is listed without the line at the top of this part).
+# ...and every git above read only the repository's own config. Read with a planted ~/.gitconfig and XDG
+# config (review 1022b: on CI's runner, which has neither, it was empty with the line at the top of this
+# part deleted, and passed): only the setting above keeps them out, on any machine.
+_r35d_home06 = _tempfile.mkdtemp(prefix="lgsm-unit-r35d-home06-")
+os.makedirs(os.path.join(_r35d_home06, "git"))
+for _r35d_f06 in (os.path.join(_r35d_home06, ".gitconfig"), os.path.join(_r35d_home06, "git", "config")):
+    with open(_r35d_f06, "w", encoding="utf-8") as _r35d_fh06:
+        _r35d_fh06.write("[r35d]\n\tprobe = 1\n")
 _r34d_git_origins = sorted({_l.split("\t", 1)[0] for _l in _sp.run(
-    ["git", "config", "--list", "--show-origin"], capture_output=True, text=True,
-    cwd="/").stdout.splitlines()})
+    ["git", "config", "--list", "--show-origin"], capture_output=True, text=True, cwd="/",
+    env=dict(os.environ, HOME=_r35d_home06, XDG_CONFIG_HOME=_r35d_home06)).stdout.splitlines()})
+_shutil.rmtree(_r35d_home06, ignore_errors=True)
 check("part06: the git it runs reads no global or system config, as on CI's runner",
       _r34d_git_origins == [] or all(_o.startswith("command line:") for _o in _r34d_git_origins),
       repr(_r34d_git_origins))

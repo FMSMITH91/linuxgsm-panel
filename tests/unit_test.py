@@ -255,6 +255,11 @@ _R28D_PATH_OWN = re.compile(r"(?<![\w${])PATH\b|\$\{PATH:?=|\bcommand\s+(?:-\w+\
 # the letters before the first `o` are not `o`, so a cluster splits only one way.
 _R31D_SH_OPTS = (r"(?:--(?:rcfile|init-file)\s+\S+\s+|[-+][^\WoO]*[oO]\w*\s+[^\s+-]\S*\s+"
                  r"|--(?!(?:rcfile|init-file)\s)[\w-]*\s+|[-+]\w+\s+)*")
+# The -c word of a nested shell: a cluster holding `c` and no `o`, or one holding both, whose `o` takes the
+# next word before the script (review 1022b: `bash -co pipefail "<script>"` and `-oc` read `pipefail` as
+# the script, so a nested shell building PATH= went unseen). Each cluster splits one way: the letters
+# before the first `c` or `o` are neither, and those after it up to the other are not that other.
+_R35D_C_TOKEN = r"(?:-[^\WoOc]*(?:c[^\WoO]*[oO]|[oO][^\Wc]*c)\w*\s+[^\s+-]\S*\s+|-[^\WoOc]*c[^\WoO]*\s+)"
 # A login shell: its profile sets PATH (Debian's /etc/profile resets it, ~/.profile prepends ~/bin).
 # An interactive one (`bash -ic`) reads ~/.bashrc, which can set it as well; an option's value
 # (`bash -O extglob -l`) is skipped, and `exec -l` hands any shell a login name (review 1017a).
@@ -276,7 +281,7 @@ _R29D_SHIM_OFF = re.compile(_R30D_SETS_ANY.pattern + "|" + _R29D_LOGIN.pattern)
 # A nested shell, bash too, handed a -c script (review 1017a: `bash -c "${P}TH=<d>; tailscale"`
 # builds the name PATH only when the inner shell runs, where no reader of the outer text sees it).
 _R30D_NESTED_C = re.compile(r"(?:^|[\s;&|(`/'\"])(?:(?:ba|da|z|k|mk)?sh|busybox\s+sh)\s+" + _R31D_SH_OPTS
-                            + r"-\w*c\w*\s+" + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
+                            + _R35D_C_TOKEN + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
 # Builtins that take a variable NAME as a word (`export 'PATH=…'`, `read ${P}TH`): one handed a
 # quoted or built name may be setting PATH. printf names it only after -v.
 _R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray",
@@ -354,12 +359,64 @@ def _r16d_shell_text(cmd, kw):
         # A list with shell=True runs its first item as the script (review 1012b: it was not read).
         _first = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd
         return _first if isinstance(_first, str) else None
-    return _r17d_dash_c_script(cmd) if isinstance(cmd, (list, tuple)) else None
+    return _r35d_shell_at(cmd, kw)[1] if isinstance(cmd, (list, tuple)) else None
 
 
-def _r17d_dash_c_script(argv):
-    """The script of `[sh|bash|dash, -c, script]`; -c grouped with other letters (`bash -lc`) too."""
-    return _r18d_dash_c(argv)[1]
+# A shell script the reader cannot see (stdin a pipe written later, a file this run may not read) is read as
+# one that may run any tailscale on any PATH: `command -p` and a built word keep it off the shim, and judge
+# it on the run's PATH and the default one (review 1022b).
+_R35D_UNREAD = "command -p $(:)"
+_R35D_SCRIPT_MAX = 1 << 20
+
+
+def _r35d_shell_at(argv, kw):
+    """(index of the shell word, the script it runs) for an argv that runs a shell, else (None, None).
+
+    Its -c script (_r18d_dash_c); with no -c, the script it reads from stdin (`bash`, `bash -s`, `bash -`:
+    the run's `input=`) or from the file its first operand names (review 1022b: neither was read, so
+    `run(["bash"], input="tailscale version")` and `["sh", "<f>.sh"]` got no guard and no judgement).
+    """
+    _i, _script = _r18d_dash_c(argv)
+    if _i is not None:
+        return _i, _script
+    _i = _r18d_shell_word(argv)
+    if _i is None:
+        return None, None
+    _c, _j = _r18d_shell_opts(argv, _i + 1)
+    if _c:
+        return None, None       # -c with no script: the shell refuses it
+    _opts = [str(_o) for _o in argv[_i + 1:_j]]
+    if _j < len(argv) and "-" not in _opts and not any(re.fullmatch(r"-[A-Za-z]*s[A-Za-z]*", _o) for _o in _opts):
+        return _i, _r35d_read_script(argv[_j], kw)
+    return _i, _r35d_stdin_script(kw)
+
+
+def _r35d_stdin_script(kw):
+    """The script a shell reads from its stdin: the run's `input=`, else one the reader cannot see."""
+    _in = kw.get("input")
+    _in = _in.decode("utf-8", "replace") if isinstance(_in, bytes) else _in
+    return _in if isinstance(_in, str) else _R35D_UNREAD
+
+
+def _r35d_read_script(name, kw):
+    """The text of the script file `name` a shell is handed: from the run's directory, else (bash) its PATH."""
+    try:
+        name = os.fsdecode(os.fspath(name))
+    except TypeError:
+        return _R35D_UNREAD
+    _base = kw.get("cwd") or os.getcwd()
+    _tries = [os.path.join(os.fsdecode(_base), name)]
+    if os.sep not in name:
+        _tries += [os.path.join(_d, name) for _d in _r20d_run_env(kw).get("PATH", os.defpath).split(os.pathsep) if _d]
+    for _f in _tries:
+        if not os.path.isfile(_f):
+            continue
+        try:
+            with open(_f, encoding="utf-8", errors="replace") as _fh:
+                return _fh.read(_R35D_SCRIPT_MAX)
+        except OSError:
+            return _R35D_UNREAD
+    return ""                   # no such file: the shell runs nothing
 
 
 def _r18d_dash_c(argv):
@@ -415,26 +472,15 @@ def _r25d_readings(argv):
 # The argv form knew 8 of them while the script form's pattern named 20 (review 1013a: `taskset 1
 # tailscale`, `flock /x tailscale` and `xargs bash -c …` ran the machine's binary), so the script
 # pattern is now built from this table plus the shell-only words, and the two cannot disagree.
-_R19D_WRAPPERS = {"env": ("uCSa", 0), "timeout": ("sk", 1), "nice": ("n", 0), "nohup": ("", 0),
-                  "setsid": ("", 0), "stdbuf": ("ioe", 0), "ionice": ("cnpPu", 0),
-                  "sudo": ("ugCDhprtTU", 0), "doas": ("aCu", 0), "runuser": ("ugGcsw", 0),
-                  "su": ("cgGsw", 0), "xargs": ("adEILnPs", 0), "chrt": ("TPD", 1), "taskset": ("", 1),
-                  "flock": ("wEc", 1), "time": ("fo", 0), "watch": ("n", 0)}
-# Wrappers that reset PATH for the command they run: it is found on the default PATH.
-_R20D_PATH_RESETS = ("sudo", "doas", "runuser", "su")
-# Words only a script has (shell builtins, a nested shell that does not read bash's exported
-# functions, and commands that run another): judged in a script, never an argv wrapper.
-_R20D_SCRIPT_ONLY = ("command", "exec", "builtin", "type", "hash", "whereis", "sh", "dash", "zsh", "ksh",
-                     "mksh", "busybox", "awk", "find")
-# Long options of those that take their value as the next word.
-_R19D_LONG_VALUE = {"--unset", "--chdir", "--argv0", "--split-string", "--signal", "--kill-after", "--adjustment",
-                    "--input", "--output", "--error", "--class", "--classdata", "--pid", "--pgid", "--uid",
-                    "--user", "--group", "--close-from", "--chroot", "--host", "--prompt", "--role",
-                    "--type", "--other-user", "--command-timeout", "--command", "--shell", "--supp-group",
-                    "--whitelist-environment", "--arg-file", "--delimiter", "--eof", "--replace",
-                    "--max-lines", "--max-args", "--max-procs", "--max-chars", "--timeout",
-                    "--conflict-exit-code", "--format", "--interval", "--sched-runtime", "--sched-period",
-                    "--sched-deadline"}
+_r35d_tg_spec = importlib.util.spec_from_file_location(
+    "_r35d_ts_guard", os.path.join(_root, "tests", "unit", "ts_guard.py"))
+_r35d_ts_guard = importlib.util.module_from_spec(_r35d_tg_spec)
+_r35d_tg_spec.loader.exec_module(_r35d_ts_guard)
+# The tables live in tests/unit/ts_guard.py (data only): the wrappers, the PATH-resetting ones, the
+# script-only words and the long options taking a value, as each is described there.
+_R19D_WRAPPERS, _R20D_PATH_RESETS = _r35d_ts_guard.WRAPPERS, _r35d_ts_guard.PATH_RESETS
+_R20D_SCRIPT_ONLY, _R19D_LONG_VALUE = _r35d_ts_guard.SCRIPT_ONLY, _r35d_ts_guard.LONG_VALUE
+_R35D_ARCH_FIRST, _R35D_LONG_FLAGS = _r35d_ts_guard.ARCH_FIRST, _r35d_ts_guard.LONG_FLAGS
 # Options whose VALUE is a command line (`env -S 'tailscale up'`, `su -c`, `runuser -c`, `flock
 # -c`): the program inside is never the next argv word, so such a value is judged by the words it
 # names (review 1013a).
@@ -460,6 +506,9 @@ def _r19d_unwrap(argv, path, prefix_value=True):
     while (_i < len(argv) and isinstance(argv[_i], str)
            and os.path.basename(argv[_i]) in _R19D_WRAPPERS):
         _w = os.path.basename(argv[_i])
+        if (_w in _R35D_ARCH_FIRST and _i + 1 < len(argv) and isinstance(argv[_i + 1], str)
+                and not argv[_i + 1].startswith("-")):
+            _i += 1
         _i, path = _r19d_wrapper_opts(_w, argv, _i + 1, None if _w in _R20D_PATH_RESETS else path,
                                       prefix_value)
         _i += _R19D_WRAPPERS[_w][1]
@@ -501,6 +550,8 @@ def _r19d_opt_word(word, argv, _i, prefix_value=True):
         return 1, [("=", _a)]
     if _a == "-" and word == "env":
         return 1, [("-i", "")]
+    if _a.partition("=")[0] in _R35D_LONG_FLAGS.get(word, ()):
+        return 1, [(_a.partition("=")[0], _a.partition("=")[2])]
     if _a.startswith("--"):
         return _r23d_long_opt(argv, _i, prefix_value)
     if re.fullmatch(r"-[A-Za-z0-9]+", _a):
@@ -545,6 +596,8 @@ def _r19d_path_after(word, opts, path):
             path = _val[len("PATH="):]
         elif word == "env" and _r23d_env_clears_path(_name, _val):
             path = None
+        elif word == "setpriv" and _r23d_long_prefix(_name, "--reset-env"):
+            path = None         # PATH set anew, as a login's (review 1022b)
     return path
 
 
@@ -654,6 +707,7 @@ def _r20d_cmdline_values(cmd):
         _val = _r21d_cluster_value(cmd, _k)
         if _val is not None:
             _out.append(_val)
+        _out += _r35d_co_words(cmd, _k)
     return _out
 
 
@@ -671,6 +725,7 @@ def _r25d_option_cmdlines(cmd):
         _val = _r21d_cluster_value(cmd, _k)
         if _val is not None:
             _out.append(_val)
+        _out += _r35d_co_words(cmd, _k)
     return _out
 
 
@@ -702,6 +757,18 @@ def _r21d_cluster_value(cmd, k):
         if not _ch.isalnum():
             return None
     return None
+
+
+def _r35d_co_words(cmd, k):
+    """The two words after a shell's `-co`/`-oc` cluster cmd[k]: the `o`'s value, then the -c script.
+
+    A shell reads `zsh -co pipefail tailscale` so, where _r21d_cluster_value takes the `o` for -c's
+    attached value and nothing after it (review 1022b, the argv half of the nested reader's `-co` miss).
+    """
+    _a = cmd[k]
+    if not (isinstance(_a, str) and re.fullmatch(r"-[A-Za-z]+", _a) and "c" in _a and re.search("[oO]", _a)):
+        return []
+    return [_w for _w in cmd[k + 1:k + 3] if isinstance(_w, str)]
 
 
 def _r20d_cmdline_candidates(cmd, kw):
@@ -974,9 +1041,13 @@ def _r20d_may_reset_path(cmd):
 # named by its path (`/usr/bin/env tailscale`) counts as well: it execs from PATH all the same.
 # `type -P tailscale` hands the binary's path to the script, past the function, and a nested
 # `sh -c` runs under dash, which never reads the exported functions.
+# A quote before the word starts one too (review 1022b: `alias x='command tailscale'` ran it past the
+# function once the alias expanded), and so does an interpreter that execs from PATH itself (`perl -e
+# 'exec "tailscale"'`, python's os.execvp), up to its line's end, since its program's own `;` is quoted:
+# only where it names the binary, so neither is read as building.
 _R19D_SCRIPT_WRAPPED = re.compile(
-    r"(?:^|[\s;&|(`/])(?:%s)\s[^;&|\n]*?\btailscale\b"
-    % "|".join(sorted(set(_R19D_WRAPPERS) | set(_R20D_SCRIPT_ONLY))))
+    r"(?:^|[\s;&|(`/'\"])(?:(?:%s)\s[^;&|\n]*?|(?:perl|python3?)\s[^\n]*?)\btailscale\b"
+    % "|".join(sorted(set(_R19D_WRAPPERS) | set(_R20D_SCRIPT_ONLY) | {"rbash"})))
 # ...and one of those commands given a word the script builds at run time (`command ${T}scale`,
 # `exec $(printf …)`): the function cannot see it, and the word may be the binary (review 1016b).
 _R25D_SCRIPT_WRAPPED_BUILT = re.compile(
@@ -986,7 +1057,7 @@ _R25D_SCRIPT_WRAPPED_BUILT = re.compile(
 # is judged by what it can build, not by the quotes that make it literal to the outer shell. Past
 # any option the shell takes (_R31D_SH_OPTS, review 1017b: `zsh -o noglob -c '…'` was not read).
 _R25D_NESTED_SHELL = re.compile(r"(?:^|[\s;&|(`/])(?:sh|dash|zsh|ksh|mksh|busybox)\s+(?:busybox\s+)?"
-                                + _R31D_SH_OPTS + r"-\w*c\w*\s+" + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\")")
+                                + _R31D_SH_OPTS + _R35D_C_TOKEN + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\")")
 # env's clearing options anywhere among its options, and by a long name's prefix (review 1015d:
 # only one right after `env` was read, so `env -v -i x`, `env -u PATH x` and `env --unse PATH x`
 # were judged on the PATH the script started with).
@@ -1090,8 +1161,12 @@ _R34D_FUNC_OFF = re.compile(r"\b(?:export|declare|typeset|local)\b(?=[^;&|\n]*\s
 _R34D_BUILT_CMD = r"(?:^|[;&|(){\n`])[ \t]*(?:\w+=\S*[ \t]+)*[$`]"
 _R34D_FUNC_OFF_BUILT = re.compile(r"\bunset\b[^;&|\n]*[$`\\]|" + _R34D_BUILT_CMD
                                   + r"[^;&|\n]*(?:\s-\w*f\b|\b(?:tailscale|which)\b)")
-_R34D_PRIV_BASH = re.compile(r"(?:^|[\s;&|(`/'\"])bash\s+" + _R31D_SH_OPTS
-                             + r"(?:-[A-Za-oq-z]*p\w*|-[A-Za-np-z]*o[A-Za-z]*\s+privileged)\b")
+# A restricted bash (`-r` in a cluster, `--restricted`, `rbash`) imports none either: bash reads the
+# environment's functions only when neither mode is on (review 1022b: `bash -r -c 'tailscale version'`
+# ran the PATH binary past them).
+_R34D_PRIV_BASH = re.compile(r"(?:^|[\s;&|(`/'\"])(?:bash\s+" + _R31D_SH_OPTS
+                             + r"(?:-[A-Za-oq-z]*p\w*|-[A-Za-qs-z]*r\w*|--restricted"
+                               r"|-[A-Za-np-z]*o[A-Za-z]*\s+privileged)\b|rbash\b)")
 # ...and one that names the binary by a path is judged by that path: ~, $VAR and a relative path
 # are read against the run's environment and directory.
 _R19D_SCRIPT_PATH = re.compile(r"(?<![\w.~$/:-])((?:~|\$\{?\w+\}?|\.{1,2})?[\w./~-]*/tailscale)(?![\w.-])")
@@ -1138,7 +1213,7 @@ def _r28d_argv_env(cmd, env):
     """
     if not isinstance(cmd, (list, tuple)):
         return env, []
-    _i = _r18d_dash_c(cmd)[0]
+    _i = _r35d_shell_at(cmd, {})[0]
     if not _i:
         return env, []
     _env, _extra = dict(env), []
@@ -1157,6 +1232,25 @@ def _r28d_no_shim(path):
     return os.pathsep.join(_d for _d in path.split(os.pathsep) if _d != _R26D_SHIM)
 
 
+# A command word quoted or escaped inside (`"command"`, `\\command`, `c''ommand`, `'sudo'`): the shell
+# runs it as the bare word.
+_R35D_QUOTED_WORD = re.compile(r"(?:^|(?<=[\s;&|(`/]))[\w'\"\\-]*['\"\\][\w'\"\\-]*(?=[\s;&|)]|$)")
+_R35D_COMMAND_WORDS = frozenset(_R19D_WRAPPERS) | frozenset(_R20D_SCRIPT_ONLY) | {"bash", "rbash", "eval", "source"}
+
+
+def _r35d_bare_words(script):
+    """`script` with each wrapper or shell word that is quoted or escaped inside written bare (review 1022b).
+
+    Only those words: the reader of a built word (_r26d_runs_built) must keep every other quote, or an
+    awk program's `'$1 >= c'` would read as building. `"env" -i tailscale`, a backslash before `command` and
+    `ti''meout 5 tailscale` each ran the PATH binary past the guard's function and shim unread.
+    """
+    def _one(_m):
+        _w = _r29d_unquoted(_m.group(0))
+        return _w if _w in _R35D_COMMAND_WORDS else _m.group(0)
+    return _R35D_QUOTED_WORD.sub(_one, script)
+
+
 def _r19d_wrapped_candidates(script, env, extra=()):
     """The tailscale a wrapper in `script` could exec from PATH: the starting one, and the default.
 
@@ -1166,8 +1260,10 @@ def _r19d_wrapped_candidates(script, env, extra=()):
     `PATH=<dir>:$PATH; timeout 5 ${T}scale` was judged on the starting PATH, never on <dir>), and
     the starting one without the shim, which counts as a stand-in and would answer for any PATH.
     """
-    if not (_R19D_SCRIPT_WRAPPED.search(script) or _r26d_runs_built(script, env)
-            or _R19D_SCRIPT_WRAPPED.search(_r23d_expand_vars(script, _r25d_script_env(script, env)))
+    _bw = _r35d_bare_words(script)
+    if not (any(_R19D_SCRIPT_WRAPPED.search(_t) for _t in (script, _bw)) or _r26d_runs_built(script, env)
+            or any(_R19D_SCRIPT_WRAPPED.search(_r23d_expand_vars(_t, _r25d_script_env(script, env)))
+                   for _t in (script, _bw))
             or _r34d_func_off(script, env)):
         return []
     return [shutil.which("tailscale", path=_p) for _p in _r29d_script_paths(script, env, extra)]
@@ -1222,7 +1318,7 @@ def _r29d_script_paths(script, env, extra):
     _bare = _r29d_unquoted(script)
     _paths = [_start] + list(extra)
     if (_R19D_SCRIPT_RESETS.search(script) or _R19D_SCRIPT_RESETS.search(_bare)
-            or _R21D_SCRIPT_SEARCHES.search(script)):
+            or _R21D_SCRIPT_SEARCHES.search(script) or _R21D_SCRIPT_SEARCHES.search(_bare)):
         _paths.append(_R19D_DEFAULT_PATH)
     # A login shell searches what its profile sets.
     if _r29d_login(script):
@@ -1236,10 +1332,13 @@ def _r29d_script_paths(script, env, extra):
 
 def _r26d_runs_built(script, env):
     """Does `script` hand a wrapper, or a nested shell, a word it builds that may spell the binary?"""
-    _bare = _r26d_strip_single(script)
+    # ...its wrapper and shell words also read bare, as the shell runs them (_r35d_bare_words).
+    _bw = _r35d_bare_words(script)
+    _bare = _r26d_strip_single(_bw)
     return (any(_r26d_may_spell(_c, script, env) for _c in _r26d_built_commands(_bare))
             or any(_r25d_builds(_n) and _r26d_may_spell(_n, _n + "\n" + script, env)
-                   for _n in (_q.strip("'\"") for _q in _R25D_NESTED_SHELL.findall(script))))
+                   for _n in (_q.strip("'\"") for _t in dict.fromkeys((script, _bw))
+                              for _q in _R25D_NESTED_SHELL.findall(_t))))
 
 
 def _r26d_built_commands(bare):
@@ -1311,7 +1410,8 @@ def _r29d_may_set_path(script):
             # builtin (review 1017c: `'.' <f>`, `\. <f>` and `so''urce <f>` sourced a PATH change unread).
             or any(_R29D_SHIM_OFF.search(_t) for _t in (script, _r29d_unquoted(script))) or _r29d_names_built(script)
             # A nested shell's -c script that builds a word may build PATH= itself (review 1017a).
-            or any(_r25d_builds(_a.strip("'\"")) for _a in _R30D_NESTED_C.findall(script)))
+            or any(_r25d_builds(_a.strip("'\"")) for _t in dict.fromkeys((script, _r35d_bare_words(script)))
+                   for _a in _R30D_NESTED_C.findall(_t)))
 
 
 def _r19d_path_candidates(script, env, cwd):
@@ -1483,7 +1583,7 @@ class _R15dNoSystemTailscale:
         else:
             # The shell word, after any wrappers; the functions go on its own `env`, so a wrapper
             # that clears the environment (`env -i`, sudo) in front of it cannot drop them.
-            _i = _r18d_dash_c(cmd)[0]
+            _i = _r35d_shell_at(cmd, kw)[0]
             cmd = (list(cmd[:_i]) + ["/usr/bin/env"]
                    + ["%s=%s" % _f for _f in _r16d_ts_shell_funcs().items()] + ["/bin/bash"]
                    + list(cmd[_i + 1:]))
@@ -1497,7 +1597,7 @@ class _R15dNoSystemTailscale:
         first word: behind a wrapper (env -i, sudo, runuser) the PATH it would search is that
         wrapper's to set, so such a shell keeps the bash route (None).
         """
-        if not kw.get("shell") and _r18d_dash_c(cmd)[0] != 0:
+        if not kw.get("shell") and _r35d_shell_at(cmd, kw)[0] != 0:
             return None
         # ...and a script that sets PATH itself or looks the name up past it: the shim is found
         # only while it is first on the PATH searched (review 1016e: `PATH=<dir>:$PATH; ${T}scale`,
@@ -1845,6 +1945,25 @@ _r16d_wrap_ts_handles()
 # part123 (review 1022a's adversarial pass: an SSH move's undo restarts sshd only onto a config sshd -t
 # accepts; change-port with no bind_host stored refuses the unchanged form) on part12's stand-ins; imports
 # part01, 12, 108, 116 and 120.
+# part124 (review 1022b, builder A: an over-long number in a game account's file no longer raises out of
+# the port walk, the capacity read or a console reply; the colour console's C0 columns; install.sh's
+# update says "System updated" only when it was; the OS update's keep file is complete or unused, and
+# the helper copies the operator's files byte for byte) drives app/monitoring/game/terminal over
+# stand-ins, install.sh's block and the remote keep under bash, the helper in-process; imports part01,
+# 05, 12, 20, 51 and 118.
+# part125 (review 1022b, builder B: an SSH port move is one transaction with a single COMMIT point and an
+# exact snapshot; the live console drain reads no further than the size it measured; an uninstall and a
+# clean reboot of its host never overlap) drives hosts.py over part120's stand-in host, the helper by file,
+# the remote snapshot and drain shell under bash/dash over its own temp files, and part12's app for the
+# uninstall, on part12's stand-ins and tripwire; imports part01, 12 and 120.
+# part126 (review 1022b, builder C: Files & Config's backup card while a schedule save is unanswered;
+# an install-progress row built under an active dashboard filter) runs server_files.js through part106's
+# harness and install_progress.js in node on part121's DOM; imports part01, 47, 106, 109 and 121.
+# part127 (review 1022b's integration, integrator J: an SSH move's undo restore that could not be
+# confirmed is tried once more and then said, never "nothing changed"; the next snapshot keeps a
+# snapshot sshd -t's rejection of the live config makes the last good copy; the update gate ignores
+# Scorecard) drives the move over part125's stand-in host, the helper by file, the remote forms under
+# bash/dash and system_ops' update gate on stand-in check runs; imports part01, 12 and 125.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1859,7 +1978,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
-          "part122", "part123", "part15")
+          "part122", "part123", "part124", "part125", "part126", "part127", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2003,17 +2122,7 @@ import json as _r26d_json  # noqa: E402 - only this check needs it
 
 _R26D_READER = ("_R25J_RESET_WORDS", "_R25J_ENV_WORD", "_r25j_long", "_r25j_short", "_r25j_env_resets",
                 "_R25JResets", "_R19D_SCRIPT_RESETS")
-_R26D_ROWS = (
-    "env -i x", "env -v -i x", "env -u PATH x", "env --unse PATH x", "env -u X -i y",
-    "env --chdir /x -i y", "env -C! -i x", "env -uPATH x", "env -S x", "env --split-string=x",
-    # A value letter inside a cluster takes the next word, and -a/--argv0 takes one (review 1016c).
-    "env -vu X -i y", "env -vC /x -i y", "env -0u X -i y", "env -vuPATH y", "env -a x -i y",
-    "env --argv0 x -i y", "env --arg x -i y", "env -va x -i y",
-    # --ig is --ignore-environment to an env older than --ignore-signal (coreutils 9), and refused
-    # as ambiguous by a newer one; --ignore-signal itself resets nothing (review 1016e).
-    "env --ig x",
-    "env -u X y", "env -C /x y", "env --debug x", "env FOO=1 x", "env -u -u PATH x", "env -vu X y",
-    "env -a x y", "env -vC /x y", "env -va -i y", "env --ignore-signal x", "env --ignore-s=INT x")
+_R26D_ROWS = _r35d_ts_guard.ENV_RESET_ROWS
 _R26D_RESETTING = 19     # the rows above `env -u X y` reset; the rest do not
 
 
@@ -2056,11 +2165,10 @@ check("unit suite: the env-reset reader answers 4000 `-C!` or `--` options at on
 # two flag clusters, so 40 such words before no -c never finished, while its comment said it could not
 # backtrack), and `--rcfile <f>` beside a bare long option. The child runs the four readers built on
 # it, cut out of this file by name, and answers the rows too, so it is shown to be the same grammar.
-_R32D_OPTS_READERS = ("_R31D_SH_OPTS", "_R29D_LOGIN", "_R30D_NESTED_C", "_R25D_NESTED_SHELL")
-_R32D_OPTS_ROWS = ('bash --rcfile /x -c "y"', "bash --init-file /x -c y", "bash -o pipefail -c y",
-                   "bash -O extglob -lc y", "sh --norc -c 'y'", "bash -o c x", "bash --rcfile -c")
-_R32D_OPTS_SLOW = ("-o +a ", "--rcfile -x ", "+O +x ", "--init-file --x ", "-o -o ", "-eo x ", "-eo -eo ", "-oo x ",
-                   "-oooo x ")
+_R32D_OPTS_READERS = ("_R31D_SH_OPTS", "_R35D_C_TOKEN", "_R29D_LOGIN", "_R30D_NESTED_C", "_R25D_NESTED_SHELL",
+                      "_R34D_PRIV_BASH")
+_R32D_OPTS_ROWS = _r35d_ts_guard.OPTS_ROWS
+_R32D_OPTS_SLOW = _r35d_ts_guard.OPTS_SLOW
 
 
 def _r32d_opts_child(timeout=10):
@@ -2071,7 +2179,7 @@ def _r32d_opts_child(timeout=10):
     _defs = [_n for _n in _ast.parse(_src).body if isinstance(_n, _ast.Assign)
              and any(getattr(_t, "id", None) in _R32D_OPTS_READERS for _t in _n.targets)]
     _code = "\n".join(["import json, re, sys"] + [_ast.get_source_segment(_src, _n) for _n in _defs] + [
-        "R = (_R29D_LOGIN, _R30D_NESTED_C, _R25D_NESTED_SHELL)",
+        "R = (_R29D_LOGIN, _R30D_NESTED_C, _R25D_NESTED_SHELL, _R34D_PRIV_BASH)",
         "[_r.search(_s + _w * 4000 + 'x') for _r in R for _s in ('bash ', 'sh ') for _w in json.loads(sys.argv[2])]",
         "print(json.dumps([[bool(_r.search(c)) for _r in R] for c in json.loads(sys.argv[1])]))"])
     try:
@@ -2087,7 +2195,7 @@ def _r32d_opts_child(timeout=10):
 
 
 _r32d_opts_ok, _r32d_opts_rows = _r32d_opts_child()
-_r32d_opts_here = [[bool(_r.search(_c)) for _r in (_R29D_LOGIN, _R30D_NESTED_C, _R25D_NESTED_SHELL)]
+_r32d_opts_here = [[bool(_r.search(_c)) for _r in (_R29D_LOGIN, _R30D_NESTED_C, _R25D_NESTED_SHELL, _R34D_PRIV_BASH)]
                    for _c in _R32D_OPTS_ROWS]
 check("unit suite: the shell-option readers answer 4000 `-o +a `, `--rcfile -x ` or `+O +x ` words at once "
       "in a child with a time limit (no exponential backtracking), and still read a -c past --rcfile's "
@@ -2540,12 +2648,16 @@ os.makedirs(os.path.join(_r15d_ts_ctl_dir, _r31d_ts_landlock.TMP), exist_ok=True
 _r31d_names = _r31d_ts_landlock.kernel_names(_r15d_ts_ctl_dir)
 _r31d_free = _r31d_landlock_run("free")
 _r31d_held = _r31d_landlock_run("held")
-# Every review-1017b, 1017c and 1022a shape reaches it unblocked (each needs only sh, bash, env and timeout).
+# Every review-1017b, 1017c, 1022a and 1022b shape reaches it unblocked (each needs only what every runner
+# has: sh, bash, env, timeout, perl and util-linux).
 _r31d_mine = {"%r %s" % (_sh[1][0], os.path.basename(_r31d_d)) for _r31d_d in (_r17d_ts_sys, _r19d_ts_lnk)
               for _shapes in (_r31d_ts_landlock.shapes_1017b, _r31d_ts_landlock.shapes_1017c,
-                              _r31d_ts_landlock.shapes_1022a)
+                              _r31d_ts_landlock.shapes_1022a, _r31d_ts_landlock.shapes_1022b)
               for _sh in _shapes(_r31d_d, _r15d_ts_ctl_dir)}
 _r31d_new = [_n for _n, _r in zip(_r31d_names, _r31d_free[1]) if _n in _r31d_mine and not _r]
+# ...and every one of them is in the table the child ran (review 1022b: a set dropped from it left the
+# check above reading none of its shapes, and green).
+_r35d_unran = sorted(_r31d_mine - set(_r31d_names))
 _r31d_let = [_n for _n, _r in zip(_r31d_names, _r31d_held[1]) if _r]
 check("unit suite: the kernel refuses the machine's own tailscale to this run and all it starts "
       "(Landlock), whatever a script does to reach it",
@@ -2591,13 +2703,14 @@ check("unit suite: ...the run says at its start when the block is on (which file
       and ("Landlock" in _r31j_result_line(False, "x", "[Errno 13] Permission denied")) == bool(_r31j_ts_header)
       and "Landlock" not in _r31j_result_line(True, "x", "[Errno 13] Permission denied"),
       repr((_r31j_ts_header, _r31j_result_line(False, "x", "[Errno 13] Permission denied"))))
-check("unit suite: ...the planted binary is reached unblocked by its path, a copy and every review-1017b "
-      "and 1017c shape, and a part's stand-in on its own PATH still runs blocked (control)",
-      _r31d_free[0] == "" and _r31d_free[1][-3:-1] == [True, True] and not _r31d_new
+check("unit suite: ...the planted binary is reached unblocked by its path, a copy and every review-1017b, "
+      "1017c, 1022a and 1022b shape (each one in the table the child ran), and a part's stand-in on its own "
+      "PATH still runs blocked (control)",
+      _r31d_free[0] == "" and _r31d_free[1][-3:-1] == [True, True] and not _r31d_new and not _r35d_unran
       and sum(_r31d_free[1]) > len(_r31d_names) // 2
       and "own stand-in" in _r31d_free[2][-1] and "own stand-in" in (_r31d_held[2] or [""])[-1]
       and _r31d_held[1][-2] is False,
-      repr((_r31d_free[0], sum(_r31d_free[1]), len(_r31d_names), _r31d_new[:5], _r31d_free[2][-2:],
+      repr((_r31d_free[0], sum(_r31d_free[1]), len(_r31d_names), _r31d_new[:5], _r35d_unran[:5], _r31d_free[2][-2:],
             (_r31d_held[2] or [""])[-2:])))
 
 # A snap install's own binaries are found in every revision, by their path under the snap (review 1017c:
@@ -2764,15 +2877,7 @@ check("unit suite: ...a nested shell past --rcfile's value and a `.`, `source` o
 # before a nested bash, or through a nested bash in privileged mode (which imports none), read as
 # written and expanded; a builtin handed an unrelated name and a sourced file that runs no tailscale
 # keep the functions' answer (control: hosts.py's os-release read must not be refused here and run on CI).
-_R34D_FUNC_OFF_ROWS = (
-    "T=tail; unset -f ${T}scale; tailscale version", 'U=un; eval "${U}set -f tailscale"; tailscale version',
-    'T=tail; eval "unset -f ${T}scale"; tailscale version', "f=tailscale; unset -f $f; tailscale version",
-    "u=unset; $u -f tailscale; tailscale version", "$(echo unset) -f tailscale; tailscale version",
-    "export -nf tailscale; bash -c 'tailscale version'", "declare +x -f tailscale; bash -c 'tailscale version'",
-    "typeset +x -f which; bash -c 'which tailscale'", "bash -p -c 'tailscale version'",
-    "bash -eo privileged -c 'tailscale version'", 'eval "$(x)"; tailscale version',
-    "unset X; echo hi", "export -n FOO; echo $HOME", 'unset "$v"; echo done', "bash +p -c 'tailscale version'",
-    '. /etc/os-release 2>/dev/null; printf %s "${ID}-${VERSION_ID}"', "bash -P -c 'tailscale version'")
+_R34D_FUNC_OFF_ROWS = _r35d_ts_guard.FUNC_OFF_ROWS
 _r34d_func_off_rows = [_r34d_func_off(_x, {}) for _x in _R34D_FUNC_OFF_ROWS]
 _r34d_priv_argv = [_r34d_argv_privileged(_x) for _x in (
     ["env", "X=1", "bash", "-p", "-c", "x"], ["env", "X=1", "bash", "-pc", "x"],
@@ -2790,6 +2895,42 @@ check("unit suite: ...a script that unsets the guard's function by a built name 
       _r34d_func_off_rows == [True] * 12 + [False] * 6
       and _r34d_priv_argv == [True] * 4 + [False] * 5 and _r34d_opts == [True] * 3 + [False],
       repr((_r34d_func_off_rows, _r34d_priv_argv, _r34d_opts)))
+# ...and (review 1022b) a wrapper or shell word quoted or escaped inside, an interpreter's exec, a nested
+# zsh, the shapes only a runner without them cannot run (unshare in a container, zsh on CI's image): each is
+# a wrapper the script's PATH is judged on, and a quoted word that is no wrapper, or one naming no tailscale,
+# is not (control). Read on the planted PATH, so the answer is the same on any machine.
+_r35d_env = {"PATH": _r17d_ts_sys}
+_r35d_wrapped = [bool(_r19d_wrapped_candidates(_x, _r35d_env)) for _x in _r35d_ts_guard.WRAPPED_ROWS]
+# ...the exec-wrappers on the argv route, past their options and operands, read as their own options read
+# them (systemd-run's --user is a flag there; setarch's arch comes before its options or not at all);
+# controls: an option's value that only looks like the program, and no program.
+_r35d_argv = [any(_h for _h in _r20d_argv_programs(_x, {"env": _r35d_env})) for _x in _r35d_ts_guard.ARGV_ROWS]
+# ...and a shell the argv route reads (zsh) behind the same cluster: its script is the word after the value.
+_r35d_argv += [bool([_h for _h in _r20d_cmdline_candidates(_x, {"env": _r35d_env}) if _h])
+               for _x in _r35d_ts_guard.ZSH_CO_ROWS]
+# ...a restricted bash (script and argv), which imports no function; --posix and --rcfile do not restrict.
+_r35d_restricted = [_r34d_func_off(_x, {}) for _x in _r35d_ts_guard.RESTRICTED_ROWS]
+_r35d_restricted_argv = [_r34d_argv_privileged(_x) for _x in _r35d_ts_guard.RESTRICTED_ARGV_ROWS]
+# ...a nested shell building PATH behind a cluster holding both `c` and the `o` that takes a value.
+_r35d_co = [_r29d_may_set_path(_x) for _x in _r35d_ts_guard.CO_ROWS]
+# ...and the script a shell reads from stdin or a file (no -c): the run's input, the file's text (a missing
+# one runs nothing), an unknown stdin as a script that may run anything; not a shell, none (control).
+_r35d_file = os.path.join(_r15d_ts_ctl_dir, "r35d-script-%s.sh" % os.path.basename(_r17d_ts_sys))
+_r35d_at = [_r35d_shell_at(_a, _k) for _a, _k in (
+    (["bash"], {"input": b"tailscale version"}), (["bash", "-s", "a"], {"input": "x"}),
+    (["bash", "-", "a"], {"input": "y"}), (["env", "X=1", "sh", _r35d_file], {}),
+    (["bash", "-o", "pipefail", "--", _r35d_file], {}), (["bash"], {}),
+    (["bash", os.path.join(_r15d_ts_ctl_dir, "r35d-none.sh")], {}), (["bash", "-c", "z"], {}), (["echo", "bash"], {}))]
+check("unit suite: ...a wrapper or shell word quoted or escaped inside, an interpreter's exec, a restricted "
+      "bash, a `-co`/`-oc` cluster before a nested script, the util-linux/systemd/tracing exec-wrappers on "
+      "the argv route, and a shell reading its script from stdin or a file are all read; a quoted word that "
+      "is no wrapper, an option's value and --posix are not (control)",
+      _r35d_wrapped == [True] * 12 + [False] * 4 and _r35d_argv == [True] * 15 + [False] * 2 + [True, True, False]
+      and _r35d_restricted == [True] * 5 + [False] * 2 and _r35d_restricted_argv == [True] * 3 + [False] * 3
+      and _r35d_co == [True] * 3 + [False]
+      and _r35d_at == [(0, "tailscale version"), (0, "x"), (0, "y"), (2, "tailscale version\n"),
+                       (0, "tailscale version\n"), (0, _R35D_UNREAD), (0, ""), (0, "z"), (None, None)],
+      repr((_r35d_wrapped, _r35d_argv, _r35d_restricted, _r35d_restricted_argv, _r35d_co, _r35d_at)))
 check("unit suite: ...nor past a comment, a here-document or a shift that only looks like one, while "
       "`command -p`, sudo, an expansion the reader cannot model, a name set other than by NAME=, and "
       "a wrapper's own NAME= are judged (control)",
@@ -2856,9 +2997,11 @@ check("unit suite: ...behind a sudo that keeps PATH, through whereis, an env cle
       repr(_r21d_static))
 
 check("unit suite: ...a grouped -lc, a list with shell=True, options before -c and wrapper commands "
-      "in front are read as shells (control)",
-      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None,
-                        "a", "b", "c", None, None, "d", "e", "f", None, "g", None, "h",
+      "in front are read as shells, and one with no -c as running its script file (control)",
+      # A shell with no -c runs its first operand as a script file (review 1022b): `x` is none here, so
+      # it runs nothing ("").
+      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", "", None,
+                        "a", "b", "c", "", "", "d", "e", "f", None, "g", None, "h",
                         "i", "j", "k", "m", "n", "o"],
       repr(_r16d_sh_read))
 # A variable's operators, as the shell reads them (review 1016b): without a colon only an unset

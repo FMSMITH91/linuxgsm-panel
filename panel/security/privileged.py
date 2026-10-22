@@ -1615,15 +1615,21 @@ _R34A_KEEP_SH = (
     "elif ! env -u LANGUAGE LC_ALL=C.UTF-8 timeout " + str(_R34J_SIM_SECONDS) + " apt-get -s"
     " -o Debug::NoLocking=1 full-upgrade > \"$kd/plan\" 2>/dev/null; then"
     " kw='the simulation failed or timed out'; "
-    "else pf=$kd/preferences; : > \"$pf\"; "
-    "po=\"-o Dir::Etc::Preferences=$pf\"; "
-    "while read -r p o n; do "
+    # Every write to the file is tested, as install.sh's: one that failed (a full /tmp, Debian 13's
+    # tmpfs) left `$po` naming a file without the host's own records, so this run ignored the
+    # operator's pins. A failed write means no keep, `$kw` saying why, and apt as before.
+    "else pf=$kd/preferences; "
+    "if ! : 2>/dev/null > \"$pf\"; then kw='its preferences file could not be written'; fi; "
+    "while [ -z \"$kw\" ] && read -r p o n; do "
     "if dpkg --compare-versions \"$n\" lt \"$o\"; then "
-    "printf 'Package: %s\\nPin: version %s\\nPin-Priority: 32000\\n\\n' \"$p\" \"$o\" >> \"$pf\"; "
+    "if ! printf 'Package: %s\\nPin: version %s\\nPin-Priority: 32000\\n\\n' \"$p\" \"$o\" 2>/dev/null >> \"$pf\"; "
+    "then kw='its preferences file could not be written'; fi; "
     "kept=\"$kept $p $o,\"; fi; "
     "done < <(sed -n 's/^Inst \\([^ ]*\\) \\[\\([^] ]*\\)\\] (\\([^ ]*\\) .*/\\1 \\2 \\3/p' \"$kd/plan\"); "
     # The host's own records AFTER the keeps (the helper's _r33_keep_installed_opts says why).
-    "[ -f /etc/apt/preferences ] && cat /etc/apt/preferences >> \"$pf\"; fi; ")
+    "if [ -z \"$kw\" ] && [ -f /etc/apt/preferences ] && ! cat /etc/apt/preferences 2>/dev/null >> \"$pf\"; "
+    "then kw='its preferences file could not be written'; fi; "
+    "if [ -z \"$kw\" ]; then po=\"-o Dir::Etc::Preferences=$pf\"; else kept=''; fi; fi; ")
 # The line saying the check could not run (the helper's _r34a_keep_installed_soft writes the same).
 _R34J_KEEP_SKIPPED = ("[ -n \"$kw\" ] && echo \"Could not check for packages apt would downgrade ($kw);"
                       " running the upgrade as before.\"")
@@ -1633,14 +1639,45 @@ _R34A_KEPT_SAID = ("Kept at the installed version (this host's apt pinning would
 _R34A_KEEP_INSTALLED_VERBS = frozenset({"apt-full-upgrade"})
 
 
+# The snapshot verbs' answer when they keep a snapshot rather than replace it (_r35b_snapshot_sh).
+R35J_SNAPSHOT_HELD = 3
+
+
+def _r35b_snapshot_sh(dropin, bak):
+    """The SSH port move's snapshot of `dropin` at `bak`, as shell: exit 0 only when `bak` is exactly it.
+
+    The helper's do_sshd_backup does the same on the panel host. A drop-in is copied whole (to a temp
+    name, then renamed over `bak`) with its mode; no drop-in removes any `bak` an earlier move left, so
+    the restore's "no snapshot: remove the drop-in" holds. This was `[ -f D ] && cp -f D B || true`:
+    a copy that failed (a full disk) exited 0 with no snapshot or half of one, a stale snapshot was put
+    back by a later undo, and either way the undo took sshd off ports it served before the move.
+
+    A snapshot that is already there while `sshd -t` rejects the live config is kept, and the verb
+    answers R35J_SNAPSHOT_HELD: an earlier move's restore was not confirmed, so the snapshot may be the
+    last good copy and the drop-in the one sshd rejected (review 1022b's integration).
+    """
+    d, b, t = (shlex.quote(x) for x in (dropin, bak, bak + ".tmp"))
+    return ("if [ -f {d} ]; then if [ -f {b} ] && ! sshd -t >/dev/null 2>&1; then r={held}; else "
+            "rm -f {t} && cp -fp {d} {t} && mv -f {t} {b}; r=$?; rm -f {t}; fi; ( exit \"$r\" ); "
+            "else rm -f {b}; fi").format(d=d, b=b, t=t, held=R35J_SNAPSHOT_HELD)
+
+
+def _r35j_restore_sh(dropin, bak):
+    """The SSH port move's restore of `dropin` from `bak`, as shell; running it twice is running it once.
+
+    The snapshot is COPIED back (to a temp name, renamed over the drop-in, mode kept) and stays where
+    it is; no snapshot removes the drop-in (there was none before the move). It used to MOVE the
+    snapshot back, so a second run, after a first whose answer was lost, deleted the drop-in it had
+    just restored. Mirrors the helper's do_sshd_restore. The next move's snapshot replaces `bak`.
+    """
+    d, b, t = (shlex.quote(x) for x in (dropin, bak, dropin + ".tmp"))
+    return ("if [ -f {b} ]; then rm -f {t} && cp -fp {b} {t} && mv -f {t} {d}; r=$?; rm -f {t}; "
+            "( exit \"$r\" ); else rm -f {d}; fi").format(d=d, b=b, t=t)
+
+
 _REMOTE_ACTIONS = {
-    "sshd-backup-dropin": lambda a: (
-        "[ -f %s ] && cp -f %s %s || true"
-        % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN_BAK))),
-    "sshd-restore-dropin": lambda a: (
-        "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
-        % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
-           shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN))),
+    "sshd-backup-dropin": lambda a: _r35b_snapshot_sh(SSHD_DROPIN, SSHD_DROPIN_BAK),
+    "sshd-restore-dropin": lambda a: _r35j_restore_sh(SSHD_DROPIN, SSHD_DROPIN_BAK),
     "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
     # Steam's ten crash-dump slots, as shell. The helper does this in Python on the panel's own
     # host; a REMOTE host has no helper to call, and without an entry here the verb rendered to an
@@ -1676,14 +1713,8 @@ _REMOTE_ACTIONS = {
         "DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd:i386 steamcmd "
         "|| DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd"
     ),
-    "sshd-socket-backup": lambda a: (
-        "[ -f %s ] && cp -f %s %s || true"
-        % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
-           shlex.quote(SSHD_SOCKET_DROPIN_BAK))),
-    "sshd-socket-restore": lambda a: (
-        "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
-        % (shlex.quote(SSHD_SOCKET_DROPIN_BAK), shlex.quote(SSHD_SOCKET_DROPIN_BAK),
-           shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN))),
+    "sshd-socket-backup": lambda a: _r35b_snapshot_sh(SSHD_SOCKET_DROPIN, SSHD_SOCKET_DROPIN_BAK),
+    "sshd-socket-restore": lambda a: _r35j_restore_sh(SSHD_SOCKET_DROPIN, SSHD_SOCKET_DROPIN_BAK),
     "sshd-socket-discard": lambda a: "rm -f %s" % shlex.quote(SSHD_SOCKET_DROPIN_BAK),
     "f2b-set-sshd-ports": lambda a: (
         "if [ -f %s ]; then "

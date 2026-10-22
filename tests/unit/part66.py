@@ -327,7 +327,8 @@ check("dashboard: ...every tile carries that label", 'data-panel="{{ key }}" dat
 import subprocess as _sp66  # nosec B404 - runs this repository's own install.sh block on stand-ins  # noqa: E402
 _ins66 = _read66(_root, "install.sh")
 _i66 = _ins66.index('                if [[ ! -f /var/run/reboot-required ]]; then\n'
-                    '                    ok "System updated')
+                    '                    if [[ "${_r35a_upg_ok}" -eq 1 ]]; then\n'
+                    '                        ok "System updated')
 _upd66 = _ins66[_i66:_ins66.index("\n                fi\n", _i66) + len("\n                fi\n")]
 _td66 = os.path.realpath(_tf66.mkdtemp(prefix="lgsm-unit-p66-reboot-"))
 _nr66 = {}

@@ -2649,35 +2649,89 @@ VERBS = {
 
 
 
-def do_sshd_backup(args, content):
-    """Snapshot the panel's sshd drop-in, if it exists. A missing file is success, not an error —
-    the restore below treats "no snapshot" as "there was no drop-in before us"."""
-    if os.path.isfile(SSHD_DROPIN):
-        # copy2, not copyfile: it carries the mode across, so the restore below can be an exact
-        # inverse. The snapshot is no more exposed than the file it copies, by construction.
-        shutil.copy2(SSHD_DROPIN, SSHD_DROPIN_BAK)
+# The snapshot verbs' answer when they keep a snapshot rather than replace it (privileged.py's).
+R35J_SNAPSHOT_HELD = 3
+
+
+def _r35j_sshd_t_ok():
+    """True only when `sshd -t` accepts the config; sshd missing, a hang or a refusal is False."""
+    try:
+        return subprocess.run([resolve("sshd"), "-t"], shell=False, env=_clean_env(),  # nosec B603 - fixed argv
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=30, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _r35j_restore(dropin, bak):
+    """Copy the snapshot back over `dropin` and keep it, or remove `dropin` when there is no snapshot.
+
+    Running it twice is running it once: change_ssh_port tries a restore whose answer was not 0 once
+    more. It used to MOVE the snapshot back, so that second run deleted the drop-in the first had
+    just restored. The copy goes to a temp name with its mode (copy2) and is renamed over the drop-in.
+    Mirrors privileged.py's _r35j_restore_sh.
+    """
+    if os.path.isfile(bak):
+        tmp = dropin + ".tmp"
+        try:
+            shutil.copy2(bak, tmp)
+            os.replace(tmp, dropin)
+        finally:
+            if os.path.lexists(tmp):
+                os.unlink(tmp)
+    else:
+        try:
+            os.unlink(dropin)
+        except FileNotFoundError:
+            # Nothing to undo. The caller reverts unconditionally on any failure, including ones
+            # that happen before the drop-in is written, so this is a normal path.
+            pass
     return 0
+
+
+def _r35b_snapshot(dropin, bak):
+    """Make `bak` exactly the snapshot of `dropin`: a copy of it, or absent when there is no drop-in.
+
+    A missing drop-in is success, not an error — the restore treats "no snapshot" as "there was no
+    drop-in before us" — so a snapshot an earlier move left behind is removed, or a later undo would
+    put back a file this move never saw. The copy goes to a temp name and is renamed over `bak`, so a
+    copy that fails (a full disk) raises (rc 1) and leaves no half snapshot for the undo to restore.
+    Mirrors privileged.py's _r35b_snapshot_sh, including its refusal: a snapshot that is already
+    there while `sshd -t` rejects the live config is kept (R35J_SNAPSHOT_HELD), because an earlier
+    move's restore was not confirmed and the snapshot may be the last good copy.
+    """
+    if os.path.isfile(dropin):
+        if os.path.isfile(bak) and not _r35j_sshd_t_ok():
+            return R35J_SNAPSHOT_HELD
+        tmp = bak + ".tmp"
+        try:
+            # copy2, not copyfile: it carries the mode across, so the restore can be an exact
+            # inverse. The snapshot is no more exposed than the file it copies, by construction.
+            shutil.copy2(dropin, tmp)
+            os.replace(tmp, bak)
+        finally:
+            if os.path.lexists(tmp):
+                os.unlink(tmp)
+    elif os.path.lexists(bak):
+        os.unlink(bak)
+    return 0
+
+
+def do_sshd_backup(args, content):
+    """Snapshot the panel's sshd drop-in (_r35b_snapshot)."""
+    return _r35b_snapshot(SSHD_DROPIN, SSHD_DROPIN_BAK)
 
 
 def do_sshd_restore(args, content):
     """Put the snapshot back, or remove the drop-in if there was no snapshot.
 
     This is the rollback for a port change that did not work, so it has to be the exact inverse of
-    do_sshd_backup: a host that had no drop-in before ends with no drop-in, not with an empty one."""
-    if os.path.isfile(SSHD_DROPIN_BAK):
-        # os.replace moves the inode, so the snapshot's mode comes with it. There was a chmod 0o644
-        # here, which was wrong twice over: it widened the file to world-readable, and it IMPOSED a
-        # mode rather than restoring the one the host had. A rollback that changes permissions is
-        # not a rollback.
-        os.replace(SSHD_DROPIN_BAK, SSHD_DROPIN)
-    else:
-        try:
-            os.unlink(SSHD_DROPIN)
-        except FileNotFoundError:
-            # Nothing to undo. The caller reverts unconditionally on any failure, including ones
-            # that happen before the drop-in is written, so this is a normal path.
-            pass
-    return 0
+    do_sshd_backup: a host that had no drop-in before ends with no drop-in, not with an empty one.
+    The snapshot's mode comes back with it (_r35j_restore copies with copy2). There was a chmod 0o644
+    here once, which was wrong twice over: it widened the file to world-readable, and it IMPOSED a
+    mode rather than restoring the one the host had. A rollback that changes permissions is not a
+    rollback."""
+    return _r35j_restore(SSHD_DROPIN, SSHD_DROPIN_BAK)
 
 
 def do_sshd_discard_backup(args, content):
@@ -2690,10 +2744,8 @@ def do_sshd_discard_backup(args, content):
 
 
 def do_sshd_socket_backup(args, content):
-    """Snapshot the panel's ssh.socket drop-in, if it exists. Exact mirror of do_sshd_backup."""
-    if os.path.isfile(SSHD_SOCKET_DROPIN):
-        shutil.copy2(SSHD_SOCKET_DROPIN, SSHD_SOCKET_DROPIN_BAK)
-    return 0
+    """Snapshot the panel's ssh.socket drop-in (_r35b_snapshot). Exact mirror of do_sshd_backup."""
+    return _r35b_snapshot(SSHD_SOCKET_DROPIN, SSHD_SOCKET_DROPIN_BAK)
 
 
 def do_sshd_socket_restore(args, content):
@@ -2702,14 +2754,7 @@ def do_sshd_socket_restore(args, content):
     The rollback for a port change on a socket-activated host, and the exact inverse of
     do_sshd_socket_backup: a host that had no drop-in before ends with none. systemd still needs a
     daemon-reload after this; the caller does that, because a reload is not the helper's to decide."""
-    if os.path.isfile(SSHD_SOCKET_DROPIN_BAK):
-        os.replace(SSHD_SOCKET_DROPIN_BAK, SSHD_SOCKET_DROPIN)
-    else:
-        try:
-            os.unlink(SSHD_SOCKET_DROPIN)
-        except FileNotFoundError:
-            pass          # reverted before the drop-in was written; a normal path
-    return 0
+    return _r35j_restore(SSHD_SOCKET_DROPIN, SSHD_SOCKET_DROPIN_BAK)
 
 
 def do_sshd_socket_discard(args, content):
@@ -2961,8 +3006,11 @@ def do_sshd_set_directive(args, content):
       5  written, but sshd -T could not be read, so nothing here is verified
     """
     key, value = args[0], args[1]
+    # surrogateescape both ways: every line but the one replaced is the operator's, and goes back
+    # byte for byte. errors="replace" turned each non-UTF-8 byte (a Latin-1 comment, a Match on a
+    # Latin-1 name) into U+FFFD on disk, a rewrite of lines the verb was never asked to touch.
     try:
-        with open(SSHD_CONFIG, encoding="utf-8", errors="replace") as fh:
+        with open(SSHD_CONFIG, encoding="utf-8", errors="surrogateescape") as fh:
             lines = fh.readlines()
     except OSError:
         return 1
@@ -2979,7 +3027,7 @@ def do_sshd_set_directive(args, content):
             out[-1] += "\n"
         out.append("%s %s\n" % (key, value))
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SSHD_CONFIG), prefix=".panel-", suffix=".tmp")
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as fh:
         fh.writelines(out)
     os.chmod(tmp, stat.S_IMODE(os.stat(SSHD_CONFIG).st_mode))   # keep sshd_config's own mode
     os.replace(tmp, SSHD_CONFIG)
@@ -3226,17 +3274,21 @@ def _r33_keep_installed_opts(apt, env, tmpdir, log):
     if not kept:
         return []
     prefs = os.path.join(tmpdir, "preferences")
-    with open(prefs, "w", encoding="utf-8") as fh:
+    # Bytes: the host's own file is copied as it is, as the remote form and install.sh do with
+    # `cat`. Decoded with errors="replace", a Latin-1 byte in a pin (`Pin: release l=D\xe9p\xf4t`)
+    # became U+FFFD, the record matched nothing for this run, and a repo the operator had blocked
+    # (Pin-Priority -1) could install as root.
+    with open(prefs, "wb") as fh:
         # The keeps FIRST: apt gives a version the priority of the FIRST specific record matching
         # it, and reads this file before preferences.d. After the operator's records, one of theirs
         # that also matched the installed version (by release, say) won, and the keep did nothing
         # (review 1022a). Each keep matches only that package's installed version, so the
         # operator's records still decide every other version.
         for pkg, old in kept:
-            fh.write("Package: %s\nPin: version %s\nPin-Priority: 32000\n\n" % (pkg, old))
+            fh.write(("Package: %s\nPin: version %s\nPin-Priority: 32000\n\n" % (pkg, old)).encode("utf-8"))
         try:
-            with open(_R34A_APT_PREFS, encoding="utf-8", errors="replace") as own:
-                fh.write(own.read().rstrip("\n") + "\n")
+            with open(_R34A_APT_PREFS, "rb") as own:
+                fh.write(own.read().rstrip(b"\n") + b"\n")
         except FileNotFoundError:
             pass    # no main preferences file: nothing of the operator's to carry over
     log.write("Kept at the installed version (this host's apt pinning would DOWNGRADE them, which "

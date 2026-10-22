@@ -720,24 +720,45 @@ def _first_sleep35(body):
     "Starts with" past any plain assignments and imports ahead of it (review 1011d): the first
     statement alone was read, so `last = None; time.sleep(30)` slept before its first pass unseen.
     """
+    return _r35d_scan35(body)[0]
+
+
+def _r35d_scan35(body):
+    """(the delay node _first_sleep35 answers, whether the scan stopped: at that sleep or at work).
+
+    Not stopped: `body` ran out holding only setup, so a try or with block that only sets up goes on to
+    the statements after it (review 1022b: `try: interval = f() / except: interval = 60` then the sleep,
+    and `with lock: if stop: return` then the sleep, read as work first, and asked for no record).
+    """
     for stmt in body:
-        # The whole while body under the same rule, not its first statement alone: `while True: now
-        # = x; time.sleep(30)` read as no sleep before the first pass (review 1011e). A try or with
-        # block runs its body first: `while True: try: time.sleep(30)` sleeps before its first pass
-        # as plainly (review 1012a: read as no sleep at all).
-        if isinstance(stmt, (_ast35.While, _ast35.Try, _ast35.With)) and stmt.body:
-            return _first_sleep35(stmt.body)
-        if isinstance(stmt, (_ast35.If, _ast35.For)):
-            # A guard that only leaves (`if stop.is_set(): return`) is not work: the scan goes on past
-            # it (review 1017c lead: the sleep after such a guard read as no sleep at all).
-            if _branch_sleep35(stmt) is not None or not _r32d_guard_only35(stmt):
-                return _branch_sleep35(stmt)
-            continue
-        if _call_name35(stmt) == "sleep":
-            return stmt.value.args[0] if stmt.value.args else None
-        if not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom)):
-            return None
-    return None
+        _got = _r35d_stmt35(stmt)
+        if _got[1]:
+            return _got
+    return None, False
+
+
+def _r35d_stmt35(stmt):
+    """_r35d_scan35's answer for one statement: (delay, True) where the scan stops, (None, False) past it."""
+    # The whole while body under the same rule, not its first statement alone: `while True: now
+    # = x; time.sleep(30)` read as no sleep before the first pass (review 1011e). A while never
+    # falls through to what follows it, so its body's answer is the answer.
+    if isinstance(stmt, _ast35.While) and stmt.body:
+        return _first_sleep35(stmt.body), True
+    # A try or with block runs its body first: `while True: try: time.sleep(30)` sleeps before its
+    # first pass as plainly (review 1012a: read as no sleep at all). A try's else and finally run
+    # next, then the statements after it; its handlers only on a raise, which the first pass need not take.
+    if isinstance(stmt, (_ast35.Try, _ast35.With)) and stmt.body:
+        return _r35d_scan35(list(stmt.body) + list(getattr(stmt, "orelse", []))
+                            + list(getattr(stmt, "finalbody", [])))
+    if isinstance(stmt, (_ast35.If, _ast35.For)):
+        # A guard that only leaves (`if stop.is_set(): return`) is not work: the scan goes on past
+        # it (review 1017c lead: the sleep after such a guard read as no sleep at all).
+        if _branch_sleep35(stmt) is not None or not _r32d_guard_only35(stmt):
+            return _branch_sleep35(stmt), True
+        return None, False
+    if _call_name35(stmt) == "sleep":
+        return (stmt.value.args[0] if stmt.value.args else None), True
+    return None, not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom))
 
 
 _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src35 in (
@@ -757,13 +778,21 @@ _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src
     "while True:\n    if stop.is_set():\n        _log.debug('stopping')\n        return\n    time.sleep(60)\n",
     "while True:\n    if a:\n        return\n    elif b:\n        continue\n    time.sleep(60)\n",
     "while True:\n    if a:\n        return\n    elif b:\n        work()\n    time.sleep(60)\n",
-    "while True:\n    if a:\n        work()\n        pass\n    time.sleep(60)\n")]
+    "while True:\n    if a:\n        work()\n        pass\n    time.sleep(60)\n",
+    # review 1022b: a try or with block holding only setup goes on to the sleep after it; one that works
+    # does not (control).
+    "while True:\n    try:\n        interval = _interval()\n    except Exception:\n        interval = 60\n"
+    "    time.sleep(interval)\n",
+    "while True:\n    with lock:\n        if stop:\n            return\n    time.sleep(5)\n",
+    "while True:\n    try:\n        n = 1\n    finally:\n        done = True\n    time.sleep(5)\n",
+    "while True:\n    try:\n        work()\n    except Exception:\n        pass\n    time.sleep(5)\n",
+    "while True:\n    try:\n        n = 1\n    finally:\n        work()\n    time.sleep(5)\n")]
 check("beating loops: a sleep after setup assignments heads a while body too (and a try or with "
       "block's, or an if or for that starts with one, or one past a guard that leaves, logging first or "
-      "down an elif chain), and one after real work or an elif that works and falls through does not "
-      "(control)",
+      "down an elif chain, or past a try or with block that only sets up), and one after real work, an "
+      "elif that works and falls through, or a try that works does not (control)",
       _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False, True, False,
-                         True, True, False, False],
+                         True, True, False, False, True, True, True, False, False],
       repr(_r15d_fs_ctl35))
 
 

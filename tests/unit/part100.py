@@ -472,6 +472,7 @@ def _rec100(kind):
 
 _pages100, _ctlp100 = {}, {}
 _sudo_was100 = dict(_so100._SUDO_PROBE)
+_r35d_seen100 = dict(_ps100._os_update_seen)     # put back as found, not emptied for the panel host
 try:
     _p9_arm(who="part100")
     for _n100 in ("_run", "_run_verb", "_git"):
@@ -493,7 +494,8 @@ finally:
     _p9_restore_all()
     _so100._status_cache["data"] = None
     _so100._SUDO_PROBE.update(_sudo_was100)
-    _ps100._os_update_seen.pop(P9_LOCAL, None)
+    _ps100._os_update_seen.clear()
+    _ps100._os_update_seen.update(_r35d_seen100)
 check("held back: a cold render of /server-management, /remote/<panel host>/manage and "
       "/api/server-management runs no apt command (the update check's simulation took ~2.4 s on "
       "every page load past the 15 s status cache)",
