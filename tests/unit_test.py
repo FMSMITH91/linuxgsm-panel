@@ -1842,6 +1842,8 @@ _r16d_wrap_ts_handles()
 # part122 (review 1022a's integration fix, integrator J: the downgrade check never stops a full-upgrade,
 # helper job and verb, remote job and verb, install.sh) drives the helper in-process and the remote
 # shell and install.sh's keep function under bash over stand-ins of its own; imports part01, 05 and 118.
+# part123 (review 1022a's adversarial pass: an SSH move's undo restarts sshd only onto a config sshd -t
+# accepts) on part12's stand-ins; imports part01, 12 and 120.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1856,7 +1858,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
-          "part122", "part15")
+          "part122", "part123", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

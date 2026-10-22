@@ -4185,7 +4185,31 @@ def _r32b_undo_ssh_move(server, undo):
         if undo.get("socket"):
             _r32b_quietly(server, _core.run_privileged, server, "systemd-daemon-reload", [], timeout=20,
                           merge_stderr=False)
-        _r32b_quietly(server, _restart_ssh_listener, server, undo.get("socket"))
+        # Only onto a config sshd accepts. A restore that raised once its command went out is retired
+        # as run (_r34b_restore_once), but it may not have run: the drop-in can still be the one
+        # step 3 rejected, and a restart stops the serving daemon and cannot start a new one.
+        if _r34j_sshd_config_ok(server):
+            _r32b_quietly(server, _restart_ssh_listener, server, undo.get("socket"))
+        else:
+            _core._log.warning(
+                "ssh port move: NOT restarting ssh on %s after undoing a step that raised: `sshd -t` "
+                "does not accept the config now (or could not be run), so the sshd that is running was "
+                "left as it is. Check /etc/ssh/sshd_config.d/ (and ssh.socket.d on a socket-activated "
+                "host), then run `sshd -t` before restarting ssh.", _r34j_log_name(server))
+
+
+def _r34j_sshd_config_ok(server):
+    """True only when the host's `sshd -t` (the sshd-validate verb) accepts the config; a raise is False."""
+    try:
+        return _core.run_privileged(server, "sshd-validate", [], timeout=15)[2] == 0
+    except Exception:
+        _core._log.debug("sshd-validate could not be run", exc_info=True)
+        return False
+
+
+def _r34j_log_name(server):
+    """The host's name for a log line, with line breaks taken out (a name is operator-entered)."""
+    return str(getattr(server, "name", "?")).replace("\r", " ").replace("\n", " ")
 
 
 def _r34b_restore_once(server, verb, undo):
