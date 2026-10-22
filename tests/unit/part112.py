@@ -36,7 +36,7 @@ _TRIP112_START = len(_P9_TRIPPED)
 _SF112 = _read106("static", "js", "server_files.js")
 _name112f = "Files & Config backup card: a schedule save that failed"
 _outf112 = _js106(_name112f, _PEND109 + (
-    "var serverId = 1; const seen = []; global.renderBackups = d => seen.push(d.tag);\n"
+    "var serverId = 1; const seen = []; global.renderBackups = (d, s, keep) => { if (!keep) seen.push(d.tag); };\n"
     "document.getElementById('bk-interval').value = '3'; document.getElementById('bk-keep').value = '';\n"), _SF112, (
     "var _bkShown", "var _r30c_sfBkSaves", "function loadBackups(", "function saveBkSchedule(",
     "function _r32c_sfBkPutBack("), (

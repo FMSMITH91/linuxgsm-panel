@@ -97,6 +97,27 @@ def _audits107(action):
 # 1. A whitelist entry is removed by its own text, however it was stored
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _whitelist107(client, client_es):
+    """Run the whitelist checks, with the list put back as found however they end.
+
+    It was emptied, and only when they finished.
+    """
+    _was = list(_p9_app.load_config().get("security_whitelist", []) or [])
+    try:
+        _r35d_whitelist107(client, client_es)
+    finally:
+        _p9_app.update_config(_whitelist_as107(_was))
+
+
+def _whitelist_as107(was):
+    """Return update_config's mutator that puts the whitelist back to `was`.
+
+    Made here, not in the finally: CodeQL's py/exit-from-finally reads a lambda's implicit return
+    there as a 'return' in it.
+    """
+    return lambda cfg: cfg.update(security_whitelist=was)
+
+
+def _r35d_whitelist107(client, client_es):
     _p9_patch(_sh107, "_apply_whitelist_everywhere", lambda app, unban=None: None)
     _p9_patch(_sh107._banlist, "refresh_soon", lambda *a, **k: None)   # a real fail2ban/ufw read
     _p9_app.update_config(lambda cfg: cfg.update(security_whitelist=[
@@ -135,7 +156,6 @@ def _whitelist107(client, client_es):
     check("whitelist remove: ...said in the viewer's language (es)",
           d_es.get("code") == "not_whitelisted" and d_es.get("message") == "Esa entrada no está en la lista blanca.",
           repr(d_es))
-    _p9_app.update_config(lambda cfg: cfg.update(security_whitelist=[]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

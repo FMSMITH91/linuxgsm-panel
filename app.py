@@ -445,9 +445,10 @@ def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
                          "SourceTV/client ports were not reserved", e.short_name,
                          getattr(remote, "name", "the host"))
             continue
-        for v in sib.values():
-            if str(v).strip().isdecimal():
-                occupied.add(int(str(v).strip()))
+        # _port_or, not isdecimal + int(): the config is the game account's to write, and a value
+        # past 4300 digits made int() raise ValueError out of every Install on the host (a 500
+        # naming nothing). A value that is no port reserves nothing, as a blank one does.
+        occupied.update(p for p in (_port_or(v, None) for v in sib.values()) if p is not None)
     return occupied
 
 
@@ -464,8 +465,9 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
         return {}
     if cur is None:
         return {}                        # config unreadable — same best-effort answer as a raise
-    have = {k: int(str(cur.get(k, "")).strip())
-            for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdecimal()}
+    # _port_or for the same reason as _add_sibling_ports: an over-long value raised out of int().
+    have = {k: p for k, p in ((k, _port_or(cur.get(k), None)) for k in _SOURCE_AUX_PORT_KEYS)
+            if p is not None}
     if not have:
         return {}                        # game has no SourceTV/client ports — nothing to do
     # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest

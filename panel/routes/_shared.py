@@ -1417,9 +1417,13 @@ def _drain_action_output(app, remote, server_id):
     path, user, pos = st["path"], st["user"], st["pos"]
     # One round trip: the size on its own first line, then the new bytes. Splitting this into a
     # stat call and a tail call would double the SSH traffic of every tick for no gain.
+    # The read stops at the size it measured, as the end read and the console poller's do: SteamCMD
+    # or LinuxGSM appending between `stat` and `tail` put bytes past `s` in the body, the offset then
+    # moved only to `s`, and the next tick pushed those bytes again (a duplicated or split console line).
     sh = (f"s=$(stat -c%s {path} 2>/dev/null || echo 0); printf '%s\\n' \"$s\"; "
           f"if [ \"$s\" -gt {int(pos)} ]; then "
-          f"tail -c +{int(pos) + 1} {path} 2>/dev/null | head -c {_ACTION_TAIL_CHUNK}; fi")
+          f"tail -c +{int(pos) + 1} {path} 2>/dev/null "
+          f"| head -c $(( s - {int(pos)} < {_ACTION_TAIL_CHUNK} ? s - {int(pos)} : {_ACTION_TAIL_CHUNK} )); fi")
     try:
         # Through the MODULE, not the name this file also imports directly: `from ssh_manager
         # import run_command` copies the function object at import time, so a stub placed on the

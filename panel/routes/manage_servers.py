@@ -658,6 +658,27 @@ def _reboot_refusal(remote):
     return None
 
 
+def _r35b_reboot_refusal(gs):
+    """An uninstall's refusal (translated text) while a clean reboot of gs's host is under way, else None."""
+    from panel.services import host_reboot as _hr
+    if _hr.reboot_busy(gs.remote_id):
+        return i18n.tr(_hr.busy_message(gs.remote.display_name))
+    return None
+
+
+def _r35b_reboot_hold(gs):
+    """What holds gs against a clean reboot of its host before anything else is asked, else None.
+
+    "install" while it installs; "uninstall" while an uninstall holds it (_claim_uninstall). An
+    uninstall stops the server and removes its account over a minute or more: a reboot sent under it
+    left the account half removed. The uninstall refuses the other way round (_r35b_reboot_refusal).
+    """
+    if gs.status in ("installing", "configuring"):
+        return "install"
+    with _install_lock:
+        return "uninstall" if gs.id in _uninstalling else None
+
+
 def _game_type_refusal(game_type):
     """Refuse a game type that is malformed or not in LinuxGSM's catalogue. -> answer or None."""
     if not GAME_TYPE_RE.match(game_type) or game_type not in {g["shortname"] for g in load_game_list()}:
@@ -2429,6 +2450,14 @@ def _register_uninstall_and_edit(app):
             # on "You do not have permission to do that." /servers/manage is itself only
             # a 302 to index, so this changes nothing for anyone who could reach it.
             return _index_reply(_m, False, "warning", 409)
+        # ...nor while the panel is stopping this host's servers to reboot it, as every action that
+        # starts, stops or reconfigures a server there is refused (host_reboot.reboot_busy). The plan
+        # holds this server's monitor lock aside and its restore record on the row: an uninstall in
+        # the middle stopped and removed the account under it, and the plan's next write to the
+        # deleted row failed the whole reboot job.
+        _busy = _r35b_reboot_refusal(gs)
+        if _busy:
+            return _index_reply(_busy, False, "warning", 409)
 
         # Held for the whole host-side sequence, and retry_install refuses while it is. The
         # _install_job_running test above ran ONCE, and everything after it yields on SSH for up

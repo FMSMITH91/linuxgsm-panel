@@ -455,16 +455,17 @@ _blocker = _rw.blocker
 
 def _row_blockers(rows):
     out = []
-    from panel.routes._shared import _backup_in_progress
+    from panel.routes import _shared as _sh, manage_servers as _ms
     for gs in rows:
-        if gs.status in ("installing", "configuring"):
-            out.append(_blocker("install", gs.name))
+        held = _ms._r35b_reboot_hold(gs)            # an install, or an uninstall, of it
+        if held:
+            out.append(_blocker(held, gs.name))
             continue
         with _install_lock:
             job = _install_jobs.get(gs.id)
         if job and job.get("status") == "running":
             out.append(_blocker("install", gs.name))
-        if _backup_in_progress(gs.id):
+        if _sh._backup_in_progress(gs.id):
             out.append(_blocker("backup", gs.name))
         live = _q_live_actions(gs.id)
         if live:

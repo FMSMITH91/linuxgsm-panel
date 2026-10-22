@@ -62,6 +62,11 @@
     td.className = 'pt-0';
     td.colSpan = srvRow.children.length;   // span whatever this table actually has
     row.appendChild(td);
+    // Hidden when its server is: the dashboard's filter (filterServers) hides a progress row with its
+    // server, but runs only on a filter change or a swap of the cards. A row a poll built under an
+    // active filter showed as a nameless bar among the servers that match. From here on the filter
+    // keeps the two in step.
+    row.style.display = srvRow.style.display;
     srvRow.parentNode.insertBefore(row, srvRow.nextSibling);
     return row;
   }
@@ -210,8 +215,12 @@
         row.setAttribute('data-settled', res.kind);
       }
       if (view.drop) {
+        // Only while this ending is still the one shown. The same server installing again and
+        // ending within the delay (a retry that fails at once) had its new ending's row dropped by
+        // this old timer: a caveat gone undismissed until the next swap.
         setTimeout(function () {
-          if (endings[id] === end) delete endings[id];
+          if (endings[id] !== end) return;
+          delete endings[id];
           dropSettledRow(id);
         }, view.drop);
       }

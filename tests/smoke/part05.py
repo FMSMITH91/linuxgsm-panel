@@ -734,13 +734,6 @@ finally:
     _mp_mon._player_counts.pop(91919, None)
     _mp_ps._max_players_cache.pop(91919, None)
 
-# ── a JSON field of the wrong TYPE is a bad request, not a panel fault ─────────────────────
-# _json_body guarantees the BODY is a dict and says nothing about the VALUES, so two dozen
-# handlers read `(body.get(k) or "").strip()` — safe against a missing key, and an
-# AttributeError on {"command": 5}. Every one answered 500 with "Something went wrong — see
-# the panel log", which is the panel accusing itself of a bug the caller caused, and which
-# makes 5xx alerting fire on a malformed request. Driven as a superadmin against every
-# mutating JSON endpoint the review named, with a NUMBER where a string belongs.
 # ── what the ban-watcher RECORDS, and at what threshold ──────────────────────────────────
 # The false notifications were half of what the unreadable-jail bug produced: an "IP banned on
 # the panel login" message per live ban, then a "Login attack in progress" alert once three
@@ -842,6 +835,13 @@ try:
 finally:
     _rs_ab.remote_fail2ban_top_ips = _rs_saved
 
+# ── a JSON field of the wrong TYPE is a bad request, not a panel fault ─────────────────────
+# _json_body guarantees the BODY is a dict and says nothing about the VALUES, so two dozen
+# handlers read `(body.get(k) or "").strip()` — safe against a missing key, and an
+# AttributeError on {"command": 5}. Every one answered 500 with "Something went wrong — see
+# the panel log", which is the panel accusing itself of a bug the caller caused, and which
+# makes 5xx alerting fire on a malformed request. Driven as a superadmin against every
+# mutating JSON endpoint the review named, with a NUMBER where a string belongs.
 _typed = [
     ("/api/command/%d" % gs_id, {"command": 5}),
     ("/api/server/%d/action" % gs_id, {"action": 5}),

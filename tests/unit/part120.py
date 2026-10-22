@@ -72,8 +72,9 @@ class _Box120:
         if verb in ("sshd-backup-dropin", "sshd-socket-backup"):
             self.bak = self.dropin
         elif verb in ("sshd-restore-dropin", "sshd-socket-restore"):
-            # The verb's own body: `if [ -f BAK ]; then mv -f BAK DROPIN; else rm -f DROPIN; fi`.
-            self.dropin, self.bak = (self.bak, None) if self.bak is not None else (None, None)
+            # The verb's own body (privileged._r35j_restore_sh): the snapshot is copied back and KEPT, or
+            # with no snapshot the drop-in is removed. (It moved the snapshot back until review 1022b.)
+            self.dropin = self.bak
         elif verb == "ufw-allow-proto-port":
             self.added = True
         elif verb == "ufw-delete-allow-proto-port":

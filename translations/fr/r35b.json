@@ -1,0 +1,5 @@
+{
+  "The current SSH port configuration could not be backed up, so a failed change could not be undone — nothing changed.": "La configuration actuelle du port SSH n'a pas pu être sauvegardée, donc un changement raté ne pourrait pas être annulé — rien n'a été modifié.",
+  "an uninstall of {name}": "une désinstallation de {name}",
+  "an uninstall is running": "une désinstallation est en cours"
+}

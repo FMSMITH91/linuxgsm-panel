@@ -92,6 +92,7 @@ function _rbBlockersList(players){
     // The panel's own work (b.panel) is named by a phrase, translated; anything else by its name.
     var li = _rbRow(b.name, {install: 'an install is running', backup: 'a backup is running',
       action: 'a LinuxGSM action is running', content: 'a content install is running',
+      uninstall: 'an uninstall is running',
       maintenance: 'LinuxGSM maintenance is running', bootstrap: 'a bootstrap is running',
       dpkg: 'a package install is running', apt: 'a package install is running',
       self_update: 'a panel update is running', restore: 'a restore is running',

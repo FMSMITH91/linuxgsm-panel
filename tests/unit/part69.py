@@ -478,8 +478,9 @@ try:
     for _ev69 in _sio69.get_received():
         if _ev69["name"] in ("term_exit", "term_error"):
             _sock69.setdefault(_ev69["name"], []).append((_ev69["args"] or [{}])[0])
-    _sio69.disconnect()
 finally:
+    if "_sio69" in globals() and _sio69.is_connected():
+        _sio69.disconnect()         # in the finally: a raise above left the client connected
     _p9_restore_all()
     with _ht69._sid_lock:
         _ht69._sid_host.pop(_exit69.get("sid"), None)

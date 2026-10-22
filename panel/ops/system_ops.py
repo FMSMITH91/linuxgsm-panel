@@ -1571,7 +1571,13 @@ _CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_fail
 # whatever main's tip is when it runs. Its verdict reaches the commit it is about as a check run
 # the job posts itself, named "Open code-scanning alerts" (see _CI_REQUIRED); the job's own run
 # says nothing about the commit it lands on.
-_CI_IGNORE = {"deploy", "Upload coverage to Codacy", "Code-scanning alerts gate"}
+#
+# "Scorecard analysis" (scorecard.yml) rates the REPOSITORY's practices (branch protection, pinned
+# actions, maintainer activity), not the commit's code, and it reads them through GitHub's own API:
+# on 2026-10-22 a GitHub-side GraphQL error failed it twice on the same commit, and no panel was
+# offered that commit until a third run passed. Nothing that verifies code is in this set: CI,
+# CodeQL, the code-scanning alerts check, pip-audit, Gitleaks and Lighthouse all still gate.
+_CI_IGNORE = {"deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "Scorecard analysis"}
 # Checks a commit must CARRY before it can be 'passing', when it changed anything the CI and
 # CodeQL workflows run for (see _ci_suite_expected). "Every check that exists is green" was the
 # rule, and it is only a rule about the checks that exist so far. "Open code-scanning alerts" is
@@ -1643,7 +1649,8 @@ def _remote_ci_state(sha):
     CodeQL's, Bandit's and Semgrep's findings gate (all three upload to code scanning); plus
     pip-audit, Gitleaks and Lighthouse, which fail their own checks. So "check for updates" never
     surfaces a commit while anything is still running, before a late check has appeared, or after
-    any check failed. (The _CI_IGNORE checks are ignored: they are not verifications.) Reads
+    any check failed. (The _CI_IGNORE checks are ignored: they verify no code — the deployment
+    itself, the coverage upload, the alerts job's misfiled run and Scorecard's rating.) Reads
     GitHub's public check-runs API anonymously (the production panel has no token).
 
     'unknown' means the checks could not be READ — no github.com origin, GitHub unreachable, a

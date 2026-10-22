@@ -2529,19 +2529,21 @@ try:
     eq("ssh port: the port sshd is already on is refused, nothing written",
        (_H.change_ssh_port(_p8_srv(), 22), [c for c in _w.calls if c[0] == "write"]),
        ((False, "SSH is already on port 22."), []))
-    _w = _csp_wire(**{"sshd-validate": ("", "/etc/ssh/sshd_config.d/panel.conf: Bad port", 255)})
+    # sshd -t rejects the new drop-in and accepts the restored one: the undo restarts only onto a config
+    # sshd -t accepts (review 1022b), so it asks again after the restore.
+    _w = _csp_wire(**{"sshd-validate": [("", "/etc/ssh/sshd_config.d/panel.conf: Bad port", 255), ("", "", 0)]})
     _cp = _H.change_ssh_port(_p8_srv(), 2222)
     check("ssh port: a config sshd rejects is reverted — snapshot restored, the opened port CLOSED "
-          "again, sshd restarted — and nothing else is touched",
+          "again, sshd restarted onto the config sshd -t accepts again — and nothing else is touched",
           _cp[0] is False and _cp[1].startswith("sshd rejected the new config — nothing changed.")
           and ("write", "sshd-port-dropin") in [(c[0], c[1]) for c in _w.calls]
           # (the close reads the firewall back, review 1015d: that read is not a change)
-          and [n for n in _w.names() if n != "ufw-status"][-3:]
-          == ["sshd-restore-dropin", "ufw-delete-allow-proto-port", "service-restart"]
+          and [n for n in _w.names() if n != "ufw-status"][-4:]
+          == ["sshd-restore-dropin", "ufw-delete-allow-proto-port", "sshd-validate", "service-restart"]
           and not _w.verbs_called("f2b-set-sshd-ports"), "result=%r names=%r" % (_cp, _w.names()))
     check("ssh port: ...and the drop-in it tried kept the old port beside the new one",
           any(c[0] == "write" and c[2].endswith("Port 2222\nPort 22\n") for c in _w.calls))
-    _w = _csp_wire(**{"sshd-socket-active": ("active", "", 0), "sshd-validate": ("", "bad", 1)})
+    _w = _csp_wire(**{"sshd-socket-active": ("active", "", 0), "sshd-validate": [("", "bad", 1), ("", "", 0)]})
     _cp = _H.change_ssh_port(_p8_srv(port=2200), 2222)
     _drop = [c[2] for c in _w.calls if c[0] == "write"]
     check("ssh port (socket-activated): the ssh.socket drop-in carries the new port, sshd_config's "

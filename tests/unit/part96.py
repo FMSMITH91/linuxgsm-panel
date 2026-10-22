@@ -625,7 +625,7 @@ check("panel-helper: ...while SSH off now, an unreadable pref, or a recorded \"n
       _ssh96["on, unrecorded, SSH off"] == (1, [], _NOKEY96)
       and _ssh96["on, unrecorded, prefs unreadable"] == (1, [], _NOKEY96)
       and _ssh96["on, recorded no, SSH on"] == (1, [], _NOKEY96 + "tailscale_ssh=no\n")
-      and _ssh96["port record, unrecorded, SSH off"][2] == _NOKEY96 + "panel_port=5055\n", repr(_ssh96))
+      and _ssh96["port record, unrecorded, SSH off"] == (0, [], _NOKEY96 + "panel_port=5055\n"), repr(_ssh96))
 
 _choice96 = {}
 try:

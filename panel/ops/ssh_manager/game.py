@@ -448,7 +448,9 @@ def _parse_minecraft_list(text):
         if nm and nm not in seen:
             seen.add(nm)
             players.append({"name": nm, "steamid": "", "num": None, "score": None, "time": None})
-    if len(players) != int(m.group(1)):
+    # _int_or_none: the count is the game's own text, and int() raises past 4300 digits — out of
+    # console_player_list, which promises never to. A count that is no number is no reply.
+    if len(players) != _int_or_none(m.group(1)):
         return None     # a truncated or partial reply is UNKNOWN — not a shorter list, not zero
     return players
 
@@ -565,8 +567,20 @@ def _r13b_reply_complete(eng, out):
     for ln in reversed(lines[:head]):
         m = _R13B_VALVE_COUNT_RE.match(ln)
         if m:
-            return len(_parse_valve_status(out)) >= int(m.group(1)) + int(m.group(2) or 0)
+            return _r35a_valve_rows_cover(m, out)
     return True
+
+
+def _r35a_valve_rows_cover(m, out):
+    """Whether `out`'s table holds no fewer rows than the `players :` line `m` counts.
+
+    _int_or_none, as _parse_minecraft_list: int() raised past 4300 digits, out of the callers that
+    promise never to. A count that is no number is an incomplete reply.
+    """
+    want, bots = _int_or_none(m.group(1)), _int_or_none(m.group(2) or 0)
+    if want is None or bots is None:
+        return False
+    return len(_parse_valve_status(out)) >= want + bots
 
 
 def _parse_player_reply(eng, out):

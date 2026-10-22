@@ -1701,7 +1701,8 @@ def _install_blocks41():
     open(marker, "w").close()
     fn = _install_block41(txt, "game_sessions_running() {", "\n}\n")
     blocks = [_install_block41(txt, '                if [[ ! -f /var/run/reboot-required ]]; then\n'
-                                    '                    ok "System updated', "\n                fi\n"),
+                                    '                    if [[ "${_r35a_upg_ok}" -eq 1 ]]; then\n'
+                                    '                        ok "System updated', "\n                fi\n"),
               _install_block41(txt, 'if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && [[ "${PANEL_NO_REBOOT:-0}" != "1" ]]; then\n'
                                     '    RB_SUDO=""', "\nfi\n")]
     return [_STUBS41 + fn + b.replace("/var/run/reboot-required", marker) for b in blocks]

@@ -1,0 +1,16 @@
+# osv-scanner's configuration for the CI tool lockfiles beside it (security-code.yml, the dependency
+# audit). It applies to the lockfiles in THIS directory only; it does not propagate.
+#
+# Every entry is a reviewed advisory that cannot be fixed by a bump, and every one EXPIRES: on its
+# ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
+# entry to a reason and a date. The model and its history: tools/gamedig/osv-scanner.toml.
+
+[[IgnoredVulns]]
+id = "GHSA-xcq7-p3pf-p88h"
+ignoreUntil = 2026-11-22
+reason = """opentelemetry-api 1.37.0 in semgrep.txt (unbounded tracestate parsing, fixed in 1.45.1).
+Not fixable by a bump: every Semgrep release up to 1.182.1 pins opentelemetry-api~=1.37.0, so the
+resolver cannot take 1.45.1 while Semgrep is installed. CI-only: Semgrep runs in a CI job over this
+repository's own files with metrics off, and is handed no trace context from outside, so the
+tracestate parser never reads attacker input. Remove this entry when Semgrep raises the pin and the
+lock moves past 1.45.0."""

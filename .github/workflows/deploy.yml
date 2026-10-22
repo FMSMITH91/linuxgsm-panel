@@ -226,7 +226,7 @@ jobs:
           # skipped. The two lists are system_ops' _CI_REQUIRED and _CI_IGNORE; a unit test holds
           # them equal. A name ending in "(" is a prefix, for a matrix job.
           REQUIRED=("checks (" "coverage" "js coverage" "gamedig lockfile (" "Analyze (" "Open code-scanning alerts")
-          IGNORED='["deploy", "Upload coverage to Codacy", "Code-scanning alerts gate"]'
+          IGNORED='["deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "Scorecard analysis"]'
           waited_until=$(( $(date +%s) + 20 * 60 ))
           while :; do
               runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \

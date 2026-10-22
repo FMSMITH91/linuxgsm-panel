@@ -389,9 +389,10 @@ check("firewall: the panel's own port moves (change-port's two closes, the SSH p
       # And the close of the port an earlier move saved but never applied (review 1017c).
       and _rsec64.count('remote_ufw_close_port(local, stored_port, "tcp", force=True)') == 1
       and _rsec64.count("remote_ufw_close_port(") == 3
-      # The revert's close is _r25b_close_added_ssh_rule's (review 1016b), called with new_port.
+      # The revert's close is _r25b_close_added_ssh_rule's (review 1016b), called with the move's own
+      # port from its undo record (review 1022b: one undo for _revert and the wrapper, _r35b_undo_close).
       and _hsrc64.count('remote_ufw_close_port(server, port, "tcp", force=True)') == 1
-      and _hsrc64.count("_r25b_close_added_ssh_rule(server, new_port, _ufw_added)") == 1)
+      and _hsrc64.count('_r25b_close_added_ssh_rule(server, undo["port"], undo["added"])') == 1)
 
 
 # ── A03: a rule for a protocol that cannot carry TCP (ufw's portless ones) is no way in ─────────

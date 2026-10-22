@@ -4134,18 +4134,58 @@ def _r26j_remote_has_ip(server, addr):
     return (want in have) if have else None
 
 
-# The running SSH port move's record of what it changed, for _r32b_undo_on_raise: per greenlet (each
-# request runs in its own), so two moves on two hosts never share one.
+# ── change_ssh_port as one transaction ──────────────────────────────────────────────────────────
+# Every step it takes, in order, and what a failure at each may undo. The undo record (`undo`) holds
+# exactly what is still owed. COMMIT (_r35b_commit, once step 6 has VERIFIED the move) empties it, and
+# nothing after that point undoes the move: a later step that fails or raises is reported or logged.
+# Point fixes to the undo left a new lock-out path four review passes running (review 1022b): the
+# discard at step 8 raised after it had run, and the wrapper restored from the snapshot it had just
+# removed, which DELETES the verified drop-in.
+#
+#   step                              committed  a failure here undoes                   owed from here
+#   P  reads, the refusals            no         nothing: nothing was changed            -
+#   1  UFW allow for the new port     no         that allow, ONLY if this step added it  port, added (the moment
+#                                                                                         the rule is in)
+#   2a snapshot the drop-in           no         the allow. No restore: no snapshot is   restore, reload (socket),
+#                                                known to exist (rc 0 only). Refused     relisten
+#                                                (R35J_SNAPSHOT_HELD) while a snapshot
+#                                                is there and `sshd -t` rejects the
+#                                                live config: it may be the good copy
+#   2b write the new drop-in          no         restore, reload, the allow; a failed    -
+#                                                write (rc) no restart, as nothing read it
+#   2c daemon-reload (socket)         no         restore, reload, the allow, restart     -
+#   3  sshd -t                        no         the same                                -
+#   5  restart the listener           no         the same                                -
+#   6  verify: listening, reached,    no         the same                                -
+#      held by sshd
+#   C  COMMIT                         YES        -                                       nothing, for good
+#   7  fail2ban repointed             yes        never: its outcome is in the message
+#   8  snapshot discarded             yes        never: logged. A snapshot left behind is harmless: the next
+#                                                move's 2a replaces it, or removes it when there is no drop-in
+#   9  the route stores the port      yes        (routes/remote_vps.py, only on success)
+#
+# Each part of an undo runs at most once in effect, whoever runs it (_revert for a failure the move
+# saw, the wrapper for a step that raised), in this order: restore, reload, close the allow, restart.
+#   * The restore copies the snapshot back and keeps it, so a second run is the first again. Retired
+#     once it may have run (it returned, or raised after its command went out); one that never reached
+#     the host stays owed, and the wrapper's single retry puts the snapshot back (_r34b_restore_once).
+#     One that answered but not 0 is run once more at once; still unconfirmed, _revert says so and
+#     names the file (never "nothing changed"), the snapshot stays, and 2a above keeps it.
+#   * The reload, the close and the restart are idempotent: retired once they returned, so one that
+#     raised is tried once more by the wrapper.
+#   * The restart only onto a config `sshd -t` accepts (_r34j_sshd_config_ok): a restore can have been
+#     retired without having run, and a restart stops the serving daemon before it starts a new one.
+# Per greenlet (each request runs in its own), so two moves on two hosts never share one record.
 _R32B_MOVE_UNDO = contextvars.ContextVar("r32b_move_undo", default=None)
 
 
 def _r32b_undo_on_raise(move):
-    """Wrap change_ssh_port: a step that RAISES undoes what the move had changed, then raises on.
+    """Wrap change_ssh_port: a step that RAISES undoes what the move still owes, then raises on.
 
     Every failure the move can SEE reverts itself (_revert). A transport that raises instead
     (paramiko does, mid-step) left the step-1 allow for the new port in UFW, and from step 2 on a
     changed drop-in, with the route answering only "failed": a firewall more open than before for a
-    port nothing may be serving. Undone best effort; a move that succeeded clears its record first.
+    port nothing may be serving. Undone best effort; a committed move owes nothing (see the table above).
     """
     @functools.wraps(move)
     def _wrapped(server, new_port, bind_addr=""):
@@ -4154,8 +4194,7 @@ def _r32b_undo_on_raise(move):
         try:
             return move(server, new_port, bind_addr)
         except Exception:
-            if undo:
-                _r32b_undo_ssh_move(server, undo)
+            _r35b_unwind(server, undo, quiet=True)
             raise
         finally:
             _R32B_MOVE_UNDO.reset(token)
@@ -4168,34 +4207,57 @@ def _r32b_move_undo():
     return {} if undo is None else undo
 
 
-def _r32b_undo_ssh_move(server, undo):
-    """change_ssh_port's _revert, for a step that RAISED, in its order: each part best effort.
+def _r35b_commit(undo):
+    """COMMIT: the move is verified, so it stands. Nothing is owed any more, whatever happens next."""
+    undo.clear()
 
-    Only the parts still owed. _revert retires each part as it does it, so a raise part-way
-    through _revert leaves this the rest and never a part again: the restore verb is NOT
-    idempotent (with its snapshot already moved back it DELETES the drop-in), so run twice it
-    removed the drop-in _revert had just put back and sshd fell back to sshd_config's port alone.
+
+def _r35b_unwind(server, undo, quiet=False):
+    """Undo what the running move still owes (`undo`), in the table's order, each part at most once.
+
+    quiet=False (_revert): the first part that raises stops the undo and the raise goes on, every
+    part after it still owed, for the wrapper. quiet=True (the wrapper, a step raised): every part
+    still owed is tried and each raise is logged, never passed on (one is already in flight).
     """
-    restore = undo.pop("restore", None)
-    if restore:
-        _r32b_quietly(server, _core.run_privileged, server, restore, [], timeout=10, merge_stderr=False)
-    if undo.get("added"):
-        _r32b_quietly(server, _r25b_close_added_ssh_rule, server, undo["port"], undo["added"])
-    if undo.get("relisten"):
-        if undo.get("socket"):
-            _r32b_quietly(server, _core.run_privileged, server, "systemd-daemon-reload", [], timeout=20,
-                          merge_stderr=False)
-        # Only onto a config sshd accepts. A restore that raised once its command went out is retired
-        # as run (_r34b_restore_once), but it may not have run: the drop-in can still be the one
-        # step 3 rejected, and a restart stops the serving daemon and cannot start a new one.
-        if _r34j_sshd_config_ok(server):
-            _r32b_quietly(server, _restart_ssh_listener, server, undo.get("socket"))
-        else:
-            _core._log.warning(
-                "ssh port move: NOT restarting ssh on %s after undoing a step that raised: `sshd -t` "
-                "does not accept the config now (or could not be run), so the sshd that is running was "
-                "left as it is. Check /etc/ssh/sshd_config.d/ (and ssh.socket.d on a socket-activated "
-                "host), then run `sshd -t` before restarting ssh.", _r34j_log_name(server))
+    for part in _R35B_UNDO_ORDER:
+        if not undo.get(part):
+            continue
+        try:
+            _R35B_UNDO_PARTS[part](server, undo)
+        except Exception:
+            if not quiet:
+                raise
+            _core._log.warning("ssh port move: undoing a step that raised also failed on %s",
+                               _r34j_log_name(server), exc_info=True)
+
+
+def _r35b_undo_reload(server, undo):
+    """Socket-activated: systemd re-reads the unit once its drop-in is back. Idempotent: retired once it returned."""
+    _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
+    undo.pop("reload", None)
+
+
+def _r35b_undo_close(server, undo):
+    """Close the allow step 1 added, and nothing else. Idempotent: retired once it returned."""
+    _r25b_close_added_ssh_rule(server, undo["port"], undo["added"])
+    undo["added"] = False
+
+
+def _r35b_undo_relisten(server, undo):
+    """Restart the listener onto the restored config, only when `sshd -t` accepts it. Retired once it returned."""
+    # A restore that raised once its command went out is retired as run (_r34b_restore_once), but it
+    # may not have run, and transports that answer -1 instead of raising say nothing either: the
+    # drop-in can still be the one step 3 rejected, and a restart stops the serving daemon and cannot
+    # start a new one.
+    if _r34j_sshd_config_ok(server):
+        _restart_ssh_listener(server, undo.get("socket"))
+    else:
+        _core._log.warning(
+            "ssh port move: NOT restarting ssh on %s after undoing a step: `sshd -t` "
+            "does not accept the config now (or could not be run), so the sshd that is running was "
+            "left as it is. Check /etc/ssh/sshd_config.d/ (and ssh.socket.d on a socket-activated "
+            "host), then run `sshd -t` before restarting ssh.", _r34j_log_name(server))
+    undo.pop("relisten", None)
 
 
 def _r34j_sshd_config_ok(server):
@@ -4212,31 +4274,151 @@ def _r34j_log_name(server):
     return str(getattr(server, "name", "?")).replace("\r", " ").replace("\n", " ")
 
 
-def _r34b_restore_once(server, verb, undo):
+def _r34b_restore_once(server, undo):
     """change_ssh_port's restore of its drop-in snapshot, retired from `undo` once it may have run.
 
-    The restore verb is not idempotent: with its snapshot already moved back it DELETES the drop-in
-    (privileged.py's `else rm -f`). So once it has reached the host it is never run again by
-    _r32b_undo_on_raise, even when its answer was lost on the way back (paramiko marks that raise
-    `command_started`). One that raised before the command went out (no connection, a refused
-    session) is still owed, and the wrapper's retry is what puts the snapshot back.
+    Once a restore has reached the host it is never run again by _r32b_undo_on_raise, even when its
+    answer was lost on the way back (paramiko marks that raise `command_started`). One that raised
+    before the command went out (no connection, a refused session) is still owed, and the wrapper's
+    retry is what puts the snapshot back.
+
+    A restore that ANSWERED but not 0 (a Tailscale or local transport answers -1 rather than
+    raising) is tried once more at once: the verb copies the snapshot over the drop-in and keeps the
+    snapshot (review 1022b's integration), so a second run puts back the same file. Still not
+    confirmed, `undo["unconfirmed"]` tells _revert to say so: the drop-in on disk may be the one
+    this move wrote, the good one only in the snapshot, and "nothing changed" would send the host's
+    next ssh restart (a reboot) onto it.
     """
     try:
-        _core.run_privileged(server, verb, [], timeout=10, merge_stderr=False)
+        rc = _rc_of(_core.run_privileged(server, undo["restore"], [], timeout=10, merge_stderr=False))
     except Exception as e:
         if getattr(e, "command_started", False):
             undo.pop("restore", None)
         raise
+    if rc != 0:
+        _core._log.warning("ssh port move: the drop-in restore on %s answered %s; trying it once more",
+                           _r34j_log_name(server), rc)
+        try:
+            rc = _rc_of(_core.run_privileged(server, undo["restore"], [], timeout=10, merge_stderr=False))
+        except Exception:
+            _core._log.warning("ssh port move: the second drop-in restore on %s failed", _r34j_log_name(server),
+                               exc_info=True)
+            rc = None
+        if rc != 0:
+            undo["unconfirmed"] = True
     undo.pop("restore", None)
 
 
-def _r32b_quietly(server, fn, *args, **kw):
-    """fn(*args, **kw) for _r32b_undo_ssh_move: a raise is logged, never passed on (one is in flight)."""
+def _r35j_dropin_paths(socket_mode):
+    """(the move's drop-in, its snapshot) on this host: ssh.socket's when socket-activated, else sshd's."""
+    if socket_mode:
+        return _priv.SSHD_SOCKET_DROPIN, _priv.SSHD_SOCKET_DROPIN_BAK
+    return _priv.SSHD_DROPIN, _priv.SSHD_DROPIN_BAK
+
+
+def _r35j_unconfirmed_message(socket_mode):
+    """_revert's message when the restore could not be confirmed: where to look, and why it matters."""
+    path, bak = _r35j_dropin_paths(socket_mode)
+    return i18n.Sentence("The SSH port change did not work, and putting the previous configuration back could not "
+                         "be confirmed — check {path} before restarting ssh (the previous one is kept at {bak}, "
+                         "and `sshd -t` must accept the config).", path=path, bak=bak)
+
+
+# The snapshot verbs' answer when they refuse: a snapshot is already there and DIFFERS from the drop-in,
+# so an earlier move did not finish (privileged.py's _r35b_snapshot_sh, the helper's _r35b_snapshot).
+_R35J_SNAPSHOT_HELD = _priv.R35J_SNAPSHOT_HELD
+
+
+def _r35j_held_message(socket_mode):
+    """2a's message when the snapshot verb kept a snapshot that differs from the drop-in.
+
+    It held only while `sshd -t` rejected the config and blamed the snapshot for that; the verb now
+    holds on the difference alone, so this names the two files and how to clear it, and nothing else.
+    """
+    path, bak = _r35j_dropin_paths(socket_mode)
+    return i18n.Sentence("{bak} differs from {path}: an earlier SSH port change on this host was not undone, or "
+                         "its snapshot was not removed after it worked. If {path} is the configuration you want, "
+                         "delete {bak}; otherwise copy {bak} over {path} to go back to the one before that "
+                         "change. Then try again. Nothing changed.", path=path, bak=bak)
+
+
+# The undo's parts, in the order they run (the table above).
+_R35B_UNDO_PARTS = {"restore": _r34b_restore_once, "reload": _r35b_undo_reload, "added": _r35b_undo_close,
+                    "relisten": _r35b_undo_relisten}
+_R35B_UNDO_ORDER = ("restore", "reload", "added", "relisten")
+
+
+def _r35b_after_commit(server, ports, discard_verb):
+    """Steps 7 and 8, after COMMIT: each best effort, and neither can raise.
+
+    -> (fail2ban's (state, why), whether the snapshot was removed).
+
+    The move is verified by now. A raise here used to reach the undo wrapper, which restored from a
+    snapshot the discard had already removed: the restore verb then deleted the new drop-in, sshd fell
+    back to sshd_config's port alone, and the route kept the panel dialling the port just dropped.
+    """
     try:
-        fn(*args, **kw)
+        f2b = _point_f2b_sshd_at(server, ports)     # catches its own; this keeps COMMIT final regardless
     except Exception:
-        _core._log.warning("ssh port move: undoing a step that raised also failed on %s",
-                           getattr(server, "name", "?"), exc_info=True)
+        _core._log.warning("ssh port move: fail2ban could not be repointed on %s", _r34j_log_name(server),
+                           exc_info=True)
+        f2b = ("failed", i18n.Sentence("the host did not answer"))
+    return f2b, _r35j_discard_snapshot(server, discard_verb)
+
+
+def _r35j_discard_snapshot(server, discard_verb):
+    """Step 8: remove the snapshot, tried once more when the answer was not 0. -> True when it is gone.
+
+    One left behind differs from the drop-in the move just wrote, and the next move's snapshot verb
+    refuses over it (_R35J_SNAPSHOT_HELD) until it is removed, so the success message has to say so.
+    """
+    for _ in range(2):
+        try:
+            if _rc_of(_core.run_privileged(server, discard_verb, [], timeout=10, merge_stderr=False)) == 0:
+                return True
+        except Exception:
+            _core._log.warning("ssh port move on %s: its drop-in snapshot could not be removed",
+                               _r34j_log_name(server), exc_info=True)
+    return False
+
+
+def _r35j_snapshot_left_note(socket_mode, gone):
+    """The success message's note when step 8 could not remove the snapshot; "" when it was removed."""
+    if gone:
+        return ""
+    path, bak = _r35j_dropin_paths(socket_mode)
+    return i18n.Sentence("The snapshot {bak} may not have been removed: while it is there, the next SSH port "
+                         "change refuses until you delete it ({path} is the configuration in use).",
+                         path=path, bak=bak)
+
+
+def _r35b_moved_message(new_port, bind_addr, f2b, unchecked):
+    """change_ssh_port's success message, from fail2ban's (state, why) and the sshd-holds note."""
+    _f2b, _f2b_why = f2b
+    if _f2b == "updated":
+        _done = i18n.Sentence("firewall + fail2ban updated")
+    elif _f2b == "absent":
+        _done = i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port",
+                              why=_f2b_why)
+    else:
+        _done = i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
+                              "brute force on port {port}", why=_f2b_why, port=new_port)
+    if bind_addr:
+        # No fallback sentence here: ListenAddress is all-or-nothing (change_ssh_port's own docstring
+        # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
+        # port is still available would be untrue exactly when it matters most.
+        return i18n.Sentences(i18n.Sentence(
+            "SSH now listens on {address}:{port}, and only there ({done}). Confirm you can still reach it "
+            "before closing anything.", address=bind_addr, port=new_port, done=_done), unchecked)
+    if _f2b == "failed":
+        # Closing the old port is the advice that assumes fail2ban covers the new one.
+        return i18n.Sentences(i18n.Sentence(
+            "SSH now listens on port {port} ({done}). The previous port is still available as a fallback; fix "
+            "fail2ban before relying on it for port {port}.", port=new_port, done=_done), unchecked)
+    return i18n.Sentences(i18n.Sentence(
+        "SSH now listens on port {port} ({done}). The previous port is still available as a fallback — "
+        "once you've confirmed you can reach SSH on {port}, close the old one from the Firewall page.",
+        port=new_port, done=_done), unchecked)
 
 
 @_r32b_undo_on_raise
@@ -4422,8 +4604,37 @@ def change_ssh_port(server, new_port, bind_addr=""):
         ("sshd-socket-backup", "sshd-socket-restore", "sshd-socket-discard", "sshd-socket-dropin")
         if socket_mode else
         ("sshd-backup-dropin", "sshd-restore-dropin", "sshd-discard-backup", "sshd-port-dropin"))
-    _core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False)
-    undo.update(restore=_restore_verb, relisten=True)   # a snapshot exists now: a raise from here restores it
+
+    def _revert(msg, restart=True):
+        # Undo what the move still owes (the table above _R32B_MOVE_UNDO): restore the snapshot if one
+        # was taken, else drop the file; close the allow step 1 added and nothing else; restart the
+        # listener onto a config sshd -t accepts. The prior binding is untouched the whole time, so
+        # SSH keeps working. Each part is retired from `undo` as it is done, so a raise in here leaves
+        # _r32b_undo_on_raise only what is still owed. restart=False: nothing reloaded or restarted
+        # anything yet, so the running listener never read the new drop-in.
+        if not restart:
+            undo.pop("relisten", None)
+        _r35b_unwind(server, undo)
+        if undo.pop("unconfirmed", False):
+            _core._log.warning("ssh port move on %s failed (%s) and its restore was not confirmed",
+                               _r34j_log_name(server), str(msg).replace("\r", " ").replace("\n", " "))
+            return False, _r35j_unconfirmed_message(socket_mode)
+        return False, msg
+
+    # 2a. The snapshot decides whether a failure can be undone at all. Its rc used to be dropped (and
+    #     the shell form ended `|| true`): a copy that failed left no snapshot, or half of one, and the
+    #     undo then removed the drop-in or put the half back. After an earlier move (2222 + 22, 22
+    #     closed as advised) that took sshd off the port the panel dials. Unsnapshotted, nothing goes on.
+    _snap_rc = _rc_of(_core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False))
+    if _snap_rc == _R35J_SNAPSHOT_HELD:
+        # An earlier move's restore was not confirmed: the snapshot may be the only good copy, and
+        # `sshd -t` rejects what is live. A new snapshot would put the rejected file in its place.
+        return _revert(_r35j_held_message(socket_mode), restart=False)
+    if _snap_rc != 0:
+        return _revert(i18n.Sentence("The current SSH port configuration could not be backed up, so a failed "
+                                     "change could not be undone — nothing changed."), restart=False)
+    # A snapshot exists now: from here a failure restores it.
+    undo.update(restore=_restore_verb, reload=socket_mode, relisten=True)
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
               "# from the panel's Firewall page once you've confirmed the new port works.\n")
     if socket_mode:
@@ -4435,24 +4646,6 @@ def change_ssh_port(server, new_port, bind_addr=""):
         body = "".join("ListenAddress %s:%s\n" % (_a, p) for p in ports)
     else:
         body = "".join("Port %s\n" % p for p in ports)
-
-    def _revert(msg, restart=True):
-        # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
-        # binding is untouched the whole time, so SSH keeps working.
-        # Each part is retired from `undo` as it is done, so a raise later in here leaves
-        # _r32b_undo_on_raise only what is still owed (see _r32b_undo_ssh_move).
-        _r34b_restore_once(server, _restore_verb, undo)
-        if socket_mode:
-            _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
-        # ...and close the hole step 1 opened. It only restored the drop-in before, so every revert
-        # path left a public ALLOW for a port nothing serves — including the step-3 path, whose
-        # message says "sshd rejected the new config — nothing changed". Best-effort, like the
-        # open: a host without UFW no-ops either way. ONLY a rule step 1 added (see there).
-        _r25b_close_added_ssh_rule(server, new_port, _ufw_added)
-        undo["added"] = False
-        if restart:
-            _restart_ssh_listener(server, socket_mode)
-        return False, msg
 
     # The write's rc decides before anything validates or restarts. It used to be dropped: on a
     # remote whose drop-in directory did not exist (stock socket-activated 24.04 has no
@@ -4520,36 +4713,13 @@ def change_ssh_port(server, new_port, bind_addr=""):
                                 "the panel-helper on this host may predate that check; re-running "
                                 "install.sh updates it.)", port=new_port, why=_why))
 
-    # 7. Point fail2ban's sshd jail at the new + old ports so its bans cover the port now served.
-    _f2b, _f2b_why = _point_f2b_sshd_at(server, ports)
-
-    _core.run_privileged(server, _discard_verb, [], timeout=10,
-                   merge_stderr=False)   # success — drop the snapshot
-    undo.clear()                         # ...and the move stands: nothing below is a reason to undo it
-    if _f2b == "updated":
-        _done = i18n.Sentence("firewall + fail2ban updated")
-    elif _f2b == "absent":
-        _done = i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port",
-                              why=_f2b_why)
-    else:
-        _done = i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
-                              "brute force on port {port}", why=_f2b_why, port=new_port)
-    if bind_addr:
-        # No fallback sentence here: ListenAddress is all-or-nothing (this function's own docstring
-        # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
-        # port is still available would be untrue exactly when it matters most.
-        return True, i18n.Sentences(i18n.Sentence(
-            "SSH now listens on {address}:{port}, and only there ({done}). Confirm you can still reach it "
-            "before closing anything.", address=bind_addr, port=new_port, done=_done), _unchecked)
-    if _f2b == "failed":
-        # Closing the old port is the advice that assumes fail2ban covers the new one.
-        return True, i18n.Sentences(i18n.Sentence(
-            "SSH now listens on port {port} ({done}). The previous port is still available as a fallback; fix "
-            "fail2ban before relying on it for port {port}.", port=new_port, done=_done), _unchecked)
-    return True, i18n.Sentences(i18n.Sentence(
-        "SSH now listens on port {port} ({done}). The previous port is still available as a fallback — "
-        "once you've confirmed you can reach SSH on {port}, close the old one from the Firewall page.",
-        port=new_port, done=_done), _unchecked)
+    # C. COMMIT: verified, so the move stands. Nothing below can undo it (the table above _R32B_MOVE_UNDO).
+    _r35b_commit(undo)
+    # 7 + 8. Point fail2ban's sshd jail at the new + old ports so its bans cover the port now served,
+    #    and drop the snapshot: best effort, after the commit.
+    _f2b, _gone = _r35b_after_commit(server, ports, _discard_verb)
+    return True, _r35b_moved_message(new_port, bind_addr, _f2b,
+                                     i18n.Sentences(_unchecked, _r35j_snapshot_left_note(socket_mode, _gone)))
 
 
 # The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`
