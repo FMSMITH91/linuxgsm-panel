@@ -242,13 +242,14 @@ def _cert_notice77():
     said = {}
     _p9_patch(_certs77, "DATA_DIR", _pl77.Path(_TMP77))
     _p9_patch(_certs77.notifications, "notify", lambda kind, title, body: said.__setitem__("body", body))
+    _at77 = _certs77._CERT_ALERTED["at"]
     for label, days in (("expired", -3), ("soon", 10)):
         said.pop("body", None)
         _cert77(days)
         _certs77._CERT_ALERTED["at"] = 0
         _certs77._maybe_alert_cert_expiring()
         said[label] = said.get("body")
-    _certs77._CERT_ALERTED["at"] = 0
+    _certs77._CERT_ALERTED["at"] = _at77    # as found, not 0 (review 1022c lead)
     check("TLS expiry notice: a certificate already past its date says it has expired (it said "
           "\"expires in 0 day(s)\"); one with days left still counts them",
           said.get("expired") == "The panel's TLS certificate has expired — renew it."

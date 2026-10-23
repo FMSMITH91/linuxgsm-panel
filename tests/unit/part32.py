@@ -56,7 +56,7 @@ import sys
 import tempfile
 
 from unit.part01 import check
-from unit.part12 import P9_ADMIN, _P9_CFG_PATH, _p9, _p9_audit, _p9_client, _p9_json
+from unit.part12 import P9_ADMIN, _P9_CFG_PATH, _p9, _p9_audit, _p9_cfg_put, _p9_client, _p9_json
 import app as _app32
 from unit import fake_tailscale as _fake32
 from panel.core import config as _cfg32
@@ -1050,10 +1050,7 @@ def _p32_cleanup():
         else:
             os.environ[key] = value
     _set_conf(**_CONF_SAVED32)
-    if _CFG_SNAPSHOT32 is not None:
-        _P9_CFG_PATH.write_bytes(_CFG_SNAPSHOT32)
-    elif _P9_CFG_PATH.exists():
-        _P9_CFG_PATH.unlink()
+    _p9_cfg_put(_CFG_SNAPSHOT32)
     ts._cache["info"] = None
     shutil.rmtree(_TMP32, ignore_errors=True)
 

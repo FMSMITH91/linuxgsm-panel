@@ -58,12 +58,15 @@ DEFAULT_CONFIG = {
 }
 
 
-# Cache the parsed config keyed by the file's (mtime, size). load_config() is called
+# Cache the parsed config keyed by the file's (inode, mtime, size). load_config() is called
 # a few times per request; this avoids re-reading + re-parsing the JSON every time,
-# while an mtime/size change (from save_config or an external edit) transparently
-# refreshes it. Each call returns a DEEP copy, so a caller that edits a nested section
-# in place (notifications._drop_master_switch does exactly that) mutates its own copy
-# and not the shared cache — a plain dict.update() only copies the top level, which
+# while a change (from save_config or an external edit) transparently refreshes it. The
+# inode is in the key because (mtime, size) alone missed a same-size rewrite within one
+# timestamp tick (file times are jiffy-coarse on kernels without multigrain timestamps):
+# every atomic writer (save_config, install.sh) replaces the file, so the inode changes.
+# save_config also drops the cache itself. Each call returns a DEEP copy, so a caller that
+# edits a nested section in place (notifications._drop_master_switch does exactly that)
+# mutates its own copy and not the shared cache — a plain dict.update() only copies the top level, which
 # left an unsaved edit visible to every later reader if the subsequent write failed.
 # The config is a few dozen small keys, so the copy is not worth optimising away.
 _cfg_cache = {"key": None, "data": {}}
@@ -252,7 +255,7 @@ def load_config():
     config = dict(DEFAULT_CONFIG)
     try:
         st = CONFIG_FILE.stat()
-        key = (st.st_mtime_ns, st.st_size)
+        key = (st.st_ino, st.st_mtime_ns, st.st_size)
         if _cfg_cache["key"] != key:
             with open(CONFIG_FILE) as f:
                 loaded = json.load(f)

@@ -272,7 +272,10 @@ def _gate127(extra):
     try:
         return _so127._remote_ci_state_read("a" * 40, {})
     finally:
+        # ...and the part's tripwire put back with them: the restore drops it too, and the next gate call
+        # ran unarmed (review 1022c lead).
         _p9_restore_all()
+        _p9_arm(who="part127")
 
 
 def _job_names127(name):

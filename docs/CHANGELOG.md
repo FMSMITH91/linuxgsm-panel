@@ -601,6 +601,72 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A twenty-third full review on 2026-10-22: fixes.** Every item below has a check that fails
+  without its fix.
+  - **One machine, one host row.** A host whose address and SSH port another row already has is
+    now refused when you add it (Hosts page or setup wizard), edit a row onto it, migrate a row to
+    Tailscale onto it, or move a row's SSH port onto it. Addresses are compared without case,
+    brackets or spelling differences (an IPv6 address by value). The same address with another
+    SSH port is still allowed. Rows that already name the same machine are left as they are and
+    can still be saved with their own values; nothing merges them, and each row keeps its own
+    locks. The refusal names the other host only to a superadmin or to someone whose groups
+    include it; anyone else reads "another host". An IPv4 address written as an IPv6-mapped
+    address, as one number or in a short form, and a name ending in a dot, count as the same
+    address. A host name and its IP address (such as a Tailscale MagicDNS name) cannot be matched.
+    Two requests adding the same host at the same moment can no longer both succeed.
+  - **An SSH port move's undo says what it could not confirm,** proven on the test VPS. Closing
+    the firewall rule the move opened, and systemd's re-read of `ssh.socket`, are each tried once
+    more when the host does not confirm them, and named in the message if they still are not.
+    When the re-read is not confirmed, a running `ssh.socket` is no longer restarted: the test VPS
+    showed that restart re-opening the moved port with its firewall rule already closed. One that
+    has stopped (no SSH listening on any port) is still restarted, after one more re-read so it
+    does not come back on the moved port list, and the message says which. If SSH still cannot be
+    confirmed listening after the undo, the message no longer says "Your existing SSH still works":
+    it says SSH may not be listening on any port and gives the commands to run from the host's
+    console or another way in. A
+    restore whose answer was lost is run once more instead of being taken as done, unless the
+    panel host's helper is too old to run it twice safely; then it is reported as not confirmed.
+    When putting the old setting back cannot be
+    confirmed on a host that had no earlier panel SSH setting, the message no longer points at a
+    copy that does not exist. A `sshd -t` that gave no answer is no longer reported as sshd
+    rejecting the new setting.
+  - **A clean reboot can no longer be overlapped by other changes to its host.** While the host's
+    servers are being stopped for a reboot, scheduled-task changes and Run now, mods, GMod
+    content, Back up now, an install, deleting the host and an SSH port move are refused. A reboot
+    waits while an SSH port move, a mods install or removal, or a Run now that is starting is in
+    progress. Turning a server's Autostart on or off from Scheduled tasks after the reboot is
+    sent takes it out of the restore, as the Autostart switch does.
+  - **An SSH port move and Prepare & Secure no longer overlap on a host.** Each is refused while
+    the other runs: Prepare & Secure restarts SSH and may reboot the host.
+  - **Remote Servers keeps a host's last figures when a stats read fails,** dimmed and marked as
+    stale, instead of showing "?". Its Reachable / Checking / Unreachable badge now updates
+    without a reload.
+  - **The dashboard's tag filter follows tag changes.** Removing a tag from a server, or deleting
+    a tag that is being filtered on, now updates the list straight away.
+  - **The panel service counts as starting at boot only when it is enabled,** not when it is
+    enabled for this boot only, and the Service check says so.
+  - **The startup banner names the tailnet address the panel is bound to,** not the host's first
+    one.
+  - **NodeSource's signing key is written inside a private temporary folder** during install and
+    on remote hosts, never at a predictable path next to it. On a remote host, its temporary key
+    file is also removed when the temporary folder cannot be created.
+  - **The debug report reads the SSH ports from `ssh.socket` on hosts that use it,** as the host
+    page does, so it no longer reports the port in `sshd_config` after a port move.
+  - **Cancelling a clean reboot while it is starting says the reboot is already under way,**
+    instead of saying it has been sent.
+  - **An update check whose GitHub answer is not in the expected shape reads as unknown,**
+    instead of stopping the check with an error.
+  - **The Tailscale migration's reasons for stopping are translated.**
+  - **A settings change saved twice within the same moment is never read back stale.** The panel
+    could keep serving the earlier copy of `config.json` when both copies were the same size.
+  - **Tests.** The unit suite's guard on the machine's tailscale now also reads scripts named by
+    a path to stdin, scripts over 1 MiB, shells started from inside a script, lines continued
+    with a backslash, and byte-string commands, and it reads optional-value options as the tools
+    do. The installer's reboot path is now driven with stand-ins for every power command. Several
+    checks that could pass without checking their subject, or that left state behind, are fixed.
+    A test pattern that could take exponential time on some inputs, and a test stand-in that
+    overwrote its base class's attributes, are fixed (CodeQL).
+
 - **A twenty-second full review on 2026-10-22: fixes.** Every item below has a check that fails
   without its fix.
   - **An SSH port move is now one transaction with a single commit point,** proven on the test VPS.

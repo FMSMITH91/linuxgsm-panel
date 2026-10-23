@@ -50,9 +50,14 @@ class _Box123(_Box120):
 
 def _undo_validates123():
     got = {}
-    for case, box in (("restore lost, drop-in still the rejected one", _Box123(lost={("sshd-restore-dropin", 1)})),
-                      ("socket mode, restore lost", _Box123(socket=True, lost={("sshd-socket-restore", 1)})),
+    # Since review 1022c a restore whose answer was lost is run once more at once, so "may not have run"
+    # is both runs lost (part129 has one lost and the second confirmed).
+    for case, box in (("restore lost, drop-in still the rejected one",
+                       _Box123(lost={("sshd-restore-dropin", 1), ("sshd-restore-dropin", 2)})),
+                      ("socket mode, restore lost",
+                       _Box123(socket=True, lost={("sshd-socket-restore", 1), ("sshd-socket-restore", 2)})),
                       ("undo's validate cannot run", _Box123(lost={("sshd-restore-dropin", 1),
+                                                                   ("sshd-restore-dropin", 2),
                                                                    ("sshd-validate", 2)})),
                       ("restore ran, answer lost (control)", _Box123(blow={("sshd-restore-dropin", 1)}))):
         raised, dropin, restores, restarts, left = _move120(box)[:5]
@@ -60,10 +65,10 @@ def _undo_validates123():
     check("ssh port move: an undo whose restore may not have run (its answer lost, command_started) never "
           "restarts sshd onto a config `sshd -t` rejects or could not check (it stopped the serving daemon and "
           "none could start: a lockout); a restore that ran is still restarted onto, once (control)",
-          got == {"restore lost, drop-in still the rejected one": (True, False, 1, 0, False, 2),
-                  "socket mode, restore lost": (True, False, 1, 0, False, 2),
-                  "undo's validate cannot run": (True, False, 1, 0, False, 2),
-                  "restore ran, answer lost (control)": (True, True, 1, 1, False, 2)}, repr(got))
+          got == {"restore lost, drop-in still the rejected one": (False, False, 2, 0, False, 2),
+                  "socket mode, restore lost": (False, False, 2, 0, False, 2),
+                  "undo's validate cannot run": (False, False, 2, 0, False, 2),
+                  "restore ran, answer lost (control)": (False, True, 2, 1, False, 2)}, repr(got))
 
 
 # ── 2. change-port: an unset bind_host's default is still "already the binding" ──────────────────

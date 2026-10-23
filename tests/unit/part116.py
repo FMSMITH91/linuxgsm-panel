@@ -130,7 +130,7 @@ def _disable116(client):
         got[case] = (r.status_code, len(seen) - n0, str(_p9_json(r).get("message")))
     check("Tailscale Disable: refused while the panel is still bound to loopback and a public bind waits for "
           "the restart (the stored 0.0.0.0 let it remove the only way in)",
-          got["bound loopback"][:2] == (400, 0) and "restart" in str(got), repr(got))
+          got["bound loopback"][:2] == (400, 0) and "restart" in got["bound loopback"][2], repr(got))
     check("Tailscale Disable: ...and allowed when the panel really listens publicly, or nothing is recorded "
           "(control)", got["bound public"][1] == 1 and got["no boot record"][1] == 1, repr(got))
 
@@ -235,15 +235,23 @@ def _journal_models116():
     return out
 
 
+def _journal_in116(files, have):
+    """Are `files` one text, with no posture line, holding a journal line exactly when it was read (`have`)?"""
+    return (len(set(files.values())) == 1 and not any(_base116.POSTURE_RE.search(f) for f in files.values())
+            and all(("panel line 0" in f) == have for f in files.values()))
+
+
 def _report_journal116():
     out = _journal_models116()
     clock = __import__("re").compile(r"report generated \d\d:\d\d:\d\d")
     for have in (True, False):
         files = {m: clock.sub("", out[(m, have)][0]) for m in ("helper", "root", "unprivileged")}
+        # ...and the journal's lines are in it exactly when one was read (review 1022c: with every model's
+        # read failing, the three "Source: none" files were as equal, and the "journal read" case passed).
         check("debug report: the downloadable file's journal lines are the SAME whichever way the panel is "
               "privileged (%s): a root-run panel with no helper said 'system journal via root' and "
               "'(privileged read)'" % ("journal read" if have else "no journal readable"),
-              len(set(files.values())) == 1 and not any(_base116.POSTURE_RE.search(f) for f in files.values()),
+              _journal_in116(files, have),
               repr(files)[:900])
     pages = {m: out[(m, False)][1] for m in ("helper", "root", "unprivileged")}
     check("debug report: ...and which read was tried is on the page only, one per model",

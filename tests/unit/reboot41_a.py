@@ -1419,8 +1419,8 @@ def _cancel_stop_checks41():
     with _ps41._hr_lock:
         _ps41._host_reboots[r.id] = {"phase": "arming", "sent": _CLOCK41.time()}
     code, body = HR.cancel(r, None)
-    check("cancel after the reboot was sent: refused, saying so",
-          _all41(code == 409, "reboot has been sent" in body["message"]), repr(body))
+    check("cancel once the reboot is arming: refused, saying it is under way (by its 'sent' code)",
+          _all41(code == 409, body.get("error") == "sent", "already under way" in body["message"]), repr(body))
     with _ps41._hr_lock:
         _ps41._host_reboots.clear()
 

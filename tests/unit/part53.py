@@ -38,7 +38,7 @@ from types import SimpleNamespace as _NS53
 from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg,
-                         _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
+                         _p9_cfg_put, _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from panel.db.models import AuditLog, CustomCommand, Group, RemoteServer, User, db
 from panel.ops import backup as _bk53
@@ -412,11 +412,7 @@ finally:
             if _row is not None:
                 db.session.delete(_row)
         db.session.commit()
-    if _CFG53_SNAPSHOT is None:
-        if _P9_CFG_PATH.exists():
-            _P9_CFG_PATH.unlink()
-    else:
-        _P9_CFG_PATH.write_bytes(_CFG53_SNAPSHOT)
+    _p9_cfg_put(_CFG53_SNAPSHOT)
 check("part53: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP53_START, repr(_P9_TRIPPED[_TRIP53_START:][:6]))
 

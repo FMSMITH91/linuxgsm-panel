@@ -41,6 +41,8 @@ import os
 import re as _re37
 import secrets as _secrets37
 import string as _string37
+import subprocess as _sp37  # nosec B404 - this interpreter on a fixed script, no shell
+import sys
 
 from panel.ops import system_ops as _so37
 from unit.part01 import check
@@ -327,7 +329,45 @@ _DOUBLE_SHELL37 = {
 _WRAPPERS37 = {"_run_local": 0, "_run_via_ssh_cli": 1, "_run_via_paramiko": 1, "_exec_local_shell": 0}
 # The text before the quote ends in a SHELL's -c: `bash -c `, `sh -lc `, `su - x -c `. A flag that is
 # only spelled -c (`jq -c`, `tail -c`, `ls -c`) takes a word, and a quoted word is what the barrier is for.
-_DASH_C37 = _re37.compile(r"(?:\b(?:ba|da|k|z)?sh(?:\s+-[a-z]+)*|\b(?:su|runuser)\b[^;&|]*)\s+-[a-z]*c\s+$")
+# The shell's options as it reads them (review 1022c: only bare clusters ending in c were, so `bash -o
+# pipefail -c `, `bash --norc -c `, `sh -ce ` and `bash -c -- ` hid a new site): an `-o`/`-O` cluster's
+# value, a long option (--rcfile and --init-file with theirs), a cluster holding c anywhere, `--` after it,
+# and a `-co`/`-oc` cluster with the o's value before the script. Read one word at a time: a value never
+# starts with a dash or a plus, and the bare long option is never --rcfile or --init-file, so each word has
+# one reading (CodeQL py/redos, alert 1294: `--rcfile +A` read as the option with its value AND as a bare
+# long option and a flag cluster, so a run of them backtracked exponentially; _f6_dash_c_linear37).
+_DASH_C37_SRC = (
+    r"(?:\b(?:r?ba|da|k|mk|z)?sh(?:\s+(?:[-+][A-Za-z]*[oO]\s+[\w.][\w.-]*|--(?:rcfile|init-file)\s+[^\s+-]\S*"
+    r"|--(?!(?:rcfile|init-file)(?![\w-]))[a-z][a-z-]*|[-+][A-Za-z]+))*\s+(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?"
+    r"|-[A-Za-z]*(?:c[A-Za-z]*[oO]|[oO][A-Za-z]*c)[A-Za-z]*\s+[\w.][\w.-]*)"
+    r"|\b(?:su|runuser)\b[^;&|]*\s+-[a-z]*c)\s+$")
+_DASH_C37 = _re37.compile(_DASH_C37_SRC)
+# Words that each had (or could have) two readings, run 4000 times before no -c (the child below).
+_DASH_C37_SLOW = ("--rcfile +A ", "--init-file +x ", "-o +a ", "-o -o ", "--rcfile -x ", "+O +x ", "-eo x ",
+                  "--norc ")
+
+
+def _f6_dash_c_linear37(timeout=10):
+    """The -c reader against runs of option words, in a child with a time limit."""
+    code = "\n".join(["import json, re, sys", "R = re.compile(json.loads(sys.argv[1]))",
+                      "[R.search(s + w * 4000 + 'x') for s in ('bash ', 'sh ') for w in json.loads(sys.argv[2])]",
+                      "print(json.dumps([bool(R.search(c)) for c in json.loads(sys.argv[3])]))"])
+    rows = ["bash -o pipefail -c ", "bash --norc -c ", "sh -ce ", "bash -c -- ", "bash -co x ",
+            "bash --rcfile X -c ", "bash --init-file /x -c ", "jq -c ", "bash -o c x "]
+    try:
+        p = _sp37.run([sys.executable, "-c", code, _json37.dumps(_DASH_C37_SRC),  # nosec B603
+                       _json37.dumps(_DASH_C37_SLOW), _json37.dumps(rows)],
+                      capture_output=True, text=True, timeout=timeout, check=False)
+        answers = _json37.loads(p.stdout) if p.returncode == 0 else p.stderr[-300:]
+    except Exception as ex:  # noqa: BLE001 - TimeoutExpired, of whichever subprocess module ran it
+        if type(ex).__name__ != "TimeoutExpired":
+            raise
+        answers = "timed out after %ss" % timeout
+    check("codeql model pack: the double-shell scan's -c reader answers 4000 `--rcfile +A `, `-o +a ` or "
+          "`+O +x ` words at once in a child with a time limit (no exponential backtracking, CodeQL "
+          "py/redos), and still reads -o pipefail -c, --norc -c, -ce, -c --, -co x and --rcfile X -c, and "
+          "not jq -c or an option value that is only `c` (controls)",
+          answers == [True] * 7 + [False] * 2, repr(answers))
 
 
 def _entry_rows37(core):
@@ -458,13 +498,18 @@ def _f6_double_shell():
         "pct": 'import shlex\nT = {"v": lambda a: "setsid sh -c %s & echo %s" % (shlex.quote(a), 1)}\n',
         "add": 'import shlex\ndef b(c):\n    return "su - x -c " + shlex.quote(c) + " && true"\n',
         "word": 'def d(p, f):\n    return f"ls -c {_quote(p)} | jq -c {_quote(f)}" + "tail -c %s" % _quote(p)\n',
+        # review 1022c: past an option's value, a long option, c inside its cluster, `--` after it, `-co x`.
+        "opts": ('def e(c):\n    return (f"bash -o pipefail -c {_quote(c)}" + f"sh -ce {_quote(c)}"'
+                 ' + f"bash -c -- {_quote(c)}" + f"bash --norc -c {_quote(c)}" + f"zsh -co pipefail {_quote(c)}"'
+                 ' + f"bash -o pipefail {_quote(c)}")\n'),
     }
     got = {k: _double_shell_sites37(v, "p.py") for k, v in probes.items()}
     check("codeql model pack: (control) the scan finds a script quoted for `bash -c`, `sh -c` and "
-          "`su -c` in an f-string, a %-format inside a table and a concatenation, and not a quoted word "
-          "after another program's -c (jq, tail, ls)",
+          "`su -c` in an f-string, a %-format inside a table and a concatenation, past the shell's options "
+          "(-o pipefail, --norc, -ce, -c --, -co x), and not a quoted word after another program's -c (jq, "
+          "tail, ls) or a shell with no -c",
           got == {"f": {("p.py", "a"): 1}, "pct": {("p.py", "<module>[v]"): 1},
-                  "add": {("p.py", "b"): 1}, "word": {}}, repr(got))
+                  "add": {("p.py", "b"): 1}, "word": {}, "opts": {("p.py", "e"): 5}}, repr(got))
 
 
 def _wrapper_refs37(tree):
@@ -1207,6 +1252,7 @@ _ROWS37 = _f6_pack()
 _f6_shapes(_ROWS37)
 _f6_entry_points(_ROWS37)
 _f6_double_shell()
+_f6_dash_c_linear37()
 _f6_local_shell()
 _f6_reach()
 _PJ37, _LOCK37 = _vendor_json37("package.json"), _vendor_json37("package-lock.json")

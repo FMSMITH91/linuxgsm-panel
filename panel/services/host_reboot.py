@@ -45,7 +45,7 @@ from panel.core.config import _r15a_cfg_int, load_config
 from panel.core.panel_state import (_action_output, _expected_offline, _full_backup_lock,
                                     _host_reboots, _hr_lock, _install_jobs, _install_lock,
                                     _monitor_state, _reboot_awaiting, _reboot_when_empty, _rwe_lock,
-                                    register_remote_state)
+                                    r36j_route_jobs, register_remote_state)
 from panel.db.models import AuditLog, GameServer, RemoteServer, db, row_label
 from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
@@ -471,9 +471,13 @@ def _row_blockers(rows):
         if live:
             # One blocker for the server (the sentence names it once), every live action in it.
             out.append(_blocker("action", gs.name, ", ".join(a.get("action") or "" for a in live)))
-        if _content_running(gs.id):
-            out.append(_blocker("content", gs.name))
+        out.extend(_blocker(kind, gs.name) for kind in _r36j_route_jobs(gs.id))
     return out
+
+
+def _r36j_route_jobs(gid):
+    """A content install, mods install/remove or Run now the routes are running on server `gid`."""
+    return (["content"] if _content_running(gid) else []) + r36j_route_jobs(gid)
 
 
 def _q_live_actions(gid):
@@ -505,12 +509,10 @@ def _content_running(gid):
 
 
 def _host_blockers(remote):
-    out = []
-    from panel.routes._shared import _bootstrap_jobs, _bootstrap_lock
-    with _bootstrap_lock:
-        bj = _bootstrap_jobs.get(remote.id)
-    if bj and bj.get("status") in ("running", "rebooting"):
-        out.append(_blocker("bootstrap", _host_label(remote)))
+    # A bootstrap, and an SSH port move (a reboot sent inside one booted onto a drop-in nothing
+    # verified, with no undo): the routes' own jobs on the host (_shared._r36c_host_jobs).
+    from panel.routes._shared import _r36c_host_jobs
+    out = [_blocker(kind, _host_label(remote)) for kind in _r36c_host_jobs(remote.id)]
     for verb, kind in (("dpkg-lock-held", "dpkg"), ("apt-any-running", "apt")):
         try:
             _o, _e, rc = _sm.run_privileged(remote, verb, [], timeout=10, merge_stderr=False)
@@ -1023,8 +1025,11 @@ def cancel(remote, actor):
     if had:
         return 200, {"success": True, "pending": False, "message": "Auto-reboot canceled."}
     if job:
+        # "has been sent" was false for up to ARM_WAIT: `sent` is set when the job starts arming
+        # (the servers are down, the locks go back, then the reboot), so a Cancel lands here before
+        # the reboot command itself goes out, and an arming that fails is rolled back.
         return 409, {"success": False, "error": "sent",
-                     "message": "Too late to cancel: the reboot has been sent."}
+                     "message": "Too late to cancel: the reboot is already under way."}
     return 200, {"success": True, "pending": False, "message": "Nothing was scheduled."}
 
 

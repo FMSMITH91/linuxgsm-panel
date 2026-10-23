@@ -14,6 +14,11 @@
 
   function mp(){ return window.MOUNT || ''; }
 
+  // The dashboard's tag filter reads its truth from the rows' chips (dashboard.js rowHasEveryTag),
+  // so every repaint of them runs the filter pass again: a server whose tags changed went on
+  // showing under a filter it no longer matched, and "Select shown" ticked it for a bulk action.
+  function refilter(){ if (typeof window.filterServers === 'function') window.filterServers(); }
+
   // Whether a tag mutes alerts, from the authoritative /api/tags list when it has the tag.
   function tagMuted(tag){
     for (var i = 0; i < TAGS.length; i++){
@@ -135,6 +140,8 @@
             // Drop its chips from every row without a reload.
             document.querySelectorAll('.srv-tags .tag-chip[data-tag-id="' + tag.id + '"]')
               .forEach(function(el){ el.remove(); });
+            if (typeof window.dropTagFilter === 'function') window.dropTagFilter(tag.id);
+            else refilter();
             loadTags();
             if (window.toast) toast('Tag deleted', 'success');
           })
@@ -168,6 +175,7 @@
       if (holder){
         holder.textContent = '';
         TAGS.filter(function(t){ return have[t.id]; }).forEach(function(t){ holder.appendChild(chip(t)); });
+        refilter();
       }
       var body = document.createElement('div');
       TAGS.forEach(function(tag){
@@ -210,6 +218,7 @@
                 holder.textContent = '';
                 (d.tags || []).slice().sort(function(a, b){ return a.name.localeCompare(b.name); })
                   .forEach(function(t){ holder.appendChild(chip(t)); });
+                refilter();
               }
               loadTags();
               if (window.toast) toast('Tags saved', 'success');

@@ -503,6 +503,17 @@ def _register_game_backup(app):
         # A JSON boolean or a 400: bool("false") is True, so `{"force": "false"}` backed up over
         # the players-online prompt it asked to be stopped by.
         force = _r13b_json_flag(_json_body(), "force", False)
+        # Not while the panel is stopping this host's servers to reboot it, as the Backup action
+        # (server_detail._run_action) and the scheduled and queued runs (_shared._reboot_holds) are
+        # not: LinuxGSM's backup stops and starts the server, and one started after the reboot's
+        # census is never seen by it, so the reboot was sent under the archive. Nothing yields
+        # between this and the status the census reads (_backup_in_progress) being set below.
+        from panel.services import host_reboot as _hr
+        if _hr.reboot_busy(gs.remote_id):
+            _why = _hr.busy_message(gs.remote.display_name)
+            log_action(current_user, "game_backup", target=gs.name, detail="refused: %s" % _why,
+                       success=False, server=gs)
+            return jsonify({"success": False, "message": i18n.tr(_why)}), 409
         if _button_backup_running(server_id):
             # The maintenance menu's Backup is archiving it now, outside the lock below; a second
             # run would take that backup's lock for an orphan and archive the same files again.

@@ -26,7 +26,7 @@ from types import SimpleNamespace as _NS56
 from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (_p9_arm, P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg, _p9_client,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_so)
+                         _p9_cfg_put, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from panel.ops import backup as _bk56
 from panel.routes import remote_bootstrap as _rb56
@@ -147,11 +147,7 @@ try:
           _bad56 == [400, 400] and _rep56 == [], repr((_bad56, _rep56)))
 finally:
     _p9_restore_all()
-    if _CFG56_SNAPSHOT is None:
-        if _P9_CFG_PATH.exists():
-            _P9_CFG_PATH.unlink()
-    else:
-        _P9_CFG_PATH.write_bytes(_CFG56_SNAPSHOT)
+    _p9_cfg_put(_CFG56_SNAPSHOT)
 check("part56: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP56_START, repr(_P9_TRIPPED[_TRIP56_START:][:6]))
 

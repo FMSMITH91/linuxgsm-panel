@@ -17,7 +17,8 @@ import os
 import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, can_bind_address, canonical_host, password_problem, username_problem)
-from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
+from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error, r36j_commit,
+    r36j_host_claim)
 from panel.ops.serve_upkeep import (_remove_serve_leftovers, with_leftover_note)
 from app import (_bind_is_loopback, _current_lang, _log, _serve_scheme_now, _setup_open,
     _setup_owner_ok, _setup_ts_ok, _superadmin_exists, claim_setup, is_setup_complete,
@@ -517,31 +518,46 @@ def _setup_add_remote(state, data):
     elif refusal:
         flash(refusal, "danger")
     else:
+        _setup_test_and_store(state, data, RemoteServer(
+            name=name, host=host, port=ssh_port,
+            username=ssh_user, auth_method=auth_method,
+            auth_credential=encrypt_secret(credential),
+            sudo_enabled=sudo_enabled,
+            linuxgsm_user=lgsm_user,
+            is_online=True,
+        ), credential)
+
+
+def _setup_test_and_store(state, data, remote, credential):
+    """The wizard's new host `remote` (not yet stored): tested over SSH and stored, or why not, flashed.
+
+    Not another row's host (the same address AND SSH port): asked before anything connects, claimed
+    across the connection test, and asked again as the row is stored (remotes.r36j_host_claim).
+    """
+    host, ssh_port = remote.host, remote.port
+    with r36j_host_claim(host, ssh_port) as (same, claim):
+        if same:
+            flash(same, "danger")
+            return
         # Pinned with the row, from this login. The wizard makes no connection of its own after
         # this, so otherwise the first contact to pin from would be a background worker's.
         _seen_key = []
-        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
+        success, msg = ssh_test_connection(host, ssh_port, remote.username, remote.auth_method, credential,
                                            captured=_seen_key)
         if not success:
             flash(i18n.tr("Connection test failed: {why}", why=msg), "danger")
-        else:
-            remote = RemoteServer(
-                name=name, host=host, port=ssh_port,
-                username=ssh_user, auth_method=auth_method,
-                auth_credential=encrypt_secret(credential),
-                sudo_enabled=sudo_enabled,
-                linuxgsm_user=lgsm_user,
-                is_online=True,
-                last_seen=utcnow(),
-                host_key=_seen_key[0] if _seen_key else "",
-            )
-            db.session.add(remote)
-            db.session.commit()
-            _setup_log("add_remote", target=name, detail="%s@%s" % (ssh_user, host),
-                       remote=remote)
-            flash(i18n.tr("Remote '{name}' added successfully!", name=name), "success")
-            data["remote_added"] = True
-            state.data = json.dumps(data)
+            return
+        remote.last_seen = utcnow()
+        remote.host_key = _seen_key[0] if _seen_key else ""
+        same = r36j_commit(host, ssh_port, token=claim, row=remote)
+    if same:
+        flash(same, "danger")
+        return
+    _setup_log("add_remote", target=remote.name, detail="%s@%s" % (remote.username, host),
+               remote=remote)
+    flash(i18n.tr("Remote '{name}' added successfully!", name=remote.name), "success")
+    data["remote_added"] = True
+    state.data = json.dumps(data)
 
 
 def _finish_setup(state, data, cfg):

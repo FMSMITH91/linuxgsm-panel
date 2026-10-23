@@ -343,6 +343,9 @@ def _locked_write88(fn):
     finally:
         lock.release()
     t.join(10)
+    if t.is_alive():
+        # Still running past the wait: the part's stubs are restored under it next (review 1022c lead).
+        calls.append("thread still running")
     return during, list(calls)
 
 

@@ -64,6 +64,21 @@ _P9_CFG_PATH = _p9_cfg.CONFIG_FILE
 _P9_CFG_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 
 
+def _p9_cfg_put(snapshot):
+    """Put config.json back to `snapshot`'s bytes (None: no file), and drop load_config's cache.
+
+    The cache is keyed on the file's (inode, mtime, size), and this write is in place (the inode stays):
+    bytes of the same size written in the same timestamp tick as the copy it holds read as unchanged,
+    and the next part saw the stale config (review 1022c lead).
+    """
+    if snapshot is None:
+        if _P9_CFG_PATH.exists():
+            _P9_CFG_PATH.unlink()
+    else:
+        _P9_CFG_PATH.write_bytes(snapshot)
+    _p9_cfg._cfg_cache["key"] = None
+
+
 # ── deferred threads ────────────────────────────────────────────────────────────────────────────
 _p9_queue = []
 
@@ -3081,11 +3096,7 @@ finally:
         pass
     # Not swallowed (review 1011e): a config.json this cannot remove or restore is left for the
     # parts after it to read, so the failure is raised and the run says where.
-    if _P9_CFG_SNAPSHOT is None:
-        if _P9_CFG_PATH.exists():
-            _P9_CFG_PATH.unlink()
-    else:
-        _P9_CFG_PATH.write_bytes(_P9_CFG_SNAPSHOT)
+    _p9_cfg_put(_P9_CFG_SNAPSHOT)
 
 check("part12: no route under test reached a real transport (every host call was stubbed)",
       not _P9_TRIPPED, repr(_P9_TRIPPED[:6]))

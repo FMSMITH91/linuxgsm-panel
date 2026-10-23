@@ -677,6 +677,7 @@ def _e_gates():
         text, finds = _e_report()
     finally:
         _cfg33.CONFIG_FILE.write_bytes(good)
+        _cfg33._cfg_cache["key"] = None   # an in-place write keeps the inode: drop load_config's cache
     check("report: an unreadable config.json is said as such (the sweeps skip), never as every "
           "clock 'not started'", "config.json could not be read" in text
           and "clock not started" not in text
@@ -1168,4 +1169,5 @@ finally:
             _cfg33.CONFIG_FILE.unlink()
     else:
         _cfg33.CONFIG_FILE.write_bytes(_CFG33_SNAPSHOT)
+    _cfg33._cfg_cache["key"] = None
     _shutil33.rmtree(_T33, ignore_errors=True)

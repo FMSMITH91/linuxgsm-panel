@@ -29,6 +29,7 @@ from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_patch, _p9_restore_all
 from unit.part20 import _patch, _patched
 from unit.part51 import _Q51, _alloc51
 from unit.part118 import _DPKG118, _SIM118
+from unit.reboot41_a import _POWER_NAMES41
 import app as _app124  # noqa: E402
 from panel.core import terminal as _term124
 from panel.ops.ssh_manager import game as _game124
@@ -132,6 +133,16 @@ def _c0_columns124():
 
 
 # ── 3. install.sh's update path: "System updated" only when it was ───────────────────────────────
+# The block runs to its real `${UPG_SUDO} reboot` branch once game_sessions_running stops answering
+# (renamed, or a branch put before it): stand-ins for reboot, sleep and sudo, and reboot41_a's refusing
+# power commands first on PATH, as reboot41_a guards the same blocks (review 1022c: only the order of the
+# block's branches kept it from the machine's reboot). Each case asserts no reboot was asked for.
+_POWER124 = os.path.join(_TMP124, "power-refused")
+os.makedirs(_POWER124)
+for _pn124 in _POWER_NAMES41:
+    _standin124(os.path.join(_POWER124, _pn124), '#!/bin/sh\necho "REFUSED $(basename "$0") $*"\nexit 1\n')
+
+
 def _install_update124():
     text = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
     start = text.index('        if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get')
@@ -150,16 +161,18 @@ def _install_update124():
             "_r30a_apt_ni() { shift; case \" $* \" in *' full-upgrade '*) return %s;; esac; return 0; }\n"
             "apt-get() { echo 'Inst tzdata [1] (2 Ubuntu:24.04 [all])'; }\n"
             "game_sessions_running() { return 0; }\n"
+            "reboot() { echo REBOOTING; }\nsleep() { :; }\nsudo() { echo \"REFUSED sudo $*\"; return 1; }\n"
             "command() { return 0; }\nid() { echo 0; }\n%s\n"
             % (rc_up, block.replace("/var/run/reboot-required", flag)),
-            _env124(_TMP124, PANEL_NO_UPGRADE="0"))
+            _env124(_POWER124 + ":" + _TMP124, PANEL_NO_UPGRADE="0"))
         got[case] = (rc, "OK System updated" in out, "WARN The OS was not fully updated" in out,
-                     "WARN The update needs a reboot" in out, err[-200:])
+                     "WARN The update needs a reboot" in out, "REBOOTING" in out or "REFUSED" in out, err[-200:])
     check("install.sh: an update whose OS upgrade was refused says the OS was not fully updated, not "
-          "'System updated — no reboot required'; a pending reboot is still said, and a good run unchanged",
-          {k: v[:4] for k, v in got.items()}
-          == {"refused": (0, False, True, False), "ok": (0, True, False, False),
-              "refused, reboot pending": (0, False, False, True)}, repr(got))
+          "'System updated — no reboot required'; a pending reboot is still said, and a good run unchanged "
+          "(no case reaches a reboot)",
+          {k: v[:5] for k, v in got.items()}
+          == {"refused": (0, False, True, False, False), "ok": (0, True, False, False, False),
+              "refused, reboot pending": (0, False, False, True, False)}, repr(got))
 
 
 # ── 4. the remote keep: a preferences file not fully written is never used ───────────────────────

@@ -1,0 +1,7 @@
+{
+  "an SSH port change on {name}": "un changement du port SSH sur {name}",
+  "an SSH port change is running": "un changement du port SSH est en cours",
+  "Tailscale SSH did not work from here, so the migration stopped before changing anything: {why}": "Tailscale SSH n'a pas fonctionné depuis ici, la migration s'est donc arrêtée avant de modifier quoi que ce soit : {why}",
+  "These are the last figures read — the latest reading failed.": "Ce sont les derniers chiffres lus : la lecture la plus récente a échoué.",
+  "{name} already uses this address and SSH port. Two hosts there would be one machine under two names, and their actions would not wait for each other.": "{name} utilise déjà cette adresse et ce port SSH. Deux hôtes à cet endroit seraient une seule machine sous deux noms, et leurs actions ne s'attendraient pas les unes les autres."
+}

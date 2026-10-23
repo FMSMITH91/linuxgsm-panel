@@ -58,7 +58,7 @@ def register(app):
             return jsonify({"success": False, "message": i18n.tr(bad)}), 400
         started, msg = _begin_bootstrap(app, remote_id, opts, current_user.id)
         if not started:
-            return jsonify({"success": False, "message": msg}), 409
+            return jsonify({"success": False, "message": i18n.tr(msg)}), 409
         # Audited at KICK-OFF, like remote_os_update: the work runs in the background and the
         # response returns immediately, so waiting for completion would mean a host could be
         # hardened, given a new user and rebooted with nothing in the log until it finished — or

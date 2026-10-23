@@ -365,7 +365,9 @@ def _move_raise114():
         def _priv(server, verb, args=(), _c=case, **kw):
             sent.append((verb, list(args)))
             if verb == "ufw-status":     # the allow, once added, is there to read back
-                added = any(v == "ufw-allow-proto-port" for v, _a in sent)
+                # ...and gone once deleted (the undo's close reads it back, and retries one still there)
+                added = [v for v, _a in sent if v in ("ufw-allow-proto-port", "ufw-delete-allow-proto-port")][-1:] == [
+                    "ufw-allow-proto-port"]
                 return ufw0 + ("2022/tcp                   ALLOW IN    Anywhere\n" if added else ""), "", 0
             if verb == "listening-sockets":
                 if _c == "listing raises":

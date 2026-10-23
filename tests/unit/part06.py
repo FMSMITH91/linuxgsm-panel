@@ -12984,15 +12984,19 @@ check("self-update card: an installer the helper stopped at its timeout, or coul
 
 # ...and every git above read only the repository's own config. Read with a planted ~/.gitconfig and XDG
 # config (review 1022b: on CI's runner, which has neither, it was empty with the line at the top of this
-# part deleted, and passed): only the setting above keeps them out, on any machine.
+# part deleted, and passed), and a planted system config (review 1022c: with no /etc/gitconfig, as here and
+# on CI, the NOSYSTEM half could be deleted and this stayed green): only the setting above keeps them out,
+# on any machine.
 _r35d_home06 = _tempfile.mkdtemp(prefix="lgsm-unit-r35d-home06-")
 os.makedirs(os.path.join(_r35d_home06, "git"))
-for _r35d_f06 in (os.path.join(_r35d_home06, ".gitconfig"), os.path.join(_r35d_home06, "git", "config")):
+_r36d_sys06 = os.path.join(_r35d_home06, "sysconfig")
+for _r35d_f06 in (os.path.join(_r35d_home06, ".gitconfig"), os.path.join(_r35d_home06, "git", "config"), _r36d_sys06):
     with open(_r35d_f06, "w", encoding="utf-8") as _r35d_fh06:
         _r35d_fh06.write("[r35d]\n\tprobe = 1\n")
 _r34d_git_origins = sorted({_l.split("\t", 1)[0] for _l in _sp.run(
     ["git", "config", "--list", "--show-origin"], capture_output=True, text=True, cwd="/",
-    env=dict(os.environ, HOME=_r35d_home06, XDG_CONFIG_HOME=_r35d_home06)).stdout.splitlines()})
+    env=dict(os.environ, HOME=_r35d_home06, XDG_CONFIG_HOME=_r35d_home06,
+             GIT_CONFIG_SYSTEM=_r36d_sys06)).stdout.splitlines()})
 _shutil.rmtree(_r35d_home06, ignore_errors=True)
 check("part06: the git it runs reads no global or system config, as on CI's runner",
       _r34d_git_origins == [] or all(_o.startswith("command line:") for _o in _r34d_git_origins),

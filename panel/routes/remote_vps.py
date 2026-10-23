@@ -2,7 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-from flask import (jsonify, render_template, request, url_for)
+from flask import (current_app, jsonify, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (_r15a_cfg_int, load_config)
 from panel.core.panel_state import (_os_update_seen)
@@ -28,16 +28,18 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     accessible_remote_ids, can_access_remote, get_game,
     get_host_remote, get_remote, has_permission, log_action, permission_required, server_access_required)
 import collections
+import contextlib
 import threading
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r20a_unreachable_said,
                              _r22b_unreachable_or_generic, _unreachable)
-from panel.routes._shared import (_json_int, _r20b_audit_on_raise)
+from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock, _json_int, _r20b_audit_on_raise)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
 from panel.services import host_reboot as _hr
 from app import (_log, _os_update_born, _os_update_current, _os_update_note)
 from panel.routes.manage_servers import (withheld_game_ports)
+from panel.routes.remotes import (r36j_host_claim)
 
 
 # One SSH port change per host at a time. The move snapshots and restores ONE fixed drop-in path
@@ -498,6 +500,52 @@ def _register_ssh_settings(app):
         return jsonify({"success": success, "message": i18n.tr(msg)})
 
 
+def _r36c_move_refusal(remote, same):
+    """Why an SSH port move may not start (translated), or None. Asked under the move's lock.
+
+    `same` is _r36j_move_claim's answer: another row already is this host on the new port.
+    """
+    # Not while the panel is rebooting this host (as its OS update is not): the move restarts sshd
+    # under the plan's own SSH, and a reboot sent before its commit boots onto a drop-in nothing
+    # verified, with no undo. Under the lock, which a reboot's census reads (_shared._r36c_host_jobs):
+    # a reboot registered after this check finds the lock held.
+    if _hr.reboot_busy(remote.id):
+        return i18n.tr(_hr.busy_message(remote.display_name))
+    # Nor while a bootstrap runs on it: the bootstrap restarts sshd (its hardening) and may reboot the
+    # host, inside the move's window. Under the lock, which _begin_bootstrap reads (_r36j_move_running).
+    if _r36j_bootstrap_running(remote.id):
+        return i18n.tr("A bootstrap (Prepare & Secure) is running on {name}: it restarts SSH and may reboot "
+                       "the host. Change the SSH port once it has finished.", name=remote.display_name)
+    return same
+
+
+def _r36j_bootstrap_running(remote_id):
+    """Whether a VPS bootstrap is running (or rebooting) on the host, as _begin_bootstrap counts one."""
+    with _bootstrap_lock:
+        job = _bootstrap_jobs.get(remote_id)
+        return bool(job and job.get("status") in ("running", "rebooting"))
+
+
+def r36j_move_running(remote_id):
+    """Whether an SSH port move holds this host's lock (from its checks to its commit). For _begin_bootstrap."""
+    return remote_id in _ssh_port_locks and _ssh_port_locks[remote_id].locked()
+
+
+@contextlib.contextmanager
+def _r36j_move_claim(remote, new_port):
+    """Claim this host's address on the new port for the move (remotes.r36j_host_claim): yields the refusal.
+
+    The row is pointed at the new port once the move works (_r25b_store_moved_port, not for Tailscale
+    SSH): refused BEFORE the move when another row already is that host on that port, and claimed to
+    the store, so an add of that address and port cannot land in between.
+    """
+    if remote.auth_method == "tailscale":
+        yield None
+        return
+    with r36j_host_claim(remote.host, new_port, own_id=remote.id) as (why, _token):
+        yield why
+
+
 def _register_ssh_port(app):
     """SSH: move a host's sshd to a new port."""
     @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
@@ -528,19 +576,25 @@ def _register_ssh_port(app):
             return jsonify({"success": False,
                             "message": "An SSH port change is already running for this host."}), 409
         try:
-            # Read under the lock: a move still running elsewhere would change what sshd serves.
-            old = _r28b_old_ssh_port(remote)
-            try:
-                with _r20b_audit_on_raise("change_ssh_port", detail=f"{old} -> {new_port}",
-                                          target=remote.name, remote=remote):
-                    ok, msg = change_ssh_port(remote, new_port, bind)
-            except Exception:
-                # Inside the lock's try, so the finally still releases it. A host that is down is
-                # _unreachable's answer, and a connection lost mid-move says "it may have run"
-                # (its command_started code); anything else is the generic 500.
-                return _r22b_unreachable_or_generic("SSH port change failed")
-            if ok:
-                msg = _r25b_store_moved_port(remote, new_port, msg)
+            # A reboot or a bootstrap of the host, or another row already that host on the new port (under
+            # the lock, the address claimed to the port's store).
+            with _r36j_move_claim(remote, new_port) as _same:
+                _refused = _r36c_move_refusal(remote, _same)
+                if _refused:
+                    return jsonify({"success": False, "message": _refused}), 409
+                # Read under the lock: a move still running elsewhere would change what sshd serves.
+                old = _r28b_old_ssh_port(remote)
+                try:
+                    with _r20b_audit_on_raise("change_ssh_port", detail=f"{old} -> {new_port}",
+                                              target=remote.name, remote=remote):
+                        ok, msg = change_ssh_port(remote, new_port, bind)
+                except Exception:
+                    # Inside the lock's try, so the finally still releases it. A host that is down is
+                    # _unreachable's answer, and a connection lost mid-move says "it may have run"
+                    # (its command_started code); anything else is the generic 500.
+                    return _r22b_unreachable_or_generic("SSH port change failed")
+                if ok:
+                    msg = _r25b_store_moved_port(remote, new_port, msg)
         finally:
             lock.release()
         log_action(current_user, "change_ssh_port", target=remote.name,
@@ -851,6 +905,21 @@ def _register_game_ports(app):
             return _r22b_unreachable_or_generic("sync ports failed")
 
 
+def _r36c_reach(remote):
+    """The Reachable / Checking… / Unreachable badge's pair for this host: {reachable, probed}.
+
+    The SAME pair manage_remotes.html renders the badge from (the monitor's view of SSH
+    reachability, as the dashboard's metrics poll reports it), so the 15 s stats poll repaints the
+    badge to what a reload would show: it was drawn once and never updated, reading "Checking…"
+    long after the first check, and "Reachable" for a host that had died while the page was open.
+    """
+    probed = current_app.jinja_env.globals.get("host_probed") or (lambda _rid: True)
+    try:
+        return {"reachable": bool(remote.is_online), "probed": bool(probed(remote.id))}
+    except Exception:  # noqa: BLE001 - a row that cannot be read says nothing; the badge stays
+        return None
+
+
 def _register_host_stats(app):
     """Host stats: live usage and uptime."""
     @app.route("/api/remote/<int:remote_id>/live-stats")
@@ -872,16 +941,23 @@ def _register_host_stats(app):
             # it. Writing the same dict to the database was strictly worse than the thing the
             # helper declines to do: one unreachable poll replaced the row's last-known values
             # with "?" for good, which is what the card renders on the next load.
-            if stats.get("read_ok"):
-                try:
-                    remote.update_cached_stats(stats)
-                    db.session.commit()
-                except Exception:
-                    db.session.rollback()
-            return jsonify({"success": True, **stats})
+            if not stats.get("read_ok"):
+                # ...nor answer it as a reading. The tailscale and local transports return a lost
+                # command instead of raising, so a down host's placeholders went out as
+                # success:true and the Remote Servers card swapped its last good figures for
+                # "CPU: ?% · RAM: ?". A failed read is a failure, as a paramiko host's raise is.
+                return jsonify({"success": False, "unreachable": True,
+                                "reach": _r36c_reach(remote)}), 200
+            try:
+                remote.update_cached_stats(stats)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            return jsonify({"success": True, **stats, "reach": _r36c_reach(remote)})
         except Exception:
             # Unreachable host is expected — 200 with an error field, not a console 500.
-            return jsonify({"success": False, "error": _log_and_generic("remote live-stats failed")}), 200
+            return jsonify({"success": False, "error": _log_and_generic("remote live-stats failed"),
+                            "reach": _r36c_reach(remote)}), 200
 
     @app.route("/api/remote/<int:remote_id>/uptime")
     @login_required

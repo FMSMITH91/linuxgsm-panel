@@ -1305,12 +1305,14 @@ nodesource_setup() {
     case "${arch}" in amd64|arm64) ;; *) return 1 ;; esac   # the only two NodeSource builds
     command -v gpg >/dev/null 2>&1 || _r30a_apt_ni "${S}" install -y gnupg >/dev/null 2>&1 || true
     key="$(mktemp 2>/dev/null)" || return 1
+    # The dearmored key goes INSIDE this private directory: a name beside the mktemp file in /tmp
+    # ("${key}.gpg") could be planted first as a link that gpg, run as root, writes through.
     gh="$(mktemp -d 2>/dev/null)" || { rm -f "${key}"; return 1; }
     if curl --proto '=https' -fsSL --connect-timeout 15 --max-time 60 "${NODESOURCE_KEY_URL}" -o "${key}" 2>/dev/null \
         && nodesource_key_ok "${key}" \
-        && GNUPGHOME="${gh}" gpg --batch --yes --dearmor -o "${key}.gpg" "${key}" 2>/dev/null \
+        && GNUPGHOME="${gh}" gpg --batch --yes --dearmor -o "${gh}/key.gpg" "${key}" 2>/dev/null \
         && ${S} install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING}")" 2>/dev/null \
-        && ${S} install -m 0644 "${key}.gpg" "${NODESOURCE_KEYRING}" 2>/dev/null; then
+        && ${S} install -m 0644 "${gh}/key.gpg" "${NODESOURCE_KEYRING}" 2>/dev/null; then
         # The one-line nodesource.list an older setup script wrote would name the same repo twice.
         ${S} rm -f "$(dirname "${NODESOURCE_SOURCES}")/nodesource.list" 2>/dev/null || true
         if printf 'Types: deb\nURIs: https://deb.nodesource.com/node_%s.x\nSuites: nodistro\nComponents: main\nArchitectures: %s\nSigned-By: %s\n' \
@@ -1322,7 +1324,7 @@ nodesource_setup() {
             rc=0
         fi
     fi
-    rm -rf "${key}" "${key}.gpg" "${gh}"
+    rm -rf "${key}" "${gh}"
     return "${rc}"
 }
 

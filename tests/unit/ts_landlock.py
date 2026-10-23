@@ -245,7 +245,9 @@ def held(blocked):
 # directly in a directory on the way to the blocked binary is denied (the limit above), and shapes()
 # writes nothing, so the reader's checks and the child see the same text.
 _SOURCES = (("r29d-path-%s.sh", "PATH=%s:$PATH\n"), ("r30d-env-%s.sh", "T=tail\n"),
-            ("r31d-path-%s.sh", "PATH=%s:$PATH\n"), ("r35d-script-%s.sh", "tailscale version\n"))
+            ("r31d-path-%s.sh", "PATH=%s:$PATH\n"), ("r35d-script-%s.sh", "tailscale version\n"),
+            # A script past the size the reader reads, its tailscale after the cut (review 1022c).
+            ("r36d-big-%s.sh", "#" * (1 << 20) + "\ntailscale version\n"))
 # The planted tree (the child's working directory): the "machine's" binary, the directory a link to
 # it is found in, a part's own stand-in, the temp area the shapes get, and the mark a run leaves.
 _SYS, _LNK, _OWN, TMP, _MARK = "sys", "lnk", "own", "r31d-tmp", "ran"
@@ -514,7 +516,7 @@ def _shapes_1017a(d, ctl):
          {"shell": True}),
         ("run", (". %s; timeout 5 ${T}scale version" % _src,), {"shell": True}),
         ("run", (["sh", "-c", "source %s; timeout 5 ${T}scale version" % _src],), {})) + _shapes_1017b(d, ctl) \
-        + _shapes_1017c(d, ctl) + _shapes_1022a(d) + _shapes_1022b(d, ctl)
+        + _shapes_1017c(d, ctl) + _shapes_1022a(d) + _shapes_1022b(d, ctl) + _shapes_1022c(d, ctl)
 
 
 def _shapes_1017b(d, ctl):
@@ -645,6 +647,41 @@ def _shapes_1022b(d, ctl):
 def shapes_1022b(d, ctl):
     """The review-1022b shapes alone (each must reach the planted binary unblocked)."""
     return _with_env(_shapes_1022b(d, ctl))
+
+
+def _shapes_1022c(d, ctl):
+    """shapes(): the stdin-by-path, `bash - file`, over-size, nested-shell, continuation and bytes shapes (1022c).
+
+    Each reached the planted "machine's" binary in `d` past the readers: a script operand naming the shell's
+    stdin (`/dev/stdin`, `/dev/fd/0`, `/proc/self/fd/0`) read as no such file, `bash - file` read as reading
+    stdin, a script judged on its first MiB alone, a shell a script runs with no -c reading a file or its
+    stdin (`bash`, `sh -s`, `sh <file>`, `bash < <file>`, `exec sh <file>`, `env -S 'bash -s'`), a wrapper
+    joined to tailscale by a backslash-newline, and a script or word given as bytes.
+    """
+    _first = {"PATH": d + ":/usr/bin:/bin"}
+    _file = os.path.join(ctl, "r35d-script-%s.sh" % os.path.basename(d))
+    _big = os.path.join(ctl, "r36d-big-%s.sh" % os.path.basename(d))
+    _in = {"input": b"tailscale version\n", "env": _first}
+    _shapes = [("run", (_a,), _in) for _a in (
+        ["bash", "/dev/stdin"], ["sh", "/proc/self/fd/0"], ["bash", "/dev/fd/0"], ["bash", "-c", "bash"],
+        ["env", "-S", "bash -s"])]
+    _shapes += [("run", (_x,), {"shell": True, **_in}) for _x in ("bash", "sh -s")]
+    _shapes += [("run", (["bash", "-", _file],), {"input": b"true\n", "env": _first}),
+                ("run", (["bash", _big],), {"env": _first}),
+                ("run", (["sh", "-c", "exec sh %s" % _file],), {"env": _first}),
+                ("run", (["bash", "-c", "bash %s" % _file],), {"env": _first}),
+                ("run", (["bash", "-c", b"tailscale version"],), {"env": _first}),
+                ("run", (["bash", b"-c", "tailscale version"],), {"env": _first})]
+    _shapes += [("run", (_x,), {"shell": True, "env": _first}) for _x in (
+        "sh %s" % _file, "bash < %s" % _file, "PATH=$PATH; command \\\ntailscale version",
+        "PATH=$PATH; timeout 5 \\\n  tailscale version", "PATH=$PATH; com\\\nmand tailscale version",
+        b"tailscale version")]
+    return tuple(_shapes)
+
+
+def shapes_1022c(d, ctl):
+    """The review-1022c shapes alone (each must reach the planted binary unblocked)."""
+    return _with_env(_shapes_1022c(d, ctl))
 
 
 def _kernel_table(ctl):

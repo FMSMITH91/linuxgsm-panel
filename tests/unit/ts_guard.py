@@ -26,7 +26,14 @@ ARCH_FIRST = ("setarch",)
 # Long flags of a wrapper that another wrapper's table reads as taking a value (systemd-run's --user is
 # runuser's --user <name>): read as flags after that wrapper.
 LONG_FLAGS = {"systemd-run": ("--user", "--system", "--scope", "--wait", "--pty", "--pipe", "--quiet",
-                              "--verbose", "--collect", "--shell", "--same-dir", "--no-block")}
+                              "--verbose", "--collect", "--shell", "--same-dir", "--no-block"),
+              # ...and the util-linux ones whose value is optional (`--x[=value]`): only `--x=value` gives
+              # one, so `unshare --user tailscale` runs tailscale (review 1022c: read as --user's value).
+              "unshare": ("--user", "--pid"), "nsenter": ("--user", "--pid", "--root", "--wd"),
+              "prlimit": ("--nice",)}
+# Long options whose value is optional in one release and required in another (nsenter's --setuid and
+# --setgid, util-linux 2.40): read both ways, as an ambiguous prefix is.
+LONG_EITHER = frozenset(("--setuid", "--setgid"))
 # Wrappers that reset PATH for the command they run: it is found on the default PATH. systemd-run hands
 # the command to the service manager, which searches its own (review 1022b).
 PATH_RESETS = ("sudo", "doas", "runuser", "su", "systemd-run")
@@ -76,7 +83,10 @@ ARGV_ROWS = (
     ["numactl", "-i", "all", "tailscale"], ["strace", "-o", "/x", "tailscale"], ["ltrace", "-e", "x", "tailscale"],
     ["systemd-run", "--user", "tailscale"], ["systemd-run", "-u", "x", "tailscale"], ["fakeroot", "tailscale"],
     ["faketime", "@1", "tailscale"], ["setpriv", "--reuid", "1", "tailscale"], ["prlimit", "-n1", "tailscale"],
-    ["unshare", "-R", "tailscale", "x"], ["prlimit", "-p", "1"])
+    ["unshare", "--user", "tailscale"], ["nsenter", "--user", "tailscale"], ["nsenter", "--root", "tailscale"],
+    ["nsenter", "--wd", "tailscale"], ["unshare", "--pid", "tailscale"], ["prlimit", "--nice", "tailscale"],
+    ["nsenter", "--setuid", "tailscale"], ["nsenter", "--setuid", "0", "tailscale"],
+    ["unshare", "-R", "tailscale", "x"], ["prlimit", "-p", "1"], ["nsenter", "--root=tailscale", "x"])
 ZSH_CO_ROWS = (
     ["zsh", "-co", "pipefail", "tailscale"], ["zsh", "-oc", "pipefail", "tailscale"], ["zsh", "-co", "pipefail", "ls"])
 RESTRICTED_ROWS = (
