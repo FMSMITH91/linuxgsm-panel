@@ -79,12 +79,38 @@ function showAddRemote() {
   el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
+// The card's Reachable / Checking… / Unreachable badge, in the template's words (manage_remotes.html).
+// It was drawn once and never updated; the stats poll now carries the same pair the template
+// renders it from (`reach`), so the badge reads what a reload would.
+var _R36C_REACH = {
+  yes:     {cls: 'bg-success',   text: 'Reachable',   title: 'The panel can reach this host over SSH'},
+  no:      {cls: 'bg-danger',    text: 'Unreachable', title: 'The panel cannot reach this host over SSH'},
+  unknown: {cls: 'bg-secondary', text: 'Checking…',   title: 'The panel has not checked this host yet'}
+};
+function _r36c_paintReach(remoteId, h) {
+  var b = document.getElementById('remote-reach-' + remoteId);
+  // No pair (an older panel, an unreadable row): the badge keeps what it shows.
+  if (!b || !h) return;
+  var st = _R36C_REACH[h.reachable ? 'yes' : (h.probed ? 'no' : 'unknown')];
+  b.className = 'badge ' + st.cls + ' ms-2';
+  // textContent, not innerHTML: i18n.js's observer translates the new text and title itself.
+  b.textContent = st.text;
+  b.setAttribute('title', st.title);
+}
+// Figures kept from an earlier read are dimmed and say so, rather than passing for current ones.
+function _r36c_markStale(el, stale) {
+  el.classList.toggle('opacity-50', stale);
+  if (stale) el.setAttribute('title', 'These are the last figures read — the latest reading failed.');
+  else el.removeAttribute('title');
+}
+
 function loadLiveStats(remoteId) {
   var el = document.getElementById('live-stats-' + remoteId);
   if (!el) return;
   fetch(MOUNT + '/api/remote/' + remoteId + '/live-stats')
     .then(r => r.json())
     .then(data => {
+      _r36c_paintReach(remoteId, data.reach);
       if (data.success) {
         // escapeHtml, like renderTailscaleStatus above: every one
         // of these is raw output read off the REMOTE host — `uptime` is literally whatever
@@ -96,13 +122,17 @@ function loadLiveStats(remoteId) {
           + ' &middot; <i class="bi bi-hdd"></i> ' + escapeHtml(String(data.disk))
           + ' &middot; ' + escapeHtml(String(data.uptime));
         el.dataset.loaded = '1';
+        _r36c_markStale(el, false);
       } else if (el.dataset.loaded !== '1') {
         el.innerHTML = '<span class="text-danger">Stats unavailable</span>';
-      }  // else: keep the last good stats on a transient failure
+      } else {
+        _r36c_markStale(el, true);   // keep the last good stats on a failure, marked as such
+      }
     })
     .catch(function() {
       // A blip shouldn't wipe good numbers — only show "Offline" if we never loaded.
       if (el.dataset.loaded !== '1') el.innerHTML = '<span class="text-danger">Offline</span>';
+      else _r36c_markStale(el, true);
     });
 }
 

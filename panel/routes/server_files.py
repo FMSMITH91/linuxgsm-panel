@@ -29,7 +29,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
-from panel.services import (lgsm_data)
+from panel.services import (host_reboot as _hr, lgsm_data)
 from itertools import count, groupby
 import re
 import secrets
@@ -42,7 +42,7 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
 from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
-    register_server_state)
+    r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
     _r20b_audit_on_raise, game_account_write_refusal)
@@ -1082,12 +1082,14 @@ def _last_output_line(clean):
 
 def _run_mods_action(gs, which, mod_id):
     """Install or remove a mod, audit it, and say whether a restart is pending: the route's answer."""
+    refused = _r36c_reboot_refused(gs, "mods_%s" % which)   # not while the host is being rebooted
+    if refused is not None:
+        return refused
     with _r20b_audit_on_raise(f"mods_{which}", target=gs.name, server=gs):
         out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
     clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
-    log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:],
-               server=gs)
     ok = rc == 0
+    log_action(current_user, f"mods_{which}", target=gs.name, success=ok, detail=clean[-400:], server=gs)
     tail = _last_output_line(clean)
     said = [_r15e_mod_outcome(which, ok, tail[:200])]
     restart_pending = False
@@ -1458,6 +1460,12 @@ def _gmod_busy():
 
 def _gmod_uninstall_request(app, gs, remote, sel):
     """Start removing `sel` from the host, unless a content job already holds it."""
+    # Asked again here, where nothing yields before the job is marked running: the content scan
+    # above is SSH, and a reboot that registered during it runs its census after this point, so it
+    # either is refused or sees the job (host_reboot._content_running).
+    refused = _r36c_reboot_refused(gs, "gmod_content_uninstall")
+    if refused is not None:
+        return refused
     if not _claim_gmod_content_host(remote.id):
         return _gmod_busy()
     _bg_gmod_content_uninstall(app, gs.id, remote.id, gs.short_name, sel, row_birth(gs))
@@ -1479,6 +1487,9 @@ def _gmod_apply_request(app, gs, remote, sel):
             "Couldn't read this server's current mounts, so the panel won't rewrite them — "
             "applying now could unmount content the server already has. Check the host is "
             "reachable and reload this card.")}), 409
+    refused = _r36c_reboot_refused(gs, "gmod_content")     # as in _gmod_uninstall_request
+    if refused is not None:
+        return refused
     if not _claim_gmod_content_host(remote.id):
         return _gmod_busy()
     _bg_gmod_content_apply(app, gs.id, remote.id, gs.short_name, sel, row_birth(gs))
@@ -1508,6 +1519,22 @@ def _write_refused(gs, action, detail=""):
         return None
     log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),
                success=False, server=gs)
+    return jsonify({"success": False, "message": i18n.tr(why)}), 409
+
+
+def _r36c_reboot_refused(gs, action):
+    """A 409 (audited) while the panel is stopping gs's host's servers to reboot it, else None."""
+    # Every action that starts, stops or reconfigures a server there is refused meanwhile
+    # (host_reboot.reboot_busy): Run now on a `restart`/`update`/`monitor` line is a second starter
+    # on a server the plan has just stopped; a content download or a mods install started after the
+    # reboot's census is never seen by it, and the reboot cuts it off; and a cron write can take away
+    # the `monitor` line the plan read to decide who brings the server back — the line the Autostart
+    # switch already waits for (server_detail._autostart_reboot_gate).
+    if not _hr.reboot_busy(gs.remote_id):
+        return None
+    why = _hr.busy_message(gs.remote.display_name)
+    log_action(current_user, action, target=gs.name, detail="refused: %s" % why, success=False,
+               server=gs)
     return jsonify({"success": False, "message": i18n.tr(why)}), 409
 
 
@@ -1909,7 +1936,10 @@ def _register_mods(app):
                 i18n.tr("Pick a valid mod to remove.") if which == "remove" else
                 i18n.tr("Pick a valid mod to act on."))}), 400
         try:
-            return _run_mods_action(gs, which, mod_id)
+            # Registered as running for its whole run, from before its reboot refusal is asked, so a
+            # reboot's census sees it (panel_state.r36j_route_job).
+            with r36j_route_job(gs.id, "mods"):
+                return _run_mods_action(gs, which, mod_id)
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("mods action failed")}), 200
 
@@ -2384,7 +2414,7 @@ def _register_cron_jobs(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
-        refused = _write_refused(gs, "cron_add")
+        refused = _r36c_reboot_refused(gs, "cron_add") or _write_refused(gs, "cron_add")
         if refused is not None:
             return refused
         # Every field through _json_str. Read raw, a number or a dict was a 500 inside the writer
@@ -2415,7 +2445,7 @@ def _register_cron_jobs(app):
 
 def _r28b_cron_update(gs, data):
     """The cron/update route's work once access is checked: rewrite one task, then re-sync the switches."""
-    refused = _write_refused(gs, "cron_update")
+    refused = _r36c_reboot_refused(gs, "cron_update") or _write_refused(gs, "cron_update")
     if refused is not None:
         return refused
     schedule = _json_str(data, "schedule")      # as cron_add reads them
@@ -2446,9 +2476,15 @@ def _r21b_sync_after_cron_write(gs):
     """
     # Read before the try: the rollback below expires `gs`, and reloading it from a row deleted (or
     # replaced, RowReplaced) while the read-back ran raised out of this "never raises" except.
-    sid = gs.id
+    sid, was_autostart = gs.id, gs.autostart
     try:
         _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
+        # A write that turned Autostart on or off (read back from the crontab, so what it really did
+        # to the `monitor` line) is the second path to the Autostart switch: once a reboot of the
+        # host is sent, the operator's change wins and the server leaves its restore, as the switch
+        # does (server_detail._autostart_reboot_gate, host_reboot.exclude_row).
+        if gs.reboot_restore and bool(gs.autostart) != bool(was_autostart):
+            _hr.exclude_row(gs, current_user, "Autostart %s (Scheduled tasks)" % ("on" if gs.autostart else "off"))
     except Exception:  # noqa: BLE001 - best-effort, after the write and its audit row
         db.session.rollback()
         _log.warning("could not re-read the crontab after a change to server %s", sid, exc_info=True)
@@ -2464,7 +2500,7 @@ def _register_cron_actions(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         data = _json_body()
-        refused = _write_refused(gs, "cron_delete")
+        refused = _r36c_reboot_refused(gs, "cron_delete") or _write_refused(gs, "cron_delete")
         if refused is not None:
             return refused
         try:
@@ -2489,16 +2525,19 @@ def _register_cron_actions(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         raw = _json_str(_json_body(), "raw")        # as cron_add reads its fields
-        refused = _write_refused(gs, "cron_run_now")
-        if refused is not None:
-            return refused
-        try:
-            with _r20b_audit_on_raise("cron_run_now", target=gs.name, server=gs):
-                ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
-            log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
-            return jsonify({"success": ok, "message": i18n.tr(msg)})
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
+        # Registered while it starts, from before the reboot refusal (panel_state.r36j_route_job). The
+        # job then runs detached on the host; from there a reboot's probe sees its LinuxGSM command.
+        with r36j_route_job(gs.id, "cron"):
+            refused = _r36c_reboot_refused(gs, "cron_run_now") or _write_refused(gs, "cron_run_now")
+            if refused is not None:
+                return refused
+            try:
+                with _r20b_audit_on_raise("cron_run_now", target=gs.name, server=gs):
+                    ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
+                log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
+                return jsonify({"success": ok, "message": i18n.tr(msg)})
+            except Exception:
+                return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
 
 
 def _sf_gmod_missing(remote, sel):
@@ -2618,7 +2657,8 @@ def _register_gmod_content(app):
                 "names.")}), 400
         # Content is HOST-wide: removing it, or fetching what is not on the host yet, needs the
         # host (see _sf_gmod_host_refusal).
-        refused = _sf_gmod_host_refusal(gs, remote, action, sel)
+        refused = (_r36c_reboot_refused(gs, "gmod_content_uninstall" if action == "uninstall" else "gmod_content")
+                   or _sf_gmod_host_refusal(gs, remote, action, sel))
         if refused is not None:
             return refused
         if action == "uninstall":

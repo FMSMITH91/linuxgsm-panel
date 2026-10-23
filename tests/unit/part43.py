@@ -1314,7 +1314,7 @@ def _rv43_setup_username():
 def _rv43_migrate(admin, deleg):
     calls = []
     _p9_patch(_rts43, "remote_migrate_to_tailscale",
-              lambda remote: (calls.append(remote.id), ("prod-db.tail0000.ts.net",
+              lambda remote, **k: (calls.append(remote.id), ("prod-db.tail0000.ts.net",
                                                         {"tailscale_ip": "100.64.0.9", "dns_name": ""}))[1])
     _p9_patch(_rts43, "close_connection", lambda remote: None)
     before = _p9_host_row(P9_HOST)

@@ -309,7 +309,11 @@ try:
         _held97 = _fh97.read()
 finally:
     os.close(_lk97)                 # lets the child go
-_out97 = _child97.communicate(timeout=30)[0].strip() if _child97 is not None else None
+try:
+    _out97 = _child97.communicate(timeout=30)[0].strip() if _child97 is not None else None
+except _sp97.TimeoutExpired:
+    _child97.kill()                 # not left running past the part (review 1022c lead); fails below
+    _out97 = "timed out: %r" % (_child97.communicate()[0],)
 with open(_conf97, encoding="utf-8") as _fh97:
     _after97 = _fh97.read()
 check("panel-helper: panel.conf's read-change-replace waits for the lock another record holds, "

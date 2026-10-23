@@ -25,7 +25,7 @@ from types import SimpleNamespace as _NS59
 from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (_p9, _p9_arm, P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg,
-                         _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
+                         _p9_cfg_put, _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from unit.part56 import _flows56
 from panel.db.models import GameServer as _GS59, db as _db59
@@ -285,11 +285,7 @@ try:
           "persisted", _st59 == ("online", False) and _gsn59.status == "offline", repr((_st59, _gsn59)))
 finally:
     _p9_restore_all()
-    if _CFG59_SNAPSHOT is None:
-        if _P9_CFG_PATH.exists():
-            _P9_CFG_PATH.unlink()
-    else:
-        _P9_CFG_PATH.write_bytes(_CFG59_SNAPSHOT)
+    _p9_cfg_put(_CFG59_SNAPSHOT)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -538,7 +534,10 @@ check("i18n scan: ...while a body with per-request text spliced in is not claime
 # ── install.sh: a gamedig command left alone is not "could not be installed" ────────────────────
 _ig_run59 = getattr(_sys59.modules.get("unit.part06"), "_ig_run", None)
 if _ig_run59 is None:
-    skip("install.sh: gamedig installed with a link left alone", "part06's install_gamedig driver is not loaded")
+    # A failure, not a skip (review 1022c lead): part06 always runs before this part, so its driver gone
+    # means it was renamed, and the check below would otherwise stop being run at all.
+    check("install.sh: gamedig installed with a link left alone", False,
+          "part06's install_gamedig driver is not loaded")
 else:
     # part06's sandbox root is gone once part06 ends; this run gets its own.
     _p06_59 = _sys59.modules["unit.part06"]

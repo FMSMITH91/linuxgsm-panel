@@ -2955,6 +2955,7 @@ finally:
 import flask as _rv_flask  # noqa: E402
 import panel.routes.remote_vps as _rv  # noqa: E402
 import panel.security.auth as _rv_auth  # noqa: E402
+import contextlib as _rv_ctx  # noqa: E402
 from panel.core import panel_state as _rv_state  # noqa: E402
 
 _rv_app = _rv_flask.Flask("p8_remote_vps")
@@ -2970,7 +2971,7 @@ _RV_NAMES = ("current_user", "get_remote", "get_host_remote", "get_game", "GameS
              "remote_ufw_status", "remote_ufw_allow_game_port", "remote_ufw_allow_game_ports",
              "detect_game_ports", "remote_uptime", "remote_os_run_updates", "remote_os_update_start",
              "remote_reboot_required", "can_access_remote",
-             "has_permission", "host_specs", "_sm", "_hr")
+             "has_permission", "host_specs", "_sm", "_hr", "r36j_host_claim")
 _rv_saved = {n: getattr(_rv, n) for n in _RV_NAMES}
 _rv_auth_saved = {"current_user": _rv_auth.current_user}
 _rv_rwe_ids = []
@@ -2990,6 +2991,7 @@ class _RvUser:
 class _RvRemote:
     def __init__(self, rid, **kw):
         self.id, self.name, self.is_local = rid, "vps%d" % rid, False
+        self.host = "vps%d.example.test" % rid        # read by the SSH port move's same-host check
         self.port, self.auth_method, self.host_key, self.host_key_fingerprint = 22, "tailscale", "k", "SHA256:abc"
         self.cached = []
         self.__dict__.update(kw)
@@ -3033,6 +3035,8 @@ try:
         return r
     _rv.get_remote = lambda rid: _rv_remotes[rid]
     _rv.get_host_remote = lambda rid: _rv_remotes[rid]   # the panel-host refusal is rbac_test's
+    # This app has no host table, so the same-host claim answers "no other row"; part130 drives it.
+    _rv.r36j_host_claim = lambda *a, **k: _rv_ctx.nullcontext((None, None))
     _rv.GameServer = NS(query=_RvQuery(_rv_games))
     _rv.db = NS(session=NS(commit=lambda: _rv_db.__setitem__("commit", _rv_db["commit"] + 1),
                            rollback=lambda: _rv_db.__setitem__("rollback", _rv_db["rollback"] + 1)))
@@ -3260,21 +3264,22 @@ try:
     # Aikido 745379031. The stock "admin" group has install/manage/uninstall servers and NOT
     # manage remotes; INSTALL_SERVER let it write root-owned allow rules on a host's firewall, from
     # ports the game account's config decides — every other firewall write needs MANAGE_REMOTES.
-    from panel.security.auth import (INSTALL_SERVER as _p8_IS, MANAGE_REMOTES as _p8_MR,  # noqa: E402
-                                     MANAGE_SERVERS as _p8_MS, UNINSTALL_SERVER as _p8_US)
+    # Through _rv_auth (imported above): one import form per module (CodeQL py/import-and-import-from).
+    _p8_is, _p8_mr, _p8_ms, _p8_us = (_rv_auth.INSTALL_SERVER, _rv_auth.MANAGE_REMOTES, _rv_auth.MANAGE_SERVERS,
+                                      _rv_auth.UNINSTALL_SERVER)
     _gpo = []
     _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": _gs.port,
                                                          "open_ports": [_gs.port, 3306], "ports": []}
     _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
                                                                    (list(ports), "x"))[1]
     _rv.current_user = _RvUser(superadmin=False, name="delegated-admin")
-    _rv.has_permission = lambda u, p: p in (_p8_IS, _p8_MS, _p8_US)
+    _rv.has_permission = lambda u, p: p in (_p8_is, _p8_ms, _p8_us)
     _rv.can_access_remote = lambda u, rid: True
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     check("sync ports: the stock admin group (install/manage/uninstall servers, no MANAGE_REMOTES) "
           "is refused, and nothing reaches the firewall",
           _st == 403 and _gpo == [], "status=%r body=%r opened=%r" % (_st, _body, _gpo))
-    _rv.has_permission = lambda u, p: p == _p8_MR
+    _rv.has_permission = lambda u, p: p == _p8_mr
     _rv.can_access_remote = lambda u, rid: False
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     check("sync ports: MANAGE_REMOTES without THIS host in the user's groups is refused too",
@@ -3334,8 +3339,9 @@ try:
     # ── live stats: only a real reading is persisted ───────────────────────────────────────────
     _rv.remote_uptime = lambda remote: {"read_ok": True, "uptime": "3 days"}
     _st, _body = _rv_json(_rv_client.get("/api/remote/%d/live-stats" % _r.id))
+    # ("reach", the badge's pair, is part130's.)
     check("live stats: a reading is returned AND persisted to the row",
-          _body == {"success": True, "read_ok": True, "uptime": "3 days"}
+          {k: v for k, v in _body.items() if k != "reach"} == {"success": True, "read_ok": True, "uptime": "3 days"}
           and _r.cached == [{"read_ok": True, "uptime": "3 days"}], repr(_body))
     _r.cache_raises = True
     _rb0 = _rv_db["rollback"]

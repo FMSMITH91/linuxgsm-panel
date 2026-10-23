@@ -17,6 +17,16 @@ window.toggleTagFilter = function(tagId, btn){
   filterServers();
 };
 
+// A tag that no longer exists leaves the filter: deleting the tag the filter was on stripped its
+// chips from every row, and the next filter pass hid every server behind a button for a tag that
+// was gone. Called by server_tags.js's deleteTag; re-runs the filter pass.
+window.dropTagFilter = function(tagId){
+  var at = _tagFilter.indexOf(tagId);
+  if (at !== -1) _tagFilter.splice(at, 1);
+  document.querySelectorAll('.tag-filter[data-tag-id="' + tagId + '"]').forEach(function(b){ b.remove(); });
+  filterServers();
+};
+
 function rowHasEveryTag(tr){
   if (!_tagFilter.length) return true;
   var have = Array.prototype.map.call(tr.querySelectorAll('.tag-chip'),

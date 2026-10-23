@@ -737,6 +737,14 @@ def _r35d_scan35(body):
     return None, False
 
 
+def _r36d_if_for35(stmt):
+    """_r35d_stmt35's answer for an if or for: its branch's sleep, or past it when it only leaves or sets up."""
+    if _branch_sleep35(stmt) is not None:
+        return _branch_sleep35(stmt), True
+    _setup = not (_r35d_scan35(stmt.body)[1] or _r35d_scan35(stmt.orelse)[1])
+    return None, not (_r32d_guard_only35(stmt) or _setup)
+
+
 def _r35d_stmt35(stmt):
     """_r35d_scan35's answer for one statement: (delay, True) where the scan stops, (None, False) past it."""
     # The whole while body under the same rule, not its first statement alone: `while True: now
@@ -752,13 +760,15 @@ def _r35d_stmt35(stmt):
                             + list(getattr(stmt, "finalbody", [])))
     if isinstance(stmt, (_ast35.If, _ast35.For)):
         # A guard that only leaves (`if stop.is_set(): return`) is not work: the scan goes on past
-        # it (review 1017c lead: the sleep after such a guard read as no sleep at all).
-        if _branch_sleep35(stmt) is not None or not _r32d_guard_only35(stmt):
-            return _branch_sleep35(stmt), True
-        return None, False
+        # it (review 1017c lead: the sleep after such a guard read as no sleep at all). Nor is an if or
+        # for whose every branch only sets up, as a try's (review 1022c: `if not interval: interval = 60`
+        # before the sleep read as work, and the loop was asked for no record).
+        return _r36d_if_for35(stmt)
     if _call_name35(stmt) == "sleep":
         return (stmt.value.args[0] if stmt.value.args else None), True
-    return None, not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom))
+    # Setup: an assignment (augmented too), an import, a global or nonlocal declaration (review 1022c lead).
+    return None, not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.AugAssign, _ast35.Import,
+                                       _ast35.ImportFrom, _ast35.Global, _ast35.Nonlocal))
 
 
 _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src35 in (
@@ -786,13 +796,19 @@ _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src
     "while True:\n    with lock:\n        if stop:\n            return\n    time.sleep(5)\n",
     "while True:\n    try:\n        n = 1\n    finally:\n        done = True\n    time.sleep(5)\n",
     "while True:\n    try:\n        work()\n    except Exception:\n        pass\n    time.sleep(5)\n",
-    "while True:\n    try:\n        n = 1\n    finally:\n        work()\n    time.sleep(5)\n")]
+    "while True:\n    try:\n        n = 1\n    finally:\n        work()\n    time.sleep(5)\n",
+    # review 1022c: an if or for whose branches only set up, an augmented assignment and a global declaration
+    # go on to the sleep after them; an if with one branch that works does not (control).
+    "while True:\n    if not interval:\n        interval = 60\n    time.sleep(interval)\n",
+    "while True:\n    for k in d:\n        v = d[k]\n    time.sleep(5)\n",
+    "while True:\n    n += 1\n    time.sleep(5)\n", "global _X\nwhile True:\n    time.sleep(30)\n",
+    "while True:\n    if a:\n        n = 1\n    else:\n        work()\n    time.sleep(5)\n")]
 check("beating loops: a sleep after setup assignments heads a while body too (and a try or with "
       "block's, or an if or for that starts with one, or one past a guard that leaves, logging first or "
-      "down an elif chain, or past a try or with block that only sets up), and one after real work, an "
+      "down an elif chain, or past a try, with, if or for block that only sets up), and one after real work, an "
       "elif that works and falls through, or a try that works does not (control)",
       _r15d_fs_ctl35 == [True, True, False, True, True, False, True, True, True, False, True, False,
-                         True, True, False, False, True, True, True, False, False],
+                         True, True, False, False, True, True, True, False, False, True, True, True, True, False],
       repr(_r15d_fs_ctl35))
 
 

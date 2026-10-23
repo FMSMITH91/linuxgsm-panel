@@ -4695,6 +4695,7 @@ def _ca13_config(**over):
     cfg = dict(_cfgmod10.DEFAULT_CONFIG, setup_complete=True)
     cfg.update(over)
     _cfgmod10.CONFIG_FILE.write_text(_json10.dumps(cfg))
+    _cfgmod10._cfg_cache["key"] = None   # an in-place write keeps the inode: same size in one tick read as cached
 
 
 def _ca13_seed_rows(now):
@@ -5312,6 +5313,7 @@ def _ca13_teardown(apps, saved):
         _cfgmod10.CONFIG_FILE.unlink(missing_ok=True)
     else:
         _cfgmod10.CONFIG_FILE.write_bytes(_CA13_CFG_SNAP)
+    _cfgmod10._cfg_cache["key"] = None
     _shutil10.rmtree(str(_CA13_DIR.parent), ignore_errors=True)
 
 

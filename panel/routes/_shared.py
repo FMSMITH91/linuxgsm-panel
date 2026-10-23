@@ -51,10 +51,17 @@ def _begin_bootstrap(app, remote_id, opts, actor_id):
     Returns (started, message). Refuses if one is already running for this remote.
     """
     _prune_jobs(_bootstrap_jobs, _bootstrap_lock)
+    from panel.routes.remote_vps import r36j_move_running
     with _bootstrap_lock:
         existing = _bootstrap_jobs.get(remote_id)
         if existing and existing.get("status") in ("running", "rebooting"):
             return False, "A bootstrap is already running for this server."
+        # Not under an SSH port move: the bootstrap restarts sshd (its hardening) and may reboot the
+        # host, inside the move's window, onto a drop-in nothing verified. Read under this lock, which
+        # the move reads after taking its own (remote_vps._r36c_move_refusal): either order refuses one.
+        if r36j_move_running(remote_id):
+            return False, i18n.Sentence("An SSH port change is running on this host. Start the bootstrap "
+                                        "once it has finished.")
         job = _bootstrap_jobs[remote_id] = {
             "status": "running", "step": 0, "total": 0,
             "step_name": "Starting…", "log": [], "message": "",
@@ -694,6 +701,21 @@ def _run_due_game_backups(app):
                                           "scheduled_backup", "Scheduled backup failed")
     finally:
         _full_backup_lock.release()
+
+
+def _r36c_host_jobs(remote_id):
+    """The kinds of host-wide job the routes are running on this host that a reboot would cut off.
+
+    "bootstrap" while a VPS bootstrap runs; "ssh_port" while an SSH port move holds its lock, from
+    its first write to its commit (remote_vps._ssh_port_locks). For host_reboot's census.
+    """
+    from panel.routes.remote_vps import _ssh_port_locks
+    with _bootstrap_lock:
+        bj = _bootstrap_jobs.get(remote_id)
+    kinds = ["bootstrap"] if bj and bj.get("status") in ("running", "rebooting") else []
+    if remote_id in _ssh_port_locks and _ssh_port_locks[remote_id].locked():
+        kinds.append("ssh_port")
+    return kinds
 
 
 def _reboot_holds(gs):

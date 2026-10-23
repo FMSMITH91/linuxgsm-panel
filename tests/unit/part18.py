@@ -30,7 +30,7 @@ from flask import Flask as _Flask18
 from unit import idreuse_support as _reuse18
 from unit.part01 import check
 from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_app, _p9_auth,
-                         _p9_banlist, _p9_cfg, _p9_client, _p9_drain, _p9_fake_time, _p9_json, _p9_notif,
+                         _p9_banlist, _p9_cfg, _p9_cfg_put, _p9_client, _p9_drain, _p9_fake_time, _p9_json, _p9_notif,
                          _p9_patch, _p9_queue, _p9_restore_all, _p9_patch_sm, _p9_state, _p9_supervised,
                          _p9_threading, _p9_ts)
 import db_maintenance as _dbm18
@@ -325,11 +325,7 @@ def _delete_mine18():
 
 
 def _restore_config18():
-    if _CFG18_SNAPSHOT is None:
-        if _P9_CFG_PATH.exists():
-            _P9_CFG_PATH.unlink()
-    else:
-        _P9_CFG_PATH.write_bytes(_CFG18_SNAPSHOT)
+    _p9_cfg_put(_CFG18_SNAPSHOT)
 
 
 _NO_LOGIN18 = _p9_auth.hash_password(os.urandom(12).hex())   # a hash nobody holds the password of

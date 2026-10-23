@@ -1423,7 +1423,7 @@ def _check_tailscale_migrate_refuses_panel_host():
     _calls = []
     _saved = (_rts_mod.remote_migrate_to_tailscale, _rts_mod.remote_tailscale_finalize,
               _rts_mod.close_connection)
-    _rts_mod.remote_migrate_to_tailscale = lambda r: (
+    _rts_mod.remote_migrate_to_tailscale = lambda r, **k: (
         _calls.append(("migrate", r.id)) or ("100.64.0.9", {"tailscale_ip": "100.64.0.9"}))
     _rts_mod.remote_tailscale_finalize = lambda r: (
         _calls.append(("finalize", r.id)) or ({"running": True}, "tailscale0 allowed"))
@@ -4515,6 +4515,9 @@ _AX_ACTION_FROM_CALLER = {
                                 # root-capable account
     "_create_refused",          # server_files' create-path passes create_file / create_folder,
     "_create_answer",           # by the kind it was asked for
+    "_r36c_reboot_refused",     # server_files' cron, mods and GMod content POSTs pass cron_add /
+                                # cron_update / cron_delete / cron_run_now / mods_<which> /
+                                # gmod_content / gmod_content_uninstall — refused during a reboot
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)
@@ -4572,7 +4575,7 @@ for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROO
 # checked against models.AUDIT_SERVER_ACTIONS by nothing but this file's comment. Each of the four
 # writes its row with server=gs; a name passed through a local is read from that local's
 # assignments in the calling function.
-_AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer"}
+_AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer", "_r36c_reboot_refused"}
 _ax_passed = []
 for _f in sorted(pathlib.Path(_ROOT, "panel").rglob("*.py")):
     _tree = ast.parse(_f.read_text(encoding="utf-8"))

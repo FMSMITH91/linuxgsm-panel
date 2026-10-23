@@ -322,6 +322,16 @@ def _tree89():
     os.symlink("data/big.cfg", os.path.join(_HOME89, "big.cfg"))
 
 
+def _staged89():
+    """Every `.paneltmp` left anywhere in the home, by its path under it.
+
+    A write stages beside its RESOLVED target, which for the console's log is log/console/ (review 1022c:
+    only the home's top level was listed, where none lands).
+    """
+    return sorted(os.path.relpath(os.path.join(_dp, _n), _HOME89) for _dp, _ds, _fs in os.walk(_HOME89)
+                  for _n in _fs if _n.endswith(".paneltmp"))
+
+
 def _console_writes89():
     _p9_patch(_p9_core, "shell_as_game_user", _fshell89)
     _tree89()
@@ -343,8 +353,8 @@ def _console_writes89():
           "one-shot or chunked — is refused, and the log keeps its inode and its text (a rename over "
           "it gave it a new inode, and tmux went on writing to the old one)",
           all(v == (False, want) for v in got.values()) and os.stat(log).st_ino == ino
-          and body == b"line 1\n" and not [n for n in os.listdir(_HOME89) if n.endswith(".paneltmp")],
-          repr((got, body, os.listdir(_HOME89))))
+          and body == b"line 1\n" and not _staged89(),
+          repr((got, body, _staged89())))
     ok = _files89.write_file(NS(), "p89u", "log/console/other.log", "new\n", selfname="p89srv")
     with open(os.path.join(_HOME89, "log/console/other.log"), "rb") as fh:
         other = fh.read()

@@ -661,8 +661,33 @@ def _r22a_hits(rule, ports):
     return {(p, got[1]) for p in ports if any(lo <= p <= hi for lo, hi in got[0])}
 
 
+# What systemd reports for ssh.socket (hosts._R26B_SOCKET_SHOW, as an argv): unprivileged, and in
+# the C locale (_debug_run's environment), like every read parsed by its words.
+_R36A_SOCKET_ARGV = ("systemctl", "show", "ssh.socket", "-p", "ActiveState", "-p", "Listen")
+
+
+def _r36a_socket_ports():
+    """ssh.socket's TCP ports while it is the active listener, as strings; None otherwise or unread."""
+    from panel.ops.ssh_manager import hosts as _smh     # lazy: the host page's own parser
+    out, _err, rc = so._debug_run(list(_R36A_SOCKET_ARGV))
+    return _smh._r26b_listen_ports(out) if rc == 0 else None
+
+
 def sshd_ports_read():
-    """The ports sshd serves on (its effective config, `sshd -T`), or None when not read."""
+    """The ports sshd serves on, or None when not read.
+
+    ssh.socket's while that unit holds the listening socket, else sshd's effective config's
+    (`sshd -T`). Only `sshd -T` was read. Under socket activation (Ubuntu 22.10+) it prints sshd_config's Port,
+    which systemd ignores: after the panel's own Change SSH port moved sshd to 2222, "Ways in" read
+    "SSH: no rule (on sshd's own ports)" with 2222 allowed from Anywhere. The host page's reader
+    (hosts._sshd_current_ports) replaces `sshd -T` with the socket's list the same way.
+    """
+    sock = _r36a_socket_ports()
+    return sorted({int(p) for p in sock}) if sock else _r36a_sshd_t_ports()
+
+
+def _r36a_sshd_t_ports():
+    """The Port lines of `sshd -T`, as sorted ints, or None when not read."""
     got = priv_read("sshd-effective-config", [], UFW_TIMEOUT)
     if got is None or got[2] != 0:
         return None

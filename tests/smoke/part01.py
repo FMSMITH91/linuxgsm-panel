@@ -83,7 +83,9 @@ _cfg["setup_complete"] = True
 #
 # Nothing here asserts on how LONG a host takes to be unreachable, only that it is — so 1s (the
 # floor _ssh_connect_timeout() clamps to) buys the identical outcome. Set before the app loads,
-# beside setup_complete, because the background watchers start inside create_app().
+# beside setup_complete: the synchronous checks and create_app()'s own supervised tickers (the console
+# poller, due actions, install reconcile) read it. The monitor and player-count watchers start only under
+# app.py's __main__ (review 1022c: this said every background watcher starts inside create_app()).
 _cfg["ssh_timeout"] = 1
 save_config(_cfg)
 

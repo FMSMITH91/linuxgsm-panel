@@ -50,6 +50,8 @@ __all__ = [
     "remote_keyed_state",
     "keyed_state_with_locks",
     "forget_rows",
+    "r36j_route_job",
+    "r36j_route_jobs",
 ]
 
 
@@ -302,3 +304,34 @@ _game_backup_status = register_server_state({})
 # os_updates._os_update_seeds). The INSERT now forgets it, as it forgets the rest.
 # "hosts": remote.id -> (count, security_count)
 _os_update_state = {"last_run": 0.0, "hosts": register_remote_state({})}
+
+# A mods install or remove (synchronous, up to 600 s) and a Scheduled tasks > Run now, by server id while
+# their request runs: [kind, ...]. A clean reboot's census reads it (host_reboot._row_blockers) as it
+# reads a running install, backup or LinuxGSM action: a reboot requested while one ran passed the
+# census, stopped the server and rebooted under the mods install. Entered BEFORE the reboot refusal is
+# asked, so a reboot registered after that answer finds the entry (the SSH port move's order). Each
+# entry is removed when its block ends, so nothing outlives the request to be inherited by a reused id.
+_r36j_jobs_lock = threading.Lock()
+_r36j_jobs = {}
+
+
+@contextlib.contextmanager
+def r36j_route_job(gid, kind):
+    """Register `kind` ("mods", "cron") as running on server `gid` for the block; let go on every exit path."""
+    with _r36j_jobs_lock:
+        _r36j_jobs.setdefault(gid, []).append(kind)
+    try:
+        yield
+    finally:
+        with _r36j_jobs_lock:
+            kinds = _r36j_jobs.get(gid) or []
+            if kind in kinds:
+                kinds.remove(kind)
+            if not kinds:
+                _r36j_jobs.pop(gid, None)
+
+
+def r36j_route_jobs(gid):
+    """The kinds r36j_route_job has registered on server `gid` now, each once (for the reboot census)."""
+    with _r36j_jobs_lock:
+        return sorted(set(_r36j_jobs.get(gid) or ()))

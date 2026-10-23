@@ -3036,7 +3036,7 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
         return False, "Tailscale installed but not running after auth", "\n".join(log)
 
 
-def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
+def remote_migrate_to_tailscale(server, new_auth_method="tailscale", refuse=None):
     """After Tailscale is bootstrapped on a remote, update the local RemoteServer
     record to use Tailscale SSH instead of raw SSH. Also closes port 22 on UFW
     since we've verified the tailscale0 interface is allowed.
@@ -3055,6 +3055,12 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     # way back, and the panel reported "Migrated to Tailscale SSH: <old host>".
     new_host = status["dns_name"] or (status["tailscale_ip"].split(", ")[0]
                                       if status["tailscale_ip"] else server.host)
+    # The caller's say on the address before anything on the host changes (the public port 22 rule
+    # is deleted below): `refuse(new_host)` -> why the record may not move there, or None. The
+    # route refuses an address another host row already uses (remotes.r36c_same_host_refusal).
+    why = refuse(new_host) if refuse is not None else None
+    if why:
+        return None, why
 
     # Do not burn the bridge until the new one carries weight.
     #
@@ -3073,8 +3079,10 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     _login_ok, _login_msg = ssh_test_connection(new_host, 22, server.username,
                                                 auth_method="tailscale")
     if not _login_ok:
-        return None, ("Tailscale SSH did not work from here, so the migration stopped before "
-                      "changing anything: %s" % _login_msg)
+        # A Sentence, so the route can show it whole in the viewer's language: %-spliced, the
+        # English matched no catalog key and es/fr viewers read it in English.
+        return None, i18n.Sentence("Tailscale SSH did not work from here, so the migration stopped "
+                                   "before changing anything: {why}", why=_login_msg)
 
     # Verified: the tailnet really is a way in. NOW the public door can close.
     try:
@@ -3945,14 +3953,17 @@ def _r28j_open_unconfirmed(server, port, added):
     after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     if arc == 0 and _r22b_ssh_port_reading(after, port)[0]:
         return None
-    _r25b_close_added_ssh_rule(server, port, added)
-    return _r28j_not_opened(port)
+    return _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
 
 
-def _r28j_not_opened(port):
-    """The refusal when the firewall does not show `port`/tcp open after the panel opened it."""
-    return i18n.Sentence("The firewall did not show port {port}/tcp open after the panel opened it, so SSH moved "
-                         "there could be unreachable. Nothing was changed.", port=port)
+def _r28j_not_opened(port, closed=True):
+    """The refusal when the firewall does not show `port`/tcp open after the panel opened it.
+
+    `closed`: whether the allow the panel added was confirmed removed (_r36b_close_confirmed).
+    """
+    return i18n.Sentences(i18n.Sentence("The firewall did not show port {port}/tcp open after the panel opened it, "
+                                        "so SSH moved there could be unreachable. Nothing was changed.", port=port),
+                          "" if closed else _r36b_rule_left_note(port))
 
 
 def _r26j_blocked(port, rule):
@@ -4022,8 +4033,7 @@ def _r26j_inactive_open(server, port):
         # Re-read: a stored rule that is not there shuts the port the moment UFW is enabled.
         out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
         if not _r26j_stored_reading(out if rc == 0 else "", port)[0]:
-            _r25b_close_added_ssh_rule(server, port, added)
-            return False, _r28j_not_opened(port)
+            return False, _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
     return added, None
 
 
@@ -4062,14 +4072,50 @@ _R25B_V4_ADDED = "v4-only"
 
 
 def _r25b_close_added_ssh_rule(server, port, added):
-    """Remove the rule _open_ssh_port_rule added for `port` (its `added`), and nothing else."""
+    """Remove the rule _open_ssh_port_rule added for `port` (its `added`), and nothing else.
+
+    -> True when it is gone (or there was none to remove), False when that was not confirmed: a
+    Tailscale or local transport answers a lost command -1 rather than raising, and the result used
+    to be dropped, so a failed close left a public allow for a port nothing serves under "nothing
+    changed".
+    """
     if added == _R25B_V4_ADDED:
         with _core.ufw_lock(server):
-            _core.run_privileged(server, "ufw-delete-allow-from-port",
-                                 [_R25B_V4_ANYWHERE, str(port), "tcp"], timeout=15)
-    elif added:
+            return _rc_of(_core.run_privileged(server, "ufw-delete-allow-from-port",
+                                               [_R25B_V4_ANYWHERE, str(port), "tcp"], timeout=15)) == 0
+    if added:
         # force: the rule step 1 added, for a port sshd may already be listening on.
-        remote_ufw_close_port(server, port, "tcp", force=True)
+        return bool(remote_ufw_close_port(server, port, "tcp", force=True)[0])
+    return True
+
+
+def _r36b_close_confirmed(server, port, added):
+    """_r25b_close_added_ssh_rule, run once more when it was not confirmed. -> True when the rule is gone.
+
+    Safe to repeat: each close is a by-spec `ufw delete` of the one rule step 1 put in, and ufw
+    exits 0 removing nothing when that rule is already gone. The first close's raise goes on (the
+    undo wrapper still owes it); the second's is logged, as an unconfirmed close.
+    """
+    if _r25b_close_added_ssh_rule(server, port, added):
+        return True
+    _core._log.warning("ssh port move: closing the port %s/tcp allow it added on %s was not confirmed; trying "
+                       "once more", int(port), _r34j_log_name(server))
+    try:
+        if _r25b_close_added_ssh_rule(server, port, added):
+            return True
+    except Exception:
+        _core._log.warning("ssh port move: the second close of port %s/tcp on %s failed", int(port),
+                           _r34j_log_name(server), exc_info=True)
+    _core._log.warning("ssh port move: the port %s/tcp allow it added on %s may still be in UFW", int(port),
+                       _r34j_log_name(server))
+    return False
+
+
+def _r36b_rule_left_note(port):
+    """Said after a failure the move undid, when the allow step 1 added could not be confirmed removed."""
+    return i18n.Sentence("One thing may not have been undone: the firewall rule this change opened for port "
+                         "{port}/tcp could not be confirmed removed — remove it from the Firewall page if it is "
+                         "still there.", port=port)
 
 
 # Every IPv6 source, as _R25B_V4_ANYWHERE is every IPv4 one: `allow from ::/0` is an IPv6-only rule
@@ -4149,8 +4195,12 @@ def _r26j_remote_has_ip(server, addr):
 #   2a snapshot the drop-in           no         the allow. No restore: no snapshot is   restore, reload (socket),
 #                                                known to exist (rc 0 only). Refused     relisten
 #                                                (R35J_SNAPSHOT_HELD) while a snapshot
-#                                                is there and `sshd -t` rejects the
-#                                                live config: it may be the good copy
+#                                                is there that DIFFERS from the drop-in,
+#                                                whatever `sshd -t` says: an earlier move
+#                                                did not finish, and it may be the good
+#                                                copy. Its rc 0 says whether a drop-in
+#                                                was there (R36B_SNAP_*), for _revert's
+#                                                unconfirmed-restore message
 #   2b write the new drop-in          no         restore, reload, the allow; a failed    -
 #                                                write (rc) no restart, as nothing read it
 #   2c daemon-reload (socket)         no         restore, reload, the allow, restart     -
@@ -4160,19 +4210,28 @@ def _r26j_remote_has_ip(server, addr):
 #      held by sshd
 #   C  COMMIT                         YES        -                                       nothing, for good
 #   7  fail2ban repointed             yes        never: its outcome is in the message
-#   8  snapshot discarded             yes        never: logged. A snapshot left behind is harmless: the next
-#                                                move's 2a replaces it, or removes it when there is no drop-in
+#   8  snapshot discarded             yes        never: tried once more when not 0. A snapshot left behind
+#                                                differs from the new drop-in, so the next move's 2a refuses
+#                                                until it is deleted; the success message says so
 #   9  the route stores the port      yes        (routes/remote_vps.py, only on success)
 #
 # Each part of an undo runs at most once in effect, whoever runs it (_revert for a failure the move
 # saw, the wrapper for a step that raised), in this order: restore, reload, close the allow, restart.
-#   * The restore copies the snapshot back and keeps it, so a second run is the first again. Retired
-#     once it may have run (it returned, or raised after its command went out); one that never reached
-#     the host stays owed, and the wrapper's single retry puts the snapshot back (_r34b_restore_once).
-#     One that answered but not 0 is run once more at once; still unconfirmed, _revert says so and
+#   * The restore copies the snapshot back and keeps it, so a second run is the first again. One that
+#     never reached the host stays owed, and the wrapper's single retry puts the snapshot back
+#     (_r34b_restore_once). One that answered but not 0, or raised after its command went out (its
+#     answer lost), is run once more at once and then retired; still unconfirmed, _revert says so and
 #     names the file (never "nothing changed"), the snapshot stays, and 2a above keeps it.
 #   * The reload, the close and the restart are idempotent: retired once they returned, so one that
-#     raised is tried once more by the wrapper.
+#     raised is tried once more by the wrapper. A reload that answered but not 0 is run once more at
+#     once; still not (or still owed after a raise), the restart is skipped, as systemd may still hold
+#     the moved socket unit, and _revert adds that it may not have re-read it. A restart that is not
+#     confirmed (not 0, -1, a raise; it already falls back from `ssh` to `sshd`) may leave nothing
+#     listening on any port, so _revert's first sentence says that and how to recover in place of
+#     "Your existing SSH still works".
+#   * The close (a by-spec `ufw delete`: ufw exits 0 removing nothing once the rule is gone) that
+#     answered but was not confirmed is run once more at once; still not, _revert adds that the rule
+#     may be left and names its port (_r36b_rule_left_note). Step 1's own refusals do the same.
 #   * The restart only onto a config `sshd -t` accepts (_r34j_sshd_config_ok): a restore can have been
 #     retired without having run, and a restart stops the serving daemon before it starts a new one.
 # Per greenlet (each request runs in its own), so two moves on two hosts never share one record.
@@ -4231,15 +4290,58 @@ def _r35b_unwind(server, undo, quiet=False):
                                _r34j_log_name(server), exc_info=True)
 
 
+def _r36b_left(undo, note):
+    """Record that a part of the undo returned without being confirmed: _revert adds `note` to its answer.
+
+    Each part used to be retired however it answered, and a transport that answers a lost command -1
+    rather than raising (Tailscale, local) left the move half-undone under "nothing changed".
+    """
+    undo.setdefault("left", []).append(note)
+
+
 def _r35b_undo_reload(server, undo):
-    """Socket-activated: systemd re-reads the unit once its drop-in is back. Idempotent: retired once it returned."""
-    _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
+    """Socket-activated: systemd re-reads the unit once its drop-in is back. Idempotent: retired once it returned.
+
+    Not 0 is tried once more; still not, systemd may hold the moved socket unit in memory, so the
+    restart below is skipped (`reload_unconfirmed`) while ssh.socket is active, and _revert says so.
+    That restart re-opened the moved port's listener when the undo had already closed its firewall
+    rule. A socket that is not active is restarted all the same, after one more reload
+    (_r35b_undo_relisten): a restart without one rebinds the moved list systemd still holds.
+    """
+    for _ in range(2):
+        if _rc_of(_core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)) == 0:
+            break
+    else:
+        _core._log.warning("ssh port move: systemd's re-read of ssh.socket on %s after the undo was not confirmed",
+                           _r34j_log_name(server))
+        undo["reload_unconfirmed"] = True
+        if not undo.get("relisten"):
+            # Nothing restarts it after this (the undo's restart is not owed): said here. When it is
+            # owed, _r35b_undo_relisten says which way it went.
+            _r36b_left(undo, _R36J_NOT_RESTARTED)
     undo.pop("reload", None)
 
 
+_R36J_NOT_RESTARTED = i18n.Sentence("One thing may not have been undone: systemd could not be confirmed to have "
+                                    "re-read ssh.socket after the change was undone, so ssh.socket was not "
+                                    "restarted — run `systemctl daemon-reload` on the host, then restart "
+                                    "ssh.socket.")
+_R36J_RESTARTED = i18n.Sentence("One thing may not have been undone: systemd could not be confirmed to have "
+                                "re-read ssh.socket after the change was undone, and ssh.socket was not "
+                                "confirmed to be listening, so it was restarted and may listen on the new "
+                                "port too — run "
+                                "`systemctl daemon-reload` on the host, then restart ssh.socket.")
+
+
 def _r35b_undo_close(server, undo):
-    """Close the allow step 1 added, and nothing else. Idempotent: retired once it returned."""
-    _r25b_close_added_ssh_rule(server, undo["port"], undo["added"])
+    """Close the allow step 1 added, and nothing else. Idempotent: retired once it returned.
+
+    One that answered but was not confirmed is run once more at once (_r36b_close_confirmed); still
+    not, _revert says the rule may be left. It was retired however it answered, and _revert said
+    "nothing changed" over a public allow for a port nothing serves.
+    """
+    if not _r36b_close_confirmed(server, undo["port"], undo["added"]):
+        _r36b_left(undo, _r36b_rule_left_note(undo["port"]))
     undo["added"] = False
 
 
@@ -4249,15 +4351,97 @@ def _r35b_undo_relisten(server, undo):
     # may not have run, and transports that answer -1 instead of raising say nothing either: the
     # drop-in can still be the one step 3 rejected, and a restart stops the serving daemon and cannot
     # start a new one.
-    if _r34j_sshd_config_ok(server):
-        _restart_ssh_listener(server, undo.get("socket"))
+    unsure = undo.get("reload") or undo.get("reload_unconfirmed")
+    if unsure and _sshd_socket_activated(server):
+        # Socket-activated, and systemd was not confirmed to have re-read ssh.socket (its reload raised and
+        # is still owed, or answered non-zero twice): it may still hold the moved unit, and restarting
+        # ssh.socket would re-open the moved port, whose firewall rule the undo has already closed.
+        # Skipped only while ssh.socket is confirmed ACTIVE, so a listener is there to protect: a step 6
+        # whose restart failed (a port another process holds: Ubuntu's ssh.socket has FreeBind=yes, so
+        # an address the host lacks does not fail it) leaves it failed with no listener on any port,
+        # the old one included, and then it is restarted below.
+        _core._log.warning("ssh port move: NOT restarting ssh.socket on %s after undoing a step: systemd was "
+                           "not confirmed to have re-read it", _r34j_log_name(server))
+        _r36j_reload_note(undo, _R36J_NOT_RESTARTED)
+    elif _r34j_sshd_config_ok(server):
+        _r36j_restart_after_undo(server, undo, unsure)
     else:
         _core._log.warning(
             "ssh port move: NOT restarting ssh on %s after undoing a step: `sshd -t` "
             "does not accept the config now (or could not be run), so the sshd that is running was "
             "left as it is. Check /etc/ssh/sshd_config.d/ (and ssh.socket.d on a socket-activated "
             "host), then run `sshd -t` before restarting ssh.", _r34j_log_name(server))
+        if unsure:
+            # ssh.socket was not confirmed active (the branch above), so it may be the failed one a
+            # step 6 left with no listener on any port, and nothing restarts it here.
+            undo["down"] = _R36J_DOWN_INVALID
+        else:
+            _r36j_reload_note(undo, _R36J_NOT_RESTARTED)
     undo.pop("relisten", None)
+
+
+def _r36j_restart_after_undo(server, undo, unsure):
+    """_r35b_undo_relisten's restart onto a config `sshd -t` accepts. `unsure`: systemd's re-read was not confirmed."""
+    if unsure:
+        _r36j_reload_again(server, undo)
+    # Not run again (the restart of `ssh` already falls back to `sshd`). One not confirmed (an
+    # answer not 0, -1) may have left nothing listening on any port: a socket restart that fails
+    # drops every listener, and `systemctl restart ssh` stops the daemon first.
+    try:
+        _up = _rc_of(_restart_ssh_listener(server, undo.get("socket"))) == 0
+    except Exception:
+        if not unsure:
+            raise       # still owed: the wrapper tries it once more (the table above _R32B_MOVE_UNDO)
+        # Behind a socket that was not active, a raise is said like any unconfirmed restart: the
+        # route's generic failure would leave the operator no way back to a host nothing answers on.
+        _core._log.warning("ssh port move: the undo's restart of ssh.socket on %s raised",
+                           _r34j_log_name(server), exc_info=True)
+        _up = False
+    if _up:
+        _r36j_reload_note(undo, _R36J_RESTARTED)
+    else:
+        _core._log.warning("ssh port move: restarting ssh on %s after the undo was not confirmed: SSH may not "
+                           "be listening on any port", _r34j_log_name(server))
+        undo["down"] = _R36J_DOWN_SOCKET if undo.get("socket") else _R36J_DOWN_SERVICE
+
+
+def _r36j_reload_again(server, undo):
+    """Run systemd's re-read once more, before restarting a socket that is not active after an unconfirmed one.
+
+    A restart without it rebinds the MOVED port list systemd still holds in memory (measured on
+    systemd 255): it fails again on the port another process holds, and nothing listens on any port.
+    Harmless when an earlier one ran: the drop-in is already put back. Confirmed, nothing is owed or said.
+    """
+    try:
+        if _rc_of(_core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)) == 0:
+            undo.pop("reload", None)
+            undo.pop("reload_unconfirmed", None)
+    except Exception:
+        _core._log.debug("ssh port move: the undo's daemon-reload before the restart raised", exc_info=True)
+
+
+# _revert's first sentence when the undo's restart was not confirmed: "Your existing SSH still works" is
+# not known then, and may be false.
+_R36J_DOWN_SOCKET = i18n.Sentence("The SSH port change did not work, and SSH could not be confirmed listening again "
+                                  "after undoing it: SSH on this host may not be listening on any port now. From "
+                                  "the host's console or another way in (Tailscale SSH, for one), run `systemctl "
+                                  "daemon-reload`, then `systemctl restart ssh.socket`.")
+_R36J_DOWN_SERVICE = i18n.Sentence("The SSH port change did not work, and SSH could not be confirmed listening "
+                                   "again after undoing it: SSH on this host may not be listening on any port now. "
+                                   "From the host's console or another way in (Tailscale SSH, for one), run "
+                                   "`systemctl restart ssh`.")
+_R36J_DOWN_INVALID = i18n.Sentence("The SSH port change did not work, and ssh.socket was not restarted after "
+                                   "undoing it because `sshd -t` did not accept the configuration (or could not be "
+                                   "run): SSH on this host may not be listening on any port now. From the host's "
+                                   "console or another way in (Tailscale SSH, for one), run `sshd -t` and fix what "
+                                   "it reports, then run `systemctl daemon-reload`, then `systemctl restart "
+                                   "ssh.socket`.")
+
+
+def _r36j_reload_note(undo, note):
+    """Say `note` (whether ssh.socket was restarted) when the undo's daemon-reload was not confirmed."""
+    if undo.get("reload_unconfirmed"):
+        _r36b_left(undo, note)
 
 
 def _r34j_sshd_config_ok(server):
@@ -4277,27 +4461,41 @@ def _r34j_log_name(server):
 def _r34b_restore_once(server, undo):
     """change_ssh_port's restore of its drop-in snapshot, retired from `undo` once it may have run.
 
-    Once a restore has reached the host it is never run again by _r32b_undo_on_raise, even when its
-    answer was lost on the way back (paramiko marks that raise `command_started`). One that raised
-    before the command went out (no connection, a refused session) is still owed, and the wrapper's
-    retry is what puts the snapshot back.
+    One that raised before the command went out (no connection, a refused session) is still owed,
+    and the wrapper's retry is what puts the snapshot back.
 
     A restore that ANSWERED but not 0 (a Tailscale or local transport answers -1 rather than
-    raising) is tried once more at once: the verb copies the snapshot over the drop-in and keeps the
-    snapshot (review 1022b's integration), so a second run puts back the same file. Still not
-    confirmed, `undo["unconfirmed"]` tells _revert to say so: the drop-in on disk may be the one
-    this move wrote, the good one only in the snapshot, and "nothing changed" would send the host's
-    next ssh restart (a reboot) onto it.
+    raising), or whose answer was lost after it went out (paramiko marks that raise
+    `command_started`), is tried once more at once: the verb copies the snapshot over the drop-in and
+    keeps the snapshot (review 1022b's integration), or with no snapshot removes the drop-in, so a
+    second run puts back the same file or removes nothing more. The lost-answer one used to be
+    retired unconfirmed and unsaid, from when a second run deleted the drop-in the first restored.
+    Retried only when 2a's snapshot verb printed its SNAPSHOT= word (`undo["copies"]`): a helper older
+    than that restores by MOVING the snapshot, and a second run would delete the drop-in the first put
+    back. Still not confirmed, `undo["unconfirmed"]` tells _revert to say so: the drop-in on disk may be
+    the one this move wrote, the good one only in the snapshot, and "nothing changed" would send the
+    host's next ssh restart (a reboot) onto it.
     """
     try:
         rc = _rc_of(_core.run_privileged(server, undo["restore"], [], timeout=10, merge_stderr=False))
     except Exception as e:
-        if getattr(e, "command_started", False):
-            undo.pop("restore", None)
-        raise
-    if rc != 0:
-        _core._log.warning("ssh port move: the drop-in restore on %s answered %s; trying it once more",
-                           _r34j_log_name(server), rc)
+        if not getattr(e, "command_started", False):
+            raise
+        _core._log.warning("ssh port move: the drop-in restore on %s went out but its answer was lost",
+                           _r34j_log_name(server), exc_info=True)
+        rc = None
+    if rc != 0 and not undo.get("copies"):
+        # A helper that did not print 2a's SNAPSHOT= word predates the copy-and-keep restore: its restore
+        # MOVES the snapshot back, so a second run finds none and deletes the drop-in the first one put
+        # back. Not retried; said as unconfirmed.
+        _core._log.warning("ssh port move: the drop-in restore on %s was not confirmed (%s), and the helper "
+                           "is too old to run it twice safely", _r34j_log_name(server),
+                           "its answer was lost" if rc is None else "it answered %s" % rc)
+        undo["unconfirmed"] = True
+    elif rc != 0:
+        # rc None: the first run went out and its answer was lost (the except above), not an answer of "None".
+        _core._log.warning("ssh port move: the drop-in restore on %s was not confirmed (%s); trying it once more",
+                           _r34j_log_name(server), "its answer was lost" if rc is None else "it answered %s" % rc)
         try:
             rc = _rc_of(_core.run_privileged(server, undo["restore"], [], timeout=10, merge_stderr=False))
         except Exception:
@@ -4305,8 +4503,12 @@ def _r34b_restore_once(server, undo):
                                exc_info=True)
             rc = None
         if rc != 0:
+            # Logged here too: on the wrapper's path (a step raised) the raise goes on, not _revert's message.
+            _core._log.warning("ssh port move: the drop-in restore on %s was not confirmed; the drop-in on disk "
+                               "may be the one this move wrote", _r34j_log_name(server))
             undo["unconfirmed"] = True
     undo.pop("restore", None)
+    undo.pop("copies", None)
 
 
 def _r35j_dropin_paths(socket_mode):
@@ -4316,12 +4518,36 @@ def _r35j_dropin_paths(socket_mode):
     return _priv.SSHD_DROPIN, _priv.SSHD_DROPIN_BAK
 
 
-def _r35j_unconfirmed_message(socket_mode):
-    """_revert's message when the restore could not be confirmed: where to look, and why it matters."""
+def _r35j_unconfirmed_message(socket_mode, prior=None):
+    """_revert's message when the restore could not be confirmed: where to look, and why it matters.
+
+    `prior` is what 2a's snapshot found (_r36b_snap_prior): True, a drop-in was there and its copy is
+    at {bak}; False, there was none, so no {bak} exists and the host is recovered by removing {path};
+    None, not said (a helper too old to print it), so both cases are named. It used to say "the
+    previous one is kept at {bak}" whatever 2a found, pointing the operator at a file that was not
+    there when the move was the host's first.
+    """
     path, bak = _r35j_dropin_paths(socket_mode)
+    if prior is False:
+        return i18n.Sentence("The SSH port change did not work, and putting the previous configuration back could "
+                             "not be confirmed — there was no {path} before this change, so remove it if it is "
+                             "there before restarting ssh (`sshd -t` must accept the config).", path=path)
+    if prior is None:
+        return i18n.Sentence("The SSH port change did not work, and putting the previous configuration back could "
+                             "not be confirmed — check {path} before restarting ssh: if {bak} exists it is the "
+                             "previous one, so copy it over {path}; if it does not, there was no {path} before "
+                             "this change, so remove it (`sshd -t` must accept the config).", path=path, bak=bak)
     return i18n.Sentence("The SSH port change did not work, and putting the previous configuration back could not "
                          "be confirmed — check {path} before restarting ssh (the previous one is kept at {bak}, "
                          "and `sshd -t` must accept the config).", path=path, bak=bak)
+
+
+def _r36b_snap_prior(out):
+    """What 2a's snapshot verb found, from its stdout: True (it copied a drop-in), False (there was none), None."""
+    words = (out or "").split()
+    if _priv.R36B_SNAP_COPIED in words:
+        return True
+    return False if _priv.R36B_SNAP_NONE in words else None
 
 
 # The snapshot verbs' answer when they refuse: a snapshot is already there and DIFFERS from the drop-in,
@@ -4605,6 +4831,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if socket_mode else
         ("sshd-backup-dropin", "sshd-restore-dropin", "sshd-discard-backup", "sshd-port-dropin"))
 
+    # What 2a's snapshot found (a drop-in, none, or not said): the unconfirmed-restore message depends on it.
+    _prior = None
+
     def _revert(msg, restart=True):
         # Undo what the move still owes (the table above _R32B_MOVE_UNDO): restore the snapshot if one
         # was taken, else drop the file; close the allow step 1 added and nothing else; restart the
@@ -4615,26 +4844,40 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if not restart:
             undo.pop("relisten", None)
         _r35b_unwind(server, undo)
+        left = undo.pop("left", [])
+        # Set when the undo's restart was not confirmed: SSH may be listening nowhere, so `msg` (which
+        # can end "Your existing SSH still works.") is logged and this is said in its place.
+        down = undo.pop("down", "")
         if undo.pop("unconfirmed", False):
             _core._log.warning("ssh port move on %s failed (%s) and its restore was not confirmed",
                                _r34j_log_name(server), str(msg).replace("\r", " ").replace("\n", " "))
-            return False, _r35j_unconfirmed_message(socket_mode)
-        return False, msg
+            return False, i18n.Sentences(_r35j_unconfirmed_message(socket_mode, _prior), down, *left)
+        if down:
+            _core._log.warning("ssh port move on %s failed (%s) and SSH may not be listening after the undo",
+                               _r34j_log_name(server), str(msg).replace("\r", " ").replace("\n", " "))
+            return False, i18n.Sentences(down, *left)
+        return False, i18n.Sentences(msg, *left) if left else msg
 
     # 2a. The snapshot decides whether a failure can be undone at all. Its rc used to be dropped (and
     #     the shell form ended `|| true`): a copy that failed left no snapshot, or half of one, and the
     #     undo then removed the drop-in or put the half back. After an earlier move (2222 + 22, 22
     #     closed as advised) that took sshd off the port the panel dials. Unsnapshotted, nothing goes on.
-    _snap_rc = _rc_of(_core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False))
+    _snap = _core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False)
+    _snap_rc = _rc_of(_snap)
     if _snap_rc == _R35J_SNAPSHOT_HELD:
-        # An earlier move's restore was not confirmed: the snapshot may be the only good copy, and
-        # `sshd -t` rejects what is live. A new snapshot would put the rejected file in its place.
+        # A snapshot is already there and DIFFERS from the drop-in: an earlier move did not finish (its
+        # restore was not confirmed, or its discard failed after it worked), so the snapshot may be the
+        # only good copy. Held on the difference alone, whatever `sshd -t` says. A new snapshot would
+        # put the drop-in in its place.
         return _revert(_r35j_held_message(socket_mode), restart=False)
     if _snap_rc != 0:
         return _revert(i18n.Sentence("The current SSH port configuration could not be backed up, so a failed "
                                      "change could not be undone — nothing changed."), restart=False)
-    # A snapshot exists now: from here a failure restores it.
-    undo.update(restore=_restore_verb, reload=socket_mode, relisten=True)
+    # A snapshot exists now (or, with no drop-in, none is left): from here a failure restores it.
+    _prior = _r36b_snap_prior(_snap[0] if isinstance(_snap, tuple) else "")
+    # copies: the snapshot verb said what it found, so the restore is the copy-and-keep one a second run
+    # of is safe (_r34b_restore_once retries only then).
+    undo.update(restore=_restore_verb, reload=socket_mode, relisten=True, copies=_prior is not None)
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
               "# from the panel's Firewall page once you've confirmed the new port works.\n")
     if socket_mode:
@@ -4664,6 +4907,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # 3. Validate the WHOLE sshd config; if the drop-in breaks it, roll back and abort (no restart).
     tout, terr, trc = _core.run_privileged(server, "sshd-validate", [], timeout=15)
     terr = terr or tout
+    if isinstance(trc, int) and trc < 0:
+        # No answer (a Tailscale or local transport answers a lost command -1): nothing says sshd
+        # rejected anything, so the message does not claim it. Undone all the same.
+        return _revert(i18n.Sentence("`sshd -t` could not be run to check the new config ({why}), so the change "
+                                     "was undone — nothing changed.", why=(terr or "no answer")[:120]))
     if trc != 0:
         return _revert(i18n.Sentence("sshd rejected the new config — nothing changed. ({why})",
                                      why=(terr or "invalid")[:120]))

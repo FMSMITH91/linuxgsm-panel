@@ -14,10 +14,14 @@ from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_acce
 from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
-    MIN_PORT, SAFE_LABEL_RE, _port_or)
+    MIN_PORT, SAFE_LABEL_RE, _port_or, ip_address_or_none)
 from panel.core.panel_state import (forget_rows)
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
+from contextlib import contextmanager
 import logging
+import re
+import socket
+import threading
 
 _log = logging.getLogger("panel.routes.remotes")
 
@@ -245,24 +249,30 @@ def _register_remote_list(app):
             return _add_local_remote(name, lgsm_user)
 
         # (host presence + charset already validated above for non-local remotes)
-        # The host key this test sees is PINNED with the row, in the same commit. Left to the next
-        # connection, the pin would come from whichever one that is, not from this login.
-        _seen_key = []
-        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
-                                           captured=_seen_key)
-        if not success:
-            return _form_err(i18n.tr("Connection test failed: {why}", why=msg), "manage_remotes")
+        # ...and not another row's host (the same address AND SSH port): asked before anything
+        # connects, claimed across the connection test, and asked again as the row is stored.
+        with r36j_host_claim(host, ssh_port) as (_same, _claim):
+            if _same:
+                return _form_err(_same, "manage_remotes")
+            # The host key this test sees is PINNED with the row, in the same commit. Left to the next
+            # connection, the pin would come from whichever one that is, not from this login.
+            _seen_key = []
+            success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
+                                               captured=_seen_key)
+            if not success:
+                return _form_err(i18n.tr("Connection test failed: {why}", why=msg), "manage_remotes")
 
-        remote = RemoteServer(
-            name=name, host=host, port=ssh_port,
-            username=ssh_user, auth_method=auth_method,
-            auth_credential=encrypt_secret(credential),
-            sudo_enabled=sudo_enabled, linuxgsm_user=lgsm_user,
-            is_online=True, last_seen=utcnow(),
-            host_key=_seen_key[0] if _seen_key else "",
-        )
-        db.session.add(remote)
-        db.session.commit()
+            remote = RemoteServer(
+                name=name, host=host, port=ssh_port,
+                username=ssh_user, auth_method=auth_method,
+                auth_credential=encrypt_secret(credential),
+                sudo_enabled=sudo_enabled, linuxgsm_user=lgsm_user,
+                is_online=True, last_seen=utcnow(),
+                host_key=_seen_key[0] if _seen_key else "",
+            )
+            _same = r36j_commit(host, ssh_port, token=_claim, row=remote)
+            if _same:
+                return _form_err(_same, "manage_remotes")
         log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}",
                    remote=remote)
 
@@ -327,16 +337,15 @@ def _register_remote_edit(app):
                                      hi=MAX_PORT), "manage_remotes")
         # Before anything on the row changes: a delegated admin may not move where, or as whom,
         # the panel signs in on its own credentials. See _delegated_retarget_refusal.
-        _refused = _delegated_retarget_refusal(
-            remote, new_host, new_port, new_user,
-            _edited("auth_method", remote.auth_method),
-            request.form.get("credential", "").strip())
+        # ...nor onto another row's host (409).
+        _refused, _code = _r36c_retarget_refusal(remote, new_host, new_port, new_user)
         if _refused:
-            return _form_err(_refused, "manage_remotes", code=403)
+            return _form_err(_refused, "manage_remotes", code=_code)
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
         if (new_host, new_port) != (remote.host, remote.port):
             remote.host_key = ""
+        _moved = _r36c_host_identity(new_host, new_port) != _r36c_host_identity(remote.host, remote.port)
         remote.host = new_host
         remote.port = new_port
         remote.username = new_user
@@ -344,9 +353,30 @@ def _register_remote_edit(app):
         if _bad_auth:
             return _form_err(_bad_auth, "manage_remotes")
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
-        db.session.commit()
+        # A changed address or port is asked again as it is stored (r36j_commit): an add or a
+        # migration may have taken it since _r36c_retarget_refusal asked.
+        _same = r36j_commit(new_host, new_port, own_id=remote.id, ask=_moved)
+        if _same:
+            return _form_err(_same, "manage_remotes", code=409)
         log_action(current_user, "edit_remote", target=remote.name, remote=remote)
         return _form_ok(i18n.tr("Remote '{name}' updated.", name=remote.name), "manage_remotes")
+
+
+def _r36c_delete_refused(remote):
+    """The answer refusing to delete `remote` while the panel is rebooting it cleanly, else None."""
+    # As an uninstall is refused (manage_servers._r35b_reboot_refusal): the bulk delete took every
+    # row the plan holds, the job went on and sent the reboot, and its restore found no rows, so
+    # every server the panel was to bring back stayed stopped.
+    from panel.services import host_reboot as _hr
+    if not _hr.reboot_busy(remote.id):
+        return None
+    name, _busy = remote.name, _hr.busy_message(remote.display_name)
+    # No remote=, as delete_remote's other rows: the action is not a host action (models.AUDIT_HOST_ACTIONS).
+    log_action(current_user, "delete_remote", target=name, success=False, detail="refused: %s" % _busy)
+    if _wants_json():
+        return jsonify({"success": False, "message": i18n.tr(_busy)}), 409
+    flash(i18n.tr(_busy), "warning")
+    return redirect(url_for("manage_remotes"))
 
 
 def _register_remote_delete_and_test(app):
@@ -367,6 +397,10 @@ def _register_remote_delete_and_test(app):
         # this value. Breaking the flow beats dismissing the alert — a gate that cries wolf is how
         # a real alert gets waved through.
         row_id = remote.id
+        # Before the password, so a refusal spends no re-authentication attempt.
+        _busy = _r36c_delete_refused(remote)
+        if _busy is not None:
+            return _busy
         # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
         # the operator to re-enter their own account password — a guard against an accidental or
         # hijacked click. Verified constant-time via bcrypt (check_password).
@@ -481,8 +515,184 @@ def _add_remote_field_error(name, ssh_port, lgsm_user, ssh_user):
     return None
 
 
+# A host HOST_RE accepts that the C resolver reads as an IPv4 address in inet_aton's forms: a decimal
+# integer (3221225985), a short dotted form (192.0.2 is 192.0.0.2), octal or hex parts (0300.0.2.1).
+_R36J_NUMERIC_V4 = re.compile(r"^[0-9][0-9a-fx.]*\Z")
+
+
+def _r36j_inet_aton(text):
+    """`text` as the IPv4 address the C resolver dials for it, or None when it is not one of its forms."""
+    if not _R36J_NUMERIC_V4.match(text):
+        return None
+    try:
+        return ip_address_or_none(socket.inet_ntoa(socket.inet_aton(text)))
+    except (OSError, ValueError):
+        return None
+
+
+def _r36c_host_identity(host, port):
+    """(address, SSH port) in the form two rows naming one machine compare equal in.
+
+    Trimmed, lowercased, without the brackets around an IPv6 literal or the root's trailing dot on a
+    name (`host.example.` is `host.example`), and an IP by value: every spelling of one address the
+    same, an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) as the IPv4 address it reaches, and the
+    integer, short, octal and hex IPv4 forms HOST_RE lets through as the address the resolver
+    (inet_aton) makes of them, since that is the one paramiko dials.
+
+    NOT matched, and it cannot be without resolving names: a host NAME and an IP address it resolves
+    to (a MagicDNS name stored by the Tailscale migration and the node's 100.x address on another row
+    are one machine and compare unequal), or two names for one machine. The rule catches the same
+    address written twice, not every way to reach one host.
+    """
+    text = (host or "").strip().lower() if isinstance(host, str) else ""
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    text = _r36j_address_text(text)
+    try:
+        return text, int(port)
+    except (TypeError, ValueError):
+        return text, None
+
+
+def _r36j_address_text(text):
+    """A host's lowercased, unbracketed text as _r36c_host_identity compares it (see there)."""
+    addr = ip_address_or_none(text)
+    if addr is None:
+        text = text[:-1] if text.endswith(".") else text
+        addr = _r36j_inet_aton(text)
+    if addr is not None and getattr(addr, "ipv4_mapped", None) is not None:
+        addr = addr.ipv4_mapped
+    return str(addr) if addr is not None else text
+
+
+def r36c_same_host_refusal(host, port, own_id=None):
+    """Why `host`:`port` may not be stored on a row (translated), or None: another row is that host.
+
+    Every per-host lock (a reboot, an SSH port move, a bootstrap, a content job) keys on the row's
+    id, so two rows naming one machine took different locks and two such actions ran on it at once.
+    The owner's rule: the SAME address and SSH port are one host; the same address on another port
+    may be another VM behind one IP, and is allowed. `own_id` is the row being edited. Every place
+    a row's address or port is set asks this: add (the Hosts page and the setup wizard), edit, the
+    Tailscale migration and an SSH port move.
+    """
+    want = _r36c_host_identity(host, port)
+    if not want[0]:
+        return None
+    for other in RemoteServer.query.all():
+        if other.id != own_id and _r36c_host_identity(other.host, other.port) == want:
+            if _r36j_may_name(other):
+                return i18n.tr("{name} already uses this address and SSH port. Two hosts there would be one "
+                               "machine under two names, and their actions would not wait for each other.",
+                               name=other.display_name)
+            # Refused all the same (one machine, one lock key), but not named: see _r36j_may_name.
+            return i18n.tr("Another host already uses this address and SSH port. Two hosts there would be one "
+                           "machine under two names, and their actions would not wait for each other.")
+    return None
+
+
+def _r36j_may_name(other):
+    """Whether the signed-in user may be told the host row `other` is there, by name.
+
+    A superadmin, or a row in their groups (can_access_remote, as /remotes lists them). The refusal
+    named whichever row it matched, so a delegated MANAGE_REMOTES admin could type any address and
+    port and read the name of a host outside their groups. Nobody signed in (the first-run wizard
+    before its admin signs in) is told no name either.
+    """
+    user = current_user
+    if not getattr(user, "is_authenticated", False):
+        return False
+    return bool(user.is_superadmin or can_access_remote(user, other.id))
+
+
+# ── One store per address at a time ─────────────────────────────────────────────────────────────
+# The same-host rule was check-then-act: add and the wizard asked it, then ran the SSH connection test
+# (which yields), then inserted; the Tailscale migration asked it, then tested Tailscale SSH and
+# deleted the public port 22 rule, then stored. Two adds of one address and port, or an add racing a
+# migration onto that name, both passed and made two rows for one machine. Now a request CLAIMS the
+# address and port when it asks (another request's claim refuses it, as a row would), holds the claim
+# across its SSH round trips without holding the lock, and stores under the lock after asking again.
+_r36j_lock = threading.Lock()
+_r36j_claims = {}       # (address, port) identity -> the claim token of the request holding it
+
+_R36J_CLAIMED = ("Another request is adding or moving a host to this address and SSH port right now. Two "
+                 "hosts there would be one machine under two names; try again once it has finished.")
+
+
+def _r36j_refusal(host, port, own_id, token):
+    """Under _r36j_lock: the same-host refusal from the rows, or from another request's claim; or None."""
+    why = r36c_same_host_refusal(host, port, own_id=own_id)
+    if why:
+        return why
+    held = _r36j_claims.get(_r36c_host_identity(host, port))
+    if held is not None and held is not token:
+        return i18n.tr(_R36J_CLAIMED)
+    return None
+
+
+@contextmanager
+def r36j_host_claim(host, port, own_id=None):
+    """Ask the same-host rule for `host`:`port` and hold it for this request: yields (why, token).
+
+    `why` is the refusal (translated), or None and the address is claimed until the block ends, on
+    every exit path. `token` goes to r36j_commit, which asks again just before the row is stored.
+    """
+    ident = _r36c_host_identity(host, port)
+    token = object()
+    with _r36j_lock:
+        why = _r36j_refusal(host, port, own_id, token)
+        if why is None and ident[0]:
+            _r36j_claims[ident] = token
+    try:
+        yield why, token
+    finally:
+        with _r36j_lock:
+            if _r36j_claims.get(ident) is token:
+                del _r36j_claims[ident]
+
+
+def r36j_commit(host, port, own_id=None, token=None, row=None, ask=True):
+    """Commit the session (adding `row` if given) unless `host`:`port` is another row's now: why, or None.
+
+    Asked again under the lock, with nothing that yields between the answer and the commit; refused,
+    the session is rolled back. `token` is the request's own claim (r36j_host_claim), None for none.
+    ask=False commits without asking (an edit that keeps the row's address and port).
+    """
+    with _r36j_lock:
+        why = _r36j_refusal(host, port, own_id, token) if ask else None
+        if why:
+            db.session.rollback()
+            return why
+        if row is not None:
+            db.session.add(row)
+        db.session.commit()
+    return None
+
+
+def _r36c_retarget_refusal(remote, new_host, new_port, new_user):
+    """(why, status) refusing edit_remote's new target, or (None, None).
+
+    A delegated admin moving where or as whom the panel signs in (403, _delegated_retarget_refusal),
+    or a CHANGED address or port that another row already is (409). Only a change is asked: a row
+    saved with its own values is accepted, even beside a duplicate made before the rule (nothing
+    deletes or merges one).
+    """
+    why = _delegated_retarget_refusal(remote, new_host, new_port, new_user,
+                                      _edited("auth_method", remote.auth_method),
+                                      request.form.get("credential", "").strip())
+    if why:
+        return why, 403
+    if _r36c_host_identity(new_host, new_port) == _r36c_host_identity(remote.host, remote.port):
+        return None, None
+    why = r36c_same_host_refusal(new_host, new_port, own_id=remote.id)
+    return (why, 409) if why else (None, None)
+
+
 def _add_remote_target_error(is_local, host, auth_method):
-    """Why the add form's host or sign-in method is refused, or None; the local branch sets its own."""
+    """Why the add form's host or sign-in method is refused, or None; the local branch sets its own.
+
+    Whether another row already is that host is asked by the caller under a claim (r36j_host_claim),
+    after the delegated-admin refusal: asked here, before it, a refused request still learned it.
+    """
     if not is_local and (not host or not HOST_RE.match(host)):
         return "Host must be a valid hostname or IP address."
     # The same allowlist edit_remote uses, and for the same reason: `auth_method` picks the

@@ -4,7 +4,6 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
-from panel.db.models import (db)
 from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
     remote_tailscale_finalize, remote_tailscale_up_url)
@@ -16,6 +15,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from panel.core.validation import HOST_RE
 from app import (_refuse_on_panel_host)
 from panel.routes._shared import (_r20b_audit_on_raise)
+from panel.routes.remotes import (r36j_commit, r36j_host_claim)
+from contextlib import ExitStack
 
 # Why migrate and finalize refuse the panel host. Not the generic "it would reboot the panel": they
 # reboot nothing. They are the steps after a REMOTE joins the tailnet, and they rewrite that host's
@@ -180,10 +181,31 @@ def _tsmigrate_refusal(remote):
     log_action(current_user, "remote_tailscale_migrate", target=remote.name,
                detail="refused: only a superadmin can migrate a host", success=False,
                remote=remote)
-    return jsonify({"success": False, "message": (
+    return jsonify({"success": False, "message": i18n.tr(
         "Only a superadmin can move a host onto the panel's Tailscale identity — a "
         "successful Tailscale login proves the panel can reach the host, not that you "
         "can. Ask a superadmin to migrate it.")}), 403
+
+
+def _r36j_claim(claims, claim, host, own_id):
+    """The migration's refuse hook: the same-host refusal for `host`:22, or None with the address claimed.
+
+    The claim lives on the route's ExitStack `claims` (released when the route returns, on every path);
+    its token is appended to `claim` for the store's re-check.
+    """
+    why, token = claims.enter_context(r36j_host_claim(host, 22, own_id=own_id))
+    claim.append(token)
+    return why
+
+
+def _r36j_store_migration(remote, new_host, claim):
+    """Point `remote` at Tailscale SSH on `new_host` and commit: None, or the 409 when that is another row now."""
+    remote.host = new_host
+    remote.auth_method = "tailscale"
+    remote.auth_credential = ""
+    remote.port = 22
+    same = r36j_commit(new_host, 22, own_id=remote.id, token=claim[0] if claim else None)
+    return (jsonify({"success": False, "message": same}), 409) if same else None
 
 
 def _tsmigrate_unusable(new_host, status):
@@ -193,13 +215,15 @@ def _tsmigrate_unusable(new_host, status):
         # for one hardcoded sentence. The reasons are actionable and different from each
         # other — tailscaled down, SSH server not enabled, ACL refusing this node/user —
         # and the operator can only act on the one they actually hit.
-        return jsonify({"success": False, "message": (
+        # i18n.tr: the reason is a fixed sentence, or a Sentence carrying the login test's own
+        # words (remote_migrate_to_tailscale), shown whole in the viewer's language.
+        return jsonify({"success": False, "message": i18n.tr(
             status if isinstance(status, str) and status
             else "Tailscale is not running on the remote")}), 400
     if not (isinstance(new_host, str) and HOST_RE.match(new_host)):
         # The name came from the host's own stdout; it becomes the stored address, which
         # every later command is built from. Store only what the add form would accept.
-        return jsonify({"success": False, "message": (
+        return jsonify({"success": False, "message": i18n.tr(
             "The host reported a Tailscale address the panel can't use, so nothing was "
             "changed.")}), 400
     return None
@@ -268,16 +292,16 @@ def _register_key_join_and_migrate(app):
         if refused:
             return refused
         try:
-            new_host, status = remote_migrate_to_tailscale(remote)
-            unusable = _tsmigrate_unusable(new_host, status)
-            if unusable:
-                return unusable
-            old_host = remote.host
-            remote.host = new_host
-            remote.auth_method = "tailscale"
-            remote.auth_credential = ""
-            remote.port = 22
-            db.session.commit()
+            with ExitStack() as claims:
+                # Tailscale SSH is port 22 on the tailnet address: refused when another row is that
+                # host, and the address claimed from that answer, across the Tailscale SSH test and
+                # the port 22 deletes, to the store (remotes.r36j_host_claim).
+                claim, old_host = [], remote.host
+                new_host, status = remote_migrate_to_tailscale(
+                    remote, refuse=lambda host: _r36j_claim(claims, claim, host, remote.id))
+                refused = _tsmigrate_unusable(new_host, status) or _r36j_store_migration(remote, new_host, claim)
+                if refused:
+                    return refused
             close_connection(remote)
 
             log_action(current_user, "remote_tailscale_migrate",

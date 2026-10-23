@@ -2652,6 +2652,9 @@ VERBS = {
 
 # The snapshot verbs' answer when they keep a snapshot that differs from the drop-in (privileged.py's).
 R35J_SNAPSHOT_HELD = 3
+# What a snapshot that answered 0 prints: it copied a drop-in, or there was none (privileged.py's).
+R36B_SNAP_COPIED = "SNAPSHOT=copied"
+R36B_SNAP_NONE = "SNAPSHOT=none"
 
 
 def _r35j_same_file(a, b):
@@ -2700,6 +2703,9 @@ def _r35b_snapshot(dropin, bak):
     DIFFERS from the drop-in is kept (R35J_SNAPSHOT_HELD), whatever `sshd -t` says, because an earlier
     move did not finish and the snapshot may be the last good copy. One identical to the drop-in (what
     every confirmed restore leaves) is replaced as usual.
+
+    Answering 0 it prints R36B_SNAP_COPIED or R36B_SNAP_NONE, as the shell form does: the move's
+    "restore could not be confirmed" message names the snapshot only when there is one.
     """
     if os.path.isfile(dropin):
         if os.path.isfile(bak) and not _r35j_same_file(dropin, bak):
@@ -2713,8 +2719,11 @@ def _r35b_snapshot(dropin, bak):
         finally:
             if os.path.lexists(tmp):
                 os.unlink(tmp)
-    elif os.path.lexists(bak):
-        os.unlink(bak)
+        sys.stdout.write(R36B_SNAP_COPIED + "\n")
+    else:
+        if os.path.lexists(bak):
+            os.unlink(bak)
+        sys.stdout.write(R36B_SNAP_NONE + "\n")
     return 0
 
 

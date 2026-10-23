@@ -15,7 +15,7 @@ import types as _types57
 
 from unit.part01 import check
 from unit.part10 import _Over as _p9_Over
-from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_trip
+from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_cfg_put, _p9_trip
 from unit.part20 import _patch, _patched
 
 import app as _app57  # noqa: E402
@@ -153,11 +153,7 @@ try:
           _ll57_err is None and any(_l.startswith("- **Bind**: config auto ·") for _l in _ll57),
           repr((_ll57_err, _ll57)))
 finally:
-    if _CFG57_SNAPSHOT is None:
-        if _P9_CFG_PATH.exists():
-            _P9_CFG_PATH.unlink()
-    else:
-        _P9_CFG_PATH.write_bytes(_CFG57_SNAPSHOT)
+    _p9_cfg_put(_CFG57_SNAPSHOT)
 
 # ── A02: every Serve handler type is another app; a Tailscale Service's listener is not the node's ─
 from panel.ops import serve_upkeep as _su57  # noqa: E402

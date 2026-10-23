@@ -316,7 +316,9 @@ _GDLOG104 = os.path.join(_GDB104, "calls")
 def _works_run104(as_root):
     if os.path.exists(_GDLOG104):
         os.remove(_GDLOG104)
-    body = _works104.replace('"${EUID}"', "0") if as_root else _works104
+    # Either way by the id the script is handed, not this run's own (review 1022c lead: the control kept
+    # "${EUID}", which is 0 on CI's root leg, and passed there whatever it found).
+    body = _works104.replace('"${EUID}"', "0" if as_root else "1000")
     # runuser is looked up on PATH plus /usr/sbin:/sbin: the weekly cron's PATH has no sbin.
     body = body.replace(":/usr/sbin:/sbin", "")
     r = _bash104(body + 'works %s; echo "RC $?"\n' % os.path.join(_GDB104, "gamedig"),
@@ -341,7 +343,7 @@ check("install-gamedig.sh: ...and runuser is found from the weekly cron too, who
       'PATH="${PATH}:/usr/sbin:/sbin" command -v runuser' in _works104, _works104[:400])
 _gduser104 = _works_run104(False)
 check("install-gamedig.sh: ...and with no root to drop from it runs the check as it is (control)",
-      _gduser104 == ("RC 0", []) or os.geteuid() == 0, repr(_gduser104))
+      _gduser104 == ("RC 0", []), repr(_gduser104))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -459,6 +461,8 @@ for _f104 in (os.path.join("venv", "bin", "python3"), "db_maintenance.py"):
     open(os.path.join(_rp_dir104, _f104), "w").close()
 _rp_saved104 = (_so104.PANEL_DIR, _so104._update_in_progress, _bk104.restore_pending,
                 _so104._is_system_service, _so104._helper_present, _so104._run_verb)
+# The repair's own "launched" record too, which the "neither" case sets (review 1022c lead: left set).
+_rp_launched104 = dict(_so104._r30a_repair_launched)
 _rp104 = {}
 try:
     _so104.PANEL_DIR = _rp_dir104
@@ -474,6 +478,8 @@ try:
 finally:
     (_so104.PANEL_DIR, _so104._update_in_progress, _bk104.restore_pending,
      _so104._is_system_service, _so104._helper_present, _so104._run_verb) = _rp_saved104
+    _so104._r30a_repair_launched.clear()
+    _so104._r30a_repair_launched.update(_rp_launched104)
 check("db repair: refused while a panel update is being installed, or a backup restore is in "
       "flight (each replaces panel.db, as the repair does), and no repair job is started",
       _rp104["update"][0][0] is False and _rp104["restore"][0][0] is False

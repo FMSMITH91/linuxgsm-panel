@@ -1778,7 +1778,21 @@ def _ci_fetch_page(slug, sha, page, seen):
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- a fixed https://api.github.com URL
     with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
         _ci_note_rate(resp, seen)
-        return json.loads(resp.read().decode("utf-8")).get("check_runs", [])
+        body = json.loads(resp.read().decode("utf-8"))
+    # Not GitHub's shape (a JSON list or string, a run that is not an object, a name or state that
+    # is not text): ValueError, which _ci_fetch_runs answers "unknown". `.get`, `.startswith` and
+    # set membership on them raised AttributeError/TypeError, which nothing there caught, and the
+    # update check or branch switch ended in an error instead of saying why.
+    runs = body.get("check_runs", []) if isinstance(body, dict) else None
+    if not isinstance(runs, list) or not all(_r36a_run_shape(r) for r in runs):
+        raise ValueError("the check-runs answer is not GitHub's shape")
+    return runs
+
+
+def _r36a_run_shape(run):
+    """Whether one check run has the fields the gate reads as text (its state may be null)."""
+    return (isinstance(run, dict) and isinstance(run.get("name"), str)
+            and all(isinstance(run.get(k), (str, type(None))) for k in ("status", "conclusion")))
 
 
 def _ci_fetch_runs(slug, sha, seen):
@@ -4940,7 +4954,9 @@ def panel_starts_at_boot():
         return None
     if res.get("error") or not res.get("props"):
         return None
-    if res["props"].get("UnitFileState") not in ("enabled", "enabled-runtime"):
+    # Only "enabled": "enabled-runtime" is a link under /run/systemd/system (tmpfs), gone at the
+    # very reboot this is asked about, so the panel would not come back to start its servers.
+    if res["props"].get("UnitFileState") != "enabled":
         return False
     if res.get("scope") == "user":
         return _linger_on()
@@ -4957,7 +4973,8 @@ def _same_dir(a, b):
 def _service_problems(scope, props):
     """The problems a unit's `systemctl show` properties reveal, as fixed sentences."""
     out = []
-    if props.get("UnitFileState") not in ("enabled", "enabled-runtime"):
+    # "enabled-runtime" lasts until the next reboot only (see panel_starts_at_boot), so it is named.
+    if props.get("UnitFileState") != "enabled":
         out.append("the unit is %s, so it does not start at boot"
                    % _unit_token(props.get("UnitFileState")))
     if scope == "user" and props.get("UnitFileState") == "enabled" and _linger_on() is False:

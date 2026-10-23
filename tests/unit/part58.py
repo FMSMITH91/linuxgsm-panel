@@ -277,14 +277,20 @@ def _backup_removed58():
     check("backup: the same FAIL lines over an archive cut mid-stream still remove it, and nothing "
           "old is pruned", res[0] is False and name not in ls and all(o in ls for o in _OLDBK58)
           and "Removed the partial archive" in res[1], repr((res, ls)))
+
+
+def _backup_timed_out58():
     _tool58("timeout", "exit 124\n")         # the archive read runs out of time
     try:
         res, name, ls = _backup58(0, _V26FAIL58, truncate=True)
     finally:
         os.unlink(os.path.join(_BIN58, "timeout"))
+    # ...and the reason is the timed-out read's own (review 1022c lead: one that read as "no answer" from
+    # the host, or anything else that kept it, passed the same).
     check("backup: an archive whose read timed out is not taken as broken: kept, nothing pruned",
           res[0] is False and name in ls and all(o in ls for o in _OLDBK58)
-          and "Removed" not in res[1], repr((res, ls)))
+          and "Removed" not in res[1] and "could not be read through here (the read timed out" in res[1],
+          repr((res, ls)))
 
 
 # ── A04: the bots and the Refresh reason ────────────────────────────────────────────────────────
@@ -554,6 +560,7 @@ try:
     _console_slots58()
     _backup_kept58()
     _backup_removed58()
+    _backup_timed_out58()
     _connect_echo58()
     _refresh_reason58()
     _localized_continued58()

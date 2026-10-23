@@ -110,7 +110,8 @@ def _f2b_boot119():
             t = _th119.Thread(target=_app119._r34a_f2b_autostart, args=(_p9,))
             t.start()
             t.join(30)
-        got[case] = seen
+        # A thread still running past the wait reads the next case's stubs, or none (review 1022c lead).
+        got[case] = seen + (["thread still running"] if t.is_alive() else [])
     check("login jail: the boot self-heal (no bind in config.json, boot resolved loopback behind Serve) writes "
           "the all-ports jail, as the whitelist edit does (it read no boot bind and banned the web port only)",
           got == {"boot resolved loopback": [True], "boot public": [False]}, repr(got))

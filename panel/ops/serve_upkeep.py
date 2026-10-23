@@ -187,6 +187,19 @@ def with_leftover_note(msg, outcome):
     return " ".join(i18n.tr(s) for s in (msg, _leftover_note(outcome)) if s)
 
 
+def _r36a_banner_addr(bind, ips):
+    """The tailnet address the banner names for a panel bound to `bind`.
+
+    The address itself when it is bound to one (it printed the first listed, which a socket on
+    another address never answers), an IPv4 one for the IPv4-only wildcard, else the first listed.
+    """
+    if bind in ips:
+        return bind
+    if bind == "0.0.0.0":  # nosec B104 - compared, never bound
+        return next((ip for ip in ips if ":" not in ip), ips[0])
+    return ips[0]
+
+
 def _tailscale_banner(stored, panel_port, conf, info, scheme_now):
     """The startup banner's Tailscale lines: only addresses that reach THIS panel.
 
@@ -208,7 +221,7 @@ def _tailscale_banner(stored, panel_port, conf, info, scheme_now):
             lines.append("  🌍 Funnel (public): %s" % ts.route_url(route))
     elif info.tailscale_ips and (bind in ("0.0.0.0", "::", "") or bind in info.tailscale_ips):  # nosec B104 - compared, never bound
         scheme = "https" if conf.get("BOOT_TLS") else "http"
-        addr = info.tailscale_ips[0]
+        addr = _r36a_banner_addr(bind, info.tailscale_ips)
         lines.append("\n  🌐 Tailscale IP: %s://%s:%s" % (
             scheme, "[%s]" % addr if ":" in addr else addr, panel_port))
     return lines

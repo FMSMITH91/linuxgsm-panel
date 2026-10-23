@@ -450,14 +450,18 @@ check("debug report: ...with sshd's ports unread it says it checked port 22 only
       "SSH LIMIT from Anywhere (port 22; sshd's own ports not read)" in _unread85, _unread85)
 
 _saved_pr85 = _nw85.priv_read
+_saved_dr85 = _nw85.so._debug_run
 _sr85 = {}
 try:
+    # No ssh.socket answer (CI's 24.04/26.04 runners have one, socket-activated on 22): sshd -T decides.
+    _nw85.so._debug_run = lambda argv, timeout=5, cap=None: ("", "", 1)
     for _k85, _ans85 in (("read", ("Port 2222\nport 443\npermitrootlogin no\n", "", 0)),
                          ("refused", ("", "sudo: a password is required", 1)), ("none", None)):
         _nw85.priv_read = lambda verb, args, timeout, _a=_ans85: _a if verb == "sshd-effective-config" else None
         _sr85[_k85] = _nw85.sshd_ports_read()
 finally:
     _nw85.priv_read = _saved_pr85
+    _nw85.so._debug_run = _saved_dr85
 check("debug report: sshd's ports come from its effective config; a refused or impossible read "
       "is None", _sr85 == {"read": [443, 2222], "refused": None, "none": None}, repr(_sr85))
 

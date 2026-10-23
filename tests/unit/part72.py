@@ -95,9 +95,13 @@ try:
         _sio72.emit("join_console", {"server_id": _HUGE72})
     except Exception as e:      # the check reads what the join left behind; the raise is its detail
         _joinerr72 = type(e).__name__
+    # ...and an id in range IS watched, through the same socket (review 1022c lead: with no positive
+    # control, a join that never registered anything passed the same).
+    _sio72.emit("join_console", {"server_id": 987654})
     with _sf72._viewers_lock:
         _joined72 = _HUGE72 in _sf72._console_viewers
         _sf72._console_viewers.pop(_HUGE72, None)
+        _inrange72 = bool(_sf72._console_viewers.pop(987654, None))
     try:
         _sio72.emit("term_open", {"remote_id": _HUGE72, "cols": 80, "rows": 24})
         _term72 = [(m.get("args") or [{}])[0] for m in _sio72.get_received()
@@ -106,7 +110,8 @@ try:
         _term72 = [type(e).__name__]
     _sio72.disconnect()
     check("row id: a console join naming a server id past SQLite's range is not watched (the poller "
-          "would look it up every pass)", not _joined72, repr(_joinerr72))
+          "would look it up every pass), and raises nothing; one in range is (control)",
+          not _joined72 and _joinerr72 is None and _inrange72, repr((_joinerr72, _inrange72)))
     check("row id: a terminal naming a host id past SQLite's range is 'No host was named.'",
           [p.get("message") if isinstance(p, dict) else p for p in _term72] == ["No host was named."], repr(_term72))
 

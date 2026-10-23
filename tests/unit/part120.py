@@ -27,6 +27,7 @@ from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_core, _p9_patch, _p9_restore_a
 from unit.part114 import _PUB_ADDR114, _TS_ADDR114
 from panel.ops.ssh_manager import files as _f120
 from panel.ops.ssh_manager import hosts as _hosts120
+from panel.security import privileged as _priv120
 
 _TRIP120_START = len(_P9_TRIPPED)
 _TMP120 = _tf120.mkdtemp(prefix="lgsm-unit-p120-")
@@ -50,8 +51,8 @@ class _Box120:
     `unsent` names pairs that raise BEFORE, as a session that could not be opened does.
     """
 
-    def __init__(self, socket=False, blow=(), inactive=False, unsent=()):
-        self.dropin, self.bak, self.socket, self.inactive = "OLD", None, socket, inactive
+    def __init__(self, socket=False, blow=(), inactive=False, unsent=(), dropin="OLD"):
+        self.dropin, self.bak, self.socket, self.inactive = dropin, None, socket, inactive
         self.blow, self.calls, self.sent, self.added = set(blow), {}, [], False
         self.unsent = set(unsent)
 
@@ -83,6 +84,9 @@ class _Box120:
         return self._answer(verb)
 
     def _answer(self, verb):
+        if verb in ("sshd-backup-dropin", "sshd-socket-backup"):
+            # What the real verb prints answering 0: whether there was a drop-in to copy (review 1022c).
+            return (_priv120.R36B_SNAP_COPIED if self.bak is not None else _priv120.R36B_SNAP_NONE), "", 0
         if verb == "ufw-status":
             if self.inactive:
                 return "Status: inactive\n", "", 0
@@ -104,6 +108,7 @@ class _Box120:
 
     def restart(self, server, socket_mode=False):
         self._tick("restart")
+        return "", "", 0            # _restart_ssh_listener's answer: the undo reads it (review 1022c)
 
 
 def _move120(box):
@@ -136,16 +141,19 @@ def _undo_once120():
         # control: a revert that raises nothing still restores once and restarts once more
         "no raise": _move120(_Box120()),
     }
-    check("ssh port move: a revert that RAISES after putting the drop-in back (its restart, its daemon-reload, or "
-          "the restore's own answer) leaves the prior drop-in in place: the restore verb runs ONCE (run again, it "
+    check("ssh port move: a revert that RAISES after putting the drop-in back (its restart or its daemon-reload) "
+          "leaves the prior drop-in in place: the restore verb runs ONCE (run again, it "
           "deleted the drop-in it had just restored, and sshd fell back to sshd_config's port alone)",
-          [got[k][1:3] for k in ("restart raises", "restore raises", "reload raises")] == [("OLD", 1)] * 3,
+          [got[k][1:3] for k in ("restart raises", "reload raises")] == [("OLD", 1)] * 2,
           repr(got))
     check("ssh port move: ...and still raises, with the rest owed done ONCE: the new port's allow closed, the "
           "socket unit re-read and the listener restarted onto the restored config; a restore that never "
           "reached the host is still retried (control: a revert that raises nothing is unchanged)",
           got == {"restart raises": (True, "OLD", 1, 3, False, 1, 0),
-                  "restore raises": (True, "OLD", 1, 2, False, 1, 0),
+                  # Since review 1022c a restore whose answer was lost is run once more at once (the verb
+                  # copies and keeps the snapshot, so that puts back the same file): confirmed, the revert
+                  # goes on and answers instead of raising (part129 has the unconfirmed side).
+                  "restore raises": (False, "OLD", 2, 2, False, 1, 0),
                   "reload raises": (True, "OLD", 1, 2, False, 1, 3),
                   "restore unsent": (True, "OLD", 2, 2, False, 1, 0),
                   "no raise": (False, "OLD", 1, 2, False, 1, 0)},

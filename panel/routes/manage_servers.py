@@ -516,6 +516,15 @@ def _register_install(app):
             name_changed = name_changed or _skipped
             if _refused is not None:
                 return _refused
+            # The reboot check again, right before the row: _install_form_refusal asked it before
+            # the port scan and the account probes above, which are SSH and yield. A clean reboot of
+            # this host started in that window ran its census before the "installing" row existed,
+            # and its plan skips installing rows, so the host was rebooted under the install. Nothing
+            # yields from here to the commit: a reboot registered after this check runs its census
+            # after the row exists, and the row holds it (_r35b_reboot_hold).
+            _refused = _reboot_refusal(remote)
+            if _refused is not None:
+                return _refused
 
             # Create the DB row up-front in the "installing" state, then run the WHOLE
             # install in a background job with live step-by-step progress (polled by the

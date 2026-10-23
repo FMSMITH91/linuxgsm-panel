@@ -1409,9 +1409,14 @@ def _nodesource_setup_remote(a):
         # key" would then be the wrong reason to give.
         'command -v gpg >/dev/null 2>&1 || { echo "gpg is missing and could not be installed, so'
         + ' NodeSource\'s signing key cannot be checked - nothing was trusted"; exit 1; }',
+        # The trap first, so every exit after a mktemp removes what it made: set after both, a failed
+        # `mktemp -d` left the key file behind. ${x:+"$x"}: nothing is named before its mktemp ran.
+        'k=; g=',
+        "trap 'rm -rf -- ${k:+\"$k\"} ${g:+\"$g\"}' EXIT",
         'k=$(mktemp) || exit 1',
+        # The dearmored key goes inside the private "$g" (install.sh's form does the same): a name
+        # beside the mktemp file in /tmp is one another account could plant first as a link.
         'g=$(mktemp -d) || exit 1',
-        "trap 'rm -rf -- \"$k\" \"$k.gpg\" \"$g\"' EXIT",
         'curl --proto "=https" -fsSL --connect-timeout 15 --max-time 60 %s -o "$k" || { echo "Could not download'
         ' NodeSource\'s signing key"; exit 1; }' % q(NODESOURCE_KEY_URL),
         'l=$(GNUPGHOME="$g" gpg --batch --with-colons --show-keys "$k" 2>/dev/null)',
@@ -1419,9 +1424,9 @@ def _nodesource_setup_remote(a):
         '[ "$(printf \'%s\\n\' "$l" | ' + first_fpr + ')" = ' + q(NODESOURCE_FINGERPRINT) + ' ]; }'
         ' || { echo "NodeSource\'s signing key is not the pinned key ' + NODESOURCE_FINGERPRINT
         + ' - nothing was trusted"; exit 1; }',
-        'GNUPGHOME="$g" gpg --batch --yes --dearmor -o "$k.gpg" "$k" 2>/dev/null && '
+        'GNUPGHOME="$g" gpg --batch --yes --dearmor -o "$g/key.gpg" "$k" 2>/dev/null && '
         'install -d -m 0755 ' + q(os.path.dirname(NODESOURCE_KEYRING)) + ' && '
-        'install -m 0644 "$k.gpg" ' + q(NODESOURCE_KEYRING)
+        'install -m 0644 "$g/key.gpg" ' + q(NODESOURCE_KEYRING)
         + ' || { echo "Could not install NodeSource\'s signing key"; exit 1; }',
         'rm -f ' + q(os.path.join(src_dir, "nodesource.list")),
         "printf %s %s \"$a\" %s > %s" % (source, q(NODESOURCE_NODE_MAJOR), q(NODESOURCE_KEYRING),
@@ -1641,6 +1646,12 @@ _R34A_KEEP_INSTALLED_VERBS = frozenset({"apt-full-upgrade"})
 
 # The snapshot verbs' answer when they keep a snapshot that differs from the drop-in (_r35b_snapshot_sh).
 R35J_SNAPSHOT_HELD = 3
+# What a snapshot verb that answered 0 printed: it copied a drop-in, or there was none (and no snapshot
+# is left). change_ssh_port's "restore could not be confirmed" message depends on which: "the previous
+# one is kept at <bak>" is untrue when there was no drop-in, and the step that recovers that host is to
+# remove the drop-in. A helper too old to print either says neither, and the message names both cases.
+R36B_SNAP_COPIED = "SNAPSHOT=copied"
+R36B_SNAP_NONE = "SNAPSHOT=none"
 
 
 def _r35b_snapshot_sh(dropin, bak):
@@ -1659,11 +1670,16 @@ def _r35b_snapshot_sh(dropin, bak):
     confirmed restore leaves (the restore copies and keeps it), so it is replaced as usual; holding
     on `sshd -t` alone refused every move over an unrelated sshd_config error (review 1022b, L1/L2).
     `cmp` failing to read either file counts as differing.
+
+    Answering 0 it prints R36B_SNAP_COPIED or R36B_SNAP_NONE (which of the two it did), and nothing
+    else; the exit status is still the copy's or the removal's own.
     """
     d, b, t = (shlex.quote(x) for x in (dropin, bak, bak + ".tmp"))
     return ("if [ -f {d} ]; then if [ -f {b} ] && ! cmp -s {d} {b}; then r={held}; else "
-            "rm -f {t} && cp -fp {d} {t} && mv -f {t} {b}; r=$?; rm -f {t}; fi; ( exit \"$r\" ); "
-            "else rm -f {b}; fi").format(d=d, b=b, t=t, held=R35J_SNAPSHOT_HELD)
+            "rm -f {t} && cp -fp {d} {t} && mv -f {t} {b}; r=$?; rm -f {t}; "
+            "[ \"$r\" = 0 ] && echo {copied}; fi; ( exit \"$r\" ); "
+            "else rm -f {b}; r=$?; [ \"$r\" = 0 ] && echo {none}; ( exit \"$r\" ); fi"
+            ).format(d=d, b=b, t=t, held=R35J_SNAPSHOT_HELD, copied=R36B_SNAP_COPIED, none=R36B_SNAP_NONE)
 
 
 def _r35j_restore_sh(dropin, bak):
