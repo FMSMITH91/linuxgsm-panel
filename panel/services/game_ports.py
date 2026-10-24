@@ -373,7 +373,7 @@ def _close_old_rule(host, row, now, rules, new_port):
     """
     closed = _close_own_rule(host, row, now, rules)
     return (("closed this server's firewall rule on %s; " % row.port) if closed else "") + (
-        "the firewall is not opened on %s: 'Open all ports' on the host's Firewall page opens it"
+        "the firewall is not opened on %s: 'Open all ports' on the host's Network tab opens it"
         % new_port)
 
 

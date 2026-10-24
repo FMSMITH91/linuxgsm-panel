@@ -1,0 +1,8 @@
+{
+  "Change it on the Security tab": "Modifiez-le dans l'onglet Sécurité",
+  "Blocked & banned IPs": "IP bloquées et bannies",
+  "Blocked & banned IPs (Security tab)": "IP bloquées et bannies (onglet Sécurité)",
+  "Who is kept out of this host: addresses the firewall blocks on every port, and addresses fail2ban has banned from the service they attacked.": "Qui est tenu à l'écart de cet hôte : les adresses que le pare-feu bloque sur tous les ports, et celles que fail2ban a bannies du service qu'elles ont attaqué.",
+  "Blocked IPs — panel host": "IP bloquées — hôte du panneau",
+  "Maint.": "Maint."
+}

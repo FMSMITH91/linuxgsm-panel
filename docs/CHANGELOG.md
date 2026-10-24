@@ -226,6 +226,19 @@ CI-verified commit regardless of this file — this changelog is for humans.
   Remote Servers list's Firewall button, the SSH port card and the search box (Ctrl/⌘+K, which now
   finds the panel host's firewall too) all lead to the tab; old links to the Firewall page still
   work. The Power card links to the Settings page's Host reboots.
+- **The host page, tidied for a phone.** All five tabs now fit a phone screen without the tab bar
+  scrolling sideways: each shows its icon over a short label ("Controls", "Maint."), in English,
+  Spanish and French, while screen readers still hear the full name. On the Network tab the list
+  of open ports and rules now comes straight after UFW Status on a phone, before the forms for
+  opening and restricting ports; on a computer it stays in its own column on the right. **Blocked
+  IPs** (addresses the firewall blocks on every port) moved to the **Security** tab, beside the
+  fail2ban bans, as one **Blocked & banned IPs** section; each list keeps its own buttons, and a
+  block or unblock from Top offenders updates the list straight away. The Network tab's "Jump to"
+  line links there, and the search box (Ctrl/⌘+K) finds Blocked IPs. The auto-block threshold now
+  has one place to change it: beside the Auto-block switch on the Security tab. Settings › Sessions
+  & Security shows its value with a link there, and saving Settings no longer touches it. Old
+  links and bookmarks to a host's Firewall page open the Network tab. Messages that told you to go
+  to "the host's Firewall page" now say the host's Network tab.
 - **Faster test runs.** The smoke suite no longer waits on itself (about 9 minutes down to under
   2), `tools/run-tests.sh` can run the suites in parallel lanes (`RUN_TESTS_PARALLEL=1`), and CI
   runs them that way, with the root unit run beside them. A lane that fails, is killed or prints

@@ -402,7 +402,7 @@ check("375px: ...a flex-wrap (or a wrapping flex-flow) in the phone block's .pag
       and _r18d_unscoped_wraps72(".page-title { flex-flow: row nowrap }") == []
       and not _r18d_name_floor72(_flctl72),
       repr((_r18d_unscoped_wraps72(_ptctl72), _r18d_name_floor72(_flctl72))))
-# The firewall's cards are one partial, rendered by the Firewall page and the host page's Network tab.
+# The firewall's cards: a partial on the host page's Network tab.
 _fw72 = _read72(_root, "templates", "_firewall_panel.html")
 _lim72 = _fw72[_fw72.index('id="limit-port"') - 400:_fw72.index('data-action="unlimitPort"')]
 check("375px: the rate-limit row gives its port the whole row below 576px (the × ran past the card "
@@ -518,11 +518,10 @@ check("375px: the file editor's header wraps and its path breaks (a long path pu
       _edh72.group(0) if _edh72 else "no editor header")
 _FWJS72 = _read72(_JS72, "remote_firewall.js")
 _bjs72 = _FWJS72[_FWJS72.index("function _fwRenderBlocks("):_FWJS72.index("function _fwUnlisted(")]
-_btpl72 = _fw72[_fw72.index('id="blocks-list"'):_fw72.index('id="blocks-body"')]
-check("375px: the blocked-IPs table pins its Unblock button and lets an address break, in the template and "
-      "the repaint (an IPv6 address hid the button under the box's scroll)",
-      "table-pin-actions" in _btpl72 and '<code class="text-break">{{ g.block_ip }}</code>' in _fw72
-      and "table-pin-actions" in _bjs72 and "<code class=\"text-break\">'" in _bjs72, _bjs72[:400])
+# Only the repaint draws the table now: the cards render "Loading…" until the read (ui-tidy-2).
+check("375px: the blocked-IPs table pins its Unblock button and lets an address break, as the repaint "
+      "draws it (an IPv6 address hid the button under the box's scroll)",
+      "table-pin-actions" in _bjs72 and "<code class=\"text-break\">'" in _bjs72, _bjs72[:400])
 check("i18n: the repainted Unblock tooltip is one translated sentence ('Unblock ' + ip was English)",
       "tf('Unblock {ip}', {ip: g.block_ip})" in _bjs72 and "'Unblock '" not in _bjs72
       and "Unblock {ip}" in _ES72 and "Unblock {ip}" in _scan72.load_catalog("fr"), _bjs72[-500:])

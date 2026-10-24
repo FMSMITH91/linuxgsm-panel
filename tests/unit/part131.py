@@ -1,14 +1,14 @@
 """Part 131 of the unit suite: the host page's Network tab (ui-network-tab).
 
 The firewall was a card on Host Controls that only linked to a page of its own, and Connection & SSH
-was that tab's last card. Both are on a Network tab now, the firewall's cards rendered there from the
-same partial (_firewall_panel.html) and script (remote_firewall.js) as the standalone page, which
-still answers its old URL. Held here:
+was that tab's last card. Both are on a Network tab now, the firewall's cards rendered there from a
+partial (_firewall_panel.html) and remote_firewall.js; the old page's URL redirects to the tab, and
+Blocked IPs moved on to the Security tab (ui-tidy-2, part132). Held here:
 
 * REACHABILITY, not presence: every control that moved, and every one that stayed on Host Controls,
   is inside the tab it should be in AND that tab's button is in the page's nav, on the panel host's
   page and on a remote's. A later edit that drops a control, or leaves it under a tab nobody can
-  open, fails by name. Every control of the standalone page's cards is on the tab too.
+  open, fails by name.
 * The tab's firewall cards say "Loading…" and claim no count until read (the page makes no
   firewall read while it loads), and remote_firewall.js is loaded wherever the tab is.
 * No link on the host page or the Remote Servers list still points at the old page; the SSH port
@@ -88,10 +88,10 @@ def _parse131(html):
 
 
 # The controls each tab must hold, on every host page (a superadmin's view).
-_NETWORK131 = ("sec-firewall", "network-jump", "fw-rules", "fw-blocks", "ufw-badge", "ufw-status-note",
-               "rules-list", "rules-count", "blocks-list", "blocks-count", "blocks-inactive-note",
+_NETWORK131 = ("sec-firewall", "network-jump", "fw-rules", "ufw-badge", "ufw-status-note",
+               "rules-list", "rules-count",
                "new-port", "new-proto", "new-comment", "port-result", "src-cidr", "src-port", "src-proto",
-               "limit-port", "limit-proto", "restrict-result", "block-ip", "block-result",
+               "limit-port", "limit-proto", "restrict-result",
                "conn-ssh-card", "sec-connection", "ssh-mode", "ssh-msg", "ssh-port-now", "ssh-port-input",
                "ssh-bind-input", "ssh-port-msg")
 _NETWORK_LOCAL131 = ("ts-ssh-badge", "panel-bind-select", "panel-bind-custom", "panel-port-input",
@@ -100,7 +100,7 @@ _NETWORK_REMOTE131 = ("conn-method", "migrate-msg", "hostkey-msg")
 _CONTROLS131 = ("os-updates", "sec-osupdates", "btn-install-updates", "update-info", "sec-terminal",
                 "sec-power", "power-state", "disc-scan-btn", "disc-result")
 _NET_ACTIONS131 = {"refreshFirewall", "openPort", "allowFromSource", "removeAllowFromSource", "limitPort",
-                   "unlimitPort", "blockIp", "sshMode", "changeSshPort"}
+                   "unlimitPort", "sshMode", "changeSshPort"}
 _NET_ACTIONS_LOCAL131 = {"changePanelBinding", "onBindSelect", "ufwAllowTailscale"}
 _NET_ACTIONS_REMOTE131 = {"retrustHostKey", "switchToTailscale"}
 
@@ -124,15 +124,14 @@ try:
     _p9_patch(_smc131, "run_privileged", lambda *a, **k: ("", "", 1))
     _p9_patch(_smc131, "run_command", lambda *a, **k: ("", "", 1))
     _p9_patch(_p9_rv, "remote_ufw_status", lambda remote: _UFW131)
-    for _k131, _url131 in (("local", "/server-management"), ("remote", "/remote/%d/manage" % P9_HOST),
-                           ("firewall", "/remote/%d/firewall" % P9_HOST)):
+    for _k131, _url131 in (("local", "/server-management"), ("remote", "/remote/%d/manage" % P9_HOST)):
         _r131 = _p9_client(P9_ADMIN).get(_url131)
         _pages131[_k131] = (_r131.status_code, _r131.get_data(as_text=True))
 finally:
     _p9_restore_all()
 
-check("network tab: every host page renders (the panel host's, a remote's and the standalone firewall page)",
-      len(_pages131) == 3 and all(st == 200 for st, _h in _pages131.values()),
+check("network tab: every host page renders (the panel host's and a remote's)",
+      len(_pages131) == 2 and all(st == 200 for st, _h in _pages131.values()),
       repr({k: v[0] for k, v in _pages131.items()}))
 _P131 = {k: _parse131(h) for k, (_st, h) in _pages131.items()}
 
@@ -168,25 +167,6 @@ for _page131, _extra131, _acts131 in (("local", _NETWORK_LOCAL131, _NET_ACTIONS_
     check("network tab (%s host page): remote_firewall.js is loaded, whose functions the tab's controls "
           "and its rule rows (deleteGroup, unblockIp) call" % _page131, len(_src131) == 1, repr(_src131))
 
-# Every control of the standalone page's cards is on the tab. Its rows' deleteGroup/unblockIp come from
-# its server-side read; on the tab the script draws them (remote_firewall.js, checked above).
-_fwp131 = _P131.get("firewall")
-_PARTIAL131 = _read131("templates", "_firewall_panel.html")
-# The cards' own actions: the page's chrome (sidebar, palette, 2FA nag) carries others.
-_fw_actions131 = {a for a in (set().union(*_fwp131.actions.values()) if _fwp131 else set())
-                  if 'data-action="%s"' % a in _PARTIAL131}
-_fw_ids131 = {i for i in (_fwp131.where if _fwp131 else {})
-              if 'id="%s"' % i in _PARTIAL131 and i not in ("rules-body", "blocks-body")}
-_net131 = _P131["remote"].actions.get("network", set()) if "remote" in _P131 else set()
-check("network tab: the standalone Firewall page still renders its read (a rule row and a block row, "
-      "with their delete and unblock)", {"deleteGroup", "unblockIp", "openPort", "blockIp"} <= _fw_actions131,
-      repr(sorted(_fw_actions131)))
-check("network tab: every control of the standalone Firewall page's cards is on the Network tab too",
-      (_fw_actions131 - {"deleteGroup", "unblockIp"}) <= _net131 and len(_fw_ids131) > 15
-      and not [i for i in _fw_ids131 if _P131["remote"].where.get(i) != "network"],
-      repr((sorted(_fw_actions131 - _net131), sorted(i for i in _fw_ids131
-                                                     if _P131["remote"].where.get(i) != "network"))))
-
 
 def _net_text131(page):
     """The Network tab's firewall section of a rendered page, as text."""
@@ -200,8 +180,8 @@ for _page131 in ("local", "remote"):
     _t131 = _net_text131(_page131)
     check("network tab (%s host page): the firewall cards wait for their read — Checking… and Loading…, no "
           "count and no empty-state claim about a firewall nothing read" % _page131,
-          "Checking…" in _t131 and _t131.count("Loading…") >= 3
-          and 'id="rules-count">&mdash;' in _t131 and 'id="blocks-count">&mdash;' in _t131
+          "Checking…" in _t131 and _t131.count("Loading…") >= 2
+          and 'id="rules-count">&mdash;' in _t131
           and "No firewall rules yet." not in _t131 and "No IPs are blocked." not in _t131
           and "not installed" not in _t131.partition('id="ufw-status-note"')[2].partition("</div>")[0],
           _t131[:300])
@@ -217,10 +197,10 @@ check("network tab: the Remote Servers list's Firewall button opens the host's N
       "title=\"Open or close firewall ports\"" in _MR131 and "url_for('remote_firewall'" not in _MR131, "")
 for _page131 in ("local", "remote"):
     _in131 = {(h, tab) for h, tab in (_P131[_page131].hrefs if _page131 in _P131 else [])
-              if h in ("#sec-firewall", "#fw-rules", "#fw-blocks", "#sec-connection")}
-    check("network tab (%s host page): the SSH port card and the jump line link into the tab, and the "
-          "Security tab to its Blocked IPs" % _page131,
-          {("#sec-firewall", "network"), ("#fw-rules", "network"), ("#fw-blocks", "network"),
+              if h in ("#sec-firewall", "#fw-rules", "#fw-blocks", "#sec-connection", "#sec-keptout")}
+    check("network tab (%s host page): the SSH port card and the jump line link into the tab (and on to the "
+          "Security tab's Blocked & banned IPs), and Top offenders to Blocked IPs" % _page131,
+          {("#sec-firewall", "network"), ("#fw-rules", "network"), ("#sec-keptout", "network"),
            ("#sec-connection", "network"), ("#fw-blocks", "security")} <= _in131, repr(sorted(_in131)))
 _pw131 = [h for h, tab in (_P131["local"].hrefs if "local" in _P131 else []) if h.endswith("/settings#sec-reboots")]
 check("network tab: the Power card links a superadmin to the Settings page's Host reboots",
@@ -272,7 +252,9 @@ function run(ready, hash, fwEarly) {
   const secs = TABS.map(t => el({'data-mtab': t[0]}));
   const btns = TABS.map(t => el({'data-mtab-btn': t[0]}, {left: t[1], right: t[2]}));
   btns.forEach(b => { b.classList._o = b; }); secs.forEach(s => { s.classList._o = s; });
-  const card = el({id: 'sec-connection'}); card._sec = secs[2];
+  // Cards by the tab they sit in: Connection & SSH on Network; Blocked IPs on Security (part132).
+  const cards = {};
+  [['sec-connection', 2], ['fw-blocks', 4]].forEach(([id, t]) => { cards[id] = el({id}); cards[id]._sec = secs[t]; });
   state = {reads: 0, scrolled: [], dcl: [], click: null, btns};
   const nav = { scrollLeft: 0, querySelectorAll() { return btns; },
     querySelector(sel) { const m = /data-mtab-btn="(\w+)"/.exec(sel);
@@ -280,7 +262,7 @@ function run(ready, hash, fwEarly) {
     addEventListener(e, f) { state.click = f; }, getBoundingClientRect() { return {left: 16, right: 359}; } };
   state.nav = nav;
   global.document = { readyState: ready,
-    getElementById(id) { return id === 'mtab-nav' ? nav : (id === 'sec-connection' ? card : null); },
+    getElementById(id) { return id === 'mtab-nav' ? nav : (cards[id] || null); },
     querySelectorAll(sel) { return sel === '[data-mtab]' ? secs : []; },
     addEventListener(e, f) { if (e === 'DOMContentLoaded') state.dcl.push(f); } };
   global.location = {hash, search: ''};
@@ -305,6 +287,13 @@ click(s, 'network'); out.click.first = s.reads; out.click.active = active(s); ou
 click(s, 'overview'); click(s, 'network'); out.click.again = s.reads;
 s = run('complete', '#sec-connection', true);
 out.card = {reads: s.reads, active: active(s), scrolled: s.scrolled};
+// The Security tab shows Blocked IPs, filled by the same read (part132): its first opening reads it,
+// a card on it opens it, and the Network tab opened after reads nothing more.
+s = run('complete', '#overview', true);
+click(s, 'security'); out.sec = {first: s.reads, active: active(s)};
+click(s, 'network'); click(s, 'security'); out.sec.again = s.reads;
+s = run('complete', '#fw-blocks', true);
+out.blocks = {reads: s.reads, active: active(s), scrolled: s.scrolled};
 console.log(JSON.stringify(out));
 """ % _json131.dumps(_IIFE131)
 _out131 = _node47(_PROG131)

@@ -763,8 +763,10 @@ def terminal(d):
     d.wait(0.8)
 
 
-# ── a host's firewall ──────────────────────────────────────────────────────────────────────────
+# ── a host's firewall: the Network tab, and Blocked IPs on the Security tab ─────────────────────
+# The firewall's own page only redirects to the host page's Network tab now (ui-tidy-2).
 FIREWALL = r"""
+J.click('[data-mtab-btn="network"]'); await J.sleep(1500);
 J.click('[data-action="refreshFirewall"]'); await J.sleep(1200);
 // Open a port: none typed, a bad one, then a good one by Enter in the box.
 J.click('[data-action="openPort"]'); await J.sleep(200);
@@ -779,11 +781,14 @@ J.click('[data-action="removeAllowFromSource"]'); await J.sleep(900);
 J.type('#limit-port', '22');
 J.click('[data-action="limitPort"]'); await J.sleep(900);
 J.click('[data-action="unlimitPort"]'); await J.sleep(900);
-// Block an address by Enter, then unblock one; sync a server's ports; remove a rule (OK).
+// Block an address by Enter, then unblock one (Security tab); sync a server's ports and remove a
+// rule (OK) back on the Network tab.
+J.click('[data-mtab-btn="security"]'); await J.sleep(1200);
 J.type('#block-ip', '198.51.100.99');
 J.q('#block-ip').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
 await J.sleep(1200);
 J.click('[data-action="unblockIp"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(900);
+J.click('[data-mtab-btn="network"]'); await J.sleep(600);
 J.click('[data-action="syncPorts"]'); await J.sleep(1200);
 J.click('[data-action="deleteGroup"]', 1); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
 return 1;
@@ -975,9 +980,9 @@ FLOWS = {
                            ("controls", js(HOST_CONTROLS)), ("maintenance", js(HOST_MAINTENANCE)),
                            ("backups", js(BACKUPS)), ("reboot", js(REBOOT_DIALOG))],
     "/remote/2/manage": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
-                         ("controls", js(HOST_CONTROLS)), ("reboot", js(REBOOT_DIALOG))],
-    "/remote/2/firewall": [("firewall", js(FIREWALL))],
-    "/remote/3/firewall": [("firewall", js(FIREWALL))],
+                         ("controls", js(HOST_CONTROLS)), ("reboot", js(REBOOT_DIALOG)),
+                         ("firewall", js(FIREWALL))],
+    "/remote/3/manage": [("firewall", js(FIREWALL))],
     "/remotes": [("remotes", js(REMOTES)), ("tailscale", remotes_tailscale)],
     "/tailscale": [("states", tailscale_states)],
     "/servers/install": [("install", js(INSTALL))],

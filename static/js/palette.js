@@ -103,7 +103,11 @@ var PALETTE_SECTIONS = [
   // The panel host's Network tab. The host rows below expand over REMOTE hosts only (the sidebar
   // lists no link to the panel host's own page under them), so "firewall" never offered this one.
   { page: '/server-management', hash: 'sec-firewall', label: 'Firewall — panel host',
-    kw: 'firewall ufw port ports open close allow deny block network panel host' },
+    kw: 'firewall ufw port ports open close allow deny network panel host' },
+  // Blocked IPs (UFW denies) is on the Security tab, in "Blocked & banned IPs" beside the fail2ban
+  // bans; "block" found only the Firewall row, which opens the Network tab.
+  { page: '/server-management', hash: 'fw-blocks', label: 'Blocked IPs — panel host',
+    kw: 'blocked block unblock deny ufw ip address kept out panel host' },
   { page: '/server-management', hash: 'sec-connection', label: 'Connection & SSH — panel host',
     kw: 'ssh connection port tailscale binding bind network panel host' }
 ];
@@ -115,7 +119,9 @@ var PALETTE_SECTIONS = [
 // identical "Firewall" rows.
 var PALETTE_HOST_SECTIONS = [
   { hash: 'sec-firewall',   label: 'Firewall',
-    kw: 'firewall ufw port ports open close allow deny block network' },
+    kw: 'firewall ufw port ports open close allow deny network' },
+  { hash: 'fw-blocks',      label: 'Blocked IPs',
+    kw: 'blocked block unblock deny ufw ip address kept out' },
   { hash: 'sec-osupdates',  label: 'OS updates',
     kw: 'os update updates apt upgrade patch security packages' },
   { hash: 'sec-power',      label: 'Power',

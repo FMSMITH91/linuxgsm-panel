@@ -381,10 +381,10 @@ def _f1_step6_raises36(rid):
           "of a clean 'installed and started'",
           warn is True and msg.startswith("p36fw1 installed and started")
           and _FW_FAILED36 in msg, repr(_fin36))
-    # The Firewall page takes Manage Remotes; an install takes only Manage Servers (or Install).
+    # The host's firewall (its Network tab) takes Manage Remotes; an install takes only Manage Servers (or Install).
     check("F1 install: ...and that sentence does not send a Manage Servers user only to a page "
           "that takes Manage Remotes — it says who else can open the ports",
-          "Firewall page" in msg and "or ask someone who manages the host to" in msg, msg)
+          "host's Network tab" in msg and "or ask someone who manages the host to" in msg, msg)
     audit = _p9_audit("install_complete")
     check("F1 install: ...and the install_complete audit entry records the failed firewall step "
           "— the job's message is gone with the job, the audit log is what stays",
