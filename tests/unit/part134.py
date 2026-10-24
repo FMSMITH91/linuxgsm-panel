@@ -365,6 +365,8 @@ def _panels134(html):
 
 
 _sdp134 = {}
+_UNREAD134 = object()
+_prefs_was134 = _UNREAD134   # set before the try: the finally reads it even if the try fails early
 try:
     _p9_arm(who="part134")
     _p9_patch(_sd134, "_maybe_resolve_public_ip", lambda *a, **k: None)
@@ -391,8 +393,9 @@ try:
 finally:
     with _p9.app_context():
         _u134 = _db134.session.get(_User134, P9_ADMIN)
-        _u134.ui_prefs = _prefs_was134
-        _db134.session.commit()
+        if _u134 is not None and _prefs_was134 is not _UNREAD134:
+            _u134.ui_prefs = _prefs_was134
+            _db134.session.commit()
     _p9_restore_all()
 _def134 = _panels134(_sdp134.get("default", (0, ""))[1])
 check("server page: with no saved layout the Live Console is the first panel, before the Connect/stats "
