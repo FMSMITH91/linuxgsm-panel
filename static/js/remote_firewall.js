@@ -137,6 +137,15 @@ function _fwStatusNote(data, inactive) {
   box.appendChild(p);
 }
 
+// Add a rule's kind, from the card's Open / One source / Rate-limit switch: that kind's fields shown,
+// the others hidden. Nothing typed is cleared, so switching back keeps it. The page renders Open
+// shown and the others hidden, which is the switch's checked state, so this only runs on a change.
+function fwAddMode(mode) {
+  document.querySelectorAll('#fw-add [data-fw-mode]').forEach(function(p) {
+    p.hidden = p.getAttribute('data-fw-mode') !== mode;
+  });
+}
+
 // The open-ports table, or its empty state, and the rule count beside the card title.
 function _fwRenderRules(listEl, openGroups) {
   if (openGroups.length) {

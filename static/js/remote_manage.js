@@ -42,6 +42,20 @@ function _uidFailHtml(what, err){
     : (_UID_WHY[why] ? '<span>'+escapeHtml(_UID_WHY[why])+'</span>' : '');
   return '<div class="small text-danger"><span>'+escapeHtml(what)+'</span>'+(reason ? ' '+reason : '')+'</div>';  // nosemgrep - fixed strings, escaped; the status is a number
 }
+// A long table on this tab shows its first `n` rows; the rest are drawn hidden, behind one "Show all"
+// under it (uidShowAll). Top offenders lists up to 100 addresses and the events card every recent
+// failure, which made the tab several screens long before Raw logs. Nothing is fetched again.
+function _uidCapped(rowsHtml, n){
+  if (rowsHtml.length <= n) return {rows: rowsHtml.join(''), more: ''};
+  return {rows: rowsHtml.map(function(r, i){ return i < n ? r : r.replace('<tr', '<tr hidden'); }).join(''),
+          more: '<button type="button" class="btn btn-link btn-sm p-0 mt-1"'+_da('uidShowAll',['@self'])+'>'
+                +tfHtml('Show all {n}', {n: String(rowsHtml.length)})+'</button>'};
+}
+function uidShowAll(btn){
+  var box = btn && btn.parentElement; if(!box) return;
+  box.querySelectorAll('tr[hidden]').forEach(function(r){ r.hidden = false; });
+  btn.remove();
+}
 function loadSecurity(){ loadSecurityBans(); loadSecurityTopIps(); loadSecurityEvents(); }
 function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
@@ -92,11 +106,12 @@ function loadSecurityTopIps(){
         +'<td class="small text-nowrap">'+jailCell+'</td>'
         +'<td class="small">'+badge+'</td>'
         +'<td class="small text-nowrap">'+block+'</td></tr>';
-    }).join('');
+    });
+    var cap=_uidCapped(rows, 10);
     el.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-0">'  // nosemgrep
       +'<thead><tr><th class="small">#</th><th class="small">IP</th><th class="small text-end">Attempts</th>'
       +'<th class="small text-end">Bans</th><th class="small">Jail</th><th class="small">Status</th><th class="small">Firewall</th></tr></thead>'
-      +'<tbody>'+rows+'</tbody></table></div>';
+      +'<tbody>'+cap.rows+'</tbody></table></div>'+cap.more;
   }).catch(function(err){ el.innerHTML=_uidFailHtml('Could not load top offenders.', err); });  // nosemgrep - _uidFailHtml escapes
 }
 function blockOffender(ip, btn){
@@ -269,13 +284,16 @@ function loadSecurityEvents(){
         +'<td class="small" data-no-i18n>'+escapeHtml(e.user||'')+'</td>'
         +'<td class="small text-secondary">'+escapeHtml(e.detail||'')+'</td>'
         +'<td class="small text-secondary">'+escapeHtml(e.ip||e.target||'')+'</td></tr>';
-    }).join('');
+    });
+    var cap=_uidCapped(rows, 5);
     el.innerHTML='<table class="table table-sm align-middle mb-0"><thead><tr>'  // nosemgrep
-      +'<th class="small">When</th><th class="small">Event</th><th class="small">User</th><th class="small">Detail</th><th class="small">IP</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      +'<th class="small">When</th><th class="small">Event</th><th class="small">User</th><th class="small">Detail</th><th class="small">IP</th></tr></thead><tbody>'+cap.rows+'</tbody></table>'+cap.more;
   }).catch(function(err){ el.innerHTML=_uidFailHtml('Could not load events.', err); });  // nosemgrep - _uidFailHtml escapes
 }
 function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
+  // Raw logs is collapsed until wanted: a jail's "view log" opens it, so the log shows where it lands.
+  var card=el.closest ? el.closest('details') : null; if(card) card.open=true;
   var hdr=document.getElementById('sec-log-title');
   if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? tf('fail2ban activity — {jail}', {jail: jail}) : '';
   _r21cLogNote(el, 'Loading…');
@@ -366,7 +384,10 @@ function _r21cLogNote(el, key){
       show(tab);
       // AFTER show(): until its tab is open the card is display:none, and scrolling to a hidden
       // element does nothing at all — silently, which is what made this hard to notice.
-      var el = document.getElementById(h); if(el) el.scrollIntoView();
+      var el = document.getElementById(h);
+      // A card that is collapsed (Raw logs) opens too: a link to it landed on a closed box.
+      var fold = (el && el.closest) ? el.closest('details') : null; if(fold) fold.open = true;
+      if(el) el.scrollIntoView();
       return;
     }
     if (fallback) { show('overview'); }
