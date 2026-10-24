@@ -404,7 +404,6 @@ _sav134 = _panels134(_sdp134.get("saved", (0, ""))[1])
 check("server page: a saved layout that put the controls first is left as it was saved",
       _sav134[:2] == ["controls", "console"], repr(_sav134))
 
-_SA134 = _read134("templates", "_server_actions.html")
 _html134 = _sdp134.get("default", (0, ""))[1]
 _mi134 = _html134.find('id="srv-maint-menu"')
 _menu134 = _html134[_mi134:_html134.find("</ul>", _mi134)] if _mi134 >= 0 else ""
