@@ -253,7 +253,8 @@ check("files & config section script: the page reads its #hash on load and follo
 # ── Alerts: only the services in use are open ───────────────────────────────────────────────────
 _ALDOM134 = r"""
 global.MOUNT = ''; global.serverId = 1; global.window = global;
-global.escapeHtml = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+global.escapeHtml = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 function esc(s){ return escapeHtml(s); } var escA = esc;
 const els = {'alerts-body': {style: {}, innerHTML: ''}, 'alerts-loading': {style: {}, innerHTML: ''}};
 global.document = {getElementById: id => els[id] || null};
