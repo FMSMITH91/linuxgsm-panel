@@ -170,7 +170,9 @@ def _fwa_block_or_unblock(remote, ip, shown, unblock):
     """The block route's write -> (ok, msg): the unblock, or the block once nothing refuses it."""
     if unblock:
         return remote_ufw_undeny_ip(remote, ip)
-    why = None if shown == NOT_AN_IP else _fwa_block_refusal(remote, shown)
+    if shown == NOT_AN_IP:
+        return False, "Invalid IP address."
+    why = _fwa_block_refusal(remote, shown)
     return (False, why) if why else remote_ufw_deny_ip(remote, ip)
 
 
