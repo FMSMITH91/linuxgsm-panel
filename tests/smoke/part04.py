@@ -753,8 +753,9 @@ def _detail_panels(html):
 
 _det = c.get("/server/%d" % gs_id).get_data(as_text=True)
 _det_default = _detail_panels(_det)
+# Console first by default (ui-scroll): it is what the page is for. A saved order still wins, below.
 check("detail: the console panels render with keys",
-      _det_default == ["controls", "console", "players"], str(_det_default))
+      _det_default == ["console", "controls", "players"], str(_det_default))
 _dp = c.post("/api/account/ui-order",
              json={"panels": {"detail_console": ["players", "console", "controls"]}})
 check("detail: saving the console panel order succeeds", _dp.status_code == 200)
