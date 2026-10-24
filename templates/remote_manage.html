@@ -49,13 +49,17 @@
 <!-- Section tabs: group the cards so the page isn't one long wall. Cards are tagged with
      data-mtab and filtered client-side (see the mtab script), so every card keeps its exact
      markup, conditionals and JS — only visibility changes. -->
+{# Below 768px the pills are icon-over-label and two labels are shortened (mtab-short, "Controls",
+   "Maint."), so all five fit a 375px phone without the bar scrolling; the full label stays in the
+   button for screen readers (mtab-full, visually hidden there) and is the one shown on a desktop.
+   panel.css #mtab-nav. A language whose labels do not fit still scrolls sideways. #}
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
   {# Host Controls holds OS updates and power (_host_ctl), the terminal (superadmin-only on the
      panel host) and Existing servers (manage_servers): a delegated host admin on the panel host
      with none of those opened it onto a blank page. #}
   {% if _host_ctl or has_permission('manage_servers') %}
-  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> <span class="mtab-full">Host Controls</span><span class="mtab-short" aria-hidden="true">Controls</span></button></li>
   {% endif %}
   {# Network: the firewall's rules and Connection & SSH, both _host_ctl. They were a "Firewall" card
      on Host Controls that only linked to a page of its own, and the last card of that tab. #}
@@ -65,7 +69,7 @@
   {# Every Maintenance card is gated like this (the panel-only ones on a superadmin, Ubuntu Pro on
      _host_ctl), so for a delegated host admin on the panel host the tab opened onto a blank page. #}
   {% if _host_ctl %}
-  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> Maintenance</button></li>
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> <span class="mtab-full">Maintenance</span><span class="mtab-short" aria-hidden="true">Maint.</span></button></li>
   {% endif %}
   {# Same rule as the Connection & SSH card: on the panel host every Security endpoint is
      /api/panel/security/*, all @superadmin_required, and their 403 JSON rendered as "fail2ban isn't
@@ -552,9 +556,17 @@
 </div>
 {% endif %}
 
-<!-- ─── Security tab: fail2ban bans (panel + ssh) + raw logs ─────── -->
+<!-- ─── Security tab: blocked & banned IPs, top offenders, events, raw logs ─────── -->
 {% if not remote.is_local or current_user.is_superadmin %}
-<div class="card mb-3" data-mtab="security">
+{# Blocked & banned IPs: the two answers to "who is kept out of this host", each list with its own
+   actions — UFW blocks (every port; _firewall_blocks.html, filled by the firewall read) and fail2ban
+   bans (the attacked service). This tab's gate is the Network tab's (_host_ctl), as the firewall
+   routes' is. #}
+<div data-mtab="security" id="sec-keptout">
+<h2 class="h6 mb-1"><i class="bi bi-person-x"></i> Blocked &amp; banned IPs</h2>
+<p class="small text-secondary mb-2">Who is kept out of this host: addresses the firewall blocks on every port, and addresses fail2ban has banned from the service they attacked.</p>
+{% include "_firewall_blocks.html" %}
+<div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-slash-circle"></i> Banned IPs (fail2ban)</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityBans"><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -563,6 +575,7 @@
     <p class="small text-secondary mb-2">{% if remote.is_local %}IPs currently banned at the firewall across every fail2ban jail on this host — the panel login and SSH.{% else %}IPs currently banned at the firewall across every fail2ban jail on this host.{% endif %}</p>
     <div id="sec-bans"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
+</div>
 </div>
 
 <!-- Top offending IPs (aggregated from the fail2ban log) -->
@@ -579,8 +592,8 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs).</p>
-    {# The blocks it makes are UFW denies, listed and removable in Blocked IPs on the Network tab
-       (the same _host_ctl gate as this tab). #}
+    {# The blocks it makes are UFW denies, listed and removable in Blocked IPs at the top of this
+       tab. #}
     <p class="small text-secondary mb-2"><span>Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</span>
       <a href="#fw-blocks">Blocked IPs</a></p>
     <p class="small text-secondary mb-2">Auto-block firewalls every IP at or above the threshold, and releases each one when its 7-day count drops back below. Because that count is cumulative, a slow attacker who spaces attempts out to dodge fail2ban's short window cannot escape it.</p>
@@ -670,9 +683,9 @@
 
 
 <!-- ─── Network tab: the firewall, then Connection & SSH ─── -->
-{# The firewall's cards as the standalone Firewall page renders them (_firewall_panel.html), with
-   no read yet: this page makes none while it loads, and remote_manage.js runs refreshFirewall the
-   first time the tab opens. #}
+{# The firewall's cards (_firewall_panel.html), with no read yet: this page makes none while it
+   loads, and remote_manage.js runs refreshFirewall the first time the tab (or the Security tab, where
+   Blocked IPs is) opens. #}
 <div data-mtab="network" id="network-firewall">
   <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
     <h2 class="h6 mb-0" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</h2>
@@ -681,16 +694,15 @@
     </button>
   </div>
   <p class="small text-secondary mb-2">Game ports open automatically at install.</p>
-  {# On a phone the tab is several screens long, the rules sit below four cards of forms and
-     Connection & SSH below all of them: links straight to each, through the page's own #card
-     routing (remote_manage.js openHash). #}
+  {# On a phone the tab is several screens long and Connection & SSH sits below every firewall card:
+     links straight to each, through the page's own #card routing (remote_manage.js openHash). Blocked
+     IPs is on the Security tab with the fail2ban bans; its link opens that tab. #}
   <nav class="small mb-3 d-flex flex-wrap column-gap-3 row-gap-1" id="network-jump" aria-label="Network tab sections">
     <span class="text-secondary">Jump to:</span>
     <a href="#fw-rules">Open Ports &amp; Rules</a>
-    <a href="#fw-blocks">Blocked IPs</a>
     <a href="#sec-connection">Connection &amp; SSH</a>
+    <a href="#sec-keptout">Blocked &amp; banned IPs (Security tab)</a>
   </nav>
-  {% set fw_status = none %}
   {% set fw_games = remote.games %}
   {% include "_firewall_panel.html" %}
 </div>
@@ -1007,7 +1019,8 @@ var REMOTE_NAME = {{ remote.name|tojson }};
    and later parts define functions the earlier ones call (always deferred and guarded). #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_host.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_backups.js') }}"></script>
-{# The Network tab's firewall cards (_firewall_panel.html), behind _host_ctl — spelled out, as the
+{# The Network tab's firewall cards (_firewall_panel.html) and the Security tab's Blocked IPs
+   (_firewall_blocks.html), behind _host_ctl — spelled out, as the
    Ubuntu Pro line below does, because a {% set %} inside the content block is not seen here. #}
 {% if (not remote.is_local) or current_user.is_superadmin %}
 <script nonce="{{ csp_nonce }}">

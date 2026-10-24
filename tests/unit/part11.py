@@ -1205,9 +1205,9 @@ try:
     check("close by name: only the tagged rules go, highest number first, each named by its key; "
           "a refused one is tried three times, each against a fresh read, then NAMED as still open",
           _cbn == (2, "2 rule(s) removed for cs2server. Still open, as it could not be removed: "
-                      "27016 — remove it from the host's Firewall page.",
-                   ["Still open, as it could not be removed: 27016 — remove it from the host's "
-                    "Firewall page."])
+                      "27016 — remove it from the firewall rules on the host's Network tab.",
+                   ["Still open, as it could not be removed: 27016 — remove it from the firewall "
+                    "rules on the host's Network tab."])
           and _cbn_del == [(6, "k1"), (4, "k2"), (4, "k2"), (4, "k2"), (2, "k1")],
           "result=%r deletes=%r" % (_cbn, _cbn_del))
     _sm_firewall.remote_ufw_status = lambda s: {"installed": False, "groups": [], "unreachable": True}
@@ -1368,7 +1368,7 @@ try:
           "reads=%d deletes=%r" % (_u.reads, _w.verbs_called("ufw-delete-num")))
     check("close by name: ...and what stayed open is NAMED in the result, not counted as removed",
           _r[0] == 0 and _r[2] == ["Still open, as it could not be removed: 47826, 47827 — remove "
-                                   "them from the host's Firewall page."]
+                                   "them from the firewall rules on the host's Network tab."]
           and _r[1].endswith(_r[2][0]), "result=%r" % (_r,))
     check("close by name: ...while every auto-block deny it raced stays (nothing about the "
           "auto-block changes)",
@@ -1394,8 +1394,8 @@ try:
     check("close game port: ...and one that keeps moving is tried three times, then named as still "
           "open",
           _u.reads == 7 and _r[0] == 0
-          and _r[2] == ["Still open, as it could not be removed: 47827 — remove it from the host's "
-                        "Firewall page."], "reads=%d result=%r" % (_u.reads, _r))
+          and _r[2] == ["Still open, as it could not be removed: 47827 — remove it from the firewall "
+                        "rules on the host's Network tab."], "reads=%d result=%r" % (_u.reads, _r))
 
     # Defect: the VPS's scenario i. The uninstall's name cleanup took every rule carrying the name —
     # an operator's DENY, a LIMIT, an allow from one network: 7 rules — although the panel makes
@@ -1581,8 +1581,8 @@ try:
     _r = _own_ports_cgp(_p8_srv(), 47856, legacy=True, ports=[47856])
     check("own ports (legacy sweep): a rule it could not remove is named once, as still open",
           _r[0] == 0 and _r[2] == [
-              ("Still open, as it could not be removed: 47856/udp — remove it from the host's "
-               "Firewall page."), "Left in place on its port: 47856/tcp LIMIT."], "result=%r" % (_r,))
+              ("Still open, as it could not be removed: 47856/udp — remove it from the firewall "
+               "rules on the host's Network tab."), "Left in place on its port: 47856/tcp LIMIT."], "result=%r" % (_r,))
     # A port the server's own tagged allow was on is its own too, inside its game's span or not:
     # the install tags the ports LinuxGSM reports, and Rust's Query port (28017 by LinuxGSM's
     # default) sits outside the 2-port span the panel reserves. A limit there was the item's defect

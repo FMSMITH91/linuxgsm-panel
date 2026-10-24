@@ -14,7 +14,7 @@ from panel.security.auth import (MANAGE_USERS, accessible_remote_ids, can_admini
                                  grantable_groups, hash_password, log_action,
     permission_required, superadmin_required)
 from panel.services import (notifications)
-from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
+from panel.services.monitoring import _autoblock_threshold
 from panel.services import host_reboot as _hr
 from datetime import (timedelta)
 from sqlalchemy.exc import IntegrityError
@@ -74,8 +74,9 @@ def _register_panel_settings(app):
         protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
         hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
         days = max(1, min(_int_or(f.get("remember_days"), 3), 90))                # 1 .. 90 days
-        autoblock = max(1, min(_int_or(f.get("autoblock_threshold"),
-                                      _AUTOBLOCK_DEFAULT_THRESHOLD), 100000))
+        # No autoblock_threshold here: it is set on a host page's Security tab (the one editor, beside
+        # the switch it governs), and this form no longer carries it. Read with a default, as it was,
+        # a save of this page would have put every install back to 20.
         reboot_wait = max(0, min(_int_or(f.get("reboot_wait_max_hours"),
                                          _hr.DEFAULT_WAIT_HOURS), 720))
         reboot_restore = bool(f.get("reboot_restore_no_autostart"))
@@ -85,7 +86,6 @@ def _register_panel_settings(app):
                 "site_title": title, "site_domain": domain, "login_tagline": tagline,
                 "accent_color": accent, "default_language": lang, "session_protection": protection,
                 "session_lifetime_hours": hours, "remember_days": days,
-                "autoblock_threshold": autoblock,
                 "reboot_wait_max_hours": reboot_wait,
                 "reboot_restore_no_autostart": reboot_restore,
             })

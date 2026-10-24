@@ -53,8 +53,24 @@ def _pgrep_rc113(verb):
 
 
 # ── R2: the bootstrap's own apt-get full-upgrade is "another package upgrade" ───────────────────
+def _own_quiet113():
+    """Wait (up to 30 s) until nothing on this machine matches the own-job probe; True once quiet.
+
+    The probe is a real `pgrep -f` over the whole machine, so a process another check or lane left
+    running whose command line holds "OS update started" (a detached remote-job shell) matched it,
+    and the check below read the bootstrap stand-in as the panel's own job (CI, 2026-10-24).
+    """
+    deadline = _time113.time() + 30
+    while _pgrep_rc113("os-update-own-running") == 0:
+        if _time113.time() > deadline:
+            return False
+        _time113.sleep(0.5)
+    return True
+
+
 def _bootstrap_busy113():
     """The panel host's bootstrap upgrade, running: refused, with a sentence that is true of it."""
+    quiet = _own_quiet113()
     words = _priv113.tool_argv("apt-full-upgrade", [])
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     stand_in = _sp113.Popen(  # nosec B603 - a sleeping stand-in; its words are only argv
@@ -69,7 +85,9 @@ def _bootstrap_busy113():
     msg = _p9_so.R31B_UPDATE_BUSY
     check("os update start (real pgrep): the panel's own bootstrap `apt-get full-upgrade` is another "
           "upgrade running — refused, nothing watched",
-          (up, own, answer) == (0, 1, (False, msg)), repr((words, up, own, answer)))
+          quiet and (up, own, answer) == (0, 1, (False, msg)),
+          repr((words, up, own, answer, "quiet before" if quiet else "another process matched the "
+                "own-job probe for 30 s before the stand-in started")))
     keys = _catalogs113()
     check("os update start: ...and the refusal does not say the panel did not start it (the bootstrap "
           "is the panel's own), in English, Spanish and French",

@@ -1534,7 +1534,7 @@ def _configure_and_start(job, remote, gs):
 # says who else can — as edit_server's does for the same button.
 FIREWALL_STEP_FAILED = i18n.Sentence(
     "The firewall step failed, so this server's ports may not be open: open them from the host's "
-    "Firewall page ('Open all ports'), or ask someone who manages the host to.")
+    "Network tab ('Open all ports'), or ask someone who manages the host to.")
 
 
 def _noting_firewall_failure(job):
@@ -2418,14 +2418,14 @@ def _port_unconfirmed_note(job, gs):
         port, why = refused
         return (i18n.Sentence("{name} installed and starting, but LinuxGSM reports port {reported} for it, "
                               "which the panel did not take: {why}. It is monitored on port {port} for now; "
-                              "'Open all ports' on the host's Firewall page reads LinuxGSM's port again and "
+                              "'Open all ports' on the host's Network tab reads LinuxGSM's port again and "
                               "stores it unless another server, SSH or the panel has it.", name=short_name,
                               reported=port, why=why, port=gs.port),
                 "started; port %s not open after 90s; LinuxGSM reports %s, not taken: %s"
                 % (gs.port, port, why))
     return (i18n.Sentence("{name} installed and starting, but LinuxGSM has not reported its game port, so "
                           "the panel cannot confirm the game uses port {port}. 'Open all ports' on the "
-                          "host's Firewall page reads it again.", name=short_name, port=gs.port),
+                          "host's Network tab reads it again.", name=short_name, port=gs.port),
             "started; port %s not open after 90s; port not reported by LinuxGSM" % gs.port)
 
 
@@ -2515,7 +2515,7 @@ def _register_uninstall_and_edit(app):
             return _form_err(
                 "The port can't be changed here — it would only move the panel's record, leaving "
                 "the game server and the firewall on the old port. Change it in the server's "
-                "LinuxGSM config, then use 'Open all ports' on the host's Firewall page (or ask "
+                "LinuxGSM config, then use 'Open all ports' on the host's Network tab (or ask "
                 "someone who manages the host to).",
                 "manage_servers")
         name = (request.form.get("name") or gs.name or "").strip() or gs.name

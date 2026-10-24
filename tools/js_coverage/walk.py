@@ -26,14 +26,13 @@ PAGES = [
     "/server/1/files", "/server/2/files", "/server/7/files",
     "/servers/install", "/remotes",
     "/remote/1/manage", "/remote/2/manage", "/remote/3/manage",
-    "/remote/2/firewall", "/remote/1/firewall", "/remote/3/firewall",
     "/users", "/groups", "/logs", "/account", "/settings", "/notifications", "/tailscale",
     "/server-management", "/commands", "/global-bans", "/terminal/1", "/terminal/2",
 ]
 
 # Pressed with OK in the third pass, in this order.
 ACCEPT_PAGES = [
-    "/server/1/files", "/server/1", "/server/4", "/remote/2/firewall", "/remote/2/manage",
+    "/server/1/files", "/server/1", "/server/4", "/remote/2/manage",
     "/remote/1/manage", "/server-management", "/settings", "/commands", "/global-bans",
     "/account", "/groups", "/users", "/", "/remotes",
 ]

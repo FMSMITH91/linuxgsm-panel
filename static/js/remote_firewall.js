@@ -25,7 +25,7 @@ function refreshFirewall() {
       if (_r23c_fwNotRead(badge, data)) return;
       // A host the panel could not reach has no firewall state to report. The endpoint says so —
       // remote_ufw_status returns unreachable:true rather than claiming UFW is installed, and the
-      // ConnectionError branch answers the same shape — and the TEMPLATE renders that carefully:
+      // ConnectionError branch answers the same shape — and the page's template rendered that carefully:
       // badge "Unknown", plus a line saying the rules can't be read. This refresh then threw all
       // of it away: enabled is absent from that payload, so the badge became "Inactive" and the
       // empty groups list became "No open ports yet." Measured against a down host — the page
@@ -108,7 +108,8 @@ function _fwHostSaid(data) {
 // The UFW Status card's line, from the same read the badge and the lists are painted from. It was
 // server-rendered only, so a refresh listed a host's rules under a card still saying the host could
 // not be reached, and a changed host key read "can't reach" there under lists saying "Re-trust".
-// The same states and sentences as the template's card, in its order.
+// The same states and sentences the standalone page's template had, in its order; the cards are
+// painted only from here now (the Network tab makes no read while the page loads).
 function _fwStatusNote(data, inactive) {
   var said = _fwHostSaid(data), n = null;
   if (data.permission_denied) {
@@ -153,7 +154,8 @@ function _fwRenderRules(listEl, openGroups) {
         + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
         + '<td>' + (g.protected
             ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(_fwReason(g)) + '"><i class="bi bi-lock-fill"></i></button>'
-            : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, _fwReason(g), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
+            : '<button class="btn btn-outline-danger btn-sm py-0 px-1" title="' + esc(_fwDelTitle(g.nums || [])) + '"'
+              + _da('deleteGroup', [g.nums, '@self', !!g.warn, _fwReason(g), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
         + '</td></tr>';
     });
     html += '</tbody></table>';
@@ -161,7 +163,7 @@ function _fwRenderRules(listEl, openGroups) {
   } else {
     listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No open ports yet.</div>';
   }
-  // The number and the WORD as separate nodes, matching what the template renders. As one
+  // The number and the WORD as separate nodes, as the old page's template rendered them. As one
   // text node the result was "3 rules", which is not a catalog key and never can be — so this
   // repaint replaced a translated count with an English one on every refresh. t() is the same
   // catalog the DOM walker uses, so the word is right immediately rather than after the
@@ -175,12 +177,18 @@ function _fwRenderRules(listEl, openGroups) {
   }
 }
 
-// Blocked IPs (separate card): the table or its empty state, and the count.
+// The x's tooltip (and its only accessible name): the rule NUMBERS it removes, called rules, not
+// ports. The standalone page's template wrote it; this repaint drew the button without one.
+function _fwDelTitle(nums) {
+  return t(nums.length > 1 ? 'Remove this rule (rules %s)' : 'Remove this rule (rule %s)').replace('%s', nums.join(', '));
+}
+
+// Blocked IPs (on the Security tab): the table or its empty state, and the count.
 function _fwRenderBlocks(blockGroups) {
   var blocksEl = document.getElementById('blocks-list');
   if (blocksEl) {
     if (blockGroups.length) {
-      // The same table as the template's (table-pin-actions, an address that may break), and its
+      // The same table the old page's template drew (table-pin-actions, an address that may break), and its
       // tooltip one translated sentence: "Unblock " + ip was English in every language.
       var bh = '<table class="table table-sm table-hover mb-0 align-middle table-pin-actions">'
         + '<thead><tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr></thead><tbody>';

@@ -1,0 +1,8 @@
+{
+  "Change it on the Security tab": "Cámbialo en la pestaña Seguridad",
+  "Blocked & banned IPs": "IP bloqueadas y baneadas",
+  "Blocked & banned IPs (Security tab)": "IP bloqueadas y baneadas (pestaña Seguridad)",
+  "Who is kept out of this host: addresses the firewall blocks on every port, and addresses fail2ban has banned from the service they attacked.": "Quién no puede entrar en este host: las direcciones que el cortafuegos bloquea en todos los puertos y las que fail2ban ha baneado del servicio que atacaron.",
+  "Blocked IPs — panel host": "IP bloqueadas — host del panel",
+  "Maint.": "Mant."
+}

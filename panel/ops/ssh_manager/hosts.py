@@ -571,7 +571,7 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     if split and _r22b_closed_by_split(before, after, port, other):
         # The split must not have closed what the bare rule kept open for the other protocol.
         return False, i18n.Sentence("{spec} is now rate limited, but {port}/{proto} is no longer open — "
-                                    "re-open it from the Firewall page.", spec=spec, port=port, proto=other)
+                                    "re-open it from the host's Network tab.", spec=spec, port=port, proto=other)
     return True, i18n.Sentence("{spec} is now rate limited (6 connections per 30s per address)", spec=spec)
 
 
@@ -1180,7 +1180,7 @@ def _next_pick(status, pick, refused):
 # The notes below are Sentences: the uninstall answer translates each one whole (_r15e_uninstalled),
 # and %-built English matched no catalog key, so es and fr viewers read them in English.
 UFW_UNREAD_NOTE = i18n.Sentence("The firewall could not be read, so this server's rules may still be open — "
-                                "check the host's Firewall page.")
+                                "check the firewall rules on the host's Network tab.")
 
 
 def _still_there(status, pick):
@@ -1197,10 +1197,10 @@ def _still_there(status, pick):
     if not stuck:
         return []
     if len(stuck) == 1:
-        return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove it from the host's "
-                              "Firewall page.", rules=stuck[0])]
-    return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove them from the host's "
-                          "Firewall page.", rules=", ".join(stuck))]
+        return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove it from the firewall "
+                              "rules on the host's Network tab.", rules=stuck[0])]
+    return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove them from the firewall "
+                          "rules on the host's Network tab.", rules=", ".join(stuck))]
 
 
 def _left_on_purpose(status, comment, removable, protected):
@@ -4114,8 +4114,8 @@ def _r36b_close_confirmed(server, port, added):
 def _r36b_rule_left_note(port):
     """Said after a failure the move undid, when the allow step 1 added could not be confirmed removed."""
     return i18n.Sentence("One thing may not have been undone: the firewall rule this change opened for port "
-                         "{port}/tcp could not be confirmed removed — remove it from the Firewall page if it is "
-                         "still there.", port=port)
+                         "{port}/tcp could not be confirmed removed — remove it from the firewall rules on the "
+                         "host's Network tab if it is still there.", port=port)
 
 
 # Every IPv6 source, as _R25B_V4_ANYWHERE is every IPv4 one: `allow from ::/0` is an IPv6-only rule
@@ -4643,7 +4643,8 @@ def _r35b_moved_message(new_port, bind_addr, f2b, unchecked):
             "fail2ban before relying on it for port {port}.", port=new_port, done=_done), unchecked)
     return i18n.Sentences(i18n.Sentence(
         "SSH now listens on port {port} ({done}). The previous port is still available as a fallback — "
-        "once you've confirmed you can reach SSH on {port}, close the old one from the Firewall page.",
+        "once you've confirmed you can reach SSH on {port}, close the old one in the firewall rules on the "
+        "host's Network tab.",
         port=new_port, done=_done), unchecked)
 
 
@@ -4879,7 +4880,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # of is safe (_r34b_restore_once retries only then).
     undo.update(restore=_restore_verb, reload=socket_mode, relisten=True, copies=_prior is not None)
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
-              "# from the panel's Firewall page once you've confirmed the new port works.\n")
+              "# in the panel (the host page's Network tab) once you've confirmed the new port works.\n")
     if socket_mode:
         # Socket-activated: the port lives on ssh.socket, and sshd_config's Port is ignored.
         body = _socket_listen_lines(ports, bind_addr)

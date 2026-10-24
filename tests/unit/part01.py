@@ -492,8 +492,12 @@ finally:
 _autoblock_src = _modsrc("app") + "".join(
     open(os.path.join(_root, "panel", "routes", _f), encoding="utf-8").read()
     for _f in sorted(os.listdir(os.path.join(_root, "panel", "routes"))) if _f.endswith(".py"))
-check("config: the autoblock default is one constant, not two",
-      "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in _autoblock_src)
+# The Settings save no longer reads the threshold at all (ui-tidy-2: its one editor is a host page's
+# Security tab), so what is held is that no route reads it with a default of its own.
+check("config: the autoblock default is one constant, not two (no route reads the threshold with a "
+      "literal default)",
+      re.search(r"""autoblock_threshold["']\)?,\s*\d""", _autoblock_src) is None
+      and "autoblock_threshold" in _autoblock_src)
 
 # ── On-disk paths must resolve to the CHECKOUT ROOT, not to the module's own directory ──────────
 # Every one of these used to be `Path(__file__).parent / …` in a module that sat at the repo root,
