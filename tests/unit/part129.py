@@ -189,7 +189,7 @@ def _close129():
           "nothing of it",
           all(["sshd rejected the new config" in m["close -1 twice"],
                "port 2022/tcp could not be confirmed removed" in m["close -1 twice"],
-               "Firewall page" in m["close -1 twice"],
+               "host's Network tab" in m["close -1 twice"],
                "may not have been undone" not in m["close -1, then runs"],
                "may not have been undone" not in m["control: close runs"]]), repr(m))
 

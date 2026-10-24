@@ -4,10 +4,15 @@
    it governs. Settings › Sessions & Security shows the value and links there; its Save no longer
    writes the threshold (with the field gone, reading it with a default would have put every install
    back to 20). Who may change it is unchanged: a superadmin, on either route.
+2. Every message that sent the user to "the host's Firewall page" names the host page's Network tab
+   (where the firewall rules are now), in English, Spanish and French: no catalog key, template text or
+   script string says "Firewall page" any more, and the sentences translate whole.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed and every host call stubbed, as
 part131 does. Nothing reaches a host or data/.
 """
+import glob as _glob132
+import json as _json132
 import os
 import re as _re132
 
@@ -15,7 +20,10 @@ from unit.part01 import check
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch,
                          _p9_restore_all)
+from panel.core import i18n as _i18n132
+from panel.ops.ssh_manager import hosts as _hosts132
 from panel.routes import admin_notifications as _an132
+from panel.routes import manage_servers as _ms132
 from panel.services import monitoring as _mon132
 
 _TRIP132_START = len(_P9_TRIPPED)
@@ -84,3 +92,48 @@ check("auto-block threshold: the Security tab's Top offenders card holds the edi
       "field and Save; a disabled field for anyone else)",
       'data-mtab="security"' in _top132 and 'id="sec-threshold" value="20">' in _top132
       and 'data-action="saveThreshold"' in _top132 and "disabled" in _top132, _top132[:200])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 2. Messages name the Network tab, not "the Firewall page"
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_CAT132 = {}
+for _lang132 in ("es", "fr"):
+    for _f132 in sorted(_glob132.glob(os.path.join(_root, "translations", _lang132, "*.json"))):
+        with open(_f132, encoding="utf-8") as _fh132:
+            _CAT132.setdefault(_lang132, {}).update(_json132.load(_fh132))
+# Every translatable server message has a catalog key (the i18n gates hold that), so a key is where a
+# sentence that still says "Firewall page" shows up, whichever file builds it.
+_old_keys132 = sorted({k for c in _CAT132.values() for k in c if "irewall page" in k})
+check("firewall wording: no message in the catalogs sends the user to \"the Firewall page\"",
+      not _old_keys132 and len(_CAT132.get("es", {})) > 1000, repr(_old_keys132[:4]))
+_net_keys132 = sorted(k for k in _CAT132.get("es", {}) if "host's Network tab" in k)
+check("firewall wording: ...each names the host's Network tab, translated in Spanish and French with the "
+      "tab's own name (Red / Réseau)",
+      len(_net_keys132) >= 12
+      and all("Red" in _CAT132["es"][k] and "Réseau" in _CAT132.get("fr", {}).get(k, "") for k in _net_keys132),
+      repr([k for k in _net_keys132 if "Red" not in _CAT132["es"][k]
+            or "Réseau" not in _CAT132.get("fr", {}).get(k, "")][:3]) + " of %d" % len(_net_keys132))
+
+
+def _uit_strip(text, kind):
+    """`text` without its comments (Jinja/HTML for a template, // and /* */ for a script)."""
+    if kind == "html":
+        return _re132.sub(r"\{#.*?#\}|<!--.*?-->", "", text, flags=_re132.S)
+    return _re132.sub(r"/\*.*?\*/|(?<![:\\'\"])//[^\n]*", "", text, flags=_re132.S)
+
+
+_uit_said = []
+for _kind132, _pat132 in (("html", ("templates", "*.html")), ("js", ("static", "js", "*.js"))):
+    for _f132 in sorted(_glob132.glob(os.path.join(_root, *_pat132))):
+        with open(_f132, encoding="utf-8") as _fh132:
+            if "irewall page" in _uit_strip(_fh132.read(), _kind132):
+                _uit_said.append(os.path.basename(_f132))
+check("firewall wording: no template text or script string says \"Firewall page\" (comments aside)",
+      not _uit_said, repr(_uit_said))
+# The sentences themselves, as a French viewer reads them: whole, with the tab named.
+_fr132 = [_i18n132.translate("fr", s.template) for s in (
+    _hosts132.UFW_UNREAD_NOTE, _ms132.FIREWALL_STEP_FAILED, _hosts132._r36b_rule_left_note(2022))]
+check("firewall wording: the firewall-could-not-be-read note, the install's failed firewall step and an SSH "
+      "move's rule-left note read in French, naming the Network tab",
+      all("onglet Réseau" in t and "page Pare-feu" not in t for t in _fr132), repr(_fr132))

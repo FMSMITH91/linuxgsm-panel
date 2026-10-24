@@ -642,7 +642,8 @@ def _register_panel_port(app):
         failed = _r31a_close_each(remote, found)
         if failed is not None:
             return jsonify({"success": False, "message": i18n.tr(
-                "Couldn't remove every rule for port {port}; check the firewall page.", port=failed)})
+                "Couldn't remove every rule for port {port}; check the firewall rules on the host's Network tab.",
+                port=failed)})
         return jsonify({"success": True, "message": _r13c_closed_port_message(port)})
 
 
@@ -774,7 +775,7 @@ def _r14a_shared_rule_message(port, shared):
     """Why Close public panel port closed nothing: `shared` rules open the port among others."""
     return i18n.tr("Port {port} is also opened by the firewall rule {rules}, which opens other ports "
                    "too, so nothing was closed — removing it would close those as well. Take port "
-                   "{port} out of that rule on the Firewall page, then try again.",
+                   "{port} out of that rule on the host's Network tab, then try again.",
                    port=port, rules=", ".join(shared))
 
 
