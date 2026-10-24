@@ -175,7 +175,8 @@ class _Fold133(_HTMLParser133):
         folded = summary = card = False
         for k, (tag, a) in enumerate(self.stack):
             # Inside a closed <details>, and not in its own <summary> (its first child, always shown).
-            if tag == "details" and a.get("open") is None and self.stack[k + 1:k + 2] != [] \
+            # "open" is a bare attribute: its value parses as None, so it is asked by name.
+            if tag == "details" and "open" not in a and self.stack[k + 1:k + 2] != [] \
                     and self.stack[k + 1][0] != "summary":
                 folded = True
             if tag == "summary":
