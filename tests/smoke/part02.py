@@ -2291,79 +2291,38 @@ finally:
                 db.session.delete(_row)
         db.session.commit()
 
-# ── The firewall PAGE survives a host it cannot reach ────────────────────────────────────
-# A down / rebooting host makes remote_ufw_status() raise ConnectionError. The API route has
-# always caught that and answered "unreachable"; the page route called the same function bare
-# and rendered a 500 — so the one page whose job is managing a remote broke precisely when
-# that remote had a problem. Stub the raise rather than depending on a host being down, and
-# restore it in finally: this file is a flat script, so a leaked stub changes every later check.
+# ── The old firewall PAGE's URL: a redirect to the host page's Network tab, behind the same checks ──
+# The standalone page's cards are the host page's Network tab now (ui-tidy-2); the URL stays for old
+# links and bookmarks. Its checks come first and are the page's own (login, Manage Remotes, the host's
+# own access check), so a refused user is refused, never sent on. The tab reads the firewall itself,
+# so the redirect reads nothing: a host that is down cannot hold it up (the page once 500'd on one).
 import panel.routes.remote_vps as _rvps
 _real_ufw = _rvps.remote_ufw_status
+_fw_reads = []
 try:
     def _refuse(_server):
+        _fw_reads.append(1)
         raise ConnectionError("smoke: host is down")
     _rvps.remote_ufw_status = _refuse
     _fw = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
-    check("firewall page: an unreachable host renders, not 500",
-          _fw.status_code == 200, "got %d" % _fw.status_code)
-    check("firewall page: ...and says it couldn't read the firewall, not that UFW is missing",
-          b"can't reach this host" in _fw.data and b"UFW is not installed" not in _fw.data,
-          "the unreachable banner is what should render")
-    # The Blocked IPs card shipped with no unreachable branch at all: block_groups is derived
-    # from status.groups, which is [] on every unreachable path, so the same screen that said
-    # "can't reach this host" went on to state "0 blocked" and "No IPs are blocked." An
-    # operator checking whether an abusive address is still denied was told it is not, about a
-    # firewall nothing read.
-    check("firewall page: ...and does not state 'No IPs are blocked' about a host it never read",
-          b"No IPs are blocked." not in _fw.data,
-          "the Blocked IPs card contradicts the banner above it")
-    check("firewall page: ...and neither count is an arithmetic claim about that host",
-          b'id="rules-count">&mdash;<' in _fw.data and b'id="blocks-count">&mdash;<' in _fw.data,
-          "a count is still printed for a firewall nothing read")
-    # Positive control: a host that ANSWERS and genuinely has nothing must still say so, with
-    # real counts — otherwise the three checks above pass by the page refusing to answer ever.
-    def _empty(_server):
-        return {"installed": True, "enabled": True, "rules": [], "groups": []}
-    _rvps.remote_ufw_status = _empty
-    _fw_ok = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
-    check("firewall page: a REACHABLE host with nothing blocked still says so",
-          _fw_ok.status_code == 200 and b"No IPs are blocked." in _fw_ok.data
-          and b"No firewall rules yet." in _fw_ok.data,
-          "status=%d — the empty states were lost" % _fw_ok.status_code)
-    check("firewall page: ...and still counts, rather than dashing everything",
-          b'id="blocks-count">0 <' in _fw_ok.data and b"&mdash;" not in _fw_ok.data,
-          "the real empty case no longer reports a count")
-    check("firewall page: ...and an ACTIVE firewall does not show the inactive note",
-          b'class="text-warning d-none">While UFW is inactive' in _fw_ok.data
-          and b"installed but inactive" not in _fw_ok.data, "the inactive copy shows on an active host")
-    # An INACTIVE ufw (stock Ubuntu) prints only its Status line — stored rules are neither
-    # listed nor enforced — so groups is [] and the page said "0 rules", "No firewall rules
-    # yet." and "No IPs are blocked." over a block that denies nothing.
-    def _inactive(_server):
-        return {"installed": True, "enabled": False, "rules": [], "groups": []}
-    _rvps.remote_ufw_status = _inactive
-    _fw_in = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
-    check("firewall page: an INACTIVE ufw is said to be inactive and unenforced",
-          _fw_in.status_code == 200 and b"installed but inactive" in _fw_in.data
-          and b"neither listed nor enforced" in _fw_in.data,
-          "status=%d" % _fw_in.status_code)
-    check("firewall page: ...with no rule or block count, and no 'none blocked' claim",
-          b'id="rules-count">&mdash;<' in _fw_in.data and b'id="blocks-count">&mdash;<' in _fw_in.data
-          and b"No IPs are blocked." not in _fw_in.data and b"No firewall rules yet." not in _fw_in.data,
-          "an inactive firewall's empty listing is still counted")
-    check("firewall page: ...and says a block there denies nothing",
-          b'class="text-warning">While UFW is inactive' in _fw_in.data, "the block copy is unqualified")
-    # A sudo refusal comes back as unreachable + permission_denied; the page blamed the network.
-    def _sudo_refused(_server):
-        return {"installed": False, "enabled": False, "rules": [], "groups": [],
-                "unreachable": True, "permission_denied": True}
-    _rvps.remote_ufw_status = _sudo_refused
-    _fw_pd = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
-    check("firewall page: a sudo refusal names sudo, not an unreachable host",
-          _fw_pd.status_code == 200 and b"sudo refused the firewall read" in _fw_pd.data
-          and b"can't reach this host" not in _fw_pd.data
-          and b"while this host is unreachable" not in _fw_pd.data,
-          "status=%d" % _fw_pd.status_code)
+    check("firewall page URL: redirects to the host page's Network tab",
+          _fw.status_code == 302
+          and _fw.headers.get("Location", "").endswith("/remote/%d/manage#network" % remote_id),
+          "got %d %r" % (_fw.status_code, _fw.headers.get("Location")))
+    check("firewall page URL: ...without a firewall read of its own (a down host cannot hold it up)",
+          _fw_reads == [], "reads=%d" % len(_fw_reads))
+    _fw_mr = client_as(mru_id).get("/remote/%d/firewall" % remote_id)
+    check("firewall page URL: a user who manages this host is redirected as well",
+          _fw_mr.status_code == 302 and "/remote/%d/manage#network" % remote_id in _fw_mr.headers.get("Location", ""),
+          "got %d %r" % (_fw_mr.status_code, _fw_mr.headers.get("Location")))
+    _fw_no = client_as(mru_id).get("/remote/%d/firewall" % remote2_id)
+    check("firewall page URL: a host the user may not manage is refused, not redirected to its page",
+          _fw_no.status_code in (403, 404) and "manage" not in _fw_no.headers.get("Location", ""),
+          "got %d %r" % (_fw_no.status_code, _fw_no.headers.get("Location")))
+    _fw_anon = app.test_client().get("/remote/%d/firewall" % remote_id)
+    check("firewall page URL: signed out, it asks for a sign-in, not the host page",
+          _fw_anon.status_code in (302, 401) and "manage" not in _fw_anon.headers.get("Location", ""),
+          "got %d %r" % (_fw_anon.status_code, _fw_anon.headers.get("Location")))
 finally:
     _rvps.remote_ufw_status = _real_ufw
 

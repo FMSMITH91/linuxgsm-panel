@@ -15,7 +15,6 @@ Held here, each against the code path the finding named:
 HOW IT RUNS. Routes on part12's Flask app and client (part12 has run), every stub through
 _p9_patch and undone in the finally. Scripts in node on this part's own fixtures.
 """
-import html as _html90
 import json as _json90
 import os
 
@@ -23,9 +22,7 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part47 import _SETTLE47, _cut47, _node47
 from unit.part87 import _DOM87
-from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
-                         _p9_patch, _p9_restore_all)
-from panel.routes import remote_vps as _rv90
+from unit.part12 import (_P9_TRIPPED, _p9)
 from panel.security import auth as _auth90
 
 _TRIP90_START = len(_P9_TRIPPED)
@@ -129,34 +126,9 @@ if _out90 is not None:
           _out90 == ["unknown", "a"], repr(_out90))
 
 
-# ════════════════════════════════════════════════════════════════════════════════════════════════
-# 2. The page as loaded: the key icon for a changed host key only
-# ════════════════════════════════════════════════════════════════════════════════════════════════
-def _cut_read90(*_a, **_k):
-    e = ConnectionError("Command failed: unit p90 drain gave up")
-    e.command_started = True
-    raise e
-
-
-_pg90 = None
-try:
-    _p9_arm(who="part90")
-    _p9_patch(_rv90, "remote_ufw_status", _cut_read90)
-    _r90 = _p9_client(P9_ADMIN).get("/remote/%d/firewall" % P9_HOST)
-    _pg90 = (_r90.status_code, _html90.unescape(_r90.get_data(as_text=True)))
-finally:
-    _p9_restore_all()
-_card90 = ""
-if _pg90 and 'id="ufw-status-note"' in _pg90[1]:
-    _at90 = _pg90[1].index('id="ufw-status-note"')
-    _card90 = _pg90[1][_at90:_pg90[1].index("</div>", _at90)]
-check("firewall page: a read cut off part-way shows its sentence under the warning icon, not the key "
-      "(the key belongs to a changed host key)",
-      bool(_pg90) and _pg90[0] == 200 and "stopped answering" in _card90
-      and "bi-exclamation-triangle" in _card90 and "bi-key" not in _card90, repr(_card90[:400]))
-check("firewall page: ...and the template keeps the key for host_key_mismatch",
-      "'bi-key' if fw.code == 'host_key_mismatch'" in _read90("templates", "_firewall_panel.html"),
-      "template")
+# (2. The page as loaded drew the key icon for a changed host key only. The standalone Firewall page is a
+# redirect to the host page's Network tab now (ui-tidy-2), whose cards are painted by the refresh alone:
+# its key-versus-warning icon is held in section 1 above.)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

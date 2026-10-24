@@ -2,11 +2,11 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-from flask import (current_app, jsonify, render_template, request, url_for)
+from flask import (current_app, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (_r15a_cfg_int, load_config)
 from panel.core.panel_state import (_os_update_seen)
-from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer, db, row_label)
+from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, remote_os_run_updates, remote_os_update_start, remote_os_update_status,
@@ -31,7 +31,7 @@ import collections
 import contextlib
 import threading
 from panel.core import i18n
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r20a_unreachable_said,
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r22b_unreachable_or_generic, _unreachable)
 from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock, _json_int, _r20b_audit_on_raise)
 from panel.core.validation import (NOT_AN_IP)
@@ -184,36 +184,17 @@ def _register_firewall_view(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def remote_firewall(remote_id):
-        """Remote VPS firewall management page."""
-        # get_host_remote: on the panel's own host this read is superadmin-only, as its write twins
-        # and its /server-management page are; a delegable whole-host grant does not reach it.
+        """The old Firewall page's address: its cards are the host page's Network tab now.
+
+        Kept for old links and bookmarks, as a redirect to that tab. The checks come first and are
+        the page's own: get_host_remote refuses a host this user may not manage (the panel's own host
+        is superadmin-only) exactly as the page did, so a refused user is never sent on to the page.
+        The tab makes its own firewall read when it opens (remote_firewall.js refreshFirewall).
+        """
         remote = get_host_remote(remote_id)
-        try:
-            status = remote_ufw_status(remote)
-        except ConnectionError as exc:
-            # A host that is down, rebooting or behind a dropped tunnel raises here, and this
-            # view rendered a 500 for it — while the API twin below, calling the same function,
-            # has always caught ConnectionError and answered "unreachable". A page whose whole
-            # job is managing a remote must survive that remote being off.
-            #
-            # This is the same shape remote_ufw_status() returns when the command runs but fails,
-            # so the template has one unreachable state to render rather than two.
-            # remote.id, not the raw remote_id path segment: get_remote() has already looked the
-            # host up and enforced access, so this is the integer primary key off the row rather
-            # than request input reaching a log sink (py/log-injection). Same shape as the other
-            # id-logging sites in panel/routes/_shared.py.
-            _log.info("remote firewall page: remote %s unreachable", row_label(remote, "id"),
-                      exc_info=True)
-            # `code` and `message` as the API twin answers them (_unreachable): a changed host key
-            # is flagged unreachable too, and the page as loaded blamed the network for it while
-            # its own Refresh said "use Re-trust host key".
-            said, code = _r20a_unreachable_said(exc)
-            status = {"installed": False, "enabled": False, "rules": [], "groups": [],
-                      "unreachable": True, "code": code, "message": said}
-        games = GameServer.query.filter_by(remote_id=remote_id).all()
-        # fw_reason: a protected rule's reason in the viewer's language (firewall.r14a_reason_text).
-        return render_template("remote_firewall.html", remote=remote, status=status, games=games,
-                               fw_reason=_fw_rules.r14a_reason_text)
+        page = (url_for("server_management") if remote.is_local
+                else url_for("remote_manage", remote_id=remote.id))
+        return redirect(page + "#network")
 
     @app.route("/api/remote/<int:remote_id>/firewall")
     @login_required

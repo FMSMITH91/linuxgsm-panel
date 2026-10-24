@@ -1523,3 +1523,64 @@
   flex:1 1 14rem;
   min-width:0;
 }
+
+/* The firewall's cards on a host page's Network tab (_firewall_panel.html). One column on a phone,
+   in DOM order: UFW Status, the rules, then the forms. From 768px the rules take a right-hand
+   column (7 of 12) spanning every row, beside the forms (5 of 12), as Bootstrap's col-md-5 /
+   col-md-7 did; the last row takes the slack so a tall rules list does not spread the forms apart,
+   and align-items:start keeps a card its own height. */
+@media (min-width: 768px){
+  .fw-layout{
+    display:grid;
+    grid-template-columns:5fr 7fr;
+    grid-template-rows:auto auto auto 1fr;
+    column-gap:1.5rem;
+    align-items:start;
+  }
+
+  .fw-layout > *{ grid-column:1; }
+
+  .fw-layout > .fw-rules-card{
+    grid-column:2;
+    grid-row:1 / -1;
+  }
+}
+
+/* The host page's tab bar (remote_manage.html #mtab-nav). Five pills with their full labels are
+   ~630px, so on a phone the bar scrolled sideways and a tab could sit out of sight. Below 768px
+   each pill is its icon over a short label (.mtab-short), sharing the bar's width; the full label
+   stays in the button for screen readers (.mtab-full, visually hidden here) and is the one shown
+   from 768px. If a language's labels still do not fit, the bar keeps its sideways scroll. */
+#mtab-nav .mtab-short{ display:none; }
+
+@media (max-width: 767.98px){
+  #mtab-nav > .nav-item{ flex:1 1 auto; }
+
+  #mtab-nav .nav-link{
+    position:relative;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:.1rem;
+    width:100%;
+    padding:.35rem .25rem;
+    font-size:.72rem;
+    line-height:1.2;
+  }
+
+  #mtab-nav .nav-link .bi{ font-size:1rem; }
+
+  #mtab-nav .mtab-short{ display:inline; }
+
+  #mtab-nav .mtab-full{
+    position:absolute;
+    width:1px;
+    height:1px;
+    padding:0;
+    margin:-1px;
+    overflow:hidden;
+    clip:rect(0, 0, 0, 0);
+    white-space:nowrap;
+    border:0;
+  }
+}

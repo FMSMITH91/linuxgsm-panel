@@ -2937,6 +2937,21 @@ _SECTION_PAGE_TEMPLATE = {
     "/servers/install": "install_server.html",
 }
 _pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
+
+
+def _with_includes(name, _depth=0):
+    """Template `name`'s source with each {% include %} put in place, as the page renders it.
+
+    A card in a partial (the host page's Blocked IPs, _firewall_blocks.html) is on the page, and the
+    gates below asked only the includer's own text, so its id read as a dead anchor.
+    """
+    src = (TEMPLATES / name).read_text(encoding="utf-8")
+    if _depth > 5:
+        return src
+    return re.sub(r'\{%-?\s*include\s+[\'"]([\w./-]+)[\'"]\s*-?%\}',
+                  lambda m: _with_includes(m.group(1), _depth + 1), src)
+
+
 _sec_block = re.search(r"var PALETTE_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _sections = re.findall(r"page:\s*'([^']+)'\s*,\s*hash:\s*'([^']+)'",
                        _sec_block.group(1) if _sec_block else "")
@@ -2949,7 +2964,7 @@ for _page, _hash in _sections:
     if not _tpl:
         _unmapped.append(_page)
         continue
-    _html = (TEMPLATES / _tpl).read_text(encoding="utf-8")
+    _html = _with_includes(_tpl)
     if not re.search(r'id="%s"' % re.escape(_hash), _html):
         _dead.append("%s#%s (not in %s)" % (_page, _hash, _tpl))
 check(not _unmapped,
@@ -3003,7 +3018,7 @@ def _mtab_owner_of(html, wanted):
     return out
 
 
-_rm_src = (TEMPLATES / "remote_manage.html").read_text(encoding="utf-8")
+_rm_src = _with_includes("remote_manage.html")
 _tabbed_hashes = [h for pg, h in _sections if pg in _TABBED]
 _owners = _mtab_owner_of(_rm_src, set(_tabbed_hashes) | {"backups", "sec-bans"})
 # Vacuity guard for the walker itself: two ids whose tabs are known independently — 'backups' sits
@@ -3012,6 +3027,10 @@ _owners = _mtab_owner_of(_rm_src, set(_tabbed_hashes) | {"backups", "sec-bans"})
 check(_owners.get("backups") == "maintenance" and _owners.get("sec-bans") == "security",
       "palette: the data-mtab walker agrees with two independently known cards",
       "backups=%r sec-bans=%r" % (_owners.get("backups"), _owners.get("sec-bans")))
+# ...and reads a card that comes from a partial: the rules list is in _firewall_panel.html, on Network.
+check(_mtab_owner_of(_rm_src, {"fw-rules"}).get("fw-rules") == "network",
+      "palette: the walker reads the page with its partials in place",
+      repr(_mtab_owner_of(_rm_src, {"fw-rules"})))
 check(len(_tabbed_hashes) >= 3, "palette: there are tabbed-page sections to check",
       "%d found — the gate below proves nothing if this is 0" % len(_tabbed_hashes))
 _unreachable = [h for h in _tabbed_hashes if not _owners.get(h)]
@@ -3026,7 +3045,7 @@ _host_block = re.search(r"var PALETTE_HOST_SECTIONS = \[(.*?)\n\];", _pal_src, r
 _host_hashes = re.findall(r"hash:\s*'([^']+)'", _host_block.group(1) if _host_block else "")
 check(len(_host_hashes) >= 5, "palette: the HOST_SECTIONS table was found and parsed",
       "%d entries parsed" % len(_host_hashes))
-_rm_html = (TEMPLATES / "remote_manage.html").read_text(encoding="utf-8")
+_rm_html = _with_includes("remote_manage.html")
 _host_dead = [h for h in _host_hashes if not re.search(r'id="%s"' % re.escape(h), _rm_html)]
 check(not _host_dead,
       "palette: every per-host section anchor exists in remote_manage.html",
@@ -4668,18 +4687,22 @@ check("data.unreachable" in _fw_win,
 check("return;" in _fw_win,
       "firewall: ...and stops there rather than falling through to the rules table",
       "the unreachable branch carries on and renders an empty rule list")
-# The firewall's cards are one partial, rendered by the Firewall page (its read as fw_status) and by the
-# host page's Network tab.
-_fw_tpl = (ROOT / "templates" / "_firewall_panel.html").read_text(encoding="utf-8")
-check("{% elif fw.unreachable %}" in _fw_tpl,
-      "firewall: the server-rendered rules list says the same, instead of 'No firewall rules yet.'",
-      "the list contradicts the status card three lines above it")
-# Both halves must say it the SAME way — the refresh replaces what the template rendered, and two
-# wordings for one fact read as two different facts when the page swaps one for the other.
+# The firewall's cards are two partials on the host page (the Network tab's, and the Security tab's
+# Blocked IPs). The page makes no firewall read while it loads, so they render no state of their own —
+# only "Loading…" and no count — and the refresh above paints every one (ui-tidy-2: the standalone page
+# that rendered a read server-side is a redirect now).
+_fw_tpl = ((ROOT / "templates" / "_firewall_panel.html").read_text(encoding="utf-8")
+           + (ROOT / "templates" / "_firewall_blocks.html").read_text(encoding="utf-8"))
+check("{% if" not in _fw_tpl.replace("{% if fw_games %}", "") and _fw_tpl.count("Loading…") >= 3
+      and "No firewall rules yet." not in _fw_tpl and "No IPs are blocked." not in _fw_tpl
+      and 'id="rules-count">&mdash;<' in _fw_tpl and 'id="blocks-count">&mdash;<' in _fw_tpl,
+      "firewall: the cards render waiting for the read — no state, count or empty line about a firewall "
+      "nothing read",
+      "a partial claims something before the refresh read it")
 _fw_msg = "Rules can't be read while this host is unreachable."
-check(_fw_msg in _fw_tpl and _fw_msg in _fw_js,
-      "firewall: ...in the same words the refresh uses, since one replaces the other",
-      "template and refresh word the same state differently")
+check(_fw_msg in _fw_js,
+      "firewall: ...and the refresh says an unreachable host's rules can't be read",
+      "the refresh words the state differently")
 # The count is an arithmetic claim. "0 rules" above "the rules cannot be read" is the same defect
 # in miniature as an update card announcing a commit count it could not list.
 _fw_unl = _js_code_only(_js_function_body(_fw_js, "_fwUnlisted") or "")
@@ -4713,8 +4736,9 @@ check("blocks-inactive-note" in _fw_win_code and 'id="blocks-inactive-note"' in 
       "the note is not toggled")
 # The × tooltip listed a group's UFW rule NUMBERS as "ports 3, 7".
 # A catalog key with the numbers formatted in (review 1011d: the welded English never translated).
-check("t('Remove this rule (rules %s)')|format(g.nums|join(', '))" in _fw_tpl and "(ports %s)" not in _fw_tpl
-      and "'ports ' + (g.nums" not in _fw_tpl,
+check("t(nums.length > 1 ? 'Remove this rule (rules %s)' : 'Remove this rule (rule %s)')" in _fw_js
+      and "(ports %s)" not in _fw_js and "'ports ' + (g.nums" not in _fw_js
+      and "esc(_fwDelTitle(g.nums || []))" in _fw_js,
       "firewall: the rule-delete tooltip calls rule numbers rules, not ports",
       "the × tooltip names ufw rule numbers as ports")
 
@@ -4745,14 +4769,11 @@ check("g.protected" in _fw_del,
 check("JSON.stringify({num: Math.max.apply(null, g.nums), key: key})" in _fw_del,
       "firewall delete: the delete request carries the rule's key, not just its position",
       "the server deletes whatever rule the number names by then")
-# Both renderers hand the identity over, or every click refuses with "out of date".
-_fw_tpl_btn = _between(_fw_tpl, 'data-action="deleteGroup"', ">")
-check("{{ g.key|tojson }}" in _fw_tpl_btn,
-      "firewall delete: the server-rendered × passes the group's identity",
-      _fw_tpl_btn[:200])
+# The × the refresh draws (the only renderer now) hands the identity over, or every click refuses
+# with "out of date".
 _fw_js_btn = _between(_fw_js, "_da('deleteGroup'", "+ '><i")
 check("(g.key || '')]" in _fw_js_btn,
-      "firewall delete: ...and so does the × the refresh draws", _fw_js_btn[:200])
+      "firewall delete: the × the refresh draws passes the group's identity", _fw_js_btn[:200])
 
 # ── the backups card must not say "none" about a host it could not read ───────────────────────
 # Same family as the firewall page and the cron card: list_game_backups discarded the rc, an

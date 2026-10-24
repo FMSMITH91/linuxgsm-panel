@@ -7,6 +7,16 @@
 2. Every message that sent the user to "the host's Firewall page" names the host page's Network tab
    (where the firewall rules are now), in English, Spanish and French: no catalog key, template text or
    script string says "Firewall page" any more, and the sentences translate whole.
+3. Phone order: on the Network tab the rules come right after UFW Status, before the forms — the DOM
+   order, so the keyboard and a screen reader go the same way; from 768px a grid puts them in a
+   right-hand column as before.
+4. Tab labels: below 768px the pills are icon-over-label with short labels for Host Controls and
+   Maintenance, the full label kept for screen readers (visually hidden, never display:none).
+5. The old /remote/<id>/firewall page redirects to the host page's Network tab (the panel host's to
+   /server-management#network) after the page's own access checks, and reads nothing itself.
+6. Blocked IPs (UFW) and the fail2ban bans are one "Blocked & banned IPs" area on the Security tab, each
+   list keeping its actions; the Network tab's jump line links there; #fw-blocks, #sec-bans and the
+   palette land on it, and the first opening of the Security tab reads the firewall.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed and every host call stubbed, as
 part131 does. Nothing reaches a host or data/.
@@ -18,8 +28,9 @@ import re as _re132
 
 from unit.part01 import check
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch,
-                         _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_HOST, P9_LOCAL, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
+                         _p9_patch, _p9_restore_all, _p9_rv)
+from unit.part131 import _P131, _out131, _pages131
 from panel.core import i18n as _i18n132
 from panel.ops.ssh_manager import hosts as _hosts132
 from panel.routes import admin_notifications as _an132
@@ -137,6 +148,149 @@ _fr132 = [_i18n132.translate("fr", s.template) for s in (
 check("firewall wording: the firewall-could-not-be-read note, the install's failed firewall step and an SSH "
       "move's rule-left note read in French, naming the Network tab",
       all("onglet Réseau" in t and "page Pare-feu" not in t for t in _fr132), repr(_fr132))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. Phone order on the Network tab: the rules right after UFW Status
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_CSS132 = _read132("static", "css", "panel.css")
+
+
+def _uit_order(page, ids):
+    """Where each of `ids` starts in `page`'s rendered HTML (-1: absent)."""
+    html = _pages131.get(page, (0, ""))[1]
+    return [html.find('id="%s"' % i) for i in ids]
+
+
+for _page132 in ("local", "remote"):
+    _o132 = _uit_order(_page132, ("ufw-badge", "fw-rules", "rules-list", "new-port", "src-cidr", "limit-port"))
+    check("phone order (%s host page): UFW Status, then Open Ports & Rules, then the forms — in the page's "
+          "own order, which a phone shows as it is" % _page132,
+          -1 not in _o132 and _o132 == sorted(_o132), repr(_o132))
+_PART132 = _read132("templates", "_firewall_panel.html")
+check("phone order: the rules card is the grid's right-hand column (fw-rules-card in .fw-layout)",
+      '<div class="fw-layout">' in _PART132 and 'class="card mb-3 fw-rules-card"' in _PART132
+      and "col-md-" not in _PART132, "")
+_grid132 = _re132.search(r"@media \(min-width: 768px\)\{\s*\.fw-layout\{([^}]*)\}(.*?)\n\}", _CSS132, _re132.S)
+check("phone order: from 768px the rules sit in a second column beside the forms, spanning every row, "
+      "with no card stretched to its row (the desktop layout as before)",
+      _grid132 is not None and "grid-template-columns:5fr 7fr" in _grid132.group(1)
+      and "align-items:start" in _grid132.group(1)
+      and _re132.search(r"\.fw-layout > \.fw-rules-card\{\s*grid-column:2;\s*grid-row:1 / -1;", _grid132.group(2))
+      is not None, repr(_grid132.group(0)[:300] if _grid132 else None))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. Tab labels that fit a phone, the full label kept for screen readers
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+for _page132 in ("local", "remote"):
+    _html132 = _pages131.get(_page132, (0, ""))[1]
+    _pills132 = dict(_re132.findall(r'data-mtab-btn="(\w+)">(.*?)</button>', _html132))
+    check("tab labels (%s host page): Host Controls and Maintenance carry the full label and a short one "
+          "hidden from screen readers; the other three are short already" % _page132,
+          '<span class="mtab-full">Host Controls</span><span class="mtab-short" aria-hidden="true">Controls'
+          '</span>' in _pills132.get("controls", "")
+          and '<span class="mtab-full">Maintenance</span><span class="mtab-short" aria-hidden="true">Maint.'
+              '</span>' in _pills132.get("maintenance", "")
+          and sorted(_pills132) == ["controls", "maintenance", "network", "overview", "security"],
+          repr(_pills132))
+_tabs132 = _CSS132[_CSS132.find("#mtab-nav .mtab-short{ display:none; }"):]
+_narrow132 = _re132.search(r"@media \(max-width: 767\.98px\)\{(.*?)\n\}", _tabs132, _re132.S)
+_full132 = _re132.search(r"#mtab-nav \.mtab-full\{([^}]*)\}", _narrow132.group(1) if _narrow132 else "")
+check("tab labels: the short label is hidden on a desktop and shown below 768px, where the full one is "
+      "visually hidden (still read out: clipped, not display:none) and the pills share the bar",
+      _narrow132 is not None and _full132 is not None
+      and "#mtab-nav .mtab-short{ display:inline; }" in _narrow132.group(1)
+      and "#mtab-nav > .nav-item{ flex:1 1 auto; }" in _narrow132.group(1)
+      and "clip:rect(0, 0, 0, 0)" in _full132.group(1) and "display:none" not in _full132.group(1),
+      repr(_narrow132.group(0)[:200] if _narrow132 else None))
+check("tab labels: the short labels are in the es and fr catalogs",
+      all(k in _CAT132.get(lang, {}) for lang in ("es", "fr") for k in ("Controls", "Maint.")), "")
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 5. The old Firewall page's URL: a redirect to the Network tab, behind the page's own checks
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_uit_fw = {}
+_uit_reads = []
+
+
+def _uit_ufw_read(remote):
+    """remote_ufw_status's stand-in: counts a read the redirect must not make."""
+    _uit_reads.append(remote)
+    return {}
+
+
+try:
+    _p9_arm(who="part132")
+    _p9_patch(_p9_rv, "remote_ufw_status", _uit_ufw_read)
+    _uit_who = (("remote", P9_ADMIN, P9_HOST), ("local", P9_ADMIN, P9_LOCAL), ("viewer", P9_VIEWER, P9_HOST),
+                ("viewer_local", P9_VIEWER, P9_LOCAL), ("missing", P9_ADMIN, 990132))
+    for _k132, _uid132, _rid132 in _uit_who:
+        _r132 = _p9_client(_uid132).get("/remote/%d/firewall" % _rid132)
+        _uit_fw[_k132] = (_r132.status_code, _r132.headers.get("Location", ""))
+finally:
+    _p9_restore_all()
+check("old Firewall URL: a remote's redirects to its host page's Network tab, the panel host's to "
+      "/server-management#network",
+      _uit_fw.get("remote", (0, ""))[0] == 302
+      and _uit_fw["remote"][1].endswith("/remote/%d/manage#network" % P9_HOST)
+      and _uit_fw.get("local", (0, ""))[0] == 302 and _uit_fw["local"][1].endswith("/server-management#network"),
+      repr(_uit_fw))
+# A refusal is the panel's own (_deny: a page request is sent home with a flash, as the page's was).
+check("old Firewall URL: ...a user without the right to manage the host, and a host that does not exist, "
+      "are refused as the page refused them — never redirected on to the host page",
+      all(_uit_fw.get(k, (0, ""))[0] in (302, 403, 404) and "#network" not in _uit_fw[k][1]
+          and "manage" not in _uit_fw[k][1] for k in ("viewer", "viewer_local", "missing"))
+      and _uit_fw.get("missing", (0, ""))[0] == 404, repr(_uit_fw))
+check("old Firewall URL: ...and the redirect reads no firewall (the tab reads it when it opens)",
+      _uit_reads == [], repr(len(_uit_reads)))
+check("old Firewall URL: the standalone template is gone, and nothing renders or links to it",
+      not os.path.exists(os.path.join(_root, "templates", "remote_firewall.html"))
+      and "remote_firewall.html" not in _read132("panel", "routes", "remote_vps.py"), "")
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 6. Blocked & banned IPs together on the Security tab
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_KEPT132 = ("sec-keptout", "fw-blocks", "blocks-list", "blocks-count", "blocks-inactive-note", "block-ip",
+            "block-result", "sec-bans")
+for _page132 in ("local", "remote"):
+    _p132 = _P131.get(_page132)
+    _where132 = {i: (_p132.where.get(i, "<absent>") if _p132 else "<no page>") for i in _KEPT132}
+    check("blocked & banned (%s host page): Blocked IPs and the fail2ban bans are both in the Security tab's "
+          "area, and the tab is offered" % _page132,
+          _p132 is not None and "security" in _p132.buttons and set(_where132.values()) == {"security"},
+          repr(_where132))
+    _acts132 = _p132.actions.get("security", set()) if _p132 else set()
+    check("blocked & banned (%s host page): each list keeps its own actions there — Block IP and Refresh "
+          "for UFW, Refresh for fail2ban; unblock and unban are drawn per row by their scripts" % _page132,
+          {"blockIp", "refreshFirewall", "loadSecurityBans", "loadSecurityTopIps"}
+          <= _acts132, repr(sorted(_acts132)))
+    _html132 = _pages131.get(_page132, (0, ""))[1]
+    _o132 = _uit_order(_page132, ("sec-keptout", "fw-blocks", "sec-bans"))
+    check("blocked & banned (%s host page): under one heading, the UFW list then the fail2ban list"
+          % _page132, -1 not in _o132 and _o132 == sorted(_o132)
+          and "Blocked &amp; banned IPs</h2>" in _html132[_o132[0]:_o132[1]], repr(_o132))
+    _hrefs132 = {(h, t) for h, t in (_p132.hrefs if _p132 else [])}
+    check("blocked & banned (%s host page): the Network tab's jump line links to the area, no longer to a "
+          "Blocked IPs card of its own, and Top offenders' link lands beside it" % _page132,
+          ("#sec-keptout", "network") in _hrefs132 and ("#fw-blocks", "network") not in _hrefs132
+          and ("#fw-blocks", "security") in _hrefs132, repr(sorted(h for h in _hrefs132 if h[0].startswith("#"))))
+_PAL132 = _read132("static", "js", "palette.js")
+check("blocked & banned: the palette finds Blocked IPs (\"block\" found only the Firewall row, which opens "
+      "the Network tab), for the panel host and every remote",
+      "page: '/server-management', hash: 'fw-blocks'" in _PAL132 and "{ hash: 'fw-blocks'," in _PAL132
+      and "allow deny block network" not in _PAL132, "")
+_RMJS132 = _read132("static", "js", "remote_manage.js")
+check("blocked & banned: a block or unblock from Top offenders repaints the Blocked IPs list beside it",
+      _RMJS132.count("_uitKeptOutChanged(); })") == 2
+      and "if (window.refreshFirewall) refreshFirewall();" in _RMJS132, "")
+if _out131 is not None:
+    check("blocked & banned: the Security tab's first opening reads the firewall (its Blocked IPs), once — "
+          "the Network tab opened after reads nothing more",
+          (_out131.get("sec") or {}).get("first") == 1 and _out131["sec"].get("again") == 1
+          and _out131["sec"].get("active") == ["security"], repr(_out131.get("sec")))
+    check("blocked & banned: a link to #fw-blocks opens the Security tab, scrolls to the card and reads",
+          _out131.get("blocks") == {"reads": 1, "active": ["security"], "scrolled": ["fw-blocks"]},
+          repr(_out131.get("blocks")))
 
 # ── END: keep this last ──────────────────────────────────────────────────────────────────────────
 check("part132: nothing it drove reached a real transport (every host call was stubbed)",

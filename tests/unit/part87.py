@@ -3,8 +3,8 @@
 Held here, each against the code path the finding named:
 
 * the OS-updates banner's audience: a host admin scoped to remotes (no panel host) gets it.
-* the remote Firewall page: a changed host key named as such on first load, and its status card
-  repainted by Refresh.
+* the firewall's status card (a changed host key named as such) repainted by Refresh; the first-load
+  check went with the standalone page (ui-tidy-2).
 * the panel host's label in the viewer's language on the terminal's status line, in the OS-updates
   banner after a live switch, and in the command palette.
 * a stored backup interval with no listed option re-rendered by a live language switch.
@@ -30,8 +30,6 @@ from unit.part12 import (P9_ADMIN, P9_HOST, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm,
 from panel.core import panel_state as _ps87
 from panel.db.models import (Group as _G87, RemoteServer as _RS87, User as _U87, db as _db87)
 from panel.ops import terminal_session as _ts87
-from panel.ops.ssh_manager._core import HostKeyMismatch as _HKM87
-from panel.routes import remote_vps as _rv87
 from panel.security import auth as _auth87
 
 _TRIP87_START = len(_P9_TRIPPED)
@@ -189,45 +187,11 @@ if _out87 is not None:
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 3. The Firewall page names a changed host key on first load, and Refresh repaints its card
+# 3. The firewall's Refresh repaints its status card
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-def _fw_page87(fn):
-    _p9_patch(_rv87, "remote_ufw_status", fn)
-    r = _p9_client(P9_ADMIN).get("/remote/%d/firewall" % P9_HOST)
-    return r.status_code, _html87.unescape(r.get_data(as_text=True))
-
-
-def _key87(*_a, **_k):
-    raise _HKM87("unit p87: the SSH host key for h has CHANGED")
-
-
-def _down87(*_a, **_k):
-    raise ConnectionError("timed out")
-
-
-_fwp87 = {}
-try:
-    _p9_arm(who="part87")
-    _lang87(P9_ADMIN, "fr")
-    _fwp87["key"] = _fw_page87(_key87)
-    _fwp87["down"] = _fw_page87(_down87)
-finally:
-    _lang87(P9_ADMIN, _LANG87_WAS)
-    _p9_restore_all()
+# The page as loaded named a changed host key on first load; the standalone Firewall page is a redirect
+# to the host page's Network tab now (ui-tidy-2), whose cards only the refresh paints, held below.
 _CANT87 = "The panel can't reach this host right now"
-_UNREAD87 = "Rules can't be read while this host is unreachable."
-_kpage87 = _fwp87.get("key", (0, ""))
-check("firewall page: a host whose key changed is said as that on first load, in the viewer's language, "
-      "in the status card and both rule lists (it blamed the network until Refresh)",
-      _kpage87[0] == 200 and bool(_FR87.get(_HOSTKEY87))
-      and _kpage87[1].count(_FR87.get(_HOSTKEY87) or "\0") == 3
-      and _CANT87 not in _kpage87[1] and _UNREAD87 not in _kpage87[1],
-      repr((_kpage87[0], _kpage87[1].count(_FR87.get(_HOSTKEY87) or "\0"), _CANT87 in _kpage87[1])))
-_dpage87 = _fwp87.get("down", (0, ""))
-check("firewall page: ...while a host that did not answer still says it cannot be reached",
-      _dpage87[0] == 200 and _CANT87 in _dpage87[1] and _dpage87[1].count(_UNREAD87) == 2
-      and (_FR87.get(_HOSTKEY87) or "\0") not in _dpage87[1], repr(_dpage87[0]))
-
 # Refresh repaints the card from the same read as the badge and the lists.
 _FWJS87 = _read87("static", "js", "remote_firewall.js")
 _name87 = "firewall refresh: the UFW Status card follows the read"
