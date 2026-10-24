@@ -749,7 +749,8 @@ def v_fwa_port_range(s):
 
     Stricter than v_portspec on purpose: "27015:27015" is no range (ufw's own parser refuses some
     spellings of it and not others), and the protocol is its own argument, as v_portspec_bare has
-    it. Mirrors privileged._fwa_port_range."""
+    it. Mirrors privileged._fwa_port_range.
+    """
     m = re.fullmatch(r"([0-9]{1,5})(?::([0-9]{1,5}))?", s)
     if not m:
         raise ValueError("not a port or a port range")

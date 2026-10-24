@@ -297,6 +297,17 @@ def _ufw_proto(protocol):
     return None
 
 
+def _fwa_open_verb(port, proto, family, cmt):
+    """(verb, its arguments, the rule as the answer names it) for remote_ufw_open_port."""
+    if family != "both":
+        label = "%s (%s, %s)" % (port, "TCP+UDP" if proto == "both" else proto.upper(),
+                                 "IPv4" if family == "v4" else "IPv6")
+        return "ufw-allow-port-family", [family, str(port), "any" if proto == "both" else proto, cmt], label
+    if proto == "both":
+        return "ufw-allow-port", [str(port), cmt], f"{port} (TCP+UDP)"
+    return "ufw-allow-proto-port", [proto, str(port), cmt], f"{port}/{proto}"
+
+
 def remote_ufw_open_port(server, port, protocol="tcp", comment="", family="both"):
     """Open a port on the remote server via UFW. protocol 'both'/'any' opens TCP+UDP
     in a single rule (a bare `ufw allow <port>` covers both). `family` v4 or v6 keeps the rule to
@@ -311,14 +322,7 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment="", family="both"
     if family not in ("both", "v4", "v6"):
         return False, "Invalid address family"
     cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
-    if family != "both":
-        verb, vargs = "ufw-allow-port-family", [family, str(port), "any" if proto == "both" else proto, cmt]
-        label = "%s (%s, %s)" % (port, "TCP+UDP" if proto == "both" else proto.upper(),
-                                 "IPv4" if family == "v4" else "IPv6")
-    elif proto == "both":
-        verb, vargs, label = "ufw-allow-port", [str(port), cmt], f"{port} (TCP+UDP)"
-    else:
-        verb, vargs, label = "ufw-allow-proto-port", [proto, str(port), cmt], f"{port}/{proto}"
+    verb, vargs, label = _fwa_open_verb(port, proto, family, cmt)
     out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
     if rc == 0:
         return True, i18n.Sentence("Port {port} opened on remote", port=label)

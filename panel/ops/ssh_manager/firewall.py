@@ -1016,6 +1016,15 @@ def _fwa_read_stored(server):
 
 
 # ── ufw's stored tuples as the rows `ufw status numbered` would list ──
+def _fwa_tuple_ifaces(t, last):
+    """A tuple's last field into `t`: its direction, and the interfaces "in_eth0!out_eth1" names."""
+    t["direction"] = last.split("_")[0]
+    for part in last.split("!"):
+        kind, _, name = part.partition("_")
+        if name:
+            t["iface_" + ("in" if kind == "in" else "out")] = name
+
+
 def _fwa_tuple(line):
     """One `### tuple ###` line of user.rules as ufw's reader takes it, or None when ufw skips it.
 
@@ -1035,12 +1044,7 @@ def _fwa_tuple(line):
         return None
     t = {"comment": comment, "direction": "in", "iface_in": "", "iface_out": "", "dapp": "", "sapp": ""}
     if len(fields) in (7, 9):
-        last = fields[-1]
-        t["direction"] = last.split("_")[0]
-        for part in last.split("!"):
-            kind, _, name = part.partition("_")
-            if name:
-                t["iface_" + ("in" if kind == "in" else "out")] = name
+        _fwa_tuple_ifaces(t, fields[-1])
     action = fields[0]
     t["forward"] = ":" in action
     action = action.split(":")[-1]
@@ -1054,29 +1058,55 @@ def _fwa_tuple(line):
 
 def _fwa_location(t, v6, loc):
     """One column (To or From) of rule `t`, as ufw's get_status prints it (numbered, not verbose)."""
-    addr, port, app = (t["dst"], t["dport"], t["dapp"]) if loc == "dst" else (t["src"], t["sport"], t["sapp"])
-    show_proto = not (t["dapp"] or t["sapp"])
-    anywhere = addr in ("0.0.0.0/0", "::/0")      # NOSONAR(S1313) - ufw's "any" networks, not hosts
+    dst = loc == "dst"
+    addr, port, app = (t["dst"], t["dport"], t["dapp"]) if dst else (t["src"], t["sport"], t["sapp"])
     if app:
         port = app + (" (v6)" if v6 and addr == "::/0" else "")
-    col = "" if anywhere else addr
-    if port != "any":
-        col = port if col == "" else col + " " + port
-        if show_proto and t["proto"] != "any":
-            col += "/" + t["proto"]
-        if v6 and t["src"] == "::/0" and t["dst"] == "::/0" and " (v6)" not in col:
-            col += " (v6)"
-    elif anywhere:
-        col = "Anywhere"
-        if show_proto and t["proto"] != "any" and t["dst"] == t["src"] and t["dport"] == t["sport"]:
-            col += "/" + t["proto"]
-        if addr == "::/0":
-            col += " (v6)"
-    elif show_proto and t["proto"] != "any" and t["dport"] == t["sport"]:
+    col = _fwa_col_port(t, v6, addr, port) if port != "any" else _fwa_col_any(t, addr)
+    return col + _fwa_col_iface(t, dst)
+
+
+# ufw's "any" networks, which it prints as Anywhere.
+_FWA_ANY_NETS = ("0.0.0.0/0", "::/0")      # NOSONAR(S1313) - ufw's "any" networks, not hosts
+
+
+def _fwa_show_proto(t):
+    """Whether ufw prints `t`'s protocol: it has one, and the rule is not an app profile's."""
+    return t["proto"] != "any" and not (t["dapp"] or t["sapp"])
+
+
+def _fwa_col_port(t, v6, addr, port):
+    """A column that names a port (or an app profile): "[<addr> ]<port>[/proto][ (v6)]"."""
+    col = port if addr in _FWA_ANY_NETS else addr + " " + port
+    if _fwa_show_proto(t):
         col += "/" + t["proto"]
-    on = (t["iface_in"] if loc == "src" else t["iface_out"]) if t["forward"] else \
-        (t["iface_in"] if loc == "dst" else t["iface_out"])
-    return col + (" on " + on if on else "")
+    if v6 and t["src"] == "::/0" and t["dst"] == "::/0" and " (v6)" not in col:
+        col += " (v6)"
+    return col
+
+
+def _fwa_col_any(t, addr):
+    """A column with no port: its address, or Anywhere (with the protocol where ufw shows it)."""
+    if addr not in _FWA_ANY_NETS:
+        same_ports = t["dport"] == t["sport"]
+        return addr + ("/" + t["proto"] if _fwa_show_proto(t) and same_ports else "")
+    col = "Anywhere"
+    if _fwa_show_proto(t) and t["dst"] == t["src"] and t["dport"] == t["sport"]:
+        col += "/" + t["proto"]
+    return col + (" (v6)" if addr == "::/0" else "")
+
+
+def _fwa_col_iface(t, dst):
+    """" on <iface>" for the column ufw names the interface in, else "".
+
+    A route rule names its incoming interface under From and its outgoing one under To; any other
+    rule names the incoming one under To and the outgoing one under From.
+    """
+    if t["forward"]:
+        on = t["iface_out"] if dst else t["iface_in"]
+    else:
+        on = t["iface_in"] if dst else t["iface_out"]
+    return " on " + on if on else ""
 
 
 def _fwa_tuple_detail(t, v6):
@@ -1126,6 +1156,20 @@ def remote_ufw_settings(server):
     (with `unreachable`, as remote_ufw_status says it) when the status itself could not be read.
     """
     out, err, rc = _core.run_privileged(server, "ufw-status", ["verbose"], timeout=15, sudo=None)
+    failed = _fwa_status_failed(out, err, rc)
+    if failed is not None:
+        return failed
+    enabled = _ufw_is_active(out)
+    stored = _fwa_read_stored(server)
+    res = dict(_fwa_stored_values(stored), read_ok=True, installed=True, enabled=enabled,
+               stored_ok=stored is not None)
+    if enabled:
+        _fwa_loaded_values(res, out)
+    return res
+
+
+def _fwa_status_failed(out, err, rc):
+    """The settings answer for a status read that is not a reading (as remote_ufw_status words it)."""
     if rc == 127:
         return {"read_ok": True, "installed": False, "enabled": False}
     if rc != 0 or not (out or "").strip():
@@ -1133,27 +1177,32 @@ def remote_ufw_settings(server):
         if _SUDO_REFUSED_RE.search((out or "") + (err or "")):
             res["permission_denied"] = True
         return res
-    enabled = _ufw_is_active(out)
-    stored = _fwa_read_stored(server)
+    return None
+
+
+def _fwa_stored_values(stored):
+    """The settings the stored files hold (every one None when they could not be read)."""
     vals = (_fwa_defaults(stored["/etc/default/ufw"], stored["/etc/ufw/ufw.conf"])
             if stored is not None else {})
-    res = {"read_ok": True, "installed": True, "enabled": enabled, "stored_ok": stored is not None,
-           "incoming": _fwa_file_policy(vals, "default_input_policy"),
-           "outgoing": _fwa_file_policy(vals, "default_output_policy"),
-           "routed": _fwa_file_policy(vals, "default_forward_policy"),
-           "logging": vals.get("loglevel") if vals.get("loglevel") in FWA_LOG_LEVELS else None,
-           "ipv6": {"yes": True, "no": False}.get(vals.get("ipv6"))}
-    if enabled:
-        # What is LOADED wins over the files while UFW is on; a line it cannot find (a ufw that
-        # words it otherwise) leaves the stored value, or None.
-        m = _FWA_DEFAULT_RE.search(out)
-        if m:
-            res["incoming"], res["outgoing"] = m.group(1), m.group(2)
-            res["routed"] = m.group(3) or res["routed"]
-        lm = _FWA_LOGGING_RE.search(out)
-        if lm:
-            res["logging"] = lm.group(1) or lm.group(2)
-    return res
+    return {"incoming": _fwa_file_policy(vals, "default_input_policy"),
+            "outgoing": _fwa_file_policy(vals, "default_output_policy"),
+            "routed": _fwa_file_policy(vals, "default_forward_policy"),
+            "logging": vals.get("loglevel") if vals.get("loglevel") in FWA_LOG_LEVELS else None,
+            "ipv6": {"yes": True, "no": False}.get(vals.get("ipv6"))}
+
+
+def _fwa_loaded_values(res, out):
+    """What is LOADED, from `ufw status verbose`, over the stored values while UFW is on.
+
+    A line it cannot find (a ufw that words it otherwise) leaves the stored value, or None.
+    """
+    m = _FWA_DEFAULT_RE.search(out)
+    if m:
+        res["incoming"], res["outgoing"] = m.group(1), m.group(2)
+        res["routed"] = m.group(3) or res["routed"]
+    lm = _FWA_LOGGING_RE.search(out)
+    if lm:
+        res["logging"] = lm.group(1) or lm.group(2)
 
 
 # ── what an ENABLED firewall would let in, and out ──
@@ -1228,30 +1277,35 @@ def _fwa_panel_path_gap(server, groups, ts):
     """
     ts_running, ts_ssh_ok, ts_iface_ok = ts
     if _core.is_local_server(server):
-        if _panel_served_over_tailscale(server) and ts_running:
-            if not _fwa_tailnet_iface_open(groups):
-                return i18n.Sentence("The panel is published over Tailscale Serve, and no rule lets the "
-                                     "tailscale0 interface in.")
-            return None
-        missing = [p for p in _r31a_panel_web_ports(server, ts_running=ts_running)
-                   if not _fwa_port_open(groups, p, lambda g, p=p: _is_panel_rule(g, p))]
-        if missing:
-            return i18n.Sentence("No rule lets the panel's own web port {port}/tcp in, and the panel is not "
-                                 "published over Tailscale.", port=", ".join(str(p) for p in missing))
-        return None
+        return _fwa_local_panel_gap(server, groups, ts_running)
     if server.auth_method == "tailscale" or _fwa_is_tailnet_host(server.host):
-        if not (ts_ssh_ok or ts_iface_ok):
-            return i18n.Sentence("The panel reaches this host over Tailscale, and neither Tailscale SSH nor "
-                                 "a rule letting the tailscale0 interface in would keep that open.")
-        return None
+        if ts_ssh_ok or ts_iface_ok:
+            return None
+        return i18n.Sentence("The panel reaches this host over Tailscale, and neither Tailscale SSH nor "
+                             "a rule letting the tailscale0 interface in would keep that open.")
     try:
         port = int(server.port)
     except (TypeError, ValueError, OverflowError):
         port = None
-    if port is None or not _fwa_port_open(groups, port, lambda g: g.get("is_ssh")):
-        return i18n.Sentence("No rule lets the SSH port the panel connects on ({port}/tcp) in.",
-                             port=port if port is not None else "?")
-    return None
+    if port is not None and _fwa_port_open(groups, port, lambda g: g.get("is_ssh")):
+        return None
+    return i18n.Sentence("No rule lets the SSH port the panel connects on ({port}/tcp) in.",
+                         port=port if port is not None else "?")
+
+
+def _fwa_local_panel_gap(server, groups, ts_running):
+    """_fwa_panel_path_gap for the panel's own host: the way into its web interface."""
+    if _panel_served_over_tailscale(server) and ts_running:
+        if _fwa_tailnet_iface_open(groups):
+            return None
+        return i18n.Sentence("The panel is published over Tailscale Serve, and no rule lets the "
+                             "tailscale0 interface in.")
+    missing = [p for p in _r31a_panel_web_ports(server, ts_running=ts_running)
+               if not _fwa_port_open(groups, p, lambda g, p=p: _is_panel_rule(g, p))]
+    if not missing:
+        return None
+    return i18n.Sentence("No rule lets the panel's own web port {port}/tcp in, and the panel is not "
+                         "published over Tailscale.", port=", ".join(str(p) for p in missing))
 
 
 def _fwa_inbound_gaps(server, groups):
@@ -1297,21 +1351,26 @@ def _fwa_out_admits(g, port, proto):
 def _fwa_out_open(groups, port, proto, iface=None):
     """Whether this host may connect out to `port`/`proto`: the first OUT rule matching it allows it.
 
-    `iface` None: a rule on no interface. A tailscale name: a rule on that interface, every port.
-    A rule on any other interface is not counted (it may not be the way out), nor is one to one
-    destination; a DENY/REJECT OUT above that matches decides first.
+    `iface` None: a rule on no interface. A tailscale name: a rule on that interface too. A rule on
+    any other interface is not counted (it may not be the way out), nor is one to one destination;
+    a DENY/REJECT OUT above that matches decides first.
     """
     for g in _fwa_ordered(groups):
-        if (g.get("direction") or "IN") != "OUT" or not _fwa_out_admits(g, port, proto):
+        if not _fwa_out_matches(g, port, proto, iface):
             continue
-        on = str(g.get("iface") or "")
-        if on and on != (iface or ""):
-            continue                    # about another interface's traffic
         if g.get("action") in ("DENY", "REJECT"):
             return False
         if g.get("action") in ("ALLOW", "LIMIT"):
             return True
     return False
+
+
+def _fwa_out_matches(g, port, proto, iface):
+    """Whether OUT rule `g` is about `proto` to `port` on no interface, or on `iface`."""
+    if (g.get("direction") or "IN") != "OUT" or not _fwa_out_admits(g, port, proto):
+        return False
+    on = str(g.get("iface") or "")
+    return not on or on == (iface or "")
 
 
 def _fwa_outbound_gaps(server, groups):
@@ -1326,17 +1385,25 @@ def _fwa_outbound_gaps(server, groups):
     if _core.is_local_server(server):
         from panel.db.models import RemoteServer
         for r in RemoteServer.query.filter(RemoteServer.is_local.is_(False)).order_by(RemoteServer.id).all():
-            try:
-                port = int(r.port or 22)
-            except (TypeError, ValueError, OverflowError):
-                port = 22
-            if r.auth_method == "tailscale" or _fwa_is_tailnet_host(r.host):
-                if not (_fwa_out_open(groups, port, "tcp", iface="tailscale0") or _fwa_out_open(groups, port, "tcp")):
-                    gaps.append(i18n.Sentence("Nothing allows the panel out to {host} over Tailscale.", host=r.name))
-            elif not _fwa_out_open(groups, port, "tcp"):
-                gaps.append(i18n.Sentence("Nothing allows the panel out to {host} on SSH port {port}/tcp.",
-                                          host=r.name, port=port))
+            gap = _fwa_remote_out_gap(groups, r)
+            if gap:
+                gaps.append(gap)
     return gaps
+
+
+def _fwa_remote_out_gap(groups, r):
+    """What the panel host would lack to keep reaching remote `r` under an outgoing deny, or None."""
+    try:
+        port = int(r.port or 22)
+    except (TypeError, ValueError, OverflowError):
+        port = 22
+    if r.auth_method == "tailscale" or _fwa_is_tailnet_host(r.host):
+        if _fwa_out_open(groups, port, "tcp", iface="tailscale0"):
+            return None
+        return i18n.Sentence("Nothing allows the panel out to {host} over Tailscale.", host=r.name)
+    if _fwa_out_open(groups, port, "tcp"):
+        return None
+    return i18n.Sentence("Nothing allows the panel out to {host} on SSH port {port}/tcp.", host=r.name, port=port)
 
 
 _FWA_UNREAD = i18n.Sentence("Couldn't read the firewall, so nothing was changed — the panel will not change a "
@@ -1440,23 +1507,24 @@ def remote_ufw_set_enabled(server, on, confirm=False):
         if bool(st.get("enabled")) == bool(on):
             return True, (i18n.Sentence("The firewall is already on.") if on
                           else i18n.Sentence("The firewall is already off.")), st
-        if on:
-            why = _fwa_enable_refusal(server, st)
-            if why:
-                return False, why, st
-            out, err, rc = _core.run_privileged(server, "ufw-enable", [], timeout=30)
-        else:
-            if confirm is not True:
-                return False, i18n.Sentence("Turning the firewall off needs your confirmation."), st
-            out, err, rc = _core.run_privileged(server, "ufw-disable", [], timeout=30)
+        why = _fwa_enable_refusal(server, st) if on else (
+            None if confirm is True else i18n.Sentence("Turning the firewall off needs your confirmation."))
+        if why:
+            return False, why, st
+        out, err, rc = _core.run_privileged(server, "ufw-enable" if on else "ufw-disable", [], timeout=30)
         after = remote_ufw_settings(server)
-        if rc != 0:
-            return False, _fwa_tool_said(out, err, rc), after
-        if not after.get("read_ok") or bool(after.get("enabled")) != bool(on):
-            return False, (i18n.Sentence("UFW answered, but the firewall does not read as on now.") if on else
-                           i18n.Sentence("UFW answered, but the firewall does not read as off now.")), after
-        return True, (i18n.Sentence("The firewall is on.") if on else
-                      i18n.Sentence("The firewall is off: this host now accepts every connection.")), after
+        return _fwa_switched(on, out, err, rc, after)
+
+
+def _fwa_switched(on, out, err, rc, after):
+    """The answer once ufw-enable / ufw-disable ran: its exit, then what the firewall reads now."""
+    if rc != 0:
+        return False, _fwa_tool_said(out, err, rc), after
+    if not after.get("read_ok") or bool(after.get("enabled")) != bool(on):
+        return False, (i18n.Sentence("UFW answered, but the firewall does not read as on now.") if on else
+                       i18n.Sentence("UFW answered, but the firewall does not read as off now.")), after
+    return True, (i18n.Sentence("The firewall is on.") if on else
+                  i18n.Sentence("The firewall is off: this host now accepts every connection.")), after
 
 
 def remote_ufw_set_logging(server, level):
@@ -1512,29 +1580,57 @@ def _fwa_port_block_refusal(server, lo, hi, protos):
     really on may be inside the range.
     """
     if "tcp" in protos:
-        try:
-            ssh = {int(p) for p in hosts._sshd_current_ports(server)}
-        except Exception:
-            _core._log.debug("port block: sshd's ports could not be read", exc_info=True)
-            ssh = set()
-        if not ssh:
-            return i18n.Sentence("Couldn't read which ports SSH listens on, so no port block was added.")
-        try:
-            ssh.add(int(server.port))
-        except (TypeError, ValueError, OverflowError):
-            _core._log.debug("port block: the stored SSH port is not a number")
-        hit = sorted(p for p in ssh if lo <= p <= hi)
-        if hit:
-            return i18n.Sentence("Port {port} is SSH's on this host; blocking it would lock you out.",
-                                 port=hit[0])
-        hit = sorted(p for p in _fwa_panel_ports(server) if lo <= p <= hi)
-        if hit:
-            return i18n.Sentence("Port {port} is this panel's own web port; blocking it would lock you "
-                                 "out of the panel.", port=hit[0])
+        why = _fwa_tcp_block_refusal(server, lo, hi)
+        if why:
+            return why
     if "udp" in protos and lo <= _FWA_TAILSCALE_UDP <= hi:
         return i18n.Sentence("Port {port}/udp is Tailscale's own; blocking it cuts this host's direct "
                              "tailnet connections.", port=_FWA_TAILSCALE_UDP)
     return None
+
+
+def _fwa_ssh_ports_read(server):
+    """The ports sshd serves, with the one the panel dials; an empty set when sshd's could not be read."""
+    try:
+        ssh = {int(p) for p in hosts._sshd_current_ports(server)}
+    except Exception:
+        _core._log.debug("port block: sshd's ports could not be read", exc_info=True)
+        return set()
+    if not ssh:
+        return ssh
+    try:
+        ssh.add(int(server.port))
+    except (TypeError, ValueError, OverflowError):
+        _core._log.debug("port block: the stored SSH port is not a number")
+    return ssh
+
+
+def _fwa_tcp_block_refusal(server, lo, hi):
+    """_fwa_port_block_refusal's TCP half: SSH's ports and the panel's own web port."""
+    ssh = _fwa_ssh_ports_read(server)
+    if not ssh:
+        return i18n.Sentence("Couldn't read which ports SSH listens on, so no port block was added.")
+    hit = sorted(p for p in ssh if lo <= p <= hi)
+    if hit:
+        return i18n.Sentence("Port {port} is SSH's on this host; blocking it would lock you out.", port=hit[0])
+    hit = sorted(p for p in _fwa_panel_ports(server) if lo <= p <= hi)
+    if hit:
+        return i18n.Sentence("Port {port} is this panel's own web port; blocking it would lock you "
+                             "out of the panel.", port=hit[0])
+    return None
+
+
+def _fwa_block_args(spec, protocol, family, action):
+    """(the protocols a block of `spec` writes, or None, and why not)."""
+    from panel.security import privileged as _priv
+    try:
+        _priv._fwa_port_range(spec)
+    except _priv.VerbError:
+        return None, i18n.Sentence("Port must be a number from 1 to 65535, or a range like 27015:27020.")
+    proto = hosts._ufw_proto(protocol)
+    if proto is None or family not in FWA_FAMILIES or action not in ("deny", "reject"):
+        return None, i18n.Sentence("That is not a protocol, address family and action the panel can block with.")
+    return (["tcp", "udp"] if proto == "both" else [proto]), None
 
 
 def remote_ufw_block_port(server, spec, protocol="tcp", family="both", action="deny", comment=""):
@@ -1544,36 +1640,37 @@ def remote_ufw_block_port(server, spec, protocol="tcp", family="both", action="d
     rules, one per protocol (ufw needs one for a range); when the second fails the first is taken
     out again, unless it was already there before.
     """
-    from panel.security import privileged as _priv
     spec = str(spec or "").strip()
-    try:
-        _priv._fwa_port_range(spec)
-    except _priv.VerbError:
-        return False, i18n.Sentence("Port must be a number from 1 to 65535, or a range like 27015:27020.")
-    proto = hosts._ufw_proto(protocol)
-    if proto is None or family not in FWA_FAMILIES or action not in ("deny", "reject"):
-        return False, i18n.Sentence("That is not a protocol, address family and action the panel can block with.")
+    protos, why = _fwa_block_args(spec, protocol, family, action)
+    if protos is None:
+        return False, why
     lo, _sep, hi = spec.partition(":")
-    protos = ["tcp", "udp"] if proto == "both" else [proto]
     why = _fwa_port_block_refusal(server, int(lo), int(hi or lo), protos)
     if why:
         return False, why
     cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
     with _core.ufw_lock(server):
-        added = []
-        for p in protos:
-            out, err, rc = _core.run_privileged(server, "ufw-block-port", [action, spec, p, family, cmt],
-                                                timeout=20)
-            if rc != 0:
-                for q in added:
-                    _core.run_privileged(server, "ufw-delete-block-port", [action, spec, q, family], timeout=20)
-                return False, _fwa_tool_said(out, err, rc)
-            # "Skipping inserting existing rule" (exit 0): it was there before, so it is not undone.
-            if "Skipping" not in (out or ""):
-                added.append(p)
-    label = "%s/%s" % (spec, "+".join(protos))
-    return True, i18n.Sentence("Blocked {spec} ({action}, {family}).", spec=label, action=_fwa_word(action),
-                               family=_fwa_word(family))
+        failed = _fwa_write_blocks(server, [action, spec, family, cmt], protos)
+    if failed:
+        return False, failed
+    return True, i18n.Sentence("Blocked {spec} ({action}, {family}).", spec="%s/%s" % (spec, "+".join(protos)),
+                               action=_fwa_word(action), family=_fwa_word(family))
+
+
+def _fwa_write_blocks(server, how, protos):
+    """Write one block rule per protocol; on a failure undo the ones this added. -> None, or why."""
+    action, spec, family, cmt = how
+    added = []
+    for p in protos:
+        out, err, rc = _core.run_privileged(server, "ufw-block-port", [action, spec, p, family, cmt], timeout=20)
+        if rc != 0:
+            for q in added:
+                _core.run_privileged(server, "ufw-delete-block-port", [action, spec, q, family], timeout=20)
+            return _fwa_tool_said(out, err, rc)
+        # "Skipping inserting existing rule" (exit 0): it was there before, so it is not undone.
+        if "Skipping" not in (out or ""):
+            added.append(p)
+    return None
 
 
 # Single shell script that prints static host specs as TAB-separated KEY<TAB>VALUE

@@ -133,19 +133,28 @@ def _fwa_block_refusal(remote, target):
     address or many, may cover the address of the viewer making it.
     """
     net = _ipaddress.ip_network(target, strict=False)
-    if net.num_addresses > 1:
-        if any(net.version == n.version and net.overlaps(n) for n in _TAILNET_NETS):
-            return i18n.Sentence("{ip} reaches into Tailscale's addresses — blocking it would cut off tailnet "
-                                 "access.", ip=target)
-        if any(net.version == w.version and net.overlaps(w) for w in _whitelist_networks()):
-            return i18n.Sentence("{ip} covers an address on the security whitelist — remove it there first, "
-                                 "or block a narrower range.", ip=target)
     mine = ip_address_or_none(client_ip())
     if mine is not None and mine.version == net.version and mine in net:
         return i18n.Sentence("{ip} covers your own address ({mine}) — blocking it would lock you out.",
                              ip=target, mine=str(mine))
     if net.num_addresses == 1:
         return None
+    return _fwa_range_refusal(net, target) or _fwa_source_refusal(remote, net, target)
+
+
+def _fwa_range_refusal(net, target):
+    """_fwa_block_refusal for a range: the tailnet's addresses and the whitelist's."""
+    if any(net.version == n.version and net.overlaps(n) for n in _TAILNET_NETS):
+        return i18n.Sentence("{ip} reaches into Tailscale's addresses — blocking it would cut off tailnet "
+                             "access.", ip=target)
+    if any(net.version == w.version and net.overlaps(w) for w in _whitelist_networks()):
+        return i18n.Sentence("{ip} covers an address on the security whitelist — remove it there first, "
+                             "or block a narrower range.", ip=target)
+    return None
+
+
+def _fwa_source_refusal(remote, net, target):
+    """_fwa_block_refusal for a range: the address the panel's connection to the host comes from."""
     src = _sm.fwa_panel_source(remote)
     if src is None:
         return i18n.Sentence("Couldn't read the address the panel connects to this host from, so {ip} was "
@@ -155,6 +164,14 @@ def _fwa_block_refusal(remote, target):
         return i18n.Sentence("{ip} covers the address the panel connects to this host from ({src}) — "
                              "blocking it would cut the panel off from the host.", ip=target, src=src)
     return None
+
+
+def _fwa_block_or_unblock(remote, ip, shown, unblock):
+    """The block route's write -> (ok, msg): the unblock, or the block once nothing refuses it."""
+    if unblock:
+        return remote_ufw_undeny_ip(remote, ip)
+    why = None if shown == NOT_AN_IP else _fwa_block_refusal(remote, shown)
+    return (False, why) if why else remote_ufw_deny_ip(remote, ip)
 
 
 def _register_blocking(app):
@@ -181,11 +198,7 @@ def _register_blocking(app):
         act, shown = ("ufw_unblock" if unblock else "ufw_block"), _sm.fwa_block_target(ip) or NOT_AN_IP
         try:
             with _r20b_audit_on_raise(act, detail=remote.name, target=shown, remote=remote):
-                why = None if unblock or shown == NOT_AN_IP else _fwa_block_refusal(remote, shown)
-                if why:
-                    ok, msg = False, why
-                else:
-                    ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
+                ok, msg = _fwa_block_or_unblock(remote, ip, shown, unblock)
             # The action spelled out: the audit-ids gate reads it from this call.
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=shown,
                        detail=remote.name, success=ok, remote=remote)
