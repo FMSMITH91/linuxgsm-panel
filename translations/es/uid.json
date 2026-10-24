@@ -8,5 +8,6 @@
   "Rate-limit": "Limitar",
   "Source address or network": "Dirección o red de origen",
   "How auto-block works": "Cómo funciona el bloqueo automático",
-  "Show all {n}": "Mostrar los {n}"
+  "Show all {n}": "Mostrar los {n}",
+  "UFW": "UFW"
 }

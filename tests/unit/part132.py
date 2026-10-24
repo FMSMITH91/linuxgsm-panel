@@ -7,7 +7,7 @@
 2. Every message that sent the user to "the host's Firewall page" names the host page's Network tab
    (where the firewall rules are now), in English, Spanish and French: no catalog key, template text or
    script string says "Firewall page" any more, and the sentences translate whole.
-3. Phone order: on the Network tab the rules come right after UFW Status, before the forms — the DOM
+3. Phone order: on the Network tab the rules come right after the UFW badge, before the forms — the DOM
    order, so the keyboard and a screen reader go the same way; from 768px a grid puts them in a
    right-hand column as before.
 4. Tab labels: below 768px the pills are icon-over-label with short labels for Host Controls and
@@ -151,7 +151,7 @@ check("firewall wording: the firewall-could-not-be-read note, the install's fail
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 3. Phone order on the Network tab: the rules right after UFW Status
+# 3. Phone order on the Network tab: the rules right after the UFW badge (ui-dense: on the heading)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _CSS132 = _read132("static", "css", "panel.css")
 
@@ -164,7 +164,7 @@ def _uit_order(page, ids):
 
 for _page132 in ("local", "remote"):
     _o132 = _uit_order(_page132, ("ufw-badge", "fw-rules", "rules-list", "new-port", "src-cidr", "limit-port"))
-    check("phone order (%s host page): UFW Status, then Open Ports & Rules, then the forms — in the page's "
+    check("phone order (%s host page): the UFW badge, then Open Ports & Rules, then the forms — in the page's "
           "own order, which a phone shows as it is" % _page132,
           -1 not in _o132 and _o132 == sorted(_o132), repr(_o132))
 _PART132 = _read132("templates", "_firewall_panel.html")

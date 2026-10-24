@@ -105,7 +105,7 @@ function _fwHostSaid(data) {
   return (why && why !== 'host_unreachable' && data.message) ? data.message : '';
 }
 
-// The UFW Status card's line, from the same read the badge and the lists are painted from. It was
+// The UFW status line under the Firewall heading, from the same read the badge and the lists are painted from. It was
 // server-rendered only, so a refresh listed a host's rules under a card still saying the host could
 // not be reached, and a changed host key read "can't reach" there under lists saying "Re-trust".
 // The same states and sentences the standalone page's template had, in its order; the cards are
