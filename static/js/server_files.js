@@ -1,3 +1,41 @@
+// ── The page's sections (#sfsub-nav) ──
+// One section on view at a time, the others display:none from the first paint (server_files.html),
+// so the page is as tall as the section being read instead of all six stacked. The section rides
+// on the URL's #hash, as the server page's tabs do, so a reload or a shared link lands on it; a
+// hash naming a section this page does not have (Backups for a non-superadmin) opens Config.
+// Only display changes: every section's data still loads with the page, as before.
+function _uis_sfSections(){
+  return Array.prototype.map.call(document.querySelectorAll('[data-sfsub-btn]'), function(b){
+    return b.getAttribute('data-sfsub-btn');
+  });
+}
+function _uis_sfShow(name, keepHash){
+  var have = _uis_sfSections();
+  if (have.indexOf(name) < 0) name = 'config';
+  document.querySelectorAll('[data-sfsub]').forEach(function(el){
+    el.style.display = el.getAttribute('data-sfsub') === name ? '' : 'none';
+  });
+  document.querySelectorAll('[data-sfsub-btn]').forEach(function(b){
+    var on = b.getAttribute('data-sfsub-btn') === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  if (!keepHash) { try { history.replaceState(null, '', '#' + name); } catch(e){ /* a sandboxed frame: the section still shows */ } }
+  return name;
+}
+(function(){
+  var nav = document.getElementById('sfsub-nav'); if (!nav) return;
+  nav.addEventListener('click', function(e){
+    var b = e.target.closest('[data-sfsub-btn]'); if (!b) return;
+    _uis_sfShow(b.getAttribute('data-sfsub-btn'));
+  });
+  // A link to another section of this same page changes only the hash: follow it.
+  window.addEventListener('hashchange', function(){ _uis_sfShow((location.hash || '').slice(1), true); });
+  var want = (location.hash || '').slice(1);
+  // No hash is the page's plain URL: show Config and leave the address as it was linked.
+  _uis_sfShow(want || 'config', !want);
+})();
+
 var curDir = "";        // current browse dir (relative to home)
 var curFile = null;     // path of the file open in the editor
 
@@ -1406,23 +1444,45 @@ function loadAlerts(){
   fetch(MOUNT+'/api/server/'+serverId+'/alerts').then(r=>r.json()).then(function(d){
     var body=document.getElementById('alerts-body'); if(!body) return;
     if(d.error){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
-    var vals=d.values||{}, html='';
-    (d.providers||[]).forEach(function(p){
+    var vals=d.values||{}, html='', add='', shown=0;
+    // Only the services already set up are open. All nine at once, every field showing, was most of
+    // this page's height on a phone; the rest wait behind "Add a service", one tap each, with their
+    // fields exactly as before (still read by saveAlerts, which posts only what changed).
+    (d.providers||[]).forEach(function(p, i){
       var on=String(vals[p.toggle]||'').toLowerCase()==='on';
-      html += '<div class="border rounded p-2 mb-2">'
+      var used = on || (p.fields||[]).some(function(f){ return String(vals[f.key]||'').trim() !== ''; });
+      if (used) shown++;
+      else add += '<button type="button" class="btn btn-outline-secondary btn-sm py-0" data-action="_uis_alertAdd" data-args=\'["@self", '+esc(i)+']\'>'
+        + '<i class="bi bi-plus-lg"></i> <span>'+esc(p.label)+'</span></button>';
+      html += '<div class="col-12 col-lg-6 col-xl-4'+(used?'':' d-none')+'" data-uis-alert="'+esc(i)+'"><div class="border rounded p-2 h-100">'
         + '<div class="form-check form-switch mb-1"><input class="form-check-input" type="checkbox" data-alert-toggle="'+escA(p.toggle)+'" data-orig="'+(on?'on':'off')+'"'+(on?' checked':'')+'>'
         + '<label class="form-check-label"><strong>'+esc(p.label)+'</strong></label></div>'
         + '<div class="row g-2">';
       (p.fields||[]).forEach(function(f){
-        html += '<div class="col-md-6"><label class="form-label small mb-0">'+esc(f.label)+'</label>'
+        html += '<div class="col-12"><label class="form-label small mb-0">'+esc(f.label)+'</label>'
           + '<input type="text" class="form-control form-control-sm font-monospace" data-alert-key="'+escA(f.key)+'" data-orig="'+escA(vals[f.key]||'')+'" value="'+escA(vals[f.key]||'')+'" spellcheck="false"></div>';
       });
-      html += '</div></div>';
+      html += '</div></div></div>';
     });
+    html = (shown ? '' : '<p class="small text-secondary mb-2" id="alerts-none">No alert service is set up yet.</p>')
+      + '<div class="row g-2 mb-2">' + html + '</div>'
+      + (add ? '<div class="d-flex flex-wrap align-items-center gap-1 mb-1" id="alerts-add"><span class="small text-secondary me-1">Add a service:</span>' + add + '</div>' : '');
     body.innerHTML=html;  // nosemgrep
     document.getElementById('alerts-loading').style.display='none';
     body.style.display='';
   }).catch(function(){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">Could not load alert settings.</span>'; });
+}
+// "Add a service": open that service's box (already in the page, hidden) and drop its button.
+function _uis_alertAdd(btn, i){
+  var box = document.querySelector('[data-uis-alert="' + Number(i) + '"]');
+  if (box) {
+    box.classList.remove('d-none');
+    var first = box.querySelector('input'); if (first) first.focus();
+  }
+  if (btn) btn.remove();
+  var none = document.getElementById('alerts-none'); if (none) none.remove();
+  var row = document.getElementById('alerts-add');
+  if (row && !row.querySelector('button')) row.remove();
 }
 function saveAlerts(btn){
   // Only the fields the user changed, as saveConfig does. The card shows the values the server runs
