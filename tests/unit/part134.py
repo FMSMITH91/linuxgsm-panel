@@ -73,10 +73,20 @@ class _Page134(_HTMLParser134):
         top = self.stack[-1] if self.stack else (None, None, False)
         sec = a.get("data-sfsub") or top[1]
         closed = top[2] or (tag == "details" and "open" not in a)
+        self._tabs(a)
+        self._record(tag, a, sec, closed)
+        if tag not in _VOID134:
+            self.stack.append((tag, sec, closed))
+
+    def _tabs(self, a):
+        """The section and tab-button lists, in document order."""
         if a.get("data-sfsub"):
             self.sections.append(a["data-sfsub"])
         if a.get("data-sfsub-btn"):
             self.buttons.append(a["data-sfsub-btn"])
+
+    def _record(self, tag, a, sec, closed):
+        """Where this element's id, action and field name sit."""
         if a.get("id"):
             self.where[a["id"]] = sec
             self.folded[a["id"]] = closed
@@ -85,8 +95,6 @@ class _Page134(_HTMLParser134):
             self.actions.setdefault(a["data-action"], []).append(sec)
         if a.get("name") and tag in ("input", "select", "textarea"):
             self.names.add(a["name"])
-        if tag not in _VOID134:
-            self.stack.append((tag, sec, closed))
 
     def handle_endtag(self, tag):
         for k in range(len(self.stack) - 1, -1, -1):
