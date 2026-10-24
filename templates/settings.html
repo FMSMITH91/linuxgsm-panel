@@ -84,9 +84,13 @@
             <option value="basic" {% if settings.session_protection == 'basic' %}selected{% endif %}>Basic — lighter checks</option>
           </select>
 
-          <label class="form-label small mb-1 mt-3" for="s-autoblock">Auto-block threshold (attempts / 7 days)</label>
-          <input type="number" id="s-autoblock" name="autoblock_threshold" min="1" max="100000"
-                 class="form-control form-control-sm" value="{{ settings.autoblock_threshold }}">
+          {# Shown, not edited: the one editor is beside the Auto-block switch it governs, on a host
+             page's Security tab (Top offenders), which saves it for every host. Two editors of one
+             install-wide value meant two places to look and a form here that wrote it back on every
+             save. Not a form field, so Save on this page leaves the value alone. #}
+          <div class="form-label small mb-1 mt-3">Auto-block threshold (attempts / 7 days)</div>
+          <div class="small"><code id="s-autoblock">{{ settings.autoblock_threshold }}</code>
+            <a class="ms-2" href="{{ url_for('server_management') }}#sec-threshold"><i class="bi bi-shield-lock"></i> Change it on the Security tab</a></div>
           <div class="small text-secondary mt-1">How many failed logins from one IP over 7 days before it's auto-blocked.</div>
         </div>
       </div>

@@ -642,8 +642,8 @@ def _r14a_ports_word(g):
 
 # Every protect_reason the Firewall page can show, as a fixed English template. The group carries
 # the template (protect_reason_key) and its values (protect_reason_params) beside the English text,
-# so the page renders it in the viewer's language: the catalogs translate the template, and the
-# values (ports, never words) go in after. protect_reason itself stays the English sentence it always
+# so the page renders it in the viewer's language (remote_firewall.js _fwReason): the catalogs
+# translate the template, and the values (ports, never words) go in after. protect_reason itself stays the English sentence it always
 # was; an API refusal built from it is an i18n.Sentence of the template (hosts._r16c_protect_refusal),
 # the same English as a str, which the route translates. The unit suite holds each one to both catalogs.
 _R14A_SSH_TAIL = (" the SSH port used to reach this host, and there's no working Tailscale route to "
@@ -676,21 +676,6 @@ def _r14a_set_reason(g, which, **params):
     g["protect_reason_params"] = {k: str(v) for k, v in params.items()}
     g["protect_reason_key"] = template
     g["protect_reason"] = template.format_map(g["protect_reason_params"])
-
-
-def r14a_reason_text(g, translate=None):
-    """`g`'s protect_reason in the viewer's language.
-
-    `translate` (the template's `t`) is applied to its template, then its values go in. The English
-    text when there is no template, or when a translation's placeholders do not match its values.
-    """
-    key = g.get("protect_reason_key")
-    if not key or translate is None:
-        return g.get("protect_reason", "")
-    try:
-        return str(translate(key)).format_map(dict(g.get("protect_reason_params") or {}))
-    except (KeyError, IndexError, ValueError):
-        return g.get("protect_reason", "")
 
 
 def _r14a_ssh_reason(g):

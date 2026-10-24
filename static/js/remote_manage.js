@@ -77,14 +77,20 @@ function blockOffender(ip, btn){
     onConfirm:function(){
       if(btn) btn.disabled=true;
       fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})})
-        .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Blocked':'Failed'), d.success?'success':'danger'); loadSecurityTopIps(); })
+        .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Blocked':'Failed'), d.success?'success':'danger'); _uitKeptOutChanged(); })
         .catch(function(){ if(window.toast) toast('Block failed','danger'); if(btn) btn.disabled=false; });
     }});
+}
+// A block or unblock from Top offenders changes the Blocked IPs list on the same tab as well:
+// both are repainted (the list from a fresh firewall read, remote_firewall.js).
+function _uitKeptOutChanged(){
+  loadSecurityTopIps();
+  if (window.refreshFirewall) refreshFirewall();
 }
 function unblockOffender(ip, btn){
   if(btn) btn.disabled=true;
   fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,unblock:true})})
-    .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Unblocked':'Failed'), d.success?'success':'info'); loadSecurityTopIps(); })
+    .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Unblocked':'Failed'), d.success?'success':'info'); _uitKeptOutChanged(); })
     .catch(function(){ if(window.toast) toast('Unblock failed','danger'); if(btn) btn.disabled=false; });
 }
 function toggleAutoblock(cb){
@@ -295,13 +301,15 @@ function _r21cLogNote(el, key){
     var nr = nav.getBoundingClientRect(), br = ab.getBoundingClientRect();
     if (br.left < nr.left || br.right > nr.right) nav.scrollLeft += br.left - nr.left - 16;
   }
-  // The Network tab's firewall cards render as "Loading…": the page makes no firewall read while
-  // it loads (a host that is down would hold the whole page up), so the first opening reads it.
+  // The firewall's cards render as "Loading…": the page makes no firewall read while it loads (a
+  // host that is down would hold the whole page up), so the first opening of a tab that shows one
+  // reads it — the Network tab's rules, or the Security tab's Blocked IPs; one read paints both.
   // remote_firewall.js loads AFTER this file, and a #network link opens the tab from here while
   // the page is still parsing, so before DOMContentLoaded the read waits for it.
+  var FW_TABS = ['network', 'security'];
   function firstOpen(tab){
     if (tab === 'security' && !_secLoaded && window.loadSecurity) { _secLoaded = true; loadSecurity(); }
-    if (tab !== 'network' || _fwLoaded) return;
+    if (FW_TABS.indexOf(tab) < 0 || _fwLoaded) return;
     _fwLoaded = true;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _fwFirstRead);
     else _fwFirstRead();

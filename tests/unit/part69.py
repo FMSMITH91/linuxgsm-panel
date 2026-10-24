@@ -756,10 +756,11 @@ check("firewall: the Open-a-port protocol select gets at least half its row",
       _proto_r16u.group(0) if _proto_r16u else "no col-N directly around #new-proto")
 
 # Row buttons in reach: each table whose last column is its row buttons is pinned, in the
-# template AND in the script that repaints it, and the rule that pins it exists at phone width.
+# template AND in the script that repaints it (where each draws one), and the rule that pins it
+# exists at phone width.
 _RM_r16u = _read69(_root, "templates", "remote_manage.html")
 _pins_r16u = {
-    "firewall rules (template)": (_FWT_r16u, "<th>Scope</th>"),
+    # (The firewall rules are drawn by the repaint alone: the cards render "Loading…" until the read.)
     "firewall rules (repaint)": (_read69(_JS69, "remote_firewall.js"), "<th>Port</th><th>Protocol</th>"),
     "panel backups": (_RM_r16u, "<th>When</th><th>Type</th>"),
     "game backups": (_read69(_JS69, "remote_manage_backups.js"), "<th>Backup file</th>"),
@@ -849,7 +850,7 @@ check("375px: a page heading wraps its label and name onto separate lines and br
       and _re_r16u.search(r"min-width:\s*0", _ptk_r16u) is not None,
       "page-title: %r / with a name: %r / children: %r" % (_pt_r16u.strip(), _ptn_r16u.strip(),
                                                            _ptk_r16u.strip()))
-for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
+for _tpl_r16u in ("remote_manage.html",):
     _h1_r16u = _re_r16u.search(r'<h1 class="page-title[^"]*">(.*?)</h1>',
                                _read69(_root, "templates", _tpl_r16u), _re_r16u.S)
     check("375px: %s's heading carries the host name as its own item (a direct child the rule reaches)"

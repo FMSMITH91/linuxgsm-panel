@@ -3012,8 +3012,8 @@ try:
     # What the cleanups could not remove, or left on purpose, is in the uninstall's answer: a rule
     # that stayed open used to read as a clean uninstall, since only the delete count was kept.
     _ms_w = _p9_new_server(P9_HOST, "p9fwleft", "csgo", 27189)
-    _ms_stuck = ("Still open, as it could not be removed: 27190 — remove it from the host's "
-                 "Firewall page.")
+    _ms_stuck = ("Still open, as it could not be removed: 27190 — remove it from the firewall "
+                 "rules on the host's Network tab.")
     _ms_kept = "Left in place, as the panel does not make rules like these: 27191 DENY."
     _ms_fw[0] = (1, "1 rule(s) removed for p9fwleft. " + _ms_stuck + " " + _ms_kept,
                  [_ms_stuck, _ms_kept])
