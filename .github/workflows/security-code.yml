@@ -9,7 +9,7 @@ name: Security scan (code)
 # (its jobs are required checks), and each job's scope step skips the scan (.github/scripts/pr_scope.py). The exclusion list is a paths-IGNORE rather than
 # an allowlist on purpose: an unrecognised new path should fail OPEN and be scanned, never skipped.
 #
-# The weekly cron is the reason the dependency audit still catches things on a quiet week — a
+# The daily cron is the reason the dependency audit still catches things on a quiet day — a
 # newly-DISCLOSED CVE changes the answer without changing any lockfile, and schedule triggers ignore
 # path filters entirely.
 on:
@@ -24,7 +24,7 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC — catches newly-disclosed CVEs
+    - cron: "0 6 * * *"   # daily 06:00 UTC — catches newly-disclosed CVEs
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
 # pushes don't queue up and waste runner minutes.
@@ -40,7 +40,7 @@ permissions:
 
 jobs:
   # Every lockfile something installs, audited at ANY severity, on every pull request, on main and
-  # weekly. The job keeps its name (a required check, .github/required-checks.txt); pip-audit is its
+  # daily. The job keeps its name (a required check, .github/required-checks.txt); pip-audit is its
   # first half. The second, osv-scanner, reads what pip-audit cannot: gamedig's npm tree, which
   # every host installs (tools/gamedig, `npm ci`), the browser libraries static/vendor/ ships to
   # every page (its package-lock.json records what the bundles carry; nothing installs from it),

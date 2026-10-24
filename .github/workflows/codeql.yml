@@ -20,10 +20,10 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:  # allow manual runs from the Actions tab
-  # Weekly as well: push and PR runs only analyse code that changed hands, so newly published
+  # Daily as well: push and PR runs only analyse code that changed hands, so newly published
   # CodeQL queries and query-pack fixes would otherwise not reach a week with no pushes.
   schedule:
-    - cron: '23 5 * * 1'
+    - cron: '23 5 * * *'
 
 # The event is part of the group: on main, the Monday scheduled run shares the ref with a push
 # run, and without it the schedule CANCELLED an in-progress push run, leaving "cancelled" required

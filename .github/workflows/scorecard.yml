@@ -12,7 +12,7 @@ name: Scorecard
 on:
   branch_protection_rule:
   schedule:
-    - cron: "25 7 * * 1"   # weekly, Monday 07:25 UTC
+    - cron: "25 7 * * *"   # daily 07:25 UTC
   push:
     branches: [ main ]
 

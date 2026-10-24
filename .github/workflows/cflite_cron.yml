@@ -7,7 +7,7 @@ name: ClusterFuzzLite prune and coverage
 # request's diff touches.
 on:
   schedule:
-    - cron: '43 4 * * 0'     # weekly, after a few nightly batch runs have fed the corpus
+    - cron: '43 4 * * *'     # daily, after the nightly batch run (03:17) has fed the corpus
   workflow_dispatch:
   # zizmor: ignore[concurrency-limits] its check lands on main's head, where a cancelled pending run reads as a failure
 

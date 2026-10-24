@@ -87,7 +87,7 @@ jobs:
     #   was SKIPPED — reporting success and judging nothing. The manual entry point had never once
     #   run (173 workflow_run runs, 0 workflow_dispatch).
     #
-    #   SCHEDULED runs are judged too. CodeQL's weekly run exists to apply newly published queries to
+    #   SCHEDULED runs are judged too. CodeQL's daily scheduled run exists to apply newly published queries to
     #   code that has not changed, security-code.yml's re-runs Bandit and Semgrep, and zizmor.yml's
     #   re-runs zizmor's online audits; an alert any of them opens lands on main with no push.
     #   Skipped here, main's head kept its push-time success, the

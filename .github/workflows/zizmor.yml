@@ -29,7 +29,7 @@ name: Security scan (workflows)
 # TRIGGERS, the same as security-code.yml's and for the same reasons. Every pull request,
 # unfiltered: the PR alert gate waits for this category on every one. A push to main with the
 # paths-ignore list ci.yml, codeql.yml and security-code.yml share (a docs-only push runs none of
-# the uploaders; code_scanning_analyses.py relies on that). And weekly, because the online audits
+# the uploaders; code_scanning_analyses.py relies on that). And daily, because the online audits
 # change their answer without a commit: an action version pinned here can gain an advisory.
 on:
   push:
@@ -43,7 +43,7 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: "37 5 * * 1"   # weekly, Monday 05:37 UTC, between CodeQL's and security-code.yml's
+    - cron: "37 5 * * *"   # daily 05:37 UTC, between CodeQL's and security-code.yml's
 
 # The event is part of the group, as in codeql.yml and security-code.yml: on main the Monday
 # scheduled run shares the ref with a push run, and must not cancel it.
