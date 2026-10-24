@@ -258,6 +258,8 @@ return 1;
 
 # ── a server's files ───────────────────────────────────────────────────────────────────────────
 FILES = r"""
+// The page shows one section at a time (#sfsub-nav): open the file browser's first.
+J.click('[data-sfsub-btn="files"]'); await J.sleep(200);
 const list = document.getElementById('file-list');
 const pick = (type) => list && Array.from(list.querySelectorAll('[data-path]')).find(r => r.dataset.type === type);
 let d = pick('dir'); if (d) { d.click(); await J.sleep(800); }
@@ -296,6 +298,8 @@ return 1;
 """
 
 CRON = r"""
+J.click('[data-sfsub-btn="schedule"]'); await J.sleep(200);
+const help = document.querySelector('#cron-help summary'); if (help) { help.click(); await J.sleep(150); }
 const sched = document.getElementById('cron-sched'), cmd = document.getElementById('cron-cmd');
 if (!sched || !cmd) return 0;
 for (const s of ['*/15 * * * *', '0 4 * * 1-5', '30 3 1,15 * *', '@reboot', 'bad cron']) {
@@ -322,16 +326,20 @@ J.click('[data-tab="lgsm"]'); await J.sleep(300);
 const f = document.getElementById('cfg-form');
 if (f) { f.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); await J.sleep(800); }
 // Backups of this server: schedule, now, and a delete (Cancel, then OK).
+J.click('[data-sfsub-btn="backups"]'); await J.sleep(300);
 J.type('#bk-interval', 'daily'); await J.sleep(300);
 J.type('#bk-keep', '3'); await J.sleep(300);
 J.click('[data-action="backupNow"]'); await J.sleep(1200); J.settleDialogs(false, PW);
 J.click('[data-action="deleteBk"]'); await J.sleep(300); J.settleDialogs(false, PW);
 J.click('[data-action="deleteBk"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(800);
 // Mods: refresh the list, install one, remove one.
+J.click('[data-sfsub-btn="mods"]'); await J.sleep(300);
 J.click('[data-action="loadMods"]'); await J.sleep(1500);
 J.click('[data-action="modAction"]', 0); await J.sleep(1200); J.settleDialogs(true, PW); await J.sleep(600);
 J.click('[data-action="modAction"]', 1); await J.sleep(1200); J.settleDialogs(true, PW); await J.sleep(600);
-// Alerts: a test message, and save.
+// Alerts: open a service that is not set up yet, then a test message, and save.
+J.click('[data-sfsub-btn="alerts"]'); await J.sleep(300);
+J.click('[data-action="_uis_alertAdd"]'); await J.sleep(200);
 J.click('[data-action="testAlert"]'); await J.sleep(800);
 J.click('[data-action="saveAlerts"]'); await J.sleep(800);
 return 1;
@@ -373,6 +381,11 @@ return {vw: window.innerWidth, row: w(row), box: w(box), field: w(box.querySelec
         error_shown: parts.some(p => p.classList.contains('fb-rename-err'))};
 """
 _FITS = ("own_parts_hidden", "box_spans_row", "inside_row", "no_sideways_scroll", "error_shown")
+
+
+def _files_section(d, name="files"):
+    """Open one section of Files & Config (#sfsub-nav); the page shows one at a time."""
+    d.run("J.click('[data-sfsub-btn=\"%s\"]'); await J.sleep(200); return 1;" % name)
 
 
 def _press(d, key, code, vk):
@@ -425,6 +438,7 @@ def _rename_phone(d):
     failed = True
     try:
         d.goto("/server/1/files")
+        _files_section(d)
         d.run(RENAME_OPEN % ("server.cfg", "server.cfg"))
         d.run("J.q('#file-list .fb-rename input').select(); return 1;")
         d.keys("a/b\n")
@@ -444,6 +458,7 @@ def _rename_phone(d):
     # Not in the finally: goto can log in again and raise LoginFailed, which there REPLACED a
     # FlowAssertion on its way out, and run.py fails the run only on that name (the rest warn).
     d.goto("/server/1/files")
+    _files_section(d)
 
 
 def files_rename(d):
@@ -452,6 +467,7 @@ def files_rename(d):
     A step that does not do what it should raises, and the walk reports this flow as broken.
     """
     d.goto("/server/1/files")
+    _files_section(d)
     _rename_keys(d)
     _rename_phone(d)
 
@@ -503,6 +519,7 @@ def _create_keys(d):
     _expect((is_open, got.get("dir")) == (False, "jscov-new"),
             "a new folder is made and opened", got, flow="create")
     d.goto("/server/1/files")
+    _files_section(d)
     d.run(CREATE_OPEN % (("file",) * 3))
     _press(d, "Escape", "Escape", 27)
     is_open, _err, _rows, got = _create_state(d)
@@ -527,6 +544,7 @@ def _create_phone(d):
     failed = True
     try:
         d.goto("/server/1/files")
+        _files_section(d)
         d.run(CREATE_OPEN % (("file",) * 3))
         d.keys("a/b\n")
         fit = d.run(CREATE_FIT) or {}
@@ -542,17 +560,20 @@ def _create_phone(d):
             if not failed:
                 raise
     d.goto("/server/1/files")
+    _files_section(d)
 
 
 def files_create(d):
     """New folder and New file in the file browser with real keys, then measured at 375px wide."""
     d.goto("/server/1/files")
+    _files_section(d)
     _create_keys(d)
     _create_phone(d)
 
 
 def files_drop(d):
     """Drop files and a folder, from disk, onto the file browser; the upload asks and is let go."""
+    _files_section(d)
     src = os.path.join(d.tree, "jscov-drop")
     os.makedirs(os.path.join(src, "maps", "custom"), exist_ok=True)
     for rel, text in (("maps/custom/a.bsp", "x"), ("maps/readme.txt", "maps"),

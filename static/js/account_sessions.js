@@ -6,6 +6,7 @@
   var box = document.getElementById('sessions-list');
   if (!box) return;
   function mp(){ return window.MOUNT || ''; }   // set by base.html, before this file loads
+  var _UIS_SESS_SHOWN = 3;   // sessions listed before "Show all"
   function rel(iso){
     if(!iso) return '';
     var s = (Date.now() - new Date(iso).getTime())/1000;
@@ -46,7 +47,26 @@
         box.textContent = '';
         var list = d.sessions;
         if(!list.length){ box.innerHTML = '<div class="text-secondary small">No active sessions.</div>'; return; }
-        list.forEach(function(s){ box.appendChild(row(s)); });
+        // The first three, and this device wherever it falls; the rest behind "Show all N". An
+        // account signed in from many browsers made this card the tallest on the page. Every row
+        // is built either way, so a hidden one revokes exactly like a shown one.
+        var hidden = 0;
+        list.forEach(function(s, i){
+          var r = row(s);
+          if (i >= _UIS_SESS_SHOWN && !s.current) { r.classList.add('d-none'); r.setAttribute('data-uis-more', ''); hidden++; }
+          box.appendChild(r);
+        });
+        if (hidden) {
+          var more = document.createElement('button'); more.type = 'button';
+          more.className = 'btn btn-link btn-sm px-0'; more.id = 'sessions-more';
+          // One whole sentence with the count as its value, so it is translated as one.
+          more.textContent = tf('Show all {n} sessions', {n: list.length});
+          more.addEventListener('click', function(){
+            box.querySelectorAll('[data-uis-more]').forEach(function(el){ el.classList.remove('d-none'); });
+            more.remove();
+          });
+          box.appendChild(more);
+        }
       })
       .catch(function(){ box.innerHTML = '<div class="text-danger small">Couldn\'t load sessions.</div>'; });
   }

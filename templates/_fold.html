@@ -1,0 +1,14 @@
+{# A folded section: help text, a rarely used form, a long list. One copy, so every fold on every
+   page opens, looks and reads the same, and so no page grows its own variant.
+
+   Why a native <details> and not a Bootstrap collapse: it opens with no script, so nothing inside
+   it is ever unreachable because a page's JS failed, and the browser keeps its open state while
+   the page lives. `label` is a fixed English phrase passed by the caller; it is rendered as a text
+   node of its own, so the page's translator finds it in the catalog like any other.
+   `open_` opens it from the first paint (a section the viewer has already set up, say). #}
+{% macro fold(label, id='', open_=False, cls='', icon='') -%}
+<details class="uis-fold {{ cls }}"{% if id %} id="{{ id }}"{% endif %}{% if open_ %} open{% endif %}>
+  <summary class="uis-fold-sum">{% if icon %}<i class="bi bi-{{ icon }}"></i> {% endif %}<span>{{ label }}</span></summary>
+  <div class="uis-fold-body">{{ caller() }}</div>
+</details>
+{%- endmacro %}

@@ -84,6 +84,8 @@ _out106 = _js106(_name106, (
     "global.fbSummary = () => {}; global.bkRenderFullStatus = () => {}; global.bkRenderAutoStatus = () => {};\n"
     "global.bkGameRows = () => ''; global.bkGameStatus = () => ''; global.bkGameDisk = () => '';\n"
     "global.schedNote = () => '';\n"
+    # the open-list memory (ui-scroll) reads the rows' <details>, which this DOM has none of
+    "global._uis_bkOpenIds = () => ({}); global._uis_bkFold = (g, o, inner) => inner;\n"
     "global.gameSchedule = g => '<row ' + g.id + ' ' + (++drawn) + '>'; let drawn = 0;\n"
     "global.bkRenderList = () => {};\n"
     "const fi = document.getElementById('fb-interval');\n"
