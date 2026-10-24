@@ -1,5 +1,5 @@
-{# The host page's Network tab's firewall cards: UFW status, the rules, Open a Port, Restrict a Port and
-   Game Server Ports (remote_manage.html). Blocked IPs is its own partial (_firewall_blocks.html), on the
+{# The host page's Network tab's firewall cards: the rules, Add a rule (open a port, to everyone or one
+   source, or rate-limit it) and Game Server Ports (remote_manage.html). Blocked IPs is its own partial (_firewall_blocks.html), on the
    Security tab beside the fail2ban bans. The page makes no firewall read while it loads (a host that is
    down would hold the whole page up), so the cards start "Loading…" and claim no count, and
    remote_firewall.js's refreshFirewall paints every state (unreachable, sudo refused, a changed host
@@ -7,22 +7,13 @@
    rendered a read of its own here, is a redirect to the tab now.
    fw_games: the host's game servers, for the "Open all ports" rows. #}
 
-{# Phone order: the rules come right after UFW Status, before the forms (most visits are to read or
-   remove a rule). That is the DOM order as well, so a screen reader and the keyboard go the same way;
-   from 768px .fw-layout (panel.css) puts the rules in a right-hand column beside the forms, as the two
-   Bootstrap columns did. #}
+{# Phone order: the rules come first, before the forms (most visits are to read or remove a rule).
+   That is the DOM order as well, so a screen reader and the keyboard go the same way; from 768px
+   .fw-layout (panel.css) puts the rules in a right-hand column beside the forms. UFW's Active /
+   Inactive badge is on the tab's Firewall heading (remote_manage.html), and what the read has to say
+   about the firewall (unreachable, inactive, sudo refused) is a line under it: a card of its own was
+   an empty box whenever the firewall was fine. #}
 <div class="fw-layout">
-  <!-- UFW Status -->
-  <div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span><i class="bi bi-shield-fill-check"></i> UFW Status</span>
-      <span id="ufw-badge" class="badge bg-secondary">Checking…</span>
-    </div>
-    <div class="card-body" id="ufw-status-note">
-      <p class="text-secondary small mb-0"><i class="bi bi-arrow-repeat"></i> Loading…</p>
-    </div>
-  </div>
-
   <!-- Current rules -->
   <div class="card mb-3 fw-rules-card">
     <div class="card-header d-flex justify-content-between align-items-center" id="fw-rules">
@@ -38,136 +29,137 @@
     </div>
   </div>
 
-  <!-- Manual Port Opener -->
-  <div class="card mb-3">
-    <div class="card-header"><i class="bi bi-plus-circle"></i> Open a Port</div>
-    <div class="card-body">
-      {# Port and protocol share a row and the comment takes its own. As one row of 4/3/5 the
-         protocol select was 66px at 375px and ~100px in the desktop column, so "Both (TCP+UDP)"
-         showed as "Both (TC" in English and "Les deu" in French, and the comment placeholder
-         was cut too. #}
-      <div class="row g-2">
-        <div class="col-5">
-          <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" aria-label="Port" min="1" max="65535">
-        </div>
-        <div class="col-7">
-          <select id="new-proto" class="form-select form-select-sm" aria-label="Protocol">
-            <option value="both" selected>Both (TCP+UDP)</option>
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-          </select>
-        </div>
-        <div class="col-12">
-          <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)" aria-label="Comment (optional)">
-        </div>
-        <div class="col-12 mt-1">
-          <button class="btn btn-success btn-sm w-100" data-action="openPort">
-            <i class="bi bi-plus-lg"></i> Open Port
-          </button>
-        </div>
+  {# Open a port, open one to a single source, rate-limit one: one card, one kind of rule at a time
+     (fwAddMode, remote_firewall.js). They were two cards and a divider, five rows of fields and two
+     paragraphs, above the game ports. Every field, button and result line is the one it was. #}
+  <div class="card mb-3" id="fw-add">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span id="fw-add-title"><i class="bi bi-plus-circle"></i> Add a rule</span>
+      <div class="btn-group btn-group-sm" role="group" aria-labelledby="fw-add-title">
+        <input type="radio" class="btn-check" name="fw-mode" id="fw-mode-open" autocomplete="off" checked
+               data-action="fwAddMode" data-args='["open"]' data-on="change">
+        <label class="btn btn-outline-secondary" for="fw-mode-open">Open</label>
+        <input type="radio" class="btn-check" name="fw-mode" id="fw-mode-src" autocomplete="off"
+               data-action="fwAddMode" data-args='["src"]' data-on="change">
+        <label class="btn btn-outline-secondary" for="fw-mode-src">One source</label>
+        <input type="radio" class="btn-check" name="fw-mode" id="fw-mode-limit" autocomplete="off"
+               data-action="fwAddMode" data-args='["limit"]' data-on="change">
+        <label class="btn btn-outline-secondary" for="fw-mode-limit">Rate-limit</label>
       </div>
-      <div id="port-result" class="mt-2 small"></div>
     </div>
-  </div>
-
-  <!-- Open a port to ONE address/network, and rate limiting -->
-  <div class="card mb-3">
-    <div class="card-header" id="fw-restrict-title"><i class="bi bi-shield-lock"></i> Restrict a Port</div>
     <div class="card-body">
-      <p class="text-secondary small mb-2">Open a port to a single address or network instead of
-        the whole internet — an admin port that only you should reach, or a game port only your
-        LAN should. A range works too (27015:27020).</p>
-      <div class="row g-2">
-        {# Below 576px the source takes the whole row: at col-6 it is 149px, which cuts the
-           translated placeholder. Desktop keeps 6/3/3. #}
-        <div class="col-12 col-sm-6">
-          <input type="text" id="src-cidr" class="form-control form-control-sm"
-                 placeholder="1.2.3.4 or 10.0.0.0/8" aria-labelledby="fw-restrict-title">
+      {# Open a port to everyone. Port and protocol share a row and the comment takes the next with the
+         button: as one row of 4/3/5 the protocol select was 66px at 375px, so "Both (TCP+UDP)" showed
+         as "Both (TC" in English and "Les deu" in French. #}
+      <div data-fw-mode="open">
+        <div class="row g-2">
+          <div class="col-5">
+            <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" aria-label="Port" min="1" max="65535">
+          </div>
+          <div class="col-7">
+            <select id="new-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="both" selected>Both (TCP+UDP)</option>
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          {# The comment and the button share a row where the column has room for both (1200px up). #}
+          <div class="col-12 col-xl">
+            <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)" aria-label="Comment (optional)">
+          </div>
+          <div class="col-12 col-xl-auto">
+            <button class="btn btn-success btn-sm w-100" data-action="openPort">
+              <i class="bi bi-plus-lg"></i> Open Port
+            </button>
+          </div>
         </div>
-        <div class="col-6 col-sm-3">
-          <input type="text" id="src-port" class="form-control form-control-sm"
-                 placeholder="Port" aria-label="Port">
-        </div>
-        <div class="col-6 col-sm-3">
-          <select id="src-proto" class="form-select form-select-sm" aria-label="Protocol">
-            <option value="tcp" selected>TCP</option>
-            <option value="udp">UDP</option>
-          </select>
-        </div>
-        <div class="col-12 mt-1 d-flex gap-2">
-          <button class="btn btn-success btn-sm flex-grow-1" data-action="allowFromSource">
-            <i class="bi bi-plus-lg"></i> Allow from this source only
-          </button>
-          <button class="btn btn-outline-danger btn-sm" data-action="removeAllowFromSource"
-                  title="Remove that source rule">
-            <i class="bi bi-trash"></i>
-          </button>
+        <div id="port-result" class="mt-2 small"></div>
+      </div>
+
+      {# A port open to ONE address or network. Below 576px the source takes the whole row: at col-6
+         it is 149px, which cuts the translated placeholder. #}
+      <div data-fw-mode="src" hidden>
+        <p class="text-secondary small mb-2">Open a port to a single address or network instead of
+          the whole internet — an admin port that only you should reach, or a game port only your
+          LAN should. A range works too (27015:27020).</p>
+        <div class="row g-2">
+          <div class="col-12 col-sm-6">
+            <input type="text" id="src-cidr" class="form-control form-control-sm"
+                   placeholder="1.2.3.4 or 10.0.0.0/8" aria-label="Source address or network">
+          </div>
+          <div class="col-6 col-sm-3">
+            <input type="text" id="src-port" class="form-control form-control-sm"
+                   placeholder="Port" aria-label="Port">
+          </div>
+          <div class="col-6 col-sm-3">
+            <select id="src-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-12 d-flex gap-2">
+            <button class="btn btn-success btn-sm flex-grow-1" data-action="allowFromSource">
+              <i class="bi bi-plus-lg"></i> Allow from this source only
+            </button>
+            <button class="btn btn-outline-danger btn-sm" data-action="removeAllowFromSource"
+                    title="Remove that source rule" aria-label="Remove that source rule">
+              <i class="bi bi-trash"></i>
+            </button>
+          </div>
         </div>
       </div>
-      <hr class="my-3">
-      <p class="text-secondary small mb-2">Rate limiting refuses an address that opens more than
-        6 connections in 30 seconds. Right for anything someone logs into (SSH, RCON); wrong for
-        gameplay traffic, where that is a quiet evening.</p>
-      <div class="row g-2">
-        {# Below 576px the port takes the whole row, as the Restrict row's source does: at
-           6/3/3 the button pair's column was 80px, and the × ran 9px past the card's edge in
-           French and Spanish ("Limiter", "Limitar"). #}
-        <div class="col-12 col-sm-6">
-          <input type="text" id="limit-port" class="form-control form-control-sm"
-                 placeholder="Port" aria-label="Port">
-        </div>
-        <div class="col-6 col-sm-3">
-          <select id="limit-proto" class="form-select form-select-sm" aria-label="Protocol">
-            <option value="tcp" selected>TCP</option>
-            <option value="udp">UDP</option>
-          </select>
-        </div>
-        <div class="col-6 col-sm-3 d-flex gap-1">
-          <button class="btn btn-warning btn-sm flex-grow-1" data-action="limitPort">Limit</button>
-          <button class="btn btn-outline-secondary btn-sm" data-action="unlimitPort"
-                  title="Remove the rate limit">
-            <i class="bi bi-x-lg"></i>
-          </button>
+
+      {# Rate limiting. Below 576px the port takes the whole row, as the source does above: at 6/3/3
+         the button pair's column was 80px, and the × ran 9px past the card's edge in French and
+         Spanish ("Limiter", "Limitar"). #}
+      <div data-fw-mode="limit" hidden>
+        <p class="text-secondary small mb-2">Rate limiting refuses an address that opens more than
+          6 connections in 30 seconds. Right for anything someone logs into (SSH, RCON); wrong for
+          gameplay traffic, where that is a quiet evening.</p>
+        <div class="row g-2">
+          <div class="col-12 col-sm-6">
+            <input type="text" id="limit-port" class="form-control form-control-sm"
+                   placeholder="Port" aria-label="Port">
+          </div>
+          <div class="col-6 col-sm-3">
+            <select id="limit-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-6 col-sm-3 d-flex gap-1">
+            <button class="btn btn-warning btn-sm flex-grow-1" data-action="limitPort">Limit</button>
+            <button class="btn btn-outline-secondary btn-sm" data-action="unlimitPort"
+                    title="Remove the rate limit" aria-label="Remove the rate limit">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
         </div>
       </div>
+      {# One result line for both restrict forms, as when they shared a card. #}
       <div id="restrict-result" class="mt-2 small"></div>
     </div>
   </div>
 
-  <!-- Game server quick ports -->
+  <!-- Game server quick ports: one line each -->
   {% if fw_games %}
   <div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span><i class="bi bi-controller"></i> Game Server Ports</span>
-      <span class="small text-secondary">opens every port the game needs</span>
+    <div class="card-header d-flex justify-content-between align-items-center gap-2">
+      <span class="text-nowrap"><i class="bi bi-controller"></i> Game Server Ports</span>
+      <span class="small text-secondary text-end">opens every port the game needs</span>
     </div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-      <table class="table table-sm mb-0">
-        <thead>
-          <tr>
-            <th>Server</th>
-            <th>Port</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for gs in fw_games %}
-          <tr>
-            <td class="small" data-no-i18n>{{ gs.name }}</td>
-            <td><code>{{ gs.port }}</code></td>
-            <td>
-              <button class="btn btn-success btn-sm" data-action="syncPorts" data-args='[{{ gs.id }}, "@self"]'
-                      title="Detect &amp; open ALL ports this game needs (game/query/rcon/etc.)">
-                <i class="bi bi-unlock"></i> Open all ports
-              </button>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      </div>
-    </div>
+    <ul class="list-group list-group-flush">
+      {% for gs in fw_games %}
+      <li class="list-group-item d-flex align-items-center gap-2 py-1">
+        <span class="small flex-grow-1 text-break" data-no-i18n>{{ gs.name }}</span>
+        <code class="small">{{ gs.port }}</code>
+        <button class="btn btn-success btn-sm py-0" data-action="syncPorts" data-args='[{{ gs.id }}, "@self"]'
+                title="Detect &amp; open ALL ports this game needs (game/query/rcon/etc.)">
+          <i class="bi bi-unlock"></i> Open all ports
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
   </div>
   {% endif %}
 </div>

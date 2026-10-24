@@ -576,6 +576,8 @@ return 1;
 
 HOST_SECURITY = r"""
 J.click('[data-mtab-btn="security"]'); await J.sleep(1200);
+// The capped lists' "Show all", and Raw logs (collapsed: its buttons open it).
+J.click('[data-action="uidShowAll"]'); await J.sleep(200);
 for (let i = 0; i < 3; i++) { J.click('[data-action="loadSecurityLog"]', i); await J.sleep(800); }
 J.click('[data-action="loadSecurityBans"]'); await J.sleep(800);
 J.click('[data-action="loadSecurityTopIps"]'); await J.sleep(1200);
@@ -774,13 +776,16 @@ J.type('#new-port', '99999'); J.click('[data-action="openPort"]'); await J.sleep
 J.type('#new-port', '27020'); J.type('#new-proto', 'udp'); J.type('#new-comment', 'jscov');
 J.q('#new-port').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
 await J.sleep(1200);
-// Restrict one: to a source, and by rate — each on, then off.
+// Restrict one: to a source, and by rate — each on, then off, each by its kind on Add a rule's switch.
+J.click('#fw-mode-src'); await J.sleep(200);
 J.type('#src-cidr', '198.51.100.0/24'); J.type('#src-port', '27015');
 J.click('[data-action="allowFromSource"]'); await J.sleep(900);
 J.click('[data-action="removeAllowFromSource"]'); await J.sleep(900);
+J.click('#fw-mode-limit'); await J.sleep(200);
 J.type('#limit-port', '22');
 J.click('[data-action="limitPort"]'); await J.sleep(900);
 J.click('[data-action="unlimitPort"]'); await J.sleep(900);
+J.click('#fw-mode-open'); await J.sleep(200);
 // Block an address by Enter, then unblock one (Security tab); sync a server's ports and remove a
 // rule (OK) back on the Network tab.
 J.click('[data-mtab-btn="security"]'); await J.sleep(1200);

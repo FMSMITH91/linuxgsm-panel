@@ -33,8 +33,8 @@
     "Number,_da,body,head,j.banned_ips.map,j.currently_banned,return",
     "_da,return",
     "head,renderDeferred,rows",
-    "i",
-    "rows"
+    "cap.more,cap.rows",
+    "i"
   ],
   "remote_manage_backups.js": [
     "_da,rows",

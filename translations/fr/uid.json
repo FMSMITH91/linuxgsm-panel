@@ -1,0 +1,13 @@
+{
+  "The panel did not answer: the connection dropped, or the panel was restarting. Try again in a moment.": "Le panneau n’a pas répondu : la connexion a été coupée, ou le panneau redémarrait. Réessayez dans un instant.",
+  "The answer was a web page, not a reading: reload this page (you may need to sign in again).": "La réponse était une page web, pas une lecture : rechargez cette page (il faudra peut-être vous reconnecter).",
+  "The panel answered with an error (HTTP {status}) instead of a reading. Try again; if it repeats, the panel's log has the cause.": "Le panneau a répondu par une erreur (HTTP {status}) au lieu d’une lecture. Réessayez ; si cela se répète, le journal du panneau en donne la cause.",
+  "Add a rule": "Ajouter une règle",
+  "Open": "Ouvrir",
+  "One source": "Une source",
+  "Rate-limit": "Limiter",
+  "Source address or network": "Adresse ou réseau source",
+  "How auto-block works": "Fonctionnement du blocage automatique",
+  "Show all {n}": "Afficher les {n}",
+  "UFW": "UFW"
+}

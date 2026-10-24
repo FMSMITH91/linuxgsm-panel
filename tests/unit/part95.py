@@ -216,7 +216,8 @@ if _out95 is not None:
 # ── 2b. The Security tab's events, and the account's sessions ─────────────────────────────────
 _RM95 = _read95("static", "js", "remote_manage.js")
 _name95 = "security events: the route's failure answer"
-_out95 = _js95(_name95, "", ("function loadSecurityEvents(",), (
+_out95 = _js95(_name95, "global.tfHtml = (k, v) => tf(k, v);\n", ("function _uidReadJson(", "var _UID_WHY", "function _uidFailHtml(",
+                            "function loadSecurityEvents("), (
     "  const out = {}, el = document.getElementById('sec-events');\n"
     "  for (const [k, d] of [['route', " + _J95["events"] + "], ['500', " + _J95["500"] + "],\n"
     "                        ['none', {events: []}]]) {\n"
