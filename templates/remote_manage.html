@@ -400,11 +400,13 @@
        below, where "Never run" read as the schedule's status; the schedule has its own line
        there now (fb-auto-status). #}
     <div id="fb-status" class="small text-secondary text-sm-end mb-1"></div>
-    <p class="small text-secondary mb-2">
+    {% call fold('About these backups', cls='mb-1') %}
+    <p class="small text-secondary mb-0">
       LinuxGSM's own per-server backup, written to ~/lgsm/backup on the host. These get large, so only
       the newest few are kept, and a running server is briefly restarted while archiving.
       These are the defaults — each server can override them.
     </p>
+    {% endcall %}
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
         <input class="form-check-input" type="checkbox" id="fb-auto-enabled" data-action="onFbAutoToggle" data-on="change">

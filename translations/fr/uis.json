@@ -27,5 +27,6 @@
   "{n} backup, newest {ago}": "{n} sauvegarde, la plus récente {ago}",
   "{n} backups, newest {ago}": "{n} sauvegardes, la plus récente {ago}",
   "Show all {n} sessions": "Afficher les {n} sessions",
-  "Why encrypt?": "Pourquoi chiffrer ?"
+  "Why encrypt?": "Pourquoi chiffrer ?",
+  "About these backups": "À propos de ces sauvegardes"
 }
