@@ -88,7 +88,7 @@ def _parse131(html):
 
 
 # The controls each tab must hold, on every host page (a superadmin's view).
-_NETWORK131 = ("sec-firewall", "network-jump", "fw-rules", "ufw-badge", "ufw-status-note",
+_NETWORK131 = ("sec-firewall", "fw-rules", "ufw-badge", "ufw-status-note",
                "rules-list", "rules-count",
                "new-port", "new-proto", "new-comment", "port-result", "src-cidr", "src-port", "src-proto",
                "limit-port", "limit-proto", "restrict-result",
@@ -198,10 +198,13 @@ check("network tab: the Remote Servers list's Firewall button opens the host's N
 for _page131 in ("local", "remote"):
     _in131 = {(h, tab) for h, tab in (_P131[_page131].hrefs if _page131 in _P131 else [])
               if h in ("#sec-firewall", "#fw-rules", "#fw-blocks", "#sec-connection", "#sec-keptout")}
-    check("network tab (%s host page): the SSH port card and the jump line link into the tab (and on to the "
-          "Security tab's Blocked & banned IPs), and Top offenders to Blocked IPs" % _page131,
-          {("#sec-firewall", "network"), ("#fw-rules", "network"), ("#sec-keptout", "network"),
-           ("#sec-connection", "network"), ("#fw-blocks", "security")} <= _in131, repr(sorted(_in131)))
+    # The "Jump to" line was removed (owner, 2026-10-24: the tab is short enough now); the SSH port
+    # card's link to the rules and Top offenders' link to Blocked IPs stay.
+    check("network tab (%s host page): the SSH port card links to the firewall rules and Top offenders to "
+          "Blocked IPs, and no Jump-to line is left" % _page131,
+          {("#sec-firewall", "network"), ("#fw-blocks", "security")} <= _in131
+          and "network-jump" not in (_P131[_page131].where if _page131 in _P131 else {"network-jump": 1}),
+          repr(sorted(_in131)))
 _pw131 = [h for h, tab in (_P131["local"].hrefs if "local" in _P131 else []) if h.endswith("/settings#sec-reboots")]
 check("network tab: the Power card links a superadmin to the Settings page's Host reboots",
       len(_pw131) == 1 and _P131["local"].where.get("sec-power") == "controls", repr(_pw131))
@@ -217,7 +220,7 @@ for _lang131 in ("es", "fr"):
     for _f131 in sorted(os.listdir(os.path.join(_root, "translations", _lang131))):
         if _f131.endswith(".json"):
             _CAT131.setdefault(_lang131, {}).update(_json131.loads(_read131("translations", _lang131, _f131)))
-_NEW131 = ("Network", "Jump to:", "Network tab sections", "Go to the firewall rules", "Firewall — panel host",
+_NEW131 = ("Network", "Go to the firewall rules", "Firewall — panel host",
            "Connection & SSH — panel host",
            "Lockout-safe: the current binding stays in place as a fallback, and the firewall and fail2ban are "
            "updated to the new port. Once you've confirmed you can reach SSH on {port}, close the old port in "
