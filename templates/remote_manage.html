@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_fold.html" import fold %}
 {% block title %}{% if remote.is_local %}{{ t('Panel Server') }}{% else %}{{ t('%s — Manage')|format(remote.display_name) }}{% endif %}{% endblock %}
 {% block content %}
 {# Host-level controls whose routes are superadmin-only on the panel's OWN host (get_host_remote):
@@ -353,9 +354,13 @@
       </div>
       <!-- One text node on purpose: inline markup mid-sentence splits this into two translation
            keys, and half a sentence cannot be translated well in either language. -->
-      <p class="small text-secondary mb-2">
+      {# The why, one tap away (ui-scroll): the status, the passphrase box and the warning about
+         losing it are what the box shows. #}
+      {% call fold('Why encrypt?', cls='mb-1') %}
+      <p class="small text-secondary mb-0">
         Off, one copied backup hands over the database and both encryption keys, including every stored SSH credential. On, the file is useless to anyone without the passphrase. Applies to new backups; existing ones keep whatever they were written with.
       </p>
+      {% endcall %}
       <div class="d-flex gap-2 flex-wrap align-items-center">
         <input type="password" id="bk-pass" class="form-control form-control-sm"
                style="max-width:22rem;" autocomplete="new-password" aria-label="Backup passphrase"

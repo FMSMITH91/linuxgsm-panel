@@ -26,5 +26,6 @@
   "Add a service:": "Ajouter un service :",
   "{n} backup, newest {ago}": "{n} sauvegarde, la plus récente {ago}",
   "{n} backups, newest {ago}": "{n} sauvegardes, la plus récente {ago}",
-  "Show all {n} sessions": "Afficher les {n} sessions"
+  "Show all {n} sessions": "Afficher les {n} sessions",
+  "Why encrypt?": "Pourquoi chiffrer ?"
 }

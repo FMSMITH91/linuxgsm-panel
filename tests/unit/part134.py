@@ -645,5 +645,16 @@ check("tailscale: Recommended Access folds its explanation and Serve form only w
       and "{% if _uis_ts_done %}{% call fold('Details') %}{{ _uis_ts_body }}{% endcall %}{% else %}"
       "{{ _uis_ts_body }}{% endif %}" in _TS134 and 'id="serve-form"' in _TS134, "fold changed")
 
+
+# The Maintenance tab's backup encryption: the why folded, the passphrase box and the warning not.
+_RM134 = _read134("templates", "remote_manage.html")
+_enc134 = _RM134[_RM134.find('id="bk-enc-box"'):]
+_encf134 = _enc134[_enc134.find("{% call fold('Why encrypt?'"):_enc134.find("{% endcall %}")]
+check("maintenance: backup encryption folds only its explanation; the status, the passphrase box, both "
+      "buttons and the no-reset warning stay on view",
+      "one copied backup hands over" in _encf134 and 'id="bk-pass"' not in _encf134
+      and 'id="bk-enc-status"' not in _encf134 and "There is no reset" not in _encf134
+      and 'id="bk-pass"' in _enc134 and "saveBackupPassphrase" in _enc134, _encf134[:200])
+
 check("part134: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP134_START, repr(_P9_TRIPPED[_TRIP134_START:]))
