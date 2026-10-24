@@ -953,6 +953,7 @@ def _fwa_word(value):
     """A setting's value as the viewer reads it; "unknown" for one nobody could read."""
     return _FWA_WORDS.get(value) or i18n.Sentence("unknown")
 
+
 # `ufw status verbose`'s lines, in the C locale the privileged verbs run in (_R19A_C_LOCALE, the
 # helper's _clean_env). "disabled (routed)" is ufw's word for a host that forwards nothing.
 _FWA_LOGGING_RE = re.compile(r"^Logging: (?:(off)|on \((low|medium|high|full)\))$", re.M)
@@ -1005,7 +1006,7 @@ def _fwa_file_policy(vals, key):
 
 
 def _fwa_read_stored(server):
-    """UFW's stored files (ufw-stored-rules) as {path: text}; None when they could not be read."""
+    """Read the stored UFW files (ufw-stored-rules) as {path: text}; None when they could not be read."""
     try:
         out, _err, rc = _core.run_privileged(server, "ufw-stored-rules", [], timeout=15, sudo=None,
                                              merge_stderr=False)
@@ -1097,7 +1098,7 @@ def _fwa_col_any(t, addr):
 
 
 def _fwa_col_iface(t, dst):
-    """" on <iface>" for the column ufw names the interface in, else "".
+    """Name the interface (" on <iface>") in the column ufw prints it in, else "".
 
     A route rule names its incoming interface under From and its outgoing one under To; any other
     rule names the incoming one under To and the outgoing one under From.
@@ -1147,7 +1148,7 @@ def _fwa_stored_rows(stored):
 
 # ── the settings read ──
 def remote_ufw_settings(server):
-    """UFW's default policies, whether it is on, its logging level and IPv6 switch, for the card.
+    """Read UFW's default policies, whether it is on, its logging level and IPv6 switch, for the card.
 
     {"read_ok", "installed", "enabled", "incoming", "outgoing", "routed", "logging", "ipv6"}. While
     UFW is on the loaded values come from `ufw status verbose`; while it is off that lists none of
