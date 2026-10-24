@@ -362,7 +362,7 @@ try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, tailscale_setup_done=True,
                              tailscale_use_funnel=False))
     _scope61, _route61, _card61 = {}, {}, {}
-    for _row61, _want61 in _PORT_ROWS61.items():
+    for _row61 in _PORT_ROWS61:
         _g61 = _fwm61._group_ufw_rules([{"num": "1", "detail": _row61}])[0]
         _scope61[_row61] = _fwm61._r14a_panel_port_scope(_g61, 5000)
         _body61, _del61 = _close61(_row61)
@@ -562,7 +562,7 @@ check("firewall: on the VPS's own rows (s5a), an SSH allow from an address a DEN
                  ("47122/tcp", _s5a_net61, "DENY"): (False, False, False),
                  ("47122/tcp", _ADMIN61, "ALLOW"): (False, False, True)}, repr(_s5a61))
 _pg61 = {}
-for _row61, _want61 in _PORT_ROWS61.items():
+for _row61 in _PORT_ROWS61:
     _grp61 = list(_protect61(NS(port=22), [_row61], is_local=True, sshd_ports=(22,),
                              cfg={"port": 5000, "tailscale_setup_done": False}))[0]
     _pg61[_row61] = _grp61["is_panel"]

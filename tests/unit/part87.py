@@ -36,9 +36,7 @@ _TRIP87_START = len(_P9_TRIPPED)
 _spec87 = _ilu87.spec_from_file_location("i18n_scan_p87", os.path.join(_root, "tools", "i18n_scan.py"))
 _scan87 = _ilu87.module_from_spec(_spec87)
 _spec87.loader.exec_module(_scan87)
-_ES87, _FR87 = _scan87.load_catalog("es"), _scan87.load_catalog("fr")
-_HOSTKEY87 = ("The panel refused to connect: this host's SSH key is not the one it trusts. If you "
-              "reinstalled the host, use Re-trust host key on its page.")
+_ES87 = _scan87.load_catalog("es")
 
 
 def _read87(*parts):
