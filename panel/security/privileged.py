@@ -367,6 +367,32 @@ def _comment(s):
     return s
 
 
+def _fwa_port_range(s):
+    """One port, or a lo:hi range with lo < hi, with NO /proto suffix: what a port block names.
+
+    Stricter than _portspec: "27015:27015" is no range, and the protocol is its own argument (as
+    _portspec_bare has it). Mirrors the helper's v_fwa_port_range.
+    """
+    m = re.fullmatch(r"([0-9]{1,5})(?::([0-9]{1,5}))?", str(s))
+    if not m:
+        raise VerbError("not a port or a port range")
+    lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+    if not (1 <= lo <= 65535 and 1 <= hi <= 65535):
+        raise VerbError("port out of range")
+    if m.group(2) is not None and hi <= lo:
+        raise VerbError("a range must run from a lower port to a higher one")
+    return str(s)
+
+
+# The source a family-only rule names (the helper's FWA_FAMILY_FROM): ufw lists either as
+# "Anywhere", the IPv6 one with (v6), and keeps the rule to that family; `both` names none.
+_FWA_FAMILY_FROM = {
+    "v4": ["from", "0.0.0.0/0"],   # NOSONAR(S1313) - the IPv4 "any source" network, not a host
+    "v6": ["from", "::/0"],
+    "both": [],
+}
+
+
 def _yesno(s):
     if str(s) not in ("yes", "no"):
         raise VerbError("expected yes or no")
@@ -967,8 +993,28 @@ _ARGV = {
     # The stored rules an inactive ufw does not list in `status` (hosts._open_ssh_port_rule).
     "ufw-show-added": ([], lambda a: [UFW, "show", "added"], None),
     "ufw-enable": ([], lambda a: [UFW, "--force", "enable"], None),
-    "ufw-default": ([_choice("allow", "deny", "reject"), _choice("incoming", "outgoing")],
+    "ufw-default": ([_choice("allow", "deny", "reject"), _choice("incoming", "outgoing", "routed")],
                     lambda a: [UFW, "default", a[0], a[1]], None),
+    # The Firewall settings card (firewall.remote_ufw_set_*). Mirrors the helper.
+    "ufw-disable": ([], lambda a: [UFW, "disable"], None),
+    "ufw-logging": ([_choice("off", "low", "medium", "high", "full")],
+                    lambda a: [UFW, "logging", a[0]], None),
+    # UFW's stored files, read while it is off (the helper's do_fwa_ufw_stored; a remote gets the
+    # shell form, _fwa_ufw_stored_remote).
+    "ufw-stored-rules": ([], lambda a: [], None),
+    # Deny or reject a port or range at the TOP of the list, one protocol per rule.
+    "ufw-block-port": ([_choice("deny", "reject"), _fwa_port_range, _choice("tcp", "udp"),
+                        _choice("v4", "v6", "both"), _comment],
+                       lambda a: [UFW, "prepend", a[0], "proto", a[2]] + _FWA_FAMILY_FROM[a[3]]
+                       + ["to", "any", "port", a[1]] + (["comment", a[4]] if a[4] else []), None),
+    "ufw-delete-block-port": ([_choice("deny", "reject"), _fwa_port_range, _choice("tcp", "udp"),
+                               _choice("v4", "v6", "both")],
+                              lambda a: [UFW, "delete", a[0], "proto", a[2]] + _FWA_FAMILY_FROM[a[3]]
+                              + ["to", "any", "port", a[1]], None),
+    "ufw-allow-port-family": ([_choice("v4", "v6"), _fwa_port_range, _choice("tcp", "udp", "any"), _comment],
+                              lambda a: [UFW, "allow"] + (["proto", a[2]] if a[2] != "any" else [])
+                              + _FWA_FAMILY_FROM[a[0]] + ["to", "any", "port", a[1]]
+                              + (["comment", a[3]] if a[3] else []), None),
     "ufw-allow-port": ([_portspec, _comment],
                        lambda a: [UFW, "allow", a[0]] + (["comment", a[1]] if a[1] else []), None),
     "ufw-allow-proto-port": ([_choice("tcp", "udp"), _portspec, _comment],
@@ -1521,6 +1567,25 @@ def _f2b_log_lines_remote(a):
             "print }'" % (F2B_LOG_GLOB, shlex.quote(a[0]), F2B_LOG_MAX_BYTES))
 
 
+# The files ufw-stored-rules prints, in order (the helper's FWA_STORED_PATHS).
+FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules",
+                    "/etc/ufw/user6.rules")
+
+
+def _fwa_ufw_stored_remote(a):
+    """The remote form of ufw-stored-rules: each file after a "==> <path> <==" line, or exit 1.
+
+    The helper's contract (do_fwa_ufw_stored): every file or none, so a listing that stopped
+    part-way is never read as "no rules". Collected first and printed only once all were read.
+    The paths are this module's constants.
+    """
+    return ("nl='\n'; o=''; for f in %s; do c=$(cat -- \"$f\" && echo x) || "
+            "{ echo \"ufw-stored-rules could not read $f\" >&2; exit 1; }; c=${c%%x}; "
+            "case \"$c\" in ''|*\"$nl\") ;; *) c=\"$c$nl\" ;; esac; "
+            "o=\"$o==> $f <==$nl$c\"; done; printf '%%s' \"$o\""
+            % " ".join(shlex.quote(p) for p in FWA_STORED_PATHS))
+
+
 # The exit status of a ufw-delete-num-if that found rule <n> changed and deleted nothing — the
 # helper's UFW_RULE_MOVED. ufw itself exits 0 or 1, so this cannot be mistaken for its answer.
 UFW_RULE_MOVED = 3
@@ -1884,6 +1949,7 @@ _REMOTE_ACTIONS = {
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: _R18B_RESTART_FLAGS_REMOTE,
     "ufw-delete-num-if": _ufw_delete_num_if_remote,
+    "ufw-stored-rules": _fwa_ufw_stored_remote,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,
 }

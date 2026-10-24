@@ -166,6 +166,7 @@ def register(app):
     """Register a host's firewall, SSH, port, stats, OS-update and reboot routes on `app`."""
     _register_firewall_view(app)
     _register_firewall_rules(app)
+    _register_firewall_settings(app)
     _register_ssh_settings(app)
     _register_ssh_port(app)
     _register_panel_port(app)
@@ -321,10 +322,14 @@ def _register_firewall_rules(app):
         # _json_str: a number or a list here raised TypeError in the comment's filter — a 500,
         # and no audit row.
         a_port, a_proto = _fw_audit_rule(port, proto)
+        # The address family: both (one rule ufw keeps for IPv4 and IPv6), or one of them. Passed
+        # only when it is one of them, so the call for both is exactly the one it always was.
+        family = _json_str(data, "family") or "both"
+        _fam = {} if family == "both" else {"family": family}
         # A call that RAISES (a direct-SSH host that is down) is audited too: _r20b_audit_on_raise.
         with _r20b_audit_on_raise("remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
                                   remote=remote):
-            success, msg = remote_ufw_open_port(remote, port, proto, _json_str(data, "comment"))
+            success, msg = remote_ufw_open_port(remote, port, proto, _json_str(data, "comment"), **_fam)
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
                    success=success, remote=remote)
         return jsonify({"success": success, "message": i18n.tr(msg)})
@@ -428,6 +433,98 @@ def _register_firewall_rules(app):
                    target=f"{remote.name}:#{_fw_audit_rule_number(num)}", success=success,
                    remote=remote)
         return jsonify({"success": success, "message": i18n.tr(msg)})
+
+
+# What a settings audit row names for a value that did not validate: a fixed text, never the request's.
+_FWA_AUDIT_NOT_A_SETTING = "(not a setting)"
+_FWA_AUDIT_NOT_A_VALUE = "(not a value)"
+_FWA_SETTINGS = ("incoming", "outgoing", "routed", "logging", "enabled")
+
+
+def _fwa_audit_setting(setting, value):
+    """(setting, value) as a settings audit row names them: each as validated, or a fixed text."""
+    if setting not in _FWA_SETTINGS:
+        return _FWA_AUDIT_NOT_A_SETTING, _FWA_AUDIT_NOT_A_VALUE
+    if setting == "enabled":
+        return setting, ({True: "on", False: "off"}.get(value) if isinstance(value, bool)
+                         else _FWA_AUDIT_NOT_A_VALUE)
+    allowed = _fw_rules.FWA_LOG_LEVELS if setting == "logging" else _fw_rules.FWA_POLICIES
+    return setting, (value if value in allowed else _FWA_AUDIT_NOT_A_VALUE)
+
+
+def _fwa_apply_setting(remote, setting, value, confirm):
+    """Make one settings change -> (ok, message, settings after or None)."""
+    if setting == "enabled":
+        if not isinstance(value, bool):
+            return False, i18n.Sentence("value must be true or false."), None
+        return _fw_rules.remote_ufw_set_enabled(remote, value, confirm=confirm)
+    if setting == "logging":
+        return _fw_rules.remote_ufw_set_logging(remote, value)
+    if setting in _fw_rules.FWA_DIRECTIONS:
+        return _fw_rules.remote_ufw_set_default(remote, setting, value, confirm=confirm)
+    return False, i18n.Sentence("That is not a firewall setting."), None
+
+
+def _register_firewall_settings(app):
+    """Firewall: its settings (default policies, on/off, logging) and blocking a port or range.
+
+    The RBAC of every firewall route above: login, MANAGE_REMOTES, and get_host_remote (the panel's
+    own host is superadmin-only). Each change is audited, refused ones included.
+    """
+    @app.route("/api/remote/<int:remote_id>/firewall/settings", methods=["GET", "POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_firewall_settings(remote_id):
+        """GET: UFW's settings (remote_ufw_settings). POST {setting, value, confirm}: change one."""
+        remote = get_host_remote(remote_id)
+        if request.method == "GET":
+            try:
+                return jsonify(_fw_rules.remote_ufw_settings(remote))
+            except ConnectionError:
+                return _unreachable("firewall settings")
+        data = _json_body()
+        setting = _json_str(data, "setting")
+        value = data.get("value") if setting == "enabled" else _json_str(data, "value")
+        confirm = _r12c_json_flag(data, "confirm", False)
+        if confirm is None:
+            return jsonify({"success": False, "message": i18n.tr("confirm must be true or false.")}), 400
+        a_setting, a_value = _fwa_audit_setting(setting, value)
+        try:
+            with _r20b_audit_on_raise("ufw_settings", target=f"{remote.name}:{a_setting}", detail=a_value,
+                                      remote=remote):
+                ok, msg, after = _fwa_apply_setting(remote, setting, value, confirm)
+        except Exception:
+            return _r22b_unreachable_or_generic("firewall settings")
+        log_action(current_user, "ufw_settings", target=f"{remote.name}:{a_setting}", detail=a_value,
+                   success=ok, remote=remote)
+        return jsonify({"success": ok, "message": i18n.tr(msg), "settings": after})
+
+    @app.route("/api/remote/<int:remote_id>/firewall/block-port", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_firewall_block_port(remote_id):
+        """Deny or reject a port or range {port, protocol, family, action, comment}."""
+        remote = get_host_remote(remote_id)
+        data = _json_body()
+        spec = _json_str(data, "port")
+        proto = _fw_proto_arg(data.get("protocol", "tcp"))
+        family = _json_str(data, "family") or "both"
+        action = _json_str(data, "action") or "deny"
+        if not spec:
+            return jsonify({"success": False, "message": i18n.tr("Port required")}), 400
+        a_port, a_proto = _fw_audit_rule(spec, proto, ranges=True)
+        a_how = "%s %s" % (action if action in ("deny", "reject") else _FWA_AUDIT_NOT_A_VALUE,
+                           family if family in _fw_rules.FWA_FAMILIES else _FWA_AUDIT_NOT_A_VALUE)
+        try:
+            with _r20b_audit_on_raise("remote_port_block", target=f"{remote.name}:{a_port}/{a_proto}",
+                                      detail=a_how, remote=remote):
+                ok, msg = _fw_rules.remote_ufw_block_port(remote, spec, proto, family, action,
+                                                          _json_str(data, "comment"))
+        except Exception:
+            return _r22b_unreachable_or_generic("port block")
+        log_action(current_user, "remote_port_block", target=f"{remote.name}:{a_port}/{a_proto}",
+                   detail=a_how, success=ok, remote=remote)
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
 
 def _register_ssh_settings(app):

@@ -744,6 +744,33 @@ def v_r23a_deny_source(s):
     return s
 
 
+def v_fwa_port_range(s):
+    """One port, or a lo:hi range with lo < hi, and NO /proto suffix: what a port block names.
+
+    Stricter than v_portspec on purpose: "27015:27015" is no range (ufw's own parser refuses some
+    spellings of it and not others), and the protocol is its own argument, as v_portspec_bare has
+    it. Mirrors privileged._fwa_port_range."""
+    m = re.fullmatch(r"([0-9]{1,5})(?::([0-9]{1,5}))?", s)
+    if not m:
+        raise ValueError("not a port or a port range")
+    lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+    if not (1 <= lo <= 65535 and 1 <= hi <= 65535):
+        raise ValueError("port out of range")
+    if m.group(2) is not None and hi <= lo:
+        raise ValueError("a range must run from a lower port to a higher one")
+    return s
+
+
+# The source a family-only rule names: ufw lists either one as "Anywhere", the IPv6 one with (v6),
+# and keeps the rule to that family. `both` names no source, so ufw writes both families' rules.
+# Mirrors privileged._FWA_FAMILY_FROM.
+FWA_FAMILY_FROM = {
+    "v4": ["from", "0.0.0.0/0"],   # NOSONAR(S1313) - the IPv4 "any source" network, not a host
+    "v6": ["from", "::/0"],
+    "both": [],
+}
+
+
 def v_comment(s):
     """A UFW rule comment. The panel already strips these to this charset before storing them;
     re-checking here is the point — the helper trusts nothing it is told."""
@@ -2342,8 +2369,40 @@ VERBS = {
         lambda a: [UFW, "--force", "enable"],
         None),
     "ufw-default": (
-        [v_choice("allow", "deny", "reject"), v_choice("incoming", "outgoing")],
+        [v_choice("allow", "deny", "reject"), v_choice("incoming", "outgoing", "routed")],
         lambda a: [UFW, "default", a[0], a[1]],
+        None),
+    # The Firewall settings card (firewall.remote_ufw_set_*): off, the logging level, and the rules
+    # the panel's settings read needs while UFW is off (do_fwa_ufw_stored). Mirrors privileged.py.
+    "ufw-disable": (
+        [],
+        lambda a: [UFW, "disable"],
+        None),
+    "ufw-logging": (
+        [v_choice("off", "low", "medium", "high", "full")],
+        lambda a: [UFW, "logging", a[0]],
+        None),
+    "ufw-stored-rules": ([], lambda a: [], None),
+    # Deny or reject a port or range, at the TOP of the list (`prepend`) so an allow for the same
+    # port further down never answers first. One protocol per rule: ufw needs one for a range.
+    "ufw-block-port": (
+        [v_choice("deny", "reject"), v_fwa_port_range, v_choice("tcp", "udp"),
+         v_choice("v4", "v6", "both"), v_comment],
+        lambda a: [UFW, "prepend", a[0], "proto", a[2]] + FWA_FAMILY_FROM[a[3]]
+        + ["to", "any", "port", a[1]] + (["comment", a[4]] if a[4] else []),
+        None),
+    # Its undo, for a block that went in for one protocol of two and not the other.
+    "ufw-delete-block-port": (
+        [v_choice("deny", "reject"), v_fwa_port_range, v_choice("tcp", "udp"),
+         v_choice("v4", "v6", "both")],
+        lambda a: [UFW, "delete", a[0], "proto", a[2]] + FWA_FAMILY_FROM[a[3]]
+        + ["to", "any", "port", a[1]],
+        None),
+    # Open a port to one address family only; `both` is ufw-allow-port / ufw-allow-proto-port.
+    "ufw-allow-port-family": (
+        [v_choice("v4", "v6"), v_fwa_port_range, v_choice("tcp", "udp", "any"), v_comment],
+        lambda a: [UFW, "allow"] + (["proto", a[2]] if a[2] != "any" else []) + FWA_FAMILY_FROM[a[0]]
+        + ["to", "any", "port", a[1]] + (["comment", a[3]] if a[3] else []),
         None),
     "ufw-allow-port": (
         [v_portspec, v_comment],
@@ -2860,6 +2919,41 @@ def do_ufw_delete_num_if(args, content):
     sys.stdout.write(d.stdout or "")
     sys.stderr.write(d.stderr or "")
     return d.returncode
+
+
+# What ufw-stored-rules prints, in this order, each after a "==> <path> <==" line: the defaults
+# (/etc/default/ufw), the logging level and on/off (ufw.conf), and the IPv4 and IPv6 rules as ufw
+# stores them. While UFW is off `ufw status` lists none of it, and turning UFW on is exactly when
+# the panel must know which of them would let SSH and the panel in. Fixed paths; nothing is passed.
+# Mirrors privileged.FWA_STORED_PATHS and its remote shell form.
+FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules",
+                    "/etc/ufw/user6.rules")
+# Far above any real rules file (one rule is about 300 bytes); a file past it is not read at all.
+FWA_STORED_MAX = 4 * 1024 * 1024
+
+
+def do_fwa_ufw_stored(args, content):
+    """Print UFW's stored configuration (FWA_STORED_PATHS) for the panel's firewall settings read.
+
+    Every file or none: a file that cannot be read exits 1 with nothing on stdout, so the panel
+    never reads "no rules" out of a listing that stopped part-way.
+    """
+    parts = []
+    for path in FWA_STORED_PATHS:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read(FWA_STORED_MAX + 1)
+        except OSError as e:
+            print("panel-helper: ufw-stored-rules could not read %s (%s)" % (path, type(e).__name__),
+                  file=sys.stderr)
+            return 1
+        if len(data) > FWA_STORED_MAX:
+            print("panel-helper: ufw-stored-rules: %s is too large to read" % path, file=sys.stderr)
+            return 1
+        text = data.decode("utf-8", "replace")
+        parts.append("==> %s <==\n%s%s" % (path, text, "" if text.endswith("\n") or not text else "\n"))
+    sys.stdout.write("".join(parts))
+    return 0
 
 
 def do_reboot_delayed(args, content):
@@ -6686,6 +6780,7 @@ ACTIONS = {
     "f2b-set-sshd-ports": do_f2b_sshd_ports,
     "reboot-delayed": do_reboot_delayed,
     "ufw-delete-num-if": do_ufw_delete_num_if,
+    "ufw-stored-rules": do_fwa_ufw_stored,
     "content-scan": do_content_scan,
     "content-dir-create": do_content_dir_create,
     "content-game-present": do_content_game_present,
@@ -6795,7 +6890,7 @@ READ_VERBS = frozenset({
     "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
     "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running", "pro-status",
     "restart-flags", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
-    "ufw-show-added", "ufw-status",
+    "ufw-show-added", "ufw-status", "ufw-stored-rules",
 })
 # ...of which these stream a download for as long as it takes, so they have no deadline: they end
 # when the caller stops reading (their next write fails) or by the two signals above.

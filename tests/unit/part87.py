@@ -197,6 +197,8 @@ _out87 = _node87(_name87, _DOM87 + _SETTLE47 + (
     "global.remoteId = 7; let unlisted = null;\n"
     "global._fwUnlisted = m => { unlisted = m; };\n"
     "global._fwRenderRules = () => {}; global._fwRenderBlocks = () => {};\n"
+    # The settings row's own read (fw-more): not this check's subject.
+    "global.refreshFwSettings = () => {};\n"
     + "".join(_cut_or87(_FWJS87, h) + "\n" for h in (
         "function refreshFirewall(", "function _fwUnreadWhy(", "function _fwHostSaid(", "function _fwStatusNote(",
         "function _r23c_fwNotRead("))

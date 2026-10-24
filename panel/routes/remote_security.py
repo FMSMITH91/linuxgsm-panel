@@ -10,9 +10,9 @@ from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
     remote_fail2ban_unban, remote_security_log, remote_ufw_close_port, remote_ufw_deny_ip,
     remote_ufw_open_port, remote_ufw_put_back_tcp, remote_ufw_undeny_ip, tailnet_exempt_ips)
-from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required,
-    superadmin_required)
-from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
+from panel.security.auth import (MANAGE_REMOTES, client_ip, get_host_remote, get_remote, log_action,
+    permission_required, superadmin_required)
+from panel.services.monitoring import (_autoblock_threshold, _whitelist_networks, _whitelisted)
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag,
                              _r22b_unreachable_or_generic, _unreachable)
@@ -123,13 +123,47 @@ def _follow_in_panel_gate(remote, ok):
         _banlist.refresh_soon(0)
 
 
+def _fwa_block_refusal(remote, target):
+    """Why blocking `target` (fwa_block_target's text: an address or a network) is refused, or None.
+
+    A block is a deny on every port inserted at the TOP, so whatever it covers is cut off: a RANGE
+    may not reach into the tailnet's addresses or an entry of the security whitelist (one address is
+    already held to both above, as it always was), nor cover the address the panel's own SSH
+    connection to this host comes from (which must be read: unread refuses); and no block, of one
+    address or many, may cover the address of the viewer making it.
+    """
+    net = _ipaddress.ip_network(target, strict=False)
+    if net.num_addresses > 1:
+        if any(net.version == n.version and net.overlaps(n) for n in _TAILNET_NETS):
+            return i18n.Sentence("{ip} reaches into Tailscale's addresses — blocking it would cut off tailnet "
+                                 "access.", ip=target)
+        if any(net.version == w.version and net.overlaps(w) for w in _whitelist_networks()):
+            return i18n.Sentence("{ip} covers an address on the security whitelist — remove it there first, "
+                                 "or block a narrower range.", ip=target)
+    mine = ip_address_or_none(client_ip())
+    if mine is not None and mine.version == net.version and mine in net:
+        return i18n.Sentence("{ip} covers your own address ({mine}) — blocking it would lock you out.",
+                             ip=target, mine=str(mine))
+    if net.num_addresses == 1:
+        return None
+    src = _sm.fwa_panel_source(remote)
+    if src is None:
+        return i18n.Sentence("Couldn't read the address the panel connects to this host from, so {ip} was "
+                             "not blocked.", ip=target)
+    s_addr = ip_address_or_none(src) if src else None
+    if s_addr is not None and s_addr.version == net.version and s_addr in net:
+        return i18n.Sentence("{ip} covers the address the panel connects to this host from ({src}) — "
+                             "blocking it would cut the panel off from the host.", ip=target, src=src)
+    return None
+
+
 def _register_blocking(app):
     """Blocking an address on a host, and its auto-block switch."""
     @app.route("/api/remote/<int:remote_id>/security/block", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_block(remote_id):
-        """UFW-block (all ports, permanent) an IP on a remote host."""
+        """UFW-block (all ports, permanent) an IP, or a range of them (CIDR), on a remote host."""
         remote = get_host_remote(remote_id)
         ip = _json_str(_json_body(), "ip")
         # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
@@ -143,11 +177,15 @@ def _register_blocking(app):
             return jsonify({"success": False, "message":
                             i18n.tr("{ip} is on the security whitelist — "
                                     "remove it there first to block it.", ip=ip)})
-        # The address, never the request's text: the row records what was acted on.
-        act, shown = ("ufw_unblock" if unblock else "ufw_block"), canonical_ip(ip) or NOT_AN_IP
+        # The address (or network), never the request's text: the row records what was acted on.
+        act, shown = ("ufw_unblock" if unblock else "ufw_block"), _sm.fwa_block_target(ip) or NOT_AN_IP
         try:
             with _r20b_audit_on_raise(act, detail=remote.name, target=shown, remote=remote):
-                ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
+                why = None if unblock or shown == NOT_AN_IP else _fwa_block_refusal(remote, shown)
+                if why:
+                    ok, msg = False, why
+                else:
+                    ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
             # The action spelled out: the audit-ids gate reads it from this call.
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=shown,
                        detail=remote.name, success=ok, remote=remote)

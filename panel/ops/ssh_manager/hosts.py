@@ -297,9 +297,10 @@ def _ufw_proto(protocol):
     return None
 
 
-def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
+def remote_ufw_open_port(server, port, protocol="tcp", comment="", family="both"):
     """Open a port on the remote server via UFW. protocol 'both'/'any' opens TCP+UDP
-    in a single rule (a bare `ufw allow <port>` covers both)."""
+    in a single rule (a bare `ufw allow <port>` covers both). `family` v4 or v6 keeps the rule to
+    that address family (ufw-allow-port-family); both, the default, is the rule it always was."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
@@ -307,8 +308,14 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     proto = _ufw_proto(protocol)
     if proto is None:
         return False, "Invalid protocol"
+    if family not in ("both", "v4", "v6"):
+        return False, "Invalid address family"
     cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
-    if proto == "both":
+    if family != "both":
+        verb, vargs = "ufw-allow-port-family", [family, str(port), "any" if proto == "both" else proto, cmt]
+        label = "%s (%s, %s)" % (port, "TCP+UDP" if proto == "both" else proto.upper(),
+                                 "IPv4" if family == "v4" else "IPv6")
+    elif proto == "both":
         verb, vargs, label = "ufw-allow-port", [str(port), cmt], f"{port} (TCP+UDP)"
     else:
         verb, vargs, label = "ufw-allow-proto-port", [proto, str(port), cmt], f"{port}/{proto}"
@@ -3391,12 +3398,46 @@ def remote_fail2ban_overview(server):
 _UFW_BLOCK_TAG = "panel-block"          # a one-off manual block
 
 
+def fwa_block_target(value):
+    """What a Block names: one address, or a network, as the firewall lists it; None for anything else.
+
+    An address in its canonical text (canonical_ip: a zone id refused). A network with its host bits
+    masked off, so `203.0.113.7/24` is the `203.0.113.0/24` ufw stores and lists, and the blocked-IPs
+    readers key (system_ops._ufw_deny_sources); a full-length prefix is the bare address, as those
+    readers list it. Every address (any /0) is a network here and is refused where it is used.
+    """
+    text = str(value or "").strip()
+    if "/" not in text:
+        return canonical_ip(text)
+    net = ip_network_or_none(text)
+    if net is None:
+        return None
+    return str(net.network_address) if net.num_addresses == 1 else str(net)
+
+
+def fwa_panel_source(server):
+    """The address `server` sees the panel's SSH connection come from: what a Block must not cover.
+
+    "" where there is none to protect this way: the panel's own host (no SSH), and a host reached
+    over Tailscale, whose source is a tailnet address, which a block is refused for anyway. Else the
+    first word of the session's $SSH_CONNECTION, which sshd sets for every session; None when it
+    could not be read, which the caller refuses on. A host that is down raises ConnectionError
+    (paramiko), as every other call to it does, for the route to answer as unreachable.
+    """
+    if _core.is_local_server(server) or server.auth_method == "tailscale":
+        return ""
+    out, _err, rc = _core.run_command(server, 'printf "%s\\n" "$SSH_CONNECTION"', timeout=10, sudo=False)
+    words = (out or "").split()
+    addr = ip_address_or_none(words[0]) if rc == 0 and words else None
+    return None if addr is None else str(addr)
+
+
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
-    """Firewall-block an IP on ALL ports via a UFW deny rule, inserted at the top so it beats any
-    allow, and tagged in the rule comment so the panel recognises its own blocks. The IP is reparsed
-    to its canonical ipaddress form, with a zone id refused, so nothing request-supplied reaches the
-    shell unchecked. (ok, msg)."""
-    ip = canonical_ip(ip)
+    """Firewall-block an IP (or a network: fwa_block_target) on ALL ports via a UFW deny rule,
+    inserted at the top so it beats any allow, and tagged in the rule comment so the panel
+    recognises its own blocks. The IP is reparsed to its canonical ipaddress form, with a zone id
+    refused, so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
+    ip = fwa_block_target(ip)
     if ip is None:
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
@@ -3416,8 +3457,8 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
 
 
 def remote_ufw_undeny_ip(server, ip):
-    """Remove a UFW deny rule for an IP (canonicalised first, a zone id refused). (ok, msg)."""
-    ip = canonical_ip(ip)
+    """Remove a UFW deny rule for an IP or a network (fwa_block_target, a zone id refused). (ok, msg)."""
+    ip = fwa_block_target(ip)
     if ip is None:
         return False, "Invalid IP address."
     # Read the result — the same fix system_ops.ufw_undeny_ip already carries, for the same
