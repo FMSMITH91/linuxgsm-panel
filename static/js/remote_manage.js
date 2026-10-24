@@ -286,6 +286,26 @@ function _r21cLogNote(el, key){
   }
   var _secLoaded = false, _fwLoaded = false;
   function _fwFirstRead(){ if (window.refreshFirewall) refreshFirewall(); }
+  // At phone width the pills scroll sideways (five of them are ~630px in a 343px bar), and a tab
+  // opened by a link or a #hash could be the one out of sight. Scrolled into the bar, sideways
+  // only: scrollIntoView would move the page too.
+  function pillIntoView(tab){
+    var ab = nav.querySelector('[data-mtab-btn="' + tab + '"]');
+    if (!ab) return;
+    var nr = nav.getBoundingClientRect(), br = ab.getBoundingClientRect();
+    if (br.left < nr.left || br.right > nr.right) nav.scrollLeft += br.left - nr.left - 16;
+  }
+  // The Network tab's firewall cards render as "Loading…": the page makes no firewall read while
+  // it loads (a host that is down would hold the whole page up), so the first opening reads it.
+  // remote_firewall.js loads AFTER this file, and a #network link opens the tab from here while
+  // the page is still parsing, so before DOMContentLoaded the read waits for it.
+  function firstOpen(tab){
+    if (tab === 'security' && !_secLoaded && window.loadSecurity) { _secLoaded = true; loadSecurity(); }
+    if (tab !== 'network' || _fwLoaded) return;
+    _fwLoaded = true;
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _fwFirstRead);
+    else _fwFirstRead();
+  }
   function show(tab){
     document.querySelectorAll('[data-mtab]').forEach(function(el){
       el.style.display = (el.getAttribute('data-mtab') === tab) ? '' : 'none';
@@ -293,24 +313,8 @@ function _r21cLogNote(el, key){
     nav.querySelectorAll('[data-mtab-btn]').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-mtab-btn') === tab);
     });
-    // At phone width the pills scroll sideways (five of them are ~630px in a 343px bar), and a tab
-    // opened by a link or a #hash could be the one out of sight. Scrolled into the bar, sideways
-    // only: scrollIntoView would move the page too.
-    var ab = nav.querySelector('[data-mtab-btn="' + tab + '"]');
-    if (ab) {
-      var nr = nav.getBoundingClientRect(), br = ab.getBoundingClientRect();
-      if (br.left < nr.left || br.right > nr.right) nav.scrollLeft += br.left - nr.left - 16;
-    }
-    if (tab === 'security' && !_secLoaded && window.loadSecurity) { _secLoaded = true; loadSecurity(); }
-    // The Network tab's firewall cards render as "Loading…": the page makes no firewall read while
-    // it loads (a host that is down would hold the whole page up), so the first opening reads it.
-    // remote_firewall.js loads AFTER this file, and a #network link opens the tab from here while
-    // the page is still parsing, so before DOMContentLoaded the read waits for it.
-    if (tab === 'network' && !_fwLoaded) {
-      _fwLoaded = true;
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _fwFirstRead);
-      else _fwFirstRead();
-    }
+    pillIntoView(tab);
+    firstOpen(tab);
     try { history.replaceState(null, '', '#' + tab); } catch(e){}
   }
   nav.addEventListener('click', function(e){

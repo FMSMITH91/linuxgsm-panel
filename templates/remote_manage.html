@@ -695,6 +695,26 @@
   {% include "_firewall_panel.html" %}
 </div>
 
+{# The SSH port change's fields, the same on the panel host's card and a remote's: what differs
+   between them is the text above it. #}
+{% macro ssh_port_form() %}
+        <div class="d-flex gap-2 flex-wrap align-items-end">
+          <div>
+            <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
+            <input type="number" id="ssh-port-input" class="form-control form-control-sm" min="1" max="65535"
+                   style="width:120px;" placeholder="e.g. 2222" aria-label="New SSH port">
+          </div>
+          <div>
+            <label class="form-label small mb-1" for="ssh-bind-input">Bind address <span class="text-secondary">(optional)</span></label>
+            <input type="text" id="ssh-bind-input" class="form-control form-control-sm" style="width:150px;"
+                   placeholder="All interfaces" aria-label="SSH bind IP address"
+                   title="Leave blank to listen on all interfaces. If this host has several IPs, enter the one sshd should bind to — it must be the address the panel connects to, or the change is rolled back.">
+          </div>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-action="changeSshPort">Change SSH port</button>
+        </div>
+        <div id="ssh-port-msg" class="small mt-1"></div>
+{% endmacro %}
+
 <!-- Connection & SSH -->
 <div class="card mb-3" data-mtab="network" id="conn-ssh-card">
   <div class="card-header" id="sec-connection"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
@@ -845,21 +865,7 @@
         <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port once you've confirmed the new one.
           <a href="#sec-firewall">Go to the firewall rules</a></p>
-        <div class="d-flex gap-2 flex-wrap align-items-end">
-          <div>
-            <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
-            <input type="number" id="ssh-port-input" class="form-control form-control-sm" min="1" max="65535"
-                   style="width:120px;" placeholder="e.g. 2222" aria-label="New SSH port">
-          </div>
-          <div>
-            <label class="form-label small mb-1" for="ssh-bind-input">Bind address <span class="text-secondary">(optional)</span></label>
-            <input type="text" id="ssh-bind-input" class="form-control form-control-sm" style="width:150px;"
-                   placeholder="All interfaces" aria-label="SSH bind IP address"
-                   title="Leave blank to listen on all interfaces. If this host has several IPs, enter the one sshd should bind to — it must be the address the panel connects to, or the change is rolled back.">
-          </div>
-          <button class="btn btn-sm btn-outline-primary" type="button" data-action="changeSshPort">Change SSH port</button>
-        </div>
-        <div id="ssh-port-msg" class="small mt-1"></div>
+        {{ ssh_port_form() }}
       </div>
     </div>
     {% else %}
@@ -909,21 +915,7 @@
         {% if remote.auth_method == 'tailscale' %}<p class="small text-secondary mb-1">The panel itself connects over Tailscale SSH on port 22, whatever port sshd uses.</p>{% endif %}
         <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port once you've confirmed the new one.
           <a href="#sec-firewall">Go to the firewall rules</a></p>
-        <div class="d-flex gap-2 flex-wrap align-items-end">
-          <div>
-            <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
-            <input type="number" id="ssh-port-input" class="form-control form-control-sm" min="1" max="65535"
-                   style="width:120px;" placeholder="e.g. 2222" aria-label="New SSH port">
-          </div>
-          <div>
-            <label class="form-label small mb-1" for="ssh-bind-input">Bind address <span class="text-secondary">(optional)</span></label>
-            <input type="text" id="ssh-bind-input" class="form-control form-control-sm" style="width:150px;"
-                   placeholder="All interfaces" aria-label="SSH bind IP address"
-                   title="Leave blank to listen on all interfaces. If this host has several IPs, enter the one sshd should bind to — it must be the address the panel connects to, or the change is rolled back.">
-          </div>
-          <button class="btn btn-sm btn-outline-primary" type="button" data-action="changeSshPort">Change SSH port</button>
-        </div>
-        <div id="ssh-port-msg" class="small mt-1"></div>
+        {{ ssh_port_form() }}
       </div>
     </div>
     {% if remote.auth_method != 'tailscale' and not remote.is_local %}

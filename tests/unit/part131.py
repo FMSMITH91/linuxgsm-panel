@@ -111,8 +111,9 @@ _STATUS131 = {"has_sudo": True, "ufw": {"enabled": True, "rules": []},
 _GROUP131 = {"is_block": False, "is_iface": False, "port_num": "27015", "proto_label": "BOTH",
              "comment": "game", "action": "ALLOW", "scope": "Any address", "family_label": "IPv4",
              "protected": False, "nums": [2], "warn": False, "key": "27015|both|any"}
-_BLOCK131 = {"is_block": True, "block_ip": "203.0.113.50", "comment": "panel-block", "family_label": "IPv4",
-             "nums": [1], "key": "block|203.0.113.50"}
+_ADDR131 = "203.0.113.50"   # NOSONAR(S1313) - a documentation address in a stand-in firewall row; never dialled
+_BLOCK131 = {"is_block": True, "block_ip": _ADDR131, "comment": "panel-block", "family_label": "IPv4",
+             "nums": [1], "key": "block|" + _ADDR131}
 _UFW131 = {"installed": True, "enabled": True, "rules": [], "groups": [_GROUP131, _BLOCK131]}
 
 _pages131 = {}
@@ -274,7 +275,8 @@ function run(ready, hash, fwEarly) {
   const card = el({id: 'sec-connection'}); card._sec = secs[2];
   state = {reads: 0, scrolled: [], dcl: [], click: null, btns};
   const nav = { scrollLeft: 0, querySelectorAll() { return btns; },
-    querySelector(sel) { const m = /data-mtab-btn="(\w+)"/.exec(sel); return m ? btns.find(b => b.attrs['data-mtab-btn'] === m[1]) || null : null; },
+    querySelector(sel) { const m = /data-mtab-btn="(\w+)"/.exec(sel);
+      return m ? btns.find(b => b.attrs['data-mtab-btn'] === m[1]) || null : null; },
     addEventListener(e, f) { state.click = f; }, getBoundingClientRect() { return {left: 16, right: 359}; } };
   state.nav = nav;
   global.document = { readyState: ready,
