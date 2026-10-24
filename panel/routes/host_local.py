@@ -379,9 +379,16 @@ def _register_panel_ban_lists(app):
         # — showing OFF. saveThreshold then reads that toggle back, under a comment saying
         # "preserve the on/off state", so one failed read followed by one Save silently disabled
         # auto-blocking on a host that had it on.
-        _settings = {"autoblock": _local_remote_id() in _autoblock_hosts(),
-                     "threshold": _autoblock_threshold(),
-                     "whitelist": _security_whitelist()}
+        # Its own guard, though: a read of them that RAISED (the database busy, config.json
+        # unreadable) escaped the route as an HTML 500, which the card can only call "Could not
+        # load". Answered as JSON without those keys, the card repaints none of its controls
+        # (paintControls paints only what an answer carries) and says the read failed.
+        try:
+            _settings = {"autoblock": _local_remote_id() in _autoblock_hosts(),
+                         "threshold": _autoblock_threshold(),
+                         "whitelist": _security_whitelist()}
+        except Exception:
+            return jsonify({"ips": [], "error": _log_and_generic("top-ips settings failed")}), 200
         try:
             # `or []`: the reader answers None when the read failed, which the card renders as
             # "no offenders" either way — but the DIFFERENCE now matters to _autoblock_reconcile.

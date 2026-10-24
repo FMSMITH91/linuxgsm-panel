@@ -14,6 +14,34 @@ function secBase(){ return IS_LOCAL ? MOUNT+'/api/panel/security' : MOUNT+'/api/
 // slow host) — and saveThreshold posts the toggle's state back as `enabled`. Saving before that
 // answer switched auto-block OFF for the host while the toast said it was blocking at N+.
 var _autoblockKnown = false;
+// This tab's reads, as JSON or a rejection that says WHY there is none. Each card's .catch showed one
+// line, "Could not load top offenders.", for every way a request can fail before its answer is
+// read: the connection dropping (the panel restarting under an update, a proxy giving up on a slow
+// read), an error page from the panel or the proxy in front of it, a sign-in page. The route itself
+// answers JSON for every host state (an unreadable or slow log, a failed read), so this line was
+// the only thing on the card when something else was wrong, and it named nothing. uidWhy: "net"
+// (no answer), "http" (an error status; uidStatus has it) or "page" (200, but not JSON).
+function _uidReadJson(url){
+  function fail(why, status){ var e = new Error('not a reading'); e.uidWhy = why; e.uidStatus = status; return e; }
+  return fetch(url).then(function(r){
+    if (r.ok === false) throw fail('http', r.status);
+    return r.json().catch(function(){ throw fail('page', r.status); });
+  }, function(){ throw fail('net', 0); });
+}
+// The card's message for a read that failed: what failed, then why. Fixed English in their own
+// <span>s, which the page's translator renders (and renders again on a language switch); the one
+// with a value in it translated whole, the status a number.
+var _UID_WHY = {
+  net: 'The panel did not answer: the connection dropped, or the panel was restarting. Try again in a moment.',
+  page: 'The answer was a web page, not a reading: reload this page (you may need to sign in again).'
+};
+function _uidFailHtml(what, err){
+  var why = err && err.uidWhy;
+  var reason = why === 'http'
+    ? tfHtml('The panel answered with an error (HTTP {status}) instead of a reading. Try again; if it repeats, the panel\'s log has the cause.', {status: String(Number(err.uidStatus) || 0)})
+    : (_UID_WHY[why] ? '<span>'+escapeHtml(_UID_WHY[why])+'</span>' : '');
+  return '<div class="small text-danger"><span>'+escapeHtml(what)+'</span>'+(reason ? ' '+reason : '')+'</div>';  // nosemgrep - fixed strings, escaped; the status is a number
+}
 function loadSecurity(){ loadSecurityBans(); loadSecurityTopIps(); loadSecurityEvents(); }
 function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
@@ -30,7 +58,7 @@ function loadSecurityTopIps(){
     if(th && d && d.threshold!=null) th.value=d.threshold;
     if(d && 'whitelist' in d) renderWhitelist(d.whitelist||[]);
   }
-  fetch(secBase()+'/top-ips').then(function(r){return r.json();}).then(function(d){
+  _uidReadJson(secBase()+'/top-ips').then(function(d){
     paintControls(d);
     var ips=(d&&d.ips)||[];
     // "nothing to report" and "the panel could not read the log" are different answers, and the
@@ -69,7 +97,7 @@ function loadSecurityTopIps(){
       +'<thead><tr><th class="small">#</th><th class="small">IP</th><th class="small text-end">Attempts</th>'
       +'<th class="small text-end">Bans</th><th class="small">Jail</th><th class="small">Status</th><th class="small">Firewall</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>';
-  }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load top offenders.</div>'; });
+  }).catch(function(err){ el.innerHTML=_uidFailHtml('Could not load top offenders.', err); });  // nosemgrep - _uidFailHtml escapes
 }
 function blockOffender(ip, btn){
   confirmDialog({title:'Block IP', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Block (all ports)',
@@ -180,7 +208,7 @@ function _r30aWhitelistRemoveRefused(d){
 }
 function loadSecurityBans(){
   var el=document.getElementById('sec-bans'); if(!el) return;
-  fetch(secBase()+'/bans').then(function(r){return r.json();}).then(function(d){
+  _uidReadJson(secBase()+'/bans').then(function(d){
     // "could not read" comes FIRST, because both answers below are reassuring and only one of
     // them is a fact. An unreadable host, or one where fail2ban is installed but stopped, used to
     // render as "No fail2ban jails found." — the same thing a healthy host with nothing configured
@@ -215,7 +243,7 @@ function loadSecurityBans(){
         : '<div class="text-secondary small">No IPs banned right now.</div>';
       return '<div class="mb-3">'+head+body+'</div>';
     }).join('');
-  }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load bans.</div>'; });
+  }).catch(function(err){ el.innerHTML=_uidFailHtml('Could not load bans.', err); });  // nosemgrep - _uidFailHtml escapes
 }
 function unbanIp(jail, ip, btn){
   if(btn) btn.disabled=true;
@@ -227,7 +255,7 @@ function unbanIp(jail, ip, btn){
 }
 function loadSecurityEvents(){
   var el=document.getElementById('sec-events'); if(!el) return;
-  fetch(MOUNT+'/api/panel/security/events').then(function(r){return r.json();}).then(function(d){
+  _uidReadJson(MOUNT+'/api/panel/security/events').then(function(d){
     // The route answers a failed audit-log read 200 {events: [], error} — "could not read" first,
     // as the bans/top-ips/log readers on this tab do, not "No security events yet."
     if(!d || d.error || !Array.isArray(d.events)) throw new Error('not a reading');
@@ -244,7 +272,7 @@ function loadSecurityEvents(){
     }).join('');
     el.innerHTML='<table class="table table-sm align-middle mb-0"><thead><tr>'  // nosemgrep
       +'<th class="small">When</th><th class="small">Event</th><th class="small">User</th><th class="small">Detail</th><th class="small">IP</th></tr></thead><tbody>'+rows+'</tbody></table>';
-  }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load events.</div>'; });
+  }).catch(function(err){ el.innerHTML=_uidFailHtml('Could not load events.', err); });  // nosemgrep - _uidFailHtml escapes
 }
 function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
