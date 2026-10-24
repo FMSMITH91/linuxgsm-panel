@@ -216,6 +216,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **Less scrolling, on a phone and on a desktop.** The alerts every page opens with (2FA off, a
+  reboot needed, updates waiting) are one line each, with their buttons beside them. Files & Config
+  shows one section at a time — Config, Files, Backups, Schedule, Alerts, Mods — each with its own
+  link, and only the alert services you use are open (the rest are under **Add a service**). The
+  server page shows the live console first unless you have arranged your own layout, and the
+  maintenance commands are in one **Maintenance** menu. Setup help on Notifications, Account,
+  Tailscale, Global Bans and Custom Commands is folded behind a line you tap to open; the
+  Maintenance tab folds each server's backup list behind "2 backups, newest 1d ago"; Account lists
+  three sessions with **Show all**; Audit Logs folds its filters on a phone. Nothing was removed.
+
 - **Less scrolling on a host page's Network and Security tabs.** On the Network tab the firewall's
   Active/Inactive badge sits on the Firewall heading instead of an empty UFW Status card; Open a Port
   and Restrict a Port are one **Add a rule** card with a switch (Open, One source, Rate-limit); each
