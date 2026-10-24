@@ -114,8 +114,7 @@ check("fw verbs: every good argument list is taken by both tables, which build t
 _vlax135 = []
 for _v135, _cases135 in _BAD135.items():
     for _a135 in _cases135:
-        for _side135, _fn135 in (("helper", lambda v, a: _helper.validate(v, a)),
-                                 ("panel", lambda v, a: _priv135.check_args(v, a))):
+        for _side135, _fn135 in (("helper", _helper.validate), ("panel", _priv135.check_args)):
             if _takes135(lambda a, _f=_fn135, _v=_v135: _f(_v, list(a)), _a135):
                 _vlax135.append((_side135, _v135, _a135))
 check("fw verbs: every bad argument list (a word outside its set, injection, a count off) is refused by both",
