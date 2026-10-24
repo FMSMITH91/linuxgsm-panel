@@ -137,3 +137,7 @@ _fr132 = [_i18n132.translate("fr", s.template) for s in (
 check("firewall wording: the firewall-could-not-be-read note, the install's failed firewall step and an SSH "
       "move's rule-left note read in French, naming the Network tab",
       all("onglet Réseau" in t and "page Pare-feu" not in t for t in _fr132), repr(_fr132))
+
+# ── END: keep this last ──────────────────────────────────────────────────────────────────────────
+check("part132: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP132_START, repr(_P9_TRIPPED[_TRIP132_START:][:6]))
