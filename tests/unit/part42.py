@@ -1,7 +1,7 @@
 """Part 42 of the unit suite: zizmor and Harden-Runner, the CI scanners added together.
 
 * zizmor (docs.zizmor.sh) audits the workflows themselves. zizmor.yml runs it on every pull
-  request, on pushes to main and weekly, at the pedantic persona, and uploads its SARIF to code
+  request, on pushes to main and daily, at the pedantic persona, and uploads its SARIF to code
   scanning under the category `zizmor`, which both alert gates wait for. The scan job holds a
   read-only token; only the upload job may write, and it runs nothing but GitHub's own actions.
 * Harden-Runner (step-security/harden-runner) records each job's outbound connections and root
@@ -240,10 +240,10 @@ _sec_on42 = _code29(_wf29("security-code.yml"))
 _pi42 = {f: _re42.findall(r"    paths-ignore:\n((?:      - .*\n)+)", t)
          for f, t in (("zizmor.yml", _zz_on42), ("security-code.yml", _sec_on42))}
 check("zizmor: runs on every pull request (no path filter), on pushes to main with security-code.yml's "
-      "paths-ignore list, and weekly",
+      "paths-ignore list, and daily",
       _zz_pr42 is not None and not _re42.search(r"paths", _zz_pr42.group(1))
       and _re42.search(r"^  push:\n    branches: \[ main \]\n    paths-ignore:\n", _zz_on42, _re42.M)
-      and _re42.search(r"^  schedule:\n    - cron: \"[0-9]+ [0-9]+ \* \* [0-6]\"", _zz_on42, _re42.M)
+      and _re42.search(r"^  schedule:\n    - cron: \"[0-9]+ [0-9]+ \* \* \*\"", _zz_on42, _re42.M)
       and len(_pi42["zizmor.yml"]) == 1 and _pi42["zizmor.yml"] == _pi42["security-code.yml"],
       repr((_zz_on42, _pi42)))
 

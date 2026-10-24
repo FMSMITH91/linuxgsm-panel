@@ -42,7 +42,7 @@ name: Codacy alerts
 
 on:
   schedule:
-    - cron: "40 6 * * *"   # daily, after the weekly security scans have had their slot
+    - cron: "40 6 * * *"   # daily, after the morning security scans have had their slot
   workflow_dispatch:
 
 permissions:
