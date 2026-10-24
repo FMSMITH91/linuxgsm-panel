@@ -157,8 +157,11 @@ _VOID133 = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", 
 
 
 class _Fold133(_HTMLParser133):
-    """For each id and each text: inside a <details> body (folded), inside its <summary> (the label line,
-    in view), inside a .card, and the open <details> ids, plus attributes by id."""
+    """Where each id and each text sits: folded, in a summary, in a card.
+
+    Folded is inside a closed <details> body; a summary is the label line, always in view. Also each
+    id's attributes.
+    """
 
     def __init__(self):
         super().__init__()
