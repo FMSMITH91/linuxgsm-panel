@@ -565,6 +565,8 @@
 <div data-mtab="security" id="sec-keptout">
 <h2 class="h6 mb-1"><i class="bi bi-person-x"></i> Blocked &amp; banned IPs</h2>
 <p class="small text-secondary mb-2">Who is kept out of this host: addresses the firewall blocks on every port, and addresses fail2ban has banned from the service they attacked.</p>
+{# Side by side from 992px (.uid-pair, panel.css), one above the other on a phone. #}
+<div class="uid-pair">
 {% include "_firewall_blocks.html" %}
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -575,6 +577,7 @@
     <p class="small text-secondary mb-2">{% if remote.is_local %}IPs currently banned at the firewall across every fail2ban jail on this host — the panel login and SSH.{% else %}IPs currently banned at the firewall across every fail2ban jail on this host.{% endif %}</p>
     <div id="sec-bans"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
+</div>
 </div>
 </div>
 
@@ -592,18 +595,25 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs).</p>
-    {# The blocks it makes are UFW denies, listed and removable in Blocked IPs at the top of this
-       tab. #}
-    <p class="small text-secondary mb-2"><span>Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</span>
-      <a href="#fw-blocks">Blocked IPs</a></p>
-    <p class="small text-secondary mb-2">Auto-block firewalls every IP at or above the threshold, and releases each one when its 7-day count drops back below. Because that count is cumulative, a slow attacker who spaces attempts out to dodge fail2ban's short window cannot escape it.</p>
-    <p class="small mb-3" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
-      <i class="bi bi-shield-check text-success"></i>
-      Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet,
-      there's nothing here for fail2ban to catch, so you can leave auto-block off. It only earns its
-      keep when SSH or the panel login is reachable from the public internet. (Game-server ports have
-      no fail2ban jail, so this never covers those.)
-    </p>
+    {# What Block and Auto-block do, behind one line: four paragraphs stood between the card's title
+       and its list on every visit. #}
+    <details class="uid-about mb-2">
+      <summary class="small"><i class="bi bi-info-circle"></i> <span>How auto-block works</span></summary>
+      <div class="mt-2">
+        {# The blocks it makes are UFW denies, listed and removable in Blocked IPs at the top of this
+           tab. #}
+        <p class="small text-secondary mb-2"><span>Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</span>
+          <a href="#fw-blocks">Blocked IPs</a></p>
+        <p class="small text-secondary mb-2">Auto-block firewalls every IP at or above the threshold, and releases each one when its 7-day count drops back below. Because that count is cumulative, a slow attacker who spaces attempts out to dodge fail2ban's short window cannot escape it.</p>
+        <p class="small mb-2" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
+          <i class="bi bi-shield-check text-success"></i>
+          Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet,
+          there's nothing here for fail2ban to catch, so you can leave auto-block off. It only earns its
+          keep when SSH or the panel login is reachable from the public internet. (Game-server ports have
+          no fail2ban jail, so this never covers those.)
+        </p>
+      </div>
+    </details>
     <!-- align-items-START (not end): the whitelist column grows downward when its chips/"nothing
          whitelisted" text load, and bottom-aligning would then shove the threshold field down out of
          line with it. Top-aligning keeps both fields level regardless of what loads below. -->
@@ -655,8 +665,10 @@
 </div>
 {% endif %}
 
-<div class="card mb-3" data-mtab="security">
-  <div class="card-header" id="sec-rawlogs"><i class="bi bi-file-earmark-text"></i> Raw logs</div>
+{# Collapsed until wanted: a "view log" on a jail, or a #sec-rawlogs link, opens it
+   (remote_manage.js). #}
+<details class="card mb-3" data-mtab="security" id="sec-rawlogs-card">
+  <summary class="card-header uid-summary-card" id="sec-rawlogs"><i class="bi bi-file-earmark-text"></i> Raw logs</summary>
   <div class="card-body">
     <div class="d-flex gap-2 flex-wrap mb-2">
       {% if remote.is_local %}<button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["panel"]'><i class="bi bi-box-arrow-in-right"></i> Panel login log</button>{% endif %}
@@ -669,7 +681,7 @@
        language switch renders the placeholder again (setLang), until a log replaces it. #}
     <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;" data-i18n-text="Pick a log above, or &quot;view log&quot; on a jail above, to see its recent lines.">{{ t('Pick a log above, or "view log" on a jail above, to see its recent lines.') }}</pre>
   </div>
-</div>
+</details>
 {% endif %}
 
 {% if _host_ctl %}
@@ -687,12 +699,17 @@
    loads, and remote_manage.js runs refreshFirewall the first time the tab (or the Security tab, where
    Blocked IPs is) opens. #}
 <div data-mtab="network" id="network-firewall">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-    <h2 class="h6 mb-0" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</h2>
+  {# UFW's Active / Inactive badge rides on the heading, and what the read says about the firewall
+     (unreachable, inactive, sudo refused: remote_firewall.js _fwStatusNote) is the line under it —
+     nothing at all when the firewall is fine. It was a UFW Status card whose body was empty then. #}
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+    <h2 class="h6 mb-0 d-flex align-items-center gap-2" id="sec-firewall"><span><i class="bi bi-shield-fill-check"></i> Firewall</span>
+      <span class="small text-secondary fw-normal">UFW</span> <span id="ufw-badge" class="badge bg-secondary">Checking…</span></h2>
     <button class="btn btn-outline-secondary btn-sm" data-action="refreshFirewall">
       <i class="bi bi-arrow-repeat"></i> Refresh
     </button>
   </div>
+  <div id="ufw-status-note" class="mb-1"><p class="text-secondary small mb-0"><i class="bi bi-arrow-repeat"></i> Loading…</p></div>
   <p class="small text-secondary mb-2">Game ports open automatically at install.</p>
   {# On a phone the tab is several screens long and Connection & SSH sits below every firewall card:
      links straight to each, through the page's own #card routing (remote_manage.js openHash). Blocked
@@ -740,11 +757,16 @@
     {% if remote.is_local and current_user.is_superadmin %}
     <div class="row g-3">
       <div class="col-md-6">
-        <div class="d-flex align-items-center gap-2 mb-1">
-          <span class="small text-secondary">Tailscale SSH:</span>
-          <span id="ts-ssh-badge" class="badge {% if status and status.tailscale_ssh.enabled %}bg-success{% else %}bg-secondary{% endif %}">{{ 'Enabled' if (status and status.tailscale_ssh.enabled) else 'Disabled' }}</span>
-        </div>
-        <p class="small text-secondary mb-1">SSH into this host over your tailnet using your Tailscale identity — no SSH keys to manage.</p>
+        {# The label line opens its explanation (.uid-about, panel.css): what a setting is for is a
+           tap away, and what an action risks stays written beside it. #}
+        <details class="uid-about mb-1">
+          <summary class="d-flex align-items-center gap-2">
+            <span class="small text-secondary">Tailscale SSH:</span>
+            <span id="ts-ssh-badge" class="badge {% if status and status.tailscale_ssh.enabled %}bg-success{% else %}bg-secondary{% endif %}">{{ 'Enabled' if (status and status.tailscale_ssh.enabled) else 'Disabled' }}</span>
+            <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i>
+          </summary>
+          <p class="small text-secondary mb-1">SSH into this host over your tailnet using your Tailscale identity — no SSH keys to manage.</p>
+        </details>
         {% set ts_up = status and status.tailscale_ssh and status.tailscale_ssh.running %}
         {% if status and status.tailscale_ssh.enabled %}
         <button class="btn btn-sm btn-outline-warning" data-action="tsSshDisable"><i class="bi bi-x-circle"></i> Disable Tailscale SSH</button>
@@ -764,12 +786,15 @@
         {% endif %}
       </div>
       <div class="col-md-6">
-        <div class="d-flex align-items-center gap-2 mb-1">
-          <span class="small text-secondary">Tailscale interface (UFW):</span>
-          <code>{{ status.tailscale_interface if status else 'tailscale0' }}</code>
-          {% if status and status.tailscale_ufw_allowed %}<span class="badge bg-success">Allowed</span>{% else %}<span class="badge bg-warning text-dark">Not allowed</span>{% endif %}
-        </div>
-        <p class="small text-secondary mb-1">Keeps the panel reachable over the tailnet in UFW.</p>
+        <details class="uid-about mb-1">
+          <summary class="d-flex align-items-center gap-2 flex-wrap">
+            <span class="small text-secondary">Tailscale interface (UFW):</span>
+            <code>{{ status.tailscale_interface if status else 'tailscale0' }}</code>
+            {% if status and status.tailscale_ufw_allowed %}<span class="badge bg-success">Allowed</span>{% else %}<span class="badge bg-warning text-dark">Not allowed</span>{% endif %}
+            <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i>
+          </summary>
+          <p class="small text-secondary mb-1">Keeps the panel reachable over the tailnet in UFW.</p>
+        </details>
         <button class="btn btn-sm btn-success" data-action="ufwAllowTailscale"
                 {% if (status and status.tailscale_ufw_allowed) or not ts_up %}disabled{% if not ts_up %} title="Tailscale isn't installed/connected on this host"{% endif %}{% endif %}>
           <i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
@@ -783,14 +808,17 @@
            node is installed-but-not-linked (NeedsLogin), which would strand the user. #}
         {% set ssh_lockdown_safe = ts_up and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
         {# The ports sshd serves, filled from ssh-status (remote_manage_host.js): the card acts on those, not on 22. #}
-        <div class="small text-secondary mb-1"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
-        {# Tailscale SSH is off unless the owner chose it at install (system_ops.tailscale_ssh_allowed),
-           so without it the way back in is sshd over the tailnet: the tailscale0 interface allowed. #}
-        {% if status and status.tailscale_ssh.enabled %}
-        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
-        {% else %}
-        <p class="small text-secondary mb-1">With the tailscale0 interface allowed, SSH to this host's tailnet address keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
-        {% endif %}
+        <details class="uid-about mb-1">
+          <summary class="small text-secondary"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span>
+            <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
+          {# Tailscale SSH is off unless the owner chose it at install (system_ops.tailscale_ssh_allowed),
+             so without it the way back in is sshd over the tailnet: the tailscale0 interface allowed. #}
+          {% if status and status.tailscale_ssh.enabled %}
+          <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+          {% else %}
+          <p class="small text-secondary mb-1">With the tailscale0 interface allowed, SSH to this host's tailnet address keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+          {% endif %}
+        </details>
         {% if not ssh_lockdown_safe %}
         <p class="small text-warning mb-1">
           {% if not ts_up %}
@@ -840,8 +868,9 @@
         <div id="panel-port-msg" class="small mt-1"></div>
       </div>
     </div>
+    {# The panel's binding and the SSH port, side by side from 768px: each was a row of its own. #}
     <div class="row g-3 mt-1">
-      <div class="col-md-8">
+      <div class="col-md-6">
         {% set _bind = (config.bind_host if config else '0.0.0.0') or '0.0.0.0' %}
         <div class="small text-secondary mb-1">Panel binding <span class="text-secondary">(where the panel web server listens)</span></div>
         <p class="small text-secondary mb-1">{% if config and config.tailscale_setup_done %}The panel restarts to apply — your Tailscale URL stays the same.{% else %}The panel restarts to apply; reconnect on the new address or port.{% endif %}</p>
@@ -871,9 +900,7 @@
         </div>
         <div id="panel-port-change-msg" class="small mt-1"></div>
       </div>
-    </div>
-    <div class="row g-3 mt-1">
-      <div class="col-md-8">
+      <div class="col-md-6">
         <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port once you've confirmed the new one.
           <a href="#sec-firewall">Go to the firewall rules</a></p>
@@ -911,8 +938,11 @@
       {% endif %}
       <div class="col-md-6">
         {# The ports sshd serves, filled from ssh-status (remote_manage_host.js): the card acts on those, not on 22. #}
-        <div class="small text-secondary mb-1"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
-        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+        <details class="uid-about mb-1">
+          <summary class="small text-secondary"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span>
+            <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
+          <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+        </details>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open the SSH port to the internet">Allow</button>
           <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit the SSH port (brute-force protection)">Limit</button>
@@ -921,27 +951,28 @@
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
     </div>
+    {# The SSH port and the pinned host key, side by side from 768px. #}
     <div class="row g-3 mt-1">
-      <div class="col-12">
+      <div class="col-md-6">
         <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         {% if remote.auth_method == 'tailscale' %}<p class="small text-secondary mb-1">The panel itself connects over Tailscale SSH on port 22, whatever port sshd uses.</p>{% endif %}
         <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port once you've confirmed the new one.
           <a href="#sec-firewall">Go to the firewall rules</a></p>
         {{ ssh_port_form() }}
       </div>
-    </div>
-    {% if remote.auth_method != 'tailscale' and not remote.is_local %}
-    <div class="row g-3">
-      <div class="col-12 mt-2 pt-3 border-top">
-        <div class="small text-secondary mb-1"><i class="bi bi-fingerprint"></i> Pinned SSH host key:
-          {% if remote.host_key_fingerprint %}<code>{{ remote.host_key_fingerprint }}</code>{% else %}<span class="text-warning">not pinned yet — pins automatically on first connection</span>{% endif %}
-        </div>
-        <p class="small text-secondary mb-1">Pins this server's SSH host key and refuses to connect if it changes (MITM protection). Reinstalled the server? Re-trust to pin the new key.</p>
+      {% if remote.auth_method != 'tailscale' and not remote.is_local %}
+      <div class="col-md-6">
+        <details class="uid-about mb-1">
+          <summary class="small text-secondary"><i class="bi bi-fingerprint"></i> Pinned SSH host key:
+            {% if remote.host_key_fingerprint %}<code class="text-break">{{ remote.host_key_fingerprint }}</code>{% else %}<span class="text-warning">not pinned yet — pins automatically on first connection</span>{% endif %}
+            <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
+          <p class="small text-secondary mb-1">Pins this server's SSH host key and refuses to connect if it changes (MITM protection). Reinstalled the server? Re-trust to pin the new key.</p>
+        </details>
         <button class="btn btn-sm btn-outline-warning" data-action="retrustHostKey"><i class="bi bi-arrow-repeat"></i> Re-trust host key</button>
         <div id="hostkey-msg" class="small mt-1"></div>
       </div>
+      {% endif %}
     </div>
-    {% endif %}
     {% endif %}
   </div>
 </div>

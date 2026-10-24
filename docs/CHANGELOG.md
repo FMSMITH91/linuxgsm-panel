@@ -216,6 +216,20 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **Less scrolling on a host page's Network and Security tabs.** On the Network tab the firewall's
+  Active/Inactive badge sits on the Firewall heading instead of an empty UFW Status card; Open a Port
+  and Restrict a Port are one **Add a rule** card with a switch (Open, One source, Rate-limit); each
+  game server's ports are one line; and Connection & SSH lays its settings out in two columns, each
+  explanation opening from its label line (the lock-out warnings stay in view beside their buttons).
+  On the Security tab Blocked IPs and the fail2ban bans sit side by side on a desktop, Top offenders'
+  explanation folds behind **How auto-block works**, the offenders and the recent events show their
+  first 10 and 5 with **Show all** for the rest, and Raw logs stays closed until you open it or press
+  a jail's "view log". Measured on a seeded panel host, the Network tab is about a third shorter on
+  a desktop and a quarter on a phone, and the Security tab about a third shorter on both. A card
+  there that cannot load now says why: "Could not load top offenders." (and the bans and events
+  cards' twins) says whether the panel did not answer (the connection dropped, or it was
+  restarting), answered with an error (with its HTTP status), or answered with a web page (sign in
+  again). A failure reading the auto-block settings no longer breaks the Top offenders card.
 - **A Network tab on every host page.** The firewall is no longer a separate page you reach from a
   link on Host Controls: its rules, Open a Port, Restrict a Port, Game Server Ports and Blocked IPs
   are on the host page's new **Network** tab, between Host Controls and Maintenance, together with

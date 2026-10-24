@@ -1525,15 +1525,15 @@
 }
 
 /* The firewall's cards on a host page's Network tab (_firewall_panel.html). One column on a phone,
-   in DOM order: UFW Status, the rules, then the forms. From 768px the rules take a right-hand
-   column (7 of 12) spanning every row, beside the forms (5 of 12), as Bootstrap's col-md-5 /
-   col-md-7 did; the last row takes the slack so a tall rules list does not spread the forms apart,
-   and align-items:start keeps a card its own height. */
+   in DOM order: the rules, then Add a rule and the game ports. From 768px the rules take a
+   right-hand column (7 of 12) spanning every row, beside the forms (5 of 12), as Bootstrap's
+   col-md-5 / col-md-7 did; the last row takes the slack so a tall rules list does not spread the
+   forms apart, and align-items:start keeps a card its own height. */
 @media (width >= 768px){
   .fw-layout{
     display:grid;
     grid-template-columns:5fr 7fr;
-    grid-template-rows:auto auto auto 1fr;
+    grid-template-rows:auto 1fr;
     column-gap:1.5rem;
     align-items:start;
   }
@@ -1543,6 +1543,43 @@
   .fw-layout > .fw-rules-card{
     grid-column:2;
     grid-row:1 / -1;
+  }
+}
+
+/* A setting's label line that opens its explanation (remote_manage.html, _firewall_blocks.html):
+   what a setting is for is a tap away, and the warnings stay written beside their buttons. The
+   summary is the label line itself, so it costs no line of its own; the info icon says it opens. */
+.uid-about > summary{
+  cursor:pointer;
+  list-style:none;
+}
+
+.uid-about > summary::-webkit-details-marker{ display:none; }
+
+.uid-about-i{
+  color:var(--text-muted);
+  font-size:.75rem;
+}
+
+.uid-about[open] .uid-about-i{ color:var(--accent); }
+
+/* A card that is a <details> (Raw logs): its header is the summary, with the card's own look. */
+.uid-summary-card{
+  cursor:pointer;
+  list-style:none;
+}
+
+.uid-summary-card::-webkit-details-marker{ display:none; }
+
+details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
+
+/* Blocked IPs and the fail2ban bans side by side from 992px (the Security tab), stacked below it. */
+@media (width >= 992px){
+  .uid-pair{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    column-gap:1rem;
+    align-items:start;
   }
 }
 

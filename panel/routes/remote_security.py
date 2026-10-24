@@ -87,14 +87,19 @@ def _register_ban_lists(app):
         # — showing OFF. saveThreshold then reads that toggle back, under a comment saying
         # "preserve the on/off state", so one failed read followed by one Save silently disabled
         # auto-blocking on a host that had it on.
-        _settings = {"autoblock": remote_id in _autoblock_hosts(),
-                     "threshold": _autoblock_threshold()}
-        # The whitelist is INSTALL-WIDE, and every other read or write of it is superadmin-only
-        # (the panel-host top-ips, both whitelist routes). Sent here at MANAGE_REMOTES, a host
-        # operator scoped to one VPS learned every address exempt from bans and auto-blocks on
-        # every host, the admins' own home IPs included.
-        if current_user.is_superadmin:
-            _settings["whitelist"] = _security_whitelist()
+        # Guarded on their own, as on the panel host's twin: a read of them that raised escaped as
+        # an HTML 500, which the card can only call "Could not load".
+        try:
+            _settings = {"autoblock": remote_id in _autoblock_hosts(),
+                         "threshold": _autoblock_threshold()}
+            # The whitelist is INSTALL-WIDE, and every other read or write of it is superadmin-only
+            # (the panel-host top-ips, both whitelist routes). Sent here at MANAGE_REMOTES, a host
+            # operator scoped to one VPS learned every address exempt from bans and auto-blocks on
+            # every host, the admins' own home IPs included.
+            if current_user.is_superadmin:
+                _settings["whitelist"] = _security_whitelist()
+        except Exception:
+            return jsonify({"ips": [], "error": _log_and_generic("top-ips settings failed")}), 200
         try:
             _ips = remote_fail2ban_top_ips(remote, 100, days=7)
         except Exception:

@@ -11,12 +11,15 @@
     </span>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">
-      Blocking an IP denies it on every port — SSH, the panel and all game servers.
-      <span id="blocks-inactive-note" class="text-warning d-none">While UFW is inactive a block is only stored — it denies nothing until UFW is enabled.</span>
-      <span class="badge bg-info text-dark">Auto</span>
-      <span>Entries marked Auto are managed by the rolling auto-block; the rest are manual.</span>
-    </p>
+    {# What a block does and what Auto means, a tap away; the inactive warning, when the read says UFW
+       is inactive, stays in view above the field it is about. #}
+    <details class="uid-about mb-2">
+      <summary class="small text-secondary">Blocking an IP denies it on every port — SSH, the panel and all game servers.
+        <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
+      <p class="small text-secondary mb-0 mt-1"><span class="badge bg-info text-dark">Auto</span>
+        <span>Entries marked Auto are managed by the rolling auto-block; the rest are manual.</span></p>
+    </details>
+    <p id="blocks-inactive-note" class="small text-warning mb-2 d-none">While UFW is inactive a block is only stored — it denies nothing until UFW is enabled.</p>
     <div class="row g-2 mb-2">
       <div class="col-sm">
         <input type="text" id="block-ip" class="form-control form-control-sm" placeholder="IP address to block (e.g. 203.0.113.10)" aria-label="IP address to block (e.g. 203.0.113.10)">

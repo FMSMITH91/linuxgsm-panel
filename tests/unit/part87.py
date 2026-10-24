@@ -192,7 +192,7 @@ if _out87 is not None:
 _CANT87 = "The panel can't reach this host right now"
 # Refresh repaints the card from the same read as the badge and the lists.
 _FWJS87 = _read87("static", "js", "remote_firewall.js")
-_name87 = "firewall refresh: the UFW Status card follows the read"
+_name87 = "firewall refresh: the UFW status line follows the read"
 _out87 = _node87(_name87, _DOM87 + _SETTLE47 + (
     "global.remoteId = 7; let unlisted = null;\n"
     "global._fwUnlisted = m => { unlisted = m; };\n"
