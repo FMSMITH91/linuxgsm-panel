@@ -216,6 +216,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **A Network tab on every host page.** The firewall is no longer a separate page you reach from a
+  link on Host Controls: its rules, Open a Port, Restrict a Port, Game Server Ports and Blocked IPs
+  are on the host page's new **Network** tab, between Host Controls and Maintenance, together with
+  the whole Connection & SSH card (Tailscale SSH, public SSH, the panel's port and binding, the SSH
+  port change). Host Controls keeps OS Updates, Terminal, Power and Existing servers. The tab reads
+  the firewall when you first open it, a line at its top jumps to the rules, Blocked IPs or
+  Connection & SSH, and on a phone the tab you are on is scrolled into view in the tab bar. The
+  Remote Servers list's Firewall button, the SSH port card and the search box (Ctrl/⌘+K, which now
+  finds the panel host's firewall too) all lead to the tab; old links to the Firewall page still
+  work. The Power card links to the Settings page's Host reboots.
 - **Faster test runs.** The smoke suite no longer waits on itself (about 9 minutes down to under
   2), `tools/run-tests.sh` can run the suites in parallel lanes (`RUN_TESTS_PARALLEL=1`), and CI
   runs them that way, with the root unit run beside them. A lane that fails, is killed or prints

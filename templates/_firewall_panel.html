@@ -1,0 +1,364 @@
+{# The firewall's own cards: UFW status, Open a Port, Restrict a Port, Game Server Ports, the rules
+   and Blocked IPs. Rendered by the standalone Firewall page (remote_firewall.html, with the read it
+   made: fw_status) and by the host page's Network tab (remote_manage.html, with fw_status none: that
+   page makes no firewall read while it loads, so the cards start "Loading…" and remote_firewall.js's
+   refreshFirewall fills them the first time the tab opens). One copy of the markup, one script.
+   fw_games: the host's game servers, for the "Open all ports" rows. #}
+{% set fw_pending = fw_status is none %}
+{% set fw = fw_status or {} %}
+{% set block_groups = (fw.groups or [])|selectattr('is_block')|list %}
+{% set open_groups = (fw.groups or [])|rejectattr('is_block')|list %}
+{# An INACTIVE ufw prints its Status line and nothing else: its stored rules are neither listed nor
+   enforced, so fw.groups is [] exactly as it is for a host nothing reached. Counted, that
+   printed "0 rules", "No firewall rules yet." and "No IPs are blocked." on a stock Ubuntu host
+   whose firewall had simply never been switched on, and a block added there denies nothing. #}
+{% set fw_inactive = fw.installed and not fw.enabled and not fw.unreachable %}
+{# Not read yet (the Network tab, before it is opened) is unlisted too: no count, no empty-state line. #}
+{% set fw_unlisted = fw_pending or fw.unreachable or fw_inactive %}
+{# Why an unreachable read was not taken, when it is not the network: a changed host key (the panel
+   refused to connect) or a read cut off part-way. The route's own sentence, in the viewer's
+   language, as the API twin sends it and refreshFirewall shows it (_fwHostSaid). #}
+{% set fw_unread_why = fw.message if fw.unreachable and not fw.permission_denied
+   and fw.code and fw.code != 'host_unreachable' and fw.message else '' %}
+
+<div class="row">
+  <!-- Left: UFW status + manual port opener -->
+  <div class="col-md-5 mb-3">
+
+    <!-- UFW Status -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-fill-check"></i> UFW Status</span>
+        <span id="ufw-badge" class="badge {% if fw_pending or fw.unreachable %}bg-secondary{% elif fw.enabled %}bg-success{% else %}bg-secondary{% endif %}">
+          {% if fw_pending %}Checking…{% elif fw.unreachable %}Unknown{% else %}{{ "Active" if fw.enabled else "Inactive" }}{% endif %}
+        </span>
+      </div>
+      <div class="card-body" id="ufw-status-note">
+        {# "Unreachable" and "UFW isn't installed" are different facts, and only one of them is
+           something the operator can act on here. Reporting a host that is simply down as having
+           no firewall is the more alarming of the two, and it is the wrong one. #}
+        {# A sudo refusal comes back flagged unreachable too (remote_ufw_status sets both), and
+           reading it as "can't reach this host" sent the operator to debug connectivity to a
+           machine the panel had just talked to: on the panel host, the very machine serving this
+           page. It names its own cause. #}
+        {% if fw_pending %}
+        <p class="text-secondary small mb-0"><i class="bi bi-arrow-repeat"></i> Loading…</p>
+        {% elif fw.permission_denied %}
+        <p class="text-warning small mb-0"><i class="bi bi-lock"></i> The panel reached this host, but sudo refused the firewall read, so its rules can't be shown. Check the panel's sudoers grant on this host.</p>
+        {% elif fw_unread_why %}
+        {# The key icon for a changed host key only, as refreshFirewall paints it: a read cut off
+           part-way is not a key problem. #}
+        <p class="text-warning small mb-0"><i class="bi {{ 'bi-key' if fw.code == 'host_key_mismatch' else 'bi-exclamation-triangle' }}"></i> {{ fw_unread_why }}</p>
+        {% elif fw.unreachable %}
+        <p class="text-secondary small mb-0"><i class="bi bi-plug"></i> The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.</p>
+        {% elif not fw.installed %}
+        <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is not installed on this remote.</p>
+        {% elif fw_inactive %}
+        <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is installed but inactive: nothing on this page is enforced, and ufw does not list its stored rules until it is enabled.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Manual Port Opener -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-plus-circle"></i> Open a Port</div>
+      <div class="card-body">
+        {# Port and protocol share a row and the comment takes its own. As one row of 4/3/5 the
+           protocol select was 66px at 375px and ~100px in the desktop column, so "Both (TCP+UDP)"
+           showed as "Both (TC" in English and "Les deu" in French, and the comment placeholder
+           was cut too. #}
+        <div class="row g-2">
+          <div class="col-5">
+            <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" aria-label="Port" min="1" max="65535">
+          </div>
+          <div class="col-7">
+            <select id="new-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="both" selected>Both (TCP+UDP)</option>
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)" aria-label="Comment (optional)">
+          </div>
+          <div class="col-12 mt-1">
+            <button class="btn btn-success btn-sm w-100" data-action="openPort">
+              <i class="bi bi-plus-lg"></i> Open Port
+            </button>
+          </div>
+        </div>
+        <div id="port-result" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <!-- Open a port to ONE address/network, and rate limiting -->
+    <div class="card mb-3">
+      <div class="card-header" id="fw-restrict-title"><i class="bi bi-shield-lock"></i> Restrict a Port</div>
+      <div class="card-body">
+        <p class="text-secondary small mb-2">Open a port to a single address or network instead of
+          the whole internet — an admin port that only you should reach, or a game port only your
+          LAN should. A range works too (27015:27020).</p>
+        <div class="row g-2">
+          {# Below 576px the source takes the whole row: at col-6 it is 149px, which cuts the
+             translated placeholder. Desktop keeps 6/3/3. #}
+          <div class="col-12 col-sm-6">
+            <input type="text" id="src-cidr" class="form-control form-control-sm"
+                   placeholder="1.2.3.4 or 10.0.0.0/8" aria-labelledby="fw-restrict-title">
+          </div>
+          <div class="col-6 col-sm-3">
+            <input type="text" id="src-port" class="form-control form-control-sm"
+                   placeholder="Port" aria-label="Port">
+          </div>
+          <div class="col-6 col-sm-3">
+            <select id="src-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-12 mt-1 d-flex gap-2">
+            <button class="btn btn-success btn-sm flex-grow-1" data-action="allowFromSource">
+              <i class="bi bi-plus-lg"></i> Allow from this source only
+            </button>
+            <button class="btn btn-outline-danger btn-sm" data-action="removeAllowFromSource"
+                    title="Remove that source rule">
+              <i class="bi bi-trash"></i>
+            </button>
+          </div>
+        </div>
+        <hr class="my-3">
+        <p class="text-secondary small mb-2">Rate limiting refuses an address that opens more than
+          6 connections in 30 seconds. Right for anything someone logs into (SSH, RCON); wrong for
+          gameplay traffic, where that is a quiet evening.</p>
+        <div class="row g-2">
+          {# Below 576px the port takes the whole row, as the Restrict row's source does: at
+             6/3/3 the button pair's column was 80px, and the × ran 9px past the card's edge in
+             French and Spanish ("Limiter", "Limitar"). #}
+          <div class="col-12 col-sm-6">
+            <input type="text" id="limit-port" class="form-control form-control-sm"
+                   placeholder="Port" aria-label="Port">
+          </div>
+          <div class="col-6 col-sm-3">
+            <select id="limit-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-6 col-sm-3 d-flex gap-1">
+            <button class="btn btn-warning btn-sm flex-grow-1" data-action="limitPort">Limit</button>
+            <button class="btn btn-outline-secondary btn-sm" data-action="unlimitPort"
+                    title="Remove the rate limit">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div id="restrict-result" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <!-- Game server quick ports -->
+    {% if fw_games %}
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-controller"></i> Game Server Ports</span>
+        <span class="small text-secondary">opens every port the game needs</span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Server</th>
+              <th>Port</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for gs in fw_games %}
+            <tr>
+              <td class="small" data-no-i18n>{{ gs.name }}</td>
+              <td><code>{{ gs.port }}</code></td>
+              <td>
+                <button class="btn btn-success btn-sm" data-action="syncPorts" data-args='[{{ gs.id }}, "@self"]'
+                        title="Detect &amp; open ALL ports this game needs (game/query/rcon/etc.)">
+                  <i class="bi bi-unlock"></i> Open all ports
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: Current rules -->
+  <div class="col-md-7 mb-3">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center" id="fw-rules">
+        <span><i class="bi bi-list-columns"></i> Open Ports &amp; Rules</span>
+        {# "0 rules" is an arithmetic claim about a firewall nothing read. fw.groups is [] on
+           every unreachable path, so this counted the empty list and printed it as a measurement,
+           directly above a body that (correctly) says the rules can't be read. An em dash, the
+           same thing static/js/remote_firewall.js already renders here on an unreachable refresh. #}
+        <span class="small text-secondary" id="rules-count">{% if fw_unlisted %}&mdash;{% else %}{{ open_groups|length }} {% if open_groups|length == 1 %}<span>rule</span>{% else %}<span>rules</span>{% endif %}{% endif %}</span>
+      </div>
+      <div class="card-body p-0">
+        <div id="rules-list" style="max-height: 500px; overflow: auto;">
+          {% if open_groups %}
+          <table class="table table-sm table-hover mb-0 align-middle table-pin-actions">
+            <thead>
+              <tr>
+                <th>Port</th>
+                <th>Protocol</th>
+                <th>For</th>
+                <th>Scope</th>
+                <th>IP</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="rules-body">
+              {% for g in open_groups %}
+              <tr>
+                <td>
+                  {% if g.is_iface %}<span class="badge bg-info text-dark">{{ g.port_num }}</span>
+                  {% else %}<code>{{ g.port_num }}</code>{% endif %}
+                </td>
+                <td>
+                  {% if g.proto_label == 'TCP' %}<span class="badge bg-primary">TCP</span>
+                  {% elif g.proto_label == 'UDP' %}<span class="badge bg-warning text-dark">UDP</span>
+                  {% elif g.proto_label == 'BOTH' %}<span class="badge bg-secondary">Both</span>
+                  {% else %}<span class="text-secondary">—</span>{% endif %}
+                </td>
+                <td class="small" data-no-i18n>{{ g.comment or '—' }}</td>
+                <td class="small text-secondary">
+                  {% if g.action != 'ALLOW' %}<span class="badge bg-danger me-1">{{ g.action }}</span>{% endif %}
+                  {{ g.scope }}
+                </td>
+                <td><span class="text-secondary" style="font-size:.68rem;">{{ g.family_label }}</span></td>
+                <td style="width:40px;">
+                  {% if g.protected %}
+                  <button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled
+                          title="{{ fw_reason(g, t) }}">
+                    <i class="bi bi-lock-fill"></i>
+                  </button>
+                  {% else %}
+                  <button class="btn btn-outline-danger btn-sm py-0 px-1"
+                          title="{{ t('Remove this rule (rules %s)')|format(g.nums|join(', ')) if g.nums|length > 1 else t('Remove this rule (rule %s)')|format(g.nums[0]) }}"
+                          data-action="deleteGroup" data-args='[{{ g.nums|tojson }}, "@self", {{ g.warn|tojson }}, {{ fw_reason(g, t)|tojson }}, {{ g.key|tojson }}]'>
+                    <i class="bi bi-x"></i>
+                  </button>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% elif fw_pending %}
+          <div class="p-3 text-center text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div>
+          {% elif fw.unreachable %}
+          {# The card above already says the host is down. Saying "no firewall rules" HERE
+             contradicts it, in the more alarming direction, about the one page where being
+             wrong about an open port matters most. #}
+          {% if fw.permission_denied %}
+          <div class="p-3 text-center text-secondary small">Rules can't be read: sudo refused the firewall read on this host.</div>
+          {% elif fw_unread_why %}
+          <div class="p-3 text-center text-secondary small">{{ fw_unread_why }}</div>
+          {% else %}
+          <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
+          {% endif %}
+          {% elif fw_inactive %}
+          <div class="p-3 text-center text-secondary small">UFW is inactive, so its rules are neither listed nor enforced.</div>
+          {% else %}
+          <div class="p-3 text-center text-secondary small">No firewall rules yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Blocked IPs: firewall denies from a specific address, kept separate from the open ports above -->
+<div class="row">
+  <div class="col-12 mb-3">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center" id="fw-blocks">
+        <span><i class="bi bi-shield-slash"></i> Blocked IPs</span>
+        {# Same reason as rules-count above: block_groups is derived from fw.groups, which is
+           [] when the read failed, so "0 blocked" was an answer about a host nothing reached. #}
+        <span class="small text-secondary" id="blocks-count">{% if fw_unlisted %}&mdash;{% else %}{{ block_groups|length }} <span>blocked</span>{% endif %}</span>
+      </div>
+      <div class="card-body">
+        <p class="small text-secondary mb-2">
+          Blocking an IP denies it on every port — SSH, the panel and all game servers.
+          <span id="blocks-inactive-note" class="text-warning{% if not fw_inactive %} d-none{% endif %}">While UFW is inactive a block is only stored — it denies nothing until UFW is enabled.</span>
+          <span class="badge bg-info text-dark">Auto</span>
+          <span>Entries marked Auto are managed by the rolling auto-block; the rest are manual.</span>
+        </p>
+        <div class="row g-2 mb-2">
+          <div class="col-sm">
+            <input type="text" id="block-ip" class="form-control form-control-sm" placeholder="IP address to block (e.g. 203.0.113.10)" aria-label="IP address to block (e.g. 203.0.113.10)">
+          </div>
+          <div class="col-sm-auto">
+            <button class="btn btn-danger btn-sm w-100" data-action="blockIp">
+              <i class="bi bi-shield-slash"></i> Block IP
+            </button>
+          </div>
+        </div>
+        <div id="block-result" class="small mb-2"></div>
+        <div id="blocks-list" style="max-height: 400px; overflow: auto;">
+          {% if block_groups %}
+          {# table-pin-actions, as the rules table above, and an address that may break: at 375px an
+             IPv6 address made the table 517px in a 285px box, its Unblock button under the scroll. #}
+          <table class="table table-sm table-hover mb-0 align-middle table-pin-actions">
+            <thead>
+              <tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr>
+            </thead>
+            <tbody id="blocks-body">
+              {% for g in block_groups %}
+              <tr>
+                <td><code class="text-break">{{ g.block_ip }}</code></td>
+                <td>
+                  {% if g.comment == 'panel-autoblock' %}<span class="badge bg-info text-dark">Auto</span>
+                  {% elif g.comment == 'panel-block' %}<span class="badge bg-secondary">Manual</span>
+                  {% elif g.comment %}<span class="badge bg-dark" data-no-i18n>{{ g.comment }}</span>
+                  {% else %}<span class="text-secondary">—</span>{% endif %}
+                </td>
+                <td><span class="text-secondary" style="font-size:.68rem;">{{ g.family_label }}</span></td>
+                <td style="width:40px;">
+                  <button class="btn btn-outline-warning btn-sm py-0 px-1" title="{{ t('Unblock %s')|format(g.block_ip) }}"
+                          data-action="unblockIp" data-args='[{{ g.block_ip|tojson }}, "@self"]'>
+                    <i class="bi bi-x"></i>
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% elif fw_pending %}
+          <div class="p-3 text-center text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div>
+          {% elif fw.unreachable %}
+          {# The Open Ports card eight rows up already refuses to answer here; this one went on to
+             state "No IPs are blocked." about a firewall nothing read. On the page where an
+             operator checks whether an abusive address is still denied, that is the worst possible
+             direction to be wrong in. Same sentence as the Open Ports branch on purpose — a UFW
+             deny IS a rule, and it is already in the catalog in both languages. #}
+          {% if fw.permission_denied %}
+          <div class="p-3 text-center text-secondary small">Rules can't be read: sudo refused the firewall read on this host.</div>
+          {% elif fw_unread_why %}
+          <div class="p-3 text-center text-secondary small">{{ fw_unread_why }}</div>
+          {% else %}
+          <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
+          {% endif %}
+          {% elif fw_inactive %}
+          <div class="p-3 text-center text-secondary small">UFW is inactive, so its rules are neither listed nor enforced.</div>
+          {% else %}
+          <div class="p-3 text-center text-secondary small">No IPs are blocked.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+

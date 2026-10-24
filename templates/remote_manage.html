@@ -2,7 +2,8 @@
 {% block title %}{% if remote.is_local %}{{ t('Panel Server') }}{% else %}{{ t('%s — Manage')|format(remote.display_name) }}{% endif %}{% endblock %}
 {% block content %}
 {# Host-level controls whose routes are superadmin-only on the panel's OWN host (get_host_remote):
-   OS updates, firewall, power, Ubuntu Pro, Connection & SSH. A delegate whose group covers the
+   OS updates, firewall, power, Ubuntu Pro, Connection & SSH (the firewall and Connection & SSH on
+   the Network tab). A delegate whose group covers the
    panel host reaches this page, and every one of those cards answered them 403 — so they are not
    offered. On a remote host the grant is enough, as before. #}
 {% set _host_ctl = (not remote.is_local) or current_user.is_superadmin %}
@@ -50,11 +51,16 @@
      markup, conditionals and JS — only visibility changes. -->
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
-  {# Host Controls holds OS updates, firewall, power and Connection & SSH (_host_ctl), the
-     terminal (superadmin-only on the panel host) and Existing servers (manage_servers): a
-     delegated host admin on the panel host with none of those opened it onto a blank page. #}
+  {# Host Controls holds OS updates and power (_host_ctl), the terminal (superadmin-only on the
+     panel host) and Existing servers (manage_servers): a delegated host admin on the panel host
+     with none of those opened it onto a blank page. #}
   {% if _host_ctl or has_permission('manage_servers') %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
+  {% endif %}
+  {# Network: the firewall's rules and Connection & SSH, both _host_ctl. They were a "Firewall" card
+     on Host Controls that only linked to a page of its own, and the last card of that tab. #}
+  {% if _host_ctl %}
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="network"><i class="bi bi-diagram-3"></i> Network</button></li>
   {% endif %}
   {# Every Maintenance card is gated like this (the panel-only ones on a superadmin, Ubuntu Pro on
      _host_ctl), so for a delegated host admin on the panel host the tab opened onto a blank page. #}
@@ -189,7 +195,7 @@
 
   {% endif %}
 
-  <!-- Firewall -->
+  <!-- Terminal -->
   {# Gated on the permission, not merely on being logged in: a shell is the most powerful grant
      in the table, so an account without it should not see the door either. On the panel's own
      host it is superadmin-only whatever the grants say (host_terminal.may_shell_on): a shell
@@ -219,18 +225,6 @@
   {% endif %}
 
   {% if _host_ctl %}
-  <div class="col-md-4 mb-3">
-    <div class="card h-100">
-      <div class="card-header" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</div>
-      <div class="card-body">
-        <p class="small text-secondary">Game ports open automatically at install.</p>
-        <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-shield-lock"></i> Manage firewall
-        </a>
-      </div>
-    </div>
-  </div>
-
   <!-- Power -->
   <div class="col-md-4 mb-3">
     <div class="card h-100">
@@ -244,6 +238,11 @@
         {# What a reboot of this host is doing — a wait, the stop phase, the restore, the last result.
            Always rendered, filled by nags.js rebootStateWatch; empty when nothing is going on. #}
         <div id="power-state" class="small mt-2" aria-live="polite"></div>
+        {# How long "Reboot when empty" waits, and whether servers without Autostart come back, are
+           install-wide settings on the Settings page (superadmin-only), not on this card. #}
+        {% if current_user.is_superadmin %}
+        <div class="small mt-2"><a href="{{ url_for('panel_settings') }}#sec-reboots"><i class="bi bi-gear"></i> Host reboots</a></div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -580,7 +579,10 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs).</p>
-    <p class="small text-secondary mb-2">Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</p>
+    {# The blocks it makes are UFW denies, listed and removable in Blocked IPs on the Network tab
+       (the same _host_ctl gate as this tab). #}
+    <p class="small text-secondary mb-2"><span>Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</span>
+      <a href="#fw-blocks">Blocked IPs</a></p>
     <p class="small text-secondary mb-2">Auto-block firewalls every IP at or above the threshold, and releases each one when its 7-day count drops back below. Because that count is cumulative, a slow attacker who spaces attempts out to dodge fail2ban's short window cannot escape it.</p>
     <p class="small mb-3" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
       <i class="bi bi-shield-check text-success"></i>
@@ -667,8 +669,34 @@
 </div>
 
 
+<!-- ─── Network tab: the firewall, then Connection & SSH ─── -->
+{# The firewall's cards as the standalone Firewall page renders them (_firewall_panel.html), with
+   no read yet: this page makes none while it loads, and remote_manage.js runs refreshFirewall the
+   first time the tab opens. #}
+<div data-mtab="network" id="network-firewall">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h2 class="h6 mb-0" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</h2>
+    <button class="btn btn-outline-secondary btn-sm" data-action="refreshFirewall">
+      <i class="bi bi-arrow-repeat"></i> Refresh
+    </button>
+  </div>
+  <p class="small text-secondary mb-2">Game ports open automatically at install.</p>
+  {# On a phone the tab is several screens long, the rules sit below four cards of forms and
+     Connection & SSH below all of them: links straight to each, through the page's own #card
+     routing (remote_manage.js openHash). #}
+  <nav class="small mb-3 d-flex flex-wrap column-gap-3 row-gap-1" id="network-jump" aria-label="Network tab sections">
+    <span class="text-secondary">Jump to:</span>
+    <a href="#fw-rules">Open Ports &amp; Rules</a>
+    <a href="#fw-blocks">Blocked IPs</a>
+    <a href="#sec-connection">Connection &amp; SSH</a>
+  </nav>
+  {% set fw_status = none %}
+  {% set fw_games = remote.games %}
+  {% include "_firewall_panel.html" %}
+</div>
+
 <!-- Connection & SSH -->
-<div class="card mb-3" data-mtab="controls" id="conn-ssh-card">
+<div class="card mb-3" data-mtab="network" id="conn-ssh-card">
   <div class="card-header" id="sec-connection"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
   <div class="card-body">
     {# ...and is_superadmin, which the Panel Updates / Diagnostics card two cards up already
@@ -816,7 +844,7 @@
       <div class="col-md-8">
         <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port once you've confirmed the new one.
-          <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Open the Firewall page</a></p>
+          <a href="#sec-firewall">Go to the firewall rules</a></p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
@@ -880,7 +908,7 @@
         <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code id="ssh-port-now" data-live="1">…</code></span></div>
         {% if remote.auth_method == 'tailscale' %}<p class="small text-secondary mb-1">The panel itself connects over Tailscale SSH on port 22, whatever port sshd uses.</p>{% endif %}
         <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port once you've confirmed the new one.
-          <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Open the Firewall page</a></p>
+          <a href="#sec-firewall">Go to the firewall rules</a></p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
@@ -987,6 +1015,14 @@ var REMOTE_NAME = {{ remote.name|tojson }};
    and later parts define functions the earlier ones call (always deferred and guarded). #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_host.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_backups.js') }}"></script>
+{# The Network tab's firewall cards (_firewall_panel.html), behind _host_ctl — spelled out, as the
+   Ubuntu Pro line below does, because a {% set %} inside the content block is not seen here. #}
+{% if (not remote.is_local) or current_user.is_superadmin %}
+<script nonce="{{ csp_nonce }}">
+var remoteId = REMOTE_ID;   // remote_firewall.js's name for it, as remote_firewall.html sets it
+</script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_firewall.js') }}"></script>
+{% endif %}
 {% if (not remote.is_local) or current_user.is_superadmin %}{# the Ubuntu Pro card's own gate #}
 <script nonce="{{ csp_nonce }}">
 UPro.load(REMOTE_ID, 'ubuntu-pro-body', {{ (remote.cached_pro.data if remote.cached_pro else None) | tojson }});

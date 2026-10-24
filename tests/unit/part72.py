@@ -402,7 +402,8 @@ check("375px: ...a flex-wrap (or a wrapping flex-flow) in the phone block's .pag
       and _r18d_unscoped_wraps72(".page-title { flex-flow: row nowrap }") == []
       and not _r18d_name_floor72(_flctl72),
       repr((_r18d_unscoped_wraps72(_ptctl72), _r18d_name_floor72(_flctl72))))
-_fw72 = _read72(_root, "templates", "remote_firewall.html")
+# The firewall's cards are one partial, rendered by the Firewall page and the host page's Network tab.
+_fw72 = _read72(_root, "templates", "_firewall_panel.html")
 _lim72 = _fw72[_fw72.index('id="limit-port"') - 400:_fw72.index('data-action="unlimitPort"')]
 check("375px: the rate-limit row gives its port the whole row below 576px (the × ran past the card "
       "in French and Spanish)",

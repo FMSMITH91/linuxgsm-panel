@@ -1,0 +1,9 @@
+{
+  "Network": "Réseau",
+  "Go to the firewall rules": "Aller aux règles du pare-feu",
+  "Lockout-safe: the current binding stays in place as a fallback, and the firewall and fail2ban are updated to the new port. Once you've confirmed you can reach SSH on {port}, close the old port in the firewall rules on the Network tab.": "Sans risque de blocage : la configuration actuelle reste en place en secours, et le pare-feu et fail2ban sont mis à jour pour le nouveau port. Une fois que vous avez vérifié que SSH répond sur {port}, fermez l'ancien port dans les règles du pare-feu de l'onglet Réseau.",
+  "Jump to:": "Aller à :",
+  "Network tab sections": "Sections de l'onglet Réseau",
+  "Firewall — panel host": "Pare-feu — hôte du panneau",
+  "Connection & SSH — panel host": "Connexion et SSH — hôte du panneau"
+}

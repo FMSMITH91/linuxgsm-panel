@@ -4668,8 +4668,10 @@ check("data.unreachable" in _fw_win,
 check("return;" in _fw_win,
       "firewall: ...and stops there rather than falling through to the rules table",
       "the unreachable branch carries on and renders an empty rule list")
-_fw_tpl = (ROOT / "templates" / "remote_firewall.html").read_text(encoding="utf-8")
-check("{% elif status.unreachable %}" in _fw_tpl,
+# The firewall's cards are one partial, rendered by the Firewall page (its read as fw_status) and by the
+# host page's Network tab.
+_fw_tpl = (ROOT / "templates" / "_firewall_panel.html").read_text(encoding="utf-8")
+check("{% elif fw.unreachable %}" in _fw_tpl,
       "firewall: the server-rendered rules list says the same, instead of 'No firewall rules yet.'",
       "the list contradicts the status card three lines above it")
 # Both halves must say it the SAME way — the refresh replaces what the template rendered, and two

@@ -99,7 +99,13 @@ var PALETTE_SECTIONS = [
   // sidebar's host links expand — and the sidebar lists remote hosts only, so typing "reboot"
   // never offered the panel host's.
   { page: '/server-management', hash: 'sec-power', label: 'Power — panel host',
-    kw: 'power reboot restart shutdown panel host' }
+    kw: 'power reboot restart shutdown panel host' },
+  // The panel host's Network tab. The host rows below expand over REMOTE hosts only (the sidebar
+  // lists no link to the panel host's own page under them), so "firewall" never offered this one.
+  { page: '/server-management', hash: 'sec-firewall', label: 'Firewall — panel host',
+    kw: 'firewall ufw port ports open close allow deny block network panel host' },
+  { page: '/server-management', hash: 'sec-connection', label: 'Connection & SSH — panel host',
+    kw: 'ssh connection port tailscale binding bind network panel host' }
 ];
 
 // Sections that exist on EVERY host page. The host's own id is not knowable here, so these are
@@ -109,7 +115,7 @@ var PALETTE_SECTIONS = [
 // identical "Firewall" rows.
 var PALETTE_HOST_SECTIONS = [
   { hash: 'sec-firewall',   label: 'Firewall',
-    kw: 'firewall ufw port ports open close allow deny block' },
+    kw: 'firewall ufw port ports open close allow deny block network' },
   { hash: 'sec-osupdates',  label: 'OS updates',
     kw: 'os update updates apt upgrade patch security packages' },
   { hash: 'sec-power',      label: 'Power',
@@ -117,7 +123,7 @@ var PALETTE_HOST_SECTIONS = [
   { hash: 'sec-specs',      label: 'System specs',
     kw: 'specs cpu ram memory disk hardware storage' },
   { hash: 'sec-connection', label: 'Connection & SSH',
-    kw: 'ssh connection port key credentials host key retrust' },
+    kw: 'ssh connection port key credentials host key retrust network' },
   { hash: 'sec-rawlogs',    label: 'Raw logs',
     kw: 'logs journal syslog raw output' },
   { hash: 'sec-ubuntupro',  label: 'Ubuntu Pro',

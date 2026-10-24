@@ -208,7 +208,7 @@ function changeSshPort(){
         : 'Move SSH to port {port}?', {port: p, bind: bind})
       +'\n\n'+tf('Lockout-safe: the current binding stays in place as a fallback, and the '
       +'firewall and fail2ban are updated to the new port. Once you\'ve confirmed you can reach SSH on '
-      +'{port}, close the old port from the Firewall page.', {port: p}),
+      +'{port}, close the old port in the firewall rules on the Network tab.', {port: p}),
     onConfirm:function(){
       var m=document.getElementById('ssh-port-msg');
       // One move at a time: the server refuses an overlapping one (409), and a second click while
