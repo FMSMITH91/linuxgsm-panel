@@ -155,7 +155,7 @@ check("firewall page: a read cut off part-way shows its sentence under the warni
       bool(_pg90) and _pg90[0] == 200 and "stopped answering" in _card90
       and "bi-exclamation-triangle" in _card90 and "bi-key" not in _card90, repr(_card90[:400]))
 check("firewall page: ...and the template keeps the key for host_key_mismatch",
-      "'bi-key' if status.code == 'host_key_mismatch'" in _read90("templates", "remote_firewall.html"),
+      "'bi-key' if fw.code == 'host_key_mismatch'" in _read90("templates", "_firewall_panel.html"),
       "template")
 
 

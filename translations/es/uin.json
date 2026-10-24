@@ -1,0 +1,9 @@
+{
+  "Network": "Red",
+  "Go to the firewall rules": "Ir a las reglas del cortafuegos",
+  "Lockout-safe: the current binding stays in place as a fallback, and the firewall and fail2ban are updated to the new port. Once you've confirmed you can reach SSH on {port}, close the old port in the firewall rules on the Network tab.": "Sin riesgo de quedarte fuera: la configuración actual se mantiene como respaldo, y el cortafuegos y fail2ban se actualizan al nuevo puerto. Cuando confirmes que llegas a SSH en {port}, cierra el puerto antiguo en las reglas del cortafuegos de la pestaña Red.",
+  "Jump to:": "Ir a:",
+  "Network tab sections": "Secciones de la pestaña Red",
+  "Firewall — panel host": "Cortafuegos — host del panel",
+  "Connection & SSH — panel host": "Conexión y SSH — host del panel"
+}

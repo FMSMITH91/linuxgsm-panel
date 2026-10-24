@@ -167,7 +167,8 @@
                 data-ts-bootstrap data-remote-id="{{ remote.id }}" data-remote-name="{{ remote.name }}">
           <i class="bi bi-rocket-takeoff"></i> Prepare
         </button>
-        <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-outline-info btn-sm" title="Open or close firewall ports">
+        {# The firewall lives on the host page's Network tab; /remote/<id>/firewall still renders it alone. #}
+        <a href="{{ url_for('remote_manage', remote_id=remote.id) }}#network" class="btn btn-outline-info btn-sm" title="Open or close firewall ports">
           <i class="bi bi-shield-fill-check"></i> Firewall
         </a>
         <button class="btn btn-outline-secondary btn-sm" title="Edit connection settings"

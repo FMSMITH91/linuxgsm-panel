@@ -452,9 +452,12 @@ function syncPorts(serverId, btn) {
 }
 
 // Enter key opens port
-document.getElementById('new-port').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') openPort();
-});
+var newPortInput = document.getElementById('new-port');
+if (newPortInput) {
+  newPortInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') openPort();
+  });
+}
 
 // Enter key blocks the typed IP
 var blockIpInput = document.getElementById('block-ip');

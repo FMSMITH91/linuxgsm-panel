@@ -731,7 +731,8 @@ for _L_r16u in ("es", "fr"):
 
 # The source field's placeholder: translated, addresses literal.
 import re as _re_r16u  # noqa: E402
-_FWT_r16u = _read69(_root, "templates", "remote_firewall.html")
+# The firewall's cards: one partial, for the Firewall page and the host page's Network tab.
+_FWT_r16u = _read69(_root, "templates", "_firewall_panel.html")
 _cidr_r16u = _re_r16u.search(r'<input\b[^>]*\bid="src-cidr"[^>]*>', _FWT_r16u, _re_r16u.S)
 _ph_r16u = _re_r16u.search(r'placeholder="([^"]*)"', _cidr_r16u.group(0)).group(1) if _cidr_r16u else ""
 check("firewall: the 'Restrict a port' source field is not data-no-i18n, so its placeholder translates",
