@@ -1658,8 +1658,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
    wrapping into a block of buttons. */
 .uis-subtabs{
   flex-wrap:nowrap;
-  overflow-x:auto;
-  overflow-y:hidden;
+  overflow:auto hidden;
   scrollbar-width:thin;
 }
 
@@ -1695,8 +1694,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
    phone's before any page began. They still wrap when a screen is too narrow for a line, between
    the sentence and its buttons, never hiding either. */
 .alert.uis-nag{
-  column-gap:.5rem;
-  row-gap:.15rem;
+  gap:.15rem .5rem;
   padding-top:.3rem;
   padding-bottom:.3rem;
   margin-bottom:.4rem;
