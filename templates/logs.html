@@ -23,7 +23,16 @@
 </div>
 
 <!-- Filter bar -->
-<div class="card mb-3">
+{# On a phone the four fields stacked into a card a quarter of the screen tall above the first
+   entry, so there they wait behind one "Filters" button (open from the first paint while a filter
+   is in use, so what is filtering the list is never hidden). From md up the bar is always shown,
+   as before: d-md-block overrides the collapse. #}
+{% set _uis_filtered = filters.q or filters.action or filters.user or filters.status %}
+<button type="button" class="btn btn-outline-secondary btn-sm mb-2 d-md-none" data-bs-toggle="collapse"
+        data-bs-target="#logs-filters" aria-controls="logs-filters" aria-expanded="{{ 'true' if _uis_filtered else 'false' }}">
+  <i class="bi bi-funnel"></i> Filters
+</button>
+<div class="card mb-3 collapse d-md-block{% if _uis_filtered %} show{% endif %}" id="logs-filters">
   <div class="card-body py-2">
     <form method="get" class="row g-2 align-items-end">
       <div class="col-12 col-md">

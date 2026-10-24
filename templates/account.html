@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_fold.html" import fold %}
 {% block title %}{{ t('Account') }}{% endblock %}
 {% block content %}
 
@@ -66,7 +67,9 @@
         <i class="bi bi-arrow-counterclockwise"></i> Reset to the default order
       </button>
       {% if current_user.is_superadmin %}
-      <hr class="my-3">
+      {# A superadmin's two house-layout buttons, used once in a panel's life: folded under the
+         reset that every account uses. #}
+      {% call fold('Panel default layout', cls='mt-2') %}
       <p class="text-secondary small mb-2">As a superadmin you can publish your arrangement as this panel's default, so new accounts — and anyone who resets — start from it instead of the built-in order.</p>
       <div class="d-flex gap-2 flex-wrap">
         <button class="btn btn-outline-primary btn-sm" data-action="publishDashLayout" data-args='["@self"]'
@@ -78,6 +81,7 @@
           <i class="bi bi-x-circle"></i> Remove the panel default
         </button>
       </div>
+      {% endcall %}
       {% endif %}
     </div>
   </div>
@@ -134,9 +138,11 @@
         <p class="mb-2"><i class="bi bi-key"></i> <strong>Backup codes</strong>
           <span class="badge {% if current_user.backup_codes_remaining > 2 %}bg-secondary{% else %}bg-warning text-dark{% endif %} ms-1">{{ current_user.backup_codes_remaining }} <span>left</span></span>
         </p>
+        {% call fold('About backup codes') %}
         <p class="text-secondary small mb-0">One-time codes to sign in if you lose your authenticator — each works once.
           They were shown only when you enabled 2FA and can't be displayed again. If you've run low or lost them,
           disable and re-enable 2FA to get a fresh set (shown once).</p>
+        {% endcall %}
       {% else %}
         <p class="text-secondary">Add a second step to your login — a 6-digit code from an authenticator
           app (Google Authenticator, Authy, 1Password, etc.). Strongly recommended if the panel is reachable
@@ -154,14 +160,16 @@
       <p class="text-secondary mb-2">Every device or browser signed in to your account. Revoke any you
         don't recognise — the one you're using now is marked <span class="badge bg-success">This device</span>.</p>
       <div id="sessions-list" class="mb-2"><div class="text-secondary small">Loading…</div></div>
-      <hr class="my-3">
-      <p class="text-secondary small mb-2">Think a device was compromised? Sign out every other
-        device at once — this one stays signed in, so you don't have to log back in to check.</p>
+      <hr class="my-2">
       <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
         <button class="btn btn-outline-danger btn-sm" type="button" data-action="_acctSignOutAll">
           <i class="bi bi-box-arrow-right"></i> Sign out everywhere else
         </button>
       </form>
+      {% call fold('When to use this', cls='mt-1') %}
+      <p class="text-secondary small mb-0">Think a device was compromised? Sign out every other
+        device at once — this one stays signed in, so you don't have to log back in to check.</p>
+      {% endcall %}
     </div>
   </div>
 
@@ -173,11 +181,13 @@
   <div class="card" id="sec-api">
     <div class="card-header"><i class="bi bi-code-slash"></i> API access</div>
     <div class="card-body">
-      <p class="text-secondary small mb-2">
+      {% call fold('What is this?') %}
+      <p class="text-secondary small mb-0">
         A personal API token lets scripts and bots call the panel's API without a browser session,
         using an Authorization: Bearer header. It acts as you — exactly your permissions and your
         server access, no more. Only a hash of it is stored, so it can never be read back.
       </p>
+      {% endcall %}
 
       {% if new_token %}
       <div class="alert alert-success py-2">
