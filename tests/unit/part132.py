@@ -280,9 +280,10 @@ check("blocked & banned: the palette finds Blocked IPs (\"block\" found only the
       "page: '/server-management', hash: 'fw-blocks'" in _PAL132 and "{ hash: 'fw-blocks'," in _PAL132
       and "allow deny block network" not in _PAL132, "")
 _RMJS132 = _read132("static", "js", "remote_manage.js")
+_kept132 = _RMJS132.partition("function _uitKeptOutChanged(){")[2].partition("\n}")[0]
 check("blocked & banned: a block or unblock from Top offenders repaints the Blocked IPs list beside it",
       _RMJS132.count("_uitKeptOutChanged(); })") == 2
-      and "if (window.refreshFirewall) refreshFirewall();" in _RMJS132, "")
+      and "loadSecurityTopIps();" in _kept132 and "refreshFirewall();" in _kept132, repr(_kept132))
 if _out131 is not None:
     check("blocked & banned: the Security tab's first opening reads the firewall (its Blocked IPs), once — "
           "the Network tab opened after reads nothing more",
