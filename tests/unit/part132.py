@@ -171,7 +171,7 @@ _PART132 = _read132("templates", "_firewall_panel.html")
 check("phone order: the rules card is the grid's right-hand column (fw-rules-card in .fw-layout)",
       '<div class="fw-layout">' in _PART132 and 'class="card mb-3 fw-rules-card"' in _PART132
       and "col-md-" not in _PART132, "")
-_grid132 = _re132.search(r"@media \(min-width: 768px\)\{\s*\.fw-layout\{([^}]*)\}(.*?)\n\}", _CSS132, _re132.S)
+_grid132 = _re132.search(r"@media \(width >= 768px\)\{\s*\.fw-layout\{([^}]*)\}(.*?)\n\}", _CSS132, _re132.S)
 check("phone order: from 768px the rules sit in a second column beside the forms, spanning every row, "
       "with no card stretched to its row (the desktop layout as before)",
       _grid132 is not None and "grid-template-columns:5fr 7fr" in _grid132.group(1)
@@ -194,7 +194,7 @@ for _page132 in ("local", "remote"):
           and sorted(_pills132) == ["controls", "maintenance", "network", "overview", "security"],
           repr(_pills132))
 _tabs132 = _CSS132[_CSS132.find("#mtab-nav .mtab-short{ display:none; }"):]
-_narrow132 = _re132.search(r"@media \(max-width: 767\.98px\)\{(.*?)\n\}", _tabs132, _re132.S)
+_narrow132 = _re132.search(r"@media \(width <= 767\.98px\)\{(.*?)\n\}", _tabs132, _re132.S)
 _full132 = _re132.search(r"#mtab-nav \.mtab-full\{([^}]*)\}", _narrow132.group(1) if _narrow132 else "")
 check("tab labels: the short label is hidden on a desktop and shown below 768px, where the full one is "
       "visually hidden (still read out: clipped, not display:none) and the pills share the bar",

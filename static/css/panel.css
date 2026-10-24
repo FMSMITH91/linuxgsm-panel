@@ -1529,7 +1529,7 @@
    column (7 of 12) spanning every row, beside the forms (5 of 12), as Bootstrap's col-md-5 /
    col-md-7 did; the last row takes the slack so a tall rules list does not spread the forms apart,
    and align-items:start keeps a card its own height. */
-@media (min-width: 768px){
+@media (width >= 768px){
   .fw-layout{
     display:grid;
     grid-template-columns:5fr 7fr;
@@ -1553,7 +1553,7 @@
    from 768px. If a language's labels still do not fit, the bar keeps its sideways scroll. */
 #mtab-nav .mtab-short{ display:none; }
 
-@media (max-width: 767.98px){
+@media (width <= 767.98px){
   #mtab-nav > .nav-item{ flex:1 1 auto; }
 
   #mtab-nav .nav-link{
