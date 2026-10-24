@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_fold.html" import fold %}
 {% block title %}{{ t('%s — Files & Config')|format(server.name) }}{% endblock %}
 {% block content %}
 
@@ -156,8 +157,24 @@
   <li class="nav-item"><a class="nav-link active" href="#" data-action="_noop" data-prevent><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
 </ul>
 
+{# The page's sections, one at a time. Stacked, the six cards were eight screens on a phone and
+   nearly five on a desktop, and everything below the config editor was found by scrolling past it.
+   Each section keeps its own #hash (server_files.js), so a reload or a shared link opens the same
+   one, and every section's data still loads with the page, as it did when they were all on view.
+   Sections the page does not render for this server (no game files yet; Backups for a superadmin
+   only) have no tab either. #}
+{% set _uis_backups = current_user.is_superadmin and not install_failed %}
+<ul class="nav nav-tabs mb-3 uis-subtabs" id="sfsub-nav" role="tablist" aria-label="Sections of this page">
+  <li class="nav-item" role="presentation"><button type="button" class="nav-link active" role="tab" data-sfsub-btn="config"><i class="bi bi-sliders"></i> Config</button></li>
+  {% if not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="files"><i class="bi bi-hdd"></i> Files</button></li>{% endif %}
+  {% if _uis_backups %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="backups"><i class="bi bi-archive"></i> Backups</button></li>{% endif %}
+  <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="schedule"><i class="bi bi-clock-history"></i> Schedule</button></li>
+  <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="alerts"><i class="bi bi-bell"></i> Alerts</button></li>
+  {% if not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
+</ul>
+
 <!-- Config editor (tabbed) -->
-<div class="card mb-3">
+<div class="card mb-3" data-sfsub="config">
   <div class="card-header p-0">
     <ul class="nav nav-tabs card-header-tabs mx-2 mt-2 border-0" id="cfg-tabs">
       <li class="nav-item"><button class="nav-link active" data-tab="lgsm"><i class="bi bi-sliders"></i> LinuxGSM Settings</button></li>
@@ -202,7 +219,7 @@
 {# No serverfiles directory to browse when the download never happened — the config tabs above are
    the whole point of the page in that state. #}
 {% if not install_failed %}
-<div class="card" id="file-browser">
+<div class="card" id="file-browser" data-sfsub="files" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-hdd"></i> File Browser</span>
     {# flex-wrap + the min-width rule above: see the comment on .fb-toolbar. The two buttons are
@@ -297,7 +314,7 @@
 {% if current_user.is_superadmin and not install_failed %}
 <!-- Backups (this server) — reuses the existing game-backup endpoints; superadmin only.
      Nothing to back up when the game files never downloaded. -->
-<div class="card mt-3" id="backup-card">
+<div class="card" id="backup-card" data-sfsub="backups" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
     <span class="text-secondary" style="font-size:.66rem;">
@@ -352,7 +369,7 @@
 {% endif %}
 
 <!-- Scheduled tasks (cron) -->
-<div class="card mt-3">
+<div class="card" id="cron-card" data-sfsub="schedule" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-clock-history"></i> Scheduled Tasks <span class="text-secondary small">(cron)</span></span>
     <span class="text-secondary" style="font-size:.66rem;">
@@ -377,6 +394,10 @@
         <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" data-action="cancelCronEdit">Cancel</button>
       </div>
     </form>
+    {# The quick picks and the field legend are help for writing a schedule, needed while learning
+       the syntax and not after: folded, the form, the live explanation of what you typed and the
+       task list are what the card shows. #}
+    {% call fold('Schedule help', id='cron-help', cls='mb-2') %}
     <!-- Quick-pick presets -->
     <div class="d-flex flex-wrap gap-1 mb-2 align-items-center" id="cron-presets">
       <span class="text-secondary me-1" style="font-size:.68rem;">Quick pick:</span>
@@ -387,24 +408,6 @@
       <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 1 * *">Monthly (1st)</button>
       <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="@reboot">At boot</button>
     </div>
-    {# WHOSE CLOCK. cron runs on the host, so every time on this page — the presets above
-       included — is the host's local time, not yours. The panel's own bootstrap sets new hosts to
-       UTC, so for most operators these numbers are hours away from what they read on the wall,
-       and nothing said so. #}
-    <div class="text-secondary mb-2" style="font-size:.68rem;">
-      <i class="bi bi-clock-history"></i>
-      {% if host_timezone %}
-        <span>Times are the host's local time</span> <code data-no-i18n>{{ host_timezone }}</code>
-      {% else %}
-        <span>Times are the host's local time, which could not be read</span>
-      {% endif %}
-    </div>
-    <!-- Live explainer (crontab.guru style) -->
-    <div id="cron-explain" class="mb-1 px-2 py-2 rounded" style="border:1px solid var(--border); background:var(--bg-elevated);">
-      <div id="cron-desc" class="text-secondary" style="font-size:.8rem;"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
-      <div id="cron-next" class="text-secondary mt-1" style="font-size:.66rem;"></div>
-    </div>
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
       {# One <span> per term. Written as prose ("Ranges 1-5, lists 1,3,5") the only text nodes
          between the <code> literals were ", lists" and ", steps" — comma-led scraps no catalog
          can translate. Each label now stands alone as its own word. #}
@@ -414,8 +417,24 @@
         <span class="ms-2">Steps <code>*/10</code></span>
         <span class="ms-2">Names <code>mon</code> <code>jan</code></span>
       </span>
-      <span id="cron-msg" class="small"></span>
+    {% endcall %}
+    <!-- Live explainer (crontab.guru style) -->
+    <div id="cron-explain" class="mb-2 px-2 py-1 rounded" style="border:1px solid var(--border); background:var(--bg-elevated);">
+      <div id="cron-desc" class="text-secondary" style="font-size:.8rem;"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
+      <div id="cron-next" class="text-secondary mt-1" style="font-size:.66rem;"></div>
     </div>
+    {# WHOSE CLOCK. cron runs on the host, so every time on this page — the presets above
+       included — is the host's local time, not yours. The panel's own bootstrap sets new hosts to
+       UTC, so for most operators these numbers are hours away from what they read on the wall,
+       and nothing said so. #}
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-1"><span class="text-secondary" style="font-size:.68rem;">
+      <i class="bi bi-clock-history"></i>
+      {% if host_timezone %}
+        <span>Times are the host's local time</span> <code data-no-i18n>{{ host_timezone }}</code>
+      {% else %}
+        <span>Times are the host's local time, which could not be read</span>
+      {% endif %}
+    </span><span id="cron-msg" class="small"></span></div>
     <!-- Existing entries -->
     <div id="cron-list-wrap">
       <div id="cron-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading scheduled tasks…</div>
@@ -430,7 +449,7 @@
 </div>
 
 <!-- Alerts & notifications -->
-<div class="card mt-3" id="alerts-card">
+<div class="card" id="alerts-card" data-sfsub="alerts" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-bell"></i> Alerts &amp; Notifications</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="testAlert" data-args='["@self"]'><i class="bi bi-send"></i> Send test alert</button>
@@ -452,7 +471,7 @@
 {# Mods install INTO serverfiles, so there is nowhere to put one until the game files download. #}
 {% if not install_failed %}
 <!-- Mods / addons -->
-<div class="card mt-3" id="mods-card">
+<div class="card" id="mods-card" data-sfsub="mods" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Mods &amp; Addons</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="loadMods" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>

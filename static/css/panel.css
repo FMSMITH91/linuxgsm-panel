@@ -1621,3 +1621,161 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     border:0;
   }
 }
+
+/* Folded sections (templates/_fold.html): help text, rarely used forms and long lists sit behind
+   one line the viewer opens, so the controls a page is for stay on the first screen. The marker is
+   the panel's own chevron, turned when open, so every fold looks the same in every browser. */
+.uis-fold > .uis-fold-sum{
+  display:inline-flex;
+  align-items:center;
+  gap:.35rem;
+  min-height:1.75rem;
+  color:var(--text-muted);
+  font-size:.8rem;
+  cursor:pointer;
+  list-style:none;
+}
+
+.uis-fold > .uis-fold-sum::-webkit-details-marker{ display:none; }
+
+.uis-fold > .uis-fold-sum::before{
+  content:"\203A";
+  display:inline-block;
+  width:.7rem;
+  font-size:1rem;
+  line-height:1;
+  transition:transform .15s;
+}
+
+.uis-fold[open] > .uis-fold-sum::before{ transform:rotate(90deg); }
+
+.uis-fold > .uis-fold-sum:hover{ color:var(--text-heading); }
+
+.uis-fold > .uis-fold-body{ padding:.25rem 0 .5rem; }
+
+/* A page's own second row of tabs (Files & Config's sections): smaller than the page tabs above
+   it, so the two rows read as page and section, and scrollable sideways on a phone rather than
+   wrapping into a block of buttons. */
+.uis-subtabs{
+  flex-wrap:nowrap;
+  overflow:auto hidden;
+  scrollbar-width:thin;
+}
+
+.uis-subtabs .nav-link{
+  padding:.3rem .65rem;
+  font-size:.82rem;
+  white-space:nowrap;
+}
+
+/* On a phone the six sections share the row, each its icon over its label, so none sits out of
+   sight past the edge (the host page's tab bar does the same). A language whose labels still do
+   not fit keeps the sideways scroll. */
+@media (width <= 767.98px){
+  .uis-subtabs > .nav-item{ flex:1 1 auto; }
+
+  .uis-subtabs .nav-link{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:.1rem;
+    width:100%;
+    padding:.3rem .2rem;
+    font-size:.7rem;
+    line-height:1.2;
+  }
+
+  .uis-subtabs .nav-link .bi{ font-size:1rem; }
+}
+
+/* The page alerts every page opens with (2FA off, a reboot needed, updates waiting): one line
+   each, icon, sentence and its buttons inline. Stacked as they were, an icon or a heading on a row
+   of its own and the buttons on another, the three took 0.35 of a desktop screen and half a
+   phone's before any page began. They still wrap when a screen is too narrow for a line, between
+   the sentence and its buttons, never hiding either. */
+.alert.uis-nag{
+  gap:.15rem .5rem;
+  padding-top:.3rem;
+  padding-bottom:.3rem;
+  margin-bottom:.4rem;
+}
+
+.alert.uis-nag.alert-dismissible{ padding-right:2.25rem; }
+
+.uis-nag .btn-close{
+  padding:.55rem .75rem;
+  font-size:.65rem;
+}
+
+/* From `sm` up the sentence may wrap BESIDE its buttons (a 15rem basis to break the line by, then
+   all the room the buttons leave), so a long translation is two lines of text with the buttons
+   still at its side, rather than the buttons pushed to a row of their own. On a phone the sentence
+   is short and keeps its own width. */
+.uis-nag .uis-nag-text{ min-width:0; }
+
+@media (width >= 576px){
+  .uis-nag .uis-nag-text{ flex:1 1 15rem; }
+}
+
+.uis-nag .uis-nag-acts{
+  display:inline-flex;
+  flex-wrap:wrap;
+  gap:.35rem;
+  margin-left:auto;
+}
+
+.uis-nag .uis-nag-acts .btn{
+  padding:.1rem .5rem;
+  font-size:.78rem;
+}
+
+.uis-nag .uis-nag-item{ white-space:nowrap; }
+
+@media (width <= 575.98px){
+  .alert.uis-nag{
+    padding-left:.6rem;
+    padding-right:.6rem;
+  }
+
+  .alert.uis-nag.alert-dismissible{ padding-right:2.25rem; }
+
+  /* A host's updates on a phone are its name and its counts: the heading already says they are
+     updates, and the words made a line per host (nags.js). The security badge keeps its shield. */
+  .uis-nag .uis-nag-item > span:not(.badge),
+  .uis-nag .uis-nag-item .badge > span{ display:none; }
+}
+
+.uis-nag .uis-nag-item + .uis-nag-item::before{
+  content:"\00B7";
+  margin-right:.5rem;
+  color:var(--text-muted);
+}
+
+/* The server bar's Maintenance menu (_server_actions.html): each command with its description
+   beside it, wrapped, since a phone has no hover to show a tooltip. Never wider than the screen. */
+.uis-maint-menu{
+  max-width:min(26rem, calc(100vw - 2rem));
+  max-height:min(70vh, 30rem);
+  overflow-y:auto;
+}
+
+.uis-maint-menu .dropdown-item{
+  white-space:normal;
+  line-height:1.3;
+}
+
+.uis-maint-menu .uis-maint-cmd{ font-weight:600; }
+
+.uis-maint-menu .uis-maint-desc{
+  display:block;
+  font-size:.72rem;
+}
+
+/* Notifications: the event switches a little tighter on a phone, where twenty of them in one
+   column were most of the page. */
+@media (width <= 767.98px){
+  .uis-ev{
+    margin-bottom:.15rem;
+    font-size:.85rem;
+  }
+}

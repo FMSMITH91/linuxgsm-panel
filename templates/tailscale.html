@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_fold.html" import fold %}
 {% block title %}{{ t('Tailscale Networking') }}{% endblock %}
 {% block content %}
 <div id="ts-page">
@@ -203,6 +204,19 @@
         <i class="bi bi-compass"></i> Recommended Access
       </div>
       <div class="card-body">
+        {# Already set up the recommended way (Serve proxies this panel): the card is a line saying
+           so, with its link, and the explanation and the form are one tap away. Shown open, it was
+           the tallest card on the page and told the viewer to do what they had already done. #}
+        {% set _uis_ts_done = suggestion.method == 'tailscale-serve' %}
+        {% if _uis_ts_done %}
+        <p class="small mb-1"><i class="bi bi-check-circle-fill text-success"></i> <span>The panel is reached through Tailscale Serve, the recommended setup.</span>
+          {% if suggestion.url %}
+          {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built by tailscale_integration on a fixed http(s):// scheme #}
+          <a href="{{ suggestion.url }}" target="_blank" class="d-inline-block text-break"><i class="bi bi-box-arrow-up-right"></i> {{ suggestion.url }}</a>
+          {% endif %}
+        </p>
+        {% endif %}
+        {% set _uis_ts_body %}
         <p class="text-secondary small mb-2">
           Based on your Tailscale status, here's the recommended way to reach the panel:
         </p>
@@ -252,6 +266,8 @@
           </div>
         </form>
         {% endif %}
+        {% endset %}
+        {% if _uis_ts_done %}{% call fold('Details') %}{{ _uis_ts_body }}{% endcall %}{% else %}{{ _uis_ts_body }}{% endif %}
       </div>
     </div>
 

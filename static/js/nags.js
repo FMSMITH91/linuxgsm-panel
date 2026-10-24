@@ -354,16 +354,18 @@ function _r26c_rbUnread(d, el){
 }
 window.rebootNagRender = function(el, hostId, label, d){
   var isLocal = hostId === window.LOCAL_HOST_ID;
-  el.className = 'alert alert-warning d-flex flex-wrap align-items-center gap-2';
+  // uis-nag (panel.css): the compact one-line alert every page's stack uses, so a reboot banner is
+  // one line on a desktop, icon and sentence and its buttons, rather than an icon on a row of its own.
+  el.className = 'alert alert-warning d-flex flex-wrap align-items-center uis-nag';
   el.setAttribute('role','alert');
   // Which of the three states this banner shows, for rebootNagCheck's failed-read branch
   // (_r26c_rbUnread): only a "reboot needed" banner is a reading of the host; a wait or a job is
   // the panel's own state. Set in the branches below that draw a wait or a job.
   el.setAttribute('data-rb', 'required');
   el.textContent = '';
-  el.appendChild(_rbEl('i', 'bi bi-arrow-clockwise fs-5'));
-  var text = _rbEl('div', 'flex-grow-1'); text.style.minWidth = '220px';
-  var acts = _rbEl('div', 'd-flex gap-2 flex-wrap');
+  el.appendChild(_rbEl('i', 'bi bi-arrow-clockwise'));
+  var text = _rbEl('span', 'uis-nag-text');
+  var acts = _rbEl('span', 'uis-nag-acts');
   // The panel host's reboot, wait and cancel are a super admin's (get_host_remote): were a delegated
   // host admin ever handed its state, it is shown without buttons that could only fail.
   if (isLocal && !window.LOCAL_HOST_CTL) {
@@ -382,14 +384,23 @@ window.rebootNagRender = function(el, hostId, label, d){
   } else {
     text.appendChild(_rbEl('strong', null, 'Reboot needed'));
     text.appendChild(document.createTextNode(' — '));
+    // A phone says which host and stops there ("Reboot needed — the panel host"), so the banner is
+    // one line and its buttons; from `sm` up it says why, in the whole sentence.
+    var short = _rbEl('span', 'd-sm-none'); short.appendChild(_rbHost(label));
+    var whole = _rbEl('span', 'd-none d-sm-inline');
     // One whole sentence with the host as a value: the host is its subject, and split off it the
     // predicate was a fragment no language could place the name around.
     tfNodes('{host} needs to reboot to finish applying system updates.', {host: _rbHost(label)})
-      .forEach(function(node){ text.appendChild(node); });
+      .forEach(function(node){ whole.appendChild(node); });
+    text.appendChild(short); text.appendChild(whole);
     if (d.packages && d.packages.length) {
-      var pk = _rbEl('span', 'text-secondary', ' (' + d.packages.slice(0,6).join(', ') + (d.packages.length>6?', …':'') + ')');
+      // The packages are detail: shown from `sm` up, and always in the tooltip, so a phone's
+      // banner is the sentence and its buttons.
+      var pkList = d.packages.slice(0,6).join(', ') + (d.packages.length>6?', …':'');
+      var pk = _rbEl('span', 'text-secondary d-none d-sm-inline', ' (' + pkList + ')');
       pk.style.fontSize = '.8rem'; pk.setAttribute('data-no-i18n', '');
       text.appendChild(pk);
+      text.title = pkList;
     }
     acts.appendChild(_rbButton('Reboot now', 'btn-sm btn-danger', function(){ window.rebootHost(hostId, label, isLocal, {prefer: 'now'}); }));
     acts.appendChild(_rbButton('Reboot when empty', 'btn-sm btn-outline-primary', function(){ window.rebootHost(hostId, label, isLocal, {prefer: 'when_empty'}); }));
@@ -446,7 +457,9 @@ window.osUpdatesNagCheck = function(){
       var off = null; try { off = sessionStorage.getItem('osUpdatesNagOff'); } catch(e){}
       if(off === sig){ _osNagClear(box); return; }
       var sec = hosts.reduce(function(a,h){ return a + (Number(h.security)||0); }, 0);
-      // One line per host, so a narrow screen breaks between hosts rather than mid-sentence.
+      // One item per host, side by side after the heading: one line on a desktop for a few hosts,
+      // where a row each made the banner grow a line per host. Each item is nowrap, so a narrow
+      // screen still breaks BETWEEN hosts rather than mid-item.
       var rows = hosts.map(function(h){
         // The two counts go into markup unescaped, so they are made numbers HERE. The API sends
         // ints (len() and sum() in _os_update_note), but that was the only thing keeping a string
@@ -457,23 +470,27 @@ window.osUpdatesNagCheck = function(){
         // data-no-i18n: a remote's link text is the host's NAME (a host called "Server" read
         // "Servidor"). The panel host's is the fixed label, left to the translator in English: the
         // server's translation behind the guard kept the old language after a live switch.
-        return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
+        return '<span class="uis-nag-item"><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
              + (h.local ? '' : ' data-no-i18n')
              + ' href="' + escapeHtml(h.url) + '#os-updates">'
              // Each word in its own span, apart from its count: "12 updates" as one node matched
              // no catalog key, so the banner stayed English on every page of a translated panel.
              + escapeHtml(h.local ? 'Panel Server' : h.name)
-             + '</a> — ' + n + ' <span>' + (n===1?'update':'updates') + '</span>'
-             + (s ? ' <span class="badge bg-danger" style="font-weight:normal;">'
-                  + s + ' <span>security</span></span>' : '') + '</div>';
+             // On a phone the words go and the counts stay ("Panel Server 3 [shield 1]"): the
+             // heading already says these are updates, and the words made a line per host there.
+             // (panel.css .uis-nag-item hides the item's plain spans below `sm`, the badge apart.)
+             + '</a><span> —</span> ' + n + ' <span>' + (n===1?'update':'updates') + '</span>'
+             + (s ? ' <span class="badge bg-danger" style="font-weight:normal;" title="security">'
+                  + '<i class="bi bi-shield-exclamation d-sm-none"></i> '
+                  + s + ' <span>security</span></span>' : '') + '</span>';
       }).join('');
       // alert-dismissible parks the close button in the corner and reserves room for it; laying it
       // out in the flow instead drops it onto a line of its own at 375px.
       box.className = 'mb-2';
       box.innerHTML = '<div class="alert ' + (sec ? 'alert-warning' : 'alert-info')   // nosemgrep
-        + ' alert-dismissible mb-0" role="alert">'
-        + '<div class="mb-1"><i class="bi bi-box-arrow-down"></i> <strong>System updates waiting</strong></div>'
-        + '<div style="font-size:.9rem;">' + rows + '</div>'
+        + ' alert-dismissible mb-0 d-flex flex-wrap align-items-center uis-nag" role="alert">'
+        + '<i class="bi bi-box-arrow-down"></i> <strong>System updates waiting</strong>'
+        + rows
         + '<button type="button" class="btn-close" aria-label="Dismiss updates notice"'
         + _da('osUpdatesNagDismiss', [sig]) + '></button></div>';
     }).catch(function(){});

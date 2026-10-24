@@ -124,13 +124,19 @@ function bkRenderGames(fg, d){
     return;
   }
   fg._r29cPending = false;
+  // Which servers' backup lists are open, so a re-read (every save, every finished backup) keeps
+  // them open rather than folding the list someone is reading.
+  var open = _uis_bkOpenIds(fg);
   var gh='';
   (d.games||[]).forEach(function(g){
     var rows=bkGameRows(g);
+    // Each server is one block of a few lines, its finished backups folded behind a line that says
+    // how many there are and how new the newest is. Open, a block with its whole table was ~320px,
+    // and the list grew by that much for every server added, with no cap.
     var table = rows
-      ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0 table-pin-actions" style="font-size:.8rem;">'
+      ? _uis_bkFold(g, open[g.id], '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0 table-pin-actions" style="font-size:.8rem;">'
         + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
-        + '<tbody>'+rows+'</tbody></table></div>'
+        + '<tbody>'+rows+'</tbody></table></div>')
       // "no backups yet" and "the host did not answer" are different facts, and only one of
       // them means nothing is protecting this server. The endpoint has reported which it is
       // since #330 (backups_unreadable, from the worker's `return sid, None`) and this page
@@ -147,19 +153,38 @@ function bkRenderGames(fg, d){
     // not, so the fixed words around them are translated.
     var hostHtml = g.host ? ' <span class="text-secondary small">· <i class="bi bi-hdd-network"></i> <span data-no-i18n>'+escapeHtml(g.host)+'</span></span>' : '';
     var dkHtml = bkGameDisk(g);
-    gh += '<div class="mb-3 border-bottom pb-2">'
-        + '<div class="d-flex justify-content-between align-items-center gap-2">'
-        + '<span><strong data-no-i18n>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
-        + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
+    // Name, schedule and "Back up now" share one row where there is room for them (a desktop);
+    // on a phone the schedule drops under the name and its button, as before.
+    gh += '<div class="mb-2 border-bottom pb-1">'
+        + '<div class="d-flex flex-wrap justify-content-between align-items-center column-gap-2">'
+        + '<span class="order-0"><strong data-no-i18n>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
+        + '<button class="btn btn-sm btn-outline-success py-0 px-2 text-nowrap order-1 order-xl-2" '+(st&&st.running?'disabled':'')
         + '' + _da('backupOneGame', [g.id, '@self']) + '><i class="bi bi-play-circle"></i> Back up now</button>'
+        + '<div class="order-2 order-xl-1 me-xl-auto">' + gameSchedule(g) + '</div>'
         + '</div>'
-        + gameSchedule(g)
         + dkHtml
         + (stHtml ? '<div class="small">'+stHtml+'</div>' : '')
         + table
         + '</div>';
   });
   fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';  // nosemgrep
+}
+// The game servers whose backup list is open in `fg` right now, as {id: true}.
+function _uis_bkOpenIds(fg){
+  var open = {};
+  fg.querySelectorAll('details[data-uis-gid][open]').forEach(function(el){ open[el.getAttribute('data-uis-gid')] = true; });
+  return open;
+}
+// One server's finished backups behind a summary line: "2 backups, newest 1d ago". The same
+// markup as templates/_fold.html's fold(), so it looks and opens like every other fold.
+function _uis_bkFold(g, isOpen, inner){
+  var done = (g.backups||[]).filter(function(b){ return !b.in_progress; });
+  var newest = done.reduce(function(a, b){ return Math.max(a, Number(b.created)||0); }, 0);
+  var label = tfHtml(done.length === 1 ? '{n} backup, newest {ago}' : '{n} backups, newest {ago}',
+                     {n: done.length, ago: newest ? bkAgo(newest) : '—'});
+  return '<details class="uis-fold" data-uis-gid="' + Number(g.id) + '"' + (isOpen ? ' open' : '') + '>'
+    + '<summary class="uis-fold-sum"><i class="bi bi-archive"></i> <span>' + label + '</span></summary>'
+    + '<div class="uis-fold-body">' + inner + '</div></details>';
 }
 // The panel's own backups: one row each, and the table shown once it is filled.
 function bkRenderList(d, tb){

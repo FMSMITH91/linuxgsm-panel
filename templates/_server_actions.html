@@ -17,22 +17,29 @@
         <i class="bi bi-eraser"></i> Clear Console
       </button>
       {% endif %}
-    </div>
-
-    {% if maintenance %}
-    <hr class="my-2">
-    <div class="d-flex gap-2 flex-wrap align-items-center">
-      <span class="text-secondary small me-1"><i class="bi bi-tools"></i> Maintenance:</span>
-      {% for m in maintenance %}
-      <button class="btn btn-sm btn-outline-secondary" title="{{ m.desc }}"
+      {# The LinuxGSM maintenance commands, in one menu on the same row. As a second row of eight
+         buttons under a rule they were 100px on a phone above every tab of the server page, for
+         commands run now and then. Each item is the button it was: the same action, its own
+         description as the tooltip, and the same confirmation first for the ones that had one. #}
+      {% if maintenance %}
+      <div class="dropdown">
+        <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" id="srv-maint-menu"
+                data-bs-toggle="dropdown" aria-expanded="false">
+          <i class="bi bi-tools"></i> Maintenance
+        </button>
+        <ul class="dropdown-menu uis-maint-menu" aria-labelledby="srv-maint-menu">
+          {% for m in maintenance %}
+          <li><button type="button" class="dropdown-item small" title="{{ m.desc }}"
               {# nosemgrep: generic.html-templates.security.unquoted-attribute-var.unquoted-attribute-var -- the attribute is single-quoted, autoescape escapes ' too, and the value is from a fixed list #}
               data-action="serverAction" data-args='["{{ m.cmd }}", "@self", {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }}, true]'>
-        <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill'}.get(m.cmd, 'gear') }}"></i>
-        {{ m.cmd }}
-      </button>
-      {% endfor %}
+            <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill'}.get(m.cmd, 'gear') }}"></i>
+            <span class="uis-maint-cmd">{{ m.cmd }}</span> <span class="text-secondary uis-maint-desc">{{ m.desc }}</span>
+          </button></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 </div>
 

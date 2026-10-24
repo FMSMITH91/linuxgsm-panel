@@ -13,7 +13,10 @@
   <div class="row">
     <!-- Branding -->
     <div class="col-lg-6 mb-3">
-      <div class="card h-100" id="sec-branding">
+      {# Two columns of about the same height: Branding and Localization on the left, Sessions and
+         Host reboots on the right. Host reboots used to sit under Branding, which made the left
+         column 350px longer than the right on a desktop. #}
+      <div class="card mb-3" id="sec-branding">
         <div class="card-header"><i class="bi bi-palette"></i> Branding</div>
         <div class="card-body">
           <label class="form-label small mb-1" for="s-title">Site name</label>
@@ -45,11 +48,7 @@
           <div class="small text-secondary mt-1">Buttons, links and highlights. Blank = built-in green.</div>
         </div>
       </div>
-    </div>
-
-    <!-- Localization + Sessions/Security -->
-    <div class="col-lg-6 mb-3">
-      <div class="card mb-3" id="sec-localization">
+      <div class="card" id="sec-localization">
         <div class="card-header"><i class="bi bi-translate"></i> Localization</div>
         <div class="card-body">
           <label class="form-label small mb-1" for="s-lang">Default language for new users</label>
@@ -62,6 +61,10 @@
         </div>
       </div>
 
+    </div>
+
+    <!-- Sessions/Security + Host reboots -->
+    <div class="col-lg-6 mb-3">
       <div class="card" id="sec-security">
         <div class="card-header"><i class="bi bi-shield-lock"></i> Sessions &amp; Security</div>
         <div class="card-body">
@@ -94,11 +97,7 @@
           <div class="small text-secondary mt-1">How many failed logins from one IP over 7 days before it's auto-blocked.</div>
         </div>
       </div>
-    </div>
-
-    <!-- Host reboots -->
-    <div class="col-lg-6 mb-3">
-      <div class="card" id="sec-reboots">
+      <div class="card mt-3" id="sec-reboots">
         <div class="card-header"><i class="bi bi-power"></i> Host reboots</div>
         <div class="card-body">
           <label class="form-label small mb-1" for="s-reboot-wait">"Reboot when everyone has left" gives up after (hours)</label>
@@ -115,6 +114,7 @@
         </div>
       </div>
     </div>
+
   </div>
 
   <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>

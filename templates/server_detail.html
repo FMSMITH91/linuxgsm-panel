@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_fold.html" import fold %}
 {% block title %}{{ t('%s - Console')|format(server.name) }}{% endblock %}
 {% block content %}
 
@@ -343,8 +344,12 @@
    resurrecting a panel the user is not allowed to see. Dispatch is an explicit if/elif rather than a
    key->macro dict, because a dict literal would have to name every macro including the ones that
    only exist behind a guard. #}
-{% set panel_keys = ['controls'] + (['console'] if (current_user.is_superadmin
-     or has_permission('view_console') or can_send_command) else []) + ['players'] %}
+{# The console comes FIRST by default: it is what this page is for, and behind the Connect address,
+   the four stat tiles and the live chart it started 1.3 screens down on a desktop and 1.9 on a
+   phone. This is only the default order. A layout someone saved (their own, or the house default a
+   superadmin published) keeps its order, because _panel_layout puts saved keys first. #}
+{% set panel_keys = (['console'] if (current_user.is_superadmin
+     or has_permission('view_console') or can_send_command) else []) + ['controls', 'players'] %}
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
 {% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
@@ -551,18 +556,24 @@
         {% endif %}
       </div>
       {# No fixed height: a 340px cap made this scroll inside a card with room to spare next
-         to it. The list is ~20 rows for a typical game, so let it size to its content and
-         let the PAGE scroll, which is what every other card here does. #}
-      <div class="card-body p-0">
-        {% if all_commands %}
+         to it. Instead the first few rows show and the rest are one tap away: all ~20 made this
+         card a screen tall, and the cards beside it (h-100) were stretched to match. #}
+      {% macro _uis_cmd_rows(rows) %}
         <table class="table table-sm table-borderless mb-0 small">
-          {% for c in all_commands %}
+          {% for c in rows %}
           <tr>
             <th scope="row" class="ps-3 fw-normal" style="white-space:nowrap;vertical-align:top;"><code class="text-info">{{ c.cmd }}</code></th>
             <td class="text-secondary pe-3">{{ c.desc }}</td>
           </tr>
           {% endfor %}
         </table>
+      {% endmacro %}
+      <div class="card-body p-0">
+        {% if all_commands %}
+        {{ _uis_cmd_rows(all_commands[:6]) }}
+        {% if all_commands|length > 6 %}
+        <div class="px-3">{% call fold('More commands') %}{{ _uis_cmd_rows(all_commands[6:]) }}{% endcall %}</div>
+        {% endif %}
         {% else %}
         <div class="p-3 text-secondary small">
           No command list cached yet.
