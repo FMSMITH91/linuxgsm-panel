@@ -131,7 +131,6 @@ _ACTIONS134 = {"saveConfig": "config", "saveGameCfg": "config", "saveRaw": "conf
                "saveCron": "schedule", "cancelCronEdit": "schedule", "saveAlerts": "alerts",
                "testAlert": "alerts", "loadMods": "mods"}
 _files134 = {}
-_FILE_USER134 = None
 try:
     from unit.part12 import P9_FILES as _FILE_USER134   # a file manager on host 1, not a superadmin
 except ImportError:
