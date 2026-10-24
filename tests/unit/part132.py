@@ -15,7 +15,7 @@
 5. The old /remote/<id>/firewall page redirects to the host page's Network tab (the panel host's to
    /server-management#network) after the page's own access checks, and reads nothing itself.
 6. Blocked IPs (UFW) and the fail2ban bans are one "Blocked & banned IPs" area on the Security tab, each
-   list keeping its actions; the Network tab's jump line links there; #fw-blocks, #sec-bans and the
+   list keeping its actions; #fw-blocks, #sec-bans and the
    palette land on it, and the first opening of the Security tab reads the firewall.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed and every host call stubbed, as
@@ -270,10 +270,10 @@ for _page132 in ("local", "remote"):
           % _page132, -1 not in _o132 and _o132 == sorted(_o132)
           and "Blocked &amp; banned IPs</h2>" in _html132[_o132[0]:_o132[1]], repr(_o132))
     _hrefs132 = {(h, t) for h, t in (_p132.hrefs if _p132 else [])}
-    check("blocked & banned (%s host page): the Network tab's jump line links to the area, no longer to a "
-          "Blocked IPs card of its own, and Top offenders' link lands beside it" % _page132,
-          ("#sec-keptout", "network") in _hrefs132 and ("#fw-blocks", "network") not in _hrefs132
-          and ("#fw-blocks", "security") in _hrefs132, repr(sorted(h for h in _hrefs132 if h[0].startswith("#"))))
+    check("blocked & banned (%s host page): nothing on the Network tab links to a Blocked IPs card of its "
+          "own, and Top offenders' link lands beside the list" % _page132,
+          ("#fw-blocks", "network") not in _hrefs132 and ("#fw-blocks", "security") in _hrefs132,
+          repr(sorted(h for h in _hrefs132 if h[0].startswith("#"))))
 _PAL132 = _read132("static", "js", "palette.js")
 check("blocked & banned: the palette finds Blocked IPs (\"block\" found only the Firewall row, which opens "
       "the Network tab), for the panel host and every remote",
