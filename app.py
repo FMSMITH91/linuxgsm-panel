@@ -1259,10 +1259,11 @@ def _prune_jobs(registry, lock, max_age=7200):
 RUNNABLE_ACTIONS = {
     "start", "stop", "restart", "monitor", "update", "validate", "backup",
     "details", "check-update", "force-update", "update-lgsm", "mods-update",
-    "postdetails", "test-alert", "fastdl",
+    "postdetails", "test-alert", "fastdl", "workshop-update",
 }
 # Long-running ones run in the background so the HTTP request returns immediately.
-LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update", "fastdl"}
+LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update", "fastdl",
+                "workshop-update"}
 # Read-only ones: show their output back to the user.
 
 # LinuxGSM alert providers: a toggle key (on/off) + the fields each needs. Exposed as a

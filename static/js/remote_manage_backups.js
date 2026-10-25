@@ -316,16 +316,22 @@ function bkGameRows(g){
       + '</td></tr>';
   }).join('');
 }
+// A skipped backup's status. Skipped because players were connected: a one-click force. Held by
+// LinuxGSM (stoponlyifnoplayers, code lgsm_postponed): it runs it once the server is empty, and a
+// forced run would only be postponed by LinuxGSM again, so none is offered.
+function bkBusyHtml(g, st){
+  if(st.code==='lgsm_postponed'){
+    return ' <span class="text-warning"><i class="bi bi-hourglass-split"></i> '+escapeHtml(st.msg||'postponed by LinuxGSM')+'</span>';
+  }
+  return ' <span class="text-warning"><i class="bi bi-people-fill"></i> '+escapeHtml(st.msg||'players online — skipped')+'</span>'
+    +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupOneGame', [g.id, '@self', true]) + '>Back up anyway</button>';
+}
 // The last backup run's outcome for one game server ('' when there is none to report).
 function bkGameStatus(g, st){
   var stHtml='';
   if(st){
     if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }
-    else if(st.busy){
-      // Skipped because players were connected — offer a one-click force.
-      stHtml=' <span class="text-warning"><i class="bi bi-people-fill"></i> '+escapeHtml(st.msg||'players online — skipped')+'</span>'
-        +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupOneGame', [g.id, '@self', true]) + '>Back up anyway</button>';
-    }
+    else if(st.busy){ stHtml=bkBusyHtml(g, st); }
     else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
     else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
   }

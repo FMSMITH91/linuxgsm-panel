@@ -25,7 +25,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
     _r22b_unreachable_or_generic)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
-    _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock)
+    _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock,
+    _lg264_bk_status)
 
 
 class _FullBackupTally:
@@ -129,10 +130,7 @@ def _record_full_backup_outcome(gs, result, defer, tally):
     ok, reason, was_skipped = result
     # ...and the outcome replaces the mark, which would otherwise hold the
     # restart sweep off this server for good.
-    _game_backup_status[gs.id] = {
-        "running": False, "ok": (None if was_skipped else ok),
-        "busy": was_skipped,
-        "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
+    _game_backup_status[gs.id] = _lg264_bk_status(ok, reason, was_skipped)
     if was_skipped:
         tally.skip_n += 1
         if defer:
@@ -342,8 +340,7 @@ def _back_up_one_now(app, server_id, gname, opts, born):
         # deliberately leaves the clock alone there so the server stays due and is
         # retried once it empties.
         _record_game_clock(app, server_id, gname)
-    return {"running": False, "ok": (None if was_skipped else ok), "busy": was_skipped,
-            "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
+    return _lg264_bk_status(ok, reason, was_skipped)
 
 
 def _publish_backup_status(app, server_id, born, status):

@@ -1405,8 +1405,12 @@ def _run_linuxgsm_backup(server, user, selfname):
     # backup was started from the panel's cgroup with it: on a system install the next panel
     # restart ended it. On the panel's own host the helper's lgsm-command gives the action a scope
     # of its own before it drops to the account; on a remote it is the same shell form as before.
-    out, err, rc = _core.run_as_game_user(server, user, "backup", timeout=3600, selfname=selfname,
-                                          answers=["y", "y", "y"])
+    # Plus the minutes LinuxGSM v26.4.0 may spend warning players before it stops the server
+    # (warnplayerstimer): a run cut off mid-countdown is a backup that never started.
+    from panel.services import lgsm_players
+    out, err, rc = _core.run_as_game_user(
+        server, user, "backup", answers=["y", "y", "y"], selfname=selfname,
+        timeout=lgsm_players.timeout_for(server, user, selfname, "backup", 3600))
     ok = rc == 0
     # LinuxGSM can exit 0 while REFUSING to back up because a (possibly stale) lock exists —
     # "Lockfile found: Backup is currently running". No archive is created, so this is NOT a
@@ -1695,6 +1699,121 @@ def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note)
     return False, reason + " (" + _BKVERIFY_WHY.get(code, "the host could not be asked") + ")." + note, False
 
 
+# ── LinuxGSM v26.4.0's own postponed backup ───────────────────────────────────────────────────────
+# With stoponlyifnoplayers on, a `backup` that would stop a server with players on prints "Backup
+# postponed until the server is empty", writes lgsm/lock/<selfname>-backup-request.lock (its first
+# line the epoch it was asked) and EXITS 0. LinuxGSM's monitor then runs `backup` itself once the
+# server is empty, removes the lock when that archive is written, and appends "alerted" to it when
+# it has sent its own backup-postponed alert after 24 hours (command_monitor.sh,
+# fn_monitor_check_backup_request). Read as an exit-0 backup, the panel found no new archive and
+# reported a FAILED backup, alerted on it and moved the clock. And left alone, the panel's hourly
+# retry and LinuxGSM's monitor would both back the server up the moment it emptied.
+_LG264_BK_END = "__LGSMP_LG264_BK__"
+# The host epoch of the request each instance was last seen waiting on, (remote id, user, selfname):
+# a request gone since, with an archive written after it, was LinuxGSM's monitor taking the backup.
+# In memory: after a panel restart that one backup may be taken twice, never skipped.
+_lg264_bk_waiting = _core.register_remote_cache({})
+
+
+def _lg264_bk_request(server, user, selfname):
+    """Read LinuxGSM's pending backup request for an instance; None when the read did not happen.
+
+    {"requested": epoch or None (no request), "alerted": bool, "monitor": bool} — monitor: the
+    instance has <selfname>-monitoring.lock AND its account's crontab runs `<selfname> monitor`
+    (the panel's Autostart), the two things LinuxGSM's monitor needs to ever run the request. A
+    commented-out line runs nothing, so it does not count.
+    """
+    if not _core.game_idents_ok(user, selfname):
+        return None
+    lock = "/home/%s/lgsm/lock/%s" % (user, selfname)
+    req = _core._quote(lock + "-backup-request.lock")
+    cmd = ("R=-; [ -f %s ] && R=$(head -n 1 %s 2>/dev/null); A=0; grep -qx alerted %s 2>/dev/null && A=1; "
+           "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -qF %s && M=1; "
+           "printf '%%s\\t%%s\\t%%s\\t%%s\\n' \"$R\" \"$A\" \"$M\" %s"
+           % (req, req, req, _core._quote(lock + "-monitoring.lock"),
+              _core._quote("/home/%s/%s monitor" % (user, selfname)), _LG264_BK_END))
+    try:
+        out, _err, _rc = _core.shell_as_game_user(server, user, cmd, timeout=20, selfname=selfname)
+    except Exception:
+        return None
+    for line in (out or "").splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) == 4 and parts[3] == _LG264_BK_END:
+            r = parts[0].strip()
+            requested = None if r == "-" else (int(r) if r.isascii() and r.isdecimal() else 0)
+            return {"requested": requested, "alerted": parts[1] == "1", "monitor": parts[2] == "1"}
+    return None
+
+
+def _lg264_bk_note(sentence, code, req=None):
+    """A backup answer's message that also carries what LinuxGSM's request says (lgsm_players.Note)."""
+    from panel.services import lgsm_players
+    return lgsm_players.note(sentence, code, requested=(req or {}).get("requested"),
+                             alerted=bool((req or {}).get("alerted")))
+
+
+def _lg264_bk_taken(server, user, since):
+    """Whether LinuxGSM's monitor wrote a backup since `since` (host epoch): the newest finished archive."""
+    newest = (cron.list_game_backups(server, user) or [{}])[0]
+    return not newest.get("in_progress") and (newest.get("created") or 0) >= since
+
+
+def _lg264_bk_before(server, user, selfname, keep):
+    """run_game_backup's answer when LinuxGSM's own postponed backup decides it, else None.
+
+    A request LinuxGSM's monitor will run is left to it (skipped, not run twice). A request that
+    has gone since it was last seen, with an archive written after it, was the monitor's backup:
+    that is the backup, pruned as after any success, and nothing is run again.
+    """
+    from panel.services import lgsm_players
+    key = (getattr(server, "id", None), user, selfname)
+    req = _lg264_bk_request(server, user, selfname)
+    if req is None:
+        return None
+    if req["requested"] is not None and req["monitor"]:
+        _lg264_bk_waiting[key] = req["requested"]
+        return False, _lg264_bk_note(lgsm_players.BACKUP_QUEUED, "lgsm_postponed", req), True
+    since = _lg264_bk_waiting.pop(key, None)
+    if req["requested"] is None and since and _lg264_bk_taken(server, user, since):
+        _bkprune_after_success(server, user, keep)
+        return True, _lg264_bk_note(lgsm_players.BACKUP_DONE_BY_LGSM, "lgsm_done"), False
+    return None
+
+
+def _lg264_bk_after(server, user, selfname, out):
+    """run_game_backup's answer when LinuxGSM postponed the backup it was just asked for, else None."""
+    from panel.services import lgsm_players
+    oc = lgsm_players.outcome(out)
+    if oc is None or oc["kind"] != "backup":
+        return None
+    req = _lg264_bk_request(server, user, selfname)
+    if req is not None and req.get("requested") is not None:
+        _lg264_bk_waiting[(getattr(server, "id", None), user, selfname)] = req["requested"]
+    # An unread request leaves Autostart unknown (None): not "Autostart is off".
+    msg = lgsm_players.outcome_message(oc, "backup", monitor=None if req is None else req["monitor"])
+    return False, _lg264_bk_note(msg, "lgsm_postponed", req), True
+
+
+def _bk_after_run(server, user, selfname, before, run, keep, headroom_note):
+    """run_game_backup's answer once LinuxGSM's `backup` has run: run = _run_linuxgsm_backup's tuple."""
+    ok, lock_refused, out, err, rc = run
+    lg = _lg264_bk_after(server, user, selfname, out) if rc == 0 else None
+    if lg is not None:
+        return lg
+    text_failed = _bkverify_text_failed(out, err)
+    if ok and not text_failed:
+        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
+    if ok:
+        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note)
+    if lock_refused:
+        return False, ("A backup lock was in the way — a previous backup may still be running, or it "
+                       "left a stale lock. Try again in a minute."), False
+    # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
+    return False, (_backup_failure_reason(out, err)
+                   + _bkpart_cleanup(server, user, selfname, before, rc, lock_refused,
+                                     text_failed)), False
+
+
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
                     query_type=None):
     """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
@@ -1718,6 +1837,11 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     if not _core.game_idents_ok(user, selfname):
         return False, _core.GAME_ACCOUNT_REFUSED[1], False
     keep = max(1, int(keep))
+    # LinuxGSM's own postponed backup first, force or not: `force` overrides the panel's player
+    # check, and LinuxGSM's stoponlyifnoplayers postpones a forced run all the same.
+    lg = _lg264_bk_before(server, user, selfname, keep)
+    if lg is not None:
+        return lg
     if not force:
         skip = _backup_players_online(server, user, game_type, port, query_type)
         if skip:
@@ -1738,19 +1862,8 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, refusal, False
     # Taken last, just before the run: the headroom prune above may have removed archives.
     before = _bkpart_listing(server, user)
-    ok, lock_refused, out, err, rc = _run_linuxgsm_backup(server, user, selfname)
-    text_failed = _bkverify_text_failed(out, err)
-    if ok and not text_failed:
-        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
-    if ok:
-        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note)
-    if lock_refused:
-        return False, ("A backup lock was in the way — a previous backup may still be running, or it "
-                       "left a stale lock. Try again in a minute."), False
-    # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
-    return False, (_backup_failure_reason(out, err)
-                   + _bkpart_cleanup(server, user, selfname, before, rc, lock_refused,
-                                     text_failed)), False
+    return _bk_after_run(server, user, selfname, before, _run_linuxgsm_backup(server, user, selfname),
+                         keep, headroom_note)
 
 
 # One row of the command table the instance script prints with no arguments:

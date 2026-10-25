@@ -686,7 +686,8 @@ _EXPECT_OFFLINE_WINDOW = 180    # a panel restart holds "server down" this long 
 # in which a REAL crash is swallowed, so a command earns its place here only by actually stopping
 # the server: `monitor` (runs every few minutes, would suppress everything) and `update-lgsm` (fetches
 # scripts with the server up) are deliberately absent.
-_LGSM_MAINTENANCE_CMDS = ("update", "force-update", "validate", "mods-update", "restart", "backup")
+_LGSM_MAINTENANCE_CMDS = ("update", "force-update", "validate", "mods-update", "restart", "backup",
+                          "workshop-update")
 
 
 def _r28a_busy_words(remote, cmd):
@@ -1158,8 +1159,11 @@ def forget_updown(server_id):
     _monitor_state["server_misses"].pop(server_id, None)
 
 
-def _mark_expected_offline(server_id, action):
+def _mark_expected_offline(server_id, action, extra=0):
     """Note a power action the PANEL is about to run on a server, for the monitor's alerts.
+
+    `extra`: seconds the action spends before it stops anything — LinuxGSM's in-game warning
+    countdown (lgsm_players.allowance_seconds) — so the window starts when the stop does.
 
     "stop": the server is meant to STAY down. Its down is recorded at once and never paged, and its
     return is not announced either (it was never announced down). "restart": it is meant to come
@@ -1170,7 +1174,7 @@ def _mark_expected_offline(server_id, action):
     if action == "start":
         _end_stop_window(server_id)
         return
-    now = time.time()
+    now = time.time() + max(0, extra)
     _expected_offline[server_id] = now
     if action == "stop":
         _expected_stop[server_id] = now
@@ -1194,6 +1198,17 @@ def _end_stop_window(server_id):
     ts = _expected_stop.pop(server_id, None)
     if ts is not None and _expected_offline.get(server_id) == ts:
         _expected_offline.pop(server_id, None)
+
+
+def _end_offline_window(server_id):
+    """A panel Stop/Restart that did not stop the server (LinuxGSM refused or postponed it): no window.
+
+    Kept, it hid a real crash of the server that stayed up for the action's whole allowance, its
+    warning minutes included. A reboot plan's hold (inf) is not the action's and stays.
+    """
+    if _expected_offline.get(server_id) != float("inf"):
+        _expected_offline.pop(server_id, None)
+        _expected_stop.pop(server_id, None)
 
 
 def _mon_server_went_down(remote, gs, up, prev_up, muted):

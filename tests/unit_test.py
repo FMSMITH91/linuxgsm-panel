@@ -1950,6 +1950,10 @@ _r16d_wrap_ts_handles()
 # services folded until used, Notifications' folds and fields, the console first by default, maintenance
 # in one menu, the one-line page alerts, the folded backups list, the sessions cap and the other folds)
 # drives part12's app with stand-ins and the page scripts in node; imports part01, 05, 12 and 47.
+# part138 (lgsm-2604: LinuxGSM v26.4.0 — the player-warning timer in every stop's budget, postponed and
+# refused actions said as such, LinuxGSM's own postponed backup, the config editor's two controls, the
+# TF2 -norestart notice, workshop-update, the reboot dialog's warning lines) drives part12's app with
+# stand-ins and the page scripts in node; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1965,7 +1969,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
           "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
-          "part132", "part133", "part134", "part15")
+          "part132", "part133", "part134", "part138", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

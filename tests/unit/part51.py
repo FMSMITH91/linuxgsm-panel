@@ -523,7 +523,7 @@ class _JobLike51:
         self.remote = NS(id=rid, name="p51-host", display_name="p51-host")
         self.job = {"mode": "when_empty", "boot": "b51"}
         self.bounce = self.bounce_joined = False
-        self.bounce_unread = ""
+        self.bounce_unread = self.bounce_why = ""
         self.deadline = None
         self.entries, self.stopped = [], []
 

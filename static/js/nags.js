@@ -94,6 +94,7 @@ function _rbBlockersList(players){
       action: 'a LinuxGSM action is running', content: 'a content install is running',
       uninstall: 'an uninstall is running',
       maintenance: 'LinuxGSM maintenance is running', bootstrap: 'a bootstrap is running',
+      lgsm_warning: 'LinuxGSM is counting down to a stop or restart',
       ssh_port: 'an SSH port change is running',
       dpkg: 'a package install is running', apt: 'a package install is running',
       self_update: 'a panel update is running', restore: 'a restore is running',
@@ -135,7 +136,64 @@ function _rbPlayers(ctx){
   ctx.body.appendChild(_rbEl('p', 'small text-secondary mb-1', 'Waiting reboots it once nobody is on any of its game servers. A server whose count can’t be read holds the wait until it is stopped.'));
   _rbWaitLimit(ctx);
   ctx.body.appendChild(_rbEl('p', 'small text-secondary mb-0', 'Rebooting now warns players in-game first, where the game can show a message, then stops each server cleanly.'));
+  _rbWarnNotes(ctx);
   _rbChoiceButtons(ctx);
+}
+// What "Reboot now" tells the players of each server that has them, before its stop: LinuxGSM's
+// own countdown (warnplayerstimer, v26.4.0), which the reboot waits for instead of the panel's, or
+// why there is none; and where "Only stop when empty" is on, that the reboot sets it aside for its
+// stop (lgsm_players.reboot_stop), which is still LinuxGSM's clean one.
+// From the preview's warn_minutes / warn_supported / lgsm_supported / lgsm_counts / say
+// (lgsm_players.reboot_warn_fields). One line per server; more than three fold under a summary.
+// lgsm_counts false: LinuxGSM counts this game's players from a list that can be empty with players
+// on, and then stops at once without its warning, so the panel's own 60 s countdown is kept.
+// lgsm_supported false: a LinuxGSM before v26.4.0, which has no warning setting to point to.
+function _rbWarnWord(sv){
+  var n = sv.warn_minutes;
+  if (n == null) return window.tf('its LinuxGSM warning time could not be read');
+  if (n > 0 && sv.warn_supported) return _rbWarnLgsm(sv, n);
+  return _rbWarnPanel(sv);
+}
+function _rbWarnLgsm(sv, n){        // a LinuxGSM timer, on a game it can warn on
+  if (sv.lgsm_counts !== false) return window.tf('LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it', {n: n});
+  return window.tf(sv.say ? 'the panel’s 60 s warning: LinuxGSM can’t always count this game’s players, so its own warning may not run'
+                          : 'no sure in-game warning: LinuxGSM can’t always count this game’s players, so its warning may not run');
+}
+function _rbWarnPanel(sv){          // no LinuxGSM warning: why, and whether the panel's 60 s reaches it
+  if (!sv.warn_supported) return window.tf(sv.say ? 'only the panel’s 60 s warning: its console can’t show LinuxGSM’s'
+                                                   : 'no in-game warning: this game can’t show one');
+  if (sv.lgsm_supported === false) return window.tf(sv.say ? 'only the panel’s 60 s warning: this LinuxGSM has no warning of its own'
+                                                           : 'no in-game warning: this LinuxGSM has no warning of its own');
+  return window.tf(sv.say ? 'only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)'
+                          : 'no in-game warning: none is set (Files & Config, LinuxGSM settings)');
+}
+function _rbWarnNotes(ctx){
+  if (!window.tf || !ctx.plan || !ctx.players) return;
+  var busy = {};
+  (ctx.players.busy || []).forEach(function(b){ busy[b.id] = true; });
+  var rows = (ctx.plan.servers || []).filter(function(sv){ return busy[sv.id] && 'warn_minutes' in sv; });
+  if (!rows.length) return;
+  var ul = _rbEl('ul', 'small mb-1 ps-3');
+  rows.forEach(function(sv){
+    var li = _rbRow(sv.name, _rbWarnWord(sv));
+    li.lastChild.setAttribute('data-no-i18n', '');
+    if (sv.stop_only_if_empty === true) {
+      li.appendChild(document.createTextNode('. '));
+      li.appendChild(_rbEl('span', null, 'Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.'));
+    }
+    ul.appendChild(li);
+  });
+  var head = _rbEl('div', 'small text-secondary mt-2 mb-1', 'Before each stop:');
+  if (rows.length <= 3) { ctx.body.appendChild(head); ctx.body.appendChild(ul); return; }
+  var det = _rbEl('details', 'mt-2');
+  var sum = _rbEl('summary', 'small text-secondary');
+  sum.appendChild(_rbEl('span', null, 'Before each stop:'));
+  sum.appendChild(document.createTextNode(' '));
+  var cnt = _rbEl('span', null, String(rows.length)); cnt.setAttribute('data-no-i18n', '');
+  sum.appendChild(cnt); sum.appendChild(document.createTextNode(' '));
+  sum.appendChild(_rbEl('span', null, 'servers'));
+  det.appendChild(sum); det.appendChild(ul);
+  ctx.body.appendChild(det);
 }
 function _rbWaitLimit(ctx){         // the limit as Settings has it; nothing when it is not known
   var hours = ctx.plan && ctx.plan.wait_hours;
