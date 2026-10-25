@@ -439,6 +439,17 @@ def reboot_warn_budget(remote, passes, workers, base_for):
                                  for grp in groups], workers) for groups in passes)
 
 
+def census_blockers(running, probes, blocker):
+    """The host census's blockers from its probes: LinuxGSM maintenance, or its warning countdown.
+
+    `running`: the rows read running; `blocker(kind, name)`: host_reboot's. A countdown (the probe's
+    WARN: <self>-warning.lock's pid alive) is LinuxGSM about to stop or restart that server after
+    its warning, and a reboot's stop would wait it out and then warn again (reboot_allowance).
+    """
+    return [blocker("lgsm_warning" if probes[gs.id].get("warn") else "maintenance", gs.name)
+            for gs in running if probes[gs.id].get("maint") or probes[gs.id].get("warn")]
+
+
 def stop_passes(remote, entries):
     """A reboot's stops as passes of account groups: first every server LinuxGSM does not warn, then the rest.
 

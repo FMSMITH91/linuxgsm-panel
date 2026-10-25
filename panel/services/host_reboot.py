@@ -624,8 +624,7 @@ def host_player_state(remote, probes=None):
         probes = _probe_rows(remote, installed)
     unknown = _unread_rows(installed, probes)
     running = [gs for gs in installed if _session_of(probes, gs) == 1]
-    blockers += [_blocker("lgsm_warning" if probes[gs.id].get("warn") else "maintenance", gs.name)
-                 for gs in running if probes[gs.id].get("maint") or probes[gs.id].get("warn")]
+    blockers += _lgp.census_blockers(running, probes, _blocker)
     busy, unk2 = _count_players(running, _mon._batched_slots(running) if running else {})
     unknown += unk2
     return {"state": _rw.state_word(blockers, busy, unknown),
@@ -1599,7 +1598,7 @@ class _Job:
         probes = _probe_rows(self.remote, rows)
         known = {e["id"]: e for e in self.entries}
         for gs in rows:
-            if self.bounce or (probes.get(gs.id) or {}).get("session") != 1:
+            if (probes.get(gs.id) or {}).get("session") != 1:
                 continue
             e = known.get(gs.id) or self._join_plan(gs, probes[gs.id])
             if e is None or e.get("stop") == "still_running":
@@ -1609,7 +1608,7 @@ class _Job:
     def _restop(self, e):
         """Stop again a server found running — within the stop phase's budget, else the shutdown ends it."""
         self._check_cancel()
-        if self._past_deadline():
+        if self._past_deadline() or self.bounce:     # a bounce under way undoes the stops anyway
             e["stop"] = "still_running"
         else:
             self._stop_one(e)

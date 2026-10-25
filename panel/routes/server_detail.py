@@ -560,12 +560,8 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 held = still_held(gs)
                 oc = _lgp.outcome_of(out, rc)
                 if oc is not None:
-                    ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name))
-                    # The button answered "issued" long before: the server's console says what
-                    # LinuxGSM did instead, as a long action's end does (_announce_action_end);
-                    # only while the id is still that server's.
-                    if held:
-                        _console_push(app, server_id, f"[panel] {action}: {detail}")
+                    # The button answered "issued" long before: the console says what LinuxGSM did.
+                    ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
                     return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
@@ -599,13 +595,16 @@ def _lg264_run_power(remote, ident, action):
     return out, rc
 
 
-def _lg264_said(oc, action, gs, held, who):
+def _lg264_said(oc, action, gs, held, who, console=None):
     """Audit LinuxGSM's postponed or refused `action` as what it was: (None, the panel's sentence).
 
     Its own audit action (lgsm_postponed / lgsm_refused), never the action's success or failure
     row: LinuxGSM exits 0 for both, and "'stop' succeeded" about a server still running with its
     players on is the report this replaces. A refused stop or a postponed restart ends the action's
     quiet window (warning minutes and all), so a crash of the server that is still up pages as usual.
+    `console`: the app, for a Stop/Restart whose button answered long before — the sentence is said
+    in the server's console too, as a long action's end is (_announce_action_end); only while the
+    id is still that server's. A long action passes None: its own end says it.
     """
     actor, origin, name = who
     msg = _lgp.outcome_message(oc, action, monitor=bool(getattr(gs, "autostart", True)))
@@ -615,6 +614,8 @@ def _lg264_said(oc, action, gs, held, who):
                server=gs if held else None)
     if held and action in ("stop", "restart"):
         _mon_end_offline_window(gs.id)
+    if held and console is not None:
+        _console_push(console, gs.id, f"[panel] {action}: {msg}")
     return None, str(msg)
 
 

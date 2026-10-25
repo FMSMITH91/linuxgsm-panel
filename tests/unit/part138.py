@@ -749,6 +749,7 @@ _prog_nags138 = (
     "function text(e){ return e.text != null ? e.text : (e.textContent || '') + e.children.map(text).join(''); }\n"
     + _cut47(_nags138, "function _rbEl(") + "\n" + _cut47(_nags138, "function _rbName(") + "\n"
     + _cut47(_nags138, "function _rbRow(") + "\n" + _cut47(_nags138, "function _rbWarnWord(") + "\n"
+    + _cut47(_nags138, "function _rbWarnLgsm(") + "\n" + _cut47(_nags138, "function _rbWarnPanel(") + "\n"
     + _cut47(_nags138, "function _rbWarnNotes(") + "\n"
     "function run(servers, busy){ const body = new El('div');"
     " _rbWarnNotes({plan: {servers: servers}, players: {busy: busy}, body: body});"
@@ -856,8 +857,7 @@ finally:
     (_smc138.run_as_game_user, _hr138.probe_server, _lgp138.warn_minutes, _smc138.shell_as_game_user) = _saved_m1
 check("M1: a stop the rescan made, refused for a player who joined, also bounces before the reboot is sent",
       "self._rescan()\n        if self._bounced():" in _read138("panel", "services", "host_reboot.py")
-      and "if self.bounce or (probes.get(gs.id) or {}).get(\"session\") != 1:" in
-      _read138("panel", "services", "host_reboot.py"))
+      and "if self._past_deadline() or self.bounce:" in _read138("panel", "services", "host_reboot.py"))
 
 # M2: games whose player LIST LinuxGSM cannot count keep the panel's own countdown, and say so.
 _saved_m2 = _lgp138.warn_minutes
@@ -878,8 +878,8 @@ try:
 finally:
     _lgp138.remember = _saved_rem_m2
 check("M2 config editor: a game whose list LinuxGSM cannot count is marked so (the page says Only stop when "
-      "empty may not hold and the warning may not run)", _vm2["players"]["list_unreliable"] is True
-      and _vm2["players"]["can_count"] is True and _v1["players"]["list_unreliable"] is False, repr(_vm2))
+      "empty may not hold and the warning may not run)", _vm2["players"].get("list_unreliable") is True
+      and _vm2["players"].get("can_count") is True and _v1["players"].get("list_unreliable") is False, repr(_vm2))
 try:
     _p9_patch(_lgp138, "settings", lambda *a, **k: {"minutes": 5, "stop_only": True, "supported": True})
     _p9_patch_sm("moderation_caps", lambda gt: {"say": True})
