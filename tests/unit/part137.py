@@ -275,8 +275,8 @@ def _linear137(timeout=10):
     code = "\n".join([
         "import json, sys, warnings", "warnings.simplefilter('ignore')", "sys.path.insert(0, sys.argv[1])",
         "from panel.ops.ssh_manager import ufweval as U",
-        "for t in (' ' * 40000 + 'x', '(log,' * 20000 + 'x', '/' * 40000 + 'tcpx', 'Anywhere' + ' ' * 40000 + ')',"
-        " '(' * 40000 + 'log', 'a/' * 20000 + 'tcp ' * 5000):",
+        "for t in (' ' * 300000 + 'x', '(log,' * 60000 + 'x', '/' * 300000 + 'tcpx', 'Anywhere' + ' ' * 300000 + ')',"
+        " '(' * 300000 + 'log', 'a/' * 150000 + 'tcp ' * 50000):",
         "    U.row_spec({'to': t, 'from': t, 'action': 'ALLOW', 'direction': 'IN'})",
         "print(json.dumps([U._strip_attribs('Anywhere  (log, out)'), U._strip_proto('192.0.2.0/24/udp')]))"])
     try:
@@ -290,7 +290,7 @@ def _linear137(timeout=10):
 
 
 _lin137 = _linear137()
-check("readers: the column, protocol and attribute readers answer 40000-character runs of spaces, slashes and "
+check("readers: the column, protocol and attribute readers answer 300000-character runs of spaces, slashes and "
       "\"(log,\" at once in a child with a time limit (no super-linear backtracking, Sonar S8786), and still read "
       "\"(log, out)\" and \"/udp\" (controls)",
       _lin137 == ["Anywhere", ["192.0.2.0/24", "udp"]], repr(_lin137))  # NOSONAR(S1313)
@@ -613,7 +613,6 @@ class _HalfHost137(_Host135):
 
 _l3 = _blk137("27015", "tcp", server=_REMOTE135, host=_HalfHost137(rules=[_SSH22]), conn=_rconn137())
 _l3u = _blk137("27015", "tcp", server=_REMOTE135, host=_HalfHost137(readback=False, rules=[_SSH22]), conn=_rconn137())
-_l3_undo = [c for c in (_l3[2] or [])]
 check("LOW-3: a block whose IPv4 half went in before ufw failed with only \"ERROR:\" is read back, that half taken "
       "out, and the answer says so; when it cannot be read back the answer says to check, never that it was undone",
       _l3[0] is False and "taken out again" in _l3[1] and "ERROR:" in _l3[1]
