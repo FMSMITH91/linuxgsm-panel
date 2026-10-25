@@ -2995,6 +2995,8 @@ def register_routes(app):
 
     from panel.routes import server_files as _r_server_files
     socketio = _r_server_files.register(app, _supervise)
+    from panel.routes import pz_admin as _r_pz_admin
+    _r_pz_admin.register(app)
     # AFTER socketio exists, and handed it: there is exactly one SocketIO in this app and the
     # terminal's events live on its DEFAULT namespace so the connect-time auth gate above applies
     # to them too. A second SocketIO(app) would collide on /socket.io/.

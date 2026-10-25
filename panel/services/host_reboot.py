@@ -97,11 +97,9 @@ DEFAULT_WAIT_HOURS = 24
 # The LinuxGSM commands whose process means "LinuxGSM is doing something to this server now", and
 # the ones of those that are maintenance a reboot must not cut through. With LinuxGSM's aliases
 # (lgsm/modules/core_getopt.sh): `./<s> u` is the same update as `./<s> update`.
-_INFLIGHT_CMDS = ("monitor|m|start|st|stop|sp|restart|r|update|u|force-update|fu|update-restart|ur|"
-                  "validate|v|backup|b|install|i|auto-install|ai|debug|d|details|dt|mods-update|mu|"
-                  "workshop-update|wu|update-lgsm|ul|uf|update-modules")
 _MAINT_CMDS = ("update|u|force-update|fu|update-restart|ur|validate|v|backup|b|install|i|auto-install|"
                "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules")
+_INFLIGHT_CMDS = "monitor|m|start|st|stop|sp|restart|r|debug|d|details|dt|" + _MAINT_CMDS
 _PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "BOOT", "MID", "NOW", "SEC")
 
 # The last finished outcome per host, shown on the Power card for a day: {at, text, ok}.
