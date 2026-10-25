@@ -337,6 +337,12 @@ _LG264_CRON_POSTPONED_ERE = ("INFO.*([0-9]+ players are on the server: (stop pre
                              "postponed)|(Update|Backup) postponed until the server is empty)")
 
 
+def _lg264_runs_monitor(cmd):
+    """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`)."""
+    words = (cmd or "").split()
+    return any(w == "monitor" and i and "/" in words[i - 1] for i, w in enumerate(words))
+
+
 def _read_cron_status(server, user):
     """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status files.
 
@@ -757,8 +763,10 @@ def _cron_job_row(raw, user, selfname, status, run_times):
         "managed": _cron_line_managed(s, user, selfname),   # always False now — every line is editable
         "role": _cron_role(display_cmd, user, selfname),    # informational label only (autostart/daily-restart)
         "last_run": last_run, "ok": ok, "error": error,
-        # The last run exited 0 having only postponed or refused (players online).
-        "postponed": bool(st.get("postponed")),
+        # The last run exited 0 having only postponed or refused (players online). Not the
+        # `monitor` job: it prints "N players are on the server: restart postponed" when it
+        # re-checks a request (command_monitor.sh), which is the monitor doing its job.
+        "postponed": bool(st.get("postponed")) and not _lg264_runs_monitor(display_cmd),
     }
 
 

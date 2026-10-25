@@ -1720,14 +1720,15 @@ def _lg264_bk_request(server, user, selfname):
 
     {"requested": epoch or None (no request), "alerted": bool, "monitor": bool} — monitor: the
     instance has <selfname>-monitoring.lock AND its account's crontab runs `<selfname> monitor`
-    (the panel's Autostart), the two things LinuxGSM's monitor needs to ever run the request.
+    (the panel's Autostart), the two things LinuxGSM's monitor needs to ever run the request. A
+    commented-out line runs nothing, so it does not count.
     """
     if not _core.game_idents_ok(user, selfname):
         return None
     lock = "/home/%s/lgsm/lock/%s" % (user, selfname)
     req = _core._quote(lock + "-backup-request.lock")
     cmd = ("R=-; [ -f %s ] && R=$(head -n 1 %s 2>/dev/null); A=0; grep -qx alerted %s 2>/dev/null && A=1; "
-           "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -qF %s && M=1; "
+           "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -qF %s && M=1; "
            "printf '%%s\\t%%s\\t%%s\\t%%s\\n' \"$R\" \"$A\" \"$M\" %s"
            % (req, req, req, _core._quote(lock + "-monitoring.lock"),
               _core._quote("/home/%s/%s monitor" % (user, selfname)), _LG264_BK_END))
@@ -1785,10 +1786,11 @@ def _lg264_bk_after(server, user, selfname, out):
     oc = lgsm_players.outcome(out)
     if oc is None or oc["kind"] != "backup":
         return None
-    req = _lg264_bk_request(server, user, selfname) or {}
-    if req.get("requested") is not None:
+    req = _lg264_bk_request(server, user, selfname)
+    if req is not None and req.get("requested") is not None:
         _lg264_bk_waiting[(getattr(server, "id", None), user, selfname)] = req["requested"]
-    msg = lgsm_players.outcome_message(oc, "backup", monitor=bool(req.get("monitor")))
+    # An unread request leaves Autostart unknown (None): not "Autostart is off".
+    msg = lgsm_players.outcome_message(oc, "backup", monitor=None if req is None else req["monitor"])
     return False, _lg264_bk_note(msg, "lgsm_postponed", req), True
 
 

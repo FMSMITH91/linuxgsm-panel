@@ -8,7 +8,6 @@
   "Stop refused: players are online and this server's LinuxGSM setting \"Only stop when empty\" (stoponlyifnoplayers) is on. Nothing was stopped.": "Detención rechazada: hay jugadores conectados y el ajuste de LinuxGSM «Detener solo si está vacío» (stoponlyifnoplayers) de este servidor está activado. No se detuvo nada.",
   "Workshop update not applied: players are online and stoponlyifnoplayers is on. Run it again when the server is empty.": "Actualización de Workshop no aplicada: hay jugadores conectados y stoponlyifnoplayers está activado. Vuelve a ejecutarla cuando el servidor esté vacío.",
   "'{action}' not run: players are online and stoponlyifnoplayers is on. Run it again when the server is empty.": "'{action}' no se ejecutó: hay jugadores conectados y stoponlyifnoplayers está activado. Vuelve a ejecutarlo cuando el servidor esté vacío.",
-  "Backup postponed by LinuxGSM: players are online. LinuxGSM runs it when the server is empty.": "Copia de seguridad aplazada por LinuxGSM: hay jugadores conectados. LinuxGSM la ejecuta cuando el servidor quede vacío.",
   "Backed up by LinuxGSM once the server was empty.": "Copia de seguridad hecha por LinuxGSM cuando el servidor quedó vacío.",
   "stoponlyifnoplayers must be on or off.": "stoponlyifnoplayers debe ser on u off.",
   "The warning time must be a whole number of minutes from 0 to {max}.": "El tiempo de aviso debe ser un número entero de minutos de 0 a {max}.",
@@ -29,5 +28,16 @@
   "only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)": "solo el aviso de 60 s del panel: no hay aviso de LinuxGSM configurado (Archivos y configuración, ajustes de LinuxGSM)",
   "no in-game warning: none is set (Files & Config, LinuxGSM settings)": "sin aviso en el juego: no hay ninguno configurado (Archivos y configuración, ajustes de LinuxGSM)",
   "LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it": "LinuxGSM avisa a sus jugadores durante {n} min antes, en lugar de los 60 s del panel; el reinicio lo espera",
-  "Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.": "Su «Detener solo si está vacío» se deja a un lado en este reinicio, así que se sigue deteniendo de forma ordenada."
+  "Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.": "Su «Detener solo si está vacío» se deja a un lado en este reinicio, así que se sigue deteniendo de forma ordenada.",
+  "LinuxGSM holds a postponed backup of this server: its monitor runs it once the server is empty.": "LinuxGSM tiene una copia de seguridad aplazada de este servidor: su monitor la ejecuta cuando el servidor quede vacío.",
+  "Postponed by LinuxGSM: players are online. LinuxGSM runs it once the server is empty if the server's Autostart is on.": "Aplazado por LinuxGSM: hay jugadores conectados. LinuxGSM lo ejecuta cuando el servidor quede vacío si el inicio automático del servidor está activado.",
+  "Cancelling the reboot of {host}. A LinuxGSM warning countdown under way is called off and its players are told; a stop already under way finishes first, and the servers stopped are started again. The Power card shows what comes back.": "Cancelando el reinicio de {host}. Se anula la cuenta atrás de aviso de LinuxGSM en curso y se avisa a sus jugadores; una parada ya en curso termina primero, y los servidores detenidos se vuelven a iniciar. La tarjeta Energía muestra lo que vuelve.",
+  "LinuxGSM's player warning countdown on {name}": "la cuenta atrás de aviso a los jugadores de LinuxGSM en {name}",
+  "the panel’s 60 s warning: LinuxGSM can’t always count this game’s players, so its own warning may not run": "el aviso de 60 s del panel: LinuxGSM no siempre puede contar los jugadores de este juego, así que su propio aviso puede no ejecutarse",
+  "no sure in-game warning: LinuxGSM can’t always count this game’s players, so its warning may not run": "ningún aviso en el juego seguro: LinuxGSM no siempre puede contar los jugadores de este juego, así que su aviso puede no ejecutarse",
+  "only the panel’s 60 s warning: this LinuxGSM has no warning of its own": "solo el aviso de 60 s del panel: este LinuxGSM no tiene aviso propio",
+  "no in-game warning: this LinuxGSM has no warning of its own": "sin aviso en el juego: este LinuxGSM no tiene aviso propio",
+  "LinuxGSM counts this game’s players from a list the server can leave empty: then it stops it anyway, with no warning.": "LinuxGSM cuenta los jugadores de este juego a partir de una lista que el servidor puede dejar vacía: entonces lo detiene igualmente, sin aviso.",
+  "LinuxGSM is counting down to a stop or restart": "LinuxGSM está en cuenta atrás hacia una parada o un reinicio",
+  "servers": "servidores"
 }

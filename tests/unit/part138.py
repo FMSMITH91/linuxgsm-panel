@@ -94,7 +94,7 @@ def _vals138(answer):
 _saved_get138 = _files138.lgsm_get_values
 try:
     _lgp138._lg264_cache.clear()
-    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "5"})
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "5", "stoponlyifnoplayersallcommands": "on"})
     _al138 = {a: _lgp138.allowance_seconds(_srv138, "u1", "s1", a)
               for a in ("stop", "restart", "update", "backup", "workshop-update", "force-update",
                         "validate", "start")}
@@ -107,7 +107,8 @@ try:
           and _al138["force-update"] == _al138["validate"] == _al138["start"] == 0, repr(_al138))
     check("warning allowance: the timer is read once and cached, from the merged LinuxGSM config",
           _n_reads138 == 1 and len(_reads138) == 1 and _again138 == _al138["stop"]
-          and _reads138[0] == ("u1", "s1", ("warnplayerstimer", "stoponlyifnoplayers")), repr(_reads138))
+          and _reads138[0] == ("u1", "s1", ("warnplayerstimer", "stoponlyifnoplayers",
+                                            "stoponlyifnoplayersallcommands")), repr(_reads138))
     _lgp138._lg264_cache.clear()
     _files138.lgsm_get_values = _vals138(None)
     check("warning allowance: a config that could not be read keeps the caller's own budget (adds 0), "
@@ -115,17 +116,19 @@ try:
           _lgp138.timeout_for(_srv138, "u2", "s2", "stop", 60) == 60 and not _lgp138._lg264_cache,
           repr(_lgp138._lg264_cache))
     _lgp138._lg264_cache.clear()
-    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "3", "stoponlyifnoplayers": "on"})
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "3", "stoponlyifnoplayers": "on",
+                                                 "stoponlyifnoplayersallcommands": "on"})
     _st138a = (_lgp138.settings(_srv138, "u4", "s4"), _lgp138.stop_only_if_empty(_srv138, "u4", "s4"))
-    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "", "stoponlyifnoplayers": "off"})
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "", "stoponlyifnoplayers": "off",
+                                                 "stoponlyifnoplayersallcommands": "on"})
     _st138b = (_lgp138.settings(_srv138, "u5", "s5"), _lgp138.stop_only_if_empty(_srv138, "u5", "s5"))
     _files138.lgsm_get_values = _vals138(None)
     _st138c = _lgp138.stop_only_if_empty(_srv138, "u6", "s6")
     check("player settings: one read gives the timer and whether stoponlyifnoplayers is on; unread is None "
-          "(unknown), never off", _st138a == ({"minutes": 3, "stop_only": True}, True)
-          and _st138b == ({"minutes": 0, "stop_only": False}, False) and _st138c is None,
+          "(unknown), never off", _st138a == ({"minutes": 3, "stop_only": True, "supported": True}, True)
+          and _st138b == ({"minutes": 0, "stop_only": False, "supported": True}, False) and _st138c is None,
           repr((_st138a, _st138b, _st138c)))
-    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "99999"})
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "99999", "stoponlyifnoplayersallcommands": "on"})
     check("warning allowance: a hand-written timer past a day is held to a day",
           _lgp138.allowance_seconds(_srv138, "u3", "s3", "stop") == 24 * 3600 + _lgp138._LG264_WARN_SLACK)
 finally:
@@ -141,6 +144,8 @@ def _with_minutes138(minutes):
 _job138 = object.__new__(_hr138._Job)
 _job138.remote = _srv138
 _job138.job = {"mode": "when_empty"}
+_job138.bounce = _job138.bounce_joined = False
+_job138.bounce_unread = ""
 _runs138 = []
 _shells138 = []
 _saved138 = (_lgp138.warn_minutes, _smc138.run_as_game_user, _hr138.probe_server, _smc138.shell_as_game_user)
@@ -155,8 +160,9 @@ try:
     _job138._stop_one(_e138)
     check("reboot (wait for empty): a stop LinuxGSM refuses is not forced (players joined: the plan bounces)",
           _shells138 == [], repr(_shells138))
-    check("reboot: a server's stop is given STOP_BUDGET plus its warnplayerstimer (10 min)",
-          _runs138 == [("stop", _hr138.STOP_BUDGET + 600 + _lgp138._LG264_WARN_SLACK)], repr(_runs138))
+    check("reboot: a server's stop is given STOP_BUDGET plus its warnplayerstimer (10 min), with room for one "
+          "other LinuxGSM command's countdown and its stop and start first",
+          _runs138 == [("stop", 2 * _hr138.STOP_BUDGET + 2 * (600 + _lgp138._LG264_WARN_SLACK))], repr(_runs138))
     check("reboot: a stop LinuxGSM refused (players on, stoponlyifnoplayers) is recorded as refused, and "
           "the server as still running",
           _e138["stop"] == "still_running" and _e138["lgsm_refused"] is True, repr(_e138))
@@ -177,13 +183,13 @@ try:
     _hr138.probe_server = lambda remote, e: {"session": 0}
     _e138f = dict(_e138)
     _job138._stop_one(_e138f)
-    _bud138 = _hr138.STOP_BUDGET + 600 + _lgp138._LG264_WARN_SLACK
+    _bud138 = 2 * _hr138.STOP_BUDGET + 2 * (600 + _lgp138._LG264_WARN_SLACK)
     check("forced reboot: a stop LinuxGSM refused (stoponlyifnoplayers) is run again as LinuxGSM's own stop "
           "with the setting readonly off, with the warning's budget, and the server is stopped — not left "
           "to the shutdown",
           _runs138 == [("stop", _bud138)]
-          and _shells138 == [("codserver", "cd /home/codserver && readonly stoponlyifnoplayers=off"
-                                           " && source ./codserver stop 2>&1", _bud138)]
+          and _shells138 == [("codserver", "cd /home/codserver && export TERM=xterm && readonly "
+                                           "stoponlyifnoplayers=off && source ./codserver stop 2>&1", _bud138)]
           and _e138f["stop"] == "stopped" and _e138f["lgsm_refused"] is False, repr((_runs138, _shells138)))
     _runs138.clear()
     _shells138.clear()
@@ -206,7 +212,8 @@ if _bash138:
         _fh.write('source "$(dirname "${BASH_SOURCE[0]}")/x.cfg"\necho "cmd=$1 stoponlyifnoplayers=${stoponlyifnoplayers}"\n')
     with open(os.path.join(_d138, "x.cfg"), "w", encoding="utf-8") as _fh:
         _fh.write('stoponlyifnoplayers="on"\n')
-    _rb138 = _sp138.run([_bash138, "-c", _lgp138._LG264_FORCED_STOP % (_d138, "fakeserver")],  # nosec B603 - fixed fixture
+    _rb138 = _sp138.run([_bash138, "-c", _lgp138._lg264_forced_sh("u138", "fakeserver").replace(  # nosec B603 - fixture
+        "cd /home/u138", "cd " + _d138, 1)],
                         capture_output=True, text=True, check=False, env={"PATH": os.defpath})
     _plain138 = _sp138.run([_bash138, "-c", "cd %s && source ./fakeserver stop" % _d138],  # nosec B603 - fixed fixture
                            capture_output=True, text=True, check=False, env={"PATH": os.defpath})
@@ -254,16 +261,14 @@ _sp_src138 = _read138("panel", "services", "host_reboot.py")
 _saved_wb138 = _lgp138.warn_minutes
 try:
     _lgp138.warn_minutes = lambda server, user, selfname, fresh=False: {"a": 2, "b": 1, "c": 10}[selfname]
-    _wb138 = _lgp138.reboot_warn_budget(_srv138, {"u1": [{"user": "u1", "selfname": "a"},
-                                                         {"user": "u1", "selfname": "b"}],
-                                                  "u2": [{"user": "u2", "selfname": "c"}]})
+    _wb138 = _lgp138.reboot_warn_budget(_srv138, [[[{"user": "u1", "selfname": "a"}, {"user": "u1", "selfname": "b"}],
+                                                   [{"user": "u2", "selfname": "c"}]]], 4, lambda e: 180)
 finally:
     _lgp138.warn_minutes = _saved_wb138
-check("reboot: the stop phase's deadline adds the longest account's summed warnings (one account's "
-      "servers stop one after another), and the job uses it",
-      _wb138 == 10 * 60 + _lgp138._LG264_WARN_SLACK
-      and _lgp138.reboot_warn_budget(_srv138, {}) == 0
-      and "STOP_PHASE_CAP + _lgp.reboot_warn_budget(self.remote, groups)" in _sp_src138, repr(_wb138))
+check("reboot: the stop phase's deadline adds the warnings as the accounts run them — one account's servers "
+      "one after another, the accounts side by side (here the 10-minute one is the longest)",
+      _wb138 == 2 * (10 * 60 + _lgp138._LG264_WARN_SLACK) + 180
+      and _lgp138.reboot_warn_budget(_srv138, [], 4, lambda e: 180) == 0, repr(_wb138))
 
 # The reboot dialog's per-server fields, from the preview.
 _saved_wm138 = (_lgp138.warn_minutes,)
@@ -278,9 +283,10 @@ try:
     _wf138b = _lgp138.reboot_warn_fields(_srv138, _gs138, {"session": 1})
     check("reboot preview: a running server carries its warning minutes, whether LinuxGSM can warn on its "
           "game, and whether the panel's own 60 s countdown reaches it",
-          _wf138 == {"warn_minutes": 7, "stop_only_if_empty": True, "warn_supported": True, "say": True}
+          _wf138 == {"warn_minutes": 7, "stop_only_if_empty": True, "warn_supported": True, "say": True,
+                     "lgsm_supported": True, "lgsm_counts": True}
           and _wf138b == {"warn_minutes": 7, "stop_only_if_empty": True, "warn_supported": False,
-                          "say": False} and _wf138s == {},
+                          "say": False, "lgsm_supported": True, "lgsm_counts": True} and _wf138s == {},
           repr((_wf138, _wf138b, _wf138s)))
 finally:
     _lgp138.warn_minutes = _saved_wm138[0]
@@ -624,7 +630,7 @@ finally:
 check("config editor: on v26.4.0+ a game LinuxGSM can warn on gets both controls, with their values, and "
       "both keys leave the generic list (edited in one place)",
       _v1["players"] == {"supported": True, "stop_only_if_empty": True, "warn_supported": True,
-                         "warn_minutes": 5, "warn_max": 60, "can_count": True}
+                         "warn_minutes": 5, "warn_max": 60, "can_count": True, "list_unreliable": False}
       and _keys138(_v1) == ["maxbackups"], repr(_v1))
 check("config editor: a game LinuxGSM cannot warn on gets no warning control (an unset timer leaves the "
       "list too), and querymode 1 is said: LinuxGSM cannot count its players",
@@ -817,6 +823,430 @@ check("config editor: the settings form saves and re-baselines every [data-key] 
       and "#cfg-groups input[data-key]" not in _sfjs138)
 check("cron list: a job LinuxGSM postponed shows 'Postponed', not 'OK'",
       "if(j.ok === true && j.postponed)" in _sfjs138 and ">Postponed</span>" in _sfjs138)
+
+# ══ The adversarial review of #461 (lg264f) ══════════════════════════════════════════════════════
+import re as _re_lg  # noqa: E402
+import tempfile as _tf_lg  # noqa: E402
+import threading as _th_m3  # noqa: E402
+# M1: a wait-for-empty reboot whose stop LinuxGSM refuses (a player joined between the panel's count
+# and LinuxGSM's) bounces back to waiting; it never leaves that server to the shutdown.
+_saved_m1 = (_smc138.run_as_game_user, _hr138.probe_server, _lgp138.warn_minutes, _smc138.shell_as_game_user)
+try:
+    _smc138.run_as_game_user = lambda remote, user, action, **k: (_OUT_STOP138, "", 0)
+    _smc138.shell_as_game_user = lambda remote, user, sh, **k: ("", "sudo: a password is required", 1)
+    _hr138.probe_server = lambda remote, e: {"session": 1}
+    _lgp138.warn_minutes = _with_minutes138(0)
+    _jm1 = object.__new__(_hr138._Job)
+    _jm1.remote, _jm1.job = _srv138, {"mode": "when_empty"}
+    _jm1.bounce = _jm1.bounce_joined = False
+    _jm1.bounce_unread = ""
+    _em1 = {"id": 1, "user": "codserver", "selfname": "codserver", "game_type": "cod", "name": "cod"}
+    _jm1._stop_one(_em1)
+    check("M1 reboot (wait for empty): a stop LinuxGSM refused for players is a player joining — the plan "
+          "bounces back to waiting (rolled back), not left to the shutdown",
+          _jm1.bounce is True and _jm1.bounce_joined is True and _em1["stop"] == "still_running", repr(_em1))
+    # L1: forced ("now"), and the forced run answers nothing: the first run's refusal is kept.
+    _jm1.job, _jm1.bounce, _jm1.bounce_joined = {"mode": "now"}, False, False
+    _em1b = dict(_em1)
+    _jm1._stop_one(_em1b)
+    check("L1 forced reboot: a forced stop that answered nothing (a sudo refusal) keeps LinuxGSM's refusal of "
+          "the first run in the record, and a forced reboot does not bounce",
+          _em1b["lgsm_refused"] is True and _em1b["stop"] == "still_running" and _jm1.bounce is False, repr(_em1b))
+finally:
+    (_smc138.run_as_game_user, _hr138.probe_server, _lgp138.warn_minutes, _smc138.shell_as_game_user) = _saved_m1
+check("M1: a stop the rescan made, refused for a player who joined, also bounces before the reboot is sent",
+      "self._rescan()\n        if self._bounced():" in _read138("panel", "services", "host_reboot.py")
+      and "if self.bounce or (probes.get(gs.id) or {}).get(\"session\") != 1:" in
+      _read138("panel", "services", "host_reboot.py"))
+
+# M2: games whose player LIST LinuxGSM cannot count keep the panel's own countdown, and say so.
+_saved_m2 = _lgp138.warn_minutes
+try:
+    _lgp138.warn_minutes = _with_minutes138(5)
+    _m2 = {gt: _lgp138.lgsm_warns(_srv138, _gs_cfg138(gt)) for gt in ("mcb", "mc", "pmc", "wmc", "cs2", "csgo",
+                                                                       "gmod", "cod")}
+finally:
+    _lgp138.warn_minutes = _saved_m2
+check("M2 forced reboot: on Minecraft Bedrock/Java and CS2/CS:GO (a player list LinuxGSM can find empty with "
+      "players on) LinuxGSM's warning is not relied on, so the panel's 60 s countdown stays; Garry's Mod and "
+      "CoD keep LinuxGSM's", _m2 == {"mcb": False, "mc": False, "pmc": False, "wmc": False, "cs2": False,
+                                     "csgo": False, "gmod": True, "cod": True}, repr(_m2))
+_saved_rem_m2 = _lgp138.remember
+try:
+    _lgp138.remember = lambda *a, **k: None
+    _vm2 = _lgp138.config_view(_gs_cfg138("mcb"), _cfg138(warn="5"))
+finally:
+    _lgp138.remember = _saved_rem_m2
+check("M2 config editor: a game whose list LinuxGSM cannot count is marked so (the page says Only stop when "
+      "empty may not hold and the warning may not run)", _vm2["players"]["list_unreliable"] is True
+      and _vm2["players"]["can_count"] is True and _v1["players"]["list_unreliable"] is False, repr(_vm2))
+try:
+    _p9_patch(_lgp138, "settings", lambda *a, **k: {"minutes": 5, "stop_only": True, "supported": True})
+    _p9_patch_sm("moderation_caps", lambda gt: {"say": True})
+    _wfm2 = _lgp138.reboot_warn_fields(_srv138, _gs_cfg138("mcb"), {"session": 1})
+    _p9_patch(_lgp138, "settings", lambda *a, **k: {"minutes": 0, "stop_only": False, "supported": False})
+    _wfl5 = _lgp138.reboot_warn_fields(_srv138, _gs_cfg138("gmod"), {"session": 1})
+finally:
+    _p9_restore_all()
+check("M2/L5 reboot preview: a game LinuxGSM cannot count says so (lgsm_counts), and a LinuxGSM before "
+      "v26.4.0 says it has no warning (lgsm_supported)",
+      _wfm2["lgsm_counts"] is False and _wfm2["lgsm_supported"] is True
+      and _wfl5["lgsm_supported"] is False and _wfl5["lgsm_counts"] is True, repr((_wfm2, _wfl5)))
+_prog_m2 = _prog_nags138.split("console.log(JSON.stringify({")[0] + (
+    "console.log(JSON.stringify({"
+    " count: run([Object.assign(S(1, 5, true, true), {lgsm_counts: false}),"
+    " Object.assign(S(2, 5, true, false), {lgsm_counts: false})], [{id: 1}, {id: 2}]),"
+    " old: run([Object.assign(S(3, 0, true, true), {lgsm_supported: false})], [{id: 3}])}));")
+_om2 = _node47(_prog_m2)
+if _om2 is None:
+    skip("M2/L5 reboot dialog lines", "node is not installed")
+else:
+    _tm2 = " ".join(x["text"] for x in (_om2.get("count") or []))
+    _tl5 = " ".join(x["text"] for x in (_om2.get("old") or []))
+    check("M2 reboot dialog: where LinuxGSM cannot always count the players it never says LinuxGSM warns them "
+          "(the panel's 60 s countdown is the warning)",
+          "srv1 — the panel’s 60 s warning: LinuxGSM can’t always count this game’s players" in _tm2
+          and "srv2 — no sure in-game warning" in _tm2 and "LinuxGSM warns its players" not in _tm2, repr(_om2))
+    check("L5 reboot dialog: before LinuxGSM v26.4.0 it does not point to a setting that page hides",
+          "srv3 — only the panel’s 60 s warning: this LinuxGSM has no warning of its own" in _tl5
+          and "Files & Config" not in _tl5, repr(_om2))
+_prog_m2sf = _prog_sf138.split("console.log(JSON.stringify({")[0] + (
+    "console.log(JSON.stringify({ul: _lg264PlayersHtml({supported: true, warn_supported: true, warn_minutes: 0,"
+    " warn_max: 60, can_count: true, list_unreliable: true}), ok: _lg264PlayersHtml({supported: true,"
+    " warn_supported: true, warn_minutes: 0, warn_max: 60, can_count: true, list_unreliable: false})}));")
+_om2sf = _node47(_prog_m2sf)
+if _om2sf is None:
+    skip("M2 config editor note", "node is not installed")
+else:
+    check("M2 config editor: a game whose player list can come back empty is told LinuxGSM then stops it "
+          "anyway, with no warning; other games are not",
+          "list the server can leave empty" in _om2sf["ul"] and "list the server can leave empty" not in _om2sf["ok"],
+          repr(_om2sf))
+
+# M3: Cancel during the stop phase calls LinuxGSM's own countdown off (its Ctrl-C), at once.
+_bash_m3 = _shutil138.which("bash")
+_envbin_m3 = _shutil138.which("env")
+if _bash_m3 and _envbin_m3:
+    _dm3 = _tf_lg.mkdtemp()
+    os.makedirs(os.path.join(_dm3, "lgsm", "lock"))
+    with open(os.path.join(_dm3, "fakeserver"), "w", encoding="utf-8") as _fh:
+        _fh.write("trap 'echo CANCELLED; rm -f lgsm/lock/fakeserver-warning.lock; exit 0' INT\n"
+                  "echo $$ > lgsm/lock/fakeserver-warning.lock\n"
+                  "for i in $(seq 300); do sleep 0.1; done\necho STOPPED\n")
+
+    def _m3_run(cmd):
+        # A test shell that is sent Ctrl-C must start with SIGINT at its default (CI ignores it).
+        p = _sp138.Popen([_envbin_m3, "--default-signal=INT", _bash_m3, "./fakeserver", cmd],  # nosec B603 - fixture
+                         cwd=_dm3, stdout=_sp138.PIPE, text=True)
+        for _i in range(100):
+            if os.path.exists(os.path.join(_dm3, "lgsm", "lock", "fakeserver-warning.lock")):
+                break
+            _time138.sleep(0.05)
+        sh = _lgp138.interrupt_sh("u138", "fakeserver").replace("cd /home/u138", "cd '%s'" % _dm3, 1)
+        r = _sp138.run([_bash_m3, "-c", sh], capture_output=True, text=True, check=False,  # nosec B603 - fixture
+                       env={"PATH": os.defpath})
+        t0 = _time138.monotonic()
+        if "LG264_INTERRUPTED" not in r.stdout:
+            p.kill()
+        out = p.communicate(timeout=60)[0]
+        try:
+            os.unlink(os.path.join(_dm3, "lgsm", "lock", "fakeserver-warning.lock"))
+        except OSError:
+            pass
+        return r.stdout, out, _time138.monotonic() - t0
+
+    _m3stop = _m3_run("stop")
+    _m3restart = _m3_run("restart")
+    check("M3 Cancel: the reboot's own stop counting down is sent LinuxGSM's Ctrl-C (its trap tells the players "
+          "the stop is cancelled and ends the command) and ends within seconds, not at the countdown's end",
+          "LG264_INTERRUPTED" in _m3stop[0] and "CANCELLED" in _m3stop[1] and "STOPPED" not in _m3stop[1]
+          and _m3stop[2] < 10, repr(_m3stop))
+    check("M3 Cancel: another command's countdown (a restart) is not the reboot's to call off",
+          "LG264_INTERRUPTED" not in _m3restart[0] and "CANCELLED" not in _m3restart[1], repr(_m3restart))
+    with open(os.path.join(_dm3, "lgsm", "lock", "fakeserver-warning.lock"), "w", encoding="utf-8") as _fh:
+        _fh.write("-1\n")
+    _m3bad = _sp138.run([_bash_m3, "-c", _lgp138.interrupt_sh("u138", "fakeserver").replace(  # nosec B603 - fixture
+        "cd /home/u138", "cd '%s'" % _dm3, 1)], capture_output=True, text=True, check=False, env={"PATH": os.defpath})
+    check("M3 Cancel: a warning lock that is not a pid signals nothing",
+          _m3bad.returncode == 0 and _m3bad.stdout == "", repr(_m3bad))
+else:
+    skip("M3 Cancel: LinuxGSM's Ctrl-C to the reboot's countdown", "bash or env is not installed")
+
+_m3calls = []
+_m3ents = [{"id": 1, "name": "a", "user": "ua", "selfname": "sa", "in_stop": True},
+           {"id": 2, "name": "b", "user": "ub", "selfname": "sb", "in_stop": False},
+           {"id": 3, "name": "c", "user": "uc", "selfname": "sc", "in_stop": True}]
+_m3off = _lgp138.interrupt_countdowns(_srv138, _m3ents, lambda remote, user, sh, **k: (
+    _m3calls.append((user, k.get("selfname"))), ("LG264_INTERRUPTED\n" if user == "ua" else "", "", 0))[1])
+check("M3 Cancel: only the stops still running are asked, as their own accounts; the names called off come back",
+      _m3calls == [("ua", "sa"), ("uc", "sc")] and _m3off == ["a"], repr((_m3calls, _m3off)))
+
+_m3gate = _th_m3.Event()
+_m3log = []
+_m3flag = []
+
+
+def _m3_group(grp):
+    _m3log.append(("start", grp[0]))
+    if grp[0] == "slow":
+        _m3gate.wait(20)
+    _m3log.append(("end", grp[0]))
+
+
+def _m3_cancel():
+    _m3log.append(("cancel",))
+    _m3gate.set()
+
+
+_m3t = _th_m3.Timer(0.3, lambda: _m3flag.append(True))
+_m3t.start()
+_lgp138.run_stop_passes([[["slow"], ["fast"]], [["later"]]], _m3_group, 4, lambda: bool(_m3flag), _m3_cancel)
+_m3t.cancel()
+check("M3 Cancel: the stop phase acts on a Cancel while a stop is still running (its countdown is called off "
+      "then, not after it), once; and a pass starts only when the one before has ended",
+      _m3log.count(("cancel",)) == 1 and _m3log.index(("cancel",)) < _m3log.index(("end", "slow"))
+      and _m3log.index(("start", "later")) > _m3log.index(("end", "slow")), repr(_m3log))
+_saved_m3s = (_smc138.run_as_game_user, _lgp138.warn_minutes)
+_m3seen = []
+try:
+    _lgp138.warn_minutes = _with_minutes138(0)
+    _em3 = {"id": 1, "user": "u", "selfname": "s"}
+    _smc138.run_as_game_user = lambda *a, **k: (_m3seen.append(_em3.get("in_stop")), ("", "", 0))[1]
+    _lgp138.reboot_stop(_srv138, _em3, 180)
+finally:
+    (_smc138.run_as_game_user, _lgp138.warn_minutes) = _saved_m3s
+check("M3: a reboot's stop is marked in flight while it runs (what Cancel calls off), and not after",
+      _m3seen == [True] and _em3["in_stop"] is False, repr((_m3seen, _em3)))
+try:
+    with _hr138._hr_lock:
+        _hr138._host_reboots[913899] = {"phase": "stopping", "sent": None}
+    _rm3 = type("R", (), {"id": 913899, "name": "h", "display_name": "h"})()
+    _cm3 = _hr138.cancel(_rm3, None)
+    with _hr138._hr_lock:
+        _hr138._host_reboots[913899] = {"phase": "warning", "sent": None}
+    _cm3b = _hr138.cancel(_rm3, None)
+finally:
+    with _hr138._hr_lock:
+        _hr138._host_reboots.pop(913899, None)
+check("M3 Cancel reply: while servers are being stopped it says a LinuxGSM countdown under way is called off "
+      "and its players told, and that a stop already under way finishes first; before that, the short reply",
+      "countdown under way is called off" in str(_cm3[1]["message"])
+      and "finishes first" in str(_cm3[1]["message"])
+      and "countdown" not in str(_cm3b[1]["message"]), repr((_cm3, _cm3b)))
+
+# M4: the census sees another command's countdown, and a restart in flight.
+check("M4 probe: the WARN line is read; a live warning means a LinuxGSM countdown",
+      _hr138.parse_probe("SESSION=1\nWARN=1\nPROBE_OK\n")["warn"] == 1
+      and _hr138.parse_probe("SESSION=1\nWARN=0\nPROBE_OK\n")["warn"] == 0
+      and _hr138.parse_probe("garbage")["warn"] is None)
+if _bash_m3:
+    _dm4 = _tf_lg.mkdtemp()
+    os.makedirs(os.path.join(_dm4, "lgsm", "lock"))
+
+    def _m4_warn(lock_text):
+        with open(os.path.join(_dm4, "lgsm", "lock", "s138-warning.lock"), "w", encoding="utf-8") as fh:
+            fh.write(lock_text)
+        sh = _hr138._probe_sh("u138", "s138").replace("cd /home/u138", "cd '%s'" % _dm4, 1)
+        r = _sp138.run([_bash_m3, "-c", sh], capture_output=True, text=True, check=False,  # nosec B603 - fixture
+                       env={"PATH": os.defpath})
+        return _hr138._probe_values(r.stdout.splitlines()).get("WARN")
+
+    _dead_m4 = _sp138.run([_bash_m3, "-c", "echo $$"], capture_output=True, text=True,  # nosec B603 - fixture
+                          check=False).stdout.strip()
+    _m4w = (_m4_warn("%d\n" % os.getpid()), _m4_warn(_dead_m4 + "\n"), _m4_warn("-1\n"), _m4_warn(""))
+    check("M4 probe: WARN=1 only while the warning lock's pid is alive; a dead pid, a non-pid or an empty lock is 0",
+          _m4w == ("1", "0", "0", "0"), repr(_m4w))
+else:
+    skip("M4 probe: the warning lock read in bash", "bash is not installed")
+check("M4 probe: a LinuxGSM restart in flight is maintenance a reboot does not cut through",
+      _re_lg.search(_hr138._cmd_pattern("s138", _hr138._MAINT_CMDS), "/bin/bash /home/u138/s138 restart")
+      is not None)
+try:
+    _p9_patch(_hr138._mon, "_host_reachable", lambda remote: True)
+    _p9_patch(_hr138, "_row_blockers", lambda rows: [])
+    _p9_patch(_hr138, "_host_blockers", lambda remote: [])
+    _p9_patch(_hr138, "_count_players", lambda running, primaries: ([], []))
+    _p9_patch(_hr138._mon, "_batched_slots", lambda rows: {})
+    with _p9.app_context():
+        _gs_m4 = _sh138.db.session.get(_sh138.GameServer, P9_GS)
+        _others_m4 = [g.id for g in _sh138.GameServer.query.filter_by(remote_id=_gs_m4.remote_id).all()]
+        _pr_m4 = {i: {"session": 0} for i in _others_m4}
+        _pr_m4[P9_GS] = {"session": 1, "maint": 0, "warn": 1}
+        _hs_m4 = _hr138.host_player_state(_gs_m4.remote, probes=_pr_m4)
+        _pr_m4[P9_GS] = {"session": 1, "maint": 1, "warn": 0}
+        _hs_m4b = _hr138.host_player_state(_gs_m4.remote, probes=_pr_m4)
+finally:
+    _p9_restore_all()
+check("M4 census: a server LinuxGSM is counting down on blocks the reboot (lgsm_warning), as maintenance does",
+      _hs_m4["state"] == "blocked" and [b["kind"] for b in _hs_m4["blockers"]] == ["lgsm_warning"]
+      and [b["kind"] for b in _hs_m4b["blockers"]] == ["maintenance"], repr((_hs_m4, _hs_m4b)))
+check("M4: the blocker is worded (in the reboot's sentence and the dialog's list)",
+      "LinuxGSM's player warning countdown on x"
+      in str(_hr138._blocked_sentence([_hr138._blocker("lgsm_warning", "x")]))
+      and "lgsm_warning: 'LinuxGSM is counting down to a stop or restart'" in _nags138)
+
+# M5 + L10: the stop phase's budget follows the pool, pass by pass.
+_saved_m5 = _lgp138.warn_minutes
+try:
+    _lgp138.warn_minutes = lambda server, user, selfname, fresh=False: {"w": 60, "n": 0}[selfname[0]]
+    _ents_m5 = [{"user": "u%d" % i, "selfname": "w%d" % i, "game_type": "gmod"} for i in range(9)]
+    _passes_m5 = _lgp138.stop_passes(_srv138, _ents_m5)
+    _b_m5 = _lgp138.reboot_warn_budget(_srv138, _passes_m5, 4, lambda e: 180)
+    _mix_m5 = [{"user": "a", "selfname": "w1", "game_type": "gmod"}, {"user": "a", "selfname": "n1", "game_type": "gmod"},
+               {"user": "b", "selfname": "n2", "game_type": "mcb"}, {"user": "c", "selfname": "w2", "game_type": "mcb"}]
+    _pm_m5 = _lgp138.stop_passes(_srv138, _mix_m5)
+finally:
+    _lgp138.warn_minutes = _saved_m5
+_one_m5 = 2 * (60 * 60 + _lgp138._LG264_WARN_SLACK) + 180
+check("M5 reboot: nine accounts with players and a 60-minute timer on four workers take three rounds — the "
+      "stop phase's budget is the pool's schedule, not the longest account",
+      _b_m5 == 3 * _one_m5 and _lgp138.schedule_seconds([5, 1, 1, 1, 1], 4) == 5
+      and _lgp138.schedule_seconds([1, 1, 1, 1, 1], 4) == 2 and _lgp138.schedule_seconds([], 4) == 0, repr(_b_m5))
+check("L10 reboot: the servers the panel's own 60 s countdown warned (LinuxGSM does not warn them) stop in a "
+      "first pass, before any LinuxGSM countdown; each account's servers still one after another",
+      [[[e["selfname"] for e in g] for g in p] for p in _pm_m5] == [[["n1"], ["n2"], ["w2"]], [["w1"]]],
+      repr(_pm_m5))
+check("M5/L10: the job runs those passes with that budget",
+      "_lgp.reboot_warn_budget(self.remote, passes, STOP_WORKERS, _stop_budget)" in _sp_src138
+      and "_lgp.run_stop_passes(passes," in _sp_src138 and "ex.map(lambda grp: self._stop_group" not in _sp_src138)
+
+# M6 + L8: the Stop button's refused outcome reaches the console, and its quiet window ends.
+_pushed_m6 = []
+try:
+    _p9_arm(who="part138")
+    _p9_patch(_lgp138, "warn_minutes", _with_minutes138(2))
+    _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: (
+        _OUT_STOP138 if action == "stop" else _OUT_RESTART138, "", 0))
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: None)
+    _p9_patch(_sd138, "_console_push", lambda app, sid, line: _pushed_m6.append((sid, line)))
+    _p9_patch(_sh138, "_console_push", lambda app, sid, line: _pushed_m6.append((sid, line)))
+    _p9_set(P9_GS, status="online", restart_pending=False, stop_pending=False, autostart=True)
+    _A_m6 = _p9_client(P9_ADMIN)
+    _A_m6.post("/api/server/%d/action" % P9_GS, json={"action": "stop"})
+    _p9_drain()
+    _win_stop_m6 = (P9_GS in _mon138._expected_offline, P9_GS in _mon138._expected_stop)
+    _A_m6.post("/api/server/%d/action" % P9_GS, json={"action": "restart"})
+    _p9_drain()
+    _win_restart_m6 = P9_GS in _mon138._expected_offline
+    _mon138._expected_offline[P9_GS] = float("inf")
+    _mon138._end_offline_window(P9_GS)
+    _inf_m6 = _mon138._expected_offline.get(P9_GS)
+finally:
+    _p9_restore_all()
+    _mon138._expected_offline.pop(P9_GS, None)
+    _mon138._expected_stop.pop(P9_GS, None)
+check("M6 Stop button: a stop LinuxGSM refused is said in the server's console, as a [panel] line",
+      any(sid == P9_GS and line.startswith("[panel] stop: Stop refused: players are online") for sid, line in _pushed_m6),
+      repr(_pushed_m6))
+check("M6 Restart button: a restart LinuxGSM postponed is said in the console too",
+      any(line.startswith("[panel] restart: Restart postponed") for _sid, line in _pushed_m6), repr(_pushed_m6))
+check("L8: a refused stop and a postponed restart end their quiet window (warning allowance and all), so a "
+      "crash of the server that stayed up pages; a reboot plan's hold is kept",
+      _win_stop_m6 == (False, False) and _win_restart_m6 is False and _inf_m6 == float("inf"),
+      repr((_win_stop_m6, _win_restart_m6, _inf_m6)))
+
+# L2 + L3: an unread request does not say Autostart is off; a held backup does not claim players are on.
+_saved_l2 = (_smc138.shell_as_game_user,)
+try:
+    _smc138.shell_as_game_user = lambda *a, **k: ("", "timed out", -1)
+    _l2 = _game138._lg264_bk_after(_srv138, "codserver", "codserver", _OUT_BACKUP138)
+finally:
+    (_smc138.shell_as_game_user,) = _saved_l2
+check("L2 backup postponed, its request unread: neither 'Autostart is off' nor a promise — it says what it "
+      "depends on", _l2 is not None and "Autostart is off" not in str(_l2[1])
+      and "if the server's Autostart is on" in str(_l2[1]) and _l2[2] is True, repr(_l2))
+check("L3: LinuxGSM's held backup is described without claiming players are online now (the monitor's own "
+      "backup may be running, or have failed)", "players are online" not in str(_lgp138.BACKUP_QUEUED)
+      and "postponed backup" in str(_lgp138.BACKUP_QUEUED))
+
+# L4: the monitor's own "restart postponed" is the monitor doing its job, not a postponed job.
+_row_l4 = {cmd: (_cron138._cron_job_row("*/5 * * * * " + cmd, "codserver", "codserver",
+                                        {_cron138._cron_job_id(cmd): {"postponed": True, "ok": True, "last_run": 1,
+                                                                      "rc": 0, "error": ""}}, {}) or {}).get("postponed")
+           for cmd in ("/home/codserver/codserver monitor", "/home/codserver/codserver restart")}
+check("L4 cron list: the Autostart monitor's run is not 'Postponed'; a restart job LinuxGSM postponed is",
+      _row_l4 == {"/home/codserver/codserver monitor": False, "/home/codserver/codserver restart": True}, repr(_row_l4))
+
+# L6: a hand-written timer of thousands of digits reads as the cap, never raises.
+try:
+    _l6 = _lgp138.warn_minutes_value("1" * 5000)
+except ValueError as _exc_l6:
+    _l6 = repr(_exc_l6)[:80]
+check("L6 warnplayerstimer: 5000 digits read as the longest the panel allows for, not a ValueError (the editor's "
+      "read and every reboot of the host went through here)",
+      _l6 == _lgp138._LG264_ALLOWANCE_CAP_MIN and _lgp138.warn_minutes_value("15") == 15, repr(_l6))
+
+# L5: before v26.4.0 a hand-set timer is off.
+_saved_l5 = _files138.lgsm_get_values
+try:
+    _lgp138._lg264_cache.clear()
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "5", "stoponlyifnoplayers": "on"})
+    _l5 = _lgp138.settings(_srv138, "u9", "s9")
+finally:
+    _files138.lgsm_get_values = _saved_l5
+    _lgp138._lg264_cache.clear()
+check("L5: on a LinuxGSM before v26.4.0 (no stoponlyifnoplayersallcommands) a hand-set timer and switch are "
+      "off: the panel keeps its own countdown and budgets nothing",
+      _l5 == {"minutes": 0, "stop_only": False, "supported": False}, repr(_l5))
+
+# L7: the uninstall's stop does not count down for minutes inside the request.
+_l7 = []
+try:
+    _p9_arm(who="part138")
+    _p9_patch_sm("shell_as_game_user", lambda remote, user, sh, **k: (_l7.append(("sh", sh, k.get("timeout"))),
+                                                                       ("Graceful ... OK", "", 0))[1])
+    _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: (_l7.append(("run", action, k.get("timeout"))),
+                                                                         ("", "", 0))[1])
+    _p9_patch_sm("run_privileged", lambda *a, **k: ("", "", 0))
+    from panel.routes import manage_servers as _ms_l7  # noqa: E402
+    _ms_l7._stop_game_processes(_srv138, "codserver", "codserver")
+    _l7a = list(_l7)
+    _l7.clear()
+    _p9_patch_sm("shell_as_game_user", lambda remote, user, sh, **k: (_l7.append(("sh", sh, k.get("timeout"))),
+                                                                       ("", "sudo: refused", 1))[1])
+    _ms_l7._stop_game_processes(_srv138, "codserver", "codserver")
+    _l7b = list(_l7)
+finally:
+    _p9_restore_all()
+check("L7 uninstall: the stop is LinuxGSM's own, with its warning and players check set aside, in 60 s — "
+      "never a countdown of warnplayerstimer minutes inside the request",
+      _l7a and _l7a[0][0] == "sh" and "readonly stoponlyifnoplayers=off warnplayerstimer=0" in _l7a[0][1]
+      and "source ./codserver stop" in _l7a[0][1] and _l7a[0][2] == 60 and not any(x[0] == "run" for x in _l7a),
+      repr(_l7a))
+check("L7 uninstall: a shell the account refuses falls back to the plain stop, as before",
+      [x[0] for x in _l7b if x[0] in ("sh", "run")][:2] == ["sh", "run"] and ("run", "stop", 60) in _l7b, repr(_l7b))
+
+# L9: a commented-out monitor line in the crontab is no monitor.
+_bash_l9 = _shutil138.which("bash")
+if _bash_l9:
+    _dl9 = _tf_lg.mkdtemp()
+    os.makedirs(os.path.join(_dl9, "home", "lgsm", "lock"))
+    os.makedirs(os.path.join(_dl9, "bin"))
+    open(os.path.join(_dl9, "home", "lgsm", "lock", "s-monitoring.lock"), "w", encoding="utf-8").close()
+    _cmd_l9 = []
+    _saved_l9 = _smc138.shell_as_game_user
+    try:
+        _smc138.shell_as_game_user = lambda s, u, c, **k: (_cmd_l9.append(c), ("", "", 1))[1]
+        _game138._lg264_bk_request(_srv138, "u", "s")
+    finally:
+        _smc138.shell_as_game_user = _saved_l9
+
+    def _l9_monitor(crontab_text):
+        with open(os.path.join(_dl9, "bin", "crontab"), "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % crontab_text.replace("/home/u", _dl9 + "/home"))
+        os.chmod(os.path.join(_dl9, "bin", "crontab"), 0o700)  # nosemgrep: insecure-file-permissions - a stand-in this part runs
+        r = _sp138.run([_bash_l9, "-c", _cmd_l9[0].replace("/home/u", _dl9 + "/home")],  # nosec B603 - fixture
+                       capture_output=True, text=True, check=False,
+                       env={"PATH": os.path.join(_dl9, "bin") + ":" + os.defpath})
+        return (r.stdout.split("\t") + ["", "", ""])[2]
+
+    _l9 = (_l9_monitor("*/5 * * * * /home/u/s monitor > /dev/null 2>&1"),
+           _l9_monitor("#*/5 * * * * /home/u/s monitor > /dev/null 2>&1"),
+           _l9_monitor("  # */5 * * * * /home/u/s monitor"))
+    check("L9 backup: a crontab whose monitor line is commented out runs no monitor (the panel backs up "
+          "itself); the live line still counts", _l9 == ("1", "0", "0"), repr(_l9))
+else:
+    skip("L9 backup: the crontab read in bash", "bash is not installed")
 
 check("part138: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP138_START, repr(_P9_TRIPPED[_TRIP138_START:]))

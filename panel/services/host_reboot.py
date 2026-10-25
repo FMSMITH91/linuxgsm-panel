@@ -97,12 +97,13 @@ _SETTING_RESTORE_NO_AUTOSTART = "reboot_restore_no_autostart"
 DEFAULT_WAIT_HOURS = 24
 
 # The LinuxGSM commands whose process means "LinuxGSM is doing something to this server now", and
-# the ones of those that are maintenance a reboot must not cut through.
+# the ones of those that are maintenance a reboot must not cut through: a `restart` among them, whose
+# start would bring the server back under the reboot (a daily cron restart at the reboot's minute).
 _INFLIGHT_CMDS = ("monitor|start|stop|restart|update|force-update|validate|backup|install|"
                   "auto-install|debug|details|mods-update|update-lgsm|workshop-update")
 _MAINT_CMDS = ("update|force-update|validate|backup|install|auto-install|mods-update|update-lgsm|"
-               "workshop-update")
-_PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "BOOT", "MID", "NOW", "SEC")
+               "workshop-update|restart")
+_PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "WARN", "BOOT", "MID", "NOW", "SEC")
 
 # The last finished outcome per host, shown on the Power card for a day: {at, text, ok}.
 _last_result = register_remote_state({})
@@ -190,13 +191,17 @@ def _probe_sh(user, selfname):
             + 'echo "CRON=$(crontab -l 2>/dev/null | grep -F -- "$s" | base64 -w0)"; '
             + 'echo "INFLIGHT=$(pgrep -u %s -fc %s)"; ' % (me, _q(_cmd_pattern(selfname, _INFLIGHT_CMDS)))
             + 'echo "MAINT=$(pgrep -u %s -fc %s)"; ' % (me, _q(_cmd_pattern(selfname, _MAINT_CMDS)))
+            # LinuxGSM v26.4.0 counting down to a stop, restart, update or backup (its warning lock's
+            # pid alive): a reboot's stop would wait it out and then warn again (lgsm_players).
+            + 'w=$(head -n 1 "$L/$s-warning.lock" 2>/dev/null); W=0; case "$w" in ""|*[!0-9]*) ;; '
+              '*) kill -0 "$w" 2>/dev/null && W=1;; esac; echo "WARN=$W"; '
             + 'echo "BOOT=$(cat /proc/sys/kernel/random/boot_id)"; '
               'echo "MID=$(cat /etc/machine-id)"; echo "NOW=$(date +%s)"; echo "SEC=$(date +%S)"; '
               'echo PROBE_OK')
 
 
-_UNREAD = {"ok": False, "session": None, "lock": None, "aside": None, "cron": None,
-           "inflight": None, "maint": None, "boot": None, "mid": None, "now": None, "sec": None}
+_UNREAD = {"ok": False, "session": None, "lock": None, "aside": None, "cron": None, "inflight": None,
+           "maint": None, "warn": None, "boot": None, "mid": None, "now": None, "sec": None}
 
 
 def _int_or_none(v):
@@ -232,6 +237,7 @@ def parse_probe(out):
     return {"ok": True, "session": sess, "lock": _word(raw.get("LOCK"), _LOCK_WORDS),
             "aside": _word(raw.get("ASIDE"), _LOCK_WORDS), "cron": _cron_lines(raw.get("CRON")),
             "inflight": _int_or_none(raw.get("INFLIGHT")), "maint": _int_or_none(raw.get("MAINT")),
+            "warn": _int_or_none(raw.get("WARN")),
             "boot": raw.get("BOOT") or None, "mid": raw.get("MID") or None,
             "now": _int_or_none(raw.get("NOW")), "sec": _int_or_none(raw.get("SEC"))}
 
@@ -618,7 +624,8 @@ def host_player_state(remote, probes=None):
         probes = _probe_rows(remote, installed)
     unknown = _unread_rows(installed, probes)
     running = [gs for gs in installed if _session_of(probes, gs) == 1]
-    blockers += [_blocker("maintenance", gs.name) for gs in running if probes[gs.id].get("maint")]
+    blockers += [_blocker("lgsm_warning" if probes[gs.id].get("warn") else "maintenance", gs.name)
+                 for gs in running if probes[gs.id].get("maint") or probes[gs.id].get("warn")]
     busy, unk2 = _count_players(running, _mon._batched_slots(running) if running else {})
     unknown += unk2
     return {"state": _rw.state_word(blockers, busy, unknown),
@@ -705,14 +712,7 @@ PANEL_WONT_RETURN = ("The panel itself is not set to start at boot, so the serve
 
 
 _blocked_sentence, shown = _rw.blocked_sentence, _rw.shown   # the words: reboot_words
-
-
-_WHY_WORDS = {"autostart": "comes back by Autostart about 5 min after boot",
-              "no_autostart": "is started by the panel after the boot",
-              "no_autostart_off": "stays stopped (Autostart is off)",
-              "stop_pending": "stays stopped (a stop was queued)",
-              "stopped": "is stopped and stays stopped",
-              "unreadable": "could not be read; it is left to the shutdown"}
+_WHY_WORDS = _rw.WHY_WORDS
 
 
 def preview(remote, probes=None):
@@ -1017,14 +1017,14 @@ def cancel(remote, actor):
             had = _reboot_when_empty.pop(remote.id, None)
         job = _host_reboots.get(remote.id)
         stoppable = bool(job) and job.get("sent") is None
+        stopping = stoppable and job.get("phase") == "stopping"
         if stoppable:
             job["cancel"] = who
     if had:
         log_action(actor, "reboot_when_empty_cancel", target=remote.name, remote=remote)
     if stoppable:
         return 200, {"success": True, "pending": False,
-                     "message": i18n.Sentence("Cancelling the reboot of {host}. The Power card shows "
-                                              "what comes back.", host=_host_label(remote))}
+                     "message": _rw.cancelling(_host_label(remote), stopping)}
     if had:
         return 200, {"success": True, "pending": False, "message": "Auto-reboot canceled."}
     if job:
@@ -1034,6 +1034,11 @@ def cancel(remote, actor):
         return 409, {"success": False, "error": "sent",
                      "message": "Too late to cancel: the reboot is already under way."}
     return 200, {"success": True, "pending": False, "message": "Nothing was scheduled."}
+
+
+def _stop_budget(e):
+    """A plan entry's graceful stop budget, before LinuxGSM's warnings (lgsm_players.reboot_allowance)."""
+    return STOP_BUDGET_TELNET if e["game_type"] in _TELNET_STOP_GAMES else STOP_BUDGET
 
 
 # ── The job ─────────────────────────────────────────────────────────────────────────────────────
@@ -1220,6 +1225,8 @@ class _Job:
         if self._bounced():
             return
         self._rescan()
+        if self._bounced():      # a stop the rescan made, refused for a player who joined
+            return
         self._send()             # its first step: a Cancel that came in by now ends the job there
 
     def _census_or_stop(self):
@@ -1470,14 +1477,14 @@ class _Job:
         self.bounce = self.bounce_joined = False
         self.bounce_unread = ""
         loaded = self._loaded_rows()
-        groups = {}
-        for e in self.entries:
-            groups.setdefault(e["user"], []).append(e)
-        # Each server warns its players before it stops: the phase gets the longest account's warnings.
-        self.deadline = time.monotonic() + STOP_PHASE_CAP + _lgp.reboot_warn_budget(self.remote, groups)
-        if groups:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(STOP_WORKERS, len(groups))) as ex:
-                list(ex.map(lambda grp: self._stop_group(grp, loaded), groups.values()))
+        # The servers LinuxGSM does not warn first, then the rest; each pass's accounts side by side.
+        passes = _lgp.stop_passes(self.remote, self.entries)
+        # Each server warns its players before it stops: the phase gets the warnings as the pool runs them.
+        self.deadline = (time.monotonic() + STOP_PHASE_CAP
+                         + _lgp.reboot_warn_budget(self.remote, passes, STOP_WORKERS, _stop_budget))
+        # A Cancel calls off LinuxGSM's countdowns in flight (LinuxGSM's own Ctrl-C), at once.
+        _lgp.run_stop_passes(passes, lambda grp: self._stop_group(grp, loaded), STOP_WORKERS, self._cancelled,
+                             lambda: _lgp.interrupt_countdowns(self.remote, self.entries, _account_shell))
         for e in self.entries:
             self._update_row(e, stop=e["stop"])
             self._clear_stop_pending(e)
@@ -1541,14 +1548,15 @@ class _Job:
 
     def _stop_one(self, e):
         # Never raises: the state read below decides, never the call.
-        out = _lgp.reboot_stop(self.remote, e, STOP_BUDGET_TELNET if e["game_type"] in _TELNET_STOP_GAMES
-                               else STOP_BUDGET, force=self.job["mode"] == "now")
+        out = _lgp.reboot_stop(self.remote, e, _stop_budget(e), force=self.job["mode"] == "now")
         # The rc is not the outcome (a refused stop exits 0 with the server still up, a stop of a
         # stopped server exits 0 too): the session is.
         sess = probe_server(self.remote, e).get("session")
         e["stop"] = {0: "stopped", 1: "still_running"}.get(sess, "failed")
         # stoponlyifnoplayers refuses a stop while players are on, whatever asked: said, not hidden.
         e["lgsm_refused"] = sess == 1 and _lgp.refused(out)
+        if e["lgsm_refused"] and self.job["mode"] == "when_empty":
+            self._bounce_for(e, False)    # LinuxGSM counted a player who joined: never the shutdown
 
     def _clear_stop_pending(self, e):
         # Only for a server this job stopped that had a deferred stop queued (stop_pending).
@@ -1591,7 +1599,7 @@ class _Job:
         probes = _probe_rows(self.remote, rows)
         known = {e["id"]: e for e in self.entries}
         for gs in rows:
-            if (probes.get(gs.id) or {}).get("session") != 1:
+            if self.bounce or (probes.get(gs.id) or {}).get("session") != 1:
                 continue
             e = known.get(gs.id) or self._join_plan(gs, probes[gs.id])
             if e is None or e.get("stop") == "still_running":

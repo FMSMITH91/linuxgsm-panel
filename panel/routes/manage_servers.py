@@ -2726,10 +2726,11 @@ def _remove_account_crontab(remote, short_name):
 def _stop_game_processes(remote, short_name, selfname):
     """Stop the game gracefully, then kill whatever the account still runs. Both best-effort."""
     try:
-        # Plus LinuxGSM's in-game warning (warnplayerstimer): cut off mid-countdown, the stop
-        # never reaches the game's own save-and-quit and the kill below takes it instead.
-        _sm.run_as_game_user(remote, short_name, "stop", selfname=selfname,
-                             timeout=_lgp.timeout_for(remote, short_name, selfname, "stop", 60))
+        # LinuxGSM's own save-and-quit, with its player warning and its players check set aside:
+        # this runs inside the request, and a countdown of warnplayerstimer minutes held the
+        # uninstall's request for up to an hour (or was cut off mid-countdown, and the kill below
+        # took the server with no save).
+        _lgp.stop_now(remote, short_name, selfname, timeout=60)
     except Exception:
         _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
     try:

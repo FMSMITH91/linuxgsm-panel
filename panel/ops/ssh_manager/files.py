@@ -515,8 +515,8 @@ def _lg264_player_settings(merged, defaults, instance, common):
     """Return LinuxGSM v26.4.0's player protection as this config has it, for the editor's controls.
 
     `supported`: this instance's _default.cfg has warnplayerstimer, which LinuxGSM rewrites from
-    the release the script runs — v26.4.0 and later. Older releases have stoponlyifnoplayers too,
-    but there a prevented stop left an update half done (the v26.4.0 notes), so it is not offered.
+    the release the script runs — v26.4.0 and later. Earlier releases have neither setting
+    (v26.1.0 has no stoponlyifnoplayers anywhere), so there the editor offers neither.
     `startparameters_set`: the instance or common config overrides startparameters (TF2's
     -norestart notice reads it).
     """

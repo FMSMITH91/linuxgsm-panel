@@ -1200,6 +1200,17 @@ def _end_stop_window(server_id):
         _expected_offline.pop(server_id, None)
 
 
+def _end_offline_window(server_id):
+    """A panel Stop/Restart that did not stop the server (LinuxGSM refused or postponed it): no window.
+
+    Kept, it hid a real crash of the server that stayed up for the action's whole allowance, its
+    warning minutes included. A reboot plan's hold (inf) is not the action's and stays.
+    """
+    if _expected_offline.get(server_id) != float("inf"):
+        _expected_offline.pop(server_id, None)
+        _expected_stop.pop(server_id, None)
+
+
 def _mon_server_went_down(remote, gs, up, prev_up, muted):
     """The down leg of _server_transition (prev_up True, now down): alert and answer what to record."""
     misses = _monitor_state["server_misses"]

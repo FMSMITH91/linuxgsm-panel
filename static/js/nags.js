@@ -94,6 +94,7 @@ function _rbBlockersList(players){
       action: 'a LinuxGSM action is running', content: 'a content install is running',
       uninstall: 'an uninstall is running',
       maintenance: 'LinuxGSM maintenance is running', bootstrap: 'a bootstrap is running',
+      lgsm_warning: 'LinuxGSM is counting down to a stop or restart',
       ssh_port: 'an SSH port change is running',
       dpkg: 'a package install is running', apt: 'a package install is running',
       self_update: 'a panel update is running', restore: 'a restore is running',
@@ -142,14 +143,21 @@ function _rbPlayers(ctx){
 // own countdown (warnplayerstimer, v26.4.0), which the reboot waits for instead of the panel's, or
 // why there is none; and where "Only stop when empty" is on, that the reboot sets it aside for its
 // stop (lgsm_players.reboot_stop), which is still LinuxGSM's clean one.
-// From the preview's warn_minutes / warn_supported / say (host_reboot._lg264_warn_fields). One line
-// per server; more than three fold under a summary.
+// From the preview's warn_minutes / warn_supported / lgsm_supported / lgsm_counts / say
+// (lgsm_players.reboot_warn_fields). One line per server; more than three fold under a summary.
+// lgsm_counts false: LinuxGSM counts this game's players from a list that can be empty with players
+// on, and then stops at once without its warning, so the panel's own 60 s countdown is kept.
+// lgsm_supported false: a LinuxGSM before v26.4.0, which has no warning setting to point to.
 function _rbWarnWord(sv){
   var n = sv.warn_minutes;
   if (n == null) return window.tf('its LinuxGSM warning time could not be read');
-  if (n > 0 && sv.warn_supported) return window.tf('LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it', {n: n});
+  if (n > 0 && sv.warn_supported && sv.lgsm_counts !== false) return window.tf('LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it', {n: n});
+  if (n > 0 && sv.warn_supported) return window.tf(sv.say ? 'the panel’s 60 s warning: LinuxGSM can’t always count this game’s players, so its own warning may not run'
+                                                          : 'no sure in-game warning: LinuxGSM can’t always count this game’s players, so its warning may not run');
   if (!sv.warn_supported) return window.tf(sv.say ? 'only the panel’s 60 s warning: its console can’t show LinuxGSM’s'
                                                    : 'no in-game warning: this game can’t show one');
+  if (sv.lgsm_supported === false) return window.tf(sv.say ? 'only the panel’s 60 s warning: this LinuxGSM has no warning of its own'
+                                                           : 'no in-game warning: this LinuxGSM has no warning of its own');
   return window.tf(sv.say ? 'only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)'
                           : 'no in-game warning: none is set (Files & Config, LinuxGSM settings)');
 }

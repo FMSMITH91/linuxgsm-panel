@@ -103,8 +103,8 @@ document.addEventListener('click', function(ev){
   if(window.copyText) window.copyText(c.getAttribute('data-copy') || '', 'Copied default');
 });
 // LinuxGSM v26.4.0's player protection, as two controls of their own at the top of the settings
-// (the route takes the two keys out of the generic list, panel/routes/server_files.py
-// _lg264_config_view). They save with the rest, through the same changed-fields-only form.
+// (the config route takes the two keys out of the generic list, panel/services/lgsm_players.py
+// config_view). They save with the rest, through the same changed-fields-only form.
 function _lg264PlayersHtml(p){
   if(!p || !p.supported) return '';
   var on = !!p.stop_only_if_empty, min = Number(p.warn_minutes) || 0;
@@ -123,6 +123,8 @@ function _lg264PlayersHtml(p){
                         : 'With players on, LinuxGSM puts off a stop, restart, update or backup until the server is empty. This game’s console can’t show LinuxGSM’s in-game warnings.')
     + '</div>';
   if(!p.can_count) html += '<div class="text-warning mt-1" style="font-size:.7rem;">LinuxGSM can’t count players on this server (its querymode), so it stops it anyway.</div>';
+  // LinuxGSM counts the player LIST, which this game can send empty with players on (lgsm_players.LIST_UNRELIABLE_GAMES).
+  else if(p.list_unreliable) html += '<div class="text-warning mt-1" style="font-size:.7rem;">LinuxGSM counts this game’s players from a list the server can leave empty: then it stops it anyway, with no warning.</div>';
   return html + '</div>';
 }
 function _lg264Tf2Html(d){

@@ -23,7 +23,7 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     allowed_custom_commands,
     _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
-from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_stop_window as _mon_end_stop_window,
+from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window as _mon_end_offline_window,
                                        _mark_expected_offline)
 from panel.services import lgsm_players as _lgp
 import concurrent.futures
@@ -35,7 +35,7 @@ from sqlalchemy.exc import (SQLAlchemyError)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
-from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
+from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
     _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal)
 
@@ -561,6 +561,11 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 oc = _lgp.outcome_of(out, rc)
                 if oc is not None:
                     ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name))
+                    # The button answered "issued" long before: the server's console says what
+                    # LinuxGSM did instead, as a long action's end does (_announce_action_end);
+                    # only while the id is still that server's.
+                    if held:
+                        _console_push(app, server_id, f"[panel] {action}: {detail}")
                     return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
@@ -599,8 +604,8 @@ def _lg264_said(oc, action, gs, held, who):
 
     Its own audit action (lgsm_postponed / lgsm_refused), never the action's success or failure
     row: LinuxGSM exits 0 for both, and "'stop' succeeded" about a server still running with its
-    players on is the report this replaces. A refused stop ends the Stop's quiet window, so a crash
-    of the server that is still up pages as usual.
+    players on is the report this replaces. A refused stop or a postponed restart ends the action's
+    quiet window (warning minutes and all), so a crash of the server that is still up pages as usual.
     """
     actor, origin, name = who
     msg = _lgp.outcome_message(oc, action, monitor=bool(getattr(gs, "autostart", True)))
@@ -608,8 +613,8 @@ def _lg264_said(oc, action, gs, held, who):
     log_action(actor, "lgsm_postponed" if postponed else "lgsm_refused", target=name,
                success=postponed, detail="%s: %s" % (action, msg), actor=origin,
                server=gs if held else None)
-    if oc["code"] == "lgsm_refused" and held:
-        _mon_end_stop_window(gs.id)
+    if held and action in ("stop", "restart"):
+        _mon_end_offline_window(gs.id)
     return None, str(msg)
 
 

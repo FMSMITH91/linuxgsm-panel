@@ -24,6 +24,7 @@ import threading
 import time
 
 from panel.core import i18n, terminal
+from panel.core.validation import _int_or
 from panel.ops import ssh_manager as _sm
 
 # The games whose console takes a chat command LinuxGSM can warn with: consoleinteract="yes" in the
@@ -39,6 +40,16 @@ WARN_GAMES = frozenset((
     "pmc", "pvkii", "pz", "q2", "q3", "q4", "ql", "qw", "ricochet", "rtcw", "rw", "scpsl", "sfc",
     "sof2", "sven", "terraria", "tf2", "tf2c", "tfc", "ts", "unt", "vints", "vs", "wet", "wf", "wmc",
     "xnt", "zmr", "zps"))
+
+# The games whose player LIST LinuxGSM cannot rely on. LinuxGSM counts players as the length of
+# gamedig's `players` list (query_gamedig.sh: `jq -re '.players | length'`), and for these games
+# that list can be empty with players on (_core.GAMEDIG_HUMANS_JQ has the measurements): Minecraft
+# Bedrock's ping never carries one (mbe), a Java server hiding its players sends none (mc, pmc, wmc:
+# gamedig "minecraft"), and a Source 2 / CS:GO server that does not answer A2S_PLAYER leaves it
+# empty. Then LinuxGSM reads 0: "Warning players: no players on the server", and it stops at once —
+# no warning — and stoponlyifnoplayers never holds anything back. So for these the panel keeps its
+# own 60 s countdown before a forced reboot, and never says LinuxGSM's warning is the one.
+LIST_UNRELIABLE_GAMES = frozenset(("mcb", "mc", "pmc", "wmc", "cs2", "csgo"))
 
 # The panel's editor offers 0-60 minutes: LinuxGSM's own countdown steps start at 60.
 WARN_MAX_MINUTES = 60
@@ -61,15 +72,28 @@ def _lg264_key(server, user, selfname):
 
 
 def warn_minutes_value(raw):
-    """Read a warnplayerstimer value as LinuxGSM does: digits are minutes, anything else is off (0)."""
+    """Read a warnplayerstimer value as LinuxGSM does: digits are minutes, anything else is off (0).
+
+    A hand-written run of digits too long for int() (over 4300) is not off — LinuxGSM would warn —
+    so it reads as the longest the panel allows for (_LG264_ALLOWANCE_CAP_MIN), never a raise:
+    the editor's read and every reboot of the host go through here.
+    """
     s = str(raw or "").strip().strip("\"'")
-    return int(s, 10) if s.isascii() and s.isdecimal() else 0
+    return _int_or(s, _LG264_ALLOWANCE_CAP_MIN) if s.isascii() and s.isdecimal() else 0
+
+
+# A key every v26.4.0 _default.cfg has and no earlier release knows (v26.1.0 has none of the three):
+# its presence is the release, read in the same config read. A warnplayerstimer written by hand on
+# an older LinuxGSM does nothing there, so it is read as off.
+_LG264_RELEASE_KEY = "stoponlyifnoplayersallcommands"
 
 
 def settings(server, user, selfname, fresh=False):
-    """The server's {"minutes": warnplayerstimer, "stop_only": stoponlyifnoplayers is on}, cached.
+    """The server's {"minutes": warnplayerstimer, "stop_only": stoponlyifnoplayers is on,
+    "supported": its LinuxGSM is v26.4.0 or later}, cached.
 
-    None when its config could not be read: unknown, never "off".
+    None when its config could not be read: unknown, never "off". Before v26.4.0 both are off
+    whatever the config says: that LinuxGSM has neither.
     """
     key = _lg264_key(server, user, selfname)
     now = time.time()
@@ -79,14 +103,15 @@ def settings(server, user, selfname, fresh=False):
         return dict(hit[1])
     try:
         vals = _sm.lgsm_get_values(server, user, selfname or user,
-                                   ["warnplayerstimer", "stoponlyifnoplayers"])
+                                   ["warnplayerstimer", "stoponlyifnoplayers", _LG264_RELEASE_KEY])
     except Exception:  # noqa: BLE001 - unread is answered as unknown, never as "off"
         vals = None
     if vals is None:
         return None
-    remember(server, user, selfname, vals.get("warnplayerstimer"), vals.get("stoponlyifnoplayers"))
-    return {"minutes": warn_minutes_value(vals.get("warnplayerstimer")),
-            "stop_only": str(vals.get("stoponlyifnoplayers") or "").strip() == "on"}
+    if not str(vals.get(_LG264_RELEASE_KEY) or "").strip():
+        vals = {}                       # an older LinuxGSM: neither setting exists there
+    return remember(server, user, selfname, vals.get("warnplayerstimer"),
+                    vals.get("stoponlyifnoplayers"), supported=bool(vals))
 
 
 def warn_minutes(server, user, selfname, fresh=False):
@@ -107,12 +132,13 @@ def forget(server, user, selfname):
         _lg264_cache.pop(_lg264_key(server, user, selfname), None)
 
 
-def remember(server, user, selfname, raw_timer, raw_stop):
-    """Cache the two settings a config read in hand already holds (the editor's read)."""
+def remember(server, user, selfname, raw_timer, raw_stop, supported=True):
+    """Cache the two settings a config read in hand already holds (the editor's read): settings()'s dict."""
+    got = {"minutes": warn_minutes_value(raw_timer) if supported else 0,
+           "stop_only": supported and str(raw_stop or "").strip() == "on", "supported": supported}
     with _lg264_lock:
-        _lg264_cache[_lg264_key(server, user, selfname)] = (
-            time.time() + _LG264_TTL, {"minutes": warn_minutes_value(raw_timer),
-                                       "stop_only": str(raw_stop or "").strip() == "on"})
+        _lg264_cache[_lg264_key(server, user, selfname)] = (time.time() + _LG264_TTL, got)
+    return dict(got)
 
 
 def allowance_seconds(server, user, selfname, action="stop"):
@@ -202,9 +228,20 @@ _LG264_REFUSED_OTHER = i18n.Sentence("'{action}' not run: players are online and
                                      "empty.")
 
 
+# Whether the server's Autostart is on could not be read: neither "LinuxGSM runs it" nor "nothing
+# will" is known, so the sentence says what it depends on.
+_LG264_POSTPONED_UNREAD = i18n.Sentence("Postponed by LinuxGSM: players are online. LinuxGSM runs it "
+                                        "once the server is empty if the server's Autostart is on.")
+
+
 def outcome_message(oc, action, monitor=True):
-    """The panel's sentence for outcome `oc` of `action`; `monitor`: the server's Autostart is on."""
+    """The panel's sentence for outcome `oc` of `action`.
+
+    `monitor`: the server's Autostart is on (True), off (False), or could not be read (None).
+    """
     if oc["code"] == "lgsm_postponed":
+        if monitor is None:
+            return _LG264_POSTPONED_UNREAD
         table = _LG264_POSTPONED if monitor else _LG264_POSTPONED_NO_MONITOR
         return table[oc["kind"]]
     return _LG264_REFUSED.get(action) or i18n.Sentence(_LG264_REFUSED_OTHER.template, action=action)
@@ -235,8 +272,11 @@ def note_code(msg):
     return getattr(msg, "code", None)
 
 
-BACKUP_QUEUED = i18n.Sentence("Backup postponed by LinuxGSM: players are online. LinuxGSM runs it "
-                              "when the server is empty.")
+# Said whenever LinuxGSM's backup request is there and its monitor is armed: that is also while
+# the monitor's own backup of it runs, and after one that failed (the request goes only when an
+# archive is written), so it does not claim players are on now.
+BACKUP_QUEUED = i18n.Sentence("LinuxGSM holds a postponed backup of this server: its monitor runs it "
+                              "once the server is empty.")
 BACKUP_DONE_BY_LGSM = i18n.Sentence("Backed up by LinuxGSM once the server was empty.")
 
 
@@ -249,6 +289,8 @@ def config_view(gs, d):
     is edited in one place — except a timer already set on a game LinuxGSM cannot warn on, which
     stays there so it can be cleared. `can_count`: LinuxGSM counts players only with querymode 2 or
     3; with any other it skips its check and stops anyway (check_players_online.sh), said on the page.
+    `list_unreliable`: a game whose player list LinuxGSM's count can find empty with players on
+    (LIST_UNRELIABLE_GAMES), said on the page too.
     """
     pl = d.pop("players", None) or {}
     if not pl.get("supported") or d.get("error"):
@@ -261,7 +303,8 @@ def config_view(gs, d):
     _lg264_hide_keys(d, {"stoponlyifnoplayers"} | ({"warnplayerstimer"} if warn_ok or not minutes else set()))
     d["players"] = {"supported": True, "stop_only_if_empty": pl.get("stoponlyifnoplayers") == "on",
                     "warn_supported": warn_ok, "warn_minutes": minutes, "warn_max": WARN_MAX_MINUTES,
-                    "can_count": pl.get("querymode") in ("2", "3")}
+                    "can_count": pl.get("querymode") in ("2", "3"),
+                    "list_unreliable": (gs.game_type or "") in LIST_UNRELIABLE_GAMES}
     d["tf2_norestart"] = _lg264_tf2_needs_norestart(gs, pl)
     return d
 
@@ -317,16 +360,21 @@ def reboot_warn_fields(remote, gs, probe):
     """What a forced reboot's stop of server `gs` tells its players first (the dialog's lines).
 
     Only for a running one (probe session 1), else {}. warn_minutes: LinuxGSM's warnplayerstimer
-    (None: unread); stop_only_if_empty: its stoponlyifnoplayers, which makes LinuxGSM REFUSE the
-    reboot's stop while players are on — the panel cannot override it, so the shutdown ends that
-    server; warn_supported: its game is in WARN_GAMES; say: the panel's own 60 s countdown
-    (host_reboot COUNTDOWN) reaches it.
+    (None: unread); stop_only_if_empty: its stoponlyifnoplayers, which makes LinuxGSM refuse a
+    plain stop while players are on — a forced reboot sets it aside for its stop (reboot_stop), so
+    the server is still stopped cleanly; warn_supported: its game is in WARN_GAMES; lgsm_supported:
+    its LinuxGSM is v26.4.0 or later (False: it has no warning setting to point to); lgsm_counts:
+    LinuxGSM can count its players (not LIST_UNRELIABLE_GAMES), without which its warning may not
+    run; say: the panel's own 60 s countdown (host_reboot COUNTDOWN) reaches it.
     """
     if (probe or {}).get("session") != 1:
         return {}
-    return {"warn_minutes": warn_minutes(remote, gs.short_name, gs.lgsm_name),
-            "stop_only_if_empty": stop_only_if_empty(remote, gs.short_name, gs.lgsm_name),
+    got = settings(remote, gs.short_name, gs.lgsm_name)
+    return {"warn_minutes": None if got is None else got["minutes"],
+            "stop_only_if_empty": None if got is None else got["stop_only"],
             "warn_supported": (gs.game_type or "") in WARN_GAMES,
+            "lgsm_supported": None if got is None else got.get("supported", True),
+            "lgsm_counts": (gs.game_type or "") not in LIST_UNRELIABLE_GAMES,
             "say": bool(_sm.moderation_caps(gs.game_type).get("say"))}
 
 
@@ -352,14 +400,122 @@ def refused_stops_note(entries):
             "the shutdown ended %s." % (n, "it" if n == 1 else "them"))
 
 
-def reboot_warn_budget(remote, groups):
-    """The seconds a reboot's stop phase adds for warnings: the longest account's sum.
+def reboot_allowance(remote, e, base):
+    """The seconds a reboot's stop of plan entry `e` may take beyond `base`, for warnings.
 
-    `groups`: {account: [plan entries]}. One account's servers stop one after another, each after
-    its own countdown; the accounts stop side by side.
+    Its own countdown (allowance_seconds), and before it room for ONE other LinuxGSM command already
+    warning the same server: fn_stop_warn_players_wait (command_stop.sh) waits while another
+    command's <self>-warning.lock pid lives — a cron `restart` fired in the reboot's minute — and
+    then warns again, so that command's countdown and its own stop and start come first. The census
+    refuses a reboot while such a warning runs (host_reboot's WARN probe); this covers one that
+    begins after it. 0 with no timer: then LinuxGSM neither warns nor waits on another's warning.
     """
-    return max((sum(allowance_seconds(remote, e["user"], e["selfname"]) for e in grp)
-                for grp in groups.values()), default=0)
+    own = allowance_seconds(remote, e["user"], e["selfname"])
+    return 2 * own + base if own else 0
+
+
+def schedule_seconds(durations, workers):
+    """How long `durations` take, in this order, on `workers` side by side: each taken by the first free.
+
+    ThreadPoolExecutor's queue does exactly that with the reboot's account groups.
+    """
+    free = [0] * max(1, min(workers, len(durations)))
+    for d in durations:
+        i = free.index(min(free))
+        free[i] += d
+    return max(free)
+
+
+def reboot_warn_budget(remote, passes, workers, base_for):
+    """The seconds a reboot's stop phase adds for warnings, as its pool runs the stops.
+
+    `passes`: stop_passes(); each a list of account groups. One account's servers stop one after
+    another, `workers` accounts at a time, each next account taken by the first worker free; a pass
+    starts when the one before has ended. `base_for(e)`: the entry's own stop budget. The longest
+    account alone undercounted it: nine accounts with players and a 60-minute timer started their
+    third batch after the deadline, so those servers were never stopped and the shutdown ended them.
+    """
+    return sum(schedule_seconds([sum(reboot_allowance(remote, e, base_for(e)) for e in grp)
+                                 for grp in groups], workers) for groups in passes)
+
+
+def stop_passes(remote, entries):
+    """A reboot's stops as passes of account groups: first every server LinuxGSM does not warn, then the rest.
+
+    A forced reboot's own 60 s countdown (panel_warned) runs BEFORE the stop phase, so the servers
+    it warned are stopped first, in a pass of their own; queued behind a LinuxGSM countdown in the
+    same account or a later batch, one was stopped up to that many minutes after its players were
+    told "60 seconds". Within an account the servers still stop one after another.
+    """
+    passes = ({}, {})
+    for e in entries:
+        passes[_lg264_warns(remote, e.get("game_type"), e["user"], e["selfname"])].setdefault(
+            e["user"], []).append(e)
+    return [list(p.values()) for p in passes if p]
+
+
+def run_stop_passes(passes, stop_group, workers, cancelled, on_cancel):
+    """Run each pass's account groups through `stop_group`, `workers` at a time, a pass after the last.
+
+    Watched a second at a time, so a Cancel is acted on while a stop runs: `on_cancel()` once, when
+    `cancelled()` first says so (it calls LinuxGSM's countdowns off: interrupt_countdowns). A raise
+    in a group is the caller's, as the pool's map gave it.
+    """
+    import concurrent.futures as _cf
+    called = False
+    for groups in passes:
+        with _cf.ThreadPoolExecutor(max_workers=min(workers, len(groups))) as ex:
+            futs = [ex.submit(stop_group, g) for g in groups]
+            pending = futs
+            while pending:
+                pending = _cf.wait(futs, timeout=1)[1]
+                if not called and cancelled():
+                    called = True
+                    on_cancel()
+            for f in futs:
+                f.result()
+
+
+# Cancel during a reboot's stop. LinuxGSM's own way to call a countdown off is Ctrl-C: core_trap.sh
+# traps INT, and fn_stop_warn_players_cancel tells the players "Server stopping cancelled", removes
+# its warning lock and ends the command without stopping. The countdown's pid is the first line of
+# lgsm/lock/<self>-warning.lock; it is signalled only while it is a `stop` of this very server (the
+# reboot's own, in either shape: `./<self> stop` or the forced `source ./<self> stop`) — another
+# command's countdown there, a cron restart, is not the reboot's to call off. Bash runs the trap
+# when its current 10 s sleep ends.
+_LG264_INTERRUPT = ('cd %s || exit 3; p=$(head -n 1 %s 2>/dev/null); case "$p" in ""|*[!0-9]*) '
+                    'exit 0;; esac; tr "\\000" " " < "/proc/$p/cmdline" 2>/dev/null | grep -qE %s '
+                    '&& kill -INT "$p" && echo LG264_INTERRUPTED')
+
+
+def interrupt_sh(user, selfname):
+    """The shell, run as the account, that calls off the reboot's own countdown of `selfname`."""
+    s = selfname.replace(".", "[.]")
+    return _LG264_INTERRUPT % (_sm._quote("/home/" + user),
+                               _sm._quote("lgsm/lock/%s-warning.lock" % selfname),
+                               _sm._quote("/[%s]%s stop( |$)" % (s[0], s[1:])))
+
+
+def interrupt_countdowns(remote, entries, account_shell):
+    """Call off LinuxGSM's warning countdown of every reboot stop still running (`in_stop`).
+
+    `account_shell(remote, user, sh, timeout=, selfname=)`: host_reboot's, which reads the panel's
+    own account on its own host directly. Best effort: a stop it cannot reach ends as LinuxGSM ends
+    it, and the job's Cancel is acted on after it. -> the names whose countdown was called off.
+    """
+    off = []
+    for e in list(entries):
+        if not e.get("in_stop"):
+            continue
+        try:
+            out, _err, _rc = account_shell(remote, e["user"], interrupt_sh(e["user"], e["selfname"]),
+                                           timeout=20, selfname=e["selfname"])
+        except Exception:  # noqa: BLE001 - best effort: the stop then runs to its end
+            _log.debug("could not call off the countdown of %s", e.get("id"), exc_info=True)
+            continue
+        if "LG264_INTERRUPTED" in (out or ""):
+            off.append(e.get("name"))
+    return off
 
 
 # A forced reboot's stop with stoponlyifnoplayers set aside for that one run. LinuxGSM has no option
@@ -370,44 +526,83 @@ def reboot_warn_budget(remote, groups):
 # its graceful stop mode for the game (quit, CTRL+c, telnet...), its locks. Measured on the test
 # host with two stand-in players: the plain stop was "stop prevented", this one "Graceful: sending
 # "quit" ... OK" in 6 s. Only a forced reboot uses it: a Stop from the panel keeps the setting.
-_LG264_FORCED_STOP = "cd %s && readonly stoponlyifnoplayers=off && source ./%s stop 2>&1"
+# TERM exported as run_as_game_user's shell form does, or LinuxGSM's tput prints errors.
+_LG264_FORCED_STOP = "cd %s && export TERM=xterm && readonly %s && source ./%s stop 2>&1"
+
+
+def _lg264_forced_sh(user, selfname, aside="stoponlyifnoplayers=off"):
+    return _LG264_FORCED_STOP % (_sm._quote("/home/" + user), aside, _sm._quote(selfname))
 
 
 def reboot_stop(remote, e, base, force=False):
-    """A reboot's `stop` of plan entry `e`, given `base` seconds plus its warning: its output.
+    """A reboot's `stop` of plan entry `e`, given `base` seconds plus its warnings: its output.
 
     The ordinary LinuxGSM stop first (through the helper's lgsm-command on the panel's host, as
     every action). `force` (the reboot was asked for with players on, "now"): a stop LinuxGSM
     refused for stoponlyifnoplayers is run again with the setting set aside (_LG264_FORCED_STOP),
     so the server still gets its clean stop rather than the shutdown. LinuxGSM refuses before it
-    warns or stops anything, so the second run is the only one that does. Never raises: the caller
-    reads the server's state to decide, never the call ("" on a raise).
+    warns or stops anything, so the second run is the only one that does. The output is both runs'
+    — a forced run that answered nothing (a sudo refusal, a transport timeout) keeps the first's
+    refusal for refused(). `in_stop` is set on `e` while it runs (interrupt_countdowns). Never
+    raises: the caller reads the server's state to decide, never the call.
     """
-    timeout = timeout_for(remote, e["user"], e["selfname"], "stop", base)
+    timeout = base + reboot_allowance(remote, e, base)
+    out = ""
+    e["in_stop"] = True
     try:
         out, _err, _rc = _sm.run_as_game_user(remote, e["user"], "stop", timeout=timeout,
                                               selfname=e["selfname"])
+        out = out or ""
         if force and refused(out):
-            sh = _LG264_FORCED_STOP % (_sm._quote("/home/" + e["user"]), _sm._quote(e["selfname"]))
-            out, _err, _rc = _sm.shell_as_game_user(remote, e["user"], sh, timeout=timeout,
-                                                    selfname=e["selfname"])
-        return out or ""
+            forced, _err, _rc = _sm.shell_as_game_user(remote, e["user"],
+                                                       _lg264_forced_sh(e["user"], e["selfname"]),
+                                                       timeout=timeout, selfname=e["selfname"])
+            out = out + "\n" + (forced or "")
     except Exception:  # noqa: BLE001 - the state read decides, never the call
         _log.debug("stop of %s raised", e.get("id"), exc_info=True)
-        return ""
+    finally:
+        e["in_stop"] = False
+    return out
+
+
+def stop_now(remote, user, selfname, timeout=60):
+    """LinuxGSM's own graceful stop with no warning and no players check: an uninstall's.
+
+    An uninstall runs inside the request, and a server it is removing is not coming back, so its
+    stop must not count down for warnplayerstimer minutes (the request would hang for up to an
+    hour) nor be refused for players. Both settings are set aside for this one run as the forced
+    reboot does (_LG264_FORCED_STOP); on a LinuxGSM before v26.4.0 the two names mean nothing. A
+    shell it cannot run falls back to the plain stop, as the uninstall did before. -> (out, err, rc).
+    """
+    sh = _lg264_forced_sh(user, selfname, "stoponlyifnoplayers=off warnplayerstimer=0")
+    got = _sm.shell_as_game_user(remote, user, sh, timeout=timeout, selfname=selfname)
+    if got[2] in (0, None) or (got[0] or "").strip():
+        return got
+    return _sm.run_as_game_user(remote, user, "stop", timeout=timeout, selfname=selfname)
+
+
+def _lg264_warns(remote, game_type, user, selfname):
+    """Whether LinuxGSM itself warns this server's players before its stop.
+
+    A timer, on a game it can warn on, whose players it can count: on LIST_UNRELIABLE_GAMES its
+    count can read 0 with players on, and then it stops at once without a word.
+    """
+    gt = game_type or ""
+    return gt in WARN_GAMES and gt not in LIST_UNRELIABLE_GAMES and bool(warn_minutes(remote, user, selfname))
 
 
 def lgsm_warns(remote, gs):
-    """Whether LinuxGSM itself warns server `gs`'s players before its stop: a timer, on its game."""
-    return (gs.game_type or "") in WARN_GAMES and bool(warn_minutes(remote, gs.short_name, gs.lgsm_name))
+    """Whether LinuxGSM itself warns server `gs`'s players before its stop (_lg264_warns)."""
+    return _lg264_warns(remote, gs.game_type, gs.short_name, gs.lgsm_name)
 
 
 def panel_warned(remote, rows):
     """The rows ([{id, name}]) a forced reboot's own 60 s countdown still warns: not LinuxGSM's.
 
-    Players are told once. Where LinuxGSM has a warning timer the reboot waits for that countdown
-    (its stop budget, allowance_seconds) and the panel says nothing; elsewhere — no timer, a game
-    LinuxGSM cannot warn on, a timer that could not be read — the panel's countdown is the warning.
+    Players are told once. Where LinuxGSM warns (lgsm_warns) the reboot waits for that countdown
+    (its stop budget, reboot_allowance) and the panel says nothing; elsewhere — no timer, a game
+    LinuxGSM cannot warn on or cannot count, a timer that could not be read — the panel's countdown
+    is the warning.
     """
     from panel.db.models import GameServer
     ids = [r["id"] for r in rows or ()]
