@@ -172,13 +172,20 @@ def _app_match(name, port, apps):
     return YES if any(p in (ANY, "tcp") and _in_ranges(port, r) for r, p in entries) else NO
 
 
+def _iface_match(rule_iface, iface):
+    """Whether a rule's interface names `iface`: exactly, or as iptables' `eth+` (every name it starts)."""
+    if rule_iface.endswith("+"):
+        return iface.startswith(rule_iface[:-1])
+    return iface == rule_iface
+
+
 def match(spec, conn, apps=None):
     """YES / NO / MAYBE: does rule `spec` match TCP connection `conn`? (`apps`: name -> entries or None)."""
     if spec["direction"] != "IN":
         return NO
     iface = YES
     if spec["iface"]:
-        iface = MAYBE if conn.iface is None else (YES if conn.iface == spec["iface"] else NO)
+        iface = MAYBE if conn.iface is None else (YES if _iface_match(spec["iface"], conn.iface) else NO)
     sport = YES if spec["sports"] == ANY else MAYBE
     return _worst(iface, _addr_match(spec["src"], conn.src), _addr_match(spec["dst"], conn.dst),
                   _port_match(spec["dports"], spec["proto"], conn.dport, apps), sport)

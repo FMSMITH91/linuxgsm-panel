@@ -24,13 +24,21 @@ CI-verified commit regardless of this file — this changelog is for humans.
   outgoing traffic needs DNS, HTTP and HTTPS allowed out, and on the panel's host its SSH to every
   remote; turning UFW off says the host will then accept every connection. While UFW is off the
   panel checks the rules UFW would load. A firewall the panel cannot read is never changed.
-  These checks are made for the address family (IPv4 or IPv6) the panel really uses to reach the
-  host, and for the address its connection comes from: a rule for IPv6 alone, or one kept to your
-  LAN, does not count as the panel's way in when it connects over IPv4 or from elsewhere. On the
-  panel's host the web port must stay open to the address you are viewing from (behind a reverse
-  proxy, the port you reached the proxy on). When the panel cannot read where it connects from,
-  the change is refused. Deleting a rule uses the same family rule: the host's last IPv4 SSH rule
-  stays protected even beside an IPv6-only one.
+  Each check reads the rules the way UFW does for the panel's own connection: its address family
+  (IPv4 or IPv6), first matching rule wins, and a rule counts only where its interface, source and
+  destination address, protocol and port (or application profile, such as `Nginx Full`) all match
+  that connection. On a remote that connection is the panel's SSH session as the host sees it,
+  after any router port-forward; on the panel's host it is your browser's connection, straight in,
+  through a reverse proxy here (the port you really came in on, 8443 included), through Tailscale
+  Serve, or through a Cloudflare Tunnel, which needs no open port. So a rule for IPv6 alone, one kept
+  to your LAN, one on another network interface or one for another of the host's addresses does not
+  count as the panel's way in when it is not. The panel's host must also keep SSH open in every
+  address family it has a public address in. In Tailscale's default mode the tailnet interface is let
+  in before UFW, so no rule for it is asked for. When the panel cannot tell how you or it connect,
+  the change is refused, and the refusal says how to make it tell (for a reverse proxy here,
+  `trust_proxy` and `trusted_proxy_users`). Deleting a rule, blocking a port and blocking an address
+  use the same reading: the rule the connection gets in by alone is protected, and a block that
+  would drop it is refused.
   Add a rule has a **Block** mode: deny or reject a port or a range (27015:27020), TCP, UDP or both,
   for IPv4, IPv6 or both, put at the top of the rule list so it wins over a rule that opens the port.
   SSH's ports, the panel's web port, a reverse proxy's or Tailscale Serve's port on the panel's host,
@@ -678,6 +686,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Deleting a remote's SSH rule could cut the panel off from it.** The delete guard kept a host's
+  last SSH rule, but counted every SSH rule as "another way in", wherever it let SSH in from. So
+  the everyday "tighten SSH to my home IP" sequence (add an allow from your home address, then delete
+  the allow from anywhere) went through with only a warning while the panel itself connected from
+  somewhere else, and under a default deny the panel lost the host. The rule the panel's own
+  connection gets in by is now protected, its reason naming the address it connects from; when that
+  address cannot be read, every SSH rule is kept until it can.
 - **A twenty-third full review on 2026-10-22: fixes.** Every item below has a check that fails
   without its fix.
   - **One machine, one host row.** A host whose address and SSH port another row already has is

@@ -1036,11 +1036,13 @@ def _fwc_protect_paths(groups, paths):
 def _fwc_sole_ways(groups, conn, apps):
     """The groups `conn` gets in by ALONE in its family's list: with one deleted, it no longer surely gets in."""
     from panel.ops.ssh_manager import ufweval
-    pairs = _fwb_family_pairs(groups, conn.version)
-    view = [c for _g, c in pairs]
-    return [g for g, c in pairs
-            if c.get("action") in ("ALLOW", "LIMIT") and ufweval.match(ufweval.spec_of(c), conn, apps) != ufweval.NO
-            and not ufweval.accepts(ufweval.ordered_specs(view, without=c), conn, False, apps)]
+    rows = sorted(((g, ufweval.spec_of(c), min(c["nums"])) for g, c in _fwb_family_pairs(groups, conn.version)
+                   if c.get("nums")), key=lambda r: r[2])
+    specs = [spec for _g, spec, _n in rows]
+    # Each spec is read once: a host with hundreds of auto-block denies is read in one pass per candidate.
+    return [g for i, (g, spec, _n) in enumerate(rows)
+            if spec["action"] in ("ALLOW", "LIMIT") and ufweval.match(spec, conn, apps) != ufweval.NO
+            and not ufweval.accepts(specs[:i] + specs[i + 1:], conn, False, apps)]
 
 
 def _fwc_protect_for(g, conn):

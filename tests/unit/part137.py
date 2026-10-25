@@ -88,6 +88,10 @@ _EVAL137 = {
                                                           None, False),
     "interface: a rule on the connection's own eth0": (["22/tcp on eth0  ALLOW IN  Anywhere"], _conn137(), False,
                                                        None, True),
+    "interface: a wildcard eth+ names eth0 (iptables' +)": (["Anywhere on eth+  DENY IN  Anywhere", _SSH22],
+                                                            _conn137(), False, None, False),
+    "interface: ...and not tailscale0": (["Anywhere on eth+  DENY IN  Anywhere", _SSH22],
+                                         _conn137(dst="100.100.1.1", iface="tailscale0"), False, None, True),  # NOSONAR(S1313)
     "interface unknown: an allow on eth0 does not count": (["22/tcp on eth0  ALLOW IN  Anywhere"],
                                                            _conn137(iface=None), False, None, False),
     "interface unknown: a deny on eth1 above may hit": (["Anywhere on eth1  DENY IN  Anywhere", _SSH22],
@@ -95,27 +99,27 @@ _EVAL137 = {
     "interface known: that deny on eth1 does not hit eth0": (["Anywhere on eth1  DENY IN  Anywhere", _SSH22],
                                                              _conn137(), False, None, True),
     "loopback rule, connection on eth0": (["Anywhere on lo  ALLOW IN  Anywhere"], _conn137(), False, None, False),
-    "destination: another address of the host": (["198.51.100.99 22/tcp  ALLOW IN  Anywhere"], _conn137(), False,
+    "destination: another address of the host": (["198.51.100.99 22/tcp  ALLOW IN  Anywhere"], _conn137(), False,  # NOSONAR(S1313)
                                                   None, False),
-    "destination: the address it reached": (["198.51.100.20 22/tcp  ALLOW IN  Anywhere"], _conn137(), False, None,
+    "destination: the address it reached": (["198.51.100.20 22/tcp  ALLOW IN  Anywhere"], _conn137(), False, None,  # NOSONAR(S1313)
                                             True),
-    "destination: a multicast group": (["224.0.0.251  ALLOW IN  Anywhere"], _conn137(), False, None, False),
-    "destination unknown: an address rule does not count": (["198.51.100.20 22/tcp  ALLOW IN  Anywhere"],
+    "destination: a multicast group": (["224.0.0.251  ALLOW IN  Anywhere"], _conn137(), False, None, False),  # NOSONAR(S1313)
+    "destination unknown: an address rule does not count": (["198.51.100.20 22/tcp  ALLOW IN  Anywhere"],  # NOSONAR(S1313)
                                                             _conn137(dst=None), False, None, False),
-    "source: a LAN /24 the panel is outside": (["22/tcp  ALLOW IN  192.0.2.0/24"], _conn137(), False, None, False),
-    "source: the LAN /24 the panel is inside": (["22/tcp  ALLOW IN  192.0.2.0/24"], _conn137(src="192.0.2.9"),
+    "source: a LAN /24 the panel is outside": (["22/tcp  ALLOW IN  192.0.2.0/24"], _conn137(), False, None, False),  # NOSONAR(S1313)
+    "source: the LAN /24 the panel is inside": (["22/tcp  ALLOW IN  192.0.2.0/24"], _conn137(src="192.0.2.9"),  # NOSONAR(S1313)
                                                 False, None, True),
-    "source: a deny of the panel's /16 above": (["Anywhere  DENY IN  203.0.0.0/16", _SSH22], _conn137(), False,
+    "source: a deny of the panel's /16 above": (["Anywhere  DENY IN  203.0.0.0/16", _SSH22], _conn137(), False,  # NOSONAR(S1313)
                                                 None, False),
-    "source: an auto-block of another address above": (["Anywhere  DENY IN  198.51.100.9", _SSH22], _conn137(),
+    "source: an auto-block of another address above": (["Anywhere  DENY IN  198.51.100.9", _SSH22], _conn137(),  # NOSONAR(S1313)
                                                        False, None, True),
-    "source port: one client port is no way in": (["22/tcp  ALLOW IN  203.0.113.50 51515"], _conn137(), False,
+    "source port: one client port is no way in": (["22/tcp  ALLOW IN  203.0.113.50 51515"], _conn137(), False,  # NOSONAR(S1313)
                                                   None, False),
-    "source port: a deny from it above may hit": (["22/tcp  DENY IN  203.0.113.50 51515", _SSH22], _conn137(),
+    "source port: a deny from it above may hit": (["22/tcp  DENY IN  203.0.113.50 51515", _SSH22], _conn137(),  # NOSONAR(S1313)
                                                   False, None, False),
     "protocol: UDP": (["22/udp  ALLOW IN  Anywhere"], _conn137(), False, None, False),
-    "protocol: a source-only gre rule": (["Anywhere  ALLOW IN  203.0.113.50/gre"], _conn137(), False, None, False),
-    "every port from the panel's own address": (["Anywhere  ALLOW IN  203.0.113.50"], _conn137(), False, None, True),
+    "protocol: a source-only gre rule": (["Anywhere  ALLOW IN  203.0.113.50/gre"], _conn137(), False, None, False),  # NOSONAR(S1313)
+    "every port from the panel's own address": (["Anywhere  ALLOW IN  203.0.113.50"], _conn137(), False, None, True),  # NOSONAR(S1313)
     "a port list": (["22,80,443/tcp  ALLOW IN  Anywhere"], _conn137(), False, None, True),
     "a range over the port": (["20:30/tcp  ALLOW IN  Anywhere"], _conn137(), False, None, True),
     "a range beside it": (["2000:3000/tcp  ALLOW IN  Anywhere"], _conn137(), False, None, False),
@@ -161,11 +165,11 @@ check("ufweval: a connection meets only its own family's list (a v6 rule admits 
 _TS137 = {"ssh": True, "netfilter_on": True}
 _ex137 = {
     "loopback": _ue137.exempt(_conn137(iface="lo"), None),
-    "tailscale0, netfilter on": _ue137.exempt(_conn137(dst="100.100.1.1", iface="tailscale0"), {"netfilter_on": True}),
-    "tailscale0, netfilter off": _ue137.exempt(_conn137(dst="100.100.1.1", iface="tailscale0"), {}),
-    "Tailscale SSH, its address, 22": _ue137.exempt(_conn137(dst="100.100.1.1", iface=None), {"ssh": True}),
+    "tailscale0, netfilter on": _ue137.exempt(_conn137(dst="100.100.1.1", iface="tailscale0"), {"netfilter_on": True}),  # NOSONAR(S1313)
+    "tailscale0, netfilter off": _ue137.exempt(_conn137(dst="100.100.1.1", iface="tailscale0"), {}),  # NOSONAR(S1313)
+    "Tailscale SSH, its address, 22": _ue137.exempt(_conn137(dst="100.100.1.1", iface=None), {"ssh": True}),  # NOSONAR(S1313)
     "Tailscale SSH, a public address": _ue137.exempt(_conn137(), {"ssh": True}),
-    "Tailscale SSH, its address, 2222": _ue137.exempt(_conn137(dst="100.100.1.1", port=2222, iface=None),
+    "Tailscale SSH, its address, 2222": _ue137.exempt(_conn137(dst="100.100.1.1", port=2222, iface=None),  # NOSONAR(S1313)
                                                       {"ssh": True}),
     "eth0": _ue137.exempt(_conn137(), _TS137),
 }
@@ -180,31 +184,31 @@ _dec137 = (_ue137.decide(_specs137(["22/tcp  DENY IN  Anywhere", _SSH22]), _conn
            _ue137.decide(_specs137([_SSH22]), _conn137()))
 check("ufweval: what decides is told (a deny first, the default, an allow) so a refusal says which",
       _dec137 == ("deny", "default", "allow"), repr(_dec137))
-_cols137 = [_ue137.column(t) for t in ("Anywhere", "Anywhere/tcp", "22/tcp", "192.0.2.0/24/udp",
-                                       "198.51.100.20 22,80/tcp", "Nginx Full", "198.51.100.20 OpenSSH",
-                                       "203.0.113.50 51515", "6000:6007/udp")]
+_cols137 = [_ue137.column(t) for t in ("Anywhere", "Anywhere/tcp", "22/tcp", "192.0.2.0/24/udp",  # NOSONAR(S1313)
+                                       "198.51.100.20 22,80/tcp", "Nginx Full", "198.51.100.20 OpenSSH",  # NOSONAR(S1313)
+                                       "203.0.113.50 51515", "6000:6007/udp")]  # NOSONAR(S1313)
 check("ufweval: get_status's column forms read back (Anywhere[/p], port[/p], addr[/p], addr port[/p], app, "
       "addr app, a source port, a range)",
       [(str(c[0]), c[1] if not isinstance(c[1], list) else [tuple(x) for x in c[1]], c[2]) for c in _cols137] == [
-          ("any", "any", None), ("any", "any", "tcp"), ("any", [(22, 22)], "tcp"), ("192.0.2.0/24", "any", "udp"),
-          ("198.51.100.20/32", [(22, 22), (80, 80)], "tcp"), ("any", ("app", "Nginx Full"), None),
-          ("198.51.100.20/32", ("app", "OpenSSH"), None), ("203.0.113.50/32", [(51515, 51515)], None),
+          ("any", "any", None), ("any", "any", "tcp"), ("any", [(22, 22)], "tcp"), ("192.0.2.0/24", "any", "udp"),  # NOSONAR(S1313)
+          ("198.51.100.20/32", [(22, 22), (80, 80)], "tcp"), ("any", ("app", "Nginx Full"), None),  # NOSONAR(S1313)
+          ("198.51.100.20/32", ("app", "OpenSSH"), None), ("203.0.113.50/32", [(51515, 51515)], None),  # NOSONAR(S1313)
           ("any", [(6000, 6007)], "udp")], repr(_cols137))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # B. What it is given, read from the host
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_IPADDR137 = ("1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
-              "2: eth0    inet 198.51.100.20/24 brd 198.51.100.255 scope global eth0\\       valid_lft forever\n"
+_IPADDR137 = ("1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"  # NOSONAR(S1313)
+              "2: eth0    inet 198.51.100.20/24 brd 198.51.100.255 scope global eth0\\       valid_lft forever\n"  # NOSONAR(S1313)
               "2: eth0    inet6 2001:db8::20/64 scope global \\       valid_lft forever\n"
-              "3: tailscale0    inet 100.100.1.1/32 scope global tailscale0\\       valid_lft forever\n"
-              "4: eth0.10@eth0    inet 10.0.10.2/24 scope global eth0.10\\       valid_lft forever\n")
+              "3: tailscale0    inet 100.100.1.1/32 scope global tailscale0\\       valid_lft forever\n"  # NOSONAR(S1313)
+              "4: eth0.10@eth0    inet 10.0.10.2/24 scope global eth0.10\\       valid_lft forever\n")  # NOSONAR(S1313)
 _rows137 = _ue137.parse_ip_addr(_IPADDR137)
 check("readers: `ip -o addr` reads as (interface, address, scope), a VLAN's @link dropped; a listing without lo "
       "is no reading",
       [(i, str(a), s) for i, a, s in _rows137 or ()] == [
-          ("lo", "127.0.0.1", "host"), ("eth0", "198.51.100.20", "global"), ("eth0", "2001:db8::20", "global"),
-          ("tailscale0", "100.100.1.1", "global"), ("eth0.10", "10.0.10.2", "global")]
+          ("lo", "127.0.0.1", "host"), ("eth0", "198.51.100.20", "global"), ("eth0", "2001:db8::20", "global"),  # NOSONAR(S1313)
+          ("tailscale0", "100.100.1.1", "global"), ("eth0.10", "10.0.10.2", "global")]  # NOSONAR(S1313)
       and _ue137.parse_ip_addr(_IPADDR137.split("\n", 1)[1]) is None
       and _ue137.iface_of(_rows137, _a(_DST137)) == "eth0"
       and _ue137.host_families(_rows137, True) == {4, 6} and _ue137.host_families(_rows137, False) == {4},
@@ -221,11 +225,11 @@ def _conn_read137(out, rc=0):
 
 
 _cr137 = {
-    "forwarded": _conn_read137("conn 203.0.113.50 51515 198.51.100.20 22\n" + _IPADDR137),
-    "mapped": _conn_read137("conn ::ffff:203.0.113.50 51515 ::ffff:198.51.100.20 22\n" + _IPADDR137),
+    "forwarded": _conn_read137("conn 203.0.113.50 51515 198.51.100.20 22\n" + _IPADDR137),  # NOSONAR(S1313)
+    "mapped": _conn_read137("conn ::ffff:203.0.113.50 51515 ::ffff:198.51.100.20 22\n" + _IPADDR137),  # NOSONAR(S1313)
     "no session var": _conn_read137("conn \n" + _IPADDR137),
     "failed": _conn_read137("", -1),
-    "no ip": _conn_read137("conn 203.0.113.50 51515 198.51.100.20 22\n"),
+    "no ip": _conn_read137("conn 203.0.113.50 51515 198.51.100.20 22\n"),  # NOSONAR(S1313)
 }
 check("readers: $SSH_CONNECTION is the session as sshd met it (a 2222 -> 22 forward reads port 22), on the "
       "interface holding that address; mapped addresses are IPv4; no variable or no answer is unread; no `ip` "
@@ -248,9 +252,9 @@ try:
     _addr = _auth137._proc_net_address
     with open(_t4, "w") as _fh:
         _fh.write(_hdr + _proc_row(_addr(_HOST4, 443), _addr(_VIEWER137, 50001))
-                  + _proc_row(_addr(_HOST4, 443), _addr("198.51.100.8", 50002))
-                  + _proc_row(_addr(_HOST4, 8443), _addr(_VIEWER137, 50003), "0A")
-                  + _proc_row(_addr("127.0.0.1", 5000), _addr(_VIEWER137, 50004)))
+                  + _proc_row(_addr(_HOST4, 443), _addr("198.51.100.8", 50002))  # NOSONAR(S1313)
+                  + _proc_row(_addr(_HOST4, 9443), _addr(_VIEWER137, 50003), "06")
+                  + _proc_row(_addr("127.0.0.1", 5000), _addr(_VIEWER137, 50004)))  # NOSONAR(S1313)
     with open(_t6, "w") as _fh:
         _fh.write(_hdr + _proc_row(_addr("::ffff:" + _HOST4, 8443), _addr("::ffff:" + _VIEWER137, 50005)))
     _saved137 = dict(_ue137._PROC_TCP)
@@ -328,7 +332,7 @@ def _guard137(rows, conn=None, patches=(), server=_SRV137, **kw):
 # HIGH-1: a rule kept to another interface or another of the host's addresses is no way in for the panel.
 _h1 = {
     "eth1 interface rule": _deny137(["22/tcp on eth1  ALLOW IN  Anywhere"], _rconn137()),
-    "a rule to another address": _deny137(["198.51.100.99 22/tcp  ALLOW IN  Anywhere"], _rconn137()),
+    "a rule to another address": _deny137(["198.51.100.99 22/tcp  ALLOW IN  Anywhere"], _rconn137()),  # NOSONAR(S1313)
 }
 _h1ok = {
     "eth0 interface rule": _deny137(["22/tcp on eth0  ALLOW IN  Anywhere"], _rconn137()),
@@ -337,14 +341,14 @@ _h1ok = {
 check("HIGH-1: a default incoming deny is refused where the panel's SSH session (from %s, on eth0) is let in "
       "only by a rule on ANOTHER interface (eth1) or to ANOTHER address of the host — nothing sent, the "
       "connection named" % _PANEL137,
-      all(r[0] is False and r[2] == [] and "panel's own SSH connection to this host in (from 203.0.113.50 to "
-          "192.0.2.10, port 22/tcp, on eth0)" in r[1] for r in _h1.values()),
+      all(r[0] is False and r[2] == [] and "panel's own SSH connection to this host in (from 203.0.113.50 to "  # NOSONAR(S1313)
+          "192.0.2.10, port 22/tcp, on eth0)" in r[1] for r in _h1.values()),  # NOSONAR(S1313)
       repr({k: r[:2] for k, r in _h1.items()}))
 check("HIGH-1: ...and set where that rule is on the interface (eth0) or to the address the session reached",
       all(r[0] is True and r[2] == [("ufw-default", ["deny", "incoming"])] for r in _h1ok.values()),
       repr({k: r[:2] for k, r in _h1ok.items()}))
-_ST_ETH1 = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth1\n"
-_ST_ETH0 = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0\n"
+_ST_ETH1 = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth1\n"  # NOSONAR(S1313)
+_ST_ETH0 = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0\n"  # NOSONAR(S1313)
 _en137 = {k: _on137(_Host135(enabled=False, stored_rules=t), _fw137.remote_ufw_set_enabled, _SRV137, True,
                     conn=_rconn137()) for k, t in (("eth1", _ST_ETH1), ("eth0", _ST_ETH0))}
 check("HIGH-1 (turn on): the STORED rules are read the same way — an SSH allow kept to eth1 refuses turning UFW "
@@ -363,7 +367,7 @@ check("MEDIUM-5: a port-forwarded remote (dialled on 2222, sshd seeing 22) is se
       and "port 22/tcp" in _m5["only 2222/tcp"][1], repr({k: v[:2] for k, v in _m5.items()}))
 # LOW-2: a remote dialled by name: the message says which family was measured.
 _NAMED137 = _NS137(is_local=False, auth_method="key", host="box.example.net", port=22, id=None, name="n137")
-_l2 = _deny137(["22/tcp  ALLOW IN  192.0.2.0/24"], _rconn137(), server=_NAMED137)
+_l2 = _deny137(["22/tcp  ALLOW IN  192.0.2.0/24"], _rconn137(), server=_NAMED137)  # NOSONAR(S1313)
 check("LOW-2: refused for a host dialled by name, the refusal says it was measured over IPv4 and the other family "
       "is not checked",
       _l2[0] is False and "measured over IPv4" in _l2[1] and "box.example.net by name" in _l2[1], repr(_l2[:2]))
@@ -422,11 +426,11 @@ check("MEDIUM-2: on a dual-stack panel host, SSH must stay open in BOTH families
       "needs only the IPv4 rule",
       _m2[0] is False and "No rule lets SSH in" in _m2[1] and _m2ok[0] is True and _m2v4[0] is True,
       repr((_m2[:2], _m2ok[:2], _m2v4[:2])))
-_l8, _ = _guard137(["22/tcp  ALLOW IN  203.0.113.0/24", "5000/tcp  ALLOW IN  Anywhere", _SSH22V6], server=_LOCAL135,
+_l8, _ = _guard137(["22/tcp  ALLOW IN  203.0.113.0/24", "5000/tcp  ALLOW IN  Anywhere", _SSH22V6], server=_LOCAL135,  # NOSONAR(S1313)
                    patches=[_DUAL137] + _viewer137("2001:db8::7", False))
 check("MEDIUM-2 (delete): beside a v6-only SSH rule, the panel host's only IPv4 SSH rule is PROTECTED for an IPv6 "
       "viewer too (the viewer's family says nothing about the admin's SSH)",
-      _l8[("22/tcp", "203.0.113.0/24")] == "PROTECTED", repr(_l8))
+      _l8[("22/tcp", "203.0.113.0/24")] == "PROTECTED", repr(_l8))  # NOSONAR(S1313)
 
 _NGX443 = [_SSH22, "443/tcp  ALLOW IN  Anywhere"]
 _m1, _m1g = _guard137(_NGX443 + ["5000/tcp  ALLOW IN  Anywhere"], server=_LOCAL135, panel_ports=(5000,),
@@ -479,7 +483,7 @@ _l5 = _deny137(_STD, server=_LOCAL135, patches=[(_fw137, "_fwb_panel_viewer", la
 check("LOW-5: a viewer the panel cannot see behind a local proxy is refused, and the refusal names trust_proxy and "
       "trusted_proxy_users",
       _l5[0] is False and "trust_proxy" in _l5[1] and "trusted_proxy_users" in _l5[1], repr(_l5[:2]))
-_SERVE_ADDRS = (_ue137, "local_addrs", lambda: _p135._addrs135(("eth0", _HOST4), ("tailscale0", "100.100.1.1")))
+_SERVE_ADDRS = (_ue137, "local_addrs", lambda: _p135._addrs135(("eth0", _HOST4), ("tailscale0", "100.100.1.1")))  # NOSONAR(S1313)
 _l8s = {
     "netfilter on, no tailscale0 rule": _deny137(
         [_SSH22], server=_LOCAL135, served=True, ts=(True, False),
@@ -505,8 +509,8 @@ _use = {
     "Cloudflare Tunnel": _m3["Cloudflare Tunnel (cloudflared here, no inbound connection)"],
     "a port-forwarded remote": _m5["22/tcp from anywhere"],
     "a remote over the tailnet, netfilter on": _deny137(
-        [], _rconn137(src="100.100.9.9", dst="100.100.5.5", iface="tailscale0"),
-        server=_NS137(is_local=False, auth_method="key", host="100.100.5.5", port=22, id=None, name="t137"),
+        [], _rconn137(src="100.100.9.9", dst="100.100.5.5", iface="tailscale0"),  # NOSONAR(S1313)
+        server=_NS137(is_local=False, auth_method="key", host="100.100.5.5", port=22, id=None, name="t137"),  # NOSONAR(S1313)
         ts=(True, False), patches=[(_ue137, "ts_netfilter_on", lambda s: True)]),
 }
 check("usability: no false refusal for the setups people run (%s)" % "; ".join(_use),
@@ -561,7 +565,7 @@ finally:
     _p9_restore_all()
 check("LOW-1: auto-block reads each offender in the form the deny is written in: a mapped spelling of a whitelisted "
       "IPv4 address is not blocked, and two spellings of one address add up (and match the blocked list's key)",
-      _l1 == {"203.0.113.60"}, repr(_l1))
+      _l1 == {"203.0.113.60"}, repr(_l1))  # NOSONAR(S1313)
 
 
 class _HalfHost137(_Host135):

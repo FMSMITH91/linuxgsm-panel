@@ -476,7 +476,6 @@ def _conn135(src, server, port=None, iface="eth0"):
 
 def _on135(host, fn, *a, served=False, panel_ports=(5000,), **kw):
     """Run fn(*a, **kw) against stand-in `host`; every host read is answered from it."""
-    import ipaddress as _ip135
     try:
         _p9_arm(who="part135")
         _p9_patch(_core135, "run_privileged", host.run)
@@ -552,7 +551,7 @@ _ts_rem135 = _deny_in135([_TS0], server=_TSREMOTE135, ts=(True, False))
 _ts_ssh135 = _deny_in135([], server=_TSREMOTE135, ts=(True, True))
 check("default incoming deny: the PANEL's own way in counts too — a key host it dials on 22 with only a tailscale0 "
       "allow is refused; a host it reaches over Tailscale with that allow, or with Tailscale SSH, is set",
-      _ts_only135[0][0] is False and "panel's own SSH connection to this host in (from 192.168.1.50 to 192.0.2.10, port 22/tcp, on eth0)" in str(_ts_only135[0][1])
+      _ts_only135[0][0] is False and "panel's own SSH connection to this host in (from 192.168.1.50 to 192.0.2.10, port 22/tcp, on eth0)" in str(_ts_only135[0][1])  # NOSONAR(S1313)
       and _ts_rem135[0][0] is True and _ts_ssh135[0][0] is True,
       repr((_ts_only135, _ts_rem135[0][:2], _ts_ssh135[0][:2])))
 # The panel's own host: its web port.
@@ -562,7 +561,7 @@ _loc_ts135 = _deny_in135([_SSH22, _TS0], server=_LOCAL135, served=True, ts=(True
 _loc_tsno135 = _deny_in135([_SSH22], server=_LOCAL135, served=True, ts=(True, False))
 check("default incoming deny (panel host): refused without the panel's web port open, set with it; published "
       "over Tailscale Serve it needs the tailscale0 allow instead",
-      _loc_no135[0][0] is False and "your connection to the panel in (from 203.0.113.20 to 192.0.2.1, port 5000/tcp, on eth0)" in str(_loc_no135[0][1]) and _loc_yes135[0][0] is True
+      _loc_no135[0][0] is False and "your connection to the panel in (from 203.0.113.20 to 192.0.2.1, port 5000/tcp, on eth0)" in str(_loc_no135[0][1]) and _loc_yes135[0][0] is True  # NOSONAR(S1313)
       and _loc_ts135[0][0] is True and _loc_tsno135[0][0] is False
       and "Tailscale Serve" in str(_loc_tsno135[0][1]),
       repr((_loc_no135[0][:2], _loc_yes135[0][:2], _loc_ts135[0][:2], _loc_tsno135[0][:2])))

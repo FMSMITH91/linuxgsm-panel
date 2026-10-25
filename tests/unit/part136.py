@@ -190,7 +190,7 @@ _h4_autoblk = _deny136(["Anywhere  DENY IN  198.51.100.77", _SSH22])   # NOSONAR
 check("H4: an SSH rule kept to a LAN is no way in for a panel connecting from outside it (refused, the source "
       "named), nor a From with a source port, nor anything when the source cannot be read; a deny of the "
       "panel's own source above the allow refuses too",
-      _h4_out[0] is False and _h4_out[2] == [] and "from 198.51.100.77 to" in _h4_out[1]
+      _h4_out[0] is False and _h4_out[2] == [] and "from 198.51.100.77 to" in _h4_out[1]  # NOSONAR(S1313)
       and _h4_srcport[0] is False and _h4_unread[0] is False and "Couldn't read the address" in _h4_unread[1]
       and _h4_autoblk[0] is False,
       repr((_h4_out[:2], _h4_srcport[:2], _h4_unread[:2], _h4_autoblk[:2])))
@@ -202,7 +202,7 @@ _h4p_in = _deny136(_PANEL_ONE, server=_LOCAL135, viewer="192.0.2.10")   # NOSONA
 _h4p_lo = _deny136([_SSH22, "5000/tcp  ALLOW IN  Anywhere"], server=_LOCAL135, viewer="127.0.0.1")   # NOSONAR(S1313)
 check("H4 (panel host): a web-port rule from one address is no way in for a viewer elsewhere (refused), is for "
       "that address (set); a request from the panel's own machine (who is behind it unknown) refuses",
-      _h4p_out[0] is False and "from 203.0.113.20 to" in _h4p_out[1] and _h4p_in[0] is True
+      _h4p_out[0] is False and "from 203.0.113.20 to" in _h4p_out[1] and _h4p_in[0] is True  # NOSONAR(S1313)
       and _h4p_lo[0] is False and "Couldn't tell which address" in _h4p_lo[1],
       repr((_h4p_out[:2], _h4p_in[:2], _h4p_lo[:2])))
 
