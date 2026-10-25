@@ -211,10 +211,17 @@ check("cron form: the Autostart switch reads both forms of the monitor line as A
       _smcron140._cron_role("cd /home/p140u && ./p140server monitor", "p140u", "p140server") == "autostart"
       and _smcron140._cron_role("/home/p140u/p140server monitor", "p140u", "p140server") == "autostart"
       and _smcron140._cron_role("cd /home/p140u && ./p140server-2 monitor", "p140u", "p140server") == "")
+_icr140 = _smcron140._install_cron_runner
+try:
+    # The base64 runner's install would reach the host; a line that goes that way is answered None.
+    _smcron140._install_cron_runner = lambda *a, **k: 1
+    _wrapped140 = _smcron140._wrap_cron_command(object(), "p140u", "cd /home/p140u && ./p140server monitor")
+finally:
+    _smcron140._install_cron_runner = _icr140
 check("cron form: a monitor line rescheduled in the editor stays visible (inline recorder, not base64), so "
       "the Autostart switch can still find and remove it",
-      _smcron140._wrap_cron_command(object(), "p140u", "cd /home/p140u && ./p140server monitor")
-      == _smcron140._record_managed_cmd("p140u", "cd /home/p140u && ./p140server monitor"))
+      _wrapped140 == _smcron140._record_managed_cmd("p140u", "cd /home/p140u && ./p140server monitor"),
+      repr(_wrapped140))
 
 # The migration: the daily upgrade pass rewrites the panel's own full-path lines in place.
 _up140 = _smcron140._CronUpgrade(
