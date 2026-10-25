@@ -797,6 +797,7 @@ def _ts3_heal140():
         return _details140(_TS3_TABLE140), "", 0
     try:
         _smc140.run_as_game_user = details
+
         def status(server):
             return _ts3_fw140[cur["u"]].status(server)
 
@@ -864,8 +865,11 @@ _VHX140 = _smg140.LGC_VH_CROSSPLAY_SKIP
 
 
 def _vh_sched140(sid, overdue_days, reason=_VHX140, queued_days=None, interval=1):
-    """One scheduled (or, with queued_days, queued) run for Valheim row `sid` whose crossplay check
-    answers `reason`: [(force, ...)] of the runs, the status left, the outcomes recorded."""
+    """Run one scheduled (or, with queued_days, queued) backup of Valheim row `sid`.
+
+    Its crossplay check answers `reason`. -> (the runs' force flags, the status left, the outcomes
+    recorded, whether it is still queued).
+    """
     runs, outcomes = [], []
 
     def runner(remote, user, selfname, keep, force=False, **k):
@@ -955,8 +959,9 @@ def _vh_up140(lock, sessions):
     with open(os.path.join(_dvh140, "bin", "tmux"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/bash\n[ \"$1\" = -L ] || exit 1\ncase \"$2\" in %s*) exit 1;; esac\n" % table)
     os.chmod(os.path.join(_dvh140, "bin", "tmux"), 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
-    sh = (_smg140._lgc_vh_up_sh("p140vh", "vhserver").replace("/home/p140vh", os.path.join(_dvh140, "home"))
-          .replace("/tmp/tmux-$(id -u)", os.path.join(_dvh140, "tmux")))
+    sh = _smg140._lgc_vh_up_sh("p140vh", "vhserver").replace("/home/p140vh", os.path.join(_dvh140, "home"))
+    # The account's tmux socket directory, whatever the shell names it, is the stand-in's.
+    sh = _re140.sub(r"\S*/tmux-\$\(id -u\)", lambda _m: os.path.join(_dvh140, "tmux"), sh)
     r = _sp140.run(["bash", "-c", sh], capture_output=True, text=True, check=False,  # nosec B603 B607 - fixture
                    env={"PATH": os.path.join(_dvh140, "bin") + ":" + os.defpath})
     return r.stdout.strip()
