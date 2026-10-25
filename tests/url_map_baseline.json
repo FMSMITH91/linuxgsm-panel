@@ -1945,6 +1945,17 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/pz-admin-password": {
+    "endpoint": "api_server_pz_admin_password",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_pz_admin_password"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/query-type": {
     "endpoint": "api_server_query_type",
     "guards": [
