@@ -464,8 +464,19 @@ check("retired games: the scan lists an existing Post Scriptum and SCP:SL Server
       and "retired by LinuxGSM in v25.1.0" in _list140[0]["game_name"] and "Squad 44" in _list140[0]["game_name"]
       and "SCP: Secret Laboratory" in _list140[1]["game_name"] and "v26.4.0" in _list140[1]["game_name"],
       repr(_list140))
-check("retired games: ...and the import accepts them as game types (stored under their own name)",
-      {"ps", "scpslsm"} <= set(_names140) and _names140["ps"] == "Post Scriptum")
+_lgl_real140 = _disc140.load_game_list
+try:
+    _disc140.load_game_list = lambda: [{"shortname": "squad44", "name": "Squad 44"}]
+    with _p9.app_context():
+        _picked140, _skipped140 = _disc140._import_selection(
+            P9_HOST, [{"user": "p140ps", "game_type": "ps"}, {"user": "p140zz", "game_type": "zz"}],
+            {"p140ps": {"ps": None}, "p140zz": {"zz": None}})
+finally:
+    _disc140.load_game_list = _lgl_real140
+check("retired games: ...and the import accepts a retired game type the scan found (stored under its own "
+      "name), while a game type nobody knows is still skipped",
+      _picked140 == [("p140ps", "ps", None)] and _skipped140 == ["p140zz"]
+      and _names140["ps"] == "Post Scriptum", repr((_picked140, _skipped140)))
 
 
 # ── 7. LinuxGSM's new games: default ports and moderation ───────────────────────────────────────
