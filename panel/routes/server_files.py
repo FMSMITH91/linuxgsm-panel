@@ -1808,11 +1808,9 @@ def _register_files_page(app):
 def _sf_config_read(gs):
     """GET /config: the instance's LinuxGSM config, or a generic 500."""
     try:
-        cfg = lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name)
+        return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
     except Exception:
         return jsonify({"error": _log_and_generic("request failed")}), 500
-    from panel.routes import pz_admin as _pz
-    return jsonify(_pz.flag_default_admin(gs, cfg))
 
 
 def _sf_config_write(gs, data):

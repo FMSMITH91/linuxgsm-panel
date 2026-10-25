@@ -507,7 +507,12 @@ def lgsm_read_config(server, user, selfname):
     merged.update(_parse_cfg(sect["SECRETS_INSTANCE"]))
     settings = _curated_cfg_settings(merged, defaults, instance, common)
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
-    return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
+    out = {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
+    # Project Zomboid (whose script is always pzserver) still on LinuxGSM's CHANGE_ME: the page
+    # warns, with a one-click fix (routes/pz_admin.py). Only on a read that succeeded, which this is.
+    if selfname == "pzserver":
+        out["lgc_pz_default_admin"] = merged.get("adminpassword") == LGC_PZ_DEFAULT_ADMIN
+    return out
 
 
 # lgsm_read_config's answer when a LinuxGSM config file is there and the game's account cannot read

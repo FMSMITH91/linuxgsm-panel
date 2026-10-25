@@ -47,7 +47,7 @@ window.hostChanged = hostChanged;
 // Which games THIS host can actually install.
 //
 // LinuxGSM refuses two games (btl, onset) above Ubuntu 20.04 in its own check_deps.sh, and the
-// picker marks them with that cap (data-legacy-os, app._LGC_DISTRO_CAPS) — the list is rendered
+// picker marks them with that cap (data-legacy-os, lgsm_data._LGC_DISTRO_CAPS) — the list is rendered
 // before a host is chosen. Once one IS chosen the comparison can be the real one: a 20.04 remote
 // under a 24.04 panel runs those games perfectly well, while on a 24.04 host they fail every time,
 // minutes into the download.

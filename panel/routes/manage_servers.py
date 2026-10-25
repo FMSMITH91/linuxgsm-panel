@@ -36,8 +36,8 @@ from panel.core import terminal
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
     SAFE_LABEL_RE, _port_or)
 from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _prune_jobs,
-    _resolve_source_aux_ports, _sync_toggles_from_cron, game_os_unsupported, lgc_distro_cap,
-    load_game_list, resolve_free_port)
+    _resolve_source_aux_ports, _sync_toggles_from_cron, game_os_unsupported, load_game_list,
+    resolve_free_port)
 from panel.routes._shared import (INVALID_ACCOUNT_NAME, _looks_installed, _notify_servers_changed,
     _record_game_clock, privileged_accounts)
 
@@ -701,7 +701,7 @@ def _os_cap_refusal(remote, game_type):
     # known. The alternative is a download that spends minutes arriving at LinuxGSM's own
     # "not supported on Ubuntu 24.04.5" and leaves a failed row to clean up.
     #
-    # The cap is LinuxGSM's own refusal in check_deps.sh (app._LGC_DISTRO_CAPS), for the host's
+    # The cap is LinuxGSM's own refusal in check_deps.sh (lgsm_data._LGC_DISTRO_CAPS), for the host's
     # distro: btl and onset above Ubuntu 20.04 or Debian 11. It is NOT the serverlist's os column,
     # which follows LinuxGSM's Docker image base: at v26.4.0 it left cod, cod2, coduo and mohaa on
     # ubuntu-24.04 while the rest moved to 26.04, and reading it as a cap refused those four on
@@ -710,13 +710,13 @@ def _os_cap_refusal(remote, game_type):
     # Fails OPEN, like game_os_unsupported itself: an unreadable host OS, or a game with no
     # cap, is not evidence of a problem, and refusing an install that would have worked is the
     # worse error. A game with no cap anywhere costs no read of the host.
-    if not any(lgc_distro_cap(game_type, d) for d in ("ubuntu", "debian")):
+    if not any(lgsm_data.lgc_distro_cap(game_type, d) for d in ("ubuntu", "debian")):
         return None
     try:
         _host_os = _sm.host_os_slug(remote)
     except Exception:
         _host_os = None
-    _game_os = lgc_distro_cap(game_type, (_host_os or "").split("-")[0])
+    _game_os = lgsm_data.lgc_distro_cap(game_type, (_host_os or "").split("-")[0])
     if _game_os and _host_os and game_os_unsupported(_game_os, _host_os):
         return _form_err(i18n.tr(
             "LinuxGSM supports {game} only up to {game_os}, and this host runs {host_os} — the install "

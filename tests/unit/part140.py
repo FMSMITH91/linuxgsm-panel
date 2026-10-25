@@ -371,8 +371,17 @@ _pz_route_calls140 = []
 try:
     _p9_arm(who="part140")
     _cfg_now140 = {"v": "CHANGE_ME"}
-    _p9_patch(_sf140, "lgsm_read_config", lambda r, u, n: {
-        "settings": [{"key": "adminpassword", "value": _cfg_now140["v"]}], "groups": [], "raw": ""})
+
+    def _frames140(server, user, inner, **k):
+        """lgsm_read_config's framed read: _default.cfg says CHANGE_ME, the instance cfg _cfg_now140."""
+        import base64 as _b64
+
+        def fr(tag, text):
+            return "__LGSMP_%s_B__%s__LGSMP_%s_E__" % (tag, _b64.b64encode(text.encode()).decode(), tag)
+        inst = "" if _cfg_now140["v"] == "CHANGE_ME" else 'adminpassword="%s"\n' % _cfg_now140["v"]
+        return (fr("DEFAULT", '#### Server Settings ####\nadminpassword="CHANGE_ME"\n') + fr("COMMON", "")
+                + fr("SECRETS_COMMON", "") + fr("SECRETS_INSTANCE", "") + fr("INSTANCE", inst), "", 0)
+    _p9_patch(_smc140, "shell_as_game_user", _frames140)
     _p9_patch(_sf140, "_write_refused", lambda gs, action, detail="": None)
     _p9_patch_sm("lgc_pz_set_admin_password",
                  lambda r, u, n, **k: (_pz_route_calls140.append(u), (True, ""))[1])

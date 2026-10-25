@@ -1,9 +1,9 @@
-"""Project Zomboid's admin password: LinuxGSM's CHANGE_ME, flagged on the config read, and its fix.
+"""Project Zomboid's admin password: the one-click fix for LinuxGSM's CHANGE_ME.
 
 LinuxGSM v26.3.0 (#4991) ships pzserver with `adminpassword="CHANGE_ME"` and starts the game with
 `-adminpassword ${adminpassword}`, so a server still on it has an admin account anyone who has read
-LinuxGSM's config can use. Kept beside the config editor's routes (server_files) rather than in
-them: that module is at its size limit.
+LinuxGSM's config can use; the config read flags it (files.lgsm_read_config). Kept beside the config
+editor's routes (server_files) rather than in them: that module is at its size limit.
 """
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
@@ -12,19 +12,6 @@ from panel.core.http import (_log_and_generic)
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import (_r20b_audit_on_raise)
 from panel.security.auth import (_can_manage_files, get_game, log_action, server_access_required)
-
-
-def flag_default_admin(gs, cfg):
-    """`cfg` (a config read), saying whether a Project Zomboid server is still on CHANGE_ME.
-
-    The page warns, with the one-click fix below. Only when the read succeeded: an empty settings
-    list is no answer.
-    """
-    if gs.game_type == "pz" and not cfg.get("error"):
-        cfg["lgc_pz_default_admin"] = any(
-            st.get("key") == "adminpassword" and st.get("value") == _sm.LGC_PZ_DEFAULT_ADMIN
-            for st in cfg.get("settings") or ())
-    return cfg
 
 
 def register(app):

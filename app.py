@@ -1305,33 +1305,11 @@ ALERT_PROVIDERS = [
 _GAME_LIST_CACHE = {"games": None}
 
 
-# The games LinuxGSM REFUSES to install above a distro release, as its own check_deps.sh refuses them
-# ("<game> is not supported on <distro> (requires Ubuntu <= 20.04 or Debian <= 11)."), read from
-# lgsm/modules/check_deps.sh at v26.4.0. That refusal is the only cap LinuxGSM has.
-#
-# serverlist.csv's `os` column is NOT one. It follows the base of LinuxGSM's Docker images (#5028):
-# at v26.4.0 138 games say ubuntu-26.04 while cod, cod2, coduo and mohaa stayed on ubuntu-24.04,
-# although #5069 made those four run on Ubuntu 26.04, Debian 13 and RHEL 9. Reading the column as a
-# cap refused them on every 26.04 host. Nor is a missing row in the distro's deps csv a signal:
-# every one of those files lists every game, btl and onset included. bf1942 and bfv were refused
-# above Ubuntu 22.04 / Debian 12 up to v26.3.0, and v26.4.0 dropped that check.
-_LGC_DISTRO_CAPS = {
-    "btl": {"ubuntu": "20.04", "debian": "11"},
-    "onset": {"ubuntu": "20.04", "debian": "11"},
-}
-
-
-def lgc_distro_cap(game_type, distro="ubuntu"):
-    """The newest '<distro>-<version>' LinuxGSM installs `game_type` on, or "" when it has no cap."""
-    ver = _LGC_DISTRO_CAPS.get(game_type or "", {}).get(distro or "")
-    return "%s-%s" % (distro, ver) if ver else ""
-
-
 def game_os_unsupported(game_os, host_os):
     """True when LinuxGSM caps this game at an OLDER release than the host runs.
 
-    Both are LinuxGSM's own slugs ("ubuntu-24.04"); `game_os` is a cap from lgc_distro_cap, never
-    the serverlist's os column (see _LGC_DISTRO_CAPS).
+    Both are LinuxGSM's own slugs ("ubuntu-24.04"); `game_os` is a cap from lgsm_data.lgc_distro_cap,
+    never the serverlist's os column (see lgsm_data._LGC_DISTRO_CAPS).
 
     Unknown or unparseable on either side answers False: a game whose OS we cannot read is not
     evidence of a problem, and hiding a game that would have worked is worse than letting it try.
@@ -1371,15 +1349,15 @@ def load_game_list():
         sn = (row.get("shortname") or "").strip()
         name = (row.get("gamename") or "").strip()
         if sn and name:
-            # The serverlist's os column rides along as data. It is not a cap (_LGC_DISTRO_CAPS
-            # says why); legacy_os below is.
+            # The serverlist's os column rides along as data. It is not a cap
+            # (lgsm_data._LGC_DISTRO_CAPS says why); legacy_os below is.
             games.append({"shortname": sn, "name": name,
                           "os": (row.get("os") or "").strip()})
     # Mark the games LinuxGSM refuses on newer releases. The picker cannot know which host is about
     # to be chosen, so it states the game's OWN Ubuntu limit; the install route and the picker's
     # script compare it against the host once one is (_os_cap_refusal, filterGamesForHost).
     for row in games:
-        row["legacy_os"] = lgc_distro_cap(row["shortname"])
+        row["legacy_os"] = lgsm_data.lgc_distro_cap(row["shortname"])
     games.sort(key=lambda row: row["name"].lower())
     # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
     # of the process, so a later retry (or the background warm) could never take effect.
