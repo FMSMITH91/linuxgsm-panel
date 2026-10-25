@@ -300,8 +300,12 @@ def bad_setting(settings):
 
 
 def _lg264_minutes(v):
-    """A posted timer as whole minutes 0..WARN_MAX_MINUTES, or None. A JSON int counts; a bool does not."""
-    if isinstance(v, int) and not isinstance(v, bool):
+    """A posted timer as whole minutes 0..WARN_MAX_MINUTES, or None. A JSON int counts; a bool does not.
+
+    A JSON true/false is an int to isinstance, and its str() is "True"/"False", which the
+    isdecimal() test refuses.
+    """
+    if isinstance(v, int):
         v = str(v)
     if not (isinstance(v, str) and v.isascii() and v.isdecimal() and len(v) <= 3):
         return None

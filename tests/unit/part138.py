@@ -114,6 +114,17 @@ try:
           "and is not cached as 'off'",
           _lgp138.timeout_for(_srv138, "u2", "s2", "stop", 60) == 60 and not _lgp138._lg264_cache,
           repr(_lgp138._lg264_cache))
+    _lgp138._lg264_cache.clear()
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "3", "stoponlyifnoplayers": "on"})
+    _st138a = (_lgp138.settings(_srv138, "u4", "s4"), _lgp138.stop_only_if_empty(_srv138, "u4", "s4"))
+    _files138.lgsm_get_values = _vals138({"warnplayerstimer": "", "stoponlyifnoplayers": "off"})
+    _st138b = (_lgp138.settings(_srv138, "u5", "s5"), _lgp138.stop_only_if_empty(_srv138, "u5", "s5"))
+    _files138.lgsm_get_values = _vals138(None)
+    _st138c = _lgp138.stop_only_if_empty(_srv138, "u6", "s6")
+    check("player settings: one read gives the timer and whether stoponlyifnoplayers is on; unread is None "
+          "(unknown), never off", _st138a == ({"minutes": 3, "stop_only": True}, True)
+          and _st138b == ({"minutes": 0, "stop_only": False}, False) and _st138c is None,
+          repr((_st138a, _st138b, _st138c)))
     _files138.lgsm_get_values = _vals138({"warnplayerstimer": "99999"})
     check("warning allowance: a hand-written timer past a day is held to a day",
           _lgp138.allowance_seconds(_srv138, "u3", "s3", "stop") == 24 * 3600 + _lgp138._LG264_WARN_SLACK)
@@ -226,6 +237,15 @@ try:
           and _lgp138.panel_warned(_srv138, []) == [], repr((_left138, _gone138, _types138)))
 finally:
     _lgp138.warn_minutes = _saved_pw138
+_saved_lw138 = _lgp138.warn_minutes
+try:
+    _lgp138.warn_minutes = lambda remote, user, selfname, fresh=False: {"a": 5, "b": 0}.get(user)
+    _lw138 = [_lgp138.lgsm_warns(_srv138, type("G", (), {"game_type": gt, "short_name": sn, "lgsm_name": sn})())
+              for gt, sn in (("gmod", "a"), ("rust", "a"), ("gmod", "b"), ("gmod", "c"))]
+finally:
+    _lgp138.warn_minutes = _saved_lw138
+check("LinuxGSM warns a server itself only with a timer AND a game it can warn on (rust cannot); no timer "
+      "or an unread one is the panel's to warn", _lw138 == [True, False, False, False], repr(_lw138))
 check("forced reboot: the job's countdown is the panel_warned rows (LinuxGSM's own warning wins)",
       "warn = _lgp.panel_warned(self.remote, warnable(census))" in _read138("panel", "services", "host_reboot.py"))
 
