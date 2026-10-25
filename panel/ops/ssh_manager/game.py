@@ -1757,17 +1757,19 @@ def _lg264_bk_request(server, user, selfname):
     {"requested": epoch or None (no request), "alerted": bool, "monitor": bool} — monitor: the
     instance has <selfname>-monitoring.lock AND its account's crontab runs `<selfname> monitor`
     (the panel's Autostart), the two things LinuxGSM's monitor needs to ever run the request. A
-    commented-out line runs nothing, so it does not count.
+    commented-out line runs nothing, so it does not count. The line is matched in both forms the
+    panel writes (cron.lgc_cron_core and the older full path) and with LinuxGSM's `m` alias.
     """
     if not _core.game_idents_ok(user, selfname):
         return None
     lock = "/home/%s/lgsm/lock/%s" % (user, selfname)
     req = _core._quote(lock + "-backup-request.lock")
     cmd = ("R=-; [ -f %s ] && R=$(head -n 1 %s 2>/dev/null); A=0; grep -qx alerted %s 2>/dev/null && A=1; "
-           "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -qF %s && M=1; "
+           "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -qE %s && M=1; "
            "printf '%%s\\t%%s\\t%%s\\t%%s\\n' \"$R\" \"$A\" \"$M\" %s"
            % (req, req, req, _core._quote(lock + "-monitoring.lock"),
-              _core._quote("/home/%s/%s monitor" % (user, selfname)), _LG264_BK_END))
+              _core._quote(cron.lgc_cron_cmd_ere(user, selfname, "monitor|m").rstrip() + "( |$)"),
+              _LG264_BK_END))
     try:
         out, _err, _rc = _core.shell_as_game_user(server, user, cmd, timeout=20, selfname=selfname)
     except Exception:

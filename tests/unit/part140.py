@@ -560,5 +560,52 @@ check("start rc 2: LinuxGSM's generic ERROR (here: missing SteamCMD dependencies
       == ("failed", "started", "started", "running"),
       repr((_start140(2, 0), _start140(2, 1), _start140(2, 0, "csserver is already running"))))
 
+# The backup request's monitor read (game._lg264_bk_request, from #461) asks whether the crontab runs
+# the Autostart monitor. It must see the `cd /home/<u> && ./<s> monitor` line this branch writes and
+# migrates to, or every migrated server reads as "Autostart off" and LinuxGSM's postponed backup as
+# one nobody will run. Its shell is run in bash against a stand-in crontab.
+_dbk140 = _tf140.mkdtemp(prefix="p140bk")
+os.makedirs(os.path.join(_dbk140, "home", "lgsm", "lock"))
+os.makedirs(os.path.join(_dbk140, "bin"))
+open(os.path.join(_dbk140, "home", "lgsm", "lock", "s-monitoring.lock"), "w", encoding="utf-8").close()
+_bkcmd140 = []
+_bksh140 = _smc140.shell_as_game_user
+try:
+    _smc140.shell_as_game_user = lambda s, u, c, **k: (_bkcmd140.append(c), ("", "", 1))[1]
+    _smg140._lg264_bk_request(object(), "u", "s")
+finally:
+    _smc140.shell_as_game_user = _bksh140
+
+
+def _bk_monitor140(line):
+    with open(os.path.join(_dbk140, "bin", "crontab"), "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % line.replace("/home/u", _dbk140 + "/home"))
+    os.chmod(os.path.join(_dbk140, "bin", "crontab"), 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    r = _sp140.run(["bash", "-c", _bkcmd140[0].replace("/home/u", _dbk140 + "/home")],  # nosec B603 B607 - fixture
+                   capture_output=True, text=True, check=False,
+                   env={"PATH": os.path.join(_dbk140, "bin") + ":" + os.defpath})
+    return (r.stdout.split("\t") + ["", "", ""])[2]
+
+
+_bk_lines140 = {
+    "*/5 * * * * " + _smcron140._record_managed_cmd("u", _smcron140.lgc_cron_core("u", "s", "monitor")): "1",
+    "*/5 * * * * " + _smcron140._record_managed_cmd("u", "/home/u/s monitor"): "1",
+    "*/5 * * * * /home/u/s monitor": "1",
+    "*/5 * * * * cd /home/u && ./s m > /dev/null 2>&1": "1",
+    "#*/5 * * * * cd /home/u && ./s monitor": "0",
+    "*/5 * * * * cd /home/u && ./s update": "0",
+    "*/5 * * * * cd /home/u && ./ss monitor": "0",
+    "*/5 * * * * /home/u/s mods-update": "0"}
+_bk_got140 = {ln: _bk_monitor140(ln) for ln in _bk_lines140} if _bkcmd140 else {}
+check("cron form: LinuxGSM's postponed backup counts the Autostart monitor in the panel's `cd && ./` form, "
+      "the old full path and the `m` alias, and not a commented line, another command or another script",
+      _bk_got140 == _bk_lines140,
+      repr({k: v for k, v in _bk_got140.items() if v != _bk_lines140.get(k)} or _bkcmd140))
+check("cron form: a scheduled-tasks row running the monitor by its `m` alias is not read as postponed",
+      _smcron140._lg264_runs_monitor("cd /home/u && ./s m")
+      and _smcron140._lg264_runs_monitor("cd /home/u && ./s monitor")
+      and not _smcron140._lg264_runs_monitor("cd /home/u && ./s mods-update"))
+
+
 check("part140: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP140_START, repr(_P9_TRIPPED[_TRIP140_START:]))

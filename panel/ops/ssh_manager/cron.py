@@ -380,9 +380,9 @@ _LG264_CRON_POSTPONED_ERE = ("INFO.*([0-9]+ players are on the server: (stop pre
 
 
 def _lg264_runs_monitor(cmd):
-    """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`)."""
+    """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`, or `m`)."""
     words = (cmd or "").split()
-    return any(w == "monitor" and i and "/" in words[i - 1] for i, w in enumerate(words))
+    return any(w in ("monitor", "m") and i and "/" in words[i - 1] for i, w in enumerate(words))
 
 
 def _read_cron_status(server, user):
