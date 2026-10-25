@@ -468,25 +468,29 @@ def stop_passes(remote, entries):
 def run_stop_passes(passes, stop_group, workers, cancelled, on_cancel):
     """Run each pass's account groups through `stop_group`, `workers` at a time, a pass after the last.
 
-    Watched a second at a time, so a Cancel is acted on while a stop runs: `on_cancel()` once, when
-    `cancelled()` first says so (it calls LinuxGSM's countdowns off: interrupt_countdowns). A raise
-    in a group is the caller's, as the pool's map gave it.
+    Watched a second at a time, so a Cancel is acted on while a stop runs: `on_cancel()` (it calls
+    LinuxGSM's countdowns off: interrupt_countdowns) as soon as `cancelled()` says so, and again
+    every _LG264_CANCEL_EVERY s while stops are still running — a stop that had not yet written its
+    warning lock when the Cancel came (its first seconds: LinuxGSM's checks) starts its countdown
+    after, and is called off then. Each call signals only a countdown still running. A raise in a
+    group is the caller's, as the pool's map gave it.
     """
     import concurrent.futures as _cf
-    called = False
+    last = None
     for groups in passes:
         with _cf.ThreadPoolExecutor(max_workers=min(workers, len(groups))) as ex:
             futs = [ex.submit(stop_group, g) for g in groups]
             pending = futs
             while pending:
                 pending = _cf.wait(futs, timeout=1)[1]
-                if not called and cancelled():
-                    called = True
+                if cancelled() and (last is None or time.monotonic() - last >= _LG264_CANCEL_EVERY):
+                    last = time.monotonic()
                     on_cancel()
             for f in futs:
                 f.result()
 
 
+_LG264_CANCEL_EVERY = 5
 # Cancel during a reboot's stop. LinuxGSM's own way to call a countdown off is Ctrl-C: core_trap.sh
 # traps INT, and fn_stop_warn_players_cancel tells the players "Server stopping cancelled", removes
 # its warning lock and ends the command without stopping. The countdown's pid is the first line of

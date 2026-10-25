@@ -1001,9 +1001,29 @@ _m3t.start()
 _lgp138.run_stop_passes([[["slow"], ["fast"]], [["later"]]], _m3_group, 4, lambda: bool(_m3flag), _m3_cancel)
 _m3t.cancel()
 check("M3 Cancel: the stop phase acts on a Cancel while a stop is still running (its countdown is called off "
-      "then, not after it), once; and a pass starts only when the one before has ended",
+      "then, not after it); and a pass starts only when the one before has ended",
       _m3log.count(("cancel",)) == 1 and _m3log.index(("cancel",)) < _m3log.index(("end", "slow"))
       and _m3log.index(("start", "later")) > _m3log.index(("end", "slow")), repr(_m3log))
+# ...and again while stops still run: a stop that wrote its warning lock only after the Cancel.
+_m3late = []
+_m3gate2 = _th_m3.Event()
+
+
+def _m3_late_cancel():
+    _m3late.append(_time138.monotonic())
+    if len(_m3late) == 2:
+        _m3gate2.set()
+
+
+_saved_every_m3 = _lgp138._LG264_CANCEL_EVERY
+try:
+    _lgp138._LG264_CANCEL_EVERY = 1
+    _lgp138.run_stop_passes([[["slow"]]], lambda grp: _m3gate2.wait(20), 4, lambda: True, _m3_late_cancel)
+finally:
+    _lgp138._LG264_CANCEL_EVERY = _saved_every_m3
+check("M3 Cancel: a stop whose countdown began after the Cancel is called off on the next pass of the watch "
+      "(the call repeats while stops run), not left to run its minutes",
+      len(_m3late) == 2 and _m3gate2.is_set() and _saved_every_m3 == 5, repr(_m3late))
 _saved_m3s = (_smc138.run_as_game_user, _lgp138.warn_minutes)
 _m3seen = []
 try:
