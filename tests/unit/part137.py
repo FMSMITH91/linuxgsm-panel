@@ -21,7 +21,10 @@ HOW IT RUNS. On part135's stand-in host and patcher (part12's tripwire armed), r
 Nothing reaches a host, sudo, ufw or data/.
 """
 import ipaddress as _ip137
+import json as _json137
 import os as _os137
+import subprocess as _sp137
+import sys as _sys137
 import tempfile as _tf137
 from types import SimpleNamespace as _NS137
 
@@ -35,6 +38,7 @@ from panel.security import auth as _auth137
 from panel.services import monitoring as _mon137
 
 _TRIP137_START = len(_P9_TRIPPED)
+_ROOT137 = _os137.path.dirname(_os137.path.dirname(_os137.path.dirname(_os137.path.abspath(__file__))))
 _Host135, _LOCAL135, _REMOTE135, _SSH22 = _p135._Host135, _p135._LOCAL135, _p135._REMOTE135, _p135._SSH22
 _SSH22V6 = "22/tcp (v6)  ALLOW IN  Anywhere (v6)"
 _PANEL137 = "203.0.113.50"     # NOSONAR(S1313) - documentation addresses throughout, never dialled
@@ -245,8 +249,7 @@ def _proc_row(local, remote, state="01"):
     return "   0: %s %s %s 00000000:00000000 00:00000000 00000000  1000        0 12345 1\n" % (local, remote, state)
 
 
-_tcpdir137 = _tf137.mkdtemp(prefix="p137-")
-try:
+with _tf137.TemporaryDirectory(prefix="p137-") as _tcpdir137:
     _t4, _t6 = _os137.path.join(_tcpdir137, "tcp"), _os137.path.join(_tcpdir137, "tcp6")
     _hdr = "  sl  local_address rem_address   st\n"
     _addr = _auth137._proc_net_address
@@ -264,16 +267,35 @@ try:
     finally:
         _ue137._PROC_TCP.clear()
         _ue137._PROC_TCP.update(_saved137)
-finally:
-    for _f in ("tcp", "tcp6"):
-        try:
-            _os137.unlink(_os137.path.join(_tcpdir137, _f))
-        except OSError:
-            pass
-    _os137.rmdir(_tcpdir137)
 check("readers: the viewer's open connections to this host from /proc/net/tcp{,6}: ESTABLISHED only, its address "
       "only, never a loopback end, a v4-mapped row in tcp6 as the IPv4 one",
       [(str(a), p) for a, p in _seen137 or ()] == [(_HOST4, 443), (_HOST4, 8443)], repr(_seen137))
+def _linear137(timeout=10):
+    """ufweval's column and attribute readers against long adversarial text, in a child with a time limit."""
+    code = "\n".join([
+        "import json, sys, warnings", "warnings.simplefilter('ignore')", "sys.path.insert(0, sys.argv[1])",
+        "from panel.ops.ssh_manager import ufweval as U",
+        "for t in (' ' * 40000 + 'x', '(log,' * 20000 + 'x', '/' * 40000 + 'tcpx', 'Anywhere' + ' ' * 40000 + ')',"
+        " '(' * 40000 + 'log', 'a/' * 20000 + 'tcp ' * 5000):",
+        "    U.row_spec({'to': t, 'from': t, 'action': 'ALLOW', 'direction': 'IN'})",
+        "print(json.dumps([U._strip_attribs('Anywhere  (log, out)'), U._strip_proto('192.0.2.0/24/udp')]))"])
+    try:
+        p = _sp137.run([_sys137.executable, "-c", code, _ROOT137], capture_output=True, text=True,  # nosec B603
+                       timeout=timeout, check=False)
+        return _json137.loads(p.stdout.strip().splitlines()[-1]) if p.returncode == 0 else p.stderr[-300:]
+    except Exception as ex:  # noqa: BLE001 - TimeoutExpired, of whichever subprocess module ran it
+        if type(ex).__name__ != "TimeoutExpired":
+            raise
+        return "timed out after %ss" % timeout
+
+
+_lin137 = _linear137()
+check("readers: the column, protocol and attribute readers answer 40000-character runs of spaces, slashes and "
+      "\"(log,\" at once in a child with a time limit (no super-linear backtracking, Sonar S8786), and still read "
+      "\"(log, out)\" and \"/udp\" (controls)",
+      _lin137 == ["Anywhere", ["192.0.2.0/24", "udp"]], repr(_lin137))  # NOSONAR(S1313)
+
+
 _nf137 = {}
 for _k, _out, _rc in (("on", '{"NetfilterMode": 2, "RunSSH": true}', 0), ("nodivert", '{"NetfilterMode": 1}', 0),
                       ("off", '{"NetfilterMode": 0}', 0), ("unread", "", 1), ("garbage", "not json", 0)):

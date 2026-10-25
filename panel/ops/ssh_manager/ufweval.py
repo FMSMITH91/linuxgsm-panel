@@ -45,18 +45,33 @@ ANY = "any"
 Conn = collections.namedtuple("Conn", "version src dst dport iface what")
 
 # A column's trailing protocol (`22/tcp`, `192.0.2.0/24/udp`, `Anywhere/gre`): ufw's supported ones.
-_PROTO_SUFFIX_RE = re.compile(r"/(tcp|udp|ipv6|esp|ah|igmp|gre|vrrp)\Z", re.I)
+_PROTOS = frozenset({"tcp", "udp", "ipv6", "esp", "ah", "igmp", "gre", "vrrp"})
 # The attributes `ufw status numbered` prints after the From column: "(log)", "(log-all)", "(out)".
-_ATTRIBS_RE = re.compile(r"\s*\((?:log|log-all|out)(?:,\s*(?:log|log-all|out))*\)\s*\Z", re.I)
+_ATTRIBS = frozenset({"log", "log-all", "out"})
 # What `ufw allow OpenSSH` resolves to when the profile files themselves could not be read: the
 # profile openssh-server ships (/etc/ufw/applications.d/openssh-server).
 _KNOWN_APPS = {"openssh": [([(22, 22)], "tcp")]}
 
 
 def _strip_proto(word):
-    """(`word` without its protocol suffix, that protocol lowercased or None)."""
-    m = _PROTO_SUFFIX_RE.search(word)
-    return (word[:m.start()], m.group(1).lower()) if m else (word, None)
+    """(`word` without its protocol suffix, that protocol lowercased or None).
+
+    Read by its last "/", not a regex: one pass, whatever the text (Sonar S8786 on the pattern it was).
+    """
+    head, sep, tail = word.rpartition("/")
+    return (head, tail.lower()) if sep and tail.lower() in _PROTOS else (word, None)
+
+
+def _strip_attribs(text):
+    """The From column without the "(log)" / "(log-all)" / "(out)" attributes ufw prints after it."""
+    t = text.rstrip()
+    if not t.endswith(")"):
+        return text
+    at = t.rfind("(")
+    words = t[at + 1:-1].split(",") if at >= 0 else []
+    if words and all(w.strip().lower() in _ATTRIBS for w in words):
+        return t[:at].rstrip()
+    return text
 
 
 def _net(word):
@@ -113,7 +128,7 @@ def column(text):
 def row_spec(p):
     """What one listed rule matches (`p`: firewall._parse_ufw_rule's fields): a dict the matcher reads."""
     dst_addr, dports, dproto = column(p.get("to"))
-    src_addr, sports, sproto = column(_ATTRIBS_RE.sub("", str(p.get("from") or "")))
+    src_addr, sports, sproto = column(_strip_attribs(str(p.get("from") or "")))
     action = str(p.get("action") or "").upper()
     return {"action": action if action in ("ALLOW", "LIMIT", "DENY", "REJECT") else "",
             "direction": str(p.get("direction") or "IN").upper(), "iface": str(p.get("iface") or ""),
