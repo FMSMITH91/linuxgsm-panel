@@ -25,7 +25,7 @@ import re as _re140
 
 from unit.part01 import check
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_row,
                          _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 import app as _app140
 from panel.routes import manage_servers as _ms140
@@ -605,6 +605,585 @@ check("cron form: a scheduled-tasks row running the monitor by its `m` alias is 
       _smcron140._lg264_runs_monitor("cd /home/u && ./s m")
       and _smcron140._lg264_runs_monitor("cd /home/u && ./s monitor")
       and not _smcron140._lg264_runs_monitor("cd /home/u && ./s mods-update"))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The adversarial review of #462: what the fixes above left open
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ── 11. L1: no game type is no ServerQuery ──────────────────────────────────────────────────────
+_rag_l1_140 = _smc140.run_as_game_user
+try:
+    _smc140.run_as_game_user = lambda *a, **k: (_details140(_PORT_TABLES140["ts3"]), "", 0)
+    _l1_open140 = _smg140.detect_game_ports(object(), "u", "ts3server")["open_ports"]
+finally:
+    _smc140.run_as_game_user = _rag_l1_140
+check("player ports: a detect_game_ports call that does not say which game it is opens none of "
+      "TeamSpeak's ServerQuery rows (10011, 10022, 10080, 10443) — only what is a player port whatever "
+      "the game", _l1_open140 == [9987, 30033], repr(_l1_open140))
+check("player ports: ...a Query row with no game type is not a player port, with one it is (Source's)",
+      _smg140._lgc_player_port("Query", None) is False and _smg140._lgc_player_port("Query", "css") is True)
+
+
+# ── 12. M1: TeamSpeak 3's ServerQuery rules an older panel opened are closed, once ───────────────
+from panel.ops.ssh_manager import hosts as _smh140  # noqa: E402
+from panel.services import game_ports as _gp140  # noqa: E402
+from panel.db.models import AuditLog as _AL140, GameServer as _GS140, db as _db140  # noqa: E402
+
+
+class _Fw140:
+    """A ufw rule table at the level hosts.py reads it (firewall.remote_ufw_status's groups).
+
+    Each rule: (port_num, proto_label, action, comment, extra fields). Deletes by number, refused when
+    the key at that number is not the one the caller expects, exactly as the verb is.
+    """
+
+    def __init__(self, rules, readable=True):
+        self.groups = []
+        for i, (port, proto, action, comment, extra) in enumerate(rules):
+            g = {"key": "k%d" % i, "port_num": str(port), "proto_label": proto, "action": action,
+                 "comment": comment, "scope": "Any address", "is_iface": False, "direction": "IN",
+                 "port_label": "%s%s" % (port, "" if proto == "BOTH" else "/" + proto.lower())}
+            g.update(extra)
+            self.groups.append(g)
+        self.readable, self.reads, self.deleted = readable, 0, []
+
+    def status(self, _server):
+        self.reads += 1
+        if not self.readable:
+            return {"unreachable": True}
+        for n, g in enumerate(self.groups, 1):
+            g["nums"] = [n]
+        return {"installed": True, "enabled": True, "groups": list(self.groups)}
+
+    def delete(self, _server, num, force=False, expect_key=None):
+        if force or not 1 <= num <= len(self.groups) or self.groups[num - 1]["key"] != expect_key:
+            return False, "moved"
+        self.deleted.append(self.groups.pop(num - 1)["key"])
+        return True, "deleted"
+
+    def left(self):
+        return sorted(g["key"] for g in self.groups)
+
+
+# The details LinuxGSM prints for the server: its SSH ServerQuery moved onto 22 (SSH's: protected) and
+# its HTTP one onto 10080, which another panel server's block holds.
+_TS3_TABLE140 = (("Voice", 9987, "udp"), ("Query", 10011, "tcp"), ("Query (SSH)", 22, "tcp"),
+                 ("Query (http)", 10080, "tcp"), ("Query (https)", 10443, "tcp"),
+                 ("File Transfer", 30033, "tcp"), ("Telnet", 10011, "tcp"))
+_TS3_RULES140 = (
+    (10011, "TCP", "ALLOW", "p140ts3", {}),                         # k0  the old panel's: goes
+    (10011, "BOTH", "ALLOW", "p140ts3", {}),                        # k1  goes
+    (10022, "TCP", "ALLOW", "p140ts3", {}),                         # k2  TeamSpeak's default SSH port: goes
+    (10443, "TCP", "ALLOW", "p140ts3", {"is_iface": True}),         # k3  on an interface (tailscale0): stays
+    (10011, "TCP", "ALLOW", "", {}),                                # k4  untagged (the operator's): stays
+    (10011, "TCP", "ALLOW", "p140other", {}),                       # k5  another name: stays
+    (10011, "TCP", "DENY", "p140ts3", {}),                          # k6  a DENY: stays
+    (22, "TCP", "ALLOW", "p140ts3", {}),                            # k7  SSH's port: stays
+    (10080, "TCP", "ALLOW", "p140ts3", {}),                         # k8  in another server's block: stays
+    (9987, "UDP", "ALLOW", "p140ts3", {}),                          # k9  voice, players': stays
+    (30033, "TCP", "ALLOW", "p140ts3", {}),                         # k10 file transfer, players': stays
+    (10443, "TCP", "ALLOW", "p140ts3", {"scope": "10.0.0.0/8"}),    # k11 from one network: stays
+)
+
+
+def _ts3_close140(fw, table=_TS3_TABLE140, siblings=None):
+    """lgc_close_ts3_serverquery over `fw`, `details` answering `table` (None: unanswered)."""
+    saved = (_smc140.run_as_game_user, _smh140.firewall.remote_ufw_status, _smh140.remote_ufw_delete_rule,
+             _smh140.protected_host_ports)
+    try:
+        _smc140.run_as_game_user = lambda *a, **k: (("", "", -1) if table is None
+                                                    else (_details140(table), "", 0))
+        _smh140.firewall.remote_ufw_status = fw.status
+        _smh140.remote_ufw_delete_rule = fw.delete
+        _smh140.protected_host_ports = lambda server: {22}
+        gs = _NS140(remote=object(), short_name="p140ts3", lgsm_name="ts3server")
+        return _gp140.lgc_close_ts3_serverquery(gs, {10080: "p140next"} if siblings is None else siblings)
+    finally:
+        (_smc140.run_as_game_user, _smh140.firewall.remote_ufw_status, _smh140.remote_ufw_delete_rule,
+         _smh140.protected_host_ports) = saved
+
+
+_fw140 = _Fw140(_TS3_RULES140)
+_ts3r140 = _ts3_close140(_fw140)
+check("ts3 ServerQuery: the panel's own public ALLOWs on ServerQuery ports (this details' and TeamSpeak's "
+      "defaults) are removed, and it says which ports",
+      _ts3r140 == (True, [10011, 10022], "") and sorted(_fw140.deleted) == ["k0", "k1", "k2"],
+      repr((_ts3r140, _fw140.deleted)))
+check("ts3 ServerQuery: ...and nothing else: no untagged or other name's rule, no DENY, no interface or "
+      "one-network rule, nothing on SSH's port or in another server's block, not the players' voice and "
+      "file-transfer ports", _fw140.left() == ["k10", "k11", "k3", "k4", "k5", "k6", "k7", "k8", "k9"],
+      repr(_fw140.left()))
+_fw_u140 = _Fw140(_TS3_RULES140, readable=False)
+_ts3u140 = _ts3_close140(_fw_u140)
+check("ts3 ServerQuery: a firewall that cannot be read is not 'done', and says so",
+      _ts3u140[0] is False and _ts3u140[1] == [] and "could not be read" in _ts3u140[2]
+      and not _fw_u140.deleted, repr(_ts3u140))
+_fw_d140 = _Fw140(_TS3_RULES140)
+_ts3d140 = _ts3_close140(_fw_d140, table=None)
+check("ts3 ServerQuery: with no details (its own voice and file ports unknown) nothing is touched, and "
+      "it is not 'done'", _ts3d140 == (False, [], "LinuxGSM's details could not be read")
+      and _fw_d140.reads == 0, repr(_ts3d140))
+
+# The daily pass: once per server, recorded on the row; a failure audited once, then logged only.
+_ts3_sid140 = _p9_new_server(P9_HOST, "p140ts3", "ts3", 9987)
+_ts3b_sid140 = _p9_new_server(P9_HOST, "p140ts3b", "ts3", 9997)
+_ts3nb_sid140 = _p9_new_server(P9_HOST, "p140nb", "css", 10080)     # holds 10080: its block
+_ts3_fw140 = {"p140ts3": _Fw140(_TS3_RULES140), "p140ts3b": _Fw140(_TS3_RULES140, readable=False)}
+_ts3_pass140 = {}
+
+
+def _ts3_heal140():
+    from panel.routes.manage_servers import sibling_port_blocks as _spb140
+    saved = (_smc140.run_as_game_user, _smh140.firewall.remote_ufw_status, _smh140.remote_ufw_delete_rule,
+             _smh140.protected_host_ports)
+    cur = {}
+
+    def details(server, user, *a, **k):
+        cur["u"] = user
+        return _details140(_TS3_TABLE140), "", 0
+    try:
+        _smc140.run_as_game_user = details
+        _smh140.firewall.remote_ufw_status = lambda s: _ts3_fw140[cur["u"]].status(s)
+        _smh140.remote_ufw_delete_rule = lambda s, n, **k: _ts3_fw140[cur["u"]].delete(s, n, **k)
+        _smh140.protected_host_ports = lambda server: {22}
+        with _p9.app_context():
+            _gp140.lgc_heal_ts3_serverquery(_spb140)
+    finally:
+        (_smc140.run_as_game_user, _smh140.firewall.remote_ufw_status, _smh140.remote_ufw_delete_rule,
+         _smh140.protected_host_ports) = saved
+
+
+def _ts3_audits140():
+    with _p9.app_context():
+        return [(a.target, a.success, a.detail) for a in _AL140.query.filter_by(action="sync_ports")
+                .filter(_AL140.target.in_(["p140ts3", "p140ts3b"])).order_by(_AL140.id).all()]
+
+
+try:
+    _p9_arm(who="part140")
+    _ts3_heal140()
+    _ts3_pass140["first"] = (_p9_row(_ts3_sid140).lgc_ts3_query, _p9_row(_ts3b_sid140).lgc_ts3_query,
+                             _ts3_audits140(), sorted(_ts3_fw140["p140ts3"].deleted))
+    _reads140 = (_ts3_fw140["p140ts3"].reads, _ts3_fw140["p140ts3b"].reads)
+    _ts3_heal140()
+    _ts3_pass140["second"] = (_p9_row(_ts3b_sid140).lgc_ts3_query, _ts3_audits140(),
+                              _ts3_fw140["p140ts3"].reads == _reads140[0],
+                              _ts3_fw140["p140ts3b"].reads > _reads140[1])
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_ts3_sid140)
+    _p9_delete_server(_ts3b_sid140)
+    _p9_delete_server(_ts3nb_sid140)
+_f140 = _ts3_pass140.get("first") or (None, None, [], [])
+check("ts3 ServerQuery heal: the daily pass closes a TeamSpeak server's ServerQuery rules, records it on the "
+      "row, and audits what it closed — not the one in another panel server's block (10080)",
+      _f140[0] == "done" and _f140[3] == ["k0", "k1", "k2"]
+      and ("p140ts3", True, "TeamSpeak 3 ServerQuery (its admin console): closed the panel's firewall "
+           "rules on 10011, 10022") in _f140[2], repr(_f140))
+check("ts3 ServerQuery heal: ...one whose firewall could not be read is audited as a failure saying so, and "
+      "is not recorded as done", _f140[1] == "failed"
+      and [a for a in _f140[2] if a[0] == "p140ts3b"][:1] == [
+          ("p140ts3b", False, [a[2] for a in _f140[2] if a[0] == "p140ts3b"][0])]
+      and "could not be read" in str([a[2] for a in _f140[2] if a[0] == "p140ts3b"]), repr(_f140))
+_s140 = _ts3_pass140.get("second") or (None, [], False, False)
+check("ts3 ServerQuery heal: a second pass leaves a done server alone (no firewall read), retries the "
+      "failed one, and does not audit its failure again",
+      _s140[0] == "failed" and _s140[2] is True and _s140[3] is True and _s140[1] == _f140[2], repr(_s140))
+_app_src140 = _read140("app.py")
+check("ts3 ServerQuery heal: the daily background pass runs it, on every host the panel has",
+      "_lgc_ts3_heal_pass" in _calls_in140(_app_src140, "_node_tools_cron_pass")
+      and "lgc_heal_ts3_serverquery" in _calls_in140(_app_src140, "_lgc_ts3_heal_pass"))
+
+
+# ── 13. M2: a Valheim on -crossplay is backed up once it has skipped a whole interval ─────────────
+from panel.routes import _shared as _sh140  # noqa: E402
+from panel.db.models import row_birth as _rb140  # noqa: E402
+from panel.core.panel_state import _game_backup_status as _gbs140  # noqa: E402
+
+_VHX140 = _smg140.LGC_VH_CROSSPLAY_SKIP
+
+
+def _vh_sched140(sid, overdue_days, reason=_VHX140, queued_days=None, interval=1):
+    """One scheduled (or, with queued_days, queued) run for Valheim row `sid` whose crossplay check
+    answers `reason`: [(force, ...)] of the runs, the status left, the outcomes recorded."""
+    runs, outcomes = [], []
+
+    def runner(remote, user, selfname, keep, force=False, **k):
+        runs.append(force)
+        return (True, "", False) if force else (False, reason, True)
+    now = _time140.time()
+    _p9_arm(who="part140")
+    _p9_patch(_sh140, "run_game_backup", runner)
+    _p9_patch(_sh140.bk, "get_game_schedule", lambda s: {"interval_days": 0 if queued_days is not None
+                                                         else interval, "keep": 2,
+                                                         "last": now - (1 + overdue_days) * 86400,
+                                                         "overridden": True})
+    _p9_patch(_sh140.bk, "game_backup_due", lambda s: True)
+    _p9_patch(_sh140.bk, "queued_since", lambda s: now - (queued_days or 0) * 86400)
+    _p9_patch(_sh140, "_record_game_clock", lambda *a, **k: outcomes.append("clock"))
+    _p9_patch(_sh140, "_record_backup_outcome",
+              lambda app, sid_, g, ok, why, *a, **k: outcomes.append((ok, str(why))))
+    _p9_patch(_sh140, "_report_overdue_skip", lambda *a, **k: outcomes.append("overdue"))
+    _p9_patch(_sh140, "_report_long_queue", lambda *a, **k: outcomes.append("queue-wait"))
+    _p9_patch(_sh140, "_lg264_lgsm_alerted", lambda *a, **k: False)
+    try:
+        with _p9.app_context():
+            gs = _db140.session.get(_GS140, sid)
+            if queued_days is None:
+                _sh140._back_up_if_due(_p9, (sid, gs.remote, gs.short_name, gs.lgsm_name, gs.name, "vh",
+                                             2456, None, _rb140(gs)))
+            else:
+                gs.backup_pending = True
+                _db140.session.commit()
+                _sh140._back_up_queued(_p9, gs)
+            pending = bool(_db140.session.get(_GS140, sid).backup_pending)
+    finally:
+        _p9_restore_all()
+    return runs, dict(_gbs140.get(sid) or {}), outcomes, pending
+
+
+_vh_sid140 = _p9_new_server(P9_HOST, "p140vh", "vh", 2456)
+try:
+    _vh_over140 = _vh_sched140(_vh_sid140, 1.1)
+    _vh_due140 = _vh_sched140(_vh_sid140, 0.5)
+    _vh_players140 = _vh_sched140(_vh_sid140, 3, reason="2 player(s) online — backup skipped so nobody gets "
+                                                        "disconnected")
+    _vh_queued140 = _vh_sched140(_vh_sid140, 0, queued_days=8)
+    _vh_queued_new140 = _vh_sched140(_vh_sid140, 0, queued_days=2)
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_vh_sid140)
+_VHA140 = _smg140.LGC_VH_BACKED_UP_ANYWAY
+check("vh crossplay backup: a whole interval past due, the scheduled sweep backs it up anyway (forced), says "
+      "why on the card and in the audit, and moves the clock — no overdue report for it",
+      _vh_over140[0] == [False, True] and _vh_over140[1].get("ok") is True
+      and _vh_over140[1].get("msg") == _VHA140 and (True, _VHA140) in _vh_over140[2]
+      and "clock" in _vh_over140[2] and "overdue" not in _vh_over140[2], repr(_vh_over140))
+check("vh crossplay backup: ...not before: half an interval past due it is still skipped, and nothing is "
+      "forced", _vh_due140[0] == [False] and _vh_due140[1].get("busy") is True
+      and _vh_due140[1].get("msg") == _VHX140, repr(_vh_due140))
+check("vh crossplay backup: a server whose players WERE counted is never forced, however overdue",
+      _vh_players140[0] == [False] and "overdue" in _vh_players140[2], repr(_vh_players140))
+check("vh crossplay backup: a 'wait until empty' queue on it is backed up anyway after a whole interval "
+      "(the default, its schedule being off), and leaves the queue",
+      _vh_queued140[0] == [False, True] and _vh_queued140[1].get("msg") == _VHA140
+      and _vh_queued140[3] is False, repr(_vh_queued140))
+check("vh crossplay backup: ...a queue two days old still waits", _vh_queued_new140[0] == [False]
+      and _vh_queued_new140[3] is True, repr(_vh_queued_new140))
+
+
+# ── 14. L5: a crashed Valheim (started.lock left, no session) is down ─────────────────────────────
+_dvh140 = _tf140.mkdtemp(prefix="p140vhup")
+os.makedirs(os.path.join(_dvh140, "bin"))
+os.makedirs(os.path.join(_dvh140, "home", "lgsm", "lock"))
+os.makedirs(os.path.join(_dvh140, "tmux"))
+
+
+def _vh_up140(lock, sessions):
+    """_lgc_vh_up_sh run by bash over a stand-in home and tmux: {socket: [session names]}."""
+    lockf = os.path.join(_dvh140, "home", "lgsm", "lock", "vhserver-started.lock")
+    if lock:
+        open(lockf, "w", encoding="utf-8").close()
+    elif os.path.exists(lockf):
+        os.remove(lockf)
+    for f in os.listdir(os.path.join(_dvh140, "tmux")):
+        os.remove(os.path.join(_dvh140, "tmux", f))
+    for sock in sessions:
+        open(os.path.join(_dvh140, "tmux", sock), "w", encoding="utf-8").close()
+    table = "".join("%s) printf '%%s\\n' %s;; " % (sock, " ".join(names) or "''")
+                    for sock, names in sessions.items())
+    with open(os.path.join(_dvh140, "bin", "tmux"), "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/bash\n[ \"$1\" = -L ] || exit 1\ncase \"$2\" in %s*) exit 1;; esac\n" % table)
+    os.chmod(os.path.join(_dvh140, "bin", "tmux"), 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    sh = (_smg140._lgc_vh_up_sh("p140vh", "vhserver").replace("/home/p140vh", os.path.join(_dvh140, "home"))
+          .replace("/tmp/tmux-$(id -u)", os.path.join(_dvh140, "tmux")))
+    r = _sp140.run(["bash", "-c", sh], capture_output=True, text=True, check=False,  # nosec B603 B607 - fixture
+                   env={"PATH": os.path.join(_dvh140, "bin") + ":" + os.defpath})
+    return r.stdout.strip()
+
+
+_vh_up_cases140 = (
+    (True, {"vhserver-7f3a": ["vhserver"]}, "LGC_UP", "lock and a live session"),
+    (True, {}, "LGC_DOWN", "lock left by a crash, no session"),
+    (True, {"vhserver-7f3a": ["vhserver-2"]}, "LGC_DOWN", "lock, only another instance's session"),
+    (True, {"vhserver": ["vhserver"]}, "LGC_UP", "lock and a session on the bare (pre-uid) socket"),
+    (False, {"vhserver-7f3a": ["vhserver"]}, "LGC_DOWN", "a session but no lock (stopped by LinuxGSM)"),
+)
+for _lk140, _ss140, _want140, _why140 in _vh_up_cases140:
+    _got140 = _vh_up140(_lk140, _ss140)
+    check("vh crossplay backup: running is the started.lock AND a live session — %s -> %s"
+          % (_why140, _want140), _got140 == _want140, repr(_got140))
+
+
+# ── 15. L3: the install's Project Zomboid note says what happened ────────────────────────────────
+_pz_notes140 = {}
+for _k140, _ans140 in (("set", (True, "")), ("kept", (False, _smf140.LGC_PZ_ALREADY_SET)),
+                       ("unread", (False, _smf140.LGSM_CONFIG_UNREAD)), ("failed", (False, "write failed")),
+                       ("raised", None)):
+    _said_pz140 = []
+    _real_pz140 = _smf140.lgc_pz_set_admin_password
+    try:
+        _smf140.lgc_pz_set_admin_password = (
+            (lambda a: lambda r, u, n, **k: a)(_ans140) if _ans140 is not None
+            else lambda r, u, n, **k: (_ for _ in ()).throw(ConnectionError("down")))
+        _jpz140 = _NS140(short_name="p140pz", lgsm_name="pzserver",
+                         finish=lambda msg, warn=False: _said_pz140.append((str(msg), warn)))
+        _ms140._lgc_seed_pz_admin(_jpz140, object(), _NS140(game_type="pz"))
+        _ms140._lgc_noting(_jpz140).finish("p140pz installed and started")
+    finally:
+        _smf140.lgc_pz_set_admin_password = _real_pz140
+    _pz_notes140[_k140] = _said_pz140[0] if _said_pz140 else None
+_pz_want140 = {"set": (_ms140.LGC_PZ_ADMIN_SET, False), "kept": (_ms140.LGC_PZ_ADMIN_KEPT, False),
+               "unread": (_ms140.LGC_PZ_ADMIN_UNREAD, True), "failed": (_ms140.LGC_PZ_ADMIN_NOT_SET, True),
+               "raised": (_ms140.LGC_PZ_ADMIN_NOT_SET, True)}
+for _k140, (_s140w, _w140) in _pz_want140.items():
+    check("pz install: step 5's note when the password %s says only that, %s" % (
+        _k140, "as a warning" if _w140 else "not as a warning"),
+        _pz_notes140.get(_k140) == ("p140pz installed and started " + str(_s140w), _w140),
+        repr(_pz_notes140.get(_k140)))
+check("pz install: ...only a failed write says the password is still CHANGE_ME",
+      "CHANGE_ME:" not in str(_ms140.LGC_PZ_ADMIN_KEPT) + str(_ms140.LGC_PZ_ADMIN_UNREAD)
+      and "is not known" in str(_ms140.LGC_PZ_ADMIN_UNREAD))
+
+
+# ── 16. L4: the admin password's read and write are one step under the cfg's lock ────────────────
+import threading as _th140  # noqa: E402
+
+_cfg_writes140 = []
+_lock_seen140 = {}
+_saved_l4_140 = (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user)
+_srv_l4_140 = _NS140(id=914001, host="p140.example.invalid", port=22, is_local=False, auth_method="key")
+
+
+def _save_l4_140():
+    _smf140.lgsm_write_config(_srv_l4_140, "p140pz", "pzserver", {"adminpassword": "TheirOwn1"})
+
+
+def _get_l4_140(*a, **k):
+    """The PZ fix's read: an operator's save is sent in the middle of it."""
+    t = _th140.Thread(target=_save_l4_140, daemon=True)
+    t.start()
+    # A sleep, not join(0.5): under eventlet's monkey-patching a timed join raises its Timeout.
+    _time140.sleep(0.5)
+    _lock_seen140["save done during the read"] = not t.is_alive()
+    _lock_seen140["thread"] = t
+    return {"adminpassword": "CHANGE_ME"}
+
+
+try:
+    _smf140.lgsm_get_values = _get_l4_140
+    _smf140._read_instance_cfg_lines = lambda *a, **k: ['adminpassword="CHANGE_ME"']
+    _smf140._write_file_as_user = lambda s, u, path, data, *a, **k: (
+        _cfg_writes140.append(_re140.search(r'adminpassword="([^"]*)"', data.decode()).group(1)), (True, ""))[1]
+    _l4_ok140 = _smf140.lgc_pz_set_admin_password(_srv_l4_140, "p140pz", "pzserver")
+    for _w140 in range(50):
+        if not _lock_seen140["thread"].is_alive():
+            break
+        _time140.sleep(0.1)
+finally:
+    (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user) = _saved_l4_140
+check("pz admin: a settings save sent while the fix has read CHANGE_ME waits for the fix's write, so the "
+      "operator's password lands last and is not overwritten by a random one",
+      _l4_ok140 == (True, "") and _lock_seen140.get("save done during the read") is False
+      and len(_cfg_writes140) == 2 and _cfg_writes140[1] == "TheirOwn1", repr((_l4_ok140, _lock_seen140,
+                                                                              _cfg_writes140)))
+
+
+# ── 17. L6 / L7: the cron upgrade says what it does, and keeps each job's last run ─────────────────
+check("cron migration: the docstrings say that an operator's line of the panel's shape is migrated too, "
+      "and that the retired-game drop removes lines",
+      "never matches" not in (_smcron140._lgc_managed_core.__doc__ or "")
+      and "indistinguishable" in (_smcron140._lgc_managed_core.__doc__ or "")
+      and "nothing is added or removed" not in (_smcron140.upgrade_managed_cron_tracking.__doc__ or "")
+      and "update-lgsm" in (_smcron140.upgrade_managed_cron_tracking.__doc__ or ""))
+_old_up140 = "/home/p140u/p140server update"
+_new_up140 = "cd /home/p140u && ./p140server update"
+_old_jid140, _new_jid140 = _smcron140._cron_job_id(_old_up140), _smcron140._cron_job_id(_new_up140)
+_ps_old140 = "/home/p140ps/psserver update-lgsm"
+_tab140 = "\n".join(["15 5 * * * " + _smcron140._record_managed_cmd("p140u", _old_up140),
+                     "0 4 * * * /home/p140u/p140server monitor"])
+_shells140, _rewrites140 = [], []
+_saved_l7_140 = (_smc140.run_privileged, _smc140._rewrite_crontab, _smc140.shell_as_game_user)
+try:
+    _smc140.run_privileged = lambda s, verb, args, **k: (_tab140, "", 0)
+    _smc140._rewrite_crontab = lambda s, u, g, add, *a, **k: (_rewrites140.append(list(add)), (True, ""))[1]
+    _smc140.shell_as_game_user = lambda s, u, cmd, **k: (_shells140.append(cmd), ("", "", 0))[1]
+    _l7_changed140 = _smcron140.upgrade_managed_cron_tracking(object(), "p140u", "p140server")
+finally:
+    (_smc140.run_privileged, _smc140._rewrite_crontab, _smc140.shell_as_game_user) = _saved_l7_140
+check("cron migration: the upgrade moves a migrated job's run history to its new job id (and only "
+      "that: an unrecorded line has none)",
+      _l7_changed140 is True and len(_shells140) == 1 and _old_jid140 in _shells140[0]
+      and _new_jid140 in _shells140[0] and _shells140[0].count(" mv -- ") == 2, repr(_shells140))
+_dcr140 = _tf140.mkdtemp(prefix="p140lgscron")
+_dcr_dir140 = os.path.join(_dcr140, ".lgsm-cron")
+os.makedirs(_dcr_dir140)
+for _n140, _body140 in ((_old_jid140 + ".log", "old log"), (_old_jid140 + ".status", "0 1 2"),
+                        ("aaaaaaaaaaaa.log", "dropped"), ("aaaaaaaaaaaa.status", "1 1 1"),
+                        ("bbbbbbbbbbbb.status", "old"), ("cccccccccccc.status", "newer")):
+    with open(os.path.join(_dcr_dir140, _n140), "w", encoding="utf-8") as _fh140:
+        _fh140.write(_body140)
+_cmds140 = []
+_saved_sg140 = _smc140.shell_as_game_user
+try:
+    _smc140.shell_as_game_user = lambda s, u, cmd, **k: (_cmds140.append(cmd), ("", "", 0))[1]
+    _smcron140._lgc_carry_cron_state(object(), "p140u", {_old_jid140: _new_jid140, "aaaaaaaaaaaa": None,
+                                                         "bbbbbbbbbbbb": "cccccccccccc"})
+finally:
+    _smc140.shell_as_game_user = _saved_sg140
+_r140 = _sp140.run(["bash", "-c", _cmds140[0].replace("/home/p140u", _dcr140)],  # nosec B603 B607 - fixture
+                   capture_output=True, text=True, check=False)
+
+
+def _cat140(name):
+    p = os.path.join(_dcr_dir140, name)
+    return open(p, encoding="utf-8").read() if os.path.exists(p) else None
+
+
+check("cron migration: the old id's .log and .status become the new id's, a dropped job's are removed, "
+      "and a newer file the new id already has is kept",
+      _r140.returncode == 0 and _cat140(_new_jid140 + ".log") == "old log"
+      and _cat140(_new_jid140 + ".status") == "0 1 2" and _cat140(_old_jid140 + ".log") is None
+      and _cat140("aaaaaaaaaaaa.log") is None and _cat140("aaaaaaaaaaaa.status") is None
+      and _cat140("cccccccccccc.status") == "newer" and _cat140("bbbbbbbbbbbb.status") == "old",
+      repr((_r140.returncode, sorted(os.listdir(_dcr_dir140)))))
+_moved_ps140 = _smcron140._lgc_moved_job_ids(
+    "30 5 * * 0 " + _smcron140._record_managed_cmd("p140ps", _ps_old140),
+    _smcron140._cron_upgrade_pass(object(), "p140ps", "psserver", (None, None, None)))
+check("cron migration: a retired game's dropped update-lgsm line has its history removed with it",
+      _moved_ps140 == {_smcron140._cron_job_id(_ps_old140): None}, repr(_moved_ps140))
+
+
+# ── 18. L11: every Autostart check reads the operator's ways of writing the monitor line ──────────
+_variants140 = ("cd /home/p140u/ && ./p140server monitor", "cd /home/p140u; ./p140server monitor",
+                "cd /home/p140u && ./p140server m", "/home/p140u/p140server monitor")
+check("autostart: the Scheduled Tasks role and the reboot's has_autostart_line read `cd /home/<u>/ && ./<s> "
+      "monitor`, `cd /home/<u>; ./<s> monitor` and the `m` alias as the Autostart line",
+      all(_smcron140._cron_role(v, "p140u", "p140server") == "autostart" for v in _variants140)
+      and _hr140.has_autostart_line(["*/5 * * * * cd /home/p140u; ./p140server monitor"], "p140u", "p140server")
+      and _smcron140._cron_role("cd /home/p140u; ./p140server update", "p140u", "p140server") == "",
+      repr([_smcron140._cron_role(v, "p140u", "p140server") for v in _variants140]))
+_ops_lines140 = ["*/5 * * * * " + v for v in _variants140] + [
+    "*/5 * * * * cd /home/p140u; ./p140server monitor > /dev/null 2>&1"]
+check("autostart: switching Autostart off removes every one of those lines, a bare one ending the line "
+      "included, and keeps the update and a neighbour's",
+      _grep_keeps140(_auto140[0], _ops_lines140 + _kept140 + ["15 5 * * * cd /home/p140u; ./p140server update"])
+      == _kept140 + ["15 5 * * * cd /home/p140u; ./p140server update"],
+      repr(_grep_keeps140(_auto140[0], _ops_lines140 + _kept140)))
+_bk_variants140 = {"*/5 * * * * cd /home/u/ && ./s monitor": "1", "*/5 * * * * cd /home/u; ./s monitor": "1",
+                   "*/5 * * * * cd /home/u;./s m": "1", "*/5 * * * * cd /home/u; ./s update": "0"}
+_bk_vgot140 = {ln: _bk_monitor140(ln) for ln in _bk_variants140} if _bkcmd140 else {}
+check("autostart: LinuxGSM's postponed backup counts those monitor lines too",
+      _bk_vgot140 == _bk_variants140, repr(_bk_vgot140))
+
+
+# ── 19. L8: the install picker greys a capped game out per the HOST's distro, Debian included ─────
+_saved_gl140 = dict(_app140._GAME_LIST_CACHE)
+_real_sl140 = _app140.lgsm_data.serverlist
+try:
+    _app140._GAME_LIST_CACHE.clear()
+    _app140._GAME_LIST_CACHE["games"] = None
+    _app140.lgsm_data.serverlist = lambda *a, **k: _rows140
+    _caps140 = {g["shortname"]: g["legacy_caps"] for g in _app140.load_game_list() if g["legacy_caps"]}
+finally:
+    _app140.lgsm_data.serverlist = _real_sl140
+    _app140._GAME_LIST_CACHE.clear()
+    _app140._GAME_LIST_CACHE.update(_saved_gl140)
+check("os cap: the picker's game list carries each capped game's cap on every distro LinuxGSM caps it on",
+      _caps140 == {"btl": "debian-11 ubuntu-20.04", "onset": "debian-11 ubuntu-20.04"}, repr(_caps140))
+check("os cap: ...and the install page puts it on the option for the script",
+      'data-legacy-caps="{{ g.legacy_caps }}"' in _read140("templates", "install_server.html"))
+from unit.part75 import _cut_or75, _js75, _run_js75  # noqa: E402
+
+_name_l8_140 = "install page: a capped game is greyed out per the host's distro (Debian too)"
+_out_l8_140 = _run_js75(_name_l8_140, (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = '';\n"
+    "global.tf = (s, v) => s.replace('{os}', v.os);\n"
+    "function mkOpt(value, os, caps, text){ const a = {'data-legacy-os': os, 'data-legacy-caps': caps};\n"
+    "  return {value, textContent: text, disabled: false, getAttribute: k => (k in a ? a[k] : null),\n"
+    "  hasAttribute: k => k in a, setAttribute: (k, v) => { a[k] = v; }, removeAttribute: k => { delete a[k]; }}; }\n"
+    "const btl = mkOpt('btl', 'ubuntu-20.04', 'debian-11 ubuntu-20.04', 'BATTALION: Legacy (ubuntu-20.04)');\n"
+    "const sel = {value: '', options: [btl]}, host = {value: '1'};\n"
+    "const slug = {'1': 'debian-12', '2': 'debian-11', '3': 'ubuntu-22.04', '4': 'ubuntu-20.04',\n"
+    "              '5': 'arch-rolling', '6': 'debian'};\n"
+    "global.fetch = (u) => Promise.resolve({ok: true, json: () => Promise.resolve({os_slug: slug[u.split('/')[3]]})});\n"
+    "global.document = {getElementById: id => ({'game-type-select': sel, 'remote-select': host})[id] || null};\n"
+    + "".join(_cut_or75(_js75("manage_servers.js"), "function %s(" % _f140) + "\n" for _f140 in (
+        "_capForHost", "_osOlder", "_osVersionParts", "_osVersionBelow", "_withoutParenNote",
+        "_hostStillSelected", "filterGamesForHost"))
+    + "(async () => { const got = {};\n"
+    "  for (const h of ['1', '2', '3', '4', '5', '6']) { host.value = h; filterGamesForHost(); await settle();\n"
+    "    got[slug[h]] = [btl.textContent, btl.disabled]; }\n"
+    "  console.log(JSON.stringify(got)); })();\n"))
+if _out_l8_140 is not None:
+    check("install page: btl is greyed out on Debian 12 ('needs debian 11') and Ubuntu 22.04, selectable on "
+          "Debian 11 and Ubuntu 20.04, and an unknown distro or a Debian with no version fails open",
+          _out_l8_140 == {
+              "debian-12": ["BATTALION: Legacy (needs debian 11)", True],
+              "debian-11": ["BATTALION: Legacy (ubuntu-20.04)", False],
+              "ubuntu-22.04": ["BATTALION: Legacy (needs ubuntu 20.04)", True],
+              "ubuntu-20.04": ["BATTALION: Legacy (ubuntu-20.04)", False],
+              "arch-rolling": ["BATTALION: Legacy (ubuntu-20.04)", False],
+              "debian": ["BATTALION: Legacy (ubuntu-20.04)", False]}, repr(_out_l8_140))
+
+
+# ── 20. L9: the CS:GO note only where it applies ─────────────────────────────────────────────────
+def _csgo_note140(instance):
+    """lgsm_read_config's lgc_csgo_appid_note for a csgoserver whose instance cfg is `instance`."""
+    import base64 as _b64
+
+    def fr(tag, text):
+        return "__LGSMP_%s_B__%s__LGSMP_%s_E__" % (tag, _b64.b64encode(text.encode()).decode(), tag)
+    saved = _smc140.shell_as_game_user
+    try:
+        _smc140.shell_as_game_user = lambda *a, **k: (
+            fr("DEFAULT", '#### Server Settings ####\ngslt=""\nclientappid="4465480"\n') + fr("COMMON", "")
+            + fr("SECRETS_COMMON", "") + fr("SECRETS_INSTANCE", "") + fr("INSTANCE", instance), "", 0)
+        return (_smf140.lgsm_read_config(object(), "p140cs", "csgoserver") or {}).get("lgc_csgo_appid_note")
+    finally:
+        _smc140.shell_as_game_user = saved
+
+
+_tok140 = "gslt=" + '"' + "P140" + "TOKEN" + '"\n'
+_csgo_cases140 = ((_tok140, True, "a gslt, LinuxGSM's default App ID 4465480"),
+                  (_tok140 + 'clientappid="730"\n', False, "a gslt, clientappid 730 (csgo_legacy)"),
+                  (_tok140 + 'clientappid=""\n', False, "a gslt, clientappid unmanaged"),
+                  ("", False, "no gslt"))
+for _inst140, _want140, _why140 in _csgo_cases140:
+    _got140 = _csgo_note140(_inst140)
+    check("csgo: the App ID note shows %s for %s" % ("" if _want140 else "nothing", _why140),
+          _got140 is _want140, repr(_got140))
+check("csgo: the note is hidden until the config read says it applies",
+      'id="lgc-csgo-appid"' in _sfhtml140 and "csw.style.display = d.lgc_csgo_appid_note ? '' : 'none';"
+      in _read140("static", "js", "server_files.js")
+      and _re140.search(r'id="lgc-csgo-appid"[^>]*style="display:none;"', _sfhtml140) is not None)
+
+
+# ── 21. L10: every game whose LinuxGSM config sets another port gets it, not 27015 ───────────────
+# The `port=` of each one's _default.cfg at LinuxGSM v26.4.0 (config-default/config-lgsm/<s>server).
+_l10_ports140 = {"btl": 7777, "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871,
+                 "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004,
+                 "qw": 27500, "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027,
+                 "tf": 5001, "ti": 7777, "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724}
+_l10_got140 = {g: _ms140._desired_install_port(g, "27015") for g in _l10_ports140}
+check("default ports: the 26 games whose LinuxGSM config sets a port other than 27015 are offered it",
+      _l10_got140 == _l10_ports140, repr({g: p for g, p in _l10_got140.items() if p != _l10_ports140[g]}))
+
+
+# ── 22. L2: MTA's HTTP port stays open, and the operator is told it also serves the web admin ────
+_mta_rows140 = [{"desc": d, "port": p, "proto": pr} for d, p, pr in _PORT_TABLES140["mta"]]
+_mta_notes140 = [str(n) for n in _smg140.lgc_admin_port_notes("mta", _mta_rows140, [22003, 22005, 22126])]
+check("mta: opening its HTTP port (22005) comes with a note that it also serves MTA's web admin over plain "
+      "HTTP, and to give admin accounts a strong password",
+      _mta_notes140 == [_smg140.LGC_MTA_HTTP_NOTE.format(port=22005)]
+      and 22005 in _ports_got140.get("mta", []), repr(_mta_notes140))
+check("mta: ...no note when that port was not opened, or for another game",
+      _smg140.lgc_admin_port_notes("mta", _mta_rows140, [22003]) == []
+      and _smg140.lgc_admin_port_notes("onset", [{"desc": "HTTP", "port": 8080}], [8080]) == [])
+check("mta: 'Open all ports' and the install both say it",
+      "lgc_admin_port_notes" in _calls_in140(_read140("panel", "routes", "remote_vps.py"), "_rv_sync_ports_run")
+      and "lgc_admin_port_notes" in _calls_in140(_ms_src140, "_open_game_ports"))
 
 
 check("part140: nothing its routes drove reached a real transport (every host call was stubbed)",

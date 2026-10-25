@@ -443,7 +443,8 @@ def _games54(rows):
         _app54._GAME_LIST_CACHE["games"] = None
         with _patched():
             _patch(_app54, "lgsm_data", NS(serverlist=lambda: rows,
-                                           lgc_distro_cap=_app54.lgsm_data.lgc_distro_cap))
+                                           lgc_distro_cap=_app54.lgsm_data.lgc_distro_cap,
+                                           lgc_distro_caps=_app54.lgsm_data.lgc_distro_caps))
             return {g["shortname"]: g["legacy_os"] for g in _app54.load_game_list()}
     finally:
         _app54._GAME_LIST_CACHE.clear()

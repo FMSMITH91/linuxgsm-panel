@@ -1364,6 +1364,18 @@ LGC_VH_CROSSPLAY_SKIP = ("Valheim with -crossplay has no Steam query port, so th
                          "whether anyone is on — backup skipped so nobody gets disconnected. Stop the "
                          "server first, back up anyway, or remove -crossplay from startparameters (a "
                          "Steam-only server) so its players can be counted.")
+# ...and its bound. A Valheim that never stops (the usual community server) skipped every backup for
+# good, and LinuxGSM's default config is that server. Valheim's own console lines were not used to
+# count players instead: their wording is not documented, nothing here could check it against a
+# real log, they are not in LinuxGSM's console log once logFile is set, and a miscount is wrong in
+# the bad direction whichever way it errs (a missed join disconnects a player; a missed leave stops
+# backups again). So once the skip has lasted a whole backup interval past due, the panel backs up
+# anyway and says so (routes/_shared._lgc_vh_anyway): a world at most one interval older than its
+# schedule promises, and players disconnected for the length of one backup.
+LGC_VH_BACKED_UP_ANYWAY = ("Valheim with -crossplay: its players cannot be counted and it had gone a whole "
+                           "backup interval past due, so it was backed up anyway — anyone on was "
+                           "disconnected while it ran. Remove -crossplay from startparameters (a "
+                           "Steam-only server) so its players can be counted.")
 
 
 def _lgc_vh_crossplay_skip(server, user, selfname):
@@ -1371,17 +1383,31 @@ def _lgc_vh_crossplay_skip(server, user, selfname):
 
     A config that could not be read counts as LinuxGSM's default, which has -crossplay; a server
     whose state could not be read counts as running: neither is evidence that nobody is on.
-    Running is LinuxGSM's `<selfname>-started.lock`, written by start and removed by stop.
+    Running is LinuxGSM's `<selfname>-started.lock` (written by start, removed by stop) AND a live
+    `<selfname>` tmux session: only stop removes the lock, so after a crash it stays, and a server
+    that was down read as running and went without its backup for as long as it stayed down.
     """
     vals = files.lgsm_get_values(server, user, selfname, ["startparameters"])
     if vals is not None and "-crossplay" not in (vals.get("startparameters") or "").split():
         return None
-    out, _, _ = _core.shell_as_game_user(
-        server, user, f"[ -f /home/{user}/lgsm/lock/{selfname}-started.lock ] && echo LGC_UP "
-                      "|| echo LGC_DOWN", timeout=15, selfname=selfname)
+    out, _, _ = _core.shell_as_game_user(server, user, _lgc_vh_up_sh(user, selfname), timeout=15,
+                                         selfname=selfname)
     if "LGC_DOWN" in (out or "").split():
         return None
     return LGC_VH_CROSSPLAY_SKIP
+
+
+def _lgc_vh_up_sh(user, selfname):
+    """Shell printing LGC_UP when `selfname` has its started.lock and a live tmux session, else LGC_DOWN.
+
+    The session by its EXACT name on any of its sockets (`has-session -t` matches by prefix, so
+    vhserver would answer for vhserver-2): LinuxGSM's `<selfname>-<uid>` sockets, and the bare
+    `<selfname>` one of releases before the uid file.
+    """
+    return (f"[ -f /home/{user}/lgsm/lock/{selfname}-started.lock ] || {{ echo LGC_DOWN; exit 0; }}; "
+            f"for s in {selfname} $(ls -1 /tmp/tmux-$(id -u) 2>/dev/null | grep -F -- '{selfname}-'); do "
+            f"TERM=screen tmux -L \"$s\" list-sessions -F '#{{session_name}}' 2>/dev/null "
+            f"| grep -Fqx -- '{selfname}' && {{ echo LGC_UP; exit 0; }}; done; echo LGC_DOWN")
 
 
 def _backup_space_refusal(server, user, headroom_note):
@@ -1768,7 +1794,7 @@ def _lg264_bk_request(server, user, selfname):
            "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -qE %s && M=1; "
            "printf '%%s\\t%%s\\t%%s\\t%%s\\n' \"$R\" \"$A\" \"$M\" %s"
            % (req, req, req, _core._quote(lock + "-monitoring.lock"),
-              _core._quote(cron.lgc_cron_cmd_ere(user, selfname, "monitor|m").rstrip() + "( |$)"),
+              _core._quote(cron.lgc_cron_cmd_ere(user, selfname, "monitor|m")),
               _LG264_BK_END))
     try:
         out, _err, _rc = _core.shell_as_game_user(server, user, cmd, timeout=20, selfname=selfname)
@@ -1980,19 +2006,46 @@ _LGC_NOT_PLAYER_DESCS = frozenset({"game: master"})
 # Per game: an HTTP row that players download from — MTA's resources, Onset's packages and Just
 # Cause 3 Multiplayer's client packages. Elsewhere "HTTP" is a web admin or status page.
 _LGC_PLAYER_HTTP_GAMES = frozenset({"mta", "onset", "jc3"})
+# MTA's HTTP row is opened (players download resources from it unless httpdownloadurl points
+# elsewhere), but it is also the server that hosts MTA's web interface — the webadmin and
+# resourcebrowser resources, behind HTTP basic auth over plain HTTP. It stays open and the operator
+# is told (lgc_admin_port_notes).
+LGC_MTA_HTTP_NOTE = ("MTA's HTTP port {port} is open for players' resource downloads, and it also "
+                     "serves MTA's web admin, which asks for a password over plain HTTP: give every "
+                     "MTA account with admin rights a strong password.")
+
+
+def lgc_admin_port_notes(game_type, ports, opened):
+    """Sentences for the opened ports that also serve an admin page: MTA's HTTP (its web admin).
+
+    `ports` is detect_game_ports' "ports" (every row), `opened` the ports the firewall took.
+    """
+    if (game_type or "").lower() != "mta":
+        return []
+    opened = set(opened or ())
+    http = sorted({p["port"] for p in ports or ()
+                   if (p.get("desc") or "").strip().lower() == "http" and p.get("port") in opened})
+    return [i18n.Sentence(LGC_MTA_HTTP_NOTE, port=p) for p in http]
+
+
 # TeamSpeak 3's "Query" rows are ServerQuery — its admin console (raw, SSH, HTTP, HTTPS) — not a
 # server-browser query, so for ts3 no Query row is opened.
 _LGC_ADMIN_QUERY_GAMES = frozenset({"ts3"})
 
 
 def _lgc_player_port(desc, game_type=None):
-    """Whether a `details` port row with this description is one a player connects to."""
+    """Whether a `details` port row with this description is one a player connects to.
+
+    With no `game_type`, a row whose meaning is the game's (Query, HTTP) is NOT one: TeamSpeak's
+    Query rows are its ServerQuery admin console, and a caller that forgot to say which game this
+    is must not open that to the internet. Every caller that opens ports passes it.
+    """
     d = (desc or "").strip().lower()
     if d.startswith(_NONESSENTIAL_PORT_DESCS) or d in _LGC_NOT_PLAYER_DESCS:
         return False
     gt = (game_type or "").lower()
     if d.startswith("query"):
-        return gt not in _LGC_ADMIN_QUERY_GAMES
+        return bool(gt) and gt not in _LGC_ADMIN_QUERY_GAMES
     if d.startswith("http"):
         return gt in _LGC_PLAYER_HTTP_GAMES and d == "http"
     return (d.startswith(("game",) + _LGC_PLAYER_PORT_DESCS) or d in _LGC_PLAYER_PORT_EXACT)
@@ -2055,7 +2108,9 @@ def detect_game_ports(server, user, selfname=None, game_type=None):
     Satisfactory's ReliableMessaging, ARK's raw UDP socket, ...). Optional/admin/outbound ports
     (SourceTV, RCON/telnet, Client, web admin) are deliberately left CLOSED — e.g. Garry's Mod
     lists Game 27015 + SourceTV 27020, but only 27015 is needed. `game_type` decides the few rows
-    whose meaning is the game's (TeamSpeak's Query is its admin console). Returns:
+    whose meaning is the game's (TeamSpeak's Query is its admin console); without it those rows
+    are not opened (_lgc_player_port), so a caller that only reads `game_port` may leave it out.
+    Returns:
       {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed],
        "answered": whether `details` printed its port table or its Server IP line at all,
        "started": its Status line — True for STARTED, False for STOPPED, None for neither}.

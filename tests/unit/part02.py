@@ -2450,7 +2450,7 @@ Client 27005 udp
 """
 try:
     _sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
-    res = _sm_game.detect_game_ports(NS(), "srv")
+    res = _sm_game.detect_game_ports(NS(), "srv", game_type="css")
     eq("source: opens game + query only", res["open_ports"], [27015, 27016])
 finally:
     # Restored. A stub left installed is not merely untidy: part03's own later blocks capture

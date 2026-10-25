@@ -320,6 +320,15 @@ def crontab_lock(server, user):
     return _host_lock("crontab", server, user)
 
 
+def lgc_config_lock(server, user, selfname):
+    """The lock every read-modify-write of a LinuxGSM instance cfg on `server` is made under.
+
+    files.lgsm_write_config takes it; a caller that decides from a read before it writes (the
+    Project Zomboid admin password) holds it across both, so a settings save cannot land between.
+    """
+    return _host_lock("lgsmcfg", server, user, selfname)
+
+
 # The ufw verbs that CHANGE the rule list (every ufw verb but the two reads). Each is run under the
 # host's ufw_lock by run_privileged, so a caller holding that lock across a read and a delete by
 # number knows the numbers it read are still the numbers.
@@ -3480,7 +3489,7 @@ def set_autostart(server, user, enabled, selfname=None):
     add = [monitor_line] if enabled else []
     # Strip any existing monitor line (either form) AND any legacy '@reboot ... start' autostart
     # line in one pass, then re-add monitor when enabling.
-    remove_re = f"({cron.lgc_cron_cmd_ere(user, selfname, 'monitor')}|@reboot .*{selfname} start)"
+    remove_re = f"({cron.lgc_cron_cmd_ere(user, selfname, 'monitor|m')}|@reboot .*{selfname} start)"
     return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}", add)
 
 

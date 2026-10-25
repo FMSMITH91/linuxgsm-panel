@@ -198,9 +198,10 @@
       </div>
       {% endif %}
       {# LinuxGSM v26.3.0 (#4963) moved CS:GO to its standalone App ID on the next start, and a GSLT is
-         made for one App ID. #}
+         made for one App ID. Shown by loadConfig only when it applies (lgc_csgo_appid_note: a gslt
+         set, clientappid neither 730 nor unset). #}
       {% if server.game_type == 'csgo' %}
-      <div class="alert alert-info py-2 px-3 mb-2 small" role="note">
+      <div id="lgc-csgo-appid" class="alert alert-info py-2 px-3 mb-2 small" role="note" style="display:none;">
         <i class="bi bi-info-circle"></i>
         <span>Since LinuxGSM v26.3.0, CS:GO runs as App ID 4465480: a gslt made for App ID 730 stops working after the switch. Make one for 4465480, or set clientappid to 730 to stay on CS2's csgo_legacy.</span>
       </div>

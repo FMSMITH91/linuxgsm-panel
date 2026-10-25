@@ -513,6 +513,13 @@ def lgsm_read_config(server, user, selfname):
     # warns, with a one-click fix (routes/pz_admin.py). Only on a read that succeeded, which this is.
     if selfname == "pzserver":
         out["lgc_pz_default_admin"] = merged.get("adminpassword") == LGC_PZ_DEFAULT_ADMIN
+    # CS:GO (csgoserver): the App ID note only where it applies — a gslt is set and LinuxGSM runs the
+    # game as another App ID than 730 (v26.3.0's clientappid, default 4465480). Not for clientappid
+    # 730 (still CS2's csgo_legacy), "" (left unmanaged) or unset (a release before v26.3.0, which
+    # does not switch), nor without a gslt, which has nothing to stop working.
+    if selfname == "csgoserver":
+        out["lgc_csgo_appid_note"] = (bool((merged.get("gslt") or "").strip())
+                                      and (merged.get("clientappid") or "").strip() not in ("", "730"))
     return out
 
 
@@ -674,13 +681,16 @@ def lgc_pz_set_admin_password(server, user, selfname, only_if_default=True):
     neither returned nor logged: it is the instance cfg's adminpassword, where Files & Config
     shows it.
     """
-    if only_if_default:
-        cur = lgsm_get_values(server, user, selfname, ["adminpassword"])
-        if cur is None:
-            return False, LGSM_CONFIG_UNREAD
-        if cur.get("adminpassword", "") not in ("", LGC_PZ_DEFAULT_ADMIN):
-            return False, LGC_PZ_ALREADY_SET
-    return lgsm_write_config(server, user, selfname, {"adminpassword": lgc_new_admin_password()})
+    # The read and the write are one step under the cfg's lock: a settings save choosing a password
+    # between them was overwritten by a random one (lgsm_write_config takes the same RLock again).
+    with _core.lgc_config_lock(server, user, selfname):
+        if only_if_default:
+            cur = lgsm_get_values(server, user, selfname, ["adminpassword"])
+            if cur is None:
+                return False, LGSM_CONFIG_UNREAD
+            if cur.get("adminpassword", "") not in ("", LGC_PZ_DEFAULT_ADMIN):
+                return False, LGC_PZ_ALREADY_SET
+        return lgsm_write_config(server, user, selfname, {"adminpassword": lgc_new_admin_password()})
 
 
 # The end of lgsm_write_config's refusal of a key secrets-<selfname>.cfg also sets: the one write
@@ -704,6 +714,14 @@ def lgsm_write_config(server, user, selfname, updates):
     refused = _cfg_write_refusal(updates)
     if refused:
         return False, refused
+    # Read, merge and write under the cfg's lock: two saves that both read before either wrote
+    # left only the second one's view (the PZ admin-password fix holds it across its own read too).
+    with _core.lgc_config_lock(server, user, selfname):
+        return _lgc_write_config_locked(server, user, selfname, updates)
+
+
+def _lgc_write_config_locked(server, user, selfname, updates):
+    """lgsm_write_config's read-merge-write, under _core.lgc_config_lock."""
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
     secrets = {}

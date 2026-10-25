@@ -24,6 +24,10 @@ var PORTS = {
   "xnt":26000,"ut99":7777,"ut2k4":7777,
   "ts3":9987,"samp":7777,"mta":22003,
   "hyt":5520,"rsdw":7777,"ce":7777,"sm":8777,"hz":7777,"jk3":29070,
+  "btl":7777,"ck":1234,"cmw":7777,"dayz":2302,"dodr":7777,"hcu":7777,"hw":12871,"inss":27102,
+  "mohaa":12203,"ohd":7777,"pvr":7777,"pw":8211,"q4":28004,"qw":27500,"sbots":7777,"scpsl":7777,
+  "sf":7777,"sof2":20100,"squad44":10027,"tf":5001,"ti":7777,"tu":7777,"ut":7777,"ut3":7777,
+  "wf":44400,"wurm":3724,
 };
 function updatePort() {
   var select = document.getElementById('game-type-select');
@@ -46,11 +50,11 @@ window.hostChanged = hostChanged;
 
 // Which games THIS host can actually install.
 //
-// LinuxGSM refuses two games (btl, onset) above Ubuntu 20.04 in its own check_deps.sh, and the
-// picker marks them with that cap (data-legacy-os, lgsm_data._LGC_DISTRO_CAPS) — the list is rendered
-// before a host is chosen. Once one IS chosen the comparison can be the real one: a 20.04 remote
-// under a 24.04 panel runs those games perfectly well, while on a 24.04 host they fail every time,
-// minutes into the download.
+// LinuxGSM refuses two games (btl, onset) above Ubuntu 20.04 and Debian 11 in its own check_deps.sh,
+// and the picker marks them with those caps (data-legacy-os, data-legacy-caps,
+// lgsm_data._LGC_DISTRO_CAPS) — the list is rendered before a host is chosen. Once one IS chosen
+// the comparison can be the real one: a 20.04 remote under a 24.04 panel runs those games
+// perfectly well, while on a 24.04 host they fail every time, minutes into the download.
 //
 // The serverlist's per-game os column is not compared: it follows LinuxGSM's Docker image base and
 // is no cap (v26.4.0 left cod/cod2/coduo/mohaa on 24.04 although they run on 26.04).
@@ -65,6 +69,17 @@ function _osOlder(gameOs, hostOs) {
   var gv = _osVersionParts(g[1]), hv = _osVersionParts(h[1]);
   if (!gv || !hv) return false;
   return _osVersionBelow(gv, hv);
+}
+
+// The option's cap on the host's distro: from data-legacy-caps ("debian-11 ubuntu-20.04"), whose
+// entry for the host's distro is the one to compare; with none for that distro, the Ubuntu cap
+// (data-legacy-os), which _osOlder then never compares across distros, so an uncapped distro
+// fails open. The Ubuntu cap alone left btl and onset selectable on a Debian 12 host.
+function _capForHost(opt, hostOs) {
+  var distro = String(hostOs || '').toLowerCase().split('-')[0];
+  var caps = String(opt.getAttribute('data-legacy-caps') || '').split(' ');
+  var mine = caps.filter(function (c) { return distro && c.split('-')[0] === distro; })[0];
+  return mine || opt.getAttribute('data-legacy-os');
 }
 
 // '24.04' as [24, 4], or null when any part is not a number.
@@ -103,7 +118,7 @@ function filterGamesForHost() {
   var apply = function (hostOs) {
     var hidden = 0;
     Array.prototype.forEach.call(sel.options, function (opt) {
-      var gameOs = opt.getAttribute('data-legacy-os');
+      var gameOs = _capForHost(opt, hostOs);
       if (!opt.value || !gameOs) return;
       var bad = !!hostOs && _osOlder(gameOs, hostOs);
       opt.disabled = bad;

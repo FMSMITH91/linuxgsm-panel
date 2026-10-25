@@ -775,6 +775,13 @@ _R15F_KNOWN_PORTS = {
     # Added by LinuxGSM v24.3.0-v26.4.0 (the `port=` of each one's _default.cfg): Hytale, RuneScape:
     # Dragonwilds, Conan Exiles, Soulmask, HumanitZ, and Jedi Knight: Jedi Academy (OpenJK).
     "hyt": 5520, "rsdw": 7777, "ce": 7777, "sm": 8777, "hz": 7777, "jk3": 29070,
+    # Every other game whose _default.cfg sets `port=` to something other than 27015 (LinuxGSM
+    # v26.4.0): these were offered 27015. Games that keep their port in the game's own config have
+    # no `port=` there and stay on the fallback; `details` corrects them after the install.
+    "btl": 7777, "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871,
+    "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
+    "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027, "tf": 5001, "ti": 7777,
+    "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724,
 }
 
 
@@ -1583,6 +1590,16 @@ LGC_PZ_ADMIN_SET = i18n.Sentence(
 LGC_PZ_ADMIN_NOT_SET = i18n.Sentence(
     "The panel could not set Project Zomboid's admin password, so it is still LinuxGSM's default, "
     "CHANGE_ME: set adminpassword in Files & Config before anyone joins.")
+# ...when the password is already not CHANGE_ME (an install retried after step 5 set one, or the
+# operator's own): nothing was changed, and nothing is wrong.
+LGC_PZ_ADMIN_KEPT = i18n.Sentence(
+    "Project Zomboid's admin password is no longer LinuxGSM's default, so the panel left it as it is "
+    "(adminpassword in Files & Config).")
+# ...and when the config could not be read: what the password is, is not known.
+LGC_PZ_ADMIN_UNREAD = i18n.Sentence(
+    "The panel could not read Project Zomboid's config, so whether its admin password is still "
+    "LinuxGSM's default, CHANGE_ME, is not known: check adminpassword in Files & Config before anyone "
+    "joins.")
 
 
 def _lgc_seed_pz_admin(job, remote, gs):
@@ -1596,11 +1613,27 @@ def _lgc_seed_pz_admin(job, remote, gs):
     if gs.game_type != "pz":
         return
     try:
-        ok, _why = _sm.lgc_pz_set_admin_password(remote, job.short_name, job.lgsm_name)
+        ok, why = _sm.lgc_pz_set_admin_password(remote, job.short_name, job.lgsm_name)
     except Exception:
         _log.debug("install %s: the admin password write raised", job.short_name, exc_info=True)
-        ok = False
-    job.lgc_note = (LGC_PZ_ADMIN_SET, False) if ok else (LGC_PZ_ADMIN_NOT_SET, True)
+        ok, why = False, None
+    job.lgc_note = _lgc_pz_note(ok, why)
+
+
+def _lgc_pz_note(ok, why):
+    """(sentence, warns) for step 5's admin-password result: only a failed WRITE says CHANGE_ME.
+
+    It said CHANGE_ME on any refusal, so a retried install whose first run had already set a random
+    password, or an operator's own, read as "still CHANGE_ME" and finished as a warning; and an
+    unread config claimed a password nobody had read.
+    """
+    if ok:
+        return LGC_PZ_ADMIN_SET, False
+    if why == _sm.LGC_PZ_ALREADY_SET:
+        return LGC_PZ_ADMIN_KEPT, False
+    if why == _sm.LGSM_CONFIG_UNREAD:
+        return LGC_PZ_ADMIN_UNREAD, True
+    return LGC_PZ_ADMIN_NOT_SET, True
 
 
 def _lgc_noting(job):
@@ -1835,6 +1868,11 @@ def _open_game_ports(job, remote, gs):
         job.listening_read = foreign is not None
         job.withheld = frozenset(withheld) | (foreign or frozenset())
         remote_ufw_allow_game_ports(remote, to_open, short_name)
+        # A port that also serves an admin page (MTA's HTTP: its web admin) is named in the install's
+        # last word (_lgc_noting); step 5's note, for a game that has one, is never replaced.
+        _admin = _sm.lgc_admin_port_notes(gs.game_type, info.get("ports"), to_open)
+        if _admin and not getattr(job, "lgc_note", None):
+            job.lgc_note = (_admin[0], False)
     except Exception:
         # Still not fatal — the files are there — but no longer silent: it was logged at debug,
         # which production never shows, and the install reported a clean success.

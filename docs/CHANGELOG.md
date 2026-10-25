@@ -58,10 +58,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **A one-click fix for Project Zomboid's default admin password.** LinuxGSM (v26.3.0) starts Project
   Zomboid with the admin password `CHANGE_ME`. A new install now gets a random one, and the install's
   last message says where to find it (adminpassword in Files & Config). A server still on
-  `CHANGE_ME` shows a warning on its Config tab with a **Set a random admin password** button.
+  `CHANGE_ME` shows a warning on its Config tab with a **Set a random admin password** button. A
+  settings save made at the same moment is not overwritten by the random password.
 - **A note for CS:GO servers about LinuxGSM's App ID switch.** From LinuxGSM v26.3.0, CS:GO runs as
   App ID 4465480, and a Game Server Login Token made for App ID 730 stops working. The Config tab
-  says so, and says how to keep the old behaviour.
+  says so, and says how to keep the old behaviour. It shows only on a server that has a token set
+  and runs as an App ID other than 730.
 
 - **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
   once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
@@ -701,28 +703,40 @@ CI-verified commit regardless of this file — this changelog is for humans.
   again.** LinuxGSM v26.4.0 left these four games on Ubuntu 24.04 in its game list, and the panel read
   that as a limit and refused them on 26.04 hosts, although LinuxGSM runs them there. The panel now
   refuses only what LinuxGSM itself refuses: BATTALION: Legacy and Onset above Ubuntu 20.04 or
-  Debian 11.
+  Debian 11. The install page greys those two out for a Debian 12 host too, not only for a newer
+  Ubuntu.
 - **Players can join a new Satisfactory server behind the panel's firewall.** The panel opened only
   the Game and Query ports, and Satisfactory also needs 8888/tcp. Now the install and "Open all ports"
   also open the other ports LinuxGSM lists that players connect to (ARK's and Conan Exiles' raw UDP
   port, Mordhau's beacon, The Isle's queue, TeamSpeak 3's file transfer, MTA's resource downloads).
-  TeamSpeak 3's ServerQuery ports, which are its admin console, are no longer opened.
+  MTA's resource-download port also serves MTA's web admin, so opening it now comes with a note to
+  give MTA's admin accounts strong passwords.
 - **LinuxGSM's monitor no longer restarts a server in the middle of the panel's nightly update.**
   On LinuxGSM before v26.4.0, the 5-minute monitor did not see an update the panel's cron had
   started, and could start the server again while SteamCMD was downloading. The panel's cron lines
   now run each command in the form every LinuxGSM version recognises, and existing lines are
-  changed over on their own.
-- **Valheim backups no longer disconnect players.** With `-crossplay` (LinuxGSM's default) Valheim
-  has no Steam query port, so the panel could never count its players, and it treated that as an
-  empty server. A running crossplay Valheim server now skips its scheduled backup, and says how to
-  let the panel count players.
+  changed over on their own, keeping their last run and result.
+- **Valheim backups no longer disconnect players every hour.** With `-crossplay` (LinuxGSM's
+  default) Valheim has no Steam query port, so the panel could never count its players, and it
+  treated that as an empty server. A running crossplay Valheim server now skips its scheduled
+  backup, and says how to let the panel count players. So that such a server is never left without
+  backups, once it has gone a whole backup interval past due the panel backs it up anyway and says
+  so on the backup card and in the audit log (anyone on is disconnected while it runs). The same
+  applies to a "wait until empty" backup that has waited a whole interval. A server that crashed
+  counts as stopped, so it is backed up as usual.
 - **Existing Post Scriptum and SCP: Secret Laboratory ServerMod servers can be imported.** LinuxGSM
   retired both games, so the panel's scan no longer recognised them. They are listed again, marked
   as retired with their replacement, and the panel no longer schedules their weekly `update-lgsm`,
   which can only fail for them.
 - **New LinuxGSM games get the right default port.** Hytale, RuneScape: Dragonwilds, Conan Exiles,
   Soulmask, HumanitZ and Jedi Academy were offered port 27015. Jedi Academy servers also get the
-  Players card's Kick and Say.
+  Players card's Kick and Say. So were 26 other games whose LinuxGSM config sets another port,
+  among them Satisfactory, Palworld, DayZ, The Isle, The Front and Insurgency: Sandstorm; each is
+  now offered LinuxGSM's own default.
+- **The Autostart switch reads a monitor line written by hand.** A crontab line written as
+  `cd /home/<user>/ && ./<script> monitor`, `cd /home/<user>; ./<script> monitor` or with
+  LinuxGSM's short `m` now counts as Autostart, and switching Autostart off removes it. Before,
+  Autostart read as off while that line kept the server running.
 - **LinuxGSM's short command names count as maintenance.** An update started as `./server u` (or
   `fu`, `b`, `v`, …) no longer reads as the server going offline unexpectedly, and a host reboot
   waits for it. A `start` that fails with LinuxGSM's generic error is no longer reported as "already
@@ -2672,6 +2686,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **TeamSpeak 3's ServerQuery (its admin console) is no longer open to the internet.** Earlier
+  versions of the panel read TeamSpeak's ServerQuery port (10011/tcp) as a server-browser port and
+  opened it in the firewall at install and on "Open all ports". Neither opens it now, and once per
+  TeamSpeak 3 server, on every host, the panel removes the firewall rules it opened itself for
+  ServerQuery (10011, and 10022, 10080 and 10443 or whatever ports the server reports). It never
+  touches a rule you added yourself, a rule of another server, SSH's or the panel's port, or the
+  voice and file-transfer ports players use. What it closed is in the audit log; if it could not read
+  the host's firewall it says so there and tries again the next day.
 
 - **Test fixtures carry no real addresses.** A connecting device's tailnet address and a public address
   copied from a live debug report were replaced with made-up or well-known public ones, and the

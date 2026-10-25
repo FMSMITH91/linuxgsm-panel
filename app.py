@@ -677,7 +677,8 @@ def _node_tools_cron_pass(app):
     pass is under way was still in the list and got written to again. Each row is re-read from the
     database just before it is acted on, and one that is gone is skipped.
 
-    Idempotent + best-effort: one host or server failing never stops the rest."""
+    Idempotent + best-effort: one host or server failing never stops the rest. Last, the one-time
+    close of TeamSpeak 3's ServerQuery rules (_lgc_ts3_heal_pass), which is a no-op once done."""
     with app.app_context():
         for r in RemoteServer.query.all():   # includes the local/panel host
             if not _still_in_db(r):
@@ -702,6 +703,19 @@ def _node_tools_cron_pass(app):
                                                   query_type=gs.query_type)
             except Exception:
                 _log.debug("cron upgrade failed for %s", row_label(gs, "name"), exc_info=True)
+    _lgc_ts3_heal_pass(app)
+
+
+def _lgc_ts3_heal_pass(app):
+    """Once per TeamSpeak 3 server: close the ServerQuery rules an older panel opened (game_ports)."""
+    try:
+        with app.app_context():
+            from panel.routes.manage_servers import sibling_port_blocks
+            from panel.services.game_ports import lgc_heal_ts3_serverquery
+            lgc_heal_ts3_serverquery(sibling_port_blocks)
+    except Exception:
+        _log.warning("the TeamSpeak 3 ServerQuery close failed; the next daily pass tries again",
+                     exc_info=True)
 
 
 def _node_tools_cron_watch(app):
@@ -1359,6 +1373,7 @@ def load_game_list():
     # script compare it against the host once one is (_os_cap_refusal, filterGamesForHost).
     for row in games:
         row["legacy_os"] = lgsm_data.lgc_distro_cap(row["shortname"])
+        row["legacy_caps"] = lgsm_data.lgc_distro_caps(row["shortname"])
     games.sort(key=lambda row: row["name"].lower())
     # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
     # of the process, so a later retry (or the background warm) could never take effect.

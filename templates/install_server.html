@@ -55,8 +55,10 @@
              what the script compares against the selected host's slug from
              /api/remote/<id>/specs, because the decision is per HOST: a 20.04 remote under a 24.04
              panel runs those games perfectly well. The game's raw os column is not it — it
-             follows LinuxGSM's Docker image base, not what the game runs on. #}
-          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %} data-no-i18n>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
+             follows LinuxGSM's Docker image base, not what the game runs on. data-legacy-caps
+             holds the game's cap on every distro LinuxGSM caps it on ("debian-11 ubuntu-20.04"):
+             the script compares the one for the chosen host's distro. #}
+          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}{% if g.legacy_caps %} data-legacy-caps="{{ g.legacy_caps }}"{% endif %} data-no-i18n>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
           {% endfor %}
         </select>
         {% if games %}

@@ -558,7 +558,7 @@ _DGP_DETAILS = ("DESCRIPTION  PORT   PROTOCOL  LISTEN\n"
 _orig_rag_dgp = _sm_core.run_as_game_user
 try:
     _sm_core.run_as_game_user = lambda *a, **k: (_DGP_DETAILS, "", 0)
-    _dgp = _sm_game.detect_game_ports(object(), "u", "csgoserver")
+    _dgp = _sm_game.detect_game_ports(object(), "u", "csgoserver", game_type="csgo")
     check("detect_game_ports: the game port is the Game row, not the first row of the table",
           _dgp["game_port"] == 27017 and _dgp["open_ports"] == [27016, 27017], str(_dgp))
     check("detect_game_ports: ...and the table ends at its first non-row line",

@@ -95,6 +95,15 @@ def lgc_distro_cap(game_type, distro="ubuntu"):
     return "%s-%s" % (distro, ver) if ver else ""
 
 
+def lgc_distro_caps(game_type):
+    """Every cap of `game_type`, one '<distro>-<version>' per distro, space-separated ("" for none).
+
+    The install picker compares the one for the chosen host's distro: the Ubuntu cap alone let a
+    Debian 12 host pick btl and onset, which LinuxGSM refuses above Debian 11.
+    """
+    return " ".join("%s-%s" % (d, v) for d, v in sorted(_LGC_DISTRO_CAPS.get(game_type or "", {}).items()))
+
+
 def release_tag(value):
     """`value` when it is a LinuxGSM release tag ('v26.1.0'), else None."""
     if isinstance(value, str) and _RELEASE_TAG_RE.fullmatch(value):
