@@ -24,6 +24,7 @@ tripwire armed; the page scripts in node. Nothing reaches a host or data/.
 import os
 import subprocess as _sp138  # nosec B404 - grep over this part's own fixtures, fixed argv
 import shutil as _shutil138
+import tempfile as _tf138
 import time as _time138
 
 from unit.part01 import check, skip
@@ -206,7 +207,6 @@ finally:
 # sources a cfg setting stoponlyifnoplayers="on" sees "off", and carries on past the refused assignment.
 _bash138 = _shutil138.which("bash")
 if _bash138:
-    import tempfile as _tf138
     _d138 = _tf138.mkdtemp()
     with open(os.path.join(_d138, "fakeserver"), "w", encoding="utf-8") as _fh:
         _fh.write('source "$(dirname "${BASH_SOURCE[0]}")/x.cfg"\necho "cmd=$1 stoponlyifnoplayers=${stoponlyifnoplayers}"\n')
@@ -827,7 +827,6 @@ check("cron list: a job LinuxGSM postponed shows 'Postponed', not 'OK'",
 
 # ══ The adversarial review of #461 (lg264f) ══════════════════════════════════════════════════════
 import re as _re_lg  # noqa: E402
-import tempfile as _tf_lg  # noqa: E402
 import threading as _th_m3  # noqa: E402
 # M1: a wait-for-empty reboot whose stop LinuxGSM refuses (a player joined between the panel's count
 # and LinuxGSM's) bounces back to waiting; it never leaves that server to the shutdown.
@@ -927,7 +926,7 @@ else:
 _bash_m3 = _shutil138.which("bash")
 _envbin_m3 = _shutil138.which("env")
 if _bash_m3 and _envbin_m3:
-    _dm3 = _tf_lg.mkdtemp()
+    _dm3 = _tf138.mkdtemp()
     os.makedirs(os.path.join(_dm3, "lgsm", "lock"))
     with open(os.path.join(_dm3, "fakeserver"), "w", encoding="utf-8") as _fh:
         _fh.write("trap 'echo CANCELLED; rm -f lgsm/lock/fakeserver-warning.lock; exit 0' INT\n"
@@ -938,7 +937,7 @@ if _bash_m3 and _envbin_m3:
         # A test shell that is sent Ctrl-C must start with SIGINT at its default (CI ignores it).
         p = _sp138.Popen([_envbin_m3, "--default-signal=INT", _bash_m3, "./fakeserver", cmd],  # nosec B603 - fixture
                          cwd=_dm3, stdout=_sp138.PIPE, text=True)
-        for _i in range(100):
+        for _ in range(100):
             if os.path.exists(os.path.join(_dm3, "lgsm", "lock", "fakeserver-warning.lock")):
                 break
             _time138.sleep(0.05)
@@ -949,10 +948,9 @@ if _bash_m3 and _envbin_m3:
         if "LG264_INTERRUPTED" not in r.stdout:
             p.kill()
         out = p.communicate(timeout=60)[0]
-        try:
-            os.unlink(os.path.join(_dm3, "lgsm", "lock", "fakeserver-warning.lock"))
-        except OSError:
-            pass
+        _lock_m3 = os.path.join(_dm3, "lgsm", "lock", "fakeserver-warning.lock")
+        if os.path.exists(_lock_m3):     # the trap removes it; a killed run leaves it
+            os.unlink(_lock_m3)
         return r.stdout, out, _time138.monotonic() - t0
 
     _m3stop = _m3_run("stop")
@@ -1040,7 +1038,7 @@ check("M4 probe: the WARN line is read; a live warning means a LinuxGSM countdow
       and _hr138.parse_probe("SESSION=1\nWARN=0\nPROBE_OK\n")["warn"] == 0
       and _hr138.parse_probe("garbage")["warn"] is None)
 if _bash_m3:
-    _dm4 = _tf_lg.mkdtemp()
+    _dm4 = _tf138.mkdtemp()
     os.makedirs(os.path.join(_dm4, "lgsm", "lock"))
 
     def _m4_warn(lock_text):
@@ -1139,7 +1137,7 @@ check("M6 Stop button: a stop LinuxGSM refused is said in the server's console, 
       any(sid == P9_GS and line.startswith("[panel] stop: Stop refused: players are online") for sid, line in _pushed_m6),
       repr(_pushed_m6))
 check("M6 Restart button: a restart LinuxGSM postponed is said in the console too",
-      any(line.startswith("[panel] restart: Restart postponed") for _sid, line in _pushed_m6), repr(_pushed_m6))
+      any(line.startswith("[panel] restart: Restart postponed") for _, line in _pushed_m6), repr(_pushed_m6))
 check("L8: a refused stop and a postponed restart end their quiet window (warning allowance and all), so a "
       "crash of the server that stayed up pages; a reboot plan's hold is kept",
       _win_stop_m6 == (False, False) and _win_restart_m6 is False and _inf_m6 == float("inf"),
@@ -1219,7 +1217,7 @@ check("L7 uninstall: a shell the account refuses falls back to the plain stop, a
 # L9: a commented-out monitor line in the crontab is no monitor.
 _bash_l9 = _shutil138.which("bash")
 if _bash_l9:
-    _dl9 = _tf_lg.mkdtemp()
+    _dl9 = _tf138.mkdtemp()
     os.makedirs(os.path.join(_dl9, "home", "lgsm", "lock"))
     os.makedirs(os.path.join(_dl9, "bin"))
     open(os.path.join(_dl9, "home", "lgsm", "lock", "s-monitoring.lock"), "w", encoding="utf-8").close()
