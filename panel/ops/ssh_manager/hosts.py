@@ -1827,7 +1827,8 @@ def classify_install_failure(output):
     if "invalid platform" in low:
         # NOT "Steam dropped Linux support", which is what this looks like and what the panel said
         # at first. It is a SteamCMD bug, and LinuxGSM's maintainer found the way through it in
-        # GameServerManagers/LinuxGSM#4754 (still open, last touched 2026-05-03):
+        # GameServerManagers/LinuxGSM#4754 (LinuxGSM v26.3.0, #4979, now applies it itself; an
+        # account on an older release still gets this message):
         #
         #   "The fix is to add steamcmdforcewindows=yes into common.cfg, run the installer and
         #    then remove steamcmdforcewindows=yes then validate. This will download the windows

@@ -574,7 +574,8 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
 def _run_teed(app, remote, server_id, short_name, action, selfname):
     """Run a long action with its output teed to the host file the console tails: (out, err, rc)."""
     # fastdl asks a few yes/no questions (overwrite / force-download / continue),
-    # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
+    # all default Y — feed Y's so it runs unattended. Up to v26.3.0 a prompt looped
+    # forever on EOF; from v26.4.0 (#5042) it exits 2 ("Unable to read an answer").
     answers = ["Y"] * 8 if action == "fastdl" else None
     # tee_log makes run_as_game_user write the output where _action_log_path says
     # and hand the whole of it back at the end, so the audit entry and the bot's

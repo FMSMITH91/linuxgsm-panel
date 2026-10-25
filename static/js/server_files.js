@@ -119,11 +119,34 @@ function loadConfig(){
     });
     if(!(d.groups||[]).length) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
+    // Project Zomboid on LinuxGSM's CHANGE_ME admin password: the warning and its one-click fix.
+    var pzw=document.getElementById('lgc-pz-admin');
+    if(pzw) pzw.style.display = d.lgc_pz_default_admin ? '' : 'none';
     var ta=document.getElementById('cfg-raw');
     ta.value = d.raw||'';
     _r29j_rawShown = ta.value;
     _r26c_rawRead='ok';
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
+}
+// The warning's fix: the server writes a random adminpassword into the instance cfg; the re-read then
+// shows it in the adminpassword field (and hides the warning). The password is never in the reply.
+function lgcPzAdminFix(){
+  var btn=document.getElementById('lgc-pz-admin-btn'), msg=document.getElementById('lgc-pz-admin-msg');
+  if(btn) btn.disabled=true;
+  if(msg){ msg.textContent=''; msg.className='d-block mt-1'; }
+  fetch(MOUNT+'/api/server/'+serverId+'/pz-admin-password',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){ return r.json(); }).then(function(d){
+      if(btn) btn.disabled=false;
+      if(d.success){
+        if(window.toast) window.toast(d.message, 'success');
+        loadConfig();
+        return;
+      }
+      if(msg){ msg.textContent=d.message||d.error||'Failed'; msg.className='d-block mt-1 text-danger'; }
+    }).catch(function(){
+      if(btn) btn.disabled=false;
+      if(msg){ msg.textContent='Request failed'; msg.className='d-block mt-1 text-danger'; }
+    });
 }
 // Accordion toggle (delegated).
 var _el_cfg_groups = document.getElementById('cfg-groups');

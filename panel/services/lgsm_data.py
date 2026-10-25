@@ -51,6 +51,28 @@ _RELEASE_TAG_RE = re.compile(r"v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 _log = logging.getLogger(__name__)
 
 
+# Games LinuxGSM has removed, whose existing installs still run. They are gone from serverlist.csv, so
+# discovery could not name them any more, and their `update-lgsm` fails for good: it first checks
+# that the game's _default.cfg is still upstream (`curl -IsfL …/config-lgsm/<gameservername>/
+# _default.cfg`, lgsm/modules/command_update_linuxgsm.sh), and that is a 404 now.
+#   ps       Post Scriptum, renamed Squad 44 (`squad44`) in v25.1.0 (#4737);
+#   scpslsm  SCP: Secret Laboratory ServerMod, removed in v26.4.0 (#5038) — Steam app 786920 was
+#            retired; plugins now run on `scpsl` itself (LabAPI / EXILED).
+# The panel keeps the shortname as the game type: the LinuxGSM script is still `<shortname>server`
+# on the host, and that is what every command runs.
+RETIRED_GAMES = {
+    "ps": {"gameservername": "psserver", "gamename": "Post Scriptum", "replaced_by": "squad44",
+           "release": "v25.1.0"},
+    "scpslsm": {"gameservername": "scpslsmserver", "gamename": "SCP: Secret Laboratory ServerMod",
+                "replaced_by": "scpsl", "release": "v26.4.0"},
+}
+
+
+def retired_game_by_script(gameservername):
+    """The RETIRED_GAMES shortname whose LinuxGSM script is `gameservername`, or None."""
+    return next((sn for sn, g in RETIRED_GAMES.items() if g["gameservername"] == gameservername), None)
+
+
 def release_tag(value):
     """`value` when it is a LinuxGSM release tag ('v26.1.0'), else None."""
     if isinstance(value, str) and _RELEASE_TAG_RE.fullmatch(value):

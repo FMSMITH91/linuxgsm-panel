@@ -23,6 +23,7 @@ var PORTS = {
   "q2":27910,"q3":27960,"ql":27960,"wet":27960,"etl":27960,"rtcw":27960,"jk2":27960,
   "xnt":26000,"ut99":7777,"ut2k4":7777,
   "ts3":9987,"samp":7777,"mta":22003,
+  "hyt":5520,"rsdw":7777,"ce":7777,"sm":8777,"hz":7777,"jk3":29070,
 };
 function updatePort() {
   var select = document.getElementById('game-type-select');
@@ -45,16 +46,14 @@ window.hostChanged = hostChanged;
 
 // Which games THIS host can actually install.
 //
-// LinuxGSM caps a few games at an older Ubuntu than the rest of the catalogue, and the picker
-// marks them against the newest release in the CATALOGUE — a stand-in for the host, because the
-// list is rendered before a host is chosen. Once one IS chosen the comparison can be the real
-// one: a 20.04 remote under a 24.04 panel runs those games perfectly well, while on a 24.04 host
-// they fail every time, minutes into the download.
+// LinuxGSM refuses two games (btl, onset) above Ubuntu 20.04 in its own check_deps.sh, and the
+// picker marks them with that cap (data-legacy-os, app._LGC_DISTRO_CAPS) — the list is rendered
+// before a host is chosen. Once one IS chosen the comparison can be the real one: a 20.04 remote
+// under a 24.04 panel runs those games perfectly well, while on a 24.04 host they fail every time,
+// minutes into the download.
 //
-// What is compared is data-legacy-os — the cap LinuxGSM sets BELOW the rest of the catalogue —
-// and not each game's declared release. Every game declares the newest release LinuxGSM builds
-// its dependency list for, so comparing that against the host would grey out the entire menu on
-// an Ubuntu 26.04 box.
+// The serverlist's per-game os column is not compared: it follows LinuxGSM's Docker image base and
+// is no cap (v26.4.0 left cod/cod2/coduo/mohaa on 24.04 although they run on 26.04).
 //
 // Fails OPEN, exactly as the server-side guard does: a host whose OS cannot be read, or a game
 // with no cap, leaves everything selectable. Refusing an install that would have worked is the

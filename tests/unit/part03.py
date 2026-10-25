@@ -1015,7 +1015,7 @@ _sm_core.set_autostart(None, "gmodserver", True)
 # recorder so the command stays VISIBLE (grep-based detection/removal still works).
 check("autostart(on): adds the */5 monitor line, recorder-wrapped",
       _cron["add"][0].startswith("*/5 * * * * ")
-      and "/home/gmodserver/gmodserver monitor" in _cron["add"][0]
+      and "cd /home/gmodserver && ./gmodserver monitor" in _cron["add"][0]
       and ".lgsm-cron/" in _cron["add"][0] and ".status" in _cron["add"][0])
 check("autostart(on): also strips any legacy @reboot start line",
       "@reboot" in _cron["grep"] and "monitor" in _cron["grep"])
@@ -1024,10 +1024,10 @@ eq("autostart(off): removes line, adds none", _cron["add"], [])
 
 _sm_core.install_game_cron(None, "gmodserver", supported={"monitor", "update-lgsm"})
 check("install_game_cron: monitor every 5 min (recorder-wrapped, command visible)",
-      any(ln.startswith("*/5 * * * * ") and "/home/gmodserver/gmodserver monitor" in ln
+      any(ln.startswith("*/5 * * * * ") and "cd /home/gmodserver && ./gmodserver monitor" in ln
           and ".status" in ln for ln in _cron["add"]))
 check("install_game_cron: weekly update-lgsm (recorder-wrapped)",
-      any(ln.startswith("30 5 * * 0 ") and "/home/gmodserver/gmodserver update-lgsm" in ln
+      any(ln.startswith("30 5 * * 0 ") and "cd /home/gmodserver && ./gmodserver update-lgsm" in ln
           and ".status" in ln for ln in _cron["add"]))
 eq("install_game_cron: only supported commands scheduled", len(_cron["add"]), 2)
 
@@ -2231,14 +2231,18 @@ check("regex rewrite: ...and list_server_commands reads a description holding 80
       "%.2fs (the old pattern: ~9s), %r" % (_sl_dt, [c["cmd"] for c in _sl_cmds]))
 
 # 14. `details`' port table rows, as _parse_details_port_table hands them over (stripped).
-_SL_OLD_PORT = _sl_re.compile(r"([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", _sl_re.I)
+# The description charset has "(", ")" and ":" since LinuxGSM's own labels use them ("Query (SSH)",
+# "Game: Server"); the oracle carries them too, and the inputs below exercise them.
+_SL_OLD_PORT = _sl_re.compile(r"([A-Za-z][A-Za-z0-9/+ .():-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", _sl_re.I)
 _sl_port_in = [s.strip() for s in _sl_gen(["Game", "Query", " ", "  ", "\t", "27015", "1", "123456", "udp", "TCP",
-                                           "both", "rawx", "ſ", "K", "/", "_", "x", "."], 2000, 10)]
+                                           "both", "rawx", "ſ", "K", "/", "_", "x", ".", "(", ")", ":"],
+                                          2000, 10)]
 _sl_port_in += [s.strip() for s in _sl_shaped(
     6000, (["Game", "Source TV", " ", "ſ", "K", "/", "_", "1", "22", "\t", "x"], 4), _SL_WS,
     ["27015", "22", "1", "123456", "7777"], _SL_WS, ["udp", "TCP", "both", "raw", "rawx", "ud"],
     ["", " x", "_", "/", "\t27016 tcp"])]
-_sl_port_in += ["Game  27015  udp", "Source TV 27020 tcp", "Game\t27015\tudp", "A 1 22 tcp"]
+_sl_port_in += ["Game  27015  udp", "Source TV 27020 tcp", "Game\t27015\tudp", "A 1 22 tcp",
+                "Query (SSH)  10022  tcp", "Game: Server  10999  udp", "Voice (unused) 2305 udp"]
 _sl_diff_check("_port_table_row reads what the port-table pattern read", _sl_port_in,
                _sm_game._port_table_row, lambda s: _sl_groups(_SL_OLD_PORT.match(s)), 300)
 _sl_fast_check("_parse_details_port_table reads a row holding 50,000 blanks",

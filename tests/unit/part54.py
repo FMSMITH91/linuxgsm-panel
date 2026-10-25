@@ -434,7 +434,7 @@ check("restore vs update: a self-update asked for after a restore was DISPATCHED
 check("restore vs update: ...but once the swap has removed its staging directory the update goes "
       "ahead (no fixed wait after every restore)", _rx54_gone[0] is True, repr(_rx54_gone))
 
-# ── A01: legacy_os is measured against the catalogue's most common release, not its newest ─────
+# ── A01: legacy_os is LinuxGSM's own cap, never the os column a staged rollout moves first ─────
 def _games54(rows):
     """{shortname: legacy_os} of load_game_list() over serverlist `rows`."""
     saved = dict(_app54._GAME_LIST_CACHE)
@@ -451,13 +451,13 @@ def _games54(rows):
 
 _rows54 = ([{"shortname": "g%d" % i, "gamename": "Game %d" % i, "os": "ubuntu-24.04"} for i in range(130)]
            + [{"shortname": "n%d" % i, "gamename": "New %d" % i, "os": "ubuntu-26.04"} for i in range(5)]
-           + [{"shortname": "bf1942", "gamename": "Battlefield 1942", "os": "ubuntu-22.04"}])
+           + [{"shortname": "btl", "gamename": "BATTALION: Legacy", "os": "ubuntu-20.04"}])
 _lg54 = _games54(_rows54)
 _capped54 = sorted(sn for sn, cap in _lg54.items()
                    if cap and _app54.game_os_unsupported(cap, "ubuntu-26.04"))
 check("game list: five games upstream moves to 26.04 first do not mark the other 130 as capped at "
-      "24.04 -- on a 26.04 host only bf1942 (22.04) is refused",
-      _capped54 == ["bf1942"] and _lg54["g0"] == "" and _lg54["n0"] == "" and _lg54["bf1942"] == "ubuntu-22.04",
+      "24.04 -- on a 26.04 host only btl (LinuxGSM's 20.04 cap) is refused",
+      _capped54 == ["btl"] and _lg54["g0"] == "" and _lg54["n0"] == "" and _lg54["btl"] == "ubuntu-20.04",
       repr((_capped54[:5], len(_capped54))))
 
 # ── A01 lead: a blank socketio_cors_origins entry is no origin, not a refusal of every handshake ─

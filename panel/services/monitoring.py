@@ -685,8 +685,12 @@ _EXPECT_OFFLINE_WINDOW = 180    # a panel restart holds "server down" this long 
 # LinuxGSM commands that legitimately take a server down for a while. Every entry widens the window
 # in which a REAL crash is swallowed, so a command earns its place here only by actually stopping
 # the server: `monitor` (runs every few minutes, would suppress everything) and `update-lgsm` (fetches
-# scripts with the server up) are deliberately absent.
-_LGSM_MAINTENANCE_CMDS = ("update", "force-update", "validate", "mods-update", "restart", "backup")
+# scripts with the server up) are deliberately absent. Each command with LinuxGSM's own aliases
+# (lgsm/modules/core_getopt.sh, real command names since v26.3.0 #5002): an operator's `./<s> u`
+# cron is the same update, and read as "went offline unexpectedly". `s` is sponsor, not a command
+# here.
+_LGSM_MAINTENANCE_CMDS = ("update", "u", "force-update", "fu", "update-restart", "ur", "validate", "v",
+                          "mods-update", "mu", "workshop-update", "wu", "restart", "r", "backup", "b")
 
 
 def _r28a_busy_words(remote, cmd):

@@ -1922,7 +1922,7 @@ try:
     check("maintenance probe: pgrep is scoped to that server's OWN unix user",
           "pgrep -u gmodserver " in _cmd or "pgrep -u 'gmodserver' " in _cmd, _cmd)
     check("maintenance probe: it matches the lgsm script name followed by a maintenance command",
-          "gmodserver (update|force-update|" in _cmd, _cmd)
+          "gmodserver (update|u|force-update|fu|" in _cmd, _cmd)
     check("maintenance probe: monitor is NOT a maintenance command (it would mute every alert)",
           "|monitor" not in _cmd and "(monitor" not in _cmd, _cmd)
     check("maintenance probe: update-lgsm is NOT one either — it never stops the server",

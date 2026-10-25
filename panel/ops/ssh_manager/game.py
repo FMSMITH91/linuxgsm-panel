@@ -47,9 +47,12 @@ _ENG_VALVE = frozenset({
 # `clientkick` and no ban; `say` is the game module's (g_svcmds.c ConsoleCommand). Quake Live
 # ("ql", `qzeroded`) is closed source: neither its `status` layout nor a kick by slot is
 # published anywhere primary, and a guessed command answers "Done." while the player stays on,
-# so it is left to gamedig's view-only list.
+# so it is left to gamedig's view-only list. jk3server (LinuxGSM v26.4.0) runs OpenJK
+# (`openjkded.x86_64`), whose codemp/server/sv_ccmds.cpp registers `status` (the "cl score ping name
+# address rate" table) and `clientkick`, and whose game module's g_svcmds.c handles `say`; it has
+# no ban by slot (sv_banaddr takes an address), so its Ban is refused like jk2's.
 _ENG_IDTECH3 = frozenset({
-    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "etl", "rtcw", "wet", "jk2",
+    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "etl", "rtcw", "wet", "jk2", "jk3",
 })
 # Minecraft — `list` gives names, kick/ban by name. LinuxGSM's Minecraft games are mc (vanilla
 # Java), pmc (PaperMC) and mcb (Bedrock). "spigot", "paper", "bukkit", "forge", "fabric",
@@ -1327,10 +1330,11 @@ def _stale_backup_lock_sweep(user, home=None):
             f"find {home} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; ")
 
 
-def _backup_players_online(server, user, game_type, port, query_type):
+def _backup_players_online(server, user, game_type, port, query_type, selfname=None):
     """The skip message when players are connected (a backup would disconnect them), else None.
 
-    An unknown count (None) is treated as empty — see run_game_backup.
+    An unknown count (None) is treated as empty — see run_game_backup — except for a running
+    Valheim on -crossplay, whose count is never known (_lgc_vh_crossplay_skip).
 
     query_type, like every other player/version read in this file (_gamedig_player_list,
     _queried_version, is_player_queryable) and like the on-screen count in server_detail.
@@ -1345,7 +1349,39 @@ def _backup_players_online(server, user, game_type, port, query_type):
     pc = cron.player_count(server, user, game_type, port, query_type)
     if pc is not None and pc > 0:
         return f"{pc} player(s) online — backup skipped so nobody gets disconnected"
+    if pc is None and (game_type or "").lower() == "vh":
+        return _lgc_vh_crossplay_skip(server, user, selfname or user)
     return None
+
+
+# Valheim's skip when its players cannot be counted. LinuxGSM starts vhserver with -crossplay by
+# default (since v24.3.0), and a crossplay server has NO Steam query port (LinuxGSM set vh to
+# querymode="1", session only, in v25.2.0 #4840), so gamedig never answers and the count is always
+# unknown. Read as empty, that ran LinuxGSM's `backup` — which stops the server — every hour with
+# players on it. LinuxGSM's own way out is in vhserver's _default.cfg: a Steam-only server drops
+# -crossplay from startparameters, and then it answers the query.
+LGC_VH_CROSSPLAY_SKIP = ("Valheim with -crossplay has no Steam query port, so the panel cannot tell "
+                         "whether anyone is on — backup skipped so nobody gets disconnected. Stop the "
+                         "server first, back up anyway, or remove -crossplay from startparameters (a "
+                         "Steam-only server) so its players can be counted.")
+
+
+def _lgc_vh_crossplay_skip(server, user, selfname):
+    """LGC_VH_CROSSPLAY_SKIP for a Valheim that runs with -crossplay; None when it is stopped or off it.
+
+    A config that could not be read counts as LinuxGSM's default, which has -crossplay; a server
+    whose state could not be read counts as running: neither is evidence that nobody is on.
+    Running is LinuxGSM's `<selfname>-started.lock`, written by start and removed by stop.
+    """
+    vals = files.lgsm_get_values(server, user, selfname, ["startparameters"])
+    if vals is not None and "-crossplay" not in (vals.get("startparameters") or "").split():
+        return None
+    out, _, _ = _core.shell_as_game_user(
+        server, user, f"[ -f /home/{user}/lgsm/lock/{selfname}-started.lock ] && echo LGC_UP "
+                      "|| echo LGC_DOWN", timeout=15, selfname=selfname)
+    if "LGC_DOWN" in (out or "").split():
+        return None
+    return LGC_VH_CROSSPLAY_SKIP
 
 
 def _backup_space_refusal(server, user, headroom_note):
@@ -1719,7 +1755,7 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, _core.GAME_ACCOUNT_REFUSED[1], False
     keep = max(1, int(keep))
     if not force:
-        skip = _backup_players_online(server, user, game_type, port, query_type)
+        skip = _backup_players_online(server, user, game_type, port, query_type, selfname)
         if skip:
             return False, skip, True
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
@@ -1806,12 +1842,55 @@ def list_server_commands(server, user, selfname=None):
 # still open any of these manually from the firewall page if they want them.
 _NONESSENTIAL_PORT_DESCS = ("client", "sourcetv", "source tv", "rcon", "telnet")
 
+# The other rows of `details`' port table that players need, beside Game and Query. Every row label
+# LinuxGSM prints (lgsm/modules/info_messages.sh, v26.4.0) was gone through; these are the ones a
+# client connects to:
+#   ReliableMessaging   Satisfactory's 8888/tcp — without it nobody can join (#4813, #4976);
+#   Server API          Satisfactory's 7777/tcp, the API the client queries before it joins;
+#   Raw UDP...          ARK's "RAW UDP Socket" and Conan Exiles' "Raw UDP" (the game port + 1);
+#   Beacon              Mordhau's and The Front's beacon (LAN Beacon is not: "lan beacon" starts "lan");
+#   Queue               The Isle's join queue;
+#   Voice               TeamSpeak 3's voice port and Arma 3's (both the game port; "Voice (unused)" is not);
+#   File Transfer       TeamSpeak 3's file transfer — avatars, icons and channel files.
+# Left closed with the admin and outbound rows: RCON, Telnet, Web Interface, API (Project CARS'
+# HTTP API), RMI, Shutdown, Mod Server, Stats, BattleEye (RCon), LAN, Steam / Steam: Auth /
+# Steamworks P2P (the server's own connection to Steam), App (Rust+), Files, Unknown.
+_LGC_PLAYER_PORT_DESCS = ("reliablemessaging", "server api", "raw udp", "beacon", "queue",
+                          "file transfer")
+# Matched whole, not as a prefix: "Voice (unused)" is Arma 3's spare port.
+_LGC_PLAYER_PORT_EXACT = frozenset({"voice"})
+# Don't Starve Together's "Game: Master" is the port its shards talk to each other on, not one a
+# player reaches; its "Game: Server" is.
+_LGC_NOT_PLAYER_DESCS = frozenset({"game: master"})
+# Per game: an HTTP row that players download from — MTA's resources, Onset's packages and Just
+# Cause 3 Multiplayer's client packages. Elsewhere "HTTP" is a web admin or status page.
+_LGC_PLAYER_HTTP_GAMES = frozenset({"mta", "onset", "jc3"})
+# TeamSpeak 3's "Query" rows are ServerQuery — its admin console (raw, SSH, HTTP, HTTPS) — not a
+# server-browser query, so for ts3 no Query row is opened.
+_LGC_ADMIN_QUERY_GAMES = frozenset({"ts3"})
+
+
+def _lgc_player_port(desc, game_type=None):
+    """Whether a `details` port row with this description is one a player connects to."""
+    d = (desc or "").strip().lower()
+    if d.startswith(_NONESSENTIAL_PORT_DESCS) or d in _LGC_NOT_PLAYER_DESCS:
+        return False
+    gt = (game_type or "").lower()
+    if d.startswith("query"):
+        return gt not in _LGC_ADMIN_QUERY_GAMES
+    if d.startswith("http"):
+        return gt in _LGC_PLAYER_HTTP_GAMES and d == "http"
+    return (d.startswith(("game",) + _LGC_PLAYER_PORT_DESCS) or d in _LGC_PLAYER_PORT_EXACT)
+
 
 # One row of `details`' DESCRIPTION / PORT / PROTOCOL table: "Game  27015  udp". The description
 # may hold spaces, so it runs to the first gap followed by a 2-5 digit port and a protocol. That was
 # `([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b`, whose lazy description re-walked
-# every later run of blanks at each character it grew by: quadratic in a row's blanks.
-_PORT_ROW_DESC_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+ .-]*", re.I)
+# every later run of blanks at each character it grew by: quadratic in a row's blanks. "(", ")" and
+# ":" are in it because LinuxGSM's own labels use them — TeamSpeak's "Query (SSH)", Arma 3's "Voice
+# (unused)", Don't Starve Together's "Game: Server" — and a row that did not parse ENDED the table:
+# TeamSpeak's File Transfer row was never read, and no row of Don't Starve Together's at all.
+_PORT_ROW_DESC_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+ .():-]*", re.I)
 _PORT_ROW_TAIL_RE = re.compile(r"\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", re.I)
 
 
@@ -1853,13 +1932,15 @@ def _parse_details_port_table(text):
     return ports, game_port
 
 
-def detect_game_ports(server, user, selfname=None):
+def detect_game_ports(server, user, selfname=None, game_type=None):
     """Parse LinuxGSM `details` for a server's ports and decide which to open.
 
-    We open only what a player needs to reach the server: the Game port and, if the
-    game lists a separate Query port (for server-browser visibility). Optional/admin/
-    outbound ports (SourceTV, RCON/telnet, Client) are deliberately left CLOSED — e.g.
-    Garry's Mod lists Game 27015 + SourceTV 27020, but only 27015 is needed. Returns:
+    We open only what a player needs to reach the server: the Game port, a separate Query port
+    (for server-browser visibility), and the other rows players connect to (_lgc_player_port:
+    Satisfactory's ReliableMessaging, ARK's raw UDP socket, ...). Optional/admin/outbound ports
+    (SourceTV, RCON/telnet, Client, web admin) are deliberately left CLOSED — e.g. Garry's Mod
+    lists Game 27015 + SourceTV 27020, but only 27015 is needed. `game_type` decides the few rows
+    whose meaning is the game's (TeamSpeak's Query is its admin console). Returns:
       {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed],
        "answered": whether `details` printed its port table or its Server IP line at all,
        "started": its Status line — True for STARTED, False for STOPPED, None for neither}.
@@ -1874,13 +1955,11 @@ def detect_game_ports(server, user, selfname=None):
     out, _, _ = _core.run_as_game_user(server, user, "details", timeout=45, selfname=selfname)
     text = terminal.strip_escapes(out or "")
     ports, game_port = _parse_details_port_table(text)
-    # Open only the essential inbound ports: Game + Query. Everything else (SourceTV,
-    # RCON, Client, …) is left closed so we don't expose more than the game needs.
-    open_ports = sorted({
-        p["port"] for p in ports
-        if not p["desc"].lower().startswith(_NONESSENTIAL_PORT_DESCS)
-        and (p["desc"].lower().startswith(("game", "query")))
-    })
+    # Open only the inbound ports players need. Everything else (SourceTV, RCON, Client, …) is
+    # left closed so we don't expose more than the game needs. It was Game + Query only, and
+    # Satisfactory's 8888/tcp ReliableMessaging was never opened: behind the panel's ufw nobody
+    # could join a new Satisfactory server.
+    open_ports = sorted({p["port"] for p in ports if _lgc_player_port(p["desc"], game_type)})
     if game_port is None:
         # The port that ENDS the line: the first `:digits` in `Internet IP: [2001:db8::1234]:27015`
         # is part of the IPv6 address, and was read as game port 1234.

@@ -5386,11 +5386,11 @@ _cron_all13, _cron_all_seen13 = _core_cron13({"monitor", "mods-update", "update"
 _cron_lines13 = _cron_all_seen13[0][2] if _cron_all_seen13 else []
 check("core cron: each supported command gets its own schedule, recorder-wrapped, in one rewrite",
       all((_cron_all13 == (True, ""), len(_cron_all_seen13) == 1,
-           [ln.split(" /home/")[0].split(" ", 5)[:5] for ln in _cron_lines13] ==
+           [ln.split(" ", 5)[:5] for ln in _cron_lines13] ==
            [["*/5", "*", "*", "*", "*"], ["0", "5", "*", "*", "*"], ["15", "5", "*", "*", "*"],
             ["30", "5", "*", "*", "0"]],
            [c for c in ("monitor", "mods-update", "update", "update-lgsm")
-            if not any("/home/gm4/gmodserver %s" % c in ln for ln in _cron_lines13)] == [],
+            if not any("cd /home/gm4 && ./gmodserver %s " % c in ln for ln in _cron_lines13)] == [],
            all("/home/gm4/.lgsm-cron/" in ln for ln in _cron_lines13))),
       repr(_cron_lines13))
 _cron_none13, _cron_none_seen13 = _core_cron13(set())

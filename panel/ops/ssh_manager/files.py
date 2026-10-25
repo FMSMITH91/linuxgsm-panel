@@ -622,6 +622,42 @@ def lgsm_get_values(server, user, selfname, keys):
     return {k: merged.get(k, "") for k in keys}
 
 
+# Project Zomboid's admin password as LinuxGSM ships it. Since v26.3.0 (#4991) pzserver's
+# _default.cfg has `adminpassword="CHANGE_ME"` and starts the game with `-adminpassword
+# ${adminpassword}`, so a new server no longer stops at the password prompt — it comes up with an
+# admin account anyone who has read LinuxGSM's config can log in to.
+LGC_PZ_DEFAULT_ADMIN = "CHANGE_ME"
+# Letters and digits only: startparameters passes the value unquoted, so a blank would split it and a
+# leading `-` would read as another option.
+_LGC_PW_ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def lgc_new_admin_password(length=20):
+    """A random admin password for a game config (about 117 bits at the default length)."""
+    import secrets as _secrets
+    return "".join(_secrets.choice(_LGC_PW_ALPHABET) for _ in range(length))
+
+
+LGC_PZ_ALREADY_SET = "This server's admin password is no longer LinuxGSM's default — nothing has been changed."
+
+
+def lgc_pz_set_admin_password(server, user, selfname, only_if_default=True):
+    """Give Project Zomboid a random adminpassword in its instance cfg. -> (ok, message).
+
+    `only_if_default`: change it only while it is LinuxGSM's CHANGE_ME (or unset), so an install
+    retried, or a second click, never replaces a password the operator chose. The password is
+    neither returned nor logged: it is the instance cfg's adminpassword, where Files & Config
+    shows it.
+    """
+    if only_if_default:
+        cur = lgsm_get_values(server, user, selfname, ["adminpassword"])
+        if cur is None:
+            return False, LGSM_CONFIG_UNREAD
+        if cur.get("adminpassword", "") not in ("", LGC_PZ_DEFAULT_ADMIN):
+            return False, LGC_PZ_ALREADY_SET
+    return lgsm_write_config(server, user, selfname, {"adminpassword": lgc_new_admin_password()})
+
+
 # The end of lgsm_write_config's refusal of a key secrets-<selfname>.cfg also sets: the one write
 # refusal that names things (the keys and the script), so write_failure_reason knows it by its end.
 LGSM_TIMESTAMPS_REFUSED = ("Turning LinuxGSM's log timestamps on freezes the live console, so the "

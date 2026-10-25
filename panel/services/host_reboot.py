@@ -95,10 +95,13 @@ _SETTING_RESTORE_NO_AUTOSTART = "reboot_restore_no_autostart"
 DEFAULT_WAIT_HOURS = 24
 
 # The LinuxGSM commands whose process means "LinuxGSM is doing something to this server now", and
-# the ones of those that are maintenance a reboot must not cut through.
-_INFLIGHT_CMDS = ("monitor|start|stop|restart|update|force-update|validate|backup|install|"
-                  "auto-install|debug|details|mods-update|update-lgsm")
-_MAINT_CMDS = "update|force-update|validate|backup|install|auto-install|mods-update|update-lgsm"
+# the ones of those that are maintenance a reboot must not cut through. With LinuxGSM's aliases
+# (lgsm/modules/core_getopt.sh): `./<s> u` is the same update as `./<s> update`.
+_INFLIGHT_CMDS = ("monitor|m|start|st|stop|sp|restart|r|update|u|force-update|fu|update-restart|ur|"
+                  "validate|v|backup|b|install|i|auto-install|ai|debug|d|details|dt|mods-update|mu|"
+                  "workshop-update|wu|update-lgsm|ul|uf|update-modules")
+_MAINT_CMDS = ("update|u|force-update|fu|update-restart|ur|validate|v|backup|b|install|i|auto-install|"
+               "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules")
 _PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "BOOT", "MID", "NOW", "SEC")
 
 # The last finished outcome per host, shown on the Power card for a day: {at, text, ok}.
@@ -440,7 +443,12 @@ def safe_start(remote, ident):
         out, err, rc = "", "the start could not be run", -1
     if rc == 0:
         return "started", ""
-    if rc == 2:                   # "already running" (command_start.sh): something else started it
+    # rc 2 is LinuxGSM's generic ERROR (fn_script_log_error), not a code of its own for "already
+    # running": that message is one of its errors, "Missing dependencies required to run SteamCMD"
+    # another, and from v26.4.0 a prompt with no input a third. So 2 is "running" only with
+    # command_start.sh's own words for it (LinuxGSM prints English only); any other 2 is read
+    # from the session, like every other exit code.
+    if rc == 2 and "is already running" in (out or ""):
         return "running", ""
     if probe_server(remote, ident).get("session") == 1:
         return "started", ""

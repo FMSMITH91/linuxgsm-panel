@@ -1808,9 +1808,16 @@ def _register_files_page(app):
 def _sf_config_read(gs):
     """GET /config: the instance's LinuxGSM config, or a generic 500."""
     try:
-        return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
+        cfg = lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name)
     except Exception:
         return jsonify({"error": _log_and_generic("request failed")}), 500
+    # Project Zomboid still on LinuxGSM's CHANGE_ME (_sm.LGC_PZ_DEFAULT_ADMIN): the page warns, with
+    # the one-click fix below. Only when the read succeeded: an empty settings list is no answer.
+    if gs.game_type == "pz" and not cfg.get("error"):
+        cfg["lgc_pz_default_admin"] = any(
+            st.get("key") == "adminpassword" and st.get("value") == _sm.LGC_PZ_DEFAULT_ADMIN
+            for st in cfg.get("settings") or ())
+    return jsonify(cfg)
 
 
 def _sf_config_write(gs, data):
@@ -1861,6 +1868,40 @@ def _register_config_editor(app):
         if refused is not None:
             return refused
         return _sf_config_write(gs, data)
+
+    @app.route("/api/server/<int:server_id>/pz-admin-password", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_pz_admin_password(server_id):
+        """Give a Project Zomboid server a random adminpassword in place of LinuxGSM's CHANGE_ME.
+
+        The same permission and refusals as a settings save, which can write the same key. The
+        password goes into the instance cfg and nowhere else: not the reply, not the audit row.
+        """
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        if gs.game_type != "pz":
+            return jsonify({"success": False,
+                            "message": i18n.tr("This server is not a Project Zomboid server.")}), 400
+        refused = _write_refused(gs, "edit_config")
+        if refused is not None:
+            return refused
+        try:
+            with _r20b_audit_on_raise("edit_config", target=gs.name, server=gs):
+                ok, msg = _sm.lgc_pz_set_admin_password(gs.remote, gs.short_name, gs.lgsm_name)
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+        log_action(current_user, "edit_config", target=gs.name,
+                   detail=_failed_detail("adminpassword set to a random value", ok,
+                                         _sm.write_failure_reason(msg)),
+                   success=ok, server=gs)
+        if not ok:
+            return jsonify({"success": False, "message": i18n.tr(msg or "Failed")})
+        return jsonify({"success": True, "message": i18n.tr(
+            "Set a random admin password: it is adminpassword below. Restart the server to apply it. "
+            "Project Zomboid uses it when it creates the admin account, on the server's first start; "
+            "if this server has started before, change the admin's password in game as well.")})
 
     @app.route("/api/server/<int:server_id>/game-config")
     @login_required

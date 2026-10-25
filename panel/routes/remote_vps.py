@@ -786,7 +786,7 @@ def _rv_on_panel_host(gs):
 def _rv_sync_ports_run(gs):
     """Detect the server's ports, open what may be opened, audit it, and report what landed."""
     with _r20b_audit_on_raise("sync_ports", target=gs.name, server=gs):
-        info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
+        info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name, game_type=gs.game_type)
         gp, to_open, refused = _ports_to_sync(gs, info)
     # Report what the firewall ACTUALLY took, not what was asked for. The return value
     # used to be discarded on the reasoning that "the firewall page reports a partially

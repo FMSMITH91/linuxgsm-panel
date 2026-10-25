@@ -18,6 +18,7 @@ from app import (lgsm_name_to_game_type, load_game_list)
 from panel.routes._shared import (_bg_cache_commands, privileged_accounts)
 from panel.ops import ssh_manager as _sm
 from panel.services import game_ports as _gp
+from panel.services import lgsm_data
 
 
 # "Could not read" is not "nothing is there", and discover_linuxgsm_servers cannot tell its caller
@@ -99,7 +100,7 @@ def register(app):
                 "it is unknown. Check the host is up and reachable, then scan again.",
                 host=remote.name)}), 200
         existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
-        games = {g["shortname"]: g["name"] for g in load_game_list()}
+        games = _lgc_import_names()
         out, content = _discovered_listing(found, existing, games)
         return jsonify({"servers": out,
                         "content": [{"user": u, "games": sorted(g)}
@@ -259,6 +260,25 @@ def _discovered_listing(found, existing, games):
     return out, content
 
 
+def _lgc_import_names():
+    """{shortname: game name} of every game an existing install may be: LinuxGSM's list, and the
+    games it retired (lgsm_data.RETIRED_GAMES), whose installs still run but are on no list now.
+    """
+    names = {sn: g["gamename"] for sn, g in lgsm_data.RETIRED_GAMES.items()}
+    names.update({g["shortname"]: g["name"] for g in load_game_list()})
+    return names
+
+
+def _lgc_listed_name(gt, games):
+    """The discover card's name for game `gt`: a retired game says so, and what replaced it."""
+    retired = lgsm_data.RETIRED_GAMES.get(gt)
+    if retired and gt not in {g["shortname"] for g in load_game_list()}:
+        return i18n.tr("{game} (retired by LinuxGSM in {release}; its replacement is {new})",
+                       game=retired["gamename"], release=retired["release"],
+                       new=games.get(retired["replaced_by"], retired["replaced_by"]))
+    return games.get(gt, gt)
+
+
 def _content_game_label(f, gt, games):
     """How the discover card names one content-box game."""
     return games.get(gt) or f.get("lgsm_name") or gt or "?"
@@ -269,7 +289,7 @@ def _importable_entry(f, user, gt, games):
 
     `port` 0 is "not in its LinuxGSM config": the import reads it from LinuxGSM's `details`.
     """
-    return {"user": user, "game_type": gt, "game_name": games.get(gt, gt),
+    return {"user": user, "game_type": gt, "game_name": _lgc_listed_name(gt, games),
             "port": f.get("port") or 0,
             "backups": f.get("backups", 0), "mods": f.get("mods", 0),
             "cron": f.get("cron", 0), "autostart": bool(f.get("autostart"))}
@@ -301,7 +321,7 @@ def _import_selection(remote_id, items, discovered):
     kept: the import stores a port read on the host or no row at all (see _import_ports).
     """
     existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
-    valid_games = {g["shortname"] for g in load_game_list()}
+    valid_games = set(_lgc_import_names())
     # A host's servers are keyed on the Linux user (short_name), so two games under ONE account
     # cannot both become servers. The loop below would take the first and drop the rest as
     # duplicates — picking a game essentially at random and reporting partial success as
@@ -426,7 +446,7 @@ def _add_imported_rows(remote_id, ready):
     alongside this one could have added the same account meanwhile.
     """
     existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
-    game_names = {g["shortname"]: g["name"] for g in load_game_list()}
+    game_names = _lgc_import_names()
     added, raced = [], []
     for user, gt, port in ready:
         if user in existing:

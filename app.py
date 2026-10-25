@@ -33,7 +33,6 @@ Routes:
   socket.io join_console    -> Live console streaming (events, not a route:
                                connect / join_console / leave_console / disconnect)
 """
-import collections
 import logging
 import os
 import re
@@ -1306,12 +1305,33 @@ ALERT_PROVIDERS = [
 _GAME_LIST_CACHE = {"games": None}
 
 
-def game_os_unsupported(game_os, host_os):
-    """True when LinuxGSM says this game tops out at an OLDER release than the host runs.
+# The games LinuxGSM REFUSES to install above a distro release, as its own check_deps.sh refuses them
+# ("<game> is not supported on <distro> (requires Ubuntu <= 20.04 or Debian <= 11)."), read from
+# lgsm/modules/check_deps.sh at v26.4.0. That refusal is the only cap LinuxGSM has.
+#
+# serverlist.csv's `os` column is NOT one. It follows the base of LinuxGSM's Docker images (#5028):
+# at v26.4.0 138 games say ubuntu-26.04 while cod, cod2, coduo and mohaa stayed on ubuntu-24.04,
+# although #5069 made those four run on Ubuntu 26.04, Debian 13 and RHEL 9. Reading the column as a
+# cap refused them on every 26.04 host. Nor is a missing row in the distro's deps csv a signal:
+# every one of those files lists every game, btl and onset included. bf1942 and bfv were refused
+# above Ubuntu 22.04 / Debian 12 up to v26.3.0, and v26.4.0 dropped that check.
+_LGC_DISTRO_CAPS = {
+    "btl": {"ubuntu": "20.04", "debian": "11"},
+    "onset": {"ubuntu": "20.04", "debian": "11"},
+}
 
-    Both are LinuxGSM's own slugs ("ubuntu-24.04"). Only the four games that declare an older
-    release are ever affected — bf1942 and bfv (22.04), btl and onset (20.04) — but on a 24.04
-    host those four fail every time, and nothing told the operator before the install did.
+
+def lgc_distro_cap(game_type, distro="ubuntu"):
+    """The newest '<distro>-<version>' LinuxGSM installs `game_type` on, or "" when it has no cap."""
+    ver = _LGC_DISTRO_CAPS.get(game_type or "", {}).get(distro or "")
+    return "%s-%s" % (distro, ver) if ver else ""
+
+
+def game_os_unsupported(game_os, host_os):
+    """True when LinuxGSM caps this game at an OLDER release than the host runs.
+
+    Both are LinuxGSM's own slugs ("ubuntu-24.04"); `game_os` is a cap from lgc_distro_cap, never
+    the serverlist's os column (see _LGC_DISTRO_CAPS).
 
     Unknown or unparseable on either side answers False: a game whose OS we cannot read is not
     evidence of a problem, and hiding a game that would have worked is worse than letting it try.
@@ -1351,30 +1371,15 @@ def load_game_list():
         sn = (row.get("shortname") or "").strip()
         name = (row.get("gamename") or "").strip()
         if sn and name:
-            # LinuxGSM's serverlist declares the newest OS it supports each game on, and that
-            # column was parsed and thrown away — so the picker offered every game on every host
-            # and four of them could only ever fail at install time, with LinuxGSM's own
-            # "not supported on Ubuntu 24.04.5" arriving minutes in. Carry it through; the caller
-            # compares it against the host.
+            # The serverlist's os column rides along as data. It is not a cap (_LGC_DISTRO_CAPS
+            # says why); legacy_os below is.
             games.append({"shortname": sn, "name": name,
                           "os": (row.get("os") or "").strip()})
-    # Mark the games LinuxGSM tops out at an OLDER release than the rest of the catalogue. Only
-    # four do, and the picker cannot know which host is about to be chosen — so state the game's
-    # OWN limit rather than guess. That is true whatever the target, and it is the fact the
-    # operator needs before spending an install on it.
-    #
-    # "The rest of the catalogue" is its MOST COMMON release, not its newest. The file is fetched
-    # weekly from upstream, and during a staged rollout a few games declare the next release
-    # first: against the newest, every other game then read as capped at the old one, and on a
-    # host running the new release _os_cap_refusal refused them all. A tie takes the newer
-    # release, which is what the newest-wins rule answered for it.
-    counts = collections.Counter(row["os"] for row in games if row.get("os"))
-    top = max(counts.values(), default=0)
-    common = max((o for o, n in counts.items() if n == top), default="")
+    # Mark the games LinuxGSM refuses on newer releases. The picker cannot know which host is about
+    # to be chosen, so it states the game's OWN Ubuntu limit; the install route and the picker's
+    # script compare it against the host once one is (_os_cap_refusal, filterGamesForHost).
     for row in games:
-        row["legacy_os"] = (row.get("os") or "") if (row.get("os") and common
-                                                     and game_os_unsupported(row["os"], common)) \
-            else ""
+        row["legacy_os"] = lgc_distro_cap(row["shortname"])
     games.sort(key=lambda row: row["name"].lower())
     # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
     # of the process, so a later retry (or the background warm) could never take effect.
@@ -1389,8 +1394,8 @@ _LGSM_NAME_MAP = {"data": None}
 
 def lgsm_name_to_game_type(lgsm_name):
     """Map a LinuxGSM 'gameservername' (e.g. 'gmodserver') to the panel's game_type / shortname
-    (e.g. 'gmod'), from LinuxGSM's serverlist. Used when importing servers discovered on a host.
-    Returns None for a game the panel doesn't know."""
+    (e.g. 'gmod'), from LinuxGSM's serverlist, or from the games it retired. Used when importing
+    servers discovered on a host. Returns None for a game the panel doesn't know."""
     rows = lgsm_data.serverlist()      # same object until lgsm_data re-reads it — see load_game_list
     if _LGSM_NAME_MAP["data"] is None or _LGSM_NAME_MAP.get("rows") is not rows:
         m = {}
@@ -1402,8 +1407,10 @@ def lgsm_name_to_game_type(lgsm_name):
         if m:                      # same reasoning as load_game_list: never memoise a failure
             _LGSM_NAME_MAP["data"] = m
             _LGSM_NAME_MAP["rows"] = rows
-        return m.get(lgsm_name)
-    return _LGSM_NAME_MAP["data"].get(lgsm_name)
+    else:
+        m = _LGSM_NAME_MAP["data"]
+    # A game LinuxGSM retired is on no list now, and its installs still run (lgsm_data.RETIRED_GAMES).
+    return m.get(lgsm_name) or lgsm_data.retired_game_by_script(lgsm_name)
 
 # ─── App Factory ──────────────────────────────────────────────
 

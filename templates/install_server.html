@@ -50,12 +50,12 @@
              already shown in the help line below. #}
           <option value="">Choose game…</option>
           {% for g in games %}
-          {# data-legacy-os is the cap LinuxGSM sets BELOW the rest of the catalogue — only four
-             games have one. It is both the at-a-glance label and what the script compares against
-             the selected host's slug from /api/remote/<id>/specs, because the decision is per
-             HOST: a 20.04 remote under a 24.04 panel runs those games perfectly well. The game's
-             raw os column is not it — every game declares the newest release LinuxGSM builds deps
-             for, so that comparison would grey out the whole menu on a 26.04 host. #}
+          {# data-legacy-os is LinuxGSM's own Ubuntu cap for the game (app._LGC_DISTRO_CAPS: the
+             check_deps.sh refusal, btl and onset at 20.04). It is both the at-a-glance label and
+             what the script compares against the selected host's slug from
+             /api/remote/<id>/specs, because the decision is per HOST: a 20.04 remote under a 24.04
+             panel runs those games perfectly well. The game's raw os column is not it — it
+             follows LinuxGSM's Docker image base, not what the game runs on. #}
           <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %} data-no-i18n>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
           {% endfor %}
         </select>
