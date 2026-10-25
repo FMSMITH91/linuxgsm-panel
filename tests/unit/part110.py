@@ -45,6 +45,7 @@ from panel.ops.debug_report import logs as _lg110
 from panel.ops.debug_report import network as _nw110
 from panel.ops.ssh_manager import firewall as _fw110
 from panel.ops.ssh_manager import hosts as _hosts110
+from panel.ops.ssh_manager import ufweval as _ue110
 from panel.routes import panel_backup as _pb110
 from panel.routes import remote_security as _rs110
 from panel.routes import remote_vps as _rv110
@@ -194,6 +195,7 @@ def _guard110():
     _p9_patch(_fw110, "_live_tailscale_state", lambda server, enabled, groups: (False, False))
     _p9_patch(_fw110, "_panel_served_over_tailscale", lambda server: False)
     _p9_patch(_hosts110, "_sshd_current_ports", lambda server: [22])
+    _p9_patch(_ue110, "local_addrs", lambda: None)   # the panel host's addresses (ufweval): unread
     _saved_port110(5077, tailscale_setup_done=False)
     got = {}
     for case, bound in (("bound 5000", 5000), ("no bound port", None)):

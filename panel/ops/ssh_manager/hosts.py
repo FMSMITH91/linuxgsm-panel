@@ -3462,17 +3462,45 @@ def fwa_panel_source(server):
 def _fwb_ssh_source(server):
     """The address remote `server` sees the panel's SSH session come from (an ip_address), or None.
 
-    The first word of the session's $SSH_CONNECTION, which sshd sets for every session; an
-    IPv4-mapped address is the IPv4 one it is. None when it could not be read: the firewall's lock-out
-    checks refuse on that, since the source is what decides whether a rule keeps the panel in. A host
-    that is down raises ConnectionError (paramiko), as every other call to it does.
+    _fwb_ssh_conn's client address. A host that is down raises ConnectionError (paramiko), as every
+    other call to it does.
     """
-    out, _err, rc = _core.run_command(server, 'printf "%s\\n" "$SSH_CONNECTION"', timeout=10, sudo=False)
-    words = (out or "").split()
-    addr = ip_address_or_none(words[0]) if rc == 0 and words else None
-    if addr is not None and getattr(addr, "ipv4_mapped", None) is not None:
-        addr = addr.ipv4_mapped
-    return addr
+    conn = _fwb_ssh_conn(server)
+    return conn["client"] if conn else None
+
+
+def _fwb_ssh_conn(server):
+    """The panel's SSH session to remote `server` as the host's firewall meets it, or None unread.
+
+    -> {"client": the address it comes from, "server": the address it reached, "port": the port sshd
+    accepted it on, "iface": the interface holding that address (None: not found), "addrs": the host's
+    addresses (ufweval.parse_ip_addr, None unread)}. All from the host itself, in one command: the
+    session's $SSH_CONNECTION, which sshd sets for every session ("<client> <client port> <server>
+    <server port>", the server end AFTER any NAT, so a router's 2222 -> 22 forward reads 22), and
+    `ip -o addr` in the C locale. An IPv4-mapped address is the IPv4 one it is. A host that is down
+    raises ConnectionError (paramiko), as every other call to it does.
+    """
+    from panel.ops.ssh_manager import ufweval
+    out, _err, rc = _core.run_command(
+        server, 'printf "conn %s\\n" "$SSH_CONNECTION"; export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; '
+        "ip -o addr show 2>/dev/null", timeout=10, sudo=False)
+    if rc != 0:
+        return None
+    lines = (out or "").splitlines()
+    words = next((ln.split()[1:] for ln in lines if ln.startswith("conn ")), [])
+    if len(words) != 4:
+        return None
+    client, server_addr = ip_address_or_none(words[0]), ip_address_or_none(words[2])
+    try:
+        port = int(words[3])
+    except ValueError:
+        return None
+    if client is None or server_addr is None or not 0 < port < 65536:
+        return None
+    client, server_addr = (getattr(a, "ipv4_mapped", None) or a for a in (client, server_addr))
+    addrs = ufweval.parse_ip_addr("\n".join(ln for ln in lines if not ln.startswith("conn ")))
+    return {"client": client, "server": server_addr, "port": port,
+            "iface": ufweval.iface_of(addrs, server_addr), "addrs": addrs}
 
 
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):

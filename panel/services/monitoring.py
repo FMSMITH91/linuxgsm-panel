@@ -38,7 +38,7 @@ from panel.ops.ssh_manager import (
     _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
     is_local_server, lgsm_get_values, metrics_for_game,
     remote_fail2ban_attempt_counts,
-    remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
+    fwa_block_target, remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     run_privileged,
     server_live_metrics, tailnet_exempt_ips, ufw_lock,
     console_status as sm_console_status,
@@ -1499,8 +1499,19 @@ def _r25a_release_own(ip, read_blocked, undeny):
 
 
 def _autoblock_offenders(remote, counts, threshold):
-    """The IPs at/above the threshold, less the host's tailnet-exempt ones and the whitelist."""
-    qualify = {ip for ip, n in counts.items() if ip and (n or 0) >= threshold}
+    """The IPs at/above the threshold, less the host's tailnet-exempt ones and the whitelist.
+
+    Each in the form the deny is written in (fwa_block_target: canonical, an IPv4-mapped address as the
+    IPv4 one), its counts added up across spellings: the guards below read the raw tally text, so a
+    mapped spelling from some jail's log went past a whitelist entry for the IPv4 address it denies,
+    and never equalled the blocked list's key, so it was blocked and released again every cycle.
+    """
+    totals = {}
+    for raw, n in counts.items():
+        ip = fwa_block_target(raw) if raw else None
+        if ip and "/" not in ip:
+            totals[ip] = totals.get(ip, 0) + (n or 0)
+    qualify = {ip for ip, n in totals.items() if n >= threshold}
     qualify -= tailnet_exempt_ips(remote, qualify)   # never auto-block your own tailnet (Tailscale up)
     _nets = _whitelist_networks()
     return {ip for ip in qualify if not _whitelisted(ip, _nets)}   # never auto-block a whitelisted IP

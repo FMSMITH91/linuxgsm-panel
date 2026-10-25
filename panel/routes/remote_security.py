@@ -164,7 +164,17 @@ def _fwa_range_refusal(net, target):
 
 
 def _fwa_source_refusal(remote, net, target):
-    """_fwa_block_refusal's half for the addresses the panel's connection to the host may come from."""
+    """_fwa_block_refusal's half for the addresses the panel's connection to the host may come from.
+
+    The session's source and the panel host's own addresses, named; then the panel's own connection
+    read as ufw reads it with the deny on top (ufweval, fwc_block_ip_refusal), which holds what those
+    cannot see.
+    """
+    return _fwb_named_source_refusal(remote, net, target) or _sm.fwc_block_ip_refusal(remote, target)
+
+
+def _fwb_named_source_refusal(remote, net, target):
+    """_fwa_source_refusal's named checks: the session's source, then the panel host's own addresses."""
     src = _sm.fwa_panel_source(remote)
     if src is None:
         return i18n.Sentence("Couldn't read the address the panel connects to this host from, so {ip} was "
@@ -193,26 +203,13 @@ def _fwb_own_addr_refusal(net, target):
 def _fwb_panel_host_addrs():
     """The panel host's own global interface addresses (ip_address objects), or None when unread.
 
-    In the C locale (parsed by its words; _core._R19A_C_LOCALE's prefix, written out as the literal the
-    shell gate asks for), global scope only: loopback and link-local never carry the panel's
-    connection to another host.
+    ufweval.local_addrs's reading (`ip -o addr` in the C locale), global scope only: loopback and
+    link-local never carry the panel's connection to another host.
     """
-    try:
-        out, _err, rc = so._run("export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; ip -o addr show scope global",
-                                timeout=8)
-    except Exception:
-        current_app.logger.debug("the panel host's addresses could not be read", exc_info=True)
+    rows = _sm.ufweval.local_addrs()
+    if rows is None:
         return None
-    if rc != 0:
-        return None
-    have = set()
-    for line in (out or "").splitlines():
-        parts = line.split()
-        for i, word in enumerate(parts[:-1]):
-            if word in ("inet", "inet6"):
-                have.add(ip_address_or_none(parts[i + 1].partition("/")[0]))
-    have.discard(None)
-    return have
+    return {addr for _iface, addr, scope in rows if scope == "global"}
 
 
 def _fwb_single_refusal(remote, target):

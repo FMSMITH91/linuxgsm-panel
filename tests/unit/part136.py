@@ -60,7 +60,7 @@ class _Host136(_Host135):
 def _src136(src, fn):
     """`fn` with the panel's SSH source read as `src` (None: unread)."""
     def run(*a, **k):
-        _p9_patch(_hosts136, "_fwb_ssh_source", lambda s: None if src is None else _ip136.ip_address(src))
+        _p9_patch(_hosts136, "_fwb_ssh_conn", lambda s: _p135._conn135(src, s))
         return fn(*a, **k)
     return run
 
@@ -190,7 +190,7 @@ _h4_autoblk = _deny136(["Anywhere  DENY IN  198.51.100.77", _SSH22])   # NOSONAR
 check("H4: an SSH rule kept to a LAN is no way in for a panel connecting from outside it (refused, the source "
       "named), nor a From with a source port, nor anything when the source cannot be read; a deny of the "
       "panel's own source above the allow refuses too",
-      _h4_out[0] is False and _h4_out[2] == [] and "(198.51.100.77)" in _h4_out[1]
+      _h4_out[0] is False and _h4_out[2] == [] and "from 198.51.100.77 to" in _h4_out[1]
       and _h4_srcport[0] is False and _h4_unread[0] is False and "Couldn't read the address" in _h4_unread[1]
       and _h4_autoblk[0] is False,
       repr((_h4_out[:2], _h4_srcport[:2], _h4_unread[:2], _h4_autoblk[:2])))
@@ -202,7 +202,7 @@ _h4p_in = _deny136(_PANEL_ONE, server=_LOCAL135, viewer="192.0.2.10")   # NOSONA
 _h4p_lo = _deny136([_SSH22, "5000/tcp  ALLOW IN  Anywhere"], server=_LOCAL135, viewer="127.0.0.1")   # NOSONAR(S1313)
 check("H4 (panel host): a web-port rule from one address is no way in for a viewer elsewhere (refused), is for "
       "that address (set); a request from the panel's own machine (who is behind it unknown) refuses",
-      _h4p_out[0] is False and "your address (203.0.113.20)" in _h4p_out[1] and _h4p_in[0] is True
+      _h4p_out[0] is False and "from 203.0.113.20 to" in _h4p_out[1] and _h4p_in[0] is True
       and _h4p_lo[0] is False and "Couldn't tell which address" in _h4p_lo[1],
       repr((_h4p_out[:2], _h4p_in[:2], _h4p_lo[:2])))
 
@@ -210,13 +210,14 @@ check("H4 (panel host): a web-port rule from one address is no way in for a view
 # M1: a reverse proxy's port
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _PROXY_CFG = (_cfg136, "load_config", lambda *x, **y: {"port": 5000, "trust_proxy": True})
+# The viewer's connection to the proxy is open while this request is answered: to the host's 443.
 _via = [(_fw136, "_fwb_panel_viewer", lambda: (_ip136.ip_address("203.0.113.20"), True)),   # NOSONAR(S1313)
-        (_fw136, "_fwb_request_port", lambda: 443)]
+        (_p135._ue135, "inbound_from", lambda peer: [(_ip136.ip_address(_p135._HOST_ADDR135), 443)])]
 _m1_443 = _deny136([_SSH22, "443/tcp  ALLOW IN  Anywhere"], server=_LOCAL135, extra=_via)
 _m1_5000 = _deny136([_SSH22, "5000/tcp  ALLOW IN  Anywhere"], server=_LOCAL135, extra=_via)
 check("M1: a viewer who came through a reverse proxy on this machine keeps the panel with 443 open and 5000 shut "
       "(set), and loses it with only 5000 open (refused, naming 443)",
-      _m1_443[0] is True and _m1_5000[0] is False and "web port 443/tcp" in _m1_5000[1], repr((_m1_443, _m1_5000)))
+      _m1_443[0] is True and _m1_5000[0] is False and "port 443/tcp" in _m1_5000[1], repr((_m1_443, _m1_5000)))
 
 
 def _blk136(spec, proto="tcp", server=_LOCAL135, extra=(), host=None):
@@ -307,7 +308,8 @@ _OWN136 = {"v": {_ip136.ip_address("203.0.113.9")}}   # NOSONAR(S1313)
 
 def _ipb_cmd(server, cmd, **k):
     if "SSH_CONNECTION" in cmd:
-        return (_OUT136 + " 51515 192.0.2.10 22\n", "", 0)   # NOSONAR(S1313)
+        return ("conn " + _OUT136 + " 51515 192.0.2.10 22\n1: lo    inet 127.0.0.1/8 scope host lo\n"   # NOSONAR(S1313)
+                "2: eth0    inet 192.0.2.10/24 scope global eth0\n", "", 0)   # NOSONAR(S1313)
     return ("", "", 1)
 
 
@@ -321,6 +323,7 @@ try:
     _p9_patch(_rs136, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_rs136, "_fwb_panel_host_addrs", lambda: _OWN136["v"])
     _p9_patch(_core136, "run_command", _ipb_cmd)
+    _p9_patch(_core136, "run_privileged", _Host135(rules=[_SSH22]).run)   # the rules ufweval reads
     _A136 = _p9_client(P9_ADMIN)
     _u136 = "/api/remote/%d/security/block" % P9_HOST
     for _k136, _v136 in (("wl32", "198.51.100.5/32"), ("wlmapped", "::ffff:198.51.100.5"),   # NOSONAR(S1313)
