@@ -28,12 +28,14 @@ from unit.part01 import check
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_patch,
                          _p9_restore_all)
 from unit import part135 as _p135
-from unit.part135 import (_Host135, _LOCAL135, _REMOTE135, _SSH22, _on135, _stored_text135)
 from panel.core import config as _cfg136, i18n as _i18n136
 from panel.ops.ssh_manager import _core as _core136, firewall as _fw136, hosts as _hosts136
 from panel.routes import remote_security as _rs136, remote_vps as _rv136
 from panel.services import monitoring as _mon136
 
+# part135's stand-in host and its runner (its _VIEWER135 is set through the module, so one import form).
+_Host135, _LOCAL135, _REMOTE135, _SSH22 = _p135._Host135, _p135._LOCAL135, _p135._REMOTE135, _p135._SSH22
+_on135, _stored_text135 = _p135._on135, _p135._stored_text135
 _TRIP136_START = len(_P9_TRIPPED)
 _REAL_TSPORT136 = _fw136._fwb_tailscaled_port
 _OUT136 = "198.51.100.77"     # NOSONAR(S1313) - documentation addresses throughout, never dialled
