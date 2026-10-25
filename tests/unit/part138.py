@@ -759,7 +759,7 @@ else:
     check("reboot dialog: a server with Only stop when empty on says the reboot sets it aside and still "
           "stops it cleanly, after its warning line",
           "srv1 — LinuxGSM warns its players for 5 min first, instead of the panel’s 60 s; the reboot waits "
-          "for it Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly."
+          "for it. Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly."
           in " ".join(x["text"] for x in (_on138.get("refuse") or [])), repr(_on138))
 check("reboot dialog: the warning lines are drawn in the players-online view only (Reboot when empty "
       "has no players to warn)", _nags138.count("_rbWarnNotes(ctx);") == 1

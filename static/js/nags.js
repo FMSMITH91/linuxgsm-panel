@@ -164,7 +164,7 @@ function _rbWarnNotes(ctx){
     var li = _rbRow(sv.name, _rbWarnWord(sv));
     li.lastChild.setAttribute('data-no-i18n', '');
     if (sv.stop_only_if_empty === true) {
-      li.appendChild(document.createTextNode(' '));
+      li.appendChild(document.createTextNode('. '));
       li.appendChild(_rbEl('span', null, 'Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.'));
     }
     ul.appendChild(li);
