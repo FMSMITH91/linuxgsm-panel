@@ -768,6 +768,10 @@ class GameServer(db.Model):
     # back, and how far that has got (JSON, see panel/services/host_reboot.py). NULL otherwise.
     # In the database, not in memory, because the panel host's own reboot takes the panel with it.
     reboot_restore = db.Column(db.Text, nullable=True)
+    # The one-time close of TeamSpeak 3's ServerQuery rules (game_ports.lgc_heal_ts3_serverquery):
+    # NULL not done yet, "failed" a try that could not finish was audited (later tries are logged
+    # only), "done" finished. Panels before the fix opened ServerQuery's 10011/tcp to the internet.
+    lgc_ts3_query = db.Column(db.String(8), nullable=True)
     commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
     created_at = db.Column(db.DateTime, default=utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
@@ -1530,6 +1534,8 @@ _LIGHT_MIGRATIONS = {
         "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
     # NULL on upgrade: no reboot the panel made before this column existed has anything to restore.
     ("game_server", "reboot_restore"): "ALTER TABLE game_server ADD COLUMN reboot_restore TEXT",
+    # NULL on upgrade: every existing TeamSpeak 3 server gets the one-time ServerQuery close.
+    ("game_server", "lgc_ts3_query"): "ALTER TABLE game_server ADD COLUMN lgc_ts3_query VARCHAR(8)",
     # NULL on upgrade, then backfilled once by _backfill_audit_object_ids (see there).
     ("audit_log", "game_server_id"): "ALTER TABLE audit_log ADD COLUMN game_server_id INTEGER",
     ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",

@@ -320,6 +320,15 @@ def crontab_lock(server, user):
     return _host_lock("crontab", server, user)
 
 
+def lgc_config_lock(server, user, selfname):
+    """The lock every read-modify-write of a LinuxGSM instance cfg on `server` is made under.
+
+    files.lgsm_write_config takes it; a caller that decides from a read before it writes (the
+    Project Zomboid admin password) holds it across both, so a settings save cannot land between.
+    """
+    return _host_lock("lgsmcfg", server, user, selfname)
+
+
 # The ufw verbs that CHANGE the rule list (every ufw verb but the two reads). Each is run under the
 # host's ufw_lock by run_privileged, so a caller holding that lock across a read and a delete by
 # number knows the numbers it read are still the numbers.
@@ -3474,12 +3483,13 @@ def set_autostart(server, user, enabled, selfname=None):
     # _rewrite_crontab checks the account, and only the caller knows what the line names.
     if not game_idents_ok(user, selfname):
         return False, GAME_ACCOUNT_REFUSED[1]
-    base = f"/home/{user}/{selfname}"
-    monitor_line = f"*/5 * * * * {cron._record_managed_cmd(user, f'{base} monitor')}"
+    # `cd /home/<u> && ./<s> monitor` — cron.lgc_cron_core says why that form.
+    monitor_line = (f"*/5 * * * * "
+                    f"{cron._record_managed_cmd(user, cron.lgc_cron_core(user, selfname, 'monitor'))}")
     add = [monitor_line] if enabled else []
-    # Strip any existing monitor line AND any legacy '@reboot ... start' autostart line in one
-    # pass, then re-add monitor when enabling.
-    remove_re = f"({base} monitor |@reboot .*{selfname} start)"
+    # Strip any existing monitor line (either form) AND any legacy '@reboot ... start' autostart
+    # line in one pass, then re-add monitor when enabling.
+    remove_re = f"({cron.lgc_cron_cmd_ere(user, selfname, 'monitor|m')}|@reboot .*{selfname} start)"
     return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}", add)
 
 
@@ -3497,13 +3507,16 @@ def install_game_cron(server, user, selfname=None, supported=None):
     selfname = selfname or user
     if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
         return False, GAME_ACCOUNT_REFUSED[1]
-    supported = supported or set()
-    base = f"/home/{user}/{selfname}"
+    supported = set(supported or ())
+    # A game LinuxGSM retired: its update-lgsm can only fail (lgsm_data.RETIRED_GAMES), every week.
+    if cron._lgc_retired(selfname):
+        supported.discard("update-lgsm")
 
     def sc(cmd):
         # Record each maintenance run's exit code + output (keeps the command visible so the
-        # managed-line grep still matches), so the panel can show update/monitor success.
-        return cron._record_managed_cmd(user, f"{base} {cmd}")
+        # managed-line grep still matches), so the panel can show update/monitor success. Run as
+        # `cd /home/<u> && ./<s> <cmd>`, the form every LinuxGSM monitor sees (cron.lgc_cron_core).
+        return cron._record_managed_cmd(user, cron.lgc_cron_core(user, selfname, cmd))
 
     lines = []
     if "monitor" in supported:
@@ -3517,7 +3530,8 @@ def install_game_cron(server, user, selfname=None, supported=None):
     if not lines:
         return True, "no maintenance commands to schedule"
 
-    remove_re = f"({base} (monitor|mods-update|update|update-lgsm) |@reboot .*{selfname} start)"
+    remove_re = (f"({cron.lgc_cron_cmd_ere(user, selfname, 'monitor|mods-update|update|update-lgsm')}"
+                 f"|@reboot .*{selfname} start)")
     return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}", lines)
 
 

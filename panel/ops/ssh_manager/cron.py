@@ -47,6 +47,58 @@ def _cron_line_managed(line, user, selfname):
     return any(p in line for p in _cron_managed_patterns(user, selfname))
 
 
+# The LinuxGSM commands the panel's own cron lines run, and the form they run them in.
+#
+# `cd /home/<u> && ./<s> <cmd>`, not `/home/<u>/<s> <cmd>`. LinuxGSM's monitor backs off while an
+# update or a backup is running by looking for that command's process, and up to v26.3.0 it asked
+# `pgrep -fcx "/bin/bash ./<s> update"` — which matches ONLY a script started as `./<s>`
+# (lgsm/modules/command_monitor.sh). The panel's `15 5 * * * /home/<u>/<s> update` ran as
+# `/bin/bash /home/<u>/<s> update`, so the panel's own */5 monitor did not see it: an update that
+# had stopped the server for SteamCMD was "restarted" by monitor in the middle of the download.
+# v26.4.0 (#5015) matches both forms; an account stays on its release until update-lgsm runs, and
+# `./<s>` is the form every release recognises.
+LGC_CRON_CMDS = ("monitor", "mods-update", "update", "update-lgsm")
+
+
+def lgc_cron_core(user, selfname, cmd):
+    """The command a panel cron line runs for LinuxGSM's `cmd` (see LGC_CRON_CMDS)."""
+    return f"cd /home/{user} && ./{selfname} {cmd}"
+
+
+def _lgc_legacy_core(user, selfname, cmd):
+    """The full-path form panel cron lines used before lgc_cron_core; still recognised."""
+    return f"/home/{user}/{selfname} {cmd}"
+
+
+def lgc_cron_cmd_ere(user, selfname, cmds):
+    """The `grep -E` text for `<any form> (<cmds>)` ending a word in a crontab line.
+
+    The forms: the old full path, lgc_cron_core's `cd /home/<u> && ./<s>`, and the ways an operator
+    writes that by hand — `cd /home/<u>/ && ./<s>`, `cd /home/<u>; ./<s>` — each with the command
+    followed by a blank or ending the line (`... ./<s> monitor` with nothing after it). Every
+    Autostart check and cron writer reads lines through this (or _lgc_cmd_re, its Python twin), so
+    a line one of them counts is one the others remove.
+
+    The names are game_idents_ok'd by every caller; "." is the one ERE metacharacter they can
+    carry, and it is made literal so it cannot match a neighbouring name.
+    """
+    u, s = user.replace(".", "[.]"), selfname.replace(".", "[.]")
+    return f"(/home/{u}/{s}|cd /home/{u}/? *(&&|;) *[.]/{s}) ({cmds})( |$)"
+
+
+def _lgc_cmd_re(user, selfname, cmds):
+    """lgc_cron_cmd_ere as a Python pattern for a WHOLE command (`cmds`: names, e.g. ("monitor", "m"))."""
+    u, s = re.escape(user), re.escape(selfname)
+    return re.compile(r"(?:/home/%s/%s|cd /home/%s/? *(?:&&|;) *\./%s) (?:%s)\Z"
+                      % (u, s, u, s, "|".join(map(re.escape, cmds))))
+
+
+def _lgc_retired(selfname):
+    """Whether `selfname` is the script of a game LinuxGSM retired (lgsm_data.RETIRED_GAMES)."""
+    from panel.services import lgsm_data
+    return lgsm_data.retired_game_by_script(selfname) is not None
+
+
 def _cron_role(command, user, selfname):
     """A non-blocking LABEL for a panel-installed line so the admin knows what it is.
 
@@ -56,7 +108,8 @@ def _cron_role(command, user, selfname):
     """
     selfname = selfname or user
     cmd = (command or "").strip()
-    if cmd == f"/home/{user}/{selfname} monitor":
+    # Any form the Autostart switch removes (lgc_cron_cmd_ere), the `m` alias included.
+    if _lgc_cmd_re(user, selfname, ("monitor", "m")).match(cmd):
         return "autostart"
     if ".restart-pending" in cmd:
         return "daily-restart"
@@ -173,6 +226,9 @@ def _unescape_cron_percent(cmd):
 # a command is safe to keep VISIBLE via the inline recorder, so the Autostart detection (which greps
 # the raw crontab for `<base> monitor`) still finds it after the admin reschedules it here.
 _SIMPLE_CMD_RE = re.compile(r"^[\w./ @:+=,-]+\Z")
+# ...and the one compound form the panel writes itself (lgc_cron_core), which must stay visible for
+# the same reason: set_autostart and install_game_cron find their lines by grepping the raw crontab.
+_LGC_CD_CMD_RE = re.compile(r"^cd /home/[\w.-]+ && \./[\w.-]+ [\w-]+\Z")
 
 
 def _wrap_cron_command(server, user, command):
@@ -193,7 +249,7 @@ def _wrap_cron_command(server, user, command):
     # generic editor sent that display form back through here, where the .restart-pending branch
     # returned it bare: the panel's own line silently stopped reporting last-run and success after
     # any edit. Checked second, the branch now only catches a command the recorder cannot take.
-    if _SIMPLE_CMD_RE.match(cmd):
+    if _SIMPLE_CMD_RE.match(cmd) or _LGC_CD_CMD_RE.match(cmd):
         return _record_managed_cmd(user, cmd)   # plain command (incl. `<base> monitor`): visible + tracked
     if ".restart-pending" in cmd:
         # Kept VERBATIM because the daily-restart detection greps the raw crontab for this, and
@@ -338,9 +394,9 @@ _LG264_CRON_POSTPONED_ERE = ("INFO.*([0-9]+ players are on the server: (stop pre
 
 
 def _lg264_runs_monitor(cmd):
-    """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`)."""
+    """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`, or `m`)."""
     words = (cmd or "").split()
-    return any(w == "monitor" and i and "/" in words[i - 1] for i, w in enumerate(words))
+    return any(w in ("monitor", "m") and i and "/" in words[i - 1] for i, w in enumerate(words))
 
 
 def _read_cron_status(server, user):
@@ -552,8 +608,9 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
                                   query_type=None):
     """IN-PLACE upgrade of the panel's own cron lines, without changing schedules or on/off state.
 
-    Each existing line is transformed where it stands, so nothing is added or removed and no
-    setting can flip. Three upgrades:
+    Each existing line is transformed where it stands, so nothing is added and no setting can
+    flip; the one line ever removed is a weekly `update-lgsm` for a game LinuxGSM retired, which can
+    only fail (_CronUpgrade.drop). The upgrades:
 
       * the simple managed commands are re-wrapped through the inline recorder, so their runs
         start reporting success/error;
@@ -567,6 +624,11 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
         which a Source server does not answer — so those restarted the server every day with
         players on it. The line keeps its own schedule; the daily time lives on the flag line,
         which this does not move;
+      * a panel line in the old full-path form (`/home/<u>/<s> update`) is rewritten to
+        lgc_cron_core's `cd /home/<u> && ./<s> update`, which every LinuxGSM monitor recognises,
+        and its last run (~/.lgsm-cron/<id>.log and .status) is moved to the new line's job id,
+        so its last run, success and LinuxGSM's "postponed" do not read as never-run
+        (_lgc_carry_cron_state);
       * a restart check this does NOT recognise (an operator has edited it) that still calls a
         bare `gamedig` only has that one call given the PATH (_core.CRON_TOOL_PATH): cron's own
         PATH is /usr/bin:/bin, and a distro npm puts gamedig in /usr/local/bin. The rest of such a
@@ -608,14 +670,65 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
             return False
         # Replace the whole crontab: drop everything (grep -vE '^' matches every line), re-add ours.
         ok, _ = _core._rewrite_crontab(server, user, "-vE '^'", new_lines)
+        if ok:
+            _lgc_carry_cron_state(server, user, _lgc_moved_job_ids(out, upgrade))
     return ok
 
 
+def _lgc_moved_job_ids(out, upgrade):
+    """{old job id: new job id or None} for the recorded lines an upgrade pass migrates (None: drops).
+
+    A migrated line's command changes, so its job id (the command's hash) does; its run history
+    under the old id would read as never-run — up to a week for update-lgsm — and stay as orphans.
+    """
+    moved = {}
+    for raw in (out or "").splitlines():
+        sched, cmd = _cron_entry(raw)
+        if sched is None:
+            continue
+        disp, jid = _unwrap_cron_command(cmd)
+        managed = _lgc_managed_core(cmd, disp, jid, _strip_devnull(cmd))
+        if jid is None or managed is None:
+            continue
+        if managed in upgrade.drop:
+            moved[jid] = None
+        elif managed in upgrade.migrate:
+            moved[jid] = _cron_job_id(upgrade.migrate[managed])
+    return moved
+
+
+def _lgc_carry_cron_state(server, user, moved):
+    """Move each migrated job's ~/.lgsm-cron/<id>.log and .status to its new id; remove a dropped one's.
+
+    As the game account, in its own ~/.lgsm-cron (like the recorder). A file the new id already has
+    is kept: that run is newer. Best-effort: the crontab is already rewritten, and a move that did
+    not happen costs one line of history, not a job.
+    """
+    if not moved:
+        return
+    d = _core._quote("/home/%s/.lgsm-cron" % user)
+    steps = []
+    for old, new in sorted(moved.items(), key=lambda kv: kv[0]):
+        for ext in ("log", "status"):
+            src = "%s/%s.%s" % (d, old, ext)
+            if new is None:
+                steps.append("rm -f -- %s" % src)
+            else:
+                dst = "%s/%s.%s" % (d, new, ext)
+                steps.append("{ [ -f %s ] && [ ! -e %s ] && mv -- %s %s; }" % (src, dst, src, dst))
+    try:
+        _core.shell_as_game_user(server, user, "; ".join(steps) + "; true", timeout=15)
+    except Exception:  # noqa: BLE001 - best-effort, see above
+        _core._log.debug("cron upgrade: the run history could not be moved for %s", user, exc_info=True)
+
+
 # One upgrade pass's fixed inputs: the account, its simple managed commands, its restart flag, the
-# bare and PATH-carrying gamedig calls, the recognised restart-check shapes, and `restart_now`
-# (a recognised check's match -> what set_daily_restart would write for it today).
+# bare and PATH-carrying gamedig calls, the recognised restart-check shapes, `restart_now`
+# (a recognised check's match -> what set_daily_restart would write for it today), `migrate`
+# ({full-path managed command: its lgc_cron_core form}) and `drop` (managed commands of either form
+# whose line is removed: update-lgsm for a game LinuxGSM retired, which can only fail).
 _CronUpgrade = collections.namedtuple(
-    "_CronUpgrade", "user simple_cores flag bare pathed checks restart_now")
+    "_CronUpgrade", "user simple_cores flag bare pathed checks restart_now migrate drop")
 
 
 def _cron_upgrade_pass(server, user, selfname, target):
@@ -624,6 +737,10 @@ def _cron_upgrade_pass(server, user, selfname, target):
     flag = f"/home/{user}/.restart-pending"
     simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
     simple_cores.add(f"touch {flag}")
+    migrate = {_lgc_legacy_core(user, selfname, c): lgc_cron_core(user, selfname, c) for c in LGC_CRON_CMDS}
+    drop = set()
+    if _lgc_retired(selfname):
+        drop = {f(user, selfname, "update-lgsm") for f in (_lgc_legacy_core, lgc_cron_core)}
     _host = []
 
     def host_of():                 # one address lookup per pass, and only if a line needs one
@@ -635,7 +752,8 @@ def _cron_upgrade_pass(server, user, selfname, target):
         return _restart_check_now(server, user, selfname, found, target, host_of)
     return _CronUpgrade(user=user, simple_cores=simple_cores, flag=flag,
                         bare=_core.GAMEDIG_CRON_BARE, pathed=_core.gamedig_cron_call(),
-                        checks=_restart_check_res(user, selfname), restart_now=restart_now)
+                        checks=_restart_check_res(user, selfname), restart_now=restart_now,
+                        migrate=migrate, drop=drop)
 
 
 def _upgrade_cron_lines(out, upgrade):
@@ -643,7 +761,8 @@ def _upgrade_cron_lines(out, upgrade):
     new_lines, changed = [], False
     for raw in (out or "").splitlines():
         up = _upgraded_cron_line(raw, upgrade)
-        new_lines.append(raw if up is None else up)
+        if up != "":                    # "" is a line the pass drops (_CronUpgrade.drop)
+            new_lines.append(raw if up is None else up)
         changed = changed or up is not None
     return new_lines, changed
 
@@ -655,13 +774,18 @@ def _cron_entry(raw):
 
 
 def _upgraded_cron_line(raw, upgrade):
-    """The upgraded form of crontab line `raw`, or None when it stays exactly as it is."""
+    """The upgraded form of crontab line `raw`, None when it stays exactly as it is, "" to drop it."""
     sched, cmd = _cron_entry(raw)
     if sched is None:
         return None
     _disp, jid = _unwrap_cron_command(cmd)
     core = _strip_devnull(cmd)
     found = _first_match(upgrade.checks, cmd)
+    managed = _lgc_managed_core(cmd, _disp, jid, core)
+    if managed in upgrade.drop:
+        return ""
+    if managed in upgrade.migrate:      # the panel's full-path line → the form monitor recognises
+        return f"{sched} {_record_managed_cmd(upgrade.user, upgrade.migrate[managed])}"
     if jid is None and core in upgrade.simple_cores:   # unwrapped simple managed line → wrap it
         return f"{sched} {_record_managed_cmd(upgrade.user, core)}"
     if found:                                   # the panel's own restart check, in any shape
@@ -670,6 +794,26 @@ def _upgraded_cron_line(raw, upgrade):
     if upgrade.flag in cmd and upgrade.bare in cmd:   # an edited restart check, calling a bare gamedig
         return raw.replace(upgrade.bare, upgrade.pathed, 1)
     return None
+
+
+def _lgc_managed_core(cmd, disp, jid, core):
+    """The managed command a line runs when it has the shape the PANEL writes, else None.
+
+    Two shapes: the inline recorder whose job id is the hash of the very command it carries (a
+    hand edit of the crontab that changes the command and not the id does not match), and the
+    unwrapped `<command>` / `<command> > /dev/null 2>&1` written before the recorder existed.
+
+    Shape is all there is to go on, and an operator's own line can have it: the Scheduled Tasks
+    editor sends every SIMPLE command through this same recorder (_wrap_cron_command), so a
+    `/home/<u>/<s> update` they added there is indistinguishable from the panel's and is migrated
+    with it — to the same command run from the same directory, which changes nothing it does but
+    the form LinuxGSM's monitor sees. For a game LinuxGSM retired, their `update-lgsm` line of
+    either shape is dropped like the panel's: on such a game it can only fail (lgsm_data.RETIRED_GAMES),
+    so nothing that ran is lost. A line in the base64 runner (a compound command) is never taken.
+    """
+    if jid is not None:
+        return disp.strip() if (_CRON_REC_RE.match(cmd.strip()) and jid == _cron_job_id(disp.strip())) else None
+    return core
 
 
 def _strip_devnull(cmd):

@@ -130,6 +130,14 @@ function _lg264PlayersHtml(p){
 function _lg264Tf2Html(d){
   return d.tf2_norestart ? '<div class="alert alert-warning small py-1 px-2 mb-2" id="cfg-tf2-norestart">Add -norestart to the end of startparameters: without it, TF2’s 64-bit server (LinuxGSM v26.4.0) can’t stop gracefully and is killed after 60 s.</div>' : '';
 }
+// Project Zomboid on LinuxGSM's CHANGE_ME admin password: the warning and its one-click fix. And
+// CS:GO's App ID note, only where the read says it applies.
+function _lgcPzWarnShow(d){
+  var pzw=document.getElementById('lgc-pz-admin');
+  if(pzw) pzw.style.display = d.lgc_pz_default_admin ? '' : 'none';
+  var csw=document.getElementById('lgc-csgo-appid');
+  if(csw) csw.style.display = d.lgc_csgo_appid_note ? '' : 'none';
+}
 function loadConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(d=>{
     document.getElementById('cfg-loading').style.display='none';
@@ -149,11 +157,32 @@ function loadConfig(){
     });
     if(!(d.groups||[]).length && !(d.players && d.players.supported)) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
+    _lgcPzWarnShow(d);
     var ta=document.getElementById('cfg-raw');
     ta.value = d.raw||'';
     _r29j_rawShown = ta.value;
     _r26c_rawRead='ok';
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
+}
+// The warning's fix: the server writes a random adminpassword into the instance cfg; the re-read then
+// shows it in the adminpassword field (and hides the warning). The password is never in the reply.
+function lgcPzAdminFix(){
+  var btn=document.getElementById('lgc-pz-admin-btn'), msg=document.getElementById('lgc-pz-admin-msg');
+  if(btn) btn.disabled=true;
+  if(msg){ msg.textContent=''; msg.className='d-block mt-1'; }
+  fetch(MOUNT+'/api/server/'+serverId+'/pz-admin-password',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){ return r.json(); }).then(function(d){
+      if(btn) btn.disabled=false;
+      if(d.success){
+        if(window.toast) window.toast(d.message, 'success');
+        loadConfig();
+        return;
+      }
+      if(msg){ msg.textContent=d.message||d.error||'Failed'; msg.className='d-block mt-1 text-danger'; }
+    }).catch(function(){
+      if(btn) btn.disabled=false;
+      if(msg){ msg.textContent='Request failed'; msg.className='d-block mt-1 text-danger'; }
+    });
 }
 // Accordion toggle (delegated).
 var _el_cfg_groups = document.getElementById('cfg-groups');

@@ -558,7 +558,7 @@ _DGP_DETAILS = ("DESCRIPTION  PORT   PROTOCOL  LISTEN\n"
 _orig_rag_dgp = _sm_core.run_as_game_user
 try:
     _sm_core.run_as_game_user = lambda *a, **k: (_DGP_DETAILS, "", 0)
-    _dgp = _sm_game.detect_game_ports(object(), "u", "csgoserver")
+    _dgp = _sm_game.detect_game_ports(object(), "u", "csgoserver", game_type="csgo")
     check("detect_game_ports: the game port is the Game row, not the first row of the table",
           _dgp["game_port"] == 27017 and _dgp["open_ports"] == [27016, 27017], str(_dgp))
     check("detect_game_ports: ...and the table ends at its first non-row line",
@@ -1922,7 +1922,7 @@ try:
     check("maintenance probe: pgrep is scoped to that server's OWN unix user",
           "pgrep -u gmodserver " in _cmd or "pgrep -u 'gmodserver' " in _cmd, _cmd)
     check("maintenance probe: it matches the lgsm script name followed by a maintenance command",
-          "gmodserver (update|force-update|" in _cmd, _cmd)
+          "gmodserver (update|u|force-update|fu|" in _cmd, _cmd)
     check("maintenance probe: monitor is NOT a maintenance command (it would mute every alert)",
           "|monitor" not in _cmd and "(monitor" not in _cmd, _cmd)
     check("maintenance probe: update-lgsm is NOT one either — it never stops the server",

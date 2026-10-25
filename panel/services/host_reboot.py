@@ -99,10 +99,10 @@ DEFAULT_WAIT_HOURS = 24
 # The LinuxGSM commands whose process means "LinuxGSM is doing something to this server now", and
 # the ones of those that are maintenance a reboot must not cut through: a `restart` among them, whose
 # start would bring the server back under the reboot (a daily cron restart at the reboot's minute).
-_INFLIGHT_CMDS = ("monitor|start|stop|restart|update|force-update|validate|backup|install|"
-                  "auto-install|debug|details|mods-update|update-lgsm|workshop-update")
-_MAINT_CMDS = ("update|force-update|validate|backup|install|auto-install|mods-update|update-lgsm|"
-               "workshop-update|restart")
+# With LinuxGSM's aliases (lgsm/modules/core_getopt.sh): `./<s> u` is the same update as `./<s> update`.
+_MAINT_CMDS = ("update|u|force-update|fu|update-restart|ur|validate|v|backup|b|install|i|auto-install|"
+               "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules|restart|r")
+_INFLIGHT_CMDS = "monitor|m|start|st|stop|sp|debug|d|details|dt|" + _MAINT_CMDS
 _PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "WARN", "BOOT", "MID", "NOW", "SEC")
 
 # The last finished outcome per host, shown on the Power card for a day: {at, text, ok}.
@@ -429,6 +429,18 @@ def _open_start(remote, user, selfname):
     return "wait", "the host did not answer"
 
 
+def _lgc_already_running(rc, out):
+    """Whether a `start` that exited `rc` with output `out` found the server already running.
+
+    rc 2 is LinuxGSM's generic ERROR (fn_script_log_error), not a code of its own for "already
+    running": that message is one of its errors, "Missing dependencies required to run SteamCMD"
+    another, and from v26.4.0 a prompt with no input a third. So 2 is "running" only with
+    command_start.sh's own words for it (LinuxGSM prints English only); any other 2 is read from
+    the session, like every other exit code.
+    """
+    return rc == 2 and "is already running" in (out or "")
+
+
 def safe_start(remote, ident):
     """Start one server the way LinuxGSM's own monitor will not race: (outcome, detail).
 
@@ -449,7 +461,7 @@ def safe_start(remote, ident):
         out, err, rc = "", "the start could not be run", -1
     if rc == 0:
         return "started", ""
-    if rc == 2:                   # "already running" (command_start.sh): something else started it
+    if _lgc_already_running(rc, out):
         return "running", ""
     if probe_server(remote, ident).get("session") == 1:
         return "started", ""

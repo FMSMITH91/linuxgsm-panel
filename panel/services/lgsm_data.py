@@ -51,6 +51,59 @@ _RELEASE_TAG_RE = re.compile(r"v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 _log = logging.getLogger(__name__)
 
 
+# Games LinuxGSM has removed, whose existing installs still run. They are gone from serverlist.csv, so
+# discovery could not name them any more, and their `update-lgsm` fails for good: it first checks
+# that the game's _default.cfg is still upstream (`curl -IsfL …/config-lgsm/<gameservername>/
+# _default.cfg`, lgsm/modules/command_update_linuxgsm.sh), and that is a 404 now.
+#   ps       Post Scriptum, renamed Squad 44 (`squad44`) in v25.1.0 (#4737);
+#   scpslsm  SCP: Secret Laboratory ServerMod, removed in v26.4.0 (#5038) — Steam app 786920 was
+#            retired; plugins now run on `scpsl` itself (LabAPI / EXILED).
+# The panel keeps the shortname as the game type: the LinuxGSM script is still `<shortname>server`
+# on the host, and that is what every command runs.
+RETIRED_GAMES = {
+    "ps": {"gameservername": "psserver", "gamename": "Post Scriptum", "replaced_by": "squad44",
+           "release": "v25.1.0"},
+    "scpslsm": {"gameservername": "scpslsmserver", "gamename": "SCP: Secret Laboratory ServerMod",
+                "replaced_by": "scpsl", "release": "v26.4.0"},
+}
+
+
+def retired_game_by_script(gameservername):
+    """The RETIRED_GAMES shortname whose LinuxGSM script is `gameservername`, or None."""
+    return next((sn for sn, g in RETIRED_GAMES.items() if g["gameservername"] == gameservername), None)
+
+
+# The games LinuxGSM REFUSES to install above a distro release, as its own check_deps.sh refuses them
+# ("<game> is not supported on <distro> (requires Ubuntu <= 20.04 or Debian <= 11)."), read from
+# lgsm/modules/check_deps.sh at v26.4.0. That refusal is the only cap LinuxGSM has.
+#
+# serverlist.csv's `os` column is NOT one. It follows the base of LinuxGSM's Docker images (#5028):
+# at v26.4.0 138 games say ubuntu-26.04 while cod, cod2, coduo and mohaa stayed on ubuntu-24.04,
+# although #5069 made those four run on Ubuntu 26.04, Debian 13 and RHEL 9. Reading the column as a
+# cap refused them on every 26.04 host. Nor is a missing row in the distro's deps csv a signal:
+# every one of those files lists every game, btl and onset included. bf1942 and bfv were refused
+# above Ubuntu 22.04 / Debian 12 up to v26.3.0, and v26.4.0 dropped that check.
+_LGC_DISTRO_CAPS = {
+    "btl": {"ubuntu": "20.04", "debian": "11"},
+    "onset": {"ubuntu": "20.04", "debian": "11"},
+}
+
+
+def lgc_distro_cap(game_type, distro="ubuntu"):
+    """The newest '<distro>-<version>' LinuxGSM installs `game_type` on, or "" when it has no cap."""
+    ver = _LGC_DISTRO_CAPS.get(game_type or "", {}).get(distro or "")
+    return "%s-%s" % (distro, ver) if ver else ""
+
+
+def lgc_distro_caps(game_type):
+    """Every cap of `game_type`, one '<distro>-<version>' per distro, space-separated ("" for none).
+
+    The install picker compares the one for the chosen host's distro: the Ubuntu cap alone let a
+    Debian 12 host pick btl and onset, which LinuxGSM refuses above Debian 11.
+    """
+    return " ".join("%s-%s" % (d, v) for d, v in sorted(_LGC_DISTRO_CAPS.get(game_type or "", {}).items()))
+
+
 def release_tag(value):
     """`value` when it is a LinuxGSM release tag ('v26.1.0'), else None."""
     if isinstance(value, str) and _RELEASE_TAG_RE.fullmatch(value):

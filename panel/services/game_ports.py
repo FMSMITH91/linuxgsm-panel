@@ -406,3 +406,113 @@ def _someone_elses(port, live):
         return ("something is listening on it, and LinuxGSM's STARTED does not say that is this "
                 "server: a game that failed to bind keeps its tmux session")
     return None
+
+
+# ── TeamSpeak 3's ServerQuery: closed once where an older panel opened it ─────────────────────────
+#
+# Before LinuxGSM-changelog fixes (#462) the panel read TeamSpeak's first "Query" row of `details`
+# as a server-browser query and opened it: 10011/tcp, raw ServerQuery, TeamSpeak's admin console,
+# to the internet, tagged with the server's name. Neither "Open all ports" nor a new install
+# opens it now (game._lgc_player_port), but neither ever closes anything, so every existing
+# TeamSpeak 3 server kept it open. This closes it once per server, on every host, panel host
+# included: only the inbound public ALLOWs tagged with THIS server's name (the rules the panel made
+# for it), never an untagged or another name's rule, never SSH's or the panel's port, and never a
+# port this server's players use or another panel server's block holds.
+#
+# The ports are the ServerQuery rows `details` reports now (raw, SSH, HTTP, HTTPS; LinuxGSM's
+# "Telnet" row is the raw port again) and TeamSpeak's own defaults, which an older ts3server.ini
+# may have been on when the rule was made.
+LGC_TS3_QUERY_DEFAULTS = (10011, 10022, 10080, 10443)
+
+
+def _lgc_ts3_query_ports(info):
+    """The ServerQuery ports to close for one TeamSpeak `details` reading (detect_game_ports)."""
+    rows = {p["port"] for p in info.get("ports") or ()
+            if (p.get("desc") or "").strip().lower().startswith(("query", "telnet"))}
+    keep = set(info.get("open_ports") or ())
+    return sorted(p for p in rows | set(LGC_TS3_QUERY_DEFAULTS) if p and p not in keep)
+
+
+def lgc_close_ts3_serverquery(gs, siblings):
+    """Close one TeamSpeak 3 server's panel-tagged ServerQuery rules. -> (done, closed, why).
+
+    `done` False when it could not finish — `details` or the firewall could not be read, or a rule
+    would not go — and `why` then says which; `closed` names the ports a rule was removed from.
+    `siblings` is {port: name} of the ports other panel servers on the host reserve.
+    """
+    info = _sm.detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name, game_type="ts3")
+    if not (info.get("answered") or info.get("ports")):
+        # Without `details` this server's own voice and file ports are not known, so none of the
+        # ports is closed: the next pass tries again.
+        return False, [], "LinuxGSM's details could not be read"
+    protected = _sm.protected_host_ports(gs.remote)
+    closed, left = [], []
+    for port in _lgc_ts3_query_ports(info):
+        if port in protected or port in siblings:
+            continue
+        deleted, _msg, still = _sm.remote_ufw_close_game_port(gs.remote, port, gs.short_name)
+        if deleted:
+            closed.append(port)
+        left.extend(str(s) for s in still if str(s) not in left)
+    return not left, closed, "; ".join(left)
+
+
+def lgc_ts3_heal_pass(app):
+    """lgc_heal_ts3_serverquery from the daily background pass (app._node_tools_cron_pass). Never raises."""
+    try:
+        with app.app_context():
+            from panel.routes.manage_servers import sibling_port_blocks
+            lgc_heal_ts3_serverquery(sibling_port_blocks)
+    except Exception:  # noqa: BLE001 - background pass; the next daily pass tries again
+        _log.warning("the TeamSpeak 3 ServerQuery close failed; the next daily pass tries again",
+                     exc_info=True)
+
+
+def lgc_heal_ts3_serverquery(sibling_port_blocks):
+    """lgc_close_ts3_serverquery once for every TeamSpeak 3 server not yet done (GameServer.lgc_ts3_query).
+
+    Runs in the daily background pass (app._node_tools_cron_pass), in its app context. One that
+    could not finish is tried again the next day; its first failure is audited, later ones logged.
+    """
+    rows = GameServer.query.filter(GameServer.game_type == "ts3",
+                                   GameServer.lgc_ts3_query.is_(None)
+                                   | (GameServer.lgc_ts3_query != "done")).all()
+    for gs in rows:
+        try:
+            _lgc_heal_one(gs, sibling_port_blocks)
+        except Exception:  # noqa: BLE001 - background pass; one server never stops the rest
+            db.session.rollback()
+            _log.warning("%s: the ServerQuery close could not run", row_label(gs, "name"),
+                         exc_info=True)
+
+
+def _lgc_heal_one(gs, sibling_port_blocks):
+    """lgc_heal_ts3_serverquery for one row: close, record, log and audit."""
+    try:
+        db.session.refresh(gs)
+    except Exception:  # noqa: BLE001 - deleted since the list was read
+        db.session.rollback()
+        return
+    if gs.remote is None or gs.lgc_ts3_query == "done":
+        return
+    siblings = sibling_port_blocks(_host_rows(gs.remote_id), gs)
+    done, closed, why = lgc_close_ts3_serverquery(gs, siblings)
+    detail = ("TeamSpeak 3 ServerQuery (its admin console): " + (
+        "closed the panel's firewall rules on %s" % ", ".join(map(str, closed)) if closed
+        else "no firewall rule of the panel's was open on it"))
+    if done:
+        _log.info("%s: %s", gs.name, detail)
+        if closed:
+            log_action(None, "sync_ports", target=gs.name, server=gs, success=True, detail=detail)
+        gs.lgc_ts3_query = "done"
+        db.session.commit()
+        return
+    _log.warning("%s: TeamSpeak 3 ServerQuery not closed yet (%s); closed so far: %s", gs.name, why,
+                 ", ".join(map(str, closed)) or "none")
+    if gs.lgc_ts3_query != "failed":
+        log_action(None, "sync_ports", target=gs.name, server=gs, success=False,
+                   detail="TeamSpeak 3 ServerQuery (its admin console) may still be open: %s%s — "
+                          "the panel tries again daily" % (why, "; closed %s" % ", ".join(map(str, closed))
+                                                           if closed else ""))
+        gs.lgc_ts3_query = "failed"
+        db.session.commit()

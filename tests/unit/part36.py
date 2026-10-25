@@ -318,7 +318,7 @@ def _run_as36(remote, user, action, **k):
 
 def _stub_install36():
     """Every host call steps 5 to the end make, answered from the script."""
-    _p9_patch(_ms36, "detect_game_ports", lambda r, s, _lg: _h36_next("detect"))
+    _p9_patch(_ms36, "detect_game_ports", lambda r, s, _lg, **_k: _h36_next("detect"))
     _p9_patch(_ms36, "_remote_listening_ports",
               lambda r: _h36_next("listen" if _h36["started"] else "listen_pre"))
     _p9_patch(_ms36, "remote_ufw_allow_game_ports",

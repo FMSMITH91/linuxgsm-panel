@@ -8,7 +8,7 @@ from panel.core.config import (_r15a_cfg_int, load_config)
 from panel.core.panel_state import (_os_update_seen)
 from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
-from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
+from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports, lgc_admin_port_notes,
     host_specs, remote_os_run_updates, remote_os_update_start, remote_os_update_status,
     remote_public_ssh_status, remote_reboot_required, remote_set_public_ssh,
     remote_ufw_allow_game_port, remote_ufw_allow_game_ports, remote_ufw_close_port,
@@ -786,7 +786,7 @@ def _rv_on_panel_host(gs):
 def _rv_sync_ports_run(gs):
     """Detect the server's ports, open what may be opened, audit it, and report what landed."""
     with _r20b_audit_on_raise("sync_ports", target=gs.name, server=gs):
-        info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
+        info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name, game_type=gs.game_type)
         gp, to_open, refused = _ports_to_sync(gs, info)
     # Report what the firewall ACTUALLY took, not what was asked for. The return value
     # used to be discarded on the reasoning that "the firewall page reports a partially
@@ -803,7 +803,9 @@ def _rv_sync_ports_run(gs):
     reply = {"success": not (missed or refused)}
     log_action(current_user, "sync_ports", target=gs.name, success=reply["success"],
                detail=_sync_ports_detail(opened, missed, refused), server=gs)
-    reply.update({"message": _sync_ports_message(opened, missed, refused),
+    # ...and a port that also serves an admin page says so (MTA's HTTP: its web admin).
+    notes = [i18n.tr(n) for n in lgc_admin_port_notes(gs.game_type, info.get("ports"), opened)]
+    reply.update({"message": " ".join([_sync_ports_message(opened, missed, refused)] + notes),
                   "ports": info.get("ports", []), "open_ports": opened,
                   "requested_ports": to_open, "failed_ports": missed,
                   "refused_ports": refused, "game_port": gp})

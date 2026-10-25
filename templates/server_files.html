@@ -186,6 +186,26 @@
     <!-- LinuxGSM settings -->
     <div id="tab-lgsm" class="cfg-tab">
       <p class="small text-secondary mb-2">Every LinuxGSM setting for this game. Changes save to <code>{{ server.lgsm_name }}.cfg</code> (the instance override file). <strong>Restart the server</strong> to apply.</p>
+      {# LinuxGSM v26.3.0 (#4991) ships pzserver with adminpassword="CHANGE_ME" and starts the game
+         with it, so a server still on it has an admin account anyone who has read LinuxGSM's config
+         can use. Shown by loadConfig when the read says so (lgc_pz_default_admin). #}
+      {% if server.game_type == 'pz' %}
+      <div id="lgc-pz-admin" class="alert alert-warning py-2 px-3 mb-2 small" role="alert" style="display:none;">
+        <i class="bi bi-shield-exclamation"></i>
+        <span>This server's admin password is still LinuxGSM's default, CHANGE_ME, so anyone who knows LinuxGSM can log in as its admin.</span>
+        <button type="button" class="btn btn-sm btn-warning py-0 ms-1" id="lgc-pz-admin-btn" data-action="lgcPzAdminFix">Set a random admin password</button>
+        <span id="lgc-pz-admin-msg" class="d-block mt-1"></span>
+      </div>
+      {% endif %}
+      {# LinuxGSM v26.3.0 (#4963) moved CS:GO to its standalone App ID on the next start, and a GSLT is
+         made for one App ID. Shown by loadConfig only when it applies (lgc_csgo_appid_note: a gslt
+         set, clientappid neither 730 nor unset). #}
+      {% if server.game_type == 'csgo' %}
+      <div id="lgc-csgo-appid" class="alert alert-info py-2 px-3 mb-2 small" role="note" style="display:none;">
+        <i class="bi bi-info-circle"></i>
+        <span>Since LinuxGSM v26.3.0, CS:GO runs as App ID 4465480: a gslt made for App ID 730 stops working after the switch. Make one for 4465480, or set clientappid to 730 to stay on CS2's csgo_legacy.</span>
+      </div>
+      {% endif %}
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>
       <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit">
         <div id="cfg-groups"></div>
