@@ -130,6 +130,11 @@ function _lg264PlayersHtml(p){
 function _lg264Tf2Html(d){
   return d.tf2_norestart ? '<div class="alert alert-warning small py-1 px-2 mb-2" id="cfg-tf2-norestart">Add -norestart to the end of startparameters: without it, TF2’s 64-bit server (LinuxGSM v26.4.0) can’t stop gracefully and is killed after 60 s.</div>' : '';
 }
+// Project Zomboid on LinuxGSM's CHANGE_ME admin password: the warning and its one-click fix.
+function _lgcPzWarnShow(d){
+  var pzw=document.getElementById('lgc-pz-admin');
+  if(pzw) pzw.style.display = d.lgc_pz_default_admin ? '' : 'none';
+}
 function loadConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(d=>{
     document.getElementById('cfg-loading').style.display='none';
@@ -149,9 +154,7 @@ function loadConfig(){
     });
     if(!(d.groups||[]).length && !(d.players && d.players.supported)) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
-    // Project Zomboid on LinuxGSM's CHANGE_ME admin password: the warning and its one-click fix.
-    var pzw=document.getElementById('lgc-pz-admin');
-    if(pzw) pzw.style.display = d.lgc_pz_default_admin ? '' : 'none';
+    _lgcPzWarnShow(d);
     var ta=document.getElementById('cfg-raw');
     ta.value = d.raw||'';
     _r29j_rawShown = ta.value;
