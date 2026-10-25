@@ -23,7 +23,9 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     allowed_custom_commands,
     _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
-from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _mark_expected_offline)
+from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window as _mon_end_offline_window,
+                                       _mark_expected_offline)
+from panel.services import lgsm_players as _lgp
 import concurrent.futures
 import functools
 import re
@@ -33,7 +35,7 @@ from sqlalchemy.exc import (SQLAlchemyError)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
-from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
+from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
     _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal)
 
@@ -95,7 +97,9 @@ def _fire_on_done(on_done, ok, detail, action, server_id):
     if not on_done:
         return
     try:
-        on_done(bool(ok), _summarise_action_output(detail))
+        # None is neither: LinuxGSM postponed or refused the action (lgsm_players.outcome), and
+        # the detail is the panel's sentence saying which.
+        on_done(None if ok is None else bool(ok), _summarise_action_output(detail))
     except Exception:
         _log.debug("completion callback for %s on server %s failed", action, server_id,
                    exc_info=True)
@@ -548,14 +552,17 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 if not remote or not gs:
                     detail = "the server or its host is no longer configured"
                     return
-                timeout = 90 if action == "restart" else 60
-                out, _, rc = _sm.run_as_game_user(remote, short_name, action,
-                                                  timeout=timeout, selfname=selfname)
+                out, rc = _lg264_run_power(remote, (server_id, short_name, selfname), action)
                 clean = terminal.strip_escapes(out or "")
                 ok, detail = (rc == 0), clean
                 # The outcome is audited under the server only while it is still that server, and
                 # its bookkeeping (the queued flags, the priority nudge) is done only then.
                 held = still_held(gs)
+                oc = _lgp.outcome_of(out, rc)
+                if oc is not None:
+                    # The button answered "issued" long before: the console says what LinuxGSM did.
+                    ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
+                    return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
                 if held:
@@ -571,8 +578,53 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def _run_teed(app, remote, server_id, short_name, action, selfname):
-    """Run a long action with its output teed to the host file the console tails: (out, err, rc)."""
+def _lg264_run_power(remote, ident, action):
+    """A start/stop/restart with its time for LinuxGSM's player warning: (out, rc).
+
+    The warning countdown (warnplayerstimer) runs BEFORE the stop, so the action is given its
+    minutes on top of the usual 60/90 s, and the monitor's "expected offline" window starts when
+    the stop does rather than when the button was pressed.
+    """
+    server_id, short_name, selfname = ident
+    extra = _lgp.allowance_seconds(remote, short_name, selfname, action)
+    if extra:
+        _mark_expected_offline(server_id, action, extra)
+    timeout = (90 if action == "restart" else 60) + extra
+    out, _, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout,
+                                      selfname=selfname)
+    return out, rc
+
+
+def _lg264_said(oc, action, gs, held, who, console=None):
+    """Audit LinuxGSM's postponed or refused `action` as what it was: (None, the panel's sentence).
+
+    Its own audit action (lgsm_postponed / lgsm_refused), never the action's success or failure
+    row: LinuxGSM exits 0 for both, and "'stop' succeeded" about a server still running with its
+    players on is the report this replaces. A refused stop or a postponed restart ends the action's
+    quiet window (warning minutes and all), so a crash of the server that is still up pages as usual.
+    `console`: the app, for a Stop/Restart whose button answered long before — the sentence is said
+    in the server's console too, as a long action's end is (_announce_action_end); only while the
+    id is still that server's. A long action passes None: its own end says it.
+    """
+    actor, origin, name = who
+    msg = _lgp.outcome_message(oc, action, monitor=bool(getattr(gs, "autostart", True)))
+    postponed = oc["code"] == "lgsm_postponed"
+    log_action(actor, "lgsm_postponed" if postponed else "lgsm_refused", target=name,
+               success=postponed, detail="%s: %s" % (action, msg), actor=origin,
+               server=gs if held else None)
+    if held and action in ("stop", "restart"):
+        _mon_end_offline_window(gs.id)
+    if held and console is not None:
+        _console_push(console, gs.id, f"[panel] {action}: {msg}")
+    return None, str(msg)
+
+
+def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True):
+    """Run a long action with its output teed to the host file the console tails: (out, err, rc).
+
+    `monitor`: the server's Autostart (LinuxGSM's monitor cron) is on, which is what runs an
+    update or backup LinuxGSM postponed.
+    """
     # fastdl asks a few yes/no questions (overwrite / force-download / continue),
     # all default Y — feed Y's so it runs unattended. Up to v26.3.0 a prompt looped
     # forever on EOF; from v26.4.0 (#5042) it exits 2 ("Unable to read an answer").
@@ -581,17 +633,23 @@ def _run_teed(app, remote, server_id, short_name, action, selfname):
     # and hand the whole of it back at the end, so the audit entry and the bot's
     # completion summary are unchanged while the console tails the file.
     logf = _action_log_path(short_name, action)
+    # Plus LinuxGSM's in-game warning before it stops the server (warnplayerstimer), which an
+    # update or a backup spends before any of its own work.
+    timeout = _lgp.timeout_for(remote, short_name, selfname, action, 1800)
     _begin_action_tail(app, server_id, action, logf, short_name)
     rc = None
+    out = ""
     try:
         out, err, rc = _sm.run_as_game_user(remote, short_name, action,
-                                            timeout=1800, selfname=selfname,
+                                            timeout=timeout, selfname=selfname,
                                             answers=answers, tee_log=True)
     finally:
         # rc is None if the SSH call raised and -1 if the transport gave up
         # waiting; _end_action_tail says "stopped reporting" for both rather than
         # guessing — a 30-minute timeout does not mean the update stopped running.
-        _end_action_tail(app, server_id, remote, action, rc)
+        oc = _lgp.outcome_of(out, rc)
+        _end_action_tail(app, server_id, remote, action, rc,
+                         note=_lgp.outcome_message(oc, action, monitor=monitor) if oc else None)
     return out, err, rc
 
 
@@ -622,7 +680,7 @@ def _bg_action(app, gs, remote, action, on_done=None):
     """
     # Plain values, read here on the request's thread (see _bg_power_action).
     server_id, remote_id, short_name, selfname = gs.id, remote.id, gs.short_name, gs.lgsm_name
-    born = row_birth(gs)
+    born, autostart = row_birth(gs), bool(getattr(gs, "autostart", True))
     _app = app
 
     def _run():
@@ -633,9 +691,17 @@ def _bg_action(app, gs, remote, action, on_done=None):
                 if not remote:
                     detail = "its host is no longer configured"
                     return
-                out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname)
+                out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
+                                         monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
+                oc = _lgp.outcome_of(out, rc)
+                if oc is not None:
+                    # Postponed (update, backup) or refused (workshop-update, validate): said as
+                    # that, and nothing was changed on the host, so nothing below applies.
+                    ok, detail = _lg264_said(oc, action, gs, gs is not None,
+                                             (None, None, gs.name if gs else short_name))
+                    return
                 log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
                            success=(rc == 0), detail=detail[-300:], server=gs)
                 # An update/validate/fastdl can restart the server (port cycles) — drop the

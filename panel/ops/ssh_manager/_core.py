@@ -2357,7 +2357,7 @@ _USER_SCOPE_RETRY = 600.0
 # The LinuxGSM actions that can leave the server running: tools/panel-helper's
 # SCOPED_START_ACTIONS | SCOPED_MAINT_ACTIONS, which a unit check holds this equal to.
 SCOPED_LGSM_ACTIONS = frozenset(("start", "restart", "monitor", "update", "force-update",
-                                 "validate", "backup", "mods-update"))
+                                 "validate", "backup", "mods-update", "workshop-update"))
 
 
 def user_scope_argv():

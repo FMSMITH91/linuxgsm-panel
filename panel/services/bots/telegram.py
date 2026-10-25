@@ -290,7 +290,10 @@ def _tg_server_action(app, token, chat_id, action, arg, sender=None):
             # background (see the gate: they are all in LONG_ACTIONS or are power actions), so
             # run_action returns "started", never "finished" — without this the chat heard that a
             # restart began and never heard whether it worked.
-            if ok:
+            if ok is None:
+                # LinuxGSM postponed or refused it (players online): the detail says which.
+                _tg_reply(token, chat_id, "⏳ %s — %s" % (name, detail or action))
+            elif ok:
                 _tg_reply(token, chat_id, "✅ %s — %s finished." % (name, action))
             else:
                 _tg_reply(token, chat_id, "⚠️ %s — %s failed%s"

@@ -7,6 +7,32 @@ is the plan and the job, so that module stays within the size the code-quality g
 from panel.core import i18n
 
 
+# What a reboot will do to each server, shown in its dialog (host_reboot.preview).
+WHY_WORDS = {"autostart": "comes back by Autostart about 5 min after boot",
+             "no_autostart": "is started by the panel after the boot",
+             "no_autostart_off": "stays stopped (Autostart is off)",
+             "stop_pending": "stays stopped (a stop was queued)",
+             "stopped": "is stopped and stays stopped",
+             "unreadable": "could not be read; it is left to the shutdown"}
+
+
+def cancelling(host, stopping):
+    """The Cancel reply for a reboot job not yet sent; `stopping`: its servers are being stopped.
+
+    Then a LinuxGSM warning countdown may be under way (warnplayerstimer): Cancel calls off the
+    reboot's own countdowns the way LinuxGSM's Ctrl-C does (lgsm_players.interrupt_countdowns),
+    which ends within about 10 s and tells those players, and a stop already past its countdown
+    finishes first. The servers stopped are then started again (the rollback).
+    """
+    if stopping:
+        return i18n.Sentence("Cancelling the reboot of {host}. A LinuxGSM warning countdown under way "
+                             "is called off and its players are told; a stop already under way "
+                             "finishes first, and the servers stopped are started again. The Power "
+                             "card shows what comes back.", host=host)
+    return i18n.Sentence("Cancelling the reboot of {host}. The Power card shows what comes back.",
+                         host=host)
+
+
 def busy_message(host):
     """Why an action on `host` (its display name) is refused while the host is being rebooted.
 
@@ -26,6 +52,8 @@ _BLOCKER_WORDS = {"install": i18n.Sentence("an install of {name}"),
                   "cron": i18n.Sentence("a scheduled task started on {name}"),
                   "uninstall": i18n.Sentence("an uninstall of {name}"),
                   "maintenance": i18n.Sentence("LinuxGSM maintenance on {name}"),
+                  # LinuxGSM v26.4.0 counting down in-game before a stop, restart, update or backup.
+                  "lgsm_warning": i18n.Sentence("LinuxGSM's player warning countdown on {name}"),
                   "bootstrap": i18n.Sentence("a bootstrap of {name}"),
                   "ssh_port": i18n.Sentence("an SSH port change on {name}"),
                   "dpkg": i18n.Sentence("a package install on {name}"),

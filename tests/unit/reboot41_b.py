@@ -677,7 +677,7 @@ def _rescan_cancel_run41(woken):
     real_run = _core41.run_as_game_user
 
     def _probe(remote, rows):
-        if _sys_caller41() == "_rescan" and not answers:
+        if _in_rescan41() and not answers:
             answers.append(HR.cancel(remote, _OPS41))
         return real_probe(remote, rows)
 
@@ -693,9 +693,12 @@ def _rescan_cancel_run41(woken):
     return r, h, answers
 
 
-def _sys_caller41():
-    """The name of the function that called the caller (a stub's caller)."""
-    return sys._getframe(2).f_code.co_name  # pylint: disable=protected-access
+def _in_rescan41():
+    """Whether a stub was reached from _Job._rescan (its probes now come through a reader it hands on)."""
+    f = sys._getframe(2)  # pylint: disable=protected-access
+    while f is not None and f.f_code.co_name != "_rescan":
+        f = f.f_back
+    return f is not None
 
 
 def _rescan_cancel_checks41():

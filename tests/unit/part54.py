@@ -530,7 +530,7 @@ from panel.services import host_reboot as _hr54  # noqa: E402
 from panel.db import models as _models54  # noqa: E402
 
 _rs54_cleared = []
-_rs54_self = NS(_check_cancel=lambda: None, _past_deadline=lambda: False,
+_rs54_self = NS(_check_cancel=lambda: None, _past_deadline=lambda: False, bounce=False,
                 _stop_one=lambda e: e.update(stop="stopped"), _update_row=lambda e, **k: None)
 _rs54_self._clear_stop_pending = lambda e: _hr54._Job._clear_stop_pending(_rs54_self, e)
 

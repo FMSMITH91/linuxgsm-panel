@@ -372,6 +372,19 @@ def _clean_cron_error(raw, limit=240):
     return out or (keep[-1][:limit] if keep else "")
 
 
+# The lines LinuxGSM v26.4.0 prints when players online kept it from the job (command_stop.sh,
+# command_restart.sh): fixed English in its scripts. A POSIX ERE for grep -E over the raw log, where
+# colour codes sit inside LinuxGSM's "[ INFO ]" tag, so only the word is required before the text.
+_LG264_CRON_POSTPONED_ERE = ("INFO.*([0-9]+ players are on the server: (stop prevented|restart "
+                             "postponed)|(Update|Backup) postponed until the server is empty)")
+
+
+def _lg264_runs_monitor(cmd):
+    """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`)."""
+    words = (cmd or "").split()
+    return any(w == "monitor" and i and "/" in words[i - 1] for i, w in enumerate(words))
+
+
 def _read_cron_status(server, user):
     """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status files.
 
@@ -389,7 +402,11 @@ def _read_cron_status(server, user):
              'read rc st en < "$s" 2>/dev/null; err=""; '
              '[ "$rc" != "0" ] && err="$(tail -n 40 "$id.log" 2>/dev/null | tail -c 3000 '
              '| base64 | tr -d "\\n")"; '
-             'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
+             # LinuxGSM v26.4.0 exits 0 when it postpones or refuses for players online
+             # (lgsm_players.outcome): that run did nothing, so it is not shown as "OK".
+             'pp=0; [ "$rc" = "0" ] && grep -qE ' + _core._quote(_LG264_CRON_POSTPONED_ERE)
+             + ' "$id.log" 2>/dev/null && pp=1; '
+             'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err" "$pp"; done')
     out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=12)
     status = {}
     for line in (out or "").split("\n"):
@@ -400,7 +417,8 @@ def _read_cron_status(server, user):
         err = parts[4] if len(parts) > 4 else ""
         try:
             status[jid] = {"last_run": int(en), "ok": rc == "0", "rc": int(rc),
-                           "error": _clean_cron_error(_cron_log_text(err))}
+                           "error": _clean_cron_error(_cron_log_text(err)),
+                           "postponed": len(parts) > 5 and parts[5].strip() == "1"}
         except ValueError:
             continue
     return status
@@ -807,11 +825,16 @@ def _cron_job_row(raw, user, selfname, status, run_times):
         return None
     display_cmd, jid = _unwrap_cron_command(cmd)
     last_run, ok, error = _cron_job_history(status, run_times, jid, display_cmd, cmd)
+    st = status.get(jid or _cron_job_id(display_cmd)) or {}
     return {
         "raw": raw, "schedule": sched, "command": display_cmd,
         "managed": _cron_line_managed(s, user, selfname),   # always False now — every line is editable
         "role": _cron_role(display_cmd, user, selfname),    # informational label only (autostart/daily-restart)
         "last_run": last_run, "ok": ok, "error": error,
+        # The last run exited 0 having only postponed or refused (players online). Not the
+        # `monitor` job: it prints "N players are on the server: restart postponed" when it
+        # re-checks a request (command_monitor.sh), which is the monitor doing its job.
+        "postponed": bool(st.get("postponed")) and not _lg264_runs_monitor(display_cmd),
     }
 
 

@@ -31,8 +31,8 @@
           {% for m in maintenance %}
           <li><button type="button" class="dropdown-item small" title="{{ m.desc }}"
               {# nosemgrep: generic.html-templates.security.unquoted-attribute-var.unquoted-attribute-var -- the attribute is single-quoted, autoescape escapes ' too, and the value is from a fixed list #}
-              data-action="serverAction" data-args='["{{ m.cmd }}", "@self", {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }}, true]'>
-            <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill'}.get(m.cmd, 'gear') }}"></i>
+              data-action="serverAction" data-args='["{{ m.cmd }}", "@self", {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl','workshop-update'] else 'false' }}, true]'>
+            <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill','workshop-update':'collection-fill'}.get(m.cmd, 'gear') }}"></i>
             <span class="uis-maint-cmd">{{ m.cmd }}</span> <span class="text-secondary uis-maint-desc">{{ m.desc }}</span>
           </button></li>
           {% endfor %}

@@ -106,7 +106,8 @@ _name99 = "raw config editor: a failed re-read after a settings save"
 _out99 = _js99(_name99, (
     "var serverId = 1; function _tr(s){ return s; }\n"
     + _line_or99(_SF99, "var _r26c_rawRead") + "\n"), (
-    "function loadConfig(", "function refreshRawConfig(", "function _r26c_rawStale(", "function saveRaw("), (
+    "function _lg264PlayersHtml(", "function _lg264Tf2Html(", "function loadConfig(", "function refreshRawConfig(",
+    "function _r26c_rawStale(", "function saveRaw("), (
     "  const out = {}, ta = document.getElementById('cfg-raw'), msg = document.getElementById('cfg-raw-msg');\n"
     "  const good = {groups: [], raw: 'port=\"27015\"\\n'};\n"
     "  const save = async () => { sent = []; reply({success: true}); saveRaw(); await settle();\n"

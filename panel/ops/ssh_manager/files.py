@@ -507,12 +507,32 @@ def lgsm_read_config(server, user, selfname):
     merged.update(_parse_cfg(sect["SECRETS_INSTANCE"]))
     settings = _curated_cfg_settings(merged, defaults, instance, common)
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
-    out = {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
+    out = {"path": inst, "raw": instance_text, "settings": settings, "groups": groups,
+           "players": _lg264_player_settings(merged, defaults, instance, common)}
     # Project Zomboid (whose script is always pzserver) still on LinuxGSM's CHANGE_ME: the page
     # warns, with a one-click fix (routes/pz_admin.py). Only on a read that succeeded, which this is.
     if selfname == "pzserver":
         out["lgc_pz_default_admin"] = merged.get("adminpassword") == LGC_PZ_DEFAULT_ADMIN
     return out
+
+
+def _lg264_player_settings(merged, defaults, instance, common):
+    """Return LinuxGSM v26.4.0's player protection as this config has it, for the editor's controls.
+
+    `supported`: this instance's _default.cfg has warnplayerstimer, which LinuxGSM rewrites from
+    the release the script runs — v26.4.0 and later. Earlier releases have neither setting
+    (v26.1.0 has no stoponlyifnoplayers anywhere), so there the editor offers neither.
+    `startparameters_set`: the instance or common config overrides startparameters (TF2's
+    -norestart notice reads it).
+    """
+    def val(k):
+        return str(merged.get(k, "")).strip()
+    return {"supported": "warnplayerstimer" in defaults,
+            "stoponlyifnoplayers": val("stoponlyifnoplayers"),
+            "warnplayerstimer": val("warnplayerstimer"),
+            "querymode": val("querymode"),
+            "startparameters": val("startparameters"),
+            "startparameters_set": "startparameters" in instance or "startparameters" in common}
 
 
 # lgsm_read_config's answer when a LinuxGSM config file is there and the game's account cannot read
@@ -681,8 +701,9 @@ def lgsm_write_config(server, user, selfname, updates):
     """
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
-    if _turns_logtimestamp_on(updates):
-        return False, LGSM_TIMESTAMPS_REFUSED
+    refused = _cfg_write_refusal(updates)
+    if refused:
+        return False, refused
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
     secrets = {}
@@ -705,9 +726,25 @@ def lgsm_write_config(server, user, selfname, updates):
         return True, ""
     _apply_cfg_updates(lines, updates)
     content = "\n".join(lines).rstrip("\n") + "\n"
+    # The warning timer every stop budgets for (lgsm_players) is read again after this write.
+    from panel.services import lgsm_players
+    lgsm_players.forget(server, user, selfname)
     # selfname: the instance cfg may be a link to the live console's log (the account can make
     # one), and replacing that through the link silenced the console (_r23b_console_frag).
     return _write_file_as_user(server, user, inst, content.encode(), selfname)
+
+
+def _cfg_write_refusal(updates):
+    """Why lgsm_write_config refuses `updates` before reading anything, or None.
+
+    logtimestamp is only ever turned off (_turns_logtimestamp_on); LinuxGSM v26.4.0's
+    stoponlyifnoplayers / warnplayerstimer take only the values LinuxGSM acts on
+    (lgsm_players.bad_setting, which also writes a good timer back as LinuxGSM reads it).
+    """
+    if _turns_logtimestamp_on(updates):
+        return LGSM_TIMESTAMPS_REFUSED
+    from panel.services import lgsm_players
+    return lgsm_players.bad_setting(updates) if isinstance(updates, dict) else None
 
 
 def _turns_logtimestamp_on(updates):
