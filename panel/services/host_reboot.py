@@ -1016,14 +1016,13 @@ def cancel(remote, actor):
             had = _reboot_when_empty.pop(remote.id, None)
         job = _host_reboots.get(remote.id)
         stoppable = bool(job) and job.get("sent") is None
-        stopping = stoppable and job.get("phase") == "stopping"
         if stoppable:
             job["cancel"] = who
     if had:
         log_action(actor, "reboot_when_empty_cancel", target=remote.name, remote=remote)
     if stoppable:
         return 200, {"success": True, "pending": False,
-                     "message": _rw.cancelling(_host_label(remote), stopping)}
+                     "message": _rw.cancelling(_host_label(remote), job.get("phase") == "stopping")}
     if had:
         return 200, {"success": True, "pending": False, "message": "Auto-reboot canceled."}
     if job:
@@ -1112,7 +1111,7 @@ class _Job:
         self.unread = 0            # running servers the plan could not read: left to the reboot
         self.bounce = False
         self.bounce_joined = False  # the bounce saw a player (not only a count it could not read)
-        self.bounce_unread = ""    # the server whose count could not be read, when that stopped it
+        self.bounce_unread = self.bounce_why = ""    # whose count could not be read; why, if not a player
         self.deadline = None       # the end of the stop phase's budget (STOP_PHASE_CAP)
         self.fired = False         # this job is a wait's, and its fire was audited and announced
         self.rolled_back = False   # a bounce has already (quietly) undone the stops
@@ -1474,7 +1473,7 @@ class _Job:
         """Stop every plan server: parallel across accounts, serial within one, verified by state."""
         self._phase("stopping", done=0, total=len(self.entries))
         self.bounce = self.bounce_joined = False
-        self.bounce_unread = ""
+        self.bounce_unread = self.bounce_why = ""
         loaded = self._loaded_rows()
         # The servers LinuxGSM does not warn first, then the rest; each pass's accounts side by side.
         passes = _lgp.stop_passes(self.remote, self.entries)
@@ -1572,14 +1571,16 @@ class _Job:
         during the rollback is seen by _back_to_waiting, which then does not put the wait back, and
         _on_cancel says what happened.
         """
-        if not self.bounce:
+        if not (self.bounce or self.bounce_why):
             return False
         # A count that could not be read (one gamedig timeout while the host is busy stopping the
         # last server) backs off the same, but is no bounce: three of those paged "Players keep
         # joining" about an empty host.
-        why = "a player joined" if self.bounce_joined else "a player count could not be read"
+        why = self.bounce_why or ("a player joined" if self.bounce_joined else "a player count could not be read")
         rollback(self.remote_id, why, wait=75, quiet=True)
         self.rolled_back = True
+        if self.bounce_why:
+            return self._refused(why, None) or True    # said as a refusal, now or waiting
         if self.bounce_joined:
             self._back_to_waiting(None, bounce=True)
         else:
@@ -1591,11 +1592,15 @@ class _Job:
         """Once more, after the stops: anything running again (a monitor run, a cron) is stopped.
 
         Within what is left of the stop phase's budget: past it, a server found running is not
-        stopped again but recorded as still running, and the shutdown ends it.
+        stopped again but recorded as still running, and the shutdown ends it. First it waits for
+        every LinuxGSM command still running on the host (lgsm_players.settled_probes): a `restart`
+        counting down when the reboot's stop came in starts the server again after it.
         """
         rows = [gs for gs in GameServer.query.filter_by(remote_id=self.remote_id, installed=True).all()
                 if gs.status not in ("installing", "configuring")]
-        probes = _probe_rows(self.remote, rows)
+        # Still running at the deadline: no probes, and _bounced undoes the plan and says why.
+        probes, self.bounce_why = _lgp.settled_probes(lambda: _probe_rows(self.remote, rows),
+                                                      self._past_deadline, self._sleep)
         known = {e["id"]: e for e in self.entries}
         for gs in rows:
             if (probes.get(gs.id) or {}).get("session") != 1:

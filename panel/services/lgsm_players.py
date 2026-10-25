@@ -465,6 +465,33 @@ def stop_passes(remote, entries):
     return [list(p.values()) for p in passes if p]
 
 
+_LG264_SETTLE_EVERY = 5
+
+
+def settled_probes(read, past_deadline, sleep):
+    """The reboot's rescan probes once no LinuxGSM command runs on the host's servers: (probes, why).
+
+    `read()`: {id: probe} (host_reboot._probe_rows). A command in flight (INFLIGHT, MAINT or a live
+    warning lock) is waited out, re-read every _LG264_SETTLE_EVERY s with `sleep` (the job's, which
+    a Cancel ends). Measured on the test host: a `restart` counting down when the reboot's stop came
+    in made that stop wait, then print "already stopped" during the restart's own stop; read then,
+    the server was stopped, the reboot went ahead, and the restart started it again 2 s later —
+    the shutdown would have ended it with no clean stop. Settled: (probes, ""), and a server found
+    running is stopped again. Still busy at the stop phase's deadline: ({}, the reason), and the
+    reboot is not sent (host_reboot._bounced undoes the plan and says why).
+    """
+    while True:
+        probes = read()
+        if not any(p.get("inflight") or p.get("maint") or p.get("warn") for p in probes.values()):
+            return probes, ""
+        if past_deadline():
+            return {}, LG264_STILL_BUSY
+        sleep(_LG264_SETTLE_EVERY)
+
+
+LG264_STILL_BUSY = "LinuxGSM was still running a command on its game servers when their stops ended."
+
+
 def run_stop_passes(passes, stop_group, workers, cancelled, on_cancel):
     """Run each pass's account groups through `stop_group`, `workers` at a time, a pass after the last.
 
