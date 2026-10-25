@@ -48,7 +48,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
     started again.
   - **A reboot does not start while LinuxGSM is counting down** to another stop, restart, update
     or backup on the host, or while a LinuxGSM restart is running, and its time allowance follows
-    how many accounts are stopped at once.
+    how many accounts are stopped at once. A LinuxGSM command that starts during the reboot's
+    stops is waited for before the reboot is sent, and a server it started again is stopped again.
   - **The Reboot dialog** lists, for each server with players online, how long LinuxGSM will warn
     them (and that the reboot waits for it), or that only the panel's 60-second warning applies.
   - **workshop-update** is in the Maintenance menu on the games LinuxGSM offers it for.
