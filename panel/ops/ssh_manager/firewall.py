@@ -1878,11 +1878,20 @@ def _fwb_family_views(versions, groups, st, ssh_ports):
 
 
 def _fwb_ts_ways(server, groups, ssh_ports):
-    """(Tailscale running, Tailscale SSH on, regular SSH over the tailnet let in), read live."""
+    """(Tailscale running, Tailscale SSH on, regular SSH over the tailnet let in), read live.
+
+    Regular SSH over the tailnet is let in by a tailnet interface rule (_r13a_tailnet_ssh_ok), or, with
+    no rule, by tailscaled's own ts-input chain in its default netfilter mode (ufweval.ts_netfilter_on),
+    where a TUN carries it and sshd listens there too.
+    """
+    from panel.ops.ssh_manager import ufweval
     ts_running, ts_ssh = hosts._tailscale_conn_state(server)
     if not ts_running:
         return False, False, False
-    return True, bool(ts_ssh), bool(_r13a_tailnet_ssh_ok(server, groups, ssh_ports))
+    iface_ok = _r13a_tailnet_ssh_ok(server, groups, ssh_ports) or (
+        ufweval.ts_netfilter_on(server) and bool(hosts._tsiface_names(server))
+        and not hosts._r11a_sshd_off_tailnet(server))
+    return True, bool(ts_ssh), bool(iface_ok)
 
 
 def _fwa_inbound_gaps(server, groups, st, default_allow=False):

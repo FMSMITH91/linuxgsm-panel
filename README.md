@@ -256,6 +256,9 @@ location / {
     # X-Real-IP when the header is absent entirely. Set both.
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    # The port the browser came in on: the firewall's lock-out check reads it when your address has
+    # more than one connection open to this host.
+    proxy_set_header X-Forwarded-Port $server_port;
     proxy_read_timeout 86400;
 }
 ```
