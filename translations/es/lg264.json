@@ -24,10 +24,10 @@
   "postponed by LinuxGSM": "aplazada por LinuxGSM",
   "Before each stop:": "Antes de cada detención:",
   "its LinuxGSM warning time could not be read": "no se pudo leer su tiempo de aviso de LinuxGSM",
-  "LinuxGSM warns its players for {n} min first; the reboot waits for it": "LinuxGSM avisa a sus jugadores durante {n} min antes; el reinicio lo espera",
   "only the panel’s 60 s warning: its console can’t show LinuxGSM’s": "solo el aviso de 60 s del panel: su consola no puede mostrar el de LinuxGSM",
   "no in-game warning: this game can’t show one": "sin aviso en el juego: este juego no puede mostrarlo",
   "only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)": "solo el aviso de 60 s del panel: no hay aviso de LinuxGSM configurado (Archivos y configuración, ajustes de LinuxGSM)",
   "no in-game warning: none is set (Files & Config, LinuxGSM settings)": "sin aviso en el juego: no hay ninguno configurado (Archivos y configuración, ajustes de LinuxGSM)",
-  "LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without a clean stop": "LinuxGSM rechazará su detención («Detener solo si está vacío» está activado), así que el reinicio lo termina sin una detención ordenada"
+  "LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it": "LinuxGSM avisa a sus jugadores durante {n} min antes, en lugar de los 60 s del panel; el reinicio lo espera",
+  "Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.": "Su «Detener solo si está vacío» se deja a un lado en este reinicio, así que se sigue deteniendo de forma ordenada."
 }

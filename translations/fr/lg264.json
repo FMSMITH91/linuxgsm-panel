@@ -24,10 +24,10 @@
   "postponed by LinuxGSM": "reportée par LinuxGSM",
   "Before each stop:": "Avant chaque arrêt :",
   "its LinuxGSM warning time could not be read": "son délai d'avertissement LinuxGSM n'a pas pu être lu",
-  "LinuxGSM warns its players for {n} min first; the reboot waits for it": "LinuxGSM avertit ses joueurs pendant {n} min avant ; le redémarrage l'attend",
   "only the panel’s 60 s warning: its console can’t show LinuxGSM’s": "seulement l'avertissement de 60 s du panneau : sa console ne peut pas afficher celui de LinuxGSM",
   "no in-game warning: this game can’t show one": "pas d'avertissement en jeu : ce jeu ne peut pas en afficher",
   "only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)": "seulement l'avertissement de 60 s du panneau : aucun avertissement LinuxGSM n'est réglé (Fichiers et configuration, réglages LinuxGSM)",
   "no in-game warning: none is set (Files & Config, LinuxGSM settings)": "pas d'avertissement en jeu : aucun n'est réglé (Fichiers et configuration, réglages LinuxGSM)",
-  "LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without a clean stop": "LinuxGSM refusera son arrêt (« Arrêter seulement si vide » est activé), donc le redémarrage l'arrête sans arrêt propre"
+  "LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it": "LinuxGSM avertit ses joueurs pendant {n} min avant, au lieu des 60 s du panneau ; le redémarrage l'attend",
+  "Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.": "Son « Arrêter seulement si vide » est mis de côté pour ce redémarrage : il est quand même arrêté proprement."
 }

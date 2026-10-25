@@ -129,15 +129,21 @@ def _with_minutes138(minutes):
 # ── the clean reboot's stop of one server ───────────────────────────────────────────────────────
 _job138 = object.__new__(_hr138._Job)
 _job138.remote = _srv138
+_job138.job = {"mode": "when_empty"}
 _runs138 = []
-_saved138 = (_lgp138.warn_minutes, _smc138.run_as_game_user, _hr138.probe_server)
+_shells138 = []
+_saved138 = (_lgp138.warn_minutes, _smc138.run_as_game_user, _hr138.probe_server, _smc138.shell_as_game_user)
 try:
+    _smc138.shell_as_game_user = lambda remote, user, sh, **k: (_shells138.append((user, sh, k.get("timeout"))),
+                                                                ("Graceful: sending \"quit\": 2 ... OK", "", 0))[1]
     _lgp138.warn_minutes = _with_minutes138(10)
     _smc138.run_as_game_user = lambda remote, user, action, **k: (_runs138.append((action, k["timeout"])),
                                                                    (_OUT_STOP138, "", 0))[1]
     _hr138.probe_server = lambda remote, e: {"session": 1}
     _e138 = {"id": 1, "user": "codserver", "selfname": "codserver", "game_type": "cod", "name": "cod"}
     _job138._stop_one(_e138)
+    check("reboot (wait for empty): a stop LinuxGSM refuses is not forced (players joined: the plan bounces)",
+          _shells138 == [], repr(_shells138))
     check("reboot: a server's stop is given STOP_BUDGET plus its warnplayerstimer (10 min)",
           _runs138 == [("stop", _hr138.STOP_BUDGET + 600 + _lgp138._LG264_WARN_SLACK)], repr(_runs138))
     check("reboot: a stop LinuxGSM refused (players on, stoponlyifnoplayers) is recorded as refused, and "
@@ -153,8 +159,75 @@ try:
     _job138._stop_one(_e138t)
     check("reboot: an unread timer keeps the old budget (the telnet games' 600 s here), never less",
           _runs138 == [("stop", _hr138.STOP_BUDGET_TELNET)], repr(_runs138))
+    # A forced reboot ("now", players on): LinuxGSM's own stop with stoponlyifnoplayers set aside.
+    _runs138.clear()
+    _lgp138.warn_minutes = _with_minutes138(10)
+    _job138.job = {"mode": "now"}
+    _hr138.probe_server = lambda remote, e: {"session": 0}
+    _e138f = dict(_e138)
+    _job138._stop_one(_e138f)
+    _bud138 = _hr138.STOP_BUDGET + 600 + _lgp138._LG264_WARN_SLACK
+    check("forced reboot: a stop LinuxGSM refused (stoponlyifnoplayers) is run again as LinuxGSM's own stop "
+          "with the setting readonly off, with the warning's budget, and the server is stopped — not left "
+          "to the shutdown",
+          _runs138 == [("stop", _bud138)]
+          and _shells138 == [("codserver", "cd /home/codserver && readonly stoponlyifnoplayers=off"
+                                           " && source ./codserver stop 2>&1", _bud138)]
+          and _e138f["stop"] == "stopped" and _e138f["lgsm_refused"] is False, repr((_runs138, _shells138)))
+    _runs138.clear()
+    _shells138.clear()
+    _smc138.run_as_game_user = lambda remote, user, action, **k: (_runs138.append((action, k["timeout"])),
+                                                                   (_OUT_WARNSTOP138, "", 0))[1]
+    _job138._stop_one(dict(_e138))
+    check("forced reboot: ...a stop LinuxGSM did not refuse is not run a second time",
+          _runs138 == [("stop", _bud138)] and _shells138 == [], repr((_runs138, _shells138)))
 finally:
-    _lgp138.warn_minutes, _smc138.run_as_game_user, _hr138.probe_server = _saved138
+    (_lgp138.warn_minutes, _smc138.run_as_game_user, _hr138.probe_server,
+     _smc138.shell_as_game_user) = _saved138
+
+# The bypass itself, in bash (the CI runners' 5.1-5.3, this machine's): an instance script that
+# sources a cfg setting stoponlyifnoplayers="on" sees "off", and carries on past the refused assignment.
+_bash138 = _shutil138.which("bash")
+if _bash138:
+    import tempfile as _tf138
+    _d138 = _tf138.mkdtemp()
+    with open(os.path.join(_d138, "fakeserver"), "w", encoding="utf-8") as _fh:
+        _fh.write('source "$(dirname "${BASH_SOURCE[0]}")/x.cfg"\necho "cmd=$1 stoponlyifnoplayers=${stoponlyifnoplayers}"\n')
+    with open(os.path.join(_d138, "x.cfg"), "w", encoding="utf-8") as _fh:
+        _fh.write('stoponlyifnoplayers="on"\n')
+    _rb138 = _sp138.run([_bash138, "-c", _lgp138._LG264_FORCED_STOP % (_d138, "fakeserver")],  # nosec B603 - fixed fixture
+                        capture_output=True, text=True, check=False, env={"PATH": os.defpath})
+    _plain138 = _sp138.run([_bash138, "-c", "cd %s && source ./fakeserver stop" % _d138],  # nosec B603 - fixed fixture
+                           capture_output=True, text=True, check=False, env={"PATH": os.defpath})
+    check("forced-reboot stop: bash keeps the readonly value through the instance cfg's own assignment and "
+          "runs on (without it the cfg's \"on\" wins)",
+          "cmd=stop stoponlyifnoplayers=off" in _rb138.stdout and "readonly variable" in _rb138.stdout
+          and "stoponlyifnoplayers=on" in _plain138.stdout, repr((_rb138.stdout, _plain138.stdout)))
+else:
+    skip("forced-reboot stop: the readonly bypass in bash", "bash is not installed")
+
+# Players are warned once: where LinuxGSM has a warning timer on a game it can warn on, the panel's own
+# 60 s countdown leaves that server out.
+_saved_pw138 = _lgp138.warn_minutes
+try:
+    _wm138 = {"gmodserver": 5, "csgoserver": 0}       # tf2server and any other: unread (None)
+    _lgp138.warn_minutes = lambda remote, user, selfname, fresh=False: _wm138.get(user)
+    with _p9.app_context():
+        _rows138 = [{"id": g.id, "name": g.name} for g in _sh138.GameServer.query.all()]
+        _types138 = {g.id: (g.game_type, g.short_name) for g in _sh138.GameServer.query.all()}
+        _pw138 = _lgp138.panel_warned(_srv138, _rows138)
+    _left138 = {_types138[r["id"]][1] for r in _pw138}
+    _gone138 = {_types138[r["id"]][1] for r in _rows138} - _left138
+    check("forced reboot: no double warning — a server LinuxGSM warns (a timer on a game it can warn on) is "
+          "left out of the panel's 60 s countdown; one with no timer, an unread timer, or a game LinuxGSM "
+          "cannot warn on keeps the panel's",
+          "gmodserver" in _gone138 and {"csgoserver", "tf2server"} <= _left138
+          and _gone138 == {sn for gt, sn in _types138.values() if _wm138.get(sn) and gt in _lgp138.WARN_GAMES}
+          and _lgp138.panel_warned(_srv138, []) == [], repr((_left138, _gone138, _types138)))
+finally:
+    _lgp138.warn_minutes = _saved_pw138
+check("forced reboot: the job's countdown is the panel_warned rows (LinuxGSM's own warning wins)",
+      "warn = _lgp.panel_warned(self.remote, warnable(census))" in _read138("panel", "services", "host_reboot.py"))
 
 # The stop phase's own cap grows by the longest account's warnings (serial within an account).
 _sp_src138 = _read138("panel", "services", "host_reboot.py")
@@ -672,7 +745,7 @@ else:
     _t4 = " ".join(x["text"] for x in (_on138.get("four") or []))
     check("reboot dialog (Reboot now, players on): one line per server with players — its LinuxGSM warning "
           "and that the reboot waits for it, or that it has none and where to set one; a server without "
-          "players is not listed", "srv1 — LinuxGSM warns its players for 5 min first; the reboot waits for it" in _t3
+          "players is not listed", "srv1 — LinuxGSM warns its players for 5 min first, instead of the panel’s 60 s; the reboot waits for it" in _t3
           and "srv2 — only the panel’s 60 s warning: no LinuxGSM warning is set" in _t3
           and "srv3 — no in-game warning: this game can’t show one" in _t3 and "srv9" not in _t3
           and [x["tag"] for x in _on138["three"]] == ["div", "ul"], repr(_on138))
@@ -683,10 +756,11 @@ else:
           and "srv3 — its LinuxGSM warning time could not be read" in _t4
           and "srv4 — only the panel’s 60 s warning: its console can’t show LinuxGSM’s" in _t4
           and _on138["none"] == [], repr(_on138))
-    check("reboot dialog: a server whose LinuxGSM will refuse the stop (Only stop when empty on) says the "
-          "reboot ends it without a clean stop",
-          "srv1 — LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without "
-          "a clean stop" in " ".join(x["text"] for x in (_on138.get("refuse") or [])), repr(_on138))
+    check("reboot dialog: a server with Only stop when empty on says the reboot sets it aside and still "
+          "stops it cleanly, after its warning line",
+          "srv1 — LinuxGSM warns its players for 5 min first, instead of the panel’s 60 s; the reboot waits "
+          "for it Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly."
+          in " ".join(x["text"] for x in (_on138.get("refuse") or [])), repr(_on138))
 check("reboot dialog: the warning lines are drawn in the players-online view only (Reboot when empty "
       "has no players to warn)", _nags138.count("_rbWarnNotes(ctx);") == 1
       and "_rbWarnNotes(ctx);" in _cut47(_nags138, "function _rbPlayers("))

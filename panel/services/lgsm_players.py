@@ -358,16 +358,56 @@ def reboot_warn_budget(remote, groups):
                 for grp in groups.values()), default=0)
 
 
-def reboot_stop(remote, e, base):
+# A forced reboot's stop with stoponlyifnoplayers set aside for that one run. LinuxGSM has no option
+# for it (v26.4.0: no flag or variable; the setting is read from the cfg files linuxgsm.sh sources
+# after the environment), so the instance script is sourced in a shell where the variable is
+# READONLY: the cfg's own assignment is refused ("readonly variable", not fatal without set -e,
+# which LinuxGSM does not use), and LinuxGSM's own stop then runs as it always does — its warning,
+# its graceful stop mode for the game (quit, CTRL+c, telnet...), its locks. Measured on the test
+# host with two stand-in players: the plain stop was "stop prevented", this one "Graceful: sending
+# "quit" ... OK" in 6 s. Only a forced reboot uses it: a Stop from the panel keeps the setting.
+_LG264_FORCED_STOP = "cd %s && readonly stoponlyifnoplayers=off && source ./%s stop 2>&1"
+
+
+def reboot_stop(remote, e, base, force=False):
     """A reboot's `stop` of plan entry `e`, given `base` seconds plus its warning: its output.
 
-    Never raises: the caller reads the server's state to decide, never the call ("" on a raise).
+    The ordinary LinuxGSM stop first (through the helper's lgsm-command on the panel's host, as
+    every action). `force` (the reboot was asked for with players on, "now"): a stop LinuxGSM
+    refused for stoponlyifnoplayers is run again with the setting set aside (_LG264_FORCED_STOP),
+    so the server still gets its clean stop rather than the shutdown. LinuxGSM refuses before it
+    warns or stops anything, so the second run is the only one that does. Never raises: the caller
+    reads the server's state to decide, never the call ("" on a raise).
     """
+    timeout = timeout_for(remote, e["user"], e["selfname"], "stop", base)
     try:
-        out, _err, _rc = _sm.run_as_game_user(remote, e["user"], "stop", selfname=e["selfname"],
-                                              timeout=timeout_for(remote, e["user"], e["selfname"],
-                                                                  "stop", base))
+        out, _err, _rc = _sm.run_as_game_user(remote, e["user"], "stop", timeout=timeout,
+                                              selfname=e["selfname"])
+        if force and refused(out):
+            sh = _LG264_FORCED_STOP % (_sm._quote("/home/" + e["user"]), _sm._quote(e["selfname"]))
+            out, _err, _rc = _sm.shell_as_game_user(remote, e["user"], sh, timeout=timeout,
+                                                    selfname=e["selfname"])
         return out or ""
     except Exception:  # noqa: BLE001 - the state read decides, never the call
         _log.debug("stop of %s raised", e.get("id"), exc_info=True)
         return ""
+
+
+def lgsm_warns(remote, gs):
+    """Whether LinuxGSM itself warns server `gs`'s players before its stop: a timer, on its game."""
+    return (gs.game_type or "") in WARN_GAMES and bool(warn_minutes(remote, gs.short_name, gs.lgsm_name))
+
+
+def panel_warned(remote, rows):
+    """The rows ([{id, name}]) a forced reboot's own 60 s countdown still warns: not LinuxGSM's.
+
+    Players are told once. Where LinuxGSM has a warning timer the reboot waits for that countdown
+    (its stop budget, allowance_seconds) and the panel says nothing; elsewhere — no timer, a game
+    LinuxGSM cannot warn on, a timer that could not be read — the panel's countdown is the warning.
+    """
+    from panel.db.models import GameServer
+    ids = [r["id"] for r in rows or ()]
+    if not ids:
+        return []
+    lgsm = {gs.id for gs in GameServer.query.filter(GameServer.id.in_(ids)).all() if lgsm_warns(remote, gs)}
+    return [r for r in rows if r["id"] not in lgsm]

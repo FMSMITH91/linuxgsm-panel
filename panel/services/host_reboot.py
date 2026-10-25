@@ -1212,7 +1212,7 @@ class _Job:
         if census is None:
             return
         if self.job["mode"] == "now":
-            warn = warnable(census)
+            warn = _lgp.panel_warned(self.remote, warnable(census))   # not twice: LinuxGSM's own wins
             if warn:
                 self._countdown(warn, census)
         self._make_plan(census)
@@ -1542,7 +1542,7 @@ class _Job:
     def _stop_one(self, e):
         # Never raises: the state read below decides, never the call.
         out = _lgp.reboot_stop(self.remote, e, STOP_BUDGET_TELNET if e["game_type"] in _TELNET_STOP_GAMES
-                               else STOP_BUDGET)
+                               else STOP_BUDGET, force=self.job["mode"] == "now")
         # The rc is not the outcome (a refused stop exits 0 with the server still up, a stop of a
         # stopped server exits 0 too): the session is.
         sess = probe_server(self.remote, e).get("session")

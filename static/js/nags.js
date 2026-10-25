@@ -139,17 +139,15 @@ function _rbPlayers(ctx){
   _rbChoiceButtons(ctx);
 }
 // What "Reboot now" tells the players of each server that has them, before its stop: LinuxGSM's
-// own countdown (warnplayerstimer, v26.4.0), which the reboot waits for, or why there is none — or
-// that LinuxGSM will refuse the stop altogether (stoponlyifnoplayers).
+// own countdown (warnplayerstimer, v26.4.0), which the reboot waits for instead of the panel's, or
+// why there is none; and where "Only stop when empty" is on, that the reboot sets it aside for its
+// stop (lgsm_players.reboot_stop), which is still LinuxGSM's clean one.
 // From the preview's warn_minutes / warn_supported / say (host_reboot._lg264_warn_fields). One line
 // per server; more than three fold under a summary.
 function _rbWarnWord(sv){
   var n = sv.warn_minutes;
-  // LinuxGSM's "Only stop when empty" refuses the stop while players are on, and nothing the panel
-  // sends overrides it: the shutdown then ends the server without its clean stop.
-  if (sv.stop_only_if_empty === true) return window.tf('LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without a clean stop');
   if (n == null) return window.tf('its LinuxGSM warning time could not be read');
-  if (n > 0 && sv.warn_supported) return window.tf('LinuxGSM warns its players for {n} min first; the reboot waits for it', {n: n});
+  if (n > 0 && sv.warn_supported) return window.tf('LinuxGSM warns its players for {n} min first, instead of the panel’s 60 s; the reboot waits for it', {n: n});
   if (!sv.warn_supported) return window.tf(sv.say ? 'only the panel’s 60 s warning: its console can’t show LinuxGSM’s'
                                                    : 'no in-game warning: this game can’t show one');
   return window.tf(sv.say ? 'only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)'
@@ -165,6 +163,10 @@ function _rbWarnNotes(ctx){
   rows.forEach(function(sv){
     var li = _rbRow(sv.name, _rbWarnWord(sv));
     li.lastChild.setAttribute('data-no-i18n', '');
+    if (sv.stop_only_if_empty === true) {
+      li.appendChild(document.createTextNode(' '));
+      li.appendChild(_rbEl('span', null, 'Its Only stop when empty is set aside for this reboot, so it is still stopped cleanly.'));
+    }
     ul.appendChild(li);
   });
   var head = _rbEl('div', 'small text-secondary mt-2 mb-1', 'Before each stop:');

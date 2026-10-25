@@ -32,9 +32,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
   - **The panel's scheduled backups and LinuxGSM's postponed backup no longer both run.** While
     LinuxGSM holds a backup for an empty server, the panel leaves it to LinuxGSM, records it when
     LinuxGSM has taken it, and does not repeat LinuxGSM's own "backup postponed" alert.
+  - **A forced reboot still stops every server cleanly.** A server with *Only stop when empty* on
+    refuses an ordinary stop while players are online; for a "Reboot now" the panel sets that
+    setting aside for the one stop, so LinuxGSM still saves and stops the server itself. The Stop
+    button keeps the setting (and says when it refused). Players are warned once: by LinuxGSM's
+    countdown where a server has one, by the panel's 60-second warning otherwise.
   - **The Reboot dialog** lists, for each server with players online, how long LinuxGSM will warn
-    them (and that the reboot waits for it), that it has no warning set, or that LinuxGSM will
-    refuse to stop it (*Only stop when empty* on), so the reboot ends it without a clean stop.
+    them (and that the reboot waits for it), or that only the panel's 60-second warning applies.
   - **workshop-update** is in the Maintenance menu on the games LinuxGSM offers it for.
   - **Team Fortress 2**: a server whose own `startparameters` lacks `-norestart` gets a one-line
     notice saying to add it.
