@@ -107,7 +107,7 @@ try:
           and _al138["force-update"] == _al138["validate"] == _al138["start"] == 0, repr(_al138))
     check("warning allowance: the timer is read once and cached, from the merged LinuxGSM config",
           _n_reads138 == 1 and len(_reads138) == 1 and _again138 == _al138["stop"]
-          and _reads138[0] == ("u1", "s1", ("warnplayerstimer",)), repr(_reads138))
+          and _reads138[0] == ("u1", "s1", ("warnplayerstimer", "stoponlyifnoplayers")), repr(_reads138))
     _lgp138._lg264_cache.clear()
     _files138.lgsm_get_values = _vals138(None)
     check("warning allowance: a config that could not be read keeps the caller's own budget (adds 0), "
@@ -176,6 +176,7 @@ check("reboot: the stop phase's deadline adds the longest account's summed warni
 _saved_wm138 = (_lgp138.warn_minutes,)
 try:
     _lgp138.warn_minutes = _with_minutes138(7)
+    _p9_patch(_lgp138, "settings", lambda *a, **k: {"minutes": 7, "stop_only": True})
     _p9_patch_sm("moderation_caps", lambda gt: {"say": gt == "cs"})
     _gs138 = type("GS", (), {"short_name": "a", "lgsm_name": "a", "game_type": "cs"})()
     _wf138 = _lgp138.reboot_warn_fields(_srv138, _gs138, {"session": 1})
@@ -184,8 +185,9 @@ try:
     _wf138b = _lgp138.reboot_warn_fields(_srv138, _gs138, {"session": 1})
     check("reboot preview: a running server carries its warning minutes, whether LinuxGSM can warn on its "
           "game, and whether the panel's own 60 s countdown reaches it",
-          _wf138 == {"warn_minutes": 7, "warn_supported": True, "say": True}
-          and _wf138b == {"warn_minutes": 7, "warn_supported": False, "say": False} and _wf138s == {},
+          _wf138 == {"warn_minutes": 7, "stop_only_if_empty": True, "warn_supported": True, "say": True}
+          and _wf138b == {"warn_minutes": 7, "stop_only_if_empty": True, "warn_supported": False,
+                          "say": False} and _wf138s == {},
           repr((_wf138, _wf138b, _wf138s)))
 finally:
     _lgp138.warn_minutes = _saved_wm138[0]
@@ -201,10 +203,15 @@ try:
     _mon138._mark_expected_offline(913802, "stop", extra=900)
     check("monitor: a warned stop's quiet window is still a Stop's (stays down, never paged)",
           _mon138._stop_expected(913802))
+    _mon138._mark_expected_offline(913803, "restart")
+    check("monitor: with no warning (extra 0) the window starts at the click, as before",
+          _t0 <= _mon138._expected_offline[913803] <= _time138.time())
 finally:
-    for _k in (913801, 913802):
+    for _k in (913801, 913802, 913803):
         _mon138._expected_offline.pop(_k, None)
         _mon138._expected_stop.pop(_k, None)
+check("monitor: those marks touched only their own servers' entries (the maps are as they were)",
+      (dict(_mon138._expected_offline), dict(_mon138._expected_stop)) == _mon138_before)
 
 # ── Stop / Restart / Update from the panel: timeouts, audit rows, console, chat bots ────────────
 _sdruns138 = []
@@ -233,6 +240,8 @@ try:
     # Stop, refused by LinuxGSM.
     _sdout138[0] = (_OUT_STOP138, "", 0)
     _r138 = _A138.post("/api/server/%d/action" % P9_GS, json={"action": "stop"})
+    check("Stop: the click is accepted at once (the stop runs in the background, warning first)",
+          _r138.status_code == 200 and (_r138.get_json() or {}).get("success") is True, repr(_r138.get_json()))
     _p9_drain()
     _ref138 = _p9_audit("lgsm_refused")
     check("Stop: the stop is given its 60 s plus the 2-minute warning",
@@ -645,13 +654,15 @@ _prog_nags138 = (
     "function run(servers, busy){ const body = new El('div');"
     " _rbWarnNotes({plan: {servers: servers}, players: {busy: busy}, body: body});"
     " return body.children.map(c => ({tag: c.tag, text: text(c)})); }\n"
-    "const S = (id, m, sup, say) => ({id: id, name: 'srv' + id, session: 1, warn_minutes: m, warn_supported: sup, say: say});\n"
+    "const S = (id, m, sup, say, so) => ({id: id, name: 'srv' + id, session: 1, warn_minutes: m,"
+    " warn_supported: sup, say: say, stop_only_if_empty: so === undefined ? false : so});\n"
     "console.log(JSON.stringify({\n"
     " three: run([S(1, 5, true, true), S(2, 0, true, true), S(3, 0, false, false), S(9, 5, true, true)],"
     " [{id: 1}, {id: 2}, {id: 3}]),\n"
     " four: run([S(1, 5, true, true), S(2, 0, true, false), S(3, null, true, true), S(4, 0, false, true)],"
     " [{id: 1}, {id: 2}, {id: 3}, {id: 4}]),\n"
-    " none: run([S(1, 5, true, true)], [])\n"
+    " none: run([S(1, 5, true, true)], []),\n"
+    " refuse: run([S(1, 5, true, true, true)], [{id: 1}])\n"
     "}));")
 _on138 = _node47(_prog_nags138)
 if _on138 is None:
@@ -672,6 +683,10 @@ else:
           and "srv3 — its LinuxGSM warning time could not be read" in _t4
           and "srv4 — only the panel’s 60 s warning: its console can’t show LinuxGSM’s" in _t4
           and _on138["none"] == [], repr(_on138))
+    check("reboot dialog: a server whose LinuxGSM will refuse the stop (Only stop when empty on) says the "
+          "reboot ends it without a clean stop",
+          "srv1 — LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without "
+          "a clean stop" in " ".join(x["text"] for x in (_on138.get("refuse") or [])), repr(_on138))
 check("reboot dialog: the warning lines are drawn in the players-online view only (Reboot when empty "
       "has no players to warn)", _nags138.count("_rbWarnNotes(ctx);") == 1
       and "_rbWarnNotes(ctx);" in _cut47(_nags138, "function _rbPlayers("))

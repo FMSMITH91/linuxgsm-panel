@@ -28,5 +28,6 @@
   "only the panel’s 60 s warning: its console can’t show LinuxGSM’s": "seulement l'avertissement de 60 s du panneau : sa console ne peut pas afficher celui de LinuxGSM",
   "no in-game warning: this game can’t show one": "pas d'avertissement en jeu : ce jeu ne peut pas en afficher",
   "only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)": "seulement l'avertissement de 60 s du panneau : aucun avertissement LinuxGSM n'est réglé (Fichiers et configuration, réglages LinuxGSM)",
-  "no in-game warning: none is set (Files & Config, LinuxGSM settings)": "pas d'avertissement en jeu : aucun n'est réglé (Fichiers et configuration, réglages LinuxGSM)"
+  "no in-game warning: none is set (Files & Config, LinuxGSM settings)": "pas d'avertissement en jeu : aucun n'est réglé (Fichiers et configuration, réglages LinuxGSM)",
+  "LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without a clean stop": "LinuxGSM refusera son arrêt (« Arrêter seulement si vide » est activé), donc le redémarrage l'arrête sans arrêt propre"
 }

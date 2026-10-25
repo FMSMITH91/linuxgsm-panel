@@ -66,37 +66,53 @@ def warn_minutes_value(raw):
     return int(s, 10) if s.isascii() and s.isdecimal() else 0
 
 
-def warn_minutes(server, user, selfname, fresh=False):
-    """Return the server's warnplayerstimer in minutes, cached; None when its config was not read."""
+def settings(server, user, selfname, fresh=False):
+    """The server's {"minutes": warnplayerstimer, "stop_only": stoponlyifnoplayers is on}, cached.
+
+    None when its config could not be read: unknown, never "off".
+    """
     key = _lg264_key(server, user, selfname)
     now = time.time()
     with _lg264_lock:
         hit = _lg264_cache.get(key)
     if hit and hit[0] > now and not fresh:
-        return hit[1]
+        return dict(hit[1])
     try:
-        vals = _sm.lgsm_get_values(server, user, selfname or user, ["warnplayerstimer"])
+        vals = _sm.lgsm_get_values(server, user, selfname or user,
+                                   ["warnplayerstimer", "stoponlyifnoplayers"])
     except Exception:  # noqa: BLE001 - unread is answered as unknown, never as "off"
         vals = None
     if vals is None:
         return None
-    minutes = warn_minutes_value(vals.get("warnplayerstimer"))
-    with _lg264_lock:
-        _lg264_cache[key] = (now + _LG264_TTL, minutes)
-    return minutes
+    remember(server, user, selfname, vals.get("warnplayerstimer"), vals.get("stoponlyifnoplayers"))
+    return {"minutes": warn_minutes_value(vals.get("warnplayerstimer")),
+            "stop_only": str(vals.get("stoponlyifnoplayers") or "").strip() == "on"}
+
+
+def warn_minutes(server, user, selfname, fresh=False):
+    """Return the server's warnplayerstimer in minutes, cached; None when its config was not read."""
+    got = settings(server, user, selfname, fresh)
+    return None if got is None else got["minutes"]
+
+
+def stop_only_if_empty(server, user, selfname):
+    """Whether the server's stoponlyifnoplayers is on, cached; None when its config was not read."""
+    got = settings(server, user, selfname)
+    return None if got is None else got["stop_only"]
 
 
 def forget(server, user, selfname):
-    """Drop the cached timer of one server: its config was just written."""
+    """Drop the cached settings of one server: its config was just written."""
     with _lg264_lock:
         _lg264_cache.pop(_lg264_key(server, user, selfname), None)
 
 
-def remember(server, user, selfname, raw):
-    """Cache the timer a config read in hand already holds (the editor's read)."""
+def remember(server, user, selfname, raw_timer, raw_stop):
+    """Cache the two settings a config read in hand already holds (the editor's read)."""
     with _lg264_lock:
         _lg264_cache[_lg264_key(server, user, selfname)] = (
-            time.time() + _LG264_TTL, warn_minutes_value(raw))
+            time.time() + _LG264_TTL, {"minutes": warn_minutes_value(raw_timer),
+                                       "stop_only": str(raw_stop or "").strip() == "on"})
 
 
 def allowance_seconds(server, user, selfname, action="stop"):
@@ -240,7 +256,8 @@ def config_view(gs, d):
         return d
     warn_ok = (gs.game_type or "") in WARN_GAMES
     minutes = warn_minutes_value(pl.get("warnplayerstimer"))
-    remember(gs.remote, gs.short_name, gs.lgsm_name, pl.get("warnplayerstimer"))
+    remember(gs.remote, gs.short_name, gs.lgsm_name, pl.get("warnplayerstimer"),
+             pl.get("stoponlyifnoplayers"))
     _lg264_hide_keys(d, {"stoponlyifnoplayers"} | ({"warnplayerstimer"} if warn_ok or not minutes else set()))
     d["players"] = {"supported": True, "stop_only_if_empty": pl.get("stoponlyifnoplayers") == "on",
                     "warn_supported": warn_ok, "warn_minutes": minutes, "warn_max": WARN_MAX_MINUTES,
@@ -296,12 +313,15 @@ def reboot_warn_fields(remote, gs, probe):
     """What a forced reboot's stop of server `gs` tells its players first (the dialog's lines).
 
     Only for a running one (probe session 1), else {}. warn_minutes: LinuxGSM's warnplayerstimer
-    (None: unread); warn_supported: its game is in WARN_GAMES; say: the panel's own 60 s countdown
+    (None: unread); stop_only_if_empty: its stoponlyifnoplayers, which makes LinuxGSM REFUSE the
+    reboot's stop while players are on — the panel cannot override it, so the shutdown ends that
+    server; warn_supported: its game is in WARN_GAMES; say: the panel's own 60 s countdown
     (host_reboot COUNTDOWN) reaches it.
     """
     if (probe or {}).get("session") != 1:
         return {}
     return {"warn_minutes": warn_minutes(remote, gs.short_name, gs.lgsm_name),
+            "stop_only_if_empty": stop_only_if_empty(remote, gs.short_name, gs.lgsm_name),
             "warn_supported": (gs.game_type or "") in WARN_GAMES,
             "say": bool(_sm.moderation_caps(gs.game_type).get("say"))}
 

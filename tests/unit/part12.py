@@ -377,10 +377,11 @@ def _p9_arm(patch=None, who="part12"):
             _m.subprocess,
             Popen=_p9_trip(_tn + ".subprocess.Popen", exc=OSError(_no)),
             run=_p9_trip(_tn + ".subprocess.run", exc=OSError(_no))))
-    # The warning timer every stop, restart, update and backup reads first (LinuxGSM v26.4.0's
-    # warnplayerstimer) is a host config read, answered here as "off"; part138 drives it.
+    # The player settings every stop, restart, update and backup reads first (LinuxGSM v26.4.0's
+    # warnplayerstimer, stoponlyifnoplayers) are a host config read, answered here as "off"; part138
+    # drives it.
     from panel.services import lgsm_players as _p9_lgp
-    patch(_p9_lgp, "warn_minutes", lambda *a, **k: 0)
+    patch(_p9_lgp, "settings", lambda *a, **k: {"minutes": 0, "stop_only": False})
     # Rendering reads Tailscale state for the nav; that is a host command, answered here.
     patch(_p9_ts, "get_tailscale_info",
           lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))

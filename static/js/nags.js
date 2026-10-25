@@ -139,11 +139,15 @@ function _rbPlayers(ctx){
   _rbChoiceButtons(ctx);
 }
 // What "Reboot now" tells the players of each server that has them, before its stop: LinuxGSM's
-// own countdown (warnplayerstimer, v26.4.0), which the reboot waits for, or why there is none.
+// own countdown (warnplayerstimer, v26.4.0), which the reboot waits for, or why there is none — or
+// that LinuxGSM will refuse the stop altogether (stoponlyifnoplayers).
 // From the preview's warn_minutes / warn_supported / say (host_reboot._lg264_warn_fields). One line
 // per server; more than three fold under a summary.
 function _rbWarnWord(sv){
   var n = sv.warn_minutes;
+  // LinuxGSM's "Only stop when empty" refuses the stop while players are on, and nothing the panel
+  // sends overrides it: the shutdown then ends the server without its clean stop.
+  if (sv.stop_only_if_empty === true) return window.tf('LinuxGSM will refuse its stop (Only stop when empty is on), so the reboot ends it without a clean stop');
   if (n == null) return window.tf('its LinuxGSM warning time could not be read');
   if (n > 0 && sv.warn_supported) return window.tf('LinuxGSM warns its players for {n} min first; the reboot waits for it', {n: n});
   if (!sv.warn_supported) return window.tf(sv.say ? 'only the panel’s 60 s warning: its console can’t show LinuxGSM’s'

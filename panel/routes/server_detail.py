@@ -23,8 +23,8 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     allowed_custom_commands,
     _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
-from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _mark_expected_offline)
-from panel.services.monitoring import _end_stop_window as _mon_end_stop_window
+from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_stop_window as _mon_end_stop_window,
+                                       _mark_expected_offline)
 from panel.services import lgsm_players as _lgp
 import concurrent.futures
 import functools
