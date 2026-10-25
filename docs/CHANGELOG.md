@@ -20,15 +20,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
   - **Two controls in Files & Config → LinuxGSM Settings**: *Only stop when empty* (on/off) and
     *Warn players first* (0–60 minutes), with a one-line explanation. They show only on servers
     running LinuxGSM 26.4 or later, and the warning only on games whose console LinuxGSM can warn
-    through.
-  - **Stop, Restart, Update, Backup, queued actions, uninstall and host reboots wait for the
-    warning** instead of giving up after a minute. A server whose setting cannot be read keeps the
-    old time limit.
+    through. On games whose player list can come back empty (Minecraft, CS2, CS:GO), the page says
+    LinuxGSM may then stop the server anyway, without its warning.
+  - **Stop, Restart, Update, Backup, queued actions and host reboots wait for the warning**
+    instead of giving up after a minute. A server whose setting cannot be read keeps the old time
+    limit. An uninstall stops the server straight away (no countdown, no players check), so the
+    page does not hang for the warning's minutes.
   - **"Postponed" is said as postponed.** An update, backup or restart LinuxGSM puts off because
     players are online is reported as postponed — in the console, the audit log, the chat bots,
     the backup card and the scheduled-tasks list — never as finished or failed, and the message
     says whether LinuxGSM will run it later (it does when Autostart is on). A stop LinuxGSM
-    refuses says so.
+    refuses says so, and the Stop and Restart buttons say it in the server's console.
   - **The panel's scheduled backups and LinuxGSM's postponed backup no longer both run.** While
     LinuxGSM holds a backup for an empty server, the panel leaves it to LinuxGSM, records it when
     LinuxGSM has taken it, and does not repeat LinuxGSM's own "backup postponed" alert.
@@ -36,7 +38,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
     refuses an ordinary stop while players are online; for a "Reboot now" the panel sets that
     setting aside for the one stop, so LinuxGSM still saves and stops the server itself. The Stop
     button keeps the setting (and says when it refused). Players are warned once: by LinuxGSM's
-    countdown where a server has one, by the panel's 60-second warning otherwise.
+    countdown where a server has one, by the panel's 60-second warning otherwise — and on games
+    whose players LinuxGSM cannot always count (Minecraft, CS2, CS:GO), by the panel's. Servers the
+    panel warned are stopped first, before any LinuxGSM countdown.
+  - **A reboot that waits for an empty host goes back to waiting** when LinuxGSM refuses a stop
+    because a player has just joined, instead of letting the shutdown end that server.
+  - **Cancel during a reboot's stops calls off LinuxGSM's countdown** the way LinuxGSM's own
+    Ctrl-C does (its players are told the stop is cancelled), and the servers already stopped are
+    started again.
+  - **A reboot does not start while LinuxGSM is counting down** to another stop, restart, update
+    or backup on the host, or while a LinuxGSM restart is running, and its time allowance follows
+    how many accounts are stopped at once.
   - **The Reboot dialog** lists, for each server with players online, how long LinuxGSM will warn
     them (and that the reboot waits for it), or that only the panel's 60-second warning applies.
   - **workshop-update** is in the Maintenance menu on the games LinuxGSM offers it for.
