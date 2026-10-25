@@ -678,7 +678,7 @@ def _node_tools_cron_pass(app):
     database just before it is acted on, and one that is gone is skipped.
 
     Idempotent + best-effort: one host or server failing never stops the rest. Last, the one-time
-    close of TeamSpeak 3's ServerQuery rules (_lgc_ts3_heal_pass), which is a no-op once done."""
+    close of TeamSpeak 3's ServerQuery rules (game_ports.lgc_ts3_heal_pass), a no-op once done."""
     with app.app_context():
         for r in RemoteServer.query.all():   # includes the local/panel host
             if not _still_in_db(r):
@@ -703,19 +703,8 @@ def _node_tools_cron_pass(app):
                                                   query_type=gs.query_type)
             except Exception:
                 _log.debug("cron upgrade failed for %s", row_label(gs, "name"), exc_info=True)
-    _lgc_ts3_heal_pass(app)
-
-
-def _lgc_ts3_heal_pass(app):
-    """Once per TeamSpeak 3 server: close the ServerQuery rules an older panel opened (game_ports)."""
-    try:
-        with app.app_context():
-            from panel.routes.manage_servers import sibling_port_blocks
-            from panel.services.game_ports import lgc_heal_ts3_serverquery
-            lgc_heal_ts3_serverquery(sibling_port_blocks)
-    except Exception:
-        _log.warning("the TeamSpeak 3 ServerQuery close failed; the next daily pass tries again",
-                     exc_info=True)
+    from panel.services import game_ports as _gp
+    _gp.lgc_ts3_heal_pass(app)
 
 
 def _node_tools_cron_watch(app):

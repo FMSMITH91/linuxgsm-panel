@@ -797,8 +797,13 @@ def _ts3_heal140():
         return _details140(_TS3_TABLE140), "", 0
     try:
         _smc140.run_as_game_user = details
-        _smh140.firewall.remote_ufw_status = lambda s: _ts3_fw140[cur["u"]].status(s)
-        _smh140.remote_ufw_delete_rule = lambda s, n, **k: _ts3_fw140[cur["u"]].delete(s, n, **k)
+        def status(server):
+            return _ts3_fw140[cur["u"]].status(server)
+
+        def delete(server, num, **k):
+            return _ts3_fw140[cur["u"]].delete(server, num, **k)
+        _smh140.firewall.remote_ufw_status = status
+        _smh140.remote_ufw_delete_rule = delete
         _smh140.protected_host_ports = lambda server: {22}
         with _p9.app_context():
             _gp140.lgc_heal_ts3_serverquery(_spb140)
@@ -845,8 +850,9 @@ check("ts3 ServerQuery heal: a second pass leaves a done server alone (no firewa
       _s140[0] == "failed" and _s140[2] is True and _s140[3] is True and _s140[1] == _f140[2], repr(_s140))
 _app_src140 = _read140("app.py")
 check("ts3 ServerQuery heal: the daily background pass runs it, on every host the panel has",
-      "_lgc_ts3_heal_pass" in _calls_in140(_app_src140, "_node_tools_cron_pass")
-      and "lgc_heal_ts3_serverquery" in _calls_in140(_app_src140, "_lgc_ts3_heal_pass"))
+      "lgc_ts3_heal_pass" in _calls_in140(_app_src140, "_node_tools_cron_pass")
+      and "lgc_heal_ts3_serverquery" in _calls_in140(_read140("panel", "services", "game_ports.py"),
+                                                     "lgc_ts3_heal_pass"))
 
 
 # ── 13. M2: a Valheim on -crossplay is backed up once it has skipped a whole interval ─────────────

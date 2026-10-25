@@ -509,18 +509,26 @@ def lgsm_read_config(server, user, selfname):
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
     out = {"path": inst, "raw": instance_text, "settings": settings, "groups": groups,
            "players": _lg264_player_settings(merged, defaults, instance, common)}
-    # Project Zomboid (whose script is always pzserver) still on LinuxGSM's CHANGE_ME: the page
-    # warns, with a one-click fix (routes/pz_admin.py). Only on a read that succeeded, which this is.
-    if selfname == "pzserver":
-        out["lgc_pz_default_admin"] = merged.get("adminpassword") == LGC_PZ_DEFAULT_ADMIN
-    # CS:GO (csgoserver): the App ID note only where it applies — a gslt is set and LinuxGSM runs the
-    # game as another App ID than 730 (v26.3.0's clientappid, default 4465480). Not for clientappid
-    # 730 (still CS2's csgo_legacy), "" (left unmanaged) or unset (a release before v26.3.0, which
-    # does not switch), nor without a gslt, which has nothing to stop working.
-    if selfname == "csgoserver":
-        out["lgc_csgo_appid_note"] = (bool((merged.get("gslt") or "").strip())
-                                      and (merged.get("clientappid") or "").strip() not in ("", "730"))
+    out.update(_lgc_read_flags(selfname, merged))
     return out
+
+
+def _lgc_read_flags(selfname, merged):
+    """The Config tab's per-game notices for a config read that succeeded (`merged`: its values).
+
+    Project Zomboid (whose script is always pzserver) still on LinuxGSM's CHANGE_ME: the page warns,
+    with a one-click fix (routes/pz_admin.py). CS:GO (csgoserver): the App ID note only where it
+    applies — a gslt is set and LinuxGSM runs the game as another App ID than 730 (v26.3.0's
+    clientappid, default 4465480). Not for clientappid 730 (still CS2's csgo_legacy), "" (left
+    unmanaged) or unset (a release before v26.3.0, which does not switch), nor without a gslt,
+    which has nothing to stop working.
+    """
+    if selfname == "pzserver":
+        return {"lgc_pz_default_admin": merged.get("adminpassword") == LGC_PZ_DEFAULT_ADMIN}
+    if selfname == "csgoserver":
+        return {"lgc_csgo_appid_note": (bool((merged.get("gslt") or "").strip())
+                                        and (merged.get("clientappid") or "").strip() not in ("", "730"))}
+    return {}
 
 
 def _lg264_player_settings(merged, defaults, instance, common):

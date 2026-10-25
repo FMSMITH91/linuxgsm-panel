@@ -657,15 +657,12 @@ def _back_up_if_due(app, target):
                                              game_type=gtype, port=port,
                                              query_type=qtype,
                                              held=functools.partial(claim_row, GameServer, sid, born))
+    # A Valheim on -crossplay a whole interval past due is backed up anyway (_lgc_vh_anyway).
+    ok, reason, was_skipped = _lgc_vh_back_up_anyway(
+        sid, (ok, reason, was_skipped), (sched["last"] + sched["interval_days"] * 86400, sched["interval_days"]),
+        (remote, short, lgsm, keep, gtype, port, qtype), functools.partial(claim_row, GameServer, sid, born))
     if claim_row(GameServer, sid, born) is None:
         return   # deleted while it was being archived: nothing below is its any more
-    if was_skipped and _lgc_vh_anyway(reason, sched["last"] + sched["interval_days"] * 86400,
-                                      sched["interval_days"]):
-        ok, reason, was_skipped = _lgc_vh_back_up_anyway(sid, (remote, short, lgsm, keep),
-                                                         (gtype, port, qtype),
-                                                         functools.partial(claim_row, GameServer, sid, born))
-        if claim_row(GameServer, sid, born) is None:
-            return
     if was_skipped:
         # Players online — leave the clock untouched so it stays "due" and we
         # retry on the next hourly tick, backing up once the server empties.
@@ -696,16 +693,18 @@ def _lgc_vh_anyway(reason, since, interval_days):
             and time.time() - since >= interval_days * 86400)
 
 
-def _lgc_vh_back_up_anyway(sid, where, game, held):
-    """The forced run for _lgc_vh_anyway: (ok, reason, skipped), the reason saying it was forced.
+def _lgc_vh_back_up_anyway(sid, result, bound, run, held):
+    """`result` (ok, reason, skipped) of a run, or the forced run that replaces it under _lgc_vh_anyway.
 
-    `where` is (remote, short_name, lgsm_name, keep), `game` (game_type, port, query_type).
-    Through _marked_backup like every unattended run; a run that worked reports
-    LGC_VH_BACKED_UP_ANYWAY alone (one sentence the page translates), one that failed its own
-    reason after it.
+    `bound` is (since, interval_days) for _lgc_vh_anyway; `run` (remote, short_name, lgsm_name,
+    keep, game_type, port, query_type). Forced through _marked_backup like every unattended run; a
+    run that worked reports LGC_VH_BACKED_UP_ANYWAY alone (one sentence the page translates), one
+    that failed its own reason after it.
     """
-    remote, short, lgsm, keep = where
-    gtype, port, qtype = game
+    # held(): never forced for a server deleted while its first run was going on.
+    if not (result[2] and _lgc_vh_anyway(result[1], *bound) and held()):
+        return result
+    remote, short, lgsm, keep, gtype, port, qtype = run
     ok, why, skipped = _marked_backup(sid, remote, short, lgsm, keep, game_type=gtype, port=port,
                                       query_type=qtype, force=True, held=held)
     note = _sm.LGC_VH_BACKED_UP_ANYWAY
@@ -820,17 +819,15 @@ def _back_up_queued(app, gs):
         gs.id, gs.remote, gs.short_name, gs.lgsm_name, sched["keep"],
         game_type=gs.game_type, port=gs.port, query_type=gs.query_type,
         held=functools.partial(still_held, gs))
+    # Valheim on -crossplay never counts as empty: a queue waiting a whole interval for that backs
+    # up anyway, as the scheduled sweep does (_lgc_vh_anyway).
+    ok, reason, was_skipped = _lgc_vh_back_up_anyway(
+        gs.id, (ok, reason, was_skipped),
+        (bk.queued_since(gs.id), sched["interval_days"] or bk.DEFAULT_FULL_INTERVAL),
+        (gs.remote, gs.short_name, gs.lgsm_name, sched["keep"], gs.game_type, gs.port, gs.query_type),
+        functools.partial(still_held, gs))
     if not still_held(gs):
         return
-    if was_skipped and _lgc_vh_anyway(reason, bk.queued_since(gs.id),
-                                      sched["interval_days"] or bk.DEFAULT_FULL_INTERVAL):
-        # Valheim on -crossplay never counts as empty: a queue waiting a whole interval for that
-        # backs up anyway, as the scheduled sweep does (_lgc_vh_anyway).
-        ok, reason, was_skipped = _lgc_vh_back_up_anyway(
-            gs.id, (gs.remote, gs.short_name, gs.lgsm_name, sched["keep"]),
-            (gs.game_type, gs.port, gs.query_type), functools.partial(still_held, gs))
-        if not still_held(gs):
-            return
     if was_skipped:
         # Still players on: stays queued. Clear the running mark set above.
         _game_backup_status[gs.id] = _lg264_busy_status(reason)

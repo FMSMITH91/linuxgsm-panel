@@ -457,6 +457,17 @@ def lgc_close_ts3_serverquery(gs, siblings):
     return not left, closed, "; ".join(left)
 
 
+def lgc_ts3_heal_pass(app):
+    """lgc_heal_ts3_serverquery from the daily background pass (app._node_tools_cron_pass). Never raises."""
+    try:
+        with app.app_context():
+            from panel.routes.manage_servers import sibling_port_blocks
+            lgc_heal_ts3_serverquery(sibling_port_blocks)
+    except Exception:  # noqa: BLE001 - background pass; the next daily pass tries again
+        _log.warning("the TeamSpeak 3 ServerQuery close failed; the next daily pass tries again",
+                     exc_info=True)
+
+
 def lgc_heal_ts3_serverquery(sibling_port_blocks):
     """lgc_close_ts3_serverquery once for every TeamSpeak 3 server not yet done (GameServer.lgc_ts3_query).
 
