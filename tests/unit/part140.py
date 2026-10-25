@@ -341,6 +341,20 @@ check("pz install: step 5 sets the random password for Project Zomboid only, and
       _pz_calls140 == [("p140pz", "pzserver")] and not hasattr(_job_css140, "lgc_note")
       and _pz_said140[:1] == [("p140pz installed and started " + str(_ms140.LGC_PZ_ADMIN_SET), False)],
       repr(_pz_said140))
+import ast as _ast140  # noqa: E402
+
+
+def _calls_in140(src, fn):
+    """Names called inside function `fn` of module source `src` (AST, so a comment is not a call)."""
+    node = next(n for n in _ast140.walk(_ast140.parse(src)) if isinstance(n, _ast140.FunctionDef) and n.name == fn)
+    return {c.func.id if isinstance(c.func, _ast140.Name) else getattr(c.func, "attr", "")
+            for c in _ast140.walk(node) if isinstance(c, _ast140.Call)}
+
+
+_ms_src140 = _read140("panel", "routes", "manage_servers.py")
+check("pz install: the install's step 5 calls the admin-password step, and its last word goes through "
+      "_lgc_noting", "_lgc_seed_pz_admin" in _calls_in140(_ms_src140, "_configure_server")
+      and "_lgc_noting" in _calls_in140(_ms_src140, "_configure_and_start"))
 check("pz install: ...and when the write failed, the install says the password is still CHANGE_ME, as a "
       "warning", len(_pz_said140) == 2 and _pz_said140[1][1] is True
       and str(_ms140.LGC_PZ_ADMIN_NOT_SET) in _pz_said140[1][0], repr(_pz_said140))
