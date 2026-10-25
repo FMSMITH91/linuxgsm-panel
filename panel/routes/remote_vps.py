@@ -307,6 +307,19 @@ def _fw_audit_source(source):
         return NOT_AN_IP
 
 
+def _fwb_open_note(remote, port, proto, family):
+    """What a successful open must add when a block above it still drops the port (L3), or None.
+
+    The open itself is done: a read that fails here (a host gone in between) says nothing either way
+    rather than turning a made change into an error.
+    """
+    try:
+        return _fw_rules.fwb_open_shadow_note(remote, int(port), proto, family)
+    except Exception:
+        _log_and_generic("open-port shadow read failed")
+        return None
+
+
 def _register_firewall_rules(app):
     """Firewall: open, allow-from, limit, close and delete rules."""
     @app.route("/api/remote/<int:remote_id>/firewall/open", methods=["POST"])
@@ -326,12 +339,17 @@ def _register_firewall_rules(app):
         # only when it is one of them, so the call for both is exactly the one it always was.
         family = _json_str(data, "family") or "both"
         _fam = {} if family == "both" else {"family": family}
+        # The family in the row too, validated: a v6-only open read the same in the trail as one for
+        # both families, and a v6-only rule beside the host's SSH rule is what the delete guard weighs.
+        a_family = family if family in _fw_rules.FWA_FAMILIES else _FWA_AUDIT_NOT_A_VALUE
         # A call that RAISES (a direct-SSH host that is down) is audited too: _r20b_audit_on_raise.
         with _r20b_audit_on_raise("remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
-                                  remote=remote):
+                                  detail=a_family, remote=remote):
             success, msg = remote_ufw_open_port(remote, port, proto, _json_str(data, "comment"), **_fam)
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
-                   success=success, remote=remote)
+                   detail=a_family, success=success, remote=remote)
+        if success:
+            msg = i18n.Sentences(msg, _fwb_open_note(remote, a_port, a_proto, family))
         return jsonify({"success": success, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])

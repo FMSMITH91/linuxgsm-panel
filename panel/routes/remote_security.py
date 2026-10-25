@@ -22,6 +22,7 @@ from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_aut
     _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _whitelist_mutate)
 from panel.ops import ssh_manager as _sm
+from panel.ops.ssh_manager import _core as _sm_core
 from panel.security import banlist as _banlist
 import ipaddress as _ipaddress
 
@@ -126,24 +127,33 @@ def _follow_in_panel_gate(remote, ok):
 def _fwa_block_refusal(remote, target):
     """Why blocking `target` (fwa_block_target's text: an address or a network) is refused, or None.
 
-    A block is a deny on every port inserted at the TOP, so whatever it covers is cut off: a RANGE
-    may not reach into the tailnet's addresses or an entry of the security whitelist (one address is
-    already held to both above, as it always was), nor cover the address the panel's own SSH
-    connection to this host comes from (which must be read: unread refuses); and no block, of one
-    address or many, may cover the address of the viewer making it.
+    A block is a deny on every port inserted at the TOP, so whatever it covers is cut off. Every
+    target, one address or many, is held to the same checks on its canonical form: it may not cover
+    the address of the viewer making it, reach into the tailnet's addresses or an entry of the
+    security whitelist (one address: the route's own checks, _fwb_single_refusal), nor cover an
+    address the panel connects to this host from: the session's source, which must be read (unread
+    refuses), and every global address of the panel's own host, any of which it may dial from next
+    time (a second uplink, a new IPv6 temporary address).
     """
     net = _ipaddress.ip_network(target, strict=False)
     mine = ip_address_or_none(client_ip())
+    mine = mine.ipv4_mapped if mine is not None and getattr(mine, "ipv4_mapped", None) else mine
     if mine is not None and mine.version == net.version and mine in net:
         return i18n.Sentence("{ip} covers your own address ({mine}) — blocking it would lock you out.",
                              ip=target, mine=str(mine))
-    if net.num_addresses == 1:
-        return None
-    return _fwa_range_refusal(net, target) or _fwa_source_refusal(remote, net, target)
+    if net.num_addresses > 1:
+        why = _fwa_range_refusal(net, target)
+        if why:
+            return why
+    return _fwa_source_refusal(remote, net, target)
 
 
 def _fwa_range_refusal(net, target):
-    """_fwa_block_refusal for a range: the tailnet's addresses and the whitelist's."""
+    """_fwa_block_refusal's tailnet and whitelist half for a RANGE: any overlap refuses.
+
+    One address is held to the route's own checks instead (_fwb_single_refusal), which exempt a
+    CGNAT-range address only while the host's tailnet is up, as the auto-block does.
+    """
     if any(net.version == n.version and net.overlaps(n) for n in _TAILNET_NETS):
         return i18n.Sentence("{ip} reaches into Tailscale's addresses — blocking it would cut off tailnet "
                              "access.", ip=target)
@@ -154,7 +164,7 @@ def _fwa_range_refusal(net, target):
 
 
 def _fwa_source_refusal(remote, net, target):
-    """_fwa_block_refusal for a range: the address the panel's connection to the host comes from."""
+    """_fwa_block_refusal's half for the addresses the panel's connection to the host may come from."""
     src = _sm.fwa_panel_source(remote)
     if src is None:
         return i18n.Sentence("Couldn't read the address the panel connects to this host from, so {ip} was "
@@ -163,17 +173,73 @@ def _fwa_source_refusal(remote, net, target):
     if s_addr is not None and s_addr.version == net.version and s_addr in net:
         return i18n.Sentence("{ip} covers the address the panel connects to this host from ({src}) — "
                              "blocking it would cut the panel off from the host.", ip=target, src=src)
+    if not src:
+        return None                  # the panel's own host, or one reached over Tailscale
+    own = _fwb_panel_host_addrs()
+    if own is None:
+        return i18n.Sentence("Couldn't read this panel host's own addresses, so {ip} was not blocked.", ip=target)
+    hit = sorted(str(a) for a in own if a.version == net.version and a in net)
+    if hit:
+        return i18n.Sentence("{ip} covers {addr}, an address of the panel's own host it may connect to this host "
+                             "from — blocking it could cut the panel off from the host.", ip=target, addr=hit[0])
+    return None
+
+
+def _fwb_panel_host_addrs():
+    """This panel host's global interface addresses (ip_address objects), or None when unread.
+
+    In the C locale (parsed by its words; _core._R19A_C_LOCALE's prefix, written out as the literal the
+    shell gate asks for), global scope only: loopback and link-local never carry the panel's
+    connection to another host.
+    """
+    try:
+        out, _err, rc = so._run("export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; ip -o addr show scope global",
+                                timeout=8)
+    except Exception:
+        current_app.logger.debug("the panel host's addresses could not be read", exc_info=True)
+        return None
+    if rc != 0:
+        return None
+    have = set()
+    for line in (out or "").splitlines():
+        parts = line.split()
+        for i, word in enumerate(parts[:-1]):
+            if word in ("inet", "inet6"):
+                have.add(ip_address_or_none(parts[i + 1].partition("/")[0]))
+    have.discard(None)
+    return have
+
+
+def _fwb_single_refusal(remote, target):
+    """The route's own refusal for ONE address (a JSON answer's message), on its canonical form, or None.
+
+    The tailnet: an address tailscale_exempt_ips holds (the host's tailnet up), or one in Tailscale's
+    own IPv6 range, which nothing else uses; and the whitelist.
+    """
+    addr = ip_address_or_none(target)
+    if addr is None:
+        return None
+    if tailnet_exempt_ips(remote, {target}) or (addr.version == 6 and any(
+            addr in n for n in _TAILNET_NETS if n.version == 6)):
+        return i18n.tr("{ip} is a Tailscale address — blocking it would cut off tailnet access.", ip=target)
+    if _whitelisted(target):
+        return i18n.tr("{ip} is on the security whitelist — remove it there first to block it.", ip=target)
     return None
 
 
 def _fwa_block_or_unblock(remote, ip, shown, unblock):
-    """The block route's write -> (ok, msg): the unblock, or the block once nothing refuses it."""
+    """The block route's write -> (ok, msg): the unblock, or the block once nothing refuses it.
+
+    The refusal is decided, and the deny written, under one hold of the host's ufw_lock (re-entrant:
+    remote_ufw_deny_ip takes it again for its own read and write).
+    """
     if unblock:
         return remote_ufw_undeny_ip(remote, ip)
     if shown == NOT_AN_IP:
         return False, "Invalid IP address."
-    why = _fwa_block_refusal(remote, shown)
-    return (False, why) if why else remote_ufw_deny_ip(remote, ip)
+    with _sm_core.ufw_lock(remote):
+        why = _fwa_block_refusal(remote, shown)
+        return (False, why) if why else remote_ufw_deny_ip(remote, shown)
 
 
 def _register_blocking(app):
@@ -188,16 +254,13 @@ def _register_blocking(app):
         # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
         # `{"unblock": "false"}` unblocked the address it asked to block.
         unblock = _r13b_json_flag(_json_body(), "unblock", False)
-        if not unblock and tailnet_exempt_ips(remote, {ip}):
-            return jsonify({"success": False, "message":
-                            i18n.tr("{ip} is a Tailscale address — "
-                                    "blocking it would cut off tailnet access.", ip=ip)})
-        if not unblock and _whitelisted(ip):
-            return jsonify({"success": False, "message":
-                            i18n.tr("{ip} is on the security whitelist — "
-                                    "remove it there first to block it.", ip=ip)})
-        # The address (or network), never the request's text: the row records what was acted on.
-        act, shown = ("ufw_unblock" if unblock else "ufw_block"), _sm.fwa_block_target(ip) or NOT_AN_IP
+        # The address (or network), never the request's text: the row records what was acted on, and
+        # the guards below and the deny all read this one canonical form (fwa_block_target).
+        act = "ufw_unblock" if unblock else "ufw_block"
+        shown = _sm.fwa_block_target(ip, unmap=not unblock) or NOT_AN_IP
+        refused = None if unblock or shown == NOT_AN_IP else _fwb_single_refusal(remote, shown)
+        if refused:
+            return jsonify({"success": False, "message": refused})
         try:
             with _r20b_audit_on_raise(act, detail=remote.name, target=shown, remote=remote):
                 ok, msg = _fwa_block_or_unblock(remote, ip, shown, unblock)

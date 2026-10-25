@@ -2971,7 +2971,7 @@ _RV_NAMES = ("current_user", "get_remote", "get_host_remote", "get_game", "GameS
              "remote_ufw_status", "remote_ufw_allow_game_port", "remote_ufw_allow_game_ports",
              "detect_game_ports", "remote_uptime", "remote_os_run_updates", "remote_os_update_start",
              "remote_reboot_required", "can_access_remote",
-             "has_permission", "host_specs", "_sm", "_hr", "r36j_host_claim")
+             "has_permission", "host_specs", "_sm", "_hr", "r36j_host_claim", "_fwb_open_note")
 _rv_saved = {n: getattr(_rv, n) for n in _RV_NAMES}
 _rv_auth_saved = {"current_user": _rv_auth.current_user}
 _rv_rwe_ids = []
@@ -3064,6 +3064,7 @@ try:
         _fw_calls.append(("from", source, port, proto, comment, allow)), (False, "nope"))[1]
     _rv.remote_ufw_limit_port = lambda remote, port, proto, limit=True: (
         _fw_calls.append(("limit", port, proto, limit)), (True, "limited"))[1]
+    _rv._fwb_open_note = lambda *a: None     # the open's read-back of the rules (part136)
     _rv.remote_ufw_close_port = lambda remote, port, proto: (
         _fw_calls.append(("close", port, proto)), (True, "closed"))[1]
     for _path, _js, _want in (("open", {"protocol": "udp"}, "Port required"),
@@ -3079,7 +3080,7 @@ try:
     check("firewall open: port, default tcp and comment are passed down; the result and audit row "
           "follow the helper", _st == 200 and _body == {"success": True, "message": "opened"}
           and _fw_calls[-1] == ("open", "27015", "tcp", "cs2")
-          and _rv_log[-1] == ("remote_port_open", "%s:27015/tcp" % _r.name, None, True),
+          and _rv_log[-1] == ("remote_port_open", "%s:27015/tcp" % _r.name, "both", True),
           "body=%r calls=%r log=%r" % (_body, _fw_calls[-1:], _rv_log[-1:]))
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/firewall/allow-from" % _r.id,
                                           json={"source": " 10.0.0.0/24 ", "port": 22, "allow": False}))

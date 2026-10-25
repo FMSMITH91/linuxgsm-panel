@@ -1955,6 +1955,11 @@ _r16d_wrap_ts_handles()
 # refusal with its positive control, the routes' RBAC and audit, the settings row's script) drives the
 # firewall module over a stand-in host on part12's stand-ins and tripwire, the remote forms under bash/dash,
 # the helper by part05 and the script in node; imports part01, 05, 12 and 47.
+# part136 (fw-more adversarial review: Block IP guarded on the canonical target, the lock-out checks per
+# address family and per source, a proxy's port as the panel's, a block's undo per family and its truthful
+# answer, the panel host's own addresses, Tailscale SSH on 22 only, tailscaled's configured port, the open's
+# shadow note and audited family) drives the firewall module on part135's stand-in host and part12's app;
+# imports part01, 12 and 135.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1970,7 +1975,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
           "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
-          "part132", "part133", "part134", "part135", "part15")
+          "part132", "part133", "part134", "part135", "part136", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

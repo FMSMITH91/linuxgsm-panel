@@ -1345,6 +1345,12 @@ def _check_host_routes_refuse_delegated_panel_host():
     _saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _stubs]
     for _m, _n, _r in _stubs:
         setattr(_m, _n, _rec(_n, _r))
+    # Not host calls these probes count: the open's read-back of the rules, and a block's read of the
+    # panel's own source (fw-more review). Stubbed silent, restored with the rest.
+    for _m, _n, _v in ((_rvps_mod._fw_rules, "fwb_open_shadow_note", lambda *a, **k: None),
+                       (_rsec_mod, "_fwa_source_refusal", lambda *a, **k: None)):
+        _saved.append((_m, _n, getattr(_m, _n)))
+        setattr(_m, _n, _v)
     with app.app_context():
         _loc = RemoteServer.query.filter_by(is_local=True).first()
         _made_local = _loc is None

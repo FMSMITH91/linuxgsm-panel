@@ -444,8 +444,15 @@ _TSREMOTE135 = _NS135(is_local=False, auth_method="tailscale", host="h.example.t
 _LOCAL135 = _NS135(is_local=True, auth_method="local", host="127.0.0.1", port=22, id=None, name="Panel")   # NOSONAR(S1313)
 
 
+# Where the panel's SSH session to a remote comes from (a LAN address, so the LAN-source rule below is
+# the panel's way in too; part136 holds a source outside it), and the viewer of a panel-host request.
+_SRC135 = "192.168.1.50"   # NOSONAR(S1313) - a private address, never dialled
+_VIEWER135 = "203.0.113.20"   # NOSONAR(S1313) - a documentation address
+
+
 def _on135(host, fn, *a, served=False, panel_ports=(5000,), **kw):
     """Run fn(*a, **kw) against stand-in `host`; every host read is answered from it."""
+    import ipaddress as _ip135
     try:
         _p9_arm(who="part135")
         _p9_patch(_core135, "run_privileged", host.run)
@@ -461,7 +468,9 @@ def _on135(host, fn, *a, served=False, panel_ports=(5000,), **kw):
         _p9_patch(_fw135, "_config_unreadable", lambda: False)
         _p9_patch(_cfg135, "load_config", lambda *x, **y: {"port": panel_ports[0] if panel_ports else 5000})
         _p9_patch(_cfg135, "bound_port", lambda: panel_ports[0] if panel_ports else None)
-        with _p9.app_context():
+        _p9_patch(_hosts135, "_fwb_ssh_source", lambda s: _ip135.ip_address(_SRC135))
+        _p9_patch(_fw135, "_fwb_tailscaled_port", lambda s: 41641)
+        with _p9.test_request_context("/", environ_base={"REMOTE_ADDR": _VIEWER135}):
             return fn(*a, **kw)
     finally:
         _p9_restore_all()
@@ -675,7 +684,7 @@ check("port block: when the second protocol fails the first is taken out again, 
       _hr135[0] is False and "ERROR: half" in str(_hr135[1]) and _hh135.changes() == [
           ("ufw-block-port", ["deny", "27015", "tcp", "both", ""]),
           ("ufw-block-port", ["deny", "27015", "udp", "both", ""]),
-          ("ufw-delete-block-port", ["deny", "27015", "tcp", "both"])], repr((_hr135, _hh135.changes())))
+          ("ufw-delete-block-port", ["deny", "27015", "tcp", "v4"])], repr((_hr135, _hh135.changes())))
 _b_badspec135 = [_block135(s)[0][0] for s in ("27015:27015", "abc", "0", "22;id")]
 check("port block: a spec that is not a port or a lo<hi range is refused before anything is read",
       _b_badspec135 == [False] * 4, repr(_b_badspec135))
@@ -763,6 +772,7 @@ try:
     _p9_patch(_fw135, "remote_ufw_block_port", lambda r, *a: (True, "blocked"))
     from panel.routes import remote_vps as _rv135
     _p9_patch(_rv135, "remote_ufw_open_port", lambda r, *a, **k: (True, "opened"))
+    _p9_patch(_fw135, "fwb_open_shadow_note", lambda *a: None)
     _C135 = _p9_client(_D135)
     for _hk135, _hid135 in (("panel host", P9_LOCAL), ("remote", P9_HOST)):
         _b135 = "/api/remote/%d/firewall/" % _hid135
@@ -805,6 +815,7 @@ try:
     _p9_patch(_rs135, "remote_ufw_deny_ip", lambda r, ip: (_rb_calls135.append(ip), (True, "ok"))[1])
     _p9_patch(_rs135, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_core135, "run_command", _rb_cmd135)
+    _p9_patch(_rs135, "_fwb_panel_host_addrs", lambda: set())
     _A135 = _p9_client(P9_ADMIN)
     _burl135 = "/api/remote/%d/security/block" % P9_HOST
     for _k135, _ip135 in (("tailnet", "100.64.0.0/9"), ("whitelist", "203.0.113.0/24"), ("mine", "127.0.0.0/8"),  # NOSONAR(S1313)
@@ -830,7 +841,7 @@ check("range block: a range clear of all of those is blocked (the deny masks it:
       _rb135["ok"].get("success") is True and _rb135["okhost"].get("success") is True
       and _rb135["ok6"].get("success") is True and _rb135["zone"].get("success") is False
       and _rb135["all"].get("success") is False
-      and _rb_calls135 == ["198.51.100.200/29", "192.0.2.77/24", "2001:db8:aa::/48"]  # NOSONAR(S1313)
+      and _rb_calls135 == ["198.51.100.200/29", "192.0.2.0/24", "2001:db8:aa::/48"]  # NOSONAR(S1313)
       and _hosts135.fwa_block_target("192.0.2.77/24") == "192.0.2.0/24"  # NOSONAR(S1313)
       and _hosts135.fwa_block_target("2001:db8:aa::5/48") == "2001:db8:aa::/48"
       and _hosts135.fwa_block_target("192.0.2.7/32") == "192.0.2.7"  # NOSONAR(S1313)

@@ -1141,6 +1141,7 @@ try:
     _p9_patch(_p9_rs, "tailnet_exempt_ips", lambda remote, ips: set())
     _p9_patch(_p9_rs, "_whitelisted", lambda ip: False)
     _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (False, "Invalid IP address."))
+    _p9_patch(_p9_rs, "_fwa_source_refusal", lambda *a: None)   # the panel's own source (part136)
     _p9_patch(_p9_rs, "remote_fail2ban_unban", lambda remote, jail, ip: (False, "Invalid IP address."))
     _hl_targets = []
     for _hl_path, _hl_body, _hl_act in (

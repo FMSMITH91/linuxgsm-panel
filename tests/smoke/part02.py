@@ -1877,9 +1877,10 @@ try:
     # refresh. Before, the gate kept serving a just-blocked address until its 90 s tick.
     _hp_refresh = []
     _hp_rs_saved = (_hp_rs.remote_ufw_deny_ip, _hp_rs.remote_fail2ban_unban,
-                    _hp_rs.tailnet_exempt_ips, _smoke_banlist.refresh_soon)
+                    _hp_rs.tailnet_exempt_ips, _smoke_banlist.refresh_soon, _hp_rs._fwa_source_refusal)
     try:
         _hp_rs.remote_ufw_deny_ip = lambda _r, _ip: (True, "blocked")
+        _hp_rs._fwa_source_refusal = lambda *a: None     # the panel's own source read (fw-more review)
         _hp_rs.remote_fail2ban_unban = lambda _r, _j, _ip: (True, "unbanned")
         _hp_rs.tailnet_exempt_ips = lambda _r, _ips: set()
         _smoke_banlist.refresh_soon = lambda *a, **k: _hp_refresh.append(a)
@@ -1890,7 +1891,7 @@ try:
         c.post("/api/remote/%d/security/block" % remote_id, json={"ip": "203.0.113.78"})
     finally:
         (_hp_rs.remote_ufw_deny_ip, _hp_rs.remote_fail2ban_unban,
-         _hp_rs.tailnet_exempt_ips, _smoke_banlist.refresh_soon) = _hp_rs_saved
+         _hp_rs.tailnet_exempt_ips, _smoke_banlist.refresh_soon, _hp_rs._fwa_source_refusal) = _hp_rs_saved
     check("panel host security: block and unban refresh the panel's own ban gate at once",
           _hp_refresh_local == 2, "refreshes=%r" % (_hp_refresh,))
     check("panel host security: ...a block on a remote does not (it is not the panel's gate)",

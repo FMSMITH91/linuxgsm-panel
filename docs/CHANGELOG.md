@@ -24,14 +24,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
   outgoing traffic needs DNS, HTTP and HTTPS allowed out, and on the panel's host its SSH to every
   remote; turning UFW off says the host will then accept every connection. While UFW is off the
   panel checks the rules UFW would load. A firewall the panel cannot read is never changed.
+  These checks are made for the address family (IPv4 or IPv6) the panel really uses to reach the
+  host, and for the address its connection comes from: a rule for IPv6 alone, or one kept to your
+  LAN, does not count as the panel's way in when it connects over IPv4 or from elsewhere. On the
+  panel's host the web port must stay open to the address you are viewing from (behind a reverse
+  proxy, the port you reached the proxy on). When the panel cannot read where it connects from,
+  the change is refused. Deleting a rule uses the same family rule: the host's last IPv4 SSH rule
+  stays protected even beside an IPv6-only one.
   Add a rule has a **Block** mode: deny or reject a port or a range (27015:27020), TCP, UDP or both,
   for IPv4, IPv6 or both, put at the top of the rule list so it wins over a rule that opens the port.
-  SSH's ports, the panel's web port and Tailscale's port cannot be blocked. **Open** can now keep a
-  port to IPv4 or IPv6 only. On the Security tab, **Blocked IPs** takes a range too
-  (203.0.113.0/24, 2001:db8::/48); a range reaching into Tailscale's addresses or the security
-  whitelist, or covering your own address or the one the panel connects from, is refused. Every
-  change is in the audit log, and on the panel's own host all of it is superadmin-only, like the
-  rest of its firewall.
+  SSH's ports, the panel's web port, a reverse proxy's or Tailscale Serve's port on the panel's host,
+  and the UDP port tailscaled listens on cannot be blocked. A block says what really happened: that
+  the port was already blocked, that an existing allow made UFW skip it (nothing blocked), that UFW
+  is off and the block is only stored, or, if it failed part-way, which rules it took out again.
+  **Open** can now keep a port to IPv4 or IPv6 only, and says so when a block above the new rule
+  still drops the port. On the Security tab, **Blocked IPs** takes a range too (203.0.113.0/24,
+  2001:db8::/48). However it is written (`/32`, an IPv4-mapped IPv6 address), a block is checked
+  as the address it really is: one reaching into Tailscale's addresses or the security whitelist,
+  or covering your own address, the one the panel connects from, or any of the panel host's own
+  addresses, is refused. Every change is in the audit log (an IPv4-only or IPv6-only open says
+  which), and on the panel's own host all of it is superadmin-only, like the rest of its firewall.
 - **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
   once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
   supported", to fetch it straight away, for a game LinuxGSM has just added.

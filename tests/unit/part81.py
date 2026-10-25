@@ -93,6 +93,7 @@ try:
     _p9_patch(_rs81, "tailnet_exempt_ips", lambda remote, ips: set())
     _p9_patch(_rs81, "_whitelisted", lambda ip: False)
     _p9_patch(_rs81, "remote_ufw_deny_ip", lambda remote, ip: (True, "Blocked."))
+    _p9_patch(_rs81, "_fwa_source_refusal", lambda *a: None)   # the panel's own source (part136)
     _p9_patch(_bl81, "refresh_soon", lambda *a, **k: None)
     _sa81 = _p9_client(P9_ADMIN)
     for _k81, _rid81, _ip81 in (("local", P9_LOCAL, "198.51.100.81"), ("remote", P9_HOST, "198.51.100.82")):

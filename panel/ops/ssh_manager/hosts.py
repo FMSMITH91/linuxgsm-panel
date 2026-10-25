@@ -3402,21 +3402,46 @@ def remote_fail2ban_overview(server):
 _UFW_BLOCK_TAG = "panel-block"          # a one-off manual block
 
 
-def fwa_block_target(value):
+def fwa_block_target(value, unmap=True):
     """What a Block names: one address, or a network, as the firewall lists it; None for anything else.
+
+    THE one reading of a Block's target: the route's guards (the whitelist, the tailnet, the viewer's
+    and the panel's own addresses) run on what this returns, and so does the deny, so no spelling
+    reaches the deny that the guards did not see. They ran on the request's text, and
+    ip_address_or_none reads `198.51.100.5/32` as no address at all, so a whitelisted or tailnet
+    address went straight past both written that way.
 
     An address in its canonical text (canonical_ip: a zone id refused). A network with its host bits
     masked off, so `203.0.113.7/24` is the `203.0.113.0/24` ufw stores and lists, and the blocked-IPs
-    readers key (system_ops._ufw_deny_sources); a full-length prefix is the bare address, as those
-    readers list it. Every address (any /0) is a network here and is refused where it is used.
+    readers key (system_ops._ufw_deny_sources); a full-length prefix (/32, /128) is the bare address,
+    as those readers list it. An IPv4-mapped IPv6 address or network (`::ffff:192.0.2.1`,
+    `::ffff:192.0.2.0/120`) is the IPv4 one it stands for, which is what a connection from it is: a
+    deny written for the mapped form sits in the IPv6 list and blocks nothing. `unmap` False keeps the
+    spelling as given, for removing a deny that was written that way. Every address (any /0) is a
+    network here and is refused where it is used.
     """
     text = str(value or "").strip()
-    if "/" not in text:
-        return canonical_ip(text)
-    net = ip_network_or_none(text)
+    if "/" in text:
+        net = ip_network_or_none(text)
+    else:
+        addr = ip_address_or_none(text)
+        net = None if addr is None else _ipaddress.ip_network(addr)
     if net is None:
         return None
+    if unmap:
+        net = _fwb_unmapped_net(net)
     return str(net.network_address) if net.num_addresses == 1 else str(net)
+
+
+# The IPv4-mapped IPv6 block (RFC 4291 2.5.5.2).
+_FWB_MAPPED = _ipaddress.ip_network("::ffff:0:0/96")
+
+
+def _fwb_unmapped_net(net):
+    """An IPv6 network inside ::ffff:0:0/96 (from /96 down) as the IPv4 network it maps, else `net`."""
+    if net.version == 6 and net.prefixlen >= 96 and net.subnet_of(_FWB_MAPPED):
+        return _ipaddress.ip_network((int(net.network_address) & 0xFFFFFFFF, net.prefixlen - 96))
+    return net
 
 
 def fwa_panel_source(server):
@@ -3430,10 +3455,24 @@ def fwa_panel_source(server):
     """
     if _core.is_local_server(server) or server.auth_method == "tailscale":
         return ""
+    addr = _fwb_ssh_source(server)
+    return None if addr is None else str(addr)
+
+
+def _fwb_ssh_source(server):
+    """The address remote `server` sees the panel's SSH session come from (an ip_address), or None.
+
+    The first word of the session's $SSH_CONNECTION, which sshd sets for every session; an
+    IPv4-mapped address is the IPv4 one it is. None when it could not be read: the firewall's lock-out
+    checks refuse on that, since the source is what decides whether a rule keeps the panel in. A host
+    that is down raises ConnectionError (paramiko), as every other call to it does.
+    """
     out, _err, rc = _core.run_command(server, 'printf "%s\\n" "$SSH_CONNECTION"', timeout=10, sudo=False)
     words = (out or "").split()
     addr = ip_address_or_none(words[0]) if rc == 0 and words else None
-    return None if addr is None else str(addr)
+    if addr is not None and getattr(addr, "ipv4_mapped", None) is not None:
+        addr = addr.ipv4_mapped
+    return addr
 
 
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
@@ -3461,8 +3500,12 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
 
 
 def remote_ufw_undeny_ip(server, ip):
-    """Remove a UFW deny rule for an IP or a network (fwa_block_target, a zone id refused). (ok, msg)."""
-    ip = fwa_block_target(ip)
+    """Remove a UFW deny rule for an IP or a network (fwa_block_target, a zone id refused). (ok, msg).
+
+    Read as it is spelled (unmap False): a deny for a mapped address someone wrote before is listed
+    that way, and its Unblock must name it so.
+    """
+    ip = fwa_block_target(ip, unmap=False)
     if ip is None:
         return False, "Invalid IP address."
     # Read the result — the same fix system_ops.ufw_undeny_ip already carries, for the same
