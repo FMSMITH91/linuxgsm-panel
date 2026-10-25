@@ -801,19 +801,19 @@ try:
     _p9_arm(who="part135")
     _p9_patch(_rs135, "tailnet_exempt_ips", lambda remote, ips: set())
     _p9_patch(_rs135, "_whitelisted", lambda ip: False)
-    _p9_patch(_rs135, "_whitelist_networks", lambda: [__import__("ipaddress").ip_network("203.0.113.64/26")])  # NOSONAR(S1313) - documentation and private test addresses
+    _p9_patch(_rs135, "_whitelist_networks", lambda: [__import__("ipaddress").ip_network("203.0.113.64/26")])  # NOSONAR(S1313)
     _p9_patch(_rs135, "remote_ufw_deny_ip", lambda r, ip: (_rb_calls135.append(ip), (True, "ok"))[1])
     _p9_patch(_rs135, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_core135, "run_command", _rb_cmd135)
     _A135 = _p9_client(P9_ADMIN)
     _burl135 = "/api/remote/%d/security/block" % P9_HOST
-    for _k135, _ip135 in (("tailnet", "100.64.0.0/9"), ("whitelist", "203.0.113.0/24"), ("mine", "127.0.0.0/8"),  # NOSONAR(S1313) - documentation and private test addresses
-                          ("mine1", "127.0.0.1"), ("source", "198.51.100.0/24"), ("v6tail", "fd7a:115c::/32"),  # NOSONAR(S1313) - documentation and private test addresses
-                          ("ok", "198.51.100.200/29"), ("okhost", "192.0.2.77/24"), ("all", "0.0.0.0/0"),  # NOSONAR(S1313) - documentation and private test addresses
+    for _k135, _ip135 in (("tailnet", "100.64.0.0/9"), ("whitelist", "203.0.113.0/24"), ("mine", "127.0.0.0/8"),  # NOSONAR(S1313)
+                          ("mine1", "127.0.0.1"), ("source", "198.51.100.0/24"), ("v6tail", "fd7a:115c::/32"),  # NOSONAR(S1313)
+                          ("ok", "198.51.100.200/29"), ("okhost", "192.0.2.77/24"), ("all", "0.0.0.0/0"),  # NOSONAR(S1313)
                           ("zone", "fe80::/64%eth0"), ("ok6", "2001:db8:aa::/48")):
         _rb135[_k135] = _A135.post(_burl135, json={"ip": _ip135}).get_json(silent=True) or {}
     _RB_SRC135["rc"] = -1
-    _rb135["unread"] = _A135.post(_burl135, json={"ip": "192.0.2.128/25"}).get_json(silent=True) or {}  # NOSONAR(S1313) - documentation and private test addresses
+    _rb135["unread"] = _A135.post(_burl135, json={"ip": "192.0.2.128/25"}).get_json(silent=True) or {}  # NOSONAR(S1313)
     _a_rb135 = _p9_audit("ufw_block")
 finally:
     _p9_restore_all()
@@ -830,13 +830,13 @@ check("range block: a range clear of all of those is blocked (the deny masks it:
       _rb135["ok"].get("success") is True and _rb135["okhost"].get("success") is True
       and _rb135["ok6"].get("success") is True and _rb135["zone"].get("success") is False
       and _rb135["all"].get("success") is False
-      and _rb_calls135 == ["198.51.100.200/29", "192.0.2.77/24", "2001:db8:aa::/48"]  # NOSONAR(S1313) - documentation and private test addresses
-      and _hosts135.fwa_block_target("192.0.2.77/24") == "192.0.2.0/24"  # NOSONAR(S1313) - documentation and private test addresses
+      and _rb_calls135 == ["198.51.100.200/29", "192.0.2.77/24", "2001:db8:aa::/48"]  # NOSONAR(S1313)
+      and _hosts135.fwa_block_target("192.0.2.77/24") == "192.0.2.0/24"  # NOSONAR(S1313)
       and _hosts135.fwa_block_target("2001:db8:aa::5/48") == "2001:db8:aa::/48"
-      and _hosts135.fwa_block_target("192.0.2.7/32") == "192.0.2.7"  # NOSONAR(S1313) - documentation and private test addresses
+      and _hosts135.fwa_block_target("192.0.2.7/32") == "192.0.2.7"  # NOSONAR(S1313)
       and _hosts135.fwa_block_target("fe80::/64%eth0") is None
-      and _a_rb135.target == "192.0.2.128/25", repr((_rb_calls135, _rbm135, _a_rb135)))  # NOSONAR(S1313) - documentation and private test addresses
-_deny_all135 = _on135(_Host135(), _hosts135.remote_ufw_deny_ip, _REMOTE135, "0.0.0.0/0")  # NOSONAR(S1313) - documentation and private test addresses
+      and _a_rb135.target == "192.0.2.128/25", repr((_rb_calls135, _rbm135, _a_rb135)))  # NOSONAR(S1313)
+_deny_all135 = _on135(_Host135(), _hosts135.remote_ufw_deny_ip, _REMOTE135, "0.0.0.0/0")  # NOSONAR(S1313)
 check("range block: every address (/0) is refused by the deny itself", _deny_all135[0] is False, repr(_deny_all135))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
