@@ -89,10 +89,10 @@ _LG264_RELEASE_KEY = "stoponlyifnoplayersallcommands"
 
 
 def settings(server, user, selfname, fresh=False):
-    """The server's {"minutes": warnplayerstimer, "stop_only": stoponlyifnoplayers is on,
-    "supported": its LinuxGSM is v26.4.0 or later}, cached.
+    """The server's LinuxGSM player settings, cached.
 
-    None when its config could not be read: unknown, never "off". Before v26.4.0 both are off
+    {"minutes": warnplayerstimer, "stop_only": stoponlyifnoplayers is on, "supported": its
+    LinuxGSM is v26.4.0 or later}. None when its config could not be read: unknown, never "off". Before v26.4.0 both are off
     whatever the config says: that LinuxGSM has neither.
     """
     key = _lg264_key(server, user, selfname)
@@ -577,7 +577,7 @@ def reboot_stop(remote, e, base, force=False):
 
 
 def stop_now(remote, user, selfname, timeout=60):
-    """LinuxGSM's own graceful stop with no warning and no players check: an uninstall's.
+    """Stop as an uninstall does: LinuxGSM's own graceful stop with no warning and no players check.
 
     An uninstall runs inside the request, and a server it is removing is not coming back, so its
     stop must not count down for warnplayerstimer minutes (the request would hang for up to an
