@@ -527,7 +527,7 @@ try:
     _p9_patch(_rs137, "client_ip", lambda: "203.0.113.20")   # NOSONAR(S1313) - the viewer, past the proxy
     _p9_patch(_rs137, "remote_ufw_deny_ip", lambda r, ip: (True, "ok"))
     _p9_patch(_rs137, "_follow_in_panel_gate", lambda remote, ok: None)
-    _p9_patch(_rs137, "_fwb_panel_host_addrs", lambda: set())
+    _p9_patch(_rs137, "_fwb_panel_host_addrs", set)
     _p9_patch(_core137, "run_privileged", _Host135(rules=[_SSH22, "5000/tcp  ALLOW IN  Anywhere"]).run)
     _p9_patch(_core137, "run_command", lambda *a, **k: ("", "", 1))
     _p9_patch(_hosts137, "_fwb_ssh_conn", lambda s: _rconn137())
@@ -600,8 +600,11 @@ check("LOW-3: a block whose IPv4 half went in before ufw failed with only \"ERRO
 
 
 class _SkipHost137(_Host135):
-    """ufw-block-port answers "Skipping" for both families; with `unread`, every listing after the guard's
-    own first read (the one the write is judged from, before and after) does not answer."""
+    """ufw-block-port answers "Skipping" for both families.
+
+    With `unread`, every listing after the guard's own first read (the one the write is judged from,
+    before and after) does not answer.
+    """
 
     def __init__(self, unread=False, **k):
         super().__init__(**k)

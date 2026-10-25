@@ -309,8 +309,9 @@ def local_addrs():
 
 
 def host_families(addrs, ipv6_on):
-    """The address families SSH may reach a host in: those of its global addresses on an interface that
-    takes connections from other machines (not loopback or a container bridge, not Tailscale's, which
+    """The address families SSH may reach a host in.
+
+    Those of its global addresses on an interface that takes connections from other machines (not loopback or a container bridge, not Tailscale's, which
     the Tailscale checks answer). IPv6 only where ufw handles it (`ipv6_on`). Unread: both.
     """
     if addrs is None:
@@ -400,7 +401,7 @@ def tunnel_running():
 
 
 def parse_app_profiles(text):
-    """ufw application profiles (INI, /etc/ufw/applications.d) -> {name lowercased: [(ranges, proto)]}.
+    """Read ufw application profiles (INI, /etc/ufw/applications.d) -> {name lowercased: [(ranges, proto)]}.
 
     A profile's `ports` is items joined by "|", each "<port>[,<port>|:<range>][/<proto>]" (no protocol:
     both). None when the text is not profiles at all.

@@ -1645,7 +1645,9 @@ _FWB_VIEWER_UNKNOWN = i18n.Sentence("Couldn't tell which address you reach the p
 # through Tailscale Serve, or (needing no inbound port) through a Cloudflare Tunnel. Each guard asks
 # ufweval whether those still get in, before and after the change it is deciding.
 def _fwc_paths(server, ts):
-    """{"conns": [ufweval.Conn], "why": a refusal when they cannot be known, "ts": Tailscale facts,
+    """The connections the panel depends on, as ufweval reads them.
+
+    {"conns": [ufweval.Conn], "why": a refusal when they cannot be known, "ts": Tailscale facts,
     "apps": a profile resolver, "unread": True when a remote's SSH session could not be read}.
 
     `ts` is (Tailscale running, Tailscale SSH on, regular SSH over the tailnet let in), read live.
@@ -1705,8 +1707,11 @@ def _fwc_serve_conns(addrs):
 
 
 def _fwc_request_end():
-    """(the address, the port) this request's socket was accepted on: eventlet's SERVER_NAME/SERVER_PORT
-    are the accepted socket's own name. (None, None) outside a request; a name is no address."""
+    """(the address, the port) this request's socket was accepted on.
+
+    eventlet's SERVER_NAME/SERVER_PORT are the accepted socket's own name. (None, None) outside a
+    request; a name is no address.
+    """
     from panel.core.validation import ip_address_or_none
     try:
         from flask import request
@@ -1736,8 +1741,9 @@ def _fwc_direct_conns(server, ts_running, viewer, addrs):
 
 
 def _fwc_proxy_conns(server, viewer, addrs):
-    """A viewer through a proxy here -> (conns, why): the connection it has open to the proxy, as the
-    kernel holds it (ufweval.inbound_from): which address and port it really came in on. None open: a
+    """A viewer through a proxy here -> (conns, why).
+
+    The connection it has open to the proxy, as the kernel holds it (ufweval.inbound_from): which address and port it really came in on. None open: a
     Cloudflare Tunnel (cloudflared runs here) needs no inbound port; anything else is not known.
     """
     from panel.ops.ssh_manager import ufweval
@@ -1795,8 +1801,11 @@ def _fwc_shown(conn):
 
 
 def _fwc_conn_gap(server, conn, denied):
-    """Why `conn` would not get in, the connection named as the firewall meets it: `denied` when a deny or
-    reject (one that may match it) comes before any allow, else because no rule lets it in."""
+    """Why `conn` would not get in, the connection named as the firewall meets it.
+
+    `denied` when a deny or reject (one that may match it) comes before any allow, else because no
+    rule lets it in.
+    """
     shown = _fwc_shown(conn)
     if conn.what == "web":
         if conn.src is None:
@@ -2312,8 +2321,10 @@ def _fwc_cut_answer(conn):
 
 
 def fwc_block_ip_refusal(server, target):
-    """Why blocking `target` (an address or network, fwa_block_target's text) on every port would cut the
-    panel's own connection to `server` off (ufweval, read before and after the deny goes on top), or None.
+    """Why blocking `target` on every port would cut the panel off from `server`, or None.
+
+    `target` is an address or network (fwa_block_target's text); the panel's own connection is read
+    by ufweval before and after the deny goes on top.
     """
     from panel.ops.ssh_manager import ufweval
     net = ipaddress.ip_network(target, strict=False)
@@ -2445,8 +2456,11 @@ def _fwa_write_blocks(server, how, protos):
 
 
 def _fwc_read_back(server, how, before, skipped, res):
-    """After a failed write: each half of the protocols tried that is listed now and was not before is
-    this call's (added, so the undo takes it out). Unread on either side: res["unverified"]."""
+    """After a failed write, find the halves this call wrote before ufw failed.
+
+    Each half of the protocols tried that is listed now and was not before is this call's (added, so
+    the undo takes it out). Unread on either side: res["unverified"].
+    """
     after = _fwb_listed_groups(server)
     if before is None or after is None:
         res["unverified"] = True
