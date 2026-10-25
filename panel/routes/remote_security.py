@@ -175,6 +175,11 @@ def _fwa_source_refusal(remote, net, target):
                              "blocking it would cut the panel off from the host.", ip=target, src=src)
     if not src:
         return None                  # the panel's own host, or one reached over Tailscale
+    return _fwb_own_addr_refusal(net, target)
+
+
+def _fwb_own_addr_refusal(net, target):
+    """_fwa_source_refusal's half for the panel host's own global addresses (any it may dial from)."""
     own = _fwb_panel_host_addrs()
     if own is None:
         return i18n.Sentence("Couldn't read this panel host's own addresses, so {ip} was not blocked.", ip=target)
@@ -186,7 +191,7 @@ def _fwa_source_refusal(remote, net, target):
 
 
 def _fwb_panel_host_addrs():
-    """This panel host's global interface addresses (ip_address objects), or None when unread.
+    """The panel host's own global interface addresses (ip_address objects), or None when unread.
 
     In the C locale (parsed by its words; _core._R19A_C_LOCALE's prefix, written out as the literal the
     shell gate asks for), global scope only: loopback and link-local never carry the panel's

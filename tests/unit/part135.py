@@ -815,7 +815,7 @@ try:
     _p9_patch(_rs135, "remote_ufw_deny_ip", lambda r, ip: (_rb_calls135.append(ip), (True, "ok"))[1])
     _p9_patch(_rs135, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_core135, "run_command", _rb_cmd135)
-    _p9_patch(_rs135, "_fwb_panel_host_addrs", lambda: set())
+    _p9_patch(_rs135, "_fwb_panel_host_addrs", set)
     _A135 = _p9_client(P9_ADMIN)
     _burl135 = "/api/remote/%d/security/block" % P9_HOST
     for _k135, _ip135 in (("tailnet", "100.64.0.0/9"), ("whitelist", "203.0.113.0/24"), ("mine", "127.0.0.0/8"),  # NOSONAR(S1313)
