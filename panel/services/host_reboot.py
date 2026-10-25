@@ -423,6 +423,18 @@ def _open_start(remote, user, selfname):
     return "wait", "the host did not answer"
 
 
+def _lgc_already_running(rc, out):
+    """Whether a `start` that exited `rc` with output `out` found the server already running.
+
+    rc 2 is LinuxGSM's generic ERROR (fn_script_log_error), not a code of its own for "already
+    running": that message is one of its errors, "Missing dependencies required to run SteamCMD"
+    another, and from v26.4.0 a prompt with no input a third. So 2 is "running" only with
+    command_start.sh's own words for it (LinuxGSM prints English only); any other 2 is read from
+    the session, like every other exit code.
+    """
+    return rc == 2 and "is already running" in (out or "")
+
+
 def safe_start(remote, ident):
     """Start one server the way LinuxGSM's own monitor will not race: (outcome, detail).
 
@@ -443,12 +455,7 @@ def safe_start(remote, ident):
         out, err, rc = "", "the start could not be run", -1
     if rc == 0:
         return "started", ""
-    # rc 2 is LinuxGSM's generic ERROR (fn_script_log_error), not a code of its own for "already
-    # running": that message is one of its errors, "Missing dependencies required to run SteamCMD"
-    # another, and from v26.4.0 a prompt with no input a third. So 2 is "running" only with
-    # command_start.sh's own words for it (LinuxGSM prints English only); any other 2 is read
-    # from the session, like every other exit code.
-    if rc == 2 and "is already running" in (out or ""):
+    if _lgc_already_running(rc, out):
         return "running", ""
     if probe_server(remote, ident).get("session") == 1:
         return "started", ""

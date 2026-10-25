@@ -188,7 +188,8 @@ check("cron form: ...and so does the Autostart switch's monitor line",
 
 def _grep_keeps140(grep_args, lines):
     """What `grep <grep_args>` (the writer's filter, as the host's grep runs it) keeps of `lines`."""
-    p = _sp140.run(["grep"] + _shlex140.split(grep_args), input="\n".join(lines) + "\n",
+    p = _sp140.run(["grep"] + _shlex140.split(grep_args),  # nosec B603 B607 - grep on test text
+                   input="\n".join(lines) + "\n",
                    capture_output=True, text=True, check=False, env={"LC_ALL": "C.UTF-8", "PATH": os.defpath})
     return p.stdout.splitlines()
 
@@ -244,15 +245,17 @@ _d140 = _tf140.mkdtemp(prefix="p140cron")
 _s140 = "p140lgc%dserver" % os.getpid()
 with open(os.path.join(_d140, _s140), "w", encoding="utf-8") as _fh140:
     _fh140.write("#!/bin/bash\nsleep 4\n")
-os.chmod(os.path.join(_d140, _s140), 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions - a test stand-in in a private temp dir
+os.chmod(os.path.join(_d140, _s140), 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
 
 
 def _monitor_sees140(line):
-    proc = _sp140.Popen(["sh", "-c", line], stdout=_sp140.DEVNULL, stderr=_sp140.DEVNULL)
+    proc = _sp140.Popen(["sh", "-c", line],  # nosec B603 B607 - a sleeping stand-in in a private temp dir
+                        stdout=_sp140.DEVNULL, stderr=_sp140.DEVNULL)
     try:
         seen = False
         for _i in range(30):
-            got = _sp140.run(["pgrep", "-fcx", "/bin/bash ./%s update" % _s140], capture_output=True,
+            got = _sp140.run(["pgrep", "-fcx", "/bin/bash ./%s update" % _s140],  # nosec B603 B607
+                             capture_output=True,
                              text=True, check=False).stdout.strip()
             if got not in ("", "0"):
                 seen = True
@@ -262,7 +265,7 @@ def _monitor_sees140(line):
     finally:
         proc.kill()
         proc.wait()
-        _sp140.run(["pkill", "-f", "%s update" % _s140], check=False)
+        _sp140.run(["pkill", "-f", "%s update" % _s140], check=False)  # nosec B603 B607
 
 
 _new_seen140 = _monitor_sees140("cd %s && ./%s update > /dev/null 2>&1" % (_d140, _s140))
@@ -494,7 +497,7 @@ check("new games: Jedi Academy (OpenJK) is moderated as idTech3 — kick and say
 check("csgo: the Config tab tells a CS:GO server that a GSLT made for App ID 730 stops working after "
       "LinuxGSM's switch to 4465480",
       "{% if server.game_type == 'csgo' %}" in _sfhtml140
-      and "A Game Server Login Token (gslt) made for App ID 730 stops working after the switch" in _sfhtml140)
+      and "a gslt made for App ID 730 stops working after the switch" in _sfhtml140)
 
 
 # ── 10. LinuxGSM's command aliases, and `start`'s exit code 2 ───────────────────────────────────

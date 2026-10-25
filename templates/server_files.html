@@ -202,7 +202,7 @@
       {% if server.game_type == 'csgo' %}
       <div class="alert alert-info py-2 px-3 mb-2 small" role="note">
         <i class="bi bi-info-circle"></i>
-        <span>From LinuxGSM v26.3.0, CS:GO runs as its own Steam app, App ID 4465480 (clientappid). A Game Server Login Token (gslt) made for App ID 730 stops working after the switch: make a new one for App ID 4465480, or set clientappid to 730 to keep running as CS2's csgo_legacy.</span>
+        <span>Since LinuxGSM v26.3.0, CS:GO runs as App ID 4465480: a gslt made for App ID 730 stops working after the switch. Make one for 4465480, or set clientappid to 730 to stay on CS2's csgo_legacy.</span>
       </div>
       {% endif %}
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>

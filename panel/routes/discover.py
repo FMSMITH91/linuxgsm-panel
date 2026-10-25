@@ -261,8 +261,10 @@ def _discovered_listing(found, existing, games):
 
 
 def _lgc_import_names():
-    """{shortname: game name} of every game an existing install may be: LinuxGSM's list, and the
-    games it retired (lgsm_data.RETIRED_GAMES), whose installs still run but are on no list now.
+    """{shortname: game name} of every game an existing install may be.
+
+    That is LinuxGSM's list, and the games it retired (lgsm_data.RETIRED_GAMES), whose installs still
+    run but are on no list now.
     """
     names = {sn: g["gamename"] for sn, g in lgsm_data.RETIRED_GAMES.items()}
     names.update({g["shortname"]: g["name"] for g in load_game_list()})

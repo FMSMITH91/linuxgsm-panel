@@ -71,7 +71,7 @@ def _lgc_legacy_core(user, selfname, cmd):
 
 
 def lgc_cron_cmd_ere(user, selfname, cmds):
-    """grep -E text for `<either form> (<cmds>) ` in a crontab line, as the cron writers remove one.
+    """The `grep -E` text for `<either form> (<cmds>) ` in a crontab line, as the cron writers remove one.
 
     The names are game_idents_ok'd by every caller; "." is the one ERE metacharacter they can
     carry, and it is made literal so it cannot match a neighbouring name.
