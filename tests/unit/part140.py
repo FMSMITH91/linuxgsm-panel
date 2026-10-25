@@ -472,9 +472,9 @@ try:
     _disc140.load_game_list = lambda: [{"shortname": "squad44", "name": "Squad 44"},
                                        {"shortname": "scpsl", "name": "SCP: Secret Laboratory"}]
     _names140 = _disc140._lgc_import_names()
-    _list140, _content140 = _disc140._discovered_listing(
+    _list140 = _disc140._discovered_listing(
         [{"user": "p140ps", "lgsm_name": "psserver"}, {"user": "p140sl", "lgsm_name": "scpslsmserver"}],
-        set(), _names140)
+        set(), _names140)[0]
 finally:
     _disc140.load_game_list = _lgl_real140
 check("retired games: the scan lists an existing Post Scriptum and SCP:SL ServerMod install for import, "
@@ -724,6 +724,60 @@ check("ts3 ServerQuery: with no details (its own voice and file ports unknown) n
       "it is not 'done'", _ts3d140 == (False, [], "LinuxGSM's details could not be read")
       and _fw_d140.reads == 0, repr(_ts3d140))
 
+# ...and over ufw's own `status numbered` text (0.36.2's layout, v4 rows and their v6 twins), through the
+# real parser and the real guarded delete (ufw-delete-num-if names the rule it means).
+_UFW_HDR140 = ("Status: active\n\n     To                         Action      From\n"
+               "     --                         ------      ----\n")
+_ufw_rows140 = [
+    ("Anywhere on tailscale0", "ALLOW IN", "Anywhere", ""), ("10011/tcp", "ALLOW IN", "Anywhere", "p140ts3"),
+    ("10022/tcp", "ALLOW IN", "Anywhere", "p140ts3"), ("9987/udp", "ALLOW IN", "Anywhere", "p140ts3"),
+    ("10011/tcp", "ALLOW IN", "Anywhere", ""), ("10011", "ALLOW IN", "Anywhere", "p140other"),
+    ("10443/tcp", "ALLOW IN", "10.0.0.0/8", "p140ts3"),
+    ("Anywhere (v6) on tailscale0", "ALLOW IN", "Anywhere (v6)", ""),
+    ("10011/tcp (v6)", "ALLOW IN", "Anywhere (v6)", "p140ts3"),
+    ("10022/tcp (v6)", "ALLOW IN", "Anywhere (v6)", "p140ts3"),
+    ("9987/udp (v6)", "ALLOW IN", "Anywhere (v6)", "p140ts3"), ("10011/tcp (v6)", "ALLOW IN", "Anywhere (v6)", "")]
+
+
+def _ufw_text140():
+    return _UFW_HDR140 + "".join("[%2d] %-26s %-11s %-26s%s\n" % (i, t, a, f, ("# " + c) if c else "")
+                                 for i, (t, a, f, c) in enumerate(_ufw_rows140, 1))
+
+
+def _ufw_verb140(server, verb, args=(), **k):
+    if verb == "ufw-status":
+        return _ufw_text140(), "", 0
+    if verb == "ufw-delete-num-if":
+        n = int(args[0])
+        got = [" ".join(r.split("]", 1)[1].split()) for r in _ufw_text140().splitlines()
+               if r.startswith("[") and int(r[1:r.index("]")]) == n]
+        if got != [args[1]]:
+            return "ufw-delete-num-if: rule %s is no longer the rule that was checked" % n, "", 3
+        del _ufw_rows140[n - 1]
+        return "Rule deleted", "", 0
+    return "", "", 0
+
+
+_ufw_saved140 = (_smc140.run_privileged, _smc140.run_command, _smc140.run_as_game_user, _smh140.protected_host_ports)
+try:
+    _smc140.run_privileged = _ufw_verb140
+    _smc140.run_command = lambda *a, **k: ("", "", 0)
+    _smc140.run_as_game_user = lambda *a, **k: (_details140(_TS3_TABLE140), "", 0)
+    _smh140.protected_host_ports = lambda server: {22}
+    _ufw_res140 = _gp140.lgc_close_ts3_serverquery(
+        _NS140(remote=_NS140(id=914002, name="vps", host="p140.example.invalid", port=22, username="root",
+                             auth_method="tailscale", auth_credential="", host_key="", is_local=False,
+                             sudo_enabled=True), short_name="p140ts3", lgsm_name="ts3server"), {})
+finally:
+    (_smc140.run_privileged, _smc140.run_command, _smc140.run_as_game_user,
+     _smh140.protected_host_ports) = _ufw_saved140
+check("ts3 ServerQuery: over ufw's own status text, the tagged 10011 and 10022 allows go in both families "
+      "(v4 and v6), and the tailscale0 rules, the untagged and other-name allows, the one-network rule and "
+      "the voice port stay", _ufw_res140 == (True, [10011, 10022], "")
+      and [r[0] for r in _ufw_rows140] == [
+          "Anywhere on tailscale0", "9987/udp", "10011/tcp", "10011", "10443/tcp",
+          "Anywhere (v6) on tailscale0", "9987/udp (v6)", "10011/tcp (v6)"], repr((_ufw_res140, _ufw_rows140)))
+
 # The daily pass: once per server, recorded on the row; a failure audited once, then logged only.
 _ts3_sid140 = _p9_new_server(P9_HOST, "p140ts3", "ts3", 9987)
 _ts3b_sid140 = _p9_new_server(P9_HOST, "p140ts3b", "ts3", 9997)
@@ -914,6 +968,17 @@ for _lk140, _ss140, _want140, _why140 in _vh_up_cases140:
     check("vh crossplay backup: running is the started.lock AND a live session — %s -> %s"
           % (_why140, _want140), _got140 == _want140, repr(_got140))
 
+_vh_sent140 = []
+_vh_saved140 = (_smf140.lgsm_get_values, _smc140.shell_as_game_user)
+try:
+    _smf140.lgsm_get_values = lambda *a, **k: {"startparameters": _XP140}
+    _smc140.shell_as_game_user = lambda s, u, cmd, **k: (_vh_sent140.append(cmd), ("LGC_DOWN", "", 0))[1]
+    _vh_down140 = _smg140._lgc_vh_crossplay_skip(object(), "p140vh", "vhserver")
+finally:
+    _smf140.lgsm_get_values, _smc140.shell_as_game_user = _vh_saved140
+check("vh crossplay backup: the backup's run-state read is that lock-and-session test, and its LGC_DOWN lets "
+      "the backup run", _vh_sent140 == [_smg140._lgc_vh_up_sh("p140vh", "vhserver")] and _vh_down140 is None,
+      repr((_vh_sent140, _vh_down140)))
 
 # ── 15. L3: the install's Project Zomboid note says what happened ────────────────────────────────
 _pz_notes140 = {}
@@ -1107,7 +1172,8 @@ _out_l8_140 = _run_js75(_name_l8_140, (
     "const sel = {value: '', options: [btl]}, host = {value: '1'};\n"
     "const slug = {'1': 'debian-12', '2': 'debian-11', '3': 'ubuntu-22.04', '4': 'ubuntu-20.04',\n"
     "              '5': 'arch-rolling', '6': 'debian'};\n"
-    "global.fetch = (u) => Promise.resolve({ok: true, json: () => Promise.resolve({os_slug: slug[u.split('/')[3]]})});\n"
+    "global.fetch = (u) => Promise.resolve({ok: true,\n"
+    "  json: () => Promise.resolve({os_slug: slug[u.split('/')[3]]})});\n"
     "global.document = {getElementById: id => ({'game-type-select': sel, 'remote-select': host})[id] || null};\n"
     + "".join(_cut_or75(_js75("manage_servers.js"), "function %s(" % _f140) + "\n" for _f140 in (
         "_capForHost", "_osOlder", "_osVersionParts", "_osVersionBelow", "_withoutParenNote",
