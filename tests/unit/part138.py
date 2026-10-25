@@ -1141,19 +1141,27 @@ try:
         _jr4.deadline = _time138.monotonic() + 600
         _jr4._sleep = lambda s: None
         _jr4._restop = lambda e: _restops_m4.append(e["id"])
-        _jr4._rescan()
-        _first_r4 = (list(_restops_m4), len(_calls_r4), _jr4.bounce_why)
+        _jr4._join_plan = lambda gs, probe: None      # only the plan's server matters here
+        try:
+            _jr4._rescan()
+            _first_r4 = (list(_restops_m4), len(_calls_r4), _jr4.bounce_why)
+        except Exception as _exc_r4:  # noqa: BLE001 - reported by the check below, by name
+            _first_r4 = repr(_exc_r4)[:120]
         # ...and still busy at the deadline: nothing is restopped, and the reboot is refused, not sent.
         _calls_r4.clear()
         _restops_m4.clear()
         _p9_patch(_hr138, "_probe_rows", lambda remote, rows: {i: {"session": 1, "maint": 1} for i in _ids_r4})
         _jr4.deadline = _time138.monotonic() - 1
-        _jr4._rescan()
         _said_r4 = []
         _p9_patch(_hr138, "rollback", lambda rid, why, wait=75, quiet=False: _said_r4.append(("rollback", why)))
         _jr4._refused = lambda reason, census: _said_r4.append(("refused", reason))
+        _jr4._back_to_waiting = lambda *a, **k: _said_r4.append(("back to waiting", k.get("reason")))
         _jr4.rolled_back = False
-        _bn_r4 = _jr4._bounced()
+        try:
+            _jr4._rescan()
+            _bn_r4 = _jr4._bounced()
+        except Exception as _exc_r4b:  # noqa: BLE001 - reported by the check below, by name
+            _bn_r4 = repr(_exc_r4b)[:120]
 finally:
     _p9_restore_all()
 check("M4 reboot: a server a LinuxGSM restart started again after the reboot's stop is stopped again once the "
@@ -1163,7 +1171,7 @@ check("M4 reboot: a LinuxGSM command still running at the stop phase's deadline 
       "the plan is undone and the reboot refused with the reason (now or waiting)",
       _restops_m4 == [] and _jr4.bounce_why == _lgp138.LG264_STILL_BUSY and _bn_r4 is True
       and _said_r4 == [("rollback", _lgp138.LG264_STILL_BUSY), ("refused", _lgp138.LG264_STILL_BUSY)],
-      repr((_restops_m4, _said_r4)))
+      repr((_restops_m4, _said_r4, _bn_r4)))
 
 # M5 + L10: the stop phase's budget follows the pool, pass by pass.
 _saved_m5 = _lgp138.warn_minutes
