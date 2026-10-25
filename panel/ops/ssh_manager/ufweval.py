@@ -147,6 +147,10 @@ def _addr_match(rule_addr, addr):
     return YES if addr in rule_addr else NO
 
 
+def _in_ranges(port, ranges):
+    return any(lo <= port <= hi for lo, hi in ranges)
+
+
 def _port_match(ports, proto, port, apps):
     """Whether TCP to `port` is named by a rule's ports (+ its protocol)."""
     if proto not in (ANY, "tcp"):
@@ -156,12 +160,16 @@ def _port_match(ports, proto, port, apps):
     if ports is None or port is None:
         return MAYBE
     if isinstance(ports, tuple):          # an application profile
-        entries = apps(ports[1]) if apps is not None else None
-        if entries is None:
-            return MAYBE
-        return YES if any(p in (ANY, "tcp") and any(lo <= port <= hi for lo, hi in r)
-                          for r, p in entries) else NO
-    return YES if any(lo <= port <= hi for lo, hi in ports) else NO
+        return _app_match(ports[1], port, apps)
+    return YES if _in_ranges(port, ports) else NO
+
+
+def _app_match(name, port, apps):
+    """Whether application profile `name` (resolved by `apps`) names TCP to `port`; MAYBE unresolved."""
+    entries = apps(name) if apps is not None else None
+    if entries is None:
+        return MAYBE
+    return YES if any(p in (ANY, "tcp") and _in_ranges(port, r) for r, p in entries) else NO
 
 
 def match(spec, conn, apps=None):
@@ -255,22 +263,24 @@ def parse_ip_addr(out):
     Each line is "N: <iface>    inet[6] <addr>/<len> ... scope <scope> ..."; a VLAN or veth name
     printed "<name>@<link>" is the name. Every Linux host lists lo, so a listing without it is no reading.
     """
-    rows = []
-    for line in (out or "").splitlines():
-        parts = line.split()
-        if len(parts) < 4 or not parts[0].endswith(":"):
-            continue
-        iface = parts[1].split("@")[0].rstrip(":")
-        for i, word in enumerate(parts[:-1]):
-            if word in ("inet", "inet6"):
-                try:
-                    addr = ipaddress.ip_interface(parts[i + 1]).ip
-                except ValueError:
-                    break
-                scope = parts[parts.index("scope") + 1] if "scope" in parts[:-1] else ""
-                rows.append((iface, addr, scope))
-                break
+    rows = [row for row in map(_ip_addr_row, (out or "").splitlines()) if row is not None]
     return rows if any(r[0] == "lo" for r in rows) else None
+
+
+def _ip_addr_row(line):
+    """One `ip -o addr` line -> (interface, ip_address, scope), else None."""
+    parts = line.split()
+    if len(parts) < 4 or not parts[0].endswith(":"):
+        return None
+    kind = next((i for i, w in enumerate(parts[:-1]) if w in ("inet", "inet6")), None)
+    if kind is None:
+        return None
+    try:
+        addr = ipaddress.ip_interface(parts[kind + 1]).ip
+    except ValueError:
+        return None
+    scope = parts[parts.index("scope") + 1] if "scope" in parts[:-1] else ""
+    return parts[1].split("@")[0].rstrip(":"), addr, scope
 
 
 def iface_of(addrs, addr):

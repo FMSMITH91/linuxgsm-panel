@@ -2065,11 +2065,13 @@ check("ufw grouping: ...and no two groups share one (positive control)",
 
 # ── firewall lock-out protection ──────────────────────────────
 def _protect_conn(server):
-    """The panel's SSH session as protect()'s remote reports it (hosts._fwb_ssh_conn): one the firewall never
-    filters (it arrives on loopback, which ufw's before.rules accept), so the checks below read the way-in
-    counting alone. The panel's own connection through the rules is held by part137 (ufweval)."""
-    import ipaddress as _ipp
-    lo = _ipp.ip_address("127.0.0.1")   # NOSONAR(S1313) - loopback
+    """The panel's SSH session as protect()'s remote reports it (hosts._fwb_ssh_conn).
+
+    One the firewall never filters (it arrives on loopback, which ufw's before.rules accept), so the
+    checks below read the way-in counting alone. The panel's own connection through the rules is held
+    by part137 (ufweval).
+    """
+    lo = _sm_hosts.ip_address_or_none("127.0.0.1")   # NOSONAR(S1313) - loopback
     return {"client": lo, "server": lo, "port": int(getattr(server, "port", 22) or 22), "iface": "lo",
             "addrs": [("lo", lo, "host")]}
 

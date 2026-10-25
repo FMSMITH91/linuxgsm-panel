@@ -1028,19 +1028,28 @@ def _fwc_protect_paths(groups, paths):
                 _fwc_protect(g, "ssh_unread")
         return
     for conn in paths["conns"]:
-        if ufweval.exempt(conn, paths["ts"]):
-            continue
-        pairs = _fwb_family_pairs(groups, conn.version)
-        view = [c for _g, c in pairs]
-        for g, c in pairs:
-            if c.get("action") not in ("ALLOW", "LIMIT") or ufweval.match(ufweval.spec_of(c), conn, paths["apps"]) == ufweval.NO:
-                continue
-            if not ufweval.accepts(ufweval.ordered_specs(view, without=c), conn, False, paths["apps"]):
-                src = str(conn.src) if conn.src is not None else "?"
-                if conn.what == "ssh":
-                    _fwc_protect(g, "ssh_panel", src=src)
-                else:
-                    _fwc_protect(g, "web_viewer", src=src, port=conn.dport if conn.dport is not None else "?")
+        if not ufweval.exempt(conn, paths["ts"]):
+            for g in _fwc_sole_ways(groups, conn, paths["apps"]):
+                _fwc_protect_for(g, conn)
+
+
+def _fwc_sole_ways(groups, conn, apps):
+    """The groups `conn` gets in by ALONE in its family's list: with one deleted, it no longer surely gets in."""
+    from panel.ops.ssh_manager import ufweval
+    pairs = _fwb_family_pairs(groups, conn.version)
+    view = [c for _g, c in pairs]
+    return [g for g, c in pairs
+            if c.get("action") in ("ALLOW", "LIMIT") and ufweval.match(ufweval.spec_of(c), conn, apps) != ufweval.NO
+            and not ufweval.accepts(ufweval.ordered_specs(view, without=c), conn, False, apps)]
+
+
+def _fwc_protect_for(g, conn):
+    """Protect `g` as the way `conn` gets in: the panel's own SSH session, or this viewer's connection."""
+    src = "?" if conn.src is None else str(conn.src)
+    if conn.what == "ssh":
+        _fwc_protect(g, "ssh_panel", src=src)
+    else:
+        _fwc_protect(g, "web_viewer", src=src, port="?" if conn.dport is None else conn.dport)
 
 
 def _ufw_is_active(status_out):
@@ -1730,26 +1739,31 @@ def _fwc_proxy_conns(server, viewer, addrs):
     Cloudflare Tunnel (cloudflared runs here) needs no inbound port; anything else is not known.
     """
     from panel.ops.ssh_manager import ufweval
-    seen = ufweval.inbound_from(viewer)
-    ssh = _fwssh_served_ports(server)
-    seen = [(a, p) for a, p in seen or () if p not in ssh]
+    seen = _fwc_seen(server, viewer)
     ports = sorted({p for _a, p in seen})
     pick = _fwc_pick_port(ports)
     if pick is not None:
         return [ufweval.Conn(viewer.version, viewer, a, pick, ufweval.iface_of(addrs, a), "web")
                 for a, p in seen if p == pick], None
-    if not seen:
-        if ufweval.tunnel_running():
-            return [], None
-        return [], i18n.Sentence(
-            "You reach the panel through a proxy on this machine, but no connection from your address ({ip}) to "
-            "this host is open, so the port you come in on is not known (a tunnel the panel does not recognise, or "
-            "a proxy that passes on another address than the one it accepted). Whether a rule keeps the panel "
-            "reachable cannot be checked.", ip=str(viewer))
-    return [], i18n.Sentence("Your address ({ip}) has connections open to this host on ports {ports}, so which one "
-                             "reaches the panel's proxy is not known. Have the proxy send X-Forwarded-Port (nginx: "
-                             "proxy_set_header X-Forwarded-Port $server_port;).",
-                             ip=str(viewer), ports=", ".join(str(p) for p in ports))
+    if seen:
+        return [], i18n.Sentence("Your address ({ip}) has connections open to this host on ports {ports}, so which "
+                                 "one reaches the panel's proxy is not known. Have the proxy send X-Forwarded-Port "
+                                 "(nginx: proxy_set_header X-Forwarded-Port $server_port;).",
+                                 ip=str(viewer), ports=", ".join(str(p) for p in ports))
+    if ufweval.tunnel_running():
+        return [], None
+    return [], i18n.Sentence(
+        "You reach the panel through a proxy on this machine, but no connection from your address ({ip}) to "
+        "this host is open, so the port you come in on is not known (a tunnel the panel does not recognise, or "
+        "a proxy that passes on another address than the one it accepted). Whether a rule keeps the panel "
+        "reachable cannot be checked.", ip=str(viewer))
+
+
+def _fwc_seen(server, viewer):
+    """The viewer's open connections to this host (ufweval.inbound_from), less any to sshd's ports."""
+    from panel.ops.ssh_manager import ufweval
+    ssh = _fwssh_served_ports(server)
+    return [(a, p) for a, p in ufweval.inbound_from(viewer) or () if p not in ssh]
 
 
 def _fwc_pick_port(ports):
@@ -2244,26 +2258,36 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     session is already covered by the refusal for every port sshd serves; the panel's host refuses
     when the block needs the port (`port_known_needed`) and it is not known.
     """
-    from panel.ops.ssh_manager import ufweval
-    status = remote_ufw_status(server)
-    if status.get("unreachable") or not status.get("installed"):
-        return _FWA_UNREAD
-    if not status.get("enabled"):
-        return None
-    groups = status.get("groups") or []
-    ssh_ports = _fwssh_served_ports(server)
-    paths = _fwc_paths(server, _fwb_ts_ways(server, groups, ssh_ports))
+    groups, why = _fwc_enforced(server)
+    if groups is None:
+        return why
+    paths = _fwc_paths(server, _fwb_ts_ways(server, groups, _fwssh_served_ports(server)))
     if paths["why"] is not None:
         return paths["why"] if port_known_needed and _core.is_local_server(server) else None
     allow_default = _fwc_default_allows(server)
-    for conn in paths["conns"]:
-        if conn.version not in families or ufweval.exempt(conn, paths["ts"]):
-            continue
-        specs = ufweval.ordered_specs(_fwb_family_view(groups, conn.version))
-        if (ufweval.accepts(specs, conn, allow_default, paths["apps"])
-                and not ufweval.accepts(list(top) + specs, conn, allow_default, paths["apps"])):
-            return _fwc_cut_answer(conn)
-    return None
+    cut = next((c for c in paths["conns"] if c.version in families
+                and _fwc_cuts(groups, c, top, allow_default, paths)), None)
+    return None if cut is None else _fwc_cut_answer(cut)
+
+
+def _fwc_enforced(server):
+    """(the rules UFW enforces now, None) -> or (None, why not to read on): unread refuses, off has none."""
+    status = remote_ufw_status(server)
+    if status.get("unreachable") or not status.get("installed"):
+        return None, _FWA_UNREAD
+    if not status.get("enabled"):
+        return None, None
+    return status.get("groups") or [], None
+
+
+def _fwc_cuts(groups, conn, top, allow_default, paths):
+    """Whether `conn` gets in now and would not with rules `top` first in its family's list."""
+    from panel.ops.ssh_manager import ufweval
+    if ufweval.exempt(conn, paths["ts"]):
+        return False
+    specs = ufweval.ordered_specs(_fwb_family_view(groups, conn.version))
+    return (ufweval.accepts(specs, conn, allow_default, paths["apps"])
+            and not ufweval.accepts(list(top) + specs, conn, allow_default, paths["apps"]))
 
 
 def _fwc_cut_answer(conn):
@@ -2488,19 +2512,25 @@ def _fwb_rules_text(pairs, spec):
     return ", ".join("%s/%s (%s)" % (spec, p, "IPv6" if f == "v6" else "IPv4") for p, f in pairs)
 
 
-def _fwb_block_answer(res, spec, protos, action, family):
-    """remote_ufw_block_port's (ok, message) from what _fwa_write_blocks did, said as it is."""
-    shown = "%s/%s" % (spec, "+".join(protos))
+def _fwc_undo_said(res, spec, shown):
+    """What the answer says about the rules THIS call added and took out again (None: nothing to say)."""
     undo = None
     if res["added"] and (res["failed"] or res["allowed"] or res["unknown"]):
         undo = (i18n.Sentence("These rules it had added could not be taken out again, so the block is partly "
                               "in place: {rules}.", rules=_fwb_rules_text(res["left"], spec)) if res["left"]
                 else i18n.Sentence("The rules it had added were taken out again."))
+    if res["failed"] and res["unverified"]:
+        undo = i18n.Sentences(undo, i18n.Sentence(
+            "The firewall could not be read back to see whether UFW wrote part of the block before it failed: "
+            "check the rules for {spec}.", spec=shown))
+    return undo
+
+
+def _fwb_block_answer(res, spec, protos, action, family):
+    """remote_ufw_block_port's (ok, message) from what _fwa_write_blocks did, said as it is."""
+    shown = "%s/%s" % (spec, "+".join(protos))
+    undo = _fwc_undo_said(res, spec, shown)
     if res["failed"]:
-        if res["unverified"]:
-            undo = i18n.Sentences(undo, i18n.Sentence(
-                "The firewall could not be read back to see whether UFW wrote part of the block before it failed: "
-                "check the rules for {spec}.", spec=shown))
         return False, i18n.Sentences(res["failed"], undo)
     if res["allowed"]:
         return False, i18n.Sentences(i18n.Sentence(

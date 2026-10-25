@@ -3484,23 +3484,29 @@ def _fwb_ssh_conn(server):
     out, _err, rc = _core.run_command(
         server, 'printf "conn %s\\n" "$SSH_CONNECTION"; export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; '
         "ip -o addr show 2>/dev/null", timeout=10, sudo=False)
-    if rc != 0:
-        return None
-    lines = (out or "").splitlines()
+    lines = (out or "").splitlines() if rc == 0 else []
     words = next((ln.split()[1:] for ln in lines if ln.startswith("conn ")), [])
-    if len(words) != 4:
+    ends = _fwc_conn_words(words)
+    if ends is None:
         return None
-    client, server_addr = ip_address_or_none(words[0]), ip_address_or_none(words[2])
-    try:
-        port = int(words[3])
-    except ValueError:
-        return None
-    if client is None or server_addr is None or not 0 < port < 65536:
-        return None
-    client, server_addr = (getattr(a, "ipv4_mapped", None) or a for a in (client, server_addr))
+    client, server_addr, port = ends
     addrs = ufweval.parse_ip_addr("\n".join(ln for ln in lines if not ln.startswith("conn ")))
     return {"client": client, "server": server_addr, "port": port,
             "iface": ufweval.iface_of(addrs, server_addr), "addrs": addrs}
+
+
+def _fwc_conn_words(words):
+    """$SSH_CONNECTION's four words -> (client address, server address, server port), else None.
+
+    IPv4-mapped addresses are the IPv4 ones they are.
+    """
+    if len(words) != 4 or not words[3].isdecimal():
+        return None
+    client, server_addr, port = ip_address_or_none(words[0]), ip_address_or_none(words[2]), int(words[3])
+    if client is None or server_addr is None or not 0 < port < 65536:
+        return None
+    return (getattr(client, "ipv4_mapped", None) or client, getattr(server_addr, "ipv4_mapped", None) or server_addr,
+            port)
 
 
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
