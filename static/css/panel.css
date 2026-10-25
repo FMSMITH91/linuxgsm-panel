@@ -1546,6 +1546,20 @@
   }
 }
 
+/* The Network tab's firewall settings row (_firewall_panel.html): a label and a select share half a
+   phone's width, so both keep a narrow padding and the select's arrow sits close; at Bootstrap's own
+   padding a French "Refuser" or "Faible" was cut to its first letters at 375px. */
+.fw-settings .input-group-text{
+  padding-left:.4rem;
+  padding-right:.4rem;
+}
+
+.fw-settings .form-select{
+  padding-left:.4rem;
+  padding-right:1.5rem;
+  background-position:right .3rem center;
+}
+
 /* A setting's label line that opens its explanation (remote_manage.html, _firewall_blocks.html):
    what a setting is for is a tap away, and the warnings stay written beside their buttons. The
    summary is the label line itself, so it costs no line of its own; the info icon says it opens. */

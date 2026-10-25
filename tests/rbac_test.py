@@ -1265,7 +1265,10 @@ _HOST_LEVEL_VIEWS = {
                       "api_remote_updates_cached", "api_remote_os_update_status",
                       "api_remote_reboot_plan", "api_remote_reboot", "api_remote_reboot_cancel",
                       # review 1015a integration: the reboot banner's read (pending packages, state)
-                      "api_remote_reboot_required"},
+                      "api_remote_reboot_required",
+                      # fw-more: the firewall settings row (default policies, on/off, logging) and
+                      # Add a rule's port block
+                      "api_remote_firewall_settings", "api_remote_firewall_block_port"},
     "remotes.py": {"edit_remote", "delete_remote"},
     "ubuntu_pro.py": {"api_remote_pro_status", "api_remote_pro_attach", "api_remote_pro_service",
                       "api_remote_pro_detach"},

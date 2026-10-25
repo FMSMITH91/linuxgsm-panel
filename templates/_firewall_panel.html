@@ -29,61 +29,47 @@
    (remote_firewall.js fwSettingChange). Read with the rules (refreshFwSettings): until then, and for
    any value nobody could read, the select is disabled and says Unknown. The server refuses any
    change that would lock SSH or the panel out (firewall.remote_ufw_set_default / _set_enabled). #}
+{# One setting of the row: its label and its select, which fwSettingChange applies. `opts` are
+   (value, label) pairs; the labels are catalog keys, so each option translates. `wrap_id`: a
+   setting rendered hidden until the read shows it (routed). #}
+{% macro fw_setting(key, label, opts, wrap_id=None) %}
+    <div class="col-6 col-sm"{% if wrap_id %} id="{{ wrap_id }}" hidden{% endif %}>
+      <div class="input-group input-group-sm">
+        <label class="input-group-text" for="fw-set-{{ key }}">{{ label }}</label>
+        <select id="fw-set-{{ key }}" class="form-select" disabled
+                data-action="fwSettingChange" data-args='["{{ key }}", "@self"]' data-on="change">
+{%- for v, l in opts %}
+          <option value="{{ v }}">{{ l }}</option>
+{%- endfor %}
+        </select>
+      </div>
+    </div>
+{%- endmacro %}
+{% set fw_policies = [("allow", "Allow"), ("deny", "Deny"), ("reject", "Reject")] %}
 <div class="fw-settings mb-3" id="fw-settings">
-  <div class="row g-2 align-items-end">
-    <div class="col-6 col-sm">
-      <label class="form-label small text-secondary mb-0" for="fw-set-incoming">Incoming</label>
-      <select id="fw-set-incoming" class="form-select form-select-sm" disabled
-              data-action="fwSettingChange" data-args='["incoming", "@self"]' data-on="change">
-        <option value="allow">Allow</option>
-        <option value="deny">Deny</option>
-        <option value="reject">Reject</option>
-      </select>
-    </div>
-    <div class="col-6 col-sm">
-      <label class="form-label small text-secondary mb-0" for="fw-set-outgoing">Outgoing</label>
-      <select id="fw-set-outgoing" class="form-select form-select-sm" disabled
-              data-action="fwSettingChange" data-args='["outgoing", "@self"]' data-on="change">
-        <option value="allow">Allow</option>
-        <option value="deny">Deny</option>
-        <option value="reject">Reject</option>
-      </select>
-    </div>
+  <div class="row g-2 align-items-center">
+{{ fw_setting("incoming", "Incoming", fw_policies) }}
+{{ fw_setting("outgoing", "Outgoing", fw_policies) }}
     {# Hidden where ufw reports "disabled (routed)": a host that forwards nothing has no routed traffic. #}
-    <div class="col-6 col-sm" id="fw-set-routed-wrap" hidden>
-      <label class="form-label small text-secondary mb-0" for="fw-set-routed">Routed</label>
-      <select id="fw-set-routed" class="form-select form-select-sm" disabled
-              data-action="fwSettingChange" data-args='["routed", "@self"]' data-on="change">
-        <option value="allow">Allow</option>
-        <option value="deny">Deny</option>
-        <option value="reject">Reject</option>
-      </select>
-    </div>
-    <div class="col-6 col-sm">
-      <label class="form-label small text-secondary mb-0" for="fw-set-logging">Logging</label>
-      <select id="fw-set-logging" class="form-select form-select-sm" disabled
-              data-action="fwSettingChange" data-args='["logging", "@self"]' data-on="change">
-        <option value="off">Off</option>
-        <option value="low">Low</option>
-        <option value="medium">Medium</option>
-        <option value="high">High</option>
-        <option value="full">Full</option>
-      </select>
-    </div>
+{{ fw_setting("routed", "Routed", fw_policies, wrap_id="fw-set-routed-wrap") }}
+{{ fw_setting("logging", "Logging", [("off", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("full", "Full")]) }}
     <div class="col-6 col-sm-auto">
       <button type="button" id="fw-set-enabled" class="btn btn-sm btn-outline-secondary w-100" disabled
               data-action="fwToggleEnabled"><i class="bi bi-power"></i> <span id="fw-set-enabled-label">Turn off</span></button>
     </div>
   </div>
-  <div id="fw-settings-msg" class="small mt-1"></div>
-  <details class="uid-about mt-1">
-    <summary class="small text-secondary">What these settings do
-      <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
-    <p class="small text-secondary mb-0 mt-1">Incoming and outgoing are what UFW does with a connection
-      no rule matches; routed is traffic this host forwards to other machines. Deny drops it without a
-      reply, reject refuses it. The panel refuses any change that would lock SSH or the panel itself out
-      of this host, and turning the firewall off makes the host accept every connection.</p>
-  </details>
+  {# The answer to a change and the folded help share one line. #}
+  <div class="d-flex flex-wrap align-items-start column-gap-3 mt-1">
+    <details class="uid-about order-last">
+      <summary class="small text-secondary">What these settings do
+        <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
+      <p class="small text-secondary mb-0 mt-1">Incoming and outgoing are what UFW does with a connection
+        no rule matches; routed is traffic this host forwards to other machines. Deny drops it without a
+        reply, reject refuses it. The panel refuses any change that would lock SSH or the panel itself out
+        of this host, and turning the firewall off makes the host accept every connection.</p>
+    </details>
+    <div id="fw-settings-msg" class="small flex-grow-1"></div>
+  </div>
 </div>
 
 <div class="fw-layout">
@@ -141,7 +127,7 @@
           </div>
           {# The family and the comment share a row; the button joins them where the column has room
              (1200px up). #}
-          <div class="col-5 col-xl-3">
+          <div class="col-5 col-xl-4">
 {{ fw_family_select("new-family") }}
           </div>
           <div class="col-7 col-xl">
@@ -223,21 +209,21 @@
         <p class="text-secondary small mb-2">Shut a port or a range (27015:27020) to everyone, ahead of
           any rule that opens it. SSH's and the panel's own ports can't be blocked.</p>
         <div class="row g-2">
-          <div class="col-5 col-xl-3">
+          <div class="col-5">
             <input type="text" id="block-port" class="form-control form-control-sm" inputmode="numeric"
                    placeholder="Port or range" aria-label="Port or range">
           </div>
-          <div class="col-7 col-xl-3">
+          <div class="col-7">
             <select id="block-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="both">Both (TCP+UDP)</option>
               <option value="tcp" selected>TCP</option>
               <option value="udp">UDP</option>
             </select>
           </div>
-          <div class="col-6 col-xl-3">
+          <div class="col-6">
 {{ fw_family_select("block-family") }}
           </div>
-          <div class="col-6 col-xl-3">
+          <div class="col-6">
             <select id="block-action" class="form-select form-select-sm" aria-label="How to block">
               <option value="deny" selected>Deny (drop)</option>
               <option value="reject">Reject</option>

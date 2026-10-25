@@ -490,12 +490,12 @@ def _register_firewall_settings(app):
             return jsonify({"success": False, "message": i18n.tr("confirm must be true or false.")}), 400
         a_setting, a_value = _fwa_audit_setting(setting, value)
         try:
-            with _r20b_audit_on_raise("ufw_settings", target=f"{remote.name}:{a_setting}", detail=a_value,
+            with _r20b_audit_on_raise("remote_ufw_settings", target=f"{remote.name}:{a_setting}", detail=a_value,
                                       remote=remote):
                 ok, msg, after = _fwa_apply_setting(remote, setting, value, confirm)
         except Exception:
             return _r22b_unreachable_or_generic("firewall settings")
-        log_action(current_user, "ufw_settings", target=f"{remote.name}:{a_setting}", detail=a_value,
+        log_action(current_user, "remote_ufw_settings", target=f"{remote.name}:{a_setting}", detail=a_value,
                    success=ok, remote=remote)
         return jsonify({"success": ok, "message": i18n.tr(msg), "settings": after})
 

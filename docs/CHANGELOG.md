@@ -14,6 +14,24 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **Firewall settings and port blocks on the Network tab.** A row above the rules now shows and
+  changes UFW's default policy for incoming and outgoing traffic (and for routed traffic on a host
+  that forwards), its logging level (off, low, medium, high, full), and turns the firewall on or
+  off. Each change asks first and says what it does. The panel refuses any change that would lock
+  you out, saying what is missing: a default deny or reject for incoming traffic, or turning UFW
+  on, needs a rule that lets SSH in and one that keeps the panel's own way to the host open (its
+  web port on the panel's host, the SSH port it dials on a remote, or Tailscale); a default deny for
+  outgoing traffic needs DNS, HTTP and HTTPS allowed out, and on the panel's host its SSH to every
+  remote; turning UFW off says the host will then accept every connection. While UFW is off the
+  panel checks the rules UFW would load. A firewall the panel cannot read is never changed.
+  Add a rule has a **Block** mode: deny or reject a port or a range (27015:27020), TCP, UDP or both,
+  for IPv4, IPv6 or both, put at the top of the rule list so it wins over a rule that opens the port.
+  SSH's ports, the panel's web port and Tailscale's port cannot be blocked. **Open** can now keep a
+  port to IPv4 or IPv6 only. On the Security tab, **Blocked IPs** takes a range too
+  (203.0.113.0/24, 2001:db8::/48); a range reaching into Tailscale's addresses or the security
+  whitelist, or covering your own address or the one the panel connects from, is refused. Every
+  change is in the audit log, and on the panel's own host all of it is superadmin-only, like the
+  rest of its firewall.
 - **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
   once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
   supported", to fetch it straight away, for a game LinuxGSM has just added.

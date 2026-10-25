@@ -36,7 +36,7 @@ from types import SimpleNamespace as _NS135
 
 from unit.part01 import check
 from unit.part05 import _helper, _root
-from unit.part12 import (P9_ADMIN, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_audit,
+from unit.part12 import (P9_ADMIN, P9_HOST, P9_LOCAL, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_audit,
                          _p9_client, _p9_patch, _p9_restore_all)
 from unit.part47 import _cut47, _node47
 from panel.core import config as _cfg135
@@ -715,7 +715,7 @@ try:
     _routes135["viewer"] = [_V135.get(_base135 + "settings").status_code,
                             _V135.post(_base135 + "settings", json={"setting": "logging", "value": "off"}).status_code,
                             _V135.post(_base135 + "block-port", json={"port": "27015"}).status_code]
-    _a_junk135 = _p9_audit("ufw_settings")
+    _a_junk135 = _p9_audit("remote_ufw_settings")
     _a_block135 = _p9_audit("remote_port_block")
 finally:
     _p9_restore_all()
@@ -737,6 +737,46 @@ check("routes: block-port passes the spec, protocol, family and action; its audi
       and _a_block135.detail == "(not a value) (not a value)", repr((_rcalls135, _a_block135)))
 check("routes: an account without MANAGE_REMOTES reaches neither new route (GET or POST)",
       all(st in (302, 403) for st in _routes135["viewer"]), repr(_routes135["viewer"]))
+# A DELEGATED host admin: MANAGE_REMOTES through a group whose grant covers the panel's own host and
+# a remote. The panel host's firewall guards the panel itself, so its settings and blocks stay
+# superadmin-only (get_host_remote), as every other firewall action there is; on the remote the same
+# account is let through (positive control).
+from panel.db.models import Group as _Group135, RemoteServer as _RS135, User as _User135, db as _db135
+from panel.security import auth as _auth135
+with _p9.app_context():
+    _g135 = _Group135(name="p135_hostadmins", description="", is_default=False)
+    _g135.set_permissions([_auth135.MANAGE_REMOTES])
+    _g135.servers.append(_db135.session.get(_RS135, P9_LOCAL))
+    _g135.servers.append(_db135.session.get(_RS135, P9_HOST))
+    _db135.session.add(_g135)
+    _d135 = _User135(username="p135_delegate", password_hash=_auth135.hash_password("x" + "Q7!long-p135-pw"),
+                     display_name="Delegate", is_superadmin=False, is_active=True)
+    _d135.groups.append(_g135)
+    _db135.session.add(_d135)
+    _db135.session.commit()
+    _D135 = _d135.id
+_deleg135 = {}
+try:
+    _p9_arm(who="part135")
+    _p9_patch(_fw135, "remote_ufw_settings", lambda r: dict(_SETTINGS135))
+    _p9_patch(_fw135, "remote_ufw_set_enabled", lambda r, on, confirm=False: (True, "ok", dict(_SETTINGS135)))
+    _p9_patch(_fw135, "remote_ufw_block_port", lambda r, *a: (True, "blocked"))
+    from panel.routes import remote_vps as _rv135
+    _p9_patch(_rv135, "remote_ufw_open_port", lambda r, *a, **k: (True, "opened"))
+    _C135 = _p9_client(_D135)
+    for _hk135, _hid135 in (("panel host", P9_LOCAL), ("remote", P9_HOST)):
+        _b135 = "/api/remote/%d/firewall/" % _hid135
+        _deleg135[_hk135] = [
+            _C135.get(_b135 + "settings").status_code,
+            _C135.post(_b135 + "settings", json={"setting": "enabled", "value": False, "confirm": True}).status_code,
+            _C135.post(_b135 + "block-port", json={"port": "27015"}).status_code,
+            _C135.post(_b135 + "open", json={"port": 27015}).status_code]
+finally:
+    _p9_restore_all()
+check("routes: a DELEGATED MANAGE_REMOTES admin whose grant covers the panel host is refused (403) its firewall "
+      "settings and blocks there, as /firewall/open is; on a remote the same account is let through",
+      _deleg135.get("panel host") == [403, 403, 403, 403]
+      and _deleg135.get("remote") == [200, 200, 200, 200], repr(_deleg135))
 _RV_SRC135 = _read135("panel", "routes", "remote_vps.py")
 _settings_src135 = _RV_SRC135[_RV_SRC135.index("def _register_firewall_settings(app):"):
                               _RV_SRC135.index("def _register_ssh_settings(app):")]
@@ -761,19 +801,19 @@ try:
     _p9_arm(who="part135")
     _p9_patch(_rs135, "tailnet_exempt_ips", lambda remote, ips: set())
     _p9_patch(_rs135, "_whitelisted", lambda ip: False)
-    _p9_patch(_rs135, "_whitelist_networks", lambda: [__import__("ipaddress").ip_network("203.0.113.64/26")])
+    _p9_patch(_rs135, "_whitelist_networks", lambda: [__import__("ipaddress").ip_network("203.0.113.64/26")])  # NOSONAR(S1313) - documentation and private test addresses
     _p9_patch(_rs135, "remote_ufw_deny_ip", lambda r, ip: (_rb_calls135.append(ip), (True, "ok"))[1])
     _p9_patch(_rs135, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_core135, "run_command", _rb_cmd135)
     _A135 = _p9_client(P9_ADMIN)
     _burl135 = "/api/remote/%d/security/block" % P9_HOST
-    for _k135, _ip135 in (("tailnet", "100.64.0.0/9"), ("whitelist", "203.0.113.0/24"), ("mine", "127.0.0.0/8"),
-                          ("mine1", "127.0.0.1"), ("source", "198.51.100.0/24"), ("v6tail", "fd7a:115c::/32"),
-                          ("ok", "198.51.100.200/29"), ("okhost", "192.0.2.77/24"), ("all", "0.0.0.0/0"),
+    for _k135, _ip135 in (("tailnet", "100.64.0.0/9"), ("whitelist", "203.0.113.0/24"), ("mine", "127.0.0.0/8"),  # NOSONAR(S1313) - documentation and private test addresses
+                          ("mine1", "127.0.0.1"), ("source", "198.51.100.0/24"), ("v6tail", "fd7a:115c::/32"),  # NOSONAR(S1313) - documentation and private test addresses
+                          ("ok", "198.51.100.200/29"), ("okhost", "192.0.2.77/24"), ("all", "0.0.0.0/0"),  # NOSONAR(S1313) - documentation and private test addresses
                           ("zone", "fe80::/64%eth0"), ("ok6", "2001:db8:aa::/48")):
         _rb135[_k135] = _A135.post(_burl135, json={"ip": _ip135}).get_json(silent=True) or {}
     _RB_SRC135["rc"] = -1
-    _rb135["unread"] = _A135.post(_burl135, json={"ip": "192.0.2.128/25"}).get_json(silent=True) or {}
+    _rb135["unread"] = _A135.post(_burl135, json={"ip": "192.0.2.128/25"}).get_json(silent=True) or {}  # NOSONAR(S1313) - documentation and private test addresses
     _a_rb135 = _p9_audit("ufw_block")
 finally:
     _p9_restore_all()
@@ -790,13 +830,13 @@ check("range block: a range clear of all of those is blocked (the deny masks it:
       _rb135["ok"].get("success") is True and _rb135["okhost"].get("success") is True
       and _rb135["ok6"].get("success") is True and _rb135["zone"].get("success") is False
       and _rb135["all"].get("success") is False
-      and _rb_calls135 == ["198.51.100.200/29", "192.0.2.77/24", "2001:db8:aa::/48"]
-      and _hosts135.fwa_block_target("192.0.2.77/24") == "192.0.2.0/24"
+      and _rb_calls135 == ["198.51.100.200/29", "192.0.2.77/24", "2001:db8:aa::/48"]  # NOSONAR(S1313) - documentation and private test addresses
+      and _hosts135.fwa_block_target("192.0.2.77/24") == "192.0.2.0/24"  # NOSONAR(S1313) - documentation and private test addresses
       and _hosts135.fwa_block_target("2001:db8:aa::5/48") == "2001:db8:aa::/48"
-      and _hosts135.fwa_block_target("192.0.2.7/32") == "192.0.2.7"
+      and _hosts135.fwa_block_target("192.0.2.7/32") == "192.0.2.7"  # NOSONAR(S1313) - documentation and private test addresses
       and _hosts135.fwa_block_target("fe80::/64%eth0") is None
-      and _a_rb135.target == "192.0.2.128/25", repr((_rb_calls135, _rbm135, _a_rb135)))
-_deny_all135 = _on135(_Host135(), _hosts135.remote_ufw_deny_ip, _REMOTE135, "0.0.0.0/0")
+      and _a_rb135.target == "192.0.2.128/25", repr((_rb_calls135, _rbm135, _a_rb135)))  # NOSONAR(S1313) - documentation and private test addresses
+_deny_all135 = _on135(_Host135(), _hosts135.remote_ufw_deny_ip, _REMOTE135, "0.0.0.0/0")  # NOSONAR(S1313) - documentation and private test addresses
 check("range block: every address (/0) is refused by the deny itself", _deny_all135[0] is False, repr(_deny_all135))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -867,9 +907,11 @@ check("settings row: the rules' refresh reads the settings too, and the settings
       "the script paints",
       "refreshFwSettings();" in _cut47(_FWJS135, "function refreshFirewall(")
       and all('id="%s"' % i in _read135("templates", "_firewall_panel.html") for i in (
-          "fw-settings", "fw-set-incoming", "fw-set-outgoing", "fw-set-routed", "fw-set-routed-wrap",
-          "fw-set-logging", "fw-set-enabled", "fw-set-enabled-label", "fw-settings-msg", "block-port",
+          "fw-settings", "fw-set-enabled", "fw-set-enabled-label", "fw-settings-msg", "block-port",
           "block-proto", "block-action", "block-comment"))
+      and all('fw_setting("%s"' % k in _read135("templates", "_firewall_panel.html")
+              for k in ("incoming", "outgoing", "routed", "logging"))
+      and 'wrap_id="fw-set-routed-wrap"' in _read135("templates", "_firewall_panel.html")
       and all('fw_family_select("%s")' % i in _read135("templates", "_firewall_panel.html")
               for i in ("new-family", "block-family")))
 

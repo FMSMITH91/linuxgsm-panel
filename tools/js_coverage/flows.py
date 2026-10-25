@@ -806,10 +806,29 @@ J.click('#fw-mode-limit'); await J.sleep(200);
 J.type('#limit-port', '22');
 J.click('[data-action="limitPort"]'); await J.sleep(900);
 J.click('[data-action="unlimitPort"]'); await J.sleep(900);
+// Block a port range (Add a rule's Block), by its button and by Enter in the box.
+J.click('#fw-mode-block'); await J.sleep(200);
+J.type('#block-port', '27030:27040'); J.type('#block-proto', 'both'); J.type('#block-family', 'v4');
+J.type('#block-action', 'reject'); J.type('#block-comment', 'jscov');
+J.click('[data-action="blockPort"]'); await J.sleep(900);
+J.q('#block-port').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+await J.sleep(900);
 J.click('#fw-mode-open'); await J.sleep(200);
+J.type('#new-family', 'v6'); J.type('#new-port', '27021'); J.click('[data-action="openPort"]'); await J.sleep(900);
+// The settings row (J.type fires the change): a policy change asked and cancelled, then applied;
+// logging; off, and on cancelled.
+J.type('#fw-set-incoming', 'reject');
+await J.sleep(300); J.settleDialogs(false, PW); await J.sleep(300);
+J.type('#fw-set-incoming', 'reject');
+await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
+J.type('#fw-set-logging', 'medium');
+await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
+J.click('[data-action="fwToggleEnabled"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
+J.click('[data-action="fwToggleEnabled"]'); await J.sleep(300); J.settleDialogs(false, PW); await J.sleep(300);
 // Block an address by Enter, then unblock one (Security tab); sync a server's ports and remove a
 // rule (OK) back on the Network tab.
 J.click('[data-mtab-btn="security"]'); await J.sleep(1200);
+J.type('#block-ip', '198.51.100.0/24'); J.click('[data-action="blockIp"]'); await J.sleep(1200);
 J.type('#block-ip', '198.51.100.99');
 J.q('#block-ip').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
 await J.sleep(1200);
