@@ -1052,10 +1052,10 @@ try:
     _smf140._write_file_as_user = lambda s, u, path, data, *a, **k: (
         _cfg_writes140.append(_re140.search(r'adminpassword="([^"]*)"', data.decode()).group(1)), (True, ""))[1]
     _l4_ok140 = _smf140.lgc_pz_set_admin_password(_srv_l4_140, "p140pz", "pzserver")
-    for _w140 in range(50):
-        if not _lock_seen140["thread"].is_alive():
-            break
+    _waited140 = 0
+    while _lock_seen140["thread"].is_alive() and _waited140 < 50:
         _time140.sleep(0.1)
+        _waited140 += 1
 finally:
     (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user) = _saved_l4_140
 check("pz admin: a settings save sent while the fix has read CHANGE_ME waits for the fix's write, so the "
