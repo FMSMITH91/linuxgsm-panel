@@ -911,7 +911,7 @@ check("settings row: the rules' refresh reads the settings too, and the settings
           "block-proto", "block-action", "block-comment"))
       and all('fw_setting("%s"' % k in _read135("templates", "_firewall_panel.html")
               for k in ("incoming", "outgoing", "routed", "logging"))
-      and 'wrap_id="fw-set-routed-wrap"' in _read135("templates", "_firewall_panel.html")
+      and 'id="fw-set-routed-wrap" hidden' in _read135("templates", "_firewall_panel.html")
       and all('fw_family_select("%s")' % i in _read135("templates", "_firewall_panel.html")
               for i in ("new-family", "block-family")))
 

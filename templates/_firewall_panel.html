@@ -30,10 +30,8 @@
    any value nobody could read, the select is disabled and says Unknown. The server refuses any
    change that would lock SSH or the panel out (firewall.remote_ufw_set_default / _set_enabled). #}
 {# One setting of the row: its label and its select, which fwSettingChange applies. `opts` are
-   (value, label) pairs; the labels are catalog keys, so each option translates. `wrap_id`: a
-   setting rendered hidden until the read shows it (routed). #}
-{% macro fw_setting(key, label, opts, wrap_id=None) %}
-    <div class="col-6 col-sm"{% if wrap_id %} id="{{ wrap_id }}" hidden{% endif %}>
+   (value, label) pairs; the labels are catalog keys, so each option translates. #}
+{% macro fw_setting(key, label, opts) %}
       <div class="input-group input-group-sm">
         <label class="input-group-text" for="fw-set-{{ key }}">{{ label }}</label>
         <select id="fw-set-{{ key }}" class="form-select" disabled
@@ -43,16 +41,16 @@
 {%- endfor %}
         </select>
       </div>
-    </div>
 {%- endmacro %}
 {% set fw_policies = [("allow", "Allow"), ("deny", "Deny"), ("reject", "Reject")] %}
 <div class="fw-settings mb-3" id="fw-settings">
   <div class="row g-2 align-items-center">
-{{ fw_setting("incoming", "Incoming", fw_policies) }}
-{{ fw_setting("outgoing", "Outgoing", fw_policies) }}
+    <div class="col-6 col-sm">{{ fw_setting("incoming", "Incoming", fw_policies) }}</div>
+    <div class="col-6 col-sm">{{ fw_setting("outgoing", "Outgoing", fw_policies) }}</div>
     {# Hidden where ufw reports "disabled (routed)": a host that forwards nothing has no routed traffic. #}
-{{ fw_setting("routed", "Routed", fw_policies, wrap_id="fw-set-routed-wrap") }}
-{{ fw_setting("logging", "Logging", [("off", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("full", "Full")]) }}
+    <div class="col-6 col-sm" id="fw-set-routed-wrap" hidden>{{ fw_setting("routed", "Routed", fw_policies) }}</div>
+    <div class="col-6 col-sm">{{ fw_setting("logging", "Logging", [("off", "Off"), ("low", "Low"),
+      ("medium", "Medium"), ("high", "High"), ("full", "Full")]) }}</div>
     <div class="col-6 col-sm-auto">
       <button type="button" id="fw-set-enabled" class="btn btn-sm btn-outline-secondary w-100" disabled
               data-action="fwToggleEnabled"><i class="bi bi-power"></i> <span id="fw-set-enabled-label">Turn off</span></button>
