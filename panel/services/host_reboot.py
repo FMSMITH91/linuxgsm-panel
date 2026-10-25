@@ -51,6 +51,7 @@ from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
 from panel.security.auth import log_action
 from panel.services import monitoring as _mon
+from panel.services import lgsm_players as _lgp
 from panel.services import notifications
 from panel.services.reboot_summary import (_bare_rebooted_text, _host_label, _late_text, _summary,
                                            _unread_note)
@@ -61,6 +62,7 @@ _log = logging.getLogger("panel.host_reboot")
 # A graceful stop's budget. LinuxGSM's longest ordinary stopmode (4, `quit`) waits 120 s before it
 # kills the session, plus its checks; the telnet stopmodes (8: 7 Days to Die, 13: Soulmask) poll a
 # telnet console that can take minutes. The panel's usual 60 s cut the stop off mid-save.
+# Plus LinuxGSM v26.4.0's warnplayerstimer (lgsm_players.allowance_seconds): it warns, then stops.
 STOP_BUDGET = 180
 STOP_BUDGET_TELNET = 600
 _TELNET_STOP_GAMES = frozenset(("sdtd", "sm"))
@@ -97,8 +99,9 @@ DEFAULT_WAIT_HOURS = 24
 # The LinuxGSM commands whose process means "LinuxGSM is doing something to this server now", and
 # the ones of those that are maintenance a reboot must not cut through.
 _INFLIGHT_CMDS = ("monitor|start|stop|restart|update|force-update|validate|backup|install|"
-                  "auto-install|debug|details|mods-update|update-lgsm")
-_MAINT_CMDS = "update|force-update|validate|backup|install|auto-install|mods-update|update-lgsm"
+                  "auto-install|debug|details|mods-update|update-lgsm|workshop-update")
+_MAINT_CMDS = ("update|force-update|validate|backup|install|auto-install|mods-update|update-lgsm|"
+               "workshop-update")
 _PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "BOOT", "MID", "NOW", "SEC")
 
 # The last finished outcome per host, shown on the Power card for a day: {at, text, ok}.
@@ -721,8 +724,8 @@ def preview(remote, probes=None):
     for gs in rows:
         p = probes.get(gs.id) or dict(_UNREAD)
         owner, why = classify(gs, p)
-        out.append({"id": gs.id, "name": gs.name, "session": p.get("session"), "owner": owner,
-                    "why": why, "text": _WHY_WORDS.get(why, "")})
+        out.append(dict({"id": gs.id, "name": gs.name, "session": p.get("session"), "owner": owner,
+                         "why": why, "text": _WHY_WORDS.get(why, "")}, **_lgp.reboot_warn_fields(remote, gs, p)))
     return out
 
 
@@ -1466,11 +1469,12 @@ class _Job:
         self._phase("stopping", done=0, total=len(self.entries))
         self.bounce = self.bounce_joined = False
         self.bounce_unread = ""
-        self.deadline = time.monotonic() + STOP_PHASE_CAP
         loaded = self._loaded_rows()
         groups = {}
         for e in self.entries:
             groups.setdefault(e["user"], []).append(e)
+        # Each server warns its players before it stops: the phase gets the longest account's warnings.
+        self.deadline = time.monotonic() + STOP_PHASE_CAP + _lgp.reboot_warn_budget(self.remote, groups)
         if groups:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(STOP_WORKERS, len(groups))) as ex:
                 list(ex.map(lambda grp: self._stop_group(grp, loaded), groups.values()))
@@ -1536,16 +1540,15 @@ class _Job:
         return None if n is None else n == 0
 
     def _stop_one(self, e):
-        budget = STOP_BUDGET_TELNET if e["game_type"] in _TELNET_STOP_GAMES else STOP_BUDGET
-        try:
-            _sm.run_as_game_user(self.remote, e["user"], "stop", timeout=budget,
-                                 selfname=e["selfname"])
-        except Exception:  # noqa: BLE001 - the state read below decides, never the call
-            _log.debug("stop of %s raised", e["id"], exc_info=True)
+        # Never raises: the state read below decides, never the call.
+        out = _lgp.reboot_stop(self.remote, e, STOP_BUDGET_TELNET if e["game_type"] in _TELNET_STOP_GAMES
+                               else STOP_BUDGET)
         # The rc is not the outcome (a refused stop exits 0 with the server still up, a stop of a
         # stopped server exits 0 too): the session is.
         sess = probe_server(self.remote, e).get("session")
         e["stop"] = {0: "stopped", 1: "still_running"}.get(sess, "failed")
+        # stoponlyifnoplayers refuses a stop while players are on, whatever asked: said, not hidden.
+        e["lgsm_refused"] = sess == 1 and _lgp.refused(out)
 
     def _clear_stop_pending(self, e):
         # Only for a server this job stopped that had a deferred stop queued (stop_pending).
@@ -1653,7 +1656,7 @@ class _Job:
     def _outcomes(self):
         words = []
         for e in self.entries:
-            words.append("%s: %s, %s" % (e["name"], e.get("stop") or "not stopped",
+            words.append("%s: %s, %s" % (e["name"], _lgp.stop_word(e),
                                          {"monitor": "back by Autostart", "panel": "started by the panel",
                                           "none": "stays stopped"}.get(e["owner"], e["owner"])))
         return "; ".join(words)
@@ -1683,7 +1686,7 @@ class _Job:
         if stay:
             text += (" %d stay%s stopped (a queued stop, or no Autostart with restoring turned off "
                      "in Settings)." % (stay, "s" if stay == 1 else ""))
-        return text + _unread_note(self.unread, "stop")
+        return text + _lgp.refused_stops_note(self.entries) + _unread_note(self.unread, "stop")
 
     def _accounts(self):
         """{account: [entries]} whose locks were moved aside: the ones put back before the reboot."""

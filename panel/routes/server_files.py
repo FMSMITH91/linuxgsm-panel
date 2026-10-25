@@ -29,7 +29,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
-from panel.services import (host_reboot as _hr, lgsm_data)
+from panel.services import (host_reboot as _hr, lgsm_data, lgsm_players as _lgp)
 from itertools import count, groupby
 import re
 import secrets
@@ -1808,7 +1808,7 @@ def _register_files_page(app):
 def _sf_config_read(gs):
     """GET /config: the instance's LinuxGSM config, or a generic 500."""
     try:
-        return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
+        return jsonify(_lgp.config_view(gs, lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name)))
     except Exception:
         return jsonify({"error": _log_and_generic("request failed")}), 500
 

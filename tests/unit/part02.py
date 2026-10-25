@@ -1226,8 +1226,10 @@ try:
     _pc = _sm_cron.player_count(None, "gm", "gmod", 27015)
     check("player_count: parses gamedig player count", _pc == 2)
     _bok, _bmsg, _bskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
+    # The LinuxGSM command itself, not the word: run_game_backup first reads LinuxGSM's own
+    # backup-request lock (a postponed backup, v26.4.0), whose path holds "backup" too.
     check("run_game_backup: skips (no backup) when players are online",
-          _bok is False and _bskip is True and "backup" not in " ".join(c for c in _cap_busy["cmds"] if "gamedig" not in c))
+          _bok is False and _bskip is True and "./gmodserver backup" not in " ".join(_cap_busy["cmds"]))
     # force=True backs up anyway even with players on
     _cap_busy["cmds"] = []
     _fok, _fmsg, _fskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015, force=True)

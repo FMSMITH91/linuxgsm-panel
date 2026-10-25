@@ -14,6 +14,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **LinuxGSM v26.4.0 support.** LinuxGSM 26.4 can warn players in-game before a stop
+  (`warnplayerstimer`) and, with `stoponlyifnoplayers` on, puts off a stop, restart, update or
+  backup while players are online. The panel now works with both:
+  - **Two controls in Files & Config → LinuxGSM Settings**: *Only stop when empty* (on/off) and
+    *Warn players first* (0–60 minutes), with a one-line explanation. They show only on servers
+    running LinuxGSM 26.4 or later, and the warning only on games whose console LinuxGSM can warn
+    through.
+  - **Stop, Restart, Update, Backup, queued actions, uninstall and host reboots wait for the
+    warning** instead of giving up after a minute. A server whose setting cannot be read keeps the
+    old time limit.
+  - **"Postponed" is said as postponed.** An update, backup or restart LinuxGSM puts off because
+    players are online is reported as postponed — in the console, the audit log, the chat bots,
+    the backup card and the scheduled-tasks list — never as finished or failed, and the message
+    says whether LinuxGSM will run it later (it does when Autostart is on). A stop LinuxGSM
+    refuses says so.
+  - **The panel's scheduled backups and LinuxGSM's postponed backup no longer both run.** While
+    LinuxGSM holds a backup for an empty server, the panel leaves it to LinuxGSM, records it when
+    LinuxGSM has taken it, and does not repeat LinuxGSM's own "backup postponed" alert.
+  - **The Reboot dialog** lists, for each server with players online, how long LinuxGSM will warn
+    them (and that the reboot waits for it), or that it has no warning set.
+  - **workshop-update** is in the Maintenance menu on the games LinuxGSM offers it for.
+  - **Team Fortress 2**: a server whose own `startparameters` lacks `-norestart` gets a one-line
+    notice saying to add it.
+
 - **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
   once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
   supported", to fetch it straight away, for a game LinuxGSM has just added.

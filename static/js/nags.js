@@ -135,7 +135,45 @@ function _rbPlayers(ctx){
   ctx.body.appendChild(_rbEl('p', 'small text-secondary mb-1', 'Waiting reboots it once nobody is on any of its game servers. A server whose count can’t be read holds the wait until it is stopped.'));
   _rbWaitLimit(ctx);
   ctx.body.appendChild(_rbEl('p', 'small text-secondary mb-0', 'Rebooting now warns players in-game first, where the game can show a message, then stops each server cleanly.'));
+  _rbWarnNotes(ctx);
   _rbChoiceButtons(ctx);
+}
+// What "Reboot now" tells the players of each server that has them, before its stop: LinuxGSM's
+// own countdown (warnplayerstimer, v26.4.0), which the reboot waits for, or why there is none.
+// From the preview's warn_minutes / warn_supported / say (host_reboot._lg264_warn_fields). One line
+// per server; more than three fold under a summary.
+function _rbWarnWord(sv){
+  var n = sv.warn_minutes;
+  if (n == null) return window.tf('its LinuxGSM warning time could not be read');
+  if (n > 0 && sv.warn_supported) return window.tf('LinuxGSM warns its players for {n} min first; the reboot waits for it', {n: n});
+  if (!sv.warn_supported) return window.tf(sv.say ? 'only the panel’s 60 s warning: its console can’t show LinuxGSM’s'
+                                                   : 'no in-game warning: this game can’t show one');
+  return window.tf(sv.say ? 'only the panel’s 60 s warning: no LinuxGSM warning is set (Files & Config, LinuxGSM settings)'
+                          : 'no in-game warning: none is set (Files & Config, LinuxGSM settings)');
+}
+function _rbWarnNotes(ctx){
+  if (!window.tf || !ctx.plan || !ctx.players) return;
+  var busy = {};
+  (ctx.players.busy || []).forEach(function(b){ busy[b.id] = true; });
+  var rows = (ctx.plan.servers || []).filter(function(sv){ return busy[sv.id] && 'warn_minutes' in sv; });
+  if (!rows.length) return;
+  var ul = _rbEl('ul', 'small mb-1 ps-3');
+  rows.forEach(function(sv){
+    var li = _rbRow(sv.name, _rbWarnWord(sv));
+    li.lastChild.setAttribute('data-no-i18n', '');
+    ul.appendChild(li);
+  });
+  var head = _rbEl('div', 'small text-secondary mt-2 mb-1', 'Before each stop:');
+  if (rows.length <= 3) { ctx.body.appendChild(head); ctx.body.appendChild(ul); return; }
+  var det = _rbEl('details', 'mt-2');
+  var sum = _rbEl('summary', 'small text-secondary');
+  sum.appendChild(_rbEl('span', null, 'Before each stop:'));
+  sum.appendChild(document.createTextNode(' '));
+  var cnt = _rbEl('span', null, String(rows.length)); cnt.setAttribute('data-no-i18n', '');
+  sum.appendChild(cnt); sum.appendChild(document.createTextNode(' '));
+  sum.appendChild(_rbEl('span', null, 'servers'));
+  det.appendChild(sum); det.appendChild(ul);
+  ctx.body.appendChild(det);
 }
 function _rbWaitLimit(ctx){         // the limit as Settings has it; nothing when it is not known
   var hours = ctx.plan && ctx.plan.wait_hours;

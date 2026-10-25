@@ -10,6 +10,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, c
     db, row_birth, row_label, same_row)
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
+from panel.services import lgsm_players as _lgp
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
@@ -2725,7 +2726,10 @@ def _remove_account_crontab(remote, short_name):
 def _stop_game_processes(remote, short_name, selfname):
     """Stop the game gracefully, then kill whatever the account still runs. Both best-effort."""
     try:
-        _sm.run_as_game_user(remote, short_name, "stop", timeout=60, selfname=selfname)
+        # Plus LinuxGSM's in-game warning (warnplayerstimer): cut off mid-countdown, the stop
+        # never reaches the game's own save-and-quit and the kill below takes it instead.
+        _sm.run_as_game_user(remote, short_name, "stop", selfname=selfname,
+                             timeout=_lgp.timeout_for(remote, short_name, selfname, "stop", 60))
     except Exception:
         _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
     try:

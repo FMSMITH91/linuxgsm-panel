@@ -2251,7 +2251,8 @@ def _sss_sudo_answers():
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
                 "details", "check-update", "force-update", "update-lgsm", "mods-update",
-                "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove")
+                "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove",
+                "workshop-update")
 
 
 def v_answers(s):
@@ -4615,7 +4616,8 @@ GAME_NICE = -1
 # every other game — and the keeper takes the restarted game to GAME_NICE, as after a cron restart.
 MAINT_NICE = 0
 SCOPED_START_ACTIONS = frozenset(("start", "restart", "monitor"))
-SCOPED_MAINT_ACTIONS = frozenset(("update", "force-update", "validate", "backup", "mods-update"))
+SCOPED_MAINT_ACTIONS = frozenset(("update", "force-update", "validate", "backup", "mods-update",
+                                  "workshop-update"))
 TMUX_SERVER_COMM = "tmux: server"
 
 

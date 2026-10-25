@@ -102,11 +102,39 @@ document.addEventListener('click', function(ev){
   if(!c) return;
   if(window.copyText) window.copyText(c.getAttribute('data-copy') || '', 'Copied default');
 });
+// LinuxGSM v26.4.0's player protection, as two controls of their own at the top of the settings
+// (the route takes the two keys out of the generic list, panel/routes/server_files.py
+// _lg264_config_view). They save with the rest, through the same changed-fields-only form.
+function _lg264PlayersHtml(p){
+  if(!p || !p.supported) return '';
+  var on = !!p.stop_only_if_empty, min = Number(p.warn_minutes) || 0;
+  var sel = '<select class="form-select form-select-sm" id="lg264-stop" data-key="stoponlyifnoplayers" data-orig="'+(on?'on':'off')+'">'
+    + '<option value="off"'+(on?'':' selected')+'>Off</option><option value="on"'+(on?' selected':'')+'>On</option></select>';
+  var html = '<div class="mb-2 border rounded px-3 py-2" id="cfg-players">'
+    + '<div class="fw-semibold small mb-1"><i class="bi bi-people"></i> <span>Players online</span></div>'
+    + '<div class="row g-2">'
+    + '<div class="col-6 col-md-4 col-xl-3"><label class="form-label mb-1" for="lg264-stop" style="font-size:.7rem;">Only stop when empty</label>'+sel+'</div>';
+  if(p.warn_supported){
+    html += '<div class="col-6 col-md-4 col-xl-3"><label class="form-label mb-1" for="lg264-warn" style="font-size:.7rem;">Warn players first (minutes, 0 = off)</label>'
+      + '<input type="number" class="form-control form-control-sm" id="lg264-warn" data-no-i18n data-key="warnplayerstimer" min="0" max="'+esc(p.warn_max)+'" step="1" data-orig="'+esc(min)+'" value="'+esc(min)+'"></div>';
+  }
+  html += '</div><div class="text-secondary mt-1" style="font-size:.7rem;">'
+    + (p.warn_supported ? 'With players on, LinuxGSM puts off a stop, restart, update or backup until the server is empty, and counts down in-game before each stop.'
+                        : 'With players on, LinuxGSM puts off a stop, restart, update or backup until the server is empty. This game’s console can’t show LinuxGSM’s in-game warnings.')
+    + '</div>';
+  if(!p.can_count) html += '<div class="text-warning mt-1" style="font-size:.7rem;">LinuxGSM can’t count players on this server (its querymode), so it stops it anyway.</div>';
+  return html + '</div>';
+}
+function _lg264Tf2Html(d){
+  return d.tf2_norestart ? '<div class="alert alert-warning small py-1 px-2 mb-2" id="cfg-tf2-norestart">Add -norestart to the end of startparameters: without it, TF2’s 64-bit server (LinuxGSM v26.4.0) can’t stop gracefully and is killed after 60 s.</div>' : '';
+}
 function loadConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(d=>{
     document.getElementById('cfg-loading').style.display='none';
     if(d.error){ document.getElementById('cfg-loading').style.display=''; document.getElementById('cfg-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     var g=document.getElementById('cfg-groups'); g.innerHTML='';
+    var lgh = _lg264Tf2Html(d) + _lg264PlayersHtml(d.players);
+    if(lgh) g.insertAdjacentHTML('beforeend', lgh);  // nosemgrep
     (d.groups||[]).forEach(function(grp, idx){
       var open = idx===0; // first group (Game Server Settings) expanded
       var body = '<div class="row g-2">'+grp.settings.map(fieldHtml).join('')+'</div>';
@@ -117,7 +145,7 @@ function loadConfig(){
         + '<span class="badge bg-secondary">'+grp.settings.length+'</span></button>'
         + '<div class="p-3" data-accbody="'+idx+'" style="'+(open?'':'display:none;')+'">'+body+'</div></div>');
     });
-    if(!(d.groups||[]).length) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
+    if(!(d.groups||[]).length && !(d.players && d.players.supported)) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
     var ta=document.getElementById('cfg-raw');
     ta.value = d.raw||'';
@@ -139,7 +167,7 @@ function saveConfig(ev){
   var settings={};
   // Only send fields the user actually changed — otherwise every default would be
   // written into the instance override file.
-  document.querySelectorAll('#cfg-groups input[data-key]').forEach(function(i){
+  document.querySelectorAll('#cfg-groups [data-key]').forEach(function(i){
     if(i.value !== i.getAttribute('data-orig')) settings[i.getAttribute('data-key')]=i.value;
   });
   var msg=document.getElementById('cfg-save-msg');
@@ -152,7 +180,7 @@ function saveConfig(ev){
       if(d.success){
         // Mark saved values as the new baseline (preserves accordion state), and show the "set"
         // badge on the fields we just wrote — they're now overrides in the instance .cfg.
-        document.querySelectorAll('#cfg-groups input[data-key]').forEach(function(i){
+        document.querySelectorAll('#cfg-groups [data-key]').forEach(function(i){
           i.setAttribute('data-orig', i.value);
           if(settings.hasOwnProperty(i.getAttribute('data-key'))){
             var b=i.parentElement.querySelector('.cfg-set-badge'); if(b) b.style.display='';
@@ -1206,7 +1234,9 @@ function cronLastRun(j){
   if(!j.last_run){ return '<span class="text-secondary" title="No recorded run yet">—</span>'; }
   var when = new Date(j.last_run*1000).toLocaleString();
   var badge;
-  if(j.ok === true){ badge = '<span class="badge bg-success" title="Exit code 0 at '+escA(when)+'">OK</span>'; }
+  // postponed: exit 0, but LinuxGSM only postponed or refused the job because players were on.
+  if(j.ok === true && j.postponed){ badge = '<span class="badge bg-warning text-dark" title="Players were online: LinuxGSM postponed or refused it">Postponed</span>'; }
+  else if(j.ok === true){ badge = '<span class="badge bg-success" title="Exit code 0 at '+escA(when)+'">OK</span>'; }
   else if(j.ok === false){ badge = '<span class="badge bg-danger" title="Failed at '+escA(when)+'">Failed</span>'; }
   else { badge = '<span class="badge bg-secondary" title="Ran at '+escA(when)+' — cron doesn\'t record exit status for panel-managed jobs">ran</span>'; }
   var out = badge + ' <span class="text-secondary" title="'+escA(when)+'">'+esc(timeAgo(j.last_run))+'</span>';
