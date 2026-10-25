@@ -2109,8 +2109,7 @@ def detect_game_ports(server, user, selfname=None, game_type=None):
     (SourceTV, RCON/telnet, Client, web admin) are deliberately left CLOSED — e.g. Garry's Mod
     lists Game 27015 + SourceTV 27020, but only 27015 is needed. `game_type` decides the few rows
     whose meaning is the game's (TeamSpeak's Query is its admin console); without it those rows
-    are not opened (_lgc_player_port), so a caller that only reads `game_port` may leave it out.
-    Returns:
+    are not opened (_lgc_player_port), so a caller reading only `game_port` may omit it. Returns:
       {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed],
        "answered": whether `details` printed its port table or its Server IP line at all,
        "started": its Status line — True for STARTED, False for STOPPED, None for neither}.
