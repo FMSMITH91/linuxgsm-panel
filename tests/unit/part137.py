@@ -16,6 +16,8 @@ asks — would ufw accept THIS connection? — and each guard asks it before and
   straight in, nginx on 443 and on 8443, Tailscale Serve, a Cloudflare Tunnel, a port-forwarded remote).
 * D: the LOW findings (canonical auto-block, a half-written block read back, truthful skip answers,
   trust_proxy named, tailscaled's FLAGS port, Serve under the default netfilter mode).
+* E: #462's TeamSpeak ServerQuery close through the delete guard (a remote with its session read and
+  unread, the panel's host in the background pass).
 
 HOW IT RUNS. On part135's stand-in host and patcher (part12's tripwire armed), routes on part12's app.
 Nothing reaches a host, sudo, ufw or data/.
@@ -35,7 +37,7 @@ from unit import part135 as _p135
 from panel.ops.ssh_manager import _core as _core137, firewall as _fw137, hosts as _hosts137, ufweval as _ue137
 from panel.routes import remote_security as _rs137
 from panel.security import auth as _auth137
-from panel.services import monitoring as _mon137
+from panel.services import game_ports as _gp137, monitoring as _mon137
 
 _TRIP137_START = len(_P9_TRIPPED)
 _ROOT137 = _os137.path.dirname(_os137.path.dirname(_os137.path.dirname(_os137.path.abspath(__file__))))
@@ -662,6 +664,55 @@ for _k, _txt in (("FLAGS --port=", 'PORT="41641"\nFLAGS="--port=41700"\n'), ("FL
 check("LOW-6: tailscaled's port is read from FLAGS' --port (it comes after --port=${PORT}) and from `export PORT=`",
       _tsf137 == {"FLAGS --port=": 41700, "FLAGS --port N": 41710, "export PORT": 41720, "FLAGS without a port": 41730},
       repr(_tsf137))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# E. #462's TeamSpeak ServerQuery close goes through this delete guard
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# game_ports.lgc_close_ts3_serverquery removes a TeamSpeak server's own tagged 10011 allows by number,
+# through remote_ufw_delete_rule and so through the paths this part protects. Those protect only a rule
+# a connection the panel depends on gets in by (an SSH rule when the session cannot be read), so the
+# close still runs in the daily background pass (no request, no viewer) and with the session unread.
+class _DelHost137(_Host135):
+    """A stand-in whose deletes by number really take the row out, as ufw's renumbering does."""
+
+    def run(self, server, verb, args=(), **k):
+        if verb in ("ufw-delete-num", "ufw-delete-num-if"):
+            self.sent.append((verb, list(args)))
+            n = int(args[0])
+            if 1 <= n <= len(self.rules):
+                del self.rules[n - 1]
+                return ("Rule deleted", "", 0)
+            return ("ERROR: Could not find rule", "", 1)
+        return super().run(server, verb, args, **k)
+
+
+_TS3_ROWS = [_SSH22, "10011/tcp  ALLOW IN  Anywhere  # ts3a", "9987/udp  ALLOW IN  Anywhere  # ts3a", _SSH22V6,
+             "10011/tcp (v6)  ALLOW IN  Anywhere (v6)  # ts3a", "9987/udp (v6)  ALLOW IN  Anywhere (v6)  # ts3a"]
+_TS3_INFO = {"answered": True, "ports": [{"port": 9987, "desc": "Voice"}, {"port": 10011, "desc": "Query"}],
+             "open_ports": [9987, 30033]}
+
+
+def _ts3heal137(server, conn, patches=()):
+    """lgc_close_ts3_serverquery on a stand-in holding _TS3_ROWS -> (its answer, the rows left)."""
+    host = _DelHost137(rules=list(_TS3_ROWS))
+    gs = _NS137(remote=server, short_name="ts3a", lgsm_name="ts3server", name="ts3a", id=1)
+    res = _on137(host, _gp137.lgc_close_ts3_serverquery, gs, {}, conn=conn,
+                 patches=[(_gp137._sm, "detect_game_ports", lambda *a, **k: _TS3_INFO)] + list(patches))
+    return res, host.rules
+
+
+_ts3 = {
+    "remote, session read": _ts3heal137(_SRV137, _rconn137()),
+    "remote, session unread": _ts3heal137(_SRV137, None),
+    "panel host, no viewer (the background pass)": _ts3heal137(
+        _LOCAL135, None, [(_fw137, "_fwb_panel_viewer", lambda: (None, False))]),
+}
+check("#462: TeamSpeak's ServerQuery close runs through the delete guard — its tagged 10011 allows go in both "
+      "families, SSH and the voice port stay, on a remote whether or not the session is read and on the panel's "
+      "host with no viewer",
+      all(r == (True, [10011], "") and left == [x for x in _TS3_ROWS if "10011" not in x]
+          for r, left in _ts3.values()),
+      repr(_ts3))
 
 check("part137: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP137_START, repr(_P9_TRIPPED[_TRIP137_START:][:3]))
