@@ -38,6 +38,8 @@ _TG_RETRY_STEPS = (0, 1, 2, 4, 8)
 def _tg_poll_retry_delay(failures):
     """Seconds to wait after the `failures`-th poll failure in a row (1 is the first)."""
     return _TG_RETRY_STEPS[failures - 1] if failures <= len(_TG_RETRY_STEPS) else _TG_CMD_BACKOFF
+
+
 # Commands run here, not on the long-poll thread — see commands.CommandWorker.
 _TG_WORKER = CommandWorker("telegram-commands")
 
