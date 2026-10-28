@@ -226,7 +226,7 @@ class _FakeTime:
             raise _StopWatch()
 
 
-def _run_watch(scripted, cfg=None):
+def _run_watch(scripted, cfg=None, max_sleeps=4):
     """Drive _telegram_command_watch over a scripted list of telegram_get_updates return values.
     Returns (handled_commands, get_updates_calls, fake_time, set_commands_clear_flags).
 
@@ -242,7 +242,7 @@ def _run_watch(scripted, cfg=None):
              _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
              _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time,
              _TG.notifications.telegram_get_me)
-    ft = _FakeTime()
+    ft = _FakeTime(max_sleeps)
     try:
         _default_cfg = {"telegram": {"enabled": True, "accept_commands": True,
                                      "token": "tok", "chat_id": "555"}}
@@ -310,11 +310,23 @@ check("telegram watch: the poll thread hands commands off instead of running the
 check("telegram watch: plain text in the authorised chat is not treated as a command",
       "not a command" not in _handled, str(_handled))
 
-# 3. A poll ERROR (None — a 409 from a second poller, or a network failure) backs off instead of
-#    spinning the loop at full speed.
+# 3. A poll ERROR (None — a 409 from a second poller, or a network failure). The FIRST one is
+#    retried at once: every failure used to sleep 15s, so one dropped long-poll left a message
+#    sent in that window unanswered for 15s more (owner, 2026-10-28: "a big delay sometimes").
+#    A RUN of failures still escalates to 15s, so a dead network or a second poller on the same
+#    token cannot spin the loop. The numbers are the design's, written as literals.
 _handled, _calls, _ft, _sc, _inline = _run_watch([[], None])
-check("telegram watch: a failed poll backs off rather than busy-looping",
-      _ft.slept and _ft.slept[-1] == _TG._TG_CMD_BACKOFF, str(_ft.slept))
+check("telegram watch: the first failed poll is retried at once, not after 15s",
+      _ft.slept == [0], str(_ft.slept))
+_handled, _calls, _ft, _sc, _inline = _run_watch([[]] + [None] * 7, max_sleeps=8)
+check("telegram watch: repeated failures back off 0, 1, 2, 4, 8 then hold at 15s",
+      _ft.slept == [0, 1, 2, 4, 8, 15, 15], str(_ft.slept))
+_handled, _calls, _ft, _sc, _inline = _run_watch([[], None, None, None, [], None])
+check("telegram watch: an answered poll resets the backoff to an immediate retry",
+      _ft.slept == [0, 1, 2, 0], str(_ft.slept))
+_handled, _calls, _ft, _sc, _inline = _run_watch([None, None, []])
+check("telegram watch: a failed PRIMING read is retried at once too, and never marks primed",
+      _ft.slept == [0, 1] and [c["offset"] for c in _calls[:3]] == [-1, -1, -1], str((_ft.slept, _calls)))
 
 # 4. Commands switched OFF. Two separate behaviours, and they differ by whether the '/' menu was
 #    ever registered — on a cold start there is nothing to clear, so only the running-then-disabled

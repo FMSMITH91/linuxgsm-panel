@@ -27,6 +27,19 @@ _PLATFORM = "telegram"
 # honoured — and every command that changes anything to the allowed user ids beside it
 # (commands.OPEN_COMMANDS). Long-polls getUpdates.
 _TG_CMD_BACKOFF = 15
+# A failed poll is retried AT ONCE, then after 1, 2, 4 and 8 seconds, and only a run of failures
+# reaches _TG_CMD_BACKOFF. Every failure used to sleep the full 15s, so one dropped long-poll — a
+# reset connection, a Telegram 502 — left a message sent in that window unanswered for 15s on top
+# of the time it took to notice the drop. A second poller on the same token (409) still ends up at
+# the cap: Telegram cuts each request short, so its failures are consecutive.
+_TG_RETRY_STEPS = (0, 1, 2, 4, 8)
+
+
+def _tg_poll_retry_delay(failures):
+    """Seconds to wait after the `failures`-th poll failure in a row (1 is the first)."""
+    return _TG_RETRY_STEPS[failures - 1] if failures <= len(_TG_RETRY_STEPS) else _TG_CMD_BACKOFF
+
+
 # Commands run here, not on the long-poll thread — see commands.CommandWorker.
 _TG_WORKER = CommandWorker("telegram-commands")
 
@@ -167,6 +180,7 @@ def _telegram_command_watch(app):
     the ones already dispatched ahead of it.
     """
     offset, primed, registered = None, False, False
+    failures = 0           # polls failed in a row; any answer resets it
     state_token = None     # the bot the three values above belong to
     bot_username = None    # this bot's @username (getMe), so '/cmd@OtherBot' is not run here
     while True:
@@ -199,15 +213,19 @@ def _telegram_command_watch(app):
                 # self-update. A `/stop codserver` sent hours earlier then stops a running server.
                 latest = notifications.telegram_get_updates(token, offset=-1, timeout=0)
                 if latest is None:
-                    time.sleep(_TG_CMD_BACKOFF)
+                    failures += 1
+                    time.sleep(_tg_poll_retry_delay(failures))
                     continue          # try again; do NOT mark primed on an answer we never got
+                failures = 0
                 offset = _tg_offset_after(latest, offset)
                 primed = True
                 continue
             updates = notifications.telegram_get_updates(token, offset=offset, timeout=25)
             if updates is None:
-                time.sleep(_TG_CMD_BACKOFF)   # error / 409 conflict (a second poller) → back off
+                failures += 1             # error / 409 conflict (a second poller)
+                time.sleep(_tg_poll_retry_delay(failures))
                 continue
+            failures = 0
             for upd in updates:
                 offset = upd.get("update_id", 0) + 1
                 _tg_route_update(app, token, authorized, bot_username, upd)

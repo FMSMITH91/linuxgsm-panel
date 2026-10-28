@@ -737,6 +737,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The Telegram bot no longer goes quiet for up to a minute after a dropped connection.** When
+  one check for new messages failed (a reset connection or a brief Telegram error), the bot waited
+  15 seconds before checking again, and a connection that died silently took 35 seconds to notice,
+  so a command sent then could wait close to a minute for an answer. It now checks again at once,
+  notices a dead connection after 30 seconds, and only slows down (1, 2, 4, 8, then 15 seconds) while
+  failures keep repeating.
 - **Deleting a remote's SSH rule could cut the panel off from it.** The delete guard kept a host's
   last SSH rule, but counted every SSH rule as "another way in", wherever it let SSH in from. So
   the everyday "tighten SSH to my home IP" sequence (add an allow from your home address, then delete
