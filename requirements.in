@@ -26,6 +26,8 @@
 # because the resolved set is the same on each, and every pin ships wheels for each. No environment
 # markers here: a 3.10 compile drops a requirement whose marker is false on 3.10, so a package
 # needed only on a newer Python must be listed bare (tests/unit refuses a marker in this file).
+# requirements.txt carries one split by hand after compiling, dnspython by Python version: its
+# header says why, and how to put it back after a recompile.
 flask
 flask-socketio
 flask-login

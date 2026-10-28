@@ -68,6 +68,8 @@ noise .dockerignore
 # requirements-bootstrap.txt, which install.sh does read, and which therefore counts.
 noise requirements.in
 noise requirements-bootstrap.in
+# osv-scanner's dated exemptions for requirements.txt (security-code.yml); nothing on a host reads it.
+noise osv-scanner.toml
 # Analysis and lint configuration, read by the scanners alone.
 noise .codacy.yaml
 noise .prospector.yaml

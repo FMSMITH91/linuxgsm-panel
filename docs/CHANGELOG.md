@@ -2732,6 +2732,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **dnspython 2.9.0 on Ubuntu 24.04 and 26.04 (CVE-2026-114605).** Older dnspython can spend
+  unbounded CPU on a crafted DNS reply, and the panel's networking library (eventlet) uses it for
+  every name the panel looks up. The fix needs Python 3.11, so hosts on Ubuntu 24.04 and 26.04 get
+  2.9.0 with the next update, and Ubuntu 22.04 (Python 3.10) stays on 2.8.0, for which no fix
+  exists. On 22.04 the risk is a busy panel if a DNS server answers maliciously; nothing is read or
+  changed. That exception is recorded with a date, and the security checks fail again when it
+  expires.
+
+- **msgpack 1.2.3 in the CI dependency audit's own tools** (GHSA-j586-36cw-2gc2, a memory leak).
+  It runs only in CI; nothing on a panel host uses it.
+
 - **TeamSpeak 3's ServerQuery (its admin console) is no longer open to the internet.** Earlier
   versions of the panel read TeamSpeak's ServerQuery port (10011/tcp) as a server-browser port and
   opened it in the firewall at install and on "Open all ports". Neither opens it now, and once per
