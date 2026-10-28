@@ -525,13 +525,15 @@ def telegram_get_updates(token, offset=None, timeout=25):
     url += "?" + urllib.parse.urlencode(params)   # only int-coerced params; kept out of _tg_api_url
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
+        # timeout + 5: Telegram answers an empty long-poll at `timeout` exactly, so anything past
+        # a few seconds more is a dead connection, and every second of it is a message unread.
         # _tg_api_url builds the URL on the fixed api.telegram.org host.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         # _OPENER, as _post uses: the default urlopen FOLLOWS a 3xx, off api.telegram.org to
         # wherever it points (http:// included), with the bot token in the path of the URL that
         # asked — the one thing _post's comment above says no provider needs. A 3xx is now an
         # HTTPError, a URLError, so this answers None like any other failed poll.
-        with _OPENER.open(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal, no redirects
+        with _OPENER.open(req, timeout=timeout + 5) as resp:  # nosec B310 - https, host-literal, no redirects
             data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
         # A reply that is not an object (a list, a bare number) raised AttributeError here, out of
         # a function that promises never to raise; a `result` that is not a list is no updates.
