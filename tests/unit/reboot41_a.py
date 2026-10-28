@@ -491,8 +491,15 @@ def _window_checks41():
        [False, False, True, False, False, False])
     _fresh41()
     r, h, _rows = _std_host41()
-    h.setn("inflight", "gmodserver", 1)        # a scheduled update started and never ends
     real_census = HR.host_player_state
+    real_send = HR._Job._send
+
+    def _busy_send(job):
+        # A scheduled update starts once the stops have settled (the rescan waits out one already
+        # running) and never ends: the window, not the rescan, is what keeps the reboot from going.
+        h.setn("inflight", "gmodserver", 1)
+        return real_send(job)
+    _patch(HR._Job, "_send", _busy_send)
 
     def _quiet_census(remote, probes=None):
         h.setn("maint", "gmodserver", 0)

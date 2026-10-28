@@ -1964,6 +1964,16 @@ _r16d_wrap_ts_handles()
 # own connection, against ufw's behaviour; its readers; every lock-out guard through it, the reviews' probe
 # cases and the usability cases; the LOW findings) drives the firewall module on part135's stand-in host and
 # part12's app; imports part01, 12 and 135.
+# part138 (lgsm-2604: LinuxGSM v26.4.0 — the player-warning timer in every stop's budget, postponed and
+# refused actions said as such, LinuxGSM's own postponed backup, the config editor's two controls, the
+# TF2 -norestart notice, workshop-update, the reboot dialog's warning lines) drives part12's app with
+# stand-ins and the page scripts in node; imports part01, 05, 12 and 47.
+# part140 (LinuxGSM changelog v24.2.0-v26.4.0: the install's OS cap, the player ports `details` lists,
+# cron lines every monitor recognises, Project Zomboid's admin password, Valheim crossplay backups,
+# retired games, new games' ports, the CS:GO App ID note, command aliases; then the adversarial
+# review's: TeamSpeak's ServerQuery closed once, Valheim's bounded skip, the picker per distro) drives
+# pure functions, part12's app with stand-ins and the picker script in node;
+# imports part01, 05, 12 and 75.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1979,7 +1989,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
           "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
-          "part132", "part133", "part134", "part135", "part136", "part137", "part15")
+          "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

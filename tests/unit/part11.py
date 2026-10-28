@@ -3269,7 +3269,7 @@ try:
     _p8_is, _p8_mr, _p8_ms, _p8_us = (_rv_auth.INSTALL_SERVER, _rv_auth.MANAGE_REMOTES, _rv_auth.MANAGE_SERVERS,
                                       _rv_auth.UNINSTALL_SERVER)
     _gpo = []
-    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": _gs.port,
+    _rv.detect_game_ports = lambda remote, short, lgsm, **_k: {"game_port": _gs.port,
                                                          "open_ports": [_gs.port, 3306], "ports": []}
     _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
                                                                    (list(ports), "x"))[1]
@@ -3292,7 +3292,7 @@ try:
     _rv.has_permission = lambda u, p: False
     _rv.can_access_remote = lambda u, rid: False
     _rv.current_user = _RvUser()
-    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": 27016, "open_ports": [27016, 27017],
+    _rv.detect_game_ports = lambda remote, short, lgsm, **_k: {"game_port": 27016, "open_ports": [27016, 27017],
                                                          "ports": [{"port": 27016}]}
     _gpo = []
     _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
@@ -3313,7 +3313,7 @@ try:
                    name="Rust", installed=True, game_type="rust", query_type=None, status="online",
                    lgsm_name="rustserver", remote=_r)
     _rv_games.insert(0, _p8_other)
-    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": 22,
+    _rv.detect_game_ports = lambda remote, short, lgsm, **_k: {"game_port": 22,
                                                          "open_ports": [22, 27016, 27018], "ports": []}
     _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
                                                                    (list(ports), "x"))[1]
@@ -3327,12 +3327,12 @@ try:
           and "22, 27018" in _body["message"] and "REFUSED" in (_rv_log[-1][2] or ""),
           "port=%r opened=%r body=%r" % (_gs.port, _gpo, _body))
     _rv_games.remove(_p8_other)
-    _rv.detect_game_ports = lambda *a: (_ for _ in ()).throw(ConnectionError("down"))
+    _rv.detect_game_ports = lambda *a, **k: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     # A host that is down is _unreachable's answer (review 1015c), not the catch-all's 500.
     eq("sync ports: a host that is down is the unreachable answer, not a generic 500", (_st, _body),
        (200, {"success": False, "unreachable": True, "code": "host_unreachable", "message": "Host unreachable", "error": "Host unreachable"}))
-    _rv.detect_game_ports = lambda *a: (_ for _ in ()).throw(RuntimeError("bug"))
+    _rv.detect_game_ports = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bug"))
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     eq("sync ports: ...while any other raise is still a generic 500", (_st, _body),
        (500, {"success": False, "message": "Internal server error"}))

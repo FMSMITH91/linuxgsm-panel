@@ -35,6 +35,7 @@ from panel.security import banlist as _banlist
 from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
     VIEW_CONSOLE, get_user_permissions, log_action)
 from panel.services import (notifications)
+from panel.services import lgsm_players as _lgp
 import threading
 import time
 from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_jobs,
@@ -255,6 +256,8 @@ def _server_action_buttons(app, gs):
         "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
         "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
         "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,
+        # LinuxGSM v26.4.0, on the games it lists it for (its own command table decides).
+        "workshop-update": UPDATE_SERVER,
     }
     core = {"start", "stop", "restart", "update"}
     maintenance = [
@@ -395,11 +398,15 @@ def _report_once(app, ident, marker, report):
         app.logger.warning("could not save that '%s' was reported for %s", report[2], gname,
                            exc_info=True)
     reason, action, title, body = report
-    _alert_backup(app, _audit_backup_outcome(app, ident, False, reason, action), title, body)
+    _bk_gs = _audit_backup_outcome(app, ident, False, reason, action)
+    # title None: LinuxGSM has sent its own backup-postponed alert about this same wait
+    # (_lg264_lgsm_alerted) — audited here, not alerted a second time.
+    if title is not None:
+        _alert_backup(app, _bk_gs, title, body)
     return True
 
 
-def _report_overdue_skip(app, ident, sched, reason):
+def _report_overdue_skip(app, ident, sched, reason, quiet=False):
     """A due server that players kept from its backup for a whole extra interval: report it once.
 
     The scheduled sweep skips a server with players on and leaves its clock alone, so it is
@@ -422,11 +429,11 @@ def _report_overdue_skip(app, ident, sched, reason):
             % ((time.time() - last) // 86400, sched["interval_days"], reason or "players online"))
     return _report_once(app, ident, (last, bk.overdue_alerted, bk.mark_overdue_alerted,
                                      _overdue_reported),
-                        (text, "scheduled_backup_overdue", "Scheduled backup overdue",
+                        (text, "scheduled_backup_overdue", None if quiet else "Scheduled backup overdue",
                          "%s is overdue for its scheduled backup: %s" % (ident[1], text)))
 
 
-def _report_long_queue(app, gs, sched, reason):
+def _report_long_queue(app, gs, sched, reason, quiet=False):
     """A 'wait until empty' backup still waiting after DEFAULT_FULL_INTERVAL days: report it once.
 
     Only for a server whose own schedule is OFF. With a schedule on, the clock is not moved while
@@ -449,7 +456,7 @@ def _report_long_queue(app, gs, sched, reason):
             % ((time.time() - since) // 86400, reason or "players online"))
     return _report_once(app, (gs.id, gs.name, row_birth(gs)),
                         (since, bk.queued_alerted, bk.mark_queued_alerted, _queue_wait_reported),
-                        (text, "queued_backup_waiting", "Queued backup still waiting",
+                        (text, "queued_backup_waiting", None if quiet else "Queued backup still waiting",
                          "The queued backup of %s is still waiting: %s" % (gs.name, text)))
 
 
@@ -623,7 +630,8 @@ def _back_up_if_due(app, target):
     successor takes.
     """
     sid, remote, short, lgsm, gname, gtype, port, qtype, born = target
-    if claim_row(GameServer, sid, born) is None:
+    row = claim_row(GameServer, sid, born)
+    if row is None:
         return   # deleted since the list was read
     sched = bk.get_game_schedule(sid)
     if sched["interval_days"] <= 0:
@@ -649,15 +657,19 @@ def _back_up_if_due(app, target):
                                              game_type=gtype, port=port,
                                              query_type=qtype,
                                              held=functools.partial(claim_row, GameServer, sid, born))
+    # A Valheim on -crossplay a whole interval past due is backed up anyway (_lgc_vh_anyway).
+    ok, reason, was_skipped = _lgc_vh_back_up_anyway(
+        sid, (ok, reason, was_skipped), (sched["last"] + sched["interval_days"] * 86400, sched["interval_days"]),
+        (remote, short, lgsm, keep, gtype, port, qtype), functools.partial(claim_row, GameServer, sid, born))
     if claim_row(GameServer, sid, born) is None:
         return   # deleted while it was being archived: nothing below is its any more
     if was_skipped:
         # Players online — leave the clock untouched so it stays "due" and we
         # retry on the next hourly tick, backing up once the server empties.
         # busy=True so the UI shows why it's waiting (+ a "back up anyway").
-        _game_backup_status[sid] = {"running": False, "ok": None, "busy": True,
-                                    "msg": reason, "ts": time.time()}
-        _report_overdue_skip(app, (sid, gname, born), sched, reason)
+        _game_backup_status[sid] = _lg264_busy_status(reason)
+        _report_overdue_skip(app, (sid, gname, born), sched, reason,
+                             quiet=_lg264_lgsm_alerted(row, reason))
         return
     _record_game_clock(app, sid, gname)
     _game_backup_status[sid] = {"running": False, "ok": ok,
@@ -668,6 +680,77 @@ def _back_up_if_due(app, target):
     # for a whole interval. See _record_backup_outcome.
     _record_backup_outcome(app, sid, gname, ok, reason,
                            "scheduled_backup", "Scheduled backup failed", born)
+
+
+def _lgc_vh_anyway(reason, since, interval_days):
+    """Whether a Valheim -crossplay skip (`reason`) has lasted a whole interval since `since` (epoch).
+
+    Its players can never be counted, so without this bound such a server is skipped for good:
+    game.LGC_VH_BACKED_UP_ANYWAY says why the panel backs it up anyway then. Matched by the
+    constant itself, never by its words. Any other skip (players counted on) is never forced.
+    """
+    return (reason == _sm.LGC_VH_CROSSPLAY_SKIP and bool(since) and interval_days > 0
+            and time.time() - since >= interval_days * 86400)
+
+
+def _lgc_vh_back_up_anyway(sid, result, bound, run, held):
+    """`result` (ok, reason, skipped) of a run, or the forced run that replaces it under _lgc_vh_anyway.
+
+    `bound` is (since, interval_days) for _lgc_vh_anyway; `run` (remote, short_name, lgsm_name,
+    keep, game_type, port, query_type). Forced through _marked_backup like every unattended run; a
+    run that worked reports LGC_VH_BACKED_UP_ANYWAY alone (one sentence the page translates), one
+    that failed its own reason after it.
+    """
+    # held(): never forced for a server deleted while its first run was going on.
+    if not (result[2] and _lgc_vh_anyway(result[1], *bound) and held()):
+        return result
+    remote, short, lgsm, keep, gtype, port, qtype = run
+    ok, why, skipped = _marked_backup(sid, remote, short, lgsm, keep, game_type=gtype, port=port,
+                                      query_type=qtype, force=True, held=held)
+    note = _sm.LGC_VH_BACKED_UP_ANYWAY
+    return ok, (note if ok else "%s %s" % (note, why or "")).strip(), skipped
+
+
+def _lg264_busy_status(reason):
+    """The card's status for a skipped backup; `code` says when LinuxGSM holds it (no 'anyway')."""
+    return _lg264_bk_status(None, reason, True)
+
+
+def _lg264_bk_status(ok, reason, was_skipped):
+    """A backup's outcome as the card shows it (_game_backup_status).
+
+    Skipped: busy, with LinuxGSM's `code` (lgsm_players.Note) when LinuxGSM holds the backup, so the
+    card offers no "back up anyway" LinuxGSM would only postpone again.
+    """
+    st = {"running": False, "ok": None if was_skipped else ok, "busy": bool(was_skipped),
+          "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
+    code = _lgp.note_code(reason)
+    if code and was_skipped:
+        st["code"] = code
+    return st
+
+
+def _lg264_lgsm_alerted(gs, reason):
+    """True when LinuxGSM has already alerted about this postponed backup through a channel it has on.
+
+    LinuxGSM appends "alerted" to its request after its backup-postponed alert, which it sends
+    through the server's own LinuxGSM alert settings; with none on, that alert went nowhere and
+    the panel's report is the only one.
+    """
+    if _lgp.note_code(reason) != "lgsm_postponed" or not getattr(reason, "alerted", False):
+        return False
+    try:
+        vals = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, _LG264_ALERT_TOGGLES)
+    except Exception:
+        return False
+    return bool(vals) and any(str(vals.get(k, "")).strip().strip("\"'") == "on"
+                              for k in _LG264_ALERT_TOGGLES)
+
+
+# LinuxGSM's alert switches (its _default.cfg's ## Notification Alerts).
+_LG264_ALERT_TOGGLES = ["discordalert", "emailalert", "gotifyalert", "iftttalert", "matrixalert",
+                        "ntfyalert", "pushbulletalert", "pushoveralert", "rocketchatalert",
+                        "slackalert", "telegramalert"]
 
 
 def _run_due_game_backups(app):
@@ -736,15 +819,21 @@ def _back_up_queued(app, gs):
         gs.id, gs.remote, gs.short_name, gs.lgsm_name, sched["keep"],
         game_type=gs.game_type, port=gs.port, query_type=gs.query_type,
         held=functools.partial(still_held, gs))
+    # Valheim on -crossplay never counts as empty: a queue waiting a whole interval for that backs
+    # up anyway, as the scheduled sweep does (_lgc_vh_anyway).
+    ok, reason, was_skipped = _lgc_vh_back_up_anyway(
+        gs.id, (ok, reason, was_skipped),
+        (bk.queued_since(gs.id), sched["interval_days"] or bk.DEFAULT_FULL_INTERVAL),
+        (gs.remote, gs.short_name, gs.lgsm_name, sched["keep"], gs.game_type, gs.port, gs.query_type),
+        functools.partial(still_held, gs))
     if not still_held(gs):
         return
     if was_skipped:
         # Still players on: stays queued. Clear the running mark set above.
-        _game_backup_status[gs.id] = {"running": False, "ok": None, "busy": True,
-                                      "msg": reason, "ts": time.time()}
+        _game_backup_status[gs.id] = _lg264_busy_status(reason)
         # ...and a wait that has gone on for a whole backup interval is reported, once. It was
         # as silent as the scheduled skip: a queue on a server never empty waited for ever.
-        _report_long_queue(app, gs, sched, reason)
+        _report_long_queue(app, gs, sched, reason, quiet=_lg264_lgsm_alerted(gs, reason))
     if not was_skipped:
         # Backed up (or genuinely failed) — either way the wait is over.
         gs.backup_pending = False
@@ -898,7 +987,11 @@ def _r21b_run_counted(gs, act):
     try:
         with _r20b_audit_on_raise("%s_server" % act, who=None, target=gs.name, server=gs,
                                   detail=_r21b_raised_attempt(act, raised_fails, raised_last)):
-            return _sm.run_as_game_user(gs.remote, gs.short_name, act, timeout=90, selfname=gs.lgsm_name)
+            # Plus LinuxGSM's in-game warning (warnplayerstimer): a server read empty still
+            # warns for its whole timer when LinuxGSM itself cannot count its players.
+            return _sm.run_as_game_user(gs.remote, gs.short_name, act, selfname=gs.lgsm_name,
+                                        timeout=_lgp.timeout_for(gs.remote, gs.short_name,
+                                                                 gs.lgsm_name, act, 90))
     except Exception:
         _r21b_count_raised(gs, raised_fails, raised_last)
         raise
@@ -929,13 +1022,12 @@ def _run_queued_action(app, gs):
     # answered with no exit status is: the raise left before the counter, so on a direct-SSH host
     # _QUEUED_ACTION_ATTEMPTS never applied and every tick ran the action again, a row each time.
     _out, err, rc = _r21b_run_counted(gs, act)
+    oc = _lgp.outcome_of(_out, rc)
+    if oc is not None:
+        return _lg264_queued_outcome(app, gs, act, oc)
     ok = (rc == 0)
     retry = _queued_action_retries(act, rc)
-    if act == "restart" and not retry:
-        try:
-            _sm.set_game_priority(gs.remote, gs.short_name)
-        except Exception:
-            app.logger.debug("priority boost failed", exc_info=True)
+    _queued_restart_priority(app, gs, act, retry)
     fails = 0 if ok else _queued_action_failures.get(gs.id, 0) + 1
     give_up = retry and fails >= _QUEUED_ACTION_ATTEMPTS
     detail = _queued_action_detail(act, (_out, err, rc), fails, retry, give_up)
@@ -953,6 +1045,39 @@ def _run_queued_action(app, gs):
         _queued_action_failures[gs.id] = fails
     db.session.commit()
     return ok
+
+
+def _queued_restart_priority(app, gs, act, retry):
+    """After a queued restart that will not be retried, the game's CPU-priority nudge (best effort)."""
+    if act != "restart" or retry:
+        return
+    try:
+        _sm.set_game_priority(gs.remote, gs.short_name)
+    except Exception:
+        app.logger.debug("priority boost failed", exc_info=True)
+
+
+def _lg264_queued_outcome(app, gs, act, oc):
+    """A queued stop/restart LinuxGSM refused or postponed (players joined after the panel's count).
+
+    A refused stop stays queued: the next empty tick tries again. A restart LinuxGSM postponed is
+    LinuxGSM's to run once its monitor (the server's Autostart) sees it empty, so the queue is
+    cleared then — kept, both would restart the server one after the other. Not a failed attempt.
+    """
+    msg = _lgp.outcome_message(oc, act, monitor=bool(getattr(gs, "autostart", True)))
+    try:
+        postponed = oc["code"] == "lgsm_postponed"
+        log_action(None, "lgsm_postponed" if postponed else "lgsm_refused", target=gs.name,
+                   detail="%s: %s" % (act, msg), success=postponed, server=gs)
+    except Exception:
+        db.session.rollback()
+        app.logger.warning("could not audit the queued %s of %s", act, row_label(gs, "name"),
+                           exc_info=True)
+    if oc["code"] == "lgsm_postponed" and getattr(gs, "autostart", True):
+        _queued_action_failures.pop(gs.id, None)
+        gs.restart_pending = gs.stop_pending = False
+    db.session.commit()
+    return False
 
 
 def _forget_unqueued_failures(pending):
@@ -1585,9 +1710,15 @@ def _reinstate_displaced(server_id, cur):
         _action_output.pop(server_id, None)
 
 
-def _announce_action_end(app, server_id, action, rc):
-    """Say in the console how a long action ended: success, no exit status, or its failure code."""
-    if rc == 0:
+def _announce_action_end(app, server_id, action, rc, note=None):
+    """Say in the console how a long action ended: success, no exit status, or its failure code.
+
+    `note`: LinuxGSM postponed or refused the action (lgsm_players.outcome_message) — it exited 0
+    having done nothing, which "finished successfully" would misstate.
+    """
+    if note:
+        _console_push(app, server_id, f"[panel] {action}: {note}")
+    elif rc == 0:
         _console_push(app, server_id, f"[panel] {action} finished successfully.")
     elif rc is None or rc < 0:
         # We never got an exit code: the SSH call raised (rc None), or the transport gave up — a
@@ -1600,7 +1731,7 @@ def _announce_action_end(app, server_id, action, rc):
         _console_push(app, server_id, f"[panel] {action} failed (exit {rc}) — see above.")
 
 
-def _end_action_tail(app, server_id, remote, action, rc):
+def _end_action_tail(app, server_id, remote, action, rc, note=None):
     """Drain whatever is left, say how it went, and stop tailing.
 
     The final drain is the point of doing this here rather than just deleting the entry: the
@@ -1645,7 +1776,7 @@ def _end_action_tail(app, server_id, remote, action, rc):
             # not registered at its own end, with no final read either: all its output was lost.
             if _action_output.get(server_id) is cur:
                 _reinstate_displaced(server_id, cur)
-    _announce_action_end(app, server_id, action, rc)
+    _announce_action_end(app, server_id, action, rc, note)
 
 
 _tz_resolve_attempts = register_remote_state({})   # remote_id -> last attempt (rate limit)

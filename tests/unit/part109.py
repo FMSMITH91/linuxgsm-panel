@@ -54,7 +54,8 @@ _outr109 = _js106(_name109r, (
     "let sent = [];\n"
     "const reply = d => { global.fetch = (u, o) => { sent.push(o && o.body ? JSON.parse(o.body) : null);\n"
     "  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve(d)}); }; };\n"), _SF109, (
-    "var _r26c_rawRead", "var _r29j_rawShown", "function _r29j_rawText(", "function loadConfig(",
+    "var _r26c_rawRead", "var _r29j_rawShown", "function _r29j_rawText(", "function _lg264PlayersHtml(",
+    "function _lg264Tf2Html(", "function _lgcPzWarnShow(", "function loadConfig(",
     "function refreshRawConfig(", "function _r26c_rawStale(", "function _r29j_rawBehind(", "function saveRaw("), (
     "  const out = {}, ta = document.getElementById('cfg-raw'), msg = document.getElementById('cfg-raw-msg');\n"
     "  const save = async () => { sent = []; reply({success: true}); saveRaw(); await settle();\n"

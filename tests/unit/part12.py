@@ -377,6 +377,11 @@ def _p9_arm(patch=None, who="part12"):
             _m.subprocess,
             Popen=_p9_trip(_tn + ".subprocess.Popen", exc=OSError(_no)),
             run=_p9_trip(_tn + ".subprocess.run", exc=OSError(_no))))
+    # The player settings every stop, restart, update and backup reads first (LinuxGSM v26.4.0's
+    # warnplayerstimer, stoponlyifnoplayers) are a host config read, answered here as "off"; part138
+    # drives it.
+    from panel.services import lgsm_players as _p9_lgp
+    patch(_p9_lgp, "settings", lambda *a, **k: {"minutes": 0, "stop_only": False})
     # Rendering reads Tailscale state for the nav; that is a host command, answered here.
     patch(_p9_ts, "get_tailscale_info",
           lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))
@@ -2528,7 +2533,7 @@ try:
     _p9_patch(_p9_ms, "ensure_persistent_bans",
               lambda r, s, l: (_ms_log.append("bans"), _ms_boom("bans"))[0])
     _p9_patch(_p9_ms, "detect_game_ports",
-              lambda r, s, l: (_ms_boom("detect"), _ms_next("detect"))[1])
+              lambda r, s, l, **_k: (_ms_boom("detect"), _ms_next("detect"))[1])
     # `listen` answers once the server has been started, `listen_pre` before: nothing of the new
     # server's is listening until its first start, and step 6 scans right before it opens ports.
     _p9_patch(_p9_ms, "_remote_listening_ports",

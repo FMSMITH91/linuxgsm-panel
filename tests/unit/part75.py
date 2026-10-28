@@ -516,7 +516,7 @@ _out75 = _run_js75(_name75, (
     "global.fetch = (u) => Promise.resolve({ok: true, json: () => Promise.resolve({os_slug: slug[u.split('/')[3]]})});\n"
     "global.document = {getElementById: id => ({'game-type-select': sel, 'remote-select': host})[id] || null};\n"
     + "".join(_cut_or75(_MS75, "function %s(" % _f75) + "\n" for _f75 in (
-        "_osOlder", "_osVersionParts", "_osVersionBelow", "_withoutParenNote"))
+        "_capForHost", "_osOlder", "_osVersionParts", "_osVersionBelow", "_withoutParenNote"))
     + _cut_or75(_MS75, "function _hostStillSelected(") + "\n" + _cut_or75(_MS75, "function filterGamesForHost(") + "\n"
     "(async () => { filterGamesForHost(); await settle(); const on24 = [old.textContent, old.disabled];\n"
     "  host.value = '2'; filterGamesForHost(); await settle();\n"

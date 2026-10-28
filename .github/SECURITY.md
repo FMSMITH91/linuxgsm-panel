@@ -144,8 +144,9 @@ has no `pam_systemd`), so everything the helper started used to run inside
 which widens what the helper will run:
 
 - A LinuxGSM action that can leave a server running (`lgsm-command` start, restart, monitor,
-  update, force-update, validate, backup, mods-update) and a scheduled task's `cron-run-now` fork a
-  child that WAITS while root moves it into a new transient scope under the system manager
+  update, force-update, validate, backup, mods-update, workshop-update) and a scheduled task's
+  `cron-run-now` fork a child that WAITS while root moves it into a new transient scope under the
+  system manager
   (`busctl call … StartTransientUnit` with that one pid — a fixed argv) and sets its nice and I/O
   class (`ionice -c 0 -p <pid>`); only then does it drop to the game account through the same
   `_drop_to`, initgroups included. `systemd-run --scope --uid=` is not used: up to systemd v261 it

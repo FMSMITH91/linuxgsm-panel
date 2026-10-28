@@ -10,6 +10,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, c
     db, row_birth, row_label, same_row)
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
+from panel.services import lgsm_players as _lgp
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
@@ -701,22 +702,22 @@ def _os_cap_refusal(remote, game_type):
     # known. The alternative is a download that spends minutes arriving at LinuxGSM's own
     # "not supported on Ubuntu 24.04.5" and leaves a failed row to clean up.
     #
-    # The cap compared here is legacy_os, NOT the raw os column, and the difference is the
-    # whole correctness of this guard. Every game declares the newest release LinuxGSM builds
-    # its dependency list for — 136 of 140 say ubuntu-24.04 — so comparing the raw column
-    # against the host refuses EVERY game on an Ubuntu 26.04 box. legacy_os is only set for
-    # the handful LinuxGSM caps below the rest of the catalogue (btl and onset at 20.04,
-    # bf1942 and bfv at 22.04), which is the real signal. CI on the 26.04 runner caught this.
+    # The cap is LinuxGSM's own refusal in check_deps.sh (lgsm_data._LGC_DISTRO_CAPS), for the host's
+    # distro: btl and onset above Ubuntu 20.04 or Debian 11. It is NOT the serverlist's os column,
+    # which follows LinuxGSM's Docker image base: at v26.4.0 it left cod, cod2, coduo and mohaa on
+    # ubuntu-24.04 while the rest moved to 26.04, and reading it as a cap refused those four on
+    # every 26.04 host although LinuxGSM runs them there.
     #
     # Fails OPEN, like game_os_unsupported itself: an unreadable host OS, or a game with no
-    # declared cap, is not evidence of a problem, and refusing an install that would have
-    # worked is the worse error.
-    _game_os = next((g.get("legacy_os") for g in load_game_list()
-                     if g["shortname"] == game_type), "")
+    # cap, is not evidence of a problem, and refusing an install that would have worked is the
+    # worse error. A game with no cap anywhere costs no read of the host.
+    if not any(lgsm_data.lgc_distro_cap(game_type, d) for d in ("ubuntu", "debian")):
+        return None
     try:
         _host_os = _sm.host_os_slug(remote)
     except Exception:
         _host_os = None
+    _game_os = lgsm_data.lgc_distro_cap(game_type, (_host_os or "").split("-")[0])
     if _game_os and _host_os and game_os_unsupported(_game_os, _host_os):
         return _form_err(i18n.tr(
             "LinuxGSM supports {game} only up to {game_os}, and this host runs {host_os} — the install "
@@ -771,6 +772,16 @@ _R15F_KNOWN_PORTS = {
     "xnt": 26000, "ut99": 7777, "ut2k4": 7777,
     # Voice / misc
     "ts3": 9987, "samp": 7777, "mta": 22003,
+    # Added by LinuxGSM v24.3.0-v26.4.0 (the `port=` of each one's _default.cfg): Hytale, RuneScape:
+    # Dragonwilds, Conan Exiles, Soulmask, HumanitZ, and Jedi Knight: Jedi Academy (OpenJK).
+    "hyt": 5520, "rsdw": 7777, "ce": 7777, "sm": 8777, "hz": 7777, "jk3": 29070,
+    # Every other game whose _default.cfg sets `port=` to something other than 27015 (LinuxGSM
+    # v26.4.0): these were offered 27015. Games that keep their port in the game's own config have
+    # no `port=` there and stay on the fallback; `details` corrects them after the install.
+    "btl": 7777, "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871,
+    "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
+    "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027, "tf": 5001, "ti": 7777,
+    "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724,
 }
 
 
@@ -1359,9 +1370,12 @@ def _install_game_files(job, remote, gs):
         why = classify_install_failure(last_out)
         # ...except "Invalid platform", which CAN be fixed — it is a SteamCMD bug,
         # and LinuxGSM's maintainer found the way through it in
-        # GameServerManagers/LinuxGSM#4754 (still open): set steamcmdforcewindows,
-        # install (which pulls the Windows depot and gets SteamCMD past its own
-        # refusal), unset it, then validate, which pulls the Linux binaries.
+        # GameServerManagers/LinuxGSM#4754: set steamcmdforcewindows, install (which
+        # pulls the Windows depot and gets SteamCMD past its own refusal), unset it,
+        # then validate, which pulls the Linux binaries. LinuxGSM v26.3.0 (#4979)
+        # does this itself ("Invalid platform - applying SteamCMD Windows platform
+        # workaround"), so on that release the files have landed before this is
+        # reached; this stays for accounts on an older release.
         #
         # The panel does that ITSELF. The alternative is telling an operator to go
         # and read a GitHub thread, which is the opposite of what this is for.
@@ -1525,7 +1539,7 @@ def _configure_and_start(job, remote, gs):
     # withheld nothing", and the re-read then opened every port `details` reported — SSH included.
     _reopen_runtime_ports(remote, job.short_name, gs, port_conflict, port_unchecked,
                           getattr(job, "withheld", None))
-    _report_install_outcome(_r13b_noting_content_note(_noting_firewall_failure(job)), gs,
+    _report_install_outcome(_lgc_noting(_r13b_noting_content_note(_noting_firewall_failure(job))), gs,
                             (port_conflict, port_unchecked), started)
 
 
@@ -1569,6 +1583,71 @@ def _r13b_noting_content_note(job):
     return SimpleNamespace(**dict(vars(job), finish=finish))
 
 
+# Step 5's word on Project Zomboid's admin password (_lgc_seed_pz_admin), appended to the install's.
+LGC_PZ_ADMIN_SET = i18n.Sentence(
+    "Project Zomboid's admin password was set to a random one: it is adminpassword in Files & Config "
+    "(LinuxGSM's own default is CHANGE_ME).")
+LGC_PZ_ADMIN_NOT_SET = i18n.Sentence(
+    "The panel could not set Project Zomboid's admin password, so it is still LinuxGSM's default, "
+    "CHANGE_ME: set adminpassword in Files & Config before anyone joins.")
+# ...when the password is already not CHANGE_ME (an install retried after step 5 set one, or the
+# operator's own): nothing was changed, and nothing is wrong.
+LGC_PZ_ADMIN_KEPT = i18n.Sentence(
+    "Project Zomboid's admin password is no longer LinuxGSM's default, so the panel left it as it is "
+    "(adminpassword in Files & Config).")
+# ...and when the config could not be read: what the password is, is not known.
+LGC_PZ_ADMIN_UNREAD = i18n.Sentence(
+    "The panel could not read Project Zomboid's config, so whether its admin password is still "
+    "LinuxGSM's default, CHANGE_ME, is not known: check adminpassword in Files & Config before anyone "
+    "joins.")
+
+
+def _lgc_seed_pz_admin(job, remote, gs):
+    """Step 5 for Project Zomboid: a random adminpassword before the first start.
+
+    LinuxGSM v26.3.0 (#4991) starts pzserver with `-adminpassword ${adminpassword}` and ships
+    CHANGE_ME, and Project Zomboid creates its admin account from it on that first start. The
+    password is written to the instance cfg and never logged; the install's last word says where
+    it is (job.lgc_note, _lgc_noting).
+    """
+    if gs.game_type != "pz":
+        return
+    try:
+        ok, why = _sm.lgc_pz_set_admin_password(remote, job.short_name, job.lgsm_name)
+    except Exception:
+        _log.debug("install %s: the admin password write raised", job.short_name, exc_info=True)
+        ok, why = False, None
+    job.lgc_note = _lgc_pz_note(ok, why)
+
+
+def _lgc_pz_note(ok, why):
+    """(sentence, warns) for step 5's admin-password result: only a failed WRITE says CHANGE_ME.
+
+    It said CHANGE_ME on any refusal, so a retried install whose first run had already set a random
+    password, or an operator's own, read as "still CHANGE_ME" and finished as a warning; and an
+    unread config claimed a password nobody had read.
+    """
+    if ok:
+        return LGC_PZ_ADMIN_SET, False
+    if why == _sm.LGC_PZ_ALREADY_SET:
+        return LGC_PZ_ADMIN_KEPT, False
+    if why == _sm.LGSM_CONFIG_UNREAD:
+        return LGC_PZ_ADMIN_UNREAD, True
+    return LGC_PZ_ADMIN_NOT_SET, True
+
+
+def _lgc_noting(job):
+    """`job`, with a finish that also says what step 5 did to the admin password — when it did."""
+    note = getattr(job, "lgc_note", None)
+    if not note:
+        return job
+    sentence, warns = note
+
+    def finish(msg, warn=False):
+        job.finish(i18n.Sentences(msg, sentence), warn=warn or warns)
+    return SimpleNamespace(**dict(vars(job), finish=finish))
+
+
 def _configure_server(job, remote, gs):
     """Step 5 of the install job: port, command list and cron, EULAs, persistent bans.
 
@@ -1581,6 +1660,7 @@ def _configure_server(job, remote, gs):
     _write_install_ports(job, remote)
     cron_written = _cache_commands_and_cron(remote, short_name, gs)
     _accept_game_eulas(remote, short_name, gs)
+    _lgc_seed_pz_admin(job, remote, gs)
     # Source/GoldSrc: make the server reload its ban list on every start, so a banid
     # ban actually survives a restart (without this the engine drops it on reboot and
     # the player rejoins). Best-effort.
@@ -1692,7 +1772,9 @@ def _accept_game_eulas(remote, short_name, gs):
         except Exception:
             _log.debug("_run: ignored non-fatal error", exc_info=True)
     # SCP: Secret Laboratory has the same problem Minecraft has, in a form that is
-    # harder to see. Its launcher stops and ASKS:
+    # harder to see. (LinuxGSM v26.4.0, #5022, passes --acceptEULA in scpslserver's
+    # startparameters; this write stays for accounts on an older release and for a
+    # startparameters an operator has replaced.) Its launcher stops and ASKS:
     #
     #   Before starting please read and accept the SCP:SL EULA.
     #   Do you accept the EULA? [yes/no]
@@ -1744,7 +1826,7 @@ def _open_game_ports(job, remote, gs):
     # panel chose standing as if LinuxGSM had confirmed it. See _read_port_after_start.
     job.port_read = False
     try:
-        info = detect_game_ports(remote, short_name, gs.lgsm_name)
+        info = detect_game_ports(remote, short_name, gs.lgsm_name, game_type=gs.game_type)
         real_port = info.get("game_port")
         job.port_read = bool(real_port)
         rows = GameServer.query.filter_by(remote_id=remote.id).all()
@@ -1786,6 +1868,11 @@ def _open_game_ports(job, remote, gs):
         job.listening_read = foreign is not None
         job.withheld = frozenset(withheld) | (foreign or frozenset())
         remote_ufw_allow_game_ports(remote, to_open, short_name)
+        # A port that also serves an admin page (MTA's HTTP: its web admin) is named in the install's
+        # last word (_lgc_noting); step 5's note, for a game that has one, is never replaced.
+        _admin = _sm.lgc_admin_port_notes(gs.game_type, info.get("ports"), to_open)
+        if _admin and not getattr(job, "lgc_note", None):
+            job.lgc_note = (_admin[0], False)
     except Exception:
         # Still not fatal — the files are there — but no longer silent: it was logged at debug,
         # which production never shows, and the install reported a clean success.
@@ -2309,7 +2396,8 @@ def _runtime_ports(remote, short_name, gs, withheld):
     """The ports the post-start re-open starts from: `details` read again, or ours alone."""
     if withheld is None:
         return [gs.port] if gs.port else []
-    return detect_game_ports(remote, short_name, gs.lgsm_name).get("open_ports") or []
+    return detect_game_ports(remote, short_name, gs.lgsm_name,
+                             game_type=gs.game_type).get("open_ports") or []
 
 
 def _audit_install(job, gs, success, detail=""):
@@ -2725,7 +2813,11 @@ def _remove_account_crontab(remote, short_name):
 def _stop_game_processes(remote, short_name, selfname):
     """Stop the game gracefully, then kill whatever the account still runs. Both best-effort."""
     try:
-        _sm.run_as_game_user(remote, short_name, "stop", timeout=60, selfname=selfname)
+        # LinuxGSM's own save-and-quit, with its player warning and its players check set aside:
+        # this runs inside the request, and a countdown of warnplayerstimer minutes held the
+        # uninstall's request for up to an hour (or was cut off mid-countdown, and the kill below
+        # took the server with no save).
+        _lgp.stop_now(remote, short_name, selfname, timeout=60)
     except Exception:
         _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
     try:

@@ -8,7 +8,7 @@
 # Regenerate: fetch https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/<commit>/lgsm/data/serverlist.csv,
 # write its shortname column (header row dropped), sorted, one per line, under these header lines,
 # and name the commit below.
-# commit: ab3145948f805968281236250cd3f59de5a898d9
+# commit: 0f1db2242a324de7415914e61ca9a2a983b47225 (tag v26.4.0)
 ac
 ahl
 ahl2
@@ -28,6 +28,7 @@ bs
 bt
 btl
 cc
+ce
 ck
 cmw
 cod
@@ -72,6 +73,7 @@ jbep3
 jc2
 jc3
 jk2
+jk3
 kf
 kf2
 l4d
@@ -109,11 +111,11 @@ rsdw
 rtcw
 rust
 rw
+rwr
 samp
 sb
 sbots
 scpsl
-scpslsm
 sdtd
 sf
 sfc

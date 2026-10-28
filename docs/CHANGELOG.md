@@ -52,6 +52,57 @@ CI-verified commit regardless of this file — this changelog is for humans.
   or covering your own address, the one the panel connects from, or any of the panel host's own
   addresses, is refused. Every change is in the audit log (an IPv4-only or IPv6-only open says
   which), and on the panel's own host all of it is superadmin-only, like the rest of its firewall.
+- **LinuxGSM v26.4.0 support.** LinuxGSM 26.4 can warn players in-game before a stop
+  (`warnplayerstimer`) and, with `stoponlyifnoplayers` on, puts off a stop, restart, update or
+  backup while players are online. The panel now works with both:
+  - **Two controls in Files & Config → LinuxGSM Settings**: *Only stop when empty* (on/off) and
+    *Warn players first* (0–60 minutes), with a one-line explanation. They show only on servers
+    running LinuxGSM 26.4 or later, and the warning only on games whose console LinuxGSM can warn
+    through. On games whose player list can come back empty (Minecraft, CS2, CS:GO), the page says
+    LinuxGSM may then stop the server anyway, without its warning.
+  - **Stop, Restart, Update, Backup, queued actions and host reboots wait for the warning**
+    instead of giving up after a minute. A server whose setting cannot be read keeps the old time
+    limit. An uninstall stops the server straight away (no countdown, no players check), so the
+    page does not hang for the warning's minutes.
+  - **"Postponed" is said as postponed.** An update, backup or restart LinuxGSM puts off because
+    players are online is reported as postponed — in the console, the audit log, the chat bots,
+    the backup card and the scheduled-tasks list — never as finished or failed, and the message
+    says whether LinuxGSM will run it later (it does when Autostart is on). A stop LinuxGSM
+    refuses says so, and the Stop and Restart buttons say it in the server's console.
+  - **The panel's scheduled backups and LinuxGSM's postponed backup no longer both run.** While
+    LinuxGSM holds a backup for an empty server, the panel leaves it to LinuxGSM, records it when
+    LinuxGSM has taken it, and does not repeat LinuxGSM's own "backup postponed" alert.
+  - **A forced reboot still stops every server cleanly.** A server with *Only stop when empty* on
+    refuses an ordinary stop while players are online; for a "Reboot now" the panel sets that
+    setting aside for the one stop, so LinuxGSM still saves and stops the server itself. The Stop
+    button keeps the setting (and says when it refused). Players are warned once: by LinuxGSM's
+    countdown where a server has one, by the panel's 60-second warning otherwise — and on games
+    whose players LinuxGSM cannot always count (Minecraft, CS2, CS:GO), by the panel's. Servers the
+    panel warned are stopped first, before any LinuxGSM countdown.
+  - **A reboot that waits for an empty host goes back to waiting** when LinuxGSM refuses a stop
+    because a player has just joined, instead of letting the shutdown end that server.
+  - **Cancel during a reboot's stops calls off LinuxGSM's countdown** the way LinuxGSM's own
+    Ctrl-C does (its players are told the stop is cancelled), and the servers already stopped are
+    started again.
+  - **A reboot does not start while LinuxGSM is counting down** to another stop, restart, update
+    or backup on the host, or while a LinuxGSM restart is running, and its time allowance follows
+    how many accounts are stopped at once. A LinuxGSM command that starts during the reboot's
+    stops is waited for before the reboot is sent, and a server it started again is stopped again.
+  - **The Reboot dialog** lists, for each server with players online, how long LinuxGSM will warn
+    them (and that the reboot waits for it), or that only the panel's 60-second warning applies.
+  - **workshop-update** is in the Maintenance menu on the games LinuxGSM offers it for.
+  - **Team Fortress 2**: a server whose own `startparameters` lacks `-norestart` gets a one-line
+    notice saying to add it.
+- **A one-click fix for Project Zomboid's default admin password.** LinuxGSM (v26.3.0) starts Project
+  Zomboid with the admin password `CHANGE_ME`. A new install now gets a random one, and the install's
+  last message says where to find it (adminpassword in Files & Config). A server still on
+  `CHANGE_ME` shows a warning on its Config tab with a **Set a random admin password** button. A
+  settings save made at the same moment is not overwritten by the random password.
+- **A note for CS:GO servers about LinuxGSM's App ID switch.** From LinuxGSM v26.3.0, CS:GO runs as
+  App ID 4465480, and a Game Server Login Token made for App ID 730 stops working. The Config tab
+  says so, and says how to keep the old behaviour. It shows only on a server that has a token set
+  and runs as an App ID other than 730.
+
 - **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
   once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
   supported", to fetch it straight away, for a game LinuxGSM has just added.
@@ -693,6 +744,49 @@ CI-verified commit regardless of this file — this changelog is for humans.
   somewhere else, and under a default deny the panel lost the host. The rule the panel's own
   connection gets in by is now protected, its reason naming the address it connects from; when that
   address cannot be read, every SSH rule is kept until it can.
+- **Call of Duty, CoD 2, CoD: United Offensive and MoH: Allied Assault install on Ubuntu 26.04
+  again.** LinuxGSM v26.4.0 left these four games on Ubuntu 24.04 in its game list, and the panel read
+  that as a limit and refused them on 26.04 hosts, although LinuxGSM runs them there. The panel now
+  refuses only what LinuxGSM itself refuses: BATTALION: Legacy and Onset above Ubuntu 20.04 or
+  Debian 11. The install page greys those two out for a Debian 12 host too, not only for a newer
+  Ubuntu.
+- **Players can join a new Satisfactory server behind the panel's firewall.** The panel opened only
+  the Game and Query ports, and Satisfactory also needs 8888/tcp. Now the install and "Open all ports"
+  also open the other ports LinuxGSM lists that players connect to (ARK's and Conan Exiles' raw UDP
+  port, Mordhau's beacon, The Isle's queue, TeamSpeak 3's file transfer, MTA's resource downloads).
+  MTA's resource-download port also serves MTA's web admin, so opening it now comes with a note to
+  give MTA's admin accounts strong passwords.
+- **LinuxGSM's monitor no longer restarts a server in the middle of the panel's nightly update.**
+  On LinuxGSM before v26.4.0, the 5-minute monitor did not see an update the panel's cron had
+  started, and could start the server again while SteamCMD was downloading. The panel's cron lines
+  now run each command in the form every LinuxGSM version recognises, and existing lines are
+  changed over on their own, keeping their last run and result.
+- **Valheim backups no longer disconnect players every hour.** With `-crossplay` (LinuxGSM's
+  default) Valheim has no Steam query port, so the panel could never count its players, and it
+  treated that as an empty server. A running crossplay Valheim server now skips its scheduled
+  backup, and says how to let the panel count players. So that such a server is never left without
+  backups, once it has gone a whole backup interval past due the panel backs it up anyway and says
+  so on the backup card and in the audit log (anyone on is disconnected while it runs). The same
+  applies to a "wait until empty" backup that has waited a whole interval. A server that crashed
+  counts as stopped, so it is backed up as usual.
+- **Existing Post Scriptum and SCP: Secret Laboratory ServerMod servers can be imported.** LinuxGSM
+  retired both games, so the panel's scan no longer recognised them. They are listed again, marked
+  as retired with their replacement, and the panel no longer schedules their weekly `update-lgsm`,
+  which can only fail for them.
+- **New LinuxGSM games get the right default port.** Hytale, RuneScape: Dragonwilds, Conan Exiles,
+  Soulmask, HumanitZ and Jedi Academy were offered port 27015. Jedi Academy servers also get the
+  Players card's Kick and Say. So were 26 other games whose LinuxGSM config sets another port,
+  among them Satisfactory, Palworld, DayZ, The Isle, The Front and Insurgency: Sandstorm; each is
+  now offered LinuxGSM's own default.
+- **The Autostart switch reads a monitor line written by hand.** A crontab line written as
+  `cd /home/<user>/ && ./<script> monitor`, `cd /home/<user>; ./<script> monitor` or with
+  LinuxGSM's short `m` now counts as Autostart, and switching Autostart off removes it. Before,
+  Autostart read as off while that line kept the server running.
+- **LinuxGSM's short command names count as maintenance.** An update started as `./server u` (or
+  `fu`, `b`, `v`, …) no longer reads as the server going offline unexpectedly, and a host reboot
+  waits for it. A `start` that fails with LinuxGSM's generic error is no longer reported as "already
+  running".
+
 - **A twenty-third full review on 2026-10-22: fixes.** Every item below has a check that fails
   without its fix.
   - **One machine, one host row.** A host whose address and SSH port another row already has is
@@ -2637,6 +2731,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **TeamSpeak 3's ServerQuery (its admin console) is no longer open to the internet.** Earlier
+  versions of the panel read TeamSpeak's ServerQuery port (10011/tcp) as a server-browser port and
+  opened it in the firewall at install and on "Open all ports". Neither opens it now, and once per
+  TeamSpeak 3 server, on every host, the panel removes the firewall rules it opened itself for
+  ServerQuery (10011, and 10022, 10080 and 10443 or whatever ports the server reports). It never
+  touches a rule you added yourself, a rule of another server, SSH's or the panel's port, or the
+  voice and file-transfer ports players use. What it closed is in the audit log; if it could not read
+  the host's firewall it says so there and tries again the next day.
 
 - **Test fixtures carry no real addresses.** A connecting device's tailnet address and a public address
   copied from a live debug report were replaced with made-up or well-known public ones, and the

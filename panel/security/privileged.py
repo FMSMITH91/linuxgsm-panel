@@ -920,7 +920,8 @@ GAME_GROUP = "lgsmpanel-games"
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
                 "details", "check-update", "force-update", "update-lgsm", "mods-update",
-                "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove")
+                "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove",
+                "workshop-update")
 
 
 def _answers(s):

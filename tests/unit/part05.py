@@ -8001,11 +8001,12 @@ check("already_escalated: ...and it calls the decision rather than inlining one"
           for c in _smg_ast.walk(_alr_fn)),
       "no _already_escalated() call inside _run_local")
 
-# ── the serverlist declares a max OS per game, and it was parsed then thrown away ──────────────
-# Four of the 140 top out below the rest: bf1942/bfv at ubuntu-22.04, btl/onset at ubuntu-20.04.
-# The picker offered all 140 on every host, so on a 24.04 box those four could only ever fail —
+# ── LinuxGSM refuses a few games above a distro release, and the picker said nothing ───────────
+# btl and onset are refused above Ubuntu 20.04 by LinuxGSM's check_deps.sh (bf1942/bfv above 22.04
+# up to v26.3.0). The picker offered them on every host, so on a 24.04 box they could only ever fail —
 # with LinuxGSM's "not supported on Ubuntu 24.04.5" arriving minutes into the install, after the
-# account had been created. Measured on the test VPS for bf1942, bfv and btl.
+# account had been created. Measured on the test VPS for bf1942, bfv and btl. The serverlist's os
+# column is NOT the cap (it follows LinuxGSM's Docker image base: v26.4.0 left cod on 24.04).
 from app import game_os_unsupported as _gosu, load_game_list as _lgl               # noqa: E402
 
 for _g, _h, _want, _why in (
@@ -8031,9 +8032,11 @@ _o_sl, _o_cache = _ld.serverlist, dict(_app_mod._GAME_LIST_CACHE)
 try:
     _ld.serverlist = lambda *a, **k: [
         {"shortname": "cs", "gameservername": "csserver", "gamename": "Counter-Strike 1.6",
+         "os": "ubuntu-26.04"},
+        {"shortname": "cod", "gameservername": "codserver", "gamename": "Call of Duty",
          "os": "ubuntu-24.04"},
         {"shortname": "bf1942", "gameservername": "bf1942server", "gamename": "Battlefield 1942",
-         "os": "ubuntu-22.04"},
+         "os": "ubuntu-26.04"},
         {"shortname": "onset", "gameservername": "onsetserver", "gamename": "Onset",
          "os": "ubuntu-20.04"},
         {"shortname": "noos", "gameservername": "noosserver", "gamename": "No OS Declared",
@@ -8042,11 +8045,11 @@ try:
     _app_mod._GAME_LIST_CACHE["games"] = None
     _games = _lgl()
     _flagged = {g["shortname"]: g.get("legacy_os") for g in _games if g.get("legacy_os")}
-    check("game os: exactly the games capped below the catalogue are flagged",
-          set(_flagged) == {"bf1942", "onset"}, str(sorted(_flagged)))
-    check("game os: ...and each carries the release it actually tops out at",
-          _flagged.get("bf1942") == "ubuntu-22.04" and _flagged.get("onset") == "ubuntu-20.04",
-          str(_flagged))
+    check("game os: exactly the games LinuxGSM's check_deps refuses on newer releases are flagged "
+          "(cod, left on ubuntu-24.04 in the os column, is not)",
+          set(_flagged) == {"onset"}, str(sorted(_flagged)))
+    check("game os: ...and it carries the release it actually tops out at",
+          _flagged.get("onset") == "ubuntu-20.04", str(_flagged))
     check("game os: a game on the newest release is NOT flagged",
           not next((g for g in _games if g["shortname"] == "cs"), {}).get("legacy_os"))
     check("game os: ...nor one that declares no OS at all",

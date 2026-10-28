@@ -5634,12 +5634,13 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 227, was 226: /api/server/<id>/create-path is a genuinely new view — New file and New folder in
 # the file browser, behind rename-path's gates (the file-manager permission, then the game
 # account's write refusal).
-# 229, was 227: two genuinely new views for the Network tab's firewall (fw-more) —
-# /api/remote/<id>/firewall/settings (UFW's default policies, on/off and logging, read and changed
-# under the lock-out checks) and /firewall/block-port (deny or reject a port or a range, which no
-# verb could express before).
-check("register_routes: every one of the 229 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 229,
+# 230, was 227: three genuinely new views — /api/server/<id>/pz-admin-password (Project Zomboid's
+# one-click random admin password, behind the settings save's gates), and two for the Network tab's
+# firewall (fw-more): /api/remote/<id>/firewall/settings (UFW's default policies, on/off and logging,
+# read and changed under the lock-out checks) and /firewall/block-port (deny or reject a port or a
+# range, which no verb could express before).
+check("register_routes: every one of the 230 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 230,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

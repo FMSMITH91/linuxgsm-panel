@@ -47,9 +47,12 @@ _ENG_VALVE = frozenset({
 # `clientkick` and no ban; `say` is the game module's (g_svcmds.c ConsoleCommand). Quake Live
 # ("ql", `qzeroded`) is closed source: neither its `status` layout nor a kick by slot is
 # published anywhere primary, and a guessed command answers "Done." while the player stays on,
-# so it is left to gamedig's view-only list.
+# so it is left to gamedig's view-only list. jk3server (LinuxGSM v26.4.0) runs OpenJK
+# (`openjkded.x86_64`), whose codemp/server/sv_ccmds.cpp registers `status` (the "cl score ping name
+# address rate" table) and `clientkick`, and whose game module's g_svcmds.c handles `say`; it has
+# no ban by slot (sv_banaddr takes an address), so its Ban is refused like jk2's.
 _ENG_IDTECH3 = frozenset({
-    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "etl", "rtcw", "wet", "jk2",
+    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "etl", "rtcw", "wet", "jk2", "jk3",
 })
 # Minecraft — `list` gives names, kick/ban by name. LinuxGSM's Minecraft games are mc (vanilla
 # Java), pmc (PaperMC) and mcb (Bedrock). "spigot", "paper", "bukkit", "forge", "fabric",
@@ -1327,10 +1330,11 @@ def _stale_backup_lock_sweep(user, home=None):
             f"find {home} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; ")
 
 
-def _backup_players_online(server, user, game_type, port, query_type):
+def _backup_players_online(server, user, game_type, port, query_type, selfname=None):
     """The skip message when players are connected (a backup would disconnect them), else None.
 
-    An unknown count (None) is treated as empty — see run_game_backup.
+    An unknown count (None) is treated as empty — see run_game_backup — except for a running
+    Valheim on -crossplay, whose count is never known (_lgc_vh_crossplay_skip).
 
     query_type, like every other player/version read in this file (_gamedig_player_list,
     _queried_version, is_player_queryable) and like the on-screen count in server_detail.
@@ -1345,7 +1349,65 @@ def _backup_players_online(server, user, game_type, port, query_type):
     pc = cron.player_count(server, user, game_type, port, query_type)
     if pc is not None and pc > 0:
         return f"{pc} player(s) online — backup skipped so nobody gets disconnected"
+    if pc is None and (game_type or "").lower() == "vh":
+        return _lgc_vh_crossplay_skip(server, user, selfname or user)
     return None
+
+
+# Valheim's skip when its players cannot be counted. LinuxGSM starts vhserver with -crossplay by
+# default (since v24.3.0), and a crossplay server has NO Steam query port (LinuxGSM set vh to
+# querymode="1", session only, in v25.2.0 #4840), so gamedig never answers and the count is always
+# unknown. Read as empty, that ran LinuxGSM's `backup` — which stops the server — every hour with
+# players on it. LinuxGSM's own way out is in vhserver's _default.cfg: a Steam-only server drops
+# -crossplay from startparameters, and then it answers the query.
+LGC_VH_CROSSPLAY_SKIP = ("Valheim with -crossplay has no Steam query port, so the panel cannot tell "
+                         "whether anyone is on — backup skipped so nobody gets disconnected. Stop the "
+                         "server first, back up anyway, or remove -crossplay from startparameters (a "
+                         "Steam-only server) so its players can be counted.")
+# ...and its bound. A Valheim that never stops (the usual community server) skipped every backup for
+# good, and LinuxGSM's default config is that server. Valheim's own console lines were not used to
+# count players instead: their wording is not documented, nothing here could check it against a
+# real log, they are not in LinuxGSM's console log once logFile is set, and a miscount is wrong in
+# the bad direction whichever way it errs (a missed join disconnects a player; a missed leave stops
+# backups again). So once the skip has lasted a whole backup interval past due, the panel backs up
+# anyway and says so (routes/_shared._lgc_vh_anyway): a world at most one interval older than its
+# schedule promises, and players disconnected for the length of one backup.
+LGC_VH_BACKED_UP_ANYWAY = ("Valheim with -crossplay: its players cannot be counted and it had gone a whole "
+                           "backup interval past due, so it was backed up anyway — anyone on was "
+                           "disconnected while it ran. Remove -crossplay from startparameters (a "
+                           "Steam-only server) so its players can be counted.")
+
+
+def _lgc_vh_crossplay_skip(server, user, selfname):
+    """LGC_VH_CROSSPLAY_SKIP for a Valheim that runs with -crossplay; None when it is stopped or off it.
+
+    A config that could not be read counts as LinuxGSM's default, which has -crossplay; a server
+    whose state could not be read counts as running: neither is evidence that nobody is on.
+    Running is LinuxGSM's `<selfname>-started.lock` (written by start, removed by stop) AND a live
+    `<selfname>` tmux session: only stop removes the lock, so after a crash it stays, and a server
+    that was down read as running and went without its backup for as long as it stayed down.
+    """
+    vals = files.lgsm_get_values(server, user, selfname, ["startparameters"])
+    if vals is not None and "-crossplay" not in (vals.get("startparameters") or "").split():
+        return None
+    out, _, _ = _core.shell_as_game_user(server, user, _lgc_vh_up_sh(user, selfname), timeout=15,
+                                         selfname=selfname)
+    if "LGC_DOWN" in (out or "").split():
+        return None
+    return LGC_VH_CROSSPLAY_SKIP
+
+
+def _lgc_vh_up_sh(user, selfname):
+    """Shell printing LGC_UP when `selfname` has its started.lock and a live tmux session, else LGC_DOWN.
+
+    The session by its EXACT name on any of its sockets (`has-session -t` matches by prefix, so
+    vhserver would answer for vhserver-2): LinuxGSM's `<selfname>-<uid>` sockets, and the bare
+    `<selfname>` one of releases before the uid file.
+    """
+    return (f"[ -f /home/{user}/lgsm/lock/{selfname}-started.lock ] || {{ echo LGC_DOWN; exit 0; }}; "
+            f"for s in {selfname} $(ls -1 /tmp/tmux-$(id -u) 2>/dev/null | grep -F -- '{selfname}-'); do "
+            f"TERM=screen tmux -L \"$s\" list-sessions -F '#{{session_name}}' 2>/dev/null "
+            f"| grep -Fqx -- '{selfname}' && {{ echo LGC_UP; exit 0; }}; done; echo LGC_DOWN")
 
 
 def _backup_space_refusal(server, user, headroom_note):
@@ -1405,8 +1467,12 @@ def _run_linuxgsm_backup(server, user, selfname):
     # backup was started from the panel's cgroup with it: on a system install the next panel
     # restart ended it. On the panel's own host the helper's lgsm-command gives the action a scope
     # of its own before it drops to the account; on a remote it is the same shell form as before.
-    out, err, rc = _core.run_as_game_user(server, user, "backup", timeout=3600, selfname=selfname,
-                                          answers=["y", "y", "y"])
+    # Plus the minutes LinuxGSM v26.4.0 may spend warning players before it stops the server
+    # (warnplayerstimer): a run cut off mid-countdown is a backup that never started.
+    from panel.services import lgsm_players
+    out, err, rc = _core.run_as_game_user(
+        server, user, "backup", answers=["y", "y", "y"], selfname=selfname,
+        timeout=lgsm_players.timeout_for(server, user, selfname, "backup", 3600))
     ok = rc == 0
     # LinuxGSM can exit 0 while REFUSING to back up because a (possibly stale) lock exists —
     # "Lockfile found: Backup is currently running". No archive is created, so this is NOT a
@@ -1695,6 +1761,123 @@ def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note)
     return False, reason + " (" + _BKVERIFY_WHY.get(code, "the host could not be asked") + ")." + note, False
 
 
+# ── LinuxGSM v26.4.0's own postponed backup ───────────────────────────────────────────────────────
+# With stoponlyifnoplayers on, a `backup` that would stop a server with players on prints "Backup
+# postponed until the server is empty", writes lgsm/lock/<selfname>-backup-request.lock (its first
+# line the epoch it was asked) and EXITS 0. LinuxGSM's monitor then runs `backup` itself once the
+# server is empty, removes the lock when that archive is written, and appends "alerted" to it when
+# it has sent its own backup-postponed alert after 24 hours (command_monitor.sh,
+# fn_monitor_check_backup_request). Read as an exit-0 backup, the panel found no new archive and
+# reported a FAILED backup, alerted on it and moved the clock. And left alone, the panel's hourly
+# retry and LinuxGSM's monitor would both back the server up the moment it emptied.
+_LG264_BK_END = "__LGSMP_LG264_BK__"
+# The host epoch of the request each instance was last seen waiting on, (remote id, user, selfname):
+# a request gone since, with an archive written after it, was LinuxGSM's monitor taking the backup.
+# In memory: after a panel restart that one backup may be taken twice, never skipped.
+_lg264_bk_waiting = _core.register_remote_cache({})
+
+
+def _lg264_bk_request(server, user, selfname):
+    """Read LinuxGSM's pending backup request for an instance; None when the read did not happen.
+
+    {"requested": epoch or None (no request), "alerted": bool, "monitor": bool} — monitor: the
+    instance has <selfname>-monitoring.lock AND its account's crontab runs `<selfname> monitor`
+    (the panel's Autostart), the two things LinuxGSM's monitor needs to ever run the request. A
+    commented-out line runs nothing, so it does not count. The line is matched in both forms the
+    panel writes (cron.lgc_cron_core and the older full path) and with LinuxGSM's `m` alias.
+    """
+    if not _core.game_idents_ok(user, selfname):
+        return None
+    lock = "/home/%s/lgsm/lock/%s" % (user, selfname)
+    req = _core._quote(lock + "-backup-request.lock")
+    cmd = ("R=-; [ -f %s ] && R=$(head -n 1 %s 2>/dev/null); A=0; grep -qx alerted %s 2>/dev/null && A=1; "
+           "M=0; [ -f %s ] && crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -qE %s && M=1; "
+           "printf '%%s\\t%%s\\t%%s\\t%%s\\n' \"$R\" \"$A\" \"$M\" %s"
+           % (req, req, req, _core._quote(lock + "-monitoring.lock"),
+              _core._quote(cron.lgc_cron_cmd_ere(user, selfname, "monitor|m")),
+              _LG264_BK_END))
+    try:
+        out, _err, _rc = _core.shell_as_game_user(server, user, cmd, timeout=20, selfname=selfname)
+    except Exception:
+        return None
+    for line in (out or "").splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) == 4 and parts[3] == _LG264_BK_END:
+            r = parts[0].strip()
+            requested = None if r == "-" else (int(r) if r.isascii() and r.isdecimal() else 0)
+            return {"requested": requested, "alerted": parts[1] == "1", "monitor": parts[2] == "1"}
+    return None
+
+
+def _lg264_bk_note(sentence, code, req=None):
+    """A backup answer's message that also carries what LinuxGSM's request says (lgsm_players.Note)."""
+    from panel.services import lgsm_players
+    return lgsm_players.note(sentence, code, requested=(req or {}).get("requested"),
+                             alerted=bool((req or {}).get("alerted")))
+
+
+def _lg264_bk_taken(server, user, since):
+    """Whether LinuxGSM's monitor wrote a backup since `since` (host epoch): the newest finished archive."""
+    newest = (cron.list_game_backups(server, user) or [{}])[0]
+    return not newest.get("in_progress") and (newest.get("created") or 0) >= since
+
+
+def _lg264_bk_before(server, user, selfname, keep):
+    """run_game_backup's answer when LinuxGSM's own postponed backup decides it, else None.
+
+    A request LinuxGSM's monitor will run is left to it (skipped, not run twice). A request that
+    has gone since it was last seen, with an archive written after it, was the monitor's backup:
+    that is the backup, pruned as after any success, and nothing is run again.
+    """
+    from panel.services import lgsm_players
+    key = (getattr(server, "id", None), user, selfname)
+    req = _lg264_bk_request(server, user, selfname)
+    if req is None:
+        return None
+    if req["requested"] is not None and req["monitor"]:
+        _lg264_bk_waiting[key] = req["requested"]
+        return False, _lg264_bk_note(lgsm_players.BACKUP_QUEUED, "lgsm_postponed", req), True
+    since = _lg264_bk_waiting.pop(key, None)
+    if req["requested"] is None and since and _lg264_bk_taken(server, user, since):
+        _bkprune_after_success(server, user, keep)
+        return True, _lg264_bk_note(lgsm_players.BACKUP_DONE_BY_LGSM, "lgsm_done"), False
+    return None
+
+
+def _lg264_bk_after(server, user, selfname, out):
+    """run_game_backup's answer when LinuxGSM postponed the backup it was just asked for, else None."""
+    from panel.services import lgsm_players
+    oc = lgsm_players.outcome(out)
+    if oc is None or oc["kind"] != "backup":
+        return None
+    req = _lg264_bk_request(server, user, selfname)
+    if req is not None and req.get("requested") is not None:
+        _lg264_bk_waiting[(getattr(server, "id", None), user, selfname)] = req["requested"]
+    # An unread request leaves Autostart unknown (None): not "Autostart is off".
+    msg = lgsm_players.outcome_message(oc, "backup", monitor=None if req is None else req["monitor"])
+    return False, _lg264_bk_note(msg, "lgsm_postponed", req), True
+
+
+def _bk_after_run(server, user, selfname, before, run, keep, headroom_note):
+    """run_game_backup's answer once LinuxGSM's `backup` has run: run = _run_linuxgsm_backup's tuple."""
+    ok, lock_refused, out, err, rc = run
+    lg = _lg264_bk_after(server, user, selfname, out) if rc == 0 else None
+    if lg is not None:
+        return lg
+    text_failed = _bkverify_text_failed(out, err)
+    if ok and not text_failed:
+        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
+    if ok:
+        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note)
+    if lock_refused:
+        return False, ("A backup lock was in the way — a previous backup may still be running, or it "
+                       "left a stale lock. Try again in a minute."), False
+    # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
+    return False, (_backup_failure_reason(out, err)
+                   + _bkpart_cleanup(server, user, selfname, before, rc, lock_refused,
+                                     text_failed)), False
+
+
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
                     query_type=None):
     """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
@@ -1718,8 +1901,13 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     if not _core.game_idents_ok(user, selfname):
         return False, _core.GAME_ACCOUNT_REFUSED[1], False
     keep = max(1, int(keep))
+    # LinuxGSM's own postponed backup first, force or not: `force` overrides the panel's player
+    # check, and LinuxGSM's stoponlyifnoplayers postpones a forced run all the same.
+    lg = _lg264_bk_before(server, user, selfname, keep)
+    if lg is not None:
+        return lg
     if not force:
-        skip = _backup_players_online(server, user, game_type, port, query_type)
+        skip = _backup_players_online(server, user, game_type, port, query_type, selfname)
         if skip:
             return False, skip, True
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
@@ -1738,19 +1926,8 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, refusal, False
     # Taken last, just before the run: the headroom prune above may have removed archives.
     before = _bkpart_listing(server, user)
-    ok, lock_refused, out, err, rc = _run_linuxgsm_backup(server, user, selfname)
-    text_failed = _bkverify_text_failed(out, err)
-    if ok and not text_failed:
-        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
-    if ok:
-        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note)
-    if lock_refused:
-        return False, ("A backup lock was in the way — a previous backup may still be running, or it "
-                       "left a stale lock. Try again in a minute."), False
-    # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
-    return False, (_backup_failure_reason(out, err)
-                   + _bkpart_cleanup(server, user, selfname, before, rc, lock_refused,
-                                     text_failed)), False
+    return _bk_after_run(server, user, selfname, before, _run_linuxgsm_backup(server, user, selfname),
+                         keep, headroom_note)
 
 
 # One row of the command table the instance script prints with no arguments:
@@ -1806,12 +1983,82 @@ def list_server_commands(server, user, selfname=None):
 # still open any of these manually from the firewall page if they want them.
 _NONESSENTIAL_PORT_DESCS = ("client", "sourcetv", "source tv", "rcon", "telnet")
 
+# The other rows of `details`' port table that players need, beside Game and Query. Every row label
+# LinuxGSM prints (lgsm/modules/info_messages.sh, v26.4.0) was gone through; these are the ones a
+# client connects to:
+#   ReliableMessaging   Satisfactory's 8888/tcp — without it nobody can join (#4813, #4976);
+#   Server API          Satisfactory's 7777/tcp, the API the client queries before it joins;
+#   Raw UDP...          ARK's "RAW UDP Socket" and Conan Exiles' "Raw UDP" (the game port + 1);
+#   Beacon              Mordhau's and The Front's beacon (LAN Beacon is not: "lan beacon" starts "lan");
+#   Queue               The Isle's join queue;
+#   Voice               TeamSpeak 3's voice port and Arma 3's (both the game port; "Voice (unused)" is not);
+#   File Transfer       TeamSpeak 3's file transfer — avatars, icons and channel files.
+# Left closed with the admin and outbound rows: RCON, Telnet, Web Interface, API (Project CARS'
+# HTTP API), RMI, Shutdown, Mod Server, Stats, BattleEye (RCon), LAN, Steam / Steam: Auth /
+# Steamworks P2P (the server's own connection to Steam), App (Rust+), Files, Unknown.
+_LGC_PLAYER_PORT_DESCS = ("reliablemessaging", "server api", "raw udp", "beacon", "queue",
+                          "file transfer")
+# Matched whole, not as a prefix: "Voice (unused)" is Arma 3's spare port.
+_LGC_PLAYER_PORT_EXACT = frozenset({"voice"})
+# Don't Starve Together's "Game: Master" is the port its shards talk to each other on, not one a
+# player reaches; its "Game: Server" is.
+_LGC_NOT_PLAYER_DESCS = frozenset({"game: master"})
+# Per game: an HTTP row that players download from — MTA's resources, Onset's packages and Just
+# Cause 3 Multiplayer's client packages. Elsewhere "HTTP" is a web admin or status page.
+_LGC_PLAYER_HTTP_GAMES = frozenset({"mta", "onset", "jc3"})
+# MTA's HTTP row is opened (players download resources from it unless httpdownloadurl points
+# elsewhere), but it is also the server that hosts MTA's web interface — the webadmin and
+# resourcebrowser resources, behind HTTP basic auth over plain HTTP. It stays open and the operator
+# is told (lgc_admin_port_notes).
+LGC_MTA_HTTP_NOTE = ("MTA's HTTP port {port} is open for players' resource downloads, and it also "
+                     "serves MTA's web admin, which asks for a password over plain HTTP: give every "
+                     "MTA account with admin rights a strong password.")
+
+
+def lgc_admin_port_notes(game_type, ports, opened):
+    """Sentences for the opened ports that also serve an admin page: MTA's HTTP (its web admin).
+
+    `ports` is detect_game_ports' "ports" (every row), `opened` the ports the firewall took.
+    """
+    if (game_type or "").lower() != "mta":
+        return []
+    opened = set(opened or ())
+    http = sorted({p["port"] for p in ports or ()
+                   if (p.get("desc") or "").strip().lower() == "http" and p.get("port") in opened})
+    return [i18n.Sentence(LGC_MTA_HTTP_NOTE, port=p) for p in http]
+
+
+# TeamSpeak 3's "Query" rows are ServerQuery — its admin console (raw, SSH, HTTP, HTTPS) — not a
+# server-browser query, so for ts3 no Query row is opened.
+_LGC_ADMIN_QUERY_GAMES = frozenset({"ts3"})
+
+
+def _lgc_player_port(desc, game_type=None):
+    """Whether a `details` port row with this description is one a player connects to.
+
+    With no `game_type`, a row whose meaning is the game's (Query, HTTP) is NOT one: TeamSpeak's
+    Query rows are its ServerQuery admin console, and a caller that forgot to say which game this
+    is must not open that to the internet. Every caller that opens ports passes it.
+    """
+    d = (desc or "").strip().lower()
+    if d.startswith(_NONESSENTIAL_PORT_DESCS) or d in _LGC_NOT_PLAYER_DESCS:
+        return False
+    gt = (game_type or "").lower()
+    if d.startswith("query"):
+        return bool(gt) and gt not in _LGC_ADMIN_QUERY_GAMES
+    if d.startswith("http"):
+        return gt in _LGC_PLAYER_HTTP_GAMES and d == "http"
+    return (d.startswith(("game",) + _LGC_PLAYER_PORT_DESCS) or d in _LGC_PLAYER_PORT_EXACT)
+
 
 # One row of `details`' DESCRIPTION / PORT / PROTOCOL table: "Game  27015  udp". The description
 # may hold spaces, so it runs to the first gap followed by a 2-5 digit port and a protocol. That was
 # `([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b`, whose lazy description re-walked
-# every later run of blanks at each character it grew by: quadratic in a row's blanks.
-_PORT_ROW_DESC_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+ .-]*", re.I)
+# every later run of blanks at each character it grew by: quadratic in a row's blanks. "(", ")" and
+# ":" are in it because LinuxGSM's own labels use them — TeamSpeak's "Query (SSH)", Arma 3's "Voice
+# (unused)", Don't Starve Together's "Game: Server" — and a row that did not parse ENDED the table:
+# TeamSpeak's File Transfer row was never read, and no row of Don't Starve Together's at all.
+_PORT_ROW_DESC_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+ .():-]*", re.I)
 _PORT_ROW_TAIL_RE = re.compile(r"\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", re.I)
 
 
@@ -1853,13 +2100,16 @@ def _parse_details_port_table(text):
     return ports, game_port
 
 
-def detect_game_ports(server, user, selfname=None):
+def detect_game_ports(server, user, selfname=None, game_type=None):
     """Parse LinuxGSM `details` for a server's ports and decide which to open.
 
-    We open only what a player needs to reach the server: the Game port and, if the
-    game lists a separate Query port (for server-browser visibility). Optional/admin/
-    outbound ports (SourceTV, RCON/telnet, Client) are deliberately left CLOSED — e.g.
-    Garry's Mod lists Game 27015 + SourceTV 27020, but only 27015 is needed. Returns:
+    We open only what a player needs to reach the server: the Game port, a separate Query port
+    (for server-browser visibility), and the other rows players connect to (_lgc_player_port:
+    Satisfactory's ReliableMessaging, ARK's raw UDP socket, ...). Optional/admin/outbound ports
+    (SourceTV, RCON/telnet, Client, web admin) are deliberately left CLOSED — e.g. Garry's Mod
+    lists Game 27015 + SourceTV 27020, but only 27015 is needed. `game_type` decides the few rows
+    whose meaning is the game's (TeamSpeak's Query is its admin console); without it those rows
+    are not opened (_lgc_player_port), so a caller reading only `game_port` may omit it. Returns:
       {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed],
        "answered": whether `details` printed its port table or its Server IP line at all,
        "started": its Status line — True for STARTED, False for STOPPED, None for neither}.
@@ -1874,13 +2124,11 @@ def detect_game_ports(server, user, selfname=None):
     out, _, _ = _core.run_as_game_user(server, user, "details", timeout=45, selfname=selfname)
     text = terminal.strip_escapes(out or "")
     ports, game_port = _parse_details_port_table(text)
-    # Open only the essential inbound ports: Game + Query. Everything else (SourceTV,
-    # RCON, Client, …) is left closed so we don't expose more than the game needs.
-    open_ports = sorted({
-        p["port"] for p in ports
-        if not p["desc"].lower().startswith(_NONESSENTIAL_PORT_DESCS)
-        and (p["desc"].lower().startswith(("game", "query")))
-    })
+    # Open only the inbound ports players need. Everything else (SourceTV, RCON, Client, …) is
+    # left closed so we don't expose more than the game needs. It was Game + Query only, and
+    # Satisfactory's 8888/tcp ReliableMessaging was never opened: behind the panel's ufw nobody
+    # could join a new Satisfactory server.
+    open_ports = sorted({p["port"] for p in ports if _lgc_player_port(p["desc"], game_type)})
     if game_port is None:
         # The port that ENDS the line: the first `:digits` in `Internet IP: [2001:db8::1234]:27015`
         # is part of the IPv6 address, and was read as game port 1234.

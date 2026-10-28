@@ -718,15 +718,6 @@
   </div>
   <div id="ufw-status-note" class="mb-1"><p class="text-secondary small mb-0"><i class="bi bi-arrow-repeat"></i> Loading…</p></div>
   <p class="small text-secondary mb-2">Game ports open automatically at install.</p>
-  {# On a phone the tab is several screens long and Connection & SSH sits below every firewall card:
-     links straight to each, through the page's own #card routing (remote_manage.js openHash). Blocked
-     IPs is on the Security tab with the fail2ban bans; its link opens that tab. #}
-  <nav class="small mb-3 d-flex flex-wrap column-gap-3 row-gap-1" id="network-jump" aria-label="Network tab sections">
-    <span class="text-secondary">Jump to:</span>
-    <a href="#fw-rules">Open Ports &amp; Rules</a>
-    <a href="#sec-connection">Connection &amp; SSH</a>
-    <a href="#sec-keptout">Blocked &amp; banned IPs (Security tab)</a>
-  </nav>
   {% set fw_games = remote.games %}
   {% include "_firewall_panel.html" %}
 </div>

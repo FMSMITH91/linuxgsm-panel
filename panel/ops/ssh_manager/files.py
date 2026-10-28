@@ -507,7 +507,47 @@ def lgsm_read_config(server, user, selfname):
     merged.update(_parse_cfg(sect["SECRETS_INSTANCE"]))
     settings = _curated_cfg_settings(merged, defaults, instance, common)
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
-    return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
+    out = {"path": inst, "raw": instance_text, "settings": settings, "groups": groups,
+           "players": _lg264_player_settings(merged, defaults, instance, common)}
+    out.update(_lgc_read_flags(selfname, merged))
+    return out
+
+
+def _lgc_read_flags(selfname, merged):
+    """The Config tab's per-game notices for a config read that succeeded (`merged`: its values).
+
+    Project Zomboid (whose script is always pzserver) still on LinuxGSM's CHANGE_ME: the page warns,
+    with a one-click fix (routes/pz_admin.py). CS:GO (csgoserver): the App ID note only where it
+    applies — a gslt is set and LinuxGSM runs the game as another App ID than 730 (v26.3.0's
+    clientappid, default 4465480). Not for clientappid 730 (still CS2's csgo_legacy), "" (left
+    unmanaged) or unset (a release before v26.3.0, which does not switch), nor without a gslt,
+    which has nothing to stop working.
+    """
+    if selfname == "pzserver":
+        return {"lgc_pz_default_admin": merged.get("adminpassword") == LGC_PZ_DEFAULT_ADMIN}
+    if selfname == "csgoserver":
+        return {"lgc_csgo_appid_note": (bool((merged.get("gslt") or "").strip())
+                                        and (merged.get("clientappid") or "").strip() not in ("", "730"))}
+    return {}
+
+
+def _lg264_player_settings(merged, defaults, instance, common):
+    """Return LinuxGSM v26.4.0's player protection as this config has it, for the editor's controls.
+
+    `supported`: this instance's _default.cfg has warnplayerstimer, which LinuxGSM rewrites from
+    the release the script runs — v26.4.0 and later. Earlier releases have neither setting
+    (v26.1.0 has no stoponlyifnoplayers anywhere), so there the editor offers neither.
+    `startparameters_set`: the instance or common config overrides startparameters (TF2's
+    -norestart notice reads it).
+    """
+    def val(k):
+        return str(merged.get(k, "")).strip()
+    return {"supported": "warnplayerstimer" in defaults,
+            "stoponlyifnoplayers": val("stoponlyifnoplayers"),
+            "warnplayerstimer": val("warnplayerstimer"),
+            "querymode": val("querymode"),
+            "startparameters": val("startparameters"),
+            "startparameters_set": "startparameters" in instance or "startparameters" in common}
 
 
 # lgsm_read_config's answer when a LinuxGSM config file is there and the game's account cannot read
@@ -622,6 +662,45 @@ def lgsm_get_values(server, user, selfname, keys):
     return {k: merged.get(k, "") for k in keys}
 
 
+# Project Zomboid's admin password as LinuxGSM ships it. Since v26.3.0 (#4991) pzserver's
+# _default.cfg has `adminpassword="CHANGE_ME"` and starts the game with `-adminpassword
+# ${adminpassword}`, so a new server no longer stops at the password prompt — it comes up with an
+# admin account anyone who has read LinuxGSM's config can log in to.
+LGC_PZ_DEFAULT_ADMIN = "CHANGE_ME"
+# Letters and digits only: startparameters passes the value unquoted, so a blank would split it and a
+# leading `-` would read as another option.
+_LGC_PW_ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def lgc_new_admin_password(length=20):
+    """A random admin password for a game config (about 117 bits at the default length)."""
+    import secrets as _secrets
+    return "".join(_secrets.choice(_LGC_PW_ALPHABET) for _ in range(length))
+
+
+LGC_PZ_ALREADY_SET = "This server's admin password is no longer LinuxGSM's default — nothing has been changed."
+
+
+def lgc_pz_set_admin_password(server, user, selfname, only_if_default=True):
+    """Give Project Zomboid a random adminpassword in its instance cfg. -> (ok, message).
+
+    `only_if_default`: change it only while it is LinuxGSM's CHANGE_ME (or unset), so an install
+    retried, or a second click, never replaces a password the operator chose. The password is
+    neither returned nor logged: it is the instance cfg's adminpassword, where Files & Config
+    shows it.
+    """
+    # The read and the write are one step under the cfg's lock: a settings save choosing a password
+    # between them was overwritten by a random one (lgsm_write_config takes the same RLock again).
+    with _core.lgc_config_lock(server, user, selfname):
+        if only_if_default:
+            cur = lgsm_get_values(server, user, selfname, ["adminpassword"])
+            if cur is None:
+                return False, LGSM_CONFIG_UNREAD
+            if cur.get("adminpassword", "") not in ("", LGC_PZ_DEFAULT_ADMIN):
+                return False, LGC_PZ_ALREADY_SET
+        return lgsm_write_config(server, user, selfname, {"adminpassword": lgc_new_admin_password()})
+
+
 # The end of lgsm_write_config's refusal of a key secrets-<selfname>.cfg also sets: the one write
 # refusal that names things (the keys and the script), so write_failure_reason knows it by its end.
 LGSM_TIMESTAMPS_REFUSED = ("Turning LinuxGSM's log timestamps on freezes the live console, so the "
@@ -640,8 +719,17 @@ def lgsm_write_config(server, user, selfname, updates):
     """
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
-    if _turns_logtimestamp_on(updates):
-        return False, LGSM_TIMESTAMPS_REFUSED
+    refused = _cfg_write_refusal(updates)
+    if refused:
+        return False, refused
+    # Read, merge and write under the cfg's lock: two saves that both read before either wrote
+    # left only the second one's view (the PZ admin-password fix holds it across its own read too).
+    with _core.lgc_config_lock(server, user, selfname):
+        return _lgc_write_config_locked(server, user, selfname, updates)
+
+
+def _lgc_write_config_locked(server, user, selfname, updates):
+    """lgsm_write_config's read-merge-write, under _core.lgc_config_lock."""
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
     secrets = {}
@@ -664,9 +752,25 @@ def lgsm_write_config(server, user, selfname, updates):
         return True, ""
     _apply_cfg_updates(lines, updates)
     content = "\n".join(lines).rstrip("\n") + "\n"
+    # The warning timer every stop budgets for (lgsm_players) is read again after this write.
+    from panel.services import lgsm_players
+    lgsm_players.forget(server, user, selfname)
     # selfname: the instance cfg may be a link to the live console's log (the account can make
     # one), and replacing that through the link silenced the console (_r23b_console_frag).
     return _write_file_as_user(server, user, inst, content.encode(), selfname)
+
+
+def _cfg_write_refusal(updates):
+    """Why lgsm_write_config refuses `updates` before reading anything, or None.
+
+    logtimestamp is only ever turned off (_turns_logtimestamp_on); LinuxGSM v26.4.0's
+    stoponlyifnoplayers / warnplayerstimer take only the values LinuxGSM acts on
+    (lgsm_players.bad_setting, which also writes a good timer back as LinuxGSM reads it).
+    """
+    if _turns_logtimestamp_on(updates):
+        return LGSM_TIMESTAMPS_REFUSED
+    from panel.services import lgsm_players
+    return lgsm_players.bad_setting(updates) if isinstance(updates, dict) else None
 
 
 def _turns_logtimestamp_on(updates):

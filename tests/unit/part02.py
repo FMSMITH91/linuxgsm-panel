@@ -232,7 +232,8 @@ try:
     _uadd = _upcap.get("add", [])
     check("cron upgrade: reports a change", _ures is True)
     check("cron upgrade: monitor line wrapped in place", any(
-        ln.startswith("*/5 * * * * ") and "/home/gm/gmodserver monitor" in ln and ".status" in ln for ln in _uadd))
+        ln.startswith("*/5 * * * * ") and "cd /home/gm && ./gmodserver monitor" in ln and ".status" in ln
+        for ln in _uadd))
     check("cron upgrade: autostart line wrapped in place", any(
         ln.startswith("@reboot ") and "/home/gm/gmodserver start" in ln and ".status" in ln for ln in _uadd))
     check("cron upgrade: user job left untouched", "0 3 * * * /home/gm/backup.sh" in _uadd)
@@ -422,9 +423,14 @@ _GH_VPS = [
 _gh_ret, _gh_add, _ = _gh_upgrade("\n".join(_GH_VPS), host="203.0.113.7", user="gmodserver",
                                   selfname="gmodserver", game_type="gmod", port=27015)
 _gh_vps_now = _gh_written(host="203.0.113.7", user="gmodserver", selfname="gmodserver")[1]
-check("cron upgrade: the test host's real gmodserver crontab — only its restart check changes, into "
-      "today's line for that server",
-      _gh_ret is True and _gh_add == [_GH_VPS[0], _gh_vps_now] + _GH_VPS[2:]
+# ...and its LinuxGSM lines move to `cd /home/<u> && ./<s> <cmd>`, the form every LinuxGSM monitor
+# recognises (cron.lgc_cron_core), each on its own schedule.
+_gh_vps_moved = [ln.split(" mkdir ")[0] + " " + _sm_cron._record_managed_cmd(
+    "gmodserver", "cd /home/gmodserver && ./gmodserver " + ln.split("/home/gmodserver/gmodserver ")[1].split(" >")[0])
+    for ln in _GH_VPS[2:]]
+check("cron upgrade: the test host's real gmodserver crontab — its restart check changes into today's line "
+      "for that server, and its LinuxGSM lines into the `cd && ./` form",
+      _gh_ret is True and _gh_add == [_GH_VPS[0], _gh_vps_now] + _gh_vps_moved
       and "127.0.0.1" in _GH_VPS[1] and _GH_OLD_COND in _GH_VPS[1], repr(_gh_add))
 
 # The rewrite replaces the WHOLE crontab with what the loop kept, so it may only run on a crontab
@@ -1226,8 +1232,10 @@ try:
     _pc = _sm_cron.player_count(None, "gm", "gmod", 27015)
     check("player_count: parses gamedig player count", _pc == 2)
     _bok, _bmsg, _bskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
+    # The LinuxGSM command itself, not the word: run_game_backup first reads LinuxGSM's own
+    # backup-request lock (a postponed backup, v26.4.0), whose path holds "backup" too.
     check("run_game_backup: skips (no backup) when players are online",
-          _bok is False and _bskip is True and "backup" not in " ".join(c for c in _cap_busy["cmds"] if "gamedig" not in c))
+          _bok is False and _bskip is True and "./gmodserver backup" not in " ".join(_cap_busy["cmds"]))
     # force=True backs up anyway even with players on
     _cap_busy["cmds"] = []
     _fok, _fmsg, _fskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015, force=True)
@@ -2463,7 +2471,7 @@ Client 27005 udp
 """
 try:
     _sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
-    res = _sm_game.detect_game_ports(NS(), "srv")
+    res = _sm_game.detect_game_ports(NS(), "srv", game_type="css")
     eq("source: opens game + query only", res["open_ports"], [27015, 27016])
 finally:
     # Restored. A stub left installed is not merely untidy: part03's own later blocks capture

@@ -606,9 +606,9 @@ def _r16d_check_tables65(names):
 
 def _r15f_game_keys65():
     names = _r15f_shortnames65()
-    check("game tables: the committed LinuxGSM shortname list is read (142 games at its commit, "
+    check("game tables: the committed LinuxGSM shortname list is read (144 games at its commit, "
           "and the ones these tables key on are in it)",
-          len(names) == 142 and {"gmod", "mcb", "vpmc", "zmr", "unt"} <= names, repr(len(names)))
+          len(names) == 144 and {"gmod", "mcb", "vpmc", "zmr", "unt"} <= names, repr(len(names)))
     _r16d_check_tables65(names)
     js = _r15f_js_ports65()
     check("game tables: the install form's JS PORTS is the same table as the route's default ports",

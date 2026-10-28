@@ -246,7 +246,8 @@ _outr106 = _js106(_name106r, (
     # a textarea's value: CR and CRLF read back as LF (the HTML spec's API value)
     "Object.defineProperty(document.getElementById('cfg-raw'), 'value', {get(){ return this._v; },\n"
     "  set(v){ this._v = String(v).replace(/\\r\\n?/g, '\\n'); }});\n"), _SF106, (
-    "var _r26c_rawRead", "var _r29j_rawShown", "function _r29j_rawText(", "function loadConfig(", "function refreshRawConfig(",
+    "var _r26c_rawRead", "var _r29j_rawShown", "function _r29j_rawText(", "function _lg264PlayersHtml(",
+    "function _lg264Tf2Html(", "function _lgcPzWarnShow(", "function loadConfig(", "function refreshRawConfig(",
     "function _r26c_rawStale(", "function _r29j_rawBehind(", "function saveRaw("), (
     "  const out = {}, ta = document.getElementById('cfg-raw'), msg = document.getElementById('cfg-raw-msg');\n"
     "  const save = async () => { sent = []; reply({success: true}); saveRaw(); await settle();\n"
