@@ -23,7 +23,7 @@ Nothing reaches a host, sudo, ufw or data/.
 import ipaddress as _ip137
 import json as _json137
 import os as _os137
-import subprocess as _sp137
+import subprocess as _sp137  # nosec B404 - runs this interpreter on a fixed script, no shell
 import sys as _sys137
 import tempfile as _tf137
 from types import SimpleNamespace as _NS137
@@ -271,12 +271,13 @@ check("readers: the viewer's open connections to this host from /proc/net/tcp{,6
       "only, never a loopback end, a v4-mapped row in tcp6 as the IPv4 one",
       [(str(a), p) for a, p in _seen137 or ()] == [(_HOST4, 443), (_HOST4, 8443)], repr(_seen137))
 def _linear137(timeout=10):
-    """ufweval's column and attribute readers against long adversarial text, in a child with a time limit."""
+    """The evaluator's column and attribute readers (ufweval) on long adversarial text, in a timed child."""
     code = "\n".join([
         "import json, sys, warnings", "warnings.simplefilter('ignore')", "sys.path.insert(0, sys.argv[1])",
         "from panel.ops.ssh_manager import ufweval as U",
-        "for t in (' ' * 300000 + 'x', '(log,' * 60000 + 'x', '/' * 300000 + 'tcpx', 'Anywhere' + ' ' * 300000 + ')',"
-        " '(' * 300000 + 'log', 'a/' * 150000 + 'tcp ' * 50000):",
+        "texts = [' ' * 300000 + 'x', '(log,' * 60000 + 'x', '/' * 300000 + 'tcpx', 'Anywhere' + ' ' * 300000 + ')']",
+        "texts += ['(' * 300000 + 'log', 'a/' * 150000 + 'tcp ' * 50000]",
+        "for t in texts:",
         "    U.row_spec({'to': t, 'from': t, 'action': 'ALLOW', 'direction': 'IN'})",
         "print(json.dumps([U._strip_attribs('Anywhere  (log, out)'), U._strip_proto('192.0.2.0/24/udp')]))"])
     try:
