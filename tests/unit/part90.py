@@ -72,6 +72,8 @@ _out90 = _node90(_name90, _DOM87 + _SETTLE47 + (
     "global.toast = (m, k) => { toasts.push([m, k]); };\n"
     "global._fwUnlisted = m => { unlisted = m; };\n"
     "let painted = 0; global._fwRenderRules = () => { painted++; }; global._fwRenderBlocks = () => { painted++; };\n"
+    # The settings row's own read (fw-more): not this check's subject.
+    "global.refreshFwSettings = () => {};\n"
     + "".join(_cut_or90(_FWJS90, h) + "\n" for h in (
         "function refreshFirewall(", "function _r23c_fwNotRead(", "function _fwUnreadWhy(",
         "function _fwHostSaid(", "function _fwStatusNote("))

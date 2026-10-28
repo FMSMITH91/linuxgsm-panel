@@ -233,14 +233,15 @@ for _pg133 in ("local", "remote"):
           < _html133.find("</h2>", _html133.find('id="sec-firewall"')),
           repr((_ids133.get("ufw-badge"), _ids133.get("ufw-status-note"))))
     _a133 = _F133[_pg133].attrs
-    _modes133 = {m: _a133.get("fw-mode-" + m, {}) for m in ("open", "src", "limit")}
+    _modes133 = {m: _a133.get("fw-mode-" + m, {}) for m in ("open", "src", "limit", "block")}
     _panels133 = dict(_re133.findall(r'<div data-fw-mode="(\w+)"( hidden)?>', _html133))
-    check("network tab (%s host page): Add a rule's switch — Open checked and its form the one shown, One source "
-          "and Rate-limit hidden, each radio calling fwAddMode on change" % _pg133,
+    check("network tab (%s host page): Add a rule's switch — Open checked and its form the one shown, One source, "
+          "Rate-limit and Block hidden, each radio calling fwAddMode on change" % _pg133,
           all(_modes133[m].get("data-action") == "fwAddMode" and _modes133[m].get("data-on") == "change"
               and _modes133[m].get("data-args") == '["%s"]' % m for m in _modes133)
           and "checked" in _modes133["open"] and "checked" not in _modes133["src"]
-          and _panels133 == {"open": "", "src": " hidden", "limit": " hidden"}, repr((_modes133, _panels133)))
+          and _panels133 == {"open": "", "src": " hidden", "limit": " hidden", "block": " hidden"},
+          repr((_modes133, _panels133)))
     _order133 = [_html133.find('id="%s"' % i) for i in ("fw-add", "new-port", "port-result", "src-cidr",
                                                         "limit-port", "restrict-result")]
     check("network tab (%s host page): every field and result line of the two old cards is in Add a rule, in "

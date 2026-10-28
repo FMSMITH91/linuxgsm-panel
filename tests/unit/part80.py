@@ -222,7 +222,7 @@ def _audit_raise80(client, rid, sid, cid):
     others = {a: got[a] for a in ("remote_port_open", "cron_add")}
     check("audit: ...and so are a firewall change and a scheduled-task write that raised (every "
           "route that audits a failed answer), the target as a failed answer records it",
-          others == {"remote_port_open": (1, False, "p80-host:27090/tcp", _WHY80),
+          others == {"remote_port_open": (1, False, "p80-host:27090/tcp", "both - " + _WHY80),
                      "cron_add": (1, False, "p80-css", "0 4 * * * - " + _WHY80)}, repr(others))
 
     n = _p9_audit_count("send_command")

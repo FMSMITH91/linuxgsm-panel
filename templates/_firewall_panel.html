@@ -1,5 +1,5 @@
-{# The host page's Network tab's firewall cards: the rules, Add a rule (open a port, to everyone or one
-   source, or rate-limit it) and Game Server Ports (remote_manage.html). Blocked IPs is its own partial (_firewall_blocks.html), on the
+{# The host page's Network tab's firewall cards: the settings row, the rules, Add a rule (open a port, to
+   everyone or one source, rate-limit it, or block one) and Game Server Ports (remote_manage.html). Blocked IPs is its own partial (_firewall_blocks.html), on the
    Security tab beside the fail2ban bans. The page makes no firewall read while it loads (a host that is
    down would hold the whole page up), so the cards start "Loading…" and claim no count, and
    remote_firewall.js's refreshFirewall paints every state (unreachable, sudo refused, a changed host
@@ -13,6 +13,63 @@
    Inactive badge is on the tab's Firewall heading (remote_manage.html), and what the read has to say
    about the firewall (unreachable, inactive, sudo refused) is a line under it: a card of its own was
    an empty box whenever the firewall was fine. #}
+{# The address-family choice of the rules this tab adds: both (one rule ufw keeps for IPv4 and IPv6),
+   or one of them. One source has none: its address already names the family. #}
+{% macro fw_family_select(id) %}
+            <select id="{{ id }}" class="form-select form-select-sm" aria-label="Address family">
+              <option value="both" selected>IPv4 + IPv6</option>
+              <option value="v4">IPv4 only</option>
+              <option value="v6">IPv6 only</option>
+            </select>
+{%- endmacro %}
+
+{# Firewall settings: what UFW does with a connection no rule matches (incoming, outgoing and, where
+   the host forwards, routed), its logging, and on/off. One row of selects; a change opens a
+   confirmation that says what it does, and the select shows what is IN FORCE until then
+   (remote_firewall.js fwSettingChange). Read with the rules (refreshFwSettings): until then, and for
+   any value nobody could read, the select is disabled and says Unknown. The server refuses any
+   change that would lock SSH or the panel out (firewall.remote_ufw_set_default / _set_enabled). #}
+{# One setting of the row: its label and its select, which fwSettingChange applies. `opts` are
+   (value, label) pairs; the labels are catalog keys, so each option translates. #}
+{% macro fw_setting(key, label, opts) %}
+      <div class="input-group input-group-sm">
+        <label class="input-group-text" for="fw-set-{{ key }}">{{ label }}</label>
+        <select id="fw-set-{{ key }}" class="form-select" disabled
+                data-action="fwSettingChange" data-args='["{{ key }}", "@self"]' data-on="change">
+{%- for v, l in opts %}
+          <option value="{{ v }}">{{ l }}</option>
+{%- endfor %}
+        </select>
+      </div>
+{%- endmacro %}
+{% set fw_policies = [("allow", "Allow"), ("deny", "Deny"), ("reject", "Reject")] %}
+<div class="fw-settings mb-3" id="fw-settings">
+  <div class="row g-2 align-items-center">
+    <div class="col-6 col-sm">{{ fw_setting("incoming", "Incoming", fw_policies) }}</div>
+    <div class="col-6 col-sm">{{ fw_setting("outgoing", "Outgoing", fw_policies) }}</div>
+    {# Hidden where ufw reports "disabled (routed)": a host that forwards nothing has no routed traffic. #}
+    <div class="col-6 col-sm" id="fw-set-routed-wrap" hidden>{{ fw_setting("routed", "Routed", fw_policies) }}</div>
+    <div class="col-6 col-sm">{{ fw_setting("logging", "Logging", [("off", "Off"), ("low", "Low"),
+      ("medium", "Medium"), ("high", "High"), ("full", "Full")]) }}</div>
+    <div class="col-6 col-sm-auto">
+      <button type="button" id="fw-set-enabled" class="btn btn-sm btn-outline-secondary w-100" disabled
+              data-action="fwToggleEnabled"><i class="bi bi-power"></i> <span id="fw-set-enabled-label">Turn off</span></button>
+    </div>
+  </div>
+  {# The answer to a change and the folded help share one line. #}
+  <div class="d-flex flex-wrap align-items-start column-gap-3 mt-1">
+    <details class="uid-about order-last">
+      <summary class="small text-secondary">What these settings do
+        <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
+      <p class="small text-secondary mb-0 mt-1">Incoming and outgoing are what UFW does with a connection
+        no rule matches; routed is traffic this host forwards to other machines. Deny drops it without a
+        reply, reject refuses it. The panel refuses any change that would lock SSH or the panel itself out
+        of this host, and turning the firewall off makes the host accept every connection.</p>
+    </details>
+    <div id="fw-settings-msg" class="small flex-grow-1"></div>
+  </div>
+</div>
+
 <div class="fw-layout">
   <!-- Current rules -->
   <div class="card mb-3 fw-rules-card">
@@ -45,6 +102,9 @@
         <input type="radio" class="btn-check" name="fw-mode" id="fw-mode-limit" autocomplete="off"
                data-action="fwAddMode" data-args='["limit"]' data-on="change">
         <label class="btn btn-outline-secondary" for="fw-mode-limit">Rate-limit</label>
+        <input type="radio" class="btn-check" name="fw-mode" id="fw-mode-block" autocomplete="off"
+               data-action="fwAddMode" data-args='["block"]' data-on="change">
+        <label class="btn btn-outline-secondary" for="fw-mode-block">Block</label>
       </div>
     </div>
     <div class="card-body">
@@ -63,8 +123,12 @@
               <option value="udp">UDP</option>
             </select>
           </div>
-          {# The comment and the button share a row where the column has room for both (1200px up). #}
-          <div class="col-12 col-xl">
+          {# The family and the comment share a row; the button joins them where the column has room
+             (1200px up). #}
+          <div class="col-5 col-xl-4">
+{{ fw_family_select("new-family") }}
+          </div>
+          <div class="col-7 col-xl">
             <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)" aria-label="Comment (optional)">
           </div>
           <div class="col-12 col-xl-auto">
@@ -136,7 +200,45 @@
           </div>
         </div>
       </div>
-      {# One result line for both restrict forms, as when they shared a card. #}
+      {# Block a port or a range: deny (drop) or reject it, at the top of the rule list so it wins over
+         a rule that opens the same port. The server refuses SSH's ports, the panel's own and
+         Tailscale's (firewall.remote_ufw_block_port). #}
+      <div data-fw-mode="block" hidden>
+        <p class="text-secondary small mb-2">Shut a port or a range (27015:27020) to everyone, ahead of
+          any rule that opens it. SSH's and the panel's own ports can't be blocked.</p>
+        <div class="row g-2">
+          <div class="col-5">
+            <input type="text" id="block-port" class="form-control form-control-sm" inputmode="numeric"
+                   placeholder="Port or range" aria-label="Port or range">
+          </div>
+          <div class="col-7">
+            <select id="block-proto" class="form-select form-select-sm" aria-label="Protocol">
+              <option value="both">Both (TCP+UDP)</option>
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-6">
+{{ fw_family_select("block-family") }}
+          </div>
+          <div class="col-6">
+            <select id="block-action" class="form-select form-select-sm" aria-label="How to block">
+              <option value="deny" selected>Deny (drop)</option>
+              <option value="reject">Reject</option>
+            </select>
+          </div>
+          <div class="col-12 col-xl">
+            <input type="text" id="block-comment" class="form-control form-control-sm"
+                   placeholder="Comment (optional)" aria-label="Comment (optional)">
+          </div>
+          <div class="col-12 col-xl-auto">
+            <button class="btn btn-danger btn-sm w-100" data-action="blockPort">
+              <i class="bi bi-slash-circle"></i> Block port
+            </button>
+          </div>
+        </div>
+      </div>
+      {# One result line for the restrict and block forms, as when they shared a card. #}
       <div id="restrict-result" class="mt-2 small"></div>
     </div>
   </div>

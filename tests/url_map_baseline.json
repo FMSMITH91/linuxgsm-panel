@@ -958,6 +958,18 @@
       "POST"
     ]
   },
+  "GET,POST /api/remote/<int:remote_id>/firewall/settings": {
+    "endpoint": "api_remote_firewall_settings",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_settings"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /api/server/<int:server_id>/alerts": {
     "endpoint": "api_server_alerts",
     "guards": [
@@ -1478,6 +1490,17 @@
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
       "view:api_remote_firewall_allow_from"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/remote/<int:remote_id>/firewall/block-port": {
+    "endpoint": "api_remote_firewall_block_port",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_block_port"
     ],
     "methods": [
       "POST"

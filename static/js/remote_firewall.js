@@ -11,6 +11,8 @@ function _fwReason(g) {
 }
 
 function refreshFirewall() {
+  // The settings row is read beside the rules, so every repaint after a change shows both.
+  refreshFwSettings();
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
     .then(r => r.json())
     .then(data => {
@@ -137,12 +139,135 @@ function _fwStatusNote(data, inactive) {
   box.appendChild(p);
 }
 
-// Add a rule's kind, from the card's Open / One source / Rate-limit switch: that kind's fields shown,
+// Add a rule's kind, from the card's Open / One source / Rate-limit / Block switch: that kind's fields shown,
 // the others hidden. Nothing typed is cleared, so switching back keeps it. The page renders Open
 // shown and the others hidden, which is the switch's checked state, so this only runs on a change.
 function fwAddMode(mode) {
   document.querySelectorAll('#fw-add [data-fw-mode]').forEach(function(p) {
     p.hidden = p.getAttribute('data-fw-mode') !== mode;
+  });
+}
+
+// ── Firewall settings: default policies, logging, on/off ─────────────────────────────────────
+// What the last settings read said (firewall.remote_ufw_settings), or null when it said nothing
+// usable: then every control is disabled and reads Unknown. A change is decided by the server,
+// which refuses one that would lock SSH or the panel out; this only asks first and shows the answer.
+var _fwSettings = null;
+var _FW_SETTING_KEYS = ['incoming', 'outgoing', 'routed', 'logging'];
+
+function refreshFwSettings() {
+  if (!document.getElementById('fw-settings')) return;
+  fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/settings')
+    .then(function(r) { return r.json(); })
+    .then(function(d) { _fwPaintSettings(d); })
+    .catch(function() { _fwPaintSettings(null); });
+}
+
+// One select set to `v`, or to an added "Unknown" and disabled when `v` is not one of its options.
+function _fwSelectValue(sel, v) {
+  var known = Array.prototype.some.call(sel.options, function(o) { return o.value === v && v !== ''; });
+  var unk = null;
+  Array.prototype.forEach.call(sel.options, function(o) { if (o.value === '') unk = o; });
+  if (!known) {
+    if (!unk) {
+      unk = document.createElement('option');
+      unk.value = '';
+      unk.textContent = t('Unknown');
+      sel.insertBefore(unk, sel.firstChild);
+    }
+    sel.value = '';
+    sel.disabled = true;
+    return;
+  }
+  if (unk) unk.remove();
+  sel.value = v;
+  sel.disabled = false;
+}
+
+function _fwPaintSettings(d) {
+  _fwSettings = (d && d.read_ok && d.installed) ? d : null;
+  _FW_SETTING_KEYS.forEach(function(k) {
+    var sel = document.getElementById('fw-set-' + k);
+    if (sel) _fwSelectValue(sel, _fwSettings ? _fwSettings[k] : null);
+  });
+  // Routed only where the host forwards: ufw says "disabled" where it does not.
+  var rw = document.getElementById('fw-set-routed-wrap');
+  if (rw) rw.hidden = !_fwSettings || _fwSettings.routed === 'disabled';
+  var btn = document.getElementById('fw-set-enabled'), lbl = document.getElementById('fw-set-enabled-label');
+  if (btn && lbl) {
+    var on = !!(_fwSettings && _fwSettings.enabled);
+    btn.disabled = !_fwSettings;
+    btn.className = 'btn btn-sm w-100 ' + (!_fwSettings ? 'btn-outline-secondary' : (on ? 'btn-outline-danger' : 'btn-outline-success'));
+    lbl.textContent = t(on || !_fwSettings ? 'Turn off' : 'Turn on');
+  }
+}
+
+// What each change does, said before it is made: a whole sentence per choice, so each translates.
+var _FW_SETTING_COPY = {
+  'incoming:allow': 'Let in every incoming connection that no rule refuses? Every port without a rule becomes open to everyone.',
+  'incoming:deny': 'Drop every incoming connection that no rule allows? The panel first checks that SSH and the panel itself stay reachable, and refuses if they would not.',
+  'incoming:reject': 'Refuse every incoming connection that no rule allows? The panel first checks that SSH and the panel itself stay reachable, and refuses if they would not.',
+  'outgoing:allow': 'Let this host connect out to anywhere a rule does not refuse?',
+  'outgoing:deny': 'Drop every outgoing connection that no rule allows? Game server downloads, Steam updates and master-server listings stop unless a rule allows them. The panel refuses unless DNS, HTTP and HTTPS out, and its own SSH connections, are allowed.',
+  'outgoing:reject': 'Refuse every outgoing connection that no rule allows? Game server downloads, Steam updates and master-server listings stop unless a rule allows them. The panel refuses unless DNS, HTTP and HTTPS out, and its own SSH connections, are allowed.',
+  'routed:allow': 'Let this host forward traffic to other machines when no rule refuses it?',
+  'routed:deny': 'Drop traffic this host would forward to other machines when no rule allows it?',
+  'routed:reject': 'Refuse traffic this host would forward to other machines when no rule allows it?',
+  'logging:off': 'Turn firewall logging off?',
+  'logging:low': 'Log blocked connections (low)?',
+  'logging:medium': 'Log blocked connections, invalid packets and new allowed connections (medium)?',
+  'logging:high': 'Log every packet that is not part of an open connection (high)? This can fill the log quickly.',
+  'logging:full': 'Log every packet (full)? This fills the log quickly.'
+};
+
+// A settings select changed: put it back to what is in force, ask, and apply only on yes.
+function fwSettingChange(name, sel) {
+  if (!_fwSettings || !sel) return;
+  var v = sel.value, cur = _fwSettings[name];
+  sel.value = cur;
+  if (!v || v === cur) return;
+  var body = _FW_SETTING_COPY[name + ':' + v];
+  if (!body) return;
+  var risky = (name === 'incoming' || name === 'outgoing') && v !== 'allow';
+  confirmDialog({title: 'Firewall settings', icon: 'shield-exclamation',
+    confirmClass: risky ? 'btn-danger' : 'btn-primary', confirmLabel: 'Apply', bodyText: t(body),
+    onConfirm: function() { _fwPostSetting({setting: name, value: v, confirm: true}); }});
+}
+
+// Turn UFW on or off, after a confirmation that says what that means.
+function fwToggleEnabled() {
+  if (!_fwSettings) return;
+  var on = !_fwSettings.enabled;
+  confirmDialog(on
+    ? {title: 'Turn the firewall on', icon: 'shield-check', confirmClass: 'btn-success', confirmLabel: 'Turn on',
+       bodyText: t('Turn the firewall on? Its rules and default policies take effect at once. The panel first checks that SSH and the panel itself stay reachable, and refuses if they would not.'),
+       onConfirm: function() { _fwPostSetting({setting: 'enabled', value: true, confirm: true}); }}
+    : {title: 'Turn the firewall off', icon: 'shield-x', confirmClass: 'btn-danger', confirmLabel: 'Turn off',
+       bodyText: t('Turn the firewall off? This host will then accept every connection on every port: no rule on this page is enforced until you turn it back on.'),
+       onConfirm: function() { _fwPostSetting({setting: 'enabled', value: false, confirm: true}); }});
+}
+
+function _fwPostSetting(body) {
+  var out = document.getElementById('fw-settings-msg');
+  if (out) out.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> <span>Applying…</span></span>';
+  fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (out) {
+      out.innerHTML = d.success                                                          // nosemgrep
+        ? '<span class="text-success">✅ ' + esc(d.message) + '</span>'
+        : '<span class="text-danger">❌ ' + esc(d.message) + '</span>';
+    }
+    if (d.settings) _fwPaintSettings(d.settings);
+    if (d.success) refreshFirewall();
+  })
+  .catch(function() {
+    if (out) out.innerHTML = '<span class="text-danger">❌ <span>Request failed.</span></span>';   // nosemgrep
+    refreshFwSettings();
   });
 }
 
@@ -309,7 +434,8 @@ function openPort() {
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/open', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({port: Number.parseInt(port, 10), protocol: proto, comment: comment}),
+    body: JSON.stringify({port: Number.parseInt(port, 10), protocol: proto, comment: comment,
+                          family: _fwValue('new-family', 'both')}),
   })
   .then(r => r.json())
   .then(data => {
@@ -341,7 +467,7 @@ function openPort() {
 function _restrictPost(path, body, busy) {
   var out = document.getElementById('restrict-result');
   out.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> ' + esc(busy) + '</span>';  // nosemgrep
-  fetch(MOUNT + '/api/remote/' + remoteId + path, {  // nosemgrep - same-origin; path is one of two literals above
+  fetch(MOUNT + '/api/remote/' + remoteId + path, {  // nosemgrep - same-origin; path is one of the literals below
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
@@ -390,6 +516,24 @@ function limitPort() {
 function unlimitPort() {
   var a = _limitArgs(false);
   if (a) _restrictPost('/firewall/limit', a, t('Removing…'));
+}
+
+// A select's value, or `dflt` when the page has no such control.
+function _fwValue(id, dflt) {
+  var el = document.getElementById(id);
+  return el ? el.value : dflt;
+}
+
+// Block a port or range: deny or reject it at the top of the rule list (firewall.remote_ufw_block_port,
+// which refuses SSH's ports, the panel's and Tailscale's).
+function blockPort() {
+  var port = document.getElementById('block-port').value.trim();
+  if (!port) return;
+  _restrictPost('/firewall/block-port', {port: port, protocol: _fwValue('block-proto', 'tcp'),
+                                         family: _fwValue('block-family', 'both'),
+                                         action: _fwValue('block-action', 'deny'),
+                                         comment: document.getElementById('block-comment').value.trim()},
+                t('Blocking…'));
 }
 
 // Delete a whole rule group (its IPv4 + IPv6 entries).
@@ -473,6 +617,14 @@ var newPortInput = document.getElementById('new-port');
 if (newPortInput) {
   newPortInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') openPort();
+  });
+}
+
+// Enter key blocks the typed port or range
+var blockPortInput = document.getElementById('block-port');
+if (blockPortInput) {
+  blockPortInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') blockPort();
   });
 }
 

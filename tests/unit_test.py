@@ -1950,6 +1950,20 @@ _r16d_wrap_ts_handles()
 # services folded until used, Notifications' folds and fields, the console first by default, maintenance
 # in one menu, the one-line page alerts, the folded backups list, the sessions cap and the other folds)
 # drives part12's app with stand-ins and the page scripts in node; imports part01, 05, 12 and 47.
+# part135 (fw-more: the Network tab's firewall settings — default policies, on/off, logging — and port and
+# range blocks: the verbs' validators and remote forms, the settings and stored-rule reads, every lock-out
+# refusal with its positive control, the routes' RBAC and audit, the settings row's script) drives the
+# firewall module over a stand-in host on part12's stand-ins and tripwire, the remote forms under bash/dash,
+# the helper by part05 and the script in node; imports part01, 05, 12 and 47.
+# part136 (fw-more adversarial review: Block IP guarded on the canonical target, the lock-out checks per
+# address family and per source, a proxy's port as the panel's, a block's undo per family and its truthful
+# answer, the panel host's own addresses, Tailscale SSH on 22 only, tailscaled's configured port, the open's
+# shadow note and audited family) drives the firewall module on part135's stand-in host and part12's app;
+# imports part01, 12 and 135.
+# part137 (fw-more second adversarial review: ufweval, the one evaluator of whether ufw accepts the panel's
+# own connection, against ufw's behaviour; its readers; every lock-out guard through it, the reviews' probe
+# cases and the usability cases; the LOW findings) drives the firewall module on part135's stand-in host and
+# part12's app; imports part01, 12 and 135.
 # part138 (lgsm-2604: LinuxGSM v26.4.0 — the player-warning timer in every stop's budget, postponed and
 # refused actions said as such, LinuxGSM's own postponed backup, the config editor's two controls, the
 # TF2 -norestart notice, workshop-update, the reboot dialog's warning lines) drives part12's app with
@@ -1975,7 +1989,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
           "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
-          "part132", "part133", "part134", "part138", "part140", "part15")
+          "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

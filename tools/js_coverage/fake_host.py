@@ -486,6 +486,11 @@ _TABLE = [
                      "0.0.0.0:27016\n0.0.0.0:2456\n127.0.0.1:5000"),
     (r"reboot-required", "YES"),
     (r"ip route get", "10.0.0.5"),  # NOSONAR - the fake host's own LAN address; nothing connects to it
+    # UFW's stored files, which the firewall settings row reads beside the status (ufw-stored-rules).
+    (r"ufw-stored-rules", "==> /etc/default/ufw <==\nIPV6=yes\nDEFAULT_INPUT_POLICY=\"DROP\"\n"
+                          "DEFAULT_OUTPUT_POLICY=\"ACCEPT\"\nDEFAULT_FORWARD_POLICY=\"DROP\"\n"
+                          "==> /etc/ufw/ufw.conf <==\nLOGLEVEL=low\n==> /etc/ufw/user.rules <==\n"
+                          "==> /etc/ufw/user6.rules <==\n"),
     (r"ufw[ -]status\b.*numbered", _UFW_NUMBERED),
     (r"ufw[ -]status\b.*verbose", _UFW_VERBOSE),
     (r"ufw[ -]status", "Status: active\n"),

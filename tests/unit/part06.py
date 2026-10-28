@@ -5704,10 +5704,13 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 227, was 226: /api/server/<id>/create-path is a genuinely new view — New file and New folder in
 # the file browser, behind rename-path's gates (the file-manager permission, then the game
 # account's write refusal).
-# 228, was 227: /api/server/<id>/pz-admin-password is a genuinely new view — Project Zomboid's
-# one-click random admin password, behind the settings save's gates.
-check("register_routes: every one of the 228 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 228,
+# 230, was 227: three genuinely new views — /api/server/<id>/pz-admin-password (Project Zomboid's
+# one-click random admin password, behind the settings save's gates), and two for the Network tab's
+# firewall (fw-more): /api/remote/<id>/firewall/settings (UFW's default policies, on/off and logging,
+# read and changed under the lock-out checks) and /firewall/block-port (deny or reject a port or a
+# range, which no verb could express before).
+check("register_routes: every one of the 230 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 230,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -9319,6 +9322,10 @@ _ANCHOR_LINE_PARSERS = {
     # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs
     # whatever is left — so $ and \Z behave identically here.
     "_CRON_WRAP_RE",
+    # `ufw status verbose`'s Logging and Default lines, matched per line (re.M) in its output.
+    "_FWA_LOGGING_RE", "_FWA_DEFAULT_RE",
+    # One line of /etc/default/tailscaled (splitlines()), the PORT= and FLAGS= the tailscaled unit reads.
+    "_FWB_TAILSCALED_PORT_RE", "_FWC_TAILSCALED_FLAGS_RE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.

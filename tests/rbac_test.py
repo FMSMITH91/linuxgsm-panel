@@ -1265,7 +1265,10 @@ _HOST_LEVEL_VIEWS = {
                       "api_remote_updates_cached", "api_remote_os_update_status",
                       "api_remote_reboot_plan", "api_remote_reboot", "api_remote_reboot_cancel",
                       # review 1015a integration: the reboot banner's read (pending packages, state)
-                      "api_remote_reboot_required"},
+                      "api_remote_reboot_required",
+                      # fw-more: the firewall settings row (default policies, on/off, logging) and
+                      # Add a rule's port block
+                      "api_remote_firewall_settings", "api_remote_firewall_block_port"},
     "remotes.py": {"edit_remote", "delete_remote"},
     "ubuntu_pro.py": {"api_remote_pro_status", "api_remote_pro_attach", "api_remote_pro_service",
                       "api_remote_pro_detach"},
@@ -1342,6 +1345,12 @@ def _check_host_routes_refuse_delegated_panel_host():
     _saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _stubs]
     for _m, _n, _r in _stubs:
         setattr(_m, _n, _rec(_n, _r))
+    # Not host calls these probes count: the open's read-back of the rules, and a block's read of the
+    # panel's own source (fw-more review). Stubbed silent, restored with the rest.
+    for _m, _n, _v in ((_rvps_mod._fw_rules, "fwb_open_shadow_note", lambda *a, **k: None),
+                       (_rsec_mod, "_fwa_source_refusal", lambda *a, **k: None)):
+        _saved.append((_m, _n, getattr(_m, _n)))
+        setattr(_m, _n, _v)
     with app.app_context():
         _loc = RemoteServer.query.filter_by(is_local=True).first()
         _made_local = _loc is None

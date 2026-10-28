@@ -14,6 +14,44 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **Firewall settings and port blocks on the Network tab.** A row above the rules now shows and
+  changes UFW's default policy for incoming and outgoing traffic (and for routed traffic on a host
+  that forwards), its logging level (off, low, medium, high, full), and turns the firewall on or
+  off. Each change asks first and says what it does. The panel refuses any change that would lock
+  you out, saying what is missing: a default deny or reject for incoming traffic, or turning UFW
+  on, needs a rule that lets SSH in and one that keeps the panel's own way to the host open (its
+  web port on the panel's host, the SSH port it dials on a remote, or Tailscale); a default deny for
+  outgoing traffic needs DNS, HTTP and HTTPS allowed out, and on the panel's host its SSH to every
+  remote; turning UFW off says the host will then accept every connection. While UFW is off the
+  panel checks the rules UFW would load. A firewall the panel cannot read is never changed.
+  Each check reads the rules the way UFW does for the panel's own connection: its address family
+  (IPv4 or IPv6), first matching rule wins, and a rule counts only where its interface, source and
+  destination address, protocol and port (or application profile, such as `Nginx Full`) all match
+  that connection. On a remote that connection is the panel's SSH session as the host sees it,
+  after any router port-forward; on the panel's host it is your browser's connection, straight in,
+  through a reverse proxy here (the port you really came in on, 8443 included), through Tailscale
+  Serve, or through a Cloudflare Tunnel, which needs no open port. So a rule for IPv6 alone, one kept
+  to your LAN, one on another network interface or one for another of the host's addresses does not
+  count as the panel's way in when it is not. The panel's host must also keep SSH open in every
+  address family it has a public address in. In Tailscale's default mode the tailnet interface is let
+  in before UFW, so no rule for it is asked for. When the panel cannot tell how you or it connect,
+  the change is refused, and the refusal says how to make it tell (for a reverse proxy here,
+  `trust_proxy` and `trusted_proxy_users`). Deleting a rule, blocking a port and blocking an address
+  use the same reading: the rule the connection gets in by alone is protected, and a block that
+  would drop it is refused.
+  Add a rule has a **Block** mode: deny or reject a port or a range (27015:27020), TCP, UDP or both,
+  for IPv4, IPv6 or both, put at the top of the rule list so it wins over a rule that opens the port.
+  SSH's ports, the panel's web port, a reverse proxy's or Tailscale Serve's port on the panel's host,
+  and the UDP port tailscaled listens on cannot be blocked. A block says what really happened: that
+  the port was already blocked, that an existing allow made UFW skip it (nothing blocked), that UFW
+  is off and the block is only stored, or, if it failed part-way, which rules it took out again.
+  **Open** can now keep a port to IPv4 or IPv6 only, and says so when a block above the new rule
+  still drops the port. On the Security tab, **Blocked IPs** takes a range too (203.0.113.0/24,
+  2001:db8::/48). However it is written (`/32`, an IPv4-mapped IPv6 address), a block is checked
+  as the address it really is: one reaching into Tailscale's addresses or the security whitelist,
+  or covering your own address, the one the panel connects from, or any of the panel host's own
+  addresses, is refused. Every change is in the audit log (an IPv4-only or IPv6-only open says
+  which), and on the panel's own host all of it is superadmin-only, like the rest of its firewall.
 - **LinuxGSM v26.4.0 support.** LinuxGSM 26.4 can warn players in-game before a stop
   (`warnplayerstimer`) and, with `stoponlyifnoplayers` on, puts off a stop, restart, update or
   backup while players are online. The panel now works with both:
@@ -699,6 +737,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Deleting a remote's SSH rule could cut the panel off from it.** The delete guard kept a host's
+  last SSH rule, but counted every SSH rule as "another way in", wherever it let SSH in from. So
+  the everyday "tighten SSH to my home IP" sequence (add an allow from your home address, then delete
+  the allow from anywhere) went through with only a warning while the panel itself connected from
+  somewhere else, and under a default deny the panel lost the host. The rule the panel's own
+  connection gets in by is now protected, its reason naming the address it connects from; when that
+  address cannot be read, every SSH rule is kept until it can.
 - **Call of Duty, CoD 2, CoD: United Offensive and MoH: Allied Assault install on Ubuntu 26.04
   again.** LinuxGSM v26.4.0 left these four games on Ubuntu 24.04 in its game list, and the panel read
   that as a limit and refused them on 26.04 hosts, although LinuxGSM runs them there. The panel now

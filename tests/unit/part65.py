@@ -431,6 +431,7 @@ def _fw_comment65(client, rid):
     sent = []
     _p9_patch(_p9_rv, "remote_ufw_open_port",
               lambda remote, port, proto, comment="": (sent.append(comment), (True, "opened"))[1])
+    _p9_patch(_p9_rv._fw_rules, "fwb_open_shadow_note", lambda *a: None)   # the open's read-back (part136)
     _p9_patch(_p9_rv, "remote_ufw_allow_from",
               lambda remote, source, port, proto, comment="", allow=True:
               (sent.append(comment), (True, "allowed"))[1])

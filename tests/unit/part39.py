@@ -827,7 +827,7 @@ _READ_VERBS39 = frozenset({
     "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
     "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running", "pro-status",
     "restart-flags", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
-    "ufw-show-added", "ufw-status",
+    "ufw-show-added", "ufw-status", "ufw-stored-rules",
 })
 
 

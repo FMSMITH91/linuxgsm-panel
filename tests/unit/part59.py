@@ -132,6 +132,7 @@ try:
         _p9_patch(_mod59, "_set_autoblock_host", _rec59(_calls59, "set_autoblock", None))
         _p9_patch(_mod59, "_run_autoblock_now", _rec59(_calls59, "run_autoblock", None))
     _p9_patch(_rs59, "remote_ufw_deny_ip", _rec59(_calls59, "deny", (True, "ok")))
+    _p9_patch(_rs59, "_fwa_source_refusal", lambda *a: None)   # the panel's own source (part136)
     _p9_patch(_rs59, "remote_ufw_undeny_ip", _rec59(_calls59, "undeny", (True, "ok")))
     _p9_patch(_rs59, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_p9_so, "ufw_deny_ip", _rec59(_calls59, "deny", (True, "ok")))

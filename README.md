@@ -152,7 +152,7 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 
 - Multi-user RBAC (Super Admin / Server Admin / Moderator / Viewer) — groups set per-action permissions and per-server access, enforced server-side on every route.
 - Fine-grained moderation (**kick / ban / announce** individually) and superadmin-defined **custom console commands** with a charset-validated argument, granted per group.
-- One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
+- One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall (default policies, on/off, logging, port and IP-range blocks, all with lock-out checks), power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
 - **Brute-force defense** — fail2ban integration with per-jail logs, top offenders, one-click UFW blocking, and an optional rolling **auto-block** that firewalls every IP over a failed-attempt threshold (default 20 / 7 days) and releases it once its count drops back below. A whitelist (IP/CIDR) is never banned or blocked, on any jail of any host; your Tailscale peers are never banned from the panel or auto-blocked. A ban also closes any console or terminal already open from that address, and API-token guessing that carries on past its rate limit is banned too.
 - **Proactive admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 20 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you). ntfy needs no account — subscribe to a topic in its app and alerts reach your phone; point it at ntfy.sh or your own instance.
 - **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
@@ -256,6 +256,9 @@ location / {
     # X-Real-IP when the header is absent entirely. Set both.
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    # The port the browser came in on: the firewall's lock-out check reads it when your address has
+    # more than one connection open to this host.
+    proxy_set_header X-Forwarded-Port $server_port;
     proxy_read_timeout 86400;
 }
 ```

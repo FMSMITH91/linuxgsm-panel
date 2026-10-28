@@ -1616,6 +1616,13 @@ _VERB_SAMPLES = {
     "apt-install-minimal": ["libc6:i386", "curl"],
     "steamcmd-install": [],
     "content-scan": ["cstrike", "hl2"],
+    # The Firewall settings card and Add a rule's Block (fw-more).
+    "ufw-disable": [],
+    "ufw-logging": ["medium"],
+    "ufw-stored-rules": [],
+    "ufw-block-port": ["deny", "27015:27020", "udp", "v4", "blk"],
+    "ufw-delete-block-port": ["reject", "27015", "tcp", "both"],
+    "ufw-allow-port-family": ["v6", "27015", "any", "game"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
