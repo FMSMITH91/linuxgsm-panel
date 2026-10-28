@@ -4,6 +4,14 @@
 #
 #    pip-compile --allow-unsafe --generate-hashes --no-annotate --no-index --output-file=requirements.txt --strip-extras requirements.in
 #
+# MERGED BY HAND after that command: dnspython is pinned per Python version, which pip-compile (one
+# Python per run) cannot write. 2.9.0 fixes CVE-2026-114605 but requires Python 3.11, so the file
+# pins `dnspython==2.8.0 ; python_version < "3.11"` and `dnspython==2.9.0 ; python_version >= "3.11"`,
+# each with its own hashes. A recompile on 3.10 (yours, or a Dependabot update) writes one unmarked
+# 2.8.0 back: re-apply the split after it, with 2.9.0's hashes from `pip-compile --generate-hashes`
+# of `dnspython==2.9.0` run in python:3.12-slim. tests/unit (part06) and pip-audit fail until it is
+# back. Drop the split when the panel drops Python 3.10 (see osv-scanner.toml's exemption).
+#
 bcrypt==5.0.0 \
     --hash=sha256:046ad6db88edb3c5ece4369af997938fb1c19d6a699b9c1b27b0db432faae4c4 \
     --hash=sha256:0c418ca99fd47e9c59a301744d63328f17798b5947b0f791e9af3c1c499c2d0a \
@@ -238,9 +246,12 @@ cryptography==50.0.2 \
     --hash=sha256:f9f6143a8c75945eb960d9eb98905a441394abfa24afaae239d514ffb2586480 \
     --hash=sha256:fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
-dnspython==2.8.0 \
+dnspython==2.8.0 ; python_version < "3.11" \
     --hash=sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af \
     --hash=sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f
+dnspython==2.9.0 ; python_version >= "3.11" \
+    --hash=sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9 \
+    --hash=sha256:b44dc6b18f07a8b1c56676a19fbfdb5209415b046a9cece286baafa87ff3f7f1
 eventlet==0.41.2 \
     --hash=sha256:6cae50e67fe6ae8bb7013e7fd4d8e0d0d20aeb9b3259b93f023c93eb6749631f \
     --hash=sha256:721b86b77fca33a735598292022ac6feef99747bf48f52defdada6b572acd5af
