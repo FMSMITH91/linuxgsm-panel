@@ -3761,47 +3761,78 @@ try:
     # python3), and every other leg ran green on a set that host could not install.
     _RQ_PYTHONS = ("3.10.0", "3.11.0", "3.12.0", "3.13.0", "3.14.0")
 
-    def _rq_python_gap(name, ver, requires_python):
+    def _rq_python_gap(name, ver, requires_python, pythons=_RQ_PYTHONS):
         if not requires_python:
             return None
-        missed = [v for v in _RQ_PYTHONS
+        missed = [v for v in pythons
                   if not _RqSpec(requires_python).contains(v, prereleases=True)]
         if not missed:
             return None
         return "%s==%s requires Python %s, so it cannot install on %s" % (
             name, ver, requires_python, ", ".join(v[:-2] for v in missed))
 
-    def _rq_closure_gaps(text):
-        pins, gaps = {}, []
+    # Each supported Python on Linux, as a marker environment. A pin may carry a marker (dnspython
+    # is split by hand: its fix needs 3.11, so 3.10 keeps the old release), and is then judged only
+    # on the Pythons it applies to.
+    _RQ_ENVS = {v: [{"python_version": v[:-2], "python_full_version": v, "sys_platform": "linux",
+                     "platform_system": "Linux", "platform_machine": mach,
+                     "implementation_name": "cpython", "platform_python_implementation": "CPython",
+                     "os_name": "posix", "extra": ""} for mach in ("x86_64", "aarch64")]
+                for v in _RQ_PYTHONS}
+
+    def _rq_entry(ln):
+        """[gap strings..., (name, version, marker or None)] for one joined requirement line."""
+        toks = ln.split()
+        rest = [t for t in toks if not t.startswith("--hash=")]
+        hashes = len(toks) - len(rest)
+        ln = " ".join(rest)
+        if not ln:
+            return ["%d hash(es) belong to no requirement" % hashes]
+        req = _RqReq(ln)
+        spec = [s for s in req.specifier if s.operator == "=="]
+        if len(spec) != 1 or len(req.specifier) != 1:
+            return ["%s is not pinned with ==" % ln]
+        # An entry with no hash is named, and still read as the pin it is.
+        nohash = [] if hashes else ["%s carries no --hash, so pip cannot verify what it downloads" % ln]
+        return nohash + [(_rq_canon(req.name), spec[0].version, req.marker)]
+
+    def _rq_entries(text):
+        """[(name, version, marker or None)], or a gap string, per requirement."""
         # requirements.txt is pip-compile's lockfile: each entry runs over `\` continuation lines,
         # one `--hash=` per line. Drop the comment lines, join each entry back onto one line, then
         # take the hashes off before the rest is read as a requirement.
         body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-        for ln in re.sub(r"\\\n", " ", body).splitlines():
-            ln = ln.split("#", 1)[0].strip()
-            if not ln:
-                continue
-            toks = ln.split()
-            hashes = [t for t in toks if t.startswith("--hash=")]
-            ln = " ".join(t for t in toks if not t.startswith("--hash="))
-            if not ln:
-                gaps.append("%d hash(es) belong to no requirement" % len(hashes))
-                continue
-            req = _RqReq(ln)
-            spec = [s for s in req.specifier if s.operator == "=="]
-            if len(spec) != 1 or len(req.specifier) != 1:
-                gaps.append("%s is not pinned with ==" % ln)
-                continue
-            if not hashes:
-                gaps.append("%s carries no --hash, so pip cannot verify what it downloads" % ln)
-            pins[_rq_canon(req.name)] = spec[0].version
-        envs = [{"python_version": "3.%d" % m, "python_full_version": "3.%d.0" % m,
-                 "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
-                 "implementation_name": "cpython", "platform_python_implementation": "CPython",
-                 "os_name": "posix", "extra": ""}
-                for m in (int(v.split(".")[1]) for v in _RQ_PYTHONS)
-                for mach in ("x86_64", "aarch64")]
-        for name, ver in sorted(pins.items()):
+        lines = (ln.split("#", 1)[0].strip() for ln in re.sub(r"\\\n", " ", body).splitlines())
+        return [_e for ln in lines if ln for _e in _rq_entry(ln)]
+
+    def _rq_where(marker):
+        """The supported Pythons a pin's marker applies to (all of them for no marker)."""
+        return [v for v in _RQ_PYTHONS
+                if marker is None or any(marker.evaluate(e) for e in _RQ_ENVS[v])]
+
+    def _rq_split_gaps(entries):
+        """Name each package without exactly one pin on a supported Python (none, or two)."""
+        gaps, names = [], sorted({e[0] for e in entries})
+        for name in names:
+            for v in _RQ_PYTHONS:
+                on = ["%s==%s" % (e[0], e[1]) for e in entries
+                      if e[0] == name and v in _rq_where(e[2])]
+                if len(on) != 1:
+                    gaps.append("%s has %d pins that apply on Python %s%s"
+                                % (name, len(on), v[:-2], (": " + ", ".join(on)) if on else ""))
+        return gaps
+
+    def _rq_closure_gaps(text):
+        entries = _rq_entries(text)
+        gaps = [e for e in entries if isinstance(e, str)]
+        entries = [e for e in entries if not isinstance(e, str)]
+        gaps += _rq_split_gaps(entries)
+        # What THIS Python installs: the pins whose marker applies here. Their installed metadata
+        # is what is read; a pin for another Python is read on the CI leg that runs that Python.
+        here = [e for e in entries if e[2] is None or e[2].evaluate()]
+        pins = {e[0]: e[1] for e in here}
+        envs = [_e for _v in _RQ_PYTHONS for _e in _RQ_ENVS[_v]]
+        for name, ver, marker in sorted(here, key=lambda e: e[0]):
             try:
                 dist = _rq_md.distribution(name)
             except _rq_md.PackageNotFoundError:
@@ -3812,7 +3843,8 @@ try:
                 gaps.append("%s is installed at %s but pinned at %s (pip install -r "
                             "requirements.txt)" % (name, dist.version, ver))
                 continue
-            py_gap = _rq_python_gap(name, ver, dist.metadata.get("Requires-Python"))
+            py_gap = _rq_python_gap(name, ver, dist.metadata.get("Requires-Python"),
+                                    _rq_where(marker))
             if py_gap:
                 gaps.append(py_gap)
             for rd in dist.requires or []:
@@ -3851,6 +3883,44 @@ try:
           and _rq_python_gap("bidict", "0.23.1", ">=3.8") is None
           and "3.14" in (_rq_python_gap("x", "1", "<3.14") or ""),
           repr(_rq_python_gap("bidict", "0.24.1", ">=3.11")))
+    # A pin with a marker is judged on the Pythons it applies to: dnspython 2.9.0 requires 3.11, and
+    # behind `python_version >= "3.11"` that is no gap; unmarked, it is.
+    _rq_m311 = _RqReq('x ; python_version >= "3.11"').marker
+    _rq_m310 = _RqReq('x ; python_version < "3.11"').marker
+    check("requirements.txt: ...a marked pin is judged only on the Pythons its marker applies to "
+          "(control)",
+          _rq_python_gap("dnspython", "2.9.0", ">=3.11", _rq_where(_rq_m311)) is None
+          and "cannot install on 3.10" in (_rq_python_gap("dnspython", "2.9.0", ">=3.11") or "")
+          and _rq_where(_rq_m310) == ["3.10.0"])
+    # ...and a split must give each Python exactly one pin: a gap leaves the package uninstalled on
+    # that Python, an overlap leaves pip to choose. Both are named; the real split passes.
+    _rq_split_bad = _rq_split_gaps([("d", "1", _rq_m310), ("d", "2", None), ("e", "1", _rq_m311)])
+    check("requirements.txt: ...and a split pin that misses a Python, or doubles one, is named "
+          "(control)",
+          _rq_split_bad == ["d has 2 pins that apply on Python 3.10: d==1, d==2",
+                            "e has 0 pins that apply on Python 3.10"]
+          and _rq_split_gaps([("d", "1", _rq_m310), ("d", "2", _rq_m311)]) == [], repr(_rq_split_bad))
+    # CVE-2026-114605 (GHSA-45c3-73f7-pv4m): dnspython before 2.9.0 spends unbounded CPU on a
+    # crafted DNS reply, and eventlet's greendns parses every reply the panel's lookups get. 2.9.0
+    # requires 3.11, so the split is made by hand after pip-compile (requirements.txt's header),
+    # and a recompile on 3.10, Dependabot's included, writes one unmarked 2.8.0 back. Every Python
+    # that CAN run the fix must get it; 3.10 alone keeps 2.8.0 (osv-scanner.toml, dated).
+    def _rq_dns_gaps(entries):
+        return ["dnspython==%s applies on Python %s, which can run the fixed 2.9.0" % (e[1], v[:-2])
+                for e in entries if not isinstance(e, str) and e[0] == "dnspython"
+                and not _RqSpec(">=2.9.0").contains(e[1])
+                for v in _rq_where(e[2]) if v != "3.10.0"]
+
+    _rq_dns_bad = _rq_dns_gaps(_rq_entries(_rq_txt))
+    check("requirements.txt: dnspython is 2.9.0 or later on every Python but 3.10 (CVE-2026-114605); "
+          "after a recompile, re-apply the split its header describes",
+          not _rq_dns_bad and any(not isinstance(e, str) and e[0] == "dnspython"
+                                  for e in _rq_entries(_rq_txt)), repr(_rq_dns_bad))
+    check("requirements.txt: ...and what a 3.10 recompile writes back, one unmarked 2.8.0, is named "
+          "(control)",
+          _rq_dns_gaps([("dnspython", "2.8.0", None)])
+          == ["dnspython==2.8.0 applies on Python %s, which can run the fixed 2.9.0" % v[:-2]
+              for v in _RQ_PYTHONS[1:]])
     # Dependabot must resolve as the OLDEST supported Python, or it proposes releases 22.04 cannot
     # install (it proposed bidict 0.24, Requires-Python >= 3.11). requirements.txt is pip-compile's
     # lockfile for requirements.in, and Dependabot re-runs pip-compile on the Python the header

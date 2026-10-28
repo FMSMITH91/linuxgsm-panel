@@ -98,8 +98,13 @@ jobs:
       #   --require-hashes: both files are hashed; pip-audit's README prefers it to --no-deps.
       #   --strict: a pin pip-audit cannot audit (PyPI has no such name/version, or a URL
       #     requirement) FAILS the run. Without it the pin is listed as "skipped" and the run passes.
-      #   The count: the audit must have read exactly the file's pins. A pin dropped silently (a
-      #     marker false on this runner's Python, a parser change in a pip-audit bump) fails here.
+      #   The count: the audit must have read exactly the file's pins that apply on this runner's
+      #     Python. A pin dropped silently (a parser change in a pip-audit bump) fails here.
+      #     pip-audit evaluates each pin's environment marker and skips one that is false here:
+      #     requirements.txt pins dnspython 2.8.0 for Python 3.10 alone, because its fix needs 3.11.
+      #     Such a pin is named in the log and left out of the count, and osv-scanner below, which
+      #     reads every pin whatever its marker, audits it (osv-scanner.toml has its exemption;
+      #     pip-audit takes none).
       - name: Audit the panel's pins (pip-audit)
         if: steps.scope.outputs.docs_only != 'true'
         run: |
@@ -107,6 +112,18 @@ jobs:
           for f in requirements.txt requirements-bootstrap.txt; do
             out="${RUNNER_TEMP}/pip-audit-${f%.txt}.json"
             pins="$(grep -cE '^[A-Za-z0-9._-]+==' "${f}" || true)"
+            # A pin whose marker is false on this Python is one pip-audit leaves out: name it, and
+            # count only the rest (.github/scripts/pins_not_here.py).
+            if ! offhere="$(python .github/scripts/pins_not_here.py "${f}")"; then
+              echo "::error::${f}: could not evaluate its environment markers on this runner's Python."
+              exit 1
+            fi
+            if [ -n "${offhere}" ]; then
+              pins=$(( pins - $(printf '%s\n' "${offhere}" | wc -l) ))
+              while IFS= read -r p; do
+                echo "${f}: ${p} does not apply on this Python, so pip-audit skips it; osv-scanner audits it."
+              done <<< "${offhere}"
+            fi
             rc=0
             pip-audit --strict --require-hashes --disable-pip -r "${f}" -f json -o "${out}" || rc=$?
             if [ -s "${out}" ]; then

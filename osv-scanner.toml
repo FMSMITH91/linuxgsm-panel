@@ -1,0 +1,23 @@
+# osv-scanner's configuration for the panel's own lockfiles beside it, requirements.txt and
+# requirements-bootstrap.txt (security-code.yml, the dependency audit). It applies to the lockfiles
+# in THIS directory only; it does not propagate.
+#
+# Every entry is a reviewed advisory that cannot be fixed by a bump, and every one EXPIRES: on its
+# ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
+# entry to a reason and a date. The model and its history: tools/gamedig/osv-scanner.toml.
+#
+# pip-audit takes NO exemption from this file. It runs on Python 3.11 and audits the pins that apply
+# there, so a fixed version for 3.11 and newer stays a hard gate. osv-scanner reads every pin in
+# requirements.txt whatever its marker, and is the only audit of a pin marked for Python 3.10 alone.
+
+[[IgnoredVulns]]
+id = "GHSA-45c3-73f7-pv4m"
+ignoreUntil = 2026-11-27
+reason = """dnspython 2.8.0, CVE-2026-114605: dns.name.from_wire_parser spends unbounded CPU on a
+crafted DNS message (name decompression). The fix, 2.9.0, requires Python 3.11, so it cannot install
+on Python 3.10, Ubuntu 22.04's python3. requirements.txt pins 2.9.0 for Python 3.11 and newer
+(Ubuntu 24.04 and 26.04) and keeps 2.8.0 only behind `python_version < "3.11"`; pip-audit still
+audits the 3.11+ pin with no exemption. Exposure on a 22.04 host: eventlet's greendns parses the
+replies to the panel's own lookups (remote hosts, GitHub, game query targets), so a malicious or
+spoofed DNS server can make the panel burn CPU; it is denial of service only, nothing is read or
+written. Remove this entry when dnspython ships a fix for 3.10 or the panel drops 3.10."""

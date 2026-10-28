@@ -18,6 +18,7 @@ HOW IT RUNS. The workflows are read as text (PyYAML is not installed in CI's tes
 the two audit steps' run blocks are taken out of the workflow and run with bash -e, as the runner
 runs them, with the scanner replaced by a stub that records its arguments and answers as told.
 """
+import importlib.util as _ilu27
 import json as _json27
 import os
 import re as _re27
@@ -78,7 +79,15 @@ with open(os.environ["P27_LOG"], "a") as fh:
 mode = os.environ.get("P27_MODE", "all")
 req = args[args.index("-r") + 1]
 out = args[args.index("-o") + 1]
-pins = re.findall(r"^([A-Za-z0-9._-]+)==(\S+)", open(req).read(), re.M)
+try:
+    from packaging.markers import Marker
+except ImportError:
+    from pip._vendor.packaging.markers import Marker
+# As pip-audit 2.10.1 reads them (_dependency_source/requirement.py): a pin whose environment
+# marker is false on this Python is left out, with no skip_reason.
+pins = [(n, v) for n, v, mk in re.findall(r"^([A-Za-z0-9._-]+)==([^\s;\\]+)[ \t]*(?:;([^\\#\n]+))?",
+                                          open(req).read(), re.M)
+        if not mk.strip() or Marker(mk.strip()).evaluate()]
 if mode == "strict":
     sys.stderr.write("ERROR:pip_audit._cli:x: Dependency not found on PyPI and could not be audited\n")
     sys.exit(1)
@@ -108,13 +117,37 @@ try:
     _pa_have_jq27 = _shutil27.which("jq") is not None
     check("pip-audit: jq is on PATH (the step reads pip-audit's JSON with it, as the runner does)",
           _pa_have_jq27)
+    # The step's own marker reader, loaded by file: what it names is left out of the count.
+    _pnh_spec27 = _ilu27.spec_from_file_location(
+        "pins_not_here27", os.path.join(_root, ".github", "scripts", "pins_not_here.py"))
+    _pnh27 = _ilu27.module_from_spec(_pnh_spec27)
+    _pnh_spec27.loader.exec_module(_pnh27)
+    _pa_off27 = {_f: _pnh27.pins_not_here(_read27(_f))
+                 for _f in ("requirements.txt", "requirements-bootstrap.txt")}
     _pa_pins27 = {_f: len(_re27.findall(r"^[A-Za-z0-9._-]+==", _read27(_f), _re27.M))
-                  for _f in ("requirements.txt", "requirements-bootstrap.txt")}
+                  - len(_pa_off27[_f]) for _f in _pa_off27}
+    _pnh_sample27 = ('old==1.0 ; python_version < "3" \\\n    --hash=sha256:aa\n'
+                     'new==2.0 ; python_version >= "3" \\\n    --hash=sha256:bb\n'
+                     'bare==3.0 \\\n    --hash=sha256:cc\n# gone==9 ; python_version < "3"\n')
+    _pnh_bad27 = os.path.join(_pa_tmp27, "bad-marker.txt")
+    with open(_pnh_bad27, "w", encoding="utf-8") as _fh27:
+        _fh27.write('x==1 ; python_version <<< "3" \\\n    --hash=sha256:aa\n')
+    check("pip-audit: the marker reader names only a pin whose marker is false here, and fails "
+          "(exit 1) on a marker it cannot evaluate (control)",
+          _pnh27.pins_not_here(_pnh_sample27) == [("old==1.0", 'python_version < "3"')]
+          and _pnh27.main(["pins_not_here.py", _pnh_bad27]) == 1,
+          repr(_pnh27.pins_not_here(_pnh_sample27)))
+    # `python` as the runner has it: this interpreter (setup-python's, with pip), so the step's
+    # marker reader runs here exactly as there. P27_PYFAIL makes it fail.
+    with open(os.path.join(_pa_tmp27, "python"), "w", encoding="utf-8") as _fh27:
+        _fh27.write('#!/bin/sh\n[ -n "${P27_PYFAIL:-}" ] && exit 1\nexec %s "$@"\n' % sys.executable)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+    os.chmod(os.path.join(_pa_tmp27, "python"), 0o700)
 
-    def _pa27(mode):
+    def _pa27(mode, **extra):
         _log = os.path.join(_pa_tmp27, "argv-%s.log" % mode)
         _env = dict(os.environ, PATH=_pa_tmp27 + ":" + os.environ.get("PATH", ""),
-                    RUNNER_TEMP=_pa_tmp27, P27_LOG=_log, P27_MODE=mode)
+                    RUNNER_TEMP=_pa_tmp27, P27_LOG=_log, P27_MODE=mode, **extra)
         _rc, _out = _run_step27(_pa_run27, _env) if _pa_run27 else (None, "")
         _argv = ([_json27.loads(_l) for _l in open(_log, encoding="utf-8")]
                  if os.path.exists(_log) else [])
@@ -131,6 +164,18 @@ try:
           _rc == 0 and all("%s: audited %d of its %d pinned packages" % (_f, _n, _n) in _out
                            for _f, _n in _pa_pins27.items()) and min(_pa_pins27.values()) >= 1,
           "rc=%r pins=%r out=%r" % (_rc, _pa_pins27, _out[-600:]))
+    # requirements.txt pins dnspython twice, split at Python 3.11 (CVE-2026-114605's fix needs
+    # 3.11), so on every Python exactly one of the two is not pip-audit's: it is named, left out of
+    # the count, and audited by osv-scanner. Counted as a pin, every audit read "33 of 34" and failed.
+    check("pip-audit: ...a pin whose marker is false on this Python is named and left out of the count",
+          _rc == 0 and len(_pa_off27["requirements.txt"]) == 1
+          and all("requirements.txt: %s ; %s does not apply on this Python" % _p in _out
+                  for _p in _pa_off27["requirements.txt"]),
+          "off=%r out=%r" % (_pa_off27, _out[-600:]))
+    _rc, _out, _argv = _pa27("all-pyfail", P27_PYFAIL="1")
+    check("pip-audit: ...and markers it cannot evaluate fail the step, before pip-audit runs",
+          _rc not in (0, None) and "could not evaluate its environment markers" in _out
+          and _argv == [], "rc=%r argv=%r %s" % (_rc, _argv, _out[-400:]))
     _rc, _out, _ = _pa27("drop1")
     check("pip-audit: ...a pin the audit did not read fails the step, by file and count",
           _rc not in (0, None) and ("audited %d of the %d packages pinned in requirements.txt"
