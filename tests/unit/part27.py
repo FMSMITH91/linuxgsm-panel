@@ -18,6 +18,7 @@ HOW IT RUNS. The workflows are read as text (PyYAML is not installed in CI's tes
 the two audit steps' run blocks are taken out of the workflow and run with bash -e, as the runner
 runs them, with the scanner replaced by a stub that records its arguments and answers as told.
 """
+import contextlib as _ctx27
 import importlib.util as _ilu27
 import json as _json27
 import os
@@ -129,14 +130,29 @@ try:
     _pnh_sample27 = ('old==1.0 ; python_version < "3" \\\n    --hash=sha256:aa\n'
                      'new==2.0 ; python_version >= "3" \\\n    --hash=sha256:bb\n'
                      'bare==3.0 \\\n    --hash=sha256:cc\n# gone==9 ; python_version < "3"\n')
-    _pnh_bad27 = os.path.join(_pa_tmp27, "bad-marker.txt")
-    with open(_pnh_bad27, "w", encoding="utf-8") as _fh27:
-        _fh27.write('x==1 ; python_version <<< "3" \\\n    --hash=sha256:aa\n')
-    check("pip-audit: the marker reader names only a pin whose marker is false here, and fails "
-          "(exit 1) on a marker it cannot evaluate (control)",
+    try:
+        _pnh_bad27 = _pnh27.pins_not_here('x==1 ; python_version <<< "3" \\\n    --hash=sha256:aa\n')
+    except _pnh27.InvalidMarker:
+        _pnh_bad27 = "raised"
+    check("pip-audit: the marker reader names only a pin whose marker is false here, and raises on "
+          "a marker it cannot evaluate (main() turns that into exit 1) (control)",
           _pnh27.pins_not_here(_pnh_sample27) == [("old==1.0", 'python_version < "3"')]
-          and _pnh27.main(["pins_not_here.py", _pnh_bad27]) == 1,
-          repr(_pnh27.pins_not_here(_pnh_sample27)))
+          and _pnh_bad27 == "raised", repr((_pnh27.pins_not_here(_pnh_sample27), _pnh_bad27)))
+    # Sonar pythonsecurity:S8707: the file comes from argv, so only the two root lockfiles are
+    # read, by name. A path (absolute, relative, through ..) to anything, even to one of them, is
+    # refused with exit 2 before anything is opened.
+    _pnh_refused27 = [_a for _a in ("../../etc/passwd", os.path.join(_root, "requirements.txt"),
+                                    "./requirements.txt", "tests/../requirements.txt", "")
+                      if _pnh27.lockfile_path(_a) is not None]
+    with open(os.devnull, "w", encoding="utf-8") as _null27, \
+            _ctx27.redirect_stdout(_null27), _ctx27.redirect_stderr(_null27):
+        _pnh_rcs27 = (_pnh27.main(["pins_not_here.py", "../../etc/passwd"]),
+                      _pnh27.main(["pins_not_here.py", "requirements.txt"]))
+    check("pip-audit: the marker reader opens only requirements.txt or requirements-bootstrap.txt at "
+          "the repository root, and refuses any other argument",
+          not _pnh_refused27 and _pnh_rcs27 == (2, 0)
+          and _pnh27.lockfile_path("requirements.txt") == os.path.join(_root, "requirements.txt"),
+          repr((_pnh_refused27, _pnh_rcs27, _pnh27.lockfile_path("requirements.txt"))))
     # `python` as the runner has it: this interpreter (setup-python's, with pip), so the step's
     # marker reader runs here exactly as there. P27_PYFAIL makes it fail.
     with open(os.path.join(_pa_tmp27, "python"), "w", encoding="utf-8") as _fh27:

@@ -11,9 +11,14 @@ marker, audits it. The step subtracts what this prints from its count and names 
 Usage:
     pins_not_here.py FILE
 
+FILE is one of the panel's two lockfiles, by name (requirements.txt, requirements-bootstrap.txt),
+read from the repository root this script sits in; any other name is refused (exit 2). The step
+passes only those two, and a path taken from the command line is never opened as given.
+
 One line per such pin, `name==version ; marker`. Exits 1, printing nothing to stdout, when a marker
 cannot be evaluated: the step then fails rather than guess the count.
 """
+import os
 import re
 import sys
 
@@ -24,6 +29,15 @@ except ImportError:  # the CI unit job installs no packaging; pip vendors it
 
 # A pin line as pip-compile writes it, with the marker hand-merged in: `name==version ; marker \`.
 _PIN_MARKER = re.compile(r"^([A-Za-z0-9._-]+==[^\s;\\]+)[ \t]*;([^\\#\n]+)", re.M)
+
+# The repository root (this file is .github/scripts/pins_not_here.py), and the only files read.
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_LOCKFILES = {_n: os.path.join(_ROOT, _n) for _n in ("requirements.txt", "requirements-bootstrap.txt")}
+
+
+def lockfile_path(name):
+    """The root lockfile `name` names, or None for any other name (a path, `..`, another file)."""
+    return next((_p for _n, _p in _LOCKFILES.items() if _n == name), None)
 
 
 def pins_not_here(text):
@@ -36,12 +50,16 @@ def main(argv):
     if len(argv) != 2:
         sys.stderr.write("usage: pins_not_here.py FILE\n")
         return 2
-    with open(argv[1], encoding="utf-8") as fh:
+    path = lockfile_path(argv[1])
+    if path is None:
+        sys.stderr.write("pins_not_here.py: reads only %s, by name\n" % ", ".join(_LOCKFILES))
+        return 2
+    with open(path, encoding="utf-8") as fh:
         text = fh.read()
     try:
         found = pins_not_here(text)
     except InvalidMarker as exc:
-        sys.stderr.write("%s: %s\n" % (argv[1], exc))
+        sys.stderr.write("%s: %s\n" % (os.path.basename(path), exc))
         return 1
     for pin, marker in found:
         print("%s ; %s" % (pin, marker))
