@@ -357,13 +357,13 @@ check("config: every DEFAULT_CONFIG key has a reader",
 # ssh_timeout at 0 or 9999 there. The "no override" state is likewise CREATED here (an empty
 # object), not assumed of the host: a machine whose config sets ssh_timeout failed that check
 # against correct code.
-import pathlib as _pl_sshto
+from pathlib import Path as _Path
 import shutil as _sh_sshto
 import tempfile as _tf_sshto
 _sshto_file_saved = _cfgmod.CONFIG_FILE
 _sshto_dir = _tf_sshto.mkdtemp()
 try:
-    _cfgmod.CONFIG_FILE = _pl_sshto.Path(_sshto_dir) / "config.json"
+    _cfgmod.CONFIG_FILE = _Path(_sshto_dir) / "config.json"
     _cfgmod.CONFIG_FILE.write_text("{}", encoding="utf-8")
     _cfgmod._cfg_cache["key"] = None
     eq("config: with no override the SSH layer uses the documented default",
@@ -392,10 +392,9 @@ finally:
 # `null`, `[1,2,3]`, `"hello"` or `123`, each of which parses fine and then raises inside
 # dict.update — so a truncated file degraded to defaults while a stray `null` 500'd every page.
 # CONFIG_FILE is redirected to a temp path here: these bodies must never touch the real one.
-import pathlib as _pl_cfg
 import tempfile as _tf_cfg
 _cfg_file_saved = _cfgmod.CONFIG_FILE
-_cfg_tmp = _pl_cfg.Path(_tf_cfg.mkdtemp()) / "config.json"
+_cfg_tmp = _Path(_tf_cfg.mkdtemp()) / "config.json"
 try:
     _cfgmod.CONFIG_FILE = _cfg_tmp
     for _body, _label in (('{"port": 5001}', "an object is read normally"),
@@ -512,7 +511,6 @@ check("config: the autoblock default is one constant, not two (no route reads th
 #
 # So: resolved, absolute, and compared against the repo root. Anchoring is in panel/__init__.py.
 import panel as _panelpkg
-from pathlib import Path as _Path
 from panel.services import lgsm_data as _lgd
 from panel.core import i18n as _i18n
 
