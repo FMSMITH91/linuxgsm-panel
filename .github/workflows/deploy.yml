@@ -256,7 +256,7 @@ jobs:
           echo "Verified ${HEAD_SHA} on main (tip $(git rev-parse --short "${MAIN}")), and every check it must pass has."
 
       - name: Join the tailnet
-        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf # v4.3.0
         with:
           # OIDC workload identity: no secret. The client id and audience are not secret either;
           # what admits this job is GitHub's signed token naming the production environment.
