@@ -256,7 +256,7 @@ jobs:
           echo "Verified ${HEAD_SHA} on main (tip $(git rev-parse --short "${MAIN}")), and every check it must pass has."
 
       - name: Join the tailnet
-        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf # v4.3.0
         with:
           # OIDC workload identity: no secret. The client id and audience are not secret either;
           # what admits this job is GitHub's signed token naming the production environment.
@@ -274,8 +274,8 @@ jobs:
           # 2026-09-26 deploy logged "Found Tailscale 1.94.2 in cache", an entry saved 2026-08-30).
           # BUMP BY HAND, all three together, when the action moves: version is the action's own
           # default at its SHA, and part29 holds the pair to that SHA.
-          version: '1.94.2'
-          sha256sum: 'c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32'
+          version: '1.104.2'
+          sha256sum: '512f613ed7d04fc7282f7dc5bd76aa105aae28168fbb9357eb749ebcbc29f0ae'
           use-cache: 'false'
 
       - name: Deploy via safe self-update (snapshot + health-check + rollback)
