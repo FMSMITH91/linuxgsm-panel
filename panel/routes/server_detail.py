@@ -625,10 +625,11 @@ def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True
     `monitor`: the server's Autostart (LinuxGSM's monitor cron) is on, which is what runs an
     update or backup LinuxGSM postponed.
     """
-    # fastdl asks a few yes/no questions (overwrite / force-download / continue),
-    # all default Y — feed Y's so it runs unattended. Up to v26.3.0 a prompt looped
-    # forever on EOF; from v26.4.0 (#5042) it exits 2 ("Unable to read an answer").
-    answers = ["Y"] * 8 if action == "fastdl" else None
+    # fastdl asks yes/no questions; which, and what each answer does, depends on the account's
+    # LinuxGSM release (v26.5.0's first one deletes the directory on Y): _sm.fastdl_answers.
+    answers = (_sm.fastdl_answers(remote, short_name, selfname,
+                                  (selfname or "").removesuffix("server"))
+               if action == "fastdl" else None)
     # tee_log makes run_as_game_user write the output where _action_log_path says
     # and hand the whole of it back at the end, so the audit entry and the bot's
     # completion summary are unchanged while the console tails the file.

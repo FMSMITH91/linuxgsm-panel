@@ -1410,6 +1410,56 @@ def _lgc_vh_up_sh(user, selfname):
             f"| grep -Fqx -- '{selfname}' && {{ echo LGC_UP; exit 0; }}; done; echo LGC_DOWN")
 
 
+# ── fastdl's prompts, per LinuxGSM release ──────────────────────────────────────────────────────
+# Piped, every fn_prompt_yn reads one line, so the answers are POSITIONAL. command_fastdl.sh asks:
+#   up to v26.4.0: "Overwrite existing directory?" [Y/n] (only when ${webdir}/fastdl exists; N
+#                  aborts), "Force clients to download files?" [Y/n] (gmod only), "Continue?" [Y/n].
+#   v26.5.0 (#5100): "Rebuild Fastdl directory from scratch? This deletes everything in it." [y/N]
+#                  (only when ${webdir}/fastdl exists), then the same two.
+# On v26.5.0 a Y to the first one deletes the whole directory, files LinuxGSM did not write
+# included (an index.html, a .htaccess, another server's files in a shared webdir), and re-bzip2s
+# everything; N is its incremental run. Up to v26.4.0 every answer the panel wants is Y and the
+# old eight are kept: up to v26.3.0 a prompt with no answer left looped for ever on EOF, so a
+# surplus is the safe side there. On v26.5.0 the list is exact: a leading N where no rebuild
+# question comes would land on gmod's "Force clients" or on "Continue?" and abort, and an
+# unexpected extra prompt then ends with "Unable to read an answer" (exit 2) rather than a guess.
+_LG265_FASTDL_RELEASE = (26, 5, 0)
+_LG265_DIR_YES, _LG265_DIR_NO = "LG265_DIR", "LG265_NODIR"
+
+
+def fastdl_answers(server, user, selfname, game_type):
+    """The keystrokes for `fastdl` on this account's LinuxGSM release (see above)."""
+    from panel.ops.ssh_manager import hosts
+    from panel.services import lgsm_data
+    if not lgsm_data.release_at_least(hosts.lgsm_release(server, user, selfname), _LG265_FASTDL_RELEASE):
+        return ["Y"] * 8
+    gmod = ["Y"] if game_type == "gmod" else []
+    return (["N"] if _lg265_fastdl_dir_exists(server, user, selfname) else []) + gmod + ["Y"]
+
+
+def _lg265_fastdl_dir_exists(server, user, selfname):
+    """Whether LinuxGSM will find ${webdir}/fastdl, so it asks its rebuild question.
+
+    webdir is ${rootdir}/public_html unless a config sets it; rootdir is the script's directory,
+    the account's home in the panel's layout. A read that failed counts as NO directory: with
+    the answers that follows, a directory that is there gets Y to "Rebuild" and nothing to
+    "Continue?", which ends the run with exit 2 before anything is cleared (fn_clear_old_fastdl runs
+    after the preview). The other guess would answer N to "Continue?" and abort with exit 0, a
+    FastDL that did nothing reported as done.
+    """
+    home = "/home/%s" % user
+    vals = files.lgsm_get_values(server, user, selfname, ["webdir"]) or {}
+    webdir = (vals.get("webdir") or "").strip() or home + "/public_html"
+    webdir = webdir.replace("${rootdir}", home).replace("$rootdir", home)
+    if "$" in webdir or not webdir.startswith("/"):
+        return False                   # a value only LinuxGSM's own bash could expand
+    out, _, _ = _core.read_as_game_user(
+        server, user, "[ -d %s ] && echo %s || echo %s" % (
+            _core._quote(webdir.rstrip("/") + "/fastdl"), _LG265_DIR_YES, _LG265_DIR_NO),
+        timeout=15, selfname=selfname)
+    return _LG265_DIR_YES in (out or "").split()
+
+
 def _backup_space_refusal(server, user, headroom_note):
     """The refusal message when the next archive will not fit on the disk, else None.
 
