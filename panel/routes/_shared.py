@@ -1067,7 +1067,8 @@ def _lg264_queued_outcome(app, gs, act, oc):
     msg = _lgp.outcome_message(oc, act, monitor=bool(getattr(gs, "autostart", True)))
     try:
         postponed = oc["code"] == "lgsm_postponed"
-        log_action(None, "lgsm_postponed" if postponed else "lgsm_refused", target=gs.name,
+        log_action(None, ("lgsm_busy" if oc["code"] == "lgsm_busy"
+                          else "lgsm_postponed" if postponed else "lgsm_refused"), target=gs.name,
                    detail="%s: %s" % (act, msg), success=postponed, server=gs)
     except Exception:
         db.session.rollback()

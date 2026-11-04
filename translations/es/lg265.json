@@ -1,0 +1,5 @@
+{
+  "'{action}' not run: an update of this server is already running. LinuxGSM runs one update, validate or workshop update at a time.": "'{action}' no se ejecutó: ya hay una actualización de este servidor en curso. LinuxGSM ejecuta una sola actualización, validación o actualización del Workshop a la vez.",
+  "Another update of this server was already running, so LinuxGSM skipped this one": "Ya había otra actualización de este servidor en curso, así que LinuxGSM omitió esta",
+  "Not run": "No ejecutado"
+}

@@ -289,7 +289,8 @@ def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
 
         def _done(ok, detail):
             if ok is None:
-                # LinuxGSM postponed or refused it (players online): the detail says which.
+                # LinuxGSM postponed or refused it (players online), or skipped it (another update was
+                # running): the detail says which.
                 _dc_reply(bot_token, channel_id, "⏳ %s — %s" % (name, detail or action))
             elif ok:
                 _dc_reply(bot_token, channel_id, "✅ %s — %s finished." % (name, action))

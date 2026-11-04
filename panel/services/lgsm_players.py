@@ -169,14 +169,24 @@ _LG264_PLAYERS_RE = re.compile(_LG264_INFO + r"\b(\d{1,6}) players are on the se
 _LG264_REQUEST_RE = re.compile(_LG264_INFO + r"\b(Update|Backup) postponed until the server is empty\b")
 
 
+# LinuxGSM v26.5.0 (#5095, check_update_lock.sh): update, force-update, validate and
+# workshop-update take lgsm/lock/updating.lock, and a second one while the first runs prints
+# "[ INFO ] Updating vhserver: Checking update: Update is already running (PID 12855) ... INFO" and
+# exits 0 having done nothing. Earlier releases never print it, so the match is its own release gate.
+_LG265_BUSY_RE = re.compile(_LG264_INFO + r"\bChecking update: Update is already running\b")
+
+
 def outcome(out):
     """What LinuxGSM's output says it did instead of the action, or None when it did the action.
 
     {"code": "lgsm_postponed" | "lgsm_refused", "kind": "update" | "backup" | "restart" | "stop",
      "players": int}. Postponed: LinuxGSM recorded a request its monitor acts on. Refused: nothing
-    was recorded, so nothing happens unless it is asked again.
+    was recorded, so nothing happens unless it is asked again. Or {"code": "lgsm_busy", "kind":
+    "update"}: another update of the server held LinuxGSM's update lock, and this run did nothing.
     """
     text = terminal.strip_escapes(out or "")
+    if _LG265_BUSY_RE.search(text):
+        return {"code": "lgsm_busy", "kind": "update"}
     m = _LG264_PLAYERS_RE.search(text)
     if m is None:
         return None
@@ -234,11 +244,18 @@ _LG264_POSTPONED_UNREAD = i18n.Sentence("Postponed by LinuxGSM: players are onli
                                         "once the server is empty if the server's Autostart is on.")
 
 
+# Said for lgsm_busy: the run was skipped, which is neither the action's success nor a failure.
+_LG265_BUSY = i18n.Sentence("'{action}' not run: an update of this server is already running. "
+                            "LinuxGSM runs one update, validate or workshop update at a time.")
+
+
 def outcome_message(oc, action, monitor=True):
     """The panel's sentence for outcome `oc` of `action`.
 
     `monitor`: the server's Autostart is on (True), off (False), or could not be read (None).
     """
+    if oc["code"] == "lgsm_busy":
+        return i18n.Sentence(_LG265_BUSY.template, action=action)
     if oc["code"] == "lgsm_postponed":
         if monitor is None:
             return _LG264_POSTPONED_UNREAD

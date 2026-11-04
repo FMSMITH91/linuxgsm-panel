@@ -598,8 +598,8 @@ def _lg264_run_power(remote, ident, action):
 def _lg264_said(oc, action, gs, held, who, console=None):
     """Audit LinuxGSM's postponed or refused `action` as what it was: (None, the panel's sentence).
 
-    Its own audit action (lgsm_postponed / lgsm_refused), never the action's success or failure
-    row: LinuxGSM exits 0 for both, and "'stop' succeeded" about a server still running with its
+    Its own audit action (lgsm_postponed / lgsm_refused / lgsm_busy), never the action's success or
+    failure row: LinuxGSM exits 0 for all three, and "'stop' succeeded" about a server still running with its
     players on is the report this replaces. A refused stop or a postponed restart ends the action's
     quiet window (warning minutes and all), so a crash of the server that is still up pages as usual.
     `console`: the app, for a Stop/Restart whose button answered long before — the sentence is said
@@ -609,7 +609,8 @@ def _lg264_said(oc, action, gs, held, who, console=None):
     actor, origin, name = who
     msg = _lgp.outcome_message(oc, action, monitor=bool(getattr(gs, "autostart", True)))
     postponed = oc["code"] == "lgsm_postponed"
-    log_action(actor, "lgsm_postponed" if postponed else "lgsm_refused", target=name,
+    log_action(actor, ("lgsm_busy" if oc["code"] == "lgsm_busy"
+                       else "lgsm_postponed" if postponed else "lgsm_refused"), target=name,
                success=postponed, detail="%s: %s" % (action, msg), actor=origin,
                server=gs if held else None)
     if held and action in ("stop", "restart"):

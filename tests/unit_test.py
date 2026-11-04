@@ -1974,8 +1974,9 @@ _r16d_wrap_ts_handles()
 # review's: TeamSpeak's ServerQuery closed once, Valheim's bounded skip, the picker per distro) drives
 # pure functions, part12's app with stand-ins and the picker script in node;
 # imports part01, 05, 12 and 75.
-# part141 (lgsm-2605: LinuxGSM v26.5.0 — FastDL's answers per release) drives pure functions with
-# stubbed host reads and part12's app with stand-ins; imports part01, 05 and 12.
+# part141 (lgsm-2605: LinuxGSM v26.5.0 — FastDL's answers per release, a second update said as
+# skipped) drives pure functions with stubbed host reads, part12's app with stand-ins and the cron
+# recorder's shell under bash; imports part01, 05 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",

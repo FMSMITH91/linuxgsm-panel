@@ -4,18 +4,26 @@ From a review of LinuxGSM v26.5.0 (2026-11-04) against v26.4.0 and the panel. He
 
 * FastDL: on v26.5.0 "Rebuild Fastdl directory from scratch?" is answered N, so the run is
   incremental and keeps files LinuxGSM did not write; older releases keep their Y's.
+* A second update while one runs (#5095): LinuxGSM exits 0 with "Update is already running", which
+  is said as that, never as an update that finished, in the console, the audit log, the chat bots
+  and the cron table.
 
 HOW IT RUNS. Pure functions with their host reads stubbed on the defining submodule; routes on
-part12's app with its transport tripwire armed and every host call stubbed. Nothing reaches a host or data/.
+part12's app with its transport tripwire armed and every host call stubbed; the cron table's shell
+under bash over a scratch directory. Nothing reaches a host or data/.
 """
 import os
+import shutil as _shutil141
+import subprocess as _sp141  # nosec B404 - bash over this part's own scratch files, fixed argv
+import tempfile as _tf141
 
-from unit.part01 import check
+from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_patch, _p9_patch_sm, _p9_restore_all
-from panel.ops.ssh_manager import _core as _smc141, files as _files141
+from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_drain,
+                         _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_set)
+from panel.ops.ssh_manager import _core as _smc141, cron as _cron141, files as _files141
 from panel.ops.ssh_manager import game as _game141, hosts as _hosts141
-from panel.routes import server_detail as _sd141
+from panel.routes import _shared as _sh141, server_detail as _sd141
 from panel.services import lgsm_data as _lgd141, lgsm_players as _lgp141
 
 _TRIP141_START = len(_P9_TRIPPED)
@@ -103,6 +111,136 @@ finally:
 check("fastdl's run passes the account's own answers (game type from its script name); other long "
       "actions get none",
       _fdruns141 == [("fastdl", ["ANS", "gmod"]), ("update", None)], repr(_fdruns141))
+
+# ── 2. a second update while one runs ───────────────────────────────────────────────────────────
+# v26.5.0 check_update_lock.sh, piped (plain) and on a terminal (its colours and \r repaints).
+_E = "\x1b"
+_BUSY141 = "[ INFO ] Updating vhserver: Checking update: Update is already running (PID 12855) ... INFO\n"
+_BUSY_TTY141 = ("%s[1m\r%s[K[%s[0m .... %s[0m]%s[0m Updating vhserver: Checking update%s[0m ... CHECKING"
+                "%s[1m\r%s[K[%s[36m INFO %s[0m]%s[0m Updating vhserver: Checking update: Update is already "
+                "running (PID 12855)%s[0m ... %s[36mINFO%s[0m\n" % ((_E,) * 14))
+_UPD_OK141 = ("[  OK  ] Updating vhserver: Checking for update: SteamCMD\n\nNo update available\n"
+              "* Local build: 123\n")
+_GAME_SAYS141 = "player42: Update is already running lol\n"
+check("outcome: LinuxGSM's 'Update is already running' is lgsm_busy, piped or on a terminal",
+      _lgp141.outcome(_BUSY141) == {"code": "lgsm_busy", "kind": "update"}
+      and _lgp141.outcome_of(_BUSY_TTY141, 0) == {"code": "lgsm_busy", "kind": "update"},
+      repr((_lgp141.outcome(_BUSY141), _lgp141.outcome(_BUSY_TTY141))))
+check("outcome: an ordinary update, a non-zero exit, and the words outside LinuxGSM's INFO tag are not",
+      _lgp141.outcome(_UPD_OK141) is None and _lgp141.outcome_of(_BUSY141, 1) is None
+      and _lgp141.outcome(_GAME_SAYS141) is None)
+_busy_msg141 = _lgp141.outcome_message({"code": "lgsm_busy", "kind": "update"}, "validate")
+check("outcome_message: busy says the action was not run because an update is already running",
+      str(_busy_msg141).startswith("'validate' not run: an update of this server is already running"),
+      str(_busy_msg141))
+
+_bsruns141 = []
+_bsout141 = [(_BUSY141, "", 0)]
+_bspushed141 = []
+_bsinval141 = []
+_bsdone141 = []
+try:
+    _p9_arm(who="part141")
+    _p9_patch(_lgp141, "warn_minutes", lambda *a, **k: 0)
+    _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: (_bsruns141.append(action),
+                                                                          _bsout141[0])[1])
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: _bsinval141.append(("ports", rid)))
+    _p9_patch_sm("invalidate_game_version", lambda rid, s: _bsinval141.append(("version", rid)))
+    _p9_patch_sm("set_game_priority", lambda *a, **k: None)
+    _p9_patch(_sh141, "_drain_action_to_end", lambda app, remote, sid, entry: None)
+    _p9_patch(_sh141, "_console_push", lambda app, sid, line: _bspushed141.append(line))
+    _p9_set(P9_GS, status="online", restart_pending=False, stop_pending=False, autostart=True)
+    _complete_before141 = _p9_audit("update_complete").id
+    _A141 = _p9_client(P9_ADMIN)
+    _A141.post("/api/server/%d/action" % P9_GS, json={"action": "update"})
+    _p9_drain()
+    _busy_row141 = _p9_audit("lgsm_busy")
+    check("update while another runs: no update_complete row; an lgsm_busy row (not a success) says it",
+          _bsruns141 == ["update"] and _p9_audit("update_complete").id == _complete_before141
+          and _busy_row141.id is not None and _busy_row141.success is False
+          and "update: 'update' not run: an update of this server is already running" in _busy_row141.detail,
+          repr((_bsruns141, _busy_row141)))
+    check("update while another runs: the console says so, never 'finished successfully'",
+          any("[panel] update: 'update' not run" in x for x in _bspushed141)
+          and not any("finished successfully" in x for x in _bspushed141), repr(_bspushed141))
+    check("update while another runs: the version and port caches are kept (nothing changed on disk)",
+          _bsinval141 == [], repr(_bsinval141))
+    # The chat bots: their callback hears neither success nor failure, with the panel's sentence.
+    _bsruns141.clear()
+    _bsout141[0] = (_BUSY141.replace("vhserver", "gmodserver"), "", 0)
+    with _p9.app_context():
+        _gs141 = _sh141.db.session.get(_sh141.GameServer, P9_GS)
+        _sd141._run_action(_p9, _gs141, _gs141.remote, "validate", None, origin="telegram:x",
+                           on_done=lambda ok, d: _bsdone141.append((ok, d)))
+    _p9_drain()
+    check("validate from a chat bot while an update runs: told as neither success nor failure, saying why",
+          _bsruns141 == ["validate"] and _bsdone141 and _bsdone141[-1][0] is None
+          and _bsdone141[-1][1].startswith("'validate' not run: an update"), repr((_bsruns141, _bsdone141)))
+    # ...and an ordinary update still finishes as one.
+    _bsout141[0] = (_UPD_OK141, "", 0)
+    _A141.post("/api/server/%d/action" % P9_GS, json={"action": "update"})
+    _p9_drain()
+    check("an ordinary update: still update_complete success, and its version cache dropped",
+          _p9_audit("update_complete").success is True and any(k == "version" for k, _r in _bsinval141),
+          repr(_bsinval141))
+finally:
+    _p9_restore_all()
+
+# The cron table: the recorder's shell itself, run under bash over a scratch .lgsm-cron directory.
+_cron_sh141 = []
+_saved_sh141 = _smc141.shell_as_game_user
+try:
+    _smc141.shell_as_game_user = lambda s, u, c, **k: (_cron_sh141.append(c), ("", "", 0))[1]
+    _cron141._read_cron_status(type("Srv", (), {"id": 9141})(), "vhserver")
+finally:
+    _smc141.shell_as_game_user = _saved_sh141
+_bash141 = _shutil141.which("bash")
+_cd141 = "cd %s " % _smc141._quote("/home/vhserver/.lgsm-cron")
+check("cron table: the recorder's shell was captured, opening with its cd (what the run below rewrites)",
+      len(_cron_sh141) == 1 and _cd141 in _cron_sh141[0], repr(_cron_sh141)[:300])
+if _bash141 and len(_cron_sh141) == 1 and _cd141 in _cron_sh141[0]:
+    _cdir141 = _tf141.mkdtemp(prefix="part141-cron-")
+    try:
+        for _jid, _rc, _log in (("busy", 0, _BUSY141), ("pp", 0, "[ INFO ] Stopping vhserver: 2 players are on "
+                                                       "the server: stop prevented\n" + _BUSY141),
+                                ("ok", 0, _UPD_OK141), ("failed", 1, _BUSY141)):
+            with open(os.path.join(_cdir141, _jid + ".status"), "w", encoding="utf-8") as _fh:
+                _fh.write("%d 1 2\n" % _rc)
+            with open(os.path.join(_cdir141, _jid + ".log"), "w", encoding="utf-8") as _fh:
+                _fh.write(_log)
+        _cmd141 = _cron_sh141[0].replace(_cd141, "cd %s " % _smc141._quote(_cdir141))
+        _cout141 = _sp141.run([_bash141, "-c", _cmd141], capture_output=True, text=True, check=False,  # nosec B603
+                              env={"PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C.UTF-8"}).stdout
+    finally:
+        _shutil141.rmtree(_cdir141, ignore_errors=True)
+    _saved_sh141 = _smc141.shell_as_game_user
+    try:
+        _smc141.shell_as_game_user = lambda s, u, c, **k: (_cout141, "", 0)
+        _cst141 = _cron141._read_cron_status(type("Srv", (), {"id": 9141})(), "vhserver")
+    finally:
+        _smc141.shell_as_game_user = _saved_sh141
+    check("cron table: an update LinuxGSM skipped for another one is 'busy', not OK and not postponed; "
+          "players-online stays postponed, an ordinary run and a failed one are neither",
+          _cst141.get("busy", {}).get("busy") is True and _cst141["busy"].get("postponed") is False
+          and _cst141["busy"]["ok"] is True
+          and _cst141.get("pp", {}).get("postponed") is True and _cst141["pp"].get("busy") is False
+          and _cst141.get("ok", {}).get("busy") is False and _cst141["ok"].get("postponed") is False
+          and _cst141.get("failed", {}).get("busy") is False, repr((_cout141, _cst141)))
+else:
+    skip("cron table: the busy grep over LinuxGSM's output", "bash is not installed")
+_upd_cmd141 = "cd /home/vhserver && ./vhserver update"
+_mon_cmd141 = "cd /home/vhserver && ./vhserver monitor"
+_st141 = {_cron141._cron_job_id(c): {"last_run": 5, "ok": True, "error": "", "busy": True, "postponed": False}
+          for c in (_upd_cmd141, _mon_cmd141)}
+_rows141 = [_cron141._cron_job_row("15 5 * * * " + c, "vhserver", "vhserver", _st141, {})
+            for c in (_upd_cmd141, _mon_cmd141)]
+check("cron table: the update job's row carries busy; LinuxGSM's monitor job never does (its own "
+      "postponed update is the monitor doing its job)",
+      _rows141[0].get("busy") is True and _rows141[1].get("busy") is False, repr(_rows141))
+_srvjs141 = _read141("static", "js", "server_files.js")
+check("cron table's page: a busy run shows its own 'Not run' badge, before the OK one",
+      "j.ok === true && j.busy" in _srvjs141
+      and _srvjs141.index("j.ok === true && j.busy") < _srvjs141.index("else if(j.ok === true){"))
 
 
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
