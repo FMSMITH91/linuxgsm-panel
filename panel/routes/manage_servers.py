@@ -782,6 +782,11 @@ _R15F_KNOWN_PORTS = {
     "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
     "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027, "tf": 5001, "ti": 7777,
     "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724,
+    # Added by LinuxGSM v26.5.0: OpenRA Red Alert and Luanti read `port=` (their startparameters use
+    # ${port}). FiveM and Battlefront Eternal keep theirs in their own config (server.cfg,
+    # config.json), so these two are the form's hint only and `details` reads the real one. The WON2
+    # servers (hlwon, cswon) use 27015, the fallback.
+    "orar": 1234, "luanti": 30000, "fivem": 30120, "bfe": 18451,
 }
 
 
@@ -2465,6 +2470,12 @@ def _report_install_outcome(job, gs, ports, started):
         _report_not_started(job, gs, s_rc, start_out)
 
 
+# LinuxGSM v26.5.0's FiveM will not start without a Cfx.re licence key in its server.cfg ("FiveM
+# license key is not set"), and the install's first start is where that shows: said with the result.
+_LG265_FIVEM_KEY = i18n.Sentence("FiveM needs a Cfx.re licence key: set sv_licenseKey in serverfiles/server.cfg "
+                                 "(Files & Config), then start the server.")
+
+
 def _report_not_started(job, gs, s_rc, start_out):
     """Finish an install whose server is not answering yet: a failed start, or one still booting."""
     short_name, _finish = job.short_name, job.finish
@@ -2482,6 +2493,8 @@ def _report_not_started(job, gs, s_rc, start_out):
                 i18n.Sentence("{name} installed, but it didn't start — check the console for the reason.",
                               name=short_name))
         _detail = ("start failed: " + reason) if reason else "start failed"
+        if gs.game_type == "fivem":
+            note = i18n.Sentences(note, _LG265_FIVEM_KEY)
     elif not getattr(job, "port_read", True):
         note, _detail = _port_unconfirmed_note(job, gs)
     else:

@@ -1,5 +1,7 @@
 {
   "'{action}' not run: an update of this server is already running. LinuxGSM runs one update, validate or workshop update at a time.": "'{action}' no se ejecutó: ya hay una actualización de este servidor en curso. LinuxGSM ejecuta una sola actualización, validación o actualización del Workshop a la vez.",
   "Another update of this server was already running, so LinuxGSM skipped this one": "Ya había otra actualización de este servidor en curso, así que LinuxGSM omitió esta",
-  "Not run": "No ejecutado"
+  "Not run": "No ejecutado",
+  "FiveM needs a Cfx.re licence key: set sv_licenseKey in serverfiles/server.cfg (Files & Config), then start the server.": "FiveM necesita una clave de licencia de Cfx.re: define sv_licenseKey en serverfiles/server.cfg (Archivos y configuración) y luego inicia el servidor.",
+  "FiveM needs a Cfx.re licence key: set sv_licenseKey in serverfiles/server.cfg, then start the server.": "FiveM necesita una clave de licencia de Cfx.re: define sv_licenseKey en serverfiles/server.cfg y luego inicia el servidor."
 }

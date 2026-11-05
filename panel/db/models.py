@@ -712,7 +712,9 @@ STEAM_CONNECT_UNSURE = frozenset({"bb", "sfc", "ts", "vs", "zmr"})
 
 # LinuxGSM game_types with NO `update` command (not SteamCMD-based — LinuxGSM omits update from
 # their menu). Used to hide the Update action even before a server's command list is fetched.
-_NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw"})
+# hlwon/cswon: LinuxGSM v26.5.0's WON2 servers (querytype protocol-valve-won, which core_getopt.sh
+# gives no update).
+_NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw", "hlwon", "cswon"})
 
 
 class GameServer(db.Model):

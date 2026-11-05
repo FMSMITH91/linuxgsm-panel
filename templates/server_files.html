@@ -206,6 +206,13 @@
         <span>Since LinuxGSM v26.3.0, CS:GO runs as App ID 4465480: a gslt made for App ID 730 stops working after the switch. Make one for 4465480, or set clientappid to 730 to stay on CS2's csgo_legacy.</span>
       </div>
       {% endif %}
+      {# LinuxGSM v26.5.0's FiveM refuses to start without its Cfx.re key (manage_servers._LG265_FIVEM_KEY). #}
+      {% if server.game_type == 'fivem' %}
+      <div id="lg265-fivem-key" class="alert alert-info py-2 px-3 mb-2 small" role="note">
+        <i class="bi bi-info-circle"></i>
+        <span>FiveM needs a Cfx.re licence key: set sv_licenseKey in serverfiles/server.cfg, then start the server.</span>
+      </div>
+      {% endif %}
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>
       <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit">
         <div id="cfg-groups"></div>

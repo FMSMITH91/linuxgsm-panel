@@ -338,5 +338,45 @@ check("player count: a querymode-3 game (fivem) is counted with gamedig at Linux
       "panel's port", _qn141 == 4 and len(_qcmd141) == 1 and "--type gta5f " in _qcmd141[0]
       and ":30120 " in _qcmd141[0], repr((_qn141, _qcmd141)))
 
+# ── 6. LinuxGSM v26.5.0's new games ─────────────────────────────────────────────────────────────
+from panel.db import models as _models141  # noqa: E402
+from panel.routes import manage_servers as _ms141  # noqa: E402
+_sn141 = set(_ln.strip() for _ln in _read141("tests", "unit", "lgsm_shortnames.txt").splitlines()
+             if _ln.strip() and not _ln.startswith("#"))
+check("shortnames fixture: v26.5.0's serverlist, with its six new games",
+      {"bfe", "cswon", "fivem", "hlwon", "luanti", "orar"} <= _sn141 and len(_sn141) == 150
+      and "(tag v26.5.0)" in _read141("tests", "unit", "lgsm_shortnames.txt"), len(_sn141))
+check("install port: orar and luanti get their own default (their startparameters use ${port}), fivem and "
+      "bfe the form's hint, the WON2 servers 27015",
+      [_ms141._desired_install_port(g, "27015") for g in ("orar", "luanti", "fivem", "bfe", "hlwon", "cswon")]
+      == [1234, 30000, 30120, 18451, 27015, 27015])
+check("player warnings: hlwon and cswon take LinuxGSM's `say` (GoldSrc, console interactive); fivem, "
+      "luanti, orar and bfe have no warn command",
+      {"hlwon", "cswon"} <= _lgp141.WARN_GAMES
+      and not {"fivem", "luanti", "orar", "bfe"} & _lgp141.WARN_GAMES)
+check("Update: the WON2 servers have none (core_getopt.sh), even before their command list is read",
+      _models141.GameServer(game_type="hlwon", commands="[]").supports_update is False
+      and _models141.GameServer(game_type="cswon", commands="[]").supports_update is False
+      and _models141.GameServer(game_type="fivem", commands="[]").supports_update is True)
+
+_fin141 = []
+try:
+    _p9_patch(_ms141, "_audit_install", lambda *a, **k: None)
+    for _gt in ("fivem", "cs"):
+        _job141 = type("J", (), {"short_name": _gt + "server",
+                                 "finish": lambda self, msg, warn=False: _fin141.append((str(msg), warn))})()
+        _ms141._report_not_started(_job141, type("G", (), {"game_type": _gt, "port": 30120, "name": _gt})(),
+                                   1, "")
+finally:
+    _p9_restore_all()
+check("install of FiveM that did not start: the result names the Cfx.re licence key; another game's does not",
+      len(_fin141) == 2 and "sv_licenseKey" in _fin141[0][0] and _fin141[0][1] is True
+      and "sv_licenseKey" not in _fin141[1][0], repr(_fin141))
+_sf_tpl141 = _read141("templates", "server_files.html")
+check("Config tab: FiveM's licence-key note, only on a FiveM server",
+      "{% if server.game_type == 'fivem' %}" in _sf_tpl141
+      and _sf_tpl141.index("{% if server.game_type == 'fivem' %}") < _sf_tpl141.index('id="lg265-fivem-key"')
+      < _sf_tpl141.index("{% endif %}", _sf_tpl141.index("{% if server.game_type == 'fivem' %}")))
+
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP141_START, repr(_P9_TRIPPED[_TRIP141_START:]))

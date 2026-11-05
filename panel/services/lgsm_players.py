@@ -30,16 +30,18 @@ from panel.ops import ssh_manager as _sm
 # The games whose console takes a chat command LinuxGSM can warn with: consoleinteract="yes" in the
 # game's _default.cfg AND a warn command in command_stop.sh's fn_stop_warn_players_command (the
 # Source, Source 2 and GoldSrc engines, plus its named games). Computed from v26.4.0's
-# lgsm/data/serverlist.csv and lgsm/config-default/config-lgsm/*/_default.cfg: 82 of 144. For any
-# other game LinuxGSM prints "Warning players: not supported by <game>: skipped".
+# lgsm/data/serverlist.csv and lgsm/config-default/config-lgsm/*/_default.cfg: 82 of 144. v26.5.0
+# added hlwon and cswon (GoldSrc, consoleinteract="yes"); its other four new games have no warn
+# command (fivem, luanti) or no console (orar, bfe). For any other game LinuxGSM prints "Warning
+# players: not supported by <game>: skipped".
 WARN_GAMES = frozenset((
-    "ahl", "ahl2", "av", "bb", "bb2", "bd", "bmdm", "bs", "bt", "cc", "cod", "cod2", "cod4", "coduo",
-    "codwaw", "cs", "cs2", "cscz", "csgo", "css", "ct", "dab", "dmc", "dod", "dods", "doi", "dst",
-    "dys", "em", "etl", "fctr", "fof", "gmod", "hl2dm", "hldm", "hldms", "hyt", "ins", "ios", "jbep3",
-    "jk2", "l4d", "l4d2", "mc", "mcb", "mcv", "mohaa", "mta", "nd", "nec", "nmrih", "ns", "opfor",
-    "pmc", "pvkii", "pz", "q2", "q3", "q4", "ql", "qw", "ricochet", "rtcw", "rw", "scpsl", "sfc",
-    "sof2", "sven", "terraria", "tf2", "tf2c", "tfc", "ts", "unt", "vints", "vs", "wet", "wf", "wmc",
-    "xnt", "zmr", "zps"))
+    "ahl", "ahl2", "av", "bb", "bb2", "bd", "bmdm", "bs", "bt", "cc", "cod", "cod2", "cod4",
+    "coduo", "codwaw", "cs", "cs2", "cscz", "csgo", "css", "cswon", "ct", "dab", "dmc", "dod",
+    "dods", "doi", "dst", "dys", "em", "etl", "fctr", "fof", "gmod", "hl2dm", "hldm", "hldms",
+    "hlwon", "hyt", "ins", "ios", "jbep3", "jk2", "l4d", "l4d2", "mc", "mcb", "mcv", "mohaa", "mta",
+    "nd", "nec", "nmrih", "ns", "opfor", "pmc", "pvkii", "pz", "q2", "q3", "q4", "ql", "qw",
+    "ricochet", "rtcw", "rw", "scpsl", "sfc", "sof2", "sven", "terraria", "tf2", "tf2c", "tfc",
+    "ts", "unt", "vints", "vs", "wet", "wf", "wmc", "xnt", "zmr", "zps"))
 
 # The games whose player LIST LinuxGSM cannot rely on. LinuxGSM counts players as the length of
 # gamedig's `players` list (query_gamedig.sh: `jq -re '.players | length'`), and for these games
