@@ -1741,8 +1741,9 @@ def _bkverify_text_failed(out, err):
 
 
 def _bkverify_name(server, user, selfname, before, out):
-    """Name this run's archive: its "Completed:" line, else LinuxGSM's script log, else the one new
-    one; None if unknown.
+    """Name this run's archive, or None if unknown.
+
+    From its "Completed:" line, else LinuxGSM's script log, else the one new archive.
     """
     m = _BKVERIFY_NAME_RE.search(terminal.strip_escapes(out or ""))
     if m and _lg265_own_archive(m.group(1), selfname):
