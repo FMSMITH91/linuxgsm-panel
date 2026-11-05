@@ -737,6 +737,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **LinuxGSM v26.5.0 compatibility.** On servers running LinuxGSM v26.5.0 or newer:
+  - FastDL no longer rebuilds its folder from scratch: the panel answers v26.5.0's new "Rebuild
+    from scratch?" question No, so the run is incremental and files LinuxGSM did not write are
+    kept.
+  - An update started while another one is running (a click during the nightly update, say) is
+    reported as "not run: an update is already running" in the console, the audit log, the chat
+    bots and Scheduled Tasks, instead of as a finished update.
+  - Backups are named and confirmed from LinuxGSM's script log when its "Completed:" line is
+    missing, including after the backup restarted the server.
+  - New games get the right default install port (OpenRA: Red Alert, Luanti, FiveM, Battlefront
+    Eternal), the in-game warning before a stop and no Update button for Half-Life and
+    Counter-Strike WON2, and a note that FiveM needs your own Cfx.re licence key.
+  - Action Half-Life installs from before v26.5.0 are told to run force-update once, to move to
+    the steam_legacy branch that its new ReHLDS fix needs.
+
+  On every LinuxGSM version:
+  - Commands a LinuxGSM update adds (QuakeWorld's Update, for example) appear after update-lgsm
+    and in a daily check, and get their scheduled task.
+  - Player counts work for games LinuxGSM queries with gamedig only (querymode 3: FiveM, SA-MP,
+    MTA and others).
 - **The Telegram bot no longer goes quiet for up to a minute after a dropped connection.** When
   one check for new messages failed (a reset connection or a brief Telegram error), the bot waited
   15 seconds before checking again, and a connection that died silently took 35 seconds to notice,
