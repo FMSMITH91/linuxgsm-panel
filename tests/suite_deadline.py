@@ -120,8 +120,11 @@ def _descendants(root_pid):
 
 
 def _unpatched(name, fallback):
-    """The module eventlet would have replaced, as it was (eventlet's green write trampolines to the
-    hub when the pipe is full, which the handler, running on the hub, cannot do)."""
+    """The module eventlet would have replaced, as it was.
+
+    eventlet's green write trampolines to the hub when the pipe is full, which the handler, running
+    on the hub, cannot do.
+    """
     try:
         from eventlet import patcher
         return patcher.original(name)
@@ -199,38 +202,51 @@ def _writes_to(pid, fdname, target):
 
 
 def holders(fd=1):
-    """[(pid, state, cmdline)] of the processes, other than this one and its ancestors, that hold
-    this process's `fd` (a pipe or a file) open for writing. A pipe's reader (`| tee`) waits for
-    every one of them, even one that has left this process's tree (`sleep 600 &` from a shell
-    that exited is the init process's child, and in no list of descendants)."""
+    """[(pid, state, cmdline)] of the other processes holding this one's `fd` open for writing.
+
+    Not this process or its ancestors; only a pipe or a file. A pipe's reader (`| tee`) waits for
+    every one of them, even one that has left this process's tree (`sleep 600 &` from a shell that
+    exited is the init process's child, and in no list of descendants).
+    """
     try:
         target = os.readlink("/proc/self/fd/%d" % fd)
     except OSError:
         return []
     if not (target.startswith("pipe:") or target.startswith("/")) or target.startswith("/dev/"):
         return []
-    skip, found = _ancestors(), []
-    for name in os.listdir("/proc"):
-        if not name.isdigit() or int(name) in skip:
-            continue
-        pid = int(name)
-        try:
-            fds = os.listdir("/proc/%d/fd" % pid)
-        except OSError:
-            continue
-        if any(_writes_to(pid, f, target) for f in fds):
-            try:
-                with open("/proc/%d/cmdline" % pid, "rb") as fh:
-                    cmd = fh.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-            except OSError:
-                cmd = "?"
-            found.append((pid, "?", cmd[:300]))
-    return found
+    skip = _ancestors()
+    return [(pid, "?", _cmdline(pid)) for pid in _pids()
+            if pid not in skip and _holds(pid, target)]
+
+
+def _pids():
+    try:
+        return [int(n) for n in os.listdir("/proc") if n.isdigit()]
+    except OSError:
+        return []
+
+
+def _holds(pid, target):
+    try:
+        fds = os.listdir("/proc/%d/fd" % pid)
+    except OSError:
+        return False
+    return any(_writes_to(pid, f, target) for f in fds)
+
+
+def _cmdline(pid):
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            return fh.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()[:300]
+    except OSError:
+        return "?"
 
 
 def leftovers():
-    """Everything that would outlive the suite: its live descendants, and any other process holding
-    its stdout or stderr for writing. Each (pid, state, cmdline), once."""
+    """Everything that would outlive the suite, each (pid, state, cmdline) once.
+
+    Its live descendants, and any other process holding its stdout or stderr for writing.
+    """
     seen, out = set(), []
     for proc in descendants() + holders(1) + holders(2):
         if proc[0] not in seen:
