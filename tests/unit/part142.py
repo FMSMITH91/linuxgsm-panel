@@ -44,7 +44,7 @@ _NS142 = "linuxgsm-panel-release"
 
 
 def _run142(argv, **kw):
-    return _sp142.run(argv, capture_output=True, text=True, env=kw.pop("env", _ENV142), **kw)
+    return _sp142.run(argv, capture_output=True  # nosec B603 - fixed argv over this part's scratch files, text=True, env=kw.pop("env", _ENV142), **kw)
 
 
 def _git142(*a):
@@ -110,9 +110,11 @@ _SH_NAMES142 = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history"
 
 
 def _target142(head, ref="", extra_env=None, root=None):
-    """resolve_update_target on the clone reset to `head`: 'TARGET=<sha> WHY=<why> HOLD=<hold>' or
-    'REFUSED <why>'. `root`, a dict, runs it as root (id -u answers 0) with HELPER_DIR, the floor
-    file and root's clone named there."""
+    """Run resolve_update_target on the clone reset to `head`, and return its last line.
+
+    That is 'TARGET=<sha> WHY=<why> HOLD=<hold> HOLDWHY=<why>' or 'REFUSED <why>'. `root`, a dict, runs it as root (id -u answers 0) with HELPER_DIR, the floor
+    file and root's clone named there.
+    """
     _git142("-C", _CO142, "reset", "-q", "--hard", head)
     pre = ("set -uo pipefail\nwarn() { echo \"WARN $*\" >&2; }\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
            "PANEL_USER=%s\n" % (_shlex142.quote(_CO142), _shlex142.quote(_run142(["id", "-un"]).stdout.strip())))
@@ -278,7 +280,8 @@ else:
         with open(_floor, "w", encoding="utf-8") as _fh:
             _fh.write(_E142 + "\n")
         _r = _target142(_A142, root=_rt142)
-        check("release signatures (root): ...and a floor commit with no key is a hold", "HOLD=unsigned" in _r, _r)
+        check("release signatures (root): ...and a floor commit that lacks release-signers holds",
+              "HOLD=unsigned" in _r, _r)
     finally:
         _shutil142.rmtree(_SB142, ignore_errors=True)
         _SB142 = _tf142.mkdtemp(prefix="p142-")
@@ -356,8 +359,10 @@ _C3, _C2, _C1 = "c" * 40, "b" * 40, "a" * 40
 
 
 def _status142(walk, signed, branch=None):
-    """_compute_update_status with the walk `walk` (newest first), every commit passing CI, and
-    exactly the commits in `signed` signed. Returns (status, commits CI was asked about)."""
+    """Run _compute_update_status over the walk `walk` (newest first), every commit passing CI.
+
+    Exactly the commits in `signed` are signed. Returns (status, commits CI was asked about).
+    """
     asked = []
 
     def _git(args, timeout=45):
@@ -403,8 +408,11 @@ check("update card: on a tracked test branch an unsigned tip is not offered, a s
 
 
 def _gate142(sig_rc, key, sig_text, valid):
-    """_release_gate_for('main')(C3) with the fetch answering sig_rc, the key `key`, the signature
-    blob `sig_text` and the verifier answering `valid`. Returns (answer, what the verifier saw)."""
+    """Ask the real _release_gate_for('main') about C3, with its reads stubbed.
+
+    The fetch answers sig_rc, the key read `key`, the signature blob `sig_text` and the verifier
+    `valid`. Returns (answer, what the verifier saw).
+    """
     seen = []
 
     def _git(args, timeout=45):
@@ -430,7 +438,7 @@ if _HAVE142:
     _kd = _tf142.mkdtemp(prefix="p142k-")
     try:
         _kp = os.path.join(_kd, "k")
-        _sp142.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", _kp], capture_output=True, check=False)
+        _run142(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", _kp])
         with open(_kp + ".pub", encoding="utf-8") as _fh:
             _kt = "release " + " ".join(_fh.read().split()[:2])
         _sig = _sign142(_kp, "main", _C3) if os.path.isdir(_SB142) else ""

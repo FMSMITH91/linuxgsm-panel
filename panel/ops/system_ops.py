@@ -2035,9 +2035,11 @@ def _release_key_text():
 
 
 def _release_signature_valid(key, sha, branch, sig):
-    """Whether `sig` (armored text) is the release key `key`'s signature of commit `sha` on `branch`.
+    """Whether `sig` (armored text) is the release key `key`'s signature of `sha` on `branch`.
+
     The message is built here, as install.sh's _release_message builds it. Anything that cannot be
-    checked (no ssh-keygen, a timeout) is False."""
+    checked (no ssh-keygen, a timeout) is False.
+    """
     import tempfile
     msg = "linuxgsm-panel release\nbranch %s\ncommit %s\n" % (branch, sha)
     with tempfile.TemporaryDirectory(prefix="lgsm-relsig-") as d:
@@ -2060,7 +2062,8 @@ def _release_gate_for(branch):
     """A predicate sha -> bool: is that commit signed for `branch` with this host's release key?
 
     Fetches the signatures once (by full name, --no-tags, into one fixed ref) and reads the key
-    once. A fetch that failed, or no key, answers False for every commit: nothing is offered."""
+    once. A fetch that failed, or no key, answers False for every commit: nothing is offered.
+    """
     _, _, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
                       "+refs/heads/%s:%s" % (_RELEASE_SIG_BRANCH, _RELEASE_SIG_REF)], timeout=45)
     key = _release_key_text() if frc == 0 else ""
