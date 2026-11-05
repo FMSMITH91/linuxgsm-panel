@@ -759,6 +759,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The Telegram bot no longer goes quiet for half a minute at a time.** On a server whose IPv6
+  route to Telegram drops some connections, as the owner's does (about one in nine), the panel
+  waited out its whole 30-second timeout on IPv6 before trying IPv4. A message sent in that window
+  went unanswered for up to 30 seconds, and replies could take 8. Each address now gets 4 seconds
+  to connect before the next is tried. This covers every alert and bot reply the panel sends and
+  every Telegram poll. Discord's live connection is separate and unchanged.
+
 - **A command the panel feeds input to can no longer hang the panel.** When a program the panel
   starts with input (the SSH key signature check, writing a file through the helper) exited
   without reading that input, the panel could spin one CPU core at 100% for ever on that request,
