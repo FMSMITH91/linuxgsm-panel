@@ -240,7 +240,7 @@ def _lg265_ahl_said(app, gs, held, action, clean):
         return clean
     if held:
         _console_push(app, gs.id, f"[panel] {action}: {note}")
-    return "%s\n%s" % (note, clean)
+    return "\n".join((str(note), clean))
 
 
 def _lg265_after_update_lgsm(gs):
