@@ -19,6 +19,7 @@ from unit.part01 import (NS, SO, _r21d_urlopen_of, _sm_core, _sm_files, _sm_fire
 import json as _p8_json  # noqa: E402
 import subprocess as _p8_subprocess  # noqa: E402
 import time as _p8_time  # noqa: E402
+from datetime import datetime as _p8_datetime, timedelta as _p8_timedelta  # noqa: E402
 import shlex as _p8_shlex  # noqa: E402
 
 from panel.ops import tailscale_integration as _tsi  # noqa: E402
@@ -2723,14 +2724,20 @@ try:
     _w = _wire(verbs={"f2b-log-lines": (_F2B_LOG, "", 0)})
     _H.remote_fail2ban_overview = lambda s: (_ for _ in ()).throw(ConnectionError("down"))
     _H.remote_ufw_blocked_ips = lambda s, shadowed=None: (_ for _ in ()).throw(ConnectionError("down"))
+    # The cutoff is 7 CALENDAR days on the panel's clock (datetime.now() - timedelta(days=7)), read
+    # just before and after the call so a run across midnight still matches. It was compared with
+    # localtime(time() - 7*86400), 7*24 real hours: across a DST change the two name different
+    # dates for an hour each night (America/Chicago, the hour after 23:00, for a week after Nov 1).
+    _cut_before = (_p8_datetime.now() - _p8_timedelta(days=7)).strftime("%Y-%m-%d")
     _top = _H.remote_fail2ban_top_ips(_p8_srv(), limit="lots", days="a week")
+    _cut_after = (_p8_datetime.now() - _p8_timedelta(days=7)).strftime("%Y-%m-%d")
     check("f2b top: nonsense limit/days fall back to 20/7; the tally stands even when the ban and "
           "block annotations could not be read",
           [(r["ip"], r["attempts"], r["bans"], r["banned_now"], r["blocked"], r["jails"]) for r in _top]
           == [("198.51.100.7", 2, 1, False, False, ["sshd"]),
               ("203.0.113.99", 1, 0, False, False, ["recidive"])]
-          and _w.verbs_called("f2b-log-lines")[0][1] == [_p8_time.strftime(
-              "%Y-%m-%d", _p8_time.localtime(_p8_time.time() - 7 * 86400))], repr(_top))
+          and _w.verbs_called("f2b-log-lines")[0][1] in ([_cut_before], [_cut_after]),
+          repr((_top, _w.verbs_called("f2b-log-lines")[:1], _cut_before)))
     _H.remote_fail2ban_overview = lambda s: {"jails": [{"jail": "sshd", "banned_ips": ["198.51.100.7"]}]}
     _H.remote_ufw_blocked_ips = lambda s, shadowed=None: {"203.0.113.99": "panel-autoblock"}
     _top = _H.remote_fail2ban_top_ips(_p8_srv(), limit=1)
