@@ -116,18 +116,18 @@ the owner ran this, so read what it shows first.
 
 What it does not cover:
 
-* **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
+- **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
   with no key yet has nothing to check the clone against. After the first update, check that
   `/usr/local/lib/linuxgsm-panel/release-signers` (root install) or the checkout's `release-signers`
   (per-user) is the owner's key: `ssh-keygen -lf` on it should print the same fingerprint as
   `ssh-keygen -lf` on the owner's own signing key. Once a host holds a key, a reinstall over a lost or deleted checkout installs only a
   signed clone.
-* **A host that has no key yet holds.** A host still on a version from before this feature takes
+- **A host that has no key yet holds.** A host still on a version from before this feature takes
   its first update through its older installer, which knows nothing of signatures; from then on it
   checks. A host where that left no key (no root copy and no `release-signers` at root's source
   floor) holds every update, saying so, until it is updated once by hand through the old installer
   or with `PANEL_ALLOW_UNSIGNED_UPDATE=1` over SSH.
-* **The test host's deploy** ships the commit's own installer, so it is GitHub-controlled by
+- **The test host's deploy** ships the commit's own installer, so it is GitHub-controlled by
   construction. It runs only when started by hand (`workflow_dispatch`, which `sign-release.sh` does
   after signing), and only from `main`. Its reach is the tailnet ACL's: the owner should confirm the
   ACL lets the CI runner's tag reach the test host only, and nothing else.
