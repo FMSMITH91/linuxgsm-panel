@@ -1287,6 +1287,9 @@ try:
     _p9_patch_sm("invalidate_game_version", lambda rid, s: _sd_side.append(("version", rid, s)))
     _p9_patch_sm("set_game_priority", lambda remote, user, *a, **k: _sd_side.append(("prio", user)))
     _p9_patch_sm("server_live_metrics", lambda *a, **k: {"ram_total": 0})   # "can't tell"
+    # An update-lgsm that exits 0 reads the command list again (lg265_refresh_commands): an empty
+    # answer, which changes nothing.
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])
     # The end of a long action reads its output once more (_drain_action_to_end): nothing here.
     _p9_patch(_p9_sh, "_drain_action_to_end", lambda app, remote, sid, entry: None)
 

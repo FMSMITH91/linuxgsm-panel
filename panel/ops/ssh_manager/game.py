@@ -1410,6 +1410,76 @@ def _lgc_vh_up_sh(user, selfname):
             f"| grep -Fqx -- '{selfname}' && {{ echo LGC_UP; exit 0; }}; done; echo LGC_DOWN")
 
 
+# ── fastdl's prompts, per LinuxGSM release ──────────────────────────────────────────────────────
+# Piped, every fn_prompt_yn reads one line, so the answers are POSITIONAL. command_fastdl.sh asks:
+#   up to v26.4.0: "Overwrite existing directory?" [Y/n] (only when ${webdir}/fastdl exists; N
+#                  aborts), "Force clients to download files?" [Y/n] (gmod only), "Continue?" [Y/n].
+#   v26.5.0 (#5100): "Rebuild Fastdl directory from scratch? This deletes everything in it." [y/N]
+#                  (only when ${webdir}/fastdl exists), then the same two.
+# On v26.5.0 a Y to the first one deletes the whole directory, files LinuxGSM did not write
+# included (an index.html, a .htaccess, another server's files in a shared webdir), and re-bzip2s
+# everything; N is its incremental run. Up to v26.4.0 every answer the panel wants is Y and the
+# old eight are kept: up to v26.3.0 a prompt with no answer left looped for ever on EOF, so a
+# surplus is the safe side there. On v26.5.0 the list is exact: a leading N where no rebuild
+# question comes would land on gmod's "Force clients" or on "Continue?" and abort, and an
+# unexpected extra prompt then ends with "Unable to read an answer" (exit 2) rather than a guess.
+_LG265_FASTDL_RELEASE = (26, 5, 0)
+_LG265_DIR_YES, _LG265_DIR_NO = "LG265_DIR", "LG265_NODIR"
+
+
+def fastdl_answers(server, user, selfname, game_type):
+    """The keystrokes for `fastdl` on this account's LinuxGSM release (see above)."""
+    from panel.ops.ssh_manager import hosts
+    if not _lg265_fastdl_runs_new(hosts.lgsm_release(server, user, selfname),
+                                  hosts.lgsm_modules_release(server, user, selfname)):
+        return ["Y"] * 8
+    gmod = ["Y"] if game_type == "gmod" else []
+    return (["N"] if _lg265_fastdl_dir_exists(server, user, selfname) else []) + gmod + ["Y"]
+
+
+def _lg265_fastdl_runs_new(script_tag, modules_tag):
+    """Whether `fastdl` will run on v26.5.0 or later, given the script's and the modules' release.
+
+    The modules are shared by every instance in the account, so they can be newer than the
+    script; and when the two differ LinuxGSM runs update-lgsm before the command, which installs
+    the newest release (v26.5.0 or later). Taking that as v26.4.0 sent Y to "Rebuild from
+    scratch?", and LinuxGSM cleared the directory (seen on the test host). If that update fails,
+    the leading N lands on v26.4.0's "Continue?", which stops before anything is touched.
+    """
+    from panel.services import lgsm_data
+    return (lgsm_data.release_at_least(script_tag, _LG265_FASTDL_RELEASE)
+            or lgsm_data.release_at_least(modules_tag, _LG265_FASTDL_RELEASE)
+            or bool(script_tag and modules_tag and script_tag != modules_tag))
+
+
+def _lg265_fastdl_dir_exists(server, user, selfname):
+    """Whether LinuxGSM will find ${webdir}/fastdl, so it asks its rebuild question.
+
+    webdir is ${rootdir}/public_html unless a config sets it; rootdir is the script's directory,
+    the account's home in the panel's layout. A read that failed counts as NO directory: with
+    the answers that follows, a directory that is there gets Y to "Rebuild" and nothing to
+    "Continue?", which ends the run with exit 2 before anything is cleared (fn_clear_old_fastdl runs
+    after the preview). The other guess would answer N to "Continue?" and abort with exit 0, a
+    FastDL that did nothing reported as done.
+    """
+    home = "/home/%s" % user
+    vals = files.lgsm_get_values(server, user, selfname, ["webdir"])
+    if vals is None:
+        # The config could not be read, which is not "webdir is unset": testing the default
+        # directory then could answer N to a "Rebuild" LinuxGSM never asks (a custom webdir with
+        # no fastdl folder yet), which it takes as No to "Continue?" — exit 0, nothing done.
+        return False
+    webdir = (vals.get("webdir") or "").strip() or home + "/public_html"
+    webdir = webdir.replace("${rootdir}", home).replace("$rootdir", home)
+    if "$" in webdir or not webdir.startswith("/"):
+        return False                   # a value only LinuxGSM's own bash could expand
+    out, _, _ = _core.read_as_game_user(
+        server, user, "[ -d %s ] && echo %s || echo %s" % (
+            _core._quote(webdir.rstrip("/") + "/fastdl"), _LG265_DIR_YES, _LG265_DIR_NO),
+        timeout=15, selfname=selfname)
+    return _LG265_DIR_YES in (out or "").split()
+
+
 def _backup_space_refusal(server, user, headroom_note):
     """The refusal message when the next archive will not fit on the disk, else None.
 
@@ -1516,17 +1586,24 @@ _BKPART_GONE = "__LGSMP_BKPART_REMOVED__"
 _BKPART_LGSM_FAIL_RCS = frozenset({1, 2, 3, 4})
 
 
-def _bkpart_listing(server, user):
+def _bkpart_listing(server, user, extra=""):
     """(host_now, {name: mtime}) of ~/lgsm/backup/*.tar.*, or None when it did not provably run.
 
     An mtime that could not be read is None: the name still counts as present. Never raises: it
-    runs before every backup, and a listing that failed must not stop one.
+    runs before every backup, and a listing that failed must not stop one. `extra`: more shell
+    run in the same round trip before the end marker (_lg265_bk_after); its lines are not T or F.
     """
+    out = _lg265_bk_listing_out(server, user, extra)
+    return _bkpart_parse(out) if out is not None else None
+
+
+def _lg265_bk_listing_out(server, user, extra=""):
+    """_bkpart_listing's raw answer, or None when it did not provably run to its end marker."""
     bdir = "/home/%s/lgsm/backup" % user
     cmd = ('printf "T\\t%%s\\n" "$(date +%%s)"; '
            'for f in %s/*.tar.*; do [ -e "$f" ] || continue; '
            'printf "F\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%Y "$f" 2>/dev/null)"; '
-           'done; printf "%%s\\n" %s') % (_core._quote(bdir), _BKPART_DONE)
+           'done; %sprintf "%%s\\n" %s') % (_core._quote(bdir), extra, _BKPART_DONE)
     try:
         out, _, rc = _core.shell_as_game_user(server, user, cmd, timeout=20)
     except Exception:       # paramiko raises: no listing, and never a reason not to back up
@@ -1535,7 +1612,7 @@ def _bkpart_listing(server, user):
     out = out or ""
     if rc != 0 or not out.rstrip().endswith(_BKPART_DONE):
         return None
-    return _bkpart_parse(out)
+    return out
 
 
 def _bkpart_parse(out):
@@ -1648,7 +1725,8 @@ def _r32b_bkpart_note(server, user, name, started):
 # a non-zero exit.
 #
 # So exit 0 is a success only with proof: no failure line of LinuxGSM's own backup in the output,
-# and this run's archive — named by LinuxGSM's "Completed: <name>" line, else the one archive the
+# and this run's archive — named by LinuxGSM's "Completed: <name>" line (up to v26.4.0; see
+# _LG265_BK_LOGGED_RE), else its script log's "Backup created: <name>", else the one archive the
 # before/after listings show is new — exists on the host, is not empty, and reads to the end with
 # `tar -tf` (GNU tar picks the decompressor from the content: zstd, gzip/pigz, or none, which is
 # what fn_select_compression chooses between). Anything less is reported as not confirmed, and
@@ -1657,6 +1735,15 @@ def _r32b_bkpart_note(server, user, name, started):
 # is bounded the way the 3600 s backup itself is, and over the same transport (no hub-blocking call).
 _BKVERIFY_FAIL_RE = re.compile(r"\[\s*FAIL\s*\]\s*Backup\b|\bin progress\b[^\n]*\bFAIL\b")
 _BKVERIFY_NAME_RE = re.compile(r"Completed:\s*([A-Za-z0-9._-]+)")
+# LinuxGSM v26.5.0 (#5117) prints nothing in place when its output is not a terminal, and the panel
+# never gives it one: "Completed: <name>" is HELD and then replaced by whatever in-place message
+# comes next — the restart's (stoponbackup="on", the default, so every backup of a running server),
+# "Pruning", or an alert's "Sending ..." — so it reaches the panel only from a backup followed by
+# nothing. The script log has the name whatever the terminal: command_backup.sh's
+# `fn_script_log_pass "Backup created: <name>.<ext>, total size N"`, in log/script/<selfname>-
+# script.log. The restart's command_start.sh then MOVES that log to <selfname>-script-<date>.log
+# (its log rotation), so the newest few of both names are read, newest first.
+_LG265_BK_LOGGED_RE = re.compile(r"PASS: Backup created: ([A-Za-z0-9._-]+), total size\b")
 _BKVERIFY_TIMEOUT = 1700
 _BKVERIFY_OK = "__LGSMP_BKVERIFY_OK__"
 _BKVERIFY_WHY = {"MISSING": "the archive is not there", "EMPTY": "the archive is empty",
@@ -1674,12 +1761,57 @@ def _bkverify_text_failed(out, err):
 
 
 def _bkverify_name(server, user, selfname, before, out):
-    """Name this run's archive: its "Completed:" line, else the one new one; None if unknown."""
+    """Name this run's archive, or None if unknown.
+
+    From its "Completed:" line, else LinuxGSM's script log, else the one new archive.
+    """
     m = _BKVERIFY_NAME_RE.search(terminal.strip_escapes(out or ""))
-    if m and m.group(1).startswith(selfname + "-") and cron._game_backup_name_ok(m.group(1)):
+    if m and _lg265_own_archive(m.group(1), selfname):
         return m.group(1)
-    after = _bkpart_listing(server, user) if before is not None else None
+    if before is None:
+        return None
+    after, logged = _lg265_bk_after(server, user, selfname)
+    if _lg265_logged_is_this_run(logged, before, after):
+        return logged
     return _bkpart_candidate(before, after, selfname) if after else None
+
+
+def _lg265_own_archive(name, selfname):
+    """`name` is a LinuxGSM backup archive of `selfname`'s, by its shape."""
+    return name.startswith(selfname + "-") and cron._game_backup_name_ok(name)
+
+
+def _lg265_logged_is_this_run(logged, before, after):
+    """The script log's archive name is this run's.
+
+    Only an archive the earlier listing did not have (a log line from an older backup names one it
+    did), and present now when the listing read. The archive check that follows also refuses one
+    older than this run (_r13b_bkverify_code's OLD).
+    """
+    return bool(logged) and logged not in before[1] and (after is None or logged in after[1])
+
+
+def _lg265_bk_after(server, user, selfname):
+    """(the after-listing or None, the archive name LinuxGSM's script log last logged or None).
+
+    One round trip: the listing, then the last "Backup created" line of the newest of
+    <selfname>-script.log and its rotated copies (see _LG265_BK_LOGGED_RE).
+    """
+    if not _core.game_idents_ok(user, selfname):
+        return _bkpart_listing(server, user), None
+    logs = _core._quote("/home/%s/log/script/%s-script" % (user, selfname))
+    extra = ("for f in $(ls -1t %s.log %s-*.log 2>/dev/null | head -n 3); do "
+             "l=$(grep -a 'PASS: Backup created: ' \"$f\" 2>/dev/null | tail -n 1); "
+             '[ -n "$l" ] && { printf "C\\t%%s\\n" "$l"; break; }; done; ' % (logs, logs))
+    out = _lg265_bk_listing_out(server, user, extra)
+    if out is None:
+        return None, None
+    logged = None
+    for line in out.splitlines():
+        m = _LG265_BK_LOGGED_RE.search(line) if line.startswith("C\t") else None
+        if m and _lg265_own_archive(m.group(1), selfname):
+            logged = m.group(1)
+    return _bkpart_parse(out), logged
 
 
 def _bkverify_archive(server, user, name, started):

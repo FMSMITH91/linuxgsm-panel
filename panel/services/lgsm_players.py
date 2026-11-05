@@ -30,16 +30,18 @@ from panel.ops import ssh_manager as _sm
 # The games whose console takes a chat command LinuxGSM can warn with: consoleinteract="yes" in the
 # game's _default.cfg AND a warn command in command_stop.sh's fn_stop_warn_players_command (the
 # Source, Source 2 and GoldSrc engines, plus its named games). Computed from v26.4.0's
-# lgsm/data/serverlist.csv and lgsm/config-default/config-lgsm/*/_default.cfg: 82 of 144. For any
-# other game LinuxGSM prints "Warning players: not supported by <game>: skipped".
+# lgsm/data/serverlist.csv and lgsm/config-default/config-lgsm/*/_default.cfg: 82 of 144. v26.5.0
+# added hlwon and cswon (GoldSrc, consoleinteract="yes"); its other four new games have no warn
+# command (fivem, luanti) or no console (orar, bfe). For any other game LinuxGSM prints "Warning
+# players: not supported by <game>: skipped".
 WARN_GAMES = frozenset((
-    "ahl", "ahl2", "av", "bb", "bb2", "bd", "bmdm", "bs", "bt", "cc", "cod", "cod2", "cod4", "coduo",
-    "codwaw", "cs", "cs2", "cscz", "csgo", "css", "ct", "dab", "dmc", "dod", "dods", "doi", "dst",
-    "dys", "em", "etl", "fctr", "fof", "gmod", "hl2dm", "hldm", "hldms", "hyt", "ins", "ios", "jbep3",
-    "jk2", "l4d", "l4d2", "mc", "mcb", "mcv", "mohaa", "mta", "nd", "nec", "nmrih", "ns", "opfor",
-    "pmc", "pvkii", "pz", "q2", "q3", "q4", "ql", "qw", "ricochet", "rtcw", "rw", "scpsl", "sfc",
-    "sof2", "sven", "terraria", "tf2", "tf2c", "tfc", "ts", "unt", "vints", "vs", "wet", "wf", "wmc",
-    "xnt", "zmr", "zps"))
+    "ahl", "ahl2", "av", "bb", "bb2", "bd", "bmdm", "bs", "bt", "cc", "cod", "cod2", "cod4",
+    "coduo", "codwaw", "cs", "cs2", "cscz", "csgo", "css", "cswon", "ct", "dab", "dmc", "dod",
+    "dods", "doi", "dst", "dys", "em", "etl", "fctr", "fof", "gmod", "hl2dm", "hldm", "hldms",
+    "hlwon", "hyt", "ins", "ios", "jbep3", "jk2", "l4d", "l4d2", "mc", "mcb", "mcv", "mohaa", "mta",
+    "nd", "nec", "nmrih", "ns", "opfor", "pmc", "pvkii", "pz", "q2", "q3", "q4", "ql", "qw",
+    "ricochet", "rtcw", "rw", "scpsl", "sfc", "sof2", "sven", "terraria", "tf2", "tf2c", "tfc",
+    "ts", "unt", "vints", "vs", "wet", "wf", "wmc", "xnt", "zmr", "zps"))
 
 # The games whose player LIST LinuxGSM cannot rely on. LinuxGSM counts players as the length of
 # gamedig's `players` list (query_gamedig.sh: `jq -re '.players | length'`), and for these games
@@ -169,14 +171,31 @@ _LG264_PLAYERS_RE = re.compile(_LG264_INFO + r"\b(\d{1,6}) players are on the se
 _LG264_REQUEST_RE = re.compile(_LG264_INFO + r"\b(Update|Backup) postponed until the server is empty\b")
 
 
-def outcome(out):
+# LinuxGSM v26.5.0 (#5095, check_update_lock.sh): update, force-update, validate and
+# workshop-update take lgsm/lock/updating.lock, and a second one while the first runs prints
+# "[ INFO ] Updating vhserver: Checking update: Update is already running (PID 12855) ... INFO" and
+# exits 0 having done nothing. Earlier releases never print it, so the match is its own release gate.
+_LG265_BUSY_RE = re.compile(_LG264_INFO + r"\bChecking update: Update is already running\b")
+# The commands that take that lock, with their aliases. ONLY their output can mean "not run": a
+# start with updateonstart="on" runs the same check in a subshell (command_start.sh), prints the
+# same line and then starts the server anyway, so the line inside a start's or restart's output
+# says nothing about whether the start happened.
+LG265_BUSY_ACTIONS = frozenset(("update", "u", "force-update", "fu", "update-restart", "ur",
+                                "validate", "v", "workshop-update", "wu"))
+
+
+def outcome(out, action=None):
     """What LinuxGSM's output says it did instead of the action, or None when it did the action.
 
     {"code": "lgsm_postponed" | "lgsm_refused", "kind": "update" | "backup" | "restart" | "stop",
      "players": int}. Postponed: LinuxGSM recorded a request its monitor acts on. Refused: nothing
-    was recorded, so nothing happens unless it is asked again.
+    was recorded, so nothing happens unless it is asked again. Or {"code": "lgsm_busy", "kind":
+    "update"}: another update of the server held LinuxGSM's update lock, and this run did nothing
+    — said only when `action` is one of LG265_BUSY_ACTIONS (see there).
     """
     text = terminal.strip_escapes(out or "")
+    if action in LG265_BUSY_ACTIONS and _LG265_BUSY_RE.search(text):
+        return {"code": "lgsm_busy", "kind": "update"}
     m = _LG264_PLAYERS_RE.search(text)
     if m is None:
         return None
@@ -189,9 +208,9 @@ def outcome(out):
     return {"code": "lgsm_refused", "kind": "stop", "players": players}
 
 
-def outcome_of(out, rc):
-    """outcome(out) for a command that exited `rc`: only an exit 0 can be one (LinuxGSM's own)."""
-    return outcome(out) if rc == 0 else None
+def outcome_of(out, rc, action=None):
+    """outcome(out, action) for a command that exited `rc`: only an exit 0 can be one (LinuxGSM's own)."""
+    return outcome(out, action) if rc == 0 else None
 
 
 # The panel's words. A postponement is only run later by LinuxGSM's `monitor`, which is the
@@ -234,11 +253,18 @@ _LG264_POSTPONED_UNREAD = i18n.Sentence("Postponed by LinuxGSM: players are onli
                                         "once the server is empty if the server's Autostart is on.")
 
 
+# Said for lgsm_busy: the run was skipped, which is neither the action's success nor a failure.
+_LG265_BUSY = i18n.Sentence("'{action}' not run: an update of this server is already running. "
+                            "LinuxGSM runs one update, validate or workshop update at a time.")
+
+
 def outcome_message(oc, action, monitor=True):
     """The panel's sentence for outcome `oc` of `action`.
 
     `monitor`: the server's Autostart is on (True), off (False), or could not be read (None).
     """
+    if oc["code"] == "lgsm_busy":
+        return i18n.Sentence(_LG265_BUSY.template, action=action)
     if oc["code"] == "lgsm_postponed":
         if monitor is None:
             return _LG264_POSTPONED_UNREAD

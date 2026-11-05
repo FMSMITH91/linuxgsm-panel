@@ -391,6 +391,20 @@ def _clean_cron_error(raw, limit=240):
 # colour codes sit inside LinuxGSM's "[ INFO ]" tag, so only the word is required before the text.
 _LG264_CRON_POSTPONED_ERE = ("INFO.*([0-9]+ players are on the server: (stop prevented|restart "
                              "postponed)|(Update|Backup) postponed until the server is empty)")
+# LinuxGSM v26.5.0's second update while one runs (lgsm_players._LG265_BUSY_RE): exit 0, nothing
+# done. A cron job is not a terminal, so v26.5.0 writes the line plain (#5117).
+_LG265_CRON_BUSY_ERE = "INFO.*Checking update: Update is already running"
+
+
+def _lg265_runs_update(cmd):
+    """Whether a cron command line runs an update-family command (lgsm_players.LG265_BUSY_ACTIONS).
+
+    Only those can have been skipped as "Update is already running": a scheduled start or restart
+    with updateonstart="on" prints the same line and still runs.
+    """
+    from panel.services.lgsm_players import LG265_BUSY_ACTIONS
+    words = (cmd or "").split()
+    return any(w in LG265_BUSY_ACTIONS and i and "/" in words[i - 1] for i, w in enumerate(words))
 
 
 def _lg264_runs_monitor(cmd):
@@ -417,9 +431,12 @@ def _read_cron_status(server, user):
              '[ "$rc" != "0" ] && err="$(tail -n 40 "$id.log" 2>/dev/null | tail -c 3000 '
              '| base64 | tr -d "\\n")"; '
              # LinuxGSM v26.4.0 exits 0 when it postpones or refuses for players online
-             # (lgsm_players.outcome): that run did nothing, so it is not shown as "OK".
+             # (lgsm_players.outcome): that run did nothing, so it is not shown as "OK". Nor is
+             # v26.5.0's update skipped because another one held its lock (pp=2).
              'pp=0; [ "$rc" = "0" ] && grep -qE ' + _core._quote(_LG264_CRON_POSTPONED_ERE)
              + ' "$id.log" 2>/dev/null && pp=1; '
+             '[ "$pp$rc" = "00" ] && grep -qE ' + _core._quote(_LG265_CRON_BUSY_ERE)
+             + ' "$id.log" 2>/dev/null && pp=2; '
              'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err" "$pp"; done')
     out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=12)
     status = {}
@@ -432,7 +449,8 @@ def _read_cron_status(server, user):
         try:
             status[jid] = {"last_run": int(en), "ok": rc == "0", "rc": int(rc),
                            "error": _clean_cron_error(_cron_log_text(err)),
-                           "postponed": len(parts) > 5 and parts[5].strip() == "1"}
+                           "postponed": len(parts) > 5 and parts[5].strip() == "1",
+                           "busy": len(parts) > 5 and parts[5].strip() == "2"}
         except ValueError:
             continue
     return status
@@ -911,6 +929,8 @@ def _cron_job_row(raw, user, selfname, status, run_times):
         # `monitor` job: it prints "N players are on the server: restart postponed" when it
         # re-checks a request (command_monitor.sh), which is the monitor doing its job.
         "postponed": bool(st.get("postponed")) and not _lg264_runs_monitor(display_cmd),
+        # ...or exited 0 having skipped an update because another one was running (v26.5.0).
+        "busy": bool(st.get("busy")) and _lg265_runs_update(display_cmd),
     }
 
 
@@ -1822,12 +1842,12 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None, cach
     """Player count using the game's OWN LinuxGSM query settings.
 
     This covers games the panel's built-in gamedig map doesn't. Reads querymode/querytype/queryport
-    from the merged LinuxGSM config and, when LinuxGSM queries the game with gamedig (querymode 2),
-    runs gamedig with LinuxGSM's own type. `fallback_port` (the port the panel already knows) is
-    used when the query port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in
-    server.properties. Returns int, or None when LinuxGSM has no usable network query for the game
-    (querymode 1 = process-check only, e.g. Factorio; querymode 3 = the legacy gsquery, not parsed
-    here yet) or the query fails. None => 'unknown', which the reboot poller treats as 'don't
+    from the merged LinuxGSM config and, when LinuxGSM queries the game with gamedig (querymode 2
+    or 3), runs gamedig with LinuxGSM's own type. `fallback_port` (the port the panel already knows)
+    is used when the query port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in
+    server.properties. Returns int, or None when LinuxGSM has no gamedig query for the game
+    (querymode 1 = session only, e.g. Factorio; 4 = gsquery and 5 = a TCP connect, neither of which
+    counts players) or the query fails. None => 'unknown', which the reboot poller treats as 'don't
     reboot'. querytype is charset-sanitised and the port is an int, so nothing user/config-supplied
     reaches the shell unchecked.
 
@@ -1887,9 +1907,18 @@ def _read_lgsm_query_settings(server, user, selfname):
         return None
 
 
+_LG265_GAMEDIG_QUERYMODES = frozenset(("2", "3"))
+
+
 def _lgsm_gamedig_target(vals, fallback_port):
-    """(querytype, queryport) when LinuxGSM queries this game with gamedig, else None."""
-    if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
+    """(querytype, queryport) when LinuxGSM queries this game with gamedig, else None.
+
+    LinuxGSM's querymodes (command_monitor.sh fn_monitor_loop, the same from v26.4.0 to v26.5.0): 2
+    is gamedig then gsquery, 3 gamedig only, 4 gsquery, 5 TCP; its own player count
+    (check_players_online.sh) uses gamedig for 2 and 3. querymode 3 was read here as the legacy
+    gsquery, so fivem, bfv, samp, eco, xnt and mta never had a count.
+    """
+    if (vals.get("querymode") or "").strip() not in _LG265_GAMEDIG_QUERYMODES:
         return None
     # Never starting with `-` or `_`, as _gamedig_type strips the panel's own override: the cfg is
     # the game account's to write, and `querytype="--debug"` reached gamedig as an option.

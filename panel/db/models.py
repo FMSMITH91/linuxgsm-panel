@@ -712,7 +712,9 @@ STEAM_CONNECT_UNSURE = frozenset({"bb", "sfc", "ts", "vs", "zmr"})
 
 # LinuxGSM game_types with NO `update` command (not SteamCMD-based — LinuxGSM omits update from
 # their menu). Used to hide the Update action even before a server's command list is fetched.
-_NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw"})
+# hlwon/cswon: LinuxGSM v26.5.0's WON2 servers (querytype protocol-valve-won, which core_getopt.sh
+# gives no update).
+_NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw", "hlwon", "cswon"})
 
 
 class GameServer(db.Model):
@@ -1042,7 +1044,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
     "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
     "browse_files", "read_file", "upload_check", "create_file", "create_folder", "list_cron",
-    "lgsm_postponed", "lgsm_refused",
+    "lgsm_postponed", "lgsm_refused", "lgsm_busy",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({

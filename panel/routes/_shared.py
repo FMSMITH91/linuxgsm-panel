@@ -1022,7 +1022,7 @@ def _run_queued_action(app, gs):
     # answered with no exit status is: the raise left before the counter, so on a direct-SSH host
     # _QUEUED_ACTION_ATTEMPTS never applied and every tick ran the action again, a row each time.
     _out, err, rc = _r21b_run_counted(gs, act)
-    oc = _lgp.outcome_of(_out, rc)
+    oc = _lgp.outcome_of(_out, rc, act)
     if oc is not None:
         return _lg264_queued_outcome(app, gs, act, oc)
     ok = (rc == 0)
@@ -1067,7 +1067,8 @@ def _lg264_queued_outcome(app, gs, act, oc):
     msg = _lgp.outcome_message(oc, act, monitor=bool(getattr(gs, "autostart", True)))
     try:
         postponed = oc["code"] == "lgsm_postponed"
-        log_action(None, "lgsm_postponed" if postponed else "lgsm_refused", target=gs.name,
+        log_action(None, ("lgsm_busy" if oc["code"] == "lgsm_busy"
+                          else "lgsm_postponed" if postponed else "lgsm_refused"), target=gs.name,
                    detail="%s: %s" % (act, msg), success=postponed, server=gs)
     except Exception:
         db.session.rollback()
@@ -1319,6 +1320,66 @@ def _maybe_cache_commands(app, gs):
         return
     _cmd_fetch_attempts[server_id] = now
     _bg_cache_commands(app, [server_id], births={server_id: row_birth(gs)})
+
+
+def lg265_refresh_commands(gs):
+    """Read `gs`'s LinuxGSM command list again; keep it when the host answered, and schedule what it gained.
+
+    The list is read at install (or import) and then only on a manual refresh, while `update-lgsm`
+    — the weekly cron's, or the button — moves the account to a release that can offer more.
+    LinuxGSM v26.5.0 gave QuakeWorld `update` and `check-update`: with the old list stored, the
+    Update button stayed hidden, the action was refused, and no daily update was scheduled. Called
+    after a panel update-lgsm that exited 0 and from the daily maintenance pass.
+
+    An empty answer is a failed read, never "no commands", so it changes nothing. A maintenance
+    command the list gained is added to the crontab (ssh_manager.add_maintenance_cron), never
+    `monitor`: that is the Autostart switch, the operator's. Nothing is scheduled from a list that
+    was never read before (the install's own cron is that). -> the maintenance commands added.
+    """
+    cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
+    old = gs.get_commands()
+    if not cmds or cmds == old:
+        return set()
+    gs.set_commands(cmds)
+    db.session.commit()
+    return lg265_schedule_gained(gs, old, cmds)
+
+
+def lg265_schedule_gained(gs, old, cmds):
+    """Schedule the maintenance commands `cmds` has that the stored list `old` did not.
+
+    lg265_refresh_commands' second half, and the manual Refresh button's: a refresh that stored the
+    new list without this left the daily pass nothing to gain, so the command never got its cron
+    line. -> the maintenance commands added.
+    """
+    gained = {c.get("cmd") for c in cmds} - {c.get("cmd") for c in (old or [])}
+    added = (gained & set(_sm.LGC_CRON_CMDS)) - {"monitor"} if old else set()
+    # A crontab write asks what every cron write asks (the account may be the host's sudo login).
+    if not added or game_account_write_refusal(gs.remote, gs.short_name) is not None:
+        return set()
+    ok, why = _sm.add_maintenance_cron(gs.remote, gs.short_name, gs.lgsm_name, added)
+    if not ok:
+        _log.warning("could not schedule %s for %s: %s", sorted(added), row_label(gs, "name"), why)
+        return set()
+    return added
+
+
+def lg265_refresh_pass(app, still_in_db):
+    """The daily pass: lg265_refresh_commands for every installed server; one failing stops nothing.
+
+    The weekly update-lgsm cron moves an account to a release that can offer more commands
+    (LinuxGSM v26.5.0 gave QuakeWorld `update`), and the stored list would hide them.
+    `still_in_db`: app._still_in_db, which re-reads a row and says whether it is still there.
+    """
+    with app.app_context():
+        for gs in GameServer.query.all():
+            if not still_in_db(gs) or gs.remote is None or not gs.installed:
+                continue
+            try:
+                lg265_refresh_commands(gs)
+            except Exception:
+                db.session.rollback()
+                _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
 
 
 # ── Module state the route modules own ─────────────────────────────────────────────────────────

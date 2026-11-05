@@ -111,6 +111,17 @@ def release_tag(value):
     return None
 
 
+def release_at_least(tag, minimum):
+    """Whether release `tag` ('v26.5.0', from hosts.lgsm_release) is `minimum` (a tuple) or later.
+
+    False for None or anything release_tag refuses: an account whose release could not be read
+    keeps the behaviour the panel had before the newer release, never the newer one by guess.
+    """
+    if release_tag(tag) is None:
+        return False
+    return tuple(int(p) for p in tag[1:].split(".")) >= tuple(minimum)
+
+
 def deps_name(os_slug):
     """Name the data file for a distro slug ('ubuntu-22.04' -> 'ubuntu-22.04.csv').
 

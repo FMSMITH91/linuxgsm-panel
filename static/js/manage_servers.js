@@ -28,6 +28,7 @@ var PORTS = {
   "mohaa":12203,"ohd":7777,"pvr":7777,"pw":8211,"q4":28004,"qw":27500,"sbots":7777,"scpsl":7777,
   "sf":7777,"sof2":20100,"squad44":10027,"tf":5001,"ti":7777,"tu":7777,"ut":7777,"ut3":7777,
   "wf":44400,"wurm":3724,
+  "orar":1234,"luanti":30000,"fivem":30120,"bfe":18451,
 };
 function updatePort() {
   var select = document.getElementById('game-type-select');

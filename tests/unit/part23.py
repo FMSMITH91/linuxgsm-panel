@@ -368,6 +368,9 @@ _LOOPS23 = (("_player_count_watch", "player-counts", ("_refresh_player_counts",)
 
 
 def _other_loops23():
+    # The node-tools loop's second pass lives in _shared (the command lists update-lgsm grows).
+    from panel.routes import _shared as _sh23
+    _patch23(_sh23, "lg265_refresh_pass", lambda *a, **k: None)
     for loop, name, stubs, stop_on in _LOOPS23:
         for attr in stubs:
             _patch23(_app23mod, attr, lambda *a, **k: set())

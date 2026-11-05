@@ -1267,6 +1267,8 @@ function cronLastRun(j){
   var badge;
   // postponed: exit 0, but LinuxGSM only postponed or refused the job because players were on.
   if(j.ok === true && j.postponed){ badge = '<span class="badge bg-warning text-dark" title="Players were online: LinuxGSM postponed or refused it">Postponed</span>'; }
+  // busy: exit 0, but LinuxGSM (v26.5.0+) skipped this update because another one was running.
+  else if(j.ok === true && j.busy){ badge = '<span class="badge bg-secondary" title="Another update of this server was already running, so LinuxGSM skipped this one">Not run</span>'; }
   else if(j.ok === true){ badge = '<span class="badge bg-success" title="Exit code 0 at '+escA(when)+'">OK</span>'; }
   else if(j.ok === false){ badge = '<span class="badge bg-danger" title="Failed at '+escA(when)+'">Failed</span>'; }
   else { badge = '<span class="badge bg-secondary" title="Ran at '+escA(when)+' — cron doesn\'t record exit status for panel-managed jobs">ran</span>'; }

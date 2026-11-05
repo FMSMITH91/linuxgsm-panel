@@ -37,7 +37,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
-    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal)
+    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal,
+    lg265_refresh_commands, lg265_schedule_gained)
 
 
 # Said when the host call was made but its audit row could not be written (the database was
@@ -189,8 +190,17 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
                detail=_clean_action_output(out)[-400:], actor=origin, server=gs)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
     _after_power_action(app, gs, remote, short_name, action, rc)
+    if action == "update-lgsm" and rc == 0:
+        _lg265_after_update_lgsm(gs)
     if action in READONLY_ACTIONS:
         return True, f"{action}: {clean[:600] or 'no output'}"
+    ok, msg = _run_sync_outcome(action, name, rc, clean)
+    note = _lg265_ahl_note(action, clean)
+    return ok, (i18n.Sentences(msg, note) if note else msg)
+
+
+def _run_sync_outcome(action, name, rc, clean):
+    """A start/stop/restart's (ok, message) from its exit code and cleaned output."""
     # The outcomes are i18n.Sentences: English for the chat bots, which send them as they are, and
     # translated whole by the routes that show them (_r15e_said).
     if rc == 0:
@@ -202,6 +212,45 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
                                     action=action, name=name)
     return False, i18n.Sentence("'{action}' failed for '{name}': {reason}", action=action, name=name,
                                 reason=reason)
+
+
+# LinuxGSM v26.5.0's fix_ahl.sh runs Action Half-Life on ReHLDS, which only works on Steam's
+# steam_legacy branch; an install made before that is on the default branch, and every start
+# warns (exit 0) and the server keeps crashing until one force-update moves it. The line exists
+# only from v26.5.0, so matching it is already keyed on the account's release.
+_LG265_AHL_REHLDS = "ReHLDS requires the steam_legacy branch"
+_LG265_AHL_NOTE = i18n.Sentence("Action Half-Life now runs on ReHLDS, which needs Steam's steam_legacy "
+                                "branch: run force-update once (Maintenance menu) to move this server to it.")
+
+
+def _lg265_ahl_note(action, clean):
+    """The force-update note when a start/restart's output carries fix_ahl.sh's warning, else None."""
+    if action in ("start", "restart") and _LG265_AHL_REHLDS in (clean or ""):
+        return _LG265_AHL_NOTE
+    return None
+
+
+def _lg265_ahl_said(app, gs, held, action, clean):
+    """A background start's detail, the AHL note (_lg265_ahl_note) first when there is one.
+
+    The note is said in `gs`'s console too while `held`: the row is still the server it ran on.
+    """
+    note = _lg265_ahl_note(action, clean)
+    if not note:
+        return clean
+    if held:
+        _console_push(app, gs.id, f"[panel] {action}: {note}")
+    return "\n".join((str(note), clean))
+
+
+def _lg265_after_update_lgsm(gs):
+    """After update-lgsm: the release it moved to may offer more commands (lg265_refresh_commands)."""
+    try:
+        lg265_refresh_commands(gs)
+    except Exception:
+        db.session.rollback()
+        _log.debug("command list refresh after update-lgsm failed for %s", row_label(gs, "name"),
+                   exc_info=True)
 
 
 def _r15e_said(msg):
@@ -558,13 +607,14 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 # The outcome is audited under the server only while it is still that server, and
                 # its bookkeeping (the queued flags, the priority nudge) is done only then.
                 held = still_held(gs)
-                oc = _lgp.outcome_of(out, rc)
+                oc = _lgp.outcome_of(out, rc, action)
                 if oc is not None:
                     # The button answered "issued" long before: the console says what LinuxGSM did.
                     ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
                     return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
+                detail = _lg265_ahl_said(app, gs, held, action, clean)
                 if held:
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
@@ -598,8 +648,8 @@ def _lg264_run_power(remote, ident, action):
 def _lg264_said(oc, action, gs, held, who, console=None):
     """Audit LinuxGSM's postponed or refused `action` as what it was: (None, the panel's sentence).
 
-    Its own audit action (lgsm_postponed / lgsm_refused), never the action's success or failure
-    row: LinuxGSM exits 0 for both, and "'stop' succeeded" about a server still running with its
+    Its own audit action (lgsm_postponed / lgsm_refused / lgsm_busy), never the action's success or
+    failure row: LinuxGSM exits 0 for all three, and "'stop' succeeded" about a server still running with its
     players on is the report this replaces. A refused stop or a postponed restart ends the action's
     quiet window (warning minutes and all), so a crash of the server that is still up pages as usual.
     `console`: the app, for a Stop/Restart whose button answered long before — the sentence is said
@@ -609,7 +659,8 @@ def _lg264_said(oc, action, gs, held, who, console=None):
     actor, origin, name = who
     msg = _lgp.outcome_message(oc, action, monitor=bool(getattr(gs, "autostart", True)))
     postponed = oc["code"] == "lgsm_postponed"
-    log_action(actor, "lgsm_postponed" if postponed else "lgsm_refused", target=name,
+    log_action(actor, ("lgsm_busy" if oc["code"] == "lgsm_busy"
+                       else "lgsm_postponed" if postponed else "lgsm_refused"), target=name,
                success=postponed, detail="%s: %s" % (action, msg), actor=origin,
                server=gs if held else None)
     if held and action in ("stop", "restart"):
@@ -625,10 +676,11 @@ def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True
     `monitor`: the server's Autostart (LinuxGSM's monitor cron) is on, which is what runs an
     update or backup LinuxGSM postponed.
     """
-    # fastdl asks a few yes/no questions (overwrite / force-download / continue),
-    # all default Y — feed Y's so it runs unattended. Up to v26.3.0 a prompt looped
-    # forever on EOF; from v26.4.0 (#5042) it exits 2 ("Unable to read an answer").
-    answers = ["Y"] * 8 if action == "fastdl" else None
+    # fastdl asks yes/no questions; which, and what each answer does, depends on the account's
+    # LinuxGSM release (v26.5.0's first one deletes the directory on Y): _sm.fastdl_answers.
+    answers = (_sm.fastdl_answers(remote, short_name, selfname,
+                                  (selfname or "").removesuffix("server"))
+               if action == "fastdl" else None)
     # tee_log makes run_as_game_user write the output where _action_log_path says
     # and hand the whole of it back at the end, so the audit entry and the bot's
     # completion summary are unchanged while the console tails the file.
@@ -647,7 +699,7 @@ def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True
         # rc is None if the SSH call raised and -1 if the transport gave up
         # waiting; _end_action_tail says "stopped reporting" for both rather than
         # guessing — a 30-minute timeout does not mean the update stopped running.
-        oc = _lgp.outcome_of(out, rc)
+        oc = _lgp.outcome_of(out, rc, action)
         _end_action_tail(app, server_id, remote, action, rc,
                          note=_lgp.outcome_message(oc, action, monitor=monitor) if oc else None)
     return out, err, rc
@@ -695,7 +747,7 @@ def _bg_action(app, gs, remote, action, on_done=None):
                                          monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
-                oc = _lgp.outcome_of(out, rc)
+                oc = _lgp.outcome_of(out, rc, action)
                 if oc is not None:
                     # Postponed (update, backup) or refused (workshop-update, validate): said as
                     # that, and nothing was changed on the host, so nothing below applies.
@@ -1377,6 +1429,17 @@ def _register_schedules(app):
         return jsonify({"success": True, "enabled": enabled})
 
 
+def _lg265_schedule_refreshed(gs, old, cmds):
+    """The Refresh button's half of lg265_refresh_commands: schedule what the stored list gained.
+
+    The list is already stored, so a crontab write that fails is logged, not said as a failed refresh.
+    """
+    try:
+        lg265_schedule_gained(gs, old, cmds)
+    except Exception:
+        _log.debug("scheduling the refreshed commands failed", exc_info=True)
+
+
 def _register_commands(app):
     """Re-reading the server's LinuxGSM command list, and sending a console command from the page."""
     @app.route("/server/<int:server_id>/refresh-commands", methods=["POST"])
@@ -1414,8 +1477,10 @@ def _register_commands(app):
                 flash(i18n.tr("Couldn't read the command list for '{name}' — the host returned nothing, "
                               "so the stored list is unchanged.", name=gs.name), "warning")
                 return redirect(url_for("server_detail", server_id=gs.id))
+            _old_cmds = gs.get_commands()
             gs.set_commands(cmds)
             db.session.commit()
+            _lg265_schedule_refreshed(gs, _old_cmds, cmds)
             # ...and an audit row, which the docstring above says was the other half of the bug
             # ("with no audit row") and which the permission fix left undone. The stored list
             # drives the control bar and install_game_cron: a host that answers oddly can empty
