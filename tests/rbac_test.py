@@ -34,6 +34,14 @@ import textwrap
 # Allow running as `python tests/rbac_test.py` from the repo root.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+# A suite past its time limit prints every thread's and greenlet's stack, then exits 124 (see
+# tests/suite_deadline.py). Armed before anything that could block; loaded by path, so the import
+# path is not changed.
+import importlib.util as _sd_util  # noqa: E402
+_sd_spec = _sd_util.spec_from_file_location(
+    "suite_deadline", os.path.join(os.path.dirname(os.path.abspath(__file__)), "suite_deadline.py"))
+_sd_spec.loader.exec_module(_suite_deadline := _sd_util.module_from_spec(_sd_spec))
+_suite_deadline.arm(globals())
 from panel.ops.ssh_manager import _core as _sm_core   # the stub seam: stubbed by MODULE,
 # because every caller now reaches these through the module rather than binding them.
 

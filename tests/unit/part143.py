@@ -1,0 +1,172 @@
+"""Part 143 of the unit suite: a suite past its time limit says where it is stuck and fails fast.
+
+The ubuntu-22.04 leg's unit suite froze on 2026-11-05 and was cancelled 32 minutes in with no word
+of where: a suite prints its checks only at the end, and a cancelled job prints nothing of a lane
+still running. tests/suite_deadline.py gives every suite a limit. Held here:
+
+* every tests/*_test.py runner arms it before it imports the panel or anything else that can block;
+* the limits: the unit suite's 35 minutes, the others' 15, the LGSM_SUITE_DEADLINE override;
+* run for real in a child interpreter with a 1 s limit: a main thread stuck on a lock is named; under
+  eventlet, a parked greenlet and the main greenlet's own wait are named, and a child process is
+  listed and killed; with SIGALRM blocked, faulthandler's watchdog still ends it;
+* ci.yml's "Run all checks" step has its own timeout-minutes, above the unit limit plus the watchdog
+  and the step's work ahead of the lanes, and under the job's.
+"""
+import glob
+import importlib.util as _ilu143
+import os
+import re
+import sys
+import tempfile as _tf143
+import time
+
+from eventlet import patcher as _patcher143
+
+from unit.part01 import check
+from unit.part05 import _root
+from unit.part14 import _wf14
+
+_sp143 = _patcher143.original("subprocess")
+_SD143_PATH = os.path.join(_root, "tests", "suite_deadline.py")
+_spec143 = _ilu143.spec_from_file_location("suite_deadline_p143", _SD143_PATH)
+SD143 = _ilu143.module_from_spec(_spec143)
+_spec143.loader.exec_module(SD143)
+
+
+# ── every runner arms it, before anything that can block ──────────────────────────────────────
+def _code143(text):
+    return [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def _armed_early143(path):
+    """(arms, line of the arm call, line of the first panel/app import) for one runner."""
+    with open(path, encoding="utf-8") as fh:
+        code = _code143(fh.read())
+    arm = next((i for i, ln in enumerate(code) if ln.strip() == "_suite_deadline.arm(globals())"), -1)
+    first = next((i for i, ln in enumerate(code)
+                  if re.match(r"\s*(from (app|panel|manage|smoke|unit)[ .]|import (app|panel|manage|unit)\b)", ln)),
+                 len(code))
+    return arm >= 0, arm, first
+
+
+_runners143 = sorted(glob.glob(os.path.join(_root, "tests", "*_test.py")))
+_armed143 = {os.path.basename(p): _armed_early143(p) for p in _runners143}
+check("suite deadline: every tests/*_test.py runner arms the time limit, before it imports the panel, "
+      "the app or a part",
+      len(_armed143) >= 9 and all(a and i < f for a, i, f in _armed143.values()), repr(_armed143))
+
+# ── the limits ────────────────────────────────────────────────────────────────────────────────
+_lims143 = {
+    "unit": SD143.limit_for("unit", {}), "smoke": SD143.limit_for("smoke", {}),
+    "rbac": SD143.limit_for("rbac", {}), "override": SD143.limit_for("unit", {SD143.ENV: "7"}),
+    "off": SD143.limit_for("smoke", {SD143.ENV: "0"}), "junk": SD143.limit_for("unit", {SD143.ENV: "x"}),
+    "name": SD143.suite_name("/a/tests/template_actions_test.py"),
+}
+check("suite deadline: the unit suite gets 35 minutes and every other suite 15; LGSM_SUITE_DEADLINE "
+      "sets seconds for all, 0 switches it off, and a value that is no number keeps the default",
+      _lims143 == {"unit": 2100.0, "smoke": 900.0, "rbac": 900.0, "override": 7.0, "off": 0.0,
+                   "junk": 2100.0, "name": "template_actions"}, repr(_lims143))
+check("suite deadline: ...and switched off, arm() starts nothing",
+      SD143.arm({"__file__": "x_test.py"}, {SD143.ENV: "0"}) == 0)
+
+# ── fired for real, in a child interpreter ────────────────────────────────────────────────────
+_PRE143 = (
+    "import importlib.util, os, signal, subprocess, sys, threading, time\n"
+    "s = importlib.util.spec_from_file_location('suite_deadline', %r)\n"
+    "sd = importlib.util.module_from_spec(s); s.loader.exec_module(sd)\n"
+    "results = [(True, 'the check before the hang', '')]\n"
+    "_part = 'part99'\n" % _SD143_PATH)
+_LOCK143 = _PRE143 + (
+    "sd.arm(globals())\n"
+    "def _stuck_on_a_lock_143():\n"
+    "    lk = threading.Lock(); lk.acquire(); lk.acquire()\n"
+    "_stuck_on_a_lock_143()\n")
+_GREEN143 = (
+    "import eventlet\neventlet.monkey_patch()\n" + _PRE143 +
+    "from eventlet import event\n"
+    "sd.arm(globals())\n"
+    "ev = event.Event()\n"
+    "def _parked_greenlet_143():\n"
+    "    ev.wait()\n"
+    "eventlet.spawn(_parked_greenlet_143)\n"
+    "child = subprocess.Popen(['sleep', '30'])\n"
+    "print('CHILD', child.pid, flush=True)\n"
+    "def _main_greenlet_waits_143():\n"
+    "    eventlet.sleep(30)\n"
+    "_main_greenlet_waits_143()\n")
+_MASKED143 = _PRE143 + (
+    "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})\n"
+    "sd.arm(globals(), backstop=1)\n"
+    "def _deaf_to_signals_143():\n"
+    "    time.sleep(30)\n"
+    "_deaf_to_signals_143()\n")
+
+
+def _fire143(source, name):
+    """(rc, output, seconds) of `source` run as tests/<name>_test.py with a 1 s limit."""
+    work = _tf143.mkdtemp(prefix="p143-")
+    path = os.path.join(work, name + "_test.py")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(source)
+    env = dict(os.environ, **{SD143.ENV: "1"})
+    t0 = time.monotonic()
+    try:
+        p = _sp143.run([sys.executable, path], capture_output=True, text=True, timeout=25,  # nosec B603 - this interpreter on the suite's own script
+                       env=env, cwd=work)
+        return p.returncode, p.stdout + p.stderr, time.monotonic() - t0
+    except _sp143.TimeoutExpired as exc:
+        return "timed out", str(exc.stdout or "") + str(exc.stderr or ""), time.monotonic() - t0
+
+
+def _alive143(pid):
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            return fh.read().rsplit(")", 1)[-1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
+
+
+_lk143 = _fire143(_LOCK143, "locked")
+check("suite deadline: a main thread stuck on a lock is stopped at the limit with exit 124, and the "
+      "report names the suite, the part, the last check and the function it is stuck in",
+      _lk143[0] == 124 and _lk143[2] < 15
+      and "SUITE TIME LIMIT: tests/locked_test.py ran past 1s" in _lk143[1]
+      and "in part: part99" in _lk143[1] and "the check before the hang" in _lk143[1]
+      and "_stuck_on_a_lock_143" in _lk143[1], repr((_lk143[0], round(_lk143[2], 1), _lk143[1][-1500:])))
+
+_gr143 = _fire143(_GREEN143, "green")
+_child143 = re.search(r"^CHILD (\d+)$", _gr143[1], re.M)
+_gr_sec143 = _gr143[1].split("suspended greenlet(s) --", 1)[-1]
+check("suite deadline: under eventlet the report shows the parked greenlet and the main greenlet's "
+      "own wait, which faulthandler cannot see",
+      _gr143[0] == 124 and "_parked_greenlet_143" in _gr_sec143 and "_main_greenlet_waits_143" in _gr_sec143,
+      repr((_gr143[0], _gr143[1][-2000:])))
+check("suite deadline: ...and the child process it started is listed and killed, so no pipe stays "
+      "open behind the suite",
+      bool(_child143) and "sleep 30" in _gr143[1] and not _alive143(int(_child143.group(1))),
+      repr((_child143 and _child143.group(1), _gr143[1][-800:])))
+
+_mk143 = _fire143(_MASKED143, "masked")
+check("suite deadline: with SIGALRM blocked, so the handler cannot run, faulthandler's watchdog still "
+      "dumps the threads and ends the process soon after",
+      _mk143[0] not in (0, "timed out", 124) and _mk143[2] < 15 and "_deaf_to_signals_143" in _mk143[1]
+      and "SUITE TIME LIMIT" not in _mk143[1], repr((_mk143[0], round(_mk143[2], 1), _mk143[1][-800:])))
+
+
+# ── ci.yml: the step's own limit sits above the unit limit, under the job's ───────────────────
+def _step_timeout143(text, job, step):
+    """(step timeout-minutes, job timeout-minutes) read from ci.yml's text, 0 when absent."""
+    m = re.search(r"^  %s:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)" % re.escape(job), text, re.M | re.S)
+    body = m.group(1) if m else ""
+    jt = re.search(r"^    timeout-minutes: (\d+)\s*$", body, re.M)
+    s = re.search(r"^      - name: %s\n(.*?)(?=^      - |\Z)" % re.escape(step), body, re.M | re.S)
+    st = re.search(r"^        timeout-minutes: (\d+)\s*$", s.group(1), re.M) if s else None
+    return (int(st.group(1)) if st else 0, int(jt.group(1)) if jt else 0)
+
+
+_ci143 = _step_timeout143(_wf14("ci.yml"), "checks", "Run all checks (compile, lint, unit, smoke, shellcheck)")
+# 120 s: the compile, lint and shellcheck ahead of the lanes took 17-34 s on the 22.04 leg.
+check("ci.yml: the \"Run all checks\" step has its own timeout, above the unit suite's limit plus the "
+      "watchdog and the work ahead of the lanes, and under the job's",
+      _ci143[0] * 60 >= SD143.LIMITS["unit"] + SD143.BACKSTOP + 120 and 0 < _ci143[0] < _ci143[1],
+      repr(_ci143))

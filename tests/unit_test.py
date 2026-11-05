@@ -29,6 +29,14 @@ import sys
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _root)
+# A suite past its time limit prints every thread's and greenlet's stack, then exits 124 (see
+# tests/suite_deadline.py). Armed before anything that could block; loaded by path, so the import
+# path is not changed.
+import importlib.util as _sd_util  # noqa: E402
+_sd_spec = _sd_util.spec_from_file_location(
+    "suite_deadline", os.path.join(os.path.dirname(os.path.abspath(__file__)), "suite_deadline.py"))
+_sd_spec.loader.exec_module(_suite_deadline := _sd_util.module_from_spec(_sd_spec))
+_suite_deadline.arm(globals())
 # tests/ on the path too, so `unit.partNN` resolves whichever directory this is run from.
 sys.path.insert(0, os.path.join(_root, "tests"))
 
@@ -1977,6 +1985,9 @@ _r16d_wrap_ts_handles()
 # part141 (lgsm-2605: LinuxGSM v26.5.0 — FastDL's answers per release, a second update said as
 # skipped) drives pure functions with stubbed host reads, part12's app with stand-ins and the cron
 # recorder's shell under bash; imports part01, 05 and 12.
+# part143 (a suite past its time limit prints every thread's and greenlet's stack and exits 124:
+# tests/suite_deadline.py armed in every runner, fired in child interpreters, ci.yml's step limit)
+# imports part01, 05 and 14.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -1992,7 +2003,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
           "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
-          "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141", "part142", "part15")
+          "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141", "part142", "part143", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

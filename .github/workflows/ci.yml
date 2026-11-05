@@ -129,6 +129,13 @@ jobs:
 
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
         if: steps.scope.outputs.docs_only != 'true'
+        # 40, under the job's 45. Each suite stops itself at its own limit (tests/suite_deadline.py:
+        # the unit suite at 35 minutes, the rest at 15) and prints every thread's and greenlet's
+        # stack; this is the limit for anything outside a suite. A lane still running when the job
+        # is cancelled prints nothing at all, which is how a 22.04 unit run froze on 2026-11-05 with
+        # no word of where. The unit suite took 713-1181 s on the 22.04 leg (the slowest); the work
+        # ahead of the lanes 17-34 s. tests/unit/part143.py holds the order of the three limits.
+        timeout-minutes: 40
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
         # shellcheck is pre-installed on the ubuntu runners.
         # REQUIRE_TOOLS=1: a linter that is missing OR broken must fail this job rather than be
