@@ -1831,12 +1831,12 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None, cach
     """Player count using the game's OWN LinuxGSM query settings.
 
     This covers games the panel's built-in gamedig map doesn't. Reads querymode/querytype/queryport
-    from the merged LinuxGSM config and, when LinuxGSM queries the game with gamedig (querymode 2),
-    runs gamedig with LinuxGSM's own type. `fallback_port` (the port the panel already knows) is
-    used when the query port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in
-    server.properties. Returns int, or None when LinuxGSM has no usable network query for the game
-    (querymode 1 = process-check only, e.g. Factorio; querymode 3 = the legacy gsquery, not parsed
-    here yet) or the query fails. None => 'unknown', which the reboot poller treats as 'don't
+    from the merged LinuxGSM config and, when LinuxGSM queries the game with gamedig (querymode 2
+    or 3), runs gamedig with LinuxGSM's own type. `fallback_port` (the port the panel already knows)
+    is used when the query port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in
+    server.properties. Returns int, or None when LinuxGSM has no gamedig query for the game
+    (querymode 1 = session only, e.g. Factorio; 4 = gsquery and 5 = a TCP connect, neither of which
+    counts players) or the query fails. None => 'unknown', which the reboot poller treats as 'don't
     reboot'. querytype is charset-sanitised and the port is an int, so nothing user/config-supplied
     reaches the shell unchecked.
 
@@ -1896,9 +1896,18 @@ def _read_lgsm_query_settings(server, user, selfname):
         return None
 
 
+_LG265_GAMEDIG_QUERYMODES = frozenset(("2", "3"))
+
+
 def _lgsm_gamedig_target(vals, fallback_port):
-    """(querytype, queryport) when LinuxGSM queries this game with gamedig, else None."""
-    if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
+    """(querytype, queryport) when LinuxGSM queries this game with gamedig, else None.
+
+    LinuxGSM's querymodes (command_monitor.sh fn_monitor_loop, the same from v26.4.0 to v26.5.0): 2
+    is gamedig then gsquery, 3 gamedig only, 4 gsquery, 5 TCP; its own player count
+    (check_players_online.sh) uses gamedig for 2 and 3. querymode 3 was read here as the legacy
+    gsquery, so fivem, bfv, samp, eco, xnt and mta never had a count.
+    """
+    if (vals.get("querymode") or "").strip() not in _LG265_GAMEDIG_QUERYMODES:
         return None
     # Never starting with `-` or `_`, as _gamedig_type strips the panel's own override: the cfg is
     # the game account's to write, and `querytype="--debug"` reached gamedig as an option.

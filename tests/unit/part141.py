@@ -315,5 +315,28 @@ else:
     check("backup name: the after-listing's shell was captured, under the account's home", False,
           repr(_bkcmds141)[:300])
 
+# ── 5. querymode 3 is gamedig only ──────────────────────────────────────────────────────────────
+# command_monitor.sh fn_monitor_loop: 2 = gamedig then gsquery, 3 = gamedig only, 4 = gsquery,
+# 5 = tcp; check_players_online.sh counts with gamedig for 2 and 3. fivem's _default.cfg (v26.5.0):
+# querymode="3", querytype="gta5f", its port in server.cfg.
+_qm141 = {m: _cron141._lgsm_gamedig_target({"querymode": m, "querytype": "gta5f"}, 30120)
+          for m in ("1", "2", "3", "4", "5")}
+check("LinuxGSM query: querymodes 2 and 3 are gamedig (type and port), 1, 4 and 5 are not",
+      _qm141 == {"1": None, "2": ("gta5f", "30120"), "3": ("gta5f", "30120"), "4": None, "5": None},
+      repr(_qm141))
+_qcmd141 = []
+try:
+    _p9_patch(_cron141, "_read_lgsm_query_settings", lambda server, user, selfname: {
+        "querymode": "3", "querytype": "gta5f", "queryport": "", "port": ""})
+    _p9_patch(_cron141, "_gamedig_reply", lambda server, user, cmd: (_qcmd141.append(cmd), {"c": 4, "ok": True})[1])
+    _p9_patch(_smc141, "_gamedig_host", lambda server: "192.0.2.10")
+    _qn141 = _cron141.player_count_via_lgsm_query(type("Srv", (), {"id": 9141})(), "fivemserver", "fivemserver",
+                                                  fallback_port=30120)
+finally:
+    _p9_restore_all()
+check("player count: a querymode-3 game (fivem) is counted with gamedig at LinuxGSM's type and the "
+      "panel's port", _qn141 == 4 and len(_qcmd141) == 1 and "--type gta5f " in _qcmd141[0]
+      and ":30120 " in _qcmd141[0], repr((_qn141, _qcmd141)))
+
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP141_START, repr(_P9_TRIPPED[_TRIP141_START:]))
