@@ -398,6 +398,9 @@ check("update card: offers the newest SIGNED + passing commit, skipping a newer 
       "never asks GitHub about the unsigned one)",
       _st.get("update_available") is True and _st.get("target_sha") == _C2 and _C3 not in _asked,
       repr((_st.get("target_sha"), _asked)))
+_st, _ = _status142([_C3, _C2, _C1], {_C1})
+check("update card: ...and an unsigned commit BELOW the tip is skipped too, for the older signed one",
+      _st.get("target_sha") == _C1, repr(_st.get("target_sha")))
 _st, _ = _status142([_C3, _C2, _C1], set())
 check("update card: nothing signed, nothing offered (the card's plain up-to-date line, no message)",
       _st.get("update_available") is False and "message" not in _st, repr(_st))
