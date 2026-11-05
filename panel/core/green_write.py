@@ -20,8 +20,9 @@ reading the input it is given and the slow runner let it exit first.
 The panel feeds stdin to short-lived children (ssh-keygen's signature check and the helper's
 write-file both pass `input=`), so this is a runtime fix, not a test one. `install()` swaps in a
 copy of eventlet's write that keeps everything it does (no wait for regular files, the trampoline,
-0 on a closed fd, a retry on EAGAIN) and lets EPIPE raise. app.py calls it straight after
-`monkey_patch()`.
+0 on a closed fd, a retry on EAGAIN) and lets EPIPE raise. Importing this module calls it, and
+app.py imports it straight after `monkey_patch()`; where eventlet has not patched `os`, it does
+nothing.
 """
 import errno
 import os
@@ -31,7 +32,7 @@ import stat
 def _fixed(orig_write, orig_stat, trampoline, io_closed):
     """Build eventlet's write with the EPIPE retry taken out."""
     def write(fd, data):
-        """write(fd, data) -> bytes written; a broken pipe raises BrokenPipeError."""
+        """Write data to fd and return the count written; a broken pipe raises BrokenPipeError."""
         while True:
             if not stat.S_ISREG(orig_stat(fd).st_mode):
                 try:
@@ -67,3 +68,6 @@ def install():
     green_os.write = fixed
     os.write = fixed
     return True
+
+
+install()
