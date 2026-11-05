@@ -9,10 +9,12 @@ swallowed, never propagated to the caller (an alert must never break the action 
 Secrets (the bot token, the webhook URL, an ntfy access token) are Fernet-encrypted at rest via
 config.encrypt_secret.
 """
+import http.client
 import json
 import logging
 import queue
 import re
+import socket
 import struct
 import threading
 import time
@@ -417,7 +419,71 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 # is also what finally makes two claims already written here true: the ntfy comment above
 # ("cannot smuggle ... a redirect target through it") and send_ntfy's docstring ("it cannot leak
 # via a redirect").
-_OPENER = urllib.request.build_opener(_NoRedirect)
+# How long one ADDRESS gets to connect before the next is tried. socket.create_connection gives
+# each address the request's WHOLE timeout, one after another, and getaddrinfo lists IPv6 first.
+# On the owner's box (2026-11-05) about one IPv6 connect in nine to api.telegram.org hung while
+# IPv4 never did (Google's IPv6 never failed: the route to Telegram, not the box), so a poll sat
+# 30 s (its timeout + 5) on a dead IPv6 connect before reaching IPv4: a message sent then went
+# unread for 30 s, and a reply waited 8 s. Measured on the box: two 30 s gaps in 10 minutes.
+# Every address but the last now gets this long and the last the full timeout, so a one-address
+# host is no less patient than before. A connect is one round trip: 4 s is far past a slow one.
+_CONNECT_EACH = 4.0
+
+
+def _connect_each(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """socket.create_connection, with every address but the last capped at _CONNECT_EACH."""
+    host, port = address
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    full = timeout if isinstance(timeout, (int, float)) else None
+    err = None
+    for i, (family, stype, proto, _canon, sockaddr) in enumerate(infos):
+        last = i == len(infos) - 1
+        sock = None
+        try:
+            sock = socket.socket(family, stype, proto)
+            # The last address keeps the whole timeout; the others the cap (or less, if the
+            # request's timeout is shorter still). No timeout at all (None) is uncapped for the
+            # last, as create_connection's is, and _CONNECT_EACH for the rest.
+            if last:
+                sock.settimeout(full)
+            else:
+                sock.settimeout(_CONNECT_EACH if full is None else min(full, _CONNECT_EACH))
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            sock.settimeout(full)   # connected: the request's own timeout from here on
+            return sock
+        except OSError as exc:
+            err = exc
+            if sock is not None:
+                sock.close()
+    if err is not None:
+        raise err
+    raise OSError("getaddrinfo returned no address for the host")
+
+
+class _FallbackHTTPSConnection(http.client.HTTPSConnection):
+    """An HTTPSConnection that connects through _connect_each."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # An INSTANCE attribute in http.client (set in HTTPConnection.__init__), so a class
+        # attribute here would be shadowed; connect() calls it through self.
+        self._create_connection = _connect_each
+
+
+class _FallbackHTTPS(urllib.request.HTTPSHandler):
+    """HTTPSHandler opening _FallbackHTTPSConnection; build_opener puts it in place of the stock one.
+
+    Only `context` is passed on, as Python 3.12+ does: certificates and hostnames are checked by the
+    default context exactly as before.
+    """
+
+    def https_open(self, req):
+        return self.do_open(_FallbackHTTPSConnection, req, context=self._context)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect, _FallbackHTTPS)
 
 
 def _post(url, data, headers, allow_configured_host=False, provider="?"):
