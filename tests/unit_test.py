@@ -28,17 +28,9 @@ import re
 import sys
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _root)
-# A suite past its time limit prints every thread's and greenlet's stack, then exits 124 (see
-# tests/suite_deadline.py). Armed before anything that could block; loaded by path, so the import
-# path is not changed.
-import importlib.util as _sd_util  # noqa: E402
-_sd_spec = _sd_util.spec_from_file_location(
-    "suite_deadline", os.path.join(os.path.dirname(os.path.abspath(__file__)), "suite_deadline.py"))
-_sd_spec.loader.exec_module(_suite_deadline := _sd_util.module_from_spec(_sd_spec))
-_suite_deadline.arm(globals())
-# tests/ on the path too, so `unit.partNN` resolves whichever directory this is run from.
-sys.path.insert(0, os.path.join(_root, "tests"))
+# tests/ on the path too (ahead of the root), so `unit.partNN` resolves whichever directory this
+# is run from.
+sys.path[:0] = [os.path.join(_root, "tests"), _root]
 
 # ── nothing in this suite may read or write the machine's own config.json (or its keys) ─────────
 # DATA_DIR is a fixed path inside the checkout, so a unit check that reached panel.core.config
@@ -224,6 +216,10 @@ def _r31j_say(line):
 
 if _r31j_ts_header:
     _r31j_say(_r31j_ts_header)
+# A suite past its time limit prints every thread's and greenlet's stack, then exits 124
+# (tests/suite_deadline.py). Armed here, after the Landlock block above:
+# faulthandler's watchdog is a second thread, and Landlock needs the process to have one.
+importlib.import_module("suite_deadline").arm(globals())
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 

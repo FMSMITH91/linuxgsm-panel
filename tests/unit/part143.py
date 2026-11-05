@@ -39,13 +39,18 @@ def _code143(text):
 
 
 def _armed_early143(path):
-    """(arms, line of the arm call, line of the first panel/app import) for one runner."""
+    """(arms, line of the arm call, line of the first import that can block) for one runner.
+
+    The unit suite arms after its Landlock block, which needs the process to have one thread
+    (faulthandler's watchdog is a second), and so after the two panel imports ahead of it; it must
+    still come before the first panel module that starts anything and before any part runs.
+    """
     with open(path, encoding="utf-8") as fh:
         code = _code143(fh.read())
-    arm = next((i for i, ln in enumerate(code) if ln.strip() == "_suite_deadline.arm(globals())"), -1)
-    first = next((i for i, ln in enumerate(code)
-                  if re.match(r"\s*(from (app|panel|manage|smoke|unit)[ .]|import (app|panel|manage|unit)\b)", ln)),
-                 len(code))
+    arm = next((i for i, ln in enumerate(code) if re.search(r"\barm\(globals\(\)\)\s*(#.*)?$", ln)), -1)
+    first_re = (r'importlib\.import_module\("panel\.|^for _part in _PARTS:' if path.endswith("unit_test.py")
+                else r"\s*(from (app|panel|manage|smoke|unit)[ .]|import (app|panel|manage|unit)\b)")
+    first = next((i for i, ln in enumerate(code) if re.search(first_re, ln)), len(code))
     return arm >= 0, arm, first
 
 
