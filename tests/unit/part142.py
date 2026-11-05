@@ -509,10 +509,10 @@ if _HAVE142:
               "rc=%s %s %s" % (_r8.returncode, _r8.stdout[-400:], _r8.stderr[-200:]))
         # More than the 200 commits it lists, as on the first release (all of history): `git log |
         # head -n 200` under pipefail died of SIGPIPE (exit 141) there, before the confirmation.
-        _run142(["bash", "-c", 'set -e; t=$(git rev-parse "HEAD^{tree}"); p=$(git rev-parse HEAD); '
-                 'for i in $(seq 1 205); do p=$(git -c commit.gpgsign=false commit-tree "$t" -p "$p" '
-                 '-m "filler $i"); done; git reset -q --hard "$p"; git push -q origin main'], cwd=_dev,
-                env=_ENV142)
+        _fill142 = ('set -e; t=$(git rev-parse "HEAD^{tree}"); p=$(git rev-parse HEAD); '
+                    'for i in $(seq 1 205); do p=$(git -c commit.gpgsign=false commit-tree "$t" -p "$p" '
+                    '-m "filler $i"); done; git reset -q --hard "$p"; git push -q origin main')
+        _run142(["bash", "-c", _fill142], cwd=_dev, env=_ENV142)
         _sc = _git142("-C", _dev, "rev-parse", "HEAD")
         _r9 = _run142(["bash", _tool, "--yes", _sc], cwd=_dev, env=_senv, input="")
         check("sign-release.sh: a release more than 200 commits after the last signed one is still "
