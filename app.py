@@ -88,11 +88,11 @@ del _w, _dd_del, _dd_rebind
 # Panel imports live AFTER the patch, all of them. terminal/clock used to sit above it and got
 # away with it only because neither pulls in anything eventlet needs to green — a latent trap for
 # whichever of them grows a dependency first. tests/unit asserts this ordering now.
-# Importing green_write installs its fix: eventlet's green os.write retries a broken pipe for ever,
-# so communicate(input) to a child that exits unread would spin and never return. First, so it is in
-# place before anything below can start a process.
-from panel.core import green_write, terminal  # noqa: F401  (green_write: imported for its effect)
-from panel.core import runtime_stats
+from panel.core import green_write, runtime_stats, terminal
+# eventlet's green os.write retries a broken pipe for ever, so communicate(input) to a child that
+# exits unread would spin and never return; install() lets it raise. First, before anything below
+# can start a process.
+green_write.install()
 from panel.core.clock import utcnow
 
 import secrets

@@ -20,9 +20,8 @@ reading the input it is given and the slow runner let it exit first.
 The panel feeds stdin to short-lived children (ssh-keygen's signature check and the helper's
 write-file both pass `input=`), so this is a runtime fix, not a test one. `install()` swaps in a
 copy of eventlet's write that keeps everything it does (no wait for regular files, the trampoline,
-0 on a closed fd, a retry on EAGAIN) and lets EPIPE raise. Importing this module calls it, and
-app.py imports it straight after `monkey_patch()`; where eventlet has not patched `os`, it does
-nothing.
+0 on a closed fd, a retry on EAGAIN) and lets EPIPE raise. app.py calls it straight after
+`monkey_patch()`.
 """
 import errno
 import os
@@ -68,6 +67,3 @@ def install():
     green_os.write = fixed
     os.write = fixed
     return True
-
-
-install()
