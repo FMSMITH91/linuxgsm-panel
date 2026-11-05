@@ -70,6 +70,10 @@ Trigger it one of two ways:
 - **In the panel:** *Panel Server → Update*. This is **CI-gated** — it only moves to a commit whose checks have all passed — and runs detached so it survives its own restart. Also available via the Telegram/Discord `/update` command.
 - **From the shell:** re-run the same command (or `bash install.sh` from the checkout). A manual re-run pulls the branch tip directly (not CI-gated), so do it when you know the tip is good.
 
+**Only signed releases are installed.** Either way, the installer already on the host moves the panel only to a commit the owner has signed with their own SSH key, a key that never leaves the owner's PC and is not the one GitHub signs merges with. So someone who took over the project's GitHub account could push code, but the panel's update would not install it: it stays where it is and says "Not updated: held at …, because commit … is not signed with this host's release key". The update card offers only a signed commit. The public key is the repository's `release-signers` file, and the host checks against the copy it already has (root-owned in `/usr/local/lib/linuxgsm-panel` on a root install), never the copy inside the update. A new key therefore arrives only in a release the current key signed. The owner signs with `tools/sign-release.sh <commit>`, which also starts the test host's deploy.
+
+If the key is ever lost, or a host says it has no release key, commit the new public key to `release-signers` and run the installer by hand on each host with `PANEL_ALLOW_UNSIGNED_UPDATE=1`, over SSH: `cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh` on a root install, `PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ~/linuxgsm-panel/install.sh` on a per-user one. The panel itself can never pass that setting. Installing with `curl … | bash` runs the installer from GitHub, so it is not covered by the signature: use it only for a first install.
+
 **Versions are dates.** The panel's version is the date of the commit it runs, in UTC, written without leading zeros: `2026.9.26`. It is always shown with the short commit (`2026.9.26 · a1b2c3d` in the footer), because every commit made on the same day shares the date. Nothing is bumped by hand; a copy downloaded as a ZIP from GitHub reads the date from its `VERSION` file, which git fills in when it builds the archive.
 
 **What the updater does** — the same safe path either way:
@@ -271,6 +275,7 @@ location / {
 - **Sessions** — signed `HttpOnly` `SameSite=Lax` `Secure`-over-HTTPS cookies with a sliding idle timeout and a capped "remember me". "Sign out everywhere" revokes every session server-side.
 - **Encryption at rest** — SSH credentials, emails, and 2FA secrets are Fernet-encrypted in `data/panel.db` (key in `data/cred_key`); `data/` is `chmod 700`, secrets inside `chmod 600`.
 - **SSH host-key pinning** — refuses to connect if a host's key changes; re-trust a reinstalled host in one click.
+- **Signed updates** — the updater installs only a release signed with the owner's own SSH key (see [Updating](#updating)), so control of the GitHub account alone cannot push code to installed panels.
 - **RBAC enforced server-side** on every route, scoped per host, covered by automated tests.
 - **CSRF protection, a strict CSP, and security headers** (HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) on every response; input validation on anything that becomes an OS operation.
 

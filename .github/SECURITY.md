@@ -88,6 +88,28 @@ went through first-run setup on an older commit went through that window. On eac
 A superadmin is root on the panel's host (see the next section). If any of these shows someone else,
 treat the host as compromised: rebuild it rather than only deleting the account.
 
+## Updates are signed with the owner's own key
+
+Every commit on `main` is a GitHub squash merge, signed by GitHub's key, so a GitHub signature says
+nothing about who asked for the merge. If the owner's GitHub account were taken over, every panel
+would otherwise install whatever was merged next.
+
+So each release is also signed with the owner's own SSH key (`tools/sign-release.sh`), whose private
+half is only on the owner's PC. The signed text is built by the host from the commit id and branch it
+is about to install, and the signature is kept on the `release-signatures` branch as
+`<branch>/<sha>.sig`. The installer already on the host checks it with `ssh-keygen -Y verify`
+(namespace `linuxgsm-panel-release`) against the key the host already holds, never the copy in the
+update: root-owned in `/usr/local/lib/linuxgsm-panel/release-signers` on a root install (taken, the
+first time, from the commit root last installed its own installer from), the installed commit's
+`release-signers` on a per-user one. An unsigned target is held, and anything unreadable counts as
+unsigned. Root also stages the helper and its other pieces only from a signed commit.
+
+What it does not cover: the first install (`curl … | bash` runs GitHub's installer), the test host's
+deploy (it ships the commit's own installer, so it is GitHub-controlled by construction), and a host
+updated once to this version by an older installer. A lost key is recovered with
+`PANEL_ALLOW_UNSIGNED_UPDATE=1` on a run by hand over SSH; the panel's own update, its terminal and
+anything it starts through the helper cannot pass it.
+
 ## Known trust-model limitation: the panel has root on its own host
 
 When the installer is run as **root** it creates a dedicated service user and grants it
