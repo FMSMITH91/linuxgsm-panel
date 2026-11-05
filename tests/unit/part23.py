@@ -363,7 +363,7 @@ def _monitor_loop23():
 _LOOPS23 = (("_player_count_watch", "player-counts", ("_refresh_player_counts",), 1),
             ("_metrics_history_watch", "metrics-history",
              ("_record_metric_samples", "_prune_metric_samples"), 1),
-            ("_node_tools_cron_watch", "node-tools", ("_node_tools_cron_pass",), 1),
+            ("_node_tools_cron_watch", "node-tools", ("_node_tools_cron_pass", "_lg265_command_refresh_pass"), 1),
             ("_autoblock_watch", "autoblock", ("_autoblock_hosts",), 2))
 
 

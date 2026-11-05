@@ -688,17 +688,10 @@ def _node_tools_cron_pass(app):
             except Exception:
                 _log.debug("node-tools cron ensure failed for %s", row_label(r, "name"),
                            exc_info=True)
-        from panel.routes._shared import game_account_write_refusal, lg265_refresh_commands
+        from panel.routes._shared import game_account_write_refusal
         for gs in GameServer.query.all():
             if not _still_in_db(gs) or gs.remote is None:
                 continue
-            try:
-                # The command list a weekly update-lgsm can have grown (LinuxGSM v26.5.0's qw update).
-                if gs.installed:
-                    lg265_refresh_commands(gs)
-            except Exception:
-                db.session.rollback()
-                _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
             try:
                 # It rewrites the crontab, so it asks what every cron write asks, as the Scheduled
                 # Tasks page's own upgrade does: the account a legacy row names may be the host's
@@ -714,12 +707,32 @@ def _node_tools_cron_pass(app):
     _gp.lgc_ts3_heal_pass(app)
 
 
+def _lg265_command_refresh_pass(app):
+    """Read every installed server's LinuxGSM command list again (lg265_refresh_commands).
+
+    The weekly update-lgsm cron moves an account to a release that can offer more commands
+    (LinuxGSM v26.5.0 gave QuakeWorld `update`), and the stored list would hide them. One
+    server failing stops nothing.
+    """
+    from panel.routes._shared import lg265_refresh_commands
+    with app.app_context():
+        for gs in GameServer.query.all():
+            if not _still_in_db(gs) or gs.remote is None or not gs.installed:
+                continue
+            try:
+                lg265_refresh_commands(gs)
+            except Exception:
+                db.session.rollback()
+                _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
+
+
 def _node_tools_cron_watch(app):
-    """Once at startup and daily after: _node_tools_cron_pass."""
+    """Once at startup and daily after: _node_tools_cron_pass, then _lg265_command_refresh_pass."""
     while True:
         try:
             _t0 = time.time()
             _node_tools_cron_pass(app)
+            _lg265_command_refresh_pass(app)
             runtime_stats.beat("node-tools", 86400, time.time() - _t0)
         except Exception:
             runtime_stats.bump("loopfail", "node-tools")

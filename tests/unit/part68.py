@@ -166,8 +166,6 @@ def _restart_callers68(client, sid, host):
     # check is a host round trip, stood in for here as a plain game account.
     _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_app68, "ensure_node_tools_cron", lambda r: None)
-    # The pass also reads each command list again (lg265_refresh_commands): an empty answer changes nothing.
-    _p9_patch_sm("list_server_commands", lambda *a, **k: [])
     _p9_patch_sm("upgrade_managed_cron_tracking",
                  lambda remote, user, *a, **k: seen.append((user, k.get("query_type"))))
     _app68._node_tools_cron_pass(_p9)
