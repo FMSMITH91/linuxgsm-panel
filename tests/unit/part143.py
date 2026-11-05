@@ -25,6 +25,8 @@ from eventlet import patcher as _patcher143
 from unit.part01 import check
 from unit.part05 import _root
 from unit.part14 import _wf14
+from unit.part29 import _CI_ROOT29, _U29, _verdict29
+from unit.part06 import _wf_run_block
 
 _sp143 = _patcher143.original("subprocess")
 _SD143_PATH = os.path.join(_root, "tests", "suite_deadline.py")
@@ -199,3 +201,25 @@ check("suite deadline: leftovers() names a `sleep 600 &` that has left the suite
       "still holds its output (found as a holder of it, the suite itself never one), and kill() ends it",
       len(_leak143[0]) == 1 and not _leak143[1]
       and _leak143[0][0][0] in _leak143[2] and os.getpid() not in _leak143[2], repr(_leak143))
+
+
+# ── the root run's output is a file nobody prints: the judging step shows how it ended ────────
+# 2026-11-05 (#474's own CI): the root unit run hit its limit and the step said only "left no
+# tally"; the report suite_deadline wrote went to unit-root.txt and was lost with the runner.
+def _root_end143():
+    ci = _wf14("ci.yml")
+    src = _wf_run_block(ci, _CI_ROOT29) if _CI_ROOT29 in ci else "<<'EOF'\n\nEOF"
+    code = src[src.find("<<'EOF'\n") + 8:src.rfind("\nEOF")]
+    tmp = _tf143.mkdtemp(prefix="p143-root-")
+    stopped = ("PASS  a\n" + "noise\n" * 300 + "!" * 100 + "\nSUITE TIME LIMIT: tests/unit_test.py ran past "
+               "2100s\n  in part: part41\nFile \"x.py\", line 9 in _stuck_here_143\n")
+    return _verdict29(code, tmp, _U29, stopped), _verdict29(code, tmp, _U29, "PASS  a\n" + "line\n" * 400)
+
+
+_re143 = _root_end143()
+check("ci root step: a root run that stopped without a tally gets its time-limit report printed, "
+      "from the report's first line, before the step fails",
+      _re143[0][0] == 1 and "SUITE TIME LIMIT" in _re143[0][1] and "_stuck_here_143" in _re143[0][1]
+      and "the end of the unit run as root" in _re143[0][1] and "noise" not in _re143[0][1], repr(_re143[0]))
+check("ci root step: ...and one with no report gets its last 150 lines",
+      _re143[1][0] == 1 and _re143[1][1].count("line\n") == 150, repr((_re143[1][0], _re143[1][1][-300:])))

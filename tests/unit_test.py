@@ -1982,8 +1982,8 @@ _r16d_wrap_ts_handles()
 # skipped) drives pure functions with stubbed host reads, part12's app with stand-ins and the cron
 # recorder's shell under bash; imports part01, 05 and 12.
 # part143 (a suite past its time limit prints every thread's and greenlet's stack and exits 124:
-# tests/suite_deadline.py armed in every runner, fired in child interpreters, ci.yml's step limit)
-# imports part01, 05 and 14.
+# tests/suite_deadline.py armed in every runner, fired in child interpreters, ci.yml's step limit,
+# the root step printing a stopped run's report) imports part01, 05, 06, 14 and 29.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
