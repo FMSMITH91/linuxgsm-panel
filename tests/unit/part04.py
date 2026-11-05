@@ -1700,13 +1700,25 @@ try:
     _ty_time.sleep(0.2)
     check("bots typing: an instant answer shows no 'typing…' at all (no request, no flicker)",
           _ty_out == "answer" and _ty_pulses == [], repr(_ty_pulses))
-    _ty_out = _ubc.while_typing(_ty_send, lambda: (_ty_time.sleep(0.45), "slow")[1])
+    # 0.42, not a multiple of the 0.1 s pulse: ending ON a pulse is the race checked just below.
+    _ty_out = _ubc.while_typing(_ty_send, lambda: (_ty_time.sleep(0.42), "slow")[1])
     _ty_n = len(_ty_pulses)
     _ty_time.sleep(0.3)
     check("bots typing: a slow one pulses 'typing…' while it runs, and returns its answer",
           _ty_out == "slow" and _ty_n >= 3, "pulses=%d" % _ty_n)
     check("bots typing: ...and stops the moment it has answered",
           len(_ty_pulses) == _ty_n, "%d then %d" % (_ty_n, len(_ty_pulses)))
+    # ...and a command that ends exactly as a pulse comes due (the wait times out in the same
+    # instant as the answer): ten of them, and not one pulse once while_typing has returned.
+    _ty_late = 0
+    for _ in range(10):
+        _ty_pulses.clear()
+        _ubc.while_typing(_ty_send, lambda: _ty_time.sleep(0.15))
+        _ty_end = _ty_time.monotonic()
+        _ty_time.sleep(0.12)
+        _ty_late += sum(1 for t in _ty_pulses if t > _ty_end)
+    check("bots typing: ...even when it answers in the same instant a pulse comes due",
+          _ty_late == 0, "%d pulses after an answer" % _ty_late)
     _ty_pulses.clear()
     _ubc._TYPING_CAP = 0.25
     _ubc.while_typing(_ty_send, lambda: _ty_time.sleep(0.7))

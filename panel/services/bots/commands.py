@@ -301,6 +301,8 @@ def while_typing(send, fn):
         end = time.monotonic() + _TYPING_CAP
         wait = _TYPING_AFTER
         while not stop.wait(wait) and time.monotonic() < end:
+            if stop.is_set():
+                break    # the answer went out while that wait timed out: no "typing…" after it
             try:
                 send()
             except Exception:
