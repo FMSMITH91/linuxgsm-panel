@@ -378,5 +378,95 @@ check("Config tab: FiveM's licence-key note, only on a FiveM server",
       and _sf_tpl141.index("{% if server.game_type == 'fivem' %}") < _sf_tpl141.index('id="lg265-fivem-key"')
       < _sf_tpl141.index("{% endif %}", _sf_tpl141.index("{% if server.game_type == 'fivem' %}")))
 
+# ── 4. a command list update-lgsm has grown (v26.5.0's QuakeWorld `update`) ─────────────────────
+_mc141 = []
+try:
+    _p9_patch(_smc141, "_rewrite_crontab", lambda server, user, grep_args, add_lines, **k: (
+        _mc141.append((grep_args, list(add_lines))), (True, "ok"))[1])
+    _smc141.add_maintenance_cron(None, "qwserver", "qwserver", {"update", "monitor", "check-update"})
+    _smc141.install_game_cron(None, "qwserver", "qwserver", {"monitor", "update", "update-lgsm", "mods-update"})
+finally:
+    _p9_restore_all()
+_upd_line141 = "15 5 * * * " + _cron141._record_managed_cmd("qwserver",
+                                                              "cd /home/qwserver && ./qwserver update")
+check("add_maintenance_cron: only the command gained is scheduled, as install_game_cron schedules it, "
+      "never monitor (the Autostart switch), and only that command's line is replaced",
+      len(_mc141) == 2 and _mc141[0][1] == [_upd_line141] and "(update)( |$)" in _mc141[0][0]
+      and "monitor" not in _mc141[0][0] and _upd_line141 in _mc141[1][1] and len(_mc141[1][1]) == 4
+      and _mc141[1][1][0].startswith("*/5 * * * * "), repr(_mc141))
+
+_QW_OLD141 = [{"cmd": "start", "short": "st", "desc": "Start the server."},
+              {"cmd": "update-lgsm", "short": "ul", "desc": "Check and apply any LinuxGSM updates."}]
+_QW_NEW141 = _QW_OLD141 + [{"cmd": "update", "short": "u", "desc": "Check and apply any server updates."},
+                           {"cmd": "check-update", "short": "cu", "desc": "Check if a gameserver update is available"}]
+_rf141 = {"list": _QW_NEW141, "added": [], "refusal": None}
+with _p9.app_context():
+    _cmds_before141 = _sh141.db.session.get(_sh141.GameServer, P9_GS).commands
+try:
+    _p9_arm(who="part141")
+    _p9_patch_sm("list_server_commands", lambda remote, user, selfname=None: list(_rf141["list"]))
+    _p9_patch_sm("add_maintenance_cron", lambda remote, user, selfname, cmds: (
+        _rf141["added"].append(set(cmds)), (True, "ok"))[1])
+    _p9_patch(_sh141, "game_account_write_refusal", lambda *a, **k: _rf141["refusal"])
+
+    def _rf_run141(old, answer, refusal=None):
+        _rf141.update(list=answer, refusal=refusal, added=[])
+        with _p9.app_context():
+            _g = _sh141.db.session.get(_sh141.GameServer, P9_GS)
+            _g.set_commands(old)
+            _sh141.db.session.commit()
+            _got = _sh141.lg265_refresh_commands(_g)
+            return _got, [c["cmd"] for c in _sh141.db.session.get(_sh141.GameServer, P9_GS).get_commands()], \
+                list(_rf141["added"])
+    _rf_grew141 = _rf_run141(_QW_OLD141, _QW_NEW141)
+    _rf_empty141 = _rf_run141(_QW_OLD141, [])
+    _rf_same141 = _rf_run141(_QW_NEW141, _QW_NEW141)
+    _rf_first141 = _rf_run141([], _QW_NEW141)
+    _rf_refused141 = _rf_run141(_QW_OLD141, _QW_NEW141, refusal="the host's sudo login")
+    check("command refresh: a list that gained update is stored and update scheduled (not check-update, "
+          "not monitor)", _rf_grew141 == ({"update"}, ["start", "update-lgsm", "update", "check-update"],
+                                          [{"update"}]), repr(_rf_grew141))
+    check("command refresh: an empty answer (a failed read) keeps the stored list and schedules nothing",
+          _rf_empty141 == (set(), ["start", "update-lgsm"], []), repr(_rf_empty141))
+    check("command refresh: an unchanged list writes nothing", _rf_same141[0] == set() and _rf_same141[2] == [],
+          repr(_rf_same141))
+    check("command refresh: a list never read before is stored, and scheduling is left to the install's cron",
+          _rf_first141 == (set(), ["start", "update-lgsm", "update", "check-update"], []), repr(_rf_first141))
+    check("command refresh: an account the panel may not write as gets its list, and no crontab write",
+          _rf_refused141[0] == set() and _rf_refused141[2] == [] and "update" in _rf_refused141[1],
+          repr(_rf_refused141))
+
+    # ...and its two callers: a panel update-lgsm that exited 0, and the daily maintenance pass.
+    _rfcalls141 = []
+    _p9_patch(_sd141, "lg265_refresh_commands", lambda gs: _rfcalls141.append(("action", gs.id)) or set())
+    _p9_patch(_sh141, "lg265_refresh_commands", lambda gs: _rfcalls141.append(("pass", gs.id)) or set())
+    _ul_rc141 = [0]
+    _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: ("", "", _ul_rc141[0]))
+    _p9_patch(_sd141, "_after_power_action", lambda *a, **k: None)
+    with _p9.app_context():
+        _g141 = _sh141.db.session.get(_sh141.GameServer, P9_GS)
+        _sd141._run_sync_action(_p9, _g141, _g141.remote, "update-lgsm", None, None)
+        _ul_rc141[0] = 1
+        _sd141._run_sync_action(_p9, _g141, _g141.remote, "update-lgsm", None, None)
+        _ul_rc141[0] = 0
+        _sd141._run_sync_action(_p9, _g141, _g141.remote, "details", None, None)
+    check("update-lgsm from the panel: the command list is read again after an exit 0 only, and not after "
+          "other actions", _rfcalls141 == [("action", P9_GS)], repr(_rfcalls141))
+    _rfcalls141.clear()
+    import app as _app141  # noqa: E402
+    _p9_patch(_app141, "ensure_node_tools_cron", lambda r: None)
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: None)
+    _p9_patch(_sh141, "game_account_write_refusal", lambda *a, **k: None)
+    from panel.services import game_ports as _gp141  # noqa: E402
+    _p9_patch(_gp141, "lgc_ts3_heal_pass", lambda app: None)
+    _app141._node_tools_cron_pass(_p9)
+    check("the daily maintenance pass reads every installed server's command list again",
+          ("pass", P9_GS) in _rfcalls141, repr(_rfcalls141))
+finally:
+    _p9_restore_all()
+    with _p9.app_context():
+        _sh141.db.session.get(_sh141.GameServer, P9_GS).commands = _cmds_before141
+        _sh141.db.session.commit()
+
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP141_START, repr(_P9_TRIPPED[_TRIP141_START:]))

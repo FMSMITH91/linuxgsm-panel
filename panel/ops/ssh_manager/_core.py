@@ -3493,6 +3493,40 @@ def set_autostart(server, user, enabled, selfname=None):
     return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}", add)
 
 
+# install_game_cron's schedule for each maintenance command (cron.LGC_CRON_CMDS).
+_LG265_MAINT_SCHEDULE = {"monitor": "*/5 * * * *", "mods-update": "0 5 * * *", "update": "15 5 * * *",
+                         "update-lgsm": "30 5 * * 0"}
+
+
+def _lg265_maint_line(user, selfname, cmd):
+    """The crontab line install_game_cron writes for maintenance command `cmd`."""
+    # Record each maintenance run's exit code + output (keeps the command visible so the
+    # managed-line grep still matches), so the panel can show update/monitor success. Run as
+    # `cd /home/<u> && ./<s> <cmd>`, the form every LinuxGSM monitor sees (cron.lgc_cron_core).
+    return "%s %s" % (_LG265_MAINT_SCHEDULE[cmd],
+                      cron._record_managed_cmd(user, cron.lgc_cron_core(user, selfname, cmd)))
+
+
+def add_maintenance_cron(server, user, selfname, cmds):
+    """Schedule maintenance commands a game's LinuxGSM newly offers, leaving every other line as it is.
+
+    For a command list that GAINED `cmds` (an account update-lgsm moved to a release with more: v26.5.0
+    gave QuakeWorld `update`). Not install_game_cron again: that rewrites every maintenance line,
+    so it would undo an operator's own schedule and put `monitor` back on a server whose Autostart
+    was switched off. `monitor` is never added here for the same reason. -> (ok, message).
+    """
+    if not game_idents_ok(user, selfname):
+        return False, GAME_ACCOUNT_REFUSED[1]
+    want = [c for c in cron.LGC_CRON_CMDS if c in set(cmds or ()) and c != "monitor"]
+    if cron._lgc_retired(selfname) and "update-lgsm" in want:
+        want.remove("update-lgsm")
+    if not want:
+        return True, "no maintenance commands to schedule"
+    remove_re = cron.lgc_cron_cmd_ere(user, selfname, "|".join(want))
+    return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}",
+                            [_lg265_maint_line(user, selfname, c) for c in want])
+
+
 def install_game_cron(server, user, selfname=None, supported=None):
     """Set up LinuxGSM maintenance cron for a game instance.
 
@@ -3512,21 +3546,7 @@ def install_game_cron(server, user, selfname=None, supported=None):
     if cron._lgc_retired(selfname):
         supported.discard("update-lgsm")
 
-    def sc(cmd):
-        # Record each maintenance run's exit code + output (keeps the command visible so the
-        # managed-line grep still matches), so the panel can show update/monitor success. Run as
-        # `cd /home/<u> && ./<s> <cmd>`, the form every LinuxGSM monitor sees (cron.lgc_cron_core).
-        return cron._record_managed_cmd(user, cron.lgc_cron_core(user, selfname, cmd))
-
-    lines = []
-    if "monitor" in supported:
-        lines.append(f"*/5 * * * * {sc('monitor')}")
-    if "mods-update" in supported:
-        lines.append(f"0 5 * * * {sc('mods-update')}")
-    if "update" in supported:
-        lines.append(f"15 5 * * * {sc('update')}")
-    if "update-lgsm" in supported:
-        lines.append(f"30 5 * * 0 {sc('update-lgsm')}")
+    lines = [_lg265_maint_line(user, selfname, c) for c in cron.LGC_CRON_CMDS if c in supported]
     if not lines:
         return True, "no maintenance commands to schedule"
 

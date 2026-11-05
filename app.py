@@ -688,10 +688,17 @@ def _node_tools_cron_pass(app):
             except Exception:
                 _log.debug("node-tools cron ensure failed for %s", row_label(r, "name"),
                            exc_info=True)
-        from panel.routes._shared import game_account_write_refusal
+        from panel.routes._shared import game_account_write_refusal, lg265_refresh_commands
         for gs in GameServer.query.all():
             if not _still_in_db(gs) or gs.remote is None:
                 continue
+            try:
+                # The command list a weekly update-lgsm can have grown (LinuxGSM v26.5.0's qw update).
+                if gs.installed:
+                    lg265_refresh_commands(gs)
+            except Exception:
+                db.session.rollback()
+                _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
             try:
                 # It rewrites the crontab, so it asks what every cron write asks, as the Scheduled
                 # Tasks page's own upgrade does: the account a legacy row names may be the host's

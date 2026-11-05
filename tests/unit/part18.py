@@ -1233,6 +1233,8 @@ try:
     _nt18 = []
 
     _p9_patch(_p9_app, "ensure_node_tools_cron", _ensure18)
+    # The pass also reads each command list again (lg265_refresh_commands): an empty answer changes nothing.
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])
     # The pass asks game_account_write_refusal before a crontab rewrite (review 1012d); the account
     # check is a host round trip, stood in for here as a plain game account.
     _p9_patch(_sh18, "game_account_write_refusal", lambda *a, **k: None)

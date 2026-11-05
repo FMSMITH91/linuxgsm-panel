@@ -37,7 +37,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
-    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal)
+    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal,
+    lg265_refresh_commands)
 
 
 # Said when the host call was made but its audit row could not be written (the database was
@@ -189,6 +190,8 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
                detail=_clean_action_output(out)[-400:], actor=origin, server=gs)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
     _after_power_action(app, gs, remote, short_name, action, rc)
+    if action == "update-lgsm" and rc == 0:
+        _lg265_after_update_lgsm(gs)
     if action in READONLY_ACTIONS:
         return True, f"{action}: {clean[:600] or 'no output'}"
     # The outcomes are i18n.Sentences: English for the chat bots, which send them as they are, and
@@ -202,6 +205,16 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
                                     action=action, name=name)
     return False, i18n.Sentence("'{action}' failed for '{name}': {reason}", action=action, name=name,
                                 reason=reason)
+
+
+def _lg265_after_update_lgsm(gs):
+    """After update-lgsm: the release it moved to may offer more commands (lg265_refresh_commands)."""
+    try:
+        lg265_refresh_commands(gs)
+    except Exception:
+        db.session.rollback()
+        _log.debug("command list refresh after update-lgsm failed for %s", row_label(gs, "name"),
+                   exc_info=True)
 
 
 def _r15e_said(msg):

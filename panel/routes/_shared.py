@@ -1322,6 +1322,38 @@ def _maybe_cache_commands(app, gs):
     _bg_cache_commands(app, [server_id], births={server_id: row_birth(gs)})
 
 
+def lg265_refresh_commands(gs):
+    """Read `gs`'s LinuxGSM command list again; keep it when the host answered, and schedule what it gained.
+
+    The list is read at install (or import) and then only on a manual refresh, while `update-lgsm`
+    — the weekly cron's, or the button — moves the account to a release that can offer more.
+    LinuxGSM v26.5.0 gave QuakeWorld `update` and `check-update`: with the old list stored, the
+    Update button stayed hidden, the action was refused, and no daily update was scheduled. Called
+    after a panel update-lgsm that exited 0 and from the daily maintenance pass.
+
+    An empty answer is a failed read, never "no commands", so it changes nothing. A maintenance
+    command the list gained is added to the crontab (ssh_manager.add_maintenance_cron), never
+    `monitor`: that is the Autostart switch, the operator's. Nothing is scheduled from a list that
+    was never read before (the install's own cron is that). -> the maintenance commands added.
+    """
+    cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
+    old = gs.get_commands()
+    if not cmds or cmds == old:
+        return set()
+    gained = {c.get("cmd") for c in cmds} - {c.get("cmd") for c in old}
+    gs.set_commands(cmds)
+    db.session.commit()
+    added = (gained & set(_sm.LGC_CRON_CMDS)) - {"monitor"} if old else set()
+    # A crontab write asks what every cron write asks (the account may be the host's sudo login).
+    if not added or game_account_write_refusal(gs.remote, gs.short_name) is not None:
+        return set()
+    ok, why = _sm.add_maintenance_cron(gs.remote, gs.short_name, gs.lgsm_name, added)
+    if not ok:
+        _log.warning("could not schedule %s for %s: %s", sorted(added), row_label(gs, "name"), why)
+        return set()
+    return added
+
+
 # ── Module state the route modules own ─────────────────────────────────────────────────────────
 # These were defined in app.py and, after the split, read ONLY from here and the route modules.
 # CodeQL reported all six as unused globals: it cannot follow a name across the app <-> routes
