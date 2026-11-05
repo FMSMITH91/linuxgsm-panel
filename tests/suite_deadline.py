@@ -177,8 +177,9 @@ def descendants(root_pid=None):
 
 
 def _ancestors():
+    # Down to 0, the parent of pid 1: in a container the suite itself can be pid 1.
     pids, pid = set(), os.getpid()
-    while pid > 1:
+    while pid > 0:
         pids.add(pid)
         try:
             with open("/proc/%d/stat" % pid, "rb") as fh:

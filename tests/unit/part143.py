@@ -188,14 +188,14 @@ def _leaked143():
         seen = [p for p in SD143.leftovers() if p[2] == "sleep 600"]
         if not seen:
             time.sleep(0.05)
-    below = [p[0] for p in SD143.descendants()]
+    held = [p[0] for p in SD143.holders(1)]
     SD143.kill(seen)
     time.sleep(0.2)
-    return seen, [p for p in SD143.leftovers() if p[2] == "sleep 600"], below
+    return seen, [p for p in SD143.leftovers() if p[2] == "sleep 600"], held
 
 
 _leak143 = _leaked143()
 check("suite deadline: leftovers() names a `sleep 600 &` that has left the suite's process tree but "
-      "still holds its output, and kill() ends it",
+      "still holds its output (found as a holder of it, the suite itself never one), and kill() ends it",
       len(_leak143[0]) == 1 and not _leak143[1]
-      and _leak143[0][0][0] not in _leak143[2], repr(_leak143))
+      and _leak143[0][0][0] in _leak143[2] and os.getpid() not in _leak143[2], repr(_leak143))
