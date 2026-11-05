@@ -402,7 +402,6 @@ _WFP42 = ".github/workflows/"
 _ZZ_IGNORES42 = {
     (_WFP42 + "codacy-coverage.yml", "dangerous-triggers"),   # main's copy runs; the report is untrusted data
     (_WFP42 + "codeql-alerts.yml", "dangerous-triggers"),     # judges main only; runs nothing of the trigger's
-    (_WFP42 + "deploy.yml", "dangerous-triggers"),            # a push to main, proved on main's first parents
     (_WFP42 + "cflite_build.yml", "concurrency-limits"),      # a cancelled build on main's head is a failure
     (_WFP42 + "cflite_batch.yml", "concurrency-limits"),      # its check lands on main's head
     (_WFP42 + "cflite_cron.yml", "concurrency-limits"),       # its check lands on main's head

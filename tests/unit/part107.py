@@ -298,7 +298,7 @@ def _install_sh107():
     pre = _ins_block107("# If anything's missing, install it automatically", "\nfi\n")
     any_sudo = _bash107(_SHIM107 + _SUDO_ANY107 + pre)
     ni = "SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "
-    pkgs = "install -y python3-venv python3-pip git curl wget cron ufw"
+    pkgs = "install -y python3-venv python3-pip git curl wget cron ufw openssh-client"
     check("install.sh: a per-user install's prerequisites are installed through sudo with the settings on "
           "apt-get's command line", any_sudo.splitlines() == [ni + "update -qq", ni + pkgs], repr(any_sudo))
     apt_only = _bash107(_SHIM107 + _SUDO_APT_ONLY107 + pre)
