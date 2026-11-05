@@ -175,3 +175,26 @@ check("ci.yml: the \"Run all checks\" step has its own timeout, above the unit s
       "watchdog and the work ahead of the lanes, and under the job's",
       _ci143[0] * 60 >= SD143.LIMITS["unit"] + SD143.BACKSTOP + 120 and 0 < _ci143[0] < _ci143[1],
       repr(_ci143))
+
+
+# ── the end-of-run gate's reader (tests/unit/part15) sees a process that left the tree ────────
+# `sleep 600 &` from a shell that then exits is the init process's child: no list of this
+# process's descendants has it, yet it holds the suite's stdout, so `| tee` would wait on it.
+def _leaked143():
+    """What leftovers() saw of a `sleep 600 &` started behind a shell that exited, and after kill."""
+    _sp143.Popen(["bash", "-c", "exec 2>&1; sleep 600 &"]).wait()  # nosec B603 B607 - a fixed stand-in
+    deadline, seen = time.monotonic() + 5, []
+    while time.monotonic() < deadline and not seen:
+        seen = [p for p in SD143.leftovers() if p[2] == "sleep 600"]
+        if not seen:
+            time.sleep(0.05)
+    SD143.kill(seen)
+    time.sleep(0.2)
+    return seen, [p for p in SD143.leftovers() if p[2] == "sleep 600"]
+
+
+_leak143 = _leaked143()
+check("suite deadline: leftovers() names a `sleep 600 &` that has left the suite's process tree but "
+      "still holds its output, and kill() ends it",
+      len(_leak143[0]) == 1 and not _leak143[1]
+      and _leak143[0][0][0] not in [p[0] for p in SD143.descendants()], repr(_leak143))

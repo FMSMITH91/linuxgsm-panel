@@ -525,9 +525,9 @@ def _ci1_root_step_bad(steps):
 def _ci1_wiring():
     bad = _ci1_root_step_bad(_steps29(_job29(_wf29("ci.yml"), "checks")))
     rt = _read29("tools", "run-tests.sh")
-    if ('"$PY" tests/unit_test.py | tee "${UNIT_LOG}"' not in rt
+    if ('"$PY" tests/unit_test.py >"${UNIT_LOG}" || rc=$?' not in rt or 'cat "${UNIT_LOG}"' not in rt
             or "set -euo pipefail" not in rt.splitlines()[:12]):
-        bad.append("run-tests.sh does not tee the unit run to UNIT_LOG under pipefail")
+        bad.append("run-tests.sh does not write the unit run to UNIT_LOG (and show it) under pipefail")
     check("ci: every checks leg runs the unit suite again as root, against the runner's own run",
           not bad, repr(bad))
 

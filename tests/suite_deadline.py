@@ -119,9 +119,32 @@ def _descendants(root_pid):
     return found
 
 
+def _unpatched(name, fallback):
+    """The module eventlet would have replaced, as it was (eventlet's green write trampolines to the
+    hub when the pipe is full, which the handler, running on the hub, cannot do)."""
+    try:
+        from eventlet import patcher
+        return patcher.original(name)
+    except ImportError:
+        return fallback
+
+
+def _write(text):
+    """All of `text` to the report descriptor, waiting out a full pipe with the unpatched calls."""
+    fd, data = _state["fd"], text.encode("utf-8", "replace")
+    raw_os, raw_select = _unpatched("os", os), _unpatched("select", None)
+    while data:
+        try:
+            data = data[raw_os.write(fd, data):]
+        except BlockingIOError:
+            if raw_select is not None:
+                raw_select.select([], [fd], [], 5)
+        except OSError:
+            return
+
+
 def _fire(signum=None, frame=None):
-    out = _state["out"]
-    w = out.write
+    w = _write
     w("\n" + "!" * 100 + "\n")
     w("SUITE TIME LIMIT: tests/%s_test.py ran past %ds and is stopped here (exit %d).\n"
       % (_state["suite"], _state["limit"], EXIT_CODE))
@@ -131,32 +154,107 @@ def _fire(signum=None, frame=None):
         w("  " + line + "\n")
     w("\n-- OS threads (the main thread's top frame is this handler; the frame under it is where "
       "it was) --\n")
-    out.flush()
-    faulthandler.dump_traceback(file=out, all_threads=True)
-    out.flush()
+    faulthandler.dump_traceback(file=_state["fd"], all_threads=True)
     stacks = _greenlet_stacks()
     w("\n-- %d suspended greenlet(s) --\n" % len(stacks))
     for i, (g, stack) in enumerate(stacks, 1):
         w("greenlet %d: %r\n%s\n" % (i, g, stack))
-    procs = _descendants(os.getpid())
-    w("-- %d process(es) below this one (killed now, so none holds a pipe open) --\n" % len(procs))
+    procs = leftovers()
+    w("-- %d process(es) below this one or holding its output (killed now, so none holds a pipe open) --\n" % len(procs))
     for pid, st, cmd in procs:
         w("  pid %d state %s: %s\n" % (pid, st, cmd))
     w("!" * 100 + "\n")
-    out.flush()
-    for pid, _st, _cmd in procs:
+    kill(procs)
+    os._exit(EXIT_CODE)
+
+
+def descendants(root_pid=None):
+    """[(pid, state, cmdline)] of every live process below root_pid (default: this one)."""
+    return [p for p in _descendants(os.getpid() if root_pid is None else root_pid) if p[1] != "Z"]
+
+
+def _ancestors():
+    pids, pid = set(), os.getpid()
+    while pid > 1:
+        pids.add(pid)
         try:
-            os.kill(pid, signal.SIGKILL)
+            with open("/proc/%d/stat" % pid, "rb") as fh:
+                pid = int(fh.read().decode("utf-8", "replace").rsplit(")", 1)[-1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return pids
+
+
+def _writes_to(pid, fdname, target):
+    """Whether pid's descriptor `fdname` is `target` opened for writing."""
+    base = "/proc/%d" % pid
+    try:
+        if os.readlink("%s/fd/%s" % (base, fdname)) != target:
+            return False
+        with open("%s/fdinfo/%s" % (base, fdname)) as fh:
+            flags = next((ln.split()[1] for ln in fh if ln.startswith("flags:")), "0")
+        return int(flags, 8) & 3 in (1, 2)
+    except (OSError, ValueError, StopIteration):
+        return False
+
+
+def holders(fd=1):
+    """[(pid, state, cmdline)] of the processes, other than this one and its ancestors, that hold
+    this process's `fd` (a pipe or a file) open for writing. A pipe's reader (`| tee`) waits for
+    every one of them, even one that has left this process's tree (`sleep 600 &` from a shell
+    that exited is the init process's child, and in no list of descendants)."""
+    try:
+        target = os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        return []
+    if not (target.startswith("pipe:") or target.startswith("/")) or target.startswith("/dev/"):
+        return []
+    skip, found = _ancestors(), []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) in skip:
+            continue
+        pid = int(name)
+        try:
+            fds = os.listdir("/proc/%d/fd" % pid)
+        except OSError:
+            continue
+        if any(_writes_to(pid, f, target) for f in fds):
+            try:
+                with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                    cmd = fh.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            except OSError:
+                cmd = "?"
+            found.append((pid, "?", cmd[:300]))
+    return found
+
+
+def leftovers():
+    """Everything that would outlive the suite: its live descendants, and any other process holding
+    its stdout or stderr for writing. Each (pid, state, cmdline), once."""
+    seen, out = set(), []
+    for proc in descendants() + holders(1) + holders(2):
+        if proc[0] not in seen:
+            seen.add(proc[0])
+            out.append(proc)
+    return out
+
+
+def kill(procs):
+    """SIGKILL each (pid, ...) in procs; one already gone is skipped."""
+    for proc in procs:
+        try:
+            os.kill(proc[0], signal.SIGKILL)
         except OSError:  # nosec B110 - already gone
             pass
-    os._exit(EXIT_CODE)
 
 
 def arm(caller_globals, environ=None, backstop=BACKSTOP):
     """Start the limit for the suite whose runner's globals these are. Returns the limit (0 = off).
 
     `backstop` is how long after the limit faulthandler's watchdog ends the process if the handler
-    could not run (tests/unit/part143.py shortens it to watch it fire).
+    could not run (tests/unit/part143.py shortens it to watch it fire). The timer stays armed
+    through interpreter exit, so a suite that prints its tally and then hangs on the way out (a
+    thread it waits for, an atexit hook) is reported the same way.
     """
     suite = suite_name(caller_globals.get("__file__") or sys.argv[0])
     limit = limit_for(suite, environ)
@@ -164,9 +262,8 @@ def arm(caller_globals, environ=None, backstop=BACKSTOP):
         return 0
     # A descriptor of its own: a check that swaps sys.stderr, or points fd 2 elsewhere for a while,
     # must not take the report with it. Not inherited by anything the suite starts (PEP 446).
-    out = os.fdopen(os.dup(2), "w", buffering=1, encoding="utf-8", errors="replace")
-    _state.update(out=out, suite=suite, limit=limit, globals=caller_globals)
+    _state.update(fd=os.dup(2), suite=suite, limit=limit, globals=caller_globals)
     signal.signal(signal.SIGALRM, _fire)
     signal.setitimer(signal.ITIMER_REAL, limit)
-    faulthandler.dump_traceback_later(limit + backstop, exit=True, file=out)
+    faulthandler.dump_traceback_later(limit + backstop, exit=True, file=_state["fd"])
     return limit
