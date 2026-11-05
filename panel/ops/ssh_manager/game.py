@@ -1430,11 +1430,26 @@ _LG265_DIR_YES, _LG265_DIR_NO = "LG265_DIR", "LG265_NODIR"
 def fastdl_answers(server, user, selfname, game_type):
     """The keystrokes for `fastdl` on this account's LinuxGSM release (see above)."""
     from panel.ops.ssh_manager import hosts
-    from panel.services import lgsm_data
-    if not lgsm_data.release_at_least(hosts.lgsm_release(server, user, selfname), _LG265_FASTDL_RELEASE):
+    if not _lg265_fastdl_runs_new(hosts.lgsm_release(server, user, selfname),
+                                  hosts.lgsm_modules_release(server, user, selfname)):
         return ["Y"] * 8
     gmod = ["Y"] if game_type == "gmod" else []
     return (["N"] if _lg265_fastdl_dir_exists(server, user, selfname) else []) + gmod + ["Y"]
+
+
+def _lg265_fastdl_runs_new(script_tag, modules_tag):
+    """Whether `fastdl` will run on v26.5.0 or later, given the script's and the modules' release.
+
+    The modules are shared by every instance in the account, so they can be newer than the
+    script; and when the two differ LinuxGSM runs update-lgsm before the command, which installs
+    the newest release (v26.5.0 or later). Taking that as v26.4.0 sent Y to "Rebuild from
+    scratch?", and LinuxGSM cleared the directory (seen on the test host). If that update fails,
+    the leading N lands on v26.4.0's "Continue?", which stops before anything is touched.
+    """
+    from panel.services import lgsm_data
+    return (lgsm_data.release_at_least(script_tag, _LG265_FASTDL_RELEASE)
+            or lgsm_data.release_at_least(modules_tag, _LG265_FASTDL_RELEASE)
+            or bool(script_tag and modules_tag and script_tag != modules_tag))
 
 
 def _lg265_fastdl_dir_exists(server, user, selfname):

@@ -1669,6 +1669,31 @@ def lgsm_release(server, account, selfname):
     return lgsm_data.release_tag(value)
 
 
+def lgsm_modules_release(server, account, selfname):
+    """The release of the LinuxGSM modules a game account's scripts share, as its tag, or None.
+
+    From `modulesversion=` in /home/<account>/lgsm/modules/core_modules.sh. Every instance script
+    in the account runs these modules, and update-lgsm from ONE instance moves them: a script can
+    then say v26.4.0 while its modules say v26.5.0 (measured on the test host). On that mismatch
+    LinuxGSM's check_version.sh runs update-lgsm first, which installs the newest release, and only
+    then runs the command. None when it cannot be read, as lgsm_release.
+    """
+    if not (account and selfname):
+        return None
+    path = _core._quote("/home/%s/lgsm/modules/core_modules.sh" % account)
+    try:
+        out, _err, rc = _core.read_as_game_user(
+            server, account, "grep -m1 -E '^modulesversion=' " + path, timeout=10,
+            selfname=selfname)
+    except Exception:
+        _core._log.debug("could not read the account's LinuxGSM modules version", exc_info=True)
+        return None
+    from panel.services import lgsm_data
+    line = (out or "").strip().splitlines()[:1] if rc == 0 else []
+    value = line[0].partition("=")[2].strip().strip("\"'") if line else ""
+    return lgsm_data.release_tag(value)
+
+
 def install_game_dependencies(server, game_type=None, extra="", account=None, selfname=None):
     """Install the exact LinuxGSM dependencies for a game (from LinuxGSM's list for this host's
     distro — a 22.04 box gets 22.04's packages, not 24.04's),

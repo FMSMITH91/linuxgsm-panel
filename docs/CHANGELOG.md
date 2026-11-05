@@ -740,10 +740,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **LinuxGSM v26.5.0 compatibility.** On servers running LinuxGSM v26.5.0 or newer:
   - FastDL no longer rebuilds its folder from scratch: the panel answers v26.5.0's new "Rebuild
     from scratch?" question No, so the run is incremental and files LinuxGSM did not write are
-    kept.
+    kept. This also covers a server whose account another server moved to v26.5.0 (the servers in
+    one account share LinuxGSM's modules).
   - An update started while another one is running (a click during the nightly update, say) is
     reported as "not run: an update is already running" in the console, the audit log, the chat
-    bots and Scheduled Tasks, instead of as a finished update.
+    bots and Scheduled Tasks, instead of as a finished update. A start or restart that checks for
+    updates first is still reported as the start it was.
   - Backups are named and confirmed from LinuxGSM's script log when its "Completed:" line is
     missing, including after the backup restarted the server.
   - New games get the right default install port (OpenRA: Red Alert, Luanti, FiveM, Battlefront

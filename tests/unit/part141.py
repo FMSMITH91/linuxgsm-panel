@@ -51,14 +51,16 @@ def _fd_probe141(server, user, sh, timeout=30, selfname=None):
     return _fd141["probe"]
 
 
-def _fd_answers141(game_type, tag="v26.5.0", vals=None, probe=("LG265_DIR\n", "", 0), unread=False):
+def _fd_answers141(game_type, tag="v26.5.0", vals=None, probe=("LG265_DIR\n", "", 0), unread=False,
+                   mods="same"):
     _fd141.update(tag=tag, vals=None if unread else ({"webdir": ""} if vals is None else vals),
-                  probe=probe, probed=[])
+                  probe=probe, probed=[], mods=tag if mods == "same" else mods)
     return _game141.fastdl_answers(None, "u141", "%sserver" % game_type, game_type)
 
 
 try:
     _p9_patch(_hosts141, "lgsm_release", lambda server, account, selfname: _fd141["tag"])
+    _p9_patch(_hosts141, "lgsm_modules_release", lambda server, account, selfname: _fd141["mods"])
     _p9_patch(_files141, "lgsm_get_values", lambda server, user, selfname, keys: _fd141["vals"])
     _p9_patch(_smc141, "read_as_game_user", _fd_probe141)
     _fd_res141 = {
@@ -91,12 +93,40 @@ try:
           and len(_fd_root141) == 1 and "[ -d /home/u141/web/fastdl ]" in _fd_root141[0], repr((_fd_def141, _fd_root141)))
     check("fastdl: a webdir only LinuxGSM's bash could expand is not guessed at (no probe, no rebuild N)",
           _fd_odd141 == ["Y"] and _fd141["probed"] == [], repr((_fd_odd141, _fd141["probed"])))
+    # The modules are the account's, shared by its instances: update-lgsm from one moves them all.
+    _fd_mix141 = {"newmods": _fd_answers141("cs", tag="v26.4.0", mods="v26.5.0"),
+                  "oldmix": _fd_answers141("gmod", tag="v26.3.0", mods="v26.4.0"),
+                  "modsunread": _fd_answers141("cs", tag="v26.4.0", mods=None),
+                  "newscript": _fd_answers141("cs", tag="v26.5.0", mods="v26.4.0")}
+    check("fastdl: a v26.4.0 script on v26.5.0 modules (another instance ran update-lgsm) gets v26.5.0's "
+          "answers, as does any mismatch (LinuxGSM then runs update-lgsm first, to the newest release); "
+          "modules that could not be read leave the script's release",
+          _fd_mix141["newmods"] == ["N", "Y"] and _fd_mix141["oldmix"] == ["N", "Y", "Y"]
+          and _fd_mix141["modsunread"] == ["Y"] * 8 and _fd_mix141["newscript"] == ["N", "Y"],
+          repr(_fd_mix141))
     _fd_unread141 = _fd_answers141("cs", unread=True)
     check("fastdl: a config that could not be read is not taken as the default webdir (no probe, no "
           "rebuild N)", _fd_unread141 == ["Y"] and _fd141["probed"] == [],
           repr((_fd_unread141, _fd141["probed"])))
 finally:
     _p9_restore_all()
+
+# The modules' release, read from the account's shared core_modules.sh.
+_mr141 = {"out": ('modulesversion="v26.5.0"\n', "", 0), "sh": []}
+try:
+    _p9_patch(_smc141, "read_as_game_user", lambda server, user, sh, timeout=30, selfname=None: (
+        _mr141["sh"].append(sh), _mr141["out"])[1])
+    _mr_read141 = _hosts141.lgsm_modules_release(None, "u141", "csserver")
+    _mr141["out"] = ("", "timed out", -1)
+    _mr_failed141 = _hosts141.lgsm_modules_release(None, "u141", "csserver")
+    _mr141["out"] = ('modulesversion="$(curl evil)"\n', "", 0)
+    _mr_odd141 = _hosts141.lgsm_modules_release(None, "u141", "csserver")
+finally:
+    _p9_restore_all()
+check("modules release: modulesversion= from the account's lgsm/modules/core_modules.sh; a failed read "
+      "and a value that is not a plain tag are None",
+      _mr_read141 == "v26.5.0" and _mr_failed141 is None and _mr_odd141 is None
+      and "/home/u141/lgsm/modules/core_modules.sh" in _mr141["sh"][0], repr((_mr_read141, _mr141["sh"])))
 
 # ...and the caller: the FastDL button's run is given exactly those answers.
 _fdruns141 = []
