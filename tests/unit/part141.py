@@ -243,5 +243,77 @@ check("cron table's page: a busy run shows its own 'Not run' badge, before the O
       and _srvjs141.index("j.ok === true && j.busy") < _srvjs141.index("else if(j.ok === true){"))
 
 
+# ── 3. the backup's archive name without "Completed:" ───────────────────────────────────────────
+# v26.5.0's piped output of a backup of a running server (the restart replaces the held
+# "Completed:" line) and of one that prunes; v26.4.0's, where the line is there.
+_BK_ARC141 = "vhserver-2026-11-04-120000.tar.zst"
+_BK_RESTART141 = "[  OK  ] Starting vhserver: LinuxGSM\n"
+_BK_PRUNE141 = "[  OK  ] Backup vhserver: Pruning\n"
+_BK_OLD141 = ("%s[1m\r%s[K[%s[32m  OK  %s[0m]%s[0m Backup vhserver: Completed: %s[3m%s%s[0m, total size 1.0G"
+              % (_E, _E, _E, _E, _E, _E, _BK_ARC141, _E))
+_bkcmds141 = []
+_saved_sh141 = _smc141.shell_as_game_user
+try:
+    _smc141.shell_as_game_user = lambda s, u, c, **k: (_bkcmds141.append(c), ("", "", 1))[1]
+    _bk_old_name141 = _game141._bkverify_name(None, "vhserver", "vhserver", (100, {}), _BK_OLD141)
+    _bk_old_cmds141 = list(_bkcmds141)
+    _game141._lg265_bk_after(None, "vhserver", "vhserver")
+finally:
+    _smc141.shell_as_game_user = _saved_sh141
+check("backup name up to v26.4.0: read from its 'Completed:' line, with no host read",
+      _bk_old_name141 == _BK_ARC141 and _bk_old_cmds141 == [], repr((_bk_old_name141, _bk_old_cmds141)))
+_bkhome141 = "/home/vhserver"
+if _bash141 and len(_bkcmds141) == 1 and _bkhome141 in _bkcmds141[0]:
+    _bkdir141 = _tf141.mkdtemp(prefix="part141-bk-")
+    try:
+        os.makedirs(os.path.join(_bkdir141, "lgsm", "backup"))
+        os.makedirs(os.path.join(_bkdir141, "log", "script"))
+        for _n in (_BK_ARC141, "vhserver-2026-11-04-120001.tar.zst", "vhserver-2026-11-03-120000.tar.zst"):
+            with open(os.path.join(_bkdir141, "lgsm", "backup", _n), "w", encoding="utf-8") as _fh:
+                _fh.write("x")
+        _sl141 = os.path.join(_bkdir141, "log", "script")
+        # The backup's own log, rotated by the restart's start, and an older one naming another archive.
+        with open(os.path.join(_sl141, "vhserver-script-2026-11-03-12:00:30.log"), "w", encoding="utf-8") as _fh:
+            _fh.write("Nov 03 12:00:10.001 vhserver: BACKUP: PASS: Backup created: "
+                      "vhserver-2026-11-03-120000.tar.zst, total size 1.0G\n")
+        with open(os.path.join(_sl141, "vhserver-script-2026-11-04-12:00:30.log"), "w", encoding="utf-8") as _fh:
+            _fh.write("Nov 04 12:00:10.001 vhserver: BACKUP: PASS: Backup created: %s, total size 1.0G\n"
+                      "Nov 04 12:00:30.001 vhserver: START: INFO: Rotating log files\n" % _BK_ARC141)
+        with open(os.path.join(_sl141, "vhserver-script.log"), "w", encoding="utf-8") as _fh:
+            _fh.write("Nov 04 12:00:31.001 vhserver: START: PASS: Started vhserver\n")
+        for _i, _n in enumerate(("vhserver-script-2026-11-03-12:00:30.log", "vhserver-script-2026-11-04-12:00:30.log",
+                                 "vhserver-script.log")):
+            os.utime(os.path.join(_sl141, _n), (1792900000 + _i * 100, 1792900000 + _i * 100))
+        _bkout141 = _sp141.run([_bash141, "-c", _bkcmds141[0].replace(_bkhome141, _bkdir141)],  # nosec B603
+                               capture_output=True, text=True, check=False,
+                               env={"PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C.UTF-8"}).stdout
+    finally:
+        _shutil141.rmtree(_bkdir141, ignore_errors=True)
+    _before141 = (100, {"vhserver-2026-11-03-120000.tar.zst": 50})
+    _bkv141 = []
+    _saved141 = (_smc141.shell_as_game_user, _game141._r13b_bkverify_code)
+    try:
+        _smc141.shell_as_game_user = lambda s, u, c, **k: (_bkout141, "", 0)
+        _game141._r13b_bkverify_code = lambda server, user, name, started: _bkv141.append(name)
+        _bk_names141 = [_game141._bkverify_name(None, "vhserver", "vhserver", _before141, o)
+                        for o in (_BK_RESTART141, _BK_PRUNE141)]
+        _bk_why141 = _game141._bkverify_unconfirmed(None, "vhserver", "vhserver", _before141, _BK_RESTART141)
+        # An older backup's log line (the archive the earlier listing already had) is never this run's.
+        _bk_stale141 = _game141._bkverify_name(
+            None, "vhserver", "vhserver", (100, {_BK_ARC141: 50, "vhserver-2026-11-03-120000.tar.zst": 50}),
+            _BK_RESTART141)
+    finally:
+        _smc141.shell_as_game_user, _game141._r13b_bkverify_code = _saved141
+    check("backup name on v26.5.0 with no 'Completed:' line (restart, prune): LinuxGSM's script log names "
+          "it, from the copy the restart rotated, though two archives are new",
+          _bk_names141 == [_BK_ARC141, _BK_ARC141], repr((_bk_names141, _bkout141)))
+    check("backup name from the script log: that archive is the one checked, and it confirms the backup",
+          _bkv141 == [_BK_ARC141] and _bk_why141 is None, repr((_bkv141, _bk_why141)))
+    check("backup name: a log line naming an archive the earlier listing already had is not this run's "
+          "(the one new archive is)", _bk_stale141 == "vhserver-2026-11-04-120001.tar.zst", repr(_bk_stale141))
+else:
+    check("backup name: the after-listing's shell was captured, under the account's home", False,
+          repr(_bkcmds141)[:300])
+
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP141_START, repr(_P9_TRIPPED[_TRIP141_START:]))
