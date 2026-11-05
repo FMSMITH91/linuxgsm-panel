@@ -44,7 +44,8 @@ _NS142 = "linuxgsm-panel-release"
 
 
 def _run142(argv, **kw):
-    return _sp142.run(argv, capture_output=True  # nosec B603 - fixed argv over this part's scratch files, text=True, env=kw.pop("env", _ENV142), **kw)
+    # nosec B603 - fixed argv (git, bash, ssh-keygen) over this part's own scratch files
+    return _sp142.run(argv, capture_output=True, text=True, env=kw.pop("env", _ENV142), **kw)  # nosec B603
 
 
 def _git142(*a):
