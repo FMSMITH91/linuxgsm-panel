@@ -104,11 +104,36 @@ first time, from the commit root last installed its own installer from), the ins
 `release-signers` on a per-user one. An unsigned target is held, and anything unreadable counts as
 unsigned. Root also stages the helper and its other pieces only from a signed commit.
 
-What it does not cover: the first install (`curl … | bash` runs GitHub's installer), the test host's
-deploy (it ships the commit's own installer, so it is GitHub-controlled by construction), and a host
-updated once to this version by an older installer. A lost key is recovered with
-`PANEL_ALLOW_UNSIGNED_UPDATE=1` on a run by hand over SSH; the panel's own update, its terminal and
-anything it starts through the helper cannot pass it.
+The update never moves backwards on its own: with no pin, a `main` tip older than the installed
+commit (one the checkout already contains) is held, signed or not.
+
+`tools/sign-release.sh` shows what is about to be signed before it signs: every first-parent commit
+since the last signed release, with its author and committer, the files changed, and a loud warning
+for any change to `.github/workflows/`, `release-signers`, `install.sh` or `tools/panel-helper`. It
+then asks for the first 12 characters of the commit id to be typed. `--yes` skips that typing only
+when its input is not a terminal (a script), and still prints all of it. A signature says only that
+the owner ran this, so read what it shows first.
+
+What it does not cover:
+
+* **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
+  with no key yet has nothing to check the clone against. After the first update, check that
+  `/usr/local/lib/linuxgsm-panel/release-signers` (root install) or the checkout's `release-signers`
+  (per-user) is the owner's key: `ssh-keygen -lf` on it should print the same fingerprint as
+  `ssh-keygen -lf` on the owner's own signing key. Once a host holds a key, a reinstall over a lost or deleted checkout installs only a
+  signed clone.
+* **A host that has no key yet holds.** A host still on a version from before this feature takes
+  its first update through its older installer, which knows nothing of signatures; from then on it
+  checks. A host where that left no key (no root copy and no `release-signers` at root's source
+  floor) holds every update, saying so, until it is updated once by hand through the old installer
+  or with `PANEL_ALLOW_UNSIGNED_UPDATE=1` over SSH.
+* **The test host's deploy** ships the commit's own installer, so it is GitHub-controlled by
+  construction. It runs only when started by hand (`workflow_dispatch`, which `sign-release.sh` does
+  after signing), and only from `main`. Its reach is the tailnet ACL's: the owner should confirm the
+  ACL lets the CI runner's tag reach the test host only, and nothing else.
+
+A lost key is recovered with `PANEL_ALLOW_UNSIGNED_UPDATE=1` on a run by hand over SSH; the panel's
+own update, its terminal and anything it starts through the helper cannot pass it.
 
 ## Known trust-model limitation: the panel has root on its own host
 

@@ -8,11 +8,16 @@ offers only such a commit. Held here:
 * install.sh's update target: a signed tip or pin moves; an unsigned one HOLDS at HEAD (or fails
   when HEAD is not on the branch), never falling back to another commit; a signature for another
   branch or commit, a tampered one, one made with a key the TARGET commit names, no key, no
-  signatures branch and a failed fetch all hold.
+  signatures branch and a failed fetch all hold. fetch_code, which moves HEAD, leaves it in place
+  on an unsigned tip; with no pin a tip older than HEAD holds (never backwards).
 * the lost-key override works only on a run a person started by hand.
 * as root, the key is root's own copy, taken from root's source floor when it is not placed yet,
-  and root stages its own pieces only from a signed commit (root_source_commit).
-* tools/sign-release.sh signs a first-parent commit of a local bare repository and refuses others.
+  and root stages its own pieces only from a signed commit (root_source_commit, run). A fresh
+  clone is checked when the host already holds a key, and is trust on first use when it does not.
+* tools/sign-release.sh signs a first-parent commit of a local bare repository and refuses others;
+  it shows the commits and a warning for installer changes, signs only once the id is typed, and
+  takes --yes only from a pipe.
+* on a system service the card trusts root's key copy, or HEAD's only when HEAD is root's floor.
 * the panel: the walk offers a signed + passing commit and skips a newer unsigned one; an unsigned
   test-branch tip is not offered; the signatures branch is never a branch to switch to; the
   helper's and the wrapper's launches never carry the override.
@@ -76,32 +81,34 @@ _UP142 = os.path.join(_SB142, "up")
 _CO142 = os.path.join(_SB142, "co")
 
 
-def _commit142(files, msg):
+def _commit142(files, msg, up=None):
+    up = up or _UP142
     for path, body in files.items():
-        with open(os.path.join(_UP142, path), "w", encoding="utf-8") as fh:
+        with open(os.path.join(up, path), "w", encoding="utf-8") as fh:
             fh.write(body)
-        _git142("-C", _UP142, "add", path)
-    _git142("-C", _UP142, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", msg)
-    return _git142("-C", _UP142, "rev-parse", "HEAD")
+        _git142("-C", up, "add", path)
+    _git142("-C", up, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", msg)
+    return _git142("-C", up, "rev-parse", "HEAD")
 
 
-def _set_sigs142(sigs):
+def _set_sigs142(sigs, up=None):
     """Make upstream's release-signatures branch hold exactly `sigs` ({path: text}); None deletes it."""
-    _git142("-C", _UP142, "branch", "-q", "-D", "release-signatures")
+    up = up or _UP142
+    _git142("-C", up, "branch", "-q", "-D", "release-signatures")
     if sigs is None:
         return
     idx = os.path.join(_SB142, "sigidx")
     env = dict(_ENV142, GIT_INDEX_FILE=idx)
     if os.path.exists(idx):
         os.unlink(idx)
-    _run142(["git", "-C", _UP142, "read-tree", "--empty"], env=env)
+    _run142(["git", "-C", up, "read-tree", "--empty"], env=env)
     for path, body in sigs.items():
-        blob = _run142(["git", "-C", _UP142, "hash-object", "-w", "--stdin"], input=body).stdout.strip()
-        _run142(["git", "-C", _UP142, "update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blob, path)],
+        blob = _run142(["git", "-C", up, "hash-object", "-w", "--stdin"], input=body).stdout.strip()
+        _run142(["git", "-C", up, "update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blob, path)],
                 env=env)
-    tree = _run142(["git", "-C", _UP142, "write-tree"], env=env).stdout.strip()
-    c = _run142(["git", "-C", _UP142, "-c", "commit.gpgsign=false", "commit-tree", "-m", "sigs", tree]).stdout.strip()
-    _git142("-C", _UP142, "update-ref", "refs/heads/release-signatures", c)
+    tree = _run142(["git", "-C", up, "write-tree"], env=env).stdout.strip()
+    c = _run142(["git", "-C", up, "-c", "commit.gpgsign=false", "commit-tree", "-m", "sigs", tree]).stdout.strip()
+    _git142("-C", up, "update-ref", "refs/heads/release-signatures", c)
 
 
 _SH_NAMES142 = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history", "_on_first_parent_line",
@@ -110,14 +117,16 @@ _SH_NAMES142 = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history"
                 "_source_floor", "_choose_update_target", "resolve_update_target")
 
 
-def _target142(head, ref="", extra_env=None, root=None):
+def _target142(head, ref="", extra_env=None, root=None, action=None):
     """Run resolve_update_target on the clone reset to `head`, and return its last line.
 
     That is 'TARGET=<sha> WHY=<why> HOLD=<hold> HOLDWHY=<why>' or 'REFUSED <why>'. `root`, a dict, runs it as root (id -u answers 0) with HELPER_DIR, the floor
-    file and root's clone named there.
+    file and root's clone named there. `action`, shell, runs instead of resolve_update_target
+    (die prints DIED and exits).
     """
     _git142("-C", _CO142, "reset", "-q", "--hard", head)
-    pre = ("set -uo pipefail\nwarn() { echo \"WARN $*\" >&2; }\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+    pre = ("set -uo pipefail\nwarn() { echo \"WARN $*\" >&2; }\ndie() { echo \"DIED ${*//$'\\n'/ }\"; exit 1; }\n"
+           "_CODE_FETCHED=0\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
            "PANEL_USER=%s\n" % (_shlex142.quote(_CO142), _shlex142.quote(_run142(["id", "-un"]).stdout.strip())))
     rt = root or {}
     pre += "HELPER_DIR=%s\nROOT_SRC_FLOOR_FILE=%s\nROOT_GIT=%s\n" % (
@@ -129,13 +138,13 @@ def _target142(head, ref="", extra_env=None, root=None):
                 "_rootgit() { git --git-dir=\"${ROOT_GIT}\" \"$@\"; }\n"
                 # _gitc runs git as the checkout's owner when it is root; here that is this account.
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n")
-    body = "".join(_inst_shfn(n) for n in _SH_NAMES142)
+    body = "".join(_inst_shfn(n) for n in _SH_NAMES142 + ("fetch_code", "_check_fresh_clone_signed"))
     tail = ("UNSIGNED_OVERRIDE=\"${PANEL_ALLOW_UNSIGNED_UPDATE:-}\"\n"
             "RELEASE_SIG_NS=linuxgsm-panel-release\nRELEASE_SIG_BRANCH=release-signatures\n"
             "RELEASE_SIG_REF=refs/linuxgsm-panel/release-signatures\nRELEASE_SIGNERS=release-signers\n"
             "RELEASE_SIG_FETCHED=0\n"
-            "if resolve_update_target; then echo \"TARGET=${TARGET_SHA} WHY=${UPD_WHY} HOLD=${UPD_HOLD} "
-            "HOLDWHY=${UPD_HOLD_WHY}\"; else echo \"REFUSED ${RESOLVE_ERR//$'\\n'/ }\"; fi\n")
+            + (action or "if resolve_update_target; then echo \"TARGET=${TARGET_SHA} WHY=${UPD_WHY} HOLD=${UPD_HOLD} "
+                         "HOLDWHY=${UPD_HOLD_WHY}\"; else echo \"REFUSED ${RESOLVE_ERR//$'\\n'/ }\"; fi\n"))
     env = dict(_ENV142, PANEL_UPDATE_REF=ref, **(extra_env or {}))
     r = _run142(["bash", "-c", pre + body + tail], env=env)
     return (r.stdout.strip().splitlines() or [""])[-1] + ("" if r.stdout.strip() else " ERR " + r.stderr[-300:])
@@ -201,6 +210,24 @@ else:
         check("release signatures: ...while the same commit signed with the installed key moves "
               "(rotation: a new key arrives inside a release the current one signed)",
               _r.startswith("TARGET=%s WHY=tip" % _D142), _r)
+        # ── fetch_code, the step that moves HEAD, obeys the same gate ───────────────────────────
+        _FC142 = "fetch_code >/dev/null\necho \"HEAD=$(git -C \"${PANEL_DIR}\" rev-parse HEAD)\"\n"
+        _r = _target142(_C142, action=_FC142)
+        check("release signatures: fetch_code moves HEAD to a signed tip (positive control)",
+              _r == "HEAD=%s" % _D142, _r)
+        _set_sigs142({})
+        _r = _target142(_C142, action=_FC142)
+        check("release signatures: fetch_code on an UNSIGNED tip leaves HEAD where it was",
+              _r == "HEAD=%s" % _C142, _r)
+        # ── no pin, and the tip is BEHIND this checkout: never moved back to ────────────────────
+        _git142("-C", _UP142, "reset", "-q", "--hard", _B142)
+        _set_sigs142(_good142(_B142))
+        _r = _target142(_C142)
+        check("release signatures: a signed tip that is OLDER than HEAD (main moved back) is not moved "
+              "to: the update holds, saying it would go backwards",
+              _r.startswith("TARGET=%s WHY=hold HOLD=backwards" % _C142) and "backwards" in _r, _r)
+        _r = _target142(_C142, action=_FC142)
+        check("release signatures: ...and fetch_code leaves HEAD there", _r == "HEAD=%s" % _C142, _r)
         _git142("-C", _UP142, "reset", "-q", "--hard", _C142)
         # ── fail closed on anything unreadable ───────────────────────────────────────────────────
         _set_sigs142(None)
@@ -285,6 +312,29 @@ else:
         _r = _target142(_A142, root=_rt142)
         check("release signatures (root): ...and a floor commit that lacks release-signers holds",
               "HOLD=unsigned" in _r, _r)
+        # ── a fresh clone (no checkout left) is checked when this host already trusts a key ────
+        _fresh = os.path.join(_SB142, "fresh")
+
+        def _fresh142():
+            _shutil142.rmtree(_fresh, ignore_errors=True)
+            _git142("clone", "-q", _UP142, _fresh)
+            return _target142(_A142, root=_rt142, action=(
+                "PANEL_DIR=%s\n_check_fresh_clone_signed\necho PASSED\n" % _shlex142.quote(_fresh)))
+
+        _r = _fresh142()
+        check("release signatures (root): a fresh clone on a host with NO release key is installed "
+              "(trust on first use, documented)", _r == "PASSED" and os.path.isdir(_fresh), _r)
+        with open(os.path.join(_hd, "release-signers"), "w", encoding="utf-8") as _fh:
+            _fh.write(_KPUB142)
+        _set_sigs142({})
+        _r = _fresh142()
+        check("release signatures (root): a fresh clone whose tip is NOT signed with the key the host "
+              "already holds is refused, and the clone is removed",
+              _r.startswith("DIED") and "not a release signed" in _r and not os.path.exists(_fresh), _r)
+        _set_sigs142(_good142(_F142))
+        _r = _fresh142()
+        check("release signatures (root): ...and one whose tip is signed is kept (positive control)",
+              _r == "PASSED" and os.path.isdir(os.path.join(_fresh, ".git")), _r)
     finally:
         _shutil142.rmtree(_SB142, ignore_errors=True)
         _SB142 = _tf142.mkdtemp(prefix="p142-")
@@ -307,6 +357,72 @@ check("install.sh: ssh-keygen is a prerequisite (openssh-client), and release-si
       and "\nruntime release-signers\n" in open(os.path.join(_root, ".github", "update-paths.txt")).read(),
       "")
 
+# ── root_source_commit, run: root stages only from a commit signed for its branch ──────────────
+_RSC_FNS142 = ("".join(_inst_shfn(n) for n in ("_gitc", "_ref_exists", "_on_first_parent_line", "_release_message",
+                                               "_unsigned_override", "_release_key_file", "_release_signed"))
+               + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
+                       _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
+
+
+def _rootsrc142(up, panel, helper, seed, extra_env=None):
+    """root_source_commit as root on `panel`, against `up`; 'OK=<commit>' or 'NO=<commit>'."""
+    body = ("set -uo pipefail\n"
+            "id() { if [ \"$#\" -eq 1 ] && [ \"$1\" = -u ]; then echo 0; else command id \"$@\"; fi; }\n"
+            "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\nwarn() { echo \"WARN $*\" >&2; }\n"
+            "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nTRUSTED_BRANCH=main\nDEFAULT_BRANCH=main\n"
+            % (_shlex142.quote(panel), _shlex142.quote(helper), _shlex142.quote("file://" + up))
+            + _RSC_FNS142
+            + "RELEASE_SIG_NS=linuxgsm-panel-release\nRELEASE_SIG_BRANCH=release-signatures\n"
+              "RELEASE_SIGNERS=release-signers\nUNSIGNED_OVERRIDE=\"${PANEL_ALLOW_UNSIGNED_UPDATE:-}\"\n"
+              "ROOT_SRC_FLOOR_SEED=%s\n" % _shlex142.quote(seed)
+            + "if root_source_commit; then echo \"OK=${ROOT_SRC_COMMIT}\"; else echo \"NO=${ROOT_SRC_COMMIT}\"; fi\n")
+    r = _run142(["bash", "-c", body], env=dict(_ENV142, **(extra_env or {})))
+    return (r.stdout.strip().splitlines() or [""])[-1] + ("" if r.stdout.strip() else " ERR " + r.stderr[-300:])
+
+
+if _HAVE142:
+    try:
+        _K142, _KPUB142 = _key142("owner-root")
+        _rup = os.path.join(_SB142, "rup")
+        _git142("init", "-q", "-b", "main", _rup)
+        _ra = _commit142({"release-signers": _KPUB142,
+                          "install.sh": "#!/bin/bash\n%s\n" % 'ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"'},
+                         "A", up=_rup)
+        _rb = _commit142({"app.py": "b\n"}, "B", up=_rup)
+        _rpanel = os.path.join(_SB142, "rpanel")
+        _git142("clone", "-q", _rup, _rpanel)
+        _rhelper = os.path.join(_SB142, "rhelper")
+
+        def _rcase142(sigs, key=True, floor=None, extra_env=None):
+            _shutil142.rmtree(_rhelper, ignore_errors=True)
+            os.makedirs(_rhelper)
+            if key:
+                with open(os.path.join(_rhelper, "release-signers"), "w", encoding="utf-8") as fh:
+                    fh.write(_KPUB142)
+            if floor:
+                with open(os.path.join(_rhelper, ".source-floor"), "w", encoding="utf-8") as fh:
+                    fh.write(floor + "\n")
+            _set_sigs142(sigs, up=_rup)
+            return _rootsrc142(_rup, _rpanel, _rhelper, _ra, extra_env)
+
+        _r = _rcase142({"main/%s.sig" % _rb: _sign142(_K142, "main", _rb)})
+        check("root_source_commit: a HEAD signed for main with root's key is staged from (positive control)",
+              _r == "OK=%s" % _rb, _r)
+        _r = _rcase142({})
+        check("root_source_commit: an UNSIGNED HEAD is refused, and no commit is set", _r == "NO=", _r)
+        _r = _rcase142({"main/%s.sig" % _rb: _sign142(_K142, "dev", _rb)})
+        check("root_source_commit: a HEAD signed for ANOTHER BRANCH is refused", _r == "NO=", _r)
+        _r = _rcase142({"main/%s.sig" % _rb: _sign142(_K142, "main", _rb)}, key=False, floor=_ra)
+        check("root_source_commit: with no key placed yet, the key at root's source floor verifies it "
+              "(the first update after an older installer)", _r == "OK=%s" % _rb, _r)
+        _r = _rcase142({}, extra_env={"PANEL_ALLOW_UNSIGNED_UPDATE": "1"})
+        _r2 = _rcase142({}, extra_env={"PANEL_ALLOW_UNSIGNED_UPDATE": "1", "PANEL_SELF_UPDATE": "1"})
+        check("root_source_commit: the override by hand stages an unsigned HEAD; started by the panel it "
+              "does not", _r == "OK=%s" % _rb and _r2 == "NO=", _r + " | " + _r2)
+    finally:
+        _shutil142.rmtree(_SB142, ignore_errors=True)
+        _SB142 = _tf142.mkdtemp(prefix="p142-")
+
 # ── tools/sign-release.sh, against a local bare repository ──────────────────────────────────────
 if _HAVE142:
     try:
@@ -327,7 +443,7 @@ if _HAVE142:
         _sl = _git142("-C", _dev, "rev-parse", "HEAD")
         _tool = os.path.join(_root, "tools", "sign-release.sh")
         _senv = dict(_ENV142, SIGN_RELEASE_KEY=_K142, SIGN_RELEASE_NO_DEPLOY="1")
-        _r1 = _run142(["bash", _tool, _sa], cwd=_dev, env=_senv)
+        _r1 = _run142(["bash", _tool, _sa], cwd=_dev, env=_senv, input=_sa[:12] + "\n")
         _blob = _git142("--git-dir", _bare, "cat-file", "blob", "release-signatures:main/%s.sig" % _sa)
         _vf = os.path.join(_SB142, "vmsg")
         with open(_vf, "w", encoding="utf-8") as _fh:
@@ -343,17 +459,54 @@ if _HAVE142:
         check("sign-release.sh: signs a first-parent commit, files <branch>/<sha>.sig on release-signatures "
               "(a SIGNED commit), and the signature verifies as a host checks it",
               _r1.returncode == 0 and _ver.returncode == 0 and "BEGIN SSH SIGNATURE" in _cobj
+              and "NO earlier signed release" in _r1.stdout
               and _git142("-C", _dev, "rev-parse", "HEAD") == _sl
               and _git142("-C", _dev, "status", "--porcelain") == "",
               "rc=%s %s %s" % (_r1.returncode, _r1.stderr[-200:], _ver.stderr[-200:]))
-        _r2 = _run142(["bash", _tool, _sl], cwd=_dev, env=_senv)
-        _r3 = _run142(["bash", _tool, _sa[:12]], cwd=_dev, env=_senv)
-        _r4 = _run142(["bash", _tool, _sa, "release-signatures"], cwd=_dev, env=_senv)
+        _r2 = _run142(["bash", _tool, _sl], cwd=_dev, env=_senv, input=_sl[:12] + "\n")
+        _r3 = _run142(["bash", _tool, _sa[:12]], cwd=_dev, env=_senv, input=_sa[:12] + "\n")
+        _r4 = _run142(["bash", _tool, _sa, "release-signatures"], cwd=_dev, env=_senv, input=_sa[:12] + "\n")
         check("sign-release.sh: refuses a commit not on origin/main's first-parent line, a short id, and "
               "the signatures branch as a branch",
               _r2.returncode != 0 and "first-parent" in _r2.stderr and _r3.returncode != 0
               and _r4.returncode != 0,
               "%s | %s | %s" % (_r2.stderr[-150:], _r3.stderr[-150:], _r4.stderr[-150:]))
+        # ── what it shows, and the typed confirmation ────────────────────────────────────────────
+        _git142("-C", _dev, "reset", "-q", "--hard", _sa)
+        with open(os.path.join(_dev, "install.sh"), "w", encoding="utf-8") as _fh:
+            _fh.write("#!/bin/bash\n")
+        _git142("-C", _dev, "add", "install.sh")
+        _git142("-C", _dev, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "change the installer")
+        _git142("-C", _dev, "push", "-q", "origin", "main")
+        _sb = _git142("-C", _dev, "rev-parse", "HEAD")
+
+        def _signed142(sha):
+            return _run142(["git", "--git-dir", _bare, "cat-file", "-e",
+                            "release-signatures:main/%s.sig" % sha]).returncode == 0
+
+        _r5 = _run142(["bash", _tool, _sb], cwd=_dev, env=_senv, input="000000000000\n")
+        check("sign-release.sh: a confirmation that is not the commit's first 12 characters signs and "
+              "pushes nothing", _r5.returncode != 0 and "does not match" in _r5.stderr
+              and not _signed142(_sb), _r5.stderr[-200:])
+        _r6 = _run142(["bash", _tool, _sb], cwd=_dev, env=_senv, input="")
+        check("sign-release.sh: no answer at all (end of input) signs nothing",
+              _r6.returncode != 0 and not _signed142(_sb), _r6.stderr[-200:])
+        if _shutil142.which("script"):
+            _r7 = _run142(["script", "-qec", " ".join(_shlex142.quote(a) for a in ("bash", _tool, "--yes", _sb)),
+                           "/dev/null"], cwd=_dev, env=_senv, input="")
+            check("sign-release.sh: --yes is refused when stdin is a terminal (a person types the id)",
+                  _r7.returncode != 0 and "refused at a terminal" in _r7.stdout and not _signed142(_sb),
+                  "rc=%s %s" % (_r7.returncode, _r7.stdout[-200:]))
+        else:
+            skip("sign-release.sh: --yes at a terminal", "script(1) is not installed")
+        _r8 = _run142(["bash", _tool, "--yes", _sb], cwd=_dev, env=_senv, input="")
+        check("sign-release.sh: --yes from a pipe signs without the typing, and still shows the commits "
+              "since the last signed release and a WARNING for an install.sh change",
+              _r8.returncode == 0 and _signed142(_sb)
+              and "Changes since the last signed release %s" % _sa in _r8.stdout
+              and "change the installer" in _r8.stdout and "author: t <t@example.invalid>" in _r8.stdout
+              and "!!! WARNING" in _r8.stdout and "!!!     install.sh" in _r8.stdout,
+              "rc=%s %s %s" % (_r8.returncode, _r8.stdout[-400:], _r8.stderr[-200:]))
     finally:
         _shutil142.rmtree(_SB142, ignore_errors=True)
 
@@ -455,6 +608,47 @@ if _HAVE142:
               and not _so142._release_signature_valid(_kt, _C3, "dev", _sig.strip()), _sig[:40])
     finally:
         _shutil142.rmtree(_kd, ignore_errors=True)
+
+# ── which key the card trusts on a system service: root's copy, or the installer's bootstrap ──
+_KH142 = _tf142.mkdtemp(prefix="p142h-")
+_FLOOR142 = "f" * 40
+
+
+def _keytext142(root_copy, floor, head):
+    """_release_key_text on a system service: HELPER_DIR holds `root_copy` (None: no file) and the
+    source floor `floor` (None: no file); HEAD is `head`, and HEAD:release-signers is 'HEADKEY'."""
+    for name, body in (("release-signers", root_copy), (".source-floor", floor)):
+        path = os.path.join(_KH142, name)
+        if os.path.exists(path):
+            os.unlink(path)
+        if body is not None:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+
+    def _git(args, timeout=45):
+        if args[:1] == ["rev-parse"]:
+            return (head + "\n", "", 0)
+        if args[:2] == ["cat-file", "blob"]:
+            return ("HEADKEY\n", "", 0)
+        return ("", "", 1)
+    with _patched():
+        _patch(_so142._priv, "HELPER_PATH", os.path.join(_KH142, "panel-helper"))
+        _patch(_so142, "_is_system_service", lambda: True)
+        _patch(_so142, "_git", _git)
+        return _so142._release_key_text()
+
+
+try:
+    check("update card (system service): root's own key copy is the key (positive control)",
+          _keytext142("ROOTKEY\n", _FLOOR142, _FLOOR142) == "ROOTKEY")
+    check("update card (system service): with no root copy, the checkout's key is NOT trusted unless HEAD "
+          "is root's source floor (a panel-moved HEAD names its own key)",
+          _keytext142(None, _FLOOR142, "e" * 40) == "" and _keytext142(None, None, _FLOOR142) == "",
+          repr((_keytext142(None, _FLOOR142, "e" * 40), _keytext142(None, None, _FLOOR142))))
+    check("update card (system service): ...and when HEAD IS the floor, its key counts, as the installer's "
+          "bootstrap reads it", _keytext142(None, _FLOOR142 + "\n", _FLOOR142) == "HEADKEY")
+finally:
+    _shutil142.rmtree(_KH142, ignore_errors=True)
 
 _branches142 = []
 

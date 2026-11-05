@@ -22,10 +22,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
   (no key, no signatures, a failed fetch, no `ssh-keygen`) counts as unsigned. Root installs check
   with a root-owned copy of the key and stage the helper and the other root-owned pieces only from a
   signed commit. The update card offers only a signed commit whose checks passed. The owner signs
-  with `tools/sign-release.sh`, which also starts the test host's deploy; the deploy now runs on
+  with `tools/sign-release.sh`, which first shows every commit since the last signed release, the
+  files changed and a warning for any change to the installer, the helper, the key or CI, and signs
+  only once the commit id's first 12 characters are typed. It also starts the test host's deploy;
+  the deploy now runs on
   that request instead of after every CI run. A lost key is recovered by running the installer by
   hand with `PANEL_ALLOW_UNSIGNED_UPDATE=1`, which the panel itself can never pass. The installer
-  now also installs `openssh-client` if it is missing.
+  now also installs `openssh-client` if it is missing. With no pin, an update never moves the
+  panel back to an older commit.
 - **Firewall settings and port blocks on the Network tab.** A row above the rules now shows and
   changes UFW's default policy for incoming and outgoing traffic (and for routed traffic on a host
   that forwards), its logging level (off, low, medium, high, full), and turns the firewall on or
