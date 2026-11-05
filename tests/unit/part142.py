@@ -615,8 +615,11 @@ _FLOOR142 = "f" * 40
 
 
 def _keytext142(root_copy, floor, head):
-    """_release_key_text on a system service: HELPER_DIR holds `root_copy` (None: no file) and the
-    source floor `floor` (None: no file); HEAD is `head`, and HEAD:release-signers is 'HEADKEY'."""
+    """Run _release_key_text as a system service would.
+
+    HELPER_DIR holds `root_copy` (None: no file) and the source floor `floor` (None: no file);
+    HEAD is `head`, and HEAD:release-signers is 'HEADKEY'.
+    """
     for name, body in (("release-signers", root_copy), (".source-floor", floor)):
         path = os.path.join(_KH142, name)
         if os.path.exists(path):
