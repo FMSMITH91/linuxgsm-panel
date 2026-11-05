@@ -698,19 +698,17 @@ def _node_tools_cron_pass(app):
                 # sudo login, which no panel write touches.
                 if game_account_write_refusal(gs.remote, gs.short_name) is not None:
                     continue
-                _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
-                                                  game_type=gs.game_type, port=gs.port,
-                                                  query_type=gs.query_type)
+                _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name, port=gs.port,
+                                                  game_type=gs.game_type, query_type=gs.query_type)
             except Exception:
                 _log.debug("cron upgrade failed for %s", row_label(gs, "name"), exc_info=True)
     from panel.services import game_ports as _gp
     _gp.lgc_ts3_heal_pass(app)
 
 
-# Once at startup and daily after: _node_tools_cron_pass, then _shared.lg265_refresh_pass (the
-# command lists update-lgsm can have grown). A comment, not a docstring: app.py is at its size limit.
 def _node_tools_cron_watch(app):
-    from panel.routes import _shared
+    """Once at startup and daily after: _node_tools_cron_pass, then _shared.lg265_refresh_pass."""
+    from panel.routes import _shared   # lg265_refresh_pass: the command lists update-lgsm can have grown
     while True:
         try:
             _t0 = time.time()
