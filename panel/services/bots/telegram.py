@@ -276,7 +276,8 @@ def _tg_dispatch(app, token, chat_id, text, sender=None):
         _tg_ack(token, chat_id, ack)
 
     def job():
-        while_typing(lambda: notifications.telegram_typing(token, chat_id), lambda: _handle_telegram_command(app, token, chat_id, text, sender))
+        while_typing(lambda: notifications.telegram_typing(token, chat_id),
+                     lambda: _handle_telegram_command(app, token, chat_id, text, sender))
 
     if panel_update_requested(cmd, _command_arg(text)):
         # One panel /update in flight at a time: a second one while the first is queued or running

@@ -1687,7 +1687,7 @@ finally:
         _ubc._UPDATE_GATE = _ub_gate_saved
 
 # ── "typing…" while a bot command works (owner, 2026-11-05: /update sat silent 10-30 s) ──
-import time as _ty_time  # noqa: E402
+_ty_time = _lgd_real_time   # the time module, already imported above (no reimport)
 _ty_saved = (_ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP)
 try:
     _ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP = 0.05, 0.1, 5.0

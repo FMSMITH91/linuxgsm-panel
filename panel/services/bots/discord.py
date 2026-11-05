@@ -260,7 +260,8 @@ def _dc_dispatch(app, bot_token, channel_id, text, sender=None):
         _dc_ack(bot_token, channel_id, ack)
 
     def job():
-        while_typing(lambda: notifications.discord_bot_typing(bot_token, channel_id), lambda: _handle_discord_command(app, bot_token, channel_id, text, sender))
+        while_typing(lambda: notifications.discord_bot_typing(bot_token, channel_id),
+                     lambda: _handle_discord_command(app, bot_token, channel_id, text, sender))
 
     if panel_update_requested(cmd, _command_arg(text)):
         # One panel !update in flight at a time — see _tg_dispatch (Aikido 745379272).
