@@ -402,6 +402,20 @@ _QW_NEW141 = _QW_OLD141 + [{"cmd": "update", "short": "u", "desc": "Check and ap
 _rf141 = {"list": _QW_NEW141, "added": [], "refusal": None}
 with _p9.app_context():
     _cmds_before141 = _sh141.db.session.get(_sh141.GameServer, P9_GS).commands
+
+class _Lg265StopLoop(BaseException):
+    """Ends a `while True` loop under test: NOT an Exception, so the loop's own handlers pass it on.
+
+    A StopIteration thrown through a generator worked on 3.12+ and became RuntimeError on 3.10
+    (PEP 479), which killed the unit suite on the 22.04 runner.
+    """
+
+
+def _lg265_stop_sleep(_seconds):
+    """The stand-in clock's sleep: one pass of the loop, then stop."""
+    raise _Lg265StopLoop()
+
+
 try:
     _p9_arm(who="part141")
     _p9_patch_sm("list_server_commands", lambda remote, user, selfname=None: list(_rf141["list"]))
@@ -462,11 +476,11 @@ try:
     _p9_patch(_sh141, "lg265_refresh_pass", lambda app, still_in_db: _ntw141.append("refresh"))
     # The loop's own clock only (a namespace in place of the module), so no other thread's sleep
     # is touched: its sleep ends the daily loop after one pass.
-    _p9_patch(_app141, "time", type("_Clock141", (), {"time": staticmethod(lambda: 0.0), "sleep": staticmethod(
-        lambda s: (_ for _ in ()).throw(StopIteration()))})())
+    _p9_patch(_app141, "time", type("_Clock141", (), {"time": staticmethod(lambda: 0.0),
+                                                      "sleep": staticmethod(_lg265_stop_sleep)})())
     try:
         _app141._node_tools_cron_watch(_p9)
-    except StopIteration:
+    except _Lg265StopLoop:
         pass   # raised by the stand-in sleep above: the one pass is done
     check("the daily node-tools loop runs the command-list refresh after the cron pass",
           _ntw141 == ["cron", "refresh"], repr(_ntw141))
