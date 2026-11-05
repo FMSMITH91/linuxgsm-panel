@@ -498,6 +498,6 @@ check("unit suite: no process a part started is still running at the end, below 
 _sd15.kill(_procs15)
 _nd15 = sorted({repr(_t) for _mod in (_threading15, _patcher15.original("threading"))
                 for _t in _mod.enumerate()
-                if _t is not _mod.main_thread() and not _t.daemon and _t.is_alive()})
+                if type(_t).__name__ != "_MainThread" and not _t.daemon and _t.is_alive()})
 check("unit suite: no non-daemon thread, real or green, is left for interpreter exit to wait on",
       not _nd15, "still running: %s" % _nd15)
