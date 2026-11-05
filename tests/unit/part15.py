@@ -488,14 +488,13 @@ check("threads: no app.py ticker or panel worker is still running when the unit 
 # suite's stdout, or a non-daemon thread (real or green), which interpreter exit joins. Each is
 # killed (processes) once named, so a failing run still ends.
 import suite_deadline as _sd15  # noqa: E402 - tests/ is on the path (unit_test.py)
-from eventlet import patcher as _patcher15  # noqa: E402
 
 _procs15 = _sd15.leftovers()
 check("unit suite: no process a part started is still running at the end, below the suite or "
       "holding its output (it would keep a reader of that output waiting after the tally)",
       not _procs15, "still running: %s" % _procs15)
 _sd15.kill(_procs15)
-_nd15 = sorted({repr(_t) for _mod in (_thr15, _patcher15.original("threading"))
+_nd15 = sorted({repr(_t) for _mod in (_thr15, _ev15.patcher.original("threading"))
                 for _t in _mod.enumerate()
                 if type(_t).__name__ != "_MainThread" and not _t.daemon and _t.is_alive()})
 check("unit suite: no non-daemon thread, real or green, is left for interpreter exit to wait on",
