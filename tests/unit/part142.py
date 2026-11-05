@@ -507,6 +507,19 @@ if _HAVE142:
               and "change the installer" in _r8.stdout and "author: t <t@example.invalid>" in _r8.stdout
               and "!!! WARNING" in _r8.stdout and "!!!     install.sh" in _r8.stdout,
               "rc=%s %s %s" % (_r8.returncode, _r8.stdout[-400:], _r8.stderr[-200:]))
+        # More than the 200 commits it lists, as on the first release (all of history): `git log |
+        # head -n 200` under pipefail died of SIGPIPE (exit 141) there, before the confirmation.
+        _fill142 = ('set -e; t=$(git rev-parse "HEAD^{tree}"); p=$(git rev-parse HEAD); '
+                    'for i in $(seq 1 205); do p=$(git -c commit.gpgsign=false commit-tree "$t" -p "$p" '
+                    '-m "filler $i"); done; git reset -q --hard "$p"; git push -q origin main')
+        _run142(["bash", "-c", _fill142], cwd=_dev, env=_ENV142)
+        _sc = _git142("-C", _dev, "rev-parse", "HEAD")
+        _r9 = _run142(["bash", _tool, "--yes", _sc], cwd=_dev, env=_senv, input="")
+        check("sign-release.sh: a release more than 200 commits after the last signed one is still "
+              "listed (the first 200, and how many older) and signed",
+              _r9.returncode == 0 and _signed142(_sc) and "filler 205" in _r9.stdout
+              and "... and 5 older commits (205 in all)" in _r9.stdout,
+              "rc=%s %s %s" % (_r9.returncode, _r9.stdout[-300:], _r9.stderr[-200:]))
     finally:
         _shutil142.rmtree(_SB142, ignore_errors=True)
 
