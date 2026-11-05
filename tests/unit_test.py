@@ -1984,9 +1984,8 @@ _r16d_wrap_ts_handles()
 # part143 (a suite past its time limit prints every thread's and greenlet's stack and exits 124:
 # tests/suite_deadline.py armed in every runner, fired in child interpreters, ci.yml's step limit,
 # the root step printing a stopped run's report) imports part01, 05, 06, 14 and 29.
-# part144 (a dead IPv6 route costs a bot request seconds, not its whole timeout: notifications'
-# _connect_each and the opener using it, with stand-in sockets and one real local listener)
-# imports part01.
+# part144 (a dead IPv6 route costs a bot request 4 s, not its whole timeout: notifications'
+# _connect_each and its opener, with stand-in sockets and a real local listener) imports part01.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -2001,9 +2000,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
           "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117",
           "part118", "part119", "part120", "part121",
-          "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
-          "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141", "part142", "part143", "part144",
-          "part15")
+          "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131", "part132",
+          "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141", "part142", "part143", "part144", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
