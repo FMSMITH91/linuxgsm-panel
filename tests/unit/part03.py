@@ -193,6 +193,12 @@ eq("port-block: multi-port block steps past a partial overlap",
 
 # ── panel file integrity + repair (git-based) ─────────────────
 from panel.ops import system_ops as _so
+# The update card offers only a commit signed with the release key (_release_gate_for, which reads
+# a signatures branch and runs ssh-keygen). Every check from here on that is about WHICH commit the
+# card offers stubs git with fixtures that have no signatures, so for the rest of the suite the gate
+# answers "signed" for every commit. part142 drives the real one, kept here, and its own stand-ins.
+RELEASE_GATE_REAL03 = _so._release_gate_for
+_so._release_gate_for = lambda branch: (lambda sha: True)
 # Captured at the FIRST stub, not at the later one. A stub left installed is what subsequent
 # blocks in this file capture as "the original" (`_orig_isgit = _so._is_git_checkout`) — so they
 # put a STUB back believing it is the real function. That is the mechanism that silently disabled
