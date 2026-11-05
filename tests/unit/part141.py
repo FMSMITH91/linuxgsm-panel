@@ -454,19 +454,62 @@ try:
           "other actions", _rfcalls141 == [("action", P9_GS)], repr(_rfcalls141))
     _rfcalls141.clear()
     import app as _app141  # noqa: E402
-    _p9_patch(_app141, "ensure_node_tools_cron", lambda r: None)
-    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: None)
-    _p9_patch(_sh141, "game_account_write_refusal", lambda *a, **k: None)
-    from panel.services import game_ports as _gp141  # noqa: E402
-    _p9_patch(_gp141, "lgc_ts3_heal_pass", lambda app: None)
-    _app141._node_tools_cron_pass(_p9)
-    check("the daily maintenance pass reads every installed server's command list again",
+    _app141._lg265_command_refresh_pass(_p9)
+    check("the daily refresh pass reads every installed server's command list again",
           ("pass", P9_GS) in _rfcalls141, repr(_rfcalls141))
+    _ntw141 = []
+    _p9_patch(_app141, "_node_tools_cron_pass", lambda app: _ntw141.append("cron"))
+    _p9_patch(_app141, "_lg265_command_refresh_pass", lambda app: _ntw141.append("refresh"))
+    # The loop's own clock only (a namespace in place of the module), so no other thread's sleep
+    # is touched: its sleep ends the daily loop after one pass.
+    _p9_patch(_app141, "time", type("_Clock141", (), {"time": staticmethod(lambda: 0.0), "sleep": staticmethod(
+        lambda s: (_ for _ in ()).throw(StopIteration()))})())
+    try:
+        _app141._node_tools_cron_watch(_p9)
+    except StopIteration:
+        pass   # raised by the stand-in sleep above: the one pass is done
+    check("the daily node-tools loop runs the command-list refresh after the cron pass",
+          _ntw141 == ["cron", "refresh"], repr(_ntw141))
 finally:
     _p9_restore_all()
     with _p9.app_context():
         _sh141.db.session.get(_sh141.GameServer, P9_GS).commands = _cmds_before141
         _sh141.db.session.commit()
+
+# ── 8. Action Half-Life on ReHLDS (#5150): an install from before needs one force-update ─────────
+_AHL_OUT141 = ("[ WARN ] Starting ahlserver: ReHLDS requires the steam_legacy branch: run ./ahlserver "
+               "force-update\n[  OK  ] Starting ahlserver: Action Half-Life\n")
+_ahl_out141 = [_AHL_OUT141]
+_ahl_push141 = []
+try:
+    _p9_arm(who="part141")
+    _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: (_ahl_out141[0], "", 0))
+    _p9_patch_sm("_invalidate_port_scan", lambda rid: None)
+    _p9_patch_sm("set_game_priority", lambda *a, **k: None)
+    _p9_patch(_sd141, "_console_push", lambda app, sid, line, ts=None: _ahl_push141.append((sid, line)))
+    _p9_patch(_sh141, "_console_push", lambda app, sid, line, ts=None: _ahl_push141.append((sid, line)))
+    with _p9.app_context():
+        _g141 = _sh141.db.session.get(_sh141.GameServer, P9_GS)
+        _ahl_sync141 = str(_sd141._run_sync_action(_p9, _g141, _g141.remote, "start", None, None)[1])
+        _ahl_stop141 = str(_sd141._run_sync_action(_p9, _g141, _g141.remote, "stop", None, None)[1])
+        _ahl_out141[0] = "[  OK  ] Starting ahlserver: Action Half-Life\n"
+        _ahl_plain141 = str(_sd141._run_sync_action(_p9, _g141, _g141.remote, "start", None, None)[1])
+    _ahl_out141[0] = _AHL_OUT141
+    _p9_set(P9_GS, status="offline", restart_pending=False, stop_pending=False)
+    _p9_client(P9_ADMIN).post("/api/server/%d/action" % P9_GS, json={"action": "start"})
+    _p9_drain()
+finally:
+    _p9_restore_all()
+_AHL_NOTE141 = str(_sd141._LG265_AHL_NOTE)
+check("AHL start: fix_ahl.sh's steam_legacy warning becomes the one-line note naming force-update, after "
+      "the start's own outcome", _ahl_sync141.endswith(_AHL_NOTE141) and "succeeded" in _ahl_sync141
+      and "run force-update once (Maintenance menu)" in _AHL_NOTE141, repr(_ahl_sync141))
+check("AHL start: no note on a start without the warning, nor on a stop", _AHL_NOTE141 not in _ahl_plain141
+      and _AHL_NOTE141 not in _ahl_stop141, repr((_ahl_plain141, _ahl_stop141)))
+check("AHL start from the button (run in the background): the note is said in the server's console",
+      (P9_GS, "[panel] start: " + _AHL_NOTE141) in _ahl_push141, repr(_ahl_push141))
+check("AHL note: es and fr translate it", all(_AHL_NOTE141 in _read141("translations", lang, "lg265.json")
+                                              for lang in ("es", "fr")))
 
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP141_START, repr(_P9_TRIPPED[_TRIP141_START:]))

@@ -194,6 +194,13 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
         _lg265_after_update_lgsm(gs)
     if action in READONLY_ACTIONS:
         return True, f"{action}: {clean[:600] or 'no output'}"
+    ok, msg = _run_sync_outcome(action, name, rc, clean)
+    note = _lg265_ahl_note(action, clean)
+    return ok, (i18n.Sentences(msg, note) if note else msg)
+
+
+def _run_sync_outcome(action, name, rc, clean):
+    """A start/stop/restart's (ok, message) from its exit code and cleaned output."""
     # The outcomes are i18n.Sentences: English for the chat bots, which send them as they are, and
     # translated whole by the routes that show them (_r15e_said).
     if rc == 0:
@@ -205,6 +212,22 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
                                     action=action, name=name)
     return False, i18n.Sentence("'{action}' failed for '{name}': {reason}", action=action, name=name,
                                 reason=reason)
+
+
+# LinuxGSM v26.5.0's fix_ahl.sh runs Action Half-Life on ReHLDS, which only works on Steam's
+# steam_legacy branch; an install made before that is on the default branch, and every start
+# warns (exit 0) and the server keeps crashing until one force-update moves it. The line exists
+# only from v26.5.0, so matching it is already keyed on the account's release.
+_LG265_AHL_REHLDS = "ReHLDS requires the steam_legacy branch"
+_LG265_AHL_NOTE = i18n.Sentence("Action Half-Life now runs on ReHLDS, which needs Steam's steam_legacy "
+                                "branch: run force-update once (Maintenance menu) to move this server to it.")
+
+
+def _lg265_ahl_note(action, clean):
+    """The force-update note when a start/restart's output carries fix_ahl.sh's warning, else None."""
+    if action in ("start", "restart") and _LG265_AHL_REHLDS in (clean or ""):
+        return _LG265_AHL_NOTE
+    return None
 
 
 def _lg265_after_update_lgsm(gs):
@@ -578,7 +601,12 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                     return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
+                note = _lg265_ahl_note(action, clean)
+                if note:
+                    detail = "%s\n%s" % (note, clean)
                 if held:
+                    if note:
+                        _console_push(app, gs.id, f"[panel] {action}: {note}")
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)
