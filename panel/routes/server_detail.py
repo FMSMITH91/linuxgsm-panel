@@ -230,6 +230,20 @@ def _lg265_ahl_note(action, clean):
     return None
 
 
+def _lg265_ahl_said(app, gs, action, clean):
+    """A background start's detail, the AHL note (_lg265_ahl_note) first when there is one.
+
+    The note is said in the console too, while `gs` (None once the row is not that server's) is
+    the server it ran on.
+    """
+    note = _lg265_ahl_note(action, clean)
+    if not note:
+        return clean
+    if gs is not None:
+        _console_push(app, gs.id, f"[panel] {action}: {note}")
+    return "%s\n%s" % (note, clean)
+
+
 def _lg265_after_update_lgsm(gs):
     """After update-lgsm: the release it moved to may offer more commands (lg265_refresh_commands)."""
     try:
@@ -601,12 +615,8 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                     return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
-                note = _lg265_ahl_note(action, clean)
-                if note:
-                    detail = "%s\n%s" % (note, clean)
+                detail = _lg265_ahl_said(app, gs if held else None, action, clean)
                 if held:
-                    if note:
-                        _console_push(app, gs.id, f"[panel] {action}: {note}")
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)

@@ -1354,6 +1354,24 @@ def lg265_refresh_commands(gs):
     return added
 
 
+def lg265_refresh_pass(app, still_in_db):
+    """The daily pass: lg265_refresh_commands for every installed server; one failing stops nothing.
+
+    The weekly update-lgsm cron moves an account to a release that can offer more commands
+    (LinuxGSM v26.5.0 gave QuakeWorld `update`), and the stored list would hide them.
+    `still_in_db`: app._still_in_db, which re-reads a row and says whether it is still there.
+    """
+    with app.app_context():
+        for gs in GameServer.query.all():
+            if not still_in_db(gs) or gs.remote is None or not gs.installed:
+                continue
+            try:
+                lg265_refresh_commands(gs)
+            except Exception:
+                db.session.rollback()
+                _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
+
+
 # ── Module state the route modules own ─────────────────────────────────────────────────────────
 # These were defined in app.py and, after the split, read ONLY from here and the route modules.
 # CodeQL reported all six as unused globals: it cannot follow a name across the app <-> routes

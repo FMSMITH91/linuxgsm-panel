@@ -1745,17 +1745,29 @@ def _bkverify_name(server, user, selfname, before, out):
     one; None if unknown.
     """
     m = _BKVERIFY_NAME_RE.search(terminal.strip_escapes(out or ""))
-    if m and m.group(1).startswith(selfname + "-") and cron._game_backup_name_ok(m.group(1)):
+    if m and _lg265_own_archive(m.group(1), selfname):
         return m.group(1)
     if before is None:
         return None
     after, logged = _lg265_bk_after(server, user, selfname)
-    # The log's name only for an archive the earlier listing did not have (a log line from an older
-    # backup names one it did), and present now when the listing read. The archive check that
-    # follows also refuses one older than this run (_r13b_bkverify_code's OLD).
-    if logged and logged not in before[1] and (after is None or logged in after[1]):
+    if _lg265_logged_is_this_run(logged, before, after):
         return logged
     return _bkpart_candidate(before, after, selfname) if after else None
+
+
+def _lg265_own_archive(name, selfname):
+    """`name` is a LinuxGSM backup archive of `selfname`'s, by its shape."""
+    return name.startswith(selfname + "-") and cron._game_backup_name_ok(name)
+
+
+def _lg265_logged_is_this_run(logged, before, after):
+    """The script log's archive name is this run's.
+
+    Only an archive the earlier listing did not have (a log line from an older backup names one it
+    did), and present now when the listing read. The archive check that follows also refuses one
+    older than this run (_r13b_bkverify_code's OLD).
+    """
+    return bool(logged) and logged not in before[1] and (after is None or logged in after[1])
 
 
 def _lg265_bk_after(server, user, selfname):
@@ -1776,7 +1788,7 @@ def _lg265_bk_after(server, user, selfname):
     logged = None
     for line in out.splitlines():
         m = _LG265_BK_LOGGED_RE.search(line) if line.startswith("C\t") else None
-        if m and m.group(1).startswith(selfname + "-") and cron._game_backup_name_ok(m.group(1)):
+        if m and _lg265_own_archive(m.group(1), selfname):
             logged = m.group(1)
     return _bkpart_parse(out), logged
 

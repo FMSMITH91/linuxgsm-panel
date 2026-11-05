@@ -708,22 +708,9 @@ def _node_tools_cron_pass(app):
 
 
 def _lg265_command_refresh_pass(app):
-    """Read every installed server's LinuxGSM command list again (lg265_refresh_commands).
-
-    The weekly update-lgsm cron moves an account to a release that can offer more commands
-    (LinuxGSM v26.5.0 gave QuakeWorld `update`), and the stored list would hide them. One
-    server failing stops nothing.
-    """
-    from panel.routes._shared import lg265_refresh_commands
-    with app.app_context():
-        for gs in GameServer.query.all():
-            if not _still_in_db(gs) or gs.remote is None or not gs.installed:
-                continue
-            try:
-                lg265_refresh_commands(gs)
-            except Exception:
-                db.session.rollback()
-                _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
+    """Read every installed server's LinuxGSM command list again (_shared.lg265_refresh_pass)."""
+    from panel.routes._shared import lg265_refresh_pass
+    lg265_refresh_pass(app, _still_in_db)
 
 
 def _node_tools_cron_watch(app):
