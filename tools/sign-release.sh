@@ -98,7 +98,12 @@ else
     RANGE="${SHA}"; FROM="${EMPTY_TREE}"
 fi
 echo "--------------------------------------------------------------------------------"
-git --no-pager log --first-parent --format='%h  author: %an <%ae>  committer: %cn  %s' "${RANGE}" | head -n 200
+# git stops at 200 itself: `git log | head -n 200` under pipefail killed the script with SIGPIPE
+# (exit 141) whenever there were more, as on the first release, which lists all of history.
+git --no-pager log --first-parent --max-count=200 \
+    --format='%h  author: %an <%ae>  committer: %cn  %s' "${RANGE}"
+N_COMMITS="$(git rev-list --first-parent --count "${RANGE}")"
+(( N_COMMITS > 200 )) && echo "... and $(( N_COMMITS - 200 )) older commits (${N_COMMITS} in all)"
 echo "--------------------------------------------------------------------------------"
 git --no-pager diff --stat=120 "${FROM}" "${SHA}" | tail -n 60
 FLAGGED="$(git diff --name-only "${FROM}" "${SHA}" \
