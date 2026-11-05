@@ -707,9 +707,10 @@ def _node_tools_cron_pass(app):
     _gp.lgc_ts3_heal_pass(app)
 
 
+# Once at startup and daily after: _node_tools_cron_pass, then _shared.lg265_refresh_pass (the
+# command lists update-lgsm can have grown). A comment, not a docstring: app.py is at its size limit.
 def _node_tools_cron_watch(app):
-    """Once at startup and daily after: _node_tools_cron_pass, then the command-list refresh."""
-    from panel.routes import _shared   # lg265_refresh_pass: the lists update-lgsm can have grown
+    from panel.routes import _shared
     while True:
         try:
             _t0 = time.time()
