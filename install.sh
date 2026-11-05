@@ -260,12 +260,12 @@ _r30a_prereq_apt() {
 
 if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 \
         || ! command -v wget >/dev/null 2>&1 || ! command -v crontab >/dev/null 2>&1 \
-        || ! command -v ufw >/dev/null 2>&1; then
+        || ! command -v ufw >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
         SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
-        info "Installing prerequisites (python3-venv, python3-pip, git, curl, wget, cron, ufw)…"
+        info "Installing prerequisites (python3-venv, python3-pip, git, curl, wget, cron, ufw, openssh-client)…"
         _r30a_prereq_apt update -qq || true
-        _r30a_prereq_apt install -y python3-venv python3-pip git curl wget cron ufw \
+        _r30a_prereq_apt install -y python3-venv python3-pip git curl wget cron ufw openssh-client \
             || warn "apt-get reported an error — re-checking prerequisites anyway."
     fi
 fi
@@ -970,6 +970,173 @@ _on_first_parent_line() {
         | awk -v want="$2" '($0 "") == want { found = 1 } END { exit !found }'
 }
 
+# ── Release signatures ─────────────────────────────────────────────────────────────────────────
+# Every commit on main is a GitHub squash merge, signed by GitHub's own key, so a signature GitHub
+# makes proves nothing against someone who takes over the owner's GitHub account: they could merge
+# anything, and every panel would install it. So an update moves a checkout only to a commit that
+# ALSO carries a signature made with the owner's own SSH key, whose private half never leaves the
+# owner's PC (tools/sign-release.sh makes it).
+#
+#   * What is signed is a message this script BUILDS from the commit it is about to install and the
+#     branch it tracks (_release_message). Nothing it verifies is read from the network but the
+#     signature itself, so a signature for one commit, or one branch, never passes for another.
+#   * Signatures live on the branch release-signatures, as <branch>/<sha>.sig. That branch holds
+#     no code. It is fetched by its full name into one fixed ref (RELEASE_SIG_REF), never through a
+#     tag, and read with cat-file from there.
+#   * The key it is checked against is the one ALREADY ON THIS HOST, never the target commit's
+#     (_release_key_file). A new key therefore arrives only inside a release the current key
+#     signed, and a commit that names its own key vouches for nothing.
+#
+# Anything that cannot be read is a NO: no key, no signature ref, a failed fetch, no ssh-keygen or
+# one too old to verify (-Y verify is OpenSSH 8.2, older than every Ubuntu this supports).
+RELEASE_SIG_NS="linuxgsm-panel-release"
+RELEASE_SIG_BRANCH="release-signatures"
+RELEASE_SIG_REF="refs/linuxgsm-panel/release-signatures"
+RELEASE_SIGNERS="release-signers"
+RELEASE_SIG_FETCHED=0
+# The override for a lost key (see _unsigned_override): exactly this value, on a run a person
+# started by hand.
+UNSIGNED_OVERRIDE="${PANEL_ALLOW_UNSIGNED_UPDATE:-}"
+
+# The exact text a release signature covers. tools/sign-release.sh builds the same three lines.
+_release_message() {
+    printf 'linuxgsm-panel release\nbranch %s\ncommit %s\n' "$1" "$2"
+}
+
+# Fetch the signatures branch into RELEASE_SIG_REF, both sides named in full and --no-tags, like
+# _fetch_branch. RELEASE_SIG_FETCHED says whether THIS run's fetch worked: a ref left by an earlier
+# run is not read when this one could not refresh it.
+_fetch_release_signatures() {
+    RELEASE_SIG_FETCHED=0
+    _gitc fetch --quiet --no-tags origin \
+        "+refs/heads/${RELEASE_SIG_BRANCH}:${RELEASE_SIG_REF}" 2>/dev/null || return 1
+    RELEASE_SIG_FETCHED=1
+}
+
+# May this run install a commit no release key signed? Only when a person asked for it by hand:
+# PANEL_ALLOW_UNSIGNED_UPDATE=1, on a run the panel did not start (_panel_started_run). That is the
+# way back after the private key is lost: commit the new public key to release-signers on main,
+# then on each host run, as root (over SSH, not in the panel's own terminal, which counts as the
+# panel):
+#     cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh
+# The panel cannot pass it. Its root route is the helper's panel-self-update verb, which builds
+# the installer's environment from nothing (_clean_env) and sets PANEL_SELF_UPDATE; sudo's
+# env_reset drops it before that; and SUDO_UID names the panel's account, which _panel_started_run
+# also refuses. The panel's own wrapper script (the path without the helper) unsets it.
+#
+# On a PER-USER install the run is the panel's own account, and the override is honoured on a
+# run by hand there too. It grants nothing new: that account owns the checkout and the install.sh
+# it runs, so it can already put any commit in place (`git reset --hard`) without asking this.
+_unsigned_override() {
+    [[ "${UNSIGNED_OVERRIDE}" = "1" ]] || return 1
+    _panel_started_run && return 1
+    return 0
+}
+
+# The release key this host trusts, as a file to hand ssh-keygen; prints its path. $1 is a
+# private temporary directory the caller removes.
+#   * As ROOT: ${HELPER_DIR}/release-signers, root-owned. install_root_tools places it from
+#     root's own source (stage_root_source), never from the panel-owned checkout. When it is not
+#     there yet — the first update after a host took this version through an OLDER installer,
+#     whose install_root_tools did not know the file — it is taken from root's own clone at root's
+#     source floor: the commit root last staged its own installer from, which is this very
+#     installer's commit. A floor without the file (the seed predates it) is a NO.
+#   * As the account that owns the checkout (a per-user install): the INSTALLED commit's copy,
+#     read from HEAD's blob before anything moves HEAD. That account runs the checkout's own
+#     install.sh, so this is the key that installer came with.
+_release_key_file() {
+    local dir="$1" floor=""
+    if [[ "$(id -u)" -eq 0 ]]; then
+        if [[ -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]] && [[ ! -L "${HELPER_DIR}/${RELEASE_SIGNERS}" ]]; then
+            printf '%s\n' "${HELPER_DIR}/${RELEASE_SIGNERS}"
+            return 0
+        fi
+        [[ -f "${ROOT_SRC_FLOOR_FILE}" ]] || return 1
+        floor="$(_source_floor 2>/dev/null)" || return 1
+        _rootgit cat-file blob "${floor}:${RELEASE_SIGNERS}" > "${dir}/key" 2>/dev/null || return 1
+    else
+        [[ -d "${PANEL_DIR}/.git" ]] || return 1
+        _gitc cat-file blob "HEAD:${RELEASE_SIGNERS}" > "${dir}/key" 2>/dev/null || return 1
+    fi
+    [[ -s "${dir}/key" ]] || return 1
+    printf '%s\n' "${dir}/key"
+}
+
+# Is commit $3 (a full id) signed for branch $4 by this host's release key? $1 is the git to read
+# the signature with, $2 the ref holding the signatures. Returns 0 only when ssh-keygen verified
+# it; everything else, unreadable included, is 1. When $5 is given, it names the key file and
+# _release_key_file is not asked.
+_release_signed() {
+    local g="$1" ref="$2" sha="$3" br="$4" key="${5:-}" dir="" rc=1
+    case "${sha}" in ""|*[!0-9a-f]*) return 1 ;; esac
+    [[ "${#sha}" -eq 40 ]] || return 1
+    command -v ssh-keygen >/dev/null 2>&1 || return 1
+    _ref_exists "${g}" "${ref}" || return 1
+    dir="$(mktemp -d 2>/dev/null)" || return 1
+    if { [[ -n "${key}" ]] || key="$(_release_key_file "${dir}")"; } \
+       && "${g}" cat-file blob "${ref}:${br}/${sha}.sig" > "${dir}/sig" 2>/dev/null \
+       && [[ -s "${dir}/sig" ]] \
+       && _release_message "${br}" "${sha}" \
+          | env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin ssh-keygen -Y verify -f "${key}" \
+                -I release -n "${RELEASE_SIG_NS}" -s "${dir}/sig" >/dev/null 2>&1; then
+        rc=0
+    fi
+    rm -rf -- "${dir}" 2>/dev/null || true
+    return "${rc}"
+}
+
+# The update's gate: may it move this checkout to $1, on DEFAULT_BRANCH? Yes only when this run
+# fetched the signatures and the commit is signed for the branch, or a person overrode it by hand.
+# Sets RELEASE_SIG_WHY to why not.
+_update_target_signed() {
+    RELEASE_SIG_WHY=""
+    if [[ "${RELEASE_SIG_FETCHED}" -eq 1 ]] && _release_signed _gitc "${RELEASE_SIG_REF}" "$1" "${DEFAULT_BRANCH}"; then
+        return 0
+    fi
+    if _unsigned_override; then
+        warn "Installing ${1:0:10} WITHOUT a release signature: PANEL_ALLOW_UNSIGNED_UPDATE=1 was given by hand." >&2
+        return 0
+    fi
+    if [[ "${RELEASE_SIG_FETCHED}" -ne 1 ]]; then
+        RELEASE_SIG_WHY="the release signatures could not be fetched"
+    elif [[ "$(id -u)" -eq 0 ]] && [[ ! -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]]; then
+        RELEASE_SIG_WHY="this host has no release key (${HELPER_DIR}/${RELEASE_SIGNERS}); to recover, run as root: cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ${HELPER_DIR}/install.sh"
+    else
+        local kd=""
+        kd="$(mktemp -d 2>/dev/null)" || kd=""
+        if [[ -n "${kd}" ]] && _release_key_file "${kd}" >/dev/null; then
+            RELEASE_SIG_WHY="commit ${1} is not signed with this host's release key for ${DEFAULT_BRANCH}"
+        elif [[ "$(id -u)" -eq 0 ]]; then
+            RELEASE_SIG_WHY="this host has no release key (${HELPER_DIR}/${RELEASE_SIGNERS}). To recover, run as root over SSH: cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ${HELPER_DIR}/install.sh"
+        else
+            RELEASE_SIG_WHY="the installed commit has no release key (${RELEASE_SIGNERS}). To recover, run by hand: PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ${PANEL_DIR}/install.sh"
+        fi
+        [[ -z "${kd}" ]] || rm -rf -- "${kd}" 2>/dev/null || true
+    fi
+    return 1
+}
+
+# The last step of _choose_update_target for a move (tip or pin): a target that is not signed is
+# not moved to. It HOLDS, as an unverifiable pin does — HEAD, when HEAD is on the branch — and
+# otherwise there is nothing safe to stay at, so it fails. Never some other commit instead. $1 is
+# HEAD (or empty). A target that IS HEAD moves nothing and needs no signature.
+_hold_unless_signed() {
+    local _head="$1" _tracking="refs/remotes/origin/${DEFAULT_BRANCH}"
+    [[ "${UPD_WHY}" = "tip" || "${UPD_WHY}" = "pin" ]] || return 0
+    [[ "${UPD_TARGET}" != "${_head}" ]] || return 0
+    _update_target_signed "${UPD_TARGET}" && return 0
+    if [[ -n "${_head}" ]] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+        UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="unsigned"
+        UPD_HOLD_WHY="${RELEASE_SIG_WHY}"
+        return 0
+    fi
+    UPD_ERR="The commit this update would move to, ${UPD_TARGET}, is not a signed release: ${RELEASE_SIG_WHY}.
+     This checkout (${_head:-no commit}) is not on ${DEFAULT_BRANCH} to stay at, and the update does not
+     fall back to any other commit."
+    UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""
+    return 1
+}
+
 # Which commit an update moves this checkout TO, once the branch has been fetched into
 # refs/remotes/origin/<branch>. resolve_update_target asks it whether there is anything to do, and
 # fetch_code asks it again to do it: ONE decision. It used to be two copies, and fetch_code's had
@@ -998,8 +1165,8 @@ _choose_update_target() {
         return 1
     fi
     UPD_WHY="tip"
-    [[ -n "${PANEL_UPDATE_REF:-}" ]] || return 0
     _head="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || _head=""
+    [[ -n "${PANEL_UPDATE_REF:-}" ]] || { _hold_unless_signed "${_head}"; return; }
     # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
     # reset to — a name git has to look up (an abbreviated id is tried as a ref name first) is never
     # checked as one commit and used as another. A value starting with '-' never reaches git.
@@ -1064,7 +1231,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the pinned commit ${UPD_PIN} is on ${DEFAULT_BRANCH} but does not contain this checkout, so moving to it would drop commits the checkout has"
         fi
     fi
-    return 0
+    _hold_unless_signed "${_head}"
 }
 
 # Copy the current checkout into PANEL_DIR (skips venv/data so we never clobber
@@ -1103,6 +1270,7 @@ fetch_code() {
         _gitc fetch --quiet --prune --unshallow origin 2>/dev/null \
             || _gitc fetch --quiet --prune origin 2>/dev/null \
             || _fetch_branch
+        _fetch_release_signatures || true   # a failed fetch is a NO in _update_target_signed
         # Where to is _choose_update_target's call — the same decision resolve_update_target made
         # before the snapshot, on the same (whole) history: the branch tip, a CI-verified pin on
         # the branch's first-parent line, or HEAD itself when it is already past that pin, or when
@@ -1115,7 +1283,7 @@ fetch_code() {
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
             hold)
-                if [[ "${UPD_HOLD}" = "sideways" ]]; then
+                if [[ "${UPD_HOLD}" = "sideways" ]] || [[ "${UPD_HOLD}" = "unsigned" ]]; then
                     echo "  Keeping ${UPD_TARGET}: ${UPD_HOLD_WHY}"
                 else
                     echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip"
@@ -1145,6 +1313,7 @@ resolve_update_target() {
     fi
     [[ -d "${PANEL_DIR}/.git" ]] || return 0   # not a git checkout: let fetch_code decide
     _fetch_branch_history || return 1
+    _fetch_release_signatures || true   # a failed fetch is a NO in _update_target_signed
     CURRENT_SHA="$(_gitc rev-parse HEAD 2>/dev/null)"
     # The same decision fetch_code acts on (see _choose_update_target). One it cannot make is NOT
     # "nothing to update": the caller stops, and says why.
@@ -1158,6 +1327,9 @@ resolve_update_target() {
     if [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "sideways" ]]; then
         warn "The commit this update is pinned to, ${UPD_PIN}, is on ${DEFAULT_BRANCH}'s first-parent line, but it neither contains this checkout (${UPD_TARGET}) nor is contained by it: ${DEFAULT_BRANCH} was fast-forwarded onto a merge since this checkout was installed."
         warn "This checkout stays at ${UPD_TARGET}: moving to the pin would drop commits it has. An update to a commit that contains it moves it forward."
+    elif [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "unsigned" ]]; then
+        warn "The update was not installed: ${UPD_HOLD_WHY}."
+        warn "This checkout stays at ${UPD_TARGET}: an update installs only a release signed with the owner's key."
     elif [[ "${UPD_WHY}" = "hold" ]]; then
         warn "The commit this update is pinned to, ${PANEL_UPDATE_REF}, is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified."
         warn "This checkout stays at ${UPD_TARGET}: the update does not fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
@@ -2046,7 +2218,8 @@ root_source_commit() {
     # On an operator's branch, ${TRUSTED_BRANCH} is fetched beside it, into a second fixed ref: the
     # floor is a commit of ${TRUSTED_BRANCH}, and a clone holding only a branch forked below it
     # would not know the floor at all.
-    local -a refspecs=("+refs/heads/${branch}:refs/root-src/tip")
+    local -a refspecs=("+refs/heads/${branch}:refs/root-src/tip"
+                       "+refs/heads/${RELEASE_SIG_BRANCH}:refs/root-src/signatures")
     [[ "${branch}" = "${TRUSTED_BRANCH}" ]] \
         || refspecs+=("+refs/heads/${TRUSTED_BRANCH}:refs/root-src/trusted")
     if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" "${refspecs[@]}" >/dev/null 2>&1; then
@@ -2083,6 +2256,20 @@ root_source_commit() {
         warn "This checkout is at ${want}, whose installer predates root's source floor: installed"
         warn "root-owned, it would accept older commits again. Root stages nothing from it."
         return 1
+    fi
+    # And SIGNED: root stages its own pieces only from a release signed with this host's release
+    # key, read from root's own clone (the signatures fetched into it by root's git) and checked
+    # against root's own copy of the key (_release_key_file) — nothing from the panel's .git. The
+    # panel moves its own HEAD, so without this a commit pushed by whoever holds the GitHub
+    # account, once the panel had been put on it, became the helper root installs.
+    if ! _release_signed _rootgit refs/root-src/signatures "${want}" "${branch}"; then
+        if _unsigned_override; then
+            warn "Staging root's pieces from ${want} WITHOUT a release signature: PANEL_ALLOW_UNSIGNED_UPDATE=1 was given by hand."
+        else
+            warn "This checkout is at ${want}, which is not a release signed with this host's release"
+            warn "key for ${branch}. Root stages nothing from it."
+            return 1
+        fi
     fi
     ROOT_SRC_COMMIT="${want}"
     # Raised only by a commit of the trusted branch. An operator's branch forks from it and may
@@ -2430,6 +2617,21 @@ install_root_tools() {
         ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
     else
         warn "Could not read tools/panel-helper from the repository — the helper was NOT refreshed."
+    fi
+
+    # The release key updates are checked against (_release_key_file), root-owned beside the
+    # helper and from the same source. A commit that changes it was itself verified with the key
+    # already here (root_source_commit), so this is how a new key arrives. A failure keeps the one
+    # in place.
+    if _stage="$(stage_root_source "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}")"; then
+        if ${H_SUDO} install -o root -g root -m 0644 "${_stage}" "${HELPER_DIR}/${RELEASE_SIGNERS}" 2>/dev/null; then
+            ok "Release key installed at ${HELPER_DIR}/${RELEASE_SIGNERS}"
+        else
+            warn "Could not install the release key at ${HELPER_DIR}/${RELEASE_SIGNERS}; the one in place stays."
+        fi
+        ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
+    else
+        warn "Could not read ${RELEASE_SIGNERS} from the repository — the release key was NOT refreshed."
     fi
 
     # db_maintenance.py is installed ROOT-OWNED beside the helper, and panel.conf records the one

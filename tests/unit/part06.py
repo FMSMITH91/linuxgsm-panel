@@ -2480,6 +2480,10 @@ try:
                       _rs_q(script or os.path.join(src, "install.sh"))) if src else "")
                 + pre
                 + _rs_fns
+                # The release-signature gate passes here: these checks are about WHICH commit root
+                # stages from and where it reads it; part142 drives the gate. The signatures
+                # refspec names a branch every fixture has, so root's one fetch still works.
+                + "RELEASE_SIG_BRANCH=main\n_release_signed() { return 0; }\n"
                 + "ROOT_SRC_FLOOR_SEED=%s\n" % _rs_q(floor_seed)
                 + ("_checkout_is_roots() { return 0; }\n" if roots else "")
                 + "_prepare_root_source\n"
@@ -3416,17 +3420,17 @@ try:
     _r = _su_run(_su_pre, "", extra=_su_pre_shim + "_venv_works() { return 1; }\n").stdout
     check("install.sh: missing prerequisites are still one `sudo apt-get install`, non-interactive",
           "SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y python3-venv "
-          "python3-pip git curl wget cron ufw\n" in _r
+          "python3-pip git curl wget cron ufw openssh-client\n" in _r
           and _r.count("apt-get install") == 1 and "tzdata" not in _r, repr(_r))
     # wget, cron and ufw are what the panel itself runs on its host, and Ubuntu's minimal images
     # lack them: any ONE missing (the venv, git and curl all present) installs the set; a host that
     # has every one of them runs no apt at all.
-    for _su_tool in ("wget", "crontab", "ufw"):
+    for _su_tool in ("wget", "crontab", "ufw", "ssh-keygen"):
         _r = _su_run(_su_pre, "", extra=_su_pre_shim.replace(
             "command() { ", "command() { [ \"$2\" != %s ]; return; " % _su_tool)
             + "_venv_works() { return 0; }\n").stdout
         check("install.sh: a host missing only %s gets the prerequisites installed" % _su_tool,
-              " apt-get install -y python3-venv python3-pip git curl wget cron ufw\n" in _r,
+              " apt-get install -y python3-venv python3-pip git curl wget cron ufw openssh-client\n" in _r,
               repr(_r))
     _r = _su_run(_su_pre, "", extra=_su_pre_shim.replace("command() { ", "command() { return 0; ")
                  + "_venv_works() { return 0; }\n").stdout
@@ -9685,14 +9689,14 @@ check("deploy: the deploy step takes its installer from the VERIFY step's output
       _dp_vid is not None and _dp_ienv is not None and _dp_ienv.group(1) == _dp_vid.group(1),
       "verify id=%r INSTALLER env=%r" % (_dp_vid and _dp_vid.group(1), _dp_ienv and _dp_ienv.group(0)))
 _dp_hs = [re.findall(r"^\s+HEAD_SHA: (.*)$", _t, re.M) for _t in (_dp_vstep, _dp_dstep)]
-check("deploy: ...and both steps take HEAD_SHA from the workflow_run (the commit verified is the one pinned)",
-      _dp_hs == [["${{ github.event.workflow_run.head_sha }}"]] * 2, repr(_dp_hs))
+check("deploy: ...and both steps take HEAD_SHA from the dispatch's sha input (the commit verified is the one pinned)",
+      _dp_hs == [["${{ inputs.sha }}"]] * 2, repr(_dp_hs))
 # ...and the verify step takes the branch NAME from the same event: the job's `if` compared it with
 # 'main' IGNORING CASE, so the step compares it again, exactly. The harness below hands it over the
 # way this line says; a step reading some other expression would not be what the harness tests.
 _dp_hb = re.findall(r"^\s+HEAD_BRANCH: (.*)$", _dp_vstep, re.M)
-check("deploy: the verify step takes HEAD_BRANCH from the workflow_run, to compare it exactly",
-      _dp_hb == ["${{ github.event.workflow_run.head_branch }}"], repr(_dp_hb))
+check("deploy: the verify step takes HEAD_BRANCH from the run's ref name, to compare it exactly",
+      _dp_hb == ["${{ github.ref_name }}"], repr(_dp_hb))
 _dp_sb = _tempfile.mkdtemp(prefix="deploy-")
 try:
     _dp_pd = os.path.join(_dp_sb, "lgsmpanel", "linuxgsm-panel")
@@ -9736,7 +9740,8 @@ try:
     _dp_runner = os.path.join(_dp_sb, "runner")
     _dp_genv = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                     GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
-                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+                    GITHUB_REF="refs/heads/main")   # a dispatch on main: the step checks it exactly
     # The verify step now also waits for the commit's check runs (`gh api …/check-runs`, see
     # deploy.yml). These checks are about WHICH commit is shipped, so `gh` answers with every
     # required check passed; part14 drives the waiting itself.
@@ -10063,7 +10068,11 @@ finally:
 _ru_names = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history",
              "_on_first_parent_line", "_choose_update_target", "resolve_update_target",
              "update_noop_line")
-_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in _ru_names)
+# The release-signature gate is a stand-in that passes here: these checks are about which commit
+# the update chooses, and part142 drives the gate itself.
+_RU_UNSIGNED_OK = "_fetch_release_signatures() { :; }\n_hold_unless_signed() { :; }\n"
+_ru_fn = ('warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in _ru_names)
+          + _RU_UNSIGNED_OK)
 _ru_sb = _tempfile.mkdtemp(prefix="updref-")
 try:
     _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
@@ -10912,7 +10921,7 @@ try:
     # own panel_update_log reads that log back.
     _uc_i = _inst.index("RED='\\033")
     _uc_out = _inst[_uc_i:_inst.index("\n", _inst.index("die()   {", _uc_i)) + 1]
-    _uc_fns = "".join(_inst_shfn(_n) for _n in _ru_names)
+    _uc_fns = "".join(_inst_shfn(_n) for _n in _ru_names) + _RU_UNSIGNED_OK
 
     def _uc_panel(name):
         pd = os.path.join(_fp_sb, name)

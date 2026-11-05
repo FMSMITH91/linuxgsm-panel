@@ -2009,6 +2009,76 @@ def _runtime_changelog(rev_range, runtime_only=True):
     return result
 
 
+# Release signatures. install.sh moves a checkout only to a commit signed with the owner's own SSH
+# key ("Release signatures" there has the why), so the card offers only such a commit: update_available
+# stays true exactly when the installer would install it. The signatures branch holds no code and is
+# never offered as a branch (panel_branches). The panel checks with the installed key — the
+# root-owned copy the installer uses on a system install, HEAD's on a per-user one, never the
+# offered commit's — but this is only the OFFER: the installer's check is the gate.
+_RELEASE_SIG_BRANCH = "release-signatures"
+_RELEASE_SIG_REF = "refs/linuxgsm-panel/release-signatures"
+_RELEASE_SIG_NS = "linuxgsm-panel-release"
+_RELEASE_SIGNERS = "release-signers"
+
+
+def _release_key_text():
+    """The release key this host trusts, as text, or "" when there is none to read."""
+    root_copy = os.path.join(os.path.dirname(_priv.HELPER_PATH), _RELEASE_SIGNERS)
+    if _is_system_service() and os.path.isfile(root_copy) and not os.path.islink(root_copy):
+        try:
+            with open(root_copy, encoding="utf-8") as fh:
+                return fh.read(65536).strip()
+        except (OSError, UnicodeDecodeError):
+            return ""
+    out, _, rc = _git(["cat-file", "blob", "HEAD:" + _RELEASE_SIGNERS], timeout=10)
+    return out.strip() if rc == 0 else ""
+
+
+def _release_signature_valid(key, sha, branch, sig):
+    """Whether `sig` (armored text) is the release key `key`'s signature of `sha` on `branch`.
+
+    The message is built here, as install.sh's _release_message builds it. Anything that cannot be
+    checked (no ssh-keygen, a timeout) is False.
+    """
+    import tempfile
+    msg = "linuxgsm-panel release\nbranch %s\ncommit %s\n" % (branch, sha)
+    with tempfile.TemporaryDirectory(prefix="lgsm-relsig-") as d:
+        kf, sf = os.path.join(d, "key"), os.path.join(d, "sig")
+        with open(kf, "w", encoding="utf-8") as fh:
+            fh.write(key + "\n")
+        with open(sf, "w", encoding="utf-8") as fh:
+            fh.write(sig + "\n")
+        try:
+            r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", kf, "-I", "release",  # nosec B603 B607
+                                "-n", _RELEASE_SIG_NS, "-s", sf], input=msg, capture_output=True,
+                               text=True, timeout=20, check=False,
+                               env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C.UTF-8"})
+        except (_SOPS_TIMEOUTS + (OSError,)):
+            return False
+    return r.returncode == 0
+
+
+def _release_gate_for(branch):
+    """A predicate sha -> bool: is that commit signed for `branch` with this host's release key?
+
+    Fetches the signatures once (by full name, --no-tags, into one fixed ref) and reads the key
+    once. A fetch that failed, or no key, answers False for every commit: nothing is offered.
+    """
+    _, _, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
+                      "+refs/heads/%s:%s" % (_RELEASE_SIG_BRANCH, _RELEASE_SIG_REF)], timeout=45)
+    key = _release_key_text() if frc == 0 else ""
+    if not key:
+        return lambda sha: False
+
+    def _signed(sha):
+        if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            return False
+        sig, _, rc = _git(["cat-file", "blob", "%s:%s/%s.sig" % (_RELEASE_SIG_REF, branch, sha)],
+                          timeout=10)
+        return rc == 0 and bool(sig) and _release_signature_valid(key, sha, branch, sig)
+    return _signed
+
+
 def _r17a_unread_status(cur_ver, cur_sha, branch):
     """The update status when the fetched ref could not be read: no update offered, and why.
 
@@ -2089,6 +2159,7 @@ def _compute_update_status():
             "repo_url": github_repo_url()}
     if behind_n == 0:
         return {**base, "update_available": False, "ci_state": "passing", "behind": 0}
+    signed = _release_gate_for(branch)
 
     # Tracking a NON-default branch is an explicit, opt-in test mode. Those branches don't run
     # the CI/security suite on this repo (it's gated to main + PRs), so the CI-gate below would
@@ -2105,6 +2176,11 @@ def _compute_update_status():
         if not _update_touches_runtime(ref):
             return _no_runtime_update(base, rem_full.strip() or ref, "unverified",
                                       behind_n, behind_n)
+        # Not a signed release: not offered (the installer would hold), and no reason on the card.
+        if not signed(rem_full.strip()):
+            return {**base, "update_available": False, "ci_state": "unverified",
+                    "behind": behind_n, "behind_tip": behind_n, "target_sha": rem_full.strip(),
+                    "remote_version": version_for_commit(ref) or "?", "changes": []}
         tgt_ver = version_for_commit(ref)
         runtime_log = _runtime_changelog("HEAD.." + ref)
         # Same fallback as the verified branch below: what is counted is what is listed.
@@ -2139,7 +2215,8 @@ def _compute_update_status():
         return _r17a_unread_status(cur_ver, cur_sha, branch)
     _ci_unknown_why["reason"] = ""
     walk_started = time.time()
-    tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
+    # An unsigned tip is never a candidate (below), so GitHub is not asked about it.
+    tip_state = _remote_ci_state(commits[0]) if signed(commits[0]) else "unsigned"
     unknown_why = _ci_unknown_why["reason"] if tip_state == "unknown" else ""
     # Only a commit that CONTAINS this checkout is an update to it, while the checkout is on the
     # branch — install.sh moves such a checkout only forward, and holds rather than move it
@@ -2170,6 +2247,10 @@ def _compute_update_status():
     unreadable = False
     for idx, sha in enumerate(commits):
         if not _contains_head(sha):
+            continue
+        # Only a signed release is a candidate: the installer holds on any other (see
+        # _release_gate_for). Asked before the CI state, which costs a GitHub request.
+        if not signed(sha):
             continue
         if idx == 0:
             st = tip_state
@@ -2500,6 +2581,9 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         # update). PANEL_NO_UPGRADE=1 makes install.sh skip its OS-upgrade+reboot step; OS updates
         # stay a separate, explicit action (the OS Updates card, which warns about online players).
         "export PANEL_NO_UPGRADE=1\n"
+        # The lost-key override is for a person running install.sh by hand (install.sh,
+        # _unsigned_override); the panel's own run never carries it, whatever its environment held.
+        "unset PANEL_ALLOW_UNSIGNED_UPDATE\n"
         'echo "=== panel self-update $(date) ===" > "$LOG"\n'
         f"bash {shlex.quote(installer)} >> \"$LOG\" 2>&1\n"
         'echo "=== installer exit $? ===" >> "$LOG"\n'
@@ -2650,7 +2734,8 @@ def list_panel_branches():
             if not name.startswith(_REMOTE_TRACKING):
                 continue
             name = name[len(_REMOTE_TRACKING):]
-            if name and name != "HEAD" and _valid_branch(name) and name not in branches:
+            if name and name not in ("HEAD", _RELEASE_SIG_BRANCH) and _valid_branch(name) \
+                    and name not in branches:
                 branches.append(name)
     if branch not in branches:
         branches.insert(0, branch)
@@ -2679,7 +2764,10 @@ def _verified_branch_target(branch):
         return "", i18n.Sentence("Couldn't read the versions of '{branch}', so there is no verified "
                                  "version to switch to.", branch=branch)
     states = []
+    signed = _release_gate_for(branch)
     for sha in [c for c in (revs or "").split() if c]:
+        if not signed(sha):
+            continue   # not a signed release: the installer would not move to it
         _ci_unknown_why["reason"] = ""
         st = _remote_ci_state(sha)
         if st == "passing":
@@ -2700,7 +2788,7 @@ def panel_switch_branch(branch):
     """Point the panel at a different branch and check it out, with the SAME snapshot / health-check
     / auto-rollback safety as a normal update. Superadmin-gated at the route. Returns (ok, message)."""
     branch = (branch or "").strip()
-    if not _valid_branch(branch):
+    if not _valid_branch(branch) or branch == _RELEASE_SIG_BRANCH:
         return False, "Invalid branch name."
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't switch branches."

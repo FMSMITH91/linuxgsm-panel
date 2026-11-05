@@ -14,6 +14,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **Updates install only releases signed with the owner's key.** Every commit on main is signed by
+  GitHub's own key, which proves nothing if someone takes over the project's GitHub account. The
+  installer already on a host now moves the panel only to a commit that also carries a signature
+  made with the owner's own SSH key (on the new `release-signatures` branch); anything else is held
+  with "Not updated: held at …" and why, never swapped for another commit. Anything it cannot read
+  (no key, no signatures, a failed fetch, no `ssh-keygen`) counts as unsigned. Root installs check
+  with a root-owned copy of the key and stage the helper and the other root-owned pieces only from a
+  signed commit. The update card offers only a signed commit whose checks passed. The owner signs
+  with `tools/sign-release.sh`, which also starts the test host's deploy; the deploy now runs on
+  that request instead of after every CI run. A lost key is recovered by running the installer by
+  hand with `PANEL_ALLOW_UNSIGNED_UPDATE=1`, which the panel itself can never pass. The installer
+  now also installs `openssh-client` if it is missing.
 - **Firewall settings and port blocks on the Network tab.** A row above the rules now shows and
   changes UFW's default policy for incoming and outgoing traffic (and for routed traffic on a host
   that forwards), its logging level (off, low, medium, high, full), and turns the firewall on or

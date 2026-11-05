@@ -1,6 +1,7 @@
 name: Deploy
 
-# Auto-deploy to the panel host after CI passes on main. DORMANT by default: the job
+# Deploy a SIGNED release to the test host. tools/sign-release.sh starts it, once it has signed the
+# commit (`gh workflow run deploy.yml --ref main -f sha=<sha>`). DORMANT by default: the job
 # only runs when the repo variable DEPLOY_ENABLED == 'true', so committing this file
 # changes nothing until you opt in. It deploys by running install.sh's UPDATE path
 # (snapshot -> git pull -> restart -> health-check -> AUTO-ROLLBACK on failure), so a
@@ -33,11 +34,20 @@ name: Deploy
 #        DEPLOY_USER    = ubuntu           # optional, defaults to ubuntu
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Started by hand, after signing — not on CI's completion any more. The installer it ships moves a
+# checkout only to a commit signed with the owner's key (install.sh, "Release signatures"), and a
+# commit is signed after its checks pass, so a deploy started on CI's completion would arrive before
+# the signature and only hold: one extra tailnet login per merge to say "Not updated". One trigger,
+# so the two never race for the deploy group either. This deploys to the TEST host only, and ships
+# the commit's own installer, so it is not itself protected by the signature (whoever can start a
+# workflow here controls that installer): the panels' own Update path is what the signature guards.
 on:
-  workflow_run:
-    workflows: [ "CI" ]
-    types: [ completed ]
-  # zizmor: ignore[dangerous-triggers] deploys only a push to main, after proving head_sha is on main (verify step)
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full commit id on main to deploy (tools/sign-release.sh passes it)"
+        required: true
+        type: string
 
 # Least-privilege GITHUB_TOKEN: deploy reads the repo and SSHes to the host; no write needed.
 permissions:
@@ -51,9 +61,11 @@ jobs:
   deploy:
     # The name the panel's update gate and the verify step below ignore (_CI_IGNORE): keep it.
     name: deploy
-    # Only after CI SUCCEEDED on a PUSH to main, and only when explicitly enabled.
+    # Only a run started on main, and only when explicitly enabled. The verify step proves the
+    # commit itself (exact ref, first-parent line, every check passed).
     #
-    # `event == 'push'` is the load-bearing clause. CI also runs on pull_request, and for a PR
+    # From when this ran on CI's completion (workflow_run), kept for why the step proves what the
+    # `if` cannot: `event == 'push'` was the load-bearing clause. CI also runs on pull_request, and for a PR
     # from a FORK the resulting workflow_run carries the HEAD REPO's branch name — a fork's
     # default branch is main, so head_branch == 'main' was satisfied by any fork PR opened from
     # that fork's default branch, and an outside contributor's PR triggered an unattended
@@ -74,16 +86,13 @@ jobs:
     # exactly `main` and proves head_sha is on main itself, before anything is taken from it or the
     # tailnet is joined.
     if: >-
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.ref == 'refs/heads/main' &&
       vars.DEPLOY_ENABLED == 'true'
     # The Tailscale login is bound to this environment twice. Its deployment-branch rule admits only
     # the branch main (header, step 3), so no workflow run on another branch or a tag can use it;
     # and the Tailscale credential (header, step 1) accepts only a GitHub OIDC token whose subject
     # names this environment, so there is no secret for any other run to read in the first place.
-    # A workflow_run job runs with GITHUB_REF set to the default branch, so this job qualifies.
+    # A dispatch run's GITHUB_REF is the --ref it was started on, so only `--ref main` qualifies.
     environment: production
     # id-token: write lets the Tailscale step ask GitHub for a signed OIDC token (sub
     # repo:FMSMITH91/linuxgsm-panel:environment:production), which Tailscale's credential
@@ -132,14 +141,14 @@ jobs:
       - name: Verify the commit is on main, and take its installer
         id: verify
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ inputs.sha }}
+          HEAD_BRANCH: ${{ github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # reads the commit's check runs (checks: read)
         run: |
           set -euo pipefail
           # The job's `if` compared head_branch with 'main' IGNORING CASE (GitHub's expressions
           # do), so a branch `Main` or a tag `MAIN` passed it. Compared here exactly, in bash.
-          if [ "${HEAD_BRANCH:-}" != "main" ]; then
+          if [ "${HEAD_BRANCH:-}" != "main" ] || [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
               echo "::error::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was deployed."
               exit 1
           fi
@@ -282,7 +291,7 @@ jobs:
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ inputs.sha }}
           INSTALLER: ${{ steps.verify.outputs.installer }}
         run: |
           set -euo pipefail
