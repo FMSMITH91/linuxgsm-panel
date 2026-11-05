@@ -176,18 +176,25 @@ _LG264_REQUEST_RE = re.compile(_LG264_INFO + r"\b(Update|Backup) postponed until
 # "[ INFO ] Updating vhserver: Checking update: Update is already running (PID 12855) ... INFO" and
 # exits 0 having done nothing. Earlier releases never print it, so the match is its own release gate.
 _LG265_BUSY_RE = re.compile(_LG264_INFO + r"\bChecking update: Update is already running\b")
+# The commands that take that lock, with their aliases. ONLY their output can mean "not run": a
+# start with updateonstart="on" runs the same check in a subshell (command_start.sh), prints the
+# same line and then starts the server anyway, so the line inside a start's or restart's output
+# says nothing about whether the start happened.
+LG265_BUSY_ACTIONS = frozenset(("update", "u", "force-update", "fu", "update-restart", "ur",
+                                "validate", "v", "workshop-update", "wu"))
 
 
-def outcome(out):
+def outcome(out, action=None):
     """What LinuxGSM's output says it did instead of the action, or None when it did the action.
 
     {"code": "lgsm_postponed" | "lgsm_refused", "kind": "update" | "backup" | "restart" | "stop",
      "players": int}. Postponed: LinuxGSM recorded a request its monitor acts on. Refused: nothing
     was recorded, so nothing happens unless it is asked again. Or {"code": "lgsm_busy", "kind":
-    "update"}: another update of the server held LinuxGSM's update lock, and this run did nothing.
+    "update"}: another update of the server held LinuxGSM's update lock, and this run did nothing
+    — said only when `action` is one of LG265_BUSY_ACTIONS (see there).
     """
     text = terminal.strip_escapes(out or "")
-    if _LG265_BUSY_RE.search(text):
+    if action in LG265_BUSY_ACTIONS and _LG265_BUSY_RE.search(text):
         return {"code": "lgsm_busy", "kind": "update"}
     m = _LG264_PLAYERS_RE.search(text)
     if m is None:
@@ -201,9 +208,9 @@ def outcome(out):
     return {"code": "lgsm_refused", "kind": "stop", "players": players}
 
 
-def outcome_of(out, rc):
-    """outcome(out) for a command that exited `rc`: only an exit 0 can be one (LinuxGSM's own)."""
-    return outcome(out) if rc == 0 else None
+def outcome_of(out, rc, action=None):
+    """outcome(out, action) for a command that exited `rc`: only an exit 0 can be one (LinuxGSM's own)."""
+    return outcome(out, action) if rc == 0 else None
 
 
 # The panel's words. A postponement is only run later by LinuxGSM's `monitor`, which is the

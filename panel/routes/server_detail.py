@@ -38,7 +38,7 @@ from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_s
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
     _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal,
-    lg265_refresh_commands)
+    lg265_refresh_commands, lg265_schedule_gained)
 
 
 # Said when the host call was made but its audit row could not be written (the database was
@@ -607,7 +607,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 # The outcome is audited under the server only while it is still that server, and
                 # its bookkeeping (the queued flags, the priority nudge) is done only then.
                 held = still_held(gs)
-                oc = _lgp.outcome_of(out, rc)
+                oc = _lgp.outcome_of(out, rc, action)
                 if oc is not None:
                     # The button answered "issued" long before: the console says what LinuxGSM did.
                     ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
@@ -699,7 +699,7 @@ def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True
         # rc is None if the SSH call raised and -1 if the transport gave up
         # waiting; _end_action_tail says "stopped reporting" for both rather than
         # guessing — a 30-minute timeout does not mean the update stopped running.
-        oc = _lgp.outcome_of(out, rc)
+        oc = _lgp.outcome_of(out, rc, action)
         _end_action_tail(app, server_id, remote, action, rc,
                          note=_lgp.outcome_message(oc, action, monitor=monitor) if oc else None)
     return out, err, rc
@@ -747,7 +747,7 @@ def _bg_action(app, gs, remote, action, on_done=None):
                                          monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
-                oc = _lgp.outcome_of(out, rc)
+                oc = _lgp.outcome_of(out, rc, action)
                 if oc is not None:
                     # Postponed (update, backup) or refused (workshop-update, validate): said as
                     # that, and nothing was changed on the host, so nothing below applies.
@@ -1466,8 +1466,13 @@ def _register_commands(app):
                 flash(i18n.tr("Couldn't read the command list for '{name}' — the host returned nothing, "
                               "so the stored list is unchanged.", name=gs.name), "warning")
                 return redirect(url_for("server_detail", server_id=gs.id))
+            _old_cmds = gs.get_commands()
             gs.set_commands(cmds)
             db.session.commit()
+            try:
+                lg265_schedule_gained(gs, _old_cmds, cmds)
+            except Exception:
+                _log.debug("scheduling the refreshed commands failed", exc_info=True)
             # ...and an audit row, which the docstring above says was the other half of the bug
             # ("with no audit row") and which the permission fix left undone. The stored list
             # drives the control bar and install_game_cron: a host that answers oddly can empty

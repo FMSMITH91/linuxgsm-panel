@@ -396,6 +396,17 @@ _LG264_CRON_POSTPONED_ERE = ("INFO.*([0-9]+ players are on the server: (stop pre
 _LG265_CRON_BUSY_ERE = "INFO.*Checking update: Update is already running"
 
 
+def _lg265_runs_update(cmd):
+    """Whether a cron command line runs an update-family command (lgsm_players.LG265_BUSY_ACTIONS).
+
+    Only those can have been skipped as "Update is already running": a scheduled start or restart
+    with updateonstart="on" prints the same line and still runs.
+    """
+    from panel.services.lgsm_players import LG265_BUSY_ACTIONS
+    words = (cmd or "").split()
+    return any(w in LG265_BUSY_ACTIONS and i and "/" in words[i - 1] for i, w in enumerate(words))
+
+
 def _lg264_runs_monitor(cmd):
     """Whether a cron command line runs LinuxGSM's `monitor` (`<path>/<script> monitor ...`, or `m`)."""
     words = (cmd or "").split()
@@ -919,7 +930,7 @@ def _cron_job_row(raw, user, selfname, status, run_times):
         # re-checks a request (command_monitor.sh), which is the monitor doing its job.
         "postponed": bool(st.get("postponed")) and not _lg264_runs_monitor(display_cmd),
         # ...or exited 0 having skipped an update because another one was running (v26.5.0).
-        "busy": bool(st.get("busy")) and not _lg264_runs_monitor(display_cmd),
+        "busy": bool(st.get("busy")) and _lg265_runs_update(display_cmd),
     }
 
 

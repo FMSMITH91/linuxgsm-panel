@@ -1448,7 +1448,12 @@ def _lg265_fastdl_dir_exists(server, user, selfname):
     FastDL that did nothing reported as done.
     """
     home = "/home/%s" % user
-    vals = files.lgsm_get_values(server, user, selfname, ["webdir"]) or {}
+    vals = files.lgsm_get_values(server, user, selfname, ["webdir"])
+    if vals is None:
+        # The config could not be read, which is not "webdir is unset": testing the default
+        # directory then could answer N to a "Rebuild" LinuxGSM never asks (a custom webdir with
+        # no fastdl folder yet), which it takes as No to "Continue?" — exit 0, nothing done.
+        return False
     webdir = (vals.get("webdir") or "").strip() or home + "/public_html"
     webdir = webdir.replace("${rootdir}", home).replace("$rootdir", home)
     if "$" in webdir or not webdir.startswith("/"):

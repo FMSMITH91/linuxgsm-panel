@@ -51,8 +51,9 @@ def _fd_probe141(server, user, sh, timeout=30, selfname=None):
     return _fd141["probe"]
 
 
-def _fd_answers141(game_type, tag="v26.5.0", vals=None, probe=("LG265_DIR\n", "", 0)):
-    _fd141.update(tag=tag, vals={"webdir": ""} if vals is None else vals, probe=probe, probed=[])
+def _fd_answers141(game_type, tag="v26.5.0", vals=None, probe=("LG265_DIR\n", "", 0), unread=False):
+    _fd141.update(tag=tag, vals=None if unread else ({"webdir": ""} if vals is None else vals),
+                  probe=probe, probed=[])
     return _game141.fastdl_answers(None, "u141", "%sserver" % game_type, game_type)
 
 
@@ -90,6 +91,10 @@ try:
           and len(_fd_root141) == 1 and "[ -d /home/u141/web/fastdl ]" in _fd_root141[0], repr((_fd_def141, _fd_root141)))
     check("fastdl: a webdir only LinuxGSM's bash could expand is not guessed at (no probe, no rebuild N)",
           _fd_odd141 == ["Y"] and _fd141["probed"] == [], repr((_fd_odd141, _fd141["probed"])))
+    _fd_unread141 = _fd_answers141("cs", unread=True)
+    check("fastdl: a config that could not be read is not taken as the default webdir (no probe, no "
+          "rebuild N)", _fd_unread141 == ["Y"] and _fd141["probed"] == [],
+          repr((_fd_unread141, _fd141["probed"])))
 finally:
     _p9_restore_all()
 
@@ -123,9 +128,21 @@ _UPD_OK141 = ("[  OK  ] Updating vhserver: Checking for update: SteamCMD\n\nNo u
               "* Local build: 123\n")
 _GAME_SAYS141 = "player42: Update is already running lol\n"
 check("outcome: LinuxGSM's 'Update is already running' is lgsm_busy, piped or on a terminal",
-      _lgp141.outcome(_BUSY141) == {"code": "lgsm_busy", "kind": "update"}
-      and _lgp141.outcome_of(_BUSY_TTY141, 0) == {"code": "lgsm_busy", "kind": "update"},
-      repr((_lgp141.outcome(_BUSY141), _lgp141.outcome(_BUSY_TTY141))))
+      _lgp141.outcome(_BUSY141, "update") == {"code": "lgsm_busy", "kind": "update"}
+      and _lgp141.outcome_of(_BUSY_TTY141, 0, "validate") == {"code": "lgsm_busy", "kind": "update"}
+      and _lgp141.outcome_of(_BUSY141, 0, "wu") == {"code": "lgsm_busy", "kind": "update"},
+      repr((_lgp141.outcome(_BUSY141, "update"), _lgp141.outcome(_BUSY_TTY141, "validate"))))
+# A start with updateonstart="on" runs the same update check (command_start.sh) and starts anyway.
+_START_BUSY141 = _BUSY141 + "[  OK  ] Starting vhserver: Valheim\n"
+_START_PP141 = ("[ INFO ] Restarting vhserver: 2 players are on the server: restart postponed until the "
+                "server is empty\n" + _BUSY141)
+check("outcome: the busy line inside a start's or restart's output (updateonstart) is not lgsm_busy: "
+      "the start ran, and a restart's own postponement is still what is said",
+      _lgp141.outcome_of(_START_BUSY141, 0, "start") is None
+      and _lgp141.outcome_of(_START_BUSY141, 0, "restart") is None
+      and _lgp141.outcome_of(_START_BUSY141, 0) is None
+      and (_lgp141.outcome_of(_START_PP141, 0, "restart") or {}).get("code") != "lgsm_busy",
+      repr((_lgp141.outcome_of(_START_BUSY141, 0, "start"), _lgp141.outcome_of(_START_PP141, 0, "restart"))))
 check("outcome: an ordinary update, a non-zero exit, and the words outside LinuxGSM's INFO tag are not",
       _lgp141.outcome(_UPD_OK141) is None and _lgp141.outcome_of(_BUSY141, 1) is None
       and _lgp141.outcome(_GAME_SAYS141) is None)
@@ -231,12 +248,17 @@ else:
 _upd_cmd141 = "cd /home/vhserver && ./vhserver update"
 _mon_cmd141 = "cd /home/vhserver && ./vhserver monitor"
 _st141 = {_cron141._cron_job_id(c): {"last_run": 5, "ok": True, "error": "", "busy": True, "postponed": False}
-          for c in (_upd_cmd141, _mon_cmd141)}
+          for c in (_upd_cmd141, _mon_cmd141, "cd /home/vhserver && ./vhserver restart",
+                    "cd /home/vhserver && ./vhserver u")}
 _rows141 = [_cron141._cron_job_row("15 5 * * * " + c, "vhserver", "vhserver", _st141, {})
-            for c in (_upd_cmd141, _mon_cmd141)]
+            for c in (_upd_cmd141, _mon_cmd141, "cd /home/vhserver && ./vhserver restart",
+                      "cd /home/vhserver && ./vhserver u")]
 check("cron table: the update job's row carries busy; LinuxGSM's monitor job never does (its own "
       "postponed update is the monitor doing its job)",
       _rows141[0].get("busy") is True and _rows141[1].get("busy") is False, repr(_rows141))
+check("cron table: a scheduled restart whose log holds the busy line (updateonstart) is not 'busy'; "
+      "the update's alias u is",
+      _rows141[2].get("busy") is False and _rows141[3].get("busy") is True, repr(_rows141[2:]))
 _srvjs141 = _read141("static", "js", "server_files.js")
 check("cron table's page: a busy run shows its own 'Not run' badge, before the OK one",
       "j.ok === true && j.busy" in _srvjs141
@@ -449,6 +471,19 @@ try:
     check("command refresh: an account the panel may not write as gets its list, and no crontab write",
           _rf_refused141[0] == set() and _rf_refused141[2] == [] and "update" in _rf_refused141[1],
           repr(_rf_refused141))
+    # ...and the server page's Refresh button, which stores the list itself.
+    _rf141.update(list=_QW_NEW141, refusal=None, added=[])
+    with _p9.app_context():
+        _g = _sh141.db.session.get(_sh141.GameServer, P9_GS)
+        _g.set_commands(_QW_OLD141)
+        _sh141.db.session.commit()
+    _rf_btn141 = _p9_client(P9_ADMIN).post("/server/%d/refresh-commands" % P9_GS).status_code
+    with _p9.app_context():
+        _rf_btn_cmds141 = [c["cmd"] for c in _sh141.db.session.get(_sh141.GameServer, P9_GS).get_commands()]
+    check("command refresh from the Refresh button: the list is stored and the update it gained is "
+          "scheduled (it was left to a daily pass that then saw nothing new)",
+          _rf141["added"] == [{"update"}] and "update" in _rf_btn_cmds141 and _rf_btn141 in (200, 302),
+          repr((_rf_btn141, _rf141["added"], _rf_btn_cmds141)))
 
     # ...and its two callers: a panel update-lgsm that exited 0, and the daily maintenance pass.
     _rfcalls141 = []
@@ -522,8 +557,12 @@ check("AHL start: no note on a start without the warning, nor on a stop", _AHL_N
       and _AHL_NOTE141 not in _ahl_stop141, repr((_ahl_plain141, _ahl_stop141)))
 check("AHL start from the button (run in the background): the note is said in the server's console",
       (P9_GS, "[panel] start: " + _AHL_NOTE141) in _ahl_push141, repr(_ahl_push141))
-check("AHL note: es and fr translate it", all(_AHL_NOTE141 in _read141("translations", lang, "lg265.json")
-                                              for lang in ("es", "fr")))
+import json as _json141  # noqa: E402
+_ahl_tr141 = {lang: _json141.loads(_read141("translations", lang, "lg265.json")).get(_AHL_NOTE141)
+              for lang in ("es", "fr")}
+check("AHL note: es and fr translate it (a value of their own, not empty and not the English)",
+      all(isinstance(v, str) and v.strip() and v != _AHL_NOTE141 for v in _ahl_tr141.values()),
+      repr(_ahl_tr141))
 
 check("part141: nothing its routes drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP141_START, repr(_P9_TRIPPED[_TRIP141_START:]))

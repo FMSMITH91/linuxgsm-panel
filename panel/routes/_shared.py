@@ -1022,7 +1022,7 @@ def _run_queued_action(app, gs):
     # answered with no exit status is: the raise left before the counter, so on a direct-SSH host
     # _QUEUED_ACTION_ATTEMPTS never applied and every tick ran the action again, a row each time.
     _out, err, rc = _r21b_run_counted(gs, act)
-    oc = _lgp.outcome_of(_out, rc)
+    oc = _lgp.outcome_of(_out, rc, act)
     if oc is not None:
         return _lg264_queued_outcome(app, gs, act, oc)
     ok = (rc == 0)
@@ -1340,9 +1340,19 @@ def lg265_refresh_commands(gs):
     old = gs.get_commands()
     if not cmds or cmds == old:
         return set()
-    gained = {c.get("cmd") for c in cmds} - {c.get("cmd") for c in old}
     gs.set_commands(cmds)
     db.session.commit()
+    return lg265_schedule_gained(gs, old, cmds)
+
+
+def lg265_schedule_gained(gs, old, cmds):
+    """Schedule the maintenance commands `cmds` has that the stored list `old` did not.
+
+    lg265_refresh_commands' second half, and the manual Refresh button's: a refresh that stored the
+    new list without this left the daily pass nothing to gain, so the command never got its cron
+    line. -> the maintenance commands added.
+    """
+    gained = {c.get("cmd") for c in cmds} - {c.get("cmd") for c in (old or [])}
     added = (gained & set(_sm.LGC_CRON_CMDS)) - {"monitor"} if old else set()
     # A crontab write asks what every cron write asks (the account may be the host's sudo login).
     if not added or game_account_write_refusal(gs.remote, gs.short_name) is not None:
