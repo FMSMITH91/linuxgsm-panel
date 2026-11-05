@@ -1686,6 +1686,118 @@ finally:
     if _ub_gate_saved is not None:
         _ubc._UPDATE_GATE = _ub_gate_saved
 
+# ── "typing…" while a bot command works (owner, 2026-11-05: /update sat silent 10-30 s) ──
+_ty_time = _lgd_real_time   # the time module, already imported above (no reimport)
+_ty_saved = (_ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP)
+try:
+    _ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP = 0.05, 0.1, 5.0
+    _ty_pulses = []
+
+    def _ty_send():
+        _ty_pulses.append(_ty_time.monotonic())
+
+    _ty_out = _ubc.while_typing(_ty_send, lambda: "answer")
+    _ty_time.sleep(0.2)
+    check("bots typing: an instant answer shows no 'typing…' at all (no request, no flicker)",
+          _ty_out == "answer" and _ty_pulses == [], repr(_ty_pulses))
+    # 0.42, not a multiple of the 0.1 s pulse: ending ON a pulse is the race checked just below.
+    _ty_out = _ubc.while_typing(_ty_send, lambda: (_ty_time.sleep(0.42), "slow")[1])
+    _ty_n = len(_ty_pulses)
+    _ty_time.sleep(0.3)
+    check("bots typing: a slow one pulses 'typing…' while it runs, and returns its answer",
+          _ty_out == "slow" and _ty_n >= 3, "pulses=%d" % _ty_n)
+    check("bots typing: ...and stops the moment it has answered",
+          len(_ty_pulses) == _ty_n, "%d then %d" % (_ty_n, len(_ty_pulses)))
+    # ...and a command that ends exactly as a pulse comes due (the wait times out in the same
+    # instant as the answer): ten of them, and not one pulse once while_typing has returned.
+    _ty_late = 0
+    for _ in range(10):
+        _ty_pulses.clear()
+        _ubc.while_typing(_ty_send, lambda: _ty_time.sleep(0.15))
+        _ty_end = _ty_time.monotonic()
+        _ty_time.sleep(0.12)
+        _ty_late += sum(1 for t in _ty_pulses if t > _ty_end)
+    check("bots typing: ...even when it answers in the same instant a pulse comes due",
+          _ty_late == 0, "%d pulses after an answer" % _ty_late)
+    _ty_pulses.clear()
+    _ubc._TYPING_CAP = 0.25
+    _ubc.while_typing(_ty_send, lambda: _ty_time.sleep(0.7))
+    check("bots typing: a command that hangs stops typing at the cap, not for ever",
+          _ty_pulses and _ty_pulses[-1] - _ty_pulses[0] < 0.4, repr(len(_ty_pulses)))
+    _ubc._TYPING_CAP = 5.0
+    _ty_pulses.clear()
+
+    def _ty_boom():
+        _ty_time.sleep(0.2)
+        raise RuntimeError("boom")
+    try:
+        _ubc.while_typing(_ty_send, _ty_boom)
+        _ty_raised = False
+    except RuntimeError:
+        _ty_raised = True
+    _ty_n = len(_ty_pulses)
+    _ty_time.sleep(0.25)
+    check("bots typing: a command that raises still stops typing, and the error reaches the worker",
+          _ty_raised and _ty_n >= 1 and len(_ty_pulses) == _ty_n, "pulses=%d" % _ty_n)
+    _ty_pulses.clear()
+    _ubc.while_typing(lambda: (_ty_send(), 1 / 0), lambda: _ty_time.sleep(0.3))
+    check("bots typing: a failing typing call never breaks the command (it keeps pulsing)",
+          len(_ty_pulses) >= 2, repr(len(_ty_pulses)))
+
+    # The routers: the job they queue runs the command under while_typing, with their own chat.
+    _ty_seen = []
+    _ty_rt = (_tgm.notifications.telegram_typing, _dcm.notifications.discord_bot_typing,
+              _tgm._handle_telegram_command, _dcm._handle_discord_command,
+              _tgm._TG_WORKER, _dcm._DC_WORKER)
+    try:
+        _tgm.notifications.telegram_typing = lambda tok, chat: _ty_seen.append(("tg", tok, chat))
+        _dcm.notifications.discord_bot_typing = lambda tok, ch: _ty_seen.append(("dc", tok, ch))
+        _tgm._handle_telegram_command = lambda *a, **k: _ty_time.sleep(0.3)
+        _dcm._handle_discord_command = lambda *a, **k: _ty_time.sleep(0.3)
+        _tgm._TG_WORKER = _dcm._DC_WORKER = _UbInline()
+        _tgm._tg_dispatch(_app, "tok", "42", "/update")
+        _dcm._dc_dispatch(_app, "dtok", "77", "!status")
+        check("telegram typing: a slow /update shows 'typing…' in the chat that asked",
+              ("tg", "tok", "42") in _ty_seen, repr(_ty_seen))
+        check("discord typing: ...and on Discord, for any slow command, in its channel",
+              ("dc", "dtok", "77") in _ty_seen, repr(_ty_seen))
+    finally:
+        (_tgm.notifications.telegram_typing, _dcm.notifications.discord_bot_typing,
+         _tgm._handle_telegram_command, _dcm._handle_discord_command,
+         _tgm._TG_WORKER, _dcm._DC_WORKER) = _ty_rt
+finally:
+    _ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP = _ty_saved
+_ty_time.sleep(0.15)   # let the last pulse thread see its stop, so no thread outlives this part
+
+# The requests themselves: fixed hosts, the right method, and nothing sent for a bad token or id.
+import panel.services.notifications as _tyn  # noqa: E402
+_ty_posts = []
+_ty_post_saved = _tyn._post
+try:
+    _tyn._post = lambda url, data, headers, **k: (_ty_posts.append((url, data, headers)), (True, "sent"))[1]
+    _ty_tok = "123456789:" + "A" * 35
+    check("telegram typing: sendChatAction on api.telegram.org, action=typing, for that chat",
+          _tyn.telegram_typing(_ty_tok, "42") is True and _ty_posts
+          and _ty_posts[-1][0] == "https://api.telegram.org/bot%s/sendChatAction" % _ty_tok
+          and b"action=typing" in _ty_posts[-1][1] and b"chat_id=42" in _ty_posts[-1][1],
+          repr(_ty_posts[-1:]))
+    _ty_posts.clear()
+    check("telegram typing: a malformed token or no chat sends nothing",
+          _tyn.telegram_typing("nope", "42") is False and _tyn.telegram_typing(_ty_tok, "") is False
+          and _ty_posts == [], repr(_ty_posts))
+    _ty_dtok = "M" * 24 + "." + "G" * 6 + "." + "x" * 27
+    _ty_dok = _tyn._valid_discord_bot_token(_ty_dtok)
+    _tyn.discord_bot_typing(_ty_dtok, "112233445566778899")
+    check("discord typing: POST /channels/<id>/typing on discord.com, the bot token in the header",
+          _ty_dok and _ty_posts
+          and _ty_posts[-1][0] == "https://discord.com/api/v10/channels/112233445566778899/typing"
+          and _ty_posts[-1][2].get("Authorization") == "Bot %s" % _ty_dtok, repr(_ty_posts[-1:]))
+    _ty_posts.clear()
+    check("discord typing: a channel id that is not a snowflake sends nothing",
+          _tyn.discord_bot_typing(_ty_dtok, "../evil") is False and _ty_posts == [], repr(_ty_posts))
+finally:
+    _tyn._post = _ty_post_saved
+
 # ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
 from panel.services.bots.discord import _parse_dc_command  # noqa: E402
 
