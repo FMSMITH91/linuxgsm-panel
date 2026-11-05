@@ -2215,7 +2215,8 @@ def _compute_update_status():
         return _r17a_unread_status(cur_ver, cur_sha, branch)
     _ci_unknown_why["reason"] = ""
     walk_started = time.time()
-    tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
+    # An unsigned tip is never a candidate (below), so GitHub is not asked about it.
+    tip_state = _remote_ci_state(commits[0]) if signed(commits[0]) else "unsigned"
     unknown_why = _ci_unknown_why["reason"] if tip_state == "unknown" else ""
     # Only a commit that CONTAINS this checkout is an update to it, while the checkout is on the
     # branch — install.sh moves such a checkout only forward, and holds rather than move it

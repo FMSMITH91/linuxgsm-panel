@@ -58,9 +58,9 @@ def _key142(name):
         return path, "release " + " ".join(fh.read().split()[:2]) + "\n"
 
 
-def _sign142(key, branch, sha, ns=_NS142):
+def _sign142(key, branch, sha, ns=_NS142, where=None):
     """The armored signature `key` makes of the release message for `sha` on `branch`."""
-    msg = os.path.join(_SB142, "msg")
+    msg = os.path.join(where or _SB142, "msg")
     with open(msg, "w", encoding="utf-8") as fh:
         fh.write("linuxgsm-panel release\nbranch %s\ncommit %s\n" % (branch, sha))
     _run142(["ssh-keygen", "-q", "-Y", "sign", "-f", key, "-n", ns, msg])
@@ -125,14 +125,16 @@ def _target142(head, ref="", extra_env=None, root=None):
         _shlex142.quote(rt.get("root_git", os.path.join(_SB142, "norootgit"))))
     if root is not None:
         pre += ("id() { if [ \"$#\" -eq 1 ] && [ \"$1\" = -u ]; then echo 0; else command id \"$@\"; fi; }\n"
-                "_rootgit() { git --git-dir=\"${ROOT_GIT}\" \"$@\"; }\n")
+                "_rootgit() { git --git-dir=\"${ROOT_GIT}\" \"$@\"; }\n"
+                # _gitc runs git as the checkout's owner when it is root; here that is this account.
+                "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n")
     body = "".join(_inst_shfn(n) for n in _SH_NAMES142)
     tail = ("UNSIGNED_OVERRIDE=\"${PANEL_ALLOW_UNSIGNED_UPDATE:-}\"\n"
             "RELEASE_SIG_NS=linuxgsm-panel-release\nRELEASE_SIG_BRANCH=release-signatures\n"
             "RELEASE_SIG_REF=refs/linuxgsm-panel/release-signatures\nRELEASE_SIGNERS=release-signers\n"
             "RELEASE_SIG_FETCHED=0\n"
             "if resolve_update_target; then echo \"TARGET=${TARGET_SHA} WHY=${UPD_WHY} HOLD=${UPD_HOLD} "
-            "HOLDWHY=${UPD_HOLD_WHY}\"; else echo \"REFUSED ${RESOLVE_ERR}\"; fi\n")
+            "HOLDWHY=${UPD_HOLD_WHY}\"; else echo \"REFUSED ${RESOLVE_ERR//$'\\n'/ }\"; fi\n")
     env = dict(_ENV142, PANEL_UPDATE_REF=ref, **(extra_env or {}))
     r = _run142(["bash", "-c", pre + body + tail], env=env)
     return (r.stdout.strip().splitlines() or [""])[-1] + ("" if r.stdout.strip() else " ERR " + r.stderr[-300:])
@@ -441,7 +443,7 @@ if _HAVE142:
         _run142(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", _kp])
         with open(_kp + ".pub", encoding="utf-8") as _fh:
             _kt = "release " + " ".join(_fh.read().split()[:2])
-        _sig = _sign142(_kp, "main", _C3) if os.path.isdir(_SB142) else ""
+        _sig = _sign142(_kp, "main", _C3, where=_kd)
         check("update card: the real verifier passes the right signature and refuses it for another "
               "commit or branch",
               _so142._release_signature_valid(_kt, _C3, "main", _sig.strip())
