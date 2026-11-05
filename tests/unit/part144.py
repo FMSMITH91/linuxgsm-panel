@@ -102,7 +102,7 @@ check("bot network: an empty address list raises OSError instead of returning No
 
 _https144 = [h for h in nt144._OPENER.handlers if isinstance(h, nt144.urllib.request.HTTPSHandler)]
 check("bot network: _OPENER's only https handler is the fallback one",
-      len(_https144) == 1 and type(_https144[0]) is nt144._FallbackHTTPS,
+      len(_https144) == 1 and isinstance(_https144[0], nt144._FallbackHTTPS),
       [type(h).__name__ for h in _https144])
 _conn144 = nt144._FallbackHTTPSConnection("api.telegram.org", timeout=5)
 check("bot network: ...and its connections connect through _connect_each",
