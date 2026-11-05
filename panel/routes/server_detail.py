@@ -1429,6 +1429,17 @@ def _register_schedules(app):
         return jsonify({"success": True, "enabled": enabled})
 
 
+def _lg265_schedule_refreshed(gs, old, cmds):
+    """The Refresh button's half of lg265_refresh_commands: schedule what the stored list gained.
+
+    The list is already stored, so a crontab write that fails is logged, not said as a failed refresh.
+    """
+    try:
+        lg265_schedule_gained(gs, old, cmds)
+    except Exception:
+        _log.debug("scheduling the refreshed commands failed", exc_info=True)
+
+
 def _register_commands(app):
     """Re-reading the server's LinuxGSM command list, and sending a console command from the page."""
     @app.route("/server/<int:server_id>/refresh-commands", methods=["POST"])
@@ -1469,10 +1480,7 @@ def _register_commands(app):
             _old_cmds = gs.get_commands()
             gs.set_commands(cmds)
             db.session.commit()
-            try:
-                lg265_schedule_gained(gs, _old_cmds, cmds)
-            except Exception:
-                _log.debug("scheduling the refreshed commands failed", exc_info=True)
+            _lg265_schedule_refreshed(gs, _old_cmds, cmds)
             # ...and an audit row, which the docstring above says was the other half of the bug
             # ("with no audit row") and which the permission fix left undone. The stored list
             # drives the control bar and install_game_cron: a host that answers oddly can empty
