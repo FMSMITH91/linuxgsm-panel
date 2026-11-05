@@ -2040,7 +2040,7 @@ def _release_key_text():
 
 
 def _release_key_at_floor():
-    """HEAD's release key when HEAD is root's source floor commit; "" otherwise (fail closed)."""
+    """Return HEAD's release key when HEAD is root's source floor commit, else "" (fail closed)."""
     floor_file = os.path.join(os.path.dirname(_priv.HELPER_PATH), ".source-floor")
     try:
         with open(floor_file, encoding="utf-8") as fh:
