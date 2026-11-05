@@ -10063,7 +10063,11 @@ finally:
 _ru_names = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history",
              "_on_first_parent_line", "_choose_update_target", "resolve_update_target",
              "update_noop_line")
-_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in _ru_names)
+# The release-signature gate is a stand-in that passes here: these checks are about which commit
+# the update chooses, and part142 drives the gate itself.
+_RU_UNSIGNED_OK = "_fetch_release_signatures() { :; }\n_hold_unless_signed() { :; }\n"
+_ru_fn = ('warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in _ru_names)
+          + _RU_UNSIGNED_OK)
 _ru_sb = _tempfile.mkdtemp(prefix="updref-")
 try:
     _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
@@ -10912,7 +10916,7 @@ try:
     # own panel_update_log reads that log back.
     _uc_i = _inst.index("RED='\\033")
     _uc_out = _inst[_uc_i:_inst.index("\n", _inst.index("die()   {", _uc_i)) + 1]
-    _uc_fns = "".join(_inst_shfn(_n) for _n in _ru_names)
+    _uc_fns = "".join(_inst_shfn(_n) for _n in _ru_names) + _RU_UNSIGNED_OK
 
     def _uc_panel(name):
         pd = os.path.join(_fp_sb, name)
