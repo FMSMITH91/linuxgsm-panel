@@ -753,6 +753,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A command the panel feeds input to can no longer hang the panel.** When a program the panel
+  starts with input (the SSH key signature check, writing a file through the helper) exited
+  without reading that input, the panel could spin one CPU core at 100% for ever on that request,
+  past its timeout. It now carries on as soon as the program has exited. The same fault was the
+  occasional freeze of the test run on Ubuntu 22.04.
+
 - **LinuxGSM v26.5.0 compatibility.** On servers running LinuxGSM v26.5.0 or newer:
   - FastDL no longer rebuilds its folder from scratch: the panel answers v26.5.0's new "Rebuild
     from scratch?" question No, so the run is incremental and files LinuxGSM did not write are

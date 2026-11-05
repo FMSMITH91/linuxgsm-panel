@@ -129,6 +129,13 @@ jobs:
 
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
         if: steps.scope.outputs.docs_only != 'true'
+        # 40, under the job's 45. Each suite stops itself at its own limit (tests/suite_deadline.py:
+        # the unit suite at 35 minutes, the rest at 15) and prints every thread's and greenlet's
+        # stack; this is the limit for anything outside a suite. A lane still running when the job
+        # is cancelled prints nothing at all, which is how a 22.04 unit run froze on 2026-11-05 with
+        # no word of where. The unit suite took 713-1181 s on the 22.04 leg (the slowest); the work
+        # ahead of the lanes 17-34 s. tests/unit/part143.py holds the order of the three limits.
+        timeout-minutes: 40
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
         # shellcheck is pre-installed on the ubuntu runners.
         # REQUIRE_TOOLS=1: a linter that is missing OR broken must fail this job rather than be
@@ -222,8 +229,23 @@ jobs:
               sys.exit(1)
 
 
+          def show_end(path, label):
+              # A run with no tally stopped early, and its output is in a file nobody else prints:
+              # from its time-limit report on (tests/suite_deadline.py), else its last 150 lines.
+              with open(path, encoding="utf-8", errors="replace") as fh:
+                  lines = fh.read().splitlines()
+              at = next((i for i, ln in enumerate(lines) if "SUITE TIME LIMIT" in ln), None)
+              print("::group::the end of the unit run %s" % label)
+              print("\n".join(lines[max(at - 1, 0):] if at is not None else lines[-150:]))
+              print("::endgroup::")
+
+
           user, user_why, user_tally = read(sys.argv[1])
           root, _, root_tally = read(sys.argv[2])
+          for _path, _tally, _label in ((sys.argv[1], user_tally, "as the runner"),
+                                        (sys.argv[2], root_tally, "as root")):
+              if _tally is None:
+                  show_end(_path, _label)
           if user_tally is None or root_tally is None:
               fail("a unit run left no tally (as the runner: %s; as root: %s), so nothing can be "
                    "judged" % (user_tally, root_tally))

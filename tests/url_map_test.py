@@ -31,6 +31,13 @@ import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+# A suite past its time limit prints every thread's and greenlet's stack, then exits 124
+# (tests/suite_deadline.py). Armed before anything that could block;
+# tests/ is on the path only for the import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import suite_deadline as _suite_deadline  # noqa: E402
+del sys.path[0]
+_suite_deadline.arm(globals())
 
 from app import create_app   # noqa: E402
 

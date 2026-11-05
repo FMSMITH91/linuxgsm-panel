@@ -65,9 +65,15 @@ run_suite() {
         return 1
     fi
     rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
+    # Into a file, not $(…): a command substitution, like a pipe, waits for EVERY process holding
+    # its write end, so one the suite left behind would keep this lane open after the tally.
+    local log
+    log="$(mktemp)"
     set +e
-    out="$("$PY" "$path" 2>&1)"; rc=$?
+    "$PY" "$path" >"$log" 2>&1; rc=$?
     set -e
+    out="$(cat "$log")"
+    rm -f "$log"
     printf '%s\n' "$out"
     if [[ "$rc" -ne 0 ]]; then
         echo "  !! ${path} exited ${rc}" >&2
@@ -143,7 +149,16 @@ unit_suite() {
     # UNIT_LOG=<file> keeps a copy of this run's output. ci.yml sets it: its next step judges the
     # suite's root run against this one. Kept in this run's scratch otherwise, to read the tally.
     local UNIT_LOG="${UNIT_LOG:-$RT_TMP/unit.log}"
-    "$PY" tests/unit_test.py | tee "${UNIT_LOG}"
+    # Into the file, then shown, not `| tee`: tee ends only when every process holding the pipe
+    # has, so one the suite left behind kept the 22.04 leg's unit lane open after its tally
+    # (2026-11-05). bash waits for the suite alone. tests/unit/part15 fails the run on such a process.
+    local rc=0
+    "$PY" tests/unit_test.py >"${UNIT_LOG}" || rc=$?
+    cat "${UNIT_LOG}"
+    if [[ "$rc" -ne 0 ]]; then
+        echo "  !! tests/unit_test.py exited ${rc}" >&2
+        return "$rc"
+    fi
     # Its exit code fails a FAIL; this fails a run that ended without counting to the end.
     if ! grep -qE '^[0-9]+ / [0-9]+ checks passed$' "${UNIT_LOG}"; then
         echo "  !! tests/unit_test.py printed no 'N / N checks passed' tally" >&2
