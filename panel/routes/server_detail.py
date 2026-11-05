@@ -230,16 +230,15 @@ def _lg265_ahl_note(action, clean):
     return None
 
 
-def _lg265_ahl_said(app, gs, action, clean):
+def _lg265_ahl_said(app, gs, held, action, clean):
     """A background start's detail, the AHL note (_lg265_ahl_note) first when there is one.
 
-    The note is said in the console too, while `gs` (None once the row is not that server's) is
-    the server it ran on.
+    The note is said in `gs`'s console too while `held`: the row is still the server it ran on.
     """
     note = _lg265_ahl_note(action, clean)
     if not note:
         return clean
-    if gs is not None:
+    if held:
         _console_push(app, gs.id, f"[panel] {action}: {note}")
     return "%s\n%s" % (note, clean)
 
@@ -615,7 +614,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                     return
                 log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                            detail=clean[-400:], actor=origin, server=gs if held else None)
-                detail = _lg265_ahl_said(app, gs if held else None, action, clean)
+                detail = _lg265_ahl_said(app, gs, held, action, clean)
                 if held:
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:

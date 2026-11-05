@@ -363,11 +363,14 @@ def _monitor_loop23():
 _LOOPS23 = (("_player_count_watch", "player-counts", ("_refresh_player_counts",), 1),
             ("_metrics_history_watch", "metrics-history",
              ("_record_metric_samples", "_prune_metric_samples"), 1),
-            ("_node_tools_cron_watch", "node-tools", ("_node_tools_cron_pass", "_lg265_command_refresh_pass"), 1),
+            ("_node_tools_cron_watch", "node-tools", ("_node_tools_cron_pass",), 1),
             ("_autoblock_watch", "autoblock", ("_autoblock_hosts",), 2))
 
 
 def _other_loops23():
+    # The node-tools loop's second pass lives in _shared (the command lists update-lgsm grows).
+    from panel.routes import _shared as _sh23
+    _patch23(_sh23, "lg265_refresh_pass", lambda *a, **k: None)
     for loop, name, stubs, stop_on in _LOOPS23:
         for attr in stubs:
             _patch23(_app23mod, attr, lambda *a, **k: set())

@@ -707,19 +707,14 @@ def _node_tools_cron_pass(app):
     _gp.lgc_ts3_heal_pass(app)
 
 
-def _lg265_command_refresh_pass(app):
-    """Read every installed server's LinuxGSM command list again (_shared.lg265_refresh_pass)."""
-    from panel.routes._shared import lg265_refresh_pass
-    lg265_refresh_pass(app, _still_in_db)
-
-
 def _node_tools_cron_watch(app):
-    """Once at startup and daily after: _node_tools_cron_pass, then _lg265_command_refresh_pass."""
+    """Once at startup and daily after: _node_tools_cron_pass, then the command-list refresh."""
+    from panel.routes import _shared   # lg265_refresh_pass: the lists update-lgsm can have grown
     while True:
         try:
             _t0 = time.time()
             _node_tools_cron_pass(app)
-            _lg265_command_refresh_pass(app)
+            _shared.lg265_refresh_pass(app, _still_in_db)
             runtime_stats.beat("node-tools", 86400, time.time() - _t0)
         except Exception:
             runtime_stats.bump("loopfail", "node-tools")

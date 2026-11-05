@@ -454,12 +454,12 @@ try:
           "other actions", _rfcalls141 == [("action", P9_GS)], repr(_rfcalls141))
     _rfcalls141.clear()
     import app as _app141  # noqa: E402
-    _app141._lg265_command_refresh_pass(_p9)
+    _sh141.lg265_refresh_pass(_p9, _app141._still_in_db)
     check("the daily refresh pass reads every installed server's command list again",
           ("pass", P9_GS) in _rfcalls141, repr(_rfcalls141))
     _ntw141 = []
     _p9_patch(_app141, "_node_tools_cron_pass", lambda app: _ntw141.append("cron"))
-    _p9_patch(_app141, "_lg265_command_refresh_pass", lambda app: _ntw141.append("refresh"))
+    _p9_patch(_sh141, "lg265_refresh_pass", lambda app, still_in_db: _ntw141.append("refresh"))
     # The loop's own clock only (a namespace in place of the module), so no other thread's sleep
     # is touched: its sleep ends the daily loop after one pass.
     _p9_patch(_app141, "time", type("_Clock141", (), {"time": staticmethod(lambda: 0.0), "sleep": staticmethod(
