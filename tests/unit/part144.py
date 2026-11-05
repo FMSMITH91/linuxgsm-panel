@@ -81,7 +81,8 @@ check("bot network: a first address that hangs is given _CONNECT_EACH, closed, a
 check("bot network: ...the cap is 4 s, far under the 30 s a long-poll used to wait",
       nt144._CONNECT_EACH == 4.0, repr(nt144._CONNECT_EACH))
 check("bot network: the last address connects with the request's whole timeout, and keeps it",
-      err is None and log[1].timeouts == [30, 30], repr(log[1].timeouts))
+      err is None and len(log) == 2 and log[1].timeouts == [30, 30],
+      repr([s.timeouts for s in log]))
 
 sock, err, log = _run144([_V4], set(), 30)
 check("bot network: a host with one address waits the whole timeout for it, as before",
