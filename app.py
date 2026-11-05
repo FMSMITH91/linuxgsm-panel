@@ -85,6 +85,11 @@ if _dd_rebind:
     _dd_del.__defaults__ = (threading._active_limbo_lock, threading._active)
 del _w, _dd_del, _dd_rebind
 
+# eventlet's green os.write retries a broken pipe forever, so communicate(input) to a child that
+# exits unread spins and never returns; panel/core/green_write.py lets it raise as subprocess expects.
+from panel.core import green_write  # noqa: E402
+green_write.install()
+
 # Panel imports live AFTER the patch, all of them. terminal/clock used to sit above it and got
 # away with it only because neither pulls in anything eventlet needs to green — a latent trap for
 # whichever of them grows a dependency first. tests/unit asserts this ordering now.

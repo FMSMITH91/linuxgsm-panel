@@ -11,6 +11,8 @@ still running. tests/suite_deadline.py gives every suite a limit. Held here:
   listed and killed; with SIGALRM blocked, faulthandler's watchdog still ends it;
 * ci.yml's "Run all checks" step has its own timeout-minutes, above the unit limit plus the watchdog
   and the step's work ahead of the lanes, and under the job's.
+* the cause the stacks showed: eventlet's green os.write retried EPIPE for ever, so communicate(input)
+  to a child that exits unread never returned; panel/core/green_write.py, installed by app.py.
 """
 import glob
 import importlib.util as _ilu143
@@ -21,6 +23,7 @@ import tempfile as _tf143
 import time
 
 from eventlet import patcher as _patcher143
+from eventlet.green import os as _green_os143
 
 from unit.part01 import check
 from unit.part05 import _root
@@ -29,6 +32,7 @@ from unit.part29 import _CI_ROOT29, _U29, _verdict29
 from unit.part06 import _wf_run_block
 
 _sp143 = _patcher143.original("subprocess")
+_subprocess143 = sys.modules["subprocess"]  # the suite's own, greened by app.py's monkey_patch
 _SD143_PATH = os.path.join(_root, "tests", "suite_deadline.py")
 _spec143 = _ilu143.spec_from_file_location("suite_deadline_p143", _SD143_PATH)
 SD143 = _ilu143.module_from_spec(_spec143)
@@ -223,3 +227,46 @@ check("ci root step: a root run that stopped without a tally gets its time-limit
       and "the end of the unit run as root" in _re143[0][1] and "noise" not in _re143[0][1], repr(_re143[0]))
 check("ci root step: ...and one with no report gets its last 150 lines",
       _re143[1][0] == 1 and _re143[1][1].count("line\n") == 150, repr((_re143[1][0], _re143[1][1][-300:])))
+
+
+# ── the cause: eventlet's green os.write retried a broken pipe forever ────────────────────────
+# 2026-11-05: the stacks of #474's stopped runs ended in eventlet/green/os.py write() under
+# subprocess._communicate: part142 handed `bash tools/sign-release.sh <id>` an input line it exits
+# without reading, and a green write to a pipe with no reader goes round its EPIPE retry for ever.
+# panel/core/green_write.py lets it raise BrokenPipeError, which _communicate is written to catch.
+_EPIPE143 = (
+    "import sys\n"
+    "sys.path.insert(0, %r)\n"
+    "import eventlet\n"
+    "eventlet.monkey_patch()\n"
+    "from panel.core import green_write\n"
+    "print('installed', green_write.install(), green_write.install())\n"
+    "import subprocess\n"
+    "p = subprocess.Popen(['true'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,\n"
+    "                     stderr=subprocess.PIPE)\n"
+    "p.wait()\n"
+    "p.communicate(b'abc\\n')\n"
+    "print('communicate returned', p.returncode)\n"
+    "r = subprocess.run(['true'], input='x' * 200000, capture_output=True, text=True, timeout=5)\n"
+    "print('run returned', r.returncode)\n") % _root
+
+
+def _epipe143():
+    try:
+        p = _sp143.run([sys.executable, "-c", _EPIPE143], capture_output=True, text=True,  # nosec B603 - this interpreter on a fixed probe
+                       timeout=20, cwd=_root)
+        return p.returncode, p.stdout + p.stderr
+    except _sp143.TimeoutExpired as exc:
+        return "timed out", str(exc.stdout or "") + str(exc.stderr or "")
+
+
+_ep143 = _epipe143()
+check("green write: under eventlet, communicate(input) and run(input=) to a child that exits without "
+      "reading return at once instead of spinning on EPIPE for ever",
+      _ep143[0] == 0 and "installed True True" in _ep143[1] and "communicate returned 0" in _ep143[1]
+      and "run returned 0" in _ep143[1], repr(_ep143))
+check("green write: app.py installs it, so the suite's (and the panel's) os.write, subprocess's and "
+      "eventlet's green os module's are all the one that raises",
+      all(getattr(w, "lgsm_epipe_raises", False)
+          for w in (os.write, _subprocess143.os.write, _green_os143.write)),
+      repr((os.write, _subprocess143.os.write, _green_os143.write)))
