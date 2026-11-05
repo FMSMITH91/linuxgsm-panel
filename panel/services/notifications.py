@@ -341,7 +341,7 @@ def _valid_discord_webhook(url):
 
 # The only Bot API methods the panel calls — pinning `method` to this set makes the URL path
 # provably not user-controlled (add here to use a new one).
-_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands", "getMe")
+_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands", "getMe", "sendChatAction")
 
 
 def _tg_api_url(token, method):
@@ -506,6 +506,19 @@ def send_telegram(token, chat_id, text):
     return False, ("Telegram rejected it — the bot token or chat ID is wrong, or you haven't messaged "
                    "the bot yet. Re-copy the token from @BotFather, use your numeric ID from "
                    "@userinfobot, and press Start in the bot's chat.")
+
+
+def telegram_typing(token, chat_id):
+    """Show "typing…" in the chat for the next ~5 s (Telegram clears it when the bot replies).
+
+    True when Telegram took it. The same SSRF-safe URL as send_telegram; nothing is read back.
+    """
+    url = _tg_api_url(token, "sendChatAction")
+    if not url or not chat_id:
+        return False
+    body = urllib.parse.urlencode({"chat_id": chat_id, "action": "typing"}).encode()
+    return _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"},
+                 provider="telegram")[0]
 
 
 def telegram_get_updates(token, offset=None, timeout=25):
@@ -738,6 +751,18 @@ def _discord_bot_message_url(channel_id):
     """
     return ("https://discord.com/api/v10/channels/%s/messages" % channel_id
             if _DISCORD_CHANNEL_RE.match(channel_id or "") else None)
+
+
+def discord_bot_typing(bot_token, channel_id):
+    """Show "<bot> is typing…" in the channel for the next ~10 s (cleared when the bot posts).
+
+    True when Discord took it. The URL is discord_bot_send's, ending /typing instead of /messages.
+    """
+    url = _discord_bot_message_url((channel_id or "").strip())
+    if not url or not _valid_discord_bot_token(bot_token):
+        return False
+    url = url[:-len("/messages")] + "/typing"
+    return _post(url, b"", {"Authorization": "Bot %s" % bot_token}, provider="discord")[0]
 
 
 def discord_bot_send(bot_token, channel_id, text):

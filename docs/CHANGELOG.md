@@ -14,6 +14,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **The Telegram and Discord bots show "typing…" while a command is working.** A panel `/update`
+  spends 10-30 seconds checking GitHub before it answers, and the chat used to sit silent all that
+  time, with no sign the bot had heard. Any command that takes longer than a moment now shows the
+  bot typing until it replies (for up to two minutes). Instant answers are unchanged: no indicator,
+  no extra request.
+
 - **Updates install only releases signed with the owner's key.** Every commit on main is signed by
   GitHub's own key, which proves nothing if someone takes over the project's GitHub account. The
   installer already on a host now moves the panel only to a commit that also carries a signature

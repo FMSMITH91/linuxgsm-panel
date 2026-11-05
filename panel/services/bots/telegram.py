@@ -11,7 +11,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
     UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
-    update_rate_reply, _r23a_update_busy_reply)
+    update_rate_reply, while_typing, _r23a_update_busy_reply)
 from panel.db.models import (LOCAL_HOST_LABEL)
 import logging
 import time
@@ -276,7 +276,7 @@ def _tg_dispatch(app, token, chat_id, text, sender=None):
         _tg_ack(token, chat_id, ack)
 
     def job():
-        _handle_telegram_command(app, token, chat_id, text, sender)
+        while_typing(lambda: notifications.telegram_typing(token, chat_id), lambda: _handle_telegram_command(app, token, chat_id, text, sender))
 
     if panel_update_requested(cmd, _command_arg(text)):
         # One panel /update in flight at a time: a second one while the first is queued or running

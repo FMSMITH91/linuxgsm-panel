@@ -11,7 +11,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
     UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
-    update_rate_reply, _r23a_update_busy_reply)
+    update_rate_reply, while_typing, _r23a_update_busy_reply)
 from panel.db.models import (LOCAL_HOST_LABEL)
 import functools
 import logging
@@ -260,7 +260,7 @@ def _dc_dispatch(app, bot_token, channel_id, text, sender=None):
         _dc_ack(bot_token, channel_id, ack)
 
     def job():
-        _handle_discord_command(app, bot_token, channel_id, text, sender)
+        while_typing(lambda: notifications.discord_bot_typing(bot_token, channel_id), lambda: _handle_discord_command(app, bot_token, channel_id, text, sender))
 
     if panel_update_requested(cmd, _command_arg(text)):
         # One panel !update in flight at a time — see _tg_dispatch (Aikido 745379272).

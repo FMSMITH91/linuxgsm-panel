@@ -281,6 +281,39 @@ _WORKING_ACK = {
 }
 
 
+# ── "typing…" while a command works ──────────────────────────────────────────────────────────
+# Both chats can show the bot as typing: Telegram for ~5 s per sendChatAction, Discord for ~10 s
+# per POST …/typing, each cleared the moment the bot posts. A command that takes a while (a
+# panel /update checking GitHub: 10-30 s of a silent chat, owner 2026-11-05) now shows it for as
+# long as it runs. The first pulse waits _TYPING_AFTER, so an answer that is instant (most of
+# them) costs no extra request and never flickers; then every _TYPING_EVERY, under Telegram's 5 s;
+# and never past _TYPING_CAP, so a command that hangs does not type for ever.
+_TYPING_AFTER = 0.7
+_TYPING_EVERY = 4.0
+_TYPING_CAP = 120.0
+
+
+def while_typing(send, fn):
+    """Run fn() and return what it returns, with send() pulsing "typing…" while it is running."""
+    stop = threading.Event()
+
+    def pulse():
+        end = time.monotonic() + _TYPING_CAP
+        wait = _TYPING_AFTER
+        while not stop.wait(wait) and time.monotonic() < end:
+            try:
+                send()
+            except Exception:
+                _log.debug("bot typing indicator failed", exc_info=True)
+            wait = _TYPING_EVERY
+
+    threading.Thread(target=pulse, name="bot-typing", daemon=True).start()
+    try:
+        return fn()
+    finally:
+        stop.set()
+
+
 # ── Running commands off the poll/socket thread ────────────────────────────────────────────────
 # Both bots read their commands on ONE thread — Telegram long-polls getUpdates, Discord holds a
 # Gateway socket — and used to run them on that same thread. A command that reaches a host costs an
