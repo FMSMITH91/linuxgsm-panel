@@ -1166,7 +1166,20 @@ _choose_update_target() {
     fi
     UPD_WHY="tip"
     _head="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || _head=""
-    [[ -n "${PANEL_UPDATE_REF:-}" ]] || { _hold_unless_signed "${_head}"; return; }
+    if [[ -z "${PANEL_UPDATE_REF:-}" ]]; then
+        # Never backwards with no pin either. A branch re-pointed at an OLDER release (a signed
+        # one passes the signature check) would otherwise reset this checkout back to it on any
+        # run without a pin: a hand run, the lost-key override, a per-user update. A tip this
+        # checkout already contains is not an update, so it holds and says why.
+        if [[ -n "${_head}" ]] && [[ "${UPD_TARGET}" != "${_head}" ]] \
+           && _gitc merge-base --is-ancestor "${UPD_TARGET}" "${_head}" 2>/dev/null; then
+            UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="backwards"
+            UPD_HOLD_WHY="the tip of ${DEFAULT_BRANCH} is older than this checkout, which already contains it, so moving to it would go backwards"
+            return 0
+        fi
+        _hold_unless_signed "${_head}"
+        return
+    fi
     # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
     # reset to — a name git has to look up (an abbreviated id is tried as a ref name first) is never
     # checked as one commit and used as another. A value starting with '-' never reaches git.
@@ -1283,7 +1296,8 @@ fetch_code() {
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
             hold)
-                if [[ "${UPD_HOLD}" = "sideways" ]] || [[ "${UPD_HOLD}" = "unsigned" ]]; then
+                if [[ "${UPD_HOLD}" = "sideways" ]] || [[ "${UPD_HOLD}" = "unsigned" ]] \
+                   || [[ "${UPD_HOLD}" = "backwards" ]]; then
                     echo "  Keeping ${UPD_TARGET}: ${UPD_HOLD_WHY}"
                 else
                     echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip"
@@ -1296,7 +1310,26 @@ fetch_code() {
         # --no-single-branch keeps the clone shallow (fast) but fetches EVERY branch tip, so the
         # panel's branch switcher can see + check out non-main branches without re-fetching history.
         git clone --depth 1 --no-single-branch --branch "${DEFAULT_BRANCH}" "${REPO_URL}" "${PANEL_DIR}"
+        _check_fresh_clone_signed
     fi
+}
+
+# The fresh clone above takes the branch's tip. On a host with no release key yet (a truly fresh
+# install) nothing can be checked: that is trust on first use, as with `curl … | bash`, and the
+# installer that runs is GitHub's anyway (SECURITY.md says to check the root key file after the
+# first update). When this host ALREADY trusts a key — root's copy beside the helper survives a
+# lost or deleted checkout — the clone must be a release that key signed, or nothing is installed
+# from it.
+_check_fresh_clone_signed() {
+    [[ "$(id -u)" -eq 0 ]] && [[ -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]] || return 0
+    local sha=""
+    sha="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sha=""
+    _fetch_release_signatures || true
+    _update_target_signed "${sha}" && return 0
+    # git clone only writes into an empty directory, so everything in it is this clone.
+    rm -rf -- "${PANEL_DIR:?}"
+    die "The fresh clone of ${DEFAULT_BRANCH} (${sha:-no commit}) is not a release signed with this host's
+     release key (${RELEASE_SIG_WHY}), so nothing was installed from it."
 }
 
 # Read-only counterpart to fetch_code: fetch and work out which commit we'd update TO,
@@ -1327,6 +1360,8 @@ resolve_update_target() {
     if [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "sideways" ]]; then
         warn "The commit this update is pinned to, ${UPD_PIN}, is on ${DEFAULT_BRANCH}'s first-parent line, but it neither contains this checkout (${UPD_TARGET}) nor is contained by it: ${DEFAULT_BRANCH} was fast-forwarded onto a merge since this checkout was installed."
         warn "This checkout stays at ${UPD_TARGET}: moving to the pin would drop commits it has. An update to a commit that contains it moves it forward."
+    elif [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "backwards" ]]; then
+        warn "The update was not installed: ${UPD_HOLD_WHY}."
     elif [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "unsigned" ]]; then
         warn "The update was not installed: ${UPD_HOLD_WHY}."
         warn "This checkout stays at ${UPD_TARGET}: an update installs only a release signed with the owner's key."

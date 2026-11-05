@@ -2024,13 +2024,33 @@ _RELEASE_SIGNERS = "release-signers"
 def _release_key_text():
     """The release key this host trusts, as text, or "" when there is none to read."""
     root_copy = os.path.join(os.path.dirname(_priv.HELPER_PATH), _RELEASE_SIGNERS)
-    if _is_system_service() and os.path.isfile(root_copy) and not os.path.islink(root_copy):
+    if _is_system_service():
+        # The installer trusts root's copy only, or, before it is placed, the key at root's source
+        # floor (install.sh _release_key_file). So the card does the same: the HEAD copy counts
+        # only when HEAD IS that floor commit, and otherwise there is nothing to offer.
+        if not os.path.isfile(root_copy) or os.path.islink(root_copy):
+            return _release_key_at_floor()
         try:
             with open(root_copy, encoding="utf-8") as fh:
                 return fh.read(65536).strip()
         except (OSError, UnicodeDecodeError):
             return ""
     out, _, rc = _git(["cat-file", "blob", "HEAD:" + _RELEASE_SIGNERS], timeout=10)
+    return out.strip() if rc == 0 else ""
+
+
+def _release_key_at_floor():
+    """HEAD's release key when HEAD is root's source floor commit; "" otherwise (fail closed)."""
+    floor_file = os.path.join(os.path.dirname(_priv.HELPER_PATH), ".source-floor")
+    try:
+        with open(floor_file, encoding="utf-8") as fh:
+            floor = fh.read(100).strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
+    if hrc != 0 or not re.fullmatch(r"[0-9a-f]{40}", floor) or head.strip() != floor:
+        return ""
+    out, _, rc = _git(["cat-file", "blob", floor + ":" + _RELEASE_SIGNERS], timeout=10)
     return out.strip() if rc == 0 else ""
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sign a release: tools/sign-release.sh <full commit id> [branch]   (branch defaults to main)
+# Sign a release: tools/sign-release.sh [--yes] <full commit id> [branch]   (branch defaults to main)
 #
 # A panel installs an update only when the commit carries a signature made with the owner's own
 # SSH key (install.sh, "Release signatures"). GitHub signs every squash merge with its own key,
@@ -9,7 +9,13 @@
 # What it does, in order, and it stops at the first thing that is not right:
 #   1. fetches <branch> by its full name and refuses unless <sha> is a full commit id on its
 #      FIRST-PARENT line (the commits the branch itself has been at);
-#   2. builds the message every host builds for itself, and signs it with ssh-keygen -Y sign
+#   2. shows what you are about to sign: every first-parent commit since the newest one already
+#      signed (with its author and committer), the files changed, and a loud WARNING for any change
+#      to the workflows, release-signers, install.sh or tools/panel-helper. Then it asks you to
+#      type the first 12 characters of the commit id. --yes skips the typing only when stdin is
+#      not a terminal (a script), and still prints all of it. The signature says only that you
+#      ran this: read what it shows before you type;
+#   2b. builds the message every host builds for itself, and signs it with ssh-keygen -Y sign
 #      (namespace linuxgsm-panel-release) using SIGN_RELEASE_KEY (default ~/.ssh/id_ed25519_signing);
 #   3. verifies that signature against the repository's release-signers, as a host would;
 #   4. commits <branch>/<sha>.sig to the branch release-signatures (created, with no history, when
@@ -26,9 +32,18 @@ NS="linuxgsm-panel-release"
 SIG_BRANCH="release-signatures"
 die() { echo "sign-release: $*" >&2; exit 1; }
 
-[[ $# -ge 1 && $# -le 2 ]] || die "usage: tools/sign-release.sh <full commit id> [branch]"
-SHA="$1"
-BRANCH="${2:-main}"
+YES=0
+ARGS=()
+for a in "$@"; do
+    if [[ "${a}" = "--yes" ]]; then YES=1; else ARGS+=("${a}"); fi
+done
+[[ ${#ARGS[@]} -ge 1 && ${#ARGS[@]} -le 2 ]] || die "usage: tools/sign-release.sh [--yes] <full commit id> [branch]"
+SHA="${ARGS[0]}"
+BRANCH="${ARGS[1]:-main}"
+# --yes is for a script feeding this, never for a person at a terminal: a person types the id.
+if [[ "${YES}" -eq 1 ]] && [[ -t 0 ]]; then
+    die "--yes is refused at a terminal: run without it and type the commit id when asked."
+fi
 REMOTE="${SIGN_RELEASE_REMOTE:-origin}"
 KEY="${SIGN_RELEASE_KEY:-${HOME}/.ssh/id_ed25519_signing}"
 
@@ -57,6 +72,54 @@ git rev-list --first-parent "${TRACK}" \
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "${TMP}"' EXIT
 
+# 1b. The signatures branch now, so the review below can start at the last signed release.
+PARENT=""
+if git fetch --quiet --no-tags "${REMOTE}" "+refs/heads/${SIG_BRANCH}:${SIGTRACK}" 2>/dev/null \
+   && git show-ref --verify --quiet "${SIGTRACK}"; then
+    PARENT="$(git rev-parse --verify "${SIGTRACK}^{commit}")"
+fi
+
+# 2. What is being signed. BASE is the newest commit below SHA on the branch's first-parent line
+#    that already has a signature; with none, this is the first release and the whole line shows.
+BASE=""
+if [[ -n "${PARENT}" ]]; then
+    while read -r c; do
+        if git cat-file -e "${PARENT}:${BRANCH}/${c}.sig" 2>/dev/null; then BASE="${c}"; break; fi
+    done < <(git rev-list --first-parent "${SHA}^" 2>/dev/null || true)
+fi
+EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+echo "================================================================================"
+if [[ -n "${BASE}" ]]; then
+    echo "Signing ${BRANCH} ${SHA}"
+    echo "Changes since the last signed release ${BASE}:"
+    RANGE="${BASE}..${SHA}"; FROM="${BASE}"
+else
+    echo "Signing ${BRANCH} ${SHA} -- NO earlier signed release: everything up to it is new."
+    RANGE="${SHA}"; FROM="${EMPTY_TREE}"
+fi
+echo "--------------------------------------------------------------------------------"
+git --no-pager log --first-parent --format='%h  author: %an <%ae>  committer: %cn  %s' "${RANGE}" | head -n 200
+echo "--------------------------------------------------------------------------------"
+git --no-pager diff --stat=120 "${FROM}" "${SHA}" | tail -n 60
+FLAGGED="$(git diff --name-only "${FROM}" "${SHA}" \
+           | grep -E '^(\.github/workflows/|release-signers$|install\.sh$|tools/panel-helper$)' || true)"
+if [[ -n "${FLAGGED}" ]]; then
+    echo "################################################################################"
+    echo "!!! WARNING: this release changes what runs as root, the release key, or CI:"
+    while IFS= read -r f; do printf '!!!     %s\n' "${f}"; done <<< "${FLAGGED}"
+    echo "!!! Read these diffs (git diff ${FROM:0:12} ${SHA:0:12} -- <file>) before you sign."
+    echo "################################################################################"
+fi
+echo "================================================================================"
+if [[ "${YES}" -eq 1 ]]; then
+    echo "--yes given (stdin is not a terminal): signing without the typed confirmation."
+else
+    printf 'Type the first 12 characters of the commit id to sign it: '
+    ANSWER=""
+    read -r ANSWER || ANSWER=""
+    [[ "${ANSWER}" = "${SHA:0:12}" ]] || die "'${ANSWER}' does not match ${SHA:0:12}; nothing was signed."
+fi
+
 # 2. The message, exactly as install.sh's _release_message builds it.
 printf 'linuxgsm-panel release\nbranch %s\ncommit %s\n' "${BRANCH}" "${SHA}" > "${TMP}/msg"
 ssh-keygen -q -Y sign -f "${KEY}" -n "${NS}" "${TMP}/msg" >/dev/null 2>&1 \
@@ -77,13 +140,9 @@ ssh-keygen -Y verify -f "${TMP}/signers" -I release -n "${NS}" -s "${TMP}/msg.si
     < "${TMP}/msg" >/dev/null 2>&1 \
     || die "the signature does not verify against release-signers; is ${KEY} the release key?"
 
-# 4. The commit on release-signatures, through a private index (GIT_INDEX_FILE): read-tree,
-#    update-index, write-tree and commit-tree never look at the caller's work tree or HEAD.
-PARENT=""
-if git fetch --quiet --no-tags "${REMOTE}" "+refs/heads/${SIG_BRANCH}:${SIGTRACK}" 2>/dev/null \
-   && git show-ref --verify --quiet "${SIGTRACK}"; then
-    PARENT="$(git rev-parse --verify "${SIGTRACK}^{commit}")"
-fi
+# 4. The commit on release-signatures (PARENT, fetched at 1b), through a private index
+#    (GIT_INDEX_FILE): read-tree, update-index, write-tree and commit-tree never look at the
+#    caller's work tree or HEAD.
 export GIT_INDEX_FILE="${TMP}/index"
 if [[ -n "${PARENT}" ]]; then
     git read-tree "${PARENT}"
