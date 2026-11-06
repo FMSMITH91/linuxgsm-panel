@@ -539,7 +539,7 @@ _latest = {"tag": None, "until": 0.0, "running": False}
 
 
 def _fetch_latest():
-    """master's release tag, or None. Never raises.
+    """The release tag on LinuxGSM's master branch, or None. Never raises.
 
     Through _download, the one reviewed fetch here: its shape check (_looks_like) refuses a portal
     page or a truncated body before the tag is read out of it.
@@ -562,7 +562,7 @@ def _refresh_latest():
 
 
 def latest_release():
-    """LinuxGSM's newest release tag ('v26.5.0'), or None while it has never been read.
+    """The newest LinuxGSM release tag ('v26.5.0'), or None while it has never been read.
 
     Never waits on GitHub: a stale or missing answer starts one background read and the call returns
     what it has, so the page asking is not held up by a fetch with a 10-second timeout.
