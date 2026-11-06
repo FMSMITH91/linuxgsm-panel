@@ -1766,7 +1766,7 @@ try:
           and _ty_p.stopped.is_set(), repr(_ty_order))
     _ty_pulses.clear()
     _ubc._TYPING_EVERY = 5.0
-    _ty_p = _ubc.start_typing(("p04", "c2"), _ty_send)
+    _ubc.start_typing(("p04", "c2"), _ty_send)
     _ty_time.sleep(0.05)
     _ubc.poke_typing(("p04", "c2"))
     _ty_time.sleep(0.05)
