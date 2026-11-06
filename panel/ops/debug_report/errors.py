@@ -8,6 +8,8 @@ THE HANDLERS (attached once, by app.create_app() through attach_log_handlers):
     '%(levelname)s %(name)s: %(message)s'. The panel configured no logging at all, so its warnings
     reached the journal bare, through logging.lastResort; attaching any handler to a chain turns
     lastResort off for that chain, which is why this one has to exist before the counter can.
+  * the debug log, only when config.json says "debug_log": true (attach_debug_file): every DEBUG
+    record of 'panel' and 'notifications' to data/debug.log, size-capped and owner-only.
   * the error counter, on 'panel', 'notifications' and Flask's app logger. It keeps a COUNT per
     "LEVEL|logger|template", where the template is record.msg (the unformatted text, never
     getMessage(): the arguments are where host and server names are), and in runtime_stats group
@@ -25,6 +27,8 @@ counter takes no lock at all (a few GIL-atomic dict operations through runtime_s
 increment under a race is acceptable, a raise or a hang is not).
 """
 import logging
+import logging.handlers
+import os
 import sys
 import time
 
@@ -66,6 +70,77 @@ class StderrHandler(logging.StreamHandler):
     def createLock(self):
         """A native RLock (see the module docstring), not the green one monkey_patch would give."""
         self.lock = _native_rlock()
+
+
+# The opt-in debug log (config "debug_log": true, read at start): every DEBUG record of the two
+# loggers above, which the stderr handler keeps out of the journal. Those are where the panel's
+# loops record what they did and why a step was skipped ("command list refresh failed for …",
+# the bots' replies), so a fault on a test box can be traced from the file instead of guessed at.
+# Capped: DEBUG_FILE_BYTES per file, DEBUG_FILE_BACKUPS older ones kept, so 20 MB at most. 0600
+# in the 0700 data dir: records name hosts, servers and players.
+DEBUG_FILE_NAME = "debug.log"
+DEBUG_FILE_BYTES = 5 * 1024 * 1024
+DEBUG_FILE_BACKUPS = 3
+DEBUG_FILE_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(threadName)s]: %(message)s"
+
+
+class DebugFileHandler(logging.handlers.RotatingFileHandler):
+    """The debug log: DEBUG and up to a size-capped file, owner-only, with a native lock."""
+
+    def __init__(self, path):
+        """Append to `path` at DEBUG in DEBUG_FILE_FORMAT, rotating at DEBUG_FILE_BYTES."""
+        super().__init__(path, maxBytes=DEBUG_FILE_BYTES, backupCount=DEBUG_FILE_BACKUPS,
+                         encoding="utf-8")
+        self.setLevel(logging.DEBUG)
+        self.setFormatter(logging.Formatter(DEBUG_FILE_FORMAT))
+        setattr(self, _MARK, "debugfile")
+
+    def createLock(self):
+        """A native RLock, as StderrHandler's: tpool threads log too."""
+        self.lock = _native_rlock()
+
+    def _open(self):
+        """Open the file (a new one after each rotation too) and make it the owner's alone."""
+        stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError as exc:
+            # Still inside the 0700 data dir, so the file stays unreadable to others; say so once
+            # on stderr (not through the logger this handler serves, which would re-enter it).
+            sys.stderr.write("debug log: could not make %s owner-only: %s\n" % (self.baseFilename, exc))
+        return stream
+
+
+def debug_file_from_config(cfg, data_dir):
+    """Attach data_dir/debug.log when config.json has "debug_log": true. Never raises.
+
+    `is True`, so a hand-edited "true" string does not switch it on. Read at start: a change takes
+    a restart. A file that cannot be opened is a warning, never a panel that does not start.
+    """
+    if (cfg or {}).get("debug_log") is not True:
+        return
+    path = os.path.join(str(data_dir), DEBUG_FILE_NAME)
+    try:
+        attach_debug_file(path)
+        logging.getLogger("panel").info("debug log on: %s", path)
+    except Exception:
+        logging.getLogger("panel").warning("the debug log could not be opened", exc_info=True)
+
+
+def attach_debug_file(path):
+    """Attach the debug log at `path` to LOGGERS, once per process. Returns what was attached now."""
+    added = []
+    handler = None
+    for name in LOGGERS:
+        lg = logging.getLogger(name)
+        if _has(lg, "debugfile"):
+            continue
+        if handler is None:
+            handler = DebugFileHandler(path)
+        lg.addHandler(handler)
+        lg.setLevel(logging.DEBUG)
+        added.append(name + ":debugfile")
+    return added
 
 
 def error_key(record):
@@ -115,10 +190,11 @@ def _has(logger, kind):
     return any(getattr(h, _MARK, None) == kind for h in logger.handlers)
 
 
-def attach_log_handlers(app_logger=None):
+def attach_log_handlers(app_logger=None, cfg=None, data_dir=None):
     """Attach the stderr handler and the counter, once per process. Returns what was attached now.
 
     `app_logger` is Flask's app.logger (already created, so Flask has added its default handler).
+    With `data_dir`, also the opt-in debug log there, when `cfg` turns it on (debug_file_from_config).
     """
     added = []
     for name in LOGGERS:
@@ -133,6 +209,8 @@ def attach_log_handlers(app_logger=None):
     if app_logger is not None and not _has(app_logger, "counter"):
         app_logger.addHandler(ErrorCounter(logging.WARNING))
         added.append(app_logger.name + ":counter")
+    if data_dir is not None:
+        debug_file_from_config(cfg, data_dir)
     return added
 
 
@@ -141,6 +219,8 @@ def detach_log_handlers(app_logger=None):
     for lg in [logging.getLogger(n) for n in LOGGERS] + ([app_logger] if app_logger else []):
         for h in [h for h in lg.handlers if getattr(h, _MARK, None)]:
             lg.removeHandler(h)
+            if getattr(h, _MARK, None) == "debugfile":
+                h.close()
     for name in LOGGERS:
         logging.getLogger(name).setLevel(logging.NOTSET)
 

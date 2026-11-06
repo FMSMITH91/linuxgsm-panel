@@ -19,6 +19,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
   release. Running update-lgsm from the Maintenance menu updates it. The release is read in the
   background after the page has drawn, and the newest release is checked against LinuxGSM's
   repository once a day, so neither slows the page.
+- **An opt-in debug log.** With `"debug_log": true` in `data/config.json` (and a restart), the
+  panel writes its detailed DEBUG messages to `data/debug.log`. Those messages say what each
+  background job did and why it skipped a step, and the journal never shows them. The file is
+  readable only by the panel's account and is capped at 5 MB, with three older files kept (20 MB
+  at most). It is off by default and meant for a test box where a problem has to be traced.
 
 - **The Telegram and Discord bots show "typing…" while a command is working.** A panel `/update`
   spends 10-30 seconds checking GitHub before it answers, and the chat used to sit silent all that
