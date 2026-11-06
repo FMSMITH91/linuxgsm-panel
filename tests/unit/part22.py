@@ -1258,7 +1258,7 @@ for _n22, _hs22l in _pre22.items():       # what an earlier part had attached, p
         _log22.getLogger(_n22).addHandler(_h22)
 _clear_groups("errors", "errors_last")
 _ll22 = []
-with _patched(_err22, attach_log_handlers=lambda lg=None: _ll22.append(lg)), \
+with _patched(_err22, attach_log_handlers=lambda lg=None, *_a22, **_k22: _ll22.append(lg)), \
         _patched(_app22, _dr_errors=_err22):
     _app22._attach_debug_logging(_eapp22)
 check("R23: app.py's create_app hook attaches through the module, with Flask's logger",
