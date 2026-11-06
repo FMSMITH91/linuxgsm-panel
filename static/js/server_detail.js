@@ -2289,12 +2289,29 @@ pollWhenVisible(_consolePoll, 30000);
 // reads the Steam manifest over SSH and queries the running game, which is far too slow to sit on
 // either the render path or the stats poll. The element is already in the DOM showing an em dash,
 // so filling it in cannot shift the layout; an unreachable host simply leaves the dash.
+// The LinuxGSM line: the server's release, and "v26.5.0 available" when LinuxGSM has a newer one.
+// An unread release leaves the dash, and an unread latest says nothing about being behind.
+function _showLgsmVersion(info) {
+  var el = document.getElementById('lgsm-version');
+  var behind = document.getElementById('lgsm-behind');
+  if (!el || !behind || !info) return;
+  if (info.release) el.textContent = info.release;
+  if (info.behind && info.latest) {
+    behind.textContent = '\u00b7 ' + tf('{latest} available', {latest: info.latest});
+    behind.title = t('Run update-lgsm from the Maintenance menu to update this server\'s LinuxGSM.');
+    behind.classList.remove('d-none');
+  } else {
+    behind.classList.add('d-none');
+  }
+}
+
 function loadGameVersion() {
   var el = document.getElementById('game-version');
   if (!el) return;
   fetch(MOUNT + '/api/server/' + serverId + '/version', {cache: 'no-store'})
     .then(function(r){ return r.json(); })
     .then(function(d){
+      _showLgsmVersion(d && d.lgsm);
       if (!d || !d.label) return;          // nothing known — leave the placeholder as it is
       el.textContent = d.label;
       if (d.detail) el.title = d.detail;   // where the number came from (build, appid, date)

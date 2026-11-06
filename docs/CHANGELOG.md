@@ -14,6 +14,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **Each server's page shows which LinuxGSM release it runs.** It appears under the game's own
+  version (for example `LinuxGSM v26.4.0`), with "· v26.5.0 available" when LinuxGSM has a newer
+  release. Running update-lgsm from the Maintenance menu updates it. The release is read in the
+  background after the page has drawn, and the newest release is checked against LinuxGSM's
+  repository once a day, so neither slows the page.
+
 - **The Telegram and Discord bots show "typing…" while a command is working.** A panel `/update`
   spends 10-30 seconds checking GitHub before it answers, and the chat used to sit silent all that
   time, with no sign the bot had heard. Any command that takes longer than a moment now shows the

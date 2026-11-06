@@ -400,7 +400,26 @@ def _register_server_stats(app):
             # dismiss the alert.
             _log.debug("game version read failed for server %s", row_label(gs, "id"), exc_info=True)
             info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
-        return jsonify({"supports_update": gs.supports_update, **info})
+        return jsonify({"supports_update": gs.supports_update, **info, "lgsm": _lgsm_version_info(gs)})
+
+
+def _lgsm_version_info(gs):
+    """{"release", "latest", "behind"} for the server page's LinuxGSM line. Never raises.
+
+    `release` is the script's own `version=` (the one an update-lgsm moves), "" when it could not
+    be read. `behind` only when both are known and the server's is older: a release the panel has
+    not read yet is never reported as out of date.
+    """
+    from panel.services import lgsm_data
+    try:
+        release, _modules = _sm.lgsm_versions(gs.remote, gs.short_name, gs.lgsm_name)
+    except Exception:
+        _log.debug("LinuxGSM version read failed for server %s", row_label(gs, "id"), exc_info=True)
+        release = None
+    latest = lgsm_data.latest_release()
+    behind = bool(release and latest and not lgsm_data.release_at_least(
+        release, tuple(int(p) for p in latest[1:].split("."))))
+    return {"release": release or "", "latest": latest or "", "behind": behind}
 
 
 def _register_installs(app):

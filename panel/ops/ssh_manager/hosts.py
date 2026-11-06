@@ -1694,6 +1694,35 @@ def lgsm_modules_release(server, account, selfname):
     return lgsm_data.release_tag(value)
 
 
+def lgsm_versions(server, account, selfname):
+    """(script release, modules release) of a game account's LinuxGSM, each a tag or None, in ONE read.
+
+    lgsm_release and lgsm_modules_release read the same two lines with a round trip each; the
+    server page asks for both on every load, so it reads them together. `grep -h -m1` stops at the
+    first match in EACH file, so the answer is at most one `version=` and one `modulesversion=`
+    line, and grep prints what it found even when the other file is missing (rc 2). An empty or
+    failed read is (None, None): never "no LinuxGSM".
+    """
+    if not (account and selfname):
+        return None, None
+    paths = " ".join(_core._quote(p) for p in ("/home/%s/%s" % (account, selfname),
+                                                "/home/%s/lgsm/modules/core_modules.sh" % account))
+    try:
+        out, _err, _rc = _core.read_as_game_user(
+            server, account, "grep -h -m1 -E '^(modules)?version=' " + paths, timeout=10,
+            selfname=selfname)
+    except Exception:
+        _core._log.debug("could not read the account's LinuxGSM versions", exc_info=True)
+        return None, None
+    from panel.services import lgsm_data
+    found = {}
+    for line in (out or "").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key in ("version", "modulesversion") and key not in found:
+            found[key] = lgsm_data.release_tag(value.strip().strip("\"'"))
+    return found.get("version"), found.get("modulesversion")
+
+
 def install_game_dependencies(server, game_type=None, extra="", account=None, selfname=None):
     """Install the exact LinuxGSM dependencies for a game (from LinuxGSM's list for this host's
     distro — a 22.04 box gets 22.04's packages, not 24.04's),
