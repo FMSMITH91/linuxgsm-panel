@@ -759,6 +759,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Maintenance → details shows all of its output, not the first 600 characters.** It used to stop
+  two sections in, partway through a word. LinuxGSM's `details` is the one command that prints the
+  server's passwords unmasked, so the full output now shows them only to people who can already
+  open the server's configs (Manage Servers). Anyone else sees every RCON, server, admin and web
+  password and every token as `********`, and the start command line hidden. The audit log's copy
+  is masked whoever ran it.
+
 - **The Telegram bot no longer goes quiet for half a minute at a time.** On a server whose IPv6
   route to Telegram drops some connections, as the owner's does (about one in nine), the panel
   waited out its whole 30-second timeout on IPv6 before trying IPv4. A message sent in that window
