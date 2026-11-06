@@ -1258,7 +1258,7 @@ for _n22, _hs22l in _pre22.items():       # what an earlier part had attached, p
         _log22.getLogger(_n22).addHandler(_h22)
 _clear_groups("errors", "errors_last")
 _ll22 = []
-with _patched(_err22, attach_log_handlers=lambda lg=None: _ll22.append(lg)), \
+with _patched(_err22, attach_log_handlers=lambda lg=None, *_a22, **_k22: _ll22.append(lg)), \
         _patched(_app22, _dr_errors=_err22):
     _app22._attach_debug_logging(_eapp22)
 check("R23: app.py's create_app hook attaches through the module, with Flask's logger",
@@ -1324,7 +1324,7 @@ def _create_app_assigns(key):
 _ca22 = _create_app_assigns("PANEL_COMMIT")
 check("R4: create_app puts PANEL_COMMIT into app.config, and calls the debug-report hooks",
       _ca22[0] and "app.config['PANEL_COMMIT'] = PANEL_COMMIT" in _ca22[1]
-      and "_attach_debug_logging(app)" in _ca22[1] and "_start_hub_lag_watch()" in _ca22[1])
+      and "_attach_debug_logging(app, cfg)" in _ca22[1] and "_start_hub_lag_watch()" in _ca22[1])
 with open(os.path.join(str(_ROOT22), "app.py"), encoding="utf-8") as _fh22:
     _main22 = _fh22.read().split('if __name__ == "__main__":', 1)[1]
 check("R19/R20: the __main__ block records the bind and port, and goes through the recording helpers",
