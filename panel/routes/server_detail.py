@@ -149,37 +149,58 @@ def _dtl_sees_secrets(actor):
         return False
 
 
-def _dtl_mask_secrets(text):
-    """`details` output with its secrets masked: each labelled one, its value wherever else it
-    appears, and the start command line, which carries them (and a GSLT no label names) as flags."""
+def _dtl_mask_labelled(text):
+    """Mask every labelled secret's value; -> (text, the values masked)."""
     found = set()
 
     def _mask(m):
         value = m.group("value").strip()
-        if value not in _DTL_NOT_SECRET:
-            found.add(value)
-            return "%s: %s" % (m.group("label"), _DTL_MASK)
-        return m.group(0)
+        if value in _DTL_NOT_SECRET:
+            return m.group(0)
+        found.add(value)
+        return "%s: %s" % (m.group("label"), _DTL_MASK)
 
-    out = _DTL_SECRET_LINE.sub(_mask, text or "")
-    # Longest first, so a password that contains a shorter one is replaced whole. Three characters
-    # at least: a one-letter "password" would mask that letter all through the output.
+    return _DTL_SECRET_LINE.sub(_mask, text or ""), found
+
+
+def _dtl_mask_values(text, found):
+    """Mask each of `found` wherever else it appears in `text`.
+
+    Longest first, so a password that contains a shorter one is replaced whole. Three characters at
+    least: a one-letter "password" would mask that letter all through the output.
+    """
     for value in sorted((v for v in found if len(v) >= 3), key=len, reverse=True):
-        out = out.replace(value, _DTL_MASK)
-    lines, hiding = out.split("\n"), False
-    for i, line in enumerate(lines):
-        bare = line.strip()
-        if bare == _DTL_CMDLINE_HEAD:
-            hiding = True
-        elif hiding and bare and set(bare) != {"="}:
-            lines[i], hiding = _DTL_CMDLINE_HIDDEN, False
-            # Everything after it up to the next blank line is the same command, wrapped.
-            for j in range(i + 1, len(lines)):
-                if not lines[j].strip():
-                    break
-                lines[j] = None
-            break
-    return "\n".join(ln for ln in lines if ln is not None)
+        text = text.replace(value, _DTL_MASK)
+    return text
+
+
+def _dtl_hide_cmdline(text):
+    """Replace the start command line under "Command-line Parameters" with _DTL_CMDLINE_HIDDEN.
+
+    The line after the heading's ==== separator, and whatever follows it up to the next blank line
+    (the same command, wrapped).
+    """
+    lines = text.split("\n")
+    try:
+        head = next(i for i, ln in enumerate(lines) if ln.strip() == _DTL_CMDLINE_HEAD)
+    except StopIteration:
+        return text
+    first = next((i for i in range(head + 1, len(lines))
+                  if lines[i].strip() and set(lines[i].strip()) != {"="}), None)
+    if first is None:
+        return text
+    last = next((i for i in range(first + 1, len(lines)) if not lines[i].strip()), len(lines))
+    return "\n".join(lines[:first] + [_DTL_CMDLINE_HIDDEN] + lines[last:])
+
+
+def _dtl_mask_secrets(text):
+    """Return `details` output with its secrets masked.
+
+    Each labelled one, its value wherever else it appears, and the start command line, which
+    carries them (and a GSLT no label names) as flags.
+    """
+    out, found = _dtl_mask_labelled(text)
+    return _dtl_hide_cmdline(_dtl_mask_values(out, found))
 
 
 def _noop_power_refusal(gs, remote, action):
