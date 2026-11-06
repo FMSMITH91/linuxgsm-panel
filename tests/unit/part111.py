@@ -673,22 +673,16 @@ def _discord_echo111():
 
 
 def _lock_sweep_pgrep111(home):
-    """A `pgrep` for the sweep that runs the real one and keeps only this check's own stand-ins.
+    """A bash `pgrep` function for the sweep: the real one, narrowed to this check's own stand-ins.
 
     The sweep asks for every tar running as the account, and here the account is whoever runs the
     suite: a second suite running at the same time (a mutation run, CI's other legs on one box), or
     any tar of theirs, was counted too, and the "download" and "none" cases kept the lock (seen
     three times on 2026-11-05). The stand-ins all run with cwd=home, so the real pgrep's answer is
-    narrowed to those. -> the directory to put first on PATH.
+    narrowed to those. A function, defined ahead of the sweep, wins over PATH: no file to write.
     """
-    real = _shutil111.which("pgrep")
-    shim = os.path.join(home, "shim")
-    os.makedirs(shim, exist_ok=True)
-    with open(os.path.join(shim, "pgrep"), "w", encoding="utf-8") as fh:
-        fh.write("#!/bin/bash\nfor p in $(%s \"$@\"); do [ \"$(readlink /proc/$p/cwd)\" = %s ] && echo \"$p\"; "
-                 "done; exit 0\n" % (_shlex111.quote(real), _shlex111.quote(home)))
-    os.chmod(os.path.join(shim, "pgrep"), 0o700)
-    return shim
+    return ('pgrep() { local p; for p in $(command pgrep "$@"); do '
+            '[ "$(readlink /proc/$p/cwd)" = %s ] && echo "$p"; done; return 0; }; ' % _shlex111.quote(home))
 
 
 def _lock_sweep111():
@@ -697,7 +691,6 @@ def _lock_sweep111():
     home = os.path.realpath(_tf111.mkdtemp(prefix="lgsm-unit-p111-lock-"))
     lock = os.path.join(home, "lgsm", "lock", "backup.lock")
     got = {}
-    env = dict(os.environ, PATH=_lock_sweep_pgrep111(home) + os.pathsep + os.environ.get("PATH", ""))
     try:
         for case, argv in (("download", ["tar", "czf", "-", "-T", "-"]),
                            ("backup", ["tar", "-hcf", os.path.join(home, "b.tar"), "-T", "-"]),
@@ -710,8 +703,8 @@ def _lock_sweep111():
                 argv, stdin=_sp111.PIPE, stdout=_sp111.DEVNULL, stderr=_sp111.DEVNULL, cwd=home)
             try:
                 _time111.sleep(0.3)
-                _sp111.run(["bash", "-c", _game111._stale_backup_lock_sweep(me, home=home) + "true"],  # nosec
-                           capture_output=True, timeout=20, check=False, env=env)
+                _sp111.run(["bash", "-c", _lock_sweep_pgrep111(home) + _game111._stale_backup_lock_sweep(me, home=home) + "true"],  # nosec
+                           capture_output=True, timeout=20, check=False)
                 got[case] = os.path.exists(lock)
             finally:
                 if stand is not None:
