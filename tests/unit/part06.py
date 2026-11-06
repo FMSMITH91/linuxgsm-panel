@@ -9330,6 +9330,8 @@ _ANCHOR_LINE_PARSERS = {
     "_FWA_LOGGING_RE", "_FWA_DEFAULT_RE",
     # One line of /etc/default/tailscaled (splitlines()), the PORT= and FLAGS= the tailscaled unit reads.
     "_FWB_TAILSCALED_PORT_RE", "_FWC_TAILSCALED_FLAGS_RE",
+    # One `Label: value` line of LinuxGSM's `details`, matched per line (re.M) to mask its secrets.
+    "_DTL_SECRET_LINE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.

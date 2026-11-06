@@ -115,6 +115,73 @@ def _clean_action_output(s):
     return re.sub(r"[ \t]{2,}", " ", s)
 
 
+# What a read-only action's output may grow to in the reply. It was 600 characters, which cut
+# `details` off two sections in (the owner's, 2026-11-05: it ended at "Memory" on a lone "S").
+# The reply is JSON to the page's output dialog, which scrolls; LinuxGSM's whole `details` is a
+# few kilobytes. The form route flashes into the session COOKIE, so it keeps the short form.
+_DTL_REPLY_MAX = 64 * 1024
+_DTL_FLASH_MAX = 600
+_DTL_MASK = "********"
+# `details` is the one LinuxGSM command that prints passwords in the clear: info_messages.sh's
+# fn_info_messages_password_strip masks them for every command BUT details. The labels it prints
+# a secret under (v26.5.0): Server/RCON/Admin/Stats/Beta/Web Interface/Telnet password, Auth Token,
+# Salt. column -t then pads the label, which _clean_action_output collapses to one space.
+_DTL_SECRET_LINE = re.compile(r"^(?P<label>[^:\n]*(?:password|passwd|token|salt|secret|api ?key|gslt)"
+                              r"[^:\n]*):[ \t]*(?P<value>\S[^\n]*)$", re.I | re.M)
+# Values that are not secrets: what LinuxGSM prints for an unset or already-masked field.
+_DTL_NOT_SECRET = {"NOT SET", _DTL_MASK, "true", "false", "on", "off", "yes", "no"}
+_DTL_CMDLINE_HEAD = "Command-line Parameters"
+_DTL_CMDLINE_HIDDEN = "%s (hidden: it can hold passwords and the Steam server token)" % _DTL_MASK
+
+
+def _dtl_sees_secrets(actor):
+    """Whether `actor` may read `details` unmasked: whoever can already open the server's configs.
+
+    Files & Config (MANAGE_SERVERS) shows the LinuxGSM configs those passwords are kept in. Anyone
+    with less — `details` needs only VIEW_CONSOLE — gets them masked. A caller that is not a panel
+    user (no is_superadmin) is masked too.
+    """
+    if getattr(actor, "is_superadmin", None) is None:
+        return False
+    try:
+        return bool(has_permission(actor, MANAGE_SERVERS))
+    except Exception:
+        return False
+
+
+def _dtl_mask_secrets(text):
+    """`details` output with its secrets masked: each labelled one, its value wherever else it
+    appears, and the start command line, which carries them (and a GSLT no label names) as flags."""
+    found = set()
+
+    def _mask(m):
+        value = m.group("value").strip()
+        if value not in _DTL_NOT_SECRET:
+            found.add(value)
+            return "%s: %s" % (m.group("label"), _DTL_MASK)
+        return m.group(0)
+
+    out = _DTL_SECRET_LINE.sub(_mask, text or "")
+    # Longest first, so a password that contains a shorter one is replaced whole. Three characters
+    # at least: a one-letter "password" would mask that letter all through the output.
+    for value in sorted((v for v in found if len(v) >= 3), key=len, reverse=True):
+        out = out.replace(value, _DTL_MASK)
+    lines, hiding = out.split("\n"), False
+    for i, line in enumerate(lines):
+        bare = line.strip()
+        if bare == _DTL_CMDLINE_HEAD:
+            hiding = True
+        elif hiding and bare and set(bare) != {"="}:
+            lines[i], hiding = _DTL_CMDLINE_HIDDEN, False
+            # Everything after it up to the next blank line is the same command, wrapped.
+            for j in range(i + 1, len(lines)):
+                if not lines[j].strip():
+                    break
+                lines[j] = None
+            break
+    return "\n".join(ln for ln in lines if ln is not None)
+
+
 def _noop_power_refusal(gs, remote, action):
     """Why a start/stop would be a no-op on this server, or None when it should run.
 
@@ -186,14 +253,20 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     with _r20b_audit_on_raise(f"{action}_server", who=actor, actor=origin, target=name, server=gs):
         out, err, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout,
                                             selfname=gs.lgsm_name)
-    log_action(actor, f"{action}_server", target=name, success=(rc == 0),
-               detail=_clean_action_output(out)[-400:], actor=origin, server=gs)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
+    # Masked for the audit log whoever ran it: the log's readers are not the runner, and its last
+    # 400 characters of `details` can be the start command line.
+    masked = _dtl_mask_secrets(clean) if action == "details" else None
+    log_action(actor, f"{action}_server", target=name, success=(rc == 0),
+               detail=(masked if masked is not None else _clean_action_output(out))[-400:],
+               actor=origin, server=gs)
     _after_power_action(app, gs, remote, short_name, action, rc)
     if action == "update-lgsm" and rc == 0:
         _lg265_after_update_lgsm(gs)
     if action in READONLY_ACTIONS:
-        return True, f"{action}: {clean[:600] or 'no output'}"
+        if masked is not None and not _dtl_sees_secrets(actor):
+            clean = masked
+        return True, f"{action}: {clean[:_DTL_REPLY_MAX] or 'no output'}"
     ok, msg = _run_sync_outcome(action, name, rc, clean)
     note = _lg265_ahl_note(action, clean)
     return ok, (i18n.Sentences(msg, note) if note else msg)
@@ -898,6 +971,10 @@ def _register_actions(app):
             return redirect(url_for("server_detail", server_id=server_id))
         try:
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
+            if action in READONLY_ACTIONS and isinstance(msg, str):
+                # A flash rides in the session cookie, which a browser drops past 4 KB — and with
+                # it the login. The page's own Maintenance menu shows the whole output.
+                msg = msg[:_DTL_FLASH_MAX]
             flash(_r15e_said(msg), "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
             # Rolled back first, as _r20b_audit_raised does: a raise from a commit leaves the
