@@ -27,6 +27,8 @@ import urllib.request
 # LinuxGSM's canonical copies. Fixed host, fixed paths — nothing here is caller-supplied.
 _BASE = "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/master/lgsm/data/"
 SERVERLIST = "serverlist.csv"
+# master's own linuxgsm.sh: only its `version=` line is read (latest_release).
+LATEST_SCRIPT = "linuxgsm.sh"
 # LinuxGSM ships a package list PER DISTRO RELEASE — ubuntu-22.04.csv, ubuntu-26.04.csv,
 # debian-12.csv, rocky-9.csv and twenty more. This is only the fallback for a host whose own file
 # LinuxGSM does not publish; `deps()` is given the host's real one.
@@ -160,6 +162,8 @@ def _looks_like(name, text):
     head = text.lstrip()[:200].lower()
     if name == SERVERLIST:
         return head.startswith("shortname,") and "gameservername" in head and text.count("\n") > 20
+    if name == LATEST_SCRIPT:
+        return head.startswith("#!/bin/bash") and _LATEST_VERSION_RE.search(text) is not None
     # Every other file we ask for is a per-distro package list, and they all start with the 'all'
     # row. Keyed on the shape rather than on one filename, since there are two dozen of them.
     return head.startswith("all,") and text.count("\n") > 20
@@ -170,7 +174,7 @@ def _download(url, name):
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
         # `url` is _BASE or _RELEASE_BASE, fixed https://raw.githubusercontent.com URLs, with a
-        # validated release tag and a LinuxGSM filename filled in.
+        # validated release tag and a LinuxGSM filename filled in, or the fixed _LATEST_URL.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # nosec B310 - fixed https host
             if getattr(resp, "status", 200) != 200:
@@ -524,12 +528,65 @@ def refresh(force=True):
     return ok and bool(serverlist())
 
 
+# The newest LinuxGSM release: the `version=` line of master's linuxgsm.sh, which is what
+# update-lgsm installs (command_update_linuxgsm.sh reads master; master IS the latest release —
+# measured 2026-11-05, v26.5.0 both there and on the releases page). Re-read once a day; a failed
+# read is tried again after _RETRY_SECONDS and the last good answer is kept meanwhile.
+_LATEST_URL = "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/master/" + LATEST_SCRIPT
+_LATEST_VERSION_RE = re.compile(r"^version=[\"']?(v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})[\"']?[ \t]*$", re.M)
+_LATEST_FRESH_SECONDS = 86400
+_latest = {"tag": None, "until": 0.0, "running": False}
+
+
+def _fetch_latest():
+    """The release tag on LinuxGSM's master branch, or None. Never raises.
+
+    Through _download, the one reviewed fetch here: its shape check (_looks_like) refuses a portal
+    page or a truncated body before the tag is read out of it.
+    """
+    text, why = _download(_LATEST_URL, LATEST_SCRIPT)
+    if why:
+        _log.debug("LinuxGSM's latest release could not be read: %s", why)
+        return None
+    m = _LATEST_VERSION_RE.search(text)
+    return release_tag(m.group(1)) if m else None
+
+
+def _refresh_latest():
+    tag = _fetch_latest()
+    with _lock:
+        if tag:
+            _latest["tag"] = tag
+        _latest["until"] = time.time() + (_LATEST_FRESH_SECONDS if tag else _RETRY_SECONDS)
+        _latest["running"] = False
+
+
+def latest_release():
+    """The newest LinuxGSM release tag ('v26.5.0'), or None while it has never been read.
+
+    Never waits on GitHub: a stale or missing answer starts one background read and the call returns
+    what it has, so the page asking is not held up by a fetch with a 10-second timeout.
+    """
+    with _lock:
+        tag, due = _latest["tag"], time.time() >= _latest["until"] and not _latest["running"]
+        if due:
+            _latest["running"] = True
+    if due:
+        try:
+            threading.Thread(target=_refresh_latest, daemon=True, name="lgsm-latest").start()
+        except Exception:
+            with _lock:
+                _latest["running"] = False
+    return tag
+
+
 def warm():
     """Populate the cache off the request path, so the first page load is not waiting on GitHub."""
     def _run():
         try:
             serverlist()
             deps()          # the default list; a host's own is fetched when it is first needed
+            latest_release()
         except Exception:   # nosec B110 - warming is best-effort; status() reports the failure
             pass
     threading.Thread(target=_run, daemon=True, name="lgsm-data-warm").start()

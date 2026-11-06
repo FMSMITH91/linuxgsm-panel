@@ -4,5 +4,7 @@
   "Not run": "Non lancé",
   "FiveM needs a Cfx.re licence key: set sv_licenseKey in serverfiles/server.cfg (Files & Config), then start the server.": "FiveM a besoin d'une clé de licence Cfx.re : définissez sv_licenseKey dans serverfiles/server.cfg (Fichiers et configuration), puis démarrez le serveur.",
   "FiveM needs a Cfx.re licence key: set sv_licenseKey in serverfiles/server.cfg, then start the server.": "FiveM a besoin d'une clé de licence Cfx.re : définissez sv_licenseKey dans serverfiles/server.cfg, puis démarrez le serveur.",
-  "Action Half-Life now runs on ReHLDS, which needs Steam's steam_legacy branch: run force-update once (Maintenance menu) to move this server to it.": "Action Half-Life tourne désormais sur ReHLDS, qui nécessite la branche steam_legacy de Steam : lancez force-update une fois (menu Maintenance) pour y passer ce serveur."
+  "Action Half-Life now runs on ReHLDS, which needs Steam's steam_legacy branch: run force-update once (Maintenance menu) to move this server to it.": "Action Half-Life tourne désormais sur ReHLDS, qui nécessite la branche steam_legacy de Steam : lancez force-update une fois (menu Maintenance) pour y passer ce serveur.",
+  "{latest} available": "{latest} disponible",
+  "Run update-lgsm from the Maintenance menu to update this server's LinuxGSM.": "Lancez update-lgsm depuis le menu Maintenance pour mettre à jour le LinuxGSM de ce serveur."
 }

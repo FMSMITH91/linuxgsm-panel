@@ -1686,26 +1686,29 @@ finally:
     if _ub_gate_saved is not None:
         _ubc._UPDATE_GATE = _ub_gate_saved
 
-# ── "typing…" while a bot command works (owner, 2026-11-05: /update sat silent 10-30 s) ──
+# ── "typing…" while a bot command works (owner, 2026-11-05: /update sat silent 10-30 s; then "as
+# soon as it receives a message it should show typing, then after it responds it goes away") ──
 _ty_time = _lgd_real_time   # the time module, already imported above (no reimport)
-_ty_saved = (_ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP)
+_ty_saved = (_ubc._TYPING_EVERY, _ubc._TYPING_CAP)
 try:
-    _ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP = 0.05, 0.1, 5.0
+    _ubc._TYPING_EVERY, _ubc._TYPING_CAP = 0.1, 5.0
     _ty_pulses = []
 
     def _ty_send():
         _ty_pulses.append(_ty_time.monotonic())
 
-    _ty_out = _ubc.while_typing(_ty_send, lambda: "answer")
-    _ty_time.sleep(0.2)
-    check("bots typing: an instant answer shows no 'typing…' at all (no request, no flicker)",
-          _ty_out == "answer" and _ty_pulses == [], repr(_ty_pulses))
+    _ty_t0 = _ty_time.monotonic()
+    _ty_out = _ubc.while_typing(_ty_send, lambda: (_ty_time.sleep(0.05), "answer")[1])
+    check("bots typing: 'typing…' starts at once, even for a quick answer (no delay first)",
+          _ty_out == "answer" and _ty_pulses and _ty_pulses[0] - _ty_t0 < 0.04,
+          repr([round(t - _ty_t0, 3) for t in _ty_pulses]))
+    _ty_pulses.clear()
     # 0.42, not a multiple of the 0.1 s pulse: ending ON a pulse is the race checked just below.
     _ty_out = _ubc.while_typing(_ty_send, lambda: (_ty_time.sleep(0.42), "slow")[1])
     _ty_n = len(_ty_pulses)
     _ty_time.sleep(0.3)
     check("bots typing: a slow one pulses 'typing…' while it runs, and returns its answer",
-          _ty_out == "slow" and _ty_n >= 3, "pulses=%d" % _ty_n)
+          _ty_out == "slow" and _ty_n >= 4, "pulses=%d" % _ty_n)
     check("bots typing: ...and stops the moment it has answered",
           len(_ty_pulses) == _ty_n, "%d then %d" % (_ty_n, len(_ty_pulses)))
     # ...and a command that ends exactly as a pulse comes due (the wait times out in the same
@@ -1744,30 +1747,115 @@ try:
     check("bots typing: a failing typing call never breaks the command (it keeps pulsing)",
           len(_ty_pulses) >= 2, repr(len(_ty_pulses)))
 
-    # The routers: the job they queue runs the command under while_typing, with their own chat.
+    # The reply stops it, and waits for a "typing…" request still in flight: one that landed after
+    # the answer showed the bot typing for 5-10 s under its own reply.
+    _ty_order = []
+
+    def _ty_slow_send():
+        _ty_order.append("typing-start")
+        _ty_time.sleep(0.15)
+        _ty_order.append("typing-done")
+
+    _ty_p = _ubc.start_typing(("p04", "c1"), _ty_slow_send)
+    _ty_time.sleep(0.05)                       # its first request is in flight now
+    _ubc.stop_typing(("p04", "c1"))
+    _ty_order.append("reply")
+    _ty_time.sleep(0.3)
+    check("bots typing: the reply stops it only once a request in flight has finished, and no "
+          "'typing…' is sent after the reply", _ty_order == ["typing-start", "typing-done", "reply"]
+          and _ty_p.stopped.is_set(), repr(_ty_order))
+    _ty_pulses.clear()
+    _ubc._TYPING_EVERY = 5.0
+    _ubc.start_typing(("p04", "c2"), _ty_send)
+    _ty_time.sleep(0.05)
+    _ubc.poke_typing(("p04", "c2"))
+    _ty_time.sleep(0.05)
+    _ty_poked = len(_ty_pulses)
+    _ubc.stop_typing(("p04", "c2"))
+    _ubc._TYPING_EVERY = 0.1
+    check("bots typing: a note posted mid-command (which clears the chat's indicator) pulses it "
+          "again at once, not a whole interval later", _ty_poked == 2, repr(_ty_poked))
+    _ty_pulses.clear()
+    _ty_old = _ubc.start_typing(("p04", "c3"), _ty_send)
+    _ubc.stop_typing(("p04", "c3"))            # another command in that chat answered first
+    _ty_time.sleep(0.05)
+    _ty_n = len(_ty_pulses)
+    _ubc.while_typing(_ty_send, lambda: _ty_time.sleep(0.25), key=("p04", "c3"), started=_ty_old)
+    check("bots typing: a queued command whose 'typing…' another reply stopped gets it back while "
+          "it runs", len(_ty_pulses) - _ty_n >= 2, "%d then %d" % (_ty_n, len(_ty_pulses)))
+    check("bots typing: nothing is left registered once the commands are done",
+          not [k for k in _ubc._typing if k[0] == "p04"], repr(list(_ubc._typing)))
+
+    # The routers: "typing…" from the moment a command ARRIVES, in the chat that sent it — before the
+    # worker runs it — and the reply clears it.
     _ty_seen = []
     _ty_rt = (_tgm.notifications.telegram_typing, _dcm.notifications.discord_bot_typing,
               _tgm._handle_telegram_command, _dcm._handle_discord_command,
-              _tgm._TG_WORKER, _dcm._DC_WORKER)
+              _tgm._TG_WORKER, _dcm._DC_WORKER, _tgm.notifications.send_telegram,
+              _dcm.notifications.discord_bot_send)
+
+    class _TyHeld:
+        """A worker that holds the job until told to run it: the command waiting in the queue."""
+
+        def __init__(self):
+            self.jobs = []
+
+        def submit(self, fn):
+            self.jobs.append(fn)
+            return True
+
     try:
         _tgm.notifications.telegram_typing = lambda tok, chat: _ty_seen.append(("tg", tok, chat))
         _dcm.notifications.discord_bot_typing = lambda tok, ch: _ty_seen.append(("dc", tok, ch))
-        _tgm._handle_telegram_command = lambda *a, **k: _ty_time.sleep(0.3)
-        _dcm._handle_discord_command = lambda *a, **k: _ty_time.sleep(0.3)
-        _tgm._TG_WORKER = _dcm._DC_WORKER = _UbInline()
-        _tgm._tg_dispatch(_app, "tok", "42", "/update")
+        _tgm.notifications.send_telegram = lambda tok, chat, text: _ty_seen.append(("tg-msg", chat))
+        _dcm.notifications.discord_bot_send = lambda tok, ch, text: _ty_seen.append(("dc-msg", ch))
+        # Each answers, then goes on a moment (an audit write, a second line): the reply itself has
+        # to clear "typing…", not the end of the command.
+        _tgm._handle_telegram_command = lambda app, tok, chat, *a, **k: (
+            _ty_time.sleep(0.15), _tgm._tg_reply(tok, chat, "done"), _ty_time.sleep(0.25))
+        _dcm._handle_discord_command = lambda app, tok, ch, *a, **k: (
+            _ty_time.sleep(0.15), _dcm._dc_reply(tok, ch, "done"), _ty_time.sleep(0.25))
+        _tgm._TG_WORKER = _dcm._DC_WORKER = _ty_held = _TyHeld()
+        _tgm._tg_dispatch(_app, "tok", "42", "/status")
         _dcm._dc_dispatch(_app, "dtok", "77", "!status")
-        check("telegram typing: a slow /update shows 'typing…' in the chat that asked",
-              ("tg", "tok", "42") in _ty_seen, repr(_ty_seen))
-        check("discord typing: ...and on Discord, for any slow command, in its channel",
-              ("dc", "dtok", "77") in _ty_seen, repr(_ty_seen))
+        _ty_time.sleep(0.05)
+        _ty_queued = list(_ty_seen)
+        for _job in _ty_held.jobs:
+            _job()
+        _ty_time.sleep(0.25)
+        check("telegram typing: shown the moment a command arrives, before the worker reaches it",
+              ("tg", "tok", "42") in _ty_queued, repr(_ty_queued))
+        check("discord typing: ...and on Discord, in its channel", ("dc", "dtok", "77") in _ty_queued,
+              repr(_ty_queued))
+        _ty_after = [e for e in _ty_seen[_ty_seen.index(("tg-msg", "42")) + 1:] if e[0] == "tg"]
+        _ty_dafter = [e for e in _ty_seen[_ty_seen.index(("dc-msg", "77")) + 1:] if e[0] == "dc"]
+        check("bots typing: no 'typing…' is sent in a chat once its answer has gone out",
+              _ty_after == [] and _ty_dafter == [], repr(_ty_seen))
     finally:
         (_tgm.notifications.telegram_typing, _dcm.notifications.discord_bot_typing,
          _tgm._handle_telegram_command, _dcm._handle_discord_command,
-         _tgm._TG_WORKER, _dcm._DC_WORKER) = _ty_rt
+         _tgm._TG_WORKER, _dcm._DC_WORKER, _tgm.notifications.send_telegram,
+         _dcm.notifications.discord_bot_send) = _ty_rt
 finally:
-    _ubc._TYPING_AFTER, _ubc._TYPING_EVERY, _ubc._TYPING_CAP = _ty_saved
+    _ubc._TYPING_EVERY, _ubc._TYPING_CAP = _ty_saved
 _ty_time.sleep(0.15)   # let the last pulse thread see its stop, so no thread outlives this part
+
+# An ack is a post, and a post clears the chat's indicator: each bot's ack must re-show it, for
+# that chat. The helper's own poke is held above; this holds the two callers that must use it.
+_ty_pokes = []
+_ty_ack_saved = (_tgm.poke_typing, _dcm.poke_typing, _tgm.notifications.send_telegram,
+                 _dcm.notifications.discord_bot_send)
+try:
+    _tgm.poke_typing = _dcm.poke_typing = _ty_pokes.append
+    _tgm.notifications.send_telegram = lambda *a, **k: _ty_pokes.append("tg-sent")
+    _dcm.notifications.discord_bot_send = lambda *a, **k: _ty_pokes.append("dc-sent")
+    _tgm._tg_ack("tok", 42, "working")
+    _dcm._dc_ack("dtok", 77, "working")
+finally:
+    (_tgm.poke_typing, _dcm.poke_typing, _tgm.notifications.send_telegram,
+     _dcm.notifications.discord_bot_send) = _ty_ack_saved
+check("bots typing: an ack re-shows 'typing…' in its own chat, after the ack is posted",
+      _ty_pokes == ["tg-sent", ("telegram", "42"), "dc-sent", ("discord", "77")], repr(_ty_pokes))
 
 # The requests themselves: fixed hosts, the right method, and nothing sent for a bad token or id.
 import panel.services.notifications as _tyn  # noqa: E402

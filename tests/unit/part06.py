@@ -9332,6 +9332,8 @@ _ANCHOR_LINE_PARSERS = {
     "_FWB_TAILSCALED_PORT_RE", "_FWC_TAILSCALED_FLAGS_RE",
     # One `Label: value` line of LinuxGSM's `details`, matched per line (re.M) to mask its secrets.
     "_DTL_SECRET_LINE",
+    # One line of master's linuxgsm.sh (re.M), `version="v26.5.0"`: the release update-lgsm installs.
+    "_LATEST_VERSION_RE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.

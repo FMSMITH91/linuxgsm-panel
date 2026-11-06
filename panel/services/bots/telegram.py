@@ -11,7 +11,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
     UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
-    update_rate_reply, while_typing, _r23a_update_busy_reply)
+    update_rate_reply, while_typing, _r23a_update_busy_reply, poke_typing, start_typing, stop_typing)
 from panel.db.models import (LOCAL_HOST_LABEL)
 import logging
 import time
@@ -44,7 +44,12 @@ def _tg_poll_retry_delay(failures):
 _TG_WORKER = CommandWorker("telegram-commands")
 
 
+def _tg_typing_key(chat_id):
+    return ("telegram", str(chat_id))
+
+
 def _tg_reply(token, chat_id, text):
+    stop_typing(_tg_typing_key(chat_id))     # before the answer, so no "typing…" lands after it
     notifications.send_telegram(token, chat_id, "%s\n%s" % (_reply_header(), text))
 
 
@@ -61,6 +66,7 @@ def _tg_ack(token, chat_id, text):
     with other chatter in between.
     """
     notifications.send_telegram(token, chat_id, text)
+    poke_typing(_tg_typing_key(chat_id))     # posting cleared the chat's "typing…": show it again
 
 
 def _parse_tg_command(text):
@@ -275,9 +281,15 @@ def _tg_dispatch(app, token, chat_id, text, sender=None):
     if ack:
         _tg_ack(token, chat_id, ack)
 
+    def send_typing():
+        notifications.telegram_typing(token, chat_id)
+
+    # "typing…" from the moment the command arrived, even while it waits behind another one.
+    typing = start_typing(_tg_typing_key(chat_id), send_typing)
+
     def job():
-        while_typing(lambda: notifications.telegram_typing(token, chat_id),
-                     lambda: _handle_telegram_command(app, token, chat_id, text, sender))
+        while_typing(send_typing, lambda: _handle_telegram_command(app, token, chat_id, text, sender),
+                     key=_tg_typing_key(chat_id), started=typing)
 
     if panel_update_requested(cmd, _command_arg(text)):
         # One panel /update in flight at a time: a second one while the first is queued or running

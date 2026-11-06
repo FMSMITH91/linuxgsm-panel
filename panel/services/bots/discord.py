@@ -11,7 +11,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
     UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
-    update_rate_reply, while_typing, _r23a_update_busy_reply)
+    update_rate_reply, while_typing, _r23a_update_busy_reply, poke_typing, start_typing, stop_typing)
 from panel.db.models import (LOCAL_HOST_LABEL)
 import functools
 import logging
@@ -70,7 +70,12 @@ _DC_FATAL_CLOSE = {
 _DC_WORKER = CommandWorker("discord-commands")
 
 
+def _dc_typing_key(channel_id):
+    return ("discord", str(channel_id))
+
+
 def _dc_reply(bot_token, channel_id, text):
+    stop_typing(_dc_typing_key(channel_id))  # before the answer, so no "typing…" lands after it
     notifications.discord_bot_send(bot_token, channel_id, "%s\n%s" % (_reply_header(), text))
 
 
@@ -95,6 +100,7 @@ def _dc_ack(bot_token, channel_id, text):
     _reply_header(), because the ack lands right under the command that caused it.
     """
     notifications.discord_bot_send(bot_token, channel_id, text)
+    poke_typing(_dc_typing_key(channel_id))  # posting cleared the channel's "typing…": show it again
 
 
 def _parse_dc_command(text):
@@ -259,9 +265,16 @@ def _dc_dispatch(app, bot_token, channel_id, text, sender=None):
     if ack:
         _dc_ack(bot_token, channel_id, ack)
 
+    def send_typing():
+        notifications.discord_bot_typing(bot_token, channel_id)
+
+    # "typing…" from the moment the command arrived — see _tg_dispatch.
+    typing = start_typing(_dc_typing_key(channel_id), send_typing)
+
     def job():
-        while_typing(lambda: notifications.discord_bot_typing(bot_token, channel_id),
-                     lambda: _handle_discord_command(app, bot_token, channel_id, text, sender))
+        while_typing(send_typing,
+                     lambda: _handle_discord_command(app, bot_token, channel_id, text, sender),
+                     key=_dc_typing_key(channel_id), started=typing)
 
     if panel_update_requested(cmd, _command_arg(text)):
         # One panel !update in flight at a time — see _tg_dispatch (Aikido 745379272).

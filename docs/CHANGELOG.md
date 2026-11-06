@@ -14,6 +14,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **Each server's page shows which LinuxGSM release it runs.** It appears under the game's own
+  version (for example `LinuxGSM v26.4.0`), with "· v26.5.0 available" when LinuxGSM has a newer
+  release. Running update-lgsm from the Maintenance menu updates it. The release is read in the
+  background after the page has drawn, and the newest release is checked against LinuxGSM's
+  repository once a day, so neither slows the page.
 - **An opt-in debug log.** With `"debug_log": true` in `data/config.json` (and a restart), the
   panel writes its detailed DEBUG messages to `data/debug.log`. Those messages say what each
   background job did and why it skipped a step, and the journal never shows them. The file is
@@ -332,6 +337,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+
+- **The bots show "typing…" the moment they receive a command, and stop as they answer.** It
+  used to start only after 0.7 s, and only once the command began, so a quick reply or a command
+  waiting behind another one showed nothing. It now starts on receipt, stays up while the command
+  waits and runs, and is cleared before the reply is posted, so it never shows under an answer.
+  After a "working on it" note (which clears the indicator), it comes back at once.
 
 - **Less scrolling, on a phone and on a desktop.** The alerts every page opens with (2FA off, a
   reboot needed, updates waiting) are one line each, with their buttons beside them. Files & Config
