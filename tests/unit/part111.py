@@ -18,6 +18,7 @@ sudo, tmux or the checkout's data/.
 import json
 import os
 import pwd as _pwd111
+import shlex as _shlex111
 import shutil as _shutil111
 import subprocess as _sp111  # nosec B404 - runs bash on this part's own commands and a cat writer
 import tempfile as _tf111
@@ -671,6 +672,19 @@ def _discord_echo111():
           and "'frobnicate'" in said[1], repr(said))
 
 
+def _lock_sweep_pgrep111(home):
+    """A bash `pgrep` function for the sweep: the real one, narrowed to this check's own stand-ins.
+
+    The sweep asks for every tar running as the account, and here the account is whoever runs the
+    suite: a second suite running at the same time (a mutation run, CI's other legs on one box), or
+    any tar of theirs, was counted too, and the "download" and "none" cases kept the lock (seen
+    three times on 2026-11-05). The stand-ins all run with cwd=home, so the real pgrep's answer is
+    narrowed to those. A function, defined ahead of the sweep, wins over PATH: no file to write.
+    """
+    return ('pgrep() { local p; for p in $(command pgrep "$@"); do '
+            '[ "$(readlink /proc/$p/cwd)" = %s ] && echo "$p"; done; return 0; }; ' % _shlex111.quote(home))
+
+
 def _lock_sweep111():
     """An old backup.lock is kept while a backup's tar runs, and cleared while only a download's runs."""
     me = _pwd111.getpwuid(os.getuid()).pw_name
@@ -689,7 +703,7 @@ def _lock_sweep111():
                 argv, stdin=_sp111.PIPE, stdout=_sp111.DEVNULL, stderr=_sp111.DEVNULL, cwd=home)
             try:
                 _time111.sleep(0.3)
-                _sp111.run(["bash", "-c", _game111._stale_backup_lock_sweep(me, home=home) + "true"],  # nosec
+                _sp111.run(["bash", "-c", _lock_sweep_pgrep111(home) + _game111._stale_backup_lock_sweep(me, home=home) + "true"],  # nosec
                            capture_output=True, timeout=20, check=False)
                 got[case] = os.path.exists(lock)
             finally:
