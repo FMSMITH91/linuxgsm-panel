@@ -1515,10 +1515,9 @@ def _attach_debug_logging(app, cfg=None):
     logging setup that fails must never stop the panel starting.
     """
     try:
-        _dr_errors.attach_log_handlers(app.logger)
+        _dr_errors.attach_log_handlers(app.logger, cfg, DATA_DIR)   # + data/debug.log, when config says so
     except Exception:
         _log.debug("debug-report log handlers not attached", exc_info=True)
-    _dr_errors.debug_file_from_config(cfg, DATA_DIR)   # data/debug.log, when config says so
 
 
 def _spawn_daemon(fn, *args):

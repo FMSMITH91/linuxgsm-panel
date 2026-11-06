@@ -188,10 +188,11 @@ def _has(logger, kind):
     return any(getattr(h, _MARK, None) == kind for h in logger.handlers)
 
 
-def attach_log_handlers(app_logger=None):
+def attach_log_handlers(app_logger=None, cfg=None, data_dir=None):
     """Attach the stderr handler and the counter, once per process. Returns what was attached now.
 
     `app_logger` is Flask's app.logger (already created, so Flask has added its default handler).
+    With `data_dir`, also the opt-in debug log there, when `cfg` turns it on (debug_file_from_config).
     """
     added = []
     for name in LOGGERS:
@@ -206,6 +207,8 @@ def attach_log_handlers(app_logger=None):
     if app_logger is not None and not _has(app_logger, "counter"):
         app_logger.addHandler(ErrorCounter(logging.WARNING))
         added.append(app_logger.name + ":counter")
+    if data_dir is not None:
+        debug_file_from_config(cfg, data_dir)
     return added
 
 
