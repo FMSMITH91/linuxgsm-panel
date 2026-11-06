@@ -104,8 +104,10 @@ class DebugFileHandler(logging.handlers.RotatingFileHandler):
         stream = super()._open()
         try:
             os.chmod(self.baseFilename, 0o600)
-        except OSError:
-            pass
+        except OSError as exc:
+            # Still inside the 0700 data dir, so the file stays unreadable to others; say so once
+            # on stderr (not through the logger this handler serves, which would re-enter it).
+            sys.stderr.write("debug log: could not make %s owner-only: %s\n" % (self.baseFilename, exc))
         return stream
 
 
