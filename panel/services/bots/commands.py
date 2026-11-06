@@ -283,37 +283,114 @@ _WORKING_ACK = {
 
 # ── "typing…" while a command works ──────────────────────────────────────────────────────────
 # Both chats can show the bot as typing: Telegram for ~5 s per sendChatAction, Discord for ~10 s
-# per POST …/typing, each cleared the moment the bot posts. A command that takes a while (a
-# panel /update checking GitHub: 10-30 s of a silent chat, owner 2026-11-05) now shows it for as
-# long as it runs. The first pulse waits _TYPING_AFTER, so an answer that is instant (most of
-# them) costs no extra request and never flickers; then every _TYPING_EVERY, under Telegram's 5 s;
-# and never past _TYPING_CAP, so a command that hangs does not type for ever.
-_TYPING_AFTER = 0.7
+# per POST …/typing, and each clears it the moment the bot posts. It starts the moment a command
+# is RECEIVED (the owner, 2026-11-05: "as soon as it receives a message it should show typing,
+# then after it responds it goes away") — not after a delay, and not only once the worker reaches
+# the command, which left a command queued behind another with nothing on screen. Then every
+# _TYPING_EVERY, under Telegram's 5 s, until the reply goes out, and never past _TYPING_CAP, so a
+# command that hangs does not type for ever.
+#
+# The reply stops it (stop_typing, called by each bot's reply function BEFORE it posts), under the
+# pulse's own lock: a "typing…" request still in flight when the answer was posted would arrive
+# after it and show the bot typing for 5-10 s more under its own reply. A "working on it" note
+# mid-command clears the chat's indicator too, so it asks for a pulse straight after (poke_typing).
 _TYPING_EVERY = 4.0
 _TYPING_CAP = 120.0
+_typing_lock = threading.Lock()
+_typing = {}            # (platform, chat) -> the set of _Typing running for that chat
 
 
-def while_typing(send, fn):
-    """Run fn() and return what it returns, with send() pulsing "typing…" while it is running."""
-    stop = threading.Event()
+class _Typing:
+    """One chat's "typing…" pulse, on its own thread, until end() or _TYPING_CAP."""
 
-    def pulse():
+    def __init__(self, send):
+        """Pulse send() at once and then every _TYPING_EVERY."""
+        self.send = send
+        self.stopped = threading.Event()
+        self._wake = threading.Event()
+        self._lock = threading.Lock()
+
+    def run(self):
+        """The pulse loop. A failing send() is logged and the loop goes on."""
         end = time.monotonic() + _TYPING_CAP
-        wait = _TYPING_AFTER
-        while not stop.wait(wait) and time.monotonic() < end:
-            if stop.is_set():
-                break    # the answer went out while that wait timed out: no "typing…" after it
-            try:
-                send()
-            except Exception:
-                _log.debug("bot typing indicator failed", exc_info=True)
-            wait = _TYPING_EVERY
+        while True:
+            with self._lock:
+                if self.stopped.is_set():
+                    return
+                try:
+                    self.send()
+                except Exception:
+                    _log.debug("bot typing indicator failed", exc_info=True)
+            if self._wake.wait(_TYPING_EVERY):
+                self._wake.clear()
+            if self.stopped.is_set() or time.monotonic() >= end:
+                self.stopped.set()
+                return
 
-    threading.Thread(target=pulse, name="bot-typing", daemon=True).start()
+    def end(self):
+        """Stop it; returns once no "typing…" request of this pulse can still be in flight."""
+        self.stopped.set()
+        self._wake.set()
+        with self._lock:
+            pass
+
+    def poke(self):
+        """Pulse again now (the bot just posted, which cleared the chat's indicator)."""
+        self._wake.set()
+
+
+def start_typing(key, send):
+    """Start "typing…" for chat `key` ((platform, chat id)) now; returns the pulse."""
+    t = _Typing(send)
+    with _typing_lock:
+        _typing.setdefault(key, set()).add(t)
+    try:
+        threading.Thread(target=t.run, name="bot-typing", daemon=True).start()
+    except Exception:
+        _finish_typing(key, t)
+        _log.debug("bot typing thread not started", exc_info=True)
+    return t
+
+
+def _finish_typing(key, t):
+    t.end()
+    with _typing_lock:
+        live = _typing.get(key)
+        if live is not None:
+            live.discard(t)
+            if not live:
+                _typing.pop(key, None)
+
+
+def stop_typing(key):
+    """Stop every "typing…" in chat `key`: the bot is about to post its answer there."""
+    with _typing_lock:
+        live = _typing.pop(key, set())
+    for t in live:
+        t.end()
+
+
+def poke_typing(key):
+    """Pulse every "typing…" in chat `key` again now: the bot posted a note that cleared it."""
+    with _typing_lock:
+        live = list(_typing.get(key, ()))
+    for t in live:
+        t.poke()
+
+
+def while_typing(send, fn, key=None, started=None):
+    """Run fn() and return what it returns, with "typing…" in chat `key` while it runs.
+
+    `started` is the pulse the router started when the command arrived. When a reply in the same
+    chat has stopped it meanwhile (another command answered first), a fresh one covers this
+    command, so a command that waited in the queue still shows "typing…" while it runs.
+    """
+    key = key if key is not None else ("", id(send))
+    t = started if started is not None and not started.stopped.is_set() else start_typing(key, send)
     try:
         return fn()
     finally:
-        stop.set()
+        _finish_typing(key, t)
 
 
 # ── Running commands off the poll/socket thread ────────────────────────────────────────────────

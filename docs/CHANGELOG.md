@@ -327,6 +327,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **The bots show "typing…" the moment they receive a command, and stop as they answer.** It
+  used to start only after 0.7 s, and only once the command began, so a quick reply or a command
+  waiting behind another one showed nothing. It now starts on receipt, stays up while the command
+  waits and runs, and is cleared before the reply is posted, so it never shows under an answer.
+  After a "working on it" note (which clears the indicator), it comes back at once.
+
 - **Less scrolling, on a phone and on a desktop.** The alerts every page opens with (2FA off, a
   reboot needed, updates waiting) are one line each, with their buttons beside them. Files & Config
   shows one section at a time — Config, Files, Backups, Schedule, Alerts, Mods — each with its own
