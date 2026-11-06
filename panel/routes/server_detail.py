@@ -149,6 +149,30 @@ def _dtl_sees_secrets(actor):
         return False
 
 
+def _dtl_outputs(action, out, clean, actor):
+    """(the audit row's text, the text the reply shows) for a short action's output.
+
+    For `details`, the audit text is masked whoever ran it — the log's readers are not the runner,
+    and its last 400 characters can be the start command line — and the reply is masked unless
+    `actor` may see the secrets (_dtl_sees_secrets). Anything else is as it was.
+    """
+    if action != "details":
+        return _clean_action_output(out), clean
+    masked = _dtl_mask_secrets(clean)
+    return masked, (clean if _dtl_sees_secrets(actor) else masked)
+
+
+def _dtl_flash_text(action, msg):
+    """`msg` cut to _DTL_FLASH_MAX for a read-only action's flash, which rides in the session cookie.
+
+    A browser drops a cookie past 4 KB — and with it the login. The page's own Maintenance menu
+    shows the whole output.
+    """
+    if action in READONLY_ACTIONS and isinstance(msg, str):
+        return msg[:_DTL_FLASH_MAX]
+    return msg
+
+
 def _dtl_mask_labelled(text):
     """Mask every labelled secret's value; -> (text, the values masked)."""
     found = set()
@@ -275,19 +299,14 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
         out, err, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout,
                                             selfname=gs.lgsm_name)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
-    # Masked for the audit log whoever ran it: the log's readers are not the runner, and its last
-    # 400 characters of `details` can be the start command line.
-    masked = _dtl_mask_secrets(clean) if action == "details" else None
-    log_action(actor, f"{action}_server", target=name, success=(rc == 0),
-               detail=(masked if masked is not None else _clean_action_output(out))[-400:],
+    audit_detail, shown = _dtl_outputs(action, out, clean, actor)
+    log_action(actor, f"{action}_server", target=name, success=(rc == 0), detail=audit_detail[-400:],
                actor=origin, server=gs)
     _after_power_action(app, gs, remote, short_name, action, rc)
     if action == "update-lgsm" and rc == 0:
         _lg265_after_update_lgsm(gs)
     if action in READONLY_ACTIONS:
-        if masked is not None and not _dtl_sees_secrets(actor):
-            clean = masked
-        return True, f"{action}: {clean[:_DTL_REPLY_MAX] or 'no output'}"
+        return True, f"{action}: {shown[:_DTL_REPLY_MAX] or 'no output'}"
     ok, msg = _run_sync_outcome(action, name, rc, clean)
     note = _lg265_ahl_note(action, clean)
     return ok, (i18n.Sentences(msg, note) if note else msg)
@@ -992,10 +1011,7 @@ def _register_actions(app):
             return redirect(url_for("server_detail", server_id=server_id))
         try:
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
-            if action in READONLY_ACTIONS and isinstance(msg, str):
-                # A flash rides in the session cookie, which a browser drops past 4 KB — and with
-                # it the login. The page's own Maintenance menu shows the whole output.
-                msg = msg[:_DTL_FLASH_MAX]
+            msg = _dtl_flash_text(action, msg)
             flash(_r15e_said(msg), "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
             # Rolled back first, as _r20b_audit_raised does: a raise from a commit leaves the
