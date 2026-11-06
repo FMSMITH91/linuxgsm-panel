@@ -1509,10 +1509,7 @@ def _session_lifetimes(cfg):
 
 
 def _attach_debug_logging(app, cfg=None):
-    """The stderr handler and the error counter (panel/ops/debug_report/errors.py), once per process.
-
-    Plus the debug log in data/, when config.json has "debug_log": true — `is True`, so a hand-edited
-    "false" string does not switch it on. Read at start: a change takes a restart.
+    """The stderr handler, the error counter and the opt-in debug log (debug_report/errors.py), once.
 
     After app.logger exists, so Flask has already added its own default handler. Best-effort: a
     logging setup that fails must never stop the panel starting.
@@ -1521,12 +1518,7 @@ def _attach_debug_logging(app, cfg=None):
         _dr_errors.attach_log_handlers(app.logger)
     except Exception:
         _log.debug("debug-report log handlers not attached", exc_info=True)
-    if (cfg or {}).get("debug_log") is True:
-        try:
-            _dr_errors.attach_debug_file(str(DATA_DIR / _dr_errors.DEBUG_FILE_NAME))
-            _log.info("debug log on: %s", DATA_DIR / _dr_errors.DEBUG_FILE_NAME)
-        except Exception:
-            _log.warning("the debug log could not be opened", exc_info=True)
+    _dr_errors.debug_file_from_config(cfg, DATA_DIR)   # data/debug.log, when config says so
 
 
 def _spawn_daemon(fn, *args):

@@ -109,6 +109,22 @@ class DebugFileHandler(logging.handlers.RotatingFileHandler):
         return stream
 
 
+def debug_file_from_config(cfg, data_dir):
+    """Attach data_dir/debug.log when config.json has "debug_log": true. Never raises.
+
+    `is True`, so a hand-edited "true" string does not switch it on. Read at start: a change takes
+    a restart. A file that cannot be opened is a warning, never a panel that does not start.
+    """
+    if (cfg or {}).get("debug_log") is not True:
+        return
+    path = os.path.join(str(data_dir), DEBUG_FILE_NAME)
+    try:
+        attach_debug_file(path)
+        logging.getLogger("panel").info("debug log on: %s", path)
+    except Exception:
+        logging.getLogger("panel").warning("the debug log could not be opened", exc_info=True)
+
+
 def attach_debug_file(path):
     """Attach the debug log at `path` to LOGGERS, once per process. Returns what was attached now."""
     added = []
