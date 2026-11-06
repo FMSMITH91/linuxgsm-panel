@@ -1796,6 +1796,7 @@ try:
 
     class _TyHeld:
         """A worker that holds the job until told to run it: the command waiting in the queue."""
+
         def __init__(self):
             self.jobs = []
 
