@@ -1324,7 +1324,7 @@ def _create_app_assigns(key):
 _ca22 = _create_app_assigns("PANEL_COMMIT")
 check("R4: create_app puts PANEL_COMMIT into app.config, and calls the debug-report hooks",
       _ca22[0] and "app.config['PANEL_COMMIT'] = PANEL_COMMIT" in _ca22[1]
-      and "_attach_debug_logging(app)" in _ca22[1] and "_start_hub_lag_watch()" in _ca22[1])
+      and "_attach_debug_logging(app, cfg)" in _ca22[1] and "_start_hub_lag_watch()" in _ca22[1])
 with open(os.path.join(str(_ROOT22), "app.py"), encoding="utf-8") as _fh22:
     _main22 = _fh22.read().split('if __name__ == "__main__":', 1)[1]
 check("R19/R20: the __main__ block records the bind and port, and goes through the recording helpers",

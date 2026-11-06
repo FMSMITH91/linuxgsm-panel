@@ -1508,8 +1508,11 @@ def _session_lifetimes(cfg):
     return hours * 3600, timedelta(days=days)
 
 
-def _attach_debug_logging(app):
+def _attach_debug_logging(app, cfg=None):
     """The stderr handler and the error counter (panel/ops/debug_report/errors.py), once per process.
+
+    Plus the debug log in data/, when config.json has "debug_log": true — `is True`, so a hand-edited
+    "false" string does not switch it on. Read at start: a change takes a restart.
 
     After app.logger exists, so Flask has already added its own default handler. Best-effort: a
     logging setup that fails must never stop the panel starting.
@@ -1518,6 +1521,12 @@ def _attach_debug_logging(app):
         _dr_errors.attach_log_handlers(app.logger)
     except Exception:
         _log.debug("debug-report log handlers not attached", exc_info=True)
+    if (cfg or {}).get("debug_log") is True:
+        try:
+            _dr_errors.attach_debug_file(str(DATA_DIR / _dr_errors.DEBUG_FILE_NAME))
+            _log.info("debug log on: %s", DATA_DIR / _dr_errors.DEBUG_FILE_NAME)
+        except Exception:
+            _log.warning("the debug log could not be opened", exc_info=True)
 
 
 def _spawn_daemon(fn, *args):
@@ -1592,7 +1601,7 @@ def create_app():
     # The commit this process loaded at start, for the debug report's header (R4). app.config, not
     # the module global alone: app.py runs as __main__ while the routes import a second copy.
     app.config["PANEL_COMMIT"] = PANEL_COMMIT
-    _attach_debug_logging(app)
+    _attach_debug_logging(app, cfg)
 
     # One-time nudge for installs still sitting on the previous, longer session defaults
     # (12h idle / 14d remember) → the tighter 8h / 3d. Only touches values left at the old

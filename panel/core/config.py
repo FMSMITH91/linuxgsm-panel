@@ -55,6 +55,9 @@ DEFAULT_CONFIG = {
     # investigate an incident found late and short enough that the table is not an indefinite
     # record of where each admin was. 0 disables it and keeps full IPs forever.
     "audit_ip_retention_days": 90,
+    # Write the panel's DEBUG records to data/debug.log (size-capped, owner-only) — for a test box
+    # where a fault has to be traced. Read at start; off unless this is exactly true.
+    "debug_log": False,
 }
 
 

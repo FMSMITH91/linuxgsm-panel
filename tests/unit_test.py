@@ -1988,6 +1988,8 @@ _r16d_wrap_ts_handles()
 # _connect_each and its opener, with stand-in sockets and a real local listener) imports part01.
 # part145 (details shows all its output, its secrets masked for anyone who cannot open the configs,
 # and masked in the audit row) drives part12's app with a stubbed host; imports part01 and 12.
+# part146 (the opt-in debug log: config "debug_log", data/debug.log at DEBUG, 0600, capped) drives
+# app._attach_debug_logging against a scratch DATA_DIR; imports part01.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2002,7 +2004,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part114", "part115", "part116", "part117", "part118", "part119", "part120", "part121", "part122",
           "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
-          "part142", "part143", "part144", "part145", "part15")
+          "part142", "part143", "part144", "part145", "part146", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
