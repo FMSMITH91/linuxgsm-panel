@@ -63,6 +63,8 @@ startparameters="-ip ${ip} -port ${port}"
 ## Notification Alerts
 # (on|off)
 
+displayip=""
+
 # Discord Alerts | https://docs.linuxgsm.com/alerts/discord
 discordalert="off"
 discordwebhook="webhook"
@@ -114,7 +116,9 @@ check("cfg form: a comment that is only a link becomes the docs link (the settin
 check("cfg form: a docs link with a quote in it is not a link (it could not leave the page's href)",
       _h_cmpc_("oddone")[1] == "", repr(_h_cmpc_("oddone")))
 check("cfg form: the banner and the (on|off) note above a blank line are nobody's help",
-      _h_cmpc_("ip")[2] == "" and _h_cmpc_("discordalert")[2] == "", repr((_h_cmpc_("ip"), _h_cmpc_("discordalert"))))
+      _h_cmpc_("ip")[2] == "" and _h_cmpc_("discordalert")[2] == ""
+      and _h_cmpc_("displayip") == ("Notification Alerts", "", ""),
+      repr((_h_cmpc_("ip"), _h_cmpc_("discordalert"), _h_cmpc_("displayip"))))
 
 
 # ── The read: help on every setting, and the file each value comes from ─────────────────────────
