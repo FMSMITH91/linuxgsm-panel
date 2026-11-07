@@ -230,21 +230,30 @@ _jcj_end = re.search(r"\n  [a-z][a-z0-9_-]*:\n", _jcj[1:])
 _jcj = _jcj[:_jcj_end.start() + 1] if _jcj_end else _jcj
 _jcj_uses = re.findall(r"uses: (\S+)", _jcj)
 _jcj_pip = re.findall(r"pip install[^\n]*", _jcj)
-check("js coverage (CI): the job pins every action to a commit, reads the repository only, and "
-      "keeps no token in .git",
-      len(_jcj_uses) == 4 and _jcj_uses[0].startswith("step-security/harden-runner@")
+# Read-only throughout: the reuse step (a push to main that merged a pull request which passed this
+# job on the same tree, part153) reads that run's jobs and checks and downloads its report, so the
+# job may read actions and checks besides the repository and the pull request.
+check("js coverage (CI): the job pins every action to a commit, only reads, and keeps no token in .git",
+      len(_jcj_uses) == 5 and _jcj_uses[0].startswith("step-security/harden-runner@")
+      and sum(1 for _u in _jcj_uses if _u.startswith("actions/download-artifact@")) == 1
       and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", _u) for _u in _jcj_uses)
-      and re.search(r"\n    permissions:\n      contents: read\n      pull-requests: read[ \t]*(?:#[^\n]*)?\n    steps:",
+      and re.search(r"\n    permissions:\n      contents: read\n      pull-requests: read[ \t]*(?:#[^\n]*)?\n"
+                    r"      actions: read[ \t]*(?:#[^\n]*)?\n      checks: read[ \t]*(?:#[^\n]*)?\n    steps:",
                     _jcj) is not None
       and "secrets." not in _jcj and "persist-credentials: false" in _jcj,
       repr((_jcj_uses, _jcj[:200])))
+# The one continue-on-error is on the step that takes the pull request run's report on a push that
+# reuses that run's pass (part153): a download that fails leaves the harness to run, it passes nothing.
+_jcj_steps = _jcj.split("\n      - ")
+_jcj_coe = [_s.split("\n", 1)[0] for _s in _jcj_steps if "continue-on-error" in _s]
 check("js coverage (CI): ...installs only requirements.txt, hash-checked, and runs the harness "
       "with nothing that turns its failure into a pass",
       _jcj_pip == ["pip install --quiet --require-hashes --only-binary :all: -r requirements.txt"]
       and "python tools/js_coverage/run.py --chrome" in _jcj and "--out lcov.info" in _jcj
-      and "|| true" not in _jcj and "continue-on-error" not in _jcj and "set -euo pipefail" in _jcj
+      and "|| true" not in _jcj and "set -euo pipefail" in _jcj
+      and _jcj_coe == ["name: Take the report the pull request's run made on the same tree"]
       and "if-no-files-found: error" in _jcj,
-      repr(_jcj_pip))
+      repr((_jcj_pip, _jcj_coe)))
 
 # ...and the Measure step itself, RUN, with run.py stood in for by a `python` on PATH that exits as
 # told: the step must leave with run.py's status (and so stop the upload after it), put the summary
