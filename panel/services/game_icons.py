@@ -220,7 +220,12 @@ def icon(script, known):
     network. A cached icon is served at once; a missing or month-old one is fetched (one fetch at a
     time), and a failure is not retried for _FAIL_BACKOFF, the stale copy serving meanwhile.
     """
-    if not isinstance(script, str) or not SCRIPT_RE.fullmatch(script) or script not in known:
+    if not isinstance(script, str) or not SCRIPT_RE.fullmatch(script):
+        return None
+    # From here on (cache file names, the log) the name is LinuxGSM's own copy from `known`, never
+    # the caller's text: a name `known` does not hold gets None and stops here.
+    script = {k: k for k in known}.get(script)
+    if script is None:
         return None
     hit = _cmpd_cached(script)
     if hit is not None and hit[2] < _ICON_MAX_AGE:
