@@ -65,6 +65,22 @@ def _cmpb_entry(category, lines):
     return {"category": category, "title": title, "body": body, "key": _cmpb_key(title)}
 
 
+def _cmpb_add(entries, seen, category, cur):
+    """Append the bullet whose lines are `cur` (if any), unless its key was already taken."""
+    if cur is None:
+        return
+    e = _cmpb_entry(category, cur)
+    if e["title"] and e["key"] not in seen:
+        seen.add(e["key"])
+        entries.append(e)
+
+
+def _cmpb_heading(line):
+    """The category a "### <category>" line opens; None for any other heading."""
+    m = _HEADING_RE.match(line)
+    return m.group(1) if m else None
+
+
 def parse(text):
     """Every top-level bullet in a CHANGELOG's text, in file order.
 
@@ -74,30 +90,21 @@ def parse(text):
     """
     entries, seen = [], set()
     category, cur = None, None
-
-    def _flush():
-        if cur is not None:
-            e = _cmpb_entry(category, cur)
-            if e["title"] and e["key"] not in seen:
-                seen.add(e["key"])
-                entries.append(e)
-
     for line in (text or "").splitlines():
         if line.startswith("#"):
-            _flush()
-            cur = None
-            m = _HEADING_RE.match(line)
-            category = m.group(1) if m else None
+            _cmpb_add(entries, seen, category, cur)
+            cur, category = None, _cmpb_heading(line)
         elif line.startswith("- ") and category:
-            _flush()
+            _cmpb_add(entries, seen, category, cur)
             cur = [line]
-        elif cur is not None and (line.startswith(" ") or not line.strip()):
+        elif cur is not None and not line[:1].strip():
+            # Indented (wrapped text, a nested point) or blank: still this bullet.
             if line.strip():
                 cur.append(line)
         else:
-            _flush()
+            _cmpb_add(entries, seen, category, cur)
             cur = None
-    _flush()
+    _cmpb_add(entries, seen, category, cur)
     return entries
 
 
