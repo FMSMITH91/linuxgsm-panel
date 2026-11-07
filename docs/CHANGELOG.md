@@ -248,6 +248,11 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **The Install page asks for only the game icons you can see.** It used to request the icons for
+  nearly every game at once, and on a panel that had not saved them yet each one was fetched from
+  linuxgsm.com in turn, so the page kept loading for many seconds. The icons for the tiles in view
+  load first, and the rest load as you scroll or search the list.
+
 - **An update is no longer held back by a failed Dependabot run on GitHub.** GitHub's own
   dependency-update job failing on the newest commit no longer stops the panel offering it.
 
