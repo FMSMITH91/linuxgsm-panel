@@ -213,7 +213,7 @@ def _cmpd_fetch_icon(script):
     return body, kind[0]
 
 
-def _cmpd_trusted_name(script, known):
+def _cmpd_listed_name(script, known):
     """Return LinuxGSM's own copy of `script` from `known`, or None.
 
     From here on (cache file names, the log) the name is that copy, never the caller's text.
@@ -230,7 +230,7 @@ def icon(script, known):
     network. A cached icon is served at once; a missing or month-old one is fetched (one fetch at a
     time), and a failure is not retried for _FAIL_BACKOFF, the stale copy serving meanwhile.
     """
-    script = _cmpd_trusted_name(script, known)
+    script = _cmpd_listed_name(script, known)
     if script is None:
         return None
     hit = _cmpd_cached(script)
