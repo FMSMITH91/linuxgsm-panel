@@ -40,6 +40,7 @@ function updatePort() {
   var contentOpt = document.getElementById('gmod-content-opt');
   if (contentOpt) contentOpt.style.display = (select.value === 'gmod') ? '' : 'none';
   suggestFreePort();
+  syncGameTiles();
 }
 // The host selector does two things now: the free-port suggestion it always did, and the game
 // filter, which needs the host before it can decide anything.
@@ -146,6 +147,7 @@ function filterGamesForHost() {
     // refreshed game list (Refresh list swaps the select in fresh), left it showing beside no game.
     var contentOpt = document.getElementById('gmod-content-opt');
     if (contentOpt) contentOpt.style.display = (sel.value === 'gmod') ? '' : 'none';
+    syncGameTiles();
     var note = document.getElementById('game-os-note');
     if (note) {
       // The count, then the sentence as its own node, so the sentence is one catalog key.
@@ -498,6 +500,8 @@ function refreshGameList(btn){
         // "Refreshing…" until a reload.
         btn.disabled = false; btn.innerHTML = orig;   // nosemgrep
         window.refreshSection('#game-col', 'filterGamesForHost');
+        // ...and the tiles, which are drawn from the same list (a new game gets its tile).
+        if (document.getElementById('game-picker')) window.refreshSection('#game-picker', 'syncGameTiles');
         return;
       }
       if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');
@@ -508,3 +512,58 @@ function refreshGameList(btn){
       btn.disabled = false; btn.innerHTML = orig;   // nosemgrep
     });
 }
+
+// ── The install page's game tiles (install_server.html #game-grid) ─────────────────────────────
+// A tile only sets the Game select, which is what the form posts, and fires its change so the
+// default port and the GMod content option follow exactly as picking from the select does.
+function pickGameTile(btn) {
+  var sel = document.getElementById('game-type-select');
+  if (!sel || btn.disabled) return;
+  sel.value = btn.getAttribute('data-game') || '';
+  sel.dispatchEvent(new Event('change', {bubbles: true}));
+  syncGameTiles();
+}
+window.pickGameTile = pickGameTile;
+
+// The search: every word typed must appear in the game's name or script name (data-search).
+function filterGameTiles(input) {
+  var words = String(input.value || '').toLowerCase().split(/\s+/).filter(Boolean);
+  var shown = 0;
+  document.querySelectorAll('#game-grid .game-tile').forEach(function (tile) {
+    var hay = tile.getAttribute('data-search') || '';
+    var hit = words.every(function (w) { return hay.indexOf(w) !== -1; });
+    tile.hidden = !hit;
+    if (hit) shown++;
+  });
+  var none = document.getElementById('game-search-none');
+  if (none) none.hidden = shown > 0;
+}
+window.filterGameTiles = filterGameTiles;
+
+// The tiles mirror the select: the chosen game is pressed, and a game the host cannot install
+// (filterGamesForHost disabled its option) is disabled too.
+function syncGameTiles() {
+  var sel = document.getElementById('game-type-select');
+  if (!sel) return;
+  document.querySelectorAll('#game-grid .game-tile').forEach(function (tile) {
+    var game = tile.getAttribute('data-game');
+    var opt = Array.prototype.find.call(sel.options, function (o) { return o.value === game; });
+    tile.disabled = !opt || opt.disabled;
+    tile.setAttribute('aria-pressed', String(!!game && sel.value === game));
+  });
+}
+window.syncGameTiles = syncGameTiles;
+
+// A game with no icon: the panel answers 404 and the tile keeps its initials.
+function _dropBrokenIcon(img) {
+  if (img && img.parentNode && img.closest('.game-tile-art')) img.parentNode.removeChild(img);
+}
+document.addEventListener('error', function (ev) {
+  if (ev.target && ev.target.tagName === 'IMG') _dropBrokenIcon(ev.target);
+}, true);
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('#game-grid .game-tile-art img').forEach(function (img) {
+    if (img.complete && img.naturalWidth === 0) _dropBrokenIcon(img);
+  });
+  syncGameTiles();
+});

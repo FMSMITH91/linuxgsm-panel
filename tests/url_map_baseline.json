@@ -617,6 +617,17 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/log/<any(script, game):kind>": {
+    "endpoint": "api_server_lgsm_log",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_lgsm_log"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/playerlist": {
     "endpoint": "api_server_playerlist",
     "guards": [
@@ -723,6 +734,17 @@
       "GET"
     ]
   },
+  "GET /game-icon/<script>": {
+    "endpoint": "game_icon",
+    "guards": [
+      "utils.py:decorated_view(install_server,manage_servers)",
+      "auth.py:decorated_function(install_server,manage_servers)",
+      "view:game_icon"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /global-bans": {
     "endpoint": "global_bans_page",
     "guards": [
@@ -760,6 +782,15 @@
       "utils.py:decorated_view(view_logs)",
       "auth.py:decorated_function(view_logs)",
       "view:view_logs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /manifest.webmanifest": {
+    "endpoint": "web_manifest",
+    "guards": [
+      "view:web_manifest"
     ],
     "methods": [
       "GET"
@@ -1054,6 +1085,19 @@
       "POST"
     ]
   },
+  "GET,POST /api/server/<int:server_id>/wipe-schedule": {
+    "endpoint": "api_server_wipe_schedule",
+    "guards": [
+      "utils.py:decorated_view(manage_servers)[server_access]",
+      "auth.py:decorated_function(manage_servers)[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_wipe_schedule"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /invite/<token>": {
     "endpoint": "redeem_invite",
     "guards": [
@@ -1164,6 +1208,16 @@
       "POST"
     ]
   },
+  "POST /account/theme": {
+    "endpoint": "account_set_theme",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_set_theme"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/account/sessions/<int:sess_id>/revoke": {
     "endpoint": "api_account_session_revoke",
     "guards": [
@@ -1189,6 +1243,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:api_account_ui_order_reset"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/account/whats-new/seen": {
+    "endpoint": "account_whats_new_seen",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_whats_new_seen"
     ],
     "methods": [
       "POST"

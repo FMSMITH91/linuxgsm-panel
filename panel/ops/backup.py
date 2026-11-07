@@ -1444,6 +1444,9 @@ def remove_game_schedule(sid):
         gs = cfg.get("game_schedules")
         if isinstance(gs, dict):
             gs.pop(str(sid), None)
+        wipes = cfg.get("wipe_schedules")      # the scheduled Rust wipe, which is per server too
+        if isinstance(wipes, dict):
+            wipes.pop(str(sid), None)
     update_config(_mut)
 
 
