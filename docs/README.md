@@ -2,11 +2,11 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/FMSMITH91/linuxgsm-panel/badge)](https://scorecard.dev/viewer/?uri=github.com/FMSMITH91/linuxgsm-panel) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15363/badge)](https://www.bestpractices.dev/projects/15363) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/b179bcf8d27941bb9ad20839ea2fe4b7)](https://app.codacy.com/gh/FMSMITH91/linuxgsm-panel/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
-[![CI](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml) [![CodeQL](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml) [![Security scan](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml) [![Security scan (code)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security-code.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security-code.yml) [![Code-scanning alerts](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql-alerts.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql-alerts.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
+[![CI](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml) [![CodeQL](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml) [![Security scan](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml) [![Security scan (code)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security-code.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security-code.yml) [![Code-scanning alerts](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql-alerts.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql-alerts.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
 
 A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game servers across one or more Ubuntu machines, with role-based access for super admins, server admins, and moderators.
 
-📓 [Changelog](docs/CHANGELOG.md) · 🔒 [Security policy](.github/SECURITY.md) · 🔐 [HTTPS setup](docs/https.md)
+📓 [Changelog](CHANGELOG.md) · 🔒 [Security policy](../.github/SECURITY.md) · 🔐 [HTTPS setup](https.md)
 
 > ## ⚠️ Disclaimer — please read first
 >
@@ -33,7 +33,7 @@ The installer runs unattended. It:
 2. Clones the repo, builds a Python virtualenv, picks a free port (5000 by default) and serves HTTPS with a self-signed certificate.
 3. Sets up the service, **never running the panel as root**:
    - **As a normal user** → a `systemd --user` service with linger, so it survives logout and reboot.
-   - **As root** → a dedicated non-login **`lgsmpanel`** user running a system service, with a scoped passwordless-sudo entry for managing the local host (see [SECURITY.md](.github/SECURITY.md)).
+   - **As root** → a dedicated non-login **`lgsmpanel`** user running a system service, with a scoped passwordless-sudo entry for managing the local host (see [SECURITY.md](../.github/SECURITY.md)).
    - Either way, the `linuxgsm-panel-recover` command (reset a password, turn off 2FA, create an admin from a shell).
 4. Asks whether to turn on **Tailscale SSH on the panel host** (no by default). Answer ahead with `PANEL_TAILSCALE_SSH=1` or `=0`, placed after `sudo`: `curl … | sudo PANEL_TAILSCALE_SSH=1 bash`. An update keeps the answer.
 
@@ -48,7 +48,7 @@ Then open **the link the installer prints at the end** — `https://your-server:
 
 Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
 
-**Only signed releases are installed.** The installer already on the host moves the panel only to a commit signed with the project's release SSH key, which is kept off GitHub. Anything else is held with "Not updated: held at …" and the reason. The host checks against its own copy of the public key (`release-signers`), never the copy inside the update. Installing with `curl … | bash` runs the installer from GitHub, so it is not covered by the signature: use it only for a first install, which has no key to check against yet; see [SECURITY.md](.github/SECURITY.md) for what to check after the first update. If a host says it has no release key, run the installer by hand once over SSH with `PANEL_ALLOW_UNSIGNED_UPDATE=1`: `cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ~/linuxgsm-panel/install.sh` (per-user).
+**Only signed releases are installed.** The installer already on the host moves the panel only to a commit signed with the project's release SSH key, which is kept off GitHub. Anything else is held with "Not updated: held at …" and the reason. The host checks against its own copy of the public key (`release-signers`), never the copy inside the update. Installing with `curl … | bash` runs the installer from GitHub, so it is not covered by the signature: use it only for a first install, which has no key to check against yet; see [SECURITY.md](../.github/SECURITY.md) for what to check after the first update. If a host says it has no release key, run the installer by hand once over SSH with `PANEL_ALLOW_UNSIGNED_UPDATE=1`: `cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ~/linuxgsm-panel/install.sh` (per-user).
 
 **Versions are dates**: the date of the commit, in UTC, shown with the short commit (`2026.9.26 · a1b2c3d` in the footer).
 
@@ -144,15 +144,15 @@ The API takes a session cookie or an `Authorization: Bearer <token>` (Account �
 | | |
 |---|---|
 | **Dashboard** — every server across every host | **Live console & per-game stats** |
-| ![Dashboard](docs/screenshots/01-dashboard.png) | ![Console](docs/screenshots/02-console.png) |
+| ![Dashboard](screenshots/01-dashboard.png) | ![Console](screenshots/02-console.png) |
 | **Host manager** — panel host and every remote | **Firewall** — UFW rules, one-click game ports |
-| ![Host manager](docs/screenshots/03-host-manager.png) | ![Firewall](docs/screenshots/04-firewall.png) |
+| ![Host manager](screenshots/03-host-manager.png) | ![Firewall](screenshots/04-firewall.png) |
 | **Files & config** | **Granular permissions** |
-| ![Files](docs/screenshots/05-files.png) | ![Permissions](docs/screenshots/06-permissions.png) |
+| ![Files](screenshots/05-files.png) | ![Permissions](screenshots/06-permissions.png) |
 | **Light theme** | **Settings form** — LinuxGSM's own help for every setting |
-| ![Light theme](docs/screenshots/07-light-theme.png) | ![Settings form](docs/screenshots/08-config-form.png) |
+| ![Light theme](screenshots/07-light-theme.png) | ![Settings form](screenshots/08-config-form.png) |
 | **Install a server** — every LinuxGSM game, with search | **LinuxGSM's script log** beside the live console |
-| ![Install](docs/screenshots/09-install.png) | ![Logs](docs/screenshots/10-logs.png) |
+| ![Install](screenshots/09-install.png) | ![Logs](screenshots/10-logs.png) |
 
 ## Configuration
 
@@ -191,7 +191,7 @@ check.
 
 ## Production deployment
 
-Run behind **Tailscale** (recommended — tailnet-only, no open ports) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](docs/https.md).
+Run behind **Tailscale** (recommended — tailnet-only, no open ports) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](https.md).
 
 For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page rather than a `tailscale serve` command of your own: the panel then writes the route on the scheme it is actually serving and keeps it pointed at the panel. A route you add by hand is not managed, and on the panel's host such a command needs `sudo`. The `/tailscale` page lists a hand-made route with a **Remove** button.
 
@@ -222,7 +222,7 @@ location / {
 - **Encryption at rest** — SSH credentials, emails and 2FA secrets are encrypted in `data/panel.db` (key in `data/cred_key`); `data/` is `chmod 700`.
 - **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict CSP and security headers, and input validation on anything that becomes an OS operation.
 
-> Prefer Tailscale over exposing the panel to the internet, and never commit `data/` (already in `.gitignore`). The security model, including what the panel can do as root on its own host, is in [SECURITY.md](.github/SECURITY.md).
+> Prefer Tailscale over exposing the panel to the internet, and never commit `data/` (already in `.gitignore`). The security model, including what the panel can do as root on its own host, is in [SECURITY.md](../.github/SECURITY.md).
 
 ### Recovery
 
@@ -265,7 +265,7 @@ The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, 
 
 ## Contributing
 
-Issues and pull requests are welcome. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run the suites through `tools/smoke-local.sh` first, and keep CI green. New functionality comes with tests, and a bug fix comes with a check that fails without the fix.
+Issues and pull requests are welcome. Report security issues privately via [SECURITY.md](../.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run the suites through `tools/smoke-local.sh` first, and keep CI green. New functionality comes with tests, and a bug fix comes with a check that fails without the fix.
 
 ## License
 

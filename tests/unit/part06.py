@@ -6544,7 +6544,7 @@ _rh_fn = _rh_fn[:_rh_fn.find("\n}\n")]
 _rh_note = ("Nothing on the host itself is changed: its game servers keep running, and the gamedig "
             "tool and weekly cron the panel installed there stay. The README’s “Removing a "
             "host” section says how to remove them.")
-_rh_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+_rh_readme = open(os.path.join(_root, "docs", "README.md"), encoding="utf-8").read()
 _rh_sec = (_rh_readme[_rh_readme.find("\n### Removing a host\n"):]
            if "\n### Removing a host\n" in _rh_readme else "")
 _rh_sec = _rh_sec[:_rh_sec.find("\n## ", 1)] if "\n## " in _rh_sec[1:] else _rh_sec
@@ -7055,7 +7055,7 @@ check("gitleaks: the config was read (it still carries its placeholder allowlist
       "regexes = [" in _gl_txt and "tskey-auth-" in _gl_txt and "useDefault = true" in _gl_txt)
 _gl_bad = [_pp for _pp in _gl_paths
            if not (_pp.startswith("^") and _pp.endswith("$"))
-           or any(re.search(_pp, _rf) for _rf in _gl_readmes + ["README.md"])]
+           or any(re.search(_pp, _rf) for _rf in _gl_readmes + ["docs/README.md"])]
 check("gitleaks: no path exemption is unanchored or takes a README out of the scan",
       not _gl_bad, "exempts: %r" % _gl_bad)
 # install.sh pins NodeSource's public key fingerprint as NODESOURCE_KEY_FPR="<40 hex>", and the
@@ -7121,7 +7121,7 @@ def _docsrc(leaf):
 
 
 _sec = _docsrc("SECURITY.md")
-_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+_readme = _docsrc("README.md")
 
 # The census table quotes the sudo=True ceiling the escalation ratchet above enforces. It said 3
 # for a release after the NodeSource step became a verb and the real number was 2.
@@ -8742,7 +8742,7 @@ check("config: a single trusted_proxies string is one entry, not its characters"
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.
-_ip_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+_ip_readme = open(os.path.join(_root, "docs", "README.md"), encoding="utf-8").read()
 check("README: the nginx block sets X-Forwarded-For rather than passing the client's through",
       "proxy_add_x_forwarded_for" in _ip_readme,
       "nginx forwards whatever the client sent")

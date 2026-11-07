@@ -389,7 +389,7 @@ for _dp50, _dn50, _fn50 in os.walk(_root):
                     _hits50.append(os.path.relpath(os.path.join(_dp50, _f50), _root))
         except OSError:
             continue
-_walked50 = os.path.isfile(os.path.join(_root, "README.md")) and os.path.isfile(
+_walked50 = os.path.isfile(os.path.join(_root, "docs", "README.md")) and os.path.isfile(
     os.path.join(_root, "tests", "unit", "part50.py"))
 check("session links: no file in the tree carries a claude.ai session link",
       _walked50 and not _hits50, repr(_hits50))

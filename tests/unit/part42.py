@@ -221,7 +221,7 @@ _dpl_note42 = _dpl_note42 if _dpl_note42.startswith("No Harden-Runner here") els
 _cl42 = open(os.path.join(_root, "docs", "CHANGELOG.md"), encoding="utf-8").read()
 _cl_hr42 = _re42.search(r"^  - \*Harden-Runner\*.*\n(?:    .*\n)*", _cl42, _re42.M)
 _cl_hr42 = " ".join(_cl_hr42.group(0).split()) if _cl_hr42 else ""
-_rd_hr42 = [ln for ln in open(os.path.join(_root, "README.md"), encoding="utf-8").read().splitlines()
+_rd_hr42 = [ln for ln in open(os.path.join(_root, "docs", "README.md"), encoding="utf-8").read().splitlines()
             if "Harden-Runner" in ln]
 _hr_copy42 = {"deploy.yml": _dpl_note42, "CHANGELOG": _cl_hr42, "README": " ".join(_rd_hr42)}
 _hr_copy_bad42 = sorted(k for k, v in _hr_copy42.items()

@@ -388,7 +388,7 @@ def _uninstall_copy47(tmp):
                   env=dict(os.environ, **env2), stdin=_sp47.DEVNULL, check=False)
     check("uninstall.sh: a root install run without root is pointed at the root-owned copy, not at the "
           "checkout's", r.returncode == 1 and ("sudo bash %s" % copy) in r.stderr, r.stderr[-400:])
-    readme = _read47(_root, "README.md")
+    readme = _read47(_root, "docs", "README.md")
     check("README: the root uninstall runs the root-owned copy",
           "sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh" in readme
           and "sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh" not in readme, "")
