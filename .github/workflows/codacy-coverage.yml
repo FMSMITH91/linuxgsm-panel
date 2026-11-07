@@ -160,7 +160,9 @@ jobs:
           report="${REPORT_DIR}/coverage.xml"
           # A documentation-only pull request runs none of CI's measuring steps (ci.yml's scope
           # step, .github/scripts/pr_scope.py); its coverage job leaves docs-only.txt in the
-          # artifact instead of a report. Honoured for a pull request only: a push always measures.
+          # artifact instead of a report. Honoured for a pull request only: a push always carries a
+          # report, measured or, when ci.yml's reuse step found the pull request's run passed on the
+          # same tree, that run's report taken over unchanged.
           if [ "${WR_EVENT}" = "pull_request" ] && [ ! -e "${report}" ] \
              && [ -f "${REPORT_DIR}/docs-only.txt" ] && [ ! -L "${REPORT_DIR}/docs-only.txt" ]; then
             echo "::notice::a documentation-only pull request: CI measured nothing, so nothing was uploaded."
