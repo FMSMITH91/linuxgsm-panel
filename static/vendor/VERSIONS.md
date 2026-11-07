@@ -14,7 +14,7 @@ osv-scanner nor Dependabot alerts could read a minified bundle. That is how the 
 sat at 4.7.5, bundling socket.io-parser 4.2.4 with two HIGH advisories against it
 (GHSA-677m-j7p3-52f9, GHSA-2m8v-j782-fhvr), with every scanner green. Now the dependency graph
 reads the lockfile, so Dependabot alerts cover these packages, and the dependency audit
-(`security-code.yml`, osv-scanner) reads it on every pull request, push and week.
+(`security-code.yml`, osv-scanner) reads it on every pull request, push and day.
 
 - `dependencies` pins each library at the exact version vendored here.
 - `overrides` pins a package a bundle carries inside it at the version the bundle was built with,

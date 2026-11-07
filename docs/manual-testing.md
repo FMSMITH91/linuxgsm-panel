@@ -5,7 +5,7 @@ This list is the rest — the things that touch **real sshd / fail2ban / UFW / s
 which the automated tests can't exercise. Work top to bottom: the safe, read-only checks are first;
 the ones that can cut off SSH are last and in a deliberate order.
 
-> **Do these on the test VPS first, not production.** And for anything that restarts sshd, keep a
+> **Do these on a test host first, not production.** And for anything that restarts sshd, keep a
 > **second way in open** the whole time — a second SSH session, Tailscale SSH, or the VPS provider's
 > web console — so a mistake is never a lockout.
 
@@ -24,9 +24,9 @@ These should all happen **without a full page reload** (watch that the page does
 - [ ] **Users**: add / edit / delete a user. → same; the modal closes, row updates, no reload.
 - [ ] **Custom commands**: add / edit / delete a command. → same.
 - [ ] **Remotes**: add / edit / test a remote. → same; the "Test" result shows as a toast.
-- [ ] **Install a game server** from the Game Servers page. → the row appears with a live progress bar, no reload.
+- [ ] **Install a game server** from **Install a Server**. → the row appears on the Dashboard with a live progress bar, no reload.
 - [ ] **Uninstall a game server**. → a styled dialog asks you to **type the server's username**; OK stays disabled until it matches; on confirm the row disappears in place. *(Expected: this is the ONLY place that asks you to type the username.)*
-- [ ] **Delete a remote server**. → a styled dialog asks for **your account password**; a wrong password re-prompts; a right one deletes the card. *(Expected: this is the ONLY place that asks for your password.)*
+- [ ] **Delete a remote server**. → a styled dialog asks for **your account password**; a wrong password re-prompts; a right one deletes the card. *(Expected: this is the ONLY place that asks for your account password; a backup restore asks for the backup's own passphrase, which is different.)*
 - [ ] Any **restart/stop with players online** → the in-app dialog (not the browser's grey `confirm()` box) warns and offers "wait until empty".
 - [ ] Confirm **no browser `confirm()`/`alert()` boxes** appear anywhere — everything is the styled in-app dialog or a toast.
 
@@ -40,11 +40,11 @@ These should all happen **without a full page reload** (watch that the page does
 
 ## 3. fail2ban for the panel login (reversible)
 
-- [ ] On the **panel host** page, find "Brute-force protection for the panel login (fail2ban)". Click **Protect the panel login**.
-  - Expected: it installs fail2ban if missing and the status flips to **Active**.
+- [ ] The panel sets this jail up itself when it starts, on a host with fail2ban installed.
   - Verify on the host: `sudo fail2ban-client status linuxgsm-panel` shows the jail, filter, and log path.
 - [ ] From a throwaway IP (e.g. your phone off wifi), fail the panel login **5 times in 10 min**.
-  - Expected: that IP gets **banned for an hour**; the panel's status line shows "banning 1 IP".
+  - Expected: that IP gets **banned for an hour**; the panel host's page → **Security** tab →
+    **Banned IPs (fail2ban)** lists it.
   - Check: `sudo fail2ban-client status linuxgsm-panel` lists the banned IP.
 - [ ] Undo a test ban: `sudo fail2ban-client set linuxgsm-panel unbanip <IP>`.
 - [ ] Sanity: `data/auth.log` contains lines like `... panel login failed from <ip>`.
@@ -57,7 +57,7 @@ Keep your second SSH session open. Test on a **remote** first, then the panel ho
   - Expected message: SSH now listens on 2222; the **old port stays open** as a fallback.
 - [ ] Verify BOTH work: `ssh -p 2222 user@host` **and** `ssh -p 22 user@host` both connect.
 - [ ] Verify fail2ban followed: `sudo fail2ban-client status sshd` shows the new port in its port list.
-- [ ] Only after both work: close the old port from the **Firewall** page (delete the `22/tcp` rule).
+- [ ] Only after both work: close the old port from the host page's **Network** tab, in the firewall rules (delete the `22/tcp` rule).
 - [ ] Confirm the panel still manages the host (it now connects on 2222 — check any host action works).
 - [ ] Failure path (optional): try a port already in use → it should **revert** and say the old port still works.
 
@@ -97,7 +97,7 @@ The unit suite covers the path checks and the argv; what it cannot cover is a re
   - Expected: it downloads the file that is open, not the last one you clicked.
 - [ ] A file that is gone: download it, delete it on the host, click the link again (browser Back,
   then the icon).
-  - Expected: back on Files & Config with "isn't there any more" — **not** a bare 404 page.
+  - Expected: back on Files & Config with "didn't return that file" — **not** a bare 404 page.
 - [ ] As a user **without** MANAGE_SERVERS, request `/server/<id>/download?path=.ssh/id_rsa` by hand.
   - Expected: bounced to the server page with a permission message; no file.
 - [ ] Drag a **folder with subfolders** (a GMod gamemode, an addon) onto the File Browser card.

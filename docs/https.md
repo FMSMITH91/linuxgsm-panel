@@ -18,7 +18,7 @@ The relevant `data/config.json` settings:
 |---------|---------|
 | `use_https` | Serve HTTPS directly with a built-in self-signed cert |
 | `trust_proxy` | You're behind a reverse proxy — trust its `X-Forwarded-*` headers |
-| `trusted_proxies` | Which peers count as that proxy — default `127.0.0.1` and `::1`; list yours if it is on another machine |
+| `trusted_proxies` | Which peers count as that proxy — default all of loopback (`127.0.0.0/8` and `::1`); list yours if it is on another machine |
 | `trusted_proxy_users` | On loopback, the accounts the proxy may run as — default `www-data`, `nginx`, `http`, `caddy`, `cloudflared` (root and the panel's own account always count) |
 | `bind_host` | `127.0.0.1` when behind a proxy, `0.0.0.0` when facing clients directly |
 | `site_domain` | The name the panel is reached at: the self-signed cert's name, and an origin the live console accepts. It does not turn on `Secure` cookies |
@@ -41,16 +41,20 @@ hand is not managed, so it answers 502 once the panel's scheme changes.
 
 A free tunnel that gives a real trusted HTTPS URL, no inbound port, auto-renewed.
 
+First, in `data/config.json`, set `"bind_host": "127.0.0.1"` and `"trust_proxy": true`, and
+restart the panel: until then it still serves its own HTTPS, and the tunnel's `http://` cannot
+reach it. Then:
+
 ```bash
 # on the panel host
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
-cloudflared tunnel login          # opens a browser to your (free) Cloudflare account
+sudo curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+sudo chmod +x /usr/local/bin/cloudflared
 cloudflared tunnel --url http://localhost:5000
 ```
 
-Then in `data/config.json`: set `"bind_host": "127.0.0.1"` and `"trust_proxy": true`,
-and restart the panel. (For a permanent named tunnel, see Cloudflare's docs.) Run `cloudflared` as
+That is a quick tunnel: no account needed, and it prints a `*.trycloudflare.com` address that
+changes every time it starts. For a fixed address, make a named tunnel on your (free) Cloudflare
+account (`cloudflared tunnel login`, then Cloudflare's docs). Run `cloudflared` as
 root, as the panel's own account, or as an account listed in `"trusted_proxy_users"` — the
 panel believes a loopback proxy's `X-Forwarded-For` only from those, since any local account can
 connect to 127.0.0.1.

@@ -40,5 +40,5 @@ artifact.
 ## Adding a target
 
 Add `fuzz_<name>.py` here (pre-import `ssh_manager`'s heavy deps uninstrumented, then
-`with atheris.instrument_imports(): import ssh_manager`), a `corpus/<name>/` seed or two, and
-`<name>` to the workflow's `matrix.target`.
+`with atheris.instrument_imports(): from panel.ops import ssh_manager`), a `corpus/<name>/` seed
+or two, and `<name>` to the workflow's `matrix.target`.

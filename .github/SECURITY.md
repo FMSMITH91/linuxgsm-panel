@@ -85,8 +85,9 @@ went through first-run setup on an older commit went through that window. On eac
    ran setup. It does record every sign-in with its address: look in Audit Logs for `login` rows by an
    account or from an address you do not recognise.
 
-A superadmin is root on the panel's host (see the next section). If any of these shows someone else,
-treat the host as compromised: rebuild it rather than only deleting the account.
+A superadmin is root on the panel's host (see "Known trust-model limitation" below). If any of
+these shows someone else, treat the host as compromised: rebuild it rather than only deleting the
+account.
 
 ## Updates are signed with the owner's own key
 
@@ -143,7 +144,7 @@ pieces are installed**, and the installer tells you which one it wrote:
 
 | condition | grant |
 |---|---|
-| helper + root-owned `db_maintenance.py` + root-owned installer all present | `ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper`, plus the game-account line and the helper's `Defaults!` line below |
+| helper + root-owned `db_maintenance.py` + root-owned `panel.conf` + root-owned installer all present | `ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper`, plus the game-account line and the helper's `Defaults!` line below |
 | any of them missing | `ALL=(ALL) NOPASSWD:ALL` — unchanged, and the panel falls back to the pre-helper path |
 
 For most of this project's life it was unconditionally the second row, and this document said
@@ -182,7 +183,7 @@ signing key pinned, installing gamedig on a remote from its hash-locked lockfile
 ufw rule by number only while it is still the rule that was checked, a scheduled task's "Run now",
 moving game servers and the local terminal's shell out of the panel's own cgroup, removing an
 uninstalled server's crontab, and the firewall's settings (default policies, on/off, logging, the
-stored rules read while UFW is off) and port blocks** — 120 verbs. (`tests/unit_test.py` asserts
+stored rules read while UFW is off) and port blocks** — 120 verbs. (`tests/unit/part06.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **Where what the helper starts runs (cgroups).** sudo opens no session on Ubuntu (its PAM stack
@@ -191,7 +192,8 @@ has no `pam_systemd`), so everything the helper started used to run inside
 which widens what the helper will run:
 
 - A LinuxGSM action that can leave a server running (`lgsm-command` start, restart, monitor,
-  update, force-update, validate, backup, mods-update, workshop-update) and a scheduled task's
+  update, force-update, validate, backup, mods-update, workshop-update, and Rust's wipe and
+  full-wipe) and a scheduled task's
   `cron-run-now` fork a child that WAITS while root moves it into a new transient scope under the
   system manager
   (`busctl call … StartTransientUnit` with that one pid — a fixed argv) and sets its nice and I/O
@@ -296,7 +298,7 @@ which is correct — their sudoers is the operator's to arrange.
 that build `sudo -u <game user> bash -c '<shell>'` and pass `sudo=False`: the file browser,
 the GMod content mounts, the cron readers, the install flows and the disk-usage probes are all
 the same shape, and all of them failed under the narrow grant exactly as server control did. The
-count in the table below is of `sudo=True` sites and has never included any of these. They work
+count in the table above is of `sudo=True` sites and has never included any of these. They work
 under the narrow grant now through its second line, the bounded right to become an enrolled game
 account (see "The second line is the game accounts" below), not through the unrestricted grant.
 
@@ -331,7 +333,7 @@ a command built from the verb table rather than composed at a call site. Earlier
 them, overstating the remaining work. A test pins the exclusion at exactly those six, so it cannot
 quietly widen and make the number flattering.)
 
-Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
+Separately there are about 45 `sudo -u <gameuser>` sites. Those run as the game user rather than
 root, and they are covered by the narrow grant's second line — `ALL=(%lgsmpanel-games)`, the right
 to become an enrolled game account and no other (see "The second line is the game accounts"
 below) — not by the unrestricted grant. They are not counted in the table, which counts root.
@@ -344,7 +346,10 @@ unchecked, several of them on the dashboard's unattended polls. The model's `@va
 a guard for this: it runs on ASSIGNMENT, and a row read back out of `panel.db` — written before the
 validator existed, edited by hand, or restored from a backup — reaches every builder unchecked.
 `short_name="x; curl …|sh; #"` ran as the panel's account on its own host and as the SSH login on a
-remote.
+remote. The account probe added after that fix (`_account_probe_cmd`) repeated the mistake inside
+quoted `echo` text (GHSA-c49r-gmr2-6qf5, fixed in f68b2c55): `privileged_accounts` now refuses a
+name that fails the same check before any probe is built, and the probe passes each name only as a
+quoted argument.
 
 The rule now:
 
@@ -407,8 +412,9 @@ types rather than in the command names:
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `ssh.socket`, `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). Those are the only services the panel
   ever touches, so a unit-name *pattern* would only buy the ability to control units nobody asked it
-  to. The panel's OWN unit is deliberately not in that list — it is reachable through exactly one
-  verb, `panel-restart`, which takes a bounded delay and nothing else.
+  to. The panel's OWN unit is deliberately not in that list, and no verb takes it as an argument:
+  `panel-restart` restarts it after a bounded delay and takes nothing else, and the database
+  repair, backup restore and self-update jobs stop and start it as fixed steps of their own.
 - The write verb takes a **destination name** and the content on **stdin**. Locally the helper
   does the write itself in Python — the content is never an argument, and the path is looked up,
   so `write-file /etc/shadow` fails on the *name*, not on a filter.
@@ -597,7 +603,7 @@ host deleted during a pass is skipped (a host it is working on at that moment fi
 the delete does nothing on hosts today, it has to work for a host that is already gone or
 unreachable, and the same paths on a host that runs a panel of its own belong to that panel.
 
-**Every one of those is converted, and the grant has narrowed.** On an install where the three
+**Every one of those is converted, and the grant has narrowed.** On an install where the four
 root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two grants, after a
 `Defaults` line for the helper:
 
@@ -622,6 +628,14 @@ itself before any verb runs.
 `systemd-run`, the `tailscale` binary, or `sudo -u root` — each of those runs whatever argv you
 hand it, so permitting any one of them would be `NOPASSWD:ALL` wearing a disguise. Each was a call
 site once; each is a verb now.
+
+**The host terminal's sudo is a separate, opt-in grant.** Installed with `PANEL_TERMINAL_SUDO=1`,
+the installer also writes `/etc/sudoers.d/00-linuxgsm-panel-terminal`:
+`<panel-user> ALL=(ALL) ALL`, which asks for a password every time (`PANEL_TERMINAL_SUDO=0`
+removes it). Its `00-` name sorts it before `linuxgsm-panel`, so the narrow `NOPASSWD` lines above
+stay the last match for the helper and the game accounts. A compromised panel holds no password
+that turns this line into root, but it can read one as it is typed into the terminal it renders,
+which is why it is off unless asked for.
 
 **The second line is the game accounts, and it is a real grant — stated rather than buried.** The
 panel drives those accounts directly at about 45 sites: the file browser reads and writes files as
@@ -668,17 +682,18 @@ packages, cannot read another account's home, and cannot edit the helper or the 
 
 Three conditions bound that claim, and all are enforced rather than asserted:
 
-- **The grant only narrows when all three root-owned pieces landed** — the helper, the
-  root-owned `db_maintenance.py`, and the root-owned installer. A host running new code that
-  has not had `install.sh` re-run as root keeps the wide grant, because it still falls back to
-  `sudo bash -c '<verb rendered as text>'` and narrowing under that would break every
+- **The grant only narrows when all four root-owned pieces landed** — the helper, the root-owned
+  `db_maintenance.py`, the root-owned `panel.conf`, and the root-owned installer. A host running new
+  code that has not had `install.sh` re-run as root keeps the wide grant, because it still falls
+  back to `sudo bash -c '<verb rendered as text>'` and narrowing under that would break every
   privileged action rather than secure anything. The installer prints which grant it wrote.
 
 - **Root no longer executes anything out of the panel's checkout — and no longer *installs* from
   it either.** `PANEL_DIR` is owned by the service user and rewritten by `git pull` on every
   self-update, so a boundary that let root run files from there would have been decorative. The
   offline DB repair and the self-update run root-owned copies placed only by `install.sh`, never
-  by a verb. The CI auto-deploy (`deploy.yml`) follows the same rule on a root install. It used to
+  by a verb. The test host's deploy (`deploy.yml`, started by hand) follows the same rule on a
+  root install. It used to
   refresh `${PANEL_DIR}/install.sh` with `git checkout` as the service user and run that with
   `sudo bash`. It now ships the verified commit's `install.sh` from the runner over SSH and runs
   that copy from a directory root created.
@@ -694,9 +709,9 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   file (on a host with `fs.protected_hardlinks=0`) is not given away. The helper's
   `content-grant-read` skips hard-linked files for the same reason.
 
-  *Which* commit is proved on the runner, not assumed from the trigger. The job's `if` checks the
-  branch by its short name, and GitHub compares strings ignoring case, so any ref whose short name
-  matches main case-insensitively passes it: a pushed tag `main`, a branch `Main`, a tag `MAIN`.
+  *Which* commit is proved on the runner, not assumed from the trigger. The job's `if` compares
+  `github.ref` with `refs/heads/main`, and GitHub compares strings ignoring case, so a branch whose
+  name differs from main only in case (`Main`, `MAIN`) passes it.
   So before it joins the tailnet, the job requires the run's branch name to be exactly `main`,
   fetches main's history from `refs/heads/main`, confirms `refs/remotes/origin/main` exists under
   exactly that name, and requires the commit to be on its first-parent line. That line holds the
@@ -706,7 +721,8 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   merged into it (a "foxtrot" merge) moves the commits main was at before onto that merge's second
   parent, and a re-run deploy of one of them is then refused. It also refuses a commit older than
   root's source floor (below) — e26a644, the first installer that staged from root's own clone —
-  since re-running an old CI run deploys that commit, and its installer runs as root. Only then
+  since dispatching the deploy with an old commit id deploys that commit, and its installer runs
+  as root. Only then
   does it read `install.sh` out of that commit, and it refuses a commit with none or an empty one,
   or one whose installer does not enforce that floor. On the host, `install.sh` checks the pin again
   against its own fetch (a shallow checkout is unshallowed first, so the check sees the history the
@@ -814,12 +830,12 @@ rise, so the boundary cannot quietly erode.
 
 What you can do today:
 
-- **If you only manage remote servers from this panel**, delete
-  `/etc/sudoers.d/linuxgsm-panel`. The panel keeps working; the grant disappears. Local-host
-  management (panel-host OS updates, its firewall, its game-server users) stops working, and so
-  do the panel's own root jobs: **Panel Server → Update** (and the bot's `/update`), restoring a
-  panel backup, and the database repair. Without the in-panel Update, security fixes reach the
-  panel only when you update it by hand, over SSH:
+- **If you only manage remote servers from this panel**, delete `/etc/sudoers.d/linuxgsm-panel`
+  (and `/etc/sudoers.d/00-linuxgsm-panel-terminal`, if present). The panel keeps working; the
+  grant disappears. Local-host management (panel-host OS updates, its firewall, its game-server
+  users) stops working, and so do the panel's own root jobs: **Panel Server → Update** (and the
+  bot's `/update`), restoring a panel backup, and the database repair. Without the in-panel Update,
+  security fixes reach the panel only when you update it by hand, over SSH:
   `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
 - **If you do manage the local host**, treat the panel host as you would any machine
   where a network service can become root: keep it off the public internet, keep 2FA on,
@@ -830,14 +846,16 @@ not affected.
 
 ## This repository's CI secret
 
-The one stored secret the workflows use is `CODACY_PROJECT_TOKEN`, which sends test coverage to
-Codacy. It is a Codacy *repository* API token: it reaches this repository on Codacy and nothing
-else, and it cannot touch the code, GitHub, or any host. It is more than an upload key, though.
-Codacy's documentation lists, for a repository token, uploading coverage and the results of
-client-side analysis tools, and on its v3 API reading the repository's issues, reanalysing commits,
-and changing which analysis tools and patterns run; on the legacy v2 API it reaches any endpoint
-for the repository. So whoever holds it can post coverage of their choosing, or switch off the
-patterns behind the Error-level Codacy gate (`codacy-alerts.yml`) so that it passes.
+The one secret credential the workflows use is `CODACY_PROJECT_TOKEN`, which sends test coverage to
+Codacy. (The test host's deploy also keeps its two Tailscale sign-in values in an environment's
+secrets, but neither is a credential: the login is OIDC, bound to that environment.) It is a Codacy
+*repository* API token: it reaches this repository on Codacy and nothing else, and it cannot touch
+the code, GitHub, or any host. It is more than an upload key, though. Codacy's documentation lists,
+for a repository token, uploading coverage and the results of client-side analysis tools, and on its
+v3 API reading the repository's issues, reanalysing commits, and changing which analysis tools and
+patterns run; on the legacy v2 API it reaches any endpoint for the repository. So whoever holds it
+can post coverage of their choosing, or switch off the patterns behind the Codacy gate on main
+(`codacy-alerts.yml`) so that it passes.
 
 It was a repository secret, which a workflow run on any branch or tag pushed here can read. The
 upload is now `codacy-coverage.yml`: a `workflow_run` job that runs `main`'s copy of that file, in
@@ -846,8 +864,8 @@ request's, no longer holds the token; it hands its report over as an artifact, a
 treats that report as untrusted data (it is never executed, and one declaring a DTD or an entity is
 refused, since the reporter's XML parser resolves entities a file declares). Fork pull requests
 upload nothing, as before. What scopes the token is a repository setting a workflow cannot make:
-the environment's deployment rule (the branch `main` only) and the secret moved into it. The
-header of `codacy-coverage.yml` lists those three steps. Until they are done the token is still a
-repository secret, with the reach described above.
+the environment's deployment rule (the branch `main` only) and the secret moved into it. Both
+are done (the steps are in the header of `codacy-coverage.yml`): the token is no longer a
+repository secret, and only a job running for `main` can read it.
 
 Thank you for helping keep the project and its users safe.
