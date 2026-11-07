@@ -388,7 +388,7 @@ def _uninstall_copy47(tmp):
                   env=dict(os.environ, **env2), stdin=_sp47.DEVNULL, check=False)
     check("uninstall.sh: a root install run without root is pointed at the root-owned copy, not at the "
           "checkout's", r.returncode == 1 and ("sudo bash %s" % copy) in r.stderr, r.stderr[-400:])
-    readme = _read47(_root, "README.md")
+    readme = _read47(_root, "docs", "README.md")
     check("README: the root uninstall runs the root-owned copy",
           "sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh" in readme
           and "sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh" not in readme, "")
@@ -400,9 +400,9 @@ def _lockout_remedy47(tmp):
     out = {k: _bash47("CYAN= NC= YELLOW= PANEL_DIR=/home/lgsmpanel/linuxgsm-panel RUN_AS_ROOT=%d\n" % k + blk).stdout
            for k in (1, 0)}
     check("install.sh: after a ROOT install the lockout remedy is only `sudo linuxgsm-panel-recover` — not the "
-          "checkout's reset-password.sh, which root would run out of a panel-writable tree; a per-user install "
-          "keeps the alternative", "linuxgsm-panel-recover" in out[1] and "reset-password.sh" not in out[1]
-          and "reset-password.sh" in out[0], repr(out))
+          "checkout's recover.sh, which root would run out of a panel-writable tree; a per-user install "
+          "keeps the alternative", "linuxgsm-panel-recover" in out[1] and "recover.sh" not in out[1]
+          and "bash recover.sh reset-password" in out[0], repr(out))
     # recover.sh's own "re-run" line, reached by an account that is neither root nor the service user.
     panel = os.path.join(tmp, "rc-panel")
     os.makedirs(panel, exist_ok=True)
