@@ -253,8 +253,8 @@ _SD_CMPA_ = _read_cmpa_("static", "js", "server_detail.js")
 _VARS_CMPA_ = "".join(m.group(0) + "\n" for m in _re_cmpa_.finditer(r"^var _(?:cmpa|CMPA)\w+ = [^\n]*;", _SD_CMPA_,
                                                                        _re_cmpa_.M))
 _HEADS_CMPA_ = ("function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush(",
-                "function _cmpaHistStep(", "function _cmpaHistKey(", "function cmpaQuickCommand(",
-                "function _cmpaLogShown(")
+                "function _cmpaHistStep(", "function _cmpaHistLeaves(", "function _cmpaHistKey(",
+                "function cmpaQuickCommand(", "function _cmpaLogShown(")
 _FORM_IIFE_CMPA_ = "(function () {\n  var form = document.getElementById('command-form');"
 _PRELUDE_CMPA_ = (
     "global.window = global; global.serverId = 7; global.t = s => s;\n"

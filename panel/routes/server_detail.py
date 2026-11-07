@@ -1723,6 +1723,14 @@ def _cmpa_log_cmd(gs, kind):
             f"[ -n \"$F\" ] || {nofile}; " + _cmpa_tail_sh())
 
 
+def _cmpa_framed(out, rc):
+    """(file name, text between the frame) of a whole reply, or None for one that is not whole."""
+    head, _nl, rest = out.partition("\n")
+    if rc != 0 or not head.startswith("N") or not (rest.startswith("B") and rest.endswith("E")):
+        return None
+    return head[1:], rest[1:-1]
+
+
 def _cmpa_parse_log(out, rc):
     """A log read's reply as {state, file, lines}: state "ok", "missing" or "unreadable".
 
@@ -1733,17 +1741,17 @@ def _cmpa_parse_log(out, rc):
     out = out or ""
     if rc == 0 and out.strip() == _CMPA_NO_FILE:
         return {"state": "missing", "file": "", "lines": []}
-    head, _nl, rest = out.partition("\n")
-    if rc != 0 or not head.startswith("N") or not (rest.startswith("B") and rest.endswith("E")):
+    framed = _cmpa_framed(out, rc)
+    if framed is None:
         return {"state": "unreadable", "file": "", "lines": []}
-    body = rest[1:-1]
+    name, body = framed
     capped = len(body.encode("utf-8", "replace")) >= _CMPA_LOG_BYTES
     if body.endswith("\n"):
         body = body[:-1]
     lines = terminal.render(body).split("\n") if body else []
     if capped and lines:
         lines = lines[1:]     # the byte cap cut the first line partway
-    return {"state": "ok", "file": head[1:], "lines": lines}
+    return {"state": "ok", "file": name, "lines": lines}
 
 
 def _cmpa_register_logs(app):

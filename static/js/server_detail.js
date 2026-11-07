@@ -2427,11 +2427,15 @@ function _cmpaHistStep(dir, current) {
   return _cmpaDraft;
 }
 
+// Whether a keydown is not ours: an IME composing text uses the arrows to pick a candidate, and a
+// modified arrow (Shift to select, and the rest) keeps what the browser does with it.
+function _cmpaHistLeaves(e) {
+  if (e.isComposing || e.keyCode === 229) return true;
+  return !!(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
+}
+
 function _cmpaHistKey(e) {
-  // An IME composing text uses the arrows to pick a candidate: never take them from it.
-  if (e.isComposing || e.keyCode === 229) return;
-  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (_cmpaHistLeaves(e) || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
   var v = _cmpaHistStep(e.key === 'ArrowUp' ? -1 : 1, e.target.value);
   if (v === null) return;
   e.preventDefault();
@@ -2494,7 +2498,12 @@ function _cmpaSetView(kind) {
   document.querySelectorAll('.cmpa-console-only').forEach(function (b) { b.classList.toggle('d-none', toLog); });
   var sel = document.getElementById('cmpa-log-select');
   if (sel && sel.value !== kind) sel.value = kind;
-  if (toLog) { cmpaLoadLog(); return; }
+  if (toLog) cmpaLoadLog();
+  else _cmpaBackToConsole();
+}
+
+// The console again, scrolled where it was left: at the bottom if it was following it.
+function _cmpaBackToConsole() {
   _cmpaLogSeq++;                  // a read still in flight is no longer wanted
   if (_cmpaConsoleTop === null || _cmpaConsoleTop === -1) stickConsole();
   else consoleEl.scrollTop = _cmpaConsoleTop;
