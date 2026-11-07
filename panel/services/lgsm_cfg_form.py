@@ -33,8 +33,8 @@ _CMPC_FILES = {"secrets-instance": "secrets-{name}.cfg", "instance": "{name}.cfg
                "secrets-common": "secrets-common.cfg", "common": "common.cfg", "default": "_default.cfg"}
 # An assignment, as files._CFG_LINE_RE reads one.
 _CMPC_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
-# `Title | https://…`: a heading naming its docs page (both `## ` and `# ` lines use it).
-_CMPC_HEADING_RE = re.compile(r"^(?P<title>[^|]*?)\s*\|\s*(?P<url>https?://\S+)$")
+# `Title | https://…`: a heading naming its docs page (both `## ` and `# ` lines use it). Split on
+# the first "|" in code rather than by one pattern, which could backtrack over the title's spaces.
 _CMPC_URL_RE = re.compile(r"https?://\S+")
 # The only link the form makes: a page of LinuxGSM's own docs. Anything else the comments name stays
 # text. Checked whole, so nothing after the path (a quote, a space) can reach the page's href.
@@ -59,8 +59,11 @@ def is_secret(key):
 
 def _cmpc_heading(body):
     """(title, url) when a comment's text is a `Title | https://…` heading, else None."""
-    m = _CMPC_HEADING_RE.match(body)
-    return (m.group("title")[:_CMPC_HEADING_MAX], m.group("url")) if m and m.group("title") else None
+    title, bar, url = body.partition("|")
+    title, url = title.rstrip(), url.lstrip()
+    if not (bar and title and _CMPC_URL_RE.fullmatch(url)):
+        return None
+    return title[:_CMPC_HEADING_MAX], url
 
 
 def _cmpc_comment(st, s):
