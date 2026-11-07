@@ -1681,12 +1681,17 @@ _CMPA_NO_FILE = "CMPANOFILE"
 _CMPA_ARCHIVE_GLOBS = "*.gz|*.zip|*.bz2|*.xz|*.zst|*.7z|*.tar"
 
 
+def _cmpa_quick_for(engine):
+    """The commands for one console dialect (game_engine's family name, not a game_type)."""
+    return _CMPA_QUICK.get(engine, ())
+
+
 def _cmpa_quick_commands(gs):
     """The quick-command chips for this server's game: [(command, fills_box)], [] for an unknown game."""
     if (gs.game_type or "").lower() == "mcb":
         cmds = _CMPA_QUICK_BEDROCK
     else:
-        cmds = _CMPA_QUICK.get(game_engine(gs.game_type), ())
+        cmds = _cmpa_quick_for(game_engine(gs.game_type))
     return [(c.strip(), c.endswith(" ")) for c in cmds]
 
 

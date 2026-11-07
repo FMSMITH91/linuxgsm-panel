@@ -2391,7 +2391,7 @@ var _cmpaBrowse = null;     // the list being stepped through, taken when Up is 
 var _cmpaHistIdx = -1;      // where in it the box is; -1 = not browsing
 var _cmpaDraft = '';        // what was in the box before browsing began
 
-function _cmpaHistStoreKey() { return 'sd.cmdHistory.' + serverId; }
+function _cmpaHistStoreKey() { return 'sd.cmdHistory.' + serverId; }   // i18n-ignore: a storage key
 
 function _cmpaHistLoad() {
   try {
