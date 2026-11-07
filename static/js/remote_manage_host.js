@@ -370,8 +370,11 @@ function renderUpdate(d){
     // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
     // verified", not "couldn't reach the update source", not "docs, tests or tooling". Each was
     // added back after the rule was set; the server's reasons stay in the API response.
-    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(d.current_sha
-        ? tfHtml('You\'re up to date ({sha}).', {sha: d.current_sha}) : escapeHtml(t('You\'re up to date.')))+'</span>';  // nosemgrep
+    // The release this panel runs is named by its date (current_version, YYYY.M.D) and its commit.
+    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(d.current_sha && d.current_version
+        ? tfHtml('You\'re up to date: release {version} ({sha}).', {version: d.current_version, sha: d.current_sha})
+        : d.current_sha ? tfHtml('You\'re up to date ({sha}).', {sha: d.current_sha})
+        : escapeHtml(t('You\'re up to date.')))+'</span>';  // nosemgrep
     btn.style.display='none'; changes.style.display='none';
   }
 }
