@@ -121,7 +121,7 @@ def _api(path):
 
 
 def _git(args):
-    """git's stdout for `args` (stripped), or Full when it did not succeed."""
+    """Return git's stdout for `args` (stripped), or Full when it did not succeed."""
     try:
         res = subprocess.run(["git"] + args, capture_output=True, text=True,  # nosec B603 B607
                              timeout=300, check=False)
