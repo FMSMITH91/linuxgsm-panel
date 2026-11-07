@@ -1992,6 +1992,8 @@ _r16d_wrap_ts_handles()
 # app._attach_debug_logging against a scratch DATA_DIR; imports part01.
 # part147 (the server page's LinuxGSM line: hosts.lgsm_versions in one read, latest_release off the
 # caller's clock, /api/server/<id>/version's "lgsm") drives part12's app; imports part01, 05 and 12.
+# part150 (the app shell: the public manifest, the account's colour scheme drawn into <html>, "What's
+# new" from the CHANGELOG entries an account has not seen) drives part12's app; imports part01 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2006,7 +2008,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part114", "part115", "part116", "part117", "part118", "part119", "part120", "part121", "part122",
           "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
-          "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part15")
+          "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part150", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

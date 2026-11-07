@@ -612,7 +612,7 @@
         <p class="small text-secondary mb-2"><span>Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</span>
           <a href="#fw-blocks">Blocked IPs</a></p>
         <p class="small text-secondary mb-2">Auto-block firewalls every IP at or above the threshold, and releases each one when its 7-day count drops back below. Because that count is cumulative, a slow attacker who spaces attempts out to dodge fail2ban's short window cannot escape it.</p>
-        <p class="small mb-2" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
+        <p class="small mb-2" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:var(--text-muted);">
           <i class="bi bi-shield-check text-success"></i>
           Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet,
           there's nothing here for fail2ban to catch, so you can leave auto-block off. It only earns its

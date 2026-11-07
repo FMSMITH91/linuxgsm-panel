@@ -5713,8 +5713,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # firewall (fw-more): /api/remote/<id>/firewall/settings (UFW's default policies, on/off and logging,
 # read and changed under the lock-out checks) and /firewall/block-port (deny or reject a port or a
 # range, which no verb could express before).
-check("register_routes: every one of the 230 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 230,
+# 233, was 230: three genuinely new views (panel/routes/app_shell.py) — /manifest.webmanifest (the
+# public app manifest: the site title and icon URLs), /account/theme (the account's own colour
+# scheme) and /api/account/whats-new/seen (recording that the account read "What's new").
+check("register_routes: every one of the 233 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 233,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

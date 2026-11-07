@@ -518,7 +518,7 @@ function showBootstrap(remoteId, name) {
         + '<div class="progress" style="height:18px;"><div id="bootstrap-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div></div>'
         + '<div id="bootstrap-elapsed" class="text-secondary" style="font-size:.7rem;margin-top:4px;"></div>'
       + '</div>'
-    + '<pre id="bootstrap-log" class="small mt-2" style="max-height:260px;overflow-y:auto;font-size:.7rem;display:none;background:#0d1117;padding:8px;border-radius:4px;"></pre>';
+    + '<pre id="bootstrap-log" class="small mt-2" style="max-height:260px;overflow-y:auto;font-size:.7rem;display:none;background:var(--bg);padding:8px;border-radius:4px;"></pre>';
 
   showModal(tfHtml('Prepare & Secure: {name}', {name: name}), html);   // name from a data-attribute, escaped by tfHtml
 }

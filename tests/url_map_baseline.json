@@ -765,6 +765,15 @@
       "GET"
     ]
   },
+  "GET /manifest.webmanifest": {
+    "endpoint": "web_manifest",
+    "guards": [
+      "view:web_manifest"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /notifications": {
     "endpoint": "notifications_settings",
     "guards": [
@@ -1164,6 +1173,16 @@
       "POST"
     ]
   },
+  "POST /account/theme": {
+    "endpoint": "account_set_theme",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_set_theme"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/account/sessions/<int:sess_id>/revoke": {
     "endpoint": "api_account_session_revoke",
     "guards": [
@@ -1189,6 +1208,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:api_account_ui_order_reset"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/account/whats-new/seen": {
+    "endpoint": "account_whats_new_seen",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_whats_new_seen"
     ],
     "methods": [
       "POST"

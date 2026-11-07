@@ -1,0 +1,45 @@
+{# "What's new": the CHANGELOG entries added since this account last dismissed it (see
+   panel/core/whats_new.py). A native <dialog>, opened by app_shell.js: it sits in the top layer,
+   so it moves nothing on the page (no layout shift), and Esc, the close button and "Got it" all
+   close it the same way — app_shell.js records the visit on `close`, whichever it was.
+   The entries are the changelog's own English, shown as text; only the chrome around them is
+   translated. Five show; the rest fold under "More changes" so a phone is not a wall of text. #}
+{% macro wn_cat(c) -%}
+  {%- if c == 'Added' %}Added{% elif c == 'Changed' %}Changed{% elif c == 'Fixed' %}Fixed
+  {%- elif c == 'Security' %}Security{% elif c == 'Removed' %}Removed
+  {%- else %}<span data-no-i18n>{{ c }}</span>{% endif -%}
+{%- endmacro %}
+{% macro wn_items(items) %}
+  <ul class="wn-list">
+    {% for e in items %}
+    <li>
+      <details>
+        <summary><span class="badge wn-cat">{{ wn_cat(e.category) }}</span> <span data-no-i18n>{{ e.title }}</span></summary>
+        {% if e.body %}<p class="wn-body" data-no-i18n>{{ e.body }}</p>{% endif %}
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+{% endmacro %}
+<dialog id="whats-new" class="wn-dialog" aria-labelledby="wn-title"
+        data-seen-url="{{ url_for('account_whats_new_seen') }}">
+  <div class="wn-head">
+    <h2 id="wn-title" class="wn-title"><i class="bi bi-stars" aria-hidden="true"></i> <span>What's new</span></h2>
+    <form method="dialog"><button type="submit" class="btn-close" aria-label="Close"></button></form>
+  </div>
+  <p class="wn-lead">The panel was updated. This is what changed since you last looked.</p>
+  {{ wn_items(whats_new[:5]) }}
+  {% if whats_new|length > 5 %}
+  <details class="wn-more">
+    <summary><span>More changes</span> <span data-no-i18n>({{ whats_new|length - 5 + whats_new_more }})</span></summary>
+    {{ wn_items(whats_new[5:]) }}
+    {% if whats_new_more %}<p class="wn-body">The rest are in the full changelog.</p>{% endif %}
+  </details>
+  {% endif %}
+  <div class="wn-foot">
+    {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant #}
+    {% if panel_repo_url %}<a href="{{ panel_repo_url }}/blob/main/docs/CHANGELOG.md" target="_blank"
+       rel="noopener noreferrer" class="small">Full changelog</a>{% endif %}
+    <form method="dialog" class="ms-auto"><button type="submit" class="btn btn-primary btn-sm">Got it</button></form>
+  </div>
+</dialog>

@@ -614,7 +614,7 @@
 
     .nav-tabs .nav-link.active,
     .nav-tabs .nav-item.show .nav-link {
-      color: var(--accent-hover);
+      color: var(--accent-ink, var(--accent-hover));
       background: transparent;
       border: 0; border-bottom: 2px solid var(--accent);
     }
@@ -964,10 +964,10 @@
 
     /* ── TYPOGRAPHY ── */
     a {
-      color: var(--accent);
+      color: var(--accent-ink, var(--accent));
       text-decoration: none;
     }
-    a:hover { color: var(--accent-hover); }
+    a:hover { color: var(--accent-ink-hover, var(--accent-hover)); }
 
     hr {
       border-color: var(--border);
@@ -1792,4 +1792,170 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     margin-bottom:.15rem;
     font-size:.85rem;
   }
+}
+
+/* ── LIGHT THEME ──────────────────────────────────────────────────────────────────────────────
+   Account → Appearance: System (the default, following the device), Dark or Light. base.html
+   puts data-bs-theme on <html> before the first paint, so Bootstrap's own components switch with
+   it and these variables recolour the panel's. Every text colour here clears WCAG AA (4.5:1) on
+   the card white and on --bg-elevated. The console and the host terminal stay dark in both
+   schemes: their ANSI palettes are tuned for a near-black ground (see ANSI COLOUR above). */
+[data-bs-theme="light"] {
+  --bg: #f3f5f8;
+  --bg-card: #fff;
+  --bg-elevated: #eef1f5;
+  --border: #d5dbe3;
+  --text: #1f2937;
+  --text-muted: #4b5563;
+  --text-heading: #111827;
+
+  /* The accent as TEXT (links, the active tab). The accent itself (#10b981, or the install's
+     own) is a fill colour — 2.5:1 on white as text — so text takes it half-mixed with black,
+     which keeps the hue and clears AA for any accent light enough to carry dark button text. */
+  --accent-ink: color-mix(in srgb, var(--accent) 50%, #000);
+  --accent-ink-hover: color-mix(in srgb, var(--accent) 40%, #000);
+  --warning-ink: #92400e;
+
+  /* Bootstrap's own link blue (nav pills, link buttons) is 4.1:1 on the light page. */
+  --bs-link-color: #1d4ed8;
+  --bs-link-color-rgb: 29, 78, 216;
+  --bs-link-hover-color: #1e3a8a;
+  --bs-link-hover-color-rgb: 30, 58, 138;
+}
+
+/* The dark scheme lifted Bootstrap's semantic colours to read on near-black; on white they need
+   the darker end instead. */
+[data-bs-theme="light"] .text-secondary { color: #4b5563 !important; }
+[data-bs-theme="light"] .text-success { color: #047857 !important; }
+[data-bs-theme="light"] .text-danger { color: #b91c1c !important; }
+[data-bs-theme="light"] .text-warning { color: #92400e !important; }
+[data-bs-theme="light"] .text-info { color: #0e7490 !important; }
+[data-bs-theme="light"] .text-primary { color: #1d4ed8 !important; }
+[data-bs-theme="light"] .text-light { color: var(--text) !important; }
+
+/* ...except inside the console, which stays dark: its placeholder keeps the dark scheme's grey. */
+[data-bs-theme="light"] .console-output .text-secondary { color: #9ca3af !important; }
+
+[data-bs-theme="light"] .btn-outline-success { color: #047857; border-color: #047857; }
+[data-bs-theme="light"] .btn-outline-danger { color: #b91c1c; border-color: #b91c1c; }
+[data-bs-theme="light"] .btn-outline-warning { color: #92400e; border-color: #b45309; }
+[data-bs-theme="light"] .btn-outline-primary { color: #1d4ed8; border-color: #1d4ed8; }
+[data-bs-theme="light"] .btn-outline-info { color: #0e7490; border-color: #0e7490; }
+
+[data-bs-theme="light"] .btn-outline-success:hover,
+[data-bs-theme="light"] .btn-outline-danger:hover,
+[data-bs-theme="light"] .btn-outline-warning:hover,
+[data-bs-theme="light"] .btn-outline-primary:hover { color: #fff; }
+[data-bs-theme="light"] .btn-outline-secondary:hover { border-color: #9aa3ae; }
+
+/* A block that asked for a dark panel (bg-dark) on a light page: its text is the page's dark
+   text, so the panel has to be a light one. Badges keep bg-dark — their text is white. */
+[data-bs-theme="light"] .bg-dark:not(.badge) { background-color: var(--bg-elevated) !important; }
+
+/* The flash close button is drawn white for the dark scheme. */
+[data-bs-theme="light"] .btn-close-white { filter: none; }
+
+[data-bs-theme="light"] .form-control,
+[data-bs-theme="light"] .form-select {
+  border-color: #c3cad4;
+  background-color: #fff;
+}
+[data-bs-theme="light"] .alert { box-shadow: 0 4px 16px rgb(0 0 0 / 12%); }
+
+/* The stat tiles and resource bars were drawn in fixed dark greys. */
+[data-bs-theme="light"] .stat-tile,
+[data-bs-theme="light"] .connect-pill,
+[data-bs-theme="light"] .res-tile { background: var(--bg-elevated); }
+
+[data-bs-theme="light"] .stat-label,
+[data-bs-theme="light"] .stat-sub,
+[data-bs-theme="light"] .core-label { color: var(--text-muted); }
+[data-bs-theme="light"] .core-val { color: var(--text); }
+
+[data-bs-theme="light"] .core-track,
+[data-bs-theme="light"] .live-res .progress {
+  background: rgb(0 0 0 / 10%);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 15%);
+}
+[data-bs-theme="light"] .install-progress-inline { border-color: var(--border); }
+[data-bs-theme="light"] .ip-track { background: rgb(0 0 0 / 10%); }
+[data-bs-theme="light"] .sidebar-nav a.active { box-shadow: inset 2px 0 0 var(--accent-ink); }
+
+/* ── WHAT'S NEW (templates/_whats_new.html) ── a native <dialog>, in the top layer. */
+.wn-dialog {
+  width: min(560px, calc(100vw - 2rem));
+  max-height: min(80vh, 720px);
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+  overflow-y: auto;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 45%);
+}
+.wn-dialog::backdrop { background: rgb(0 0 0 / 60%); }
+
+.wn-head {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.wn-head form { margin-left: auto; }
+
+.wn-title {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+.wn-lead {
+  margin: .35rem 0 .6rem;
+  font-size: .85rem;
+  color: var(--text-muted);
+}
+
+.wn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wn-list > li { border-top: 1px solid var(--border); }
+
+.wn-list summary,
+.wn-more > summary {
+  padding: .5rem 0;
+  cursor: pointer;
+  font-size: .88rem;
+}
+.wn-list summary { color: var(--text-heading); }
+
+.wn-more > summary {
+  border-top: 1px solid var(--border);
+  color: var(--accent-ink, var(--accent));
+}
+
+.wn-cat {
+  margin-right: .35rem;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.wn-body {
+  margin: 0 0 .6rem;
+  font-size: .82rem;
+  color: var(--text);
+}
+
+.wn-foot {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-top: .75rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--border);
 }

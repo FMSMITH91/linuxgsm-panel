@@ -1786,10 +1786,10 @@ function initChart() {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { intersect: false, mode: 'index' },
       scales: {
-        y: { min: 0, max: 100, ticks: { color: '#8b98a5', maxTicksLimit: 5 }, grid: { color: 'rgba(255,255,255,.05)' } },
-        x: { ticks: { color: '#8b98a5', maxTicksLimit: 6, maxRotation: 0 }, grid: { display: false } }
+        y: { min: 0, max: 100, ticks: { color:_cmpbInk().tick, maxTicksLimit: 5 }, grid: { color:_cmpbInk().grid } },
+        x: { ticks: { color:_cmpbInk().tick, maxTicksLimit: 6, maxRotation: 0 }, grid: { display: false } }
       },
-      plugins: { legend: { labels: { color: '#c9d1d9', boxWidth: 12, boxHeight: 12 } } }
+      plugins: { legend: { labels: { color:_cmpbInk().legend, boxWidth: 12, boxHeight: 12 } } }
     }
   });
 }
@@ -1888,11 +1888,20 @@ function _pushStatsPoint(m) {
 
 var _histRange = '24h';
 
+// Chart text and grid in the page's colour scheme: the dark scheme's grey ticks are 2.9:1 on the
+// light scheme's white card. A declaration, so the module-scope _histX below can call it.
+function _cmpbInk(){
+  var de = document.documentElement;
+  var light = !!(de && de.getAttribute && de.getAttribute('data-bs-theme') === 'light');
+  return light ? {tick: '#4b5563', grid: 'rgba(0,0,0,.08)', legend: '#1f2937'}
+               : {tick: '#8b98a5', grid: 'rgba(255,255,255,.05)', legend: '#c9d1d9'};
+}
+
 var _histCharts = {};
 
 var _histTimes = {};
 
-var _histX = { ticks:{color:'#8b98a5', maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
+var _histX = { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
 
 function _histXScale(id){
   var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
@@ -1907,7 +1916,7 @@ function _histXScale(id){
         prev = d;
       });
     },
-    ticks:{ color:'#8b98a5', maxTicksLimit:6, maxRotation:0, autoSkip:true,
+    ticks:{ color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0, autoSkip:true,
       callback: function(value){ var t=(_histTimes[id]||[])[value]; return t ? [fmtT(t), fmtD(t)] : ''; } } };
 }
 
@@ -1931,7 +1940,7 @@ function _histChart(id, labels, datasets, yScales, xScale){
     type:'line', data:{ labels:labels, datasets:datasets },
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{intersect:false, mode:'index'}, scales:scales,
-      plugins:{ legend:{ labels:{color:'#c9d1d9', boxWidth:12, boxHeight:12} } } }
+      plugins:{ legend:{ labels:{color:_cmpbInk().legend, boxWidth:12, boxHeight:12} } } }
   });
 }
 
@@ -1965,15 +1974,15 @@ window.loadHistory = function(){
       _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
       _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
       var _xs = function(id){ return _histRange==='7d' ? _histX : _histXScale(id); };
-      var pctY = { y:{ min:0, max:100, ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} } };
+      var pctY = { y:{ min:0, max:100, ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} } };
       _histChart('hist-players', sL,
         [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
-        { y:{ min:0, ticks:{color:'#8b98a5', maxTicksLimit:5, precision:0}, grid:{color:'rgba(255,255,255,.05)'} } }, _xs('hist-players'));
+        { y:{ min:0, ticks:{color:_cmpbInk().tick, maxTicksLimit:5, precision:0}, grid:{color:_cmpbInk().grid} } }, _xs('hist-players'));
       _histChart('hist-server', sL, [
         Object.assign(_ds('CPU %', s.map(function(p){return p.cpu;}), '#3fb950', true), {yAxisID:'y'}),
         Object.assign(_ds('RAM MB', s.map(function(p){return p.ram;}), '#d29922', false), {yAxisID:'y1'})
-      ], { y:{ min:0, max:100, position:'left', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} },
-           y1:{ min:0, position:'right', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{display:false} } }, _xs('hist-server'));
+      ], { y:{ min:0, max:100, position:'left', ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} },
+           y1:{ min:0, position:'right', ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{display:false} } }, _xs('hist-server'));
       _histChart('hist-host', hL, [
         _ds('CPU %', h.map(function(p){return p.cpu;}), '#58a6ff', false),
         _ds('RAM %', h.map(function(p){return p.ram;}), '#3fb950', false),
