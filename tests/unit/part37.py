@@ -75,6 +75,8 @@ _HTTP_REVIEWED37 = {
     ("panel/services/notifications.py", "_connect", "websocket.create_connection"),
     ("panel/ops/system_ops.py", "_ci_fetch_page", "urlopen"),
     ("panel/services/lgsm_data.py", "_download", "urlopen"),
+    ("panel/services/game_icons.py", "_cmpd_http_get", "build_opener"),
+    ("panel/services/game_icons.py", "_cmpd_http_get", "opener.open"),
 }
 
 

@@ -1,0 +1,11 @@
+{
+  "Passwords, tokens and keys are hidden, and can't be changed here.": "Les mots de passe, jetons et clés sont masqués et ne peuvent pas être modifiés ici.",
+  "Find a setting": "Rechercher un paramètre",
+  "The badge names the file each value comes from.": "Le badge indique le fichier d'où vient chaque valeur.",
+  "No setting matches.": "Aucun paramètre ne correspond.",
+  "LinuxGSM puts its own copy of this file back every time it runs, so changes saved here would be lost. Set them in the server's own config instead.": "LinuxGSM remet sa propre copie de ce fichier à chaque exécution, donc les modifications enregistrées ici seraient perdues. Définissez-les plutôt dans la configuration propre du serveur.",
+  "Open the Config tab": "Ouvrir l'onglet Config",
+  "Docs": "Documentation",
+  "LinuxGSM's _default.cfg for this server could not be found, so its settings can't be listed here. LinuxGSM puts it back the next time it runs a command; the Raw tab still works.": "Le _default.cfg de LinuxGSM de ce serveur est introuvable, donc ses paramètres ne peuvent pas être listés ici. LinuxGSM le remet à sa prochaine commande ; l'onglet Raw fonctionne toujours.",
+  "LinuxGSM puts its own copy of _default.cfg back every time it runs, so a change saved here would be lost. Set it in the server's own config on the Config tab instead — nothing has been changed.": "LinuxGSM remet sa propre copie de _default.cfg à chaque exécution, donc une modification enregistrée ici serait perdue. Définissez-la plutôt dans la configuration propre du serveur, dans l'onglet Config — rien n'a été modifié."
+}

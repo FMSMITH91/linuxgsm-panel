@@ -55,6 +55,9 @@ def register(app):
     _register_2fa_and_profile(app)
     _register_sign_out_everywhere(app)
     _register_session_list(app)
+    # The manifest, colour scheme and "What's new" (app.py is at its size limit).
+    from panel.routes import app_shell
+    app_shell.register(app)
 
 
 def _register_sign_in(app):

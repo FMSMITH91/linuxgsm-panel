@@ -7,6 +7,15 @@
   .fb-key { font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: .72rem; color: var(--text-muted); }
   .cfg-acc-header { background: var(--bg-elevated); color: var(--text-heading); cursor: pointer; border: none; }
   .cfg-acc-header:hover { background: var(--border); }
+  /* The settings form (cmpc): LinuxGSM's help under each field, its headings, and a Save that
+     stays in reach on a long section. The help keeps LinuxGSM's own line breaks and tabs. */
+  .cmpc-help { font-size: .66rem; color: var(--text-muted); white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; margin-top: .1rem; }
+  .cmpc-help summary { cursor: pointer; }
+  /* Closed, a long first line (CS:GO's game-mode table) is one line with an ellipsis, not four. */
+  .cmpc-help:not([open]) > summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmpc-sub { font-size: .72rem; font-weight: 600; color: var(--text-heading); border-bottom: 1px solid var(--border); padding-top: .25rem; }
+  .cmpc-docs { font-size: .62rem; white-space: nowrap; text-decoration: none; }
+  .cmpc-savebar { position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding: .4rem 0; border-top: 1px solid var(--border); }
   .fb-panel { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   /* The drop target is the whole card, not just the file list — see the drop wiring in
      server_files.js for why a small target was the actual "drag and drop is broken" bug. */
@@ -214,10 +223,20 @@
       </div>
       {% endif %}
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>
-      <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit">
+      <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit" data-cmpc-inst="{{ server.lgsm_name }}.cfg">
+        {# Shown by loadConfig when the read kept this server's passwords and tokens from the viewer
+           (lgsm_cfg_form.form_view). #}
+        <div id="cmpc-masked" class="alert alert-secondary small py-1 px-2 mb-2" role="note" style="display:none;">Passwords, tokens and keys are hidden, and can't be changed here.</div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <input type="search" id="cmpc-filter" class="form-control form-control-sm" style="max-width:22rem;" placeholder="Find a setting" aria-label="Find a setting" autocomplete="off">
+          <span class="small text-secondary">The badge names the file each value comes from.</span>
+        </div>
+        <div id="cmpc-filter-none" class="text-secondary small mb-2" style="display:none;">No setting matches.</div>
         <div id="cfg-groups"></div>
-        <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-save"></i> Save settings</button>
-        <span id="cfg-save-msg" class="small ms-2"></span>
+        <div class="cmpc-savebar">
+          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-save"></i> Save settings</button>
+          <span id="cfg-save-msg" class="small ms-2"></span>
+        </div>
       </form>
     </div>
     <!-- Game config file -->
@@ -317,6 +336,13 @@
               <button class="btn btn-primary btn-sm" data-action="saveFile"><i class="bi bi-save"></i> Save</button>
               <button class="btn btn-outline-secondary btn-sm" data-action="closeEditor" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>
+          </div>
+          {# An instance's _default.cfg: LinuxGSM puts its own copy back every time it runs, so a save
+             there is refused (files.CMPC_DEFAULT_CFG_REFUSED). Shown by openFile for that file. #}
+          <div id="cmpc-default-warn" class="alert alert-warning small py-1 px-2 mb-1" role="note" style="display:none;">
+            <i class="bi bi-exclamation-triangle"></i>
+            <span>LinuxGSM puts its own copy of this file back every time it runs, so changes saved here would be lost. Set them in the server's own config instead.</span>
+            <a href="#config" class="alert-link">Open the Config tab</a>
           </div>
           {# Gutter + textarea share one scroll box. wrap="off" is what makes the numbers line up:
              with soft wrap a single logical line can occupy several visual rows and every number
@@ -475,6 +501,60 @@
   </div>
 </div>
 
+{# The scheduled wipe, for the games whose LinuxGSM script has wipe/full-wipe (Rust). The panel runs
+   it (panel/routes/wipe_schedule.py): a backup first, and no wipe if that backup failed. The form
+   is rendered whole, and the script only fills its values, so nothing moves when it loads. #}
+{% if wipe_supported(server.game_type) %}
+<div class="card mt-3" id="wipe-card" data-sfsub="schedule" style="display:none;">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-eraser-fill"></i> Scheduled wipe <span class="badge bg-danger">Destructive</span></span>
+    <span class="text-secondary" style="font-size:.66rem;" id="wipe-state">Off</span>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">A map wipe deletes the map and saves and keeps blueprints. A full wipe also deletes blueprints and player data (not Rust+ pairing). The panel takes a LinuxGSM backup first and does not wipe if that backup fails.</p>
+    <form id="wipe-form" class="row g-2 align-items-end" data-action="saveWipeSchedule" data-args='["@event"]' data-on="submit">
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-kind">Wipe</label>
+        <select id="wipe-kind" class="form-select form-select-sm">
+          <option value="map">Map wipe</option>
+          <option value="full">Full wipe</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-preset">When</label>
+        <select id="wipe-preset" class="form-select form-select-sm" data-action="wipePresetChanged" data-on="change">
+          <option value="first-thursday">First Thursday of the month</option>
+          <option value="weekly-thursday">Every Thursday</option>
+          <option value="custom">Custom (cron)</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2" id="wipe-at-col">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-at">Time (your time)</label>
+        <input type="time" id="wipe-at" class="form-control form-control-sm" value="19:00">
+      </div>
+      <div class="col-12 col-md-3" id="wipe-cron-col" hidden>
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-cron">Cron (your time)</label>
+        <input type="text" id="wipe-cron" class="form-control form-control-sm font-monospace" placeholder="0 19 * * 4" spellcheck="false" data-no-i18n>
+      </div>
+      <div class="col-12 col-md-2 d-flex gap-2">
+        <button type="submit" class="btn btn-danger btn-sm flex-grow-1"><i class="bi bi-calendar-check"></i> Save</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="wipe-off" data-action="turnOffWipeSchedule" hidden>Turn off</button>
+      </div>
+      <div class="col-12">
+        <div class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" id="wipe-wait" checked>
+          <label class="form-check-label small" for="wipe-wait">Wait until the server is empty (up to 12 hours)</label>
+        </div>
+      </div>
+    </form>
+    <div class="small mt-2 text-secondary" id="wipe-next-row" hidden><span>Next wipe:</span> <span id="wipe-next" data-no-i18n></span></div>
+    <div class="small mt-1" id="wipe-last-row" hidden><span>Last run:</span> <span id="wipe-last" data-no-i18n></span></div>
+    <div class="small mt-1 text-warning" id="wipe-wait-row" hidden><span>Waiting:</span> <span id="wipe-wait-why" data-no-i18n></span></div>
+    <span id="wipe-msg" class="small"></span>
+  </div>
+</div>
+{% endif %}
+
 <!-- Alerts & notifications -->
 <div class="card" id="alerts-card" data-sfsub="alerts" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -531,4 +611,5 @@ var SERVER_NAME = {{ server.name|tojson }};   // the shared control bar names th
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
+{% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}

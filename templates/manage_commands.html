@@ -153,7 +153,7 @@
     </div>
   </div>
   <div class="collapse" id="edit-cmd-{{ cmd.id }}">
-    <div class="card-body border-top" style="border-color: #30363d !important;">
+    <div class="card-body border-top" style="border-color: var(--border) !important;">
       <form method="POST" action="{{ url_for('edit_command', cmd_id=cmd.id) }}"
             class="ajax-form" data-ajax-refresh="#commands-list" data-ajax-reset="off">
         {{ command_fields(cmd, 'e' ~ cmd.id) }}

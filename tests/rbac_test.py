@@ -4063,6 +4063,7 @@ _MUT_NO_PERM_OK = {
     "account_2fa_disable", "account_revoke_sessions", "account_api_token_generate",
     "account_api_token_revoke", "api_account_ui_order", "logout", "api_account_session_revoke",
     "api_account_ui_order_reset", "account_dismiss_otp_nag",
+    "account_set_theme", "account_whats_new_seen",
     # The viewer's own UI language. POST because the PROFILE write is a stored state change and
     # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
     # pre-login (the switcher is on the login page), so there is no permission to require.
@@ -4205,6 +4206,8 @@ _NO_AUDIT_OK = {
     "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)
     "api_tailscale_check_peer",      # connectivity probe; changes nothing
     "set_language",                  # the viewer's own UI language; usable pre-login
+    "account_set_theme",             # the viewer's own colour scheme — a UI preference
+    "account_whats_new_seen",        # the viewer closed "What's new"; dismisses a dialog
     # SSH reachability probe. It records is_online / last_seen, and pins the key it met on a host
     # with no pin yet, exactly as that host's next connection from anywhere in the panel would
     # (_persist_host_key), and none of those write a row either.

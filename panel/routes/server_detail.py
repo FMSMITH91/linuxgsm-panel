@@ -28,7 +28,9 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window
 from panel.services import lgsm_players as _lgp
 import concurrent.futures
 import functools
+import posixpath
 import re
+import shlex
 import threading
 from panel.core import i18n
 from sqlalchemy.exc import (SQLAlchemyError)
@@ -897,6 +899,7 @@ def register(app):
     _register_when_empty(app)
     _register_schedules(app)
     _register_commands(app)
+    _cmpa_register_logs(app)
     # Published on `app` because the module-level Telegram and Discord command bots drive a
     # start/stop/restart through this exact function, rather than a copy of its logic. It used to
     # be assigned at the end of register_routes(); now the module that owns it does the publishing,
@@ -992,6 +995,7 @@ def _register_detail_page(app):
                                # just be bounced by it.
                                console_log_rel="log/console/%s-console.log" % gs.lgsm_name,
                                can_download_log=_can_manage_files(),
+                               quick_commands=_cmpa_quick_commands(gs),
                                cron_restart_pending=_cron_restart_pending.get(gs.id, False))
 
 
@@ -1655,3 +1659,134 @@ def _register_commands(app):
             return redirect(url_for("server_detail", server_id=server_id))
         flash(i18n.tr("Command sent: {command}", command=cmd_text), "success")
         return redirect(url_for("server_detail", server_id=server_id))
+
+
+# ── Quick commands and LinuxGSM's other logs (the script log, the game's own log) ─────────────────
+# A few one-tap commands per console dialect, shown under the command box to anyone who may send
+# commands at all: the send goes through /api/command, which checks SEND_COMMAND itself. A command
+# ending in a space takes an argument, so the chip puts it in the box rather than sending it.
+_CMPA_QUICK = {
+    "valve": ("status", "say ", "changelevel "),
+    "idtech3": ("status", "say ", "map "),
+    "minecraft": ("list", "say ", "save-all"),
+}
+# Bedrock's console has no save-all (its save is `save hold`/`save resume`, a two-step backup aid).
+_CMPA_QUICK_BEDROCK = ("list", "say ")
+
+# How much of a log one read returns: lines, then bytes, so one enormous line cannot size the reply.
+_CMPA_LOG_LINES = 300
+_CMPA_LOG_BYTES = 256 * 1024
+# The reply when the log is not there: a positive token, so an empty reply is never read as "missing".
+_CMPA_NO_FILE = "CMPANOFILE"
+# Rotated archives in the game's log directory: not text, and never the newest log being written.
+_CMPA_ARCHIVE_GLOBS = "*.gz|*.zip|*.bz2|*.xz|*.zst|*.7z|*.tar"
+
+
+def _cmpa_quick_for(engine):
+    """The commands for one console dialect (game_engine's family name, not a game_type)."""
+    return _CMPA_QUICK.get(engine, ())
+
+
+def _cmpa_quick_commands(gs):
+    """The quick-command chips for this server's game: [(command, fills_box)], [] for an unknown game."""
+    if (gs.game_type or "").lower() == "mcb":
+        cmds = _CMPA_QUICK_BEDROCK
+    else:
+        cmds = _cmpa_quick_for(game_engine(gs.game_type))
+    return [(c.strip(), c.endswith(" ")) for c in cmds]
+
+
+def _cmpa_log_rel(gs, kind):
+    """The log's path under the game user's home, built from the server's own row (never the request).
+
+    `game` names the DIRECTORY: LinuxGSM links log/server to the game's own log directory
+    (install_logs.sh, `ln -nfs "${gamelogdir}" "${logdir}/server"`), or writes there directly when
+    the game's gamelogdir is log/server itself. Which file in it is newest is decided on the host.
+    """
+    if kind == "script":
+        name = gs.lgsm_name + "-script.log"
+        return posixpath.join("log", "script", name)
+    return "log/server"
+
+
+def _cmpa_tail_sh():
+    """The framed tail of "$F": `N<name>`, then B<last lines>E. pipefail, so a failed tail is no E."""
+    return ('printf \'N%s\\n\' "${F##*/}"; printf B; '
+            f'tail -n {_CMPA_LOG_LINES} -- "$F" | tail -c {_CMPA_LOG_BYTES} || exit 1; printf E')
+
+
+def _cmpa_log_cmd(gs, kind):
+    """The read-only shell that tails one of the server's LinuxGSM logs, as its game account."""
+    path = shlex.quote("/home/%s/%s" % (gs.short_name, _cmpa_log_rel(gs, kind)))
+    nofile = "{ echo %s; exit 0; }" % _CMPA_NO_FILE
+    if kind == "script":
+        return (f"set -o pipefail; F={path}; [ -e \"$F\" ] || {nofile}; [ -f \"$F\" ] || exit 1; "
+                + _cmpa_tail_sh())
+    # The newest plain file in the directory, not following a link inside it to somewhere else.
+    return (f"set -o pipefail; D={path}; [ -e \"$D\" ] || {nofile}; [ -r \"$D\" ] && [ -x \"$D\" ] "
+            "|| exit 1; F=; for f in \"$D\"/*; do [ -f \"$f\" ] && [ ! -L \"$f\" ] || continue; "
+            f"case \"$f\" in {_CMPA_ARCHIVE_GLOBS}) continue;; esac; "
+            "if [ -z \"$F\" ] || [ \"$f\" -nt \"$F\" ]; then F=$f; fi; done; "
+            f"[ -n \"$F\" ] || {nofile}; " + _cmpa_tail_sh())
+
+
+def _cmpa_framed(out, rc):
+    """(file name, text between the frame) of a whole reply, or None for one that is not whole."""
+    head, _nl, rest = out.partition("\n")
+    if rc != 0 or not head.startswith("N") or not (rest.startswith("B") and rest.endswith("E")):
+        return None
+    return head[1:], rest[1:-1]
+
+
+def _cmpa_parse_log(out, rc):
+    """A log read's reply as {state, file, lines}: state "ok", "missing" or "unreadable".
+
+    "unreadable" is the read that did not run or did not finish — a host that did not answer, a
+    timeout, a tail that failed — and is never shown as an empty log: on the transports that do not
+    raise, a failed read is ("", …, -1), and "" is not a log with nothing in it.
+    """
+    out = out or ""
+    if rc == 0 and out.strip() == _CMPA_NO_FILE:
+        return {"state": "missing", "file": "", "lines": []}
+    framed = _cmpa_framed(out, rc)
+    if framed is None:
+        return {"state": "unreadable", "file": "", "lines": []}
+    name, body = framed
+    capped = len(body.encode("utf-8", "replace")) >= _CMPA_LOG_BYTES
+    if body.endswith("\n"):
+        body = body[:-1]
+    lines = terminal.render(body).split("\n") if body else []
+    if capped and lines:
+        lines = lines[1:]     # the byte cap cut the first line partway
+    return {"state": "ok", "file": name, "lines": lines}
+
+
+def _cmpa_register_logs(app):
+    """Reading LinuxGSM's script log and the game's own log, read-only, from the server page."""
+    @app.route("/api/server/<int:server_id>/log/<any(script, game):kind>")
+    @login_required
+    @server_access_required
+    def api_server_lgsm_log(server_id, kind):
+        """The last lines of the server's LinuxGSM script log or of the game's own newest log.
+
+        The same permission as the file browser and its download of the console log, which is where
+        these files could be read until now: MANAGE_SERVERS. And the same refusal for an account
+        that can become root, whose home the file browser does not read either. The path is the
+        server's own, from its row; the request only picks which of the two.
+        """
+        from panel.routes.server_files import _read_refused
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": i18n.tr("You don't have permission to manage server files.")}), 403
+        refused = _read_refused(gs, "read_file", _cmpa_log_rel(gs, kind))
+        if refused is not None:
+            return refused
+        try:
+            out, _err, rc = _sm.read_as_game_user(gs.remote, gs.short_name, _cmpa_log_cmd(gs, kind),
+                                                  timeout=15, selfname=gs.lgsm_name)
+        except Exception:
+            _log.debug("log read for server %s failed", row_label(gs, "id"), exc_info=True)
+            out, rc = "", -1
+        body = _cmpa_parse_log(out, rc)
+        body["kind"] = kind
+        return jsonify(body)

@@ -172,6 +172,15 @@ group_custom_commands = db.Table(
 #   hidden        {"<region>": ["<panel key>", ...]}     panels the user collapsed out of a region
 UI_PREF_KEYS = frozenset({"host_order", "server_order", "panels", "hidden"})
 
+# The colour schemes User.theme may hold; "system" is the default and the fallback.
+UI_THEMES = ("system", "dark", "light")
+
+
+def _cmpb_whats_new_stamp():
+    """The "What's new" stamp of the CHANGELOG as it is now (None when it cannot be read)."""
+    from panel.core import whats_new
+    return whats_new.current_stamp()
+
 
 class User(UserMixin, db.Model):
     # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
@@ -221,7 +230,20 @@ class User(UserMixin, db.Model):
     # on the row instead of its own table — reading it costs no extra query. An ABSENT key means
     # "use the default layout", so there is exactly one fallback path in the renderer.
     ui_prefs = db.Column(db.Text, default="{}")
+    # Colour scheme: "system" follows the device (prefers-color-scheme), or a fixed "dark" /
+    # "light". Rendered into <html data-bs-theme> by the server, so a page never paints in the
+    # wrong scheme first. Anything else reads as "system" (User.ui_theme).
+    theme = db.Column(db.String(8), default="system")
+    # The CHANGELOG entries this account had when it last dismissed "What's new" (a stamp from
+    # panel/core/whats_new.py). A new account starts at what is there now, so it sees nothing
+    # until the next update; NULL never shows the card.
+    whats_new_seen = db.Column(db.Text, nullable=True, default=_cmpb_whats_new_stamp)
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
+
+    @property
+    def ui_theme(self):
+        """The account's colour scheme: "dark", "light", or "system" for anything else."""
+        return self.theme if self.theme in UI_THEMES else "system"
 
     def get_ui_prefs(self):
         """Return this user's saved UI layout, or {}.
@@ -1557,6 +1579,10 @@ _LIGHT_MIGRATIONS = {
     ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
     ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
     ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
+    ("user", "theme"): "ALTER TABLE user ADD COLUMN theme VARCHAR(8) DEFAULT 'system'",
+    # NULL on upgrade, then stamped once by _cmpb_stamp_whats_new: an existing account starts from
+    # the changelog as it is now, rather than being shown every entry ever written.
+    ("user", "whats_new_seen"): "ALTER TABLE user ADD COLUMN whats_new_seen TEXT",
     # DEFAULT 0: every account that already exists chose its own password, or has been using
     # whatever it was given for long enough that a forced change on upgrade would be a surprise
     # rather than a protection. The flag only ever starts true for a password set from now on.
@@ -1578,6 +1604,17 @@ _LIGHT_MIGRATIONS = {
 }
 
 
+def _cmpb_stamp_whats_new():
+    """Stamp every existing account with the changelog as it is now (once, as the column arrives).
+
+    Committed by _run_light_migrations' own commit, BEFORE the index build that follows it.
+    """
+    stamp = _cmpb_whats_new_stamp()
+    if stamp:
+        db.session.execute(text("UPDATE user SET whats_new_seen = :s WHERE whats_new_seen IS NULL"),
+                           {"s": stamp})
+
+
 def _run_light_migrations():
     """Add columns that may be missing on databases created by older versions.
 
@@ -1587,9 +1624,12 @@ def _run_light_migrations():
     insp = inspect(db.engine)
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
     _audit_ids_new = "audit_log" in existing and "game_server_id" not in existing["audit_log"]
+    _seen_new = "user" in existing and "whats_new_seen" not in existing["user"]
     for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    if _seen_new:
+        _cmpb_stamp_whats_new()
     if _audit_ids_new:
         _backfill_audit_object_ids()
         # Committed HERE: _create_declared_indexes builds on db.engine, another connection, and

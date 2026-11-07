@@ -510,6 +510,10 @@ def lgsm_read_config(server, user, selfname):
     out = {"path": inst, "raw": instance_text, "settings": settings, "groups": groups,
            "players": _lg264_player_settings(merged, defaults, instance, common)}
     out.update(_lgc_read_flags(selfname, merged))
+    # Each setting's help from _default.cfg's comments, and the file its value comes from.
+    from panel.services import lgsm_cfg_form
+    out.update(lgsm_cfg_form.annotate(groups, sect["DEFAULT"], {t: _parse_cfg(x) for t, x in sect.items()},
+                                      selfname))
     return out
 
 
@@ -1432,6 +1436,16 @@ def _rawlts_refusal(server, user, ap, data):
 R14B_NOT_TEXT = "The file contents must be text."
 
 
+# An instance's _default.cfg is LinuxGSM's copy of lgsm/config-default/config-lgsm/<game>/_default.cfg,
+# put back over it on every run when the two differ ("WHICH FILES", above): a change saved into it
+# said "Saved" and was gone at the next start, stop or monitor run. Its settings belong in
+# <instance>.cfg, which the Config tab writes; the file editor says so when it opens one.
+CMPC_DEFAULT_CFG_REFUSED = ("LinuxGSM puts its own copy of _default.cfg back every time it runs, so a "
+                            "change saved here would be lost. Set it in the server's own config on "
+                            "the Config tab instead — nothing has been changed.")
+_CMPC_DEFAULT_CFG_RE = re.compile(r"/home/[^/]+/lgsm/config-lgsm/[^/]+/_default\.cfg")
+
+
 def write_file(server, user, relpath, content, selfname=None):
     """Write text content to a file in the game user's home.
 
@@ -1441,6 +1455,8 @@ def write_file(server, user, relpath, content, selfname=None):
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return False, "Invalid path"
+    if _CMPC_DEFAULT_CFG_RE.fullmatch(ap):
+        return False, CMPC_DEFAULT_CFG_REFUSED
     if not _is_text(content or ""):
         return False, R14B_NOT_TEXT        # a lone surrogate: .encode() below raised, a 500
     refusal = _rawlts_refusal(server, user, ap, content or "")
@@ -2421,4 +2437,5 @@ _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
     _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
     LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE, R31J_CONSOLE_UNREAD, R34B_WRITE_RESERVED,
+    CMPC_DEFAULT_CFG_REFUSED,
 })
