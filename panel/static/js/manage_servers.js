@@ -561,17 +561,42 @@ function _dropBrokenIcon(img) {
 document.addEventListener('error', function (ev) {
   if (ev.target && ev.target.tagName === 'IMG') _dropBrokenIcon(ev.target);
 }, true);
-// The icons start once the page has drawn. Given their URLs in the markup, Chrome's lazy-load
-// distance still fetched most of the grid at once, and those requests competed with the page's
-// stylesheet and scripts: Lighthouse measured the install page's first paint at 2.8 s, against
-// about 1.1 s on the other pages. Each tile shows its initials until its icon arrives. The URL is
-// built here (the panel's /game-icon/<script> route), with the script name escaped, rather than
-// copied whole from the page into src.
+// The icons start once the page has drawn, and only for the tiles the grid's own scroll box shows
+// (plus about a row below it); the rest follow as the grid is scrolled or searched. Each tile
+// shows its initials until its icon arrives.
+//
+// Not every tile at once: the grid holds every LinuxGSM game, about 140, and loading="lazy" did
+// not hold them back — Chrome's lazy-load distance reaches far past a 22rem box — so the page
+// asked the panel for over a hundred icons. Where the panel has not cached an icon yet, it fetches
+// it from linuxgsm.com one at a time, so the last ones waited many seconds in that queue, on a
+// phone that showed fourteen tiles. And because most of the page's requests were then slow ones,
+// Lighthouse's model of this host took them as its normal response time and applied it to the
+// page's own stylesheet and scripts: it put the first paint at 4.5 s against about 1 s on the
+// other pages.
+//
+// The URL is built here (the panel's /game-icon/<script> route), with the script name escaped,
+// rather than copied whole from the page into src.
+function _loadGameIcon(img) {
+  var script = img.getAttribute('data-icon-script');
+  if (!script) return;
+  img.removeAttribute('data-icon-script');
+  img.src = MOUNT + '/game-icon/' + encodeURIComponent(script);
+}
 function startGameIcons() {
-  document.querySelectorAll('#game-grid img[data-icon-script]').forEach(function (img) {
-    img.src = MOUNT + '/game-icon/' + encodeURIComponent(img.getAttribute('data-icon-script'));
-    img.removeAttribute('data-icon-script');
-  });
+  var grid = document.getElementById('game-grid');
+  if (!grid) return;
+  var imgs = grid.querySelectorAll('img[data-icon-script]');
+  if (!('IntersectionObserver' in window)) { imgs.forEach(_loadGameIcon); return; }
+  // Rooted at the grid, so "in view" means inside its scroll box, not merely on the page. A tile a
+  // search hides (display:none) never intersects; one it reveals does, and loads then.
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      io.unobserve(e.target);
+      _loadGameIcon(e.target);
+    });
+  }, { root: grid, rootMargin: '0px 0px 48px 0px' });
+  imgs.forEach(function (img) { io.observe(img); });
 }
 document.addEventListener('DOMContentLoaded', syncGameTiles);
 if (document.readyState === 'complete') startGameIcons();
