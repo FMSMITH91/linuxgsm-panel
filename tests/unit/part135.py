@@ -1,6 +1,6 @@
 """Part 135 of the unit suite: the Network tab's firewall settings and port/range blocks (fw-more, PR A).
 
-The owner: "i want more custom settings on firewall page". The tab now changes UFW's default policies
+The firewall tab now changes UFW's default policies
 (incoming, outgoing, routed), turns it on and off, sets its logging level, blocks a port or a range
 (deny or reject, TCP/UDP/both, IPv4/IPv6/both), opens a port to one address family, and blocks a whole
 IP range on the Security tab. Every one of those can lock a host out, so held here:

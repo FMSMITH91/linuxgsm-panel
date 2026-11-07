@@ -4,7 +4,7 @@ name: Security scan
 # ANY file — a README, a doc, a .gitignore — so this workflow is deliberately NOT path-filtered.
 # Filtering it by path is how one slips through.
 #
-# The scanners that only read code (pip-audit, Bandit, Semgrep) live in security-code.yml, which IS
+# The scanners that only read code (pip-audit, osv-scanner, Bandit, Semgrep) live in security-code.yml, which IS
 # path-filtered. The open-alerts gate moved to codeql-alerts.yml, which runs AFTER CodeQL rather
 # than beside it — see the note there.
 on:
@@ -16,7 +16,7 @@ on:
     - cron: "0 6 * * *"   # daily 06:00 UTC
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
-# pushes don't queue up and waste runner minutes. The event is part of the group: the Monday
+# pushes don't queue up and waste runner minutes. The event is part of the group: the daily
 # schedule runs on main too, and with workflow+ref alone it CANCELLED an in-progress push run
 # there, leaving a "cancelled" Gitleaks (a required check) on that commit (as codeql.yml says).
 concurrency:

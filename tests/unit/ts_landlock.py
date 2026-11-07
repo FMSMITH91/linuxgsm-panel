@@ -3,7 +3,7 @@
 WHY. tests/unit_test.py's tailscale guard reads a shell script's TEXT and predicts whether the shell
 will reach the machine's binary. Every review pass from 1011e to 1017b found new shapes it misread
 (a nested `bash -o pipefail -c`, a line continuation before `#`, `X=1 . file`, BASH_ENV, a `.` in
-backticks), each one running the real CLI against the owner's live node. A reader of shell text
+backticks), each one running the real CLI against the live node. A reader of shell text
 cannot be finished. So the kernel answers instead: Landlock (Linux 5.13+, unprivileged, in Ubuntu's
 default LSM list since 22.04 and in this repo's dev machine's) denies EXECUTE and READ_FILE on the
 machine's `tailscale`/`tailscaled` files to this process and to everything it starts, whatever

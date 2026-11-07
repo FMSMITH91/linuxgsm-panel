@@ -45,7 +45,7 @@ on:
   schedule:
     - cron: "37 5 * * *"   # daily 05:37 UTC, between CodeQL's and security-code.yml's
 
-# The event is part of the group, as in codeql.yml and security-code.yml: on main the Monday
+# The event is part of the group, as in codeql.yml and security-code.yml: on main the daily
 # scheduled run shares the ref with a push run, and must not cancel it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
@@ -149,7 +149,7 @@ jobs:
       # scheduled run uploads only while its commit is still main's head; a head that cannot be read
       # uploads as before. code_scanning_analyses.py answers "moved on" for the run that skipped.
       # A head that only added DOCUMENTATION on top of it is still current: that push runs none of
-      # the uploaders (the shared paths-ignore), so skipping here threw the week's scan away with
+      # the uploaders (the shared paths-ignore), so skipping here threw the day's scan away with
       # nothing to replace it. The script asks GitHub's compare API (moved_past).
       # Asked here, in the scan job: the upload job, which can write security events, runs no shell.
       - name: Is the analysed commit still main's head? (scheduled runs only)

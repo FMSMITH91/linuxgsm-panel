@@ -438,7 +438,7 @@ check("runtime-path: every file install.sh stages root-owned counts as a change 
       repr([(_q, _so._is_runtime_path(_q)) for _q in _srs_paths]))
 
 # ── every file in the repository is named: one a host runs, or one it does not ─────────────────
-# The owner's rule: "Update available" only when a file the host runs changes, and every such file
+# The rule: "Update available" only when a file the host runs changes, and every such file
 # kept current. A file named on NEITHER side counts as runtime (a host must never miss it), so an
 # unnamed file would raise false updates instead: this fails the build until it is named. The tree
 # is walked, not asked of git: the throwaway tree tools/smoke-local.sh runs in has no .git. The
@@ -471,7 +471,7 @@ check("runtime-path: ...and a file named on neither side counts as one a host ru
       _so._path_class("a-new-file.cfg") is None and _so._is_runtime_path("a-new-file.cfg") is True
       and _so._path_class("panel/x.py") == "runtime" and _so._path_class("tests/x.py") == "noise")
 
-# ── no committed file names the owner's real infrastructure ─────────────────────────────────────
+# ── no committed file names real infrastructure ───────────────────────────────────────────────
 # Fixtures once carried the live host's name, its tailnet name, the test VPS's name and addresses
 # (review 1016c), and a journal line kept the tailnet address of the device that connected to the
 # test VPS (review 1016e), and a public address taken from a live debug report into the redactor's
@@ -570,7 +570,7 @@ for _r26d_f in _cls_files:
         _r26d_text = _r26d_fh.read().decode("utf-8", "ignore")
     if _r26d_hits(_r26d_text, _R26D_FORBIDDEN, _r26d_memo):
         _r26d_found.append(_r26d_f)
-check("privacy: no file in the repository names the owner's real hosts, tailnet or addresses",
+check("privacy: no file in the repository names a real host, tailnet or address",
       len(_cls_files) >= 300 and not _r26d_found,
       "files naming a forbidden value: %r (replace each with a synthetic one of the same shape: "
       "node.taile00000.ts.net, 100.64.0.10, 203.0.113.x)" % (_r26d_found,))
@@ -2561,7 +2561,7 @@ try:
     eq("update-target: newer unverified counted", _r.get("newer_unverified"), 1)
     eq("update-target: behind is measured to the target, not the tip", _r["behind"], 2)
     # ...and says nothing about the newer commits still in CI. The card shows "Update available" or
-    # "You're up to date" and no reason line (the owner's rule): the "N newer commits still being
+    # "You're up to date" and no reason line: the "N newer commits still being
     # verified" note it used to carry is gone, and the count stays in newer_unverified for the API.
     check("update-target: the offer carries no 'still being verified' message",
           not _r.get("message") and _r.get("newer_unverified") == 1, repr(_r.get("message")))
@@ -2591,7 +2591,7 @@ try:
 
     # DOCS-ONLY commits are NOT an update. #276 made them one ("am I up to date?"), and from then on
     # every CI-only merge raised "Update available" on every panel, for an install that changed
-    # nothing the panel runs. The owner's rule: an update is offered only when a file the panel
+    # nothing the panel runs. The rule: an update is offered only when a file the panel
     # runs changes. The commits are still reported (behind, target), and docs_only says why.
     _o_touch = _so._update_touches_runtime
     try:

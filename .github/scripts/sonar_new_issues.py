@@ -38,7 +38,7 @@ API = "https://sonarcloud.io/api/"
 KNOWN_OPEN = {
     "AaDejKLMfWz637hiAQny": "docker:S6471 in .clusterfuzzlite/Dockerfile: the fuzz image runs as "
                             "root, which is ClusterFuzzLite's build contract. A Dockerfile has no "
-                            "NOSONAR, and the owner declined to Accept it in SonarCloud (2026-09-29).",
+                            "NOSONAR, and it was left un-Accepted in SonarCloud (2026-09-29).",
 }
 
 

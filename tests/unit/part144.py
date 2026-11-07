@@ -1,6 +1,6 @@
 """Part 144 of the unit suite: a dead IPv6 route to Telegram costs a bot seconds, not 30.
 
-On the owner's box (2026-11-05) about one IPv6 connect in nine to api.telegram.org hung, and
+On one measured host (2026-11-05) about one IPv6 connect in nine to api.telegram.org hung, and
 socket.create_connection gave each address the request's whole timeout in turn, IPv6 first: a
 long-poll waited 30 s for IPv4 and a reply 8 s. notifications._connect_each caps every address but
 the last at _CONNECT_EACH, and _OPENER (every Telegram, Discord and ntfy request) connects through it.

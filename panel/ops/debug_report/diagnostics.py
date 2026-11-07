@@ -14,7 +14,7 @@ from panel.ops.debug_report._base import Result
 MEMO_DB_INTEGRITY = "db.integrity"
 _ORDER = {"fail": 0, "warn": 1, "ok": 2}
 # Checks that are security posture: on the in-panel page only, never the file, the summary or
-# At a glance (owner's decision, 2026-10-16). Whether the OS patches itself tells a reader of the
+# At a glance. Whether the OS patches itself tells a reader of the
 # public issue how old the host's packages may be.
 POSTURE_CHECKS = frozenset(("Automatic security updates",))
 

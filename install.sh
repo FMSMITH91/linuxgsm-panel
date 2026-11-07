@@ -972,10 +972,10 @@ _on_first_parent_line() {
 
 # ── Release signatures ─────────────────────────────────────────────────────────────────────────
 # Every commit on main is a GitHub squash merge, signed by GitHub's own key, so a signature GitHub
-# makes proves nothing against someone who takes over the owner's GitHub account: they could merge
-# anything, and every panel would install it. So an update moves a checkout only to a commit that
-# ALSO carries a signature made with the owner's own SSH key, whose private half never leaves the
-# owner's PC (tools/sign-release.sh makes it).
+# makes proves nothing against someone who takes over the project's GitHub account: they could
+# merge anything, and every panel would install it. So an update moves a checkout only to a commit
+# that ALSO carries a signature made with the release SSH key, which is kept off GitHub
+# (tools/sign-release.sh makes it).
 #
 #   * What is signed is a message this script BUILDS from the commit it is about to install and the
 #     branch it tracks (_release_message). Nothing it verifies is read from the network but the
@@ -1364,7 +1364,7 @@ resolve_update_target() {
         warn "The update was not installed: ${UPD_HOLD_WHY}."
     elif [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "unsigned" ]]; then
         warn "The update was not installed: ${UPD_HOLD_WHY}."
-        warn "This checkout stays at ${UPD_TARGET}: an update installs only a release signed with the owner's key."
+        warn "This checkout stays at ${UPD_TARGET}: an update installs only a release signed with the release key."
     elif [[ "${UPD_WHY}" = "hold" ]]; then
         warn "The commit this update is pinned to, ${PANEL_UPDATE_REF}, is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified."
         warn "This checkout stays at ${UPD_TARGET}: the update does not fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
@@ -2462,7 +2462,7 @@ install_recovery_command() {
     ${H_SUDO} ln -sf "${target}" "${link}" 2>/dev/null || true
 }
 
-# ── Tailscale SSH on this host: the owner's choice, recorded root-owned ─────────────────────────
+# ── Tailscale SSH on this host: the operator's choice, recorded root-owned ──────────────────────
 # Tailscale SSH lets the TAILNET decide who may log in here as root, by its own SSH policy. The
 # panel's Connect joins a host through a login link, and whoever opens that link picks the tailnet;
 # so if the panel's account could ask for SSH, a compromised panel could hand some tailnet root
@@ -2472,7 +2472,7 @@ install_recovery_command() {
 #
 # Prints "yes|no <why>", why being env|kept|running|asked|default. `PANEL_TAILSCALE_SSH=1 ./install.sh` (or 0) decides. Unset, the choice already
 # recorded is kept, so an update never changes it. With none recorded: a host already running
-# Tailscale SSH is recorded "yes", so it keeps working exactly as before (the owner turned it on);
+# Tailscale SSH is recorded "yes", so it keeps working exactly as before (it was turned on deliberately);
 # otherwise the question is asked when someone is at a terminal, and the answer is no by default
 # and whenever nobody is there to ask (a self-update, `curl | bash` with no tty, CI).
 #
@@ -2480,7 +2480,7 @@ install_recovery_command() {
 # stderr is what says whether a person is watching.
 _r25a_tailscale_ssh_choice() {
     local _conf="$1" _prev="" _ans="" _env="${PANEL_TAILSCALE_SSH:-}"
-    # Never on a run the PANEL started (PANEL_SELF_UPDATE): the choice is the owner's, and the
+    # Never on a run the PANEL started (PANEL_SELF_UPDATE): the choice is the operator's, and the
     # helper's environment for that run is its own (_self_update_env), but this must not rest on it.
     [[ -z "${PANEL_SELF_UPDATE:-}" ]] || _env=""
     case "${_env}" in
@@ -3135,7 +3135,7 @@ release_tailscale_operator() {
     [[ -n "${_rto_cur}" && "${_rto_cur}" == "${PANEL_USER}" ]] || return 0
     if LC_ALL=C.UTF-8 timeout 10 tailscale set --operator= >/dev/null 2>&1; then
         ok "The panel's account is no longer the Tailscale operator (the panel changes Tailscale through its helper)"
-        # Per-user: the panel's account IS the owner's own login, so the owner just lost the role.
+        # Per-user: the panel's account IS the operator's own login, so they just lost the role.
         # Say it now, not only in the README: their own `tailscale serve` starts asking for sudo.
         [[ "${RUN_AS_ROOT}" -eq 1 ]] || warn "This is a per-user install, so that account is your own login: your own \`tailscale serve\` and \`tailscale set\` now need sudo (an operator can move this host to another tailnet and turn on Tailscale SSH without root)."
     else

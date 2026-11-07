@@ -89,14 +89,14 @@ A superadmin is root on the panel's host (see "Known trust-model limitation" bel
 these shows someone else, treat the host as compromised: rebuild it rather than only deleting the
 account.
 
-## Updates are signed with the owner's own key
+## Updates are signed with a release key
 
 Every commit on `main` is a GitHub squash merge, signed by GitHub's key, so a GitHub signature says
-nothing about who asked for the merge. If the owner's GitHub account were taken over, every panel
+nothing about who asked for the merge. If the project's GitHub account were taken over, every panel
 would otherwise install whatever was merged next.
 
-So each release is also signed with the owner's own SSH key (`tools/sign-release.sh`), whose private
-half is only on the owner's PC. The signed text is built by the host from the commit id and branch it
+So each release is also signed with a release SSH key (`tools/sign-release.sh`), whose private
+half is kept off GitHub. The signed text is built by the host from the commit id and branch it
 is about to install, and the signature is kept on the `release-signatures` branch as
 `<branch>/<sha>.sig`. The installer already on the host checks it with `ssh-keygen -Y verify`
 (namespace `linuxgsm-panel-release`) against the key the host already holds, never the copy in the
@@ -113,16 +113,16 @@ since the last signed release, with its author and committer, the files changed,
 for any change to `.github/workflows/`, `release-signers`, `install.sh` or `tools/panel-helper`. It
 then asks for the first 12 characters of the commit id to be typed. `--yes` skips that typing only
 when its input is not a terminal (a script), and still prints all of it. A signature says only that
-the owner ran this, so read what it shows first.
+the script was run with the release key, so read what it shows first.
 
 What it does not cover:
 
 - **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
   with no key yet has nothing to check the clone against. After the first update, check that
   `/usr/local/lib/linuxgsm-panel/release-signers` (root install) or the checkout's `release-signers`
-  (per-user) is the owner's key: `ssh-keygen -lf` on it should print the same fingerprint as
-  `ssh-keygen -lf` on the owner's own signing key. Once a host holds a key, a reinstall over a lost or deleted checkout installs only a
-  signed clone.
+  (per-user) is the release key: `ssh-keygen -lf` on it should print the same fingerprint as the
+  repository's `release-signers` shows on GitHub. Once a host holds a key, a reinstall over a lost
+  or deleted checkout installs only a signed clone.
 - **A host that has no key yet holds.** A host still on a version from before this feature takes
   its first update through its older installer, which knows nothing of signatures; from then on it
   checks. A host where that left no key (no root copy and no `release-signers` at root's source
@@ -130,7 +130,7 @@ What it does not cover:
   or with `PANEL_ALLOW_UNSIGNED_UPDATE=1` over SSH.
 - **The test host's deploy** ships the commit's own installer, so it is GitHub-controlled by
   construction. It runs only when started by hand (`workflow_dispatch`, which `sign-release.sh` does
-  after signing), and only from `main`. Its reach is the tailnet ACL's: the owner should confirm the
+  after signing), and only from `main`. Its reach is the tailnet ACL's: confirm the
   ACL lets the CI runner's tag reach the test host only, and nothing else.
 
 A lost key is recovered with `PANEL_ALLOW_UNSIGNED_UPDATE=1` on a run by hand over SSH; the panel's
@@ -471,11 +471,11 @@ types rather than in the command names:
   read (an `up` with a key logs in afresh, into the key's tailnet), and an interactive `up` on a
   node already Running or Starting (answered "already connected", with nothing run) or one that
   holds a node key while it is not up (an expired key, or `tailscale down`): there the login link
-  would let whoever opens it pick another tailnet, so the owner signs it in again at the host with
+  would let whoever opens it pick another tailnet, so the operator signs it in again at the host with
   `sudo tailscale up`. A status the helper cannot read still gets the link, so the first Connect
   works while tailscaled is still starting after an install. That first join is still the panel's
   to start, and whoever opens its link picks the tailnet, so it grants no logins on its own:
-  **Tailscale SSH on the panel's host is the owner's choice at install**, recorded root-owned in
+  **Tailscale SSH on the panel's host is the operator's choice at install**, recorded root-owned in
   the helper's `panel.conf` (`tailscale_ssh=yes|no`; `PANEL_TAILSCALE_SSH=1` or `=0` sets it, an
   unset one keeps what is recorded, a host already running Tailscale SSH when its installer first
   records it is recorded yes so it keeps working, and anything else is no). The self-update that
@@ -504,7 +504,7 @@ types rather than in the command names:
   `:443` listener, taking the other apps there off the internet (an outage for them, not an
   exposure; the panel itself refuses it unless the boot is keeping the listener as it is). Other
   listeners (another port, a Tailscale Service) are never touched by the panel's write. A route the
-  owner adds to `:443` after Funnel is on is public because the owner put it on a Funnel listener.
+  operator adds to `:443` after Funnel is on is public because it was put on a Funnel listener.
   The listener checks are point-in-time reads, and a panel account that can run code can still
   relay other traffic through the panel's own port; this keeps Serve and Funnel from being pointed
   anywhere else. A Tailscale old enough to answer `serve status` only to root or the operator is read

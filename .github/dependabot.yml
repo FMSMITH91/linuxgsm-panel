@@ -32,8 +32,6 @@ updates:
       - dependency-name: "bidict"
         versions: [">=0.24"]
 
-  # Keep the GitHub Actions themselves current (this is what clears the
-  # "Node.js 20 is deprecated" runner warning once new majors ship).
   # The CI tool pins (hash-locked): the Bandit job holds security-events: write, so its tools are
   # pinned, and bumped here like everything else rather than floating to whatever is newest.
   # Each .txt here is pip-compile's lockfile for the .in beside it, so Dependabot updates it by
@@ -58,7 +56,10 @@ updates:
         update-types: ["version-update:semver-major"]
       # complexity.in pins prospector to the version Codacy runs, so the PR-side count matches
       # Codacy's; a newer prospector cannot resolve against that pin, and the grouped update failed
-      # whole every week trying to (2026-11-07). Move the pin by hand when Codacy's moves.
+      # whole trying to (2026-11-07). Move the pin by hand when Codacy's moves. An ignore also
+      # stops Dependabot's SECURITY updates for prospector (GitHub's options reference marks
+      # `ignore` for both kinds); an advisory against it still reaches security-code.yml's
+      # osv-scanner, which reads this directory's lockfiles.
       - dependency-name: "prospector"
 
   # The test matrix's tools (flake8, esprima), which run on 3.10 as well: pip-compile lockfiles
@@ -97,6 +98,8 @@ updates:
       - dependency-name: "gamedig"
         update-types: ["version-update:semver-major"]
 
+  # Keep the GitHub Actions themselves current (this is what clears a "Node.js N is deprecated"
+  # runner warning once new majors ship).
   # Every `uses:` under .github/workflows, step-security/harden-runner (the first step of every job)
   # included; each moves SHA and version comment together. zizmor's pin is the pip entry above
   # (.github/ci-requirements/zizmor.txt).

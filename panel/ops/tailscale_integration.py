@@ -178,8 +178,8 @@ def _r24t_released():
     """Log a release that took, and say what it means on a per-user install; "released"."""
     _log.info("The panel's account is no longer the Tailscale operator")
     if not _so._is_system_service():
-        # Per-user install: the panel's account is the owner's own login, so it was the owner who
-        # lost the role. Tell them once, now, why their own `tailscale serve` starts asking for sudo.
+        # Per-user install: the panel's account is the operator's own login, so it was the operator
+        # who lost the role. Tell them once, now, why their own `tailscale serve` starts asking for sudo.
         _log.warning("This is a per-user install, so the panel's account is your own login: your "
                      "own `tailscale serve` and `tailscale set` now need sudo. An operator account "
                      "can move this host to another tailnet and turn on Tailscale SSH without "
@@ -849,7 +849,7 @@ def tailscale_up_local(enable_ssh=True):
     `sudo bash -c` whole (a bare `sudo ` elevated only its leading `rm`, and `tailscale up` never
     started); only a host with no helper takes it, and its grant is the old broad one anyway.
     """
-    # SSH only where the owner chose it at install (system_ops.tailscale_ssh_allowed): the helper
+    # SSH only where the operator chose it at install (system_ops.tailscale_ssh_allowed): the helper
     # refuses `--ssh` otherwise, and Connect must still join, so it asks without it.
     enable_ssh = enable_ssh and _so.tailscale_ssh_allowed()
     out, err, rc = _so._run_verb("tailscale-up-login",

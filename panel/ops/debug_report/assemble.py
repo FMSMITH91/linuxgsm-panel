@@ -12,7 +12,7 @@ by whole lines, so a URL never carries anything the summary would not.
 
 Security posture (_base.py's Result.posture, and any section whose part is not one of FILE_PARTS)
 is shown on the in-panel report page ONLY: never in the downloaded file, the summary or the issue
-body, which the issue form asks to have attached to a public issue (owner's decision, 2026-10-16).
+body, which the issue form asks to have attached to a public issue.
 _page_only() is the one place that decides it, and _r24r_withhold() holds back any line of the file
 that still reads as posture (POSTURE_RE), whoever printed it.
 """

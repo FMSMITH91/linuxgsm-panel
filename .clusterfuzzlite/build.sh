@@ -8,7 +8,7 @@ SRC_DIR="$SRC/linuxgsm-panel"
 
 # The panel is an application, not a pip package: there is no setup.py, so `pip3 install .` (what the
 # OSS-Fuzz Python guide shows) does not apply. Putting the repo root on PYTHONPATH is what makes the
-# harnesses' `import ssh_manager` resolve, and it is what lets PyInstaller find those modules to
+# harnesses' `from panel.ops import ssh_manager` resolve, and it is what lets PyInstaller find those modules to
 # bundle while compiling.
 export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 

@@ -60,7 +60,7 @@ LEVELS = ("fail", "warn", "unread", "ok")
 # The posture's own vocabulary: the labels and finding texts the sections print through posture()
 # and posture_find(). assemble.py withholds any line of the downloadable file that matches, whichever
 # section printed it and however (a posture line a new section adds with add() instead): the file is
-# what the GitHub issue form asks to have attached publicly, and the issue's account names the owner.
+# what the GitHub issue form asks to have attached publicly, and the issue's account names whoever filed it.
 # Fixed, English report vocabulary (the report is not translated), never a host's text.
 POSTURE_RE = re.compile(
     r"\*\*2FA on\*\*|not every superadmin has 2FA|grant superadmin|setup token file|Must change password"

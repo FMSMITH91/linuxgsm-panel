@@ -11,7 +11,7 @@ name: Fuzz
 #   code, seconds earlier. Re-running it on the merge commit is six jobs (~460s) re-covering the
 #   same ground — and it cannot even find more by luck, because the corpus is NOT persisted between
 #   runs: each job starts from the committed seeds in tests/fuzz/corpus and throws away what it
-#   generates (new units go to an artifact, not back into the repo). So the second run explores the
+#   generates (new units are discarded; only a crash reproducer is uploaded). So the second run explores the
 #   same seeds for the same bounded time.
 #   Coverage is unchanged: a PR still fuzzes before merge, and the nightly soak runs longer over
 #   the same seeds than any per-push run does. A direct push to main that bypassed a PR is covered

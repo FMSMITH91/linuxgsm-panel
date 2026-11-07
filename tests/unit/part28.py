@@ -454,7 +454,7 @@ with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
                  _sq28.main(["x", "--branch", "main", "--sha", "nope"]),
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
-check("sonar main gate: ...the known issue is the owner's declined docker:S6471, the self-test "
+check("sonar main gate: ...the known issue is the declined docker:S6471, the self-test "
       "passes, and a malformed branch or commit is refused",
       set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny"}
       and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"] and _sq28_rcs == (0, 2, 2)

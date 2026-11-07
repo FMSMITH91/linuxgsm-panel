@@ -250,7 +250,7 @@ def _ssh_port130():
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 2b. One machine, one host row: the same address AND SSH port is refused (owner's rule)
+# 2b. One machine, one host row: the same address AND SSH port is refused
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _rows130():
     """Stand-in host rows: an IPv4, a name and an IPv6 host, another one, and a legacy duplicate."""

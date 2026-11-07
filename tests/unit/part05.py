@@ -1791,7 +1791,7 @@ try:
           # generic-api-key rule flags, and the history it scans is not rewritten.
           and _sec_runs[0][1] == 'token: "%s"\n' % _SEC_ARGS["pro-attach"][0],
           repr((_sec_pro, _sec_runs)))
-    # SSH "no": with "yes" the helper first asks whether the owner chose Tailscale SSH at install
+    # SSH "no": with "yes" the helper first asks whether the operator chose Tailscale SSH at install
     # (part93), and this check is about where the key travels.
     _sec_ts = _sec_helper(["tailscale-up-key", "no", "-", "-"], "tskey-auth-SeCrEtKeY42\n")
     check("secrets: the helper runs tailscale up reading the key from stdin, not its argv",

@@ -10,7 +10,8 @@ name: ClusterFuzzLite artifact cleanup
 #   fails if one did not: "fuzz the diff (address)", a required check, then fails on every pull
 #   request that touches fuzzed code, and the nightly batch, prune and coverage jobs stop, until
 #   the artifact is gone. Nothing removed it but a person, and it would otherwise sit there for the
-#   whole 90-day retention. This removes it within six hours, or at once when run by hand.
+#   whole 90-day retention. This removes it at its next scheduled run (every six hours, though GitHub may delay or
+#   drop a scheduled run), or at once when run by hand.
 #
 # WHAT IT DELETES, AND WHAT IT DOES NOT
 #   Only an artifact whose run names its branch, its head repository and this repository, and

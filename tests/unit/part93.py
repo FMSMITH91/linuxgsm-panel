@@ -3,8 +3,8 @@
 Helper, install, uninstall, Tailscale, monitoring and the debug report. Held here, each against the
 code path the finding named:
 
-* Tailscale SSH on the panel's host only where the owner chose it at install (the owner's decision
-  of 2026-10-16): the helper refuses `--ssh` on both joins and `tailscale-ssh on` without panel.conf's
+* Tailscale SSH on the panel's host only where the operator chose it at install (decided
+  2026-10-16): the helper refuses `--ssh` on both joins and `tailscale-ssh on` without panel.conf's
   `tailscale_ssh=yes`, and still joins without SSH and turns SSH off; install.sh records the choice
   (an env answer, else the one recorded, else "yes" for a host already running Tailscale SSH, else
   no unless someone at a terminal says yes); the panel's Connect leaves --ssh off, its Enable
@@ -54,7 +54,7 @@ def _fn93(src, name):
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 1. Tailscale SSH on the panel's host only where the owner chose it at install
+# 1. Tailscale SSH on the panel's host only where the operator chose it at install
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 class _Run93:
     """subprocess for the helper, answering `status --json` as a node that has never joined.
@@ -275,7 +275,7 @@ try:
             _db93.session.commit()
 finally:
     _p9_restore_all()
-check("panel: Connect asks the helper for a join WITHOUT SSH where the owner did not choose it at "
+check("panel: Connect asks the helper for a join WITHOUT SSH where the operator did not choose it at "
       "install, and with it where they did (control)",
       _flows93[("Connect", "not chosen")] == [("tailscale-up-login", ["no", "-"])]
       and _flows93[("Connect", "chosen")] == [("tailscale-up-login", ["yes", "-"])], repr(_flows93))

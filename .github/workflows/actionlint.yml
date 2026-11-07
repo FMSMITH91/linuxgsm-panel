@@ -21,12 +21,12 @@ on:
   pull_request:
     branches: [ main ]
 
-# Least-privilege default; the job below escalates only to post its check-run annotations.
 # Supersede rather than stack: Only the newest push's workflow lint is of any interest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default; the job adds only pull-requests: read, for its scope step.
 permissions:
   contents: read
 

@@ -1,7 +1,7 @@
 """Part 110 of the unit suite: the nineteenth review's panel-host fixes (review 1017b, builder A).
 
 * A panel-host reboot whose host row could not be READ is refused (503), never sent bare: a bare
-  reboot kills the host's game servers and brings none back (owner's clean-reboot rule).
+  reboot kills the host's game servers and brings none back (the clean-reboot rule).
 * Every reader of "the panel's port" that means the port it serves NOW asks the bound port
   (config.bound_port, BOOT_PORT), not config.json's, which is the next start's: Serve Enable/Disable
   and the Tailscale page, Close public panel port and its status, the firewall's lock-out guard and

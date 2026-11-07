@@ -1807,7 +1807,7 @@ _r16d_wrap_ts_handles()
 # part92 (decisions 1016a: the debug report's security posture on the panel's page only, never the
 # downloaded file, builder R) runs the report's network and access sections and its assembler on
 # stand-ins, and node on the page's script; imports part01, 05, 47 and 87 (part87's DOM).
-# part93 (review 1016b: Tailscale SSH on the panel host only by the owner's choice at install, the
+# part93 (review 1016b: Tailscale SSH on the panel host only by the operator's choice at install, the
 # helper's restore and self-update targets, the debug report, monitoring, install and uninstall,
 # builder A) runs the helper and the panel's modules on stand-ins, part12's app, and bash over
 # install.sh's and uninstall.sh's own functions in throwaway dirs, and the debug report's

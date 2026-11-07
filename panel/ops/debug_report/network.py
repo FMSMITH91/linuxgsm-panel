@@ -10,7 +10,7 @@ request greenlet: it needs the request, and `network` runs in a worker thread.
 Nothing here prints an address (only its class), a host name, an account, a jail's logpath, a rule's
 source or comment, or a header value. The security posture (2FA and invites, the setup token, the
 firewall's ways in and default, what fail2ban can ban) goes through Result.posture(): it is shown on
-the in-panel report page only, never in the downloaded file (owner's decision, 2026-10-16). The
+the in-panel report page only, never in the downloaded file. The
 privileged reads (ufw, fail2ban-client) run only through the root-owned helper or as root: never the
 pre-helper `sudo` form, which has no -n.
 """
@@ -544,7 +544,7 @@ def _tailscale_lines(ctx, res, facts, got):
     _health_lines(ctx, res, v)
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)
-    # Funnel is a way in from the internet: page-only (owner's decision, 2026-10-16). The mount
+    # Funnel is a way in from the internet: page-only. The mount
     # it shares a line with is not posture, and stays in the file.
     res.posture("- **Funnel**: " + _funnel_line(cfg, readable, v))
     res.add("- **Mount**: " + _mount_line(cfg, readable, routes))
@@ -1364,7 +1364,7 @@ def _account_lines(res, counts):
                 c["remember"]))
     # Posture: which accounts are the weak target. Shown on the in-panel page only, never in the
     # downloaded file, the summary or At a glance: the issue form asks for the file to be attached
-    # to a public issue, whose account identifies the owner (owner's decision, 2026-10-16).
+    # to a public issue, whose account identifies whoever filed it.
     res.posture("- **2FA on**: superadmins %d/%d, others %d/%d · open invites %d (%d "
                 "grant superadmin)" % (c["s2fa"], c["supers"], c["o2fa"], others, c["invites"],
                                        c["invites_super"]))

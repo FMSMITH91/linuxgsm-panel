@@ -35,7 +35,7 @@ name: Deploy
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Started by hand, after signing — not on CI's completion any more. The installer it ships moves a
-# checkout only to a commit signed with the owner's key (install.sh, "Release signatures"), and a
+# checkout only to a commit signed with the release key (install.sh, "Release signatures"), and a
 # commit is signed after its checks pass, so a deploy started on CI's completion would arrive before
 # the signature and only hold: one extra tailnet login per merge to say "Not updated". One trigger,
 # so the two never race for the deploy group either. This deploys to the TEST host only, and ships
@@ -76,15 +76,11 @@ jobs:
     # the deploy. codeql-alerts.yml already distinguishes the two event kinds for its own reasons;
     # this is the mirror image of that clause.
     #
-    # This `if` decides WHETHER to deploy. It cannot prove WHAT: head_branch is a SHORT name, and
-    # GitHub compares strings IGNORING CASE, so any ref whose short name matches main
-    # case-insensitively passes it — a TAG `main`, a branch `Main`, a tag `MAIN`. One of those
-    # pushed with a commit that carries its own workflow named "CI" (on: push) completes as event
-    # 'push', head_branch 'main' (or 'Main'), head_repository this repository — every clause below
-    # true, and head_sha a commit that was never on main. The repository's ruleset protects
-    # refs/heads/main; none of those is that ref. So the verify step requires head_branch to be
-    # exactly `main` and proves head_sha is on main itself, before anything is taken from it or the
-    # tailnet is joined.
+    # This `if` decides WHETHER to deploy. It cannot prove WHAT: GitHub compares strings IGNORING
+    # CASE, so a dispatch on a branch named `Main` or `MAIN` passes it, and the sha input is any
+    # text the dispatcher typed. The repository's ruleset protects refs/heads/main; neither of
+    # those branches is that ref. So the verify step requires the ref to be exactly `main` and
+    # proves the sha is on main itself, before anything is taken from it or the tailnet is joined.
     if: >-
       github.ref == 'refs/heads/main' &&
       vars.DEPLOY_ENABLED == 'true'
@@ -116,9 +112,9 @@ jobs:
       # must not list the deploy host's address and every command run as root. part42 names this
       # exception.
 
-      # The installer root runs on a system install comes from the commit CI just verified, carried
-      # to the host inside the SSH session — not from the host's own checkout (the system-install
-      # branch below says why that one cannot be trusted).
+      # The installer root runs on a system install comes from the commit the verify step proves,
+      # carried to the host inside the SSH session — not from the host's own checkout (the
+      # system-install branch below says why that one cannot be trusted).
       #
       # This step fetches MAIN'S HISTORY, not that commit. It used to check out head_sha directly,
       # which fetches any commit id GitHub will serve: a tag's, another branch's, even a fork's
@@ -146,8 +142,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # reads the commit's check runs (checks: read)
         run: |
           set -euo pipefail
-          # The job's `if` compared head_branch with 'main' IGNORING CASE (GitHub's expressions
-          # do), so a branch `Main` or a tag `MAIN` passed it. Compared here exactly, in bash.
+          # The job's `if` compared the ref with 'refs/heads/main' IGNORING CASE (GitHub's
+          # expressions do), so a branch `Main` passed it. Compared here exactly, in bash.
           if [ "${HEAD_BRANCH:-}" != "main" ] || [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
               echo "::error::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was deployed."
               exit 1
@@ -195,7 +191,7 @@ jobs:
               exit 1
           fi
           # ...and NO OLDER than root's source floor. Every commit main was ever at passes the check
-          # above, and a re-run of an old CI run deploys its commit: the installer shipped below runs
+          # above, and a dispatch naming an old commit deploys it: the installer shipped below runs
           # as root on a system install, pinned to that commit, and can leave that commit's installer
           # in place root-owned. One from before e26a644 read the helper out of the panel-owned .git,
           # so a compromised panel could then plant the helper root installs. install.sh keeps the
@@ -225,11 +221,23 @@ jobs:
               echo "::error::${HEAD_SHA}'s install.sh predates root's source floor, so it is not shipped; nothing was deployed."
               exit 1
           fi
-          # ...and it passed EVERYTHING the panel's own update gate requires, not only CI. This job
-          # is triggered by CI's completion, and deployed on that alone: the security scans, CodeQL
-          # and the code-scanning alerts check ("Open code-scanning alerts", posted a minute or two
-          # after CodeQL finishes) could still be running, or go on to fail, and the host already
-          # had the commit — one the self-updating panels would never have been offered. So wait
+          # A commit that changes only what ci.yml's paths-ignore lists ('**/*.md', 'docs/**',
+          # LICENSE, .gitignore, .editorconfig; system_ops._ci_path_ignored reads the same list)
+          # gets no CI or CodeQL run, so the wait below could only time out after 20 minutes. It
+          # changes nothing a host runs, and tools/sign-release.sh starts no deploy for one; a
+          # dispatch by hand is refused here at once. A root commit or a diff git cannot produce
+          # counts as code, and is waited for.
+          if changed="$(git diff --name-only "${HEAD_SHA}^1" "${HEAD_SHA}" -- 2>/dev/null)" \
+             && [ -n "${changed}" ] \
+             && ! grep -qvE '(\.md$|^docs/|^LICENSE$|^\.gitignore$|^\.editorconfig$)' <<< "${changed}"; then
+              echo "::error::${HEAD_SHA} changes only documentation, which CI does not run for; there is nothing to verify, and nothing was deployed."
+              exit 1
+          fi
+          # ...and it passed EVERYTHING the panel's own update gate requires, not only CI. A deploy
+          # started too early would ship a commit whose security scans, CodeQL and code-scanning
+          # alerts check ("Open code-scanning alerts", posted a minute or two after CodeQL
+          # finishes) could still be running, or go on to fail — one the self-updating panels
+          # would never have been offered. So wait
           # (up to 20 minutes) for the same set system_ops._remote_ci_state waits for: every check
           # on the commit completed and none failed, and each REQUIRED name present and not merely
           # skipped. The two lists are system_ops' _CI_REQUIRED and _CI_IGNORE; a unit test holds
@@ -323,7 +331,7 @@ jobs:
           # (refs/remotes/origin/main, spelled out in full there too), and moves a checkout on main
           # only forward to it — never backwards, and never sideways onto a pin that does not
           # contain it (a foxtrot push can leave one on the line) — so a run that finishes late (a
-          # re-run of an old commit's CI) leaves a newer host where it is, and says why in this log
+          # dispatch naming an older commit) leaves a newer host where it is, and says why in this log
           # when it holds. A pin it cannot verify on its own fetch (a foxtrot push landed
           # in between) is not replaced by the tip either: the host stays where it is, with a
           # warning in this log, or — when its checkout is not on main — the update stops with an

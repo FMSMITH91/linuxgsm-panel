@@ -534,7 +534,7 @@ try:
     _mh_head26 = _mh_main26(_X26)
     _mh_unread26 = _mh_main26(None)
     # A head that added documentation only: that push runs no uploader (the shared paths-ignore),
-    # so X's scan is still main's. MOVED threw the week's scan away with nothing to replace it.
+    # so X's scan is still main's. MOVED threw the day's scan away with nothing to replace it.
     _mh_docs26 = _mh_main26(_Y26, _mh_files26("README.md", "docs/x.md"))
     _mh_cmp_unread26 = _mh_main26(_Y26, None)
     _mh_diverged26 = _mh_main26(_Y26, dict(_mh_files26("README.md"), status="diverged"))

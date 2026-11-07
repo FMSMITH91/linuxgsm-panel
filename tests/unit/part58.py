@@ -211,7 +211,7 @@ def _console_slots58():
 
 
 # ── live regression from #416: a backup LinuxGSM called failed while its archive is whole ──────
-# LinuxGSM v26.3.0 on the owner's host: the FAIL below, then "Backup created" and exit 0, and the
+# LinuxGSM v26.3.0 on one measured host: the FAIL below, then "Backup created" and exit 0, and the
 # archive complete (1.2G, the size of the earlier ones). #416's rule took the FAIL text alone as
 # proof and deleted that day's archives for two servers.
 _SELF58 = "csgoserver"

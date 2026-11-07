@@ -118,7 +118,7 @@ def _clean_action_output(s):
 
 
 # What a read-only action's output may grow to in the reply. It was 600 characters, which cut
-# `details` off two sections in (the owner's, 2026-11-05: it ended at "Memory" on a lone "S").
+# `details` off two sections in (2026-11-05: one ended at "Memory" on a lone "S").
 # The reply is JSON to the page's output dialog, which scrolls; LinuxGSM's whole `details` is a
 # few kilobytes. The form route flashes into the session COOKIE, so it keeps the short form.
 _DTL_REPLY_MAX = 64 * 1024

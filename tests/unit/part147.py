@@ -1,7 +1,6 @@
 """Part 147 of the unit suite: the server page says which LinuxGSM release a server is on.
 
-The owner asked (2026-11-05) how to tell whether each game server's LinuxGSM is up to date; nothing
-showed it. /api/server/<id>/version, which the page already fetches once after drawing, now carries
+Whether each game server's LinuxGSM is up to date was shown nowhere. /api/server/<id>/version, which the page already fetches once after drawing, now carries
 {"release", "latest", "behind"}. Held here:
 
 * hosts.lgsm_versions reads the script's and the modules' release in ONE read, and a failed or

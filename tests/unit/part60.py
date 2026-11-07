@@ -1,6 +1,6 @@
 """Part 60 of the unit suite: New file and New folder in the file browser.
 
-The owner asked to create a file or a folder from the file browser. POST
+Creating a file or a folder from the file browser. POST
 /api/server/<id>/create-path makes one empty file or folder in the folder the browser shows, held
 to every gate rename-path has:
 

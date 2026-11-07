@@ -366,7 +366,7 @@ function renderUpdate(d){
     });
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
   } else {
-    // Two states and nothing else (the owner's rule, given more than once): an update to install,
+    // Two states and nothing else: an update to install,
     // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
     // verified", not "couldn't reach the update source", not "docs, tests or tooling". Each was
     // added back after the rule was set; the server's reasons stay in the API response.

@@ -315,6 +315,55 @@ def _repo_jobs127():
     return jobs
 
 
+def _ci_paths_ignore127(wf):
+    """The paths-ignore list of `wf`'s push trigger, as written."""
+    text = _read127(os.path.join(_ROOT127, ".github", "workflows", wf)) or ""
+    block = text.split("paths-ignore:", 1)[1] if "paths-ignore:" in text else ""
+    out = []
+    for line in block.splitlines()[1:]:
+        m = _re127.match(r"\s+- '([^']+)'\s*$", line)
+        if not m:
+            break
+        out.append(m.group(1))
+    return out
+
+
+def _docs_patterns127():
+    """The documentation-only pattern each of sign-release.sh and deploy.yml greps with, or None."""
+    pats = {}
+    for name, rel in (("sign-release.sh", ("tools", "sign-release.sh")),
+                      ("deploy.yml", (".github", "workflows", "deploy.yml"))):
+        m = _re127.search(r"grep -qvE '(\([^']+\))'", _read127(os.path.join(_ROOT127, *rel)) or "")
+        pats[name] = m.group(1) if m else None
+    return pats
+
+
+def _docs_only127():
+    """sign-release.sh and deploy.yml call a commit documentation-only by the same list as CI."""
+    pats = _docs_patterns127()
+    want = ["**/*.md", "docs/**", "LICENSE", ".gitignore", ".editorconfig"]
+    lists = {wf: _ci_paths_ignore127(wf) for wf in ("ci.yml", "codeql.yml")}
+    samples = ["README.md", "docs/a.png", "a/b/c.md", "LICENSE", ".gitignore", ".editorconfig", "app.py",
+               "docs.py", "static/x.js", ".gitattributes", "LICENSE.txt", "install.sh", "mdocs/x.py"]
+    agree = {}
+    for name, pat in pats.items():
+        agree[name] = pat is not None and all(
+            bool(_re127.search(pat, s)) == _so127._ci_path_ignored(s) for s in samples)
+    check("docs-only: ci.yml and codeql.yml ignore exactly the paths system_ops._ci_path_ignored, "
+          "tools/sign-release.sh and deploy.yml's verify step call documentation",
+          lists == {"ci.yml": want, "codeql.yml": want}
+          and all(_so127._ci_path_ignored(p.replace("**/*", "x").replace("/**", "/x")) for p in want),
+          repr(lists))
+    check("docs-only: sign-release.sh's and deploy.yml's patterns are one pattern, and it calls a path "
+          "documentation exactly when system_ops._ci_path_ignored does",
+          pats["sign-release.sh"] == pats["deploy.yml"] and all(agree.values()), repr((pats, agree)))
+    dep = _read127(os.path.join(_ROOT127, ".github", "workflows", "deploy.yml")) or ""
+    check("deploy: the verify step refuses a documentation-only commit BEFORE its 20-minute wait for "
+          "checks CI never runs for it, and before the tailnet is joined",
+          0 < dep.find("changes only documentation") < dep.find("waited_until=")
+          < dep.find("name: Join the tailnet"), "")
+
+
 def _ignored127():
     def _run(name, status, conclusion):
         return [{"name": name, "status": status, "conclusion": conclusion}]
@@ -339,7 +388,8 @@ def _ignored127():
 try:
     _p9_arm(who="part127")
     os.makedirs(os.path.join(_TMP127, "const"))
-    for _fn127 in (_moves127, _discards127, _shells127, _helpers127, _scorecard127, _ignored127):
+    for _fn127 in (_moves127, _discards127, _shells127, _helpers127, _scorecard127, _ignored127,
+                  _docs_only127):
         _fn127()
         _p9_restore_all()
         _p9_arm(who="part127")
