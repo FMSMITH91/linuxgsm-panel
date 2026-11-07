@@ -139,11 +139,13 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 
 ### Game servers
 
-- One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs.
-- Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks). gamedig is installed on each host from a hash-locked lockfile in `tools/gamedig`, updated through reviewed Dependabot pull requests.
+- One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs. The install page shows each game's icon, with a search box; the panel fetches the icons itself, so the browser only ever talks to the panel.
+- Real-time WebSocket console, command sending (↑/↓ recalls earlier commands, and buttons hold each game's common ones), LinuxGSM's script log and the game's own log beside the live one, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks). gamedig is installed on each host from a hash-locked lockfile in `tools/gamedig`, updated through reviewed Dependabot pull requests.
 - Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups and mod changes can wait until a server is empty.
 - **Clean host reboots** — rebooting a host from the panel stops its running game servers cleanly first, then brings back the ones that were running (stopped servers stay stopped; a setting can leave a server without Autostart stopped). With players on, you choose: reboot once everyone has left, or now (players are warned in-game with a 60-second countdown where the game can show a message). See [Rebooting a host](#rebooting-a-host).
 - Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload, download (a folder comes down as a `.tar.gz`) and in-browser editing.
+- **Settings form** for LinuxGSM's config: every setting with LinuxGSM's own help text, its default, and a badge for the file the value comes from. Changes are saved to the server's own config, never to `_default.cfg` (LinuxGSM overwrites that one).
+- **Scheduled Rust wipes** — a map wipe or a full wipe on a schedule, with a backup taken first and no wipe if that backup fails.
 - **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
 
@@ -162,7 +164,7 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
 - Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
 
-**Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); and a first-run setup wizard.
+**Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); a light or dark theme per account (or follow the device); installable as an app on a phone's home screen; a **What's new** card after each update; and a first-run setup wizard.
 
 ### Rebooting a host
 
@@ -188,7 +190,7 @@ The API takes a session cookie or an `Authorization: Bearer <token>` (Account �
 
 ## Screenshots
 
-> IPs, hostnames, and accounts are placeholders (`203.0.113.10`, `example.ts.net`, `admin@example.com`).
+> Taken from a demo panel with sample data: IPs and hostnames are documentation placeholders (`192.0.2.x`, `203.0.113.10`).
 
 | | |
 |---|---|
@@ -198,6 +200,10 @@ The API takes a session cookie or an `Authorization: Bearer <token>` (Account �
 | ![Host manager](docs/screenshots/03-host-manager.png) | ![Firewall](docs/screenshots/04-firewall.png) |
 | **Files & config** | **Granular permissions** |
 | ![Files](docs/screenshots/05-files.png) | ![Permissions](docs/screenshots/06-permissions.png) |
+| **Light theme** | **Settings form** — LinuxGSM's own help for every setting |
+| ![Light theme](docs/screenshots/07-light-theme.png) | ![Settings form](docs/screenshots/08-config-form.png) |
+| **Install a server** — every LinuxGSM game, with search | **LinuxGSM's script log** beside the live console |
+| ![Install](docs/screenshots/09-install.png) | ![Logs](docs/screenshots/10-logs.png) |
 
 ## Configuration
 
