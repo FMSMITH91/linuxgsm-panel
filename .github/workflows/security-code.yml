@@ -166,7 +166,7 @@ jobs:
       # propagate), with a reason and an ignoreUntil date, after which it fails again and is looked
       # at afresh: tools/gamedig/osv-scanner.toml.
       #   requirements.txt:<path>: osv-scanner picks a parser by file NAME, so a pip lockfile not
-      #     called requirements.txt must say how to read it (docs/scan-source.md, v2.6.0).
+      #     called requirements.txt must say how to read it (docs/scan-source.md, v2.7.0).
       #   The count: osv-scanner prints `Scanned <path> file and found N packages` per lockfile.
       #     Each must have been read and have yielded packages, or the run fails: a lockfile it
       #     parsed as empty is otherwise reported clean.

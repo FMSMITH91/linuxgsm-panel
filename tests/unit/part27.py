@@ -342,7 +342,7 @@ check("dependency audit: the workflow runs it on every pull request, on main and
 
 
 # ── the exemptions: reasoned, expiring, and the same list in Dependency Review ──────────────────
-# osv-scanner reads osv-scanner.toml from the scanned file's own directory only (docs, v2.6.0). Read
+# osv-scanner reads osv-scanner.toml from the scanned file's own directory only (docs, v2.7.0). Read
 # as text: the 3.10 CI leg has no tomllib.
 def _ignored27(text):
     """[[IgnoredVulns]] entries as dicts of their id, ignoreUntil and reason (raw text)."""

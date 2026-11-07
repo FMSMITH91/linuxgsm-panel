@@ -9,7 +9,7 @@
 id = "GHSA-xcq7-p3pf-p88h"
 ignoreUntil = 2026-11-22
 reason = """opentelemetry-api 1.37.0 in semgrep.txt (unbounded tracestate parsing, fixed in 1.45.1).
-Not fixable by a bump: every Semgrep release up to 1.182.1 pins opentelemetry-api~=1.37.0, so the
+Not fixable by a bump: every Semgrep release up to 1.184.0 pins opentelemetry-api~=1.37.0, so the
 resolver cannot take 1.45.1 while Semgrep is installed. CI-only: Semgrep runs in a CI job over this
 repository's own files with metrics off, and is handed no trace context from outside, so the
 tracestate parser never reads attacker input. Remove this entry when Semgrep raises the pin and the
