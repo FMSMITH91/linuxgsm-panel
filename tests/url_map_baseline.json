@@ -617,6 +617,17 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/log/<any(script, game):kind>": {
+    "endpoint": "api_server_lgsm_log",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_lgsm_log"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/playerlist": {
     "endpoint": "api_server_playerlist",
     "guards": [

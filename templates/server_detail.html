@@ -163,18 +163,28 @@
       <div class="card-header d-flex align-items-center flex-wrap gap-2">
         <span><i class="bi bi-terminal-fill"></i> Live Console</span>
         <span class="text-secondary small" id="ws-status">(connecting...)</span>
+        {# LinuxGSM's other two logs, read-only, in place of the live console while one is chosen.
+           The same permission as the Log download beside it and the file browser it comes from. #}
+        {% if can_download_log %}
+        <select class="form-select form-select-sm w-auto" id="cmpa-log-select" aria-label="Which log to show"
+                data-action="cmpaShowLog" data-args='["@self"]' data-on="change">
+          <option value="console">Live Console</option>
+          <option value="script">Script log</option>
+          <option value="game">Game log</option>
+        </select>
+        {% endif %}
         {# The console keeps its own scrollback now; this pulls a much deeper slice of the log for
            when you need to look further back than the session has been open. #}
         {# Off by default for nobody: a Minecraft server already prefixes its own [HH:MM:SS], so
            the gutter is duplication there and the toggle is how you turn it off. The choice is
            remembered per browser. #}
         {% if _can_view_console %}
-        <button class="btn btn-sm btn-outline-secondary ms-auto" id="console-ts-toggle"
+        <button class="btn btn-sm btn-outline-secondary ms-auto cmpa-console-only" id="console-ts-toggle"
                 data-action="toggleConsoleTs" aria-pressed="true"
                 title="Show the time the panel saw each line, in your own timezone">
           <i class="bi bi-clock"></i> <span>Times</span>
         </button>
-        <button class="btn btn-sm btn-outline-secondary" data-action="loadMoreConsole"
+        <button class="btn btn-sm btn-outline-secondary cmpa-console-only" data-action="loadMoreConsole"
                 data-args='["@self"]' title="Fetch a deeper slice of the log file">
           <i class="bi bi-arrow-up-circle"></i> Load older
         </button>
@@ -224,6 +234,19 @@
           {% if not _can_view_console %}<div class="text-secondary">You don't have permission to view this server's console.</div>
           {% else %}{% for line in console_lines if line.strip() %}<div class="console-line" data-no-i18n>{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}{% endif %}
         </div>
+        {% if can_download_log %}
+        {# A <pre> filled by textContent: the log is the game's text, player names and chat included. #}
+        <div id="cmpa-log-view" hidden>
+          <div class="d-flex align-items-center gap-2 px-2 py-1 small">
+            <span class="text-secondary text-truncate" id="cmpa-log-file" data-no-i18n></span>
+            <span class="text-secondary" id="cmpa-log-note"></span>
+            <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-action="cmpaLoadLog"
+                    title="Read the log again"><i class="bi bi-arrow-clockwise"></i> <span>Refresh</span></button>
+          </div>
+          <pre class="console-output mb-0" id="cmpa-log-output" tabindex="0" data-no-i18n
+               style="white-space:pre-wrap;word-break:break-all;"></pre>
+        </div>
+        {% endif %}
       </div>
       {% if can_send_command %}
       <div class="card-footer">
@@ -235,6 +258,18 @@
             <i class="bi bi-send-fill"></i> Send
           </button>
         </form>
+        {# One-tap commands for this game's console. One that takes an argument (shown with …) puts
+           itself in the box for the rest to be typed; the others send at once, through the box. #}
+        {% if quick_commands %}
+        <div class="d-flex flex-wrap gap-1 mt-2" role="group" aria-label="Quick commands">
+          {% for cmd, fills in quick_commands %}
+          <button type="button" class="btn btn-sm btn-outline-secondary py-0 font-monospace"
+                  data-action="cmpaQuickCommand" data-args='["@self"]' data-cmd="{{ cmd }}"
+                  data-fill="{{ '1' if fills else '0' }}"
+                  title="{{ t('Put this in the command box') if fills else t('Send this command now') }}"><span data-no-i18n>{{ cmd }}{% if fills %} …{% endif %}</span></button>
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
       {% endif %}
 </div>

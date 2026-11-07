@@ -1,0 +1,13 @@
+{
+  "Which log to show": "Qué registro mostrar",
+  "Script log": "Registro del script",
+  "Game log": "Registro del juego",
+  "Read the log again": "Volver a leer el registro",
+  "Quick commands": "Comandos rápidos",
+  "Send this command now": "Enviar este comando ahora",
+  "Put this in the command box": "Poner esto en el cuadro de comandos",
+  "This log is empty.": "Este registro está vacío.",
+  "No game log found. Not every game keeps one where LinuxGSM can link to it.": "No se encontró ningún registro del juego. No todos los juegos guardan uno donde LinuxGSM pueda enlazarlo.",
+  "LinuxGSM has not written this log yet.": "LinuxGSM todavía no ha escrito este registro.",
+  "Couldn't read this log. The host may not have answered; try Refresh.": "No se pudo leer este registro. Puede que el host no haya respondido; prueba con Actualizar."
+}

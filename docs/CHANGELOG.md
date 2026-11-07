@@ -24,6 +24,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **"What's new" after the panel updates.** The first time you open the panel after an update,
   a small window lists the changelog entries added since you last looked; close it and it does not
   come back until the next update. A new account sees nothing until then.
+- **The console remembers the commands you sent.** In the command box, the Up and Down arrows bring
+  back the last 50 commands sent to that server from this browser. Pressing Down past the newest one
+  returns what you were typing.
+- **Quick commands under the console.** For Source, Quake 3 engine and Minecraft servers, a few
+  one-tap buttons send common commands such as `status` or `list`. A command that needs more, such
+  as `say`, is put in the box for you to finish. Only people who may send console commands see them.
+- **The script log and the game's own log on the server page.** A menu beside "Live Console" shows
+  the last 300 lines of LinuxGSM's script log (starts, stops, updates, monitor checks) or of the
+  newest file in the game's own log folder, with a Refresh button. It needs the same permission as
+  the file browser. When the panel cannot read a log, it says so instead of showing it as empty.
 - **Each server's page shows which LinuxGSM release it runs.** It appears under the game's own
   version (for example `LinuxGSM v26.4.0`), with "· v26.5.0 available" when LinuxGSM has a newer
   release. Running update-lgsm from the Maintenance menu updates it. The release is read in the
