@@ -1840,18 +1840,22 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   color: #047857;
   border-color: #047857;
 }
+
 [data-bs-theme="light"] .btn-outline-danger {
   color: #b91c1c;
   border-color: #b91c1c;
 }
+
 [data-bs-theme="light"] .btn-outline-warning {
   color: #92400e;
   border-color: #b45309;
 }
+
 [data-bs-theme="light"] .btn-outline-primary {
   color: #1d4ed8;
   border-color: #1d4ed8;
 }
+
 [data-bs-theme="light"] .btn-outline-info {
   color: #0e7490;
   border-color: #0e7490;
