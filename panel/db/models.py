@@ -242,7 +242,7 @@ class User(UserMixin, db.Model):
 
     @property
     def ui_theme(self):
-        """This account's colour scheme: "dark", "light", or "system" for anything else."""
+        """The account's colour scheme: "dark", "light", or "system" for anything else."""
         return self.theme if self.theme in UI_THEMES else "system"
 
     def get_ui_prefs(self):

@@ -86,6 +86,7 @@ check("whats_new.current_entries: the panel's own CHANGELOG parses, this change'
       repr(len(_real150)))
 
 # ── the migration: an upgrade stamps the accounts that exist, a new account starts at "now" ───────
+_NOLOGIN150 = "!"               # not a hash any password matches: these rows never sign in
 _TMP150 = tempfile.mkdtemp(prefix="lgsm-unit-p150-")
 _mig150 = _Flask150("unit_part150_mig")
 _mig150.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_TMP150, "upgrade.db"),
@@ -93,7 +94,7 @@ _mig150.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_TMP15
 db.init_app(_mig150)
 with _mig150.app_context():
     db.create_all()
-    db.session.add(User(username="p150old", password_hash="x"))
+    db.session.add(User(username="p150old", password_hash=_NOLOGIN150))
     db.session.commit()
     db.session.execute(_sa_text150("ALTER TABLE user DROP COLUMN whats_new_seen"))
     db.session.execute(_sa_text150("ALTER TABLE user DROP COLUMN theme"))
@@ -101,7 +102,7 @@ with _mig150.app_context():
     _models150._run_light_migrations()
     _upg150 = db.session.execute(_sa_text150(
         "SELECT theme, whats_new_seen FROM user WHERE username = 'p150old'")).one()
-    db.session.add(User(username="p150new", password_hash="x"))
+    db.session.add(User(username="p150new", password_hash=_NOLOGIN150))
     db.session.commit()
     _new150 = db.session.execute(_sa_text150(
         "SELECT theme, whats_new_seen FROM user WHERE username = 'p150new'")).one()
