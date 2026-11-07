@@ -117,8 +117,9 @@
          nothing moves when the script arrives. A tile only SETS the Game select above, which is
          what the form posts, so the install flow is the one it always was. Icons come from the
          panel's own /game-icon route (fetched and cached server-side from linuxgsm.com); a game
-         with none keeps its initials. Each icon's URL waits in data-icon-src until the page has
-         drawn (manage_servers.js), so the icons never hold back the first paint. Right under the Game select on a phone; last on a
+         with none keeps its initials. Each tile names its game's script in data-icon-script, and
+         manage_servers.js builds the icon's URL from it once the page has drawn, so the icons never
+         hold back the first paint. Right under the Game select on a phone; last on a
          wide screen (order-md-last), below the row of fields. #}
       {% if games %}
       <div class="col-12 order-md-last" id="game-picker">
@@ -134,7 +135,7 @@
           <button type="button" class="game-tile" data-game="{{ g.shortname }}" aria-pressed="false"
                   data-search="{{ (g.name ~ ' ' ~ g.shortname ~ 'server')|lower }}"
                   data-action="pickGameTile" data-args='["@self"]'>
-            <span class="game-tile-art" aria-hidden="true"><span data-no-i18n>{{ ((_ws[0][:1] ~ (_ws[1][:1] if _ws|length > 1 else _ws[0][1:2])) if _ws else '?')|upper }}</span><img data-icon-src="{{ url_for('game_icon', script=g.shortname ~ 'server') }}" alt="" loading="lazy" width="36" height="36"></span>
+            <span class="game-tile-art" aria-hidden="true"><span data-no-i18n>{{ ((_ws[0][:1] ~ (_ws[1][:1] if _ws|length > 1 else _ws[0][1:2])) if _ws else '?')|upper }}</span><img data-icon-script="{{ g.shortname }}server" alt="" loading="lazy" width="36" height="36"></span>
             <span class="game-tile-text"><span class="game-tile-name" data-no-i18n>{{ g.name }}</span>
               <code class="game-tile-script text-secondary" data-no-i18n>{{ g.shortname }}server</code></span>
           </button>

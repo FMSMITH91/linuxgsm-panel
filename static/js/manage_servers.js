@@ -564,11 +564,13 @@ document.addEventListener('error', function (ev) {
 // The icons start once the page has drawn. Given their URLs in the markup, Chrome's lazy-load
 // distance still fetched most of the grid at once, and those requests competed with the page's
 // stylesheet and scripts: Lighthouse measured the install page's first paint at 2.8 s, against
-// about 1.1 s on the other pages. Each tile shows its initials until its icon arrives.
+// about 1.1 s on the other pages. Each tile shows its initials until its icon arrives. The URL is
+// built here (the panel's /game-icon/<script> route), with the script name escaped, rather than
+// copied whole from the page into src.
 function startGameIcons() {
-  document.querySelectorAll('#game-grid img[data-icon-src]').forEach(function (img) {
-    img.src = img.getAttribute('data-icon-src');
-    img.removeAttribute('data-icon-src');
+  document.querySelectorAll('#game-grid img[data-icon-script]').forEach(function (img) {
+    img.src = MOUNT + '/game-icon/' + encodeURIComponent(img.getAttribute('data-icon-script'));
+    img.removeAttribute('data-icon-script');
   });
 }
 document.addEventListener('DOMContentLoaded', syncGameTiles);
