@@ -466,7 +466,6 @@ compares git commits, not this file.
   - Optimise database no longer says "Optimized" when it was put off; after a reboot is called
     off, a server is not given up on while its host is silent or a LinuxGSM update holds its start.
 
-
 - **Phones (375 px wide).** Pop-up messages, tables, long names and French labels now fit the
   screen with delete buttons in reach. Desktop pages are unchanged except the Open-a-port card.
 
