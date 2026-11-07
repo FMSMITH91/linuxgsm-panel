@@ -17,7 +17,7 @@ A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game s
 ## Requirements
 
 - A host running **Ubuntu 22.04, 24.04 or 26.04 LTS** for the panel (CI tests all three, each on the Python that release ships — 3.10, 3.12 and 3.14; other distros may work but aren't supported).
-- One or more game-server machines on the same, reachable over SSH (key, password, or Tailscale SSH). The panel host can also manage itself.
+- One or more game-server machines, reachable over SSH (key, password, or Tailscale SSH). The panel host can also manage itself.
 - **LinuxGSM** on those machines, or let the panel install it.
 - *Optional:* **[Tailscale](https://tailscale.com)** for private HTTPS with no open ports.
 
@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
 
 **What the installer does** — one command, unattended:
 
-1. Installs the prerequisites it needs (`python3-venv`, `pip`, `git`, `curl`, `wget`, `cron`, `ufw`).
+1. Installs the prerequisites it needs (`python3-venv`, `python3-pip`, `git`, `curl`, `wget`, `cron`, `ufw`, `openssh-client`, and `tzdata` if it is missing).
 2. Patches the OS with `apt full-upgrade` — skip with `PANEL_NO_UPGRADE=1 bash install.sh`. If the
    upgrade needs a reboot it reboots the host (unless game servers are running); `PANEL_NO_REBOOT=1`
    keeps the upgrade and skips the reboot, on a first install and on an update.
@@ -37,7 +37,8 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
 4. Picks a free port (5000 by default) and records it in `data/config.json`.
 5. Sets up the service — **and never runs the panel as root**:
    - **As a normal user** → a `systemd --user` service with linger, so it survives logout/reboot.
-   - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Also installs the `linuxgsm-panel-recover` command. Remove the sudoers entry if this panel only ever manages *remote* servers — but that also turns off the in-panel **Update** (and the bot's `/update`), panel backup restore and the database repair, so you then update by hand over SSH with `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
+   - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Remove the sudoers entry if this panel only ever manages *remote* servers — but that also turns off the in-panel **Update** (and the bot's `/update`), panel backup restore and the database repair, so you then update by hand over SSH with `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
+   - Either way, it installs the `linuxgsm-panel-recover` command (reset a password, turn off 2FA, create an admin from a shell).
 6. Leaves the **host terminal**'s `sudo` alone. The panel user's grant names only its privileged
    helper and the game-server accounts the panel manages, so in a terminal on the panel host
    `sudo` to root *refuses* rather than prompting, while `sudo -u <game account>` (an account the
@@ -161,7 +162,7 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall (default policies, on/off, logging, port and IP-range blocks, all with lock-out checks), power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
 - **Brute-force defense** — fail2ban integration with per-jail logs, top offenders, one-click UFW blocking, and an optional rolling **auto-block** that firewalls every IP over a failed-attempt threshold (default 20 / 7 days) and releases it once its count drops back below. A whitelist (IP/CIDR) is never banned or blocked, on any jail of any host; your Tailscale peers are never banned from the panel or auto-blocked. A ban also closes any console or terminal already open from that address, and API-token guessing that carries on past its rate limit is banned too.
 - **Proactive admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 20 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you). ntfy needs no account — subscribe to a topic in its app and alerts reach your phone; point it at ntfy.sh or your own instance.
-- **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
+- **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/console <name>`, `/connect <name>`, `/say <name> <message>`, `/backup <name>`, `/update` (the panel, or one server with a name), `/start` / `/stop` / `/restart <name>`, and `/help`. Opt-in and locked to the configured chat/channel.
 - Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
 
 **Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); a light or dark theme per account (or follow the device); installable as an app on a phone's home screen; a **What's new** card after each update; and a first-run setup wizard.
@@ -214,7 +215,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `port` | 5000 | Web server port |
 | `bind_host` | *(auto)* | Bind address — empty picks `127.0.0.1` when Tailscale Serve can proxy, else `0.0.0.0`. Set `127.0.0.1` explicitly behind a proxy |
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
-| `trusted_proxies` | `["127.0.0.1", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
+| `trusted_proxies` | `["127.0.0.0/8", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
 | `trusted_proxy_users` | `www-data`, `nginx`, `http`, `caddy`, `cloudflared` | With `trust_proxy`, on loopback: the local accounts a proxy may run as (names or uids). Root and the panel's own account always count |
 | `session_lifetime_hours` | 8 | Idle session timeout (sliding) |
 | `remember_days` | 3 | "Remember me" cookie lifetime |
@@ -222,7 +223,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
 
-Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, the brute-force auto-block threshold and the two host-reboot settings are editable in-app at **Administration → Settings** (superadmin) and apply live. The panel's `port` and `bind_host` are changed at **Server management → Panel binding** (superadmin), which also updates the firewall and restarts the panel; `trust_proxy` stays in `config.json`.
+Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, and the two host-reboot settings are editable in-app at **Administration → Settings** (superadmin) and apply live. The brute-force auto-block threshold is shown there and changed on a host page's **Security** tab. The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding** (superadmin), which also updates the firewall and restarts the panel; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 
@@ -335,12 +336,12 @@ only reach packages above it in this list:
 
 | Package | Holds | Imports from |
 |---|---|---|
-| `panel/core/` | `clock` `config` `http` `i18n` `middleware` `origins` `panel_state` `runtime_stats` `terminal` `validation` | — |
+| `panel/core/` | `clock` `config` `green_write` `http` `i18n` `middleware` `origins` `panel_state` `runtime_stats` `terminal` `validation` `whats_new` | — |
 | `panel/db/` | `models` `prefs` `id_sequence` | core |
 | `panel/security/` | `auth` `banlist` `privileged` | core, db |
-| `panel/ops/` | `ssh_manager/` (8 modules) `debug_report/` `system_ops` `tailscale_integration` `serve_upkeep` `terminal_session` `socket_hooks` `backup` | core, db, security |
-| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` `game_ports` `host_reboot` `reboot_summary` `reboot_words` `bots/` | core, db, security, ops |
-| `panel/routes/` | the 26 route modules `register(app)` is assembled from, and `_shared` | everything above |
+| `panel/ops/` | `ssh_manager/` (9 modules) `debug_report/` `system_ops` `tailscale_integration` `serve_upkeep` `terminal_session` `socket_hooks` `backup` | core, db, security |
+| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` `lgsm_cfg_form` `lgsm_players` `game_ports` `game_icons` `host_reboot` `reboot_summary` `reboot_words` `wipe_schedule` `bots/` | core, db, security, ops |
+| `panel/routes/` | the route modules `register(app)` is assembled from (30), and `_shared` | everything above |
 
 The rule is about **module-level** imports; an import inside a function body runs only at call
 time, so it cannot make a load-order cycle, and a few cross the grain on purpose that way — for
@@ -357,7 +358,7 @@ with its path recorded in `panel.conf`). The shell scripts stay for the same rea
 documented install and recovery one-liners fetch them from the repo root by raw URL.
 
 Anything needing an on-disk path (`data/`, `translations/`, the git tree) takes it from
-`panel.REPO_ROOT` rather than recomputing it from `__file__`; `tests/unit_test.py` has a gate
+`panel.REPO_ROOT` rather than recomputing it from `__file__`; `tests/unit/part01.py` has a gate
 that fails if any of them drifts back to being module-relative.
 
 ## Contributing
