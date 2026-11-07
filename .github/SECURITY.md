@@ -186,7 +186,7 @@ and more — 120 verbs. The narrowing is in the argument types:
   tailscaled's operator. The helper will not move a joined host to another tailnet. Tailscale SSH
   there is your choice at install (`PANEL_TAILSCALE_SSH=1`/`0`, recorded root-owned in `panel.conf`).
   Serve and Funnel publish only the panel's own recorded port, and Funnel is refused while another
-  app is served on the same listener.
+  app is served on the same listener, unless Funnel is already on there.
 
 ### What is still escalated by hand
 
@@ -214,7 +214,8 @@ lets it *become a game account*, bounded by a group:
 - the Runas target is `%lgsmpanel-games`, never `ALL` or a named user, so `sudo -u root` stays
   refused;
 - membership is set only by install.sh and the `gameuser-group` verb, which holds the group name
-  as a literal;
+  as a literal; an account the panel creates (`user-create`) is enrolled by that verb as it is
+  made, under every test below but the install one, since its home is still the skeleton;
 - **only a game account is enrolled**: a uid in `/etc/login.defs`' `UID_MIN`..`UID_MAX`, not the
   panel's own account, only ordinary groups, and a LinuxGSM instance or Steam content tree in its own
   `/home/<name>`;
@@ -224,7 +225,7 @@ lets it *become a game account*, bounded by a group:
 
 A game account cannot write `/etc`, install packages, read another account's home, or edit the
 helper or the sudoers file. Every `sudo -u <account>` the panel builds goes through
-`ssh_manager._core.game_user_cmd` or `game_user_exec_cmd`, which refuse (rather than quote) an
+`ssh_manager._core.game_user_cmd` or `game_user_exec_cmd`, which refuse, not only quote, an
 account or script name that is not a plain identifier, or is `root` (GHSA-hh39-76g3-wxcx,
 reported by kta1kri; GHSA-c49r-gmr2-6qf5). A login or host handed to the system `ssh` client is checked the same way
 and placed after `--`. A panel backup restore re-checks every such name in the archive's database

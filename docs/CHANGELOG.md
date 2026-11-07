@@ -104,7 +104,8 @@ compares git commits, not this file.
   `use_terminal` permission and host access, and on the panel's own host it is superadmin-only.
   Sessions are audited (never what was typed) and close after 15 minutes idle; on a remote the shell
   runs as the account the panel connects with, often root. On the panel host `sudo` refuses unless
-  `PANEL_TERMINAL_SUDO=1 ./install.sh` grants it with a password required.
+  `PANEL_TERMINAL_SUDO=1 ./install.sh` grants it with a password required (give the account one
+  with `sudo passwd lgsmpanel`).
 - **The install picker knows which games LinuxGSM caps at an older Ubuntu.** Battlefield 1942,
   Battlefield: Vietnam, BATTALION: Legacy and Onset are greyed out and refused up front when the
   selected host's Ubuntu is newer than they support, instead of failing after a long download.
@@ -1128,10 +1129,10 @@ compares git commits, not this file.
   host (as root on a remote with sudo enabled) when deleting, writing files or cron, or importing.
   Such names are now refused before the host is asked, and removing such a server now removes it
   from the panel without touching the host.
-- **A failed firewall step during an install no longer opens SSH.** The install's port re-read
-  could open everything LinuxGSM reported, including port 22. It now holds back SSH, the panel's
-  port and other servers' ports itself, opens only the server's own port, and finishes with a
-  warning.
+- **A failed firewall step during an install no longer opens SSH.** If the firewall step failed,
+  the install's port re-read opened everything LinuxGSM reported, including port 22. It now holds
+  back SSH, the panel's port and other servers' ports itself; when the firewall step failed it
+  opens only the server's own port and finishes with a warning.
 - **An action's message never carries an internal error's text.** Such text, which could name a
   path, now goes to the log.
 - **A malformed stored server name can no longer mute that server's offline alerts.** A name like
