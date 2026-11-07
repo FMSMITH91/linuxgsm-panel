@@ -1,2162 +1,717 @@
 # Changelog
 
 All notable, user-facing changes to the LinuxGSM Panel. The project is alpha — see the README
-disclaimer. A version is the date of the commit, in UTC, written YYYY.M.D (`2026.9.26`) and shown
-with the short commit; the numbered sections below (0.8.0 to 0.10.0) are from before that. The
-panel's in-app "update available" check compares git commits, so you always get the newest
-CI-verified commit regardless of this file — this changelog is for humans.
+disclaimer. Each commit on `main` is a release, named by its date in UTC, written YYYY.M.D
+(`2026.9.26`) and shown with the short commit. "Since 0.10.0-alpha" lists everything released that
+way; the numbered sections below it (0.8.0 to 0.10.0) are from before. The panel's update check
+compares git commits, not this file.
 
 <!-- Every release repeats the same Added / Changed / Fixed / Security headings, as Keep a
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
-## [Unreleased]
+## [Since 0.10.0-alpha]
 
 ### Added
 
-- **Install the panel on a phone's home screen.** The panel now has an app manifest and icons, so
-  a phone's browser offers "Install" or "Add to Home screen", and the panel then opens in its own
-  window without the browser's bars. It works under a Tailscale Serve path too.
-- **A light theme.** The Account page's "Language and theme" card offers System (the default,
-  which follows the device's light or dark setting), Dark and Light. The choice is saved to the
-  account, so it follows you to every device, and the page draws in it from the start, with no
-  flash of the other one. The console and the host terminal stay dark in both.
+- **Install the panel on a phone's home screen.** A phone's browser now offers "Install" or "Add to
+  Home screen", and the panel then opens in its own window, also under a Tailscale Serve path.
+- **A light theme.** The Account page's "Language and theme" card offers System (the default),
+  Dark and Light, saved to the account so it follows you to every device. The console and the host
+  terminal stay dark in both.
 - **"What's new" after the panel updates.** The first time you open the panel after an update,
-  a small window lists the changelog entries added since you last looked; close it and it does not
-  come back until the next update. A new account sees nothing until then.
-- **The console remembers the commands you sent.** In the command box, the Up and Down arrows bring
-  back the last 50 commands sent to that server from this browser. Pressing Down past the newest one
-  returns what you were typing.
-- **Quick commands under the console.** For Source, Quake 3 engine and Minecraft servers, a few
-  one-tap buttons send common commands such as `status` or `list`. A command that needs more, such
-  as `say`, is put in the box for you to finish. Only people who may send console commands see them.
+  a small window lists the changelog entries added since you last looked.
+- **The console remembers the commands you sent.** Up and Down in the command box bring back the
+  last 50 commands sent to that server from this browser.
+- **Quick commands under the console.** For Source, Quake 3 engine and Minecraft servers, one-tap
+  buttons send common commands such as `status` or `list`. Only people who may send console
+  commands see them.
 - **The script log and the game's own log on the server page.** A menu beside "Live Console" shows
-  the last 300 lines of LinuxGSM's script log (starts, stops, updates, monitor checks) or of the
-  newest file in the game's own log folder, with a Refresh button. It needs the same permission as
-  the file browser. When the panel cannot read a log, it says so instead of showing it as empty.
-- **The LinuxGSM settings form explains each setting.** Under every field on Files & Config →
-  Config is LinuxGSM's own help for it, from the comments in the game's `_default.cfg`, grouped
-  under LinuxGSM's headings, with a link to the setting's page on docs.linuxgsm.com where LinuxGSM
-  names one. A badge shows which file the value comes from (`_default.cfg`, `common.cfg`, the
-  secrets files or the server's own `.cfg`). A search box finds a setting, the form is one column
-  on a phone, and the Save button stays in view. A save still changes only the lines you edited, in
-  the server's own `.cfg`. The file editor now refuses to save an instance's `_default.cfg` and
-  says why: LinuxGSM puts its own copy back every time it runs, so the change would be lost.
-- **Game pictures and search on the Install page.** Every game is a tile with its icon, its full
-  name and its LinuxGSM script name (for example `gmodserver`), and a search box narrows them as you
-  type, by name or script name. Pressing a tile picks that game in the form, which installs exactly
-  as before. The icons are LinuxGSM's own, from linuxgsm.com: the panel downloads each one the first
-  time it is shown, checks it is a real PNG, JPEG or WEBP picture, and keeps a copy under `data/`, so
-  your browser only ever loads them from the panel. A game without an icon shows its initials.
-- **Scheduled wipes for Rust.** On a Rust server's Files & Config page, the Schedule tab has a
-  Scheduled wipe card: a map wipe (map and saves; blueprints kept) or a full wipe (blueprints and
-  player data too), on the first Thursday of the month, every Thursday, or your own cron schedule,
-  at a time in your own timezone. Before every wipe the panel takes a LinuxGSM backup, and if that
-  backup fails nothing is wiped. By default it waits for the server to be empty (up to 12 hours).
-  A wipe the panel missed by more than 6 hours (it was not running) is skipped, not run late.
-  Every run is in the audit log, and a run that did not wipe sends an alert. Saving a schedule asks
-  you to confirm, and needs the same permission as Scheduled Tasks.
+  the last 300 lines of LinuxGSM's script log or of the game's newest log file. It needs the file
+  browser's permission, and says so when a log cannot be read.
+- **The LinuxGSM settings form explains each setting.** Each field on Files & Config → Config shows
+  LinuxGSM's own help, a docs link where LinuxGSM names one, and which file the value comes from.
+  The file editor now refuses to save an instance's `_default.cfg`, which LinuxGSM overwrites.
+- **Game pictures and search on the Install page.** Every game is a tile with its icon, full name
+  and script name, with a search box. Icons come from linuxgsm.com but are checked and kept under
+  `data/`, so your browser only loads them from the panel.
+- **Scheduled wipes for Rust.** A Rust server's Schedule tab can run a map or full wipe on a
+  schedule in your timezone. A LinuxGSM backup is taken first (if it fails, nothing is wiped), and
+  a run that did not wipe sends an alert.
 
 - **Each server's page shows which LinuxGSM release it runs.** It appears under the game's own
-  version (for example `LinuxGSM v26.4.0`), with "· v26.5.0 available" when LinuxGSM has a newer
-  release. Running update-lgsm from the Maintenance menu updates it. The release is read in the
-  background after the page has drawn, and the newest release is checked against LinuxGSM's
-  repository once a day, so neither slows the page.
+  version, with "· v26.5.0 available" when LinuxGSM has a newer release; update-lgsm in the
+  Maintenance menu updates it.
 - **An opt-in debug log.** With `"debug_log": true` in `data/config.json` (and a restart), the
-  panel writes its detailed DEBUG messages to `data/debug.log`. Those messages say what each
-  background job did and why it skipped a step, and the journal never shows them. The file is
-  readable only by the panel's account and is capped at 5 MB, with three older files kept (20 MB
-  at most). It is off by default and meant for a test box where a problem has to be traced.
+  panel writes detailed DEBUG messages to `data/debug.log`, readable only by the panel's account and
+  capped at 20 MB. It is off by default.
 
-- **The Telegram and Discord bots show "typing…" while a command is working.** A panel `/update`
-  spends 10-30 seconds checking GitHub before it answers, and the chat used to sit silent all that
-  time, with no sign the bot had heard. Any command that takes longer than a moment now shows the
-  bot typing until it replies (for up to two minutes). Instant answers are unchanged: no indicator,
-  no extra request.
+- **The Telegram and Discord bots show "typing…" while a command is working.** Any command that
+  takes longer than a moment shows the bot typing until it replies (up to two minutes).
 
-- **Updates install only signed releases.** Every commit on main is signed by
-  GitHub's own key, which proves nothing if someone takes over the project's GitHub account. The
-  installer already on a host now moves the panel only to a commit that also carries a signature
-  made with the release SSH key (on the new `release-signatures` branch); anything else is held
-  with "Not updated: held at …" and why, never swapped for another commit. Anything it cannot read
-  (no key, no signatures, a failed fetch, no `ssh-keygen`) counts as unsigned. Root installs check
-  with a root-owned copy of the key and stage the helper and the other root-owned pieces only from a
-  signed commit. The update card offers only a signed commit whose checks passed. A release is signed
-  with `tools/sign-release.sh`, which first shows every commit since the last signed release, the
-  files changed and a warning for any change to the installer, the helper, the key or CI, and signs
-  only once the commit id's first 12 characters are typed. It also starts the test host's deploy;
-  the deploy now runs on
-  that request instead of after every CI run. A lost key is recovered by running the installer by
-  hand with `PANEL_ALLOW_UNSIGNED_UPDATE=1`, which the panel itself can never pass. The installer
-  now also installs `openssh-client` if it is missing. With no pin, an update never moves the
-  panel back to an older commit.
-- **Firewall settings and port blocks on the Network tab.** A row above the rules now shows and
-  changes UFW's default policy for incoming and outgoing traffic (and for routed traffic on a host
-  that forwards), its logging level (off, low, medium, high, full), and turns the firewall on or
-  off. Each change asks first and says what it does. The panel refuses any change that would lock
-  you out, saying what is missing: a default deny or reject for incoming traffic, or turning UFW
-  on, needs a rule that lets SSH in and one that keeps the panel's own way to the host open (its
-  web port on the panel's host, the SSH port it dials on a remote, or Tailscale); a default deny for
-  outgoing traffic needs DNS, HTTP and HTTPS allowed out, and on the panel's host its SSH to every
-  remote; turning UFW off says the host will then accept every connection. While UFW is off the
-  panel checks the rules UFW would load. A firewall the panel cannot read is never changed.
-  Each check reads the rules the way UFW does for the panel's own connection: its address family
-  (IPv4 or IPv6), first matching rule wins, and a rule counts only where its interface, source and
-  destination address, protocol and port (or application profile, such as `Nginx Full`) all match
-  that connection. On a remote that connection is the panel's SSH session as the host sees it,
-  after any router port-forward; on the panel's host it is your browser's connection, straight in,
-  through a reverse proxy here (the port you really came in on, 8443 included), through Tailscale
-  Serve, or through a Cloudflare Tunnel, which needs no open port. So a rule for IPv6 alone, one kept
-  to your LAN, one on another network interface or one for another of the host's addresses does not
-  count as the panel's way in when it is not. The panel's host must also keep SSH open in every
-  address family it has a public address in. In Tailscale's default mode the tailnet interface is let
-  in before UFW, so no rule for it is asked for. When the panel cannot tell how you or it connect,
-  the change is refused, and the refusal says how to make it tell (for a reverse proxy here,
-  `trust_proxy` and `trusted_proxy_users`). Deleting a rule, blocking a port and blocking an address
-  use the same reading: the rule the connection gets in by alone is protected, and a block that
-  would drop it is refused.
-  Add a rule has a **Block** mode: deny or reject a port or a range (27015:27020), TCP, UDP or both,
-  for IPv4, IPv6 or both, put at the top of the rule list so it wins over a rule that opens the port.
-  SSH's ports, the panel's web port, a reverse proxy's or Tailscale Serve's port on the panel's host,
-  and the UDP port tailscaled listens on cannot be blocked. A block says what really happened: that
-  the port was already blocked, that an existing allow made UFW skip it (nothing blocked), that UFW
-  is off and the block is only stored, or, if it failed part-way, which rules it took out again.
-  **Open** can now keep a port to IPv4 or IPv6 only, and says so when a block above the new rule
-  still drops the port. On the Security tab, **Blocked IPs** takes a range too (203.0.113.0/24,
-  2001:db8::/48). However it is written (`/32`, an IPv4-mapped IPv6 address), a block is checked
-  as the address it really is: one reaching into Tailscale's addresses or the security whitelist,
-  or covering your own address, the one the panel connects from, or any of the panel host's own
-  addresses, is refused. Every change is in the audit log (an IPv4-only or IPv6-only open says
-  which), and on the panel's own host all of it is superadmin-only, like the rest of its firewall.
+- **Updates install only signed releases.** The installer now moves the panel only to a commit
+  that also carries a signature made with the release key; anything else, or anything it cannot
+  verify, is held with "Not updated: held at …" and why. The update card offers only a signed
+  commit whose checks passed. A lost key is recovered by running the installer by hand with
+  `PANEL_ALLOW_UNSIGNED_UPDATE=1`, which the panel itself can never pass.
+- **Firewall settings and port blocks on the Network tab.** A row above the rules shows and changes
+  UFW's default policies and logging level and turns the firewall on or off, each asking first. A
+  change that would lock you out (cutting SSH or the panel's own way to the host) is refused, saying
+  what is missing. Add a rule gains a **Block** mode for a port or range, put above rules that open
+  it; SSH's ports, the panel's web port and the ports Tailscale uses cannot be blocked. **Open** can
+  keep a port to IPv4 or IPv6 only, and **Blocked IPs** takes a range, refusing one that covers
+  Tailscale's addresses, the whitelist, your own address or the panel's. Every change is audited,
+  and on the panel's own host all of it is superadmin-only.
 - **LinuxGSM v26.4.0 support.** LinuxGSM 26.4 can warn players in-game before a stop
-  (`warnplayerstimer`) and, with `stoponlyifnoplayers` on, puts off a stop, restart, update or
-  backup while players are online. The panel now works with both:
-  - **Two controls in Files & Config → LinuxGSM Settings**: *Only stop when empty* (on/off) and
-    *Warn players first* (0–60 minutes), with a one-line explanation. They show only on servers
-    running LinuxGSM 26.4 or later, and the warning only on games whose console LinuxGSM can warn
-    through. On games whose player list can come back empty (Minecraft, CS2, CS:GO), the page says
-    LinuxGSM may then stop the server anyway, without its warning.
-  - **Stop, Restart, Update, Backup, queued actions and host reboots wait for the warning**
-    instead of giving up after a minute. A server whose setting cannot be read keeps the old time
-    limit. An uninstall stops the server straight away (no countdown, no players check), so the
-    page does not hang for the warning's minutes.
-  - **"Postponed" is said as postponed.** An update, backup or restart LinuxGSM puts off because
-    players are online is reported as postponed — in the console, the audit log, the chat bots,
-    the backup card and the scheduled-tasks list — never as finished or failed, and the message
-    says whether LinuxGSM will run it later (it does when Autostart is on). A stop LinuxGSM
-    refuses says so, and the Stop and Restart buttons say it in the server's console.
-  - **The panel's scheduled backups and LinuxGSM's postponed backup no longer both run.** While
-    LinuxGSM holds a backup for an empty server, the panel leaves it to LinuxGSM, records it when
-    LinuxGSM has taken it, and does not repeat LinuxGSM's own "backup postponed" alert.
-  - **A forced reboot still stops every server cleanly.** A server with *Only stop when empty* on
-    refuses an ordinary stop while players are online; for a "Reboot now" the panel sets that
-    setting aside for the one stop, so LinuxGSM still saves and stops the server itself. The Stop
-    button keeps the setting (and says when it refused). Players are warned once: by LinuxGSM's
-    countdown where a server has one, by the panel's 60-second warning otherwise — and on games
-    whose players LinuxGSM cannot always count (Minecraft, CS2, CS:GO), by the panel's. Servers the
-    panel warned are stopped first, before any LinuxGSM countdown.
-  - **A reboot that waits for an empty host goes back to waiting** when LinuxGSM refuses a stop
-    because a player has just joined, instead of letting the shutdown end that server.
-  - **Cancel during a reboot's stops calls off LinuxGSM's countdown** the way LinuxGSM's own
-    Ctrl-C does (its players are told the stop is cancelled), and the servers already stopped are
-    started again.
-  - **A reboot does not start while LinuxGSM is counting down** to another stop, restart, update
-    or backup on the host, or while a LinuxGSM restart is running, and its time allowance follows
-    how many accounts are stopped at once. A LinuxGSM command that starts during the reboot's
-    stops is waited for before the reboot is sent, and a server it started again is stopped again.
-  - **The Reboot dialog** lists, for each server with players online, how long LinuxGSM will warn
-    them (and that the reboot waits for it), or that only the panel's 60-second warning applies.
-  - **workshop-update** is in the Maintenance menu on the games LinuxGSM offers it for.
-  - **Team Fortress 2**: a server whose own `startparameters` lacks `-norestart` gets a one-line
-    notice saying to add it.
-- **A one-click fix for Project Zomboid's default admin password.** LinuxGSM (v26.3.0) starts Project
-  Zomboid with the admin password `CHANGE_ME`. A new install now gets a random one, and the install's
-  last message says where to find it (adminpassword in Files & Config). A server still on
-  `CHANGE_ME` shows a warning on its Config tab with a **Set a random admin password** button. A
-  settings save made at the same moment is not overwritten by the random password.
-- **A note for CS:GO servers about LinuxGSM's App ID switch.** From LinuxGSM v26.3.0, CS:GO runs as
-  App ID 4465480, and a Game Server Login Token made for App ID 730 stops working. The Config tab
-  says so, and says how to keep the old behaviour. It shows only on a server that has a token set
-  and runs as an App ID other than 730.
+  (`warnplayerstimer`) and, with `stoponlyifnoplayers` on, put off a stop, restart, update or backup
+  while players are online. The panel now works with both:
+  - *Only stop when empty* and *Warn players first* (0–60 minutes) in LinuxGSM Settings, on servers
+    running 26.4 or later.
+  - Stop, Restart, Update, Backup, queued actions and host reboots wait for the warning.
+  - Work LinuxGSM puts off is reported as postponed, never as finished or failed.
+  - The panel's scheduled backups no longer run alongside LinuxGSM's postponed backup.
+  - Reboots still stop every server cleanly and warn players once, and Cancel calls off LinuxGSM's
+    countdown.
+  - workshop-update is in the Maintenance menu where LinuxGSM offers it.
+  - A Team Fortress 2 server whose `startparameters` lacks `-norestart` shows a notice to add it.
+- **A one-click fix for Project Zomboid's default admin password.** A new install gets a random
+  admin password instead of LinuxGSM's `CHANGE_ME`, and a server still on `CHANGE_ME` shows a
+  warning with a **Set a random admin password** button.
+- **A note for CS:GO servers about LinuxGSM's App ID switch.** From LinuxGSM v26.3.0 a Game Server
+  Login Token made for App ID 730 stops working; the Config tab says so, and how to keep the old
+  behaviour, on a server with a token set that runs as another App ID.
 
-- **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
-  once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
-  supported", to fetch it straight away, for a game LinuxGSM has just added.
-- **New file and New folder in the file browser.** Two buttons beside Upload and Upload folder
-  make an empty file or folder in the folder the browser is showing. Each opens a name field at the
-  top of the list: Enter or Create makes it, Escape or Cancel closes it, and when the panel refuses,
-  the reason shows under the field so you can fix the name where you typed it. A new folder is
-  opened straight away, and a new file opens in the editor. The name follows Rename's rules: a
-  single name, no `/`, not `.` or `..`, at most 255 bytes, no control or text-direction characters
-  and no space at either end, sent as typed and never trimmed. Nothing is ever replaced: a name
-  already in the folder, even a broken symbolic link, is refused, including one that appears while
-  the panel is creating it. Protected LinuxGSM names and the live console's log folders are refused,
-  as is a folder reached through a symbolic link. The file or folder belongs to the game's account,
-  the same accounts are refused as for Delete and Rename, and every attempt is in the audit log.
-- **Rename a file or folder in the file browser.** Every row that can be deleted now has a Rename
-  (pencil) control, at every width. It turns the row's name into a field holding the current name,
-  with the part before the extension selected, so typing replaces `notes` and keeps `.txt`. Enter or
-  Rename sends it, Escape or Cancel puts the row back, and when the panel refuses, the reason shows
-  under the field so you can fix the name where you typed it. It covers renaming something you just
-  uploaded, and a file open in the editor follows its new name. A rename stays in its own folder,
-  and the same rules guard it as Delete. The new name must be a single name: no `/`, not `.` or
-  `..`, at most 255 bytes, and no character that would make it read as another name (control
-  characters, line or paragraph separators, text-direction controls, or a space at either end:
-  `server.cfg ` looks exactly like `server.cfg`). The name is sent as typed and never trimmed; a
-  name the panel refuses comes back with the reason. Protected LinuxGSM paths cannot be renamed, and
-  no other name can be renamed onto them. Nor can the live console's log or the `log` and
-  `log/console` folders it is in, also when the logs are reached through a symbolic link, because
-  the console would stop until the server restarts. A path reached through a symbolic link to a
-  folder is refused, not followed. An existing name is never replaced, including one that appears
-  while the rename runs; there is no "replace" option. A game account that can become root is
-  refused, as it is for every other file write. Every rename request from someone allowed to manage
-  files is in the audit log (`rename_file`): renamed, refused (with the reason, including a name
-  refused for its form) or unconfirmed. If the host doesn't confirm the rename, the panel says
-  exactly that and asks you to reload, rather than guessing whether it happened.
+- **A Refresh list button for LinuxGSM's game list.** A superadmin can press **Refresh list** on the
+  install page to fetch the list straight away instead of waiting for the weekly refresh.
+- **New file and New folder in the file browser.** Two buttons beside Upload make an empty file or
+  folder where you are, following Rename's naming rules. Nothing existing is replaced, protected
+  LinuxGSM names are refused, and every attempt is in the audit log.
+- **Rename a file or folder in the file browser.** Every row that can be deleted has a Rename
+  (pencil) control; a refused name shows its reason under the field. An existing name is never
+  replaced, protected LinuxGSM paths and the live console's logs cannot be renamed, and every
+  request is in the audit log.
 - **Clean host reboots: running game servers are stopped first and come back after.** Every reboot
-  the panel makes — a host's Power card (the panel's own host too), the reboot-needed banner, the
-  command palette, "reboot when everyone has left", `POST /api/remote/<id>/reboot` and `POST
-  /api/server-management/reboot` — now stops the host's running game servers with LinuxGSM's
-  graceful `stop` first (verified by the tmux session, never the exit code), reboots, and brings
-  back exactly the servers that were running. Before, the reboot's SIGTERM killed them ungracefully,
-  and a stop beforehand would have deleted LinuxGSM's monitoring lock, so nothing came back. Now the
-  lock is moved aside for the stop and put back before the reboot — at a second of the minute no
-  `*/5 monitor` run can read it, with no LinuxGSM command in flight — so Autostart servers come back
-  by LinuxGSM's own monitor exactly as after a plain reboot, even with the panel down. Running
-  servers WITHOUT Autostart are started by the panel once the host is back (a new setting turns that
-  off); stopped servers stay stopped. One summary notification (a new `host_reboot` event) says how
-  soon after the reboot was sent the host's new boot started and its servers were running again
-  (by Autostart, started by the panel, or found already running), how many stayed stopped and why,
-  which have not come back (one left to LinuxGSM's monitor gets 12 minutes from the host's new
-  boot), and how many running servers could not be read (the panel neither stops nor restarts
-  those). A reboot that did not happen —
-  refused by the host, or a panel restart before it was sent — is undone: every server is put back
-  as it was, including one restoring would have left stopped (only a queued stop stays stopped),
-  and you are told.
-- **With players on, the reboot asks.** The dialog lists who is on each server (and which counts
-  can't be read) and offers **Wait: reboot when everyone has left** or **Reboot now**. A forced
-  reboot warns players in-game at 60, 30 and 10 seconds where the game can show a message (Source,
-  GoldSrc, idTech3 and Minecraft consoles). Work a reboot would cut off (an install, a backup,
-  LinuxGSM maintenance, a package upgrade, a panel update) refuses "now" and can be waited for.
-- **The wait is visible and bounded.** A pending "reboot when everyone has left" shows on the
-  host's Power card and in the banner (with who it is waiting on and a Cancel button) even when no
-  reboot is required, gives up after 24 hours (setting `reboot_wait_max_hours`, 0 for no limit) with
-  a notification, reminds you once when a server's count has been unreadable for 30 minutes, re-checks
-  each server right before stopping it (a player who joins in that moment puts it back to waiting),
-  and is cancelled with a notification when the panel restarts.
-- **A terminal in the browser, for the panel's own host and for every remote.** xterm.js over the
-  socket the console already uses. It needs a new "use terminal" permission (`use_terminal`) and
-  access to the host; on the panel's own host it is superadmin-only whatever the grants say, because
-  a shell there runs as the account that owns the panel's database and keys. Every session opened
-  and closed is audited, never what was typed. Limits: 12 sessions in all, 3 per user, 512 KB/s of
-  output per session, and a session closes after 15 minutes with no input. Host access is re-checked
-  while a session is open, not only when it opens, and an account that has been told to change its
-  password cannot open one. On a remote the shell runs as the account the panel connects with —
-  often root — and the page names that account.
-
-  On the panel host `sudo` refuses by default, because the panel user's grant names only the helper.
-  `PANEL_TERMINAL_SUDO=1 ./install.sh` grants it general sudo **with a password required** (give the
-  account one with `sudo passwd lgsmpanel`), `=0` removes it, and leaving it unset changes nothing.
-  A web terminal sees every keystroke, that password included, so this protects against a stolen
-  panel session and not against a compromised panel; the README says so. Remote hosts' sudoers are
-  never touched.
-- **The install picker knows which games LinuxGSM caps at an older Ubuntu.** LinuxGSM's game list
-  declares the newest release each game supports, and four sit below the rest: Battlefield 1942 and
-  Battlefield: Vietnam at 22.04, BATTALION: Legacy and Onset at 20.04. The panel parsed that column
-  and threw it away, so on a 24.04 host those installs created the account, downloaded for several
-  minutes and only then failed with LinuxGSM's "not supported". Once a host is chosen the picker now
-  greys them out, labelled "(needs ubuntu 20.04)" and so on, and the install route refuses them up
-  front, naming the cap and the host's release. Both compare against the **selected host's**
-  release, not the panel's, and both let everything through when a host's release cannot be read —
-  refusing an install that would have worked is the worse mistake.
-- **A failed install says why, and offers what you can do about it.** The dashboard row used to say
-  "Failed" and nothing more: the reason lived in the install job's memory and was gone at the next
-  restart, there was no Retry, Remove was on another page, and Files & Config was greyed out on
-  exactly that row. The reason is now stored with the server, stripped of LinuxGSM's colour codes,
-  and shown above that host's table with **Retry install**, **Edit its config** and **Remove**.
-  Retry is left out, with a sentence saying so, when another attempt cannot help. Files & Config
-  opens for a failed install — the config LinuxGSM writes before the download is usually where the
-  fix is (a `steamuser` it asks for, say) — and the reconcile ticker now re-checks failed rows, so
-  after fixing the config and pressing Update the server is adopted once its files land. An install
-  that died before the download step is marked failed too, instead of staying "installing" with
-  nothing able to act on it.
-- **Game servers can be uninstalled from the dashboard.** The only Uninstall sat on Remote Servers →
-  a host → Overview, well down a table. Every dashboard row now has one for anyone allowed to
-  uninstall, behind the confirmation the host page already used: type the server's account name to
-  enable the button, because it deletes the server, its files and every backup it has. The
-  failed-install banner's Remove uses the same gate rather than a plain yes/no.
-- **Install progress is shown where the server is.** An install takes five to forty-five minutes,
-  and its progress lived on a page you were usually not on — the install form's toast said progress
-  was "shown live below", under the form. The dashboard now shows a progress row directly beneath
-  the installing server (step, bar, percentage, elapsed) that stays with it through sorting and
-  filtering, and Install a Server shows an "Installing now" panel that says the install carries on
-  if you leave. `/api/installs` answers "is anything installing" for the servers you can see, and
-  nothing polls unless something is. The Offline tile's "+N installing or failed" is now just "+N
-  failed".
+  the panel makes now stops running game servers with LinuxGSM's graceful `stop` first, then brings
+  back exactly the ones that were running: Autostart servers by LinuxGSM's monitor, the rest by the
+  panel (a setting turns that off). A `host_reboot` notification summarises it, and a reboot that
+  did not happen is undone and you are told.
+- **With players on, the reboot asks.** The dialog lists who is on each server and offers **Wait:
+  reboot when everyone has left** or **Reboot now**. A forced reboot warns players in-game where the
+  game can show a message, and work a reboot would cut off refuses "now".
+- **The wait is visible and bounded.** A pending wait shows on the host's Power card and banner
+  with a Cancel button, and gives up after 24 hours (`reboot_wait_max_hours`, 0 for no limit).
+- **A terminal in the browser, for the panel's own host and for every remote.** It needs the new
+  `use_terminal` permission and host access, and on the panel's own host it is superadmin-only.
+  Sessions are audited (never what was typed) and close after 15 minutes idle; on a remote the shell
+  runs as the account the panel connects with, often root. On the panel host `sudo` refuses unless
+  `PANEL_TERMINAL_SUDO=1 ./install.sh` grants it with a password required.
+- **The install picker knows which games LinuxGSM caps at an older Ubuntu.** Battlefield 1942,
+  Battlefield: Vietnam, BATTALION: Legacy and Onset are greyed out and refused up front when the
+  selected host's Ubuntu is newer than they support, instead of failing after a long download.
+- **A failed install says why, and offers what you can do about it.** The reason is kept and shown
+  above that host's table with **Retry install**, **Edit its config** and **Remove**. Once the
+  config is fixed and Update pressed, the server is adopted when its files land.
+- **Game servers can be uninstalled from the dashboard.** Every row has Uninstall for anyone allowed
+  to, enabled by typing the server's account name, since it deletes the server, its files and
+  backups.
+- **Install progress is shown where the server is.** The dashboard shows a progress row beneath the
+  installing server, and Install a Server says the install carries on if you leave.
 - **The update card's list of changes links each commit and PR**, to the repository this checkout
-  tracks, so a fork links to the fork. The links are built only from a hex SHA, a run of digits and
-  a repository URL of the expected shape; anything else renders as plain text, as before.
+  tracks, so a fork links to the fork.
 - **The sidebar footer links to the panel's repository, and its commit SHA to that exact commit**,
-  so what is actually deployed is one click away. The URL comes from the checkout's `origin`, so a
-  fork links to itself, and anything that cannot be read falls back to the canonical repository.
-- **Console history can have real timestamps, not just lines you watched arrive.** The panel tails
-  the console log, so on its own it can only date what it saw — on an idle server that means the
-  whole of history is blank. LinuxGSM can stamp the log *at write time* (`logtimestamp`, which
-  pipes the tmux capture through `gawk strftime`), and the Live Console now offers to turn that on
-  where the gap is noticed. Once it is, every line arrives already dated, for every game — the
-  Call of Duty family included, which has no per-line time of its own.
-
-  The stamp LinuxGSM writes is in the **host's** local time with no offset, so the panel reads it
-  against that host's timezone, converts it to a UTC instant, and the browser renders it in yours
-  — a line written at 05:09 in Tokyo reads as 15:09 in US Central. It is stripped from the text
-  and shown in the gutter, so the time is not printed twice. A host whose timezone is not known
-  yet leaves those lines undated rather than reading them against a guess, and turning the setting
-  on edits the instance's LinuxGSM config and takes effect at the server's next start — the
-  confirmation says both.
-- **Each console line now carries the time the panel saw it**, in your own timezone, with a
-  "Times" toggle in the Live Console header (remembered per browser — a Minecraft server already
-  prefixes its own `[HH:MM:SS]`, so the gutter is duplication there). 24-hour in the gutter so the
-  column stays aligned and the same width all day; the hover text gives the full date in your
-  locale's own format. Lines the panel *watched arrive* are stamped — a push from the console
-  poller, or output from an update it ran itself, which is why an update's output still reads with
-  its timestamps after a reload. The window fetched on page load is a fresh tail of the game's log
-  file, which for most games records no per-line time at all: those lines were written at some
-  unknowable point before the panel looked, so their gutter stays **blank** rather than claiming
-  the moment you opened the page.
+  so what is actually deployed is one click away.
+- **Console history can have real timestamps, not just lines you watched arrive.** The Live Console
+  offers to turn on LinuxGSM's `logtimestamp`, so every line arrives dated, shown in your timezone.
+  It takes effect at the server's next start.
+- **Each console line now carries the time the panel saw it**, in your own timezone, with a "Times"
+  toggle in the Live Console header. Lines loaded from the log when the page opens have no known
+  time, so their gutter stays blank.
 - **Three remaining timestamps now render in your timezone too** — ban dates, invite expiry and
-  Tailscale peer last-seen. They formatted the stored UTC value themselves, so they showed UTC
-  with nothing saying so, which reads as a wrong local time rather than as a UTC one. There is now
-  a check that no template can format a stored timestamp itself.
+  Tailscale peer last-seen, which showed UTC with nothing saying so.
 - **LinuxGSM's colour now survives into the console.** `[  OK  ]` green, `[ FAIL ]` red,
-  `[ INFO ]` blue — the same output `putty` shows, which is most of what makes a long `update`
-  readable at a glance. Every display path used to run the text through `strip_escapes`, which is
-  right for the paths that *parse* console output and wrong for the one showing it to a person.
-  The server keeps SGR (and only SGR — erase-line, cursor moves, window titles and stray `ESC`
-  bytes are still removed) and the page turns each run into a styled node. Applies to a game's own
-  console too, so a Minecraft server's JLine colour comes through as well. Console lines are built
-  as DOM nodes and never as markup: player names and chat arrive in that text verbatim, so it is
-  attacker-authored end to end, and there is now a gate pinning that.
-- **The installed game version is shown on the server detail page**, on its own line under the
-  host and port. Two sources are read, because no single one answers it for every game the panel
-  manages: SteamCMD records an exact build id on disk (`serverfiles/steamapps/appmanifest_*.acf`
-  — the same `buildid` LinuxGSM's own `update` compares against Steam), and the running game
-  reports the version players see over its query protocol. The reported string is shown when
-  there is one, the build id otherwise, and the hover text says where the number came from and
-  when Steam last changed the files. For the Call of Duty family — which is not SteamCMD-based
-  and has no `update` command at all — the live query is the only version that exists, so that is
-  what appears. Neither read is on the render path: the page draws first and fills the line in
-  afterwards, and the answer is cached until an update moves it. A game that is neither
-  SteamCMD-based nor currently answering shows a dash rather than a number that might be wrong.
-- **Download the console log** from the Live Console header — the full LinuxGSM log file, not just
-  the slice on screen. It reuses the file browser's download route (the log lives under the game
-  user's home), so it needs the same permission; the button is hidden for anyone who would only be
-  bounced by it.
-- **Line numbers in the file editor.** A gutter beside the editor, kept in step with the text as
-  you type and scroll. The editor no longer soft-wraps (a wrapped line occupies several rows, which
-  would push every number below it out of alignment) — long lines scroll sideways instead, as they
-  do in any code editor. Drag the bottom edge to make the whole editor taller; the numbers follow.
-- **Drag and drop now takes folders, and actually works.** Two separate problems. Dropping a
-  *folder* never worked: the handler read `dataTransfer.files`, which for a folder is a single
-  contentless entry — folder contents are only reachable through `webkitGetAsEntry()`, which is now
-  walked recursively, so nested subfolders upload with their structure intact (the server already
-  created missing parent directories, so nothing changed behind the API). And dropping a *file*
-  often appeared broken: the drop target was the file-list panel alone, a couple of centimetres
-  tall when the listing is short, and nothing suppressed the browser's own drop behaviour — so a
-  near miss made the browser navigate the tab to the dropped file. The whole File Browser card is
-  the target now, the page suppresses the default everywhere, and a miss does nothing instead of
-  navigating away. Reported on Linux, but it behaved the same in every browser.
+  `[ INFO ]` blue, and a game's own console colour too; other escape codes are still removed.
+- **The installed game version is shown on the server detail page**, from the game's own query
+  reply or SteamCMD's build id, with the source in the hover text. A game with neither shows a dash.
+- **Download the console log** from the Live Console header — the full LinuxGSM log file. It needs
+  the file browser's permission.
+- **Line numbers in the file editor.** The editor no longer soft-wraps (long lines scroll
+  sideways), and dragging its bottom edge makes it taller.
+- **Drag and drop now takes folders, and actually works.** Dropped folders upload with their
+  subfolders, and the whole File Browser card is the target, so a near miss no longer navigates the
+  tab to the dropped file.
 - **An "Upload folder" button**, for when dragging between the desktop and the browser misbehaves
-  (common on Wayland). Same recursive upload, via the file picker instead of a drag.
-- **Downloads in the file browser** — a download button on every row of Files & Config, plus one in
-  the editor header for the file you have open. A file streams as-is: any type, any size, no 1 MB
-  cap and no "binary file" refusal, because the editor's read and a download are different jobs. A
-  folder downloads as a `.tar.gz` built while it streams, so pulling a whole `addons/` or `cfg/`
-  directory is one click rather than a file at a time; it asks first, since a folder's finished size
-  is not knowable up front. Protected files (the `lgsm` tree, `serverfiles`) are downloadable —
-  protection is about deleting them. Needs the same permission as the rest of the file browser.
-  Reads happen **as the game user**, never as root: a symlink under that home reaches only what that
-  user could already read, and the path is re-checked on the host after the privilege drop. Over SSH
-  the filename never appears in the command — the remote command is fixed text and the path travels
-  on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
+  (common on Wayland).
+- **Downloads in the file browser** — on every row of Files & Config and in the editor header. A
+  file downloads as-is at any size, and a folder as a `.tar.gz` after asking. Reads happen as the
+  game user, never as root.
 
 ### Changed
 
-- **The Install page draws before its game icons load.** The game icons start loading once the
-  page has finished drawing, so the search box and the game list appear sooner on a slow
-  connection. A game whose icon is missing keeps its initials.
+- **The Install page draws before its game icons load.** The search box and the game list appear
+  sooner on a slow connection.
 
-- **The bots show "typing…" the moment they receive a command, and stop as they answer.** It
-  used to start only after 0.7 s, and only once the command began, so a quick reply or a command
-  waiting behind another one showed nothing. It now starts on receipt, stays up while the command
-  waits and runs, and is cleared before the reply is posted, so it never shows under an answer.
-  After a "working on it" note (which clears the indicator), it comes back at once.
+- **The bots show "typing…" the moment they receive a command, and stop as they answer.** It also
+  shows while a command waits behind another, and is cleared before the reply is posted.
 
-- **Less scrolling, on a phone and on a desktop.** The alerts every page opens with (2FA off, a
-  reboot needed, updates waiting) are one line each, with their buttons beside them. Files & Config
-  shows one section at a time — Config, Files, Backups, Schedule, Alerts, Mods — each with its own
-  link, and only the alert services you use are open (the rest are under **Add a service**). The
-  server page shows the live console first unless you have arranged your own layout, and the
-  maintenance commands are in one **Maintenance** menu. Setup help on Notifications, Account,
-  Tailscale, Global Bans and Custom Commands is folded behind a line you tap to open; the
-  Maintenance tab folds each server's backup list behind "2 backups, newest 1d ago"; Account lists
-  three sessions with **Show all**; Audit Logs folds its filters on a phone. Nothing was removed.
+- **Less scrolling, on a phone and on a desktop.** Page alerts are one line each, Files & Config
+  shows one section at a time, the server page leads with the live console, and long help and lists
+  are folded. Nothing was removed.
 
-- **Less scrolling on a host page's Network and Security tabs.** On the Network tab the firewall's
-  Active/Inactive badge sits on the Firewall heading instead of an empty UFW Status card; Open a Port
-  and Restrict a Port are one **Add a rule** card with a switch (Open, One source, Rate-limit); each
-  game server's ports are one line; and Connection & SSH lays its settings out in two columns, each
-  explanation opening from its label line (the lock-out warnings stay in view beside their buttons).
-  On the Security tab Blocked IPs and the fail2ban bans sit side by side on a desktop, Top offenders'
-  explanation folds behind **How auto-block works**, the offenders and the recent events show their
-  first 10 and 5 with **Show all** for the rest, and Raw logs stays closed until you open it or press
-  a jail's "view log". Measured on a seeded panel host, the Network tab is about a third shorter on
-  a desktop and a quarter on a phone, and the Security tab about a third shorter on both. A card
-  there that cannot load now says why: "Could not load top offenders." (and the bans and events
-  cards' twins) says whether the panel did not answer (the connection dropped, or it was
-  restarting), answered with an error (with its HTTP status), or answered with a web page (sign in
-  again). A failure reading the auto-block settings no longer breaks the Top offenders card.
-- **A Network tab on every host page.** The firewall is no longer a separate page you reach from a
-  link on Host Controls: its rules, Open a Port, Restrict a Port, Game Server Ports and Blocked IPs
-  are on the host page's new **Network** tab, between Host Controls and Maintenance, together with
-  the whole Connection & SSH card (Tailscale SSH, public SSH, the panel's port and binding, the SSH
-  port change). Host Controls keeps OS Updates, Terminal, Power and Existing servers. The tab reads
-  the firewall when you first open it, a line at its top jumps to the rules, Blocked IPs or
-  Connection & SSH, and on a phone the tab you are on is scrolled into view in the tab bar. The
-  Remote Servers list's Firewall button, the SSH port card and the search box (Ctrl/⌘+K, which now
-  finds the panel host's firewall too) all lead to the tab; old links to the Firewall page still
-  work. The Power card links to the Settings page's Host reboots.
-- **The host page, tidied for a phone.** All five tabs now fit a phone screen without the tab bar
-  scrolling sideways: each shows its icon over a short label ("Controls", "Maint."), in English,
-  Spanish and French, while screen readers still hear the full name. On the Network tab the list
-  of open ports and rules now comes straight after UFW Status on a phone, before the forms for
-  opening and restricting ports; on a computer it stays in its own column on the right. **Blocked
-  IPs** (addresses the firewall blocks on every port) moved to the **Security** tab, beside the
-  fail2ban bans, as one **Blocked & banned IPs** section; each list keeps its own buttons, and a
-  block or unblock from Top offenders updates the list straight away. The Network tab's "Jump to"
-  line links there, and the search box (Ctrl/⌘+K) finds Blocked IPs. The auto-block threshold now
-  has one place to change it: beside the Auto-block switch on the Security tab. Settings › Sessions
-  & Security shows its value with a link there, and saving Settings no longer touches it. Old
-  links and bookmarks to a host's Firewall page open the Network tab. Messages that told you to go
-  to "the host's Firewall page" now say the host's Network tab.
-- **Faster test runs.** The smoke suite no longer waits on itself (about 9 minutes down to under
-  2), `tools/run-tests.sh` can run the suites in parallel lanes (`RUN_TESTS_PARALLEL=1`), and CI
-  runs them that way, with the root unit run beside them. A lane that fails, is killed or prints
-  no full tally fails the run. Two checks that repeated another check exactly were removed.
+- **Less scrolling on a host page's Network and Security tabs.** Open and Restrict are one **Add a
+  rule** card, and long lists show their first few with **Show all**. A card that cannot load now
+  says whether the panel did not answer, answered with an error, or wants you to sign in again.
+- **A Network tab on every host page.** The firewall moved from its own page to the host page's new
+  **Network** tab, together with the Connection & SSH card. Old links to the Firewall page still
+  work.
+- **The host page, tidied for a phone.** All five tabs fit a phone screen. **Blocked IPs** moved to
+  the **Security** tab beside the fail2ban bans, and the auto-block threshold is now changed only
+  beside the Auto-block switch there.
 
-- **A documentation-only pull request no longer runs the whole CI.** CI only. When every file it
-  changes is `*.md`, `docs/`, `LICENSE` or a git/editor dotfile, the heavy checks pass at once under
-  their required names; secret scanning, Dependency Review and the unit suite (it reads the docs)
-  still run. Anything else, or a file list that cannot be read, runs everything. Pushes are unchanged.
-
-- **CodeQL now reads the whole smoke test suite.** The 1 MB suite is split into a runner and six parts
-  (`tests/smoke/`), running the same 1,636 checks in the same order; CodeQL had skipped it for time.
-  The complexity gate judges a file split out of another together with that file, so moved code is not
-  counted as new. CodeQL uploads an analysis only when it completed, and the alert gates never count a
-  failed or cancelled run's empty upload as a commit's analysis.
-- **The security scanners now read the tests too.** CI only; nothing on a panel changes. Bandit,
-  Semgrep and CodeQL used to skip `tests/`, so a mistake in a test, such as a check that can never
-  fail, went unnoticed. They read it now, and the first scan found a few. One check read a value
-  only after the next step had already reset it, so it could not fail. Three refusal checks counted
-  any crash as a refusal. The inline-script checks missed an upper-case `<SCRIPT>` tag. All are
-  fixed. Semgrep had also been silently skipping files over 1 MB and stopping rules early on the
-  largest suites. It now reads every file in full and fails if it can't. CodeQL now fails its run
-  if the root-run helper, `tools/panel-helper` (a Python file with no `.py` extension), is missing
-  from what it analysed. CodeQL skips one 1 MB test file, which takes it 24 minutes to read.
-  Bandit, Semgrep and SonarCloud still read that file.
 - **Two more CI scanners: zizmor on the workflows, and Harden-Runner in every job but deploy.**
-  CI only; nothing on a panel changes, and no panel is offered an update for it.
-  - *zizmor* audits the GitHub Actions setup itself: template injection, over-wide token
-    permissions, credentials left behind by checkout, dangerous triggers and, online, impostor
-    commits and action versions with a known advisory. A new workflow, `Security scan (workflows)`,
-    runs it on every pull request, on pushes to main and weekly, at its pedantic persona, and
-    uploads the findings to code scanning, where both alert gates wait for them as they do for
-    CodeQL, Bandit and Semgrep. The scanner runs with a read-only token; a second job uploads.
-    Its first run found 19 things at the strictest persona. Fixed: a version comment that named no
-    tag, five permissions with no comment saying why and one (`actions: read`) that nothing used,
-    two unnamed jobs, an optional Codacy token readable outside a main-only environment, and a
-    coverage upload that two runs for one commit could interleave. Accepted, each marked beside the
-    code with its reason:
-    the three `workflow_run` workflows, and five workflows whose check lands on main and so carry no
-    concurrency group on purpose. A unit check names every accepted finding.
-  - *Harden-Runner* (StepSecurity) is the first step of every job but one, in audit mode. Audit mode
-    applies no allow-list, but it is not passive. It routes each job's DNS, docker's included,
-    through its own proxy. It blocks any host on StepSecurity's global blocklist, which it fetches
-    when the job starts, so the list can change without a commit here. It prints what it saw into
-    the job's public log: each address the job connected to, and the command line of each process
-    the job ran as root. The same records go to StepSecurity. A job fails if the agent's download or
-    start fails. The deploy job is the exception. It holds the tailnet identity that reaches the
-    live panel, so a deploy does not depend on StepSecurity's runtime blocklist, and its log does
-    not list the deploy host's address or every command it ran as root.
+  CI only; nothing on a panel changes.
+  - *zizmor* audits the GitHub Actions workflows on every pull request, push to main and weekly.
+  - *Harden-Runner* runs in audit mode: no allow-list, but it routes each job's DNS through its own
+    proxy, blocks hosts on StepSecurity's global blocklist, and prints what it saw into the job's
+    public log. The deploy job does not run it.
 - **A reboot request with no mode and players on now answers 409 instead of rebooting.**
-  `POST /api/remote/<id>/reboot` with no body used to reboot at once; with players on (or a count
-  nobody can read) it now answers `{"error": "players_online", "needs_choice": true, "choices":
-  ["when_empty", "now"], ...}` and the caller asks again with `{"mode": "now"}` or
-  `{"mode": "when_empty"}`. `{"when_empty": "false"}` no longer arms a wait (a string was read as
-  true), and an unknown mode is a 400.
+  The caller must ask again with `{"mode": "now"}` or `{"mode": "when_empty"}`; an unknown mode is a
+  400.
 - **Host reboots from a bootstrap or install.sh never reboot a host with game servers on it.** They
-  leave the reboot-needed banner and say to reboot from the host's Power card, where the servers are
-  stopped cleanly and brought back.
-- **While a host is being rebooted, actions on its servers wait.** Start, stop, restart, update,
-  Autostart, installs, OS updates, a bootstrap and the panel's self-update are refused for that host
-  until the reboot is sent, and the queued-restart and backup sweeps skip it. After that, an
-  operator's own Start or Stop takes the server out of the restore. While the reboot runs, the
-  panel's own "server offline / back online" and "host unreachable / back online" alerts are held
-  for the servers and hosts it took down, also when the panel restarts in the middle of it (it
-  always does when the host is its own); the summary reports on every server the plan held. Once
-  the summary is sent, the monitor holds it to its word: a server it counts as running again whose
-  port is still shut three minutes later (12 more minutes for an Autostart server after a reboot
-  that did not happen, which LinuxGSM's monitor restarts), or that crashes, pages "went offline
-  unexpectedly"; one it reports as not back pages "back online" when it returns, if that alert is
-  on. A running server whose state could not be read is not in the plan: the notices count it, and
-  on a remote host one still down eight minutes after the panel began stopping the host's servers
-  pages "went offline unexpectedly" (on the panel's own host the panel restarts too and does not).
+  leave the reboot-needed banner and say to reboot from the host's Power card.
+- **While a host is being rebooted, actions on its servers wait.** Starts, stops, updates, installs
+  and similar actions for that host are refused until the reboot is sent, and the panel holds its
+  offline and online alerts for what it took down. Afterwards it alerts if a server it reported as
+  running is still down.
 - The panel host's helper now runs LinuxGSM as `./<script>` from the game home instead of by its
   absolute path, so LinuxGSM's own monitor can see a start or stop the panel is running there and
   backs off instead of starting a second copy.
 - **The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo
-  lines.** Every `sudo` writes three journal lines (and three to auth.log). On a host with three game
-  servers the panel made about 580 such calls an hour, and they were 99% of its unit's journal. Each
-  of these now skips work it did not need. On some hosts the restart banner can now appear later
-  than before; that is named below. (A server the panel cannot query can also read "unknown" for a
-  minute where it read 0; see the `details` entry under Fixed.)
-  - The metrics history no longer looks up each running server's map every minute. It stores no
-    map, so the answer was thrown away.
-  - The player poll reads the map in the same gamedig reply as the player count. The dashboard
-    uses that answer instead of running gamedig again, and two pages asking at once share one
-    lookup.
-  - The player poll runs one gamedig command per host instead of one per server. It runs as one of
-    that host's game accounts, never as the panel's own account or the SSH login, and on the
-    panel's host never as an account in an administrator group or one that is root by another door
-    (docker, lxd, incus-admin, libvirt, disk). A server that command could not read is asked on its
-    own, as before.
-  - The server page's player list is read only while the Console tab is showing, and two viewers
-    polling within ten seconds share one read. Refresh, and the re-read after a kick, always ask.
-  - The priority keeper checks nice values without privilege. It renices only the game accounts
-    that drifted, instead of every account on every host every two minutes.
-  - The ban watcher reads the UFW rules only when ufw's rule files have changed, and at least every
-    15 minutes. Blocks the panel makes itself are still read at once. fail2ban is read every 90 s as
-    before.
-  - The restart-banner flags are read every minute only for a host where daily restart is on or a
-    banner is showing. Other hosts are read every 10 minutes, and a host with no servers is never
-    read. So on a host without daily restart, a restart banner from a crontab the panel does not
-    manage (an imported server, an edit in the terminal) can now appear up to 10 minutes late
-    instead of within a minute.
-  - The live console reads the log's size and its new lines in one command instead of two.
-
-  The saving is a model, not yet a measurement of a running panel: one pass of each background
-  loop, with every host command stubbed and counted, multiplied by each loop's period on the live
-  host. For three servers the model gives about 9 privileged calls a minute before (the live host's
-  report measured about the same) and about 2 after.
-
-  A console you are looking at still costs one call per two seconds; apart from merging its two
-  reads, the console was left as it was. A console tab left in the background no longer costs
-  anything (next entry).
+  lines.** Background checks skip work they did not need, modelled at about 9 calls a minute down
+  to 2 for three servers. On a host without daily restart, a restart banner from a crontab the panel
+  does not manage can now appear up to 10 minutes late.
 - **A console tab left in the background stops costing the host a privileged read every two
-  seconds.** Once a server page's tab has been hidden for 30 seconds it leaves the live console, and
-  the panel stops reading that log when nobody else is watching it: one sudo call every two seconds,
-  about 1,800 an hour, for each console left open in another tab, a minimised window or a locked
-  phone. A quick switch away costs nothing. Coming back rejoins straight away and fills in what was
-  written in the meantime from the log file, each line once and in order, along with the panel's
-  own lines that went to the console meanwhile, such as an update's result. The panel works out
-  where the page left off by its position in the log file, not by matching text, so lines the
-  game repeats word for word, such as a heartbeat or an autosave notice, are neither dropped nor
-  shown twice. That includes a return whose connection dropped while the tab was away, as it does
-  on a phone that slept. A tab whose connection was already down when it left, and that had been
-  sent no new line since it last read the log, has no position to go on and is still matched by
-  text. The catch-up shows at most 2,000 lines. If more was written, or the server
-  was restarted while the tab was away (a restart starts a new log file, and the catch-up reads the
-  current one), or the host never answered the catch-up's read, the console says that some output
-  is not shown, at the point where it is missing. Lines filled in this way have no time beside them
-  unless the log itself stamps them, since the panel did not see when they were written. A tab
-  stays in while an update or another long panel action it saw start is still running, so that
-  action's output keeps arriving as it is written.
+  seconds.** After 30 seconds hidden it leaves the live console; coming back fills in what was
+  written meanwhile (up to 2,000 lines) and says where output is missing.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
-  now opens with **At a glance**: every problem any section found, failures first, and the sections
-  that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
-  first. Each section heading says how long it took. A section that failed or ran out of time says
-  so in its heading. It is never left out or shown as "(none)", which read the same as "nothing
-  there". The whole report has a 20-second budget, and the header gives the time it took.
-
-  New sections cover:
-  - **the panel process**: systemd's own view of it (automatic restarts, memory, linger), how far
-    the event loop has lagged, what it is listening on against config.json, whether HTTPS really
-    started at boot, and unit-file drift from what install.sh writes;
-  - **background workers**: each loop's last pass beside how often it should run, and supervisor
-    restarts;
-  - **errors swallowed since start**;
-  - **install and privilege**: the install model, the helper asked through `sudo -n`, which sudo
-    answers, and root-owned pieces compared with the commit;
-  - **updates**: which checks hold an update, the last run judged by its exit status, the update
-    history, and installer warnings from the whole log;
-  - **network and access**: Tailscale, Serve and Funnel, proxy trust, a login-loop predictor for
-    the session cookie, UFW, fail2ban jail health, and sign-in counts held against auth.log;
-  - **hosts and game servers**: transport, reachability and the last probe error per host, Tailscale
-    peer state, game-server status from the database against the monitor, port collisions, and
-    stranded installs;
-  - **the live console**, per watched server;
-  - **the database**: pragmas, backups, a table census and an audit digest;
-  - **panel backups, notifications, dependencies** (from what is installed), and **Config**,
-    showing the file and what the process runs with;
-  - **a digest of journal errors** before the recent log, which keeps the newest and most important
-    lines instead of cutting at 8000 characters. On a system install the panel's own privileged
-    calls (about three a minute, three journal lines each) used to fill the whole log. They are now
-    counted by helper verb ("restart-flags ×714, …") and left out, so the log shows the panel. A
-    refused `sudo` still shows.
-
-  The header's commit is now the code this process is running, not the checkout. When the two
-  differ, the header says RESTART PENDING. "Open a GitHub issue" puts the "describe the problem"
-  prompt first, and its prefill is sized to the length of the encoded URL.
-
-  **Privacy.** Known names are replaced with tokens that are the same in every section, such as
-  `[host-3]`, `[server-5]` and `[user-2]`. This covers hosts, game servers, panel users, OS and SSH
-  accounts, tags, groups, Tailscale node, peer, tailnet and login names, and notification chat and
-  topic ids. IP addresses print as their class, such as `[ip:public]`. Paths print as `<panel>`,
-  `<data>` and `/home/[user]`, and a traceback frame keeps its module. A Privacy footer counts what
-  was replaced and says what the pass cannot cover. The old "contains no secrets" claim is gone, and
-  the report asks you to review it before posting. This closes leaks the old report had:
-  - Config printed bind_host, site_domain and site_title.
-  - The Data directory check printed the absolute path, and with it the account name.
-  - The log tail, the last update's installer output and the Discord gateway text were printed as
-    they were.
-
-  **Fixes the report brings with it.**
-  - **Security card (panel host).** A stopped fail2ban read as "no jails", and a UFW whose status
-    could not be read read as disabled. The card now says "Could not read fail2ban on this host".
-  - **Journal fallback.** It never ran, because journalctl prints "-- No entries --" and exits 0. It
-    could also run `sudo` without `-n`. It now reads the user journal, then the helper, then the
-    system journal filtered to the panel's own uid, and it never prompts.
-  - **Hub stall.** Generating the report froze the whole panel for as long as two SQLite integrity
-    checks took. Both ran on the event loop. It now runs one read-only check, off the loop and
-    bounded. A locked database is "not checked", no longer reported as damage.
-  - **Diagnostics corrections:**
-    - Service is read from systemd's state, not from a unit file existing.
-    - TLS says whether the panel uses its certificate, and a TLS start that failed at boot is a
-      failure.
-    - Database integrity says whether a restart would restore a backup or start EMPTY.
-    - Data directory shows its owner and mode, not its path.
-    - File integrity names the changed files and the paths hidden from git.
-    - Privileged helper tells "refused" from "timed out".
-    - A new **Host credentials** check says whether stored credentials decrypt.
-
-  The panel's own warnings, and the notification service's, now reach the journal as
-  `WARNING <logger>: <message>`.
-- **CI now catches on a pull request, or on main, what it used to let through.** An audit held
-  every CI configuration against its vendor's documentation and fixed each gap it found. CI only;
-  nothing on a panel changes.
-  - *Code scanning.* The pull-request alert gate waits until Bandit and Semgrep have analysed this
-    merge commit, as well as the three CodeQL languages, and fails naming any category that never
-    arrived. Before, it judged whichever analyses had landed. The main gate no longer sends a `sha=`
-    parameter that the API ignores: it checks that every category's newest analysis is this
-    commit's. The weekly CodeQL scan is now judged on main, so its findings no longer surface first
-    as a red check on an unrelated pull request.
-  - *Dependencies.* osv-scanner now audits gamedig's npm tree, which every host installs, and every
-    CI tool's pip lockfile, at any severity. It fails when a lockfile yields no packages. pip-audit
-    now runs `--strict --disable-pip`; it had audited `requirements-bootstrap.txt` as 0 of 1
-    packages. Dependency Review now blocks low and moderate advisories, not only high. Dependabot
-    waits 7 days after a release, as Renovate already did. Semgrep installs from one hash lockfile
-    with a fixed PyJWT. gitleaks uses its current `git` command and `[[allowlists]]` table.
-  - *Codacy and SonarCloud.* The main Codacy gate asks for High as well as Error issues. It fails
-    when an accepted finding vanished only because Codacy stopped reading a file over 150 KB. The
-    complexity check runs Codacy's Prospector over those large files on every pull request. A new
-    `SonarCloud open issues (main)` check fails on any issue open on main that is not known. Those
-    include issues a pull request leaves on lines it did not change, which Sonar's pull-request
-    check does not report. A test pins `.sonarcloud.properties`, so widening an exclusion fails the
-    build.
-  - *Fuzzing.* ClusterFuzzLite keeps its corpus and builds as Actions artifacts, so batch fuzzing,
-    corpus pruning and coverage run. Before, they were off waiting for a storage repository.
-    "Fuzz the diff" gets the vendor's 600 seconds, and its harnesses start in about 2 s instead of
-    about 10 s, so its targets fuzz instead of timing out. Every job that reads a stored fuzz
-    artifact first fails if any was not made on this repository's main. A fork pull request could
-    otherwise plant a build that a privileged job unpacks and runs.
-  - *The rest.* The unit checks that only run as root now run as root on every CI leg; one fixture
-    they use had broken unnoticed. actionlint fails if its shellcheck pass is not running, and
-    fails on an unknown `vars.*` name. The deploy job's Tailscale client is pinned by version and
-    sha256, with the action's unverified cache turned off. A test fails any `uses:` not pinned to a
-    full commit SHA.
-- **SonarCloud is told what it was guessing.** `.sonarcloud.properties` answers its three analysis
-  warnings: the Python versions the panel supports (3.10 to 3.14), `tests/` as test code (it was
-  running production rules on the suites), and UTF-8 throughout, with the vendored minified bundles
-  in `static/vendor/`, every image and font, and the fuzz corpus left out of the analysis. The
-  encoding warning was two literal replacement characters (U+FFFD) in tests, which SonarCloud's
-  scanner reports as invalid in any file; they are written as `\ufffd` now. A test fails the build
-  if a file it reads is not UTF-8 or holds a U+FFFD or a NUL.
-- **Every scanner's verdict is a merge requirement, on every pull request.** Actionlint, Dependency
-  Review and the two fuzzing workflows ran only when their files changed, so they could not be
-  required, and a red one would not have held a merge. They run on every pull request now (the fuzz
-  jobs pass at once when a change touches nothing they fuzz) and are required. And SonarCloud's free
-  plan keeps the "Sonar way" gate, which lets new code smells through: a new required check,
-  `SonarCloud new issues`, waits for SonarCloud's analysis of the pull request's head and fails on
-  anything new.
-- **A pull request cannot merge into main until its checks pass.** Before, only the secret scan
-  was required; tests, CodeQL, Codacy, SonarCloud, Bandit, Semgrep and pip-audit were waited for by
-  habit, not enforced. `.github/required-checks.txt` lists what main's ruleset now requires, and a
-  test holds it to the workflows: every one runs on every pull request (the four main workflows no
-  longer skip docs-only ones), and a new job is required or the build says why not.
-- **A new check catches what Codacy's pull-request check misses.** Codacy counts an issue as new
-  only on a changed line, and it files a function's complexity and length on its `def` line and a
-  file's length on line 1, so a function that grew past the limit passed as "0 new issues" and the
-  issue appeared on main (23 by 2026-09-30). `complexity (Codacy limits)` compares every changed
-  file before and after with Codacy's limits, files over 150 KB included (Codacy skips those), and
-  fails on what the change adds. It found one at once, in the update check's own new code, fixed
-  here.
-- **Renovate proposes updates to the release binaries CI downloads.** gitleaks, actionlint and the
-  Codacy coverage reporter are pinned by tag and sha256, which Dependabot cannot see, so they were
-  bumped by hand. `.github/renovate.json` runs only a regex manager over those pins, and Dependabot
-  keeps everything else. A release must be 7 days old before it is proposed, and each proposal
-  carries the new tag and the new release's sha256 together. CI only; nothing on a panel changes.
-- **The version is now the date of the commit the panel runs.** It reads `2026.9.26`: the
-  commit's date in UTC, with no leading zeros, and always beside the short commit (the footer, the
-  update card, the Telegram and Discord messages and the installer's "Code updated" line), because
-  every commit made on the same day shares the date. It comes from git, so nothing has to be bumped
-  by hand any more, and the hand-kept 0.x numbers stop at 0.10.0-alpha; the sections below keep
-  them. A copy downloaded as a ZIP from GitHub has no git history, so its `VERSION` file carries the
-  commit's time, filled in by git when the archive is made. The Release workflow, which only ran
-  when `VERSION` changed and never cut a release, is removed. The update that brings this change
-  in is offered and run by the code the host already has, which reads `VERSION` as text, so for
-  that one update the card offers `v$Format:%ct$` and the installer's log names it the same way;
-  once it has landed, the panel and the installer show the date.
-- **Deleting a host says what stays on it.** The delete makes the panel forget the host and never
-  connects to it, so gamedig (`/usr/local/lib/linuxgsm-panel/gamedig` and its two links) and the
-  weekly root cron that re-runs its install script (`/etc/cron.d/lgsm-node-tools`) stay there,
-  and the confirmation did not say so. It does now, and README has a "Removing a host" section:
-  what the panel put on a remote host and the commands that remove it, with the one case where
-  not to run them (a host that runs a panel of its own).
+  opens with **At a glance**, every problem found with failures first, and covers many more areas.
+  Names, addresses and paths are replaced with tokens, and it asks you to review it before posting.
+  - The panel host's Security card says "Could not read fail2ban on this host" instead of "no
+    jails".
+  - Generating the report no longer freezes the whole panel.
+  - A new **Host credentials** check says whether stored credentials decrypt.
+- **The version is now the date of the commit the panel runs.** It reads like `2026.9.26` (the
+  commit's UTC date), always beside the short commit, and comes from git; the hand-kept 0.x numbers
+  stop at 0.10.0-alpha. The one update that brings this in shows as `v$Format:%ct$`.
+- **Deleting a host says what stays on it.** The confirmation now says gamedig and its weekly root
+  cron stay on the host. README's "Removing a host" section gives the commands to remove them, and
+  when not to.
 - **`LICENSE` is the plain MIT text**, so GitHub and OpenSSF Scorecard detect it as MIT. The terms
-  are unchanged. The notice appended to it (not affiliated with LinuxGSM; built largely with AI) is
-  in the README's disclaimer, which already said most of it.
-- **Imported game servers get Autostart turned on, as a fresh install already does.** Autostart is
-  LinuxGSM's `monitor` cron, which brings back a server that should be running and leaves a
-  deliberately stopped one down. An import left it off, so an imported server did not come back
-  after a host reboot. It is turned on only for a game that has `monitor` and an account the helper
-  enrolled, the switch reads On only once the cron line is written, and it never starts a stopped
-  server. Servers already in the panel are not changed.
-- **The installer refuses a Python older than 3.10 by name** — "Python 3.10 or newer is required,
-  and this python3 is 3.8" — before apt runs, instead of failing inside pip with "No matching
-  distribution found". A `python3` that does not run is named too.
+  are unchanged; the extra notice is in the README's disclaimer.
+- **Imported game servers get Autostart turned on, as a fresh install already does.** So an imported
+  server comes back after a host reboot. Only for games with `monitor` on an account the helper
+  enrolled; it never starts a stopped server, and servers already in the panel are not changed.
+- **The installer refuses a Python older than 3.10 by name** before apt runs, instead of failing
+  inside pip with "No matching distribution found".
 - **A queued restart that LinuxGSM finishes with a non-zero exit is cleared after one attempt**, and
-  audited with its exit line. It used to be retried up to three times, and LinuxGSM exits non-zero
-  on some restarts that worked. A restart that got no answer at all is still retried.
+  audited with its exit line, instead of retried up to three times. A restart that got no answer is
+  still retried.
 - **A panel bound to a public address with Tailscale Serve set up keeps serving its own HTTPS**, and
-  Serve is pointed at it with `https+insecure`. A loopback bind, or an unset one proxied by Serve,
-  is unchanged.
-- **The update card answers one question: is there something to install?** It shows "Update
-  available" or "You're up to date" (with the running SHA), and nothing else: no line saying a
-  commit is still being verified, could not be verified, could not be fetched, or is only docs. It
-  offers an update exactly when one would be allowed to install — still the newest commit that has
-  passed CI — and that changes a file the panel runs. A verified commit below a tip that is still
-  being checked is still offered, and the commit count and the list come from the same set. Commits
-  that touch only docs, CI, tests or tooling are not an update: they arrive with the next one that
-  is. (For eleven days they were offered too, and a CI-only merge put "Update available" on every
-  panel for an install that changed nothing.) Every file in the repository is named as one a host
-  runs or one it does not, and the build fails on a new file named as neither, so neither mistake
-  can slip in: a file a host runs never goes un-updated, and nothing else raises an update. The
-  build also checks that every module the panel imports and every file the installer reads is on
-  the runs side.
+  Serve is pointed at it with `https+insecure`. Loopback and unset binds are unchanged.
+- **The update card answers one question: is there something to install?** It shows only "Update
+  available" or "You're up to date". An update is offered only when the newest commit that passed CI
+  changes a file the panel runs; docs, CI, test or tooling commits arrive with the next real update.
 - **The 2FA reset in Users → Edit is always visible**, disabled with a reason when the account has
-  no 2FA to reset. It was hidden unless the account already had 2FA on, so an admin looking for it
-  found an empty section and concluded the feature did not exist.
-- **Backup retention is typed, not picked from a list.** "Keep daily backups for", "Keep per
-  server" and each server's own override were dropdowns offering a handful of values (1, 2, 3, 5,
-  7, 14, 30) — so the number you actually wanted was only available if it happened to be on the
-  list. All three are number fields now. A per-server override is set by typing a number and
-  cleared by emptying the box, which is what its "Default" placeholder says.
-  The server has always clamped these (1-30 game backups, 1-365 days), and it still does — but a
-  clamp you cannot see is worse on a field you type into than on one you pick from: entering 100
-  would have stored 30 while the page said "Saved". It now says **"Saved — 100 is out of range,
-  kept 30"** and shows the stored number. The bounds come from the server, so the field and the
-  clamp behind it cannot drift apart. Changing the global default also refreshes the rows that
-  inherit it, instead of leaving them showing the old number until the next page load.
-- **The pure helper layer moved out of `app.py`** into `panel/core/validation.py` (the input
-  patterns, the port and password rules) and `panel/core/http.py` (how a handler answers: JSON for
-  a fetch, flash-and-redirect for a form, and the two error shapes that keep exception text out of
-  a response). They were defined in `app.py` and imported back out of it by most of
-  `panel/routes/`, which every static analyser reads as a cycle even though the runtime imports are
-  lazy. Nothing about a route changed — same endpoints, methods and guard chains, asserted against
-  the committed URL-map baseline — and the names crossing that cycle dropped from 82 to 63.
-- **A new test suite, `tests/input_validation_test.py`,** drives every numeric form field with the
-  values a browser never sends — boundaries, blanks, non-numeric text, a newline, non-ASCII digits
-  — and asserts a refusal with no row written, plus a positive control per field so it cannot pass
-  against a route that refuses everything. The suites around it assert structure; none of them ever
-  sent a handler a bad value, which is why the port bugs above survived them.
-- **Running a test suite in-tree no longer edits your `data/config.json`.** Every suite that boots
-  the app has to set `setup_complete` and a short SSH timeout, and deleting the file only when the
-  suite created it left those edits behind on a developer's machine — where a leftover
-  `ssh_timeout: 1` then failed a check in a *different* suite, pointing at config rather than at
-  whoever wrote it. A pre-existing config is now restored byte-for-byte.
-- **The application modules now live in a `panel/` package.** Eighteen of the twenty-one Python
-  modules that sat loose in the repo root moved into `panel/{core,db,security,ops,services}/`,
-  grouped by the layering the import graph already had — root drops from 37 tracked files to 19.
-  Nothing a user sees changes, and no route, endpoint, method or guard moved: the URL-map snapshot
-  matches its baseline byte for byte across all 208 rules. `app.py`, `manage.py` and
-  `db_maintenance.py` deliberately stay at the root, because the systemd unit, `recover.sh` and the
-  installer each address them by path, as do the shell scripts behind the documented install and
-  recovery one-liners. `README.md` has the map. Two new gates keep it honest: one fails if a
-  package imports *down* the stack at module level, the other if an on-disk path (`data/`,
-  `translations/`, the git tree) goes back to being derived from a module's own `__file__` instead
-  of `panel.REPO_ROOT` — which, during this move, silently pointed the database, secret key and
-  credential key at `panel/core/data/` and would have presented a live install as a fresh one.
-- **LinuxGSM's data files are no longer committed here.** `lgsm/data/serverlist.csv` (every
-  supported game) and `lgsm/data/ubuntu-24.04.csv` (each game's apt packages) belong to LinuxGSM,
-  and vendoring them froze the panel's game list at whatever upstream shipped the day the copy was
-  taken — it was already **two games behind** by the time this replaced it, and the only way to add
-  a newly-supported game was a panel release. They are fetched from LinuxGSM's repository and
-  cached under `data/` (git-ignored, survives updates, refreshed weekly), so new games appear on
-  their own. A response that is not the file we asked for — a captive portal's login page, a
-  truncated body — is never cached, a stale copy is served when a refresh fails, and if there is no
-  copy at all the install page says so and offers a Retry instead of rendering an empty menu.
-- **Uploads are roughly an order of magnitude faster**, which matters most for a folder of many
-  small files. Two things were wrong, and both were latency rather than bandwidth. Writing one file
-  took at least **three SSH round trips** (create the directory, send a base64 chunk, decode it) —
-  a file small enough for one command now takes **one**, and that is essentially every config,
-  script and Lua file a game server holds. And the browser sent files **strictly one at a time**,
-  leaving the link idle between them; up to four now upload at once. A 400-file gamemode was
-  ~1,600 serialised round trips. Large files still stream in chunks. Both paths also write to a
-  temp file and rename it into place, so a failure part-way can no longer leave a half-written file
-  where the original was.
-- **`ssh_manager`'s shell quoting is now `shlex.quote`** rather than a hand-rolled `'`-and-escape.
-  The two produce equivalent shell words, so no command changes; the point is that the one thing
-  every remote command depends on being right is the standard library's implementation, and static
-  analysis recognises it as a sanitiser where it can know nothing about a local function returning
-  an f-string. Its test changed with it: it asserted the old *spelling* (`_quote("abc") ==
-  "'abc'"`), and now round-trips a dozen payloads — quotes, `$(id)`, backticks, tabs, newlines,
-  non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
+  no 2FA to reset. It used to be hidden unless 2FA was on.
+- **Backup retention is typed, not picked from a list.** All three retention settings are number
+  fields; empty a per-server box to use the default. The limits (1-30 backups, 1-365 days) are
+  unchanged, and an out-of-range value now says what was kept: "Saved — 100 is out of range,
+  kept 30".
+- **The pure helper layer moved out of `app.py`** into `panel/core/`. No route or behaviour changed.
+- **The application modules now live in a `panel/` package.** Nothing a user sees changes. `app.py`,
+  `manage.py` and `db_maintenance.py` stay at the root, where the systemd unit, `recover.sh` and the
+  installer address them by path.
+- **LinuxGSM's data files are no longer committed here.** The game list and each game's apt packages
+  are fetched from LinuxGSM and cached under `data/` (refreshed weekly), so new games appear without
+  a panel release. A failed refresh keeps the last copy; with none, the install page offers Retry.
+- **Uploads are roughly an order of magnitude faster**, most of all for folders of many small files:
+  a small file takes one SSH round trip instead of three, and up to four upload at once. A failure
+  part-way no longer leaves a half-written file where the original was.
+- **`ssh_manager`'s shell quoting is now `shlex.quote`** rather than a hand-rolled version. The two
+  are equivalent, so no command changes.
 
 ### Fixed
 
-- **An update is no longer held back by a failed Dependabot run on GitHub.** GitHub files its own
-  weekly dependency-update job against the newest commit, and the panel read a failure there as
-  that commit failing its checks, so it was not offered until the next one. Those jobs check the
-  dependency files, not the code, and the panel now ignores them, as it already ignored the
-  repository's Scorecard rating.
+- **An update is no longer held back by a failed Dependabot run on GitHub.** GitHub's own
+  dependency-update job failing on the newest commit no longer stops the panel offering it.
 
-- **Maintenance → details shows all of its output, not the first 600 characters.** It used to stop
-  two sections in, partway through a word. LinuxGSM's `details` is the one command that prints the
-  server's passwords unmasked, so the full output now shows them only to people who can already
-  open the server's configs (Manage Servers). Anyone else sees every RCON, server, admin and web
-  password and every token as `********`, and the start command line hidden. The audit log's copy
-  is masked whoever ran it.
+- **Maintenance → details shows all of its output, not the first 600 characters.** LinuxGSM's
+  `details` prints passwords unmasked, so they show only to users with Manage Servers; anyone else
+  sees passwords and tokens as `********`. The audit log's copy is always masked.
 
-- **The Telegram bot no longer goes quiet for half a minute at a time.** On a server whose IPv6
-  route to Telegram drops some connections (about one in nine, on one server measured), the panel
-  waited out its whole 30-second timeout on IPv6 before trying IPv4. A message sent in that window
-  went unanswered for up to 30 seconds, and replies could take 8. Each address now gets 4 seconds
-  to connect before the next is tried. This covers every alert and bot reply the panel sends and
-  every Telegram poll. Discord's live connection is separate and unchanged.
+- **The Telegram bot no longer goes quiet for half a minute at a time.** Where the IPv6 route to
+  Telegram drops some connections, each address now gets 4 seconds to connect before the next is
+  tried, instead of 30. Discord's live connection is unchanged.
 
-- **A command the panel feeds input to can no longer hang the panel.** When a program the panel
-  starts with input (the SSH key signature check, writing a file through the helper) exited
-  without reading that input, the panel could spin one CPU core at 100% for ever on that request,
-  past its timeout. It now carries on as soon as the program has exited. The same fault was the
-  occasional freeze of the test run on Ubuntu 22.04.
+- **A command the panel feeds input to can no longer hang the panel.** A program that exited without
+  reading its input (the SSH key signature check, a write through the helper) could leave the panel
+  spinning a CPU core at 100%.
 
 - **LinuxGSM v26.5.0 compatibility.** On servers running LinuxGSM v26.5.0 or newer:
-  - FastDL no longer rebuilds its folder from scratch: the panel answers v26.5.0's new "Rebuild
-    from scratch?" question No, so the run is incremental and files LinuxGSM did not write are
-    kept. This also covers a server whose account another server moved to v26.5.0 (the servers in
-    one account share LinuxGSM's modules).
-  - An update started while another one is running (a click during the nightly update, say) is
-    reported as "not run: an update is already running" in the console, the audit log, the chat
-    bots and Scheduled Tasks, instead of as a finished update. A start or restart that checks for
-    updates first is still reported as the start it was.
-  - Backups are named and confirmed from LinuxGSM's script log when its "Completed:" line is
-    missing, including after the backup restarted the server.
+  - FastDL runs incrementally (the panel answers "Rebuild from scratch?" No), keeping files
+    LinuxGSM did not write.
+  - An update started while another runs is reported as "not run: an update is already running".
+  - Backups are confirmed from LinuxGSM's script log when its "Completed:" line is missing.
   - New games get the right default install port (OpenRA: Red Alert, Luanti, FiveM, Battlefront
-    Eternal), the in-game warning before a stop and no Update button for Half-Life and
-    Counter-Strike WON2, and a note that FiveM needs your own Cfx.re licence key.
-  - Action Half-Life installs from before v26.5.0 are told to run force-update once, to move to
-    the steam_legacy branch that its new ReHLDS fix needs.
+    Eternal); FiveM needs your own Cfx.re licence key. Half-Life and Counter-Strike WON2 get the
+    in-game stop warning and no Update button.
+  - Action Half-Life installs from before v26.5.0 are told to run force-update once, to move to the
+    steam_legacy branch.
 
   On every LinuxGSM version:
   - Commands a LinuxGSM update adds (QuakeWorld's Update, for example) appear after update-lgsm
-    and in a daily check, and get their scheduled task.
-  - Player counts work for games LinuxGSM queries with gamedig only (querymode 3: FiveM, SA-MP,
-    MTA and others).
-- **The Telegram bot no longer goes quiet for up to a minute after a dropped connection.** When
-  one check for new messages failed (a reset connection or a brief Telegram error), the bot waited
-  15 seconds before checking again, and a connection that died silently took 35 seconds to notice,
-  so a command sent then could wait close to a minute for an answer. It now checks again at once,
-  notices a dead connection after 30 seconds, and only slows down (1, 2, 4, 8, then 15 seconds) while
-  failures keep repeating.
-- **Deleting a remote's SSH rule could cut the panel off from it.** The delete guard kept a host's
-  last SSH rule, but counted every SSH rule as "another way in", wherever it let SSH in from. So
-  the everyday "tighten SSH to my home IP" sequence (add an allow from your home address, then delete
-  the allow from anywhere) went through with only a warning while the panel itself connected from
-  somewhere else, and under a default deny the panel lost the host. The rule the panel's own
-  connection gets in by is now protected, its reason naming the address it connects from; when that
-  address cannot be read, every SSH rule is kept until it can.
+    and get their scheduled task.
+  - Player counts work for games LinuxGSM queries with gamedig only (querymode 3: FiveM, SA-MP, MTA
+    and others).
+- **The Telegram bot no longer goes quiet for up to a minute after a dropped connection.** After a
+  failed check it now checks again at once, notices a dead connection after 30 seconds, and only
+  backs off (up to 15 seconds) while failures keep repeating.
+- **Deleting a remote's SSH rule could cut the panel off from it.** The rule the panel's own
+  connection gets in by is now protected, naming that address; if the address cannot be read, every
+  SSH rule is kept.
 - **Call of Duty, CoD 2, CoD: United Offensive and MoH: Allied Assault install on Ubuntu 26.04
-  again.** LinuxGSM v26.4.0 left these four games on Ubuntu 24.04 in its game list, and the panel read
-  that as a limit and refused them on 26.04 hosts, although LinuxGSM runs them there. The panel now
-  refuses only what LinuxGSM itself refuses: BATTALION: Legacy and Onset above Ubuntu 20.04 or
-  Debian 11. The install page greys those two out for a Debian 12 host too, not only for a newer
-  Ubuntu.
-- **Players can join a new Satisfactory server behind the panel's firewall.** The panel opened only
-  the Game and Query ports, and Satisfactory also needs 8888/tcp. Now the install and "Open all ports"
-  also open the other ports LinuxGSM lists that players connect to (ARK's and Conan Exiles' raw UDP
-  port, Mordhau's beacon, The Isle's queue, TeamSpeak 3's file transfer, MTA's resource downloads).
-  MTA's resource-download port also serves MTA's web admin, so opening it now comes with a note to
-  give MTA's admin accounts strong passwords.
+  again.** The panel now refuses only what LinuxGSM refuses: BATTALION: Legacy and Onset above
+  Ubuntu 20.04 or Debian 11 (greyed out for Debian 12 hosts too).
+- **Players can join a new Satisfactory server behind the panel's firewall.** Install and "Open all
+  ports" now also open the other player ports LinuxGSM lists (Satisfactory's 8888/tcp, and ports for
+  ARK, Conan Exiles, Mordhau, The Isle, TeamSpeak 3 and MTA). MTA's download port also serves its
+  web admin, so give MTA's admin accounts strong passwords.
 - **LinuxGSM's monitor no longer restarts a server in the middle of the panel's nightly update.**
-  On LinuxGSM before v26.4.0, the 5-minute monitor did not see an update the panel's cron had
-  started, and could start the server again while SteamCMD was downloading. The panel's cron lines
-  now run each command in the form every LinuxGSM version recognises, and existing lines are
-  changed over on their own, keeping their last run and result.
-- **Valheim backups no longer disconnect players every hour.** With `-crossplay` (LinuxGSM's
-  default) Valheim has no Steam query port, so the panel could never count its players, and it
-  treated that as an empty server. A running crossplay Valheim server now skips its scheduled
-  backup, and says how to let the panel count players. So that such a server is never left without
-  backups, once it has gone a whole backup interval past due the panel backs it up anyway and says
-  so on the backup card and in the audit log (anyone on is disconnected while it runs). The same
-  applies to a "wait until empty" backup that has waited a whole interval. A server that crashed
-  counts as stopped, so it is backed up as usual.
-- **Existing Post Scriptum and SCP: Secret Laboratory ServerMod servers can be imported.** LinuxGSM
-  retired both games, so the panel's scan no longer recognised them. They are listed again, marked
-  as retired with their replacement, and the panel no longer schedules their weekly `update-lgsm`,
-  which can only fail for them.
+  This affected LinuxGSM before v26.4.0. The panel's cron lines now use a form every LinuxGSM
+  version recognises; existing lines change over on their own, keeping their last run and result.
+- **Valheim backups no longer disconnect players every hour.** A running crossplay Valheim server
+  (LinuxGSM's default) cannot report players, so it skips its scheduled backup and says how to fix
+  that. After a whole interval past due it is backed up anyway and says so; "wait until empty"
+  backups do the same.
+- **Existing Post Scriptum and SCP: Secret Laboratory ServerMod servers can be imported.** They are
+  listed as retired with their replacement, and no longer get a weekly `update-lgsm` that can only
+  fail.
 - **New LinuxGSM games get the right default port.** Hytale, RuneScape: Dragonwilds, Conan Exiles,
-  Soulmask, HumanitZ and Jedi Academy were offered port 27015. Jedi Academy servers also get the
-  Players card's Kick and Say. So were 26 other games whose LinuxGSM config sets another port,
-  among them Satisfactory, Palworld, DayZ, The Isle, The Front and Insurgency: Sandstorm; each is
-  now offered LinuxGSM's own default.
-- **The Autostart switch reads a monitor line written by hand.** A crontab line written as
-  `cd /home/<user>/ && ./<script> monitor`, `cd /home/<user>; ./<script> monitor` or with
-  LinuxGSM's short `m` now counts as Autostart, and switching Autostart off removes it. Before,
-  Autostart read as off while that line kept the server running.
+  Soulmask, HumanitZ, Jedi Academy and 26 other games were offered 27015 and now get LinuxGSM's own
+  default. Jedi Academy also gets the Players card's Kick and Say.
+- **The Autostart switch reads a monitor line written by hand.** Forms such as `cd /home/<user>;
+  ./<script> monitor` or LinuxGSM's short `m` now count as Autostart, and switching it off removes
+  them.
 - **LinuxGSM's short command names count as maintenance.** An update started as `./server u` (or
-  `fu`, `b`, `v`, …) no longer reads as the server going offline unexpectedly, and a host reboot
-  waits for it. A `start` that fails with LinuxGSM's generic error is no longer reported as "already
-  running".
+  `fu`, `b`, `v`, …) no longer reads as an unexpected outage, and a host reboot waits for it. A
+  `start` failing with LinuxGSM's generic error is no longer reported as "already running".
 
-- **A twenty-third full review on 2026-10-22: fixes.** Every item below has a check that fails
-  without its fix.
-  - **One machine, one host row.** A host whose address and SSH port another row already has is
-    now refused when you add it (Hosts page or setup wizard), edit a row onto it, migrate a row to
-    Tailscale onto it, or move a row's SSH port onto it. Addresses are compared without case,
-    brackets or spelling differences (an IPv6 address by value). The same address with another
-    SSH port is still allowed. Rows that already name the same machine are left as they are and
-    can still be saved with their own values; nothing merges them, and each row keeps its own
-    locks. The refusal names the other host only to a superadmin or to someone whose groups
-    include it; anyone else reads "another host". An IPv4 address written as an IPv6-mapped
-    address, as one number or in a short form, and a name ending in a dot, count as the same
-    address. A host name and its IP address (such as a Tailscale MagicDNS name) cannot be matched.
-    Two requests adding the same host at the same moment can no longer both succeed.
-  - **An SSH port move's undo says what it could not confirm,** proven on the test VPS. Closing
-    the firewall rule the move opened, and systemd's re-read of `ssh.socket`, are each tried once
-    more when the host does not confirm them, and named in the message if they still are not.
-    When the re-read is not confirmed, a running `ssh.socket` is no longer restarted: the test VPS
-    showed that restart re-opening the moved port with its firewall rule already closed. One that
-    has stopped (no SSH listening on any port) is still restarted, after one more re-read so it
-    does not come back on the moved port list, and the message says which. If SSH still cannot be
-    confirmed listening after the undo, the message no longer says "Your existing SSH still works":
-    it says SSH may not be listening on any port and gives the commands to run from the host's
-    console or another way in. A
-    restore whose answer was lost is run once more instead of being taken as done, unless the
-    panel host's helper is too old to run it twice safely; then it is reported as not confirmed.
-    When putting the old setting back cannot be
-    confirmed on a host that had no earlier panel SSH setting, the message no longer points at a
-    copy that does not exist. A `sshd -t` that gave no answer is no longer reported as sshd
-    rejecting the new setting.
-  - **A clean reboot can no longer be overlapped by other changes to its host.** While the host's
-    servers are being stopped for a reboot, scheduled-task changes and Run now, mods, GMod
-    content, Back up now, an install, deleting the host and an SSH port move are refused. A reboot
-    waits while an SSH port move, a mods install or removal, or a Run now that is starting is in
-    progress. Turning a server's Autostart on or off from Scheduled tasks after the reboot is
-    sent takes it out of the restore, as the Autostart switch does.
-  - **An SSH port move and Prepare & Secure no longer overlap on a host.** Each is refused while
-    the other runs: Prepare & Secure restarts SSH and may reboot the host.
-  - **Remote Servers keeps a host's last figures when a stats read fails,** dimmed and marked as
-    stale, instead of showing "?". Its Reachable / Checking / Unreachable badge now updates
-    without a reload.
-  - **The dashboard's tag filter follows tag changes.** Removing a tag from a server, or deleting
-    a tag that is being filtered on, now updates the list straight away.
-  - **The panel service counts as starting at boot only when it is enabled,** not when it is
-    enabled for this boot only, and the Service check says so.
-  - **The startup banner names the tailnet address the panel is bound to,** not the host's first
-    one.
-  - **NodeSource's signing key is written inside a private temporary folder** during install and
-    on remote hosts, never at a predictable path next to it. On a remote host, its temporary key
-    file is also removed when the temporary folder cannot be created.
-  - **The debug report reads the SSH ports from `ssh.socket` on hosts that use it,** as the host
-    page does, so it no longer reports the port in `sshd_config` after a port move.
-  - **Cancelling a clean reboot while it is starting says the reboot is already under way,**
-    instead of saying it has been sent.
-  - **An update check whose GitHub answer is not in the expected shape reads as unknown,**
-    instead of stopping the check with an error.
-  - **The Tailscale migration's reasons for stopping are translated.**
-  - **A settings change saved twice within the same moment is never read back stale.** The panel
-    could keep serving the earlier copy of `config.json` when both copies were the same size.
-  - **Tests.** The unit suite's guard on the machine's tailscale now also reads scripts named by
-    a path to stdin, scripts over 1 MiB, shells started from inside a script, lines continued
-    with a backslash, and byte-string commands, and it reads optional-value options as the tools
-    do. The installer's reboot path is now driven with stand-ins for every power command. Several
-    checks that could pass without checking their subject, or that left state behind, are fixed.
-    A test pattern that could take exponential time on some inputs, and a test stand-in that
-    overwrote its base class's attributes, are fixed (CodeQL).
+- **A twenty-third full review on 2026-10-22: fixes.**
+  - Adding a host, or moving a row, onto an address and SSH port another row already has is
+    refused; existing rows naming the same machine are left as they are.
+  - An SSH port move's undo retries steps the host did not confirm and names any still unconfirmed,
+    with console commands to run if SSH may not be listening on any port.
+  - A clean reboot can no longer overlap other changes to its host, and an SSH port move and
+    Prepare & Secure no longer overlap.
+  - Remote Servers keeps a host's last figures, marked stale, when a stats read fails.
+  - NodeSource's signing key is written inside a private temporary folder, never a predictable
+    path.
 
-- **A twenty-second full review on 2026-10-22: fixes.** Every item below has a check that fails
-  without its fix.
-  - **An SSH port move is now one transaction with a single commit point,** proven on the test VPS.
-    Once the panel has confirmed sshd answers on the new port, nothing undoes the move. Before, a
-    failure after that point (removing the old-setting snapshot, or repointing fail2ban) undid it
-    and deleted the new SSH port setting, which could lock you out of the host. The move now stops
-    before changing anything when it cannot take an exact snapshot of the current setting (a full
-    disk left half of one). Its undo restarts sshd only onto a configuration `sshd -t` accepts. If
-    putting the old setting back cannot be confirmed, the panel tries once more. If it still
-    cannot, it says so and names the file to check, instead of "nothing changed", and the next
-    move keeps the old setting's copy rather than overwriting it.
-  - **An SSH port move refuses only over an unfinished earlier move, and names both files.** It
-    refuses when the old setting's copy differs from the current setting, whatever `sshd -t` says,
-    and tells you which file to copy or delete. An unrelated `sshd_config` error no longer blocks
-    every move with a message blaming that copy. If the copy cannot be removed after a move that
-    worked, the panel tries once more, and then says the next move will refuse until you delete it.
-  - **The console no longer shows an update's lines twice.** Lines written while the panel was
-    reading an action's output were sent again on the next read.
-  - **A failed OpenSSF Scorecard run no longer holds back panel updates.** Scorecard rates the
-    repository's practices, not a commit's code, and a GitHub-side error in it kept an update from
-    every panel. Every check that tests the code still has to pass.
-  - **An uninstall and a clean reboot of its host no longer overlap.** An uninstall is refused
-    while the reboot is stopping the host's servers, and a reboot waits while an uninstall runs.
-  - **An over-long number in a game server's own files no longer breaks a port or player-count
-    read.** A sibling server's port, the max-players setting, or a console player count thousands
-    of digits long stopped the read instead of being skipped.
-  - **The installer's update says the OS was not fully updated when the upgrade was refused,**
-    instead of "System updated".
-  - **OS updates hand apt a keep file only when it was written in full.** On the panel host, the
-    host's own apt preferences are copied into it byte for byte. Changing an sshd setting keeps
-    every other line of `sshd_config` byte for byte too, including characters that are not UTF-8.
-  - **Smaller fixes.** A backup-schedule save that never answers no longer freezes the whole
-    Backups card on Files & Config; it stops waiting after 15 seconds and holds only the schedule.
-    An install's progress row now stays hidden for a server the dashboard filter hides. A finished
-    install's row is no longer removed by an earlier install's timer. In the coloured console, a
-    NUL or bell character no longer shifts the text that overwrites it.
-  - **Tests.** The unit suite's guard on the machine's tailscale now also reads scripts given on
-    stdin or as a file, quoted wrapper words, `-co` option clusters, restricted bash and more
-    exec-wrappers. Several checks that left state behind or did not check their own premise are
-    fixed.
+- **A twenty-second full review on 2026-10-22: fixes.**
+  - Once sshd answers on the new port, nothing undoes an SSH port move; a later failure could undo
+    it and lock you out. A move that cannot snapshot the current setting changes nothing.
+  - An SSH port move refuses only over an unfinished earlier move, and names the files to fix.
+  - The console no longer shows an update's lines twice.
+  - A failed OpenSSF Scorecard run no longer holds back panel updates.
+  - An uninstall and a clean reboot of its host no longer overlap.
 
-- **A twenty-first full review on 2026-10-22: fixes.** Every item below has a check that fails
-  without its fix.
-  - **Undoing a failed SSH port move no longer deletes the SSH setting it has just put back.** When
-    a move failed and the restart in its undo failed too, the undo ran a second time. That second
-    run deleted the restored SSH port setting, so sshd fell back to its default port, which could
-    lock you out of the host. Each part of the undo now runs exactly once. A move that fails right
-    after the new port's firewall rule went in now also removes that rule.
-  - **The Public SSH card's Limit and Allow no longer re-open a port you closed.** After a port
-    move, closing the old port as the panel advised and then pressing Limit or Allow opened it
-    again. They now act only on the ports that are open and the one the panel connects on, and the
-    message names them.
-  - **Full upgrades keep a package apt would downgrade, and the check never stops the upgrade.**
-    #447's fix for the OS update now also covers the host setup's full upgrade, on the panel host
-    and on remotes, and the installer's two. A host's own apt preference that also matched the
-    installed version no longer undoes the keep. If the check cannot finish (the simulation fails
-    or takes too long, or there is no dpkg), the upgrade runs as before and the log says so. The
-    installer no longer prints "System packages up to date" after a refused upgrade.
-  - **The login-attempt jail written at startup matches the one a whitelist edit writes.** On a
-    panel reached through Tailscale Serve with no address saved, each start banned the web port
-    only, and undid the all-ports jail that editing the whitelist had written.
-  - **Saving or uploading a file refuses a name where the console's log folders will go,** as
-    Create and Rename already did, on a stopped server whose log link points at a folder not made
-    yet.
-  - **Smaller fixes.** Re-applying a saved address whose restart could not be scheduled now
-    applies it, instead of answering "already the panel's binding". The uninstaller closes the
-    port the panel's settings record when the settings file cannot be read. The dashboard keeps an
-    "Installed, with a warning" row when the server cards refresh. Two quick backup-schedule saves
-    no longer show the first value again. The Tailscale page's buttons no longer act twice after
-    a refresh. Its Enable form counts a route to a port change still waiting for its restart as
-    the panel's own. The downloadable debug report no longer says, per remote, whether the panel
-    uses sudo there; that is on the in-panel page only. The helper reads a cron file's lines the
-    way cron does.
-  - **Tests.** The unit suite's guard on the machine's tailscale now catches a script that removes
-    it by a built name, un-exports it or runs a privileged bash, and option clusters such as
-    `-euo pipefail`. Three monitor checks now run enough sweeps to be able to fail. Several checks
-    that leaked state or could not fail are fixed.
+- **A twenty-first full review on 2026-10-22: fixes.**
+  - Undoing a failed SSH port move no longer deletes the SSH setting it just put back, which could
+    lock you out.
+  - After a port move, the Public SSH card's Limit and Allow no longer re-open a port you closed.
+  - Full upgrades in host setup and the installer also keep a package apt would downgrade.
+  - The login-attempt jail written at startup matches the one a whitelist edit writes.
+  - Saving or uploading a file refuses a name where the console's log folders will go.
 
-- **Installing OS updates no longer stops on a package apt would downgrade.** On a host whose apt
-  pinning prefers an older version of a package (here proftpd, often left by a third-party repo's
-  setup), apt refused the whole upgrade ("Packages were downgraded and -y was used without
-  --allow-downgrades", exit 100) and none of the real updates installed. The panel never
-  downgrades by itself: it now keeps such packages at the version installed, for that run only and
-  without changing the host's apt settings, installs every real update, and names the kept packages
-  in the log. On the panel host and on remote hosts; proven on the test VPS.
+- **Installing OS updates no longer stops on a package apt would downgrade.** Where apt pinning
+  prefers an older version, the panel keeps that package at its installed version for that run only,
+  installs every real update and names the kept packages in the log. Panel host and remotes.
 
-- **A twentieth full review on 2026-10-17: fixes.** Every item below has a check that fails without
-  its fix.
-  - **The Public SSH card follows the SSH port the host really uses.** After the panel moved a host's
-    SSH off port 22, the card still read port 22's firewall rules, so it could say "tailnet only"
-    while the new port was open to the internet, and Limit, Disable and Close changed port 22
-    alone. The card now names the ports sshd serves and its buttons act on all of them, in IPv4 and
-    IPv6. Every lock-out guard stays: Disable is refused when the panel itself connects over the
-    public address, when there is no Tailscale way back in, or when the ports cannot be read.
-  - **Everywhere "now" is meant, the panel's own port is read from the running process,** not from
-    the settings file, which holds the port for the next start. While a port change waits for its
-    restart, a second port change, the Tailscale page's Disable guard and its direct links, the
-    "Public panel access" line, the login-attempt jail, the debug report, `manage.py setup-token`,
-    an update that restarts nothing and the uninstaller all act on the port the panel really
-    serves. The setup wizard keeps the Serve route the operator is using instead of pointing it at
-    a port nothing listens on yet.
-  - **The downloadable debug report no longer tells how the panel is privileged.** Which journal
-    read it made, and whether the panel logs in to each remote as root, are now on the in-panel
-    report page only. The file reads the same whichever way the panel runs.
-  - **A previous update's leftovers no longer read as "Updates installed."** When the panel could
-    not tell whether its own OS update was still running, it took an old result as the new one.
-  - **An SSH port move that loses its connection halfway is undone,** instead of leaving the new
-    port's firewall rule and a half-changed SSH setting behind.
-  - **Create and Rename refuse a name where the console's log folder will go** on a stopped server
-    whose log link points at a folder not made yet; a file there stopped the next start from
-    making its log folders.
-  - **Smaller fixes.** A folder download keeps working when a file shrinks while it is read, and
-    names that file inside the archive; two people redeeming invites under the same name at once
-    get "That username is taken." instead of an error page; a backup whose broken partial archive
-    could not be removed says so; the backup schedule shows the stored choice after a save that
-    failed; the dashboard's empty state no longer sends you to a page that does not exist; the
-    Garry's Mod content card keeps one watch per job; and the remote Tailscale sign-in offers
-    "Check again" after five minutes instead of a button that skipped the firewall step.
-  - **Tests.** The unit suite stops before any part runs when the kernel block on the machine's
-    tailscale cannot be set up. The smoke suite no longer opens SSH to this machine with the
-    developer's keys. Several gates that passed while reading nothing now fail by name.
-- **A nineteenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
-  its fix.
-  - **The file browser no longer deletes a running game server's console log.** Deleting it, or the
-    `log/console` or `log` folder above it, silenced the live console until the next restart and
-    freed no space, because the server keeps writing to the deleted file. Delete now refuses and
-    says why: each start begins a fresh log anyway. A file renamed to `log` is refused too. Proven
-    with a real tmux console on Ubuntu 22.04, 24.04 and 26.04: after the refused delete the console
-    keeps showing new lines, and after the old delete it showed nothing more.
-  - **A panel-host reboot that cannot first stop the game servers is refused, not done anyway.**
-    When the panel could not read its own host's record, Reboot skipped stopping the game servers
-    and restoring them afterwards and rebooted the machine bare. It now says the host could not be
-    read and reboots nothing. A reboot is also refused while a database repair is starting.
-  - **"An update is already running — watching it" only for the panel's own update.** An upgrade
-    someone started over SSH was "watched" through the panel's previous log, which could say
-    "Updates installed." while apt was still working. The panel now says another update is running
-    and to wait for it, both in the popup and on the OS Updates card, and starts nothing when it
-    cannot tell.
-  - **After a panel port change, everything acts on the port the panel really serves on until it
-    restarts:** Tailscale Serve's Enable and Disable, the firewall's lock-out guard, closing the
-    public panel port (which now closes both the old and the new port), the SSH status card, the
-    debug report's login-attempt jail and port-conflict lines, and the setup wizard's last page.
-  - **An unreadable LinuxGSM config is never shown or saved as empty.** A settings save could write
-    only the changed lines over a config the panel could not read.
-  - **Clicking Repair database twice no longer starts two repairs.**
-  - **A restore or a folder download run by the panel's helper can no longer be stalled** by a pipe
-    put in place of a file.
-  - **The downloadable debug report no longer says the panel runs as root** in its log's source
-    line, or lists the panel account's groups. Both stay on the in-panel report page.
-  - **Smaller fixes.** A game's dependencies are reported installed when every package installed on
-    retry; Garry's Mod content held by another account, or a scan that failed, gets a true sentence;
-    a folder download no longer holds a game's backup lock; a Discord "unknown command" reply no
-    longer echoes formatting; a new server whose every default name is taken asks for a name; a
-    failed backup-schedule save re-reads the card; the GMod content card keeps watching a job it
-    just started when the first read fails; and the Tailscale peer check shows why a check was
-    refused instead of "not responding".
-  - **Tests.** The machine's own tailscale is now blocked from the unit tests by the kernel
-    (Landlock), whatever a test's script does; until now a guard read each script's text to predict
-    it, and every review found a new way past it. That guard still runs and reads more shapes.
-    Forty-two stand-ins that only half replaced what they named now replace it everywhere, and two
-    smoke checks could pass on an error page or a skipped premise.
+- **A twentieth full review on 2026-10-17: fixes.**
+  - The Public SSH card follows the SSH ports sshd really serves after a port move, and its buttons
+    act on all of them; every lock-out guard stays.
+  - While a panel port change waits for its restart, everything meaning "now" uses the port the
+    panel really serves.
+  - The downloadable debug report no longer tells how the panel is privileged.
+  - An SSH port move that loses its connection halfway is undone.
+  - A previous OS update's leftovers no longer read as "Updates installed."
+- **A nineteenth full review on 2026-10-17: fixes.**
+  - The file browser refuses to delete a running game server's console log (or the folders above
+    it), which silenced the live console until the next restart.
+  - A panel-host reboot that cannot first stop the game servers is refused, not done anyway.
+  - An upgrade someone started over SSH is reported as another update to wait for, not "watched".
+  - An unreadable LinuxGSM config is never shown or saved as empty.
+  - The downloadable debug report no longer says the panel runs as root or lists its groups.
 
-- **An eighteenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Changing the SSH port of a remote host on stock Ubuntu 24.04 or 26.04 works.** There SSH is
-    started by systemd's ssh.socket, and the folder the panel writes the new port into does not exist
-    on a fresh install, so the move wrote nothing and was then reverted as "sshd didn't come up". The
-    panel now creates that folder, as it already did on its own host. Proven on a stock Ubuntu 24.04
-    test server: the old code wrote nothing and blamed sshd, the new code writes the setting and
-    systemd reads the new port. If the setting still cannot be written, the panel says so and changes
-    nothing, before it checks or restarts SSH.
-  - **A panel port change whose restart could not be scheduled puts the old port back** in the
-    firewall and the login-attempt jail: the panel still listens there, and was left unreachable.
-  - **Installing updates twice no longer starts a second upgrade.** The "an update is already
-    running" check did not see the panel's own update job, so a second click ran apt again beside it.
-    A restore or a panel update is also refused while a database repair the panel just started is
-    getting under way.
-  - **Removing a hand-edited address from the security whitelist removes it.** An entry written in
-    another form ("10.0.0.5/24", upper-case IPv6) stayed in force while the panel said it was gone;
-    an address that is not on the list is now answered as such.
-  - **The installer never stops to ask a question it hides.** Every package it installs (Node.js,
-    npm, fail2ban, the prerequisites) now runs without prompts, not only the OS upgrade.
-  - **The downloadable debug report no longer describes the panel's privileges** (its sudo grant,
-    that it runs as root, which calls went through root). That stays on the in-panel report page.
-  - **Garry's Mod content held only in a game server's account is named as such** whichever account
-    holds the most content; it could read "Not on this host yet".
-  - **Smaller fixes.** A draft in the Raw config editor is kept when you save settings in the other
-    tab, even if you clicked away from it; the GMod content card keeps watching a running content job
-    when one read fails; an invite whose creator was deactivated can be revoked; the Backups card no
-    longer shows an out-of-date schedule after you change it, and the Live card no longer lets an old
-    answer overwrite a newer one; a file read on a game account can no longer be stalled by a pipe put
-    in its place; the install-status pass carries on past a row that fails; refusing to close the
-    public panel port because the firewall could not be read is recorded in the audit log; and the
-    OS-update start messages are in the viewer's language.
-  - **Tests.** The guard that keeps tests off the machine's own tailscale reads more ways a script
-    can reach it; fifty stand-ins that only half replaced what they named now replace it everywhere;
-    more refusal checks require the refusal itself, not just "no crash".
+- **An eighteenth full review on 2026-10-17: fixes.**
+  - Changing a remote host's SSH port on stock Ubuntu 24.04 or 26.04 works.
+  - A panel port change whose restart could not be scheduled puts the old port back in the
+    firewall and the login-attempt jail.
+  - Installing updates twice no longer starts a second upgrade.
+  - Removing a hand-edited address from the security whitelist removes it.
+  - The installer never stops at a hidden prompt, and the downloadable debug report no longer
+    describes the panel's privileges.
+- **A seventeenth full review on 2026-10-17: fixes.**
+  - A game server's account can no longer stall the server scan: its installed-mods list is read
+    only as an ordinary file of bounded size.
+  - Garry's Mod content: when a host did not answer, the card, Remove and Apply now say it could
+    not be read instead of treating it as "no content".
+  - OS updates started through the older API routes run as the same background job as the OS
+    Updates card; repairing the database is refused during a panel update or backup restore.
+  - Every invite link that still works is listed and can be revoked; no new ones are made while
+    100 still work.
+  - The downloadable debug report no longer says whether passwordless sudo makes the panel root.
+  - A leftover backup lock no longer stops pruning; a download of unreadable size no longer saves
+    an empty file.
+  - Smaller fixes to the Backups and Live cards, the Raw config editor, the host forms' credential
+    box and `manage.py setup-token` behind a proxy; the weekly gamedig check no longer runs as root.
 
-- **A seventeenth full review on 2026-10-17: fixes.** Every item below has a check that fails without
-  its fix.
-  - **A game server's account can no longer stall the server scan.** The scan read a file that
-    account controls (its installed-mods list) whole, as root, through links and pipes, on the panel
-    host and on remote hosts; a link to an endless device could hang it or run it out of memory. That
-    file is now read only as an ordinary file of bounded size, and on the panel host a /home folder
-    with no account behind it is skipped.
-  - **Garry's Mod content: a host that did not answer is no longer read as "no content".** Remove
-    reported success having done nothing, the card showed every game as not on the host, and Apply
-    could download into a new account beside content it never saw. Each now says the host could not
-    be read. On a remote host, a mount list that could not be read no longer reads as "mounts
-    nothing", which made Remove drop every other mount.
-  - **OS updates started through the older API routes now run as the same background job as the
-    OS Updates card**, so a long upgrade or a panel restart no longer stops apt part-way. Repairing
-    the database is refused while a panel update or a backup restore is in progress.
-  - **Every invite link that still works can be revoked.** The list stopped at 25, so an older link
-    had no Revoke button for up to 30 days. All of them are listed now, and the panel stops making
-    new ones while 100 still work.
-  - **The downloadable debug report no longer says whether passwordless sudo makes the panel root.**
-    Like 2FA and the firewall, that is shown on the in-panel report page only.
-  - **A leftover backup lock no longer stops old backups being pruned**, and a download whose size
-    could not be read no longer saves an empty file under the real name.
-  - **Smaller fixes.** The Backups card no longer wipes what you are typing when it refreshes; the
-    Live card marks its figures stale when the panel stops answering; the Raw config editor will not
-    save text from before a settings save made while you were typing in it; the add-host and
-    edit-host forms keep the credential box masked, or hidden for Tailscale SSH, when the browser
-    restores the form, without emptying a password already typed; the GMod install text says what
-    happens to content only a game server holds; a hand-edited `security_whitelist` written as one
-    address is read as that address; the weekly gamedig check no longer runs the package as root;
-    per-user installs keep apt from stopping to ask questions; and `manage.py setup-token` prints an
-    http link behind a proxy.
-  - **Tests.** The guard that keeps tests off the machine's own tailscale now catches a script that
-    sets PATH however it spells it; several refusal checks no longer pass on a server error; a few
-    gates now read what they guard. The docs say what deleting the panel's sudoers grant also stops.
+- **A sixteenth full review on 2026-10-16: fixes.**
+  - Garry's Mod content never uses a panel-managed game server's account (Remove could delete that
+    server's files); the panel's own content account is used. A host already mounting from such an
+    account is left as it is, and Remove refuses and names the server.
+  - Moving SSH back to port 22 opens it in the firewall again and checks the rule is there.
+  - Turning public SSH off, or Close port 22, refuses a host the panel itself reaches on public
+    port 22; move it to Tailscale SSH or its Tailscale address first.
+  - A backup is no longer pruned while another backup is still being written.
+  - The SSH port card shows the port sshd really listens on, for every host.
+  - Smaller fixes to the console's audit warning, scheduled-task editing, the maintenance check on
+    hosts needing a sudo password, the installer and uninstall.
 
-- **A sixteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Garry's Mod content no longer touches another game server's account.** On a host where a
-    panel-managed CS:S server held the only CS:S content, the GMod content card used that server's
-    account: Remove deleted the server's own game files, script and config, the weekly content update
-    restarted it unannounced, and even mounting it gave the GMod account read access to that server's
-    configs (RCON password included). A panel server's account is now never used; the panel's own
-    content account is used instead. A host already mounting from such an account is left as it is:
-    the card shows the game mounted but not on the host, and Remove refuses and names the server.
-  - **Moving SSH back to port 22 opens it in the firewall again.** After the panel moved SSH to 2222
-    and you closed 22 as advised, moving back to 22 opened nothing, because 22 was still listening
-    behind the firewall, and the panel lost the host. The move now goes by the firewall's rules, checks
-    the rule is really there afterwards, and refuses if it is not.
-  - **Turning public SSH off, or Close port 22, refuses a host the panel itself reaches on public
-    port 22**, instead of cutting the panel off. Move that host to Tailscale SSH or its Tailscale
-    address first.
-  - **A backup is no longer pruned while another backup is still being written**, so the archive in
-    progress can't take a kept backup's place.
-  - **Also:** binding SSH never re-opens public SSH; GMod Remove keeps mounts it does not hold; prune waits on the lock.
-  - **The SSH port card shows the port sshd really listens on** for every host, the panel's own
-    included; it showed the stored 22. The audit row for a move names the old port sshd really used.
-  - **Smaller fixes.** The console's send box warns when the command's audit row could not be written;
-    editing a scheduled task re-syncs the Autostart and Daily-restart switches; a retried install
-    forgets a stale "found an account" note; the maintenance check works on hosts that need a sudo
-    password; uninstall reads the panel port the way install does; the installer refuses to overwrite
-    an unreadable config.json; and the root helper's database repair checks the real data folder,
-    not the link to it.
-  - **Tests.** The guard that keeps tests off the machine's own tailscale now also catches scripts
-    that set their own PATH; four checks no longer pass on a server error; the JS sink scanners read
-    `//` inside comments, templates and regexes correctly.
+- **OS updates respect Ubuntu's phased rollout.** Updates apt would not install yet are no longer
+  forced in on remote hosts; they are listed separately on the OS Updates card and left out of the
+  count and banner. The check no longer runs when the panel host's page loads.
 
-- **OS updates respect Ubuntu's phased rollout.** Ubuntu releases some updates to a share of machines
-  at a time; `apt full-upgrade` holds the rest back. The panel used to count those as waiting and
-  forced them in on remote hosts. It now never forces them: what apt's own upgrade would not
-  install yet (the phased rollout, or a package apt keeps back) is listed separately on the OS
-  Updates card and left out of the update count and the banner, on every Ubuntu release the panel
-  supports. Phased updates install on their own once released to the machine. The update check
-  no longer runs when the panel host's page loads; the card shows the last check.
+- **A fifteenth full review on 2026-10-16: fixes.**
+  - The Raw config editor can no longer blank a server's config after a failed re-read.
+  - Moving SSH twice on a Tailscale-SSH host no longer drops the first move's port.
+  - Update snapshots are pruned on per-user installs whose panel folder is a link; before, disk use
+    only grew.
+  - Smaller fixes to the panel port, UFW rules when moving SSH, Serve, the install page, a stale
+    reboot banner and audit rows.
+- **A fourteenth full review on 2026-10-16: fixes.**
+  - Moving SSH on a Tailscale-SSH host is refused instead of losing the host.
+  - Close Port and Unblock no longer say "closed" when nothing was removed, and a v4 rule beside a
+    v6-only LIMIT no longer turns that LIMIT into a plain allow.
+  - Errors no longer read as "nothing there" on a dozen pages (file lists, backups, logs and more).
+  - Removing a server made on an existing account leaves that account alone; config saves keep the
+    live console log intact.
+- **A thirteenth full review on 2026-10-16: fixes.**
+  - Close Port 22 really closes it: it removes every public rule for 22 (IPv4 and IPv6) and checks
+    the firewall afterwards; before, a rate-limit rule kept 22 open.
+  - Unblock no longer says "Unblocked" when another rule still blocks the address.
+  - A host with Tailscale installed but stopped no longer aborts a fresh install.
+  - An update that failed while writing new code restores the old code before restarting.
+  - The root helper refuses a restore whose data folder was swapped for a link, and refuses to
+    remove an account whose home is not its own.
+- **A twelfth full review on 2026-10-15: fixes.** Its one high finding shipped on its own; see
+  Security.
+  - The update's snapshot clean-up refuses a linked `data/.backups`, so root can no longer be made
+    to delete folders elsewhere.
+  - IPv4 and IPv6 firewall rules are read separately: an IPv6 allow above the limit no longer reads
+    as "rate limited".
+  - The OS-updates banner shows again for delegated admins on the hosts they manage.
+  - A host that is down or has a changed key says so instead of "Internal server error"; bracketed
+    IPv6 addresses work in the setup wizard and Tailscale ping.
+- **An eleventh full review on 2026-10-15: fixes.**
+  - A remote whose SSH key changed shows its firewall as "Unknown", with the reason, not "Inactive".
+  - "Rate limit" checks which rule really matches first, instead of claiming success when an
+    earlier rule already opened the port.
+  - A host saved as `[fd7a:…]` connects; other spellings of one address are read as one address.
+  - On a host whose /home is a link, the file browser and config lookup work.
+  - Delegated admins no longer see the panel host's update count, reboot state or pending packages,
+    and two remote read pages now check the host permission.
+- **A tenth full review on 2026-10-15: fixes.**
+  - On a German or Dutch host with UFW on, a fresh install no longer reads the firewall as off and
+    skips opening the panel's port; command output is read in English.
+  - A remote stored by its tailnet IPv6 address is reachable again.
+  - On a host whose sudoers checker is sudo-rs 0.2.2, the installer keeps the panel's sudo grant
+    without the one line that version does not understand, instead of deleting it all.
+  - A changed host key and a cut-off command are named for what they are.
 
-- **A fifteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
-  its fix.
-  - **The Raw config editor can no longer blank a server's config.** If re-reading the config after a
-    settings save failed, the editor was left empty and its Save wrote that over the file; it now keeps
-    the last good text and refuses to save what it never loaded.
-  - **Moving SSH twice on a Tailscale-SSH host** no longer drops the first move's port while saying it
-    is still a fallback, and the host page shows the port sshd really uses.
-  - **Update snapshots are pruned on per-user installs** whose panel folder is a link you made; before,
-    every update kept another full copy and disk use only grew.
-  - **Smaller fixes.** Every reader uses the corrected panel port; moving SSH with UFW inactive keeps a
-    rule you already had; disabling Serve at another app's path is a refusal, not an error; the install
-    page keeps polling after a failed first read; a stale reboot banner clears; audit rows for actions and
-    commands are kept; and more.
-  - **Tests.** The guard that keeps tests off the machine's own tailscale reads clustered options, runs its
-    speed check in a time-limited child, and keeps scripts on their own shell; 19 refusal checks no longer
-    pass on a crash.
-- **A fourteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Moving SSH on a Tailscale-SSH host** no longer loses the host: the port change is refused there.
-  - **Close Port and Unblock** no longer say "closed" when the read-back failed and nothing was removed;
-    a v4 rule beside a v6-only LIMIT no longer turns that LIMIT into a plain allow. Proven against real UFW.
-  - **Errors no longer read as "nothing there"** on a dozen pages (file lists, backups, logs and more).
-  - **Removing a server** made on an existing account leaves that account alone; config saves keep the
-    live console log intact; uptime, timezone and other world-readable reads no longer need sudo.
-  - **Smaller fixes** in the update snapshot prune, uninstall's Tailscale route removal, auto-block
-    release, the debug report's At-a-glance line, and an unreadable dropped folder's message.
-  - **Tests.** The guard that keeps tests off the machine's own tailscale reads shells and options as
-    they really parse, eight refusal checks no longer pass on a crash, and several gates now can fail.
-- **A thirteenth full review on 2026-10-16: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Close Port 22 really closes it.** On every host the panel set up, port 22 is open through a
-    rate-limit rule, and the button removed only a plain allow (which ufw reports as done even when
-    it is not there), so it said "removed" while 22 stayed open. It now removes every public rule
-    for 22 in both IPv4 and IPv6 and checks the firewall afterwards. Proven against real UFW.
-  - **Unblock tells the truth.** Unblocking an address on the panel host or a remote no longer says
-    "Unblocked" when it is still blocked by another rule. Proven against real UFW.
-  - **Fresh installs with Tailscale stopped.** A host with Tailscale installed but not running no
-    longer aborts the install before printing the setup link.
-  - **A failed update rolls back its code.** An update that failed while writing the new code
-    restarted the half-written tree as the old version; it now restores the old code first.
-  - **Root helper.** It names only its own account as Tailscale's operator, refuses a restore whose
-    data folder was swapped for a link, and refuses to remove an account whose home is not its own.
-  - **Smaller fixes.** Panel restarts are refused while the panel host reboots; the firewall page no
-    longer shows a server error as a reading; saving over the live console log keeps it working;
-    a failed large save leaves no staging file; IPv6-only SSH rules are read when moving SSH; test
-    runs print each lane's log as it ends, and on Ctrl-C.
-  - **Tests.** Stand-ins now model ufw's real answer to deleting a missing rule, ten refusal checks
-    no longer read a crashed request as a refusal, and several gates that could not fail now can.
-- **A twelfth full review on 2026-10-15: fixes.** Every item below has a check that fails without
-  its fix. (Its one high finding, apt `#include` through the root helper, shipped on its own; see
-  Security.)
-  - **Updates keep their snapshots safe.** The update's clean-up of old snapshots followed a link
-    the panel account could plant at `data/.backups`, so root could be made to delete folders
-    elsewhere. It now refuses a linked path and removes only dated folders inside the real one.
-    Proven on a real host.
-  - **Rate limiting over IPv6.** IPv4 and IPv6 firewall rules are now read separately: an IPv6
-    allow above the limit no longer reads as "rate limited". Proven against real UFW output.
-  - **OS-updates banner for delegated admins** shows again for the hosts they manage; it stopped
-    when the eleventh review hid the panel host from them.
-  - **Running the tests no longer deletes a developer's database.** The default test run removed
-    `data/panel.db` and its backup in the checkout; it now runs those suites in a copy, Ctrl-C
-    stops a parallel run, and the README points contributors to the safe runner.
-  - **Smaller fixes.** The setup wizard and Tailscale ping accept a bracketed IPv6 address; saving
-    a file through a link writes the file it points at; a file of blank lines opens as text; the
-    root-capable account check also asks classic sudo on sudo-rs hosts; a host that is down or has
-    a changed key says so instead of "Internal server error"; the debug report's "Ways in" line
-    reads the real SSH ports; several untranslated labels follow the viewer's language.
-  - **Tests.** The stdlib-stub gate now covers pwd and grp and patcher helpers, several checks that
-    could no longer fail can again, and a hung lock control can no longer stall the run.
-- **An eleventh full review on 2026-10-15: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Firewall page after a host key change.** When a remote's SSH key had changed, refreshing its
-    Firewall page showed "Inactive, no open ports, no IPs blocked" instead of "Unknown". It says
-    "Unknown" again, with the reason.
-  - **Rate limiting SSH.** "Rate limit" on a port said it worked when the port was already open
-    through the OpenSSH profile, a port list or a one-address rule listed above it, so nothing was
-    limited. It now checks which rule really matches first. Proven against a real UFW rule list.
-  - **IPv6 hosts in brackets.** A host saved as `[fd7a:…]` failed to connect and was reported as
-    "no tailnet peer" in the debug report. Brackets and other spellings of the same address are
-    now read as one address everywhere.
-  - **A symlinked /home.** On a host whose /home is a link, the file browser refused the game
-    user's own files and the game's config was not found. Proven on a real host.
-  - **Delegated admins.** They no longer see the panel host's own update count, reboot state or
-    pending packages through the banners, and two remote read pages now check the host permission
-    like the rest.
-  - **Smaller fixes.** "Panel Server" is translated; a mistyped Ubuntu Pro token is refused with a
-    message instead of an error; a file name ending in a newline reads the right file; a stalled
-    language save no longer holds back later ones; an unreadable folder keeps a half-typed rename;
-    a server action no longer writes two audit rows; ping latency is read in English.
-  - **Tests.** About seventy checks replaced a piece of Python itself for the whole run instead of
-    the module under test, and a new gate refuses that. Eight stale permission exemptions are gone
-    and the list now fails on a stale entry, several checks that passed without testing anything
-    now can fail, and the fuzzers run on very large pull requests.
-- **A tenth full review on 2026-10-15: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Hosts in other languages.** On a German or Dutch host with UFW on, a fresh install read the
-    firewall as off and did not open the panel's port. The installer, and the panel host's own
-    commands when the helper is not installed, now read command output in English, and a sudo
-    refusal is recognised as one in any language. Proven on a real host set to German.
-  - **Tailscale over IPv6.** A remote stored by its tailnet IPv6 address had the MagicDNS name glued
-    on, so every command, the Test button and the terminal failed to reach it.
-  - **Installer and sudo-rs.** On a host whose sudoers checker is sudo-rs 0.2.2, the installer
-    deleted the panel's whole sudo grant and stopped. It now keeps the grant without the one line
-    that version does not understand, and says so. Ubuntu 26.04's sudo-rs accepts the full file.
-  - **Robustness.** A host key that changed and a command that was cut off are named for what they
-    are, a route list is checked before IP forwarding is turned on, and an awk reading with a
-    decimal comma no longer breaks a reading.
-  - **Tests.** About thirty checks that could pass without testing what they named now can fail,
-    including one smoke check that passed on a server that never had the id it was testing.
+- **A ninth full review on 2026-10-13: fixes.**
+  - On a non-English host, memory, OS-update versions and an install's account switch read
+    correctly.
+  - Changing the firewall on an unreachable host says the host is unreachable.
+  - Error pages, "❌" validation messages and page-written text follow the viewer's language.
+  - A kick by name keeps the player's full name; an expired certificate no longer reads
+    "0 day(s)"; a hand-edited port that is not a number no longer breaks a page.
 
-- **A ninth full review on 2026-10-13: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Hosts in other languages.** On a host whose system language is not English, the panel read
-    its memory as zero and showed "?" for it, the OS-update list lost each package's current
-    version, and an install's account switch did not retry. The commands the panel reads now run
-    with English output; proven on a real host set to German.
-  - **Firewall.** Changing the firewall on a host the panel cannot reach says the host is
-    unreachable instead of "Something went wrong".
-  - **Languages.** The panel's own error pages (an expired form, a file that is too large) are
-    shown in the viewer's language, and so are the validation messages that begin with "❌".
-    Text the page wrote itself (the console's connection state, Customise/Done, "all healthy",
-    the New file and New folder labels) follows a live language change.
-  - **Robustness.** A kick by name keeps the player's full name; the console box no longer blames
-    the game server for a panel-side failure; an expired certificate no longer reads "0 day(s)"; a
-    failed SSH command no longer leaves its channel open; and a hand-edited port that is not a
-    number no longer breaks a page.
-  - **Tests.** About twenty checks that could pass without testing what they named now can fail,
-    and the test runner no longer runs a real `tailscale` installed in a home directory.
+- **An eighth full review on 2026-10-12: fixes.**
+  - A ban by name on a Valve (Source/GoldSrc) server could reach a different player; fixed. Quake
+    Live still gets no kick or ban.
+  - A package installed for two architectures lists each row with its architecture.
+  - More messages follow the viewer's language; IPv6 hosts are bracketed in login lines, connect
+    addresses and links.
+  - Several checks no longer read a failed command as a clean answer.
 
-- **An eighth full review on 2026-10-12: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Player moderation.** A ban by name on a Valve (Source/GoldSrc) server could reach a different
-    player: the colour-code name matching meant for Quake-engine games also ran there. Quake Live
-    still gets no kick or ban: no primary source documents its console commands.
-  - **OS updates.** A package installed for two architectures (the 32-bit libraries game servers
-    need) was listed twice with nothing to tell the rows apart; each row now names its
-    architecture.
-  - **Languages.** The dashboard's failed-install banner is shown in the viewer's language (older
-    banners stay as they were written), and so are the panel's generic error message, the host
-    page's header and about 20 more messages. Clicking the Connect address before it loads no
-    longer copies the placeholder word.
-  - **IPv6.** An IPv6 host is bracketed in the SSH login line, the host page's connect addresses,
-    the chat-bot's server line and the installer's first-login link.
-  - **Robustness.** Several checks no longer read a failed command as a clean answer (update
-    status, IP forwarding, automatic security updates, the whitelist reload), and a reboot rolled
-    back on a host that stays silent is now given up on like any other.
-  - **Tests.** Eighteen checks that could pass without testing what they named now can fail.
-
-- **A seventh full review on 2026-10-12: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Garry's Mod content.** The Content card now shows how an install or uninstall ended: its
-    message stayed hidden once the job stopped running, so a failure showed nothing.
-  - **Console.** A line holding a control character (a pasted Ctrl-C, Ctrl-Z or line break) is
-    refused instead of reaching the game, where it interrupted or suspended the server. After Clear,
-    a panel line could appear twice; it now appears once.
-  - **Phones.** The file editor's header, the blocked-IP table's Unblock button, the dashboard's
-    server names, the server page's Connect row and the French rate-limit row fit a 375-pixel
-    screen. The stat tiles' "not read" and "stopped", the console's connection state and the file
-    editor's save results are translated.
-  - **Languages.** Ubuntu Pro, full-backup, import and database-optimise answers, the GMod install
-    progress, "Internal server error" and the ✓/✗ results are translated for Spanish and French
-    viewers, and the translation checks now follow messages passed through helpers.
-  - **Robustness.** Optimise database no longer says "Optimized" when the database was busy and the
-    compaction was put off. A hand-edited panel port no longer breaks Change Port, and an id too
-    large for the database is refused instead of failing. After a reboot is called off, a server
-    is no longer given up on while its host is silent or a LinuxGSM update is holding its start;
-    the hour's wait counts from when the host answers. An IPv6 address is
-    bracketed in the links the panel and installer print, and in a server's copyable connect
-    address and Join link.
-  - **Tests.** Seventeen checks that could pass without testing what they named now can fail.
+- **A seventh full review on 2026-10-12: fixes.**
+  - The GMod Content card shows how an install or uninstall ended, failures included.
+  - The console refuses a line holding a control character (a pasted Ctrl-C or Ctrl-Z), which
+    interrupted or suspended the server.
+  - Several pages fit a 375-pixel phone, and more text is translated for Spanish and French.
+  - Optimise database no longer says "Optimized" when it was put off; after a reboot is called
+    off, a server is not given up on while its host is silent or a LinuxGSM update holds its start.
 
 
-- **Phones (375 px wide).** Pop-up messages use the screen's width: they were squeezed into a
-  188-pixel column, and a long Spanish refusal covered the page header. The firewall rules, backups,
-  users and game-server tables fit the screen with their delete buttons in reach. Long host and
-  server names in page headings wrap instead of pushing the page sideways. French labels and
-  placeholders are no longer cut off, and "Any address" and the firewall's example address are
-  translated. Checked in English, Spanish and French; desktop pages are unchanged except the
-  Open-a-port card, whose protocol list was cut off there too.
+- **Phones (375 px wide).** Pop-up messages, tables, long names and French labels now fit the
+  screen with delete buttons in reach. Desktop pages are unchanged except the Open-a-port card.
 
-- **A sixth full review on 2026-10-12: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Panel backup restore in Spanish and French.** When the safety copy taken before a restore
-    could not be written, the "Restore anyway" choice never appeared for Spanish and French viewers:
-    the page recognised that answer by its English words. It now reads a field the panel sends, and
-    the same holds for the passphrase refusals.
-  - **Daily restart (when empty).** A server whose player count the panel reads through a query type
-    you set on its page was restarted every day with players on it; the hourly check now uses that
-    query type. Jedi Knight II names longer than 15 characters are read whole.
-  - **Console.** A console line is now always typed as text: a line ending in `;`, or one that looks
-    like a key name such as `C-c`, is sent to the game as written instead of being read by tmux.
-  - **Languages.** About 330 more messages, including login refusals, firewall refusals, Close port
-    22, reboot notices and the Test buttons, are translated for Spanish and French viewers, and a new
-    check fails when a message shown to a viewer has no translation.
-  - **Robustness.** A hand-edited on/off or number setting no longer breaks the audit-log cleanup,
-    backup pruning or the time zone setting. Signing everyone out also clears their sessions from the
-    session list.
-  - **CI.** The two longest required jobs get time limits that leave room above their measured run
-    times, so a slower runner no longer fails them.
+- **A sixth full review on 2026-10-12: fixes.**
+  - "Restore anyway" on a panel backup restore appears for Spanish and French viewers too.
+  - Daily restart (when empty) uses the query type set on a server's page; such servers were
+    restarted every day with players on.
+  - Console lines are always typed as text, so `;` endings or `C-c` reach the game as written.
+  - About 330 more messages are translated for Spanish and French.
+  - Signing everyone out also clears their sessions from the session list.
 
-- **A fifth full review on 2026-10-12: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Console.** Panel lines that arrive after you press Clear no longer vanish at the next 30-second
-    refresh, and the lines Clear removed still stay gone. A console command that starts with `-`
-    (such as `-version`) is now typed into the game instead of being refused by tmux. After the
-    console window is resized narrower, the panel no longer shows rows from before the command as
-    its output.
-  - **Player lists and moderation.** Call of Duty 4 (CoD4X) servers show who is online. Ban is
-    offered only for games whose console can ban by slot: on Quake III, Enemy Territory and
-    ET: Legacy, Ban was answered "Done." while the player stayed on, and it is now refused with the
-    reason. Jedi Knight II servers now get a player list, Kick and Say, and five more Valve games
-    (Brainbread, Opposing Force, The Specialists, Vampire Slayer, Zombie Master: Reborn) get the
-    Valve player tools. Game tables held 45 names that match no LinuxGSM game; they are removed or
-    corrected, so Vampire Slayer and Vintage Story now get their own default ports.
-  - **Firewall.** Close public panel port says why it cannot act when UFW is off or lets everything
-    in by default, instead of reporting the port as already closed. A UDP-only or loopback rule no
-    longer counts as holding the panel port open. Proven against a real firewall, which was left as
-    it was.
-  - **Languages.** About 300 more messages that contain a name or a number (confirmations, refusals,
-    host, firewall and reboot notices, install progress) are translated as whole sentences for Spanish and French viewers, and so
-    are page titles, the Tailscale status line and Discord connection problems. In French,
-    "Controls" no longer reads the same as "Commands".
-  - **Robustness.** A host or game server deleted while a background pass is running no longer
-    breaks that pass. A hand-edited number in the settings no longer breaks the Settings page or a
-    backup. Resetting a user's password signs out their other sessions.
-  - **Tests and CI.** Several checks that could not fail now can, and the CI root run requires each
-    root-only check to have actually run.
+- **A fifth full review on 2026-10-12: fixes.**
+  - Console: panel lines after Clear no longer vanish, and commands starting with `-` are typed in.
+  - CoD4X and Jedi Knight II servers show who is online; five more Valve games get the player
+    tools. Ban is offered only where the console can ban by slot (Quake III, Enemy Territory and
+    ET: Legacy now refuse it). Vampire Slayer and Vintage Story get their own default ports.
+  - Close public panel port says why it cannot act when UFW is off or allows everything.
+  - About 300 more messages are translated; resetting a user's password signs out their other
+    sessions.
 
-- **A fourth full review on 2026-10-12: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Player lists.** Quake III and Return to Castle Wolfenstein servers
-    now show who is online, read from each engine's own status table. Quake III 1.32 and
+- **A fourth full review on 2026-10-12: fixes.**
+  - Quake III and Return to Castle Wolfenstein servers show who is online; Quake III 1.32 and
     Enemy Territory no longer drop players with spaces in their names.
-  - **Firewall page.** A rule that opens the panel's port as part of a list or range is shown as
-    the panel's rule and protected, like the panel card and Close port already treat it. Close port
-    refuses a rule shared with other ports instead of deleting it. Lock-out reasons describe ranges
-    correctly and are shown in the viewer's language.
-  - **Pages.** Sentences that contain a name or a number (upload results, confirmations, schedule
-    explanations and many more) are now translated as whole sentences for Spanish and French
-    viewers, with names left as typed. Alert names, permission names and more tooltips are
-    translated too.
-  - **Audit log.** Characters the audit page cannot show are escaped in every row.
-- **A third full review on 2026-10-11: fixes.** Every item below has a check that fails without
-  its fix.
-  - **Backups.** A scheduled backup no longer deletes a good archive because LinuxGSM printed a
-    FAIL line. LinuxGSM 26.3.0 prints a spurious "Problem identifying the previous backup directory
-    for exclusion" on every backup and still writes a complete archive. The panel now reads the
-    archive to the end and keeps it when it is whole, showing LinuxGSM's line as a warning. It
-    removes only an empty or cut-off archive.
-  - **Settings sent as text.** Ten more switches no longer read the text `"false"` as yes. They
-    include whitelist removal, blocking and unblocking, auto-block, backup force, daily restart and
-    log timestamps. Each accepts only a real true or false.
-  - **Bots and settings.** A Discord channel id or Telegram chat id entered as a number no longer
-    stops the bots and their alerts. A setting in config.json that is not text no longer takes down
-    pages, the console or the boot.
-  - **Game servers.** The player list no longer shows the previous status table when the server
-    answers slowly. The install no longer hides a GMod content step it skipped.
-  - **Pages.** Confirm dialogs, the command palette and more page text are translated, and the
-    translation check now finds text split across pieces. Names stay as typed. The users page fits
-    a phone screen.
-- **A second full review on 2026-10-11, rerun after the first one's fixes: fixes.** Every item below
-  has a check that fails without its fix.
-  - **Settings sent as text.** A switch sent as the text `"false"` counted as on. During VPS setup
-    that meant `"reboot": "false"` rebooted the host. The same applied to installing fail2ban or the
-    dependencies, enabling UFW, Tailscale SSH, tag notifications, autostart and backups. Each one
-    now accepts only a real true or false. A backup passphrase sent as `null`, `false` or `0` no
-    longer turns encryption off. Text typed into a server's Keep box no longer clears its setting.
-  - **Game servers.** Saving the Alerts card no longer copies values from `secrets-*.cfg` into the
-    plain instance config. The Alerts and log-timestamp writes now get the same safety check as the
-    settings form. The install's GMod content step no longer runs at the same time as a Content-tab
-    job, and it no longer skips content that is already on the host. A file whose name happens to
-    match an internal marker no longer makes its folder read as "outside the home".
-  - **Panel host.** A staged Ubuntu rollout no longer limits the whole game list to the older release.
-    "Restore all" in Repair works on a copied file. The OS-update lock check reads the probe's exit
-    codes correctly.
-  - **Pages.** The players dialog (shown before a restart or a Panel Server backup) and 147 other
-    page strings are now translated for Spanish and French viewers. Usernames, group names and
-    command names are no longer run through the translator.
-  - **Tests and CI.** About 30 more test checks could pass without testing what they named; each was
-    shown blind to a deliberate break and now catches it. The install-job tests now use stand-ins
-    shaped like the real functions, and a new check catches a wrong-shaped one. The fail2ban fuzz
-    target had timed out on every run while its job showed green; it runs now, and a timeout fails
-    the unit suite. Bandit and Semgrep now also scan `.github/scripts`. A documentation-only push
-    during the weekly scan no longer throws that scan away.
-- **Findings from a full code review including the tests and CI (2026-10-11): fixes.** Every item
-  below has a check that fails without its fix.
-  - **Game servers.** A remote GMod install whose content download partly failed (one game out of
-    disk) mounted nothing; it now mounts the games that are on disk, as the panel host already did.
-    Config reads now include `secrets-common.cfg` and `secrets-<instance>.cfg`, which LinuxGSM reads
-    last: the Alerts card no longer shows a stale webhook, and a save that the secrets file would
-    override is refused with that file's name instead of saying "Saved". A server whose config does
-    not exist until first start is no longer read as "not installed" and downloaded again. Another
-    server's `update` on the same account no longer counts as this server's maintenance and mutes
-    its offline alerts. The mods card says the host did not answer instead of "no mods".
-  - **Host reboots.** "Reboot when everyone has left" no longer loops, stopping and restarting
-    servers, when it cannot read a server's player count; it reads the host's batched count, and
-    says so once if it still cannot. A reboot after the operator took over the planned servers no
-    longer says "no running game server was found".
-  - **Hosts.** VPS setup no longer says "complete" when `ufw enable`, the timezone, the swap file or
-    fail2ban failed; each failure is named in "Bootstrap finished, but …". "Test connection" on the
-    panel host's own row no longer marks it offline.
-  - **Panel updates and repair.** Opening the panel host's page no longer races the update check's
-    `git fetch` (which cached "Couldn't reach the update source" for 5 minutes), and fetches nothing
-    while an update runs. Switching to any branch is refused during an update, and the running
-    update's log is no longer deleted. A backup restore and a self-update now refuse to overlap.
-    "Restore all" in Repair works when a file is staged as added or renamed.
-  - **Recovery tool.** `manage.py` no longer starts the panel's background jobs (scheduled restarts,
-    install checks, update checks) beside the running service. `create-admin` applies the same name
-    rules as the web forms, so it cannot create an account whose name has a stray space and can
-    never sign in.
-  - **Pages.** Adding a host as "Existing server — just scan" no longer shows a red error after it
-    succeeded (pressing Add again made a duplicate) and goes on to the scan. "Load older" during a
-    console catch-up no longer shows lines twice. Two quick file opens leave the editor on the
-    second. A delegated host admin is no longer offered panel-host reboot buttons that always fail.
-    Host, server and device names are no longer translated ("Servidor"). Uploading into a folder
-    that is a symbolic link shows the Replace dialog again. A non-text value from the terminal or
-    a bad `socketio_cors_origins` in config.json no longer breaks the socket.
-  - **Settings input.** A game's backup schedule no longer clears its override on a value it cannot
-    read, Repair no longer restores every file when `paths` is not a list, and a non-text SSH mode
-    or backup passphrase is refused with a 400 instead of an error page.
-  - **Tests and CI.** About seventy test checks could pass without testing what they named; each was
-    shown blind to a deliberate break and now catches it. Fixing them found a test that ran a real
-    `sudo -n`, five test threads left running, real `dpkg-query`/`apt-config` calls from the unit
-    suite, and the JavaScript coverage run's rename flow, broken since 2026-10-08 behind a warning;
-    all fixed. A scheduled code-scanning run of an old commit no longer uploads over a newer one,
-    and one 502 from SonarCloud no longer turns main's check red.
+  - A rule opening the panel's port in a list or range is protected, and Close port refuses a rule
+    shared with other ports.
+  - More whole sentences are translated; the audit page escapes characters it cannot show.
+- **A third full review on 2026-10-11: fixes.**
+  - A scheduled backup keeps a whole archive despite LinuxGSM 26.3.0's spurious FAIL line, shown as
+    a warning; only an empty or cut-off archive is removed.
+  - Ten more switches accept only a real true or false, not the text `"false"`.
+  - A Discord channel id or Telegram chat id entered as a number no longer stops the bots.
+  - The player list no longer shows a stale status table; more page text is translated.
+- **A second full review on 2026-10-11, rerun after the first one's fixes: fixes.**
+  - A switch sent as the text `"false"` no longer counts as on: during VPS setup,
+    `"reboot": "false"` rebooted the host. A backup passphrase sent as `null`, `false` or `0` no
+    longer turns encryption off.
+  - Saving the Alerts card no longer copies values from `secrets-*.cfg` into the plain instance
+    config.
+  - A staged Ubuntu rollout no longer limits the game list to the older release.
+  - The players dialog and 147 more strings are translated for Spanish and French.
+- **Findings from a full code review including the tests and CI (2026-10-11): fixes.**
+  - Config reads include LinuxGSM's secrets files, and a save they would override is refused with
+    that file's name. A remote GMod install mounts the games that did download.
+  - Another server's `update` on the same account no longer mutes this server's offline alerts.
+  - "Reboot when everyone has left" no longer loops when it cannot read a player count.
+  - VPS setup names each failed step instead of saying "complete".
+  - A backup restore and a self-update refuse to overlap; branch switching is refused during an
+    update.
+  - `manage.py` no longer starts the panel's background jobs beside the running service, and
+    `create-admin` applies the web forms' name rules.
+  - Adding a host as "Existing server — just scan" no longer shows a false error (Add again made a
+    duplicate).
 
 - **The Tailscale page no longer shows "12/31/1" as the last-seen time of every connected
-  device.** Tailscale reports a placeholder for "no time" for a device that is online now, and the
-  page printed it as a date in year 1. Connected devices now show a dash; offline ones keep their
-  real last-seen time.
+  device.** Connected devices show a dash; offline ones keep their real last-seen time.
 - **A game server the panel starts on its own host now writes its files group-writable again (664),
-  as it does when LinuxGSM's cron or a login starts it.** Since game servers were given a scope of
-  their own, the privileged helper ran LinuxGSM (and a scheduled task's "Run now") with the panel
-  service's umask, 0022, so new console logs and lock files were 644. It now uses the umask the
-  account's own session gets — login.defs' `UMASK` with Ubuntu's user-private-group rule, 0002 for a
-  game account — computed the way pam_umask does. Remote hosts already got it through `sudo -u`.
+  as it does when LinuxGSM's cron or a login starts it.** The panel now uses the account's own
+  session umask instead of the service's 0022. Remote hosts already did.
 - **"Reboot now" no longer misses a LinuxGSM action that a newer one on the same server displaced.**
-  The reboot check read only the newest registered action, so in the moment that action was ending
-  (its last output still being read), an older update or validate still running beneath it was not
-  seen, and the reboot could stop the server under it. Every action still running is now counted.
+  Every action still running is counted, so a reboot no longer stops a server under an older
+  update or validate.
 - **The live console no longer shows a few lines twice when a server's page opens**, and no longer
-  drops the lines written while it loaded. The page now learns where in the log its first window ends
-  and is caught up from there, as a return from a background tab already was, so new lines are placed
-  by their position in the log, not by their text. A line the game repeats word for word still shows.
+  drops lines written while it loaded.
 - **A backup that LinuxGSM reports as finished is "Backed up" only when its archive reads whole.**
-  LinuxGSM exits with success even when the archive failed, if it restarted the server afterwards; the
-  panel then removed a good old backup to make room for the broken one. Now it says the backup is not
-  confirmed and keeps every old backup. After a backup that failed, the partial archive it left is
-  removed, but only when it is certainly that run's and the run has certainly ended; after a timeout, a
-  lost connection or a lock refusal nothing is removed. The message says when an archive was removed.
+  Otherwise it is "not confirmed" and every old backup is kept. A failed run's partial archive is
+  removed only when it is certainly that run's and the run has ended.
 - **The file browser's editor, the Config card's Raw tab and uploads refuse a LinuxGSM config that
-  turns `logtimestamp` on**, which freezes the live console. Turning it off, and commented-out lines,
-  still save.
-- **Findings from a full code review (2026-10-08): fixes.** Every item below has a check that fails
-  without its fix.
-  - **Game servers and alerts.** A batched player poll counted bots and reserved slots instead of
-    people, so a Bedrock server with players on read 0 and sent a false "server emptied" alert. A
-    failed backup no longer runs the cleanup, which deleted one more good backup each time. Server
-    actions, single or bulk, now skip a server that is still installing. During a remote reboot, a
-    server whose state could not be read no longer pages "went offline unexpectedly" before the
-    host is back. In "reboot when everyone has left", an unreadable player count is not "a player
-    joined", and an earlier plan still restoring is not taken for a rollback. The Power card's
-    colour comes from the outcome, not from the words in it.
-  - **The live console.** After a dropped connection, the console catches up from its own place in
-    the log, as a tab returning from the background does. It used to add the last 250 lines a second
-    time. A line that arrived while the first window was loading is no longer lost, and "Load older"
-    is not reverted by the next poll. A game line that happens to be exactly "Done" or "Saved" is no
-    longer translated.
-  - **Files and settings.** A folder that is a symbolic link (LinuxGSM's own `log/server`, or a
-    `serverfiles` moved to another disk) is listed and opened as a folder. Saving or uploading onto a
-    folder's name fails instead of moving the file inside it. Deleting or renaming a link that leads
-    outside the home acts on the link. Deleting a folder closes an open editor inside it. The Config
-    form no longer offers `logtimestamp`, which freezes the console, and the config writer refuses
-    turning it on. A config save sets every line of a key written twice, so the copy LinuxGSM reads changes too.
-    "Run now" on a remote records its result when the command ends in a `#` comment.
-  - **Hosts.** The firewall lockout guard protects the port sshd really listens on, not a leftover
-    22 rule. A mistyped timezone or an over-long account name is refused before host setup starts,
-    instead of stopping it halfway with the firewall and SSH hardening unapplied. Host setup no longer
-    locks an account it could not confirm it created, and no longer reports a reboot that never
-    happened as "back online". A reboot that was never sent is not waited on. One server with a
-    non-numeric port no longer breaks metrics for every host. The GMod content mount fails when the
-    read grant fails, instead of saying "Mounted".
-  - **Panel.** Renaming the default "Everyone" group no longer creates a second default group with
-    console access on the next restart. The database repair stops if it cannot first keep a copy of
-    the original. A fail2ban reconfigure that could not write its files says so, instead of reporting
-    the old jail as updated. A git, sudo or `systemctl` timeout is reported as a timeout instead of an
-    error page. The auto-block watcher survives a bad setting and logs it. The Ubuntu Pro cache no
-    longer expires early or late on a host not set to UTC. The first-run wizard applies the same
-    username rules as everywhere else. Group ids in the user and invite forms are parsed safely. A host that cannot reach GitHub no longer
-    waits up to 10 seconds for the game list on every page that needs it.
-  - **Debug report.** A service read that times out no longer fails the whole Diagnostics section,
-    and is not reported as "no unit file". A group or tag named with one of the report's own words
-    no longer rewrites its text. The journal read without the helper no longer scans the whole
-    journal, and the SSH failure count includes the rotated log.
-  - **Pages.** The GMod Apply button, the Power card's reboot polling, the Install Tailscale button
-    and the setup wizard's Tailscale step recover from a failed request. A Tailscale host's edit form
-    hides the credential field from the start. An invite link is no longer presented as a one-time
-    password. Enter in the Tailscale mount-point field no longer reloads the page.
-  - **Install and uninstall.** The install banner no longer calls a blocked port open. The
-    uninstaller removes a rate-limited (`LIMIT`) panel port rule and names the NodeSource repository
-    it leaves in place.
+  turns `logtimestamp` on**, which freezes the live console.
+- **Findings from a full code review (2026-10-08): fixes.**
+  - Batched player polls count people, not bots or reserved slots (a Bedrock server sent false
+    "server emptied" alerts); a failed backup no longer deletes a good one; actions skip servers
+    still installing.
+  - After a dropped connection the console catches up from its place instead of repeating 250
+    lines.
+  - Symlinked folders (LinuxGSM's `log/server`, a moved `serverfiles`) open as folders; the Config
+    form no longer offers `logtimestamp`.
+  - The firewall lockout guard protects the port sshd really listens on; a bad timezone or
+    over-long account name is refused before host setup starts.
+  - Renaming the "Everyone" group no longer creates a second default group with console access.
+  - The uninstaller removes a rate-limited (`LIMIT`) panel port rule and names the NodeSource
+    repository it leaves in place.
 
 - **The file browser fits a phone inside a folder with a long name, and its path shows a name's
-  spaces.** The path and the Upload / Upload folder buttons shared one row that could not wrap or
-  shrink. On a 375px phone, inside a folder named `hang44-wwwwwwwwwwwwww`, Upload folder ended 8px
-  past the screen, so the whole page panned sideways and taps landed off target. With a 40- or
-  80-character folder name the buttons were off screen altogether (the page was 587 and 957px wide).
-  An 80-character name pushed a desktop page 20px wider than the window too. Now, below 992px, the
-  buttons move to a row of their own when the path needs the room; from 992px up they stay beside
-  the path, as before, and a deep path wraps next to them. A name too long for the card wraps inside
-  the path and is shown whole, never cut short. Measured at 320, 375, 414, 768, 992 and 1280px over
-  17 paths (names of 21 to 80 characters, with spaces, hyphens and Japanese, and paths up to nine
-  levels deep): the page is never wider than the window, and both buttons stay whole. Each folder
-  in the path is now a target at least 24px wide and 24px tall. It was as narrow as 3px (`i`) and
-  14px tall. So a path of short names such as `serverfiles/tf/cfg` is a little wider, and a path
-  that wraps onto two lines is 8px taller. Separately, the path and the "Drop files … to upload to"
-  label collapsed the spaces in a folder's name, so `a  b` read as `a b` and ` x` as `x`. Both now
-  show each name exactly as it is, as the file list does, including a space at the end. Found by
-  the real-browser check of file rename on the test VPS.
-- **An imported server is stored on the port it really uses, read on its host.** Importing a
-  discovered server stored the port the browser sent, and 27015 when it sent none. Discovery read
-  the first `port=` line it found in three of LinuxGSM's config files, and 46 of the 140 games
-  LinuxGSM lists keep their port in the game's own config instead (Minecraft and PaperMC in
-  `server.properties`, Teamspeak 3 in its `.ini`, 7 Days to Die in its `.xml`, and so on), so for
-  those the card showed "—" and the import stored 27015. On the test VPS that is Garry's Mod's port:
-  an imported Minecraft server read as up whenever Garry's Mod was, so its crash never paged, and
-  Start was refused as "already running". Its player count, its "when empty" actions and its restart
-  cron asked the wrong server, and 27015 stayed reserved for it, so a later install could not use
-  it. Now:
-  - Discovery reads the five config files in LinuxGSM's own order, secrets files included, takes
-    the last `port=` (as bash does), and counts it only when the game's start line passes
-    `${port}`. San Andreas MP's `port="7777"`, which the game never sees, no longer counts. It
-    reads only regular files, never a symlink or a fifo, at most 1 MiB of each, and keeps only the
-    two lines it needs: a fifo or a huge file in a game account's config folder can no longer
-    stall the scan, or fill the memory of the root shell it runs in on a remote host.
-  - The import stores the port its own scan read, never one sent with the request. When the scan
-    has none, it asks LinuxGSM's `details`, which reads the game's own config. A server whose port
-    still cannot be read is not imported, and the reason says what was seen: LinuxGSM did not
-    answer (try again), or the game's own config is missing or does not set the port (set it there;
-    a game that writes that file itself when it first starts, such as Vintage Story, needs one start
-    first). A port that is the host's SSH or the panel's own is refused.
-  - A server set to the same port as another server on its host is still imported on that port,
-    because it is the port its config sets: on the test VPS, PaperMC's `server.properties` sets
-    25565, as Minecraft's does. The import now says so, under "Import selected" and in its reply:
-    it names each shared port and the servers on it, whether the other server came in the same
-    import or was already in the panel, and says that no two of them can run at the same time
-    unless one uses only TCP on that port and the other only UDP (LinuxGSM's Terraria and ARK both
-    default to 7777, one TCP and one UDP), or each is bound to its own IP address. It also says
-    that while one runs, the panel cannot tell them apart by port, so a stopped one may read online.
-    A server on another host does not count. That note, the ones for servers not imported and for
-    accounts not added to the game-account group, and the "—" port's tooltip are now in the
-    viewer's language. The card holds account names, so the page's translator is kept out of it,
-    and they had stayed in English.
-  - Servers imported before this are re-read a minute after each panel start: the panel reads
-    every installed server's port from LinuxGSM again and stores it where it differs (audited as
-    `port_resync`). When the stored port is certainly not the server's — another server's, or one
-    something else listens on while the server is stopped — the new port is stored even when
-    another server shares it, as the import itself allows (Minecraft and PaperMC both default to
-    25565), and its audit row then says so in the import's words. The audit rows are written once
-    the host's moves are done, so the share they name is the one the pass leaves: a server moved
-    onto a port that another one is leaving in the same pass (its config was changed to end the
-    clash) is not said to share it. Otherwise the new port is stored only when it is free: in no
-    other server's block and not listened on, because LinuxGSM says STARTED even for a game that
-    failed to bind. SSH's and the panel's ports are never taken. A
-    server that does not answer, or whose new port is not free, keeps its port until the next
-    start, with the reason in the log; "Open all ports" on the host's Firewall page reads it again
-    on demand. A move also points the server's restart-when-empty check at the new port, keeps the
-    monitor from paging the move as a crash, and closes this server's own firewall rule on the old
-    port when no other server can need it. It opens no firewall rule: "Open all ports" does that.
-  - The same gap on the install side: when LinuxGSM reported no port before the first start, the
-    install kept the port the panel chose as if it were confirmed. It now reads the port again after
-    the first start and adopts it when nothing else held it before the start. When the host's
-    listening ports could not be read before the start, it is not adopted, because the panel can't
-    tell. If the port still can't be read, or is not adopted, the install says which and why,
-    instead of promising the server will show as online "once it opens" a port the game may never
-    use.
+  spaces.** Long folder names no longer push the page sideways; the upload buttons move to their
+  own row on narrow screens, and each path folder is an easier tap target.
+- **An imported server is stored on the port it really uses, read on its host.** 46 of LinuxGSM's
+  140 games keep their port in the game's own config, so for those the import stored 27015, which
+  can be another server's (on the test host, crashes went unpaged and player counts asked the
+  wrong server).
+  - Discovery reads LinuxGSM's config files in its own order, secrets included, as regular files
+    of bounded size.
+  - The import stores the port its own scan (or LinuxGSM's `details`) read; a server whose port
+    cannot be read is not imported, with the reason. The host's SSH or panel port is refused.
+  - A server on the same port as another on its host is still imported, with a note that they
+    cannot run at once unless one uses only TCP and the other only UDP, or each has its own IP.
+  - Servers imported before this have their port re-read a minute after each panel start and
+    stored where it differs and the new port is free or the old one is certainly not the
+    server's (audited as `port_resync`); otherwise it keeps its port until the next start. No
+    firewall rule is opened: "Open all ports" does that.
+  - An install re-reads the port after the first start and says when it could not confirm it.
 - **The file browser lists every file under its real name, including one whose name ends in a
-  space or holds a line break.** The host's listing ended each entry with a newline, and every
-  connection type (local, Tailscale, SSH) trims the whitespace at the end of a command's output. So
-  when the entry listed last was a name ending in a space, the space went with the newline:
-  `server.cfg ` was listed as `server.cfg`. Rename on that row said the file was no longer there,
-  and Delete answered "Deleted" and left it in place. Worse, beside a real `server.cfg` both rows
-  pointed at the real file, so Rename, Delete or Edit on the spaced row acted on the real config.
-  Separately, the listing was split on every kind of line break Python knows, so a name holding
-  U+2028, U+2029 or U+0085 (an upload can create one) showed cut short, under a name no file has.
-  In each case, uploading a file of that name was not flagged as replacing it. Both listings now end
-  each entry with a NUL, which no filename can hold and the trim leaves alone, and are split on that
-  alone. Found by the real-browser check of file rename on the test VPS.
-- **Bootstrap and install.sh rebooted hosts with game servers running.** Their "are game servers
-  running?" check was `pgrep -x tmux`, and tmux renames its server process `tmux: server`: on the
-  test VPS, with four LinuxGSM servers up, it found nothing, so a bootstrap re-run or an install.sh
-  update that needed a reboot rebooted the busy host. Both now match the server's real name, and the
-  bootstrap also counts any server the panel last saw online.
+  space or holds a line break.** Before, Rename, Delete or Edit on such a row could act on a
+  different file, such as the real `server.cfg`.
+- **Bootstrap and install.sh rebooted hosts with game servers running.** Their check missed tmux's
+  renamed server process; both now find running servers, and bootstrap also counts any server the
+  panel last saw online.
 - **The Power card said "Autostart servers come back on their own"** and the reboot banner's
   "Reboot now" skipped the player check the Power card made. Both open the same dialog now.
 - **Every Stop from the panel paged "went offline unexpectedly" about four and a half minutes
-  later** (since #346, on by default). A server the panel stopped stayed recorded as running for the
-  three minutes the panel expects it offline, so when that window ended with the server still
-  stopped, as intended, the monitor declared it down and sent the alert. A Stop (the button, a bot,
-  the palette, bulk, or a queued "stop when empty") is now recorded as down at once with no alert,
-  and its return isn't announced either. Its window ends with a Start from the panel, or once the
-  monitor has seen the server down, so a crash after that alerts as usual. A Restart (the button, a
-  bot, the palette, bulk, or a queued "restart when empty") is meant to come back: nothing is sent
-  while it does, but a server still down when its three minutes are up, or one that came back and
-  crashed within them, pages "went offline unexpectedly" then, as the Restart button already did.
-  A crash outside these windows alerts exactly as before, and its return still pages "back online"
-  if that alert is on. A queued "stop when empty" was not marked as the panel's own at all, so it
-  paged as a crash within about two minutes of running; a queued restart that leaves its game dead
-  now pages when the Restart's three minutes are up, where it paged about two minutes after it ran.
-  A server the panel first sees down after it starts (an update, a reboot of its own host) was
-  never announced as down, so its return isn't announced either; it used to page "back online".
-- **An update's output no longer appears twice in the live console.** On a server page opened
-  before any panel action had run, an update's lines showed as they came, and a later console poll
-  appended the whole update again beneath them.
-- **An update that ran with no console open keeps its result.** The panel reads a long action's
-  output only while someone has its console open. An update started from the dashboard, by a bot,
-  or with the console closed got one read when it ended, of its first 64 KB, so a long one lost the
-  lines that say whether it worked. The end now reads the last of the output in one read, as much
-  as the console's history keeps (its last 598 lines, within 255 KB, whole lines only), so opening
-  the console afterwards shows how it ended. When that leaves earlier lines out, a line above them
-  says so and names the file on the host that holds all of the output. An action someone is
-  watching still shows every line it printed, however many it wrote in its last seconds.
+  later** (since #346, on by default). A Stop from the panel, queued ones included, is now recorded
+  as down at once with no alert. A Restart still pages if the server is down, or crashed again,
+  when its three minutes are up.
+- **An update's output no longer appears twice in the live console.**
+- **An update that ran with no console open keeps its result.** Opening the console afterwards shows
+  how it ended; a line notes any earlier lines left out and names the file on the host that holds
+  them all.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
-  and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
-  `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
-  answered "Invalid game". Player counts fell back to LinuxGSM's own query, and the daily
-  restart-when-empty check could never see these servers empty. They now use gamedig 5's names
-  (`counterstrike16`, `counterstrike2`, `teamfortress2`, `hl2d`, `l4d2`, `cod4mw`, `mbe`). Existing
-  restart-check lines are rewritten by the daily cron upgrade.
+  and Minecraft Bedrock.** They now use gamedig 5's game names, so restart-when-empty can see these
+  servers empty. Existing restart-check lines are rewritten by the daily cron upgrade.
 - **A server whose query lists no player names is no longer counted as empty with people on it.**
-  The panel counted players by the length of the name list gamedig returns. A Minecraft Bedrock
-  server's reply never has that list, only the number of players. A Java server that hides its
-  players, or a Source server that does not answer the player-list query, sends an empty one. Each
-  read as 0 players whoever was on. The hourly restart-when-empty check then restarted the server,
-  a restart or stop queued for when it emptied ran at once, and the reboot warning listed nobody.
-  Every count now uses the server's own player number, less its bots, when that is larger than the
-  list. The Players panel and the chat bot's /players now say they could not read the list instead
-  of "no players connected". Existing restart-check lines are rewritten by the daily cron upgrade.
-- **Autostart shows what the server's crontab really has after an install.** A new server's
-  Autostart switch read On even when neither of the install's two attempts to write the monitor
-  cron line worked, because both attempts' results were ignored. Such a server does not come back
-  after a crash or a reboot. The switch now follows what was written and what the crontab reads back
-  as, and a failed write is logged. A write that fails changes nothing: a new server starts Off
-  until a write or the crontab says otherwise, and a retried install keeps what its earlier attempt
-  recorded, because a failed write leaves that attempt's monitor line in place. When nothing can
-  confirm the switch, the panel logs a warning. An install that failed before this version was
-  created with the switch On before anything wrote the line; the upgrade sets such a server (one
-  whose install never finished) Off, once, and its retry's first cron write or read corrects it.
+  Counts now use the server's own player number, less bots, when that is larger than the name list,
+  so restart-when-empty and queued stops no longer run with people on. Existing restart-check lines
+  are rewritten by the daily cron upgrade.
+- **Autostart shows what the server's crontab really has after an install.** It read On even when
+  the install failed to write the monitor cron line; a server whose install never finished is set
+  Off once by the upgrade.
 - **The panel is published over Tailscale Serve at one address, and a leftover route to it no
-  longer answers 502.** The boot re-point wrote only the configured mount (`tailscale_mount`), so a
-  second route to the panel — at "/" beside /lgsm, say — kept the scheme it was written with and
-  answered 502 from the next change of the panel's own scheme (a bind change, an update, a restore),
-  while the debug report said the re-point was "ok". At each start the panel now also removes its
-  own routes at other mounts on :443, one at a time with `tailscale serve --https=443
-  --set-path=<mount> off`, reading Serve again right before each. Another app's route, and a route
-  to the panel on another listener, are left alone, and nothing is removed when Serve cannot be
-  read. A route at the same mount with a trailing slash ("/lgsm/" beside "/lgsm") counts as another
-  route, because Serve answers every /lgsm/ page from it. Only a config set with `tailscale serve
-  set-raw` can hold both, because every other Serve write replaces the other spelling. So the
-  panel's own write at start clears such a route, and the Tailscale page and the debug report name
-  it until then. Enable at a new mount does the same, and
-  every Serve write uses the scheme the running panel serves rather than the one its next start
-  will.
-- **The setup wizard no longer publishes the panel twice.** Its finish read the "/" route its own
-  Serve step had just written (or one from a hand-run `tailscale serve`) as another app's, and
-  published a second route at /lgsm. It now adopts a route that already reaches the panel, and does
-  nothing when the Serve step has run. The Serve step no longer publishes at "/" over another app's
-  route, and the wizard says "serving" only when the panel itself is.
-- **The Tailscale page can remove a leftover route on its own.** Each route to the panel that it
-  does not manage is listed with a Remove button, which leaves the panel's address and settings
-  alone. Like Enable and Disable, it first makes the panel's account the Tailscale operator, so it
-  also works on a host where the route was made by hand. When Enable or Remove takes down the
-  route the page was opened through, the page goes to the panel's own address instead of
-  reloading into a dead one. Disable removes every route to the panel, where it removed one and
-  cleared the mount, so the page in use at /lgsm lost its prefix and a second route stayed
-  published.
+  longer answers 502.** At each start the panel removes its own extra routes at other mounts on
+  :443. Other apps' routes are left alone, and nothing is removed when Serve cannot be read.
+- **The setup wizard no longer publishes the panel twice.** It now adopts a route that already
+  reaches the panel, and no longer publishes at "/" over another app's route.
+- **The Tailscale page can remove a leftover route on its own.** Each route to the panel it does not
+  manage gets a Remove button, and Disable now removes every route to the panel.
 - **The startup log, the setup-complete page and Recommended Access name the panel's own
-  address.** They gave https://<machine name>, the root, which on a panel at /lgsm is another app
-  or a leftover route. They now give the route at the configured mount, and only while it works.
-- **The debug report names a leftover Serve route and how to remove it.** It said "a route reaches
-  the panel with the wrong scheme" with no word on which one, and nothing at all when its scheme
-  happened to match. Each route the panel does not manage is now listed with its listener and the
-  exact `sudo tailscale serve --https=<port> --set-path=<mount> off` that removes it, and the boot's
-  own removal is reported beside the re-point. When no route reaches the panel on the scheme it
-  serves, that is still a failure, not a warning.
-- **Uninstalling removes the panel's Tailscale Serve route.** It ran `tailscale serve --bg --remove`,
-  which no Tailscale accepts, so the route stayed behind after every uninstall (and a reinstall then
-  published the panel at /lgsm beside it). It now removes every route to the panel's port, and only
-  those, and says what it could not.
-- **An update says "this panel now serves HTTPS" only when that is new.** It said so after every
-  update of a panel serving its own TLS, with a public address even when the firewall closed the
-  port and with "set up Tailscale" when Tailscale Serve was already up. It now compares with what
-  the panel served before the update, gives the Serve address when there is one, and gives the
-  public address only when the firewall does not close the port.
-- **The README no longer gives a `tailscale serve` command to copy.** Its
-  `tailscale serve --bg --https 443 http://127.0.0.1:5000` answers 502 on a panel serving its
-  default HTTPS. Use the wizard or the Tailscale page. docs/https.md no longer says Serve always
-  takes over TLS: it does only once the panel is bound to 127.0.0.1.
-- **The debug report's journal sections cover the panel's own output, not its sudo calls.** The
-  report read the newest 5,000 journal lines and only then dropped the sudo lines. On a live host
-  4,964 of the 5,000 were sudo lines, so the window covered under three hours and the recent log had
-  36 lines. The report now asks journald for the panel's own lines by field, over the last 24 hours,
-  so the lines it reads are the panel's output and not its sudo calls. The 24-hour window is what
-  keeps the read short on any journal: asked instead for the newest 5,000 such lines, journalctl
-  walked the whole of a 1.9 GB journal that held fewer, was still running after five minutes, and
-  the report showed no journal at all. Each part of the request names something rare on its own (the
-  panel's own output stream, a critical message, the unit), so a day on which the panel logged
-  thousands of errors costs little more to read than a quiet one. When the window holds more than
-  5,000 entries (a traceback is one entry, however many lines it prints), or the filtered read fails
-  or runs out of its half of the time, the report reads the newest 5,000 lines as before; when that
-  read has nothing either, the report says its lines are the oldest of the window, cut off. Refused
-  sudo calls and the panel's warnings are still included. The sudo calls of the last hour are
-  counted from a separate read and printed once, under *Errors in the journal*. Each is labelled by
-  what it did (`gamedig players`, `console poll`, `console send`, `LinuxGSM config`, `backup prune`,
-  `backup lock sweep`, `installed version`, `git` as the panel's own account, `true as root`, and so
-  on) instead of "other command". Account names, paths, what was typed into a console and scripts an
-  operator ran are never printed. The installer's calls as the panel's own account (the service
-  account, or the login account a per-user panel runs as) are counted under their own label, not as
-  a game account's; a game server run under that same account still has its gamedig and console
-  calls counted as game work. A system install needs an updated helper for this; an older helper
-  gets the previous read.
-- **A privileged command the panel gives up on no longer keeps running as root.** When a call
-  through the helper timed out, the panel stopped it with SIGKILL. That reached `sudo` alone, and
-  sudo cannot pass a SIGKILL on, so the helper and the program it ran carried on as root with
-  nobody waiting for the answer: on the test host a debug report's journal read kept a core busy
-  for five and a half minutes, and every further report added another. The panel now sends SIGTERM
-  first, which both classic sudo and sudo-rs pass on, and SIGKILL only after two seconds. The
-  helper ends a read, and every process it started, when that SIGTERM arrives, when the sudo above
-  it is gone, or after 60 seconds; a process that ignores the SIGTERM is killed even after the one
-  that started it has exited. A LinuxGSM `details`, `check-update` or `postdetails` counts as a
-  read (with two minutes before its own limit), so a timed-out one no longer leaves the helper
-  waiting on it as root. A call that changes the host (apt, a firewall rule, a new account, a
-  LinuxGSM start) still runs to its end when the panel stops waiting, as it always did, even
-  after the sudo above it is gone: stopping it halfway would be worse. An update installs the new
-  helper.
-- **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
-  text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
+  address.** They now give the route at the configured mount, and only while it works.
+- **The debug report names a leftover Serve route and how to remove it.** Each one is listed with
+  the exact `sudo tailscale serve --https=<port> --set-path=<mount> off` that removes it.
+- **Uninstalling removes the panel's Tailscale Serve route.** It removes every route to the panel's
+  port, and only those, and says what it could not.
+- **An update says "this panel now serves HTTPS" only when that is new.** It gives the Serve address
+  when there is one, and the public address only when the firewall does not close the port.
+- **The README no longer gives a `tailscale serve` command to copy.** That command answered 502 on a
+  panel serving its default HTTPS; use the wizard or the Tailscale page.
+- **The debug report's journal sections cover the panel's own output, not its sudo calls.** It reads
+  the panel's own lines over the last 24 hours and counts the last hour's sudo calls by what they
+  did. A system install needs an updated helper for this.
+- **A privileged command the panel gives up on no longer keeps running as root.** On a timeout the
+  panel now sends SIGTERM, which sudo passes on, before SIGKILL, and the helper ends a read; a call
+  that changes the host still runs to its end. An update installs the new helper.
+- **Call of Duty servers show the capacity the game reports.** It showed the LinuxGSM config's
+  number instead.
 - **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**
-  This covers a game outside the gamedig list (Factorio) and one gamedig cannot reach. The `details`
-  run (several `du` passes over the server's files) and the config reads came every pass. For a
-  server the monitor sees listening, the player count is now "unknown" without asking. For up to a
-  minute after such a server stops (until the monitor's next pass), it can show "unknown" where
-  `details` would have said 0, and a reboot-when-empty or notify-when-empty waits for that pass.
-  LinuxGSM's query settings, and a config that names no capacity, are re-read every 10 minutes
-  instead of every pass.
-- **The debug report no longer calls a systemd unit an email address.** A unit started from a
-  template is written `name@instance.service` (`user@1000.service`, `getty@tty1.service`), and the
-  report's email rule printed it as `[email]`, in cgroup paths and journal lines alike; so did an npm
-  `package@1.2.3`. Neither is replaced now. Addresses still are, an address written after a unit
-  name included.
-- **The debug report's installer lines keep their paths and the commit they name.** Installer
-  output was redacted before its paths were shortened, so on the usual install the data directory,
-  the helper and gamedig all printed as `/[redacted]`, the verified commit an update moved to as
-  `verified commit [redacted]`, and every address as a bare `[ip]`. They now print as `<data>/…`,
-  `<panel-lib>/…` and `<gamedig>/…`, the commit as its first 12 characters, and an address by its
-  class, as everywhere else in the report. The "Installer said" list no longer repeats a line the
-  log tail below it already shows; its warnings are always listed.
-- **The debug report's Privacy footer counts everything it replaced.** It counted only the names
-  and addresses it pseudonymised, so a report with `[email]` and `[redacted]` in it said "nothing
-  matched". A new "Redacted" line counts email-shaped strings, long tokens, key=value secrets, URL
-  credentials and SQL parameter lists, each counted once however often it appears, and the domains
-  and certificate issuers that Tailscale's health messages print as [domain] and [issuer withheld].
-- **The debug report pseudonymises an account written before an address.** In `name@<IPv4>` the
-  address rule ran first, so the email rule no longer saw an address and the account printed
-  (`alice@[ip:tailnet]`); `name@<a known host>` was the same. The account is now an [account-N]
-  token, the same one wherever else the name appears, a mention earlier in the same text or in the
-  summary included. Names the report keeps everywhere, such as root, are kept here too, and so is a
-  word no account can be named (one starting with a digit, such as a year). An email address whose
-  local part is a name the report knows (an OS account, a panel user), or whose domain starts with
-  a known host's name, is now `[email]`; the name was replaced first, so the address was no longer
-  recognised, and its domain (or the name before the @) printed.
-- **The debug report no longer says a self-update that completed DIED.** It read a log with no
-  "installer exit" line as a run killed mid-update, and raised a [fail] at the top of the report.
-  The panel's helper wrote no such line until its version of 2026-09-26, so every self-update an
-  older helper ran ended without one, finished or not. When the log holds install.sh's own ending
-  ("Update complete", "Already up to date", "Not updated") with no error after it, the report now
-  gives that outcome, says the exit line is missing, and names what can leave it out (an older
-  helper, or a run stopped after install.sh's ending) without claiming which one did.
-- **The debug report prints Tailscale's health messages, not only how many there are.** Each one
-  is on its own line, with node and login names, addresses, a self-hosted server's domain and a
-  certificate issuer replaced, as the rest of the report replaces them; file paths and Tailscale's
-  own help links are kept. A self-hosted control server's full host name is added to the names the
-  report replaces everywhere.
-- **The debug report says "node key expiry disabled" for a node whose key does not expire.**
-  Tailscale leaves the expiry out for a tagged node or one with expiry turned off, and the report
-  read that as "not recorded". A node that is not in the network map yet (it needs login) says the
-  expiry is unknown instead, rather than claiming either.
-- **The debug report's update lines say what was actually checked.** With nothing newer to install,
-  the CI gate line read `ci_state=passing · target ?` although no CI was asked; it now says it was
-  not consulted. An unverified newest commit is named as one, not as the "target". While newer
-  commits are still being verified, the commit on offer is labelled "offered" rather than printed
-  as origin's tip. And "Last 'update available' notification" says "none" when there is none,
-  which is the usual state once an update is installed; it printed `?`.
-- **The debug report no longer says a background job never ran when it is not due yet.** Several
-  jobs wait before their first run (the monitor 60 s, the update check 30 s, auto-block an hour),
-  and a report taken just after a restart said each had "never completed a pass". It now says when
-  the first run is due, and for one that was due and has not finished, when it was due. "Not yet
-  probed" hosts say that the monitor has not made its first pass yet, and when it will.
+  While the monitor sees it listening, its player count shows "unknown" without asking.
+- **The debug report no longer calls a systemd unit an email address.** Names like
+  `user@1000.service` and `package@1.2.3` are kept; addresses are still replaced.
+- **The debug report's installer lines keep their paths and the commit they name.** Paths print
+  shortened (`<data>/…`) instead of `/[redacted]`, and the commit as its first 12 characters.
+- **The debug report's Privacy footer counts everything it replaced.** A new "Redacted" line counts
+  emails, tokens, secrets and other replaced strings.
+- **The debug report pseudonymises an account written before an address.** In `name@<address>` the
+  account printed in clear; it is now an [account-N] token.
+- **The debug report no longer says a self-update that completed DIED.** When install.sh's own
+  ending is in the log with no error after it, the report gives that outcome.
+- **The debug report prints Tailscale's health messages, not only how many there are.** Names,
+  addresses, domains and certificate issuers are replaced as elsewhere in the report.
+- **The debug report says "node key expiry disabled" for a node whose key does not expire.** It said
+  "not recorded".
+- **The debug report's update lines say what was actually checked.** It says when CI was not
+  consulted, labels unverified commits as such, and prints "none" instead of `?`.
+- **The debug report no longer says a background job never ran when it is not due yet.** It says
+  when the first run is due.
 - **With `trust_proxy` off, forwarded headers from a local account other than root are logged and
-  counted.** They were already refused, but nothing recorded it, so the debug report's "Forwarding
-  headers ignored, last hour" always said "none". The log line no longer suggests editing
-  `trusted_proxies`, which does nothing without `trust_proxy`. The report's "forwarded headers
-  believed" line also names why: Tailscale Serve on loopback, or a proxy you declared.
+  counted.** They were already refused, but the debug report always said "none".
 - **The Backups page and the debug report no longer read the "Back up game servers now" button's
-  last run as the automatic schedule's.** Automatic game-server backups keep one clock per server;
-  only the button writes the time both of them showed. So an install whose weekly backups had run
-  every week read "Never run" right beside the Automatic backups switch, and one whose button was
-  pressed yesterday read "Last: 1d ago" there however overdue the schedule was. The button's own
-  line now sits under the button and says whose it is, and the schedule's row shows the newest
-  automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed — and when
-  the newest failed, the newest that worked first, so one failing host does not hide the rest). The
-  debug report prints the schedule per server (by id and game: interval, whose setting it is, the
-  clock's age, "due since", "clock not started"; a clock the install or the schedule's first look
-  at a server only started says "no backup yet" and when the first is due, where it said "last 0 s
-  ago"), what the unattended backups recorded in 30 days,
-  and the button's run under its own name. A default interval of 0 reads "default: off", because a
-  server's own setting can still back it up. Unused code that would have backed every server up
-  twice (`full_backup_due`) is gone.
-- **"Back up game servers now" moves each server's schedule clock.** It did not, so every server it
-  archived was still due to the hourly schedule, which archived it again at its old time: another
-  stop and restart, another archive, and the prune evicting an older restore point early. A server
-  it skipped (players online) or that failed stays due, as before.
-- **A server that always has players on is no longer silently never backed up.** The schedule
-  skips a server with players online and retries hourly, which is right, but a server never empty
-  at the top of an hour was skipped for good with no record anywhere. Once it is a whole interval
-  overdue (twice its interval since its last backup) that is audited and alerted, once — it is
-  remembered in config.json, so the panel's daily restart does not repeat it — and again only after
-  the server has been backed up. A "wait until empty" backup on a server whose own schedule is off
-  is reported the same way after a week of waiting; pressing the button again does not restart that
-  week. The report says how old the server's backup clock is and that players were on at that
-  attempt, not that they were on at every attempt: the clock is also that old after a schedule was
-  off, or a host's backups failed, for days. It is filed as its own audit action, so it does not
-  read as a failed backup. No player is ever disconnected for it.
-- **A backup host that is down sends one alert, not one an hour.** A scheduled or queued backup
-  that raised (a direct-SSH host that is down, or a key it now refuses) is retried hourly, and every
-  retry alerted again — twice an hour for a server both due and queued. The first failure of a
-  streak alerts; the retries are still on the audit log. The next failure after a backup that
-  reached the host alerts again. An audit-log write that fails (a locked database) no longer takes
-  the alert with it, nor stops the rest of the sweep.
-- **A failing daily panel backup no longer stops the game-server backups.** The hourly backup pass
-  ran the panel's own daily backup and both game-server sweeps under one error handler, so a daily
-  backup that raised skipped the game backups for that hour, every hour, and logged nothing at the
-  default level. Each step now runs on its own, logs a failure as a warning naming the step, and a
-  pass with a failure is counted as failed in the debug report.
-- **A direct-SSH host that never answers can no longer stop every backup.** Waiting for the
-  remote's reply to a command request had no time limit, so a wedged or hostile host held the
-  caller for ever — and a backup sweep holds the one lock every backup on every host shares, so
-  all scheduled and queued backups stopped, silently, until the panel restarted. That wait (and the
-  channel open, for long commands) is now bounded at five minutes, for commands and for the backup
-  and file downloads, and the connection that did not answer is dropped, so the next command on
-  that host reconnects instead of waiting five minutes again. Hosts on the panel's own machine and
-  over Tailscale were never affected.
-- **A daily panel backup that cannot make its temp folder no longer leaves an empty "backup".** The
-  archive's name was claimed before the temp folder was made, and a failure there left a 0-byte
-  file that counted as the day's daily backup — so none was taken for 23 hours, and the Backups page
-  listed one that cannot be restored.
-- **The debug report names the notification events that are off.** It printed only a count ("15
-  of 19"), so whether "A backup fails" was one of them could not be told. It now lists them by key.
-- **Restarting or updating the panel no longer kills the game servers it started.** Every server the
-  panel started on its own host — Start, Restart, an update, validate or backup that restarts it, a
-  scheduled task's "Run now" — ran inside the panel's own systemd unit, and every panel stop,
-  restart, crash or self-update sent it the same signals. On a root install that killed them, with
-  nothing in the journal naming them, until LinuxGSM's monitor cron brought them back up to five
-  minutes later (or never, with autostart off). On a per-user install it killed servers running as
-  the panel's own account and filled the journal with "Failed to kill control group" for the rest.
-  The privileged helper now starts each of them in a transient scope of its own, beside
-  `cron.service` in `system.slice`, before it drops to the game account. On a per-user install, the
-  servers an earlier version started under other accounts outlive the panel's stop, and are moved
-  out once when it starts again. On a root install the stop that installs this update still ends
-  them, as before; LinuxGSM's monitor cron brings back those with autostart on, and every start
-  after that is in a scope. A per-user install without the helper uses its own user manager
-  (`systemd-run --user --scope`); a host without systemd is unchanged. Measured on the test host:
-  Minecraft started from the panel survived `systemctl restart linuxgsm-panel` (before: killed), and
-  the panel unit stayed at 21 tasks (before: 61, with 585 MB of the game charged to it).
-- **Panel-started game servers run at the game priority, not the panel's.** They inherited the
-  panel's low-priority tuning (nice 10, I/O best-effort 6, and its CPU weight of 30 against cron's
-  100); the priority keeper could undo only the nice, and only up to two minutes later. A Start or
-  Restart now begins at nice -1 with no I/O class, and LinuxGSM's maintenance actions at nice 0 —
-  what LinuxGSM's own cron gives the same actions — in a scope of their own. Where LinuxGSM runs as
-  the panel's own account, the priority keeper no longer renices the panel itself to -1.
+  last run as the automatic schedule's.** The schedule's row now shows the newest automatic backup
+  from the audit log, and the button's last run sits under the button.
+- **"Back up game servers now" moves each server's schedule clock.** The hourly schedule no longer
+  archives the same servers again, with another stop and restart. A skipped or failed server stays
+  due.
+- **A server that always has players on is no longer silently never backed up.** Once it is twice
+  its interval overdue, that is audited and alerted once, and again only after it has been backed
+  up. No player is ever disconnected for it.
+- **A backup host that is down sends one alert, not one an hour.** Only the first failure of a
+  streak alerts; the retries stay on the audit log.
+- **A failing daily panel backup no longer stops the game-server backups.** Each step of the hourly
+  pass runs on its own and logs a failure as a warning.
+- **A direct-SSH host that never answers can no longer stop every backup.** Waiting for its reply is
+  now bounded at five minutes, and the connection that did not answer is dropped.
+- **A daily panel backup that cannot make its temp folder no longer leaves an empty "backup".** That
+  0-byte file counted as the day's backup and could not be restored.
+- **The debug report names the notification events that are off.** Not just a count.
+- **Restarting or updating the panel no longer kills the game servers it started.** On a host with
+  systemd, each server the panel starts on its own host now runs in a scope of its own, outside the
+  panel's unit. On
+  a root install the stop that installs this update still ends them once; LinuxGSM's monitor cron
+  brings back those with autostart on.
+- **Panel-started game servers run at the game priority, not the panel's.** A Start or Restart
+  begins at nice -1 and maintenance actions at nice 0, as LinuxGSM's own cron runs them.
 - **Repairing the database, restoring a backup and updating the panel no longer leave a root
-  install's panel stopped.** Each ran inside the panel's unit and stopped that unit as its first step,
-  which ended the job too: nothing was repaired or restored, the self-update died at step 1 of 6, and
-  the panel stayed down until someone ran `systemctl start` over SSH. They now run as transient
-  services of their own (as does the OS update, which a panel restart could kill mid-upgrade); a
-  second one while the first is running is refused. Measured with the real helper on the test host:
-  before, the stand-in panel was left inactive; after, it came back on its own.
+  install's panel stopped.** They (and the OS update) now run as services of their own.
   **Updating a root install TO this version: do it from a shell, once** — `sudo bash install.sh` in
   the panel's checkout (`/home/lgsmpanel/linuxgsm-panel`), or the one-line install command. The
-  panel's Update button runs the updater the host already has, which is the previous version's and
-  has this bug: it stops the panel at step 1 of 6, ends itself with it, and leaves the panel down
-  until `sudo systemctl start linuxgsm-panel`. Every update after this one works from the button.
-  A per-user install is not affected and updates from the button as usual.
-- **An OS update can now restart the panel (root installs on Ubuntu 24.04 and 26.04).** With apt
-  running in a service of its own, Ubuntu's needrestart (which on 24.04 and 26.04 restarts affected
-  services by default) restarts `linuxgsm-panel.service` like any other service when the update
-  replaces a library the panel has loaded. Before, apt ran inside the panel's unit, and needrestart deferred
-  that one restart because it would have killed apt itself. The consoles reconnect once the panel
-  is back, the OS-update window retries until it answers and goes on following the log, and the
-  game servers, no longer inside the panel's unit, keep running through it.
+  Update button runs the old updater, which leaves the panel down until
+  `sudo systemctl start linuxgsm-panel`. Later updates, and per-user installs, work from the button.
+- **An OS update can now restart the panel (root installs on Ubuntu 24.04 and 26.04).** Consoles
+  reconnect, the OS-update window keeps following the log, and game servers keep running.
 - **Restoring a backup on a per-user install with the helper no longer swaps the files under the
-  running panel.** The helper's restore stops and starts the SYSTEM unit, which a per-user install
-  does not have, so the panel kept running while its database and its WAL were replaced beneath
-  it. A per-user install now restores through its own user manager, chosen by the same system-unit
-  test the database repair and the self-update use. That launch is now checked as well: a
-  `systemd-run` that fails is reported as "Could not start the restore." and the staged database
-  and keys are deleted, where it used to answer "Restoring…" for a restore that never ran.
-- **The local web terminal's jobs outlive a panel restart.** A server, tmux or nohup job started in
-  the panel host's terminal ran inside the panel's unit and died at the next restart or self-update.
-  The terminal's shell now runs in a scope of its own. Uninstalling a root install stops those
-  scopes before it removes the panel user, which `userdel` would otherwise refuse while a job left
-  in the terminal is still running.
-- **The debug report names game servers inside the panel's cgroup.** It listed them as "other",
-  printed their memory as the panel's, and raised nothing. It now counts game-server processes (tmux
-  servers, what they started, and leftovers older than the panel) with a warning that says what a
-  panel stop does to them on this kind of install, splits the unit's memory into anon and file cache
-  (the live report's "20976 MB" was mostly page cache), says the peak covers the cgroup's whole life,
-  counts processes it could not read instead of dropping them, and explains systemd's "Failed to
-  kill control group … remains running after unit stopped" lines in the journal digest.
-- **Uninstalling a server removes its account's crontab.** `userdel -r` removes the home but not
-  `/var/spool/cron/crontabs/<name>`, so every uninstalled server left its monitor and update lines
-  behind; cron logged them as "ORPHAN (no passwd entry)", and the file stayed owned by a uid the
-  next new account was given. The crontab is now removed just before the account.
-- **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
-  update check decides which files the panel runs from a list, and that list lived in the panel's
-  own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then
-  itself a change to the panel's code, and every panel was offered that one line as an update. The
-  list is now a data file, `.github/update-paths.txt`, read from the version being offered, and it
-  counts as a file the panel does not run. Naming a new tool's file there is not an update any more.
-  Anything the list does not name still counts as a change. A test fails the build if any file in
-  the repository is left unnamed.
-- **Installing a game on a minimal host no longer fails at "Downloading LinuxGSM".** The install
-  fetched LinuxGSM with wget, and LinuxGSM runs curl, one step BEFORE the step that installs the
-  game's dependencies, wget and curl among them. Ubuntu's minimal and cloud images have neither, so
-  every game install on such a host (a remote, or the panel's own) failed there. Dependencies are
-  now step 2 and LinuxGSM step 3.
+  running panel.** It now restores through the install's own user manager.
+- **The local web terminal's jobs outlive a panel restart.** A server, tmux or nohup job started
+  there now survives a restart or self-update.
+- **The debug report names game servers inside the panel's cgroup.** It warns what a panel stop does
+  to them and splits the unit's memory into anon and file cache.
+- **Uninstalling a server removes its account's crontab.** `userdel -r` left it behind.
+- **Adding a tool's settings file to the repository is no longer offered as a panel update.**
+- **Installing a game on a minimal host no longer fails at "Downloading LinuxGSM".** Dependencies,
+  wget and curl among them, are now installed before LinuxGSM.
 - **An update keeps the panel's systemd unit current, as it does everything else the installer
-  put on the host.** The unit was written once, at install, and no update touched it again, so a
-  host kept whatever unit it was first given. It is now rewritten when its text differs from what
-  this version installs (and only then), and an update that rolls back puts the old one back. A
-  test fails the build if a fresh install ever runs a step an update does not.
-- **The installer installs wget, cron and ufw when they are missing.** Ubuntu's minimal and cloud
-  images leave them out, and the panel runs all three on its own host: every game install downloads
-  LinuxGSM with wget, autostart and scheduled tasks are cron jobs, and the Firewall page and
-  auto-blocking drive ufw. Installing ufw does not turn the firewall on. An update installs them
-  too, on a host that is missing them.
+  put on the host.** A rollback puts the old one back.
+- **The installer installs wget, cron and ufw when they are missing.** Installing ufw does not turn
+  the firewall on; an update installs them too.
 - **A docs, CI or test change no longer brings back "Panel update available" on Telegram or
-  Discord.** Merged on top of an update you had not installed yet, it moved the update's target
-  commit, and the alert went out again for the same change. It goes out once per change the panel
-  runs.
-- **A file the panel runs that was moved into `tools/` or `docs/` counts as a change.** Git names
-  only a rename's destination, so the move read as docs-only. The fuzz image's build files and the
-  JavaScript lint config, which nothing on a panel reads, no longer count as changes.
-- **Checking a lost install asks the host once, not once per poll.** When the panel restarted
-  mid-install, the Game Servers page asked the host whether the install had finished every 2.5
-  seconds, each time with a full `du` of the game files that can take up to 30 seconds — one open
-  page stacked about five on the host. There is now one check per server at a time, and the page is
-  told it is under way.
-- **Retrying a failed install can no longer be overwritten by the background check.** Pressing Retry
-  while the panel was still checking the earlier failed install could mark the new install "failed"
-  (or "installed") while it was downloading. The check now leaves a server alone if an install
-  started, or the server was removed, while it waited on the host.
-- **Security tab event times are shown in your own time zone correctly.** Recent security events
-  were read as local time instead of UTC, so every ban and failed login appeared shifted by your UTC
-  offset.
+  Discord.** The alert goes out once per change the panel runs.
+- **A file the panel runs that was moved into `tools/` or `docs/` counts as a change.**
+- **Checking a lost install asks the host once, not once per poll.** Each poll ran a full `du` of
+  the game files; there is now one check per server at a time.
+- **Retrying a failed install can no longer be overwritten by the background check.**
+- **Security tab event times are shown in your own time zone correctly.** They were shifted by your
+  UTC offset.
 - **"Panel update available" is sent once per update, not after every restart.**
 - **Malformed numbers no longer cause server errors.** A reboot delay or auto-block threshold of
-  `Infinity`/`1e400` now gets the normal "not a number" handling instead of a 500.
+  `Infinity`/`1e400` gets the normal "not a number" handling instead of a 500.
 - **A scheduled-task change can no longer be lost or undone by another one.** Crontab changes for an
   account now run one at a time.
-- **A failed crontab read no longer wipes the account's scheduled tasks.** If the crontab could not
-  be read, or a temporary file could not be written (a full `/tmp`), the panel installed an empty or
-  partial crontab and reported success. Now nothing is installed and the error is shown.
+- **A failed crontab read no longer wipes the account's scheduled tasks.** Nothing is installed and
+  the error is shown.
 - **LinuxGSM config values with `$`, backticks, backslashes or quotes are saved as typed.** They
-  were written unescaped into a file LinuxGSM runs as shell code: a trailing backslash broke the
-  config, `$` mangled passwords, and `$(…)` ran as a command. References like `${port}` still work.
+  were written unescaped into a file LinuxGSM runs as shell code, so `$(…)` ran as a command.
+  References like `${port}` still work.
 - **Broken downloads now fail instead of saving a truncated file.** Downloads that go quiet time
-  out, SSH connections are always closed afterwards, and the SSH commands have a connect timeout.
-- **A locked database is no longer "repaired" into yesterday's backup.** The startup self-heal
-  treated any SQLite error as corruption, including "database is locked" and "unable to open
-  database file", replacing a busy but healthy panel.db with the rolling backup. Only real
-  corruption triggers the heal now; anything else stops startup with the error.
-- **The self-heal keeps the newest writes of a corrupt database.** Its -wal and -shm used to be
-  deleted (the check itself deleted them too). They are now moved aside with the corrupt file, and
-  if moving aside fails nothing is restored over it.
+  out, and SSH commands have a connect timeout.
+- **A locked database is no longer "repaired" into yesterday's backup.** Only real corruption
+  triggers the startup self-heal; anything else stops startup with the error.
+- **The self-heal keeps the newest writes of a corrupt database.** Its -wal and -shm are moved aside
+  with it instead of deleted.
 - **`manage.py` no longer runs the database self-heal** beside the live service.
-- **The updater no longer repairs a database it could not read.** A locked or unopenable panel.db
-  counted as damaged; the update now aborts and leaves the data alone. The repair's saved original
-  now also includes its -wal.
-- **A GitHub outage no longer stalls every page that shows the game list.** The game and package
-  lists are refetched outside the lock; other requests are served the copy already held.
+- **The updater no longer repairs a database it could not read.** The update aborts and leaves the
+  data alone.
+- **A GitHub outage no longer stalls every page that shows the game list.** Other requests are
+  served the copy already held.
 - **The session and credential keys can no longer be read half-written** on a fresh install by a
   racing process.
 - **Uninstalling removes the panel's sudo grants first,** right after the service stops, and deletes
@@ -2165,20 +720,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **The Tailscale login log is created fresh** (`O_EXCL|O_NOFOLLOW`, 0600) instead of being
   truncated through whatever sat at its path.
 - **SECURITY.md describes the sudo grant install.sh actually writes,** including the helper's
-  `Defaults!` line, its fixed interpreter and environment, and the rules for which accounts may join
-  the game-account group.
-- **A sign-in that can't be recorded is refused instead of going through half-registered.** If the
-  per-device session row could not be written (a momentary database lock), the login went ahead with
-  a cookie nothing could expire, list or revoke. The write is retried once, and if it still fails
-  the person is asked to try again.
-- **One missed probe no longer pages you.** A host or server is now declared down only after two
-  failed checks in a row; the dashboard still shows each check as it happens.
-- **A burst of alerts arrives as one message instead of dozens.** Alerts go through one bounded
-  queue with a single sender, and whatever piles up is sent as one message per channel — no more
-  fifty messages at once running into Telegram's rate limit.
+  `Defaults!` line and the rules for which accounts may join the game-account group.
+- **A sign-in that can't be recorded is refused instead of going through half-registered.** The
+  session write is retried once, then the person is asked to try again.
+- **One missed probe no longer pages you.** A host or server is declared down only after two failed
+  checks in a row.
+- **A burst of alerts arrives as one message instead of dozens.** Whatever piles up is sent as one
+  message per channel.
 - **Changing your password, or signing out everywhere from an older login, never leaves an untracked
-  session.** If the new session record can't be written, the device is signed out and asked to sign
-  in again.
+  session.** If the new session record can't be written, the device is signed out.
 - **`Infinity` in a JSON body no longer causes a server error** (bulk actions, tag sets, discovery
   import, firewall rules, the SSH port change, backup settings, and the console and terminal
   sockets).
@@ -2190,10 +740,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **Rebooting the panel host no longer sends "server went offline" alerts.**
 - **Blocking or unbanning an address on the panel host takes effect at once** in the panel's own ban
   check.
-- **Clicking Update no longer risks aborting the update it started.** The progress card re-checked
-  for updates every 1.5 seconds, each check fetching the same git ref the installer was fetching and
-  using up GitHub's hourly limit. Checks now run one at a time, none run while an update is
-  installing, and the card watches only the update log.
+- **Clicking Update no longer risks aborting the update it started.** The progress card watches only
+  the update log instead of re-checking for updates every 1.5 seconds.
 - **Install and bootstrap progress stop polling once their row is gone.**
 - **"Still working — reload the page to check." stays put** instead of being overwritten by a slow
   poll.
@@ -2202,1881 +750,741 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **Opening a second terminal on the same connection now records that the first one closed.**
 - **A failed port scan while setting up a Source server's extra ports is now logged.**
 - **The panel host's own Firewall card could say "permission denied" with the helper installed.**
-  Its rule list was the one firewall read that followed the host row's "sudo" setting, which is a
-  remote's SSH option, and on the panel's own host it also decided whether to use the helper. The
-  panel creates its own host's row with that setting on and never shows it for that row, but a row
-  with it off (one written into the database directly, as the test panel's was) ran `ufw status`
-  as the panel's account, which ufw refuses, so the card listed no rules and no rule could be
-  deleted from it, while Server Management read the same firewall fine. On the panel's own host
-  that setting is no longer read: the rule list is read as root like every other firewall action,
-  through the helper where it is installed. A remote still follows its own setting.
-- **On a remote host, a fail2ban log just under the 8 MB read limit is counted again.** The panel
-  guessed that a remote host's log had been cut short whenever it came within 64 KB of that limit,
-  and treated a complete log as unread, so auto-blocking on that host held still. The remote read
-  now stops at the limit itself and says when it had to, as the panel's own host already did, and
-  only a log that really was cut is treated as unread. A cut log on a remote host now shows as
-  unreadable on the Security card, rather than as a smaller count.
-- **Storing a host's first SSH key pin no longer freezes the panel while the database is busy.**
-  The pin is written by whichever part of the panel made the first contact, often a background
-  worker. When another write held the database at that moment, the pin waited inside SQLite, and
-  that wait stops the whole panel: the console, every page, and the other write too, which then
-  could not finish. After up to 15 seconds the pin failed and the connection was refused anyway.
-  Measured with a 3-second wait: a write that would have finished half a second later still froze
-  the panel for all 3 seconds. The pin no longer waits for the database at all. If another write
-  holds it at that moment, the key is not stored and that one connection is refused straight away,
-  as it was at the end of the wait, and the next connection to the host tries again.
+  On the panel's own host the rule list is now always read as root, through the helper where it is
+  installed.
+- **On a remote host, a fail2ban log just under the 8 MB read limit is counted again.** It had been
+  treated as cut short, so auto-blocking on that host held still.
+- **Storing a host's first SSH key pin no longer freezes the panel while the database is busy.** If
+  the database is busy, that one connection is refused and the next one tries again.
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
-  restarted.** If the terminal's output reader was still busy a second after the close, for
-  instance still handing output to the browser, the close stopped partway. The session stayed on
-  the panel's list of open terminals, the page was never told it had ended, and it went on counting
-  against the limit of 3 terminals per user and 12 in all. The 15-minute idle close skipped it,
-  because it was already marked closed. The cause was a timed wait on a thread, which under
-  eventlet on Python 3.13+ raises an error that nothing caught instead of returning. The Tailscale
-  transport waited the same way for a command's output. When a command exited while something it
-  had started still held that output open for more than five seconds, the error could end the page
-  request or background loop that ran the command. Both now wait in a way that returns on every
-  Python version. Python 3.10 to 3.12 (Ubuntu 22.04 and 24.04) were not affected.
-- **The daily gamedig pass could write to a host that had just been deleted.** It read the list of
-  hosts once and then worked through it, a few minutes per host that needed gamedig installed, so
-  a host deleted while a pass was running was still on its list and got gamedig and its weekly cron
-  put back. Each host, and each game server, is now re-read from the database just before it is
-  acted on, and one that is gone is skipped.
-- **An older "daily restart when empty" line could restart the server with players on it.**
-  Lines written before the fix for "Is anyone on?" (below) kept the old check, which restarted
-  whenever the player query failed, because `jq` counts gamedig's error reply as 0 players. The
-  oldest of those lines also send the query to 127.0.0.1, which a Source server does not answer,
-  so for them every query fails and the server restarts every day, players or not. On the test
-  host, gmodserver's line got `{"error":"Failed all 2 attempts"}` from 127.0.0.1 and would have
-  restarted at the first :10 past the daily time, while the same query to the host's own address
-  answered normally. The earlier heal only added the PATH to such a line. The in-place upgrade
-  (run whenever a server's Scheduled Tasks are opened, and daily for every game server) now
-  recognises every shape the panel has ever written for this line and rewrites it to exactly what
-  turning the setting on writes today: the host's own address, the server's port and query type,
-  a restart only on a counted 0, and gamedig's PATH. The line keeps its own schedule, and the
-  daily restart time, which is on the separate flag line, does not move. A line the panel did not
-  write is left alone; one an operator has edited is not rewritten either, and only gets the PATH
-  as before. A crontab whose listing failed is still never rewritten. A game that once had no
-  player query, and has one now, gets the player check.
+  restarted.** It went on counting against the per-user and total terminal limits. Python 3.10 to
+  3.12 were not affected.
+- **The daily gamedig pass could write to a host that had just been deleted.** Each host and server
+  is now re-read just before it is acted on.
+- **An older "daily restart when empty" line could restart the server with players on it.** Old
+  lines restarted whenever the player query failed. The daily in-place upgrade now rewrites every
+  shape the panel has written to today's line, keeping its schedule; a line an operator has edited
+  only gets the PATH.
 - **The panel's update card now says when an update stopped, or held, instead of spinning.** It
-  finished only when the panel restarted, and an update that ends before the panel is stopped never
-  restarts it: the update source unreachable, a pinned commit the installer cannot verify, a hold.
-  The `[ERROR]` was in the log, and after three minutes the card said "Still working — reload the
-  page to check." Both launchers (the root-owned helper, and the wrapper a per-user install runs)
-  now end the log with the installer's exit status, and the card reads it: a stop shows in red with
-  the installer's own reason, a hold shows its "Not updated: held at …" line, and the buttons come
-  back. It trusts that only while the panel answering is still the one that started the update, so
-  a run that did restart the panel is judged as before. Each launch removes the previous run's log
-  first, so its ending is never read as the new one's. The debug report's "Last update" names these
-  outcomes too, where it said "unknown (in progress…)". The helper side reaches a host when its
-  installer next re-stages the helper, which every update does.
-- **On a shallow checkout the update decided on less history than it then acted on.** The installer
-  clones `--depth 1`; the step that picks where to update to fetched only the new tip, and the step
-  that resets fetched the whole history first. So an older verified pin (a late deploy) was missing
-  and read as "not verified", holding the host with a false warning, and after a foxtrot push a pin
-  the host already contained could not be seen to be its ancestor, so the first step chose a
-  snapshot and restart that the second then undid by keeping the checkout where it was. The first
-  step now unshallows the tracked branch before deciding. That adds history and nothing else — no
-  change to the working tree, `HEAD`, other refs or the config — once per checkout.
-- **"Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.** The
-  hourly check runs from the game account's crontab, and cron gives a crontab the PATH
-  `/usr/bin:/bin`. Ubuntu's own npm installs gamedig into `/usr/local/bin`, where cron does not
-  look, so the check never found gamedig, never counted a player, and waited for an empty server
-  that never came. That covers 24.04 and 26.04 panel hosts whose Node.js the installer took from
-  Ubuntu, and remotes that already had Ubuntu's Node 18+. Hosts with NodeSource's Node were not
-  affected: its npm puts gamedig in `/usr/bin`, and on the test host (Node from NodeSource) the
-  check counted 0 under cron's own environment. The check now sets its own PATH
-  (`/usr/local/bin:/usr/bin:/bin`) for the player query only. Existing lines are fixed without
-  touching the setting: the in-place upgrade that runs whenever a server's Scheduled Tasks are
-  opened now also runs once a day for every game server, and adds the PATH to that call without
-  changing anything else on the line. That upgrade also no longer rewrites a crontab whose listing
-  failed, because it replaces the whole crontab with the lines it read.
-- **Player counts and lists never worked on a fresh Ubuntu 24.04 or 26.04 install.** Both ship a
-  Node new enough to skip NodeSource, and the distro's `nodejs` has no `npm`, which the gamedig step
-  needs — so gamedig was never installed. The installer and the add-host bootstrap now install `npm`
-  when Node 18+ lacks it, and the installer warns if gamedig is still missing. A full system and
-  per-user install was run on Ubuntu 26.04, whose `/usr/bin/sudo` is sudo-rs, and it turned up three
-  more: a sudo-rs refusal on the Firewall page read as "The panel can't reach this host"; the
-  install retry for a just-created account only recognised classic sudo's wording for an unknown
-  user; and, on every release, uninstall said it had removed the panel's UFW rule on hosts that
-  never had one (`ufw delete` exits 0 for a missing rule) — it now counts the rule before and after.
+  shows the installer's own reason, or its hold line, and the buttons come back.
+- **On a shallow checkout the update decided on less history than it then acted on.** An older
+  verified pin could read as "not verified" and hold the host with a false warning. The update now
+  unshallows the tracked branch before deciding.
+- **"Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.** Under
+  cron the check could not find gamedig, so it never counted a player. It now sets its own PATH, and
+  existing lines are fixed by the in-place upgrade, which now runs daily for every game server.
+- **Player counts and lists never worked on a fresh Ubuntu 24.04 or 26.04 install.** The installer
+  and add-host bootstrap now install `npm` when needed, so gamedig gets installed. Also fixed on
+  26.04 (sudo-rs): a Firewall-page refusal read as "The panel can't reach this host", and the
+  install retry for a just-created account.
 - **"1 RLock(s) were not greened" no longer prints on every start under Python 3.13+** (Ubuntu
-  26.04). It asked for an import-order fix nothing could make: Python 3.13 binds two `threading`
-  internals into a default argument that eventlet's patching never reaches, which also leaked an
-  entry per dummy thread. They are rebound around the patch, only when they have exactly that shape;
-  3.10 and 3.12 are unchanged.
+  26.04).
 - **After an in-place Ubuntu release upgrade the panel could not start, and re-running the installer
-  did not fix it.** `do-release-upgrade` moves `/usr/bin/python3` to a new minor version; the venv's
-  `python3` follows it and finds none of the panel's packages (`No module named 'eventlet'`, in a
-  restart loop). The installer skipped pip while `requirements.txt` was unchanged, and with the code
-  already current it exited "Already up to date" before reaching pip at all. A venv whose recorded
-  Python no longer matches the interpreter it resolves to is now rebuilt through the full update
-  path (snapshot, health check, rollback), and `linuxgsm-panel-recover` names the problem. Minimal
-  images (Docker, some LXC) ship no zone database, so every time zone name was refused; `tzdata` is
-  now installed there, non-interactively.
-- **The live console no longer re-appends old output after an update and a start.** Reported as "I
-  stop seeing the live console respond till I load more of the old log". The stream never stopped:
-  the 30-second catch-up poll failed to match the page's copy of the log and appended its whole
-  window again under the live output — +82, +29 and +33 duplicate lines on three polls after stop,
-  update, start. The update's `[panel]` lines went into that copy though they are never in the log;
-  the poll's window lost trailing whitespace (Minecraft's `list` reply ends in a space); and
-  LinuxGSM's start rotates the log with `mv` and `touch`, which the poller only noticed when the
-  file shrank, so it read the new log from the old offset and missed the boot output. Offsets are
-  keyed by inode now, panel lines are shown but kept out of the comparison, the window is read
-  byte-exact, and the poll appends only while the socket is down (and once after a reconnect).
-  **Load older** no longer wipes the console for a log it could not read. A colour code thousands of
-  digits long, or a game writing without newlines, can no longer stall a console, and
-  `/api/server/<id>/log-timestamps` is off-only, like the page.
-- **The Tailscale page's Disable, and the SSH toggle, did the wrong thing.** Disable aimed at the
-  first Serve route listed — with the panel at a sub-path, another app's `/` — and left the panel's
-  own mapping in place; turning Tailscale SSH off ran `tailscale up … --reset`, resetting every
-  other Tailscale setting; and Enable offered a mount another app already held, which replaces its
-  mapping. Disable now removes the panel's own route, and is refused while the panel is bound to
-  loopback, where Serve is the only way in: bind `0.0.0.0` under System → Panel Server first.
+  did not fix it.** A venv whose Python changed is now rebuilt through the full update path, and
+  `linuxgsm-panel-recover` names the problem. Minimal images get `tzdata` so time zones work.
+- **The live console no longer re-appends old output after an update and a start.** The 30-second
+  catch-up poll appended its whole window again under the live output; it now appends only while
+  the live connection is down. **Load older** no longer wipes the console for a log it could not
+  read.
+- **The Tailscale page's Disable, and the SSH toggle, did the wrong thing.** Turning Tailscale SSH
+  off reset every other Tailscale setting. Disable now removes the panel's own route and is refused
+  while the panel is bound to loopback: bind `0.0.0.0` under System → Panel Server first.
 - **The firewall's delete guard protects the rules that keep you in.** It failed open when the
-  firewall could not be read (every rule became deletable), when `config.json` was corrupt (the
-  tailnet rule), and when a stale `tailscale_setup_done` said Tailscale was the way in (the panel's
-  only web port). It did not recognise `ufw allow OpenSSH` or `… on eth0` rules as SSH, nor a
-  `LIMIT` on the panel's port, and it treated an outbound rule on that port as the panel's. A stale
-  rule number could delete a different rule, and a non-English `ufw` read a live firewall as
-  inactive. The panel host's firewall status dropped every rule whose To column is not a number —
-  the `tailscale0` allow, app profiles, the panel's own denies. "Remove rate limit" deleted the rule
-  and closed the port; it rewrites LIMIT to ALLOW now. `force` still overrides the guard.
-- **`uninstall.sh` removes what it installed, and only that.** A per-user uninstall left the weekly
-  root cron (`npm install -g … gamedig`, as root), the helper tree, `panel.conf` and the recovery
-  symlink behind. It could not stop a per-user service over a non-interactive SSH session and then
-  deleted the running panel's files; it now confirms the stop and refuses otherwise. It left an
-  enabled fail2ban jail watching a log it had just deleted, took host-shared pieces that belonged to
-  another install on the same box, and ran `tailscale serve reset`, which wipes every Serve mapping
-  on the node rather than the panel's; a per-user uninstall now closes its own port. It reported
-  removing the UFW rule and the panel user whether or not it had — and a surviving panel user still
-  owns the SSH key to every host the panel managed, which the warning now says. It no longer exits
-  silently when the service account is already gone.
-- **`install.sh` fails safe mid-update.** Its snapshot check accepted a truncated archive — the
-  disk-full case its own comment names — and the rollback then killed the script with the panel
-  half-populated and no message. An abort while the panel was stopped left it down with the rollback
-  unreachable, and the database snapshot was taken while the service was still writing to it. On a
-  per-user install its firewall probe ran without `sudo`, so the panel's port was never opened and
-  the banner printed an address the firewall blocked; an unanswered probe is reported as unknown
-  now.
-- **"Is anyone on?" no longer answers "no" when it could not tell.** A failed gamedig query prints
-  JSON with no player list, which `jq` counts as 0 — so the hourly "daily restart when empty" check
-  restarted a full server whenever a query failed (packet loss, a world save, a firewalled query
-  port), and reboot-when-empty read the same zero. Only a counted 0 means empty now. The host-reboot
-  confirmation lists running servers whose count could not be read and warns they will be
-  disconnected, and passes a server's query-type override as the server page does; the per-server
-  restart and stop confirmations say they could not check. The unattended reboot no longer treats a
-  host as idle while a server on it is still installing.
+  firewall could not be read, and a stale rule number could delete a different rule. "Remove rate
+  limit" now rewrites LIMIT to ALLOW instead of closing the port. `force` still overrides the guard.
+- **`uninstall.sh` removes what it installed, and only that.** A per-user uninstall no longer leaves
+  its root cron, helper files or fail2ban jail behind, confirms the service stopped before deleting
+  files, and no longer resets every Tailscale Serve mapping on the node. It warns that a surviving
+  panel user still holds the SSH key to every managed host.
+- **`install.sh` fails safe mid-update.** A truncated snapshot or an abort could leave the panel
+  half-populated or down with no message. On a per-user install the firewall probe no longer runs
+  without `sudo`, which left the panel's port closed.
+- **"Is anyone on?" no longer answers "no" when it could not tell.** A failed player query counted
+  as 0, so the "when empty" restart and reboot could hit a full server; only a counted 0 means empty
+  now. Confirmations say when a count could not be read.
 - **A server's status is what the game's port says, and a failed read no longer overwrites it.**
-  LinuxGSM's `STARTED` only means a tmux session exists, and the wrapper inside it outlives a
-  crashed game — so a server that crashed, or never booted, read as online, and the detail page
-  committed that over the correct "offline" (and wrote "online" over an install in progress).
-  "Online" now means the game's port is listening, everywhere. The other direction too: a `details`
-  read that timed out (it runs a full `du` — 13 seconds on a 6.5 GB install) wrote "unknown"; the
-  stats endpoint persisted an all-zero failed read as "offline", which let "notify when empty" fire
-  and clear itself with players still connected; and a port scan that did not answer wrote every
-  server on that host offline, with a "Server offline" alert each. Only a status that was actually
-  read is stored now. A queued "stop/restart when empty" is no longer discarded because the server
-  had crashed.
-- **Auto-blocking and the fail2ban watchers no longer act on reads that failed.** An empty fail2ban
-  read released every auto-block the panel had placed; a quiet remote host whose logs simply held no
-  Ban lines read as "could not read" forever, so its expired blocks were never released; and an
-  unreadable firewall made the reconcile re-issue up to 200 privileged commands a cycle. One failed
-  read of the panel's jail logged an unban for every live ban and then, on the next good read, a ban
-  and a notification for each — three or more tripping "Login attack in progress". A failed read
-  also repainted the Auto-block toggle as off, which saving the threshold then persisted.
-- **An unreachable host no longer renders as idle and healthy.** Only the paramiko transport raises
-  on a failed read; the local and Tailscale transports return empty output, which the metrics code
-  turned into a full set of zeros. A host that was down showed "Reachable · CPU 0% · RAM 0% · Disk
-  0%" on the dashboard and "CPU 0%, 0 cores, RAM 0 of 0" on its Live Resources card, drew a dip to
-  0% in each server's live chart, and recorded those zeros in the history charts. The Reachable
-  badge was never refreshed at all — the column was written only at creation, by Test connection and
-  by a bootstrap — and an open dashboard kept a silent host's last figures under "Auto-refreshing".
-  Each now shows the host as unknown or unreachable, the live chart leaves a gap, and the badge
-  follows the monitor.
-- **Database repair keeps the fullest copy.** It preferred a rebuild of the damaged file over a
-  complete backup whenever the rebuild was a well-formed file — in the reproduction, 17 rows of
-  4,000, reported as a successful repair, after which the rolling backup was refreshed from it. It
-  now counts the rows in both, takes the fuller, and says which. The dump-based rebuild also threw
-  away every row it had salvaged when it met one bad page. And the pre-update database step —
-  integrity check, fresh rolling backup, abort on a corrupt database — never ran on a root install:
-  the root-owned copy imported the panel's package, which is not importable there.
-- **GMod shared content on a remote host is detected correctly.** The remote check always answered
-  that the content was downloaded, so it never was, and weekly update crons were written for scripts
-  that do not exist; an unreachable host read as "not downloaded", and content already on disk was
-  fetched again. A content mount now says it needs a restart while the server is running, since
-  until then the server cannot read the new files.
-- **A failed read can no longer be saved back over a real config.** A config edit, port change or
-  alert edit whose read of the LinuxGSM config failed wrote a file containing only the keys being
-  changed. A `common.cfg` without a trailing newline made the Raw tab open empty, and Save wrote
-  that over the real config. A file whose read failed opened in the editor as an empty file. The
-  Alerts card showed blank webhooks and tokens after a failed read, and one Save replaced the real
-  ones. Each now reports the failed read and changes nothing.
-- **A failed read no longer triggers something destructive.** A `df` that timed out made the
-  backup-headroom check delete backups to "free space" (two of four in the reproduction). A failed
-  `du` marked an installed server as failed and re-ran its whole download. An unreadable GMod mount
-  state unmounted everything — through the content uninstall, and through the content card, which
-  showed every box unticked and applied that. Opening Files & Config on a host that did not answer
-  turned the server's Autostart and Daily restart off, and said "No scheduled tasks yet." about a
-  crontab it never reached. "Refresh commands" on an empty read wiped the stored command list,
-  hiding Start, Stop and Update for everyone.
-- **"Nothing there" and "could not look" no longer render the same.** A folder the panel could not
-  read showed "(empty folder)"; the Backups card said "No backups yet."; the firewall page repainted
-  an unreadable host as "Inactive" with "No open ports yet." after one refresh; the Public SSH card
-  called an unreadable firewall "tailnet-only", the reassurance an operator acts on before closing
-  port 22; "Ubuntu Pro is not installed" was cached for a day from a timed-out read; the fail2ban
-  overview said "No fail2ban jails found." for a host whose read failed or whose fail2ban was
-  stopped; the file-integrity check showed its green tick when git could not run; discovery reported
-  an unreachable host as having no servers; and an unreachable remote was reported as having
-  Tailscale installed. Each now says it could not read.
-- **Actions that report success now check that they succeeded.** Unblocking an address returned
-  success unconditionally, on the panel host and on remotes. "Disable public SSH" reported "✓
-  tailnet-only" and audited a hardening that had not happened on a host without ufw. Closing the
-  panel's public port said "already closed" about a firewall it never read, and could force-delete a
-  DENY rule on that port. Opening game ports reported the ports it asked for, and a panel port
-  change reported "Firewall: opened" either way. A refused remote reboot and a failed host reboot
-  were audited as reboots, and a refused full backup as one that ran. A scheduled task's "Run now"
-  said "Started" for a launch that never happened. The hourly auto-block audit counted attempts, not
-  results. A global ban said "Banned across all Source servers" regardless; it now records how many
-  servers applied it, were not running, or failed. And the SteamCMD crash-dump sweep did nothing at
-  all on remote hosts.
-- **An upload no longer overwrites a file because a check failed.** The "does this already exist?"
-  check answered "nothing conflicts" when its listing did not run, and the server-side re-check read
-  a failed probe as "no file there" — replacing a file the caller had asked not to overwrite.
-- **On a phone, the dashboard's Actions column no longer covers the row.** It is pinned to the right
-  edge so the controls stay reachable, and it had grown to 270px of a 341px viewport, sitting on top
-  of the server name, status and players. Its buttons now wrap into two rows in 190px; desktop is
-  unchanged.
-- **The VPS bootstrap no longer acts on probes that never answered.** It rebooted a host after the
-  upgrade when its "are game servers running?" probe timed out, told a host it needed no reboot when
-  that check had not run, reported "Swap already present" on a host it never read (which then got no
-  swap), and skipped creating the game account when `id` did not answer. And filling in the optional
-  game-user field on a remote made every privileged command — ufw, apt, fail2ban, the sshd
-  hardening, the whole bootstrap — run as that user instead of root, while reporting success. That
-  field's inline edit box is gone, and the add-host help says what it is for.
-- **Tailscale migration checks the new way in before closing the old one.** "Migrate to Tailscale"
-  closed port 22 and blanked the host's only stored credential because tailscaled was running — not
-  because Tailscale SSH was on, or the panel could log in that way — and gave one generic reason for
-  every refusal. A node with a MagicDNS name and no address was migrated to the old host. It now
-  logs in over Tailscale first, and names the real problem, including the `tailscale set --ssh` to
-  run. Bring-up also skipped the `ufw allow in on tailscale0` rule when UFW's status could not be
-  read; interface detection could pick `wg0` on a host running both, which "Allow Tailscale" then
-  opened all inbound on; and a bad Serve mount point is a 400 with a message rather than a 500.
-- **A branch switch that failed to launch no longer changes the tracked branch.** The route reported
-  the failure, but the panel was left tracking a branch its checkout was not on, and the next
-  ordinary Update moved the checkout onto it.
-- **Backups honour a server's own retention, and "Back up now" counts.** A per-server retention
-  override was read only by the scheduled ticker; "Back up now", the full backup and the
-  wait-until-empty queue pruned to the global number and deleted the archives the override said to
-  keep. A backup taken by hand or by that queue did not move the schedule's clock either, so the
-  ticker backed the same server up again within the hour. The safety copy taken before a panel
-  restore had its result ignored, so the restore went ahead when that copy failed; it is checked
-  now, with an explicit override for a database already too broken to copy.
-- **Bans on imported Source servers survive a map change.** `banid` with `writeid` persists to
-  `banned_user.cfg`, which the engine reloads only if the server config execs it, and the panel
-  added that line only when it installed the server. Bans from the Players panel and global bans now
-  make sure of it first, on every target server.
+  "Online" now means the game's port is listening, so a crashed server no longer reads as online.
+  Only a status that was actually read is stored, so failed reads no longer raise false offline or
+  "empty" alerts.
+- **Auto-blocking and the fail2ban watchers no longer act on reads that failed.** A failed read no
+  longer releases every auto-block, floods ban notifications, or shows the Auto-block toggle as off.
+  Expired blocks on a quiet remote host are released again.
+- **An unreachable host no longer renders as idle and healthy.** A down host had shown "Reachable"
+  with CPU, RAM and Disk at 0% and recorded zeros in the charts. It now shows as unknown or
+  unreachable, live charts leave a gap, and the Reachable badge follows the monitor.
+- **Database repair keeps the fullest copy.** It counts the rows in the rebuild and the backup,
+  takes the fuller and says which; it had kept a 17-of-4,000-row rebuild over a full backup. The
+  rebuild no longer discards salvaged rows at one bad page, and the pre-update database check now
+  runs on a root install.
+- **GMod shared content on a remote host is detected correctly.** The check always said the content
+  was downloaded, so it never was, and update crons were written for scripts that did not exist. A
+  content mount on a running server now says it needs a restart.
+- **A failed read can no longer be saved back over a real config.** Config, port and alert edits,
+  the Raw tab, the file editor and the Alerts card now report a failed read and change nothing,
+  instead of saving an empty or partial file (or blank webhooks and tokens) over the real one.
+- **A failed read no longer triggers something destructive.** Failed reads no longer delete backups
+  to free space, re-download an installed server, unmount all GMod content, turn off Autostart and
+  Daily restart, or wipe the stored command list that shows Start, Stop and Update.
+- **"Nothing there" and "could not look" no longer render the same.** Folders, backups, the firewall
+  and Public SSH cards, fail2ban, Ubuntu Pro, discovery and other checks now say they could not read
+  instead of reporting empty, inactive or fine.
+- **Actions that report success now check that they succeeded.** Unblock, firewall and port changes,
+  reboots, full backups, "Run now" and global bans now report and audit what actually happened. The
+  SteamCMD crash-dump sweep now runs on remote hosts.
+- **An upload no longer overwrites a file because a check failed.** A failed existence check no
+  longer reads as "nothing there", which had replaced files you asked not to overwrite.
+- **On a phone, the dashboard's Actions column no longer covers the row.** Its buttons now wrap into
+  two rows instead of covering the server name, status and players; desktop is unchanged.
+- **The VPS bootstrap no longer acts on probes that never answered.** It no longer reboots, skips
+  swap or skips the game account on a probe that did not answer. Filling in a remote's optional
+  game-user field no longer runs every privileged command as that user instead of root.
+- **Tailscale migration checks the new way in before closing the old one.** It now logs in over
+  Tailscale before closing port 22 and blanking the stored credential, and names the real problem,
+  including the `tailscale set --ssh` to run. "Allow Tailscale" no longer risks opening `wg0`
+  instead.
+- **A branch switch that failed to launch no longer changes the tracked branch.** The next ordinary
+  Update no longer moves the checkout onto a branch it never switched to.
+- **Backups honour a server's own retention, and "Back up now" counts.** "Back up now", the full
+  backup and the wait-until-empty queue keep a server's retention override and move its schedule
+  clock. A panel restore no longer goes ahead when its safety copy fails, unless you override it for
+  a database too broken to copy.
+- **Bans on imported Source servers survive a map change.** Bans from the Players panel and global
+  bans now make sure each target server's config execs `banned_user.cfg` first.
 - **Installs that worked were reported as failures, and one that could not work was reported
-  online.** A slow first boot (Insurgency took 40 seconds) ended with "installed, but it didn't
-  start" after a 15-second wait; the wait is about 90 seconds now, and a start LinuxGSM did not
-  complain about says the server is still coming up. A game that ignores the panel's port setting (a
-  Velocity proxy, for one) had its default port adopted even when another server held it — and was
-  then called online on that server's socket; the panel keeps its own port and names the clash,
-  including against servers installed by hand, and no longer rewrites the other server's firewall
-  rule while doing so. SCP: Secret Laboratory never started, because its launcher waited at an EULA
-  prompt and a per-port config prompt in a tmux session nobody was attached to; both are answered at
-  install. A retry keeps the GMod content selection, and install progress no longer freezes after
-  one failed poll.
-- **Left 4 Dead 2 installs.** SteamCMD refused it with "Invalid platform": the app publishes only a
-  Windows launch entry, a SteamCMD bug with a workaround documented by LinuxGSM's maintainers —
-  download once with `steamcmdforcewindows=yes`, then turn it off and validate, which fetches the
-  Linux binaries. The install does that itself, once, and sets the option back even if the download
-  fails. A classified failure reason no longer ends with LinuxGSM's misleading "check
-  steamcmdforcewindows" hint.
-- **SteamCMD stopped working for every game on a host once ten accounts had used it.** Steam uses
-  one crash-dump directory per Linux account (`/tmp/dumps` to `/tmp/dumps09`) and refuses to run
-  when all ten are taken — the panel creates an account per game server, and `userdel` leaves the
-  directory behind, so ten uninstalls could wedge an idle host. Installs, updates and validates all
-  failed, surfacing as "the download may be corrupt". A helper verb now frees orphaned slots, never
-  a live account's, on uninstall and before each install, so a wedged host heals on its next
-  install. Failures a retry cannot fix — this one, a game that needs a Steam account that owns it, a
-  game LinuxGSM caps at an older Ubuntu — stop the retry loop instead of costing three more
-  downloads.
+  online.** The first-boot wait is now about 90 seconds, a game that ignores the panel's port
+  setting no longer takes another server's port, and SCP: Secret Laboratory now starts.
+- **Left 4 Dead 2 installs.** The install applies LinuxGSM's documented `steamcmdforcewindows`
+  workaround for SteamCMD's "Invalid platform" error once, and sets the option back even if the
+  download fails.
+- **SteamCMD stopped working for every game on a host once ten accounts had used it.** The panel now
+  frees orphaned Steam crash-dump slots (never a live account's) on uninstall and before each
+  install, so a wedged host heals on its next install. Failures a retry cannot fix stop the retry
+  loop.
 - **On an install hardened by `install.sh` run as root, the panel could not manage a single game
-  server.** The narrow sudoers grant permits one command, the privileged helper, and about 45 call
-  sites ran `sudo -u <game user> bash -c …`, which it does not. Restart did nothing, the file
-  browser, GMod content, cron and install flows all failed, and the dashboard still showed the
-  servers online from its port scan. The grant now has a second line letting the panel become
-  accounts in the `lgsmpanel-games` group, and only those; game accounts are enrolled by the
-  installer and a helper verb, LinuxGSM commands go through a bounded `lgsm-command` verb, and
-  crontab edits run as the game account rather than as root. The installer now applies this on every
-  run — including one with nothing new to fetch, which used to exit "Already up to date" without
-  refreshing the helper or the grant.
+  server.** The narrow sudoers grant now also lets the panel become accounts in the
+  `lgsmpanel-games` group, and only those. The installer applies this on every run, including one
+  with nothing new to fetch.
 - **Installing a game server failed at the dependency step on a hardened host, silently.** The step
-  ran `sudo bash -c`, which the narrow grant refuses, the failure was logged at debug level and the
-  step reported success, so the install failed later at the download looking like a bad archive. It
-  is now a sequence of helper verbs that also enables `multiverse` (where `steamcmd` lives) and
-  pre-answers the SteamCMD licence prompt, and it reports what did not install. The panel's own host
-  also sent every command without an explicit `sudo=` through `sudo`, so about twenty reads that
-  need no privilege — the dashboard port scan, disk, uptime — failed under that grant; console logs
-  are read as the game account instead. The OS update, the reboot and "enable unattended upgrades"
-  no longer refuse under the narrow grant.
-- **The file editor saves exactly what it opened.** Opening a file and pressing Save without typing
-  converted every CRLF line ending to LF (UT2004's `.ini` files are CRLF) and dropped the trailing
-  newline and any leading blank lines. Files now travel between the host and the editor as base64,
-  and a read that comes back malformed is treated as a failed read, not as content.
-- **Changing the SSH port works on Ubuntu 22.10 and later.** sshd there is socket-activated:
-  `ssh.socket` owns the listening socket, so a `Port` in `sshd_config` passes `sshd -t` and is
-  ignored — the change opened the firewall, found nothing listening and reverted, every time, on the
-  current LTS. The panel now detects socket activation and writes an `ssh.socket` drop-in, whose
-  content the helper restricts to listen addresses, since a unit file can run commands as root. A
-  bind address that would lock you out is refused before anything is touched — loopback, where sshd
-  starts fine so the change used to report success, or an address the host does not have — and a
-  bind change's message no longer promises a fallback port that `ListenAddress` cannot provide.
-  After a port change the Public SSH card no longer reads `2222/tcp` as port 22 open, and a reverted
-  change removes the allow rule it had added.
+  now works under the narrow grant, enables `multiverse` and reports what did not install. The OS
+  update, reboot and "enable unattended upgrades" no longer refuse under it either.
+- **The file editor saves exactly what it opened.** Saving without typing no longer converts CRLF
+  line endings to LF or drops the trailing newline and leading blank lines, and a malformed read is
+  treated as a failed read.
+- **Changing the SSH port works on Ubuntu 22.10 and later.** The panel now writes an `ssh.socket`
+  drop-in, since `sshd_config`'s `Port` is ignored there. A bind address that would lock you out is
+  refused before anything changes.
 - **The panel-login fail2ban jail never banned anyone on Debian or Ubuntu**, while the panel showed
-  it Active. Those distributions default every jail to `backend = systemd`, which reads the journal
-  and ignores `logpath`, and the panel writes failed logins to a file. The jail now pins a file
-  backend, and a jail with a stale `logpath` or the wrong backend is rewritten on startup, so
-  existing installs correct themselves.
-- **Commands with a lot of output, and helper verbs run outside systemd, no longer hang.**
-  `run_command` waited for a remote command to exit before reading its output, and a command that
-  fills the 2 MiB window cannot exit — a long `journalctl`, a fail2ban log grep or a big update's
-  output hung that request for good. And 26 helper verbs read a stdin nobody sent them: under
-  systemd stdin is `/dev/null`, so it went unnoticed, but started any other way they sat until
-  "Command timed out".
-- **Console lines are no longer cut at 80 columns, and the player list with them.** `tmux
-  capture-pane` returns the pane's visual lines unless asked to join them, so every line was
-  hard-wrapped mid-word — and a vanilla Minecraft `list` reply, which puts every player on one line,
-  parsed as one player named `Ali` out of twelve. That count feeds the Players panel, the
-  empty-server notification and reboot-when-empty. Also in the console: a chunk beginning with a
-  newline could arrive glued to the line before it; **Load older** had never worked, always
-  answering "Could not load more console output"; reverse video and the bright background colours
-  were kept but styled by nothing; undated lines sat 78px left of dated ones; and when a re-run
-  action's log was truncated, the first chunk of its output was dropped.
-- **Pages no longer offer controls their route refuses, and a few that did nothing now work.** A
-  moderator holding only "start server" was shown Stop and Restart as well, on the dashboard and in
-  the bulk bars; Files & Config was offered to viewers who could not open it; the panel host's
-  Manage page showed superadmin-only controls to holders of "manage remotes", and read the panel's
-  port as blank; the Groups page linked to pages a delegated admin could not open. Clicking the text
-  of the pending-restart banner called `window.stop()` and aborted every request on the page. After
-  importing discovered servers, the host page's Uninstall posted without its CSRF token. The Install
-  page fetched itself in full every eight seconds, and the players card and the History tab could
-  stay empty on first load. Hiding a server page's Controls card stopped the rest of that page's
-  live status from updating.
-- **Browser fixes in the translated UI and the dashboard.** With the page in Spanish or French, the
-  translator rewrote user data — a server named "Console", a username "Admin", a folder called
-  `Backups`, so uploads were said to go into a folder that does not exist — and counted phrases like
-  "7 entries" could never be translated. The "System updates waiting" security banner dismissed
-  itself six seconds after every page load. "Show this panel again" never restored a hidden panel. A
-  new tag did not appear on its dashboard row until a reload, so filtering by it hid the server.
-  Copy on the 2FA backup-codes page did nothing on an `http://` install; Tailscale's "waiting for
-  you to authorize" polls never stopped; the Join link was intercepted on touchscreen laptops; and
-  Ctrl/Cmd+K was swallowed on the login page.
-- **Bad requests and down hosts no longer answer 500.** A JSON field of the wrong type made two
-  dozen endpoints fail with "Something went wrong"; a host that is simply switched off made the
-  mutating remote endpoints raise; and with no error handler at all, any failure on an API call came
-  back as an HTML page the browser could not parse. API calls now get JSON errors with a real
-  status: a 400 for bad input, and an "unreachable" answer for a host that is down. A `config.json`
-  that is valid JSON but not an object (`null`, a list) crashed every page, and one that does not
-  parse is no longer overwritten with defaults — backup passphrase and whitelist included.
-- **Scheduled Tasks edit and delete work on a crontab whose first line is indented.** The read
-  stripped that indentation, so delete reported success and removed nothing, and an edit added its
-  rewrite beside the original — the job then ran on two schedules. A `%` in a restart-pending job
-  was cut off by cron, and rescheduling the panel's own daily-restart line in the generic editor
-  ended its run tracking.
+  it Active. Those distributions read the journal by default, but the panel logs failed logins to a
+  file; the jail now pins a file backend, and existing installs correct themselves on startup.
+- **Commands with a lot of output, and helper verbs run outside systemd, no longer hang.** A long
+  `journalctl`, a fail2ban log grep or a big update's output no longer hangs its request, and helper
+  verbs started outside systemd no longer wait for stdin until "Command timed out".
+- **Console lines are no longer cut at 80 columns, and the player list with them.** A Minecraft
+  `list` reply no longer parses as one player, which fed the Players panel and the "when empty"
+  checks. Load older now works.
+- **Pages no longer offer controls their route refuses, and a few that did nothing now work.** Stop,
+  Restart, Files & Config and superadmin-only controls are no longer shown to users who cannot use
+  them. Clicking the pending-restart banner no longer aborts the page's requests, and Uninstall
+  after an import works.
+- **Browser fixes in the translated UI and the dashboard.** In Spanish or French the translator no
+  longer rewrites server names, usernames or folders. The updates banner no longer dismisses itself,
+  and "Show this panel again" works.
+- **Bad requests and down hosts no longer answer 500.** API calls now get JSON errors: 400 for bad
+  input and an "unreachable" answer for a down host. A `config.json` that is not an object no longer
+  crashes every page, and one that does not parse is no longer overwritten with defaults.
+- **Scheduled Tasks edit and delete work on a crontab whose first line is indented.** Delete no
+  longer removes nothing while reporting success, and edit no longer leaves the job on two
+  schedules. A `%` in a restart-pending job is no longer cut off.
 - **Notifications that fail are logged, and a restart cannot replay a Telegram command.** A provider
-  that rejected a message (a rotated token, a deleted webhook) logged nothing, so alerting could
-  stop without a trace. After a restart, a failed Telegram priming poll asked for every unconfirmed
-  update Telegram still held — up to 24 hours — so a `/stop` sent hours earlier stopped a running
-  server. `/console` printed an internal sentinel instead of saying there was no session, and
-  `/players` reported a server that was down as empty.
+  rejecting a message is now logged, and an hours-old Telegram `/stop` is no longer replayed after a
+  restart. `/console` says when there is no session, and `/players` no longer reports a down server
+  as empty.
 - **The install page says why the game list is empty** — a DNS failure, an HTTP error, a response
-  that was not a CSV, a read-only `data/` — instead of a fixed guess about GitHub. Retry tells a
-  fresh fetch from the cached copy, rather than answering "Loaded 30 games." with every fetch
-  failing.
-- **Editing your own account can no longer leave the panel without a superadmin.** With a password
-  reset or 2FA change in the same edit, the demotion was committed before the "last superadmin"
-  guard ran: the request answered "aborted" and the panel had none left, recoverable only through
-  `manage.py`.
-- **A new host or server no longer inherits a deleted one's state.** SQLite hands a deleted row's id
-  to the next insert. A deleted host's auto-block opt-in (which then added UFW denies to the new
-  host), its backup-schedule overrides, its cached specs and Ubuntu Pro status, and the address
-  player queries were sent to all carried over; so did install and bootstrap job state (a new server
-  shown as "Install failed", a new host refused because "a bootstrap is already running"), up to 14
-  days of CPU, RAM and player history, the distro used to pick its package list, and its place in
-  every user's saved layout. All of it is cleared with the row now, including when every host is
-  deleted.
+  that was not a CSV, a read-only `data/`. Retry says whether it fetched fresh or used the cached
+  copy.
+- **Editing your own account can no longer leave the panel without a superadmin.** A demotion
+  combined with a password reset or 2FA change was committed before the last-superadmin guard ran.
+- **A new host or server no longer inherits a deleted one's state.** SQLite reuses a deleted row's
+  id, so a new host or server could pick up the old one's auto-block opt-in, backup overrides,
+  cached specs, job state, history and saved-layout place. All of it is now cleared with the row.
 - **Downloading a game backup whose name contains a newline or a non-Latin-1 character** (an
   em-dash, CJK) no longer fails with a 500.
-- **Console text is no longer struck through, bolded or italicised at random.** SGR 38/48/58 are
-  extended-colour *introducers* that consume the parameters after them — `38;5;n` is one
-  256-colour instruction, `38;2;r;g;b` one truecolor instruction. The panel dropped the introducer
-  and then read each sub-parameter as if it were its own attribute, so an RGB triple became
-  formatting: `48;2;1;9;3` came out as dim + bold + **strikethrough** + italic. Minecraft converts
-  a plugin's `§x` hex colour into exactly these sequences, which is how a line ended up drawn
-  through an EssentialsX warning and the URL beneath it. The whole instruction is consumed and
-  dropped now (the panel does not render extended colour), and a real code sharing the same
-  sequence still applies.
-- **The console no longer loses output, or cuts a line in half, during a busy burst.** The poller
-  reads at most 64KB per tick but then advanced its offset to the log's *full* size, so anything
-  past that cap was silently discarded — and the 64KB boundary itself landed mid-line, reaching
-  the screen as a fragment (a bare `[20` where a timestamp had been sliced). A server writing more
-  than 64KB between two 2-second polls is not hypothetical: it is every Garry's Mod start, loading
-  hundreds of Lua modules, which is exactly when someone is watching. The offset now advances by
-  what was actually read, so a burst drains over the next few ticks instead of being thrown away,
-  and a chunk's trailing half-line is held until the next read completes it.
+- **Console text is no longer struck through, bolded or italicised at random.** Extended-colour
+  sequences, such as a Minecraft plugin's hex colours, were misread as formatting. They are now
+  dropped whole, and a real code in the same sequence still applies.
+- **The console no longer loses output, or cuts a line in half, during a busy burst.** Output past
+  64KB per poll, as on every Garry's Mod start, was discarded and lines were cut at the boundary. A
+  burst now drains over the next few polls, and a half-line waits to be completed.
 - **The panel no longer offers to turn LinuxGSM's `logtimestamp` on**, and offers a way to turn it
-  off. It works — the log really is stamped at write time — but LinuxGSM builds the capture as
-  `cat | gawk '{ print strftime(...), $0 }' >> consolelog`, and gawk writing to a *file* is block
-  buffered, not line buffered: measured at 0 lines reaching the log after 33 lines of input, with
-  everything appearing only once 4KB had accumulated. On a quiet server that is an apparently
-  frozen console. The pipeline is built in `command_start.sh`, so nothing in the panel can add an
-  `fflush`. Shipped as a one-click offer before that was measured; the parsing stays, so a log
-  stamped by hand still reads correctly, but the invitation is gone.
-- **Console lines with a timestamp are no longer taller than lines without one.** The gutter is an
-  inline-block, and per CSS an inline-block whose `overflow` is not `visible` takes its baseline
-  from its bottom margin edge rather than its last line box — so it hung below the text beside it
-  and the line box grew by a descender to contain it. Measured at 24.44px per stamped line against
-  18.72px unstamped, which reads as ragged double-spacing wherever stamped and unstamped lines
-  meet. Reported as "why is there like a extra space inbetween lines".
-- **Console timestamps now appear on a server that only polls, and an empty column says why.**
-  Reported as "I still don't see the timestamps in the console", and it was two things. The
-  timestamp was attached only to lines pushed over the websocket; the 30-second HTTP poll that
-  also feeds the console passed none — so on an install whose websocket cannot connect, *no* line
-  ever got a time. A poll delta is new output the panel just watched arrive (accurate to the poll
-  interval) and is stamped now; only the first window, which is history written before the panel
-  looked, stays blank. Second, on an idle server every line on screen IS that first window, so the
-  column was legitimately empty and indistinguishable from a broken feature — the console now says
-  "Times appear on lines as they arrive" while nothing is stamped, and drops the note the moment
-  one is.
-- **Schedules are now set in your own time, not the host's.** A cron entry fires on the host's
-  clock — which this panel's own bootstrap sets to **UTC** — and the daily restart wrote a
-  hardcoded `0 5 * * *` with no time shown in the UI at all. So "daily restart when empty" on a
-  server run by someone in US Central fired at 23:00 their time, in peak hours, and nothing on
-  screen said so. The panel now learns each host's timezone and keeps it; the restart time is
-  entered in **your** timezone and converted before it reaches the crontab, with the host's own
-  time shown underneath ("Runs at 19:00 on the host (Asia/Tokyo)"). The cron editor carries the
-  same label, so its "Daily 5am" preset finally says whose 5am. A host whose timezone cannot be
-  read says exactly that and leaves your time untouched rather than guessing UTC.
-
-  One caveat that cannot be engineered away here: a crontab line is a fixed wall time on the host,
-  so where two timezones' daylight-saving rules differ the schedule is an hour out after the next
-  changeover. The panel writes what is correct today and shows you the host time it wrote.
-- **A long action's output no longer vanishes when you reload the page.** "when you refresh the
-  page after i did update...those messages went away" — and they did: the console socket reaches
-  only the pages open at the time, and `/api/console` rebuilds a console by tailing the *game's*
-  console log, which a panel action never writes to. So an update's output lived in exactly one
-  place, the DOM of whichever tab happened to be open. The panel keeps a bounded per-server
-  backlog of what it pushed and replays it on the next console load — including when the host is
-  unreachable, which is when you most want to still be able to read what the update said.
-- **"Watch the live console for progress" was not true of any long action.** Accepting an update,
-  validate, backup, force-update, mods-update or fastdl answered with exactly that, and then sent
-  nothing to the console at all — reported as "it says to watch the console for updates, there is
-  nothing that gets sent to the console". The command ran on its own SSH channel with its output
-  captured into a variable, so the only place it ever surfaced was the audit log after the fact,
-  truncated to 300 characters; and the console the message points at is a tail of the *game's*
-  console log, which an update never writes to. An operator watching it saw an unchanging screen
-  for the whole download, with no way to tell a working update from a stalled one. A long action
-  now tees its output through a file in the game user's home, and the console poller tails that
-  file on the same ticks it already tails the game log — so the output appears as it is produced,
-  bracketed by `[panel] update started` / `[panel] update finished` markers. The full output still
-  comes back to the panel, so the audit-log entry and the chat bots' completion message are
-  unchanged.
-- **The Update button appeared for games that have no update command.** `GameServer.supports_update`
-  knows the Call of Duty family is not SteamCMD-based (`_NO_UPDATE_GAMES` exists for exactly that),
-  and `/api/servers/bulk-action` asks it and skips those servers with "no update support". The
-  control bar computed the same thing a second time, and for a server whose command list had not
-  been fetched yet its version failed open for *every* game — so the detail page offered Update on
-  a Call of Duty server, accepted the click as a long action, told the operator to watch the
-  console, ran a command LinuxGSM does not have, and discarded the error. One question with two
-  answers, and the button had the wrong one; it asks the model now.
-- **A game server could be installed on a port that does not exist.** The install form took
-  `int(port)` straight from the request with no range check at all, so `0`, `-5` and `99999` were
-  stored on the row, opened in the firewall and written into the LinuxGSM config. Three other port
-  fields in the panel each had their own bounds check — two of them with their own test — so the
-  rule was never in doubt; the endpoint that actually writes a server was just the one nobody drove
-  with a bad value. Ports are now parsed by one shared helper that carries the range with the parse,
-  and enforced again at the data layer (a `@validates` hook, like the shell-identifier one beside
-  it) so the next route to assign a port cannot skip it. Non-ASCII digits are refused too: Python's
-  `int()` reads `٢٧٠١٥` as 27015, which meant a port nobody typed could be stored.
-- **The port picker could hand back a port that was already in use.** After scanning 400 candidates
-  it returned the last one it had tried — occupied by definition — and reported the search as
-  successful, so the install went ahead and failed later on the host as the game's own
-  "Port N was unavailable". The same walk could also run past 65535. It now reports that it found
-  nothing and the caller refuses with a message that names the real problem.
-- **Installing to a host that was switched off returned a 500.** Picking a free port scans the
-  host's listening ports over SSH, and an unreachable host raised straight through the route. A
-  host being down is a normal condition for this panel, not a fault in it — the install form now
-  says so and writes no row.
-- **The setup wizard could save a panel port that the panel cannot bind.** Step 1 writes the
-  address the panel listens on, and nothing downstream re-checks it, so a typo of `0` or `99999`
-  produced a panel that would not come back up on its next boot — recoverable only with
-  `linuxgsm-panel-recover` or by editing `data/config.json` by hand. It is validated against the
-  same bounds as the in-panel port change, which is where the code had always assumed it happened.
-- **Rotating a remote's SSH credential did not take effect.** Editing a host rewrote its user, host,
-  port and credential and committed without dropping the pooled SSH connection, so the panel kept
-  authenticating with the OLD credential for as long as its 30-second keepalive held the socket
-  open. Repointing a host at a different address was worse: the pooled entry became unreachable for
-  the life of the process, because the only way to close a connection was to name the address the
-  row currently held. The pool is now invalidated from the row itself, so it cannot be missed by a
-  route added later.
-- **A new game server could inherit a deleted one's status.** SQLite hands a deleted row's id
-  straight to the next INSERT, and two id-keyed status maps — the last per-server backup outcome,
-  and the GMod content-install state — were not among those cleared when a row goes away. Both are
-  read to render a server's page, so a newly created server could show the previous one's failed
-  backup, or a content install frozen at "running". The maps register themselves for pruning now
-  rather than being listed by hand somewhere else, which is how these two were missed.
-- **An update that changed only the privileged helper raised no "update available" badge.**
-  `tools/panel-helper` is the root-owned end of the sudo boundary and only `install.sh`, run as
-  root, can refresh it — the badge is what tells the operator to do that. It was classified as
-  documentation-style noise along with the rest of `tools/`, so the panel could move on while the
-  installed helper did not, which makes the feature behind a new verb fail silently.
-- **The self-update's CI gate read only the first 100 checks on a commit.** Enough for the
-  workflows that exist today, but the failure mode was the wrong one: a check that did not fit was
-  simply not seen, so a commit whose only failure sat on the second page would have read as passing
-  and been offered as an update. It follows the pages now.
-- **Every host was given Ubuntu 24.04's package list, whatever it was actually running.** LinuxGSM
-  publishes a dependency list per distro release — `ubuntu-22.04.csv`, `ubuntu-26.04.csv`,
-  `debian-12.csv` and twenty more — and the panel hard-coded the 24.04 one. The panel supports
-  22.04, 24.04 and 26.04, so this was not hypothetical: on **22.04**, Garry's Mod silently missed
-  `libtinfo5:i386`, and Minecraft asked for `openjdk-25-jre`, which does not exist on that release
-  — and `apt-get install` is atomic, so one unavailable package takes the whole batch down. The
-  panel now reads the host's own `/etc/os-release` and fetches that distro's list, falling back to
-  the default for a distro LinuxGSM does not publish. The slug comes from the remote host and is
-  interpolated into a URL, so it is validated against LinuxGSM's exact filename shape first.
+  off. With it on, LinuxGSM's log capture is block-buffered, so a quiet server's console looks
+  frozen. A log stamped by hand still reads correctly.
+- **Console lines with a timestamp are no longer taller than lines without one.** Mixed stamped and
+  unstamped lines had looked like ragged double-spacing.
+- **Console timestamps now appear on a server that only polls, and an empty column says why.** Lines
+  arriving through the 30-second poll are now stamped, not just websocket ones; only history from
+  before the panel looked stays blank. While nothing is stamped, the console says "Times appear on
+  lines as they arrive".
+- **Schedules are now set in your own time, not the host's.** The daily restart time is entered in
+  your timezone, with the host's time shown underneath. Where daylight-saving rules differ, the
+  schedule is an hour out after the next changeover.
+- **A long action's output no longer vanishes when you reload the page.** The panel keeps a bounded
+  per-server backlog of what it pushed and replays it on the next console load, even when the host
+  is unreachable.
+- **"Watch the live console for progress" was not true of any long action.** Update, validate,
+  backup, force-update, mods-update and fastdl now show their output in the live console as it is
+  produced, between start and finish markers. The audit-log entry and chat bots' completion message
+  are unchanged.
+- **The Update button appeared for games that have no update command.** The server page no longer
+  offers Update on a Call of Duty server; it asks the same check bulk actions use.
+- **A game server could be installed on a port that does not exist.** Install now refuses ports out
+  of range (such as `0`, `-5` or `99999`) and non-ASCII digits, and the range is enforced again
+  where a port is stored.
+- **The port picker could hand back a port that was already in use.** After 400 candidates it
+  returned an occupied port, and could pass 65535; it now reports finding nothing and the install is
+  refused with a message naming the problem.
+- **Installing to a host that was switched off returned a 500.** The install form now says the host
+  is down and writes no row.
+- **The setup wizard could save a panel port that the panel cannot bind.** Step 1's port is now
+  validated like the in-panel port change, so a typo like `0` or `99999` no longer leaves a panel
+  that will not start.
+- **Rotating a remote's SSH credential did not take effect.** Editing a host now drops its pooled
+  SSH connection, so a new credential or address takes effect instead of the old connection staying
+  in use.
+- **A new game server could inherit a deleted one's status.** A new server could show a deleted
+  one's failed backup or a GMod content install frozen at "running"; both are now cleared with the
+  row.
+- **An update that changed only the privileged helper raised no "update available" badge.** It does
+  now; the badge is what tells you to re-run `install.sh` as root to refresh the helper.
+- **The self-update's CI gate read only the first 100 checks on a commit.** A failure past the first
+  page could have let a commit be offered as an update; it follows the pages now.
+- **Every host was given Ubuntu 24.04's package list, whatever it was actually running.** The panel
+  now fetches LinuxGSM's dependency list for each host's own release from `/etc/os-release`, so
+  22.04 hosts no longer get packages that do not exist there. A distro LinuxGSM does not publish
+  falls back to the default.
 - **Start/Stop/Restart on Files & Config reported a failure right after reporting success.** The
-  action had actually worked. `server_actions.js` is shared by the server detail page and Files &
-  Config, but it called `pollStats`, which is defined only in `server_detail.js` — a script Files &
-  Config does not load. `setTimeout(pollStats, …)` evaluates the identifier immediately, so the
-  success handler threw `ReferenceError` the moment the toast was shown, and the trailing `.catch`
-  reported that as "Action failed — connection error". The call is guarded now; more importantly,
-  the connection-error toast moved out of the trailing `.catch` and into the handler that only sees
-  upstream failures, so a bug in the success path can never again tell you an action failed when it
-  succeeded — which invites running a restart a second time.
-- **Ctrl+A in the console selected the whole page.** The console is a plain `div`, so the browser
-  handed select-all to the document and you got the nav, the cards and the forms along with the
-  log. Click into the console and Ctrl/Cmd+A now selects exactly the console. Ctrl+A anywhere else
-  on the page is untouched, as are Ctrl+C and Ctrl+Alt+A.
-- **An unreachable host blanked the console on page load.** `api_console` answers one with an empty
-  list, and the first poll adopted that over the server-rendered content. It keeps what is on
-  screen and adopts the next poll that actually returns something.
-- **Restart and Stop on the dashboard fired with no confirmation.** The server detail page has
-  always asked before either — the dashboard did not, so a mis-click on a row restarted or stopped
-  a populated server instantly. Both now confirm, naming the server and saying how many players are
-  connected (read from the row's live player count, so it costs no extra request; when the count is
-  unknown it claims nothing either way). Bulk **Restart** joined bulk Stop and Update in confirming
-  too — it was the one bulk action that skipped the prompt. Start is unchanged: it is not
-  destructive and does not ask.
-- **The live console kept throwing away its history.** Three separate limits, and fixing any one
-  alone would not have been noticeable. The API only ever tailed **100 lines**; the poll **rebuilt**
-  the console from that window on every refresh, discarding whatever was on screen; and the
-  websocket handler — the path that actually runs on a busy server — had its own **500-line cap**
-  and its own rendering. The console now keeps a real scrollback: each poll contributes only the
-  lines that are new (found by overlapping its window with what is already shown), both append
-  paths share one buffer and one 5,000-line cap, and the default window is 250 lines rather than
-  100. A **Load older** button pulls a much deeper slice of the log when you need to look further
-  back than the page has been open.
-- **"Replace existing file" never replaced anything.** Ticking the overwrite box on an upload
-  conflict did nothing: the file uploaded, hit the server's existence check, and came back as
-  "already existed". `confirmDialog` removes its overlay *before* it calls `onConfirm`, so both
-  upload dialogs were reading their checkboxes out of a document that no longer contained them —
-  `document.querySelectorAll('[data-ovw]')` matched nothing and `getElementById` returned null,
-  both of which read as "unticked". They read the node they passed in as `bodyNode` now, which a
-  detached element still answers for. This affected the per-file ticks (shipped earlier, so they
-  have never worked) as well as the folder dialog's replace-all. `confirmDialog` now documents the
-  ordering, and two static guards refuse either spelling.
-- **Running the installer the "other" way built a second panel instead of updating the first.** The
-  update check asks whether there is an `app.py` and a unit file *where it is about to install* —
-  but that location has already been decided by how the script was invoked: as root it looks under
-  the service user's home, as yourself it looks under yours. Neither sees the other. So
-  `sudo ./install.sh` on a host with a working per-user install found nothing, declared a fresh
-  install, created the service user and would have stood up a **parallel** panel: its own user,
-  service, database, and the same port as the one already running. It now looks for an install in
-  the other service model first and refuses, naming what it found and how to update it. Adopting it
-  automatically would mean moving a running service between systemd scopes and re-owning its data
-  directory, which is not something an installer should do unasked.
-- **Six endpoints answered HTTP 500 when a remote host was simply unreachable.** A host that is
-  powered off, rebooting, or behind a broken link is a normal condition for a panel that manages
-  remote machines — not a fault in the panel. `live`, `pro-status`, `uptime`, `firewall`,
-  `check-updates` and `tailscale-check` all raised straight through, so opening a host's Manage page
-  while it was down filled the browser console with 500s, and any alerting on the panel's own 5xx
-  rate fired for someone else's downtime. `live-stats` already answered `200` with an error field
-  and explained why in a comment; its siblings never followed. They do now, keyed on the
-  `ConnectionError` that `ssh_manager` raises specifically for unreachable — anything that is *not*
-  a connection failure still returns 500, deliberately, because those are the panel's own bugs.
-- **Four buttons on the Remote Servers page did nothing.** `manage_remotes.html` loaded its script
-  from inside the content block, which `base.html` renders *before* `panel.js`. The top-level
-  `pollWhenVisible(...)` call in `manage_remotes.js` therefore threw `ReferenceError` while the file
-  was still evaluating, and every top-level statement after it was skipped — including the delegated
-  click handler wiring **Tailscale check, Tailscale bootstrap, Install Tailscale and Delete remote**.
-  Function *declarations* are hoisted, so the page looked normal and the only symptom was one line in
-  the browser console. The live-stats auto-refresh on that page never started either. Both page
-  scripts now load from `{% block scripts %}`, and a template gate fails the build if any page loads
-  a script before `panel.js` again.
-- **A failed swap-file setup still wrote a swap entry to `/etc/fstab`.** The shell form was
-  `fallocate && chmod && mkswap && swapon && grep -q … || echo … >> /etc/fstab`, and `&&`/`||` are
-  left-associative with equal precedence — so the append ran whenever *any* earlier step failed,
-  not only when the grep found nothing. A host that ran out of space got an fstab entry pointing at
-  a file that was never formatted.
-- **A parser could crash on a superscript digit.** `str.isdigit()` is true for characters like `¹`
-  that `int()` refuses, and the panel used that pairing in 35 places — including the query port read
-  from a game server's own config, and the session-cookie user loader. Found by the fuzzer, fixed
-  everywhere with `isdecimal()`, which is exactly the predicate `int()` accepts.
-- **A dead constant in `ssh_manager` turned main red.** `_OS_UPDATE_LOG` stopped being used when the
-  detached OS-update job moved into the privileged helper — the helper writes that log and hands it
-  back through the `os-update-log` verb, so the panel never names the path any more. The alias, and
-  a comment still claiming the runner "writes to it by name", are gone. The reason it reached main
-  at all is the more useful half: the local orphaned-constant gate counted a *test* reference as
-  proof a name was alive, and the only thing left mentioning this one was its own parity test. The
-  gate now requires a reference from production code and says so when a name is test-only.
-- **The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.** It
-  ran on the same push as the analysis rather than after it, so a commit that *fixed* an alert
-  failed the gate, and — worse — a commit that *introduced* one passed it, with the alert then
-  blamed on whatever landed next. It now runs when CodeQL completes.
-- **`tailscale0` was never actually allowed through UFW.** `ufw_allow_tailscale()` passed its
-  argument list as `_run`'s positional `timeout` *and* a `timeout=` keyword, so every call raised
-  `TypeError` before reaching UFW — 100% of the time, since the verb conversion. The
-  "Allow Tailscale Interface" button answered HTTP 500, and the two automatic callers (after
-  `tailscale up`, and during Serve setup) swallow exceptions, so the guard that exists to stop
-  exactly the "UFW is up but tailscale0 is not allowed" lockout had silently never run.
-- **The installer's update path never refreshed the root-owned helper.** The block that installs
-  `panel-helper`, `db_maintenance.py`, `panel.conf` and the root-owned installer sat *after* the
-  update path's `exit 0`. So every update — in-panel self-update, the CI auto-deploy, a plain
-  re-run — shipped new code against whatever helper first landed on the host. The verb table grows
-  most releases, and a stale helper answers a new verb with `unknown verb` and no fallback, so the
-  feature behind it stopped working with no message anywhere. The sudoers grant was never
-  re-evaluated either, which left a host that first installed pre-helper on `NOPASSWD:ALL`
-  indefinitely. Both are now done on update as well, and the Diagnostics card compares the panel's
-  verb table against the installed helper's and names the missing verbs.
-- **The "Repair database" button could never appear.** `remote_manage.html` carried
-  `id="diag-repair-btn"` on both the panel-file restore button and the database repair button, in
-  the same block — and `getElementById` returns the first. So a healthy DB check *hid the
-  file-restore button*, an unhealthy one told you to click a button that stayed hidden, and
-  `repairDb()` relabelled the wrong control. A template gate now fails on any id rendered twice in
-  the same page (ids in mutually exclusive Jinja branches are still fine).
-- **Disabling Tailscale Serve on a sub-path mount did not disable it.** The handler hardcoded
-  `mount: '/'`, and `tailscale serve --remove /` exits 0 on a node whose mapping is at
-  `/lgsm-panel` — so the panel reported success, cleared `tailscale_setup_done` and
-  `tailscale_mount`, and left Serve running, with the panel no longer prefixing its own URLs. The
-  Disable button now carries the configured mount. The Mount Point field also shows the configured
-  mount instead of always `/`.
-- **Changing the panel's port dropped the fail2ban whitelist.** The port change rewrites the
-  panel-login jail, and that call omitted the whitelist — so `ignoreip` came back as localhost only
-  and every whitelisted IP/CIDR silently lost its exemption until the next boot re-applied it (or
-  indefinitely, if the restart that follows failed). Its two sibling call sites always passed it.
+  action had worked; a script error showed "Action failed — connection error". That toast now
+  appears only for real upstream failures.
+- **Ctrl+A in the console selected the whole page.** Click into the console and Ctrl/Cmd+A now
+  selects only the console; elsewhere it is unchanged.
+- **An unreachable host blanked the console on page load.** The console keeps what is on screen
+  until a poll returns something.
+- **Restart and Stop on the dashboard fired with no confirmation.** Both now confirm, naming the
+  server and its connected player count when known, and bulk Restart now confirms like bulk Stop and
+  Update. Start does not ask.
+- **The live console kept throwing away its history.** It now keeps a scrollback of up to 5,000
+  lines, adds only new lines on each poll, starts from 250 lines rather than 100, and has a Load
+  older button for deeper history.
+- **"Replace existing file" never replaced anything.** Ticking overwrite on an upload conflict, per
+  file or replace-all for a folder, now replaces the file instead of reporting it already existed.
+- **Running the installer the "other" way built a second panel instead of updating the first.**
+  Running `install.sh` as root over a per-user install, or the reverse, now refuses instead of
+  setting up a parallel panel, naming the install it found and how to update it.
+- **Six endpoints answered HTTP 500 when a remote host was simply unreachable.** `live`,
+  `pro-status`, `uptime`, `firewall`, `check-updates` and `tailscale-check` now answer 200 with an
+  error field for an unreachable host; other failures still return 500.
+- **Four buttons on the Remote Servers page did nothing.** Tailscale check, Tailscale bootstrap,
+  Install Tailscale and Delete remote now work, and the page's live-stats auto-refresh starts.
+- **A failed swap-file setup still wrote a swap entry to `/etc/fstab`.** A host that ran out of
+  space got an fstab entry for a swap file that was never formatted.
+- **A parser could crash on a superscript digit.** Characters like `¹`, in places such as a game
+  config's query port or the session cookie, are now refused by the digit check instead of crashing
+  the parse.
+- **`tailscale0` was never actually allowed through UFW.** Every call failed before reaching UFW, so
+  "Allow Tailscale Interface" answered 500 and the automatic allow after `tailscale up` and during
+  Serve setup never ran.
+- **The installer's update path never refreshed the root-owned helper.** Updates now refresh it and
+  re-evaluate the sudoers grant, which had left hosts first installed before the helper on
+  `NOPASSWD:ALL`. The Diagnostics card names verbs the installed helper lacks.
+- **The "Repair database" button could never appear.** A duplicate id on the Manage page hid the
+  wrong button and relabelled the wrong control.
+- **Disabling Tailscale Serve on a sub-path mount did not disable it.** Disable reported success but
+  left Serve running on a mount such as `/lgsm-panel`; it now uses the configured mount, which the
+  Mount Point field also shows.
+- **Changing the panel's port dropped the fail2ban whitelist.** Whitelisted IPs and CIDRs lost their
+  panel-login exemption until the next boot re-applied it.
 
-- **`datetime.utcnow()`, which Python has scheduled for removal, is gone** from all 22 call sites
-  (including twelve database column defaults). Stored timestamps are unchanged — still naive UTC, to
-  the microsecond — they now come from `clock.utcnow()`.
+- **`datetime.utcnow()`, which Python has scheduled for removal, is gone** from all 22 call sites.
+  Stored timestamps are unchanged.
 
 ### Security
 
 - **dnspython 2.9.0 on Ubuntu 24.04 and 26.04 (CVE-2026-114605).** Older dnspython can spend
-  unbounded CPU on a crafted DNS reply, and the panel's networking library (eventlet) uses it for
-  every name the panel looks up. The fix needs Python 3.11, so hosts on Ubuntu 24.04 and 26.04 get
-  2.9.0 with the next update, and Ubuntu 22.04 (Python 3.10) stays on 2.8.0, for which no fix
-  exists. On 22.04 the risk is a busy panel if a DNS server answers maliciously; nothing is read or
-  changed. That exception is recorded with a date, and the security checks fail again when it
-  expires.
+  unbounded CPU on a crafted DNS reply. Ubuntu 22.04 stays on 2.8.0, which has no fix; the risk
+  there is a busy panel, with nothing read or changed.
 
-- **msgpack 1.2.3 in the CI dependency audit's own tools** (GHSA-j586-36cw-2gc2, a memory leak).
-  It runs only in CI; nothing on a panel host uses it.
+- **msgpack 1.2.3 in the CI dependency audit's own tools** (GHSA-j586-36cw-2gc2, a memory leak). It
+  runs only in CI; nothing on a panel host uses it.
 
-- **TeamSpeak 3's ServerQuery (its admin console) is no longer open to the internet.** Earlier
-  versions of the panel read TeamSpeak's ServerQuery port (10011/tcp) as a server-browser port and
-  opened it in the firewall at install and on "Open all ports". Neither opens it now, and once per
-  TeamSpeak 3 server, on every host, the panel removes the firewall rules it opened itself for
-  ServerQuery (10011, and 10022, 10080 and 10443 or whatever ports the server reports). It never
-  touches a rule you added yourself, a rule of another server, SSH's or the panel's port, or the
-  voice and file-transfer ports players use. What it closed is in the audit log; if it could not read
-  the host's firewall it says so there and tries again the next day.
+- **TeamSpeak 3's ServerQuery (its admin console) is no longer open to the internet.** Install and
+  "Open all ports" no longer open it, and the panel removes, once per TeamSpeak 3 server, only the
+  ServerQuery rules it opened itself, never ones you added or player ports. What it closed is in the
+  audit log.
 
-- **Test fixtures carry no real addresses.** A connecting device's tailnet address and a public address
-  copied from a live debug report were replaced with made-up or well-known public ones, and the
-  privacy check now refuses them.
+- **Test fixtures carry no real addresses.** A tailnet address and a public address copied from a
+  live debug report were replaced with made-up or well-known ones, and the privacy check now refuses
+  them.
 
-- **The repository no longer names the maintainer's own hosts.** Test fixtures that used a real host
-  label, tailnet name and addresses now use made-up values, and a check keeps them out.
-
+- **The repository no longer names the maintainer's own hosts.** Test fixtures now use made-up host
+  labels, tailnet names and addresses, and a check keeps them out.
 - **Tailscale SSH on the panel's machine is your install-time choice.** The installer asks (default
-  no) and records it as root; the panel can join Tailscale from Connect but turns SSH on only if you
-  chose it, and the System page's switch is read-only otherwise. A machine that already runs Tailscale
-  SSH keeps it (the next update records yes). Before this, on a machine not yet on Tailscale, a
-  compromised panel account could start a login with SSH on and let whoever opened it pick the tailnet.
-- **Serve and Funnel publish only the panel's own port.** The root helper reads the panel's port from
-  its root-owned config and refuses any other, or one another account is listening on; changing the
-  panel's port refuses a port already in use. Funnel is also refused while anything else is served on
-  the same listener, since Funnel opens the whole listener. Before, a compromised panel account could
-  put any local service on the public internet through Funnel.
+  no); the panel turns Tailscale SSH on only if you chose it, and a machine already running it keeps
+  it. Before, on a machine not yet on Tailscale, a compromised panel account could start a login
+  with SSH on and let whoever opened it pick the tailnet.
+- **Serve and Funnel publish only the panel's own port.** The root helper refuses any other port,
+  and refuses Funnel while anything else is served on the same listener. Before, a compromised panel
+  account could put any local service on the public internet through Funnel.
 
-- **On the panel's own machine, the panel account no longer controls Tailscale.** It used to be
-  made Tailscale's "operator", which let it join the machine to a tailnet of its choosing and turn
-  on Tailscale SSH (root logins by that tailnet's rules) without sudo. Connect, Serve, route removal
-  and Tailscale SSH on/off now go through the root helper, which refuses to move a joined machine
-  to another tailnet; every button stays. Connect on a machine that is logged in but down (or whose
-  key expired) now refuses and asks you to run `sudo tailscale up` on it, since a login link would let
-  whoever opens it pick any tailnet. Existing installs drop the operator role on their next update or
-  panel start (on a per-user install that is your own login, so your own `tailscale serve` then needs
-  sudo; the installer says so). Remote hosts are unchanged.
-- **The downloadable debug report leaves out account security.** 2FA counts, superadmin invites,
-  the setup-token file, ways in, firewall and fail2ban state (including the ban gate), Funnel,
-  automatic security updates, proxy trust and session cookie settings are shown only on the report
-  page in the panel, not in the file the issue form asks you to attach publicly, and a check keeps it so.
+- **On the panel's own machine, the panel account no longer controls Tailscale.** It is no longer
+  Tailscale's "operator"; Connect, Serve, route removal and Tailscale SSH go through the root
+  helper, which will not move a joined machine to another tailnet. Connect on a machine that is
+  logged in but down asks you to run `sudo tailscale up`. On a per-user install your own
+  `tailscale serve` now needs sudo. Remote hosts are unchanged.
+- **The downloadable debug report leaves out account security.** 2FA counts, invites, the setup
+  token, firewall, fail2ban, Funnel, proxy and cookie settings and similar appear only on the report
+  page in the panel, not in the file the issue form asks you to attach publicly.
 
-- **The root helper no longer lets the panel account run commands as root through apt.** Its
-  check for `/etc/apt/apt.conf.d/20auto-upgrades` skipped every line starting with `#`, but apt
-  reads `#include <file>` and `#clear <key>` as instructions, so an included file could carry a
-  hook that apt runs as root. That file now accepts only the four update settings the panel
-  writes, with no comment lines. Proven against apt on Ubuntu. Installs where the panel already
-  runs as a root-capable user were not exposed by this.
+- **The root helper no longer lets the panel account run commands as root through apt.** An
+  `#include` in `/etc/apt/apt.conf.d/20auto-upgrades` could pull in a hook apt runs as root; the
+  file now accepts only the four update settings the panel writes. Installs where the panel already
+  runs as a root-capable user were not exposed.
 
-- **CI's Semgrep job runs on an MCP SDK with no known advisory.** semgrep pins `mcp==1.29.0`,
-  which has GHSA-84m7-p3x7-pcfv (unbounded sessions in its HTTP server mode). Semgrep's lock now
-  leaves mcp out and a second hash lockfile pins 1.30.0, installed with `--no-deps`; a `pip check`
-  step allows only that one known mismatch. Proven: the scan writes the same SARIF. CI only.
+- **CI's Semgrep job runs on an MCP SDK with no known advisory.** It now uses mcp 1.30.0 instead of
+  semgrep's pinned 1.29.0 (GHSA-84m7-p3x7-pcfv). CI only.
 
-- **A seventh full review on 2026-10-12: security.** Every item below has a check that fails
-  without its fix.
+- **A seventh full review on 2026-10-12: security.**
   - **Host terminal.** A host's label can no longer carry terminal escape sequences into the web
     terminal.
-  - **HTTPS cookies.** The secure-cookie setting is read the same way however it was written in the
-    settings file.
+  - **HTTPS cookies.** The secure-cookie setting is read the same however it was written.
 
-- **A sixth full review on 2026-10-12: security.** Every item below has a check that fails without
-  its fix.
-  - **SSH lockout guard.** Removing an "Allow from source" rule could still delete the only way in to
-    SSH or the panel when the source was written in another form than the firewall's (`0.0.0.0/0`,
-    `::/0`, a network such as `/24`, or an address with or without `/32`). The guard now compares
-    sources the way the firewall does. Proven against a real firewall, which was left as it was.
+- **A sixth full review on 2026-10-12: security.**
+  - **SSH lockout guard.** Removing an "Allow from source" rule could delete the only way in to SSH
+    or the panel when the source was written in another form (`0.0.0.0/0`, a `/24`, `/32`).
   - **Root helper.** The restart-flag check no longer follows a symbolic link, and its update,
-    restore, database-repair and OS-update jobs run only inside their own system unit, never in one
-    the panel's account started.
-  - **Accounts that can become root.** The panel no longer lists such an account's scheduled tasks,
-    and its refusal says exactly what the panel still reads.
-- **A fifth full review on 2026-10-12: security.** Every item below has a check that fails without
-  its fix.
-  - **SSH lockout guard.** Removing an allowed address or closing a port now goes through the same
-    guard as deleting a rule, so neither can remove the only public way in to SSH. Multicast,
-    broadcast and portless rules no longer count as another way in. Proven against a real firewall,
-    which was left as it was.
-  - **Audit log.** The user name column and LinuxGSM's colour codes in completion rows are escaped,
-    and an escape is never cut in half.
+    restore, database-repair and OS-update jobs run only inside their own system unit.
+  - **Accounts that can become root.** The panel no longer lists such an account's scheduled tasks.
+- **A fifth full review on 2026-10-12: security.**
+  - **SSH lockout guard.** Removing an allowed address or closing a port can no longer remove the
+    only public way in to SSH; multicast, broadcast and portless rules no longer count as one.
+  - **Audit log.** User names and LinuxGSM colour codes are escaped.
   - **The debug report** no longer prints part of a doas command's arguments.
-- **A fourth full review on 2026-10-12: security.** Every item below has a check that fails without
-  its fix.
-  - **SSH lockout guard.** A rule that only lets the server reach itself (loopback, Docker bridges,
-    `127.0.0.1`) or a UDP-only rule, with or without a comment, no longer counts as another way
-    in, so the only public SSH rule stays protected. Rules are read in the order the firewall
-    applies them, so a DENY above an ALLOW is honoured. Proven against a real firewall, which was
-    left as it was.
-  - **File browser.** The new file and folder actions, rename and delete pass only the validated
-    LinuxGSM script name to the host.
-  - **The debug report** no longer prints secrets nested inside JSON text, nor sudo arguments in the
+- **A fourth full review on 2026-10-12: security.**
+  - **SSH lockout guard.** Loopback, Docker-bridge and UDP-only rules no longer count as another way
+    in, and rules are read in the order the firewall applies them.
+  - **File browser.** New file and folder, rename and delete pass only the validated LinuxGSM script
+    name to the host.
+  - **The debug report** no longer prints secrets nested in JSON text, nor sudo arguments in the
     last case that still leaked them.
-- **A third full review on 2026-10-11: security.** Every item below has a check that fails without
-  its fix.
-  - **Tailscale Serve.** File shares and text pages served by Tailscale were not read, so turning
-    Funnel on for the panel could publish one of them on the internet, or take it off. A Tailscale
-    Service listener is no longer mistaken for the server's own :443. The firewall is opened for
-    Tailscale only after the panel has decided the change is safe. Proven against a real Tailscale
-    install, changing nothing on it.
-  - **SSH lockout guards.** An all-ports rule no longer counts as an SSH rule, and a UDP rule no
-    longer does either.
-  - **The privileged helper.** Four more sudoers forms that withdraw a root grant are now read the
-    way sudo reads them. Content commands on a remote host now run as the content account, not as
-    root.
+- **A third full review on 2026-10-11: security.**
+  - **Tailscale Serve.** Turning Funnel on for the panel could publish (or unpublish) a file share
+    or text page served by Tailscale.
+  - **SSH lockout guards.** All-ports and UDP rules no longer count as SSH rules.
+  - **The privileged helper.** Four more sudoers forms that withdraw a root grant are read as sudo
+    reads them; content commands on a remote host run as the content account, not root.
   - **The debug report** no longer prints sudo arguments when the host's language is not English.
-  - **The panel no longer says "tailnet-only"** when it could not read Tailscale Serve, or during a
-    pending port change.
-- **A second full review on 2026-10-11: security.** Every item below has a check that fails without
-  its fix.
-  - **Turning Funnel on or off for the panel changed it for other apps too.** Funnel applies to the
-    whole :443 listener, so when another app shared that listener with the panel, the panel's
-    Serve setup switched that app's Funnel on (putting it on the internet) or off. The panel now
-    leaves another app's Funnel alone. It refuses a change that would flip it, and says so.
-    When another app's Funnel makes the panel reachable from the internet too, the Tailscale and
-    Panel Server pages now say that, and no longer claim the panel is tailnet-only.
-  - **Binding the panel to `::1` with Tailscale Serve set up locked you out.** Serve forwards to
-    `127.0.0.1` only, and the same change closed the public port. The change is now refused.
-  - **SSH lockout guards.** SSH rules written as a port list or range, or forwarding (`FWD`) rules,
-    were misread when deciding whether another way in remains. "Close port" also deleted a
-    forwarding rule it took for the panel's own way in.
-  - **The privileged helper's root-access check.** The installer's own game-group line could cancel
-    out a real root grant. A negated host, a withdrawal through an alias, and a trailing `PASSWD:`
-    still counted as root.
-  - **The debug report** printed sudo lines it could not parse in full, including their arguments and
-    `ENV=` values. It now prints only the fixed label.
+  - **The panel no longer says "tailnet-only"** when it could not read Serve, or during a pending
+    port change.
+- **A second full review on 2026-10-11: security.**
+  - **Funnel for the panel no longer flips another app's Funnel** on the shared :443 listener; such
+    a change is refused, and the pages say when another app's Funnel makes the panel public.
+  - **Binding the panel to `::1` with Tailscale Serve set up**, which locked you out, is refused.
+  - **SSH lockout guards.** Port lists, ranges and `FWD` rules are read correctly, and "Close port"
+    no longer deletes a forwarding rule.
+  - **Root-access check.** The installer's game-group line could cancel out a real root grant, and
+    three other sudoers forms were misread.
+  - **The debug report** prints only a fixed label for sudo lines it cannot parse in full.
   - **The installer** opened the panel's port past a UFW `DENY` written as a port range.
-- **gamedig's dependency `http-cache-semantics` is 4.3.0, not 4.2.0.** Only the lockfile moved;
-  `npm ci` from it installs and loads gamedig as before. This does **not** fix CVE-2026-93748:
-  scanners list only 4.2.0 because the advisory predates 4.3.0, but 4.3.0's max-stale handling is
-  unchanged and the upstream fix was never merged. It remains unreachable here (gamedig never gives
-  its HTTP client a cache). The scanner exceptions for it are removed, so a lockfile that brought
-  4.2.0 back would fail the audit again.
-- **Findings from a full code review including the tests and CI (2026-10-11): security.** Every
-  item below has a check that fails without its fix.
-  - **The debug report could print a password.** A sudo command that sudo refused (a mistyped sudo
-    password in the web terminal), or one logged with `GROUP=`, `ENV=` or `TSID=`, was printed with
-    its full command line, so `sudo mysql -p<password>` appeared in a report meant to be shared. Those
-    lines now show the same fixed label as every other sudo call. An empty `data/cred_key` no longer
-    passes the report's key check, which made the report write a new key on the install it was
-    diagnosing.
-  - **Reinstalling opened the panel's port to the internet.** When a UFW rule already limited the
-    panel's port (for example to Tailscale's addresses), the installer added an allow-from-anywhere
-    rule. Any existing rule for the port is now left alone, and the closing message says access is
-    limited.
-  - **The firewall page let you delete the only public SSH rule.** Any allow rule on the Tailscale
-    interface, for any port, counted as another way in. It now counts only when it admits SSH and UFW
-    reaches it first. "Disable public SSH" and "Close port 22" are also refused when sshd listens only
-    on the public address, where the tailnet rule cannot reach it.
-  - **A loopback address written another way bypassed a lockout guard.** `0::1` or
-    `0:0:0:0:0:0:0:1` as the bind address skipped the "localhost without Serve locks you out" check.
-    Addresses are now parsed, and stored in canonical form.
-  - **The string `"false"` turned Tailscale Funnel on.** Only a JSON `true` enables it now.
-  - **The helper treated sudoers files that sudo ignores as grants.** A `.disabled` or `~` file in
-    `sudoers.d` made the panel treat every game account as root-capable. The helper now applies
-    sudo's own skip rules.
+- **gamedig's dependency `http-cache-semantics` is 4.3.0, not 4.2.0.** Only the lockfile moved. This
+  does **not** fix CVE-2026-93748 (the upstream fix was never merged); it stays unreachable here
+  because gamedig never gives its HTTP client a cache.
+- **Findings from a full code review including the tests and CI (2026-10-11): security.**
+  - **The debug report could print a password**, such as `sudo mysql -p<password>` from a sudo
+    command refused in the web terminal. It now shows a fixed label.
+  - **Reinstalling opened the panel's port to the internet** when a UFW rule already limited it;
+    existing rules for the port are now left alone.
+  - **The firewall page let you delete the only public SSH rule**, because any Tailscale-interface
+    allow counted as another way in.
+  - **A loopback address written another way** (`0::1`) bypassed a lockout guard.
+  - **The string `"false"` turned Tailscale Funnel on.**
+  - **The helper treated sudoers files that sudo ignores as grants**, so a `.disabled` file made
+    every game account read as root-capable.
 
-- **Findings from a full code review (2026-10-08): security.** Every item below has a check that
-  fails without its fix.
-  - **"Disable public SSH" on a remote host could lock you out.** The panel decided that the host
-    let SSH in over Tailscale if the word "tailscale" appeared anywhere in its firewall rules, so an
-    `ALLOW OUT` rule, a `DENY IN`, or a comment was enough. It now reads the rules in the order the
-    firewall applies them, on the host's real Tailscale interface, and answers "not safe" on any
-    doubt, as the panel's own host already did. On the panel's own host, the rule list no longer
-    drops rows whose comment has parentheses, or IPv6-only rows, so a `DENY` on the tailnet
-    interface is seen.
-  - **A delegated admin could point a host at another tailnet machine with "Migrate to Tailscale
-    SSH".** The new address came from the host's own answer and was never checked. Migration now
-    needs a superadmin, as adding a host on the panel's Tailscale identity already did, and the
-    button is shown only to superadmins.
-  - **The sign-in code step has a per-account limit.** Wrong codes at sign-in now count
-    against the same per-account budget every other code check uses, not only the per-address one.
-  - **File-browser reads as a root-capable account are refused**, as writes already were. A legacy
-    server bound to the host's sudo login no longer hands its `~/.ssh` keys or shell history to
-    someone who may only manage that server's files.
-  - **Panel-host details stay superadmin-only on the remote-host pages.** The tailnet check, bans,
-    top addresses, firewall view, SSH status, update check and Ubuntu Pro status of the panel's own
-    host now refuse a delegated admin, as the rest of that host does, and the page no longer shows
-    them those cards.
-  - **The privileged helper deletes a home folder only for an account it removed**, and only through
-    paths it has resolved without following a link the panel user could plant. When it cannot read
-    the sudo policy, it no longer assumes the caller is already root.
-  - **The uninstaller runs from a root-owned copy.** A root install now keeps `uninstall.sh` beside
-    the recovery command in `/usr/local/lib/linuxgsm-panel/`, and the README and the script point
-    root there, not at the panel's own checkout, which the panel user can edit. The end-of-install
-    lockout hint no longer has root run scripts from the checkout either.
-  - **The `curl … | bash` installer only uses the current folder when it is that installer's own
-    tree.** Run from an old clone or any other Flask project, it used that folder as the panel's
-    source, which could downgrade the panel or install another project as the service.
-  - **The Add Remote form hides the SSH password as you type it**, and the browser no longer saves
-    it as an ordinary form entry.
-  - **The debug report's secret protection now covers the configured secrets themselves**, not
-    their encrypted form.
+- **Findings from a full code review (2026-10-08): security.**
+  - **"Disable public SSH" on a remote host could lock you out**; the panel now reads the host's
+    rules in order on its real Tailscale interface and answers "not safe" on any doubt.
+  - **"Migrate to Tailscale SSH" needs a superadmin**; a delegated admin could point a host at
+    another tailnet machine.
+  - **Sign-in codes** now count against the per-account limit too; **file-browser reads** as a
+    root-capable account are refused, as writes were.
+  - **Panel-host details on the remote-host pages** are superadmin-only.
+  - **The privileged helper** deletes a home folder only for an account it removed, without
+    following a planted link.
+  - **The uninstaller runs from a root-owned copy** in `/usr/local/lib/linuxgsm-panel/`, not from
+    the panel's checkout, which the panel user can edit.
+  - **The `curl … | bash` installer** uses the current folder only when it is its own tree.
+  - **The Add Remote form hides the SSH password**, and the debug report masks configured secrets.
 
 - **A stored server name is never put into the account check's shell text (GHSA-hh39-76g3-wxcx,
-  reopened).** The check the panel runs before deleting a server's account, writing its files or
-  cron, or importing it asks the host about the account in one shell command, as root on a remote
-  with sudo enabled. Since that check arrived it carried the name raw inside a quoted `echo`, where
-  `$(…)`, backticks and a `"` still run — and a name from a database older than the name rule, a
-  hand edit or a restore is not checked when it is loaded. A name that is not a plain account name
-  is now refused before anything is asked; the check passes every name as a quoted argument; and an
-  import checks a name before it asks the host about it, not after. Removing such a server now
-  removes it from the panel without touching the host, and the message says so without repeating
-  the name. Before, Remove asked the host about the name, which ran it, then said "couldn't check,
-  try again", so the server could never be removed.
-- **A failed firewall step during an install no longer opens SSH.** The install's last step re-reads
-  the game's ports after its first start and opens any new ones, minus the ones the firewall step
-  had held back (SSH, the panel's port, other servers' ports). If the firewall step itself failed,
-  that held-back list was empty and the re-read opened everything LinuxGSM reported, so a config
-  naming port 22 as its query port opened SSH. The re-read now works out SSH, the panel's port and
-  other servers' ports for itself. When the firewall step failed it opens only the server's own
-  port, and the install finishes with a warning that the firewall step failed instead of a clean
-  "installed and started". The warning says to ask someone who manages the host when you cannot
-  open its Firewall page, and the install's audit entry records the failed step. A port the firewall
-  step could not check is no longer re-opened by the re-read when another port was held back in the
-  same install.
-- **An action's message never carries an internal error's text.** A LinuxGSM action whose argument
-  check failed for an unexpected reason answered with that error's own text, which could name a
-  path. It now says the panel could not check the action's arguments, and the error goes to the
-  log.
-- **A malformed stored server name can no longer mute that server's offline alerts.** The check
-  for a nightly LinuxGSM update in progress built a process pattern from the stored names, and a
-  name like `x|.*` matched every maintenance process on the host. Such names are not probed now.
+  reopened).** A name from an older database, a hand edit or a restore could run shell code on the
+  host (as root on a remote with sudo enabled) when deleting, writing files or cron, or importing.
+  Such names are now refused before the host is asked, and removing such a server now removes it
+  from the panel without touching the host.
+- **A failed firewall step during an install no longer opens SSH.** The install's port re-read
+  could open everything LinuxGSM reported, including port 22. It now holds back SSH, the panel's
+  port and other servers' ports itself, opens only the server's own port, and finishes with a
+  warning.
+- **An action's message never carries an internal error's text.** Such text, which could name a
+  path, now goes to the log.
+- **A malformed stored server name can no longer mute that server's offline alerts.** A name like
+  `x|.*` matched every maintenance process on the host; such names are not probed now.
 - **The browser's Socket.IO client is 4.8.4, past two HIGH advisories in the parser it bundles.**
-  The panel vendored socket.io-client 4.7.5, whose bundle carries socket.io-parser 4.2.4: affected
-  by GHSA-677m-j7p3-52f9 (fixed in 4.2.6) and GHSA-2m8v-j782-fhvr (fixed in 4.2.7), both of which
-  name the client too. Every page loads it. The decoder runs in the operator's browser on packets
-  from the panel's own server, so the realistic worst case was a browser tab driven out of memory by
-  a malicious or intercepted server. The new file is byte-identical to the one in the npm tarball,
-  whose integrity and registry signature were checked; its bundle carries both parser fixes, and it
-  speaks the same protocols (Engine.IO 4, Socket.IO 5) as the panel's python-socketio 5.17. Pages
-  now load it, and every other vendored file, by a URL that changes with the file's contents: the
-  fixed URL they used is cached for a week, so a browser would have kept the old client for up to a
-  week after the update. It takes the new one on its next page load.
-- **Scanners can see the vendored browser libraries now.** No scanner read `static/vendor/`: there
-  was no manifest for the dependency graph, and neither Dependabot alerts nor osv-scanner can look
-  inside a minified bundle, which is how the client above sat on a vulnerable parser with every check
-  green. `static/vendor/package.json` and `package-lock.json` now record each library and what its
-  bundle carries, the dependency audit reads the lockfile on every pull request, push and week, and
-  a unit gate ties every file to the manifest by sha256 and by the version its own banner states. A
-  library carried inside another's bundle is recorded at the version the bundle holds (Chart.js
-  carries @kurkle/color 0.3.2, which npm alone recorded as 0.3.4). A change to the two manifests
-  alone is not offered to panels as an update: nothing a panel runs reads them.
-- **gitleaks catches a Telegram bot token wherever it is written.** Its built-in rule needs a
-  `telegr…` name right before the value, so it missed the panel's own `config.json` shape, a bare
-  `token = "…"`, a function argument, the Bot API URL and prose; main's full-history scan carried a
-  real-shaped value and reported nothing. A keyword-free rule now finds all of them. Its one
-  allowlisted value is the historical synthetic fixture, matched exactly. The fixture-shape check in
-  the unit suite also caught too little: a token ending in `-` and the Bot API URL form passed it.
-- **A pull request can no longer allowlist its own leaked secret.** The secret scan read the pull
-  request's own gitleaks config and `.gitleaksignore`, and honoured `gitleaks:allow` on any line, so
-  one diff could add a secret and the exemption that hid it, and pass. A pull request is now scanned
-  with the base branch's config and ignore file, its own ignore file set aside and `gitleaks:allow`
-  ignored, then with its own config too; an exemption has to reach `main` on its own first.
+  GHSA-677m-j7p3-52f9 and GHSA-2m8v-j782-fhvr; the realistic worst case was a tab driven out of
+  memory by a malicious or intercepted server. Browsers take the new client on their next page load.
+- **Scanners can see the vendored browser libraries now.** `static/vendor/` now has a manifest and
+  lockfile the dependency audit reads. A change to those manifests alone is not offered as an
+  update.
+- **gitleaks catches a Telegram bot token wherever it is written.** That includes the panel's own
+  `config.json` shape and the Bot API URL.
+- **A pull request can no longer allowlist its own leaked secret.** It is scanned with the base
+  branch's gitleaks config and ignore file, so an exemption has to reach `main` on its own first.
 - **SECURITY.md says how to check an install set up before the setup-token fix**
   (GHSA-cwmq-pvg9-jjfx): list the superadmins, confirm which tailnet the host is in and what it
-  publishes, and read the sign-ins. Finishing setup did not undo either takeover, so an install that
-  was already set up is not thereby in the clear.
-- **CodeQL sees Socket.IO input and the commands the panel runs.** CodeQL models python-socketio but
-  not Flask-SocketIO, so what a browser emits to the console and terminal sockets was not untrusted
-  input to any query; and the command text the panel sends to a host was not a command-injection
-  sink: neither SSH transport is modelled (paramiko's `exec_command`, or the `ssh` argument list
-  for Tailscale), and on the panel's own host CodeQL takes only the first element of
-  `["/bin/bash", "-c", cmd]` as the command. A model pack in
-  `.github/codeql/extensions` adds both. The sinks are the text as it enters `run_command`,
-  `shell_as_game_user`, `read_as_game_user` and `game_user_cmd`, which covers every transport, plus
-  the own-host shell. A value passed through `shlex.quote` counts as safe inside that text; that
-  barrier applies to every command-injection sink, so the few places that quote a whole script for
-  a second shell (`sudo bash -c '…'`), where a quote hides what is inside it, are listed and a unit
-  check fails on a new one. The `py/partial-ssrf` exclusion's justification, which said one
-  function was the panel's only outbound request, now lists all six outbound-HTTP call sites, and a
-  unit check fails on a seventh until it is reviewed.
-- **CI's Semgrep job runs on a PyJWT with no known advisory.** Every PyJWT 2.13 release has
-  published advisories (the worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pinned
-  `~=2.13.0`, so no lockfile that honoured semgrep's own pin was safe and Dependabot could not open a
-  fix. semgrep 1.179.0 accepts PyJWT 2.15, so Semgrep's one hash lockfile now carries PyJWT 2.15.1
-  and installs with pip's dependency check on; the interim second lockfile for PyJWT alone is gone.
-  This touches CI only: the panel does not use PyJWT.
-- **Group forms reject ids that cannot be real ids.** Anyone who could manage groups could make the
-  add and edit pages fail with a server error by submitting an extremely long number as an id; such
-  values, and non-ASCII digits that were being read as ids, are now ignored.
-- **Moving SSH to another port no longer deletes the firewall rule your current SSH depends on.** If
-  the move failed, the panel always removed the allow rule for the new port — and when that port was
-  one SSH already used (a bind-address change on port 22, or moving to a port sshd already listened
-  on) that was the rule the panel's own connection came in on, while the message said "your existing
-  SSH still works". Opening the port also turned the bootstrap's rate-limited SSH rule into a plain
-  allow. The panel now opens only a port no rule already lets in, removes only a rule it added, and
-  refuses a port a firewall rule blocks before changing anything.
-- **Deleting a firewall rule by number can no longer hit a different rule.** Rule numbers shift
-  whenever the auto-block adds a deny at the top, and that could happen between the safety check and
-  the delete. Firewall changes on a host now run one at a time, and the delete holds its place from
-  the check to the delete.
+  publishes, and read the sign-ins. Finishing setup did not undo either takeover.
+- **CodeQL sees Socket.IO input and the commands the panel runs.** A model pack in
+  `.github/codeql/extensions` makes socket input untrusted and the command text sent to hosts a
+  command-injection sink.
+- **CI's Semgrep job runs on a PyJWT with no known advisory.** Semgrep's lockfile now carries PyJWT
+  2.15.1, past the 2.13 advisories (worst GHSA-ffc3-869f-jxw9). CI only: the panel does not use
+  PyJWT.
+- **Group forms reject ids that cannot be real ids.** An extremely long number no longer causes a
+  server error, and non-ASCII digits are no longer read as ids.
+- **Moving SSH to another port no longer deletes the firewall rule your current SSH depends on.**
+  The panel now opens only a port no rule already lets in, removes only a rule it added, keeps a
+  rate-limited SSH rule, and refuses a port a firewall rule blocks before changing anything.
+- **Deleting a firewall rule by number can no longer hit a different rule.** Firewall changes on a
+  host now run one at a time, so an auto-block deny cannot shift the numbers mid-delete.
 - **A password-login host with no usable stored password no longer signs in with the panel's own SSH
-  key.** The connection now fails with a clear message, as the Test button already did. A key-login
-  host uses only the key it names: no SSH agent, and no other keys from `~/.ssh`.
-- **The file browser can no longer delete LinuxGSM's files through a symlinked folder.** The
-  protected-path check is now made on the host against the real location, in the same command as the
-  delete.
-- **A backup code now works exactly once, even when two sign-ins race.** The code is now spent with
-  a conditional update that only succeeds if nobody changed the list in between.
-- **Only real game accounts can join the panel's game-account group.** The panel's sudoers line lets
-  it become any member of `lgsmpanel-games`, but the helper enrolled any account that couldn't
-  already reach root: a colleague's login, `postgres`, `www-data`, `nobody`. An account now needs an
-  ordinary uid (login.defs' range), only ordinary groups, not to be the panel's own account, and a
-  LinuxGSM install or content tree in its own home. Accounts the panel creates are enrolled as
-  they're made. The root-equivalence check now also reads doas and polkit, and refuses microk8s,
-  lpadmin, kmem, incus, src, systemd-journal, syslog and ssl-cert.
+  key.** It fails with a clear message. A key-login host uses only the key it names.
+- **The file browser can no longer delete LinuxGSM's files through a symlinked folder.**
+- **A backup code now works exactly once, even when two sign-ins race.**
+- **Only real game accounts can join the panel's game-account group.** Before, the helper enrolled
+  accounts such as `postgres`, `www-data` or a colleague's login. An account now needs an ordinary
+  uid and groups and a LinuxGSM install or content tree in its home; the root check also reads doas
+  and polkit and refuses more root-equivalent groups.
 - **The privileged helper no longer takes its interpreter or environment from the caller.** It runs
-  `/usr/bin/python3 -I`, it and every tool it starts get a fixed minimal environment, and the
-  installer adds `Defaults!<helper> env_reset, secure_path=…` to the grant.
-- **Root no longer reads files in the panel's directory through symlinks.** Without a `.git`, the
-  installer printed `VERSION` into the update log as root, so a `VERSION` symlink handed any
-  root-only file (`/etc/shadow`, SSH keys) to the panel. The installer and uninstaller now read the
-  version and `config.json` as the panel's own user, refusing links and FIFOs.
+  `/usr/bin/python3 -I` with a fixed minimal environment.
+- **Root no longer reads files in the panel's directory through symlinks.** A `VERSION` symlink
+  could hand a root-only file such as `/etc/shadow` to the panel through the update log.
 - **Hard links can no longer steer root's chown or chmod** on hosts with `fs.protected_hardlinks=0`.
 - **The self-update installer no longer runs inside the panel's checkout.**
-- **Remote GMod content and mount operations run as the game account, not root.** The remote chmod,
-  removal and `mount.cfg` read followed symlinks the game account controlled; a linked `mount.cfg`
-  printed the remote host's `/etc/shadow` into the panel.
+- **Remote GMod content and mount operations run as the game account, not root.** A linked
+  `mount.cfg` printed the remote host's `/etc/shadow` into the panel.
 - **An update from a local checkout unpacks as the panel's user,** so directory links in the panel's
   tree can't redirect root's writes.
-- **Update snapshots and rollbacks no longer run as root inside the panel's own files.** An update
-  created `data/.backups/<stamp>` and wrote the snapshot archives there as root, read the panel's
-  directory as root to build them, and unpacked them as root on rollback — so a symlink the panel
-  placed could redirect root's writes, and a hard link could copy a root-only file into an archive
-  the panel can read. These steps now run as the panel directory's owner. Rollback works as before.
-- **A stolen "remember me" cookie no longer works from someone else's machine.** With "strong"
-  session protection, dropping the session cookie and keeping the remember cookie gave a fresh
-  session with no binding, which was then bound to whoever sent it. Every per-device login is now
-  checked against the address and browser its session record noted at sign-in (IPv6 by its /64, as
-  before).
-- **Old pre-upgrade login cookies now die with a password change or "sign out everywhere".** A
-  cookie carrying only the account number was accepted whatever the account's epoch; it is now
-  accepted only by an account whose sessions have never been revoked, and the live console's
-  re-check follows the same rule.
+- **Update snapshots and rollbacks no longer run as root inside the panel's own files.** A planted
+  link could redirect root's writes or copy a root-only file into a readable archive. These steps
+  now run as the account that owns the panel directory; rollback works as before.
+- **A stolen "remember me" cookie no longer works from someone else's machine.** Every per-device
+  login is now checked against the address and browser noted at sign-in (IPv6 by its /64).
+- **Old pre-upgrade login cookies now die with a password change or "sign out everywhere".**
 - **A request body sent in chunks is read before the request is authorized, like any other.**
-- **"Monitor" now needs the restart permission.** LinuxGSM's `monitor` restarts a crashed or
-  unresponsive server, but it required only view-console, so a view-only user could restart a
-  server. The maintenance menu now hides it from them too.
-- **An authenticator code can no longer sign in twice by racing itself.** The spent-code record is
-  updated in one conditional database write, so two sign-ins (or two API-token mints) with the same
-  code cannot both pass.
-- **Chat bots now check who sent a command, not just which chat it came from.** Any member of the
-  configured Telegram group, or anyone who could post in the Discord channel, could stop and restart
-  servers, self-update the panel with `/update`, read the live console and `/say` in-game, and the
-  audit log named them only by a username they could change. Each bot now has "Users who may run
-  commands" on the Notifications page (numeric Telegram/Discord user IDs, up to 50). Anyone in the
-  chat can still use `/status`, `/servers`, `/hosts`, `/connect` and `/help`; everything else,
-  including `/console`, `/say` and `/players`, runs only for a listed user. **With the list empty
-  nobody can run those** — the bot replies with the sender's own ID and where to add it. Audit rows
-  record the sender's numeric ID, and a panel update or `/say` from chat now writes an audit row at
-  all.
-- **The Discord bot no longer risks getting its token reset by reconnecting forever.** It
-  reconnected 15 seconds after every session end, including when Discord had refused the token
-  (4004) or the Message Content intent (4014) — about 5,400 attempts a day against Discord's limit
-  of 1,000. A fatal close code now stops the bot, says why in the log and on the Notifications page,
-  and it stays stopped until the token or "Accept commands" changes (retrying every 6 hours). Other
-  disconnects back off up to 15 minutes.
+- **"Monitor" now needs the restart permission.** It restarts a crashed server, but a view-only
+  user could run it; the maintenance menu now hides it from them.
+- **An authenticator code can no longer sign in twice by racing itself.** This covers API-token
+  mints too.
+- **Chat bots now check who sent a command, not just which chat it came from.** Before, anyone in
+  the Telegram group or Discord channel could stop servers, run `/update` and read the console. Add
+  numeric user IDs under "Users who may run commands" on the Notifications page; `/status`,
+  `/servers`, `/hosts`, `/connect` and `/help` stay open. **With the list empty nobody can run the
+  rest**; the bot replies with the sender's ID.
+- **The Discord bot no longer risks getting its token reset by reconnecting forever.** A refused
+  token (4004) or Message Content intent (4014) now stops the bot and says why in the log and on the
+  Notifications page, until the token or "Accept commands" changes (retrying every 6 hours).
 - **A stolen remember cookie from before per-device sessions no longer works from another machine.**
-  An older login with no per-device record has nothing on the server to check its client against;
-  when its remember cookie came back without a session cookie, "strong" protection tied the fresh
-  session to whoever sent it. It is now refused, and the person signs in once more to get a
-  per-device login. Sessions that are already bound keep working, and "basic" and off are unchanged.
-- **Discovery import no longer adopts an account that is root on its host.** Import accepted any
-  account a scan found except one named "root", so a delegated admin could import the host's own SSH
-  login (in the sudo group) and then, through the file manager or cron, write its `.bashrc`,
-  `authorized_keys` or crontab — root on that host. Import now asks the host, and refuses the login
-  account, uid 0, members of sudo/wheel/admin/root/docker/lxd/disk, and accounts with sudo rules. If
-  the host can't be asked, nothing is imported. On the panel's own host, an account the helper
-  refuses to enrol is no longer imported anyway.
-- **Uninstall never deletes a host's administrator account.** Uninstalling a row for a root-capable
-  account ran `userdel -r -f` on it; now the panel row is removed and the account is left alone,
-  with a warning. If the host can't answer the check, nothing is changed.
-- **Garry's Mod shared content needs access to the host.** An admin granted a single GMod server
-  could remove content every GMod server on the host mounts, or start large downloads onto the
-  host's disk.
+  Under "strong" protection such a cookie is refused; sign in once more to get a per-device login.
+  "basic" and off are unchanged.
+- **Discovery import no longer adopts an account that is root on its host.** A delegated admin could
+  import the host's sudo login and gain root through the file manager or cron. Import now refuses
+  root-capable accounts, and imports nothing if the host can't be asked.
+- **Uninstall never deletes a host's administrator account.** For a root-capable account, only the
+  panel row is removed, with a warning.
+- **Garry's Mod shared content needs access to the host.** An admin of one GMod server could remove
+  content every GMod server on the host mounts.
 - **Deleting a tag needs access to every server that carries it.** Tags are install-wide and drive
   alert routing.
-- **Current-password and 2FA-code checks are throttled per account and audited.** Password change,
-  turning 2FA on or off, minting an API token and deleting a host share the login throttle's budget,
-  and every failed attempt is in the audit log.
+- **Current-password and 2FA-code checks are throttled per account and audited.** This covers
+  password change, 2FA on or off, minting an API token and deleting a host.
 - **Tailscale peer check is superadmin-only.** It pinged arbitrary addresses from the panel host for
   any Manage Remotes holder.
 - **The panel host's firewall can't be changed through the game-port routes by a delegated admin.**
-  "Open game port" and "Sync ports" follow the same superadmin-only rule as the panel host's other
-  firewall writes.
-- **An update whose checks could not be read is no longer installed.** When the panel couldn't read
-  GitHub (offline, a private repository, or an origin address it didn't recognise), it treated the
-  newest commit as verified and offered it. It now offers nothing and the update card says why.
-  Origins using GitHub's SSH-over-443 address (`ssh://git@ssh.github.com:443/…`) are now recognised.
-- **An update isn't offered until its code-scanning check has run.** A code commit must now carry
-  all of CI, CodeQL and the alerts check; the alerts check now reports on the commit it actually
-  judged, not whatever main's newest commit was, and waits for both code-scanning uploads.
-- **Semgrep findings now block an update.** They were only printed to a job summary; they now go to
-  code scanning like Bandit's.
+- **An update whose checks could not be read is no longer installed.** When GitHub can't be read,
+  nothing is offered and the update card says why. `ssh://git@ssh.github.com:443/…` origins are
+  recognised.
+- **An update isn't offered until its code-scanning check has run.** A code commit must carry CI,
+  CodeQL and the alerts check.
+- **Semgrep findings now block an update.**
 - **Auto-deploy waits for the security checks, not only CI,** and refuses a commit that failed any
   of them.
-- **Switching the panel back to main no longer skips the update checks.** Branch switching always
-  installed the newest commit on the chosen branch — for main, possibly one whose checks were still
-  running or had failed. Switching to main now installs its newest version that passed its checks,
-  and says why when there isn't one. Switching to any other branch still installs that branch's
-  newest commit, and the panel now says clearly that this is unverified code for testing.
-- **File and cron writes are refused for a game account that can become root on its host.** Import
-  now refuses such accounts, but a server row imported earlier (for example for the host's own sudo
-  login) could still have its `~/.bashrc`, `authorized_keys` or crontab written from the file
-  manager. Every file-manager and cron write now asks the host first; the answer is cached for a
-  minute, and if the host can't answer, nothing is written.
-- **Only a superadmin can edit or delete the panel host's own entry.** A delegated admin whose group
-  included the panel host could rename it, change its SSH user, or delete it, removing every game
-  server on that machine from the panel.
-- **A firewall rule is deleted by number only while it is still the rule that was checked.** The
-  check and the delete now happen in one root step on the host (new helper verb
-  `ufw-delete-num-if`), so a `ufw` command typed on the host in between can no longer make a
-  different rule — possibly the one keeping SSH open — be deleted.
-- **Telegram polling no longer follows redirects.** The bot's message and name lookups followed a
-  redirect off api.telegram.org with the bot token in the URL; they now refuse redirects like the
-  send path, and failures no longer log the URL.
-- **Enabling 2FA spends its code the same way sign-in does.** Two enrolment submissions with the
-  same code could both succeed, each showing its own backup codes while only one set was saved.
-- **A delegated admin whose hosts include the panel's own no longer gets that host's controls.** The
-  firewall, SSH mode and port, OS updates, reboot, fail2ban (block, unban, auto-block, log) and
-  Ubuntu Pro actions under a host's Manage page checked only *which* hosts the account could reach,
-  never whether one of them was the panel host. The same actions on the panel host's own page are
-  superadmin-only, because that machine's firewall and sshd guard the panel itself. They now are
-  on every route: a non-superadmin gets a 403 on the panel host, and remote hosts are unchanged.
+- **Switching the panel back to main no longer skips the update checks.** It installs main's newest
+  version that passed its checks. Other branches still install their newest commit, which the panel
+  calls unverified code for testing.
+- **File and cron writes are refused for a game account that can become root on its host.** This
+  covers server rows imported earlier; if the host can't answer, nothing is written.
+- **Only a superadmin can edit or delete the panel host's own entry.** Deleting it removed every
+  game server on that machine from the panel.
+- **A firewall rule is deleted by number only while it is still the rule that was checked.** A `ufw`
+  command typed on the host in between can no longer cause a different rule to be deleted.
+- **Telegram polling no longer follows redirects.** It followed them with the bot token in the URL;
+  failures no longer log the URL.
+- **Enabling 2FA spends its code the same way sign-in does.**
+- **A delegated admin whose hosts include the panel's own no longer gets that host's controls.**
+  Firewall, SSH, OS update, reboot, fail2ban and Ubuntu Pro actions under a host's Manage page now
+  return 403 on the panel host for a non-superadmin; remote hosts are unchanged.
 - **You can no longer reset your own password or 2FA from the Users page.** That form asks for
-  neither your current password nor a code, so a borrowed session could hand itself a new password,
-  switch 2FA off and sign the real owner out everywhere. Use your Account page, which asks first.
-  Resetting *another* account's password or 2FA is unchanged.
-- **The login throttle can no longer be raced or reset.** A burst of simultaneous sign-in attempts
-  all got through before any of them was counted, and one successful sign-in from an address wiped
-  the failures before it — so anyone with an account of their own could keep guessing at another.
-  Attempts now count the moment they start (a success gives its place back), and earlier failures
-  stay counted after a success.
-- **The self-update no longer prunes old snapshots by splitting their names.** It ran as root over
-  a folder the panel's account owns, and a folder name containing a space made root delete whatever
-  path followed it. It now removes only folders named the way the updater names them.
-- **Editing an old Telegram message no longer runs its command again.** An edit arrives as a new
-  update, so fixing a typo in last week's `/stop` stopped the server a second time.
+  neither your password nor a code; use your Account page. Resetting *another* account is unchanged.
+- **The login throttle can no longer be raced or reset.** Attempts count the moment they start, and
+  earlier failures stay counted after a successful sign-in.
+- **The self-update no longer prunes old snapshots by splitting their names.** A folder name with a
+  space could make root delete another path.
+- **Editing an old Telegram message no longer runs its command again.**
 - **The first-run wizard now needs a one-time setup token, so a stranger can no longer take a fresh
-  install.** Until the first admin existed, anyone who reached the port could open the wizard and
-  make themselves the superadmin, which is root on the panel's host. A default install opens that
-  port itself. The operator's own browser was then sent to a login it had no account for. The same
-  caller could also join the host to *their* tailnet with Tailscale SSH on, through the wizard's
-  Tailscale endpoints (a cookie-less request with a Bearer header skipped CSRF, so one request was
-  enough). They could also make the panel test SSH connections to hosts of their choosing.
-  The installer now ends by printing the wizard's link with a token in it (`/setup?token=…`), read from
-  `data/setup_token` (0600, the panel's account). `manage.py setup-token`, or
-  `sudo linuxgsm-panel-recover setup-token`, prints it again. Until an admin exists, the wizard and
-  every `/api/setup/*` endpoint answer only a browser that has shown the token. Anyone else gets a
-  page asking for it. The token is deleted once the admin exists.
-  The Tailscale endpoints refuse everyone until then. Two "create admin" requests that raced (the
-  password hash yielded between the check and the insert) can no longer both make a superadmin. The
-  wizard now follows its own step, so a form cannot skip ahead to a later one.
-  Its "add a host" step runs the Hosts page's own checks before connecting. That step also accepted
-  `auth_method=local`, which made a remote host read as the panel's own host.
-  An install that is already set up is unaffected: the token is never needed there.
-- **The wizard's last page no longer calls a panel that is still public "Private tailnet".** The Serve
-  step stores a loopback bind, but a new bind applies only from the next start. Until then the panel
-  kept answering on its public address, and the page said only your devices could reach it. That page
-  was also never shown, because finishing redirected to the login page. It is shown now. It says
-  where the panel still answers and offers **Restart now**; nothing restarts on its own, since that
-  would cut off an operator who is not on the tailnet.
-- **The setup wizard's own steps are on the audit log.** Creating the first superadmin, the bind
-  address and port it saves, a host added at its last step, finishing setup and **Restart now**
-  wrote no row, so the one flow that runs before anyone can sign in left no record of what it did.
-  Each now writes one, by the account signed in to drive the wizard (a superadmin may, once the
-  first one exists), or by "setup wizard" when no one is signed in. **Restart now** writes its row
-  before the restart is scheduled, since the restart can stop the panel before a later write
-  lands, and a restart that could not be scheduled writes a second row saying why. The test that
-  should have caught this matched functions by name, and counted these as audited because other
-  functions with the same names log. It now follows each call to the function it really reaches.
-  The Tailscale Serve the wizard sets up on the way out is audited too, and is stored as set up
-  only when Serve accepted it: its result was ignored, so a Serve that failed left the firewall
-  page treating the tailnet as the way in, and the public web port's rule unprotected.
-- **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions on
-  the Hosts page. They rewrite a remote's record and firewall; migrate also deletes its public
-  22/tcp rule.
-- **`trust_proxy` believes `X-Forwarded-For` only from the proxy.** It used to read the header from
-  any peer, so a panel also reachable directly — or any local account on its host, a game-server
-  user included — could send a fresh address with every login attempt (unlimited guessing past the
-  throttle) and have fail2ban and the auto-block ban an address it chose. The socket peer must now
-  be in the new `trusted_proxies` (default `127.0.0.1` and `::1`), and on loopback the connection
-  must belong to root, the panel's own account or one in `trusted_proxy_users` (default `www-data`,
-  `nginx`, `http`, `caddy`, `cloudflared`). **If your proxy is on another machine or in a Docker
-  bridge network, add its address to `trusted_proxies` in `data/config.json`**; until you do, every
-  client is keyed as the proxy (one shared login throttle), and the panel log says
-  `ignoring X-Forwarded-For from <address>`. The startup output now warns when `trust_proxy` is on
-  and the panel listens beyond loopback.
-- **An IPv6 zone id no longer passes as an address.** Python's address parser accepts a zone after
-  `%` on any IPv6 address and keeps whatever text follows it, spaces, `$(…)` and newlines included:
-  `fe80::1%x panel login failed from 203.0.113.9` parses. The panel used that parse as its safety
-  check, so the text got through wherever an address was expected. A delegated admin with
-  **Manage remotes** could put lines of their own into a remote host's root-owned sshd or
-  `ssh.socket` drop-in through the SSH port's bind address, which is more than that permission
-  grants. The same admin could pass the text to `fail2ban-client` as root through **Unban**, on any
-  host in their groups (the panel's own included). fail2ban's source shows it logging such a value
-  verbatim to `/var/log/fail2ban.log`, and the panel counts that log's lines toward the auto-block.
-  Behind a proxy that passes the client's own `X-Forwarded-For` through (nginx setting only
-  `X-Real-IP`, say), or from a local account trusted as a proxy, a login client could write free
-  text into `data/auth.log`, the audit trail, the session list and admin alerts. fail2ban then
-  banned an address the text named, or every address of a hostname, instead of the client. When
-  the address's last 64 bits were zero, each new zone was also a new login-throttle bucket, which
-  meant unlimited password guessing. Through Tailscale Serve or Funnel, or the README's nginx block,
-  a client cannot choose that value. The first-run wizard also accepted a zoned bind address that
-  the next start could not bind. Every address, network, ban, whitelist, firewall and bind check now
-  refuses a zone and passes on the parsed address rather than the typed text, and the root helper
-  checks this for itself. A block, unban, allow-from or whitelist-removal row is audited under its
-  address or network, or as `(not an IP address)`; an allow-from row names the source as the rule
-  was sent, and a port rule's row names its port and protocol as they were checked, or
-  `(not a port)` / `(not a protocol)`.
-  A client address that a proxy reports with a zone is read with the zone dropped: Apache and Go's
-  reverse proxy write a link-local client into `X-Forwarded-For` that way, and that client is
-  keyed, logged and audited as its address alone. Refusing the value would have keyed it as the
-  proxy, so fail2ban could have banned the proxy and everyone behind it. That parse is what closes
-  the throttle hole: every zone on one address is that address's bucket. The throttle also drops a
-  zone itself, as a second guard in case another path ever hands it one. A link-local client that
-  the kernel reports with its interface attached is keyed by its address too. A whitelist entry
-  stored with a zone before the whitelist refused them still exempts its address from the
-  auto-block and the ban gate, as it did before (fail2ban's `ignoreip` leaves it out, as it always
-  has); remove it and add the address without the `%zone` to have fail2ban skip it too. Audit IPs
-  that an older version stored with a zone lose it at the first start after the update, whatever
-  their age and whether or not IP ageing is on: an address keeps the address alone, a row that
-  version had already reduced keeps its `/64` without the zone's text, and one that is no address
-  at all is blanked.
-- **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
-  address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
-  console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the
-  exact origin (e.g. `https://panel.example.com`); the panel logs
-  `socketio_cors_origins "*" is ignored` once.
-- **Usernames and group names cannot carry control or format characters.** A delegate with
-  user or group management could store ESC sequences that moved the cursor, forged rows or wrote the
-  clipboard in the recovery CLI (`manage.py`, run as root); group names had no format check at all.
-  The CLI now shows any such character as a visible escape, so names stored earlier are safe too.
-- **The chat bots' `!update` can no longer hold every self-update at "still being verified".** Each
-  one forced a fresh check against GitHub's anonymous API (60 requests an hour), and a spent limit
-  reads as "pending", which blocked the web UI's update too. A status under a minute old is reused,
-  a second `!update` while one is running is answered instead of queued, and chat-triggered checks
-  are limited to ten an hour across both bots.
+  install.** Before, anyone reaching the port before the first admin existed could become
+  superadmin (root on the panel's host) and join the host to their tailnet. The installer prints the
+  wizard link with its token; `manage.py setup-token` or `sudo linuxgsm-panel-recover setup-token`
+  prints it again. An install that is already set up is unaffected.
+- **The wizard's last page no longer calls a panel that is still public "Private tailnet".** The new
+  bind applies only from the next start, so the page now says where the panel still answers and
+  offers **Restart now**; nothing restarts on its own.
+- **The setup wizard's own steps are on the audit log.** That includes creating the first
+  superadmin, the bind settings, a host added, finishing, **Restart now** and the Tailscale Serve it
+  sets up.
+- **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions
+  on the Hosts page.
+- **`trust_proxy` believes `X-Forwarded-For` only from the proxy.** Before, a client reaching the
+  panel directly or any local account on its host could dodge the login throttle and steer fail2ban
+  bans. **If your proxy is on another machine or in a Docker bridge network, add its address to
+  `trusted_proxies` in `data/config.json`**; until then every client shares the proxy's login
+  throttle, and the log says `ignoring X-Forwarded-For from <address>`.
+- **An IPv6 zone id no longer passes as an address.** Text after `%` let a delegated admin with
+  **Manage remotes** write lines into a remote host's root-owned sshd or `ssh.socket` drop-in, or
+  pass text to `fail2ban-client` as root through **Unban**. A whitelist entry stored with a zone
+  still exempts its address from the auto-block, but fail2ban skips it only once you remove it and
+  re-add the address without the `%zone`.
+- **A `"*"` in `socketio_cors_origins` is ignored.** It let a same-site page open the console and
+  terminal as whoever visited it. If you had set it, set `site_domain` or list the exact origin.
+- **Usernames and group names cannot carry control or format characters.** Such characters could
+  act in the root-run recovery CLI; it now shows them as visible escapes, so older names are safe.
+- **The chat bots' `!update` can no longer hold every self-update at "still being verified".**
+  Chat-triggered checks are limited to ten an hour across both bots, so GitHub's rate limit is not
+  spent.
 - **The post-restart "update complete" message goes only to a channel that is still authorised.**
-  It went to the channel that asked even after the bot was switched off or moved.
 - **The terminal's input queue is counted, not re-summed on every keystroke**, and dropped input is
-  reported once a second rather than once per keystroke.
-- **A delegated group admin can edit or delete only a group wholly within their reach.** The
-  permission list was filtered to what the editor holds, but nothing asked whose group it was:
-  an admin scoped to one host could give another tenant's viewers `use_terminal` and
-  `send_command` on a host the admin cannot reach, strip another tenant's admins, or, through
-  the default "Everyone" group, give every account a shell in one POST. Deleting a group skipped
-  its custom commands, so a group made for a superadmin-authored command could be deleted by
-  anyone who held its permissions. Editing and deleting now need all three of: the group's
-  permissions, hosts, servers and custom commands within the editor's reach; every member but
-  themselves and superadmins someone the editor could administer on Users (the rule `/users`
-  already applied); and no live invite naming the group alongside one outside their reach.
-  Otherwise the request is refused and audited. The Groups page shows those groups without Edit
-  or Delete, with their members, permissions and access still listed. **What changes:** on an
-  install with more than one tenant, a delegated admin can no longer edit "Everyone", or their
-  own group if someone else in it reaches more than they do. That is the intended rule. A
-  superadmin's page and edits are unchanged.
-- **An invite no longer outlives its minter, or its expiry, while its form is in flight.** The
-  checks that the minter is still active and still holds what the invite grants ran before the
-  form was read. A request carrying an `Authorization: Bearer` header and no cookie skips the
-  CSRF check that otherwise reads the body early, so a client could send the headers, hold the
-  body back while the minter was demoted and deactivated, and still get the account, superadmin
-  included. An invite that expired while the body was held was redeemed the same way. Redemption
-  now claims the invite only if it is unexpired, and re-reads the minter after the claim, while it
-  holds the database's write lock, before creating the account. The password is hashed before
-  that lock is taken, so other writers wait less.
-- **A signed-in request is authorized once its body has arrived, not before.** Every check that a
-  token, an account or a permission is still good ran before the request's body was read, and the
-  body is read only when the route first asks for it. So a client could send the headers, hold the
-  body back while its API token was revoked, its account deactivated or its permission removed, and
-  the action still ran once the body arrived. That was open for every API call made with an
-  `Authorization: Bearer` token and for every in-page request with a JSON body from a signed-in
-  browser: the CSRF check, which reads a form's body early, skips the first and does not read the
-  second's JSON. (A browser's form posts were already safe: that check reads them first.) The panel
-  now reads the whole body of a signed-in request before any check, then looks up who is asking
-  again, so the checks see the token, the account and its permissions as they are when the body
-  lands. An upload still streams to a temporary file rather than into memory, and a request that is
-  not signed in is still refused without its body being read.
+  reported once a second.
+- **A delegated group admin can edit or delete only a group wholly within their reach.** An admin
+  scoped to one host could give other tenants' accounts a shell, including through "Everyone". On an
+  install with more than one tenant, a delegated admin can no longer edit "Everyone", or their own
+  group if someone else in it reaches more than they do.
+- **An invite no longer outlives its minter, or its expiry, while its form is in flight.** Holding
+  the request body back while the minter was demoted, or the invite expired, could still create the
+  account, superadmin included.
+- **A signed-in request is authorized once its body has arrived, not before.** Before, a revoked
+  token, deactivated account or removed permission still let an action run if its body was held
+  back.
 - **A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by
-  name.** `/logs` matched a row to a viewer's servers and hosts by the row's target name, and
-  names are not unique. The same game installed on two hosts gets the same name by default, so a
-  viewer granted one read the other's console commands with their arguments (`rcon_password ...`).
-  Anyone who could rename their own server or host could rename it onto another tenant's server,
-  onto `database`, a branch name or an IP, and read those rows too: another tenant's firewall
-  changes, the panel host's own administration, and another account's password or 2FA reset. Each
-  audit row now records the game server or host it is about, and a delegated viewer is shown their
-  own rows plus the rows about servers and hosts they can reach. Nothing is matched by name. When
-  a server or host is deleted its rows let go of the id, so a new server that SQLite gives the
-  same id to does not inherit another tenant's history. **On upgrade**, existing rows get their id
-  once, only where the action is about a server or host and exactly one server or host has that
-  name. The rest stay visible to the person who did the action and to superadmins. Password and
-  2FA resets are now treated as account rows.
-- **A host's SSH key is pinned from the first connection, whichever part of the panel makes it.**
-  A first contact from a background check (the host monitor, a pool worker) had no app context,
-  so its pin was never saved. Every later connection was "first contact" again, and a
-  man-in-the-middle at any of them was trusted. The pin is now stored from any thread, and a
-  connection whose pin cannot be stored is closed rather than used. Adding a host, the setup
-  wizard's host step and the **Test** button now pin the key they logged in with. A pin that
-  can no longer be decrypted refuses the Test login instead of reading as "no pin" and sending the
-  password to whatever answered.
-- **Changing a host's SSH port checks that sshd is what answers on the new port.** The move was
-  kept once *something* listened there, so a game account that bound the port first took the
-  panel's next SSH connections to that host. Each listener on the new port must now be root's sshd
-  (`ssh.service`/`sshd.service`, or `ssh.socket` under socket activation); anything else reverts
-  the move. fail2ban's sshd jail now covers the new port through
-  `/etc/fail2ban/jail.d/zz-panel-sshd.local`. The old edit touched only `jail.local`, which a stock
-  install does not have, so the jail kept watching the old port. It is updated only after the move
-  is confirmed, and the result says "fail2ban updated" only when the jail is running on the new
-  port. Two port changes for the same host at once are refused (409). **Re-run `install.sh` to
-  update the privileged helper**; an older helper keeps the move and says it could not confirm
-  sshd.
-- **The firewall touches only the rules a game server owns.** Uninstalling a server deleted every
-  rule on its port by spec, an operator's and another server's included, and "Open all ports"
-  replaced whatever rule held a port: another server's, an operator's DENY or LIMIT. Rules are now
-  removed by number, only ALLOW rules tagged with that server's name (and untagged ones only where
-  no other server's block holds the port), and a rule the panel did not make is never replaced.
-  No port is opened or stored on SSH, the panel's own web port, or another server's reserved
-  block. "Open all ports" (`/api/server/<id>/sync-ports`) now needs **Manage Remotes** for that
-  host, not only Install Server. An install holds back a port something else started listening on
-  while its files downloaded, and says so. A port scan that cannot be read no longer counts as
-  "every port is free".
-  - Uninstall no longer leaves a rule open when the firewall changes during the cleanup. A new
-    auto-block rule shifted the rule numbers, the delete was rightly refused, and the rule was then
-    given up and the uninstall reported a clean result. The panel now reads the firewall again and
-    retries up to three times, and the uninstall message names any rule still open. It also no
-    longer deletes a DENY, a LIMIT, a rule for one address, or any rule on the SSH or panel port
-    just because it carries the server's name. Those rules stay, and the message lists them.
-    "Open all ports" no longer says a port is open when a DENY for TCP or UDP still blocks it. It
-    adds an allow only for the protocol no rule covers yet, and names the rule it left each
-    protocol to (for example `27015/tcp DENY`).
-  - Uninstall also names a rule with no name on it that is still on the server's own ports. The
-    rate limit from the Firewall page is one: `ufw limit` writes no comment, so the limit on a game
-    port carries no server's name. It was neither removed nor mentioned, so the port stayed open,
-    rate limited, after an uninstall that reported a clean result. The rule is still left in place,
-    but the message now names it (for example `Left in place on its port: 27015/tcp LIMIT`) and the
-    result is a warning. A port another server on the host still uses is left out. The server's
-    ports include every port its own rules were on, so a Query port outside the game's usual range
-    (Rust's 28017) is covered, and a rule on one interface or to one address is named too. The
-    message says only the port and what the rule does, not the address or interface it names:
-    whoever may uninstall the server is not always someone who may read the host's firewall.
-- **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
-  passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
-  A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the
-  panel's common set does, or it is `steamcmd`. Anything else is refused, named in the result and
-  logged. Package names must also end in a letter or digit, because `apt-get install foo-`
-  *removes* `foo`. A game account on an older LinuxGSM release asks for that release's packages,
-  which can differ from the panel's copy (v26.1.0 wants `openjdk-21-jre` and `dotnet-runtime-8.0`
-  where the newest release has `-25-` and `10.0`), and a newer release can list a package the
-  panel's weekly copy has not caught up with. A name the panel's copy refuses is now looked up
-  again in LinuxGSM's own repository: in the list at the release the account's script runs, then
-  in the current list, fetched at most once an hour. The account's own copy of the list is never
-  used, because the account can edit it; it can pick only which published release is read.
-- **A refused SSH connection is now closed.** When a connection to a remote failed its host-key
-  check, its login or any other step, the panel left that connection's thread and socket open. A
-  real SSH server hangs up after its login grace time, but a man-in-the-middle can keep them open
-  for good, and the host monitor added one per host on every pass. The "Test connection" button
-  left one open the same way whenever a test failed. Both now close the connection on every failure.
+  name.** Matching by name let a viewer read another tenant's rows, including console commands with
+  arguments. **On upgrade**, old rows get an id only where exactly one server or host has that name;
+  the rest stay visible to whoever did the action and to superadmins.
+- **A host's SSH key is pinned from the first connection, whichever part of the panel makes it.** A
+  pin from a background check was never saved, so later connections trusted whatever answered.
+- **Changing a host's SSH port checks that sshd is what answers on the new port.** Anything but
+  root's sshd listening on the new port now reverts the move, and fail2ban's sshd jail follows the
+  port once the move is confirmed. Two port changes for one host at once are refused. **Re-run
+  `install.sh` to update the privileged helper**; an older helper keeps the move and says it could
+  not confirm sshd.
+- **The firewall touches only the rules a game server owns.** Uninstall and "Open all ports" no
+  longer delete or replace another server's or an operator's rules, and no port is opened on SSH,
+  the panel's web port or another server's reserved block. "Open all ports" now needs **Manage
+  Remotes** for that host.
+  - Uninstall removes only ALLOW rules tagged with the server's name (untagged ones only where no
+    other server's block holds the port), retries if the rule numbers shift, and names any rule
+    still on the server's ports that it left in place, such as a DENY, LIMIT or rate limit.
+  - "Open all ports" no longer says a port is open while a DENY still blocks it.
+  - An install holds back a port something else started using while it downloaded, and an
+    unreadable port scan no longer counts as "every port is free".
+- **Root `apt` installs only the packages LinuxGSM lists for the game.** A package is installed as
+  root only when LinuxGSM's published dependency list for that game and distro names it (at the
+  account's release or the current one), the panel's common set does, or it is `steamcmd`; anything
+  else is refused and logged.
+- **A refused SSH connection is now closed.** A connection that fails its host-key check, login or
+  any other step, including from "Test connection", no longer leaves its thread and socket open.
 - **A new server or host no longer inherits a deleted one's state when SQLite reuses its id.**
-  SQLite hands a deleted row's id to the next row created, and the panel keyed per-server and
-  per-host state by that id: console backlog, install and action jobs, cached OS-update lists and
-  alert counts. A new server could replay the previous one's console, and its first update alert
-  could be swallowed. That state is now dropped when a row is deleted, and again when a row is
-  created. A host bootstrap whose id was taken mid-run no longer writes onto the host that took it.
-  If the taking host's first SSH contact is stalled, the stale worker no longer pins its own key
-  onto it or aims its remaining root steps there.
+  Console backlog, jobs, cached OS-update lists and alert counts are dropped when a row is deleted
+  or created, and a host bootstrap whose id was taken mid-run no longer writes onto the new host.
 - **A deleted host, game server, user or group's id is no longer given to the next one, and work
-  still running for a deleted row no longer lands on the row that took its id.** The hosts, game
-  servers, users, groups, custom commands, tags, global bans, invites and login sessions tables now
-  use SQLite's AUTOINCREMENT, so a new row never gets an id a deleted one had. A Global Bans page
-  left open while its newest ban was removed and another added no longer removes the new ban, and
-  lifts it on every server, when Remove is pressed. An existing install's tables are rebuilt once,
-  at the first start after this update, with every row and id kept. A table that cannot be copied
-  without losing something is left as it was and logged, and the next start tries again. The next id
-  also starts above any id something still points at, such as an audit row or a tag left behind by a
-  deleted server. Work that holds a row through a long step also checks it is still the same row
-  before writing or acting, for any table not rebuilt yet. An install whose host was deleted mid-run
-  now stops at its next step instead of running it on the host that took the id, and no longer marks
-  that host's new server failed. Starts, stops and restarts, an update's mods restart, bulk actions,
-  the command list cache, a cross-server ban, a GMod content job, and the on-demand, full, scheduled
-  and queued backups no longer write their result to, audit it under, or act on the server that took
-  the id. The monitor, the player count poll, the metric history, the dashboard's status poll and
-  the daily OS-update check no longer apply what they found for a deleted row to its successor, and
-  an open terminal on a deleted host is closed rather than kept by the host that took its id. The
-  hourly auto-block no longer adds or removes firewall rules on a host that took the id of a deleted
-  host that had it on.
+  still running for a deleted row no longer lands on the row that took its id.** These tables now
+  never reuse an id; an existing install's tables are rebuilt once at the first start after the
+  update, keeping every row and id. Installs, actions, backups, monitoring, auto-block and open
+  terminals no longer act on a row that took a deleted one's id.
 - **Unbounded reads and rows are capped.**
-  - The fail2ban log read stops at 8 MB, and a tally cut short is shown as unread rather than as
-    a smaller count.
-  - The console backlog keeps each line under 2048 characters and the whole backlog under 256 KB,
-    without cutting a colour sequence in half. The live console is unchanged.
-  - Every audit column is capped at its declared size, and the detail at 8 KB. SQLite does not
-    enforce column sizes, so a megabyte console command went into `panel.db` whole.
-  - The Ubuntu Pro service endpoint refuses an unknown service or action before running or
-    auditing anything.
-- **Changing the panel's own port audits what really happened.** The row said success even when
-  the firewall or fail2ban step failed or the old port's rule stayed open. A failed restart now
-  gets its own row, and the failure reply includes the firewall outcome.
-- **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
-  kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
-  (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own
-  polls among them, with nobody watching. The model checks those names only when they are
-  **assigned**, never when a row is read back, so a database from before that check, a hand edit
-  of `panel.db`, or a restored backup could hold `short_name="x; curl …|sh; #"`, and the next poll
-  ran it as the panel's account on its own host, or as the SSH login on a remote. Every such
-  command is now built in one place, which refuses a name that is not one plain account word
-  (`root` and sudo's `#0`-style uids included) before anything is sent, and quotes what it accepts.
-  A refused name reads everywhere as "could not run", never as an empty result; the commands sent
-  for every real name are byte-for-byte what they were. The script name that the monitor, update,
-  restart-when-empty and restart-check cron lines carry is checked too. A panel backup is now
-  refused, naming the row, when its database holds such a name or a port stored as text — checked
-  before the safety copy or anything else is touched — and a row that is already in the database
-  is named in the log once, instead of every action on it failing with no reason given. Unit gates
-  fail the build on any `sudo -u` built outside that one place.
-
-  A review of that fix found four more ways in, all closed here:
-  - **The console read the script name unchecked.** The live console's log path is built from the
-    server's game type, and the console reads checked only the account, so a game type of
-    `mc; <cmd>; #` ran `<cmd>` every two seconds while anyone had that console open, and when its
-    history was loaded. Those reads now check the script name too, and the unit gate that looks for
-    a script name dropped on the way into a command now follows it through the server's own
-    attributes and the variables built from them, not only through a variable called `selfname`.
-  - **The backup check could be sidestepped by spelling.** SQLite does not care about the case of
-    table and column names, and the check looked them up exactly: a backup whose database spelled
-    the table `GAME_SERVER` or the column `SHORT_NAME` was not checked at all, and the panel then read
-    it as usual. The check now reads the database as SQLite serves it. It also refuses a backup whose
-    database could change a value after the check, or hide one from it: a trigger, a view, a column
-    computed from other columns, an index that disagrees with its table (SQLite's own integrity check
-    must pass), or a server or host table missing one of the checked columns. No version of the
-    panel has written any of these, so no genuine backup is refused for them.
-  - **A port stored as text reached the hourly restart line.** The restart-when-empty cron line was
-    the one place that put a server's port into a command without converting it to a number first;
-    it now refuses one that is not a number, as does the daily pass that rewrites old lines. A port
-    stored as text is also named in the log when the row is read.
-  - **A host's SSH login could become an ssh option.** For a host connected over Tailscale, the
-    panel runs the system `ssh` client with `<login>@<host>` — for every command, the web terminal
-    and file and backup downloads — and a stored login of `-oProxyCommand=<cmd>` ran `<cmd>` on the
-    panel's host.
-    The login and address are now checked before either is handed to ssh, and they come after `--`,
-    where ssh stops reading options. The add/edit host form no longer accepts an address that begins
-    with a dash.
-- **pip itself is hash-locked.** The installer upgraded the panel's venv with
-  `pip install --upgrade pip`: whatever PyPI served that day, unchecked, the first thing the venv
-  ran on every install and on every update that reinstalled dependencies. pip now comes from
-  `requirements-bootstrap.txt`, a pip-compile lockfile (compiled for Python 3.10, like
-  `requirements.txt`) installed with `--require-hashes --only-binary :all:`, so a pip wheel that is
-  not byte-for-byte the locked one is refused. Dependabot keeps it current with the rest of the
-  Python dependencies, CI installs it on every Python in the test matrix and pip-audit reads it, and
-  a change to it alone now counts as a dependency change on update. Checked on fresh 22.04, 24.04
-  and 26.04 venvs (their own pip 22.0.2, 24.0 and 25.1.1): each installs it, and refuses it with
-  one hash altered. An update pinned to an older commit, which has no such file, keeps the pip the
-  venv already has instead of fetching an unpinned one; 22.04's own pip installs the panel's
-  requirements unaided. A test now reads every pip call in the project's shell scripts and fails
-  on one that is neither hash-checked nor listed with its reason (the one listed is
-  `requirements.txt`'s: an older pinned commit's copy may carry no hashes).
-- **The Codacy token is no longer readable by a workflow on any branch.** `CODACY_PROJECT_TOKEN`
-  was a repository secret, and the coverage job that used it ran the code under test. The upload
-  is now its own workflow, `codacy-coverage.yml`, which runs after CI from main's copy of the file,
-  in an environment named `codacy`, and uploads the report CI left as an artifact for the commit
-  CI tested, so pull requests keep their Codacy coverage checks. The report is treated as untrusted:
-  one declaring a DTD or an entity is refused (the reporter's XML parser resolves entities a file
-  declares, which could read its environment, token included). Scoping the token takes three
-  repository settings a workflow cannot make, listed in that file's header: the environment's
-  deployment rule (branch `main` only), the token as an environment secret, and the repository
-  secret deleted. `.github/SECURITY.md` says what the token can do; it is more than an upload key.
-  The upload's check lands on main's newest commit even for a pull request's run (GitHub files
-  every `workflow_run` job there), so the panel's update check ignores it, as it ignores the
-  deploy: one pull request's failed upload no longer stops panels being offered main.
-- **The code-scanning gate judges main only for a run that was exactly main's.** Like the deploy
-  before it, `codeql-alerts.yml` compared the run's branch with `main` the way GitHub compares
-  strings, ignoring case and by short name, so a branch `Main` or a tag `main` pushed with its own
-  "CodeQL" workflow was judged, and reported, as main. The name is now compared exactly, in bash,
-  and any other run judges nothing. Read-only either way.
+  - The fail2ban log read stops at 8 MB; a tally cut short shows as unread.
+  - Console backlog lines stay under 2048 characters and the backlog under 256 KB.
+  - Audit columns are capped at their declared size, and the detail at 8 KB.
+  - The Ubuntu Pro endpoint refuses an unknown service or action before running anything.
+- **Changing the panel's own port audits what really happened.** It no longer records success when
+  the firewall or fail2ban step failed, and a failed restart gets its own row.
+- **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx). A server
+  account or script name in the database (old database, hand edit, restored backup) could run a
+  command as the panel's account or the SSH login. Such names are now refused before anything is
+  sent, and a panel backup holding one, or a port stored as text, is refused. Also closed:
+  - The live console's log reads now check the script name too.
+  - The backup check can no longer be sidestepped by name case, triggers, views, computed columns
+    or a failing integrity check.
+  - The restart-when-empty cron line refuses a port that is not a number.
+  - A Tailscale host's stored SSH login can no longer become an `ssh` option, and the host form
+    refuses an address beginning with a dash.
+- **pip itself is hash-locked.** The installer now installs pip from the hash-locked
+  `requirements-bootstrap.txt` instead of whatever PyPI serves. An update pinned to an older commit
+  without that file keeps the venv's existing pip.
+- **The Codacy token is no longer readable by a workflow on any branch.** The coverage upload now
+  runs in its own `codacy-coverage.yml` workflow from main's copy, in a `codacy` environment, and
+  refuses a report declaring a DTD or entity. The three repository settings it needs are listed in
+  that file's header.
+- **The code-scanning gate judges main only for a run that was exactly main's.** A branch `Main` or
+  a tag `main` is no longer judged as main.
 - **A compromised panel can no longer send root back to an old commit, or choose the branch root
-  installs from.** On a root install, the panel could reset its own checkout to an old commit of
-  main and ask for a self-update. Root accepted it (every commit main was ever at is on its
-  first-parent line) and installed that commit's installer root-owned. One from before e26a644
-  read the helper out of the panel-owned `.git`, so a planted replace ref became the helper on the
-  next update. Root now keeps a source floor in `/usr/local/lib/linuxgsm-panel/.source-floor`: the
-  newest commit of main it has staged from, never lowered, with e26a644 when there is no file yet.
-  It refuses any commit below the floor, and any commit whose installer does not enforce the floor
-  itself. The auto-deploy refuses the same commits, so re-running an old CI run cannot ship one.
-  Separately, the branch the panel tracks (`PANEL_BRANCH`) decided which branch root verified
-  against, so any pushed branch could supply the helper. When the panel starts an update, root now
-  takes its pieces from main only. On another branch the code still switches, and the helper,
-  `db_maintenance.py`, the installer, the recovery command and gamedig's lockfile and install
-  script are left as they were, with a message in the update log. An operator testing a branch as root (`cd / && sudo
-  PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh`, or from a root shell) still
-  gets that branch's pieces. The helper marks the
-  panel's runs in a way the panel cannot remove, and `.github/SECURITY.md` explains how. Installs
-  run as a normal user are unchanged.
+  installs from.** On a root install, root keeps a never-lowered source floor in
+  `/usr/local/lib/linuxgsm-panel/.source-floor` and refuses older commits, as does the auto-deploy.
+  A panel-started update takes root's pieces from main only; to test a branch as root, run
+  `cd / && sudo PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh`. Installs run
+  as a normal user are unchanged.
 - **A tag named like a branch can no longer stand in for it, and a commit main only reached
-  through a merge no longer counts as main.** git reads a bare `origin/main` as a tag called
-  `origin/main` before the branch, and the installer's clone, its fetches and the panel's branch
-  list all bring tags along. So once a tag pushed under that name had been fetched, the next update
-  reset the checkout to a commit that was never on main, and the panel's update card, branch list
-  and verified target all read the same tag. The installer and the panel now name the branch in
-  full, both when they read it (`refs/remotes/origin/main`, and only after confirming that ref
-  exists — a missing one falls through git's lookup to a tag named `refs/remotes/origin/main`) and
-  when they fetch it (`+refs/heads/main:refs/remotes/origin/main`, where a bare `main` fetched a tag
-  of that name instead). Naming the destination also fixes a single-branch clone tracking another
-  branch, whose remote-tracking ref was never created, so the update card said "up to date". The
-  branch list no longer fetches every tag, and the switcher confirms a branch by its exact name,
-  where `dev` used to be "found" by a branch called `feature/dev`.
-
-  "On main" now means main's own first-parent line, not "an ancestor of main". A pull request
-  merged with a merge commit brings all its commits into main's ancestry, including an intermediate
-  one whose change was reverted before the merge. The update card offered such a commit as the
-  verified target while the merge was still being checked, the installer accepted it as a pin, and
-  root staged the helper from a checkout sitting on one. All three, and the auto-deploy, now accept
-  only a commit on main's first-parent line, never the side of a merge. That line holds the
-  commits main's tip has been at and each commit of a multi-commit push or rebase merge, with one
-  exception: a push that fast-forwards main onto a branch that had main merged into it (a
-  "foxtrot" merge) moves the commits main was at before onto that merge's second parent, and they
-  are no longer accepted as a pin or deployed by a re-run. The installer and the deploy read that
-  line as a stream, so neither a long history (a here-string of it needs a temp file past 64 KiB,
-  which fails on a full or read-only /tmp) nor an early match (`grep -q` in a pipe kills
-  `git rev-list` with SIGPIPE) can make a commit on the line read as off it.
-
-  The installer's "never move backwards" rule, which keeps a newer checkout where it is when handed
-  an older verified commit, asks only whether that checkout is an ANCESTOR of main: it is what
-  the host already runs, not something being verified, and a host left off the first-parent line by
-  a foxtrot push must not be reset backwards. The full update path (taken when the venv is stale) also
-  honours that rule now; it had been resetting a current checkout back to the older commit. It is
-  now "never backwards, and never sideways": a checkout on main moves only to a pin that contains
-  it. After a foxtrot push a verified pin can be on main's line and neither contain the checkout nor
-  be contained by it (the other branch's commit the merge was made on), and the update moved the
-  host to it, dropping the commit it was on; now it holds, and says why. The panel's update card,
-  which could offer that commit while the merge was still in CI, no longer offers a commit that
-  does not contain the running one, so it never shows an update that would only hold, and does
-  not ask GitHub's anonymous API about such a commit either (60 requests an hour). And a
-  pinned commit the installer cannot verify is no longer replaced by main's tip, which nothing had
-  verified: a checkout on main stays where it is, with a warning, and any other stops the update
-  with an error that names the pin, having changed nothing. A hold ends with "Not updated: held at
-  …, because …", never "Already up to date".
-
-  The CI auto-deploy had the same gap one step earlier: its trigger compares the branch's short
-  name, and GitHub compares it ignoring case, so any ref whose short name matches main
-  case-insensitively passes — a pushed tag `main`, a branch `Main`, a tag `MAIN`. It now requires
-  the name to be exactly `main`, fetches main's history, proves the commit is on main's
-  first-parent line before taking its installer, and refuses a commit with no installer or an
-  empty one with a stated error. All of that happens before the job joins the tailnet. The job
-  also logs in to Tailscale with OIDC workload identity instead of an OAuth client secret: no
-  secret is stored, and Tailscale accepts only a token GitHub signed for this repository's
-  `production` environment, which only the branch main may use. The old secret was a repository
-  secret any branch or tag could read (the header of `deploy.yml` has the one-time setup).
-- **The panel's Python dependencies are installed by hash.** `requirements.txt` is now pip-compile's
-  lockfile for a new `requirements.in`: the same 33 versions as before, each with the hashes of its
-  published files. pip refuses any download that is not byte-for-byte what was locked. The installer
-  gets this with no change, because pip checks hashes whenever the file has them. CI and the fuzz
-  image also install wheels only. Packages already installed on a host are kept as they are; the
-  check applies to whatever pip installs from now on.
-- **Preparing a remote host no longer runs NodeSource's setup script as root.** The add-host
-  bootstrap piped `https://deb.nodesource.com/setup_lts.x` into a root shell, so anyone able to
-  serve that one URL could run code as root on every host being prepared. It now does what
-  `install.sh` already does on the panel host, through a new `nodesource-setup` verb. Only the
-  signing key is downloaded, and it is trusted only if the file holds exactly one key with the
-  pinned fingerprint. The apt source and pin are then written directly, and nothing downloaded is
-  executed. The key, Node.js major (24) and paths are `install.sh`'s, and a test keeps the two
-  copies equal. A remote that already has Node.js 18+ keeps it, as before. npm is now installed
-  only when a Node.js 18+ is present, as `install.sh` does. Before, a failed NodeSource setup on
-  22.04 went on to install the distro's npm, and with it Node 12, which gamedig cannot run on. The
-  panel host's helper refuses the verb: `install.sh` sets up NodeSource there. `SECURITY.md` had
-  said this step could not be narrowed; it now describes what replaced it.
+  through a merge no longer counts as main.** The installer and panel name main's branch in full,
+  so a tag called `origin/main` or `main` is never used.
+  - Only a commit on main's first-parent line is offered, accepted as a pin or deployed.
+  - An update never moves a checkout backwards or sideways; a hold says "Not updated: held at …,
+    because …". A pin the installer cannot verify is no longer replaced by main's tip.
+  - The CI auto-deploy requires the ref name to be exactly `main` and logs in to Tailscale with
+    OIDC instead of a stored secret.
+- **The panel's Python dependencies are installed by hash.** `requirements.txt` is now a lockfile
+  with the same 33 versions and their hashes; pip refuses any download that does not match.
+  Packages already installed are kept.
+- **Preparing a remote host no longer runs NodeSource's setup script as root.** Only the signing key
+  is downloaded, trusted only with the pinned fingerprint, and nothing downloaded is executed.
+  npm is installed only when Node.js 18+ is present.
 - **gamedig is installed from a hash-locked lockfile, and root no longer fetches it every week.**
-  It was `npm install -g --ignore-scripts gamedig@5`, at install and from a weekly root cron on
-  every host: whatever gamedig 5.x and whatever versions of its ~50 floating dependencies the
-  registry served that Sunday, unreviewed, then run by every game account. `tools/gamedig` now holds
-  a `package.json` pinning gamedig 5.3.3 and a `package-lock.json` naming all 61 packages, each with
-  a sha512, and `install-gamedig.sh` installs that tree with `npm ci`, which rejects any tarball that
-  does not match. It builds into a staging directory, runs the result once, and only then switches
-  over, so a failed download leaves the working gamedig in place, and it links both
-  `/usr/local/bin/gamedig` and `/usr/bin/gamedig` to it, since existing restart-when-empty cron
-  lines look in `/usr/bin`. The first run removes npm's old global gamedig once the new one runs
-  and both links point at it, so `gamedig` answers throughout the switch. `npm ci` gets ten
-  minutes, and on an update it runs after the health check has passed, so a registry that stalls
-  cannot hold the verdict or the rollback. A commit that changes only these files is an update
-  to what the host runs, not "docs, tests or tooling", on the update card.
-  Everything lives in `/usr/local/lib/linuxgsm-panel/gamedig` on every host. `install.sh` places
-  the three files there root-owned from root's own source (never the panel-owned checkout), after
-  the helper and after the new code is fetched; it used to install gamedig before fetching. Remote
-  hosts get them through a new `gamedig-install` verb, which replaces `npm-install-global`, from
-  the add-host bootstrap and the daily pass, which on a remote writes the files before the cron
-  that runs them. The helper refuses that verb on the panel host. The weekly cron, still
-  `/etc/cron.d/lgsm-node-tools`, now re-runs the script and fetches nothing while the tree is in
-  place. Updates arrive as Dependabot pull requests (weekly, a seven-day cooldown, gamedig majors
-  ignored), and the Dependency Review check now runs on them. Tests hold every lockfile entry to a
-  sha512 and a registry.npmjs.org source, and allow no `npm install` in any shell script. This also
-  clears Scorecard's last Pinned-Dependencies finding for npm, which counts only `npm ci` as pinned.
-  `uninstall.sh` removes the two links, but only where they point into the panel's directory.
-- **A ban now closes what the banned address already had open.** A ban refuses new connections, at
-  the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
-  terminal opened before the ban was not a new connection, so it kept streaming for as long as the
-  browser stayed. Under Funnel that always happened; on a direct connection it happened under a UFW
-  deny, because ufw passes established traffic before its own rules. Every new ban reading now
-  disconnects the sockets whose client it names, which also closes that terminal's shell.
-  Whitelisted addresses and tailnet peers are left alone.
-- **API-token guessing reaches fail2ban.** Failed bearer-token attempts were throttled inside the
-  panel and written nowhere else. So fail2ban never banned them, the 7-day auto-block never counted
-  them, and the Funnel gate never refused them, while password guessing met all three. Once the
-  token throttle refuses an address (20 misses in 5 minutes), each further attempt is written to
-  `data/auth.log` as a line the panel-login jail counts, and the block is audited once per window.
-  Individual misses are not logged, so a script with a stale token that retries now and then is not
-  banned at the firewall for a config mistake. The jail's filter is rewritten on start to match
-  the new line.
-- **The whitelist protects every jail on the panel's own host.** Remotes got the whitelist on all
-  of their fail2ban jails, sshd included. The panel's own host had it on the panel-login jail
-  alone, so a whitelisted admin could still be banned from SSH on the machine the panel runs on,
-  while the Security page said "never banned or blocked". The same drop-in is now written there. It
-  is not created for an empty whitelist, since it would replace a `[DEFAULT] ignoreip` you set
-  yourself. The remote copy is built by the same code, which drops an IPv6 zone-id entry that could
-  carry a newline into the file.
-- **Tailscale peers are never banned from the panel login.** The panel-login jail exempted the
-  tailnet only when it banned on every port (a proxied panel). On a panel reached directly, five
-  mistyped passwords from an admin's own laptop banned that tailnet address from the panel for an
-  hour, despite the README's promise. The panel's own login throttle still applies to them.
-- **Values written into page scripts are JSON-escaped throughout**, and a test fails the build if
-  one is not. The language code, the CSRF token and a server page's mount prefix were written into a
-  quoted string with HTML escaping, which is the wrong escaping inside a script. None was
-  exploitable, since each value is either generated or validated, but the protection rested on
-  that. The audit log's sort header no longer emits raw attribute text. All 45 Semgrep findings
-  were triaged: those fixes, plus a stated reason beside each false positive.
-- **A client banned for failed logins is refused when it arrives through Tailscale Funnel.**
-  fail2ban and the auto-block ban at the host firewall, and Funnel traffic never reaches it:
-  tailscaled connects to the panel from `127.0.0.1`, so a banned client carried on at eight guesses
-  per five minutes while the panel announced the ban. The panel now keeps the current ban set —
-  fail2ban's jail plus UFW's denies — in memory and answers a proxied request whose forwarded client
-  is on it with a bare `403`, ahead of everything, the console socket included. The security
-  whitelist and tailnet peers are never refused, and an IPv6 ban covers its /64. On a dual-stack
-  `::` bind, tailscaled appeared as `::ffff:127.0.0.1`, so every Serve or Funnel client was keyed as
-  loopback and one attacker's failures throttled everyone; those sessions may be signed out once
-  after the update. `X-Forwarded-Prefix` is now believed only under `trust_proxy`, so a proxy on the
-  same host that mounts the panel under a sub-path must set it (the documented nginx and Caddy
-  setups do). A socket already open when its client is banned stays open until it closes.
-- **The game-account group cannot be used to reach root.** The sudoers grant lets the panel become
-  any member of `lgsmpanel-games`, so enrolling an account that can already `sudo` would make it
-  `NOPASSWD:ALL` with one hop — and the installer's sweep over `/home` meets exactly those accounts,
-  since LinuxGSM's own docs run it under the operator's account. The check looked for one English
-  phrase in `sudo -l`, so an unknown user, a missing sudo or a non-English host all read as safe. It
-  now answers yes, no or unknown, and only a definite no enrols. It also refuses members of
-  `docker`, `lxd` and `disk`, and sudo reached through a group or an alias; asks every sudo present
-  when accounts come from LDAP or SSSD (Ubuntu 26.04's sudo-rs ignores those, the classic `sudo.ws`
-  beside it does not); and trusts a cached "not allowed" only while SSSD's sudo responder answers.
-  An "unknown" no longer evicts existing members during an update, and a sudoers rule for `ALL`
-  users is refused with a message saying to narrow it.
-- **A compromised panel account can no longer choose what root runs.** On a root install the panel
-  runs as `lgsmpanel` and reaches root only through the helper, and several paths let that account
-  steer root anyway. The self-update ran the panel-owned venv's Python on a panel-owned script
-  before fetching anything, and ran that venv's `pip` as root. The helper, `db_maintenance.py`, the
-  installer and the recovery command were installed from a checkout whose `origin`, index flags and
-  git filters the panel controls — and deleting the helper file widened the grant to `NOPASSWD:ALL`.
-  Root now stages them from its own clone (`/usr/local/lib/linuxgsm-panel/.source.git`) or an
-  operator's root-owned tree, pip runs as the checkout's owner, the grant narrows only while the
-  helper really exists root-owned, and an unfamiliar `origin` withholds every root-owned install,
-  the recovery command included, and says so — a fork is still a legitimate thing to run. Every
-  root-run Python in the installer and uninstaller runs isolated (`-I`), since a self-update runs
-  them from the checkout, where a planted module would have been imported as root.
-- **Secrets the panel cannot read, or should not expose.** With a `cred_key` that did not match
-  (rotated, restored or replaced), the backup passphrase read as "none set", so backups — which
-  carry `panel.db`, `secret_key` and `cred_key` — were written unencrypted without saying so; they
-  are refused now. The same mismatch made a stored SSH host-key pin read as empty, so the panel
-  accepted whatever key a host presented and pinned that instead; it refuses, and the fingerprint
-  reads "unreadable (cred_key mismatch)". The connection test run against existing hosts accepted
-  any host key, and a password host whose credential could not be decrypted fell back to the panel's
-  own `~/.ssh/id_rsa`. The Ubuntu Pro token and the Tailscale auth key were command-line arguments,
-  readable from `/proc` by any local account on the target host while the command ran; they travel
-  on stdin now, and the helper refuses them as arguments.
-- **SSH hardening takes effect on cloud images.** sshd keeps the first value it reads for each
-  keyword, and Ubuntu's `sshd_config` includes `sshd_config.d/*.conf` first — so writing
-  `PasswordAuthentication no` into `sshd_config` changed nothing where a cloud-init drop-in says
-  yes, while the panel and the bootstrap reported the host hardened. It now writes
-  `00-panel-hardening.conf`, which sorts first, on the panel host and on remotes, and only where
-  sshd reads that directory.
-- **The weekly root cron no longer upgrades npm**, and no longer installs from the registry at all:
-  it re-runs `install-gamedig.sh`, which installs gamedig from its hash-locked lockfile (see the
-  gamedig entry above). On the panel host, NodeSource's repository is set up with its signing key
-  pinned, instead of by running NodeSource's setup script as root (remote hosts: see above).
-- **Auto-block cannot cut off your tailnet, or take over your own rules.** When the Tailscale probe
-  failed, tailnet addresses lost their exemption and could be denied at UFW position 1, above the
-  `tailscale0` allow; an address that cannot be confirmed is now exempted. Auto-block replaced, and
-  later released, an operator's own `ufw deny`, and counted a deny sitting below an allow as a
-  block. IPv6 offenders can now be blocked.
-- **Hostile input can no longer freeze the panel.** A crafted `?next=` backtracked exponentially;
-  password hashing ran on the event loop, stalling every request during a login; a silent or
-  flooding remote host could hang or exhaust the panel, as could one hostile line in the cron
-  journal or an encrypted backup whose header asked for a minutes-long key derivation. Transitive
-  Python dependencies are pinned too.
-- **A delegated admin can no longer take over an account that reaches more than they do.** Holding
-  "manage users" was enough to reset a more privileged account's password — the new password comes
-  back in the response — and clear its 2FA, or to do the same to a peer with identical permissions
-  but hosts the admin was never granted. An admin may now administer only an account whose
-  permissions and hosts are a subset of their own. Granting a group whose permissions they already
-  held handed over that group's hosts; deleting a group skipped the escalation guard the edit path
-  applies; the default group could be deleted by a direct POST; and a delegated admin could add or
-  repoint a host onto the panel's own SSH keys or tailnet identity — such admins can now add only
-  password-auth hosts, and changing a host's address, user or auth needs the new password in the
-  same request. An invite outlived its creator once the next account took their id, and its group
-  grant outlived its creator's demotion; revoking one in the instant it was redeemed no longer
-  reports a revocation that did not happen.
-- **Delegated admins and viewers see only what they can reach.** The groups page offered every host
-  and server on the install as a tick box (a tick outside their reach was silently dropped), and the
-  sidebar, `/api/tags`, the group summaries, the users page and `/tailscale` each showed hosts or
-  servers beyond the viewer's grants. The audit log showed any holder of "view logs" the whole
-  install's trail — other servers' console commands and every admin's sign-in address among it; a
-  delegated viewer now sees their own rows and those about the servers and hosts they can access.
-- **Session protection is enforced.** The default `strong` setting did nothing; a session is now
-  bound to its client's address and User-Agent. Existing sessions are bound on their first request
-  after the update rather than signed out, and behind Tailscale the bound address is the device's
-  tailnet IP, so a phone changing networks stays signed in. Toggling a phone browser's "Request
-  desktop site" changes the User-Agent and signs you out; choose `basic` in Settings if that gets in
-  the way. A database error while loading a session also skipped the revoked-device and remember-me
-  expiry checks and let the request through; it now refuses.
+  gamedig 5.3.3 installs with `npm ci` into `/usr/local/lib/linuxgsm-panel/gamedig` on every host,
+  and a failed download keeps the working copy. The weekly cron fetches nothing while it is in
+  place.
+- **A ban now closes what the banned address already had open.** Live consoles and host terminals
+  opened before the ban are disconnected. Whitelisted addresses and tailnet peers are left alone.
+- **API-token guessing reaches fail2ban.** Once the token throttle refuses an address (20 misses in
+  5 minutes), further attempts are logged for the panel-login jail; individual misses are not.
+- **The whitelist protects every jail on the panel's own host.** A whitelisted admin can no longer
+  be banned from SSH on the panel's host. The drop-in is not created for an empty whitelist, so a
+  `[DEFAULT] ignoreip` you set yourself is kept.
+- **Tailscale peers are never banned from the panel login.** The panel's own login throttle still
+  applies to them.
+- **Values written into page scripts are JSON-escaped throughout**. None of the values that were
+  HTML-escaped instead was exploitable.
+- **A client banned for failed logins is refused when it arrives through Tailscale Funnel.** A
+  proxied request from a client on fail2ban's or UFW's ban list gets a bare `403`; the whitelist and
+  tailnet peers are never refused. On a dual-stack `::` bind, Serve and Funnel sessions may be
+  signed out once after the update.
+  `X-Forwarded-Prefix` is now believed only under `trust_proxy`, so a proxy on the same host that
+  mounts the panel under a sub-path must set it (the documented nginx and Caddy setups do).
+- **The game-account group cannot be used to reach root.** An account is enrolled only when it
+  definitely cannot `sudo`; members of `docker`, `lxd` and `disk` are refused, and a sudoers rule
+  for `ALL` users is refused with a message to narrow it.
+- **A compromised panel account can no longer choose what root runs.** On a root install, root
+  stages the helper, installer and recovery command from its own clone or an operator's root-owned
+  tree, never the panel-owned checkout, and an unfamiliar `origin` withholds them and says so.
+- **Secrets the panel cannot read, or should not expose.** With a mismatched `cred_key`, backups are
+  refused rather than written unencrypted, and a host-key pin reads "unreadable (cred_key mismatch)"
+  instead of accepting any key. The Ubuntu Pro token and Tailscale auth key travel on stdin.
+- **SSH hardening takes effect on cloud images.** It is now written to `00-panel-hardening.conf`,
+  which sshd reads first, so a cloud-init drop-in no longer overrides it.
+- **The weekly root cron no longer upgrades npm**, and no longer installs from the registry: it
+  re-runs the hash-locked gamedig install. On the panel host, NodeSource's repository is set up with
+  its signing key pinned.
+- **Auto-block cannot cut off your tailnet, or take over your own rules.** Tailnet addresses stay
+  exempt when the Tailscale probe fails, and an operator's own `ufw deny` is no longer replaced or
+  released. IPv6 offenders can now be blocked.
+- **Hostile input can no longer freeze the panel.** Crafted `?next=` values, logins, silent or
+  flooding remote hosts, hostile cron journal lines and costly backup headers can no longer stall
+  it.
+  Transitive Python dependencies are pinned too.
+- **A delegated admin can no longer take over an account that reaches more than they do.** An admin
+  may administer only accounts whose permissions and hosts are a subset of their own, and can add
+  only password-auth hosts. Changing a host's address, user or auth needs the new password.
+- **Delegated admins and viewers see only what they can reach.** Pages and APIs show only the hosts
+  and servers within their grants, and a delegated viewer of the audit log sees only their own rows
+  and those about servers and hosts they can access.
+- **Session protection is enforced.** A session is bound to its client's address and User-Agent.
+  Toggling a phone browser's "Request desktop site" signs you out; choose `basic` in Settings if
+  that gets in the way.
 - **The privileged helper no longer follows links, or accepts content the panel does not write.**
-  Root copied restore files through symlinks planted in the staging directory (reading
-  `/etc/shadow`, or writing into `/etc/cron.d`); the GMod content verbs chowned a symlinked
-  `~/serverfiles` to the content account, chmodded every symlink's target to 0777, printed any
-  root-readable file through a symlinked `mount.cfg`, and followed a symlinked `serverfiles` when
-  removing content; `content-cron-write` put any line into `/etc/cron.d`, one running as root
-  included; the offline database repair, the self-update log and the port picker wrote through names
-  the panel user could plant; and a restore gave root-created files the staged set-id bits. Files
-  are opened without following links, created fresh with a fixed mode, and read as the game account
-  where they live in its home. `write-file` accepted any numeric sysctl or `APT::` key and fail2ban
-  content that could run a command; both are exact allowlists now. The per-account verbs, which
-  reached any non-root account, are limited to the game-account group on a hardened host, and
-  imports are enrolled automatically. A restore no longer leaves a plaintext copy of the panel's
-  keys behind. The helper is root-owned and outside the checkout, so these reach a host when
-  `install.sh` runs as root.
-- **A game server can no longer be pointed at an account that is not its own.** A server named
-  `lgsmpanel` made root run `userdel -r` and `rm -rf` over the panel's own home — database, both
-  keys, config and every backup — for anyone with "manage servers"; the panel's account is now
-  recognised by what its home holds, even when `panel.conf` is unreadable. An install could take
-  over or delete an account that already existed, `root` included. Importing took the account name
-  from the request, so naming `root` created a server whose game commands then ran as root; it
-  accepts only what the scan found. And the remote rendering of `userdel -r`, `pkill -u` and
-  `crontab -u` accepted `root` where the helper refused it.
-- **The login throttle can no longer be dodged by choosing a header.** The client's address keys the
-  login and API-token throttles, the audit log and `data/auth.log`, which fail2ban reads. It came
-  from the first `X-Forwarded-For` hop — the one a client always controls — so twenty failed logins
-  with twenty values were never throttled, and fail2ban banned whichever address the attacker named.
-  The first fix preferred `X-Real-IP`, which Tailscale Serve, set up by the panel itself, passes
-  through from the client untouched. The address is now the last `X-Forwarded-For` hop, with
-  `X-Real-IP` only when there is no `X-Forwarded-For`, and neither is used unless it parses as an
-  address; a local account can no longer forge its login address either, and the README's nginx
-  example sets both headers. Behind a proxy the panel-login ban covers every port, not only the
-  panel's backend port.
-- **Session cookies and the console socket are tied to the right origin.** Behind a reverse proxy —
-  the setup the README recommends — the session and remember-me cookies were issued without
-  `Secure`, and a captured remember token is a working login for `remember_days`; a `site_domain` on
-  a plain-HTTP panel did the opposite, marking them `Secure` so the browser dropped them and login
-  looped forever. The CSRF exemption for API-token requests also covered a request signed in by the
-  remember cookie, so a logout carrying no CSRF token went through. `X-Forwarded-Prefix` could point
-  every link and redirect off-site with `//host`, and `/panelserver/1` was treated as under a
-  `/panel` mount. The console and terminal socket now accept only the panel's own origin, port
-  included, or `site_domain` — another node on the same tailnet is refused — so a reverse proxy that
-  rewrites `Host` to loopback and forwards no host needs `site_domain` set.
-- **The setup wizard cannot be finished, or reopened, by someone else.** On a fresh install an
-  unauthenticated POST could jump to the last step and close setup before any admin existed, leaving
-  a panel nobody could sign in to and reconfiguring Tailscale Serve on the way; completion now
-  requires a superadmin. The wizard stayed open after the admin account existed, its join-my-tailnet
-  step included. And it stored the panel's bind address unchecked — `0.0.0.0; rm -rf /` was
-  accepted, and the panel would not come back up.
-- **Two-factor authentication is harder to get around.** Turning 2FA off needed only the password —
-  a weaker gate than changing the password, which already asked for a code; it now needs a current
-  code or a backup code, and a backup code is not spent on a request that fails for another reason.
-  The code that turned 2FA on could be replayed at login within its ~90-second window. Generating an
-  API token needed only a session; it now asks for the password and, with 2FA on, a code, and a
-  password change or "sign out everywhere" now revokes API tokens, which survived both.
-  `manage.py`'s 2FA disable clears backup codes too, a pending 2FA secret no longer sits in the
-  session cookie, and a mistyped code no longer costs a bcrypt per backup code.
-- **Routes and sockets that did more than their permission allowed.** A custom command's
-  `argument_pattern` was never enforced — one restricted to `^(easy|normal|hard)$` sent `9999` — and
-  a pattern over 200 characters was stored truncated, which can turn it into "accept anything";
-  over-long patterns are refused now. "Refresh commands" needed only access to the server.
-  `playerlist?console=1` typed `status` into the game console for anyone who could see the server;
-  it needs console permission. The Tailscale install, up and serve endpoints act on the panel host
-  and now need superadmin, as do the install-wide whitelist and auto-block threshold on the remote
-  pages. Opening a game port needed only "install server" and took any port; it needs "manage
-  remotes" and a port a game server on that host uses. Dismissing an install card had no permission
-  check, and switching language wrote the stored preference on a GET any site could trigger. Console
-  access was checked once, at join: a viewer whose access, permission, session or account was
-  revoked — or who was told to change their password — kept watching. It is re-checked every poll
-  now.
-- **What players type can no longer steer moderation or Discord.** A Source `status` row puts the
-  name before the SteamID, so a player named `STEAM_0:1:11111111` had that ID on their row, and a
-  Ban click banned that third party — fleet-wide under "all servers", and into the global ban list.
-  A player named `my uniqueid` could blank the player list. A Minecraft kick of a name containing a
-  space could reach someone else; it is refused now. And Discord replies parsed mentions in player
-  names and console text, so a player could mass-ping the operator's Discord whenever an admin ran
-  `!players`.
-- **Stored values can no longer change where or how a command runs.** A remote's `auth_method`
-  selects its transport and was stored unchecked, so a forged `local` sent every command for that
-  host — console input, file writes, privileged verbs — to the panel's own machine; it is checked
-  against the three methods the form offers, and clearing a field on the edit form no longer stores
-  an empty host or user. Every security validator was anchored with `$`, which accepts a trailing
-  newline — `linuxgsm_user = "lgsm\n"` ran the panel's commands as the SSH login instead; they use
-  `\Z`. The root `apt-get` for game dependencies took package names unvalidated from a
-  panel-writable cache file, and the crontab rewrite put an unquoted account name into a root
-  pipeline.
-- **`linuxgsm-panel-recover` picks the right install, or asks.** Run as root during a lockout, it
-  took the alphabetically first per-user install under `/home` — where every game-server account
-  lives — so one could plant a fake panel and be handed the new superadmin password the operator
-  typed. It now refuses when there is more than one candidate, names them, takes `PANEL_DIR=` to
-  settle it, and prints which install it is using before asking for anything. It is installed
-  root-owned rather than linked to a panel-writable file, no longer pairs one install's directory
-  with another's service user, and a `panel.conf` it cannot read no longer ends the run.
-- **Smaller hardening.** The Tailscale Serve mount reached `tailscale serve --remove` unvalidated,
-  where a value starting with `-` is read as an option; ssh control sockets were trusted in a `/tmp`
-  directory anyone could create first; a remote host's `uptime` output reached the page as markup;
-  names from host discovery could forge a record; the delete guard let a path climb out and back
-  into `lgsm/`; and live metrics interpolated a stored game-user name unchecked.
-- **CSRF could be skipped by sending an `Authorization: Bearer` header.** The exemption exists
-  because an API-token request carries no cookie, so there is nothing for a cross-site page to
-  ride — but it tested only for the header, so a request sending both a Bearer header and a session
-  cookie skipped CSRF while being authenticated from the cookie. Not reachable from a browser (a
-  custom header forces a CORS preflight, and the `SameSite=Lax` cookie is not sent cross-site), so
-  this is the exemption now resting on the condition it claims rather than a fix for a live hole.
-- **A compromised remote host could inject markup into the panel.** A host's own
-  `tailscale status --json` output — its tailnet IP and MagicDNS name — plus the addresses returned
-  by the migrate endpoint and its live CPU figures went into the admin's page unescaped. The strict
-  CSP (no `unsafe-inline` for scripts) stops that becoming script execution, so this was HTML
-  injection rather than XSS, but it is the same class the 0.10.0 release fixed elsewhere and it
-  survived in `manage_remotes.js`. The regression gate written to catch the next one could not see
-  these: it only read the expression sitting at the sink, and this markup is accumulated into a
-  variable first. It now follows a variable to its sink, understands helpers that assign their own
-  parameter to `innerHTML`, and is verified by mutation against all seven values.
-- **`X-Forwarded-Prefix` was trusted from any client.** `PrefixMiddleware` read it unconditionally
-  while the panel can bind `0.0.0.0`. `SCRIPT_NAME` is what every `url_for()` and outgoing
-  `Location` is built from, so a caller could rewrite the links in its own response — including to a
-  protocol-relative `//host`. It is now believed only from loopback (where Tailscale Serve sits) or
-  when `trust_proxy` is set, which is the rule `client_ip()` has always applied to
-  `X-Forwarded-For`.
-- **The rolling database backup was left world-readable.** `data/panel.db.backup` and any
-  `panel.db.corrupt-*` copy hold every password hash and encrypted credential the live database
-  does, and were created at the process umask — the one set of files in `data/` that
-  `harden_data_permissions()` did not cover. (`data/` itself is `0700`, so this was defence in
-  depth, not exposure.)
+  Root no longer follows planted symlinks, and its file and cron writes accept only allowlisted
+  content. These reach a host when `install.sh` runs as root.
+- **A game server can no longer be pointed at an account that is not its own.** A server can no
+  longer make root delete the panel's own home, an install can no longer take over an existing
+  account (`root` included), and an import accepts only an account the scan found.
+- **The login throttle can no longer be dodged by choosing a header.** The client address is now
+  the last `X-Forwarded-For` hop, or `X-Real-IP` when there is none; the README's nginx example sets
+  both headers. Behind a proxy the panel-login ban covers every port.
+- **Session cookies and the console socket are tied to the right origin.** Cookies are `Secure`
+  behind a reverse proxy. The console and terminal socket accept only the panel's own origin or
+  `site_domain`, so a proxy that rewrites `Host` to loopback and forwards no host needs
+  `site_domain` set.
+- **The setup wizard cannot be finished, or reopened, by someone else.** Completing setup now
+  requires a superadmin, the wizard no longer stays open once the admin account exists, and the
+  bind address is checked.
+- **Two-factor authentication is harder to get around.** Turning 2FA off needs a current or backup
+  code, and generating an API token asks for the password (and a code with 2FA on). A password
+  change or "sign out everywhere" now revokes API tokens.
+- **Routes and sockets that did more than their permission allowed.**
+  - A custom command's `argument_pattern` is enforced; patterns over 200 characters are refused.
+  - `playerlist?console=1` needs console permission; the Tailscale install, up and serve endpoints
+    and the install-wide whitelist and auto-block threshold need superadmin.
+  - Opening a game port needs "manage remotes" and a port a game server on that host uses.
+  - Console access is re-checked every poll, so a revoked viewer stops watching.
+- **What players type can no longer steer moderation or Discord.** A player name can no longer get
+  someone else banned or kicked, or blank the player list, and Discord replies no longer ping from
+  player names or console text.
+- **Stored values can no longer change where or how a command runs.** A host's `auth_method` is
+  checked, so a forged `local` cannot send its commands to the panel's machine, and validators no
+  longer accept a trailing newline.
+- **`linuxgsm-panel-recover` picks the right install, or asks.** With more than one install it
+  refuses and names them; pass `PANEL_DIR=` to choose. It prints which install it uses first.
+- **Smaller hardening.** Fixed: unvalidated Tailscale Serve mounts, ssh control sockets in a shared
+  `/tmp` directory, a remote host's `uptime` rendered as markup, forged host-discovery records, a
+  delete guard that could climb out of `lgsm/`, and an unchecked game-user name in live metrics.
+- **CSRF could be skipped by sending an `Authorization: Bearer` header.** A request carrying both
+  that header and a session cookie no longer skips CSRF. It was not reachable from a browser.
+- **A compromised remote host could inject markup into the panel.** Its `tailscale status --json`
+  values, migrate addresses and live CPU figures are now escaped. The CSP kept it from running
+  script.
+- **`X-Forwarded-Prefix` was trusted from any client.** It is now believed only from loopback
+  (where Tailscale Serve sits) or when `trust_proxy` is set.
+- **The rolling database backup was left world-readable.** `data/panel.db.backup` and
+  `panel.db.corrupt-*` copies, which hold every password hash and credential, are now locked down
+  like the rest of `data/` (itself already `0700`).
 - **The self-signed TLS private key was written at the process umask, then chmodded.** It is now
-  created `0600` by `os.open`, so there is no window in which an unencrypted key is readable.
-- **The sudoers grant is no longer `NOPASSWD:ALL`.** On an install where the root-owned pieces are
-  present, `/etc/sudoers.d/linuxgsm-panel` now contains a single line permitting one command — the
-  privileged helper — and nothing else. Not `/bin/bash`, not `systemd-run`, not the `tailscale`
-  binary, not `sudo -u`: each of those runs whatever argv you hand it, so permitting any one would
-  be `NOPASSWD:ALL` in disguise. Each was a call site once; each is a verb now.
+  created `0600`, so it is never readable in between.
+- **The sudoers grant is no longer `NOPASSWD:ALL`.** Once all three root-owned pieces are present,
+  `/etc/sudoers.d/linuxgsm-panel` permits only the privileged helper. A host running new code that
+  has not had `install.sh` re-run as root keeps the wide grant; the installer prints which it wrote.
+- **`tailscale up` on the panel's own host wrote root's output to `/tmp`.** It now writes to the
+  root-owned `/run/panel-tailscale-up.log`, so a local user cannot redirect what root writes.
+- **A missing `data/config.json` reopened four unauthenticated setup endpoints.** A deleted or
+  corrupt config file on a configured panel unlocked the setup wizard's Tailscale endpoints to
+  anyone who could reach the port. They now use the wizard's own database-only lock.
+- **Three VPS-preparation actions could be aimed at the panel's own host.** The *Prepare* and
+  *Tailscale* routes now refuse the local host with a JSON 400 that says why.
+- **The privileged helper carries every local escalation.** Local root work goes through
+  `tools/panel-helper`, which validates each argument and runs a fixed command with no shell. See
+  SECURITY.md.
 
-  Getting there needed two things beyond the verb conversions. First, **root had to stop executing
-  code out of the panel's own checkout** — that directory is owned by the service user and rewritten
-  by `git pull`, so a boundary that let root run files from it would have been decorative; the
-  offline DB repair and the self-update now run root-owned copies placed only by `install.sh`.
-  Second, the grant **only narrows when all three root-owned pieces landed**; a host running new
-  code that has not had `install.sh` re-run as root keeps the wide grant, because it still falls
-  back to the pre-helper path and narrowing under that would break every privileged action rather
-  than secure anything. The installer prints which grant it wrote.
-- **`tailscale up` on the panel's own host wrote root's output to `/tmp`.** The local flow built its
-  own `sudo bash -c` script — a backgrounded `tailscale up`, a redirect to `/tmp/tsup.log`, and a
-  poll loop. `/tmp` is world-writable, so any local user could pre-create or symlink that path and
-  redirect what root wrote there. The equivalent REMOTE flow was converted to the
-  `tailscale-up-login` verb some time ago — which writes to `/run/panel-tailscale-up.log`
-  (root-owned, `0600`, cleared on reboot) — but the local twin was never switched over. It is now,
-  on every path: the helper when installed, the tool directly when already root, and the verb's own
-  rendered shell form otherwise, which uses the `/run` path too. `tailscale up` on this host also
-  stops needing `sudo bash`, which is one of the call sites blocking the sudoers grant from being
-  narrowed; a new census ratchet holds the remaining count at 1.
-- **A missing `data/config.json` reopened four unauthenticated setup endpoints.** The setup wizard's
-  Tailscale endpoints (`/api/setup/tailscale/{status,install,up,serve}`) have no login — during a
-  fresh install there is no user yet — so they are safe only for as long as their "setup is still
-  open" test is. That test was `is_setup_complete()`, which is *DB row AND config flag*, and the
-  config half fails open: `load_config()` returns `DEFAULT_CONFIG` (where `setup_complete` is
-  `False`) on any `JSONDecodeError`/`OSError`. On a fully configured panel, a `config.json` that was
-  deleted, truncated by a full disk, or hand-edited into invalid JSON therefore unlocked all four to
-  anyone who could reach the port: `install` runs the Tailscale installer as root, `up` returns an
-  auth URL that joins **the panel's host** to the caller's tailnet with SSH enabled, and `serve`
-  rewrites `bind_host` and `site_domain`. They now use the same DB-row-only lock the wizard itself
-  has used since the equivalent hole was closed there — the reasoning was already written down in
-  `setup_wizard()`, just never applied to these four. A lost config file should degrade the panel,
-  not hand it over.
-- **Three VPS-preparation actions could be aimed at the panel's own host.** The remotes page hides
-  *Prepare* and *Tailscale* for the local host, but the API routes behind them accepted a POST
-  carrying its id — so anyone with "manage remotes" could apt full-upgrade the panel's own machine,
-  rewrite its `sshd_config`, pipe an installer into a root shell, and reboot it out from under the
-  request. The routes refuse the local host now, with a JSON 400 that says why.
-- **The privileged helper carries every local escalation.** The panel escalated local work as
-  `sudo bash -c '<command>'`, which is why its sudoers grant could never be narrowed: permitting
-  `/bin/bash` *is* `NOPASSWD:ALL`. `tools/panel-helper` is a root-owned script that takes a verb and
-  separated arguments, re-validates each one, and runs a fixed command — no shell, and `bash` is not
-  a program it can reach. 86 verbs cover the `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
-  families, the log reads, user/cron management, the root-owned config writes, the sshd port change,
-  the deferred reboot, Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban
-  activity report and the VPS hardening steps. Root-escalating call sites that still build a shell
-  string are down from 131 to 4, the `_sudo_sh` route is gone entirely, and a ratcheting test counts
-  BOTH routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). See SECURITY.md.
-
-- **The panel could not hear its own deprecation warnings.** A filter installed at import time
-  silenced every `DeprecationWarning` in the process, permanently — and did not silence the one it
-  named, because eventlet's banner is not a `DeprecationWarning` at all, so it printed on every start
-  regardless. Running the panel under `-W always::DeprecationWarning` heard nothing. Now only
-  eventlet's banner is silenced, and `-W` / `PYTHONWARNINGS` work again.
+- **The panel could not hear its own deprecation warnings.** Only eventlet's banner is silenced
+  now, so `-W` and `PYTHONWARNINGS` work again.
 
 ## [0.10.0-alpha] — 2026-09-09
 
@@ -4238,7 +1646,7 @@ so this re-baselines it and starts the changelog. Notable changes since then:
   id/token).
 - The Telegram `/update` completion check compares the **git commit**, not the static VERSION.
 
-[Unreleased]: https://github.com/FMSMITH91/linuxgsm-panel/compare/v0.10.0-alpha...main
+[Since 0.10.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/compare/v0.10.0-alpha...main
 [0.10.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.10.0-alpha
 [0.9.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.9.0-alpha
 [0.8.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.8.0-alpha

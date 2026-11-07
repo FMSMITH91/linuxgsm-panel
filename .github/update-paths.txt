@@ -28,7 +28,6 @@ runtime VERSION
 runtime install.sh
 runtime uninstall.sh
 runtime recover.sh
-runtime reset-password.sh
 runtime requirements.txt
 runtime requirements-bootstrap.txt
 # The release key an update is checked against (install.sh _release_key_file). Installed root-owned

@@ -27,67 +27,30 @@ A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game s
 curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 ```
 
-**What the installer does** — one command, unattended:
+The installer runs unattended. It:
 
-1. Installs the prerequisites it needs (`python3-venv`, `python3-pip`, `git`, `curl`, `wget`, `cron`, `ufw`, `openssh-client`, and `tzdata` if it is missing).
-2. Patches the OS with `apt full-upgrade` — skip with `PANEL_NO_UPGRADE=1 bash install.sh`. If the
-   upgrade needs a reboot it reboots the host (unless game servers are running); `PANEL_NO_REBOOT=1`
-   keeps the upgrade and skips the reboot, on a first install and on an update.
-3. Clones the repo, builds a Python virtualenv, and installs the panel's dependencies.
-4. Picks a free port (5000 by default) and records it in `data/config.json`.
-5. Sets up the service — **and never runs the panel as root**:
-   - **As a normal user** → a `systemd --user` service with linger, so it survives logout/reboot.
-   - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Remove the sudoers entry if this panel only ever manages *remote* servers — but that also turns off the in-panel **Update** (and the bot's `/update`), panel backup restore and the database repair, so you then update by hand over SSH with `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
-   - Either way, it installs the `linuxgsm-panel-recover` command (reset a password, turn off 2FA, create an admin from a shell).
-6. Leaves the **host terminal**'s `sudo` alone. The panel user's grant names only its privileged
-   helper and the game-server accounts the panel manages, so in a terminal on the panel host
-   `sudo` to root *refuses* rather than prompting, while `sudo -u <game account>` (an account the
-   panel enrolled) runs without a password, as the panel's own game commands do. To allow root,
-   re-run the installer with `PANEL_TERMINAL_SUDO=1` and give the panel user a password
-   (`sudo passwd lgsmpanel`) — sudo then asks for that password every time, and
-   `PANEL_TERMINAL_SUDO=0` removes the grant again. Worth knowing before you enable it: you would
-   be typing that password into a terminal the panel itself renders, so it protects you against a
-   stolen panel session, not against a compromised panel. Remote hosts are untouched by this —
-   whatever their own account already has is what applies.
-   **Tailscale SSH on the panel host** is chosen here too, because with it on, the tailnet the host
-   joins decides who may log in as root: the installer asks (no by default, and no when nobody is
-   at a terminal), `PANEL_TAILSCALE_SSH=1` or `=0` answers ahead (put it AFTER `sudo`, which
-   drops a variable set before it: `curl … | sudo PANEL_TAILSCALE_SSH=1 bash`, or
-   `sudo PANEL_TAILSCALE_SSH=1 bash install.sh`; on a per-user install, run it as the panel's user
-   without `sudo`), and an update keeps the answer.
-   A host already running Tailscale SSH is recorded as yes, so it keeps working. Without it the
-   panel's **Connect** still joins the host to Tailscale, just without SSH, and **Enable Tailscale
-   SSH** is shown read-only. Remote hosts are untouched by this.
-7. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots** if step 2's upgrade needs it and no game server is running.
+1. Installs its prerequisites and patches the OS with `apt full-upgrade` (skip with `PANEL_NO_UPGRADE=1`). If the upgrade needs a reboot it reboots at the end, unless game servers are running; `PANEL_NO_REBOOT=1` skips the reboot.
+2. Clones the repo, builds a Python virtualenv, picks a free port (5000 by default) and serves HTTPS with a self-signed certificate.
+3. Sets up the service, **never running the panel as root**:
+   - **As a normal user** → a `systemd --user` service with linger, so it survives logout and reboot.
+   - **As root** → a dedicated non-login **`lgsmpanel`** user running a system service, with a scoped passwordless-sudo entry for managing the local host (see [SECURITY.md](.github/SECURITY.md)).
+   - Either way, the `linuxgsm-panel-recover` command (reset a password, turn off 2FA, create an admin from a shell).
+4. Asks whether to turn on **Tailscale SSH on the panel host** (no by default). Answer ahead with `PANEL_TAILSCALE_SSH=1` or `=0`, placed after `sudo`: `curl … | sudo PANEL_TAILSCALE_SSH=1 bash`. An update keeps the answer.
 
-Then finish in the browser: open **the link the installer prints at the end** — `https://your-server:5000/setup?token=…` (`http://` won't load — it's TLS-only) — accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
+In a terminal on the panel host, `sudo` to root is refused (the panel user's grant names only its helper and the game accounts). To allow it, re-run the installer with `PANEL_TERMINAL_SUDO=1` and give the panel user a password (`sudo passwd lgsmpanel`); sudo then asks for it every time, and `PANEL_TERMINAL_SUDO=0` removes it. You would be typing that password into a terminal the panel renders, so it protects against a stolen session, not a compromised panel.
 
-The token in that link is what makes the install yours. Until the first admin exists the wizard answers only to a browser that has shown it, so nobody else who reaches the port first can create that account. It is single-use: it is deleted once the admin exists. Lost the link? `sudo linuxgsm-panel-recover setup-token` prints it again (or open `/setup` and paste the token).
+Then open **the link the installer prints at the end** — `https://your-server:5000/setup?token=…` (`http://` won't load) — accept the one-time certificate warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin. The token makes the install yours: until the first admin exists, only a browser that has shown it can use the wizard. Lost the link? `sudo linuxgsm-panel-recover setup-token` prints it again.
 
 ### Updating
 
-Trigger it one of two ways:
+- **In the panel:** *Panel Server → Update* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
+- **From the shell:** re-run the install command (or `bash install.sh` from the checkout). This takes the branch tip directly, without the CI gate.
 
-- **In the panel:** *Panel Server → Update*. This is **CI-gated** — it only moves to a commit whose checks have all passed — and runs detached so it survives its own restart. Also available via the Telegram/Discord `/update` command.
-- **From the shell:** re-run the same command (or `bash install.sh` from the checkout). A manual re-run pulls the branch tip directly (not CI-gated), so do it when you know the tip is good.
+Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
 
-**Only signed releases are installed.** Either way, the installer already on the host moves the panel only to a commit signed with the project's release SSH key, which is kept off GitHub and is not the key GitHub signs merges with. So someone who took over the project's GitHub account could push code, but the panel's update would not install it: it stays where it is and says "Not updated: held at …, because commit … is not signed with this host's release key". The update card offers only a signed commit. The public key is the repository's `release-signers` file, and the host checks against the copy it already has (root-owned in `/usr/local/lib/linuxgsm-panel` on a root install), never the copy inside the update. A new key therefore arrives only in a release the current key signed. A release is signed with `tools/sign-release.sh <commit>`, which first shows what changed since the last signed release and asks for the commit id's first 12 characters to be typed, then starts the test host's deploy. A fresh install has no key to check against yet (trust on first use); see [SECURITY.md](.github/SECURITY.md) for what to check after the first update.
+**Only signed releases are installed.** The installer already on the host moves the panel only to a commit signed with the project's release SSH key, which is kept off GitHub. Anything else is held with "Not updated: held at …" and the reason. The host checks against its own copy of the public key (`release-signers`), never the copy inside the update. A first install with `curl … | bash` has no key to check against yet; see [SECURITY.md](.github/SECURITY.md) for what to check after the first update. If a host says it has no release key, run the installer by hand once over SSH with `PANEL_ALLOW_UNSIGNED_UPDATE=1`: `cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ~/linuxgsm-panel/install.sh` (per-user).
 
-If the key is ever lost, or a host says it has no release key, commit the new public key to `release-signers` and run the installer by hand on each host with `PANEL_ALLOW_UNSIGNED_UPDATE=1`, over SSH: `cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh` on a root install, `PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ~/linuxgsm-panel/install.sh` on a per-user one. The panel itself can never pass that setting. Installing with `curl … | bash` runs the installer from GitHub, so it is not covered by the signature: use it only for a first install.
-
-**Versions are dates.** The panel's version is the date of the commit it runs, in UTC, written without leading zeros: `2026.9.26`. It is always shown with the short commit (`2026.9.26 · a1b2c3d` in the footer), because every commit made on the same day shares the date. Nothing is bumped by hand; a copy downloaded as a ZIP from GitHub reads the date from its `VERSION` file, which git fills in when it builds the archive.
-
-**What the updater does** — the same safe path either way:
-
-1. **Checks if there's anything to do.** If you're already on the target version it stops here — no snapshot, panel left running. A commit the panel already contains leaves it where it is. It also stops here, saying "Not updated: held at …" and why, when the commit it was given cannot be verified, or would move the panel sideways rather than forward. An in-panel update that stops at this step (that, or an unreachable update source) is reported on the update card with the installer's reason.
-2. **Snapshots the current code *and* database** to a timestamped backup (keeps the last 3).
-3. **Checks and optimises the database** with the service stopped (the snapshot from step 2 is the fallback if anything goes wrong).
-4. **Fetches the new version** — the CI-verified commit for an in-panel update, the branch tip for a manual re-run.
-5. **Installs dependencies** — but only if `requirements.txt` or `requirements-bootstrap.txt` (pip itself, which is installed hash-checked from that file before anything else) actually changed, so a code-only update doesn't rebuild anything.
-6. **Starts the service** back up.
-7. **Health-checks that the panel answers.** On success it prunes old snapshots; on failure it **auto-rolls-back the code *and* database** to the snapshot — so a broken release can't leave you with a dead panel.
-
-On a root / system install, the updater also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel` (the privileged helper, the offline database tool, gamedig's lockfile and install script, and the installer itself). It takes them from `main` only when the panel starts the update, and never from a commit of `main` older than the last one it installed them from. If you switch the panel to another branch, its code moves but those pieces stay as they were. To take them from a branch on purpose, run `cd / && sudo PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh` yourself over SSH (not in the panel's own terminal, which counts as the panel). [SECURITY.md](.github/SECURITY.md) explains why.
+**Versions are dates**: the date of the commit, in UTC, shown with the short commit (`2026.9.26 · a1b2c3d` in the footer).
 
 ## Uninstall
 
@@ -97,35 +60,22 @@ bash ~/linuxgsm-panel/uninstall.sh                     # per-user install
 #   add --yes to skip the "type yes to confirm" prompt
 ```
 
-On a root install, run the root-owned copy the installer keeps in `/usr/local/lib/linuxgsm-panel`, not the one in the panel's checkout: that one belongs to the panel's own account, and root should never run a file the panel can rewrite. (An install from before that copy existed gets it with its next update.)
+On a root install, run the root-owned copy above, not the one in the panel's checkout. The uninstaller removes the service, the panel's own firewall rule and Tailscale Serve routes, the panel files and `data/` (accounts, config and keys) and, on a root install, everything the installer put outside the panel directory (the sudoers entry, the helper directory with gamedig, its links and weekly cron, the recovery command, the sysctl tuning and the `lgsmpanel` user). It leaves NodeSource's apt repository and automatic security updates in place, and names them.
 
-**What the uninstaller does:**
-
-1. **Detects** whether it's a root/system install or a per-user one (and refuses to run without `sudo` on a root install).
-2. **Asks you to confirm** — type `yes` (or pass `--yes`); anything else aborts with nothing changed.
-3. **Stops, disables, and removes** the systemd service and its priority drop-in.
-4. Removes the panel's **own** UFW port rule — never a game-server port — and every Tailscale Serve route that pointed at the panel's port, one at a time with `tailscale serve --https=<port> --set-path=<mount> off`. Other apps' Serve routes are left alone, and if Serve's config can't be read nothing is removed and it says so. (Both install kinds.)
-5. **Deletes the panel files and its `data/`** — accounts, config, and encryption keys.
-6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`, which holds the panel's gamedig install too), the `/usr/local/bin/gamedig` and `/usr/bin/gamedig` links into it (only when they point there), the `linuxgsm-panel-recover` command, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
-
-It **leaves in place, and names,** host configuration the installer may have added that other software can rely on: NodeSource's apt repository for Node.js (`/etc/apt/sources.list.d/nodesource.sources`, its key `/usr/share/keyrings/nodesource.gpg` and the nodejs pin `/etc/apt/preferences.d/nodejs`) and automatic security updates (`/etc/apt/apt.conf.d/20auto-upgrades`).
-
-**Your game servers are left completely alone** — their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched, so every server keeps running exactly as before once the panel is gone.
+**Your game servers are left completely alone** — their users, files, LinuxGSM installs, autostart crontabs and game-port firewall rules are never touched.
 
 ### Removing a host
 
-Deleting a host on **Remote Servers** (the trash button) makes the panel forget it and its game servers. The panel does not connect to the host to do that, so nothing on the host changes: its game servers, their accounts, files and crontabs, keep running as before. The panel's daily gamedig pass works only through the hosts the panel still has, so it stops touching the host at once; a pass already under way skips it too (unless it is working on that very host at that moment, when it finishes that one step).
+Deleting a host on **Remote Servers** makes the panel forget it and its game servers. The panel does not connect to the host to do that, so nothing on it changes and its game servers keep running. What the panel put there stays:
 
-What the panel put on a remote host, and leaves there:
+- **gamedig**, the player-query tool, in `/usr/local/lib/linuxgsm-panel/gamedig`, with the links `/usr/local/bin/gamedig` and `/usr/bin/gamedig` into it.
+- **its weekly root cron**, `/etc/cron.d/lgsm-node-tools` (it fetches nothing while the tree is in place), and its log, `/var/log/lgsm-node-tools.log`.
+- **Tailscale, if the panel set it up there.** This is the one leftover that is still a way in: `sudo tailscale logout` (or remove the machine in the Tailscale admin console), then `sudo ufw delete allow in on tailscale0` and `sudo rm -f /etc/sysctl.d/99-tailscale.conf`.
+- **the fail2ban whitelist file** (its addresses can never be banned there): `sudo rm -f /etc/fail2ban/jail.d/zz-panel-whitelist.local && sudo fail2ban-client reload`.
+- **auto-block firewall rules**, UFW denies commented `panel-autoblock` (`sudo ufw status numbered`, then `sudo ufw delete <n>`).
+- **whatever "Prepare & Secure" set up**, if you ran it: ordinary host configuration (packages, UFW, fail2ban, SSH hardening, swap, timezone, automatic updates).
 
-- **gamedig**, the player-query tool, in `/usr/local/lib/linuxgsm-panel/gamedig`, with the links `/usr/local/bin/gamedig` and `/usr/bin/gamedig` into it. Every remote the panel reached gets it.
-- **its weekly root cron**, `/etc/cron.d/lgsm-node-tools`, which re-runs gamedig's install script (it fetches nothing while the tree is in place), and its log, `/var/log/lgsm-node-tools.log`.
-- **Tailscale, if the panel set it up there**: the host stays on your tailnet (with Tailscale SSH on, if it was), reachable from every node your tailnet's access rules allow, with UFW's `allow in on tailscale0` rule and, if routes were advertised, `/etc/sysctl.d/99-tailscale.conf`. This is the one leftover that is still a way in: `sudo tailscale logout` (or remove the machine in the Tailscale admin console), then `sudo ufw delete allow in on tailscale0` and `sudo rm -f /etc/sysctl.d/99-tailscale.conf`.
-- **the fail2ban whitelist file**, `/etc/fail2ban/jail.d/zz-panel-whitelist.local`, on any remote with fail2ban (written whenever the panel's security whitelist changes): the addresses in it can never be banned by any jail there, sshd included. `sudo rm -f /etc/fail2ban/jail.d/zz-panel-whitelist.local && sudo fail2ban-client reload`.
-- **auto-block firewall rules**, UFW denies commented `panel-autoblock`, which nothing releases once the host is gone (`sudo ufw status numbered`, then `sudo ufw delete <n>`).
-- **whatever "Prepare & Secure" set up**, if you ran it: packages (Node.js, and NodeSource's apt source on a host that had no Node 18 or newer; jq and the other basics), UFW, fail2ban, the SSH hardening, swap, the timezone, the services it disabled, and automatic security updates. That is ordinary host configuration; undo it only if you want it gone.
-
-To remove the panel's gamedig and its cron, run this on the host itself, over SSH. **Not on a host where a panel is installed**: there `uninstall.sh` removes them, and the panel needs them while it runs. And if you keep that host's game servers with "restart when empty" on, keep gamedig: that schedule counts players with it.
+To remove the panel's gamedig and its cron, run this on the host over SSH — **not on a host where a panel is installed** (there `uninstall.sh` removes them), and not if that host's servers use "restart when empty", which counts players with gamedig:
 
 ```bash
 sudo rm -f /etc/cron.d/lgsm-node-tools /var/log/lgsm-node-tools.log
@@ -140,54 +90,52 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 
 ### Game servers
 
-- One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs. The install page shows each game's icon, with a search box; the panel fetches the icons itself, so the browser only ever talks to the panel.
-- Real-time WebSocket console, command sending (↑/↓ recalls earlier commands, and buttons hold each game's common ones), LinuxGSM's script log and the game's own log beside the live one, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks). gamedig is installed on each host from a hash-locked lockfile in `tools/gamedig`, updated through reviewed Dependabot pull requests.
-- Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups and mod changes can wait until a server is empty.
-- **Clean host reboots** — rebooting a host from the panel stops its running game servers cleanly first, then brings back the ones that were running (stopped servers stay stopped; a setting can leave a server without Autostart stopped). With players on, you choose: reboot once everyone has left, or now (players are warned in-game with a 60-second countdown where the game can show a message). See [Rebooting a host](#rebooting-a-host).
-- Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload, download (a folder comes down as a `.tar.gz`) and in-browser editing.
-- **Settings form** for LinuxGSM's config: every setting with LinuxGSM's own help text, its default, and a badge for the file the value comes from. Changes are saved to the server's own config, never to `_default.cfg` (LinuxGSM overwrites that one).
-- **Scheduled Rust wipes** — a map wipe or a full wipe on a schedule, with a backup taken first and no wipe if that backup fails.
-- **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.
+- One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), with search and game icons.
+- Real-time console with command history and quick commands, LinuxGSM's script log and the game's own log, per-game CPU/RAM/uptime, and live player counts.
+- Start/stop/restart/update/validate and more; restart, stop, backups and mod changes can wait until a server is empty.
+- **Clean host reboots** — game servers are stopped cleanly first and the ones that were running come back. See [Rebooting a host](#rebooting-a-host).
+- Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL, per-server schedules with autostart and restart-when-empty, and a file browser with upload, download and in-browser editing.
+- A **settings form** for LinuxGSM's config, with LinuxGSM's own help for every setting.
+- **Scheduled Rust wipes**, with a backup taken first.
+- **Garry's Mod content mounting** — one shared copy of CS:Source and other Source games' content per host, mounted read-only into each GMod server.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
 
 ### Backups
 
-- One-click and scheduled backups of the panel (DB, settings, keys) and of each game server (LinuxGSM full backups), with retention, download, and restore.
-- Per-server schedules override a global default; player-aware (busy servers queue) and disk-aware (won't start a backup that can't fit).
+- One-click and scheduled backups of the panel (database, settings, keys) and of each game server, with retention, download and restore. Busy servers queue, and a backup that cannot fit on disk does not start.
 
 ### Access, security & hosts
 
-- Multi-user RBAC (Super Admin / Server Admin / Moderator / Viewer) — groups set per-action permissions and per-server access, enforced server-side on every route.
-- Fine-grained moderation (**kick / ban / announce** individually) and superadmin-defined **custom console commands** with a charset-validated argument, granted per group.
-- One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall (default policies, on/off, logging, port and IP-range blocks, all with lock-out checks), power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
-- **Brute-force defense** — fail2ban integration with per-jail logs, top offenders, one-click UFW blocking, and an optional rolling **auto-block** that firewalls every IP over a failed-attempt threshold (default 20 / 7 days) and releases it once its count drops back below. A whitelist (IP/CIDR) is never banned or blocked, on any jail of any host; your Tailscale peers are never banned from the panel or auto-blocked. A ban also closes any console or terminal already open from that address, and API-token guessing that carries on past its rate limit is banned too.
-- **Proactive admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 20 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you). ntfy needs no account — subscribe to a topic in its app and alerts reach your phone; point it at ntfy.sh or your own instance.
-- **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/console <name>`, `/connect <name>`, `/say <name> <message>`, `/backup <name>`, `/update` (the panel, or one server with a name), `/start` / `/stop` / `/restart <name>`, and `/help`. Opt-in and locked to the configured chat/channel.
-- Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
+- Users and groups (Super Admin / Server Admin / Moderator / Viewer) with per-action permissions and per-server access, enforced server-side on every route.
+- One host page for the panel and every remote: specs, live resources, OS updates, UFW firewall with lock-out checks, power controls, Ubuntu Pro, SSH lockdown, and lock-out-safe port changes.
+- **Brute-force defense** — fail2ban logs and top offenders, one-click UFW blocking, and an optional rolling **auto-block**. A whitelist is never banned or blocked, and your Tailscale peers are never banned from the panel or auto-blocked.
+- **Admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 20 events — server down, host unreachable, disk low, high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more.
+- **Chat command bot** (Telegram *or* Discord): `/status`, `/servers`, `/players <name>`, `/start` / `/stop` / `/restart <name>`, `/update` and more. Opt-in and locked to the configured chat.
+- Tailscale integration, multiple SSH remotes with host-key pinning, a web terminal, diagnostics, and audit logging.
 
-**Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); a light or dark theme per account (or follow the device); installable as an app on a phone's home screen; a **What's new** card after each update; and a first-run setup wizard.
+**Also:** branding and session settings in-app, HTTPS by default, TOTP 2FA with backup codes, English/Spanish/French, light and dark themes, installable on a phone's home screen, and a **What's new** card after each update.
 
 ### Rebooting a host
 
-Every reboot the panel makes — the host's **Power** card (the panel host's too), the reboot-needed banner, the command palette, "reboot when everyone has left" and the API below — goes the same way:
+Every reboot the panel makes goes the same way:
 
-1. **Who is on.** Each running game server's players are counted. With anyone on (or a server whose count can't be read), you choose **Wait: reboot when everyone has left** or **Reboot now**. Work that a reboot would cut off — an install, a backup, LinuxGSM maintenance, a package upgrade — refuses "now" and lets you wait for it instead.
-2. **Stop cleanly.** On a forced reboot, players are warned in-game first (60, 30 and 10 seconds) on every server whose game can show a message — one whose player count can't be read included — then each running server gets LinuxGSM's own graceful `stop` (saves written, players told), verified by its tmux session, never by the exit code.
-3. **Reboot**, then **bring back exactly what was running**. A server with Autostart comes back the way it always has: LinuxGSM's `*/5` monitor restarts it about 5 minutes after boot, because the panel leaves its LinuxGSM monitoring lock exactly as it found it. A running server *without* Autostart is started by the panel once the host is back (a setting turns this off). A stopped server stays stopped.
-4. **One summary** in the panel's notifications: how soon after the reboot was sent the host's new boot started and its servers were running again ("X rebooted: its new boot started within 20 s of the reboot being sent. 4/4 running again within 6 min of the reboot being sent …"), how many stayed stopped and why, and which have not come back (one LinuxGSM's monitor brings back gets 12 minutes from the new boot). If the reboot did not happen (the host refused it, or the panel restarted before sending it), every server is put back as it was, except one whose stop was queued, and you are told.
+1. **Who is on.** With players on (or a count that can't be read), you choose **Wait: reboot when everyone has left** or **Reboot now**. Work a reboot would cut off (an install, a backup, an upgrade) refuses "now".
+2. **Stop cleanly.** On a forced reboot players are warned in-game (60, 30 and 10 seconds) where the game can show a message, then each server gets LinuxGSM's graceful `stop`.
+3. **Reboot and bring back what was running.** Servers with Autostart come back through LinuxGSM's monitor about 5 minutes after boot; the panel starts running servers without Autostart (a setting turns this off). Stopped servers stay stopped.
+4. **One summary** in notifications says what came back and what did not.
 
-A pending "reboot when everyone has left" shows on the host's Power card with a **Cancel** button, gives up after 24 hours by default (Settings → Host reboots, `reboot_wait_max_hours`; 0 waits for as long as it takes), and is cancelled — with a notification — if the panel itself restarts. It is refused when asked for if the panel could not reboot that host (sudo refused, or no answer); if that happens later, when it fires, it says so once and tries again every 10 minutes. A Cancel the panel accepts is never followed by the reboot. Reboots made outside the panel (`sudo reboot` in a terminal, your provider's console) are not changed.
+A pending wait shows on the host's Power card with a **Cancel** button and gives up after 24 hours by default (`reboot_wait_max_hours`; 0 waits as long as it takes). Reboots made outside the panel are not changed.
 
-The API takes a session cookie or an `Authorization: Bearer <token>` (Account → API access), with the same permissions as the page (`manage_remotes` and access to the host; the panel's own host is superadmin-only):
+The API takes a session cookie or an `Authorization: Bearer <token>` (Account → API access), with the same permissions as the page:
 
 | Request | Does |
 |---------|------|
-| `POST /api/remote/<id>/reboot` `{"mode": "now" \| "when_empty"}` | Reboot cleanly now (202), or arm the wait (200). With no `mode` and players on, answers **409** `{"error": "players_online", "needs_choice": true, "choices": [...], "players": {...}}` instead of rebooting; a host the panel could not reboot answers **409** `{"error": "preflight"}` for either mode. The older `{"when_empty": true}` / `{"force": true}` still work. |
-| `POST /api/remote/<id>/reboot-cancel` | Cancel the wait, or a reboot that has not been sent yet |
-| `GET /api/remote/<id>/players` | Who is on: `{state, total, busy, unknown, blockers}` |
-| `GET /api/remote/<id>/reboot-plan` | What a reboot is doing: `{wait, job, rows, last}`; with `?preview=1`, what it would do to each server |
-| `GET /api/remote/<id>/reboot-required` | Whether a reboot is needed, plus any `wait` or `job` |
-| `POST /api/server-management/reboot` `{"delay": 0-300, "mode": ...}` | The panel's own host, the same way (superadmin) |
+| `POST /api/remote/<id>/reboot` `{"mode": "now" \| "when_empty"}` | Reboot now (202) or arm the wait (200). With no `mode` and players on: **409** `{"error": "players_online", ...}` |
+| `POST /api/remote/<id>/reboot-cancel` | Cancel the wait, or a reboot not yet sent |
+| `GET /api/remote/<id>/players` | Who is on |
+| `GET /api/remote/<id>/reboot-plan` | What a reboot is doing (`?preview=1`: what it would do) |
+| `GET /api/remote/<id>/reboot-required` | Whether a reboot is needed |
+| `POST /api/server-management/reboot` `{"delay": 0-300, "mode": ...}` | The panel's own host (superadmin) |
 
 ## Screenshots
 
@@ -223,15 +171,13 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
 
-Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, and the two host-reboot settings are editable in-app at **Administration → Settings** (superadmin) and apply live. The brute-force auto-block threshold is shown there and changed on a host page's **Security** tab. The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding** (superadmin), which also updates the firewall and restarts the panel; `trust_proxy` stays in `config.json`.
+Branding, the default language, session settings and the two reboot settings are also editable at **Administration → Settings** (superadmin). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 
 Groups grant any mix of these, scoped to specific servers/hosts. Super Admin is **not** one of
 them — it is the `is_superadmin` flag on the account, set on the Users page, and it bypasses every
-check. (It used to be grantable as a `super_admin` permission; that was removed because a group
-holding it passed the route decorators while every flag-based gate and the whole nav still refused
-the account. Any leftover grant is stripped at startup.)
+check.
 
 | Permission | Grants |
 |------------|--------|
@@ -243,13 +189,11 @@ the account. Any leftover grant is stripped at startup.)
 | `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
 
-**Typical groups:** *Admins* — view + power + `manage_servers`; *Moderators* — view + `kick/ban/say` on specific servers; *Viewers* — `view_servers` only. Super Admin is auto-granted via `is_superadmin` (no group needed).
-
 ## Production deployment
 
-Run behind **Tailscale** (recommended — tailnet-only, no open ports; auto-detected in the wizard or managed at `/tailscale`) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](docs/https.md).
+Run behind **Tailscale** (recommended — tailnet-only, no open ports) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](docs/https.md).
 
-For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page, not a `tailscale serve` command of your own. The panel then writes the route itself, on the scheme it is actually serving (its own self-signed HTTPS by default, which needs `https+insecure://`; plain `http://` only once it is bound to `127.0.0.1` with Serve set up), records the mount in `tailscale_mount`, and re-points the route at every start. A route you add by hand is one the panel does not manage: nothing re-points it, so it answers 502 once the panel's scheme changes, and a hand-made one at `/` makes the wizard publish the panel a second time at `/lgsm`. On the panel's own host the panel changes Tailscale (Connect, Serve, Tailscale SSH) only through its root-owned helper, and its account is not the Tailscale *operator* (an install or update takes that role back from it whenever it holds it; on a per-user install that account is your own login), so a `tailscale serve` command you run yourself there needs `sudo`. If you already have one, the `/tailscale` page lists it with a **Remove** button, and the debug report names it with the exact `sudo tailscale serve --https=443 --set-path=<mount> off` that removes it.
+For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page rather than a `tailscale serve` command of your own: the panel then writes the route on the scheme it is actually serving and keeps it pointed at the panel. A route you add by hand is not managed, and on the panel's host such a command needs `sudo`. The `/tailscale` page lists a hand-made route with a **Remove** button.
 
 ```nginx
 # Reverse proxy — the WebSocket console needs the upgrade headers
@@ -260,15 +204,11 @@ location / {
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    # Append the real peer rather than passing the client's own copy through. Without this line
-    # nginx forwards whatever X-Forwarded-For the client sent, and anything reading that header
-    # is reading a value the client chose. THIS is the line the panel depends on: it reads the
-    # LAST X-Forwarded-For hop, which is the peer nginx appended, and only falls back to
-    # X-Real-IP when the header is absent entirely. Set both.
+    # The panel reads the LAST X-Forwarded-For hop, the peer nginx appends here, so the client
+    # cannot choose its own address. Set both this and X-Real-IP.
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    # The port the browser came in on: the firewall's lock-out check reads it when your address has
-    # more than one connection open to this host.
+    # The firewall's lock-out check reads the port the browser came in on.
     proxy_set_header X-Forwarded-Port $server_port;
     proxy_read_timeout 86400;
 }
@@ -277,16 +217,12 @@ location / {
 ## Security
 
 - **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
-- **Passwords** bcrypt-hashed with a length/case/number/symbol policy; logins are rate-limited.
-- **Two-factor (TOTP)** optional per account, with one-time backup codes; super admins without it are reminded.
-- **Sessions** — signed `HttpOnly` `SameSite=Lax` `Secure`-over-HTTPS cookies with a sliding idle timeout and a capped "remember me". "Sign out everywhere" revokes every session server-side.
-- **Encryption at rest** — SSH credentials, emails, and 2FA secrets are Fernet-encrypted in `data/panel.db` (key in `data/cred_key`); `data/` is `chmod 700`, secrets inside `chmod 600`.
-- **SSH host-key pinning** — refuses to connect if a host's key changes; re-trust a reinstalled host in one click.
-- **Signed updates** — the updater installs only a release signed with the release SSH key (see [Updating](#updating)), so control of the GitHub account alone cannot push code to installed panels.
-- **RBAC enforced server-side** on every route, scoped per host, covered by automated tests.
-- **CSRF protection, a strict CSP, and security headers** (HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) on every response; input validation on anything that becomes an OS operation.
+- **Passwords** bcrypt-hashed with a strength policy; logins are rate-limited. Optional **TOTP 2FA** with backup codes.
+- **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
+- **Encryption at rest** — SSH credentials, emails and 2FA secrets are encrypted in `data/panel.db` (key in `data/cred_key`); `data/` is `chmod 700`.
+- **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict CSP and security headers, and input validation on anything that becomes an OS operation.
 
-> Prefer running behind Tailscale over exposing the panel to the internet, and never commit `data/` (it holds `panel.db`, `secret_key`, `cred_key`, `config.json` — already in `.gitignore`).
+> Prefer Tailscale over exposing the panel to the internet, and never commit `data/` (already in `.gitignore`). The security model, including what the panel can do as root on its own host, is in [SECURITY.md](.github/SECURITY.md).
 
 ### Recovery
 
@@ -313,59 +249,23 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python app.py
 
-# The test tools CI installs beside them (esprima, which the template checks need, builds from source)
+# The test tools CI installs beside them
 pip install --require-hashes -r .github/ci-requirements-checks/build.txt
 pip install --require-hashes --no-build-isolation -r .github/ci-requirements-checks/checks.txt
 
-# Every suite, each in a throwaway copy of the tree with sudo refused and outbound connections blocked.
-# A failing suite does not stop the loop, so every suite runs; the names of the ones that failed
-# are printed at the end.
+# Every suite, each in a throwaway copy of the tree with sudo refused and outbound connections blocked
 failed=""; for s in tests/*_test.py; do PYTHON=./venv/bin/python ./tools/smoke-local.sh "$s" || failed="$failed $s"; done; echo "failed:${failed:- none}"
 ```
 
-`tools/run-tests.sh` (compile, flake8, shellcheck, then every suite) is what CI runs. Do not run it on your own machine: it boots the app with real `sudo -n` probes, which pam_faillock counts until it locks you out of sudo, and real outbound SSH to the test fixtures' hosts. `tools/smoke-local.sh` runs the same suites without either.
+Use `tools/smoke-local.sh`, not `tools/run-tests.sh` (what CI runs): the latter makes real `sudo -n` probes, which can lock you out of sudo, and real outbound SSH.
 
-CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, zizmor (on the workflows themselves), a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records the job's outbound connections and the processes it runs as root (in the job's public log, and with StepSecurity), routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
+CI also runs CodeQL, Bandit, Semgrep, zizmor, a dependency audit and fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records outbound connections and root processes in the job's public log, routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
 
-The panel's own JavaScript (`static/js/`) is measured separately, in a real browser: `tools/js_coverage/run.py` boots a seeded panel in a throwaway copy of the tree, with every host command answered by a fake host, walks its pages and controls in headless Chrome, and writes V8's coverage as LCOV (`python tools/js_coverage/run.py --summary js-coverage.txt` with Chrome or Chromium installed; it never touches `data/`). CI sends that to Codacy beside the Python report.
-
-### Layout
-
-The application lives in `panel/`, layered so that each package's **module-level** imports
-only reach packages above it in this list:
-
-| Package | Holds | Imports from |
-|---|---|---|
-| `panel/core/` | `clock` `config` `green_write` `http` `i18n` `middleware` `origins` `panel_state` `runtime_stats` `terminal` `validation` `whats_new` | — |
-| `panel/db/` | `models` `prefs` `id_sequence` | core |
-| `panel/security/` | `auth` `banlist` `privileged` | core, db |
-| `panel/ops/` | `ssh_manager/` (9 modules) `debug_report/` `system_ops` `tailscale_integration` `serve_upkeep` `terminal_session` `socket_hooks` `backup` | core, db, security |
-| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` `lgsm_cfg_form` `lgsm_players` `game_ports` `game_icons` `host_reboot` `reboot_summary` `reboot_words` `wipe_schedule` `bots/` | core, db, security, ops |
-| `panel/routes/` | the route modules `register(app)` is assembled from (30), and `_shared` | everything above |
-
-The rule is about **module-level** imports; an import inside a function body runs only at call
-time, so it cannot make a load-order cycle, and a few cross the grain on purpose that way — for
-example `security/auth.py` reaches `ops.ssh_manager` for `game_engine`, `ops/ssh_manager/`
-reaches `services.lgsm_data` for the dependency list, and `services/host_reboot.py` reaches the
-route modules' console helpers. `tests/unit/part01.py` enforces the module-level rule over every
-module under `panel/`.
-
-Three modules deliberately stay at the repo root, because something outside the checkout
-addresses them by path: **`app.py`** (the systemd unit's `ExecStart`, and the installer's
-"is there a panel here?" probe), **`manage.py`** (`recover.sh` locates an install by it and
-execs it), and **`db_maintenance.py`** (installed root-owned beside the privileged helper,
-with its path recorded in `panel.conf`). The shell scripts stay for the same reason — the
-documented install and recovery one-liners fetch them from the repo root by raw URL.
-
-Anything needing an on-disk path (`data/`, `translations/`, the git tree) takes it from
-`panel.REPO_ROOT` rather than recomputing it from `__file__`; `tests/unit/part01.py` has a gate
-that fails if any of them drifts back to being module-relative.
+The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, `routes`; each package's module-level imports reach only the ones before it, enforced by `tests/unit/part01.py`). `app.py`, `manage.py`, `db_maintenance.py` and the shell scripts stay at the repo root because installed panels and the install/recovery one-liners address them by path.
 
 ## Contributing
 
-Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run the suites through `tools/smoke-local.sh` first (see Development), and keep CI green.
-
-**Tests come with the change.** New functionality comes with tests of it, and a bug fix comes with a check that fails without the fix, in the suite that owns that area (`tests/unit/`, `tests/smoke/`, `tests/rbac_test.py`, …). A PR that changes behaviour without a test is not merged.
+Issues and pull requests are welcome. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run the suites through `tools/smoke-local.sh` first, and keep CI green. New functionality comes with tests, and a bug fix comes with a check that fails without the fix.
 
 ## License
 

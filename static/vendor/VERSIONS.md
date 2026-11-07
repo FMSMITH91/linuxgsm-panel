@@ -1,59 +1,8 @@
 # Vendored front-end libraries
 
 These ship with the panel instead of being loaded from a CDN: the panel is designed to run on a
-tailnet with no outbound internet, and a strict CSP with no third-party origins. The trade is that
-nothing updates them automatically: no Dependabot entry and no Renovate manager touches this
-directory, and nothing installs from it.
-
-This file is the manifest for people, and `tests/unit_test.py` gates it: every library listed must
-exist, and its recorded version must be the one in the file's own banner comment.
-
-`package.json` and `package-lock.json` beside it are the manifest for scanners. Until they existed
-no scanner could see this directory at all: the dependency graph had no entry for it, and neither
-osv-scanner nor Dependabot alerts could read a minified bundle. That is how the Socket.IO client
-sat at 4.7.5, bundling socket.io-parser 4.2.4 with two HIGH advisories against it
-(GHSA-677m-j7p3-52f9, GHSA-2m8v-j782-fhvr), with every scanner green. Now the dependency graph
-reads the lockfile, so Dependabot alerts cover these packages, and the dependency audit
-(`security-code.yml`, osv-scanner) reads it on every pull request, push and day.
-
-- `dependencies` pins each library at the exact version vendored here.
-- `overrides` pins a package a bundle carries inside it at the version the bundle was built with,
-  not the newest one npm would resolve. Each pin says how that version is known:
-  - `@kurkle/color` 0.3.2: Chart.js's bundle keeps the color library's own banner
-    (`@kurkle/color v0.3.2`). npm alone resolved Chart.js's `^0.3.0` to 0.3.4, so until this pin
-    the scanners judged a version the panel does not ship.
-  - `socket.io-parser` 4.2.7 and `engine.io-client` 6.6.7: read from the code, since neither keeps
-    a banner (see the Socket.IO section below).
-  - `@popperjs/core` 2.11.8: Bootstrap's bundle carries Popper with no banner; Bootstrap's own
-    `package-lock.json` at its v5.3.3 tag locks 2.11.8, which is what its build bundled.
-
-  Two packages a bundle carries are NOT pinned, and are recorded at what npm resolves: the
-  Socket.IO bundle's `engine.io-parser` and `@socket.io/component-emitter`. Neither keeps a banner,
-  and nothing in the code tells their versions apart. `tests/unit/part37.py` fails when a bundle
-  states a package's version in a banner and the lockfile records another, or no override pins it.
-- `vendored` maps every file in this directory to its package, the file inside that package's npm
-  tarball it was taken from, and its sha256.
-- The lockfile over-approximates on purpose: it also lists engine.io-client's Node-only
-  dependencies (`ws`, `xmlhttprequest-ssl`, `debug`), which the browser bundle leaves out. An
-  advisory against one of them is a false alarm for this directory; one against anything else is
-  not.
-
-`tests/unit/part37.py` holds the two manifests and the files to each other: every file here has a
-`vendored` entry and matches its sha256; its banner states exactly the version its package is pinned
-at; the lockfile resolves that version; every package a bundle names in a banner of its own is
-locked, and pinned by an override, at that version; this table agrees; and the Socket.IO bundle
-carries the socket.io-parser fixes.
-
-The two manifests are scanner input, not something a panel runs, so `.github/update-paths.txt`
-names them `noise`: a change to them alone (a Dependabot bump of the lockfile, say) offers no panel
-an update. The files they describe stay `runtime`.
-
-Templates load every file here through `asset_url(...)`, never a bare `url_for('static', ...)`.
-`/static` is served with a week-long `Cache-Control`, so a fixed URL kept a browser on the file it
-already had for up to a week after an update; `asset_url` puts a hash of the bytes in the URL, so a
-new file is a new URL. The bootstrap-icons font preload is the one exception: its URL must match
-the one the stylesheet itself requests, and that carries bootstrap-icons' own hash. A bump is therefore a deliberate change to the file, this table and both
-JSON files, and it shows up in review.
+tailnet with no outbound internet, under a strict CSP with no third-party origins. Nothing updates
+them automatically.
 
 | Library | Version | File | Upstream |
 |---|---|---|---|
@@ -65,13 +14,34 @@ JSON files, and it shows up in review.
 | xterm.js (JS) | 5.5.0 | `xterm/xterm.min.js` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
 | xterm.js (CSS) | 5.5.0 | `xterm/xterm.min.css` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
 
-## Bootstrap's two halves must match
+This table is the manifest for people. `package.json` and `package-lock.json` beside it are the
+manifest for scanners: Dependabot alerts and the dependency audit (osv-scanner in
+`security-code.yml`) read the lockfile, since no scanner can read a minified bundle.
 
-The JS and CSS ship as one release and are vendored as two files, so they can drift apart — and had:
-the JS sat at 5.3.0 against 5.3.3 CSS for months, because each was fetched on a different day and
-nothing compared them. They were API-compatible, so nothing was visibly broken; that is precisely
-what makes it the kind of drift nobody notices. Both are 5.3.3 now, and the gate requires the two
-rows to agree, so the next split fails the build instead of sitting there.
+- `dependencies` pins each library at the exact version vendored here.
+- `overrides` pins a package a bundle carries inside it at the version the bundle was built with:
+  `@kurkle/color` 0.3.2 (Chart.js's bundle keeps its banner), `socket.io-parser` 4.2.7 and
+  `engine.io-client` 6.6.7 (read from the code), and `@popperjs/core` 2.11.8 (Bootstrap's own
+  lockfile at v5.3.3). The Socket.IO bundle's `engine.io-parser` and `@socket.io/component-emitter`
+  keep no banner and are recorded at what npm resolves.
+- `vendored` maps every file here to its package, the file in that package's npm tarball, and its
+  sha256.
+- The lockfile also lists engine.io-client's Node-only dependencies (`ws`, `xmlhttprequest-ssl`,
+  `debug`), which the browser bundle leaves out: an advisory against one of those is a false alarm
+  here.
+
+Unit checks (`tests/unit/part06.py`, `tests/unit/part37.py`) hold all of this together: every file
+is listed and matches its sha256, its banner states the version in the table and in `package.json`,
+the lockfile resolves it, Bootstrap's JS and CSS are the same release, and the Socket.IO bundle
+carries socket.io-parser's fixes for GHSA-677m-j7p3-52f9 and GHSA-2m8v-j782-fhvr. The two JSON
+manifests are scanner input, so `.github/update-paths.txt` names them `noise`.
+
+Templates load every file here through `asset_url(...)`, which puts a hash of the bytes in the URL,
+because `/static` is served with a week-long `Cache-Control`. The bootstrap-icons font preload is
+the one exception: its URL must match the one the stylesheet requests.
+
+xterm.js comes from jsDelivr (the `@xterm/xterm` package) because cdnjs serves it with no banner,
+which would leave the version check nothing to read.
 
 ## Updating one
 
@@ -90,39 +60,8 @@ rows to agree, so the next split fails the build instead of sitting there.
 
 ## Socket.IO client 4.8.4 (2026-10-03)
 
-Taken from `socket.io-client-4.8.4.tgz` on the npm registry. Before use, the tarball's sha512
-matched the registry's `dist.integrity` (`sha512-7wjKAvVX…kAA==`) and its sha1 matched `dist.shasum`.
-The registry's ECDSA signature over `socket.io-client@4.8.4:<integrity>` was also verified, with
-the key `SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U` from `/-/npm/v1/keys`. The vendored
-file is byte-identical to `package/dist/socket.io.min.js` in it.
-
-`package.json` declares `socket.io-parser ~4.2.4`, which says nothing about what the bundle
-contains, so the bundle itself was read:
-
-- socket.io-parser 4.2.6 added the `maxAttachments` limit ("too many attachments"), the fix for
-  GHSA-677m-j7p3-52f9.
-- 4.2.7 refuses a binary packet that declares fewer than one attachment (`n < 1`, was `n < 0`),
-  the fix for GHSA-2m8v-j782-fhvr. It also deconstructs a `toJSON()` result when encoding.
-
-All three are in the 4.8.4 bundle and none is in the 4.7.5 one. engine.io-client 6.6.7's new
-`transportImplementations` option is in it too, so the bundle carries engine.io-client 6.6.7. Both
-versions are what `overrides` records.
-
-Protocols are unchanged. The bundle speaks Engine.IO protocol 4 (`EIO=4`) and Socket.IO protocol 5,
-the same as 4.7.5. python-socketio's compatibility table maps JS client 3.x and 4.x to protocol 5,
-Engine.IO 4, and python-socketio 5.x. The panel runs python-socketio 5.17.0 and python-engineio
-4.14.0.
-
-## xterm.js is two files from one release, like Bootstrap
-
-The host terminal needs a real terminal emulator, not a `<pre>`: anything full-screen — `top`,
-`less`, `nano`, a package manager's progress bar — uses cursor addressing and the alternate
-screen, which line-oriented rendering cannot show. `panel/core/terminal.py` renders the game
-console's one-way log output and is deliberately not used here.
-
-Fetched from jsDelivr rather than cdnjs for a boring reason that matters to the gate above: cdnjs
-serves this bundle with no banner at all, so nothing in the file states its own version and the
-manifest check has nothing to verify against. jsDelivr prepends `Original file:
-/npm/@xterm/xterm@5.5.0/...` to both, which is the same thing that makes the Chart.js row
-checkable. The package is `@xterm/xterm` — the project renamed at 5.4, and the old unscoped
-`xterm` name on cdnjs stops being the same lineage.
+Taken from `socket.io-client-4.8.4.tgz` on the npm registry, byte-identical to its
+`package/dist/socket.io.min.js`. Before use, the tarball's sha512 matched the registry's
+`dist.integrity` and the registry's ECDSA signature was verified with the key
+`SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U` from `/-/npm/v1/keys`. The bundle speaks
+Engine.IO protocol 4 and Socket.IO protocol 5, which the panel's python-socketio 5.x serves.
