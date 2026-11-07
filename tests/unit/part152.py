@@ -13,6 +13,7 @@ import datetime
 import json
 import os
 import pathlib
+import re as _re152
 import tempfile
 
 from unit.part01 import check
@@ -426,5 +427,34 @@ if _tout_cmpd is not None:
           _tout_cmpd.get("dis") == [False, True, True] and _tout_cmpd.get("afterBtl") == ["", 0]
           and _tout_cmpd.get("val") == "rust" and _tout_cmpd.get("events") == [["change", True]]
           and _tout_cmpd.get("pressed") == ["true", "false", "false"], repr(_tout_cmpd))
+# The icons wait for the page's load event: given their URLs in the markup, Chrome's lazy-load
+# distance fetched most of the grid at once and Lighthouse measured the install page's first
+# paint at 2.8 s (about 1.1 s elsewhere). The tile's <img> carries the URL as data-icon-src only.
+_tile_img_cmpd = _re152.search(r'<img [^>]*game_icon[^>]*>', _tpl_cmpd)
+check("install page: a tile's icon URL waits in data-icon-src, so the markup itself fetches no icon",
+      _tile_img_cmpd is not None and 'data-icon-src="{{ url_for(\'game_icon\'' in _tile_img_cmpd.group(0)
+      and not _re152.search(r'\ssrc=', _tile_img_cmpd.group(0)), _tile_img_cmpd and _tile_img_cmpd.group(0))
+_wire_at_cmpd = _MS_cmpd.find("if (document.readyState === 'complete') startGameIcons();")
+_wire_cmpd = (_MS_cmpd[_wire_at_cmpd:_MS_cmpd.find("\n", _MS_cmpd.find("\n", _wire_at_cmpd) + 1)]
+              if _wire_at_cmpd >= 0 else "/* MISSING the load wiring */")
+_name_icons_cmpd = "install page: the icons start on the page's load event, not before"
+_iout_cmpd = _run_js75(_name_icons_cmpd, (
+    "global.window = global; const on = {};\n"
+    "window.addEventListener = (ev, fn) => { on[ev] = fn; };\n"
+    "function img(u) { const a = {'data-icon-src': u};\n"
+    "  return {src: '', getAttribute: k => (k in a ? a[k] : null), removeAttribute: k => { delete a[k]; },\n"
+    "    has: () => 'data-icon-src' in a}; }\n"
+    "const imgs = [img('/game-icon/rustserver'), img('/game-icon/gmodserver')];\n"
+    "global.document = {readyState: 'loading', querySelectorAll: () => imgs.filter(i => i.has())};\n"
+    + _cut_or75(_MS_cmpd, "function startGameIcons(") + "\n" + _wire_cmpd + "\n"
+    "const before = imgs.map(i => i.src);\n"
+    "if (on.load) on.load();\n"
+    "console.log(JSON.stringify({before, after: imgs.map(i => i.src), left: imgs.map(i => i.has()),\n"
+    "  waited: typeof on.load}));\n"))
+if _iout_cmpd is not None:
+    check(_name_icons_cmpd,
+          _iout_cmpd.get("before") == ["", ""] and _iout_cmpd.get("waited") == "function"
+          and _iout_cmpd.get("after") == ["/game-icon/rustserver", "/game-icon/gmodserver"]
+          and _iout_cmpd.get("left") == [False, False], repr(_iout_cmpd))
 check("part152: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP152_START, repr(_P9_TRIPPED[_TRIP152_START:]))

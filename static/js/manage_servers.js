@@ -561,9 +561,16 @@ function _dropBrokenIcon(img) {
 document.addEventListener('error', function (ev) {
   if (ev.target && ev.target.tagName === 'IMG') _dropBrokenIcon(ev.target);
 }, true);
-document.addEventListener('DOMContentLoaded', function () {
-  document.querySelectorAll('#game-grid .game-tile-art img').forEach(function (img) {
-    if (img.complete && img.naturalWidth === 0) _dropBrokenIcon(img);
+// The icons start once the page has drawn. Given their URLs in the markup, Chrome's lazy-load
+// distance still fetched most of the grid at once, and those requests competed with the page's
+// stylesheet and scripts: Lighthouse measured the install page's first paint at 2.8 s, against
+// about 1.1 s on the other pages. Each tile shows its initials until its icon arrives.
+function startGameIcons() {
+  document.querySelectorAll('#game-grid img[data-icon-src]').forEach(function (img) {
+    img.src = img.getAttribute('data-icon-src');
+    img.removeAttribute('data-icon-src');
   });
-  syncGameTiles();
-});
+}
+document.addEventListener('DOMContentLoaded', syncGameTiles);
+if (document.readyState === 'complete') startGameIcons();
+else window.addEventListener('load', startGameIcons);
