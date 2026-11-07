@@ -34,6 +34,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the last 300 lines of LinuxGSM's script log (starts, stops, updates, monitor checks) or of the
   newest file in the game's own log folder, with a Refresh button. It needs the same permission as
   the file browser. When the panel cannot read a log, it says so instead of showing it as empty.
+- **The LinuxGSM settings form explains each setting.** Under every field on Files & Config →
+  Config is LinuxGSM's own help for it, from the comments in the game's `_default.cfg`, grouped
+  under LinuxGSM's headings, with a link to the setting's page on docs.linuxgsm.com where LinuxGSM
+  names one. A badge shows which file the value comes from (`_default.cfg`, `common.cfg`, the
+  secrets files or the server's own `.cfg`). A search box finds a setting, the form is one column
+  on a phone, and the Save button stays in view. A save still changes only the lines you edited, in
+  the server's own `.cfg`. The file editor now refuses to save an instance's `_default.cfg` and
+  says why: LinuxGSM puts its own copy back every time it runs, so the change would be lost.
 - **Each server's page shows which LinuxGSM release it runs.** It appears under the game's own
   version (for example `LinuxGSM v26.4.0`), with "· v26.5.0 available" when LinuxGSM has a newer
   release. Running update-lgsm from the Maintenance menu updates it. The release is read in the

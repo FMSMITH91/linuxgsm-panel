@@ -7,6 +7,15 @@
   .fb-key { font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: .72rem; color: var(--text-muted); }
   .cfg-acc-header { background: var(--bg-elevated); color: var(--text-heading); cursor: pointer; border: none; }
   .cfg-acc-header:hover { background: var(--border); }
+  /* The settings form (cmpc): LinuxGSM's help under each field, its headings, and a Save that
+     stays in reach on a long section. The help keeps LinuxGSM's own line breaks and tabs. */
+  .cmpc-help { font-size: .66rem; color: var(--text-muted); white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; margin-top: .1rem; }
+  .cmpc-help summary { cursor: pointer; }
+  /* Closed, a long first line (CS:GO's game-mode table) is one line with an ellipsis, not four. */
+  .cmpc-help:not([open]) > summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmpc-sub { font-size: .72rem; font-weight: 600; color: var(--text-heading); border-bottom: 1px solid var(--border); padding-top: .25rem; }
+  .cmpc-docs { font-size: .62rem; white-space: nowrap; text-decoration: none; }
+  .cmpc-savebar { position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding: .4rem 0; border-top: 1px solid var(--border); }
   .fb-panel { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   /* The drop target is the whole card, not just the file list — see the drop wiring in
      server_files.js for why a small target was the actual "drag and drop is broken" bug. */
@@ -214,10 +223,20 @@
       </div>
       {% endif %}
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>
-      <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit">
+      <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit" data-cmpc-inst="{{ server.lgsm_name }}.cfg">
+        {# Shown by loadConfig when the read kept this server's passwords and tokens from the viewer
+           (lgsm_cfg_form.form_view). #}
+        <div id="cmpc-masked" class="alert alert-secondary small py-1 px-2 mb-2" role="note" style="display:none;">Passwords, tokens and keys are hidden, and can't be changed here.</div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <input type="search" id="cmpc-filter" class="form-control form-control-sm" style="max-width:22rem;" placeholder="Find a setting" aria-label="Find a setting" autocomplete="off">
+          <span class="small text-secondary">The badge names the file each value comes from.</span>
+        </div>
+        <div id="cmpc-filter-none" class="text-secondary small mb-2" style="display:none;">No setting matches.</div>
         <div id="cfg-groups"></div>
-        <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-save"></i> Save settings</button>
-        <span id="cfg-save-msg" class="small ms-2"></span>
+        <div class="cmpc-savebar">
+          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-save"></i> Save settings</button>
+          <span id="cfg-save-msg" class="small ms-2"></span>
+        </div>
       </form>
     </div>
     <!-- Game config file -->
@@ -317,6 +336,13 @@
               <button class="btn btn-primary btn-sm" data-action="saveFile"><i class="bi bi-save"></i> Save</button>
               <button class="btn btn-outline-secondary btn-sm" data-action="closeEditor" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>
+          </div>
+          {# An instance's _default.cfg: LinuxGSM puts its own copy back every time it runs, so a save
+             there is refused (files.CMPC_DEFAULT_CFG_REFUSED). Shown by openFile for that file. #}
+          <div id="cmpc-default-warn" class="alert alert-warning small py-1 px-2 mb-1" role="note" style="display:none;">
+            <i class="bi bi-exclamation-triangle"></i>
+            <span>LinuxGSM puts its own copy of this file back every time it runs, so changes saved here would be lost. Set them in the server's own config instead.</span>
+            <a href="#config" class="alert-link">Open the Config tab</a>
           </div>
           {# Gutter + textarea share one scroll box. wrap="off" is what makes the numbers line up:
              with soft wrap a single logical line can occupy several visual rows and every number
