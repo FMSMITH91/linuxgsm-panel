@@ -650,7 +650,7 @@ def _r36j_live130():
     _p9_patch(_hr130, "reboot_busy", _busy)
     for name, kind, ret in (("mods_action", "mods", ("", "", 0)), ("run_cron_job_now", "cron", (True, "Started"))):
         _p9_patch(_p9_sf, name, lambda *a, _k=kind, _r=ret, **k: (during.__setitem__(
-            _k, [b["kind"] for b in _hr130._row_blockers([_hr130.GameServer.query.get(P9_GS)])]), _r)[1])
+            _k, [b["kind"] for b in _hr130._row_blockers([_db130.session.get(_hr130.GameServer, P9_GS)])]), _r)[1])
     _p9_patch(_p9_sf, "_apply_mod_restart", lambda gs, remote: ("", ""))
     client = _p9_client(P9_ADMIN)
     client.post("/api/server/%d/mods" % P9_GS, json={"action": "install", "mod": "sourcemod"}, headers=_XHR130)
@@ -659,7 +659,7 @@ def _r36j_live130():
     client.post("/api/server/%d/mods" % P9_GS, json={"action": "install", "mod": "sourcemod"}, headers=_XHR130)
     after = _ps130.r36j_route_jobs(P9_GS)
     with _p9.app_context():
-        idle = [b["kind"] for b in _hr130._row_blockers([_hr130.GameServer.query.get(P9_GS)])]
+        idle = [b["kind"] for b in _hr130._row_blockers([_db130.session.get(_hr130.GameServer, P9_GS)])]
     check("clean reboot: a mods install and a Scheduled tasks Run now in flight are in the reboot's census "
           "(a reboot requested meanwhile stopped the server under them), registered before the reboot "
           "refusal is asked; and let go when they end, also when the mods install raises",

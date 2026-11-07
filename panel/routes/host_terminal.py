@@ -18,7 +18,7 @@ from flask_login import current_user, login_required
 from flask_socketio import emit
 
 from panel.core import i18n
-from panel.db.models import RemoteServer, _r21c_host_text, claim_row, row_birth
+from panel.db.models import RemoteServer, _r21c_host_text, claim_row, db, row_birth
 from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
 from panel.ops.ssh_manager import is_local_server
@@ -122,7 +122,7 @@ def _terminal_still_permitted(uid, cred, entry):
     RAISES when it cannot look. load_user answers a locked database with None, and closing a live
     shell — and whatever is running in it — on a transient lock is not the same as revoking it.
     """
-    from panel.db.models import User, db
+    from panel.db.models import User
     from panel.routes.server_files import _credential_still_valid
     user = db.session.get(User, uid) if uid is not None else None
     if user is None or not user.is_active or getattr(user, "must_change_password", False):
@@ -148,7 +148,7 @@ def revoked_terminal_sids(only_sid=None):
     A positive "no" only: a socket whose owner could not be checked is left alone this time and
     asked again on the next sweep. Must run inside an app context. Never raises.
     """
-    from panel.db.models import User, db
+    from panel.db.models import User
     with _sid_lock:
         owners = {s: (o, _sid_host.get(s)) for s, o in _sid_owner.items()
                   if only_sid is None or s == only_sid}
@@ -325,7 +325,7 @@ def _terminal_target(data):
     from panel.security.auth import can_access_remote
     if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
         return None, None, "You don't have access to that host."
-    remote = RemoteServer.query.get(remote_id)
+    remote = db.session.get(RemoteServer, remote_id)
     if remote is None:
         return None, None, "That host no longer exists."
     # ...and the panel's own host is superadmin-only, which no host grant changes. The page

@@ -153,7 +153,7 @@ with app.app_context():
     tag = "rbactest_" + secrets.token_hex(3)
     grp = Group(name=tag, description="RBAC test (auto)", is_default=False)
     grp.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])   # NO action/manage perms
-    grp.servers.append(RemoteServer.query.get(granted_remote))    # access to ONE remote only
+    grp.servers.append(db.session.get(RemoteServer, granted_remote))    # access to ONE remote only
     db.session.add(grp)
     db.session.flush()
     u = User(username=tag, password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -168,7 +168,7 @@ with app.app_context():
     tag2 = tag + "_mr"
     grp2 = Group(name=tag2, description="RBAC test MR (auto)", is_default=False)
     grp2.set_permissions([auth.MANAGE_REMOTES])
-    grp2.servers.append(RemoteServer.query.get(granted_remote))
+    grp2.servers.append(db.session.get(RemoteServer, granted_remote))
     db.session.add(grp2)
     db.session.flush()
     u2 = User(username=tag2, password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -199,7 +199,7 @@ with app.app_context():
     tag4 = tag + "_grpadm"
     grp4 = Group(name=tag4, description="RBAC test group-admin (auto)", is_default=False)
     grp4.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_GROUPS])
-    grp4.servers.append(RemoteServer.query.get(granted_remote))
+    grp4.servers.append(db.session.get(RemoteServer, granted_remote))
     db.session.add(grp4)
     db.session.flush()
     u4 = User(username=tag4, password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -1062,10 +1062,10 @@ def _check_specs_os_slug_for_installers():
     with app.app_context():
         _spg = Group(name=tag + "_sp", description="RBAC test INSTALL_SERVER (auto)", is_default=False)
         _spg.set_permissions([auth.VIEW_SERVERS, auth.INSTALL_SERVER])      # NOT manage_remotes
-        _spg.servers.append(RemoteServer.query.get(granted_remote))
+        _spg.servers.append(db.session.get(RemoteServer, granted_remote))
         _spm = Group(name=tag + "_spm", description="RBAC test MANAGE_REMOTES (auto)", is_default=False)
         _spm.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_REMOTES])
-        _spm.servers.append(RemoteServer.query.get(granted_remote))
+        _spm.servers.append(db.session.get(RemoteServer, granted_remote))
         db.session.add_all([_spg, _spm]); db.session.flush()
         _spu = User(username=tag + "_sp", password_hash=auth.hash_password(secrets.token_hex(16)),
                     display_name=tag + "_sp", is_superadmin=False, is_active=True)
@@ -1128,7 +1128,7 @@ def _check_uninstall_lands_on_openable_page():
         _ug = Group(name=tag + "_un", description="RBAC test UNINSTALL only (auto)",
                     is_default=False)
         _ug.set_permissions([auth.VIEW_SERVERS, auth.UNINSTALL_SERVER])
-        _ug.servers.append(RemoteServer.query.get(granted_remote))
+        _ug.servers.append(db.session.get(RemoteServer, granted_remote))
         db.session.add(_ug); db.session.flush()
         _uu = User(username=tag + "_un", password_hash=auth.hash_password(secrets.token_hex(16)),
                    display_name=tag + "_un", is_superadmin=False, is_active=True)
@@ -1189,7 +1189,7 @@ def _check_retry_install_matches_its_route():
         _msg = Group(name=tag + "_ms", description="RBAC test MANAGE_SERVERS (auto)",
                      is_default=False)
         _msg.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])   # NOT install_server
-        _msg.servers.append(RemoteServer.query.get(granted_remote))
+        _msg.servers.append(db.session.get(RemoteServer, granted_remote))
         db.session.add(_msg); db.session.flush()
         _msu = User(username=tag + "_ms", password_hash=auth.hash_password(secrets.token_hex(16)),
                     display_name=tag + "_ms", is_superadmin=False, is_active=True)
@@ -1544,7 +1544,7 @@ def _check_vps_prep_allows_a_remote_host():
         with app.app_context():
             _ig = Group(name=tag + "_idor", description="RBAC IDOR (auto)", is_default=False)
             _ig.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER, auth.MANAGE_SERVERS])
-            _ig.servers.append(RemoteServer.query.get(granted_remote))
+            _ig.servers.append(db.session.get(RemoteServer, granted_remote))
             db.session.add(_ig)
             db.session.flush()
             _iu = User(username=tag + "_idor", password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -1856,8 +1856,8 @@ def _check_group_admin_cannot_grant_more():
     _r23d_ge = c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "changed by grpadm",
                                                        "permissions": [auth.VIEW_SERVERS]})
     with app.app_context():
-        kept = set(Group.query.get(gid5).get_permissions())
-        kept_desc = Group.query.get(gid5).description
+        kept = set(db.session.get(Group, gid5).get_permissions())
+        kept_desc = db.session.get(Group, gid5).description
     check("escalation: an edit of a group holding a permission the editor cannot grant is refused",
           _r23d_ge.status_code < 500 and auth.MANAGE_USERS in kept and kept_desc == "RBAC test preserve (auto)",
           "status %d, after edit: %s, description %r" % (_r23d_ge.status_code, sorted(kept), kept_desc))
@@ -1939,7 +1939,7 @@ def _check_join_needs_the_hosts_too():
     with app.app_context():
         _reach = Group(name=tag + "_reach", description="RBAC test reach (auto)", is_default=False)
         _reach.set_permissions([auth.MANAGE_USERS])          # a SUBSET of what the MU admin holds
-        _reach.servers.append(RemoteServer.query.get(other_remote))   # ...carrying a host they lack
+        _reach.servers.append(db.session.get(RemoteServer, other_remote))   # ...carrying a host they lack
         db.session.add(_reach)
         db.session.commit()
         _reach_gid = _reach.id
@@ -3043,7 +3043,7 @@ def _check_bulk_actions_per_id():
             with app.app_context():
                 grpb = Group(name=tag + "_bulk", description="RBAC bulk (auto)", is_default=False)
                 grpb.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER])
-                grpb.servers.append(RemoteServer.query.get(granted_remote))
+                grpb.servers.append(db.session.get(RemoteServer, granted_remote))
                 db.session.add(grpb)
                 db.session.flush()
                 ub = User(username=tag + "_bulk", password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -3063,8 +3063,8 @@ def _check_bulk_actions_per_id():
             _t.sleep(0.3)   # the action runs in a background thread; give it time to have fired
             check("bulk-action: and nothing was actually run on it", not _ran, "ran: %s" % _ran[:1])
             with app.app_context():
-                db.session.delete(User.query.get(uidb))
-                db.session.delete(Group.query.get(gidb))
+                db.session.delete(db.session.get(User, uidb))
+                db.session.delete(db.session.get(Group, gidb))
                 db.session.commit()
         finally:
             _sm_core.run_as_game_user = _sv_rag
@@ -3975,7 +3975,7 @@ finally:
         with app.app_context():
             for _uid in (uid, locals().get("uid2"), locals().get("uid3"), locals().get("uid4")):
                 if _uid:
-                    _u = User.query.get(_uid)
+                    _u = db.session.get(User, _uid)
                     if _u:
                         db.session.delete(_u)
             # Belt and braces: anything whose name starts with this run's unique tag is ours.
