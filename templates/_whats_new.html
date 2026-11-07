@@ -30,9 +30,8 @@
   <p class="wn-lead">The panel was updated. This is what changed since you last looked.</p>
   {{ wn_items(whats_new[:5]) }}
   {% if whats_new|length > 5 %}
-  {% set wn_more_n = whats_new|length - 5 + whats_new_more %}
   <details class="wn-more">
-    <summary><span>More changes</span> <span data-no-i18n>{{ '(%d)' % wn_more_n }}</span></summary>
+    <summary><span>More changes</span> <span data-no-i18n>{{ whats_new_folded }}</span></summary>
     {{ wn_items(whats_new[5:]) }}
     {% if whats_new_more %}<p class="wn-body">The rest are in the full changelog.</p>{% endif %}
   </details>

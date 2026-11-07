@@ -33,7 +33,11 @@ def _cmpb_shell_context():
     except Exception:
         # Cosmetic: a page must render without either rather than fail over them.
         _log.debug("app shell context failed; rendering the defaults", exc_info=True)
-    return {"ui_theme": theme, "whats_new": items, "whats_new_more": more}
+    # The count beside "More changes", made here so the template prints a name, not arithmetic
+    # (CodeQL reads a Jinja expression as JavaScript).
+    folded = len(items) - 5 + more
+    return {"ui_theme": theme, "whats_new": items, "whats_new_more": more,
+            "whats_new_folded": "(%d)" % folded if folded > 0 else ""}
 
 
 def _cmpb_manifest():
