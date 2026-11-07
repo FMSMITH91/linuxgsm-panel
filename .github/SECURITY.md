@@ -226,7 +226,7 @@ A game account cannot write `/etc`, install packages, read another account's hom
 helper or the sudoers file. Every `sudo -u <account>` the panel builds goes through
 `ssh_manager._core.game_user_cmd` or `game_user_exec_cmd`, which refuse (rather than quote) an
 account or script name that is not a plain identifier, or is `root` (GHSA-hh39-76g3-wxcx,
-GHSA-c49r-gmr2-6qf5). A login or host handed to the system `ssh` client is checked the same way
+reported by kta1kri; GHSA-c49r-gmr2-6qf5). A login or host handed to the system `ssh` client is checked the same way
 and placed after `--`. A panel backup restore re-checks every such name in the archive's database
 and refuses the restore naming the bad row.
 

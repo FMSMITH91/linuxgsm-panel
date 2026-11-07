@@ -1331,7 +1331,8 @@ compares git commits, not this file.
   - The Ubuntu Pro endpoint refuses an unknown service or action before running anything.
 - **Changing the panel's own port audits what really happened.** It no longer records success when
   the firewall or fail2ban step failed, and a failed restart gets its own row.
-- **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx). A server
+- **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported
+  by kta1kri). A server
   account or script name in the database (old database, hand edit, restored backup) could run a
   command as the panel's account or the SSH login. Such names are now refused before anything is
   sent, and a panel backup holding one, or a port stored as text, is refused. Also closed:
