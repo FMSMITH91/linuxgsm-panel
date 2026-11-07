@@ -592,7 +592,7 @@ def _register_game_backup_files(app):
         return next((b for b in listing if b.get("name") == name), None), False
 
     # What to say when the listing could not be read — the wording the per-server card already
-    # uses (static/js/server_files.js), so the two do not contradict each other.
+    # uses (panel/static/js/server_files.js), so the two do not contradict each other.
     _BK_UNREADABLE = ("Couldn't read this server's backups — the host didn't answer. "
                       "This is not the same as there being none.")
 

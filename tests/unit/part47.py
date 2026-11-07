@@ -40,8 +40,8 @@ from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_res
 from panel.db.models import Invite, User, db
 from panel.security import auth as _auth47
 
-_JS47 = os.path.join(_root, "static", "js")
-_TPL47 = os.path.join(_root, "templates")
+_JS47 = os.path.join(_root, "panel", "static", "js")
+_TPL47 = os.path.join(_root, "panel", "templates")
 
 
 def _read47(*parts):

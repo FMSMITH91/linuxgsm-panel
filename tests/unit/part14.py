@@ -97,17 +97,17 @@ check("js coverage: the script's end, on the line after a file's final newline, 
 
 # ── the LCOV written, and the summary's "largest missed runs" ─────────────────────────────────
 check("js coverage: LCOV holds line records only, one file per record, files in order",
-      _v8.to_lcov({"static/js/b.js": {3: 0, 1: 2}, "static/js/a.js": {7: 1}}) ==
-      "TN:\nSF:static/js/a.js\nDA:7,1\nLF:1\nLH:1\nend_of_record\n"
-      "TN:\nSF:static/js/b.js\nDA:1,2\nDA:3,0\nLF:2\nLH:1\nend_of_record\n"
+      _v8.to_lcov({"panel/static/js/b.js": {3: 0, 1: 2}, "panel/static/js/a.js": {7: 1}}) ==
+      "TN:\nSF:panel/static/js/a.js\nDA:7,1\nLF:1\nLH:1\nend_of_record\n"
+      "TN:\nSF:panel/static/js/b.js\nDA:1,2\nDA:3,0\nLF:2\nLH:1\nend_of_record\n"
       and _v8.to_lcov({}) == "")
 check("js coverage: missed runs are consecutive executable lines with no hits, largest first",
       _v8.missed_spans({1: 1, 2: 0, 5: 0, 9: 0, 10: 3, 11: 0, 12: 1, 20: 0}) ==
       [(2, 9, 3), (11, 11, 1), (20, 20, 1)])
 
 # ── what the harness produces, the upload accepts ─────────────────────────────────────────────
-# codacy-coverage.yml refuses an LCOV with any file outside static/js/<name>.js, and run.py lists
-# every static/js/*.js in its report. A file there whose name the upload would refuse would stop
+# codacy-coverage.yml refuses an LCOV with any file outside panel/static/js/<name>.js, and run.py lists
+# every panel/static/js/*.js in its report. A file there whose name the upload would refuse would stop
 # the whole JavaScript upload; one the harness's URL pattern would not match would read as never
 # loaded. Both patterns, against every file actually there.
 _drv_src = open(os.path.join(_JC_DIR, "driver.py"), encoding="utf-8").read()
@@ -115,11 +115,11 @@ _cc_src14 = open(os.path.join(_root, ".github", "workflows", "codacy-coverage.ym
                 encoding="utf-8").read()
 _jc_up_re = re.search(r'path_re = re\.compile\(r"([^"]+)"\)', _cc_src14)
 _jc_url_re = re.search(r'JS_URL_PATH = re\.compile\(r"([^"]+)"\)', _drv_src)
-_jc_js = sorted(f for f in os.listdir(os.path.join(_root, "static", "js")) if f.endswith(".js"))
+_jc_js = sorted(f for f in os.listdir(os.path.join(_root, "panel", "static", "js")) if f.endswith(".js"))
 _jc_bad = [f for f in _jc_js
-           if not (_jc_up_re and re.fullmatch(_jc_up_re.group(1), "static/js/" + f))
+           if not (_jc_up_re and re.fullmatch(_jc_up_re.group(1), "panel/static/js/" + f))
            or not (_jc_url_re and re.fullmatch(_jc_url_re.group(1), "/static/js/" + f))]
-check("js coverage: every static/js file is named so the harness counts it and the upload accepts it",
+check("js coverage: every panel/static/js file is named so the harness counts it and the upload accepts it",
       len(_jc_js) >= 20 and _jc_up_re is not None and _jc_url_re is not None and not _jc_bad,
       repr(_jc_bad))
 
@@ -196,7 +196,7 @@ _jc_src_tree = _tf14.mkdtemp(prefix="jscov-src-")
 _jc_dst_tree = os.path.join(_tf14.mkdtemp(prefix="jscov-dst-"), "tree")
 try:
     for _rel in ("app.py", "data/panel.db", "data/config.json", "lgsm/data/serverlist.csv",
-                 ".git/HEAD", ".venv/bin/python", "static/js/panel.js", "tools/x/.claude/a"):
+                 ".git/HEAD", ".venv/bin/python", "panel/static/js/panel.js", "tools/x/.claude/a"):
         os.makedirs(os.path.dirname(os.path.join(_jc_src_tree, _rel)), exist_ok=True)
         open(os.path.join(_jc_src_tree, _rel), "w").close()
     _jc_saved_root = _jc_run.ROOT
@@ -210,7 +210,7 @@ try:
     check("js coverage: run.py's copy leaves out the real data/, .git and .venv, keeps lgsm/data, "
           "and carries the throwaway marker",
           _jc_got == [".js-coverage-throwaway", "app.py", "lgsm/data/serverlist.csv",
-                      "static/js/panel.js"],
+                      "panel/static/js/panel.js"],
           repr(_jc_got))
 finally:
     import shutil as _sh14b
@@ -373,13 +373,13 @@ def _jc_lost(_d, only=None):
     raise _jc_run.LoginFailed("signing in did not land: still at '/login'")
 
 
-_jc_good = {"static/js/a.js": {1: 2, 2: 0}, "static/js/b.js": {4: 0}}
+_jc_good = {"panel/static/js/a.js": {1: 2, 2: 0}, "panel/static/js/b.js": {4: 0}}
 _jc_cases = {
     "no browser": _jc_main(lambda: _JcDriver(_jc_good), chrome=None),
     "panel did not boot": _jc_main(_jc_raise("the panel did not boot (no /healthz on x)")),
     "sign-in did not land": _jc_main(_jc_raise("signing in did not land — every page would be "
                                                "measured as the login form")),
-    "nothing ran": _jc_main(lambda: _JcDriver({"static/js/a.js": {1: 0}, "static/js/b.js": {}})),
+    "nothing ran": _jc_main(lambda: _JcDriver({"panel/static/js/a.js": {1: 0}, "panel/static/js/b.js": {}})),
     "a page not reached": _jc_main(lambda: _JcDriver(_jc_good, [("/servers/manage",
                                                                  "redirected to /")])),
     "measured": _jc_main(lambda: _JcDriver(_jc_good)),
@@ -406,8 +406,8 @@ try:
     _jc_lcov = open(os.path.join(_jc_ok[2], "lcov.info")).read()
     check("js coverage: ...and a run that measured something exits 0 with both reports written "
           "(positive control)",
-          _jc_ok[0] == 0 and "SF:static/js/a.js\nDA:1,2\nDA:2,0\nLF:2\nLH:1\n" in _jc_lcov
-          and "SF:static/js/b.js\nDA:4,0\nLF:1\nLH:0\n" in _jc_lcov
+          _jc_ok[0] == 0 and "SF:panel/static/js/a.js\nDA:1,2\nDA:2,0\nLF:2\nLH:1\n" in _jc_lcov
+          and "SF:panel/static/js/b.js\nDA:4,0\nLF:1\nLH:0\n" in _jc_lcov
           and "TOTAL" in open(os.path.join(_jc_ok[2], "summary.txt")).read(),
           repr((_jc_ok[0], _jc_ok[1][-300:], _jc_lcov[:200])))
     check("js coverage: ...and the unreached run names the page and why",
@@ -488,7 +488,7 @@ class _JcCDP:
 
 _jc_cdp = _JcCDP()
 _jc_drv = _jc_run.Driver(_jc_cdp, "http://127.0.0.1:1", "u", "p" * 20,
-                         {"static/js/a.js": "f();\n  g();\n", "static/js/b.js": "h();\n"})
+                         {"panel/static/js/a.js": "f();\n  g();\n", "panel/static/js/b.js": "h();\n"})
 _jc_drv.start()
 _jc_calls = dict(_jc_cdp.calls)
 check("js coverage: the driver starts block coverage with call counts, breaks on `navigate`, and "
@@ -509,11 +509,11 @@ if _jc_cdp.pending:
         {"url": "http://elsewhere.example/static/js/b.js",
          "functions": [{"ranges": [{"startOffset": 0, "endOffset": 5, "count": 1}]}]}]}})
 check("js coverage: a page pausing to leave is resumed only after its counts are taken, and they "
-      "are kept for its own static/js scripts alone",
+      "are kept for its own panel/static/js scripts alone",
       _jc_before == (["Profiler.takePreciseCoverage"], 1)
       and _jc_cdp.sent == ["Profiler.takePreciseCoverage", "Debugger.resume"]
-      and _jc_drv.hits() == {"static/js/a.js": {1: 3, 2: 3}, "static/js/b.js": {1: 0}}
-      and _jc_drv.loaded == {"static/js/a.js"} and _jc_drv.held == 1,
+      and _jc_drv.hits() == {"panel/static/js/a.js": {1: 3, 2: 3}, "panel/static/js/b.js": {1: 0}}
+      and _jc_drv.loaded == {"panel/static/js/a.js"} and _jc_drv.held == 1,
       repr((_jc_before, _jc_cdp.sent, _jc_drv.hits(), _jc_drv.loaded)))
 
 # goto() signs in again when a page lands on /login — once. An account that can no longer sign
@@ -572,7 +572,7 @@ check("js coverage: a page whose panel scripts would not be counted is recorded 
       "under the panel's mount is counted",
       _jc_seen[0] == [] and len(_jc_seen[1]) == 1 and "would not be counted" in _jc_seen[1][0]
       and "/a/b/static/js/users.js" in _jc_seen[1][0] and len(_jc_seen[2]) == 1
-      and _jc_drv.repo_path("http://127.0.0.1:1/lgsm/static/js/panel.js") == "static/js/panel.js",
+      and _jc_drv.repo_path("http://127.0.0.1:1/lgsm/static/js/panel.js") == "panel/static/js/panel.js",
       repr(_jc_seen))
 _jc_nav["scripts"] = []
 
@@ -1253,7 +1253,7 @@ finally:
     (_so14._git, _so14._is_git_checkout, _so14._remote_ci_state, _so14._launch_installer,
      _so14._update_in_progress) = _sw14_saved
     _cfg14.load_config, _cfg14.update_config = _sw14_cfg_saved
-_rmh14 = open(os.path.join(_root, "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
+_rmh14 = open(os.path.join(_root, "panel", "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
 check("switch-branch (UI): the confirm dialog says which it installs — main's newest verified "
       "version, or another branch's tip as UNVERIFIED",
       "It installs the newest version of main that has passed its automated checks." in _rmh14

@@ -23,7 +23,7 @@ from panel.db.models import RemoteServer as _RS72, User as _U72, db as _db72
 from panel.security import auth as _auth72
 from panel.routes import remote_security as _rs72, server_files as _sf72
 
-_JS72 = os.path.join(_root, "static", "js")
+_JS72 = os.path.join(_root, "panel", "static", "js")
 
 
 def _read72(*parts):
@@ -148,11 +148,11 @@ _spec72.loader.exec_module(_scan72)
 
 _td72 = os.path.realpath(_tf72.mkdtemp(prefix="lgsm-unit-p72-"))
 try:
-    for _d72 in (("panel", "routes"), ("translations", "es")):
+    for _d72 in (("panel", "routes"), ("panel", "translations", "es")):
         os.makedirs(os.path.join(_td72, *_d72))
     with open(os.path.join(_td72, "app.py"), "w") as _fh72:
         _fh72.write("")
-    with open(os.path.join(_td72, "translations", "es", "x.json"), "w") as _fh72:
+    with open(os.path.join(_td72, "panel", "translations", "es", "x.json"), "w") as _fh72:
         _fh72.write('{"Already here.": "Ya está."}')
     with open(os.path.join(_td72, "panel", "routes", "r.py"), "w") as _fh72:
         _fh72.write(
@@ -175,7 +175,7 @@ try:
             "        msg = 'Already here.'\n"
             "    return jsonify({'message': msg})\n")                         # a local assigned a literal
     _gaps72 = sorted(k for k, _w in _scan72.route_answer_gaps("es", root=_td72,
-                                                            translation_dir=os.path.join(_td72, "translations")))
+                                                            translation_dir=os.path.join(_td72, "panel", "translations")))
     _shown72 = sorted(_scan72.shown_literals_py(root=_td72))
 finally:
     _shutil72.rmtree(_td72, ignore_errors=True)
@@ -348,8 +348,8 @@ if _out72 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 import re as _re72  # noqa: E402
 
-_CSS72 = _re72.sub(r"/\*.*?\*/", "", _read72(_root, "static", "css", "panel.css"), flags=_re72.S)
-_DASH72 = _read72(_root, "templates", "dashboard.html")
+_CSS72 = _re72.sub(r"/\*.*?\*/", "", _read72(_root, "panel", "static", "css", "panel.css"), flags=_re72.S)
+_DASH72 = _read72(_root, "panel", "templates", "dashboard.html")
 from unit.part69 import _r17d_media_bodies  # noqa: E402
 
 _PHONE72 = "@media (width <= 767.98px)"
@@ -403,7 +403,7 @@ check("375px: ...a flex-wrap (or a wrapping flex-flow) in the phone block's .pag
       and not _r18d_name_floor72(_flctl72),
       repr((_r18d_unscoped_wraps72(_ptctl72), _r18d_name_floor72(_flctl72))))
 # The firewall's cards: a partial on the host page's Network tab.
-_fw72 = _read72(_root, "templates", "_firewall_panel.html")
+_fw72 = _read72(_root, "panel", "templates", "_firewall_panel.html")
 _lim72 = _fw72[_fw72.index('id="limit-port"') - 400:_fw72.index('data-action="unlimitPort"')]
 check("375px: the rate-limit row gives its port the whole row below 576px (the × ran past the card "
       "in French and Spanish)",
@@ -510,7 +510,7 @@ if _out72c is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 8. Pages at 375px and for a screen reader (measured in a browser; held here by their markup)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SF72 = _read72(_root, "templates", "server_files.html")
+_SF72 = _read72(_root, "panel", "templates", "server_files.html")
 _edh72 = _re72.search(r'<div class="([^"]*)">\s*<code class="([^"]*)" id="editor-path">', _SF72)
 check("375px: the file editor's header wraps and its path breaks (a long path pushed Save and Close off "
       "the card, the page 740px wide)",
@@ -525,12 +525,12 @@ check("375px: the blocked-IPs table pins its Unblock button and lets an address 
 check("i18n: the repainted Unblock tooltip is one translated sentence ('Unblock ' + ip was English)",
       "tf('Unblock {ip}', {ip: g.block_ip})" in _bjs72 and "'Unblock '" not in _bjs72
       and "Unblock {ip}" in _ES72 and "Unblock {ip}" in _scan72.load_catalog("fr"), _bjs72[-500:])
-_MG72 = _read72(_root, "templates", "manage_groups.html")
+_MG72 = _read72(_root, "panel", "templates", "manage_groups.html")
 check("a11y: the edit form's permission boxes are a group named by its heading, as the Add modal's are",
       'id="edit-perms-label-{{ group.id }}"' in _MG72
       and _re72.search(r'role="group"\s+aria-labelledby="edit-perms-label-\{\{ group\.id \}\}"', _MG72) is not None,
       "no named group on the edit form's permissions")
-_MR72 = _read72(_root, "templates", "manage_remotes.html")
+_MR72 = _read72(_root, "panel", "templates", "manage_remotes.html")
 _sub72 = _re72.search(r'<button type="submit" class="btn btn-primary btn-sm w-100"([^>]*)>\s*<i class="bi bi-check">', _MR72)
 check("a11y: the host edit form's icon-only submit has a name", _sub72 is not None
       and 'aria-label="Save changes"' in _sub72.group(1), _sub72.group(0) if _sub72 else "no such button")
@@ -541,7 +541,7 @@ check("a11y: the host edit form's icon-only submit has a name", _sub72 is not No
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Measured in a browser: with a Join button the row (label, address pill, Join) could not wrap, so
 # /server/<id> was 399px wide in Spanish and 381px in English, Join past the screen's edge.
-_SDT72 = _read72(_root, "templates", "server_detail.html")
+_SDT72 = _read72(_root, "panel", "templates", "server_detail.html")
 _conn72 = _re72.search(r'<div class="([^"]*)">\s*<span class="text-secondary small">Connect:</span>', _SDT72)
 _pill72 = _re72.search(r"\.connect-pill\s*\{([^}]*)\}", _CSS72)
 _addr72 = _re72.search(r"\.connect-pill\s+#connect-addr\s*\{([^}]*)\}", _CSS72)

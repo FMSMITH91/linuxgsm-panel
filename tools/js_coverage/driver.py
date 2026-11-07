@@ -68,14 +68,14 @@ class Driver:
     def __init__(self, cdp, base, user, password, sources):
         """Drive the page behind `cdp`, on the panel at `base`, signed in as `user`.
 
-        `sources` is {"static/js/x.js": its text}: the files whose coverage is kept.
+        `sources` is {"panel/static/js/x.js": its text}: the files whose coverage is kept.
         """
         self.cdp = cdp
         self.base = base
         self.user = user
         self.password = password
         self.sources = sources
-        self.counts = {}          # "static/js/x.js" -> v8_lcov.FileCounts
+        self.counts = {}          # "panel/static/js/x.js" -> v8_lcov.FileCounts
         self.loaded = set()       # the files some page loaded
         self.held = 0             # navigations held to take the leaving document's counts
         self.errors = []          # uncaught exceptions the pages threw: (url, line, text)
@@ -218,11 +218,11 @@ class Driver:
         return {path: fc.hits() for path, fc in self.counts.items()}
 
     def repo_path(self, url):
-        """Map a script URL to its repository path (static/js/x.js), or None if it is not one."""
+        """Map a script URL to its repository path (panel/static/js/x.js), or None if it is not one."""
         if not url.startswith(self.base):
             return None
         m = JS_URL_PATH.match(url[len(self.base):].split("?", 1)[0])
-        return "static/js/" + m.group(1) if m else None
+        return "panel/static/js/" + m.group(1) if m else None
 
     # ── navigation ─────────────────────────────────────────────────────────────────────────────
     def url(self):

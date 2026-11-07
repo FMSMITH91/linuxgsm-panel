@@ -319,7 +319,7 @@ def _catalog111():
     keys = {}
     for lg in ("es", "fr"):
         keys[lg] = set()
-        root = os.path.join(_ROOT111, "translations", lg)
+        root = os.path.join(_ROOT111, "panel", "translations", lg)
         for name in sorted(os.listdir(root)):
             if name.endswith(".json"):
                 with open(os.path.join(root, name), encoding="utf-8") as fh:

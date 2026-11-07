@@ -65,7 +65,7 @@ _ON_MAIN = " (Codacy reports this on main, not on the pull request)"
 # Codacy's own default ignores, quoted from docs.codacy.com/repositories-configure/ignoring-files/
 # ("Default ignored files"; .codacy.yaml's empty exclude_paths leaves them in force). Codacy never
 # analyses a path matching one, so judging it here failed #393 on code nobody can change: the
-# minified socket.io-client bundle in static/vendor/ (two functions over CCN 10).
+# minified socket.io-client bundle in panel/static/vendor/ (two functions over CCN 10).
 CODACY_DEFAULT_IGNORES = tuple(re.compile(p) for p in (
     r".*[\.-]min\.css", r".*[\.-]min\.js", r".*node_modules/.*", r".*bower_components/.*",
     r".*vendor/.*", r".*third[_-]?[Pp]arty/.*", r".*samples?/.*", r".*releases?/.*", r".*builds?/.*",
@@ -561,8 +561,8 @@ def _ignore_cases():
     plain = "function f(a){return a}\n"
     return {
         "a vendored or minified file is not judged (Codacy skips it)":
-            ({"static/vendor/v.min.js": plain, "web/x.min.js": plain},
-             {"static/vendor/v.min.js": js, "web/x.min.js": js}, False),
+            ({"panel/static/vendor/v.min.js": plain, "web/x.min.js": plain},
+             {"panel/static/vendor/v.min.js": js, "web/x.min.js": js}, False),
         "the same function in a plain .js file is judged": ({"web/app.js": plain}, {"web/app.js": js}, True),
     }
 

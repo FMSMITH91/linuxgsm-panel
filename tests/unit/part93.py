@@ -283,7 +283,7 @@ check("panel: Enable Tailscale SSH is refused before any verb runs where it was 
       "`tailscale-ssh on` where it was (control)",
       _flows93[("SSH on", "not chosen")] == (False, [])
       and _flows93[("SSH on", "chosen")] == (True, [("tailscale-ssh", ["on"])]), repr(_flows93))
-_ES93 = _json93.loads(_read93("translations", "es", "r25j.json"))
+_ES93 = _json93.loads(_read93("panel", "translations", "es", "r25j.json"))
 check("panel: ...its route answers 403 with the stable code tailscale_ssh_not_chosen and the "
       "sentence in the viewer's language (es)",
       _flows93["route, es viewer"][:2] == (403, "tailscale_ssh_not_chosen")

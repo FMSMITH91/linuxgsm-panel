@@ -51,10 +51,10 @@ def _read73(*parts):
 
 def _cat73(lang):
     out = {}
-    folder = _os73.path.join(_ROOT73, "translations", lang)
+    folder = _os73.path.join(_ROOT73, "panel", "translations", lang)
     for name in sorted(_os73.listdir(folder)):
         if name.endswith(".json"):
-            out.update(_json73.loads(_read73("translations", lang, name)))
+            out.update(_json73.loads(_read73("panel", "translations", lang, name)))
     return out
 
 
@@ -76,7 +76,7 @@ with _p9.app_context():
 
 # ── A01: an IPv6 host's connect address, wherever it is printed ──────────────────────────────────
 _V6_73 = "2001:db8::5"
-_RM73 = _read73("templates", "remote_manage.html")
+_RM73 = _read73("panel", "templates", "remote_manage.html")
 _cell73 = _RM73[_RM73.index("{% set addr = remote.connect_host %}"):]
 _cell73 = _cell73[:_cell73.index("</td>")]
 _gs73 = _models73.GameServer(name="p73", short_name="csgoserver", game_type="csgo", port=27015)
@@ -112,13 +112,13 @@ check("chat bot: /connect prints an IPv6 address bracketed, above its steam:// l
       _bot6_73 == "p73\n[%s]:27015\nsteam://connect/[%s]:27015" % (_V6_73, _V6_73)
       and _bot4_73 == "p73\n203.0.113.5:27015\nsteam://connect/203.0.113.5:27015", repr((_bot6_73, _bot4_73)))
 
-_SC73 = _read73("templates", "setup_complete.html")
+_SC73 = _read73("panel", "templates", "setup_complete.html")
 # The `<code>` that prints the running bind before its port, found by what it prints, not by how.
 _rb73 = next((ln.strip() for ln in _SC73.splitlines() if "running_bind" in ln and "panel_port" in ln), "")
 _rb73 = _rb73[_rb73.find("<code>"):_rb73.find("</code>") + len("</code>")]
 _ANY4_73 = "0.0.0.0"  # nosec B104 - a bind value rendered and compared, never bound
 _rbv73 = [_p9.jinja_env.from_string(_rb73).render(running_bind=b, panel_port=5000) for b in ("::", _ANY4_73)]
-_rh73 = _read73("static", "js", "remote_manage_host.js")
+_rh73 = _read73("panel", "static", "js", "remote_manage_host.js")
 _br73 = _rh73[_rh73.index("function _r18aBracket"):_rh73.index("function changePanelBinding")]
 _cpb73 = _rh73[_rh73.index("function changePanelBinding"):_rh73.index("function _changePanelBinding")]
 _js73 = _rh73[_rh73.index("var shownBind"):]
@@ -187,8 +187,8 @@ check("panel bind: ...and Change binding's reply names an IPv6 bind bracketed, i
 
 _rv6_73 = _models73.RemoteServer(name="p73", host=_V6_73, username="ubuntu", port=2222)
 _rv4_73 = _models73.RemoteServer(name="p73", host="203.0.113.5", username="ubuntu", port=22)
-_tpl_hp73 = [n for n in sorted(_os73.listdir(_os73.path.join(_ROOT73, "templates"))) if n.endswith(".html")
-             and "remote.host }}:{{" in _read73("templates", n)]
+_tpl_hp73 = [n for n in sorted(_os73.listdir(_os73.path.join(_ROOT73, "panel", "templates"))) if n.endswith(".html")
+             and "remote.host }}:{{" in _read73("panel", "templates", n)]
 check("host login: a remote's SSH login is shown with an IPv6 host bracketed (ubuntu@2001:db8::5:2222 "
       "named no address), an IPv4 one as it was, and no template prints `remote.host:port` itself",
       _rv6_73.login_address == "ubuntu@[%s]:2222" % _V6_73
@@ -496,7 +496,7 @@ _us73 = _osu73._update_summary(_up73)
 check("os updates: ...the alert quotes the labels and still counts every upgrade (5, 3 security)",
       _us73 == (5, 3, ["libx11-6 (amd64)", "libx11-6 (i386)", "libx11-data"]), repr(_us73))
 
-_rm73 = _read73("static", "js", "remote_manage.js")
+_rm73 = _read73("panel", "static", "js", "remote_manage.js")
 _ru73 = _rm73[_rm73.index("function isSecurityPkg"):_rm73.index("// available → enabled")]
 _ruv73 = _node47(
     "const el = {};\nconst document = {getElementById: (id) => id === 'update-info' ? el : null};\n"

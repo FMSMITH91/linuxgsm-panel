@@ -1005,13 +1005,13 @@ check("sonarcloud: every file it reads, sources and tests, is UTF-8 with no U+FF
 # out) takes those files out of the analysis: the pull request shows no new issues in them, and on
 # main their issues close as if fixed. Both Sonar checks stay green while judging less. The keys,
 # the source and test roots and every exclusion are pinned, and every source file the scanner could
-# read (Python, JavaScript, templates, shell, outside tests/ and static/vendor/) must not be
+# read (Python, JavaScript, templates, shell, outside tests/ and panel/static/vendor/) must not be
 # excluded, so a scope change is a change to this test as well.
-_sq_allowed_excl = {"tests/**", "static/vendor/**", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif",
+_sq_allowed_excl = {"tests/**", "panel/static/vendor/**", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif",
                     "**/*.webp", "**/*.ico", "**/*.woff", "**/*.woff2", "**/*.ttf"}
 _sq_keys = {_k.strip(): _v.strip() for _k, _v in _sq_props.items()}
 _sq_src = [_f for _f in _sq_walk if _f.endswith((".py", ".js", ".html", ".sh"))
-           and not _f.startswith(("tests/", "static/vendor/"))]
+           and not _f.startswith(("tests/", "panel/static/vendor/"))]
 _sq_scope_bad = (
     ["keys: %r" % sorted(_sq_keys)] * (set(_sq_keys) != {
         "sonar.python.version", "sonar.sources", "sonar.tests", "sonar.exclusions",
@@ -1024,8 +1024,8 @@ _sq_scope_bad = (
     + ["%s is excluded" % _f for _f in _sq_src if _sq_excluded(_f)])
 check("sonarcloud: its scope is pinned (keys, roots, exclusions) and excludes no source file",
       not _sq_scope_bad and len(_sq_src) >= 150
-      and {"app.py", "install.sh", "panel/ops/system_ops.py", "templates/base.html",
-           "static/js/panel.js"} <= set(_sq_src),
+      and {"app.py", "install.sh", "panel/ops/system_ops.py", "panel/templates/base.html",
+           "panel/static/js/panel.js"} <= set(_sq_src),
       repr((_sq_scope_bad[:6], len(_sq_src))))
 
 # ── CodeQL analyses a pull request in FULL, as main does ───────────────────────────────────────

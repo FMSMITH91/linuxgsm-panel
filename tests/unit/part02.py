@@ -3854,7 +3854,7 @@ finally:
 # base.html hands the browser a catalog and walks the DOM, swapping any text whose exact
 # whitespace-collapsed form is a key — so a sentence the catalogs have never heard of stays
 # English whatever the user picked, and nothing anywhere fails. The i18n gate in part06 reads
-# templates/ and static/js/ only, so a sentence that lives in a ROUTE's source is invisible to it:
+# panel/templates/ and panel/static/js/ only, so a sentence that lives in a ROUTE's source is invisible to it:
 # both refusals this gate added shipped untranslated, and the four template strings beside them
 # (which that gate does see) were translated in the same change. This one reads the flash calls
 # out of the route itself, so the NEXT refusal added here has to be translated too rather than
@@ -3942,7 +3942,7 @@ check("api token: the mint's refusal sentences were found to check",
 _atg_untranslated = {}
 for _lang in ("es", "fr"):
     _atg_keys = set()
-    _atg_dir = os.path.join(_p02_root, "translations", _lang)
+    _atg_dir = os.path.join(_p02_root, "panel", "translations", _lang)
     for _f in sorted(os.listdir(_atg_dir)):
         if _f.endswith(".json"):
             _atg_keys |= set(json.load(open(os.path.join(_atg_dir, _f), encoding="utf-8")))

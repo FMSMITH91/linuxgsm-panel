@@ -1037,7 +1037,7 @@ _R21D_SINK_CTL20 = (
 
 
 def _p20_js():
-    src = open(os.path.join(SO.PANEL_DIR, "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
+    src = open(os.path.join(SO.PANEL_DIR, "panel", "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
     fn = src.split("function genDebugReport(){", 1)[-1].split("\nfunction ", 1)[0]
     check("debug report page: the issue link is built from the server's issue_body, inside a try/catch, "
           "and nothing slices the text",

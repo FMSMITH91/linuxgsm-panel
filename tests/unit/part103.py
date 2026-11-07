@@ -105,7 +105,7 @@ check("custom command: a send that FAILED and whose audit row could not be writt
       and len(_R103["custom_fail"]["message"]) > len(_AUDIT103) + 1
       and _AUDIT103 in _R103.get("custom_ok", {}).get("message", ""), repr(_R103))
 
-_SD103 = _read103("static", "js", "server_detail.js")
+_SD103 = _read103("panel", "static", "js", "server_detail.js")
 _name103 = "console send box: an unwritten audit row"
 _out103 = _js103(_name103, (
     "var serverId = 1; let toasts = [];\n"
@@ -166,7 +166,7 @@ check("SSH port card: the panel host's card and a key host's are filled from ssh
           and "Currently: <code>" not in card for st, card in _pages103.values())
       and len(_pages103) == 2, repr(_pages103))
 
-_RMH103 = _read103("static", "js", "remote_manage_host.js")
+_RMH103 = _read103("panel", "static", "js", "remote_manage_host.js")
 _m103 = re.search(r"^var SSH_LABELS=.*$", _RMH103, re.M)
 # A one-line `var`, taken as its line (review 1022a lead: cut by _cut47 it ran on to the next `{`, so it
 # carried the whole of _r32bPublicPorts with it, declared a second time by the cut after it).

@@ -412,7 +412,7 @@ check("install.sh update hint: ...a range that misses the port, a udp range, an 
 from unit.part01 import skip as _skip75  # noqa: E402
 from unit.part47 import _cut47 as _cut75, _node47 as _node75  # noqa: E402
 
-_JS75 = os.path.join(_root75, "static", "js")
+_JS75 = os.path.join(_root75, "panel", "static", "js")
 
 
 def _js75(name):
@@ -613,7 +613,7 @@ check("login page: the admin's site title and tagline are guarded from the trans
       "to a catalog key was translated), and the default tagline is not",
       '<h3 class="mt-2" data-no-i18n>Dashboard</h3>' in _login75
       and "<span data-no-i18n>Settings</span>" in _login75, _login75[_login75.find("<h3"):][:400])
-_tpl75 = {n: open(os.path.join(_root75, "templates", n), encoding="utf-8").read()
+_tpl75 = {n: open(os.path.join(_root75, "panel", "templates", n), encoding="utf-8").read()
           for n in ("dashboard.html", "remote_manage.html", "server_detail.html", "login.html")}
 _open75 = [n for n, src in _tpl75.items()
            for line in src.splitlines() if "{{ srv.game_display" in line or "{{ gs.game_display" in line

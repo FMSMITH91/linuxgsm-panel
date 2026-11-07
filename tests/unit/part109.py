@@ -47,7 +47,7 @@ _PEND109 = (
 # so a settings save is made with the box hidden and unfocused: the draft was replaced with the file's
 # text and no word. And a refill after a 'behind' mark left the "Reload before saving" note beside a
 # box whose Save worked again.
-_SF109 = _read106("static", "js", "server_files.js")
+_SF109 = _read106("panel", "static", "js", "server_files.js")
 _name109r = "Raw config editor: a settings save's re-read with the box unfocused"
 _outr109 = _js106(_name109r, (
     "var serverId = 1; function _tr(s){ return s; }\n"
@@ -88,7 +88,7 @@ if _outr109 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. The GMod content card keeps polling a running job through an unread host
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SD109 = _read106("static", "js", "server_detail.js")
+_SD109 = _read106("panel", "static", "js", "server_detail.js")
 _name109g = "GMod content card: polls while a job runs"
 _outg109 = _js106(_name109g, _PEND109 + (
     "var serverId = 1; global._esc = escapeHtml; global.tfHtml = (k, v) => k;\n"
@@ -138,7 +138,7 @@ if _outg109 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. The Backups card (Server Management) does not draw a read that may predate a save
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_BK109 = _read106("static", "js", "remote_manage_backups.js")
+_BK109 = _read106("panel", "static", "js", "remote_manage_backups.js")
 _LIST109 = {"settings": {"enabled": True, "keep_days": 5}, "full": {"interval_days": 7, "keep": 2},
             "games": [{"id": 4, "name": "p109"}], "backups": []}
 _name109b = "Backups card: a re-read and a save in flight"
@@ -213,7 +213,7 @@ if _outf109 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. Live Resources: an older /live answer arriving after a newer one is dropped
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM109 = _read106("static", "js", "remote_manage.js")
+_RM109 = _read106("panel", "static", "js", "remote_manage.js")
 _name109l = "Live Resources: /live answers out of order"
 _outl109 = _js106(_name109l, _PEND109 + (
     "var REMOTE_ID = 1; let painted = 0, badge = [];\n"

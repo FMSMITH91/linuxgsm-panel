@@ -529,7 +529,7 @@ for _label, _got, _want in (
          "data/cred_key"),
         ("config.CONFIG_FILE", _live_paths.get("CONFIG_FILE", _cfgmod.CONFIG_FILE),
          "data/config.json"),
-        ("i18n translations dir", _i18n._DIR, "translations"),
+        ("i18n translations dir", _i18n._DIR, "panel/translations"),
         ("lgsm_data cache dir", _lgd._CACHE_DIR, "data/lgsm"),
         ("system_ops.PANEL_DIR", SO.PANEL_DIR, "."),
 ):
@@ -594,6 +594,8 @@ check("layering: the gate actually inspected every module under panel/",
 _stray = [os.path.relpath(os.path.join(_dp, _d), _root)
           for _dp, _dns, _ in os.walk(os.path.join(_root, "panel"))
           for _d in _dns if _d in ("data", "translations")]
+# panel/translations/ is the catalog itself (it moved there from the root); any OTHER is stray.
+_stray = [_s for _s in _stray if _s != os.path.join("panel", "translations")]
 check("paths: no stray data/ or translations/ dir was created inside panel/",
       not _stray, ", ".join(_stray))
 

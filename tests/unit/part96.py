@@ -678,7 +678,7 @@ check("boot: a Tailscale SSH choice the helper recorded because SSH was on is sa
       _boot_ssh96 == [("tailscale_ssh_choice_recorded", True)], repr(_boot_ssh96))
 
 # The route answers the stable code for the unrecorded copy too, in the viewer's language.
-_ES96 = _json96.loads(open(os.path.join(_root, "translations", "es", "r25j.json"), encoding="utf-8").read())
+_ES96 = _json96.loads(open(os.path.join(_root, "panel", "translations", "es", "r25j.json"), encoding="utf-8").read())
 try:
     _p9_arm(_p9_patch, who="part96")
     _p9_patch(_so96, "tailscale_ssh_enable", lambda: (False, _so96.TS_SSH_NOT_RECORDED))
@@ -702,7 +702,7 @@ check("ts-ssh-enable: the unrecorded refusal answers 403 with code tailscale_ssh
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 7. How to allow it, for both install models (R4), and the Public SSH card (R6)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_TPL96 = open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-8").read()
+_TPL96 = open(os.path.join(_root, "panel", "templates", "remote_manage.html"), encoding="utf-8").read()
 _refusal96 = _helper_run96(["tailscale-ssh", "on"], conf={"tailscale_ssh": "no"})[3]
 _howto96 = {"helper": _refusal96, "system_ops": str(_so96.TS_SSH_NOT_CHOSEN),
             "system_ops, unrecorded": str(_so96.TS_SSH_NOT_RECORDED),

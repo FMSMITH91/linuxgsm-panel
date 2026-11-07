@@ -623,7 +623,7 @@ def _section_playerlist_page34():
     kws = _calls34(_fn34("panel/routes/server_detail.py", "api_server_playerlist")).get("player_list")
     check("B playerlist: the route shares the timed poll and asks fresh on ?console=1",
           "shared=request.args.get('console') != '1'" in (kws or []), repr(kws))
-    with open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "static", "js", "server_detail.js"), encoding="utf-8") as fh:
         code = "\n".join(ln.split("//", 1)[0] for ln in fh.read().splitlines())
     poll = _re34.search(r"pollWhenVisible\((\w+), 15000\)", code)
     name = poll.group(1) if poll else "NONE"
@@ -1156,7 +1156,7 @@ def _stitch34(have, incoming):
             _NO_NODE34.append(1)
             skip("console stitch: server_detail.js's own _newConsoleLines", "no node: a Python copy ran")
         return _stitch_py34(have, incoming)
-    with open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "static", "js", "server_detail.js"), encoding="utf-8") as fh:
         js = fh.read()
     prog = "\n".join(_js_fn34(js, n) for n in ("_sameLine", "_eqRange", "_newConsoleLines"))
     prog += ("\nconst d=JSON.parse(require('fs').readFileSync(0,'utf8'));"

@@ -600,8 +600,8 @@ _ROOT61 = _os61.path.dirname(_os61.path.dirname(_os61.path.dirname(_os61.path.ab
 
 
 def _cat61(lang):
-    """Every section of translations/<lang>/, merged."""
-    out, d = {}, _os61.path.join(_ROOT61, "translations", lang)
+    """Every section of panel/translations/<lang>/, merged."""
+    out, d = {}, _os61.path.join(_ROOT61, "panel", "translations", lang)
     for f in sorted(_os61.listdir(d)):
         if f.endswith(".json"):
             with open(_os61.path.join(d, f), encoding="utf-8") as fh:
@@ -628,7 +628,7 @@ check("protect reason: the API's sentence is the English one, and the page's tex
       and _es61.startswith("El puerto 47150 es donde escucha"), repr((_g61["protect_reason"], _es61)))
 # (The standalone Firewall page rendered the tooltip server-side too; it is a redirect to the host page's
 # Network tab now (ui-tidy-2), whose rules only the page's JS draws, held below.)
-with open(_os61.path.join(_ROOT61, "static", "js", "remote_firewall.js"), encoding="utf-8") as _fh61:
+with open(_os61.path.join(_ROOT61, "panel", "static", "js", "remote_firewall.js"), encoding="utf-8") as _fh61:
     _jsrc61 = _fh61.read()
 _cat_es61 = _cat61("es")
 _js61 = _node47("const I18N = %s; const t = s => (Object.prototype.hasOwnProperty.call(I18N, s) ? I18N[s] : s);\n"

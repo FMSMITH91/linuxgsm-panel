@@ -124,7 +124,7 @@ const seen = id => { const r = row(id); if (!r) return null;
             r.parentNode.children.indexOf(root.querySelector('tr[data-server-id="' + id + '"]'))}; };
 """
 
-_IP121 = _read121("static", "js", "install_progress.js")
+_IP121 = _read121("panel", "static", "js", "install_progress.js")
 _name121 = "install progress: an ending on the dashboard after a swap of its cards"
 _out121 = _node121(_name121, _DOM121 + _SETTLE47 + _IP121 + r"""
 const poll = async () => { window.watchInstallsNow(); await settle(); await settle(); };
@@ -191,7 +191,7 @@ if _out121 is not None:
 
 # dashboard.js puts the endings back after every swap of #server-cards, before the filter runs (the
 # filter hides a progress row with its server, so a row added after it would show under a hidden one).
-_DB121 = _read121("static", "js", "dashboard.js")
+_DB121 = _read121("panel", "static", "js", "dashboard.js")
 _head121 = "window.afterDashRefresh = function("
 _name121 = "dashboard: the after-swap hook puts install endings back"
 _out121 = _node121(_name121, (
@@ -210,7 +210,7 @@ if _out121 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The Tailscale page's direct listeners, once per element
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_TS121 = _read121("static", "js", "tailscale.js")
+_TS121 = _read121("panel", "static", "js", "tailscale.js")
 _name121 = "tailscale page: an after-hook with nothing swapped in"
 _out121 = _node121(_name121, (
     "global.window = global; global.MOUNT = ''; let els = {};\n"
@@ -235,7 +235,7 @@ if _out121 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Files & Config's backup card: a read sent while another schedule save is unanswered
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SF121 = _read121("static", "js", "server_files.js")
+_SF121 = _read121("panel", "static", "js", "server_files.js")
 _name121 = "Files & Config backup card: a second pick before the first save answers"
 _out121 = _js106(_name121, _PEND109 + (
     "var serverId = 1;\n"

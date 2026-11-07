@@ -50,8 +50,8 @@ from panel.routes import remotes as _rm53
 from panel.routes import tailscale as _ts53
 from panel.security import auth as _auth53
 
-_JS53 = os.path.join(_root, "static", "js")
-_TPL53 = os.path.join(_root, "templates")
+_JS53 = os.path.join(_root, "panel", "static", "js")
+_TPL53 = os.path.join(_root, "panel", "templates")
 _CFG53_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 _mine53 = {"remotes": [], "users": [], "groups": [], "commands": []}
 # The stored hash of the users this part makes: no password hashes to it, so none can log in.
@@ -746,14 +746,14 @@ check("part53: loading run.py leaves sys.path and the top-level module names as 
 
 class _Drv53:
     def __init__(self, flow_errors):
-        self.loaded, self.errors, self.held, self.unreached = {"static/js/a.js"}, [], 0, []
+        self.loaded, self.errors, self.held, self.unreached = {"panel/static/js/a.js"}, [], 0, []
         self.flow_errors = list(flow_errors)
 
     def snapshot(self):
         return None
 
     def hits(self):
-        return {"static/js/a.js": {1: 2, 2: 0}}
+        return {"panel/static/js/a.js": {1: 2, 2: 0}}
 
 
 _d53 = _Drv53([])

@@ -162,7 +162,7 @@ check("icon route: traversal, an unlisted game and an SVG name are each a 404", 
 check("icon route: needs the install page's permission, and a login",
       _view_cmpd in (302, 403) and _anon_cmpd in (302, 401), repr((_view_cmpd, _anon_cmpd)))
 
-with open(os.path.join(_root, "templates", "install_server.html"), encoding="utf-8") as _fh_cmpd:
+with open(os.path.join(_root, "panel", "templates", "install_server.html"), encoding="utf-8") as _fh_cmpd:
     _tpl_cmpd = _fh_cmpd.read()
 check("install page: every tile's picture is the panel's own route (no other image origin; the script "
       "builds /game-icon/<script> from data-icon-script, checked below)",
@@ -358,7 +358,7 @@ check("wipe route: an account without the Scheduled Tasks permission cannot chan
       _viewer_cmpd in (302, 403), repr(_viewer_cmpd))
 check("wipe route: turning it off removes the schedule", _off_cmpd.get("enabled") is False, repr(_off_cmpd))
 
-with open(os.path.join(_root, "static", "js", "wipe_schedule.js"), encoding="utf-8") as _fh_cmpd:
+with open(os.path.join(_root, "panel", "static", "js", "wipe_schedule.js"), encoding="utf-8") as _fh_cmpd:
     _wjs_cmpd = _fh_cmpd.read()
 _SETTLE_cmpd = "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
 # The card's own script, driven: Save opens the red dialog and posts NOTHING until it is confirmed.

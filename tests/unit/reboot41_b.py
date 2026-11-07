@@ -425,20 +425,20 @@ async function dialog(state, opts, postAnswer, planBody){
 
 
 def _node_run41():
-    """static/js/nags.js under _NODE41; None without node, else its JSON (or {"error": ...})."""
+    """panel/static/js/nags.js under _NODE41; None without node, else its JSON (or {"error": ...})."""
     node = _shutil41.which("node")
     if not node:
         return None
     harness = os.path.join(_TMP41, "nags-harness.js")
     # nags.js builds the banner's sentence with i18n.js's tfNodes (base.html loads i18n.js first):
     # the harness gets that one function, and a t() that answers English.
-    with open(os.path.join(_ROOT41, "static", "js", "i18n.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT41, "panel", "static", "js", "i18n.js"), encoding="utf-8") as fh:
         i18n_src = fh.read()
     start = i18n_src.index("window.tfNodes = function(")
     tf_nodes = i18n_src[start:i18n_src.index("\n};\n", start) + 3]
     with open(harness, "w", encoding="utf-8") as fh:
         fh.write(_NODE41.replace("vm.runInThisContext(", "global.t = s => s;\n" + tf_nodes + "\nvm.runInThisContext(", 1))
-    r = _run41([node, harness, os.path.join(_ROOT41, "static", "js", "nags.js")], timeout=60)
+    r = _run41([node, harness, os.path.join(_ROOT41, "panel", "static", "js", "nags.js")], timeout=60)
     try:
         return _json41.loads((r.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -555,7 +555,7 @@ def _banner_checks41(out):
 
 
 def _power_card_copy41():
-    with open(os.path.join(_ROOT41, "templates", "remote_manage.html"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT41, "panel", "templates", "remote_manage.html"), encoding="utf-8") as fh:
         src = fh.read()
     card = src[src.index('id="sec-power"'):src.index('id="power-state"')]
     check("Power card: its help text promises no blanket 'they come back' on either host — it points "

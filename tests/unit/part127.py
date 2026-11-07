@@ -344,7 +344,7 @@ def _docs_only127():
     want = ["**/*.md", "docs/**", "LICENSE", ".gitignore", ".editorconfig"]
     lists = {wf: _ci_paths_ignore127(wf) for wf in ("ci.yml", "codeql.yml")}
     samples = ["README.md", "docs/a.png", "a/b/c.md", "LICENSE", ".gitignore", ".editorconfig", "app.py",
-               "docs.py", "static/x.js", ".gitattributes", "LICENSE.txt", "install.sh", "mdocs/x.py"]
+               "docs.py", "panel/static/x.js", ".gitattributes", "LICENSE.txt", "install.sh", "mdocs/x.py"]
     agree = {}
     for name, pat in pats.items():
         agree[name] = pat is not None and all(

@@ -193,10 +193,10 @@ _live_prog84 = _DOM72 + (
     "  console.log(JSON.stringify({ph, empty, emptyFr, failed, failedFr, log, logFr}));\n"
     "})();\n"
 ) % (_json84.dumps({k: _ES84[k] for k in _PKEYS84}), _json84.dumps({k: _FR84[k] for k in _PKEYS84}),
-     _json84.dumps(_read84("static", "js", "i18n.js")),
+     _json84.dumps(_read84("panel", "static", "js", "i18n.js")),
      _SETTLE47.replace("const settle", "global.settle"),
-     _cut_or84(_read84("static", "js", "remote_manage.js"), "function loadSecurityLog(") + "\n"
-     + _cut_or84(_read84("static", "js", "remote_manage.js"), "function _r21cLogNote("))
+     _cut_or84(_read84("panel", "static", "js", "remote_manage.js"), "function loadSecurityLog(") + "\n"
+     + _cut_or84(_read84("panel", "static", "js", "remote_manage.js"), "function _r21cLogNote("))
 _live84 = _node84("i18n.js: data-i18n-placeholder and the security log's notes", _live_prog84)
 if _live84 is not None:
     check("i18n.js: a live switch re-renders a guarded field's placeholder named in "
@@ -223,7 +223,7 @@ _cred_prog84 = (
     "const key = [input.placeholder, input.attrs['data-i18n-placeholder'] || null];\n"
     "toggleCreds({value: 'password', closest: () => form}); toggleCreds({value: 'tailscale', closest: () => form});\n"
     "const ts = input.attrs['data-i18n-placeholder'] || null;\n"
-    "console.log(JSON.stringify({pw, key, ts}));\n") % _cut_or84(_read84("static", "js", "manage_remotes.js"),
+    "console.log(JSON.stringify({pw, key, ts}));\n") % _cut_or84(_read84("panel", "static", "js", "manage_remotes.js"),
                                                                  "function toggleCreds(")
 _cred84 = _node84("manage_remotes.js: the credential field's placeholder key", _cred_prog84)
 if _cred84 is not None:
@@ -239,7 +239,7 @@ if _cred84 is not None:
 # #429 kept an open field through a refresh that answered {error}; the Tailscale and local
 # transports answer a host that did not reply as {entries: [], unreadable: true}, no error, so the
 # rename box and its text were still thrown away.
-_SF84 = _read84("static", "js", "server_files.js")
+_SF84 = _read84("panel", "static", "js", "server_files.js")
 _br_prog84 = (
     _SETTLE47 + "global.window = global; global.MOUNT = ''; global.serverId = 1; const toasts = [];\n"
     "window.toast = (m, k) => toasts.push([m, k]); global.esc = s => s; global.t = s => 'T:' + s;\n"
@@ -282,7 +282,7 @@ if _br84 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Saves are chained so the server's last write is the last pick (#429); a save on a stalled
 # connection (fetch has no timeout) held every later save behind it for the life of the page.
-_PJ84 = _read84("static", "js", "panel.js")
+_PJ84 = _read84("panel", "static", "js", "panel.js")
 _HANDLER84 = ("document.addEventListener('change', function(e){\n  var el = e.target;\n"
               "  if (!el || !el.matches || !el.matches('select[data-lang-select]')")
 _lang_prog84 = (
@@ -366,10 +366,10 @@ check("pages: ...and the dashboard's move button names it in Spanish (\"Move %s 
       repr(_aria84))
 
 # The templates that name a host: none renders display_name raw, in or out of a guard.
-_raw84 = sorted(f for f in os.listdir(os.path.join(_root, "templates")) if f.endswith(".html")
-                and _re84.search(r"\{\{\s*(?:remote|r|s)\.display_name\s*\}\}", _read84("templates", f))
+_raw84 = sorted(f for f in os.listdir(os.path.join(_root, "panel", "templates")) if f.endswith(".html")
+                and _re84.search(r"\{\{\s*(?:remote|r|s)\.display_name\s*\}\}", _read84("panel", "templates", f))
                 and f != "install_server.html")
-_inst84 = _read84("templates", "install_server.html")
+_inst84 = _read84("panel", "templates", "install_server.html")
 check("templates: a host's name is rendered through host_label / host_text everywhere (the install "
       "picker's <option> guards a remote's only)",
       _raw84 == [] and "{% if not r.is_local %} data-no-i18n{% endif %}>{{ r.display_name }}</option>" in _inst84,
@@ -382,7 +382,7 @@ with _p9.app_context():
 check("pages: host_label renders the panel host's label unguarded and a remote's name guarded, each "
       "one span marked data-host-name, which the heading's wrap rule reads",
       _hl84 == ("<span data-host-name>Panel Server</span>", "<span data-host-name data-no-i18n>p9-host</span>")
-      and ".page-title:has(> [data-host-name]) { flex-wrap: wrap; }" in _read84("static", "css", "panel.css"),
+      and ".page-title:has(> [data-host-name]) { flex-wrap: wrap; }" in _read84("panel", "static", "css", "panel.css"),
       repr(_hl84))
 
 # A sentence the server words around a host name: the label is translated with it.
@@ -476,7 +476,7 @@ check("OS updates: ...a superadmin still reads it, and the banner names the pane
 
 # ...and the pages do not ask for it: base.html's reboot banner ran /reboot-required for the panel
 # host for any host admin (LOCAL_HOST_ID), and the panel host's manage page did again on an update.
-_NAGS84 = _read84("static", "js", "nags.js")
+_NAGS84 = _read84("panel", "static", "js", "nags.js")
 _mark84 = "window.rebootNagCheck(window.LOCAL_HOST_ID, 'the panel host'); }"
 _at84 = _NAGS84.find(_mark84)
 _iife84 = (_NAGS84[_NAGS84.rfind("(function(){", 0, _at84):_NAGS84.index("})();", _at84) + 5]
@@ -495,13 +495,13 @@ if _out84 is not None:
 check("reboot banner: ...nor does the panel host's manage page after an update, unless the viewer may "
       "act on it",
       "if(IS_LOCAL && window.LOCAL_HOST_ID!=null && window.LOCAL_HOST_CTL) rebootNagCheck"
-      in _read84("static", "js", "remote_manage.js"), "remote_manage.js's post-update banner check")
+      in _read84("panel", "static", "js", "remote_manage.js"), "remote_manage.js's post-update banner check")
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 7. Every key a data-i18n-placeholder names is in both catalogs
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _named84 = set()
-for _dir84, _ext84 in (("templates", ".html"), (os.path.join("static", "js"), ".js")):
+for _dir84, _ext84 in ((os.path.join("panel", "templates"), ".html"), (os.path.join("panel", "static", "js"), ".js")):
     for _fn84 in sorted(os.listdir(os.path.join(_root, _dir84))):
         if _fn84.endswith(_ext84):
             _src84 = _read84(_dir84, _fn84)

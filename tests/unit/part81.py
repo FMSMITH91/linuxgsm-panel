@@ -272,7 +272,7 @@ check("i18n gate: a callback's keyword called inside a lambda in the callee is r
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # fr then es on a slow link: the fr catalog arriving last put the page (and every picker) back in
 # French, and the two saves raced on the server. The real handler, with fetch answered by hand.
-_PJ81 = _read81("static", "js", "panel.js")
+_PJ81 = _read81("panel", "static", "js", "panel.js")
 _HANDLER81 = "document.addEventListener('change', function(e){\n  var el = e.target;\n  if (!el || !el.matches || !el.matches('select[data-lang-select]')"
 _lang_prog81 = (
     _SETTLE47 + "global.window = global; global.MOUNT = '';\n"
@@ -304,7 +304,7 @@ if _lang81 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The new set was adopted when the swap was ASKED, so one failed swap (a blip, a restart, a login
 # page) left a new server missing, and a removed one listed, until a reload.
-_DJ81 = _read81("static", "js", "dashboard.js")
+_DJ81 = _read81("panel", "static", "js", "dashboard.js")
 _dash_prog81 = (
     _SETTLE47 + "global.window = global; global.MOUNT = ''; let clock = 1e6; Date.now = () => clock;\n"
     "let rendered = ['1', '2'], live = [1, 2, 3], swaps = 0, landing = false;\n"
@@ -347,7 +347,7 @@ if _dash81 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # fb-interval offers 1/7/14/30 and the API takes 0-365: a stored 3 left the select with no
 # selection, and the next save of anything on the card posted parseInt('')||7 (weekly).
-_RB81 = _read81("static", "js", "remote_manage_backups.js")
+_RB81 = _read81("panel", "static", "js", "remote_manage_backups.js")
 _fb_prog81 = (
     "global.window = global; global.MOUNT = ''; let posted = null;\n"
     "global.tf = (k, v) => k.replace('{n}', v.n);\n"
@@ -404,7 +404,7 @@ try:
     _upd81 = _p9_json(_p9_client(P9_ADMIN).get("/api/panel/update-status"))
 finally:
     _p9_restore_all()
-_RMH81 = _read81("static", "js", "remote_manage_host.js")
+_RMH81 = _read81("panel", "static", "js", "remote_manage_host.js")
 _upd_prog81 = (
     "global.window = global; global.MOUNT = ''; global.escapeHtml = s => String(s); global.t = s => s;\n"
     "global.tfHtml = (k, v) => k.replace(/\\{(\\w+)\\}/g, (m, n) => (v[n] && v[n].html) || v[n]);\n"
@@ -455,7 +455,7 @@ if _card81 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # browse() cleared the open create and rename fields and wiped the list before it read d.error, so
 # an upload's refresh during a host blip threw away what was being typed.
-_SF81 = _read81("static", "js", "server_files.js")
+_SF81 = _read81("panel", "static", "js", "server_files.js")
 _br_prog81 = (
     _SETTLE47 + "global.window = global; global.MOUNT = ''; global.serverId = 1; const toasts = [];\n"
     "window.toast = (m, k) => toasts.push([m, k]); global.esc = s => s;\n"
@@ -492,7 +492,7 @@ if _br81 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The listener tested every console_output, game log pushes included: a player's chat line holding
 # "[panel] " made every open page of the server re-read /version.
-_SD81 = _read81("static", "js", "server_detail.js")
+_SD81 = _read81("panel", "static", "js", "server_detail.js")
 _ver_prog81 = (
     "const handlers = [], timers = []; global.serverId = 4;\n"
     "global.socket = {on: (e, f) => handlers.push(f)};\n"
@@ -598,7 +598,7 @@ _rch_prog81 = (
     "console.log(JSON.stringify({lYes, lNo, rYes, hLocal, hRemote}));\n") % (
         _cut_or81(_DJ81, "var HOST_REACH = {"), _cut_or81(_DJ81, "var _R20C_LOCAL_REACH = {"),
         _cut_or81(_DJ81, "function paintHostReach("),
-        _cut_or81(_read81("static", "js", "remote_manage.js"), "function _r18cPaintHostBadge("))
+        _cut_or81(_read81("panel", "static", "js", "remote_manage.js"), "function _r18cPaintHostBadge("))
 _rch81 = _node81("dashboard.js / remote_manage.js: the local host's repainted badge", _rch_prog81)
 if _rch81 is not None:
     check("dashboard and host page: ...and the 10 s / live repaint keeps it so (both states on the "
@@ -640,7 +640,7 @@ _live_prog81 = _DOM72 + (
     "window.setLang('en', {}); const en = read();\n"
     "console.log(JSON.stringify({fr, en}));\n"
 ) % (_json81.dumps({k: _ES81[k] for k in _SKEYS81}), _json81.dumps({k: _FR81[k] for k in _SKEYS81}),
-     _json81.dumps(_read81("static", "js", "i18n.js")),
+     _json81.dumps(_read81("panel", "static", "js", "i18n.js")),
      _json81.dumps(_SKEYS81[0]), _json81.dumps(_SKEYS81[0]), _json81.dumps(_SKEYS81[1]), _json81.dumps(_SKEYS81[1]),
      _json81.dumps(_SKEYS81[2]), _json81.dumps(_SKEYS81[2]))
 _live81 = _node81("i18n.js: a live switch and data-i18n-title / data-i18n-text", _live_prog81)
@@ -653,7 +653,7 @@ if _live81 is not None:
                       "en": list(_SKEYS81[:3]) + ["sshd: Accepted publickey", "prod", "3 days"]}, repr(_live81))
 # Every key such an attribute names is one the catalogs hold (it is looked up as it is written).
 _named81 = set()
-for _dir81, _ext81 in (("templates", ".html"), (os.path.join("static", "js"), ".js")):
+for _dir81, _ext81 in ((os.path.join("panel", "templates"), ".html"), (os.path.join("panel", "static", "js"), ".js")):
     for _fn81 in sorted(os.listdir(os.path.join(_root, _dir81))):
         if _fn81.endswith(_ext81):
             _src81 = _read81(_dir81, _fn81)

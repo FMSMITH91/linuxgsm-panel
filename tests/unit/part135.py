@@ -887,7 +887,7 @@ check("range block: every address (/0) is refused by the deny itself", _deny_all
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. The settings row's script, in node
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_FWJS135 = _read135("static", "js", "remote_firewall.js")
+_FWJS135 = _read135("panel", "static", "js", "remote_firewall.js")
 _DOM135 = r"""
 function el(id, extra) { return Object.assign({id: id, value: '', disabled: false, hidden: false, className: '',
   textContent: '', innerHTML: '', options: [], children: [],
@@ -951,13 +951,13 @@ check("settings row (node): turning off asks with the off dialog, sends enabled 
 check("settings row: the rules' refresh reads the settings too, and the settings markup carries every control "
       "the script paints",
       "refreshFwSettings();" in _cut47(_FWJS135, "function refreshFirewall(")
-      and all('id="%s"' % i in _read135("templates", "_firewall_panel.html") for i in (
+      and all('id="%s"' % i in _read135("panel", "templates", "_firewall_panel.html") for i in (
           "fw-settings", "fw-set-enabled", "fw-set-enabled-label", "fw-settings-msg", "block-port",
           "block-proto", "block-action", "block-comment"))
-      and all('fw_setting("%s"' % k in _read135("templates", "_firewall_panel.html")
+      and all('fw_setting("%s"' % k in _read135("panel", "templates", "_firewall_panel.html")
               for k in ("incoming", "outgoing", "routed", "logging"))
-      and 'id="fw-set-routed-wrap" hidden' in _read135("templates", "_firewall_panel.html")
-      and all('fw_family_select("%s")' % i in _read135("templates", "_firewall_panel.html")
+      and 'id="fw-set-routed-wrap" hidden' in _read135("panel", "templates", "_firewall_panel.html")
+      and all('fw_family_select("%s")' % i in _read135("panel", "templates", "_firewall_panel.html")
               for i in ("new-family", "block-family")))
 
 check("part135: nothing it drove reached a real transport (every host call was stubbed)",

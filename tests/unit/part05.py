@@ -8073,7 +8073,7 @@ finally:
     _app_mod._GAME_LIST_CACHE.clear()
     _app_mod._GAME_LIST_CACHE.update(_o_cache)
 
-_tpl_is = open(os.path.join(_root, "templates", "install_server.html"), encoding="utf-8").read()
+_tpl_is = open(os.path.join(_root, "panel", "templates", "install_server.html"), encoding="utf-8").read()
 check("game os: the picker LABELS a capped game, not just tags it",
       "({{ g.legacy_os }})" in _tpl_is, "the option no longer shows the release")
 check("game os: ...and still tags it for anything that wants to react",

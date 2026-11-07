@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Measure how much of the panel's own JavaScript (static/js/*.js) a real browser runs.
+"""Measure how much of the panel's own JavaScript (panel/static/js/*.js) a real browser runs.
 
     python tools/js_coverage/run.py --out lcov.info [--summary js-coverage.txt] [--chrome PATH]
 
 Boots a seeded panel (serve.py) in a throwaway copy of this tree, drives headless Chrome through
 its pages and their controls over the DevTools protocol, and records V8's precise block coverage
-of every /static/js/*.js the pages load. Writes LCOV with repository paths (static/js/<file>.js),
+of every /static/js/*.js the pages load. Writes LCOV with repository paths (panel/static/js/<file>.js),
 which is what Codacy is sent beside the Python report, and a per-file summary.
 
 EXITS NON-ZERO, rather than writing an empty report, when the panel did not boot, the sign-in did
 not land, Chrome could not be driven, a page the walk names did not render as itself, or no file
 ran a single line — a report of nothing would read as "0% covered" and look like a measurement.
 
-Every static/js file is in the report, loaded or not: a file no page loaded is compiled (never run)
+Every panel/static/js file is in the report, loaded or not: a file no page loaded is compiled (never run)
 at the end so its lines are counted, all of them missed. Leaving it out would hide it from the
 total, which is the one number this exists to make honest.
 
@@ -76,8 +76,8 @@ def fail(msg, code=EXIT_SETUP):
 
 
 def js_files(root=ROOT):
-    """Return the names of the panel's own scripts: static/js/*.js, not the vendored ones."""
-    d = os.path.join(root, "static", "js")
+    """Return the names of the panel's own scripts: panel/static/js/*.js, not the vendored ones."""
+    d = os.path.join(root, "panel", "static", "js")
     return sorted(f for f in os.listdir(d) if f.endswith(".js"))
 
 
@@ -292,16 +292,16 @@ class Session:
 
 # ── the report ─────────────────────────────────────────────────────────────────────────────────
 def sources(root=ROOT):
-    """Return {"static/js/x.js": its text} for every file the report covers."""
+    """Return {"panel/static/js/x.js": its text} for every file the report covers."""
     out = {}
     for name in js_files(root):
-        with open(os.path.join(root, "static", "js", name), encoding="utf-8") as fh:
-            out["static/js/" + name] = fh.read()
+        with open(os.path.join(root, "panel", "static", "js", name), encoding="utf-8") as fh:
+            out["panel/static/js/" + name] = fh.read()
     return out
 
 
 def measure(d):
-    """Take the last counts and return {path: {line: hits}} for every static/js file."""
+    """Take the last counts and return {path: {line: hits}} for every panel/static/js file."""
     d.snapshot()
     return d.hits()
 
@@ -370,7 +370,7 @@ def measure_and_report(d, out, summary_path):
     write_reports(files, text, out, summary_path)
     log(text)
     if hit == 0:
-        raise Abort("no line of static/js ran: the coverage is empty", EXIT_EMPTY)
+        raise Abort("no line of panel/static/js ran: the coverage is empty", EXIT_EMPTY)
     if d.unreached:
         raise Abort("the walk did not reach %d page(s) it names — a renamed or removed route? %s"
                     % (len(d.unreached), "; ".join("%s (%s)" % u for u in d.unreached)))

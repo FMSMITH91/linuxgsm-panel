@@ -3,8 +3,8 @@
 Strings are keyed by their English source text (gettext-style), so anything not yet translated
 falls back to English automatically — pages never break, they just show English until a phrase is
 added to a language file. Each non-English catalog is a FOLDER of section files
-(translations/<lang>/*.json), each a flat {"English": "Translated"} map, merged into one catalog.
-A single flat translations/<lang>.json is legacy and merged LAST if present — so following the old
+(panel/translations/<lang>/*.json), each a flat {"English": "Translated"} map, merged into one catalog.
+A single flat panel/translations/<lang>.json is legacy and merged LAST if present — so following the old
 layout would silently override every section file. The merged catalog is also handed to the browser
 (window.I18N) so the panel's JavaScript can translate the strings it renders too.
 
@@ -21,16 +21,16 @@ import threading
 from flask import has_request_context, session
 from flask_login import current_user
 
-from panel import REPO_ROOT as _ROOT   # translations/ is at the checkout root, not beside this file
-_DIR = _ROOT / "translations"
+from panel import REPO_ROOT as _ROOT
+_DIR = _ROOT / "panel" / "translations"
 
 # Supported languages: code -> native name (shown in the switcher).
 LANGUAGES = {"en": "English", "es": "Español", "fr": "Français"}
 DEFAULT_LANG = "en"
-# Each non-English language is a FOLDER of section files (translations/<lang>/*.json) that are all
+# Each non-English language is a FOLDER of section files (panel/translations/<lang>/*.json) that are all
 # merged into one catalog — so translations can be organised per page/section and grown file by
 # file. The code -> folder map is fixed (constant literals), so the directory we list below is
-# never built from request input. A legacy single translations/<lang>.json is still merged if it
+# never built from request input. A legacy single panel/translations/<lang>.json is still merged if it
 # happens to exist.
 _LANG_DIRS = {code: code for code in LANGUAGES if code != DEFAULT_LANG}
 _LEGACY_FILES = {code: code + ".json" for code in LANGUAGES if code != DEFAULT_LANG}
@@ -68,7 +68,7 @@ def catalog(lang):
                         if isinstance(v, str) and v:
                             merged[k] = v
 
-            # Every section file in translations/<lang>/ (paths come from the directory
+            # Every section file in panel/translations/<lang>/ (paths come from the directory
             # listing, not from request input), then the legacy single file if present.
             # OSError => no translations dir for this language yet; fall through.
             try:

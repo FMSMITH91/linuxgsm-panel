@@ -23,7 +23,7 @@ from unit.part47 import _cut47, _node47
 from panel.db.models import User as _User69, db as _db69
 from panel.ops import backup as _bk69, system_ops as _so69
 
-_JS69 = os.path.join(_root, "static", "js")
+_JS69 = os.path.join(_root, "panel", "static", "js")
 
 
 _TRIP69_START = len(_P9_TRIPPED)
@@ -188,11 +188,11 @@ _spec69.loader.exec_module(_scan69)
 
 _td69 = os.path.realpath(_tf69.mkdtemp(prefix="lgsm-unit-p69-"))
 try:
-    for _d69 in (("panel", "routes"), ("panel", "ops"), ("translations", "es")):
+    for _d69 in (("panel", "routes"), ("panel", "ops"), ("panel", "translations", "es")):
         os.makedirs(os.path.join(_td69, *_d69))
     with open(os.path.join(_td69, "app.py"), "w") as _fh69:
         _fh69.write("")
-    with open(os.path.join(_td69, "translations", "es", "x.json"), "w") as _fh69:
+    with open(os.path.join(_td69, "panel", "translations", "es", "x.json"), "w") as _fh69:
         _fh69.write('{"Already here.": "Ya está."}')
     with open(os.path.join(_td69, "panel", "routes", "r.py"), "w") as _fh69:
         _fh69.write(
@@ -239,7 +239,7 @@ try:
             "    j['step_name'], j['message'] = 'Complete', user\n"
             "    return {'step_name': 'Queued'}\n")
     _gaps69 = sorted(k for k, _w in _scan69.route_answer_gaps("es", root=_td69,
-                                                            translation_dir=os.path.join(_td69, "translations")))
+                                                            translation_dir=os.path.join(_td69, "panel", "translations")))
     _steps69 = sorted(_scan69.step_name_keys(root=_td69))
     _built69 = _scan69.step_names_built(root=_td69)
 finally:
@@ -732,7 +732,7 @@ for _L_r16u in ("es", "fr"):
 # The source field's placeholder: translated, addresses literal.
 import re as _re_r16u  # noqa: E402
 # The firewall's cards: one partial, for the Firewall page and the host page's Network tab.
-_FWT_r16u = _read69(_root, "templates", "_firewall_panel.html")
+_FWT_r16u = _read69(_root, "panel", "templates", "_firewall_panel.html")
 _cidr_r16u = _re_r16u.search(r'<input\b[^>]*\bid="src-cidr"[^>]*>', _FWT_r16u, _re_r16u.S)
 _ph_r16u = _re_r16u.search(r'placeholder="([^"]*)"', _cidr_r16u.group(0)).group(1) if _cidr_r16u else ""
 check("firewall: the 'Restrict a port' source field is not data-no-i18n, so its placeholder translates",
@@ -758,14 +758,14 @@ check("firewall: the Open-a-port protocol select gets at least half its row",
 # Row buttons in reach: each table whose last column is its row buttons is pinned, in the
 # template AND in the script that repaints it (where each draws one), and the rule that pins it
 # exists at phone width.
-_RM_r16u = _read69(_root, "templates", "remote_manage.html")
+_RM_r16u = _read69(_root, "panel", "templates", "remote_manage.html")
 _pins_r16u = {
     # (The firewall rules are drawn by the repaint alone: the cards render "Loading…" until the read.)
     "firewall rules (repaint)": (_read69(_JS69, "remote_firewall.js"), "<th>Port</th><th>Protocol</th>"),
     "panel backups": (_RM_r16u, "<th>When</th><th>Type</th>"),
     "game backups": (_read69(_JS69, "remote_manage_backups.js"), "<th>Backup file</th>"),
     "host game servers": (_RM_r16u, "<th>Name</th><th>Type</th><th>Connect</th>"),
-    "users": (_read69(_root, "templates", "manage_users.html"), "<th>Username</th>"),
+    "users": (_read69(_root, "panel", "templates", "manage_users.html"), "<th>Username</th>"),
 }
 for _what_r16u, (_src_r16u, _head_r16u) in _pins_r16u.items():
     _at_r16u = _src_r16u.find(_head_r16u)
@@ -773,7 +773,7 @@ for _what_r16u, (_src_r16u, _head_r16u) in _pins_r16u.items():
     _tag_r16u = _src_r16u[_tbl_r16u:_src_r16u.find(">", _tbl_r16u)] if _tbl_r16u >= 0 else ""
     check("375px: the %s table pins its row buttons (table-pin-actions)" % _what_r16u,
           "table-pin-actions" in _tag_r16u, _tag_r16u or "table not found")
-_CSS_r16u = _read69(_root, "static", "css", "panel.css")
+_CSS_r16u = _read69(_root, "panel", "static", "css", "panel.css")
 _PIN_RULE_r16u = r"\.table-pin-actions\s*>\s*tbody\s*>\s*tr\s*>\s*:last-child\s*\{([^}]*)\}"
 
 
@@ -820,7 +820,7 @@ check("375px: ...and the same rule moved into the desktop block is not read as t
 check("375px: the dashboard's server-name width floor is scoped to the dashboard table, not every "
       "wrapped table's second column",
       _re_r16u.search(r"\.table-responsive\s+\.table\s+(thead|tbody)\s+t[hd]:nth-child\(2\)", _CSS_r16u) is None
-      and "dash-srv-table" in _read69(_root, "templates", "dashboard.html"),
+      and "dash-srv-table" in _read69(_root, "panel", "templates", "dashboard.html"),
       "an unscoped `.table-responsive .table … :nth-child(2)` rule is back")
 
 # A heading that names a host or a server: measured at 375px with a 45-char host name, the Firewall
@@ -852,7 +852,7 @@ check("375px: a page heading wraps its label and name onto separate lines and br
                                                            _ptk_r16u.strip()))
 for _tpl_r16u in ("remote_manage.html",):
     _h1_r16u = _re_r16u.search(r'<h1 class="page-title[^"]*">(.*?)</h1>',
-                               _read69(_root, "templates", _tpl_r16u), _re_r16u.S)
+                               _read69(_root, "panel", "templates", _tpl_r16u), _re_r16u.S)
     check("375px: %s's heading carries the host name as its own item (a direct child the rule reaches)"
           % _tpl_r16u,
           _h1_r16u is not None and ("<span data-no-i18n>{{ remote.display_name }}</span>" in _h1_r16u.group(1)

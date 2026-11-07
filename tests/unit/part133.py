@@ -66,7 +66,7 @@ for _k133 in ("panel", "remote"):
           and bool(_j133.get("error")) and _j133.get("ips") == []
           and not {"autoblock", "threshold", "whitelist"} & set(_j133), repr(_uid_top.get(_k133)))
 
-_RM133 = _read133("static", "js", "remote_manage.js")
+_RM133 = _read133("panel", "static", "js", "remote_manage.js")
 
 
 def _uid_cut(head):
@@ -282,7 +282,7 @@ for _pg133 in ("local", "remote"):
     check("network tab (%s host page): the switch's action is a control on the Network tab" % _pg133,
           "fwAddMode" in _net133, repr(sorted(_net133)))
 
-_FWP133 = _read133("templates", "_firewall_panel.html")
+_FWP133 = _read133("panel", "templates", "_firewall_panel.html")
 _games133 = _pages131.get("remote", (0, ""))[1]
 _LI133 = '<li class="list-group-item d-flex align-items-center gap-2 py-1">'
 check("network tab: the game ports are one line each — name, port, Open all ports — not a table of three lines "
@@ -292,13 +292,13 @@ check("network tab: the game ports are one line each — name, port, Open all po
       and _games133.count('data-action="syncPorts"') == _games133.count(_LI133),
       repr(_games133.count('data-action="syncPorts"')))
 
-_CSS133 = _read133("static", "css", "panel.css")
+_CSS133 = _read133("panel", "static", "css", "panel.css")
 _pair133 = _re133.search(r"@media \(width >= 992px\)\{\s*\.uid-pair\{([^}]*)\}", _CSS133)
 check("security tab: the pair is two columns from 992px (range notation), one above the other below it",
       _pair133 is not None and "grid-template-columns:1fr 1fr" in _pair133.group(1), "")
 
 # The switch, the "Show all" and the folds' openers, in node.
-_FW133 = _read133("static", "js", "remote_firewall.js")
+_FW133 = _read133("panel", "static", "js", "remote_firewall.js")
 _FOLD_PROG133 = r"""
 const SRC = %s;
 const mk = (attrs) => ({attrs, hidden: !!attrs.hidden, open: false,

@@ -2,7 +2,7 @@
 
 A console someone has joined costs the panel one privileged read of its log every two seconds (the
 poller in panel/routes/server_files.py): about 1,800 sudo calls an hour per watched console, for as
-long as the tab stays open, looked at or not. static/js/server_detail.js now leaves the console's
+long as the tab stays open, looked at or not. panel/static/js/server_detail.js now leaves the console's
 room once its tab has stayed hidden for 30 s, and on the way back rejoins, asking with its join to be
 caught up from its own place in the log; the poller answers on its next pass with the lines written
 since, cut exactly where its own pushes go on from, and every push says where in the log it ends.
@@ -62,8 +62,8 @@ _TMP38 = _tf38.mkdtemp(prefix="lgsm-unit-p38-")
 _ABSENT38 = object()
 _SAVED38 = {}
 _TRIP38_FROM = [0]
-_SRC38 = os.path.join(_root, "static", "js", "server_detail.js")
-_PANEL38 = os.path.join(_root, "static", "js", "panel.js")
+_SRC38 = os.path.join(_root, "panel", "static", "js", "server_detail.js")
+_PANEL38 = os.path.join(_root, "panel", "static", "js", "panel.js")
 
 
 def _set38(owner, name, value):
@@ -162,7 +162,7 @@ function makePage(o) {
     addEventListener: (e, f) => (docL[e] = docL[e] || []).push(f),
     removeEventListener: (e, f) => { const l = docL[e] || [], i = l.indexOf(f); if (i >= 0) l.splice(i, 1); },
   };
-  // socket.io-client 4.8.4 as static/vendor/socketio has it: a packet emitted while the socket is not
+  // socket.io-client 4.8.4 as panel/static/vendor/socketio has it: a packet emitted while the socket is not
   // connected — or is, but its engine's ping deadline has passed (_hasPingExpired, a page woken from
   // a long sleep) — goes to sendBuffer, and is sent on the next connect BEFORE the 'connect'
   // listeners run (onconnect: emitBuffered, then emitReserved('connect')). An expired ping also

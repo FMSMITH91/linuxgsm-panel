@@ -2218,11 +2218,11 @@ def _so7_integrity_repair():
     global _k
     SO._is_git_checkout = lambda: True
     SO._git = lambda args, timeout=45: {"rev-parse": ("abc1234", "", 0),
-                                        "diff": ("M\tapp.py\n\nD\tstatic/x.js\n", "", 0)}[args[0]]
+                                        "diff": ("M\tapp.py\n\nD\tpanel/static/x.js\n", "", 0)}[args[0]]
     _ci = SO._compute_panel_integrity()
     eq("so/_compute_panel_integrity: blank lines are skipped, statuses named, sorted by path",
        (_ci["modified"], _ci["count"], _ci["clean"], _ci["verified"]),
-       ([{"path": "app.py", "status": "modified"}, {"path": "static/x.js", "status": "deleted"}], 2, False, True))
+       ([{"path": "app.py", "status": "modified"}, {"path": "panel/static/x.js", "status": "deleted"}], 2, False, True))
     _rep_git = []
     SO.panel_integrity = lambda force=False: {"git": True, "verified": True, "modified": [{"path": "app.py"}]}
     SO._git = lambda args, timeout=45: (_rep_git.append(args), ("", "error: pathspec", 1))[1]

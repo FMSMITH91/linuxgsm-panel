@@ -36,7 +36,7 @@ from unit.part72 import _DOM72
 from panel.db.models import User as _U78, db as _db78
 from panel.routes import close_port22 as _cp78, server_detail as _sd78
 
-_JS78 = os.path.join(_root, "static", "js")
+_JS78 = os.path.join(_root, "panel", "static", "js")
 _XHR78 = {"X-Requested-With": "XMLHttpRequest"}
 
 
@@ -136,7 +136,7 @@ _prog78 = _DOM72 + (
     "b.textContent = ''; put(FR['Done']); window.setLang('fr', FR); window.setLang('en', {});\n"
     "const shared = texts()[0];\n"
     "console.log(JSON.stringify({es, en, fr, esLabel, enLabel, frLabel, shared}));\n"
-) % (_json78.dumps(_ES_SUB78), _json78.dumps(_FR_SUB78), _json78.dumps(_read78("static", "js", "i18n.js")))
+) % (_json78.dumps(_ES_SUB78), _json78.dumps(_FR_SUB78), _json78.dumps(_read78("panel", "static", "js", "i18n.js")))
 _out78 = _node78("i18n.js: ✅/❌ marks and text written already translated", _prog78)
 # The fixture's premise, as its own check (review 1013a): a translator giving the two keys
 # different words then fails here, by name, not as "i18n.js guessed". It reads the catalog only, so
@@ -174,7 +174,7 @@ _sites78 = {
         "input.setAttribute('aria-label', kind==='folder' ? 'New folder name' : 'New file name');",
         "ok.textContent='Create';", "no.textContent='Cancel';"]),
 }
-_missing78 = [k for k, (f, needles) in _sites78.items() if not all(n in _read78("static", "js", f) for n in needles)]
+_missing78 = [k for k, (f, needles) in _sites78.items() if not all(n in _read78("panel", "static", "js", f) for n in needles)]
 check("pages: the socket status, the console's gap notice, Customise/Done, the diagnostics badge and "
       "the New file/New folder field write English for the translator (not t()'s translation)",
       not _missing78, repr(_missing78))
@@ -198,7 +198,7 @@ for _lang_cat78 in (_ES78, _FR78):
 _tkeys78 = {}
 for _fn78 in sorted(os.listdir(_JS78)):
     if _fn78.endswith(".js"):
-        for _m78 in _re78.finditer(r"\bt\(\s*'((?:[^'\\]|\\.)*)'", _read78("static", "js", _fn78)):
+        for _m78 in _re78.finditer(r"\bt\(\s*'((?:[^'\\]|\\.)*)'", _read78("panel", "static", "js", _fn78)):
             _tkeys78.setdefault(_m78.group(1).replace("\\'", "'"), _fn78)
 _frozen78 = sorted((k, f, _amb78[k]) for k, f in _tkeys78.items() if k in _amb78 and k not in _TRANSIENT78)
 check("i18n gate: no page script writes t('…') of a key whose translation another key shares (the "
@@ -211,7 +211,7 @@ check("i18n gate: no page script writes t('…') of a key whose translation anot
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # One page-wide _uploadChecked: a second batch started before the first finished overwrote it, and
 # the first batch's clash summary then spoke of the other's pre-flight.
-_SF78 = _read78("static", "js", "server_files.js")
+_SF78 = _read78("panel", "static", "js", "server_files.js")
 _du78 = _cut_or78(_SF78, "function _doUpload(")
 _uf78 = _cut_or78(_SF78, "function uploadFiles(")
 check("file browser: each upload batch carries its own pre-flight result into its summary (one "
@@ -244,7 +244,7 @@ check("server page: an IPv6 host's Connect row (and what click-to-copy copies) i
 # The empty state was the for-loop's else over HOSTS, which the panel's own machine always fills:
 # with no game server the box was blank.
 # The macro on its own (importing the page would render base.html around it).
-_MG78 = _read78("templates", "manage_groups.html")
+_MG78 = _read78("panel", "templates", "manage_groups.html")
 _mi78 = _MG78.find("{% macro game_server_access(")
 _MACRO78 = _MG78[_mi78:_MG78.find("{% endmacro %}", _mi78) + len("{% endmacro %}")] if _mi78 >= 0 else ""
 with _p9.test_request_context("/"):
@@ -333,7 +333,7 @@ check("install.sh: ...a public IPv4 still wins over IPv6, 172.32/100.128 are pub
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 7. The panel host's own page never calls itself unreachable over SSH
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM78 = _read78("static", "js", "remote_manage.js")
+_RM78 = _read78("panel", "static", "js", "remote_manage.js")
 _badge78 = {}
 for _local78 in (True, False):
     _o78 = _node78("host page: the local header badge on a failed local read", (

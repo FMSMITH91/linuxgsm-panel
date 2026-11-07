@@ -39,8 +39,8 @@ from panel.routes import remote_vps as _rv63
 from panel.security import auth as _auth63
 from panel.services import host_reboot as _hr63
 
-_JS63 = os.path.join(_root, "static", "js")
-_TPL63 = os.path.join(_root, "templates")
+_JS63 = os.path.join(_root, "panel", "static", "js")
+_TPL63 = os.path.join(_root, "panel", "templates")
 _CFG63_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 
 

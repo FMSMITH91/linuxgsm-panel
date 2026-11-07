@@ -167,9 +167,9 @@ finally:
 
 
 # ── A01: a threshold above the endpoint's 100000 cap is refused on the host page ─────────────────
-with open(_os64.path.join(_ROOT64, "static", "js", "remote_manage.js"), encoding="utf-8") as _fh64:
+with open(_os64.path.join(_ROOT64, "panel", "static", "js", "remote_manage.js"), encoding="utf-8") as _fh64:
     _rmjs64 = _fh64.read()
-with open(_os64.path.join(_ROOT64, "templates", "remote_manage.html"), encoding="utf-8") as _fh64:
+with open(_os64.path.join(_ROOT64, "panel", "templates", "remote_manage.html"), encoding="utf-8") as _fh64:
     _rmhtml64 = _fh64.read()
 _th64 = _node47("global.window = global; let toasts = [], posts = [];\n"
                 "global.toast = (m, l) => toasts.push([m, l]);\n"

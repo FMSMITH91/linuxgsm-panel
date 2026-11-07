@@ -304,8 +304,8 @@ def _hostile_names40(a_client, sid):
 
 
 def _catalog_keys40(lang):
-    """Every key of translations/<lang>/*.json, merged as panel.core.i18n.catalog merges them."""
-    root = os.path.join(_ROOT40, "translations", lang)
+    """Every key of panel/translations/<lang>/*.json, merged as panel.core.i18n.catalog merges them."""
+    root = os.path.join(_ROOT40, "panel", "translations", lang)
     keys = set()
     for name in sorted(os.listdir(root)):
         if name.endswith(".json"):

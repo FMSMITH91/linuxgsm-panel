@@ -1739,7 +1739,7 @@ finally:
 import glob as _tz_glob
 import re as _tz_re  # pylint: disable=reimported
 _tz_bad = []
-for _tz_path in sorted(_tz_glob.glob(os.path.join(_repo_root, "templates", "*.html"))):
+for _tz_path in sorted(_tz_glob.glob(os.path.join(_repo_root, "panel", "templates", "*.html"))):
     _tz_src = open(_tz_path, encoding="utf-8").read()
     _tz_src = _tz_re.sub(r"\{#.*?#\}", "", _tz_src, flags=_tz_re.S)   # Jinja comments
     for _tz_m in _tz_re.finditer(r"\{\{(.*?)\}\}", _tz_src, _tz_re.S):
@@ -1750,7 +1750,7 @@ check("time: no template formats a stored timestamp itself (it must go through |
       not _tz_bad, "raw strftime in a template shows UTC as if it were local: %s" % _tz_bad[:3])
 # Vacuity guard: the scan must actually be finding the filter, or the check above passes on a
 # repo where nothing renders a timestamp at all.
-_tz_filtered = sum(1 for _p in _tz_glob.glob(os.path.join(_repo_root, "templates", "*.html"))
+_tz_filtered = sum(1 for _p in _tz_glob.glob(os.path.join(_repo_root, "panel", "templates", "*.html"))
                    if "|datetime" in open(_p, encoding="utf-8").read())
 check("time: (setup) templates really do use the |datetime filter",
       _tz_filtered >= 4, "only %d templates use it — the gate above proves little" % _tz_filtered)
@@ -2487,7 +2487,7 @@ def _r15d_lt_judge(src):
 
 
 _lt_bad, _lt_seen = [], 0
-for _lt_js in sorted(_lt_glob.glob(os.path.join(_repo_root, "static", "js", "*.js"))):
+for _lt_js in sorted(_lt_glob.glob(os.path.join(_repo_root, "panel", "static", "js", "*.js"))):
     _lt_n, _lt_b = _r15d_lt_judge(open(_lt_js, encoding="utf-8").read())
     _lt_seen += _lt_n
     _lt_bad += ["%s: %s" % (os.path.basename(_lt_js), _b) for _b in _lt_b]

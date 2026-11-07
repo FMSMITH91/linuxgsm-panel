@@ -657,7 +657,7 @@ def _page_follows_checks():
     check("Remove of the route the page came through answers the panel's own address; from the "
           "panel's own route, or with a page address that is not one, it refreshes in place",
           gone == [(200, _HOST32 + "/lgsm/tailscale"), (200, "absent"), (200, "absent")], repr(gone))
-    js = _code_js(_script_text(os.path.join("static", "js", "tailscale.js")))
+    js = _code_js(_script_text(os.path.join("panel", "static", "js", "tailscale.js")))
     bodies = [_js_fn(js, n) for n in ("enableServe", "removeServeRoute", "_tsAfterServeChange")]
     check("tailscale.js: Enable and Remove send the page's address and follow `go`; the in-place "
           "refresh is only the fallback",

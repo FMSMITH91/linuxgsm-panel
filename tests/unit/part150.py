@@ -137,7 +137,8 @@ check("manifest: carries nothing but its own fields (no user, host or server dat
 _icons150 = {(i["sizes"], i["purpose"]): i["src"] for i in _m150.get("icons", [])}
 _files_ok150 = []
 for (_sz150, _pu150), _src150 in _icons150.items():
-    _path150 = os.path.join(_root150, _src150.lstrip("/"))
+    # The URL is /static/...; the files behind it are in panel/static/ (app.py's static_folder).
+    _path150 = os.path.join(_root150, "panel", _src150.lstrip("/"))
     _w150 = int(_sz150.split("x")[0])
     _files_ok150.append(_png_size150(_path150) == (_w150, _w150))
 check("manifest: a 192 and a 512 icon, and a maskable 512, each a PNG of the size it claims",
@@ -148,7 +149,7 @@ check("manifest: under a path prefix (Tailscale Serve) start_url, scope and icon
       _mp150.get("start_url") == "/lgsm/" and _mp150.get("scope") == "/lgsm/"
       and all(i["src"].startswith("/lgsm/static/icons/") for i in _mp150.get("icons", [])), repr(_mp150))
 check("apple-touch-icon: the file base.html links is a 180px PNG",
-      _png_size150(os.path.join(_root150, "static", "icons", "apple-touch-icon.png")) == (180, 180))
+      _png_size150(os.path.join(_root150, "panel", "static", "icons", "apple-touch-icon.png")) == (180, 180))
 
 
 # ── the colour scheme ────────────────────────────────────────────────────────────────────────────

@@ -49,7 +49,7 @@ _ROOT77 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 
 def _cat77(lang):
     out = {}
-    folder = os.path.join(_ROOT77, "translations", lang)
+    folder = os.path.join(_ROOT77, "panel", "translations", lang)
     for name in sorted(os.listdir(folder)):
         if name.endswith(".json"):
             with open(os.path.join(folder, name), encoding="utf-8") as fh:

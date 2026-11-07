@@ -74,7 +74,7 @@ regexes = [
   '''key": "AaDejKLMfWz637hiAQny"''',
 ]
 # No `paths` exemptions. There was one — '''README\.md''' — and gitleaks' path patterns are
-# unanchored searches, so it took every README in the repo (the root one, static/js/,
+# unanchored searches, so it took every README in the repo (the root one, panel/static/js/,
 # tests/fuzz/, .clusterfuzzlite/) out of the scan entirely, for placeholders the regexes above
 # already cover. A README is exactly where a real token gets pasted while documenting a setup,
 # which is why security.yml refuses to be path-filtered. A unit gate keeps any future path

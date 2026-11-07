@@ -188,7 +188,7 @@ _console_viewers = {}
 _viewers_lock = threading.Lock()
 
 # server_id -> {socket sid: {"id", "since", "tries", "waits"}}: the catch-ups pages asked for when they rejoined
-# a console they had left (static/js/server_detail.js leaves the console of a tab hidden for 30 s).
+# a console they had left (panel/static/js/server_detail.js leaves the console of a tab hidden for 30 s).
 # The console poller answers each on its next pass (_serve_console_catchups). Guarded by
 # _viewers_lock; a sid's entry goes when it leaves or disconnects.
 _console_catchups = register_server_state({}, _viewers_lock)

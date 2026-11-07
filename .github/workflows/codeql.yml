@@ -153,7 +153,7 @@ jobs:
           must = {
               "python": ["tools/panel-helper", "app.py", "tests/unit_test.py", "tests/unit/part01.py",
                          "tests/smoke_test.py"] + sorted(glob.glob("tests/smoke/part*.py")),
-              "javascript-typescript": ["static/js/panel.js", "static/js/dashboard.js"],
+              "javascript-typescript": ["panel/static/js/panel.js", "panel/static/js/dashboard.js"],
               "actions": [".github/workflows/codeql.yml"],
           }[sys.argv[2]]
           missing = [p for p in must if not any(n.endswith("/" + p) for n in names)]

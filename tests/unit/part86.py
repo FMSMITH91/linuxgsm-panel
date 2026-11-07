@@ -543,7 +543,7 @@ def _toggle_audit86(client, sid):
 
 
 def _upro86():
-    src = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
+    src = open(os.path.join(_root, "panel", "static", "js", "panel.js"), encoding="utf-8").read()
     i = src.find("window.UPro = (function(){")
     j = src.find("\n})();", i)
     body = src[i:j + 6] if i >= 0 and j > i else "/* MISSING window.UPro */"

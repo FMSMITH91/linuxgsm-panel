@@ -181,7 +181,7 @@ def _check_template_url_for():
     import re
     endpoints = {r.endpoint for r in app.url_map.iter_rules()}
     bad = []
-    _tpls = sorted(_lgsm_pathlib.Path("templates").glob("*.html"))
+    _tpls = sorted(_lgsm_pathlib.Path("panel", "templates").glob("*.html"))
     # A "no bad url_for anywhere" gate passes on an empty sweep. Floor, not an inventory.
     check("templates: the url_for sweep found templates to read", len(_tpls) >= 20,
           "%d templates — the check below would pass vacuously" % len(_tpls))

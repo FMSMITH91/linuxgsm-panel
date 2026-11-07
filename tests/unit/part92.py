@@ -302,9 +302,9 @@ check("debug report posture gate: no debug-report section prints posture vocabul
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. The page shows the posture; the download holds the report only
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-with open(os.path.join(_root, "static", "js", "remote_manage_host.js"), encoding="utf-8") as _fh92:
+with open(os.path.join(_root, "panel", "static", "js", "remote_manage_host.js"), encoding="utf-8") as _fh92:
     _JS92 = _fh92.read()
-with open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-8") as _fh92:
+with open(os.path.join(_root, "panel", "templates", "remote_manage.html"), encoding="utf-8") as _fh92:
     _TPL92 = _fh92.read()
 _diag92 = _TPL92.split('<div id="diag-report"', 1)[-1].split("{% endif %}", 1)[0]
 check("debug report page: the posture block sits in the report card, under the report's own text "

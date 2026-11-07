@@ -68,7 +68,7 @@ def _js106(name, setup, src, cuts, body):
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 1. A Backups-card refresh keeps what the operator is typing
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_BK106 = _read106("static", "js", "remote_manage_backups.js")
+_BK106 = _read106("panel", "static", "js", "remote_manage_backups.js")
 _LIST106 = {"settings": {"enabled": True, "keep_days": 5, "encrypt": True},
             "full": {"interval_days": 7, "keep": 2}, "games": [{"id": 4, "name": "p106"}], "backups": []}
 _name106 = "Backups card: a refresh under the operator's typing"
@@ -169,7 +169,7 @@ if _out106 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. The Live Resources card says it is stale when /live gets no answer at all
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM106 = _read106("static", "js", "remote_manage.js")
+_RM106 = _read106("panel", "static", "js", "remote_manage.js")
 _name106 = "Live Resources: a /live request with no JSON answer"
 _out106 = _js106(_name106, (
     "var REMOTE_ID = 1; let painted = 0;\n"
@@ -221,7 +221,7 @@ finally:
     _p9_restore_all()
 _m106 = _re106.search(r'id="gmod-content-opt".*?(GMod needs .*?)</div>', _page106, _re106.S)
 _said106 = " ".join(_m106.group(1).split()) if _m106 else ""
-_cats106 = {lang: _json106.loads(_read106("translations", lang, "r29c.json")) for lang in ("es", "fr")}
+_cats106 = {lang: _json106.loads(_read106("panel", "translations", lang, "r29c.json")) for lang in ("es", "fr")}
 check("GMod install box: it says a copy only a panel game server holds is downloaded again (it said "
       "content already on the host is reused, false since #439 for a server's account), and es/fr "
       "carry that sentence",
@@ -236,7 +236,7 @@ check("GMod install box: it says a copy only a panel game server holds is downlo
 # (a slow host) and typed, then pressed Raw Save, wrote the pre-save text back over the settings just
 # saved. Now: typed into and behind the file, its Save is refused with a note; focused but untouched,
 # it is refilled; typed into while the file did not change, it saves as before.
-_SF106 = _read106("static", "js", "server_files.js")
+_SF106 = _read106("panel", "static", "js", "server_files.js")
 _name106r = "Raw config editor: a re-read under the operator's typing"
 _outr106 = _js106(_name106r, (
     "var serverId = 1; function _tr(s){ return s; }\n"
@@ -324,7 +324,7 @@ def _ps106(src):
 
 
 _name106p = "credential field after a restored auth select"
-_MR106 = _read106("static", "js", "manage_remotes.js")
+_MR106 = _read106("panel", "static", "js", "manage_remotes.js")
 _outp106 = _js106(_name106p, (
     "const on = []; window.addEventListener = (ev, fn) => { if (ev === 'pageshow') on.push(fn); };\n"
     "global.Event = function(t){ this.type = t; };\n"
@@ -346,7 +346,7 @@ _outp106 = _js106(_name106p, (
     + "\n".join("  " + _piece106(_MR106, h) for h in (
         "function toggleCreds(", "function toggleEditCreds(", "function _r29j_credsOff(")) + "\n"
     + "  " + _ps106(_MR106) + "\n"
-    + "  " + _read106("static", "js", "setup_remote.js") + "\n"
+    + "  " + _read106("panel", "static", "js", "setup_remote.js") + "\n"
     # set: [select value, field type, field value, group hidden] per form; then the page is shown
     "  const show = (sel, grp, inp, st) => { sel.value = st[0]; inp.type = st[1]; inp.value = st[2];\n"
     "    grp.style.display = st[3] ? 'none' : ''; };\n"

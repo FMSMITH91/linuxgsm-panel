@@ -427,7 +427,7 @@ def _check_remote_edit_auth_method():
     # _core.is_local_server() answers True for auth_method == "local", so that one value moves
     # every command the panel runs "on that host" onto the PANEL HOST — the machine holding the
     # database, the credential key and the panel's own sudoers grant. The form's select offers
-    # exactly key/password/tailscale (templates/manage_remotes.html), so anything else is forged.
+    # exactly key/password/tailscale (panel/templates/manage_remotes.html), so anything else is forged.
     for bad in ("local", "LOCAL", "banana", "", "key\nlocal"):
         r = c.post("/remotes/%d/edit" % remote_id,
                    data={"name": "iv-host", "host": "192.0.2.10", "ssh_user": "root",

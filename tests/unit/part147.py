@@ -152,9 +152,9 @@ check("version endpoint: a LinuxGSM read that raises still answers 200, with no 
       _ep_down147.status_code == 200 and (_ep_down147.get_json() or {}).get("lgsm", {}).get("release") == "",
       repr((_ep_down147.status_code, _ep_down147.get_json())))
 
-with open(os.path.join(_root, "templates", "server_detail.html"), encoding="utf-8") as _fh147:
+with open(os.path.join(_root, "panel", "templates", "server_detail.html"), encoding="utf-8") as _fh147:
     _tpl147 = _fh147.read()
-with open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8") as _fh147:
+with open(os.path.join(_root, "panel", "static", "js", "server_detail.js"), encoding="utf-8") as _fh147:
     _js147 = _fh147.read()
 check("server page: the LinuxGSM line is there from the first paint, with a dash to fill in",
       '<span id="lgsm-version" data-no-i18n>&mdash;</span>' in _tpl147
