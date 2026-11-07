@@ -2029,7 +2029,8 @@ def _release_notes(target):
     An entry is new when its key (whats_new: a hash of its bold title) is not in this checkout's
     own CHANGELOG, so a bullet that only moved or had its body edited is not news. ([], 0) when
     either file cannot be read: with HEAD's unreadable every entry would read as new, so the card
-    falls back to the commits alone. `target` is a sha the caller has already resolved."""
+    falls back to the commits alone. `target` is a sha the caller has already resolved.
+    """
     new, _, rc = _git(["show", "%s:%s" % (target, _CHANGELOG_PATH)])
     old, _, orc = _git(["show", "HEAD:" + _CHANGELOG_PATH])
     if rc != 0 or orc != 0 or not new or not old:
