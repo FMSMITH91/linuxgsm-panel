@@ -429,7 +429,8 @@ _upd_prog81 = (
     "  answer = Promise.reject(new Error('offline'));\n"
     "  checkPanelUpdate(true); await settle(); const failedAfterOffer = [st.innerHTML, btn.style.display];\n"
     "  console.log(JSON.stringify({failedRoute, shaOnly, failedFirst, failedAfterOffer}));\n"
-    "})();\n") % (_line81(_RMH81, "var _r20cNoteCats"), _cut_or81(_RMH81, "function renderReleaseNotes("),
+    "})();\n") % (_line81(_RMH81, "var _r20cNoteCats") + "\n" + _line81(_RMH81, "var _r20cHexSha"),
+        _cut_or81(_RMH81, "function renderReleaseNotes("),
                   _line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("),
                   _cut_or81(_RMH81, "function checkPanelUpdate("), _json81.dumps(_upd81))
 _card81 = _node81("remote_manage_host.js: the update card when the check fails", _upd_prog81)
@@ -496,7 +497,8 @@ _notes_prog81 = (
     "renderUpdate(Object.assign({}, base, {target_sha: 'abcdef1234567'}));\n"
     "out.none = card();\n"
     "console.log(JSON.stringify(out));\n") % (
-        _line81(_RMH81, "var _r20cNoteCats"), _cut_or81(_RMH81, "function renderReleaseNotes("),
+        _line81(_RMH81, "var _r20cNoteCats") + "\n" + _line81(_RMH81, "var _r20cHexSha"),
+        _cut_or81(_RMH81, "function renderReleaseNotes("),
         _line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("))
 _notes81 = _node81("remote_manage_host.js: the update card's changelog entries", _notes_prog81)
 if _notes81 is not None:

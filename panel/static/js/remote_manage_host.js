@@ -303,7 +303,7 @@ function ufwAllowTailscale(){
 // turns out to be an issue — GitHub redirects that way, not the other.
 function appendSubject(li, text, repo){
   if(!repo){ li.appendChild(document.createTextNode(text)); return; }
-  var re=/#(\d{1,9})\b/g, last=0;
+  var re=new RegExp('#([0-9]{1,9})\\b', 'g'), last=0;   // a string: lizard misreads this as a literal
   for(var m=re.exec(text); m!==null; m=re.exec(text)){
     if(m.index>last) li.appendChild(document.createTextNode(text.slice(last, m.index)));
     var a=document.createElement('a');
@@ -322,6 +322,8 @@ function appendSubject(li, text, repo){
 // category badge and the title, opening to the body. The changelog's own English, as text only.
 // Returns how many it listed.
 var _r20cNoteCats={Added:1, Changed:1, Fixed:1, Removed:1, Security:1};
+// A RegExp string, not a literal: lizard (Codacy's complexity tool) loses its place in a regex literal.
+var _r20cHexSha=new RegExp('^[0-9a-f]{7,40}$');
 function renderReleaseNotes(d, repo){
   var box=document.getElementById('pu-notes'), ul=document.getElementById('pu-notes-list');
   var more=document.getElementById('pu-notes-more');
@@ -347,7 +349,7 @@ function renderReleaseNotes(d, repo){
   // The rest are in the changelog of the commit being offered, linked only from a vetted repo URL
   // and a sha that is hex, as the commit links are.
   var extra=Number(d.release_notes_more)||0, sha=String(d.target_sha||'');
-  if(extra>0 && repo && /^[0-9a-f]{7,40}$/.test(sha)){
+  if(extra>0 && repo && _r20cHexSha.test(sha)){
     more.href=repo+'/blob/'+sha+'/docs/CHANGELOG.md';
     more.textContent=tf('…and {n} more in the full changelog.', {n: extra});
     more.style.display='';
