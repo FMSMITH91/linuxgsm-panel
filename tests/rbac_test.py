@@ -44,6 +44,21 @@ _suite_deadline.arm(globals())
 from panel.ops.ssh_manager import _core as _sm_core   # the stub seam: stubbed by MODULE,
 # because every caller now reaches these through the module rather than binding them.
 
+# No real SSH from this suite. Its hosts are seeded at 127.0.0.1:22, so a route that reached
+# paramiko dialled whatever answers port 22 on the machine running the tests: on GitHub's
+# ubuntu-26.04 runner something accepted and hung up, and paramiko printed 33 "Error reading SSH
+# protocol banner" tracebacks per run. _open_client is where every real client is built (local
+# hosts and the pool are decided before it), so it is refused here with a down host's error.
+_RBAC_SSH_TRIES = []
+
+
+def _rbac_no_ssh(server):
+    _RBAC_SSH_TRIES.append(getattr(server, "name", "?"))
+    raise ConnectionError("SSH connection failed: refused by rbac_test (no real SSH from this suite)")
+
+
+_sm_core._open_client = _rbac_no_ssh
+
 from app import create_app
 from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState
 from panel.security import auth
@@ -4634,6 +4649,10 @@ check("audit ids: the scan found the server and host rows to check (positive con
           _ax_counts["server"], _ax_counts["remote"]))
 check("audit ids: every row about a server or host passes it, with an action the backfill knows",
       not _ax_bad, "; ".join(_ax_bad[:5]))
+
+check("rbac: a route that opens SSH reached the suite's refusal, not a real host (positive control)",
+      len(_RBAC_SSH_TRIES) > 0 and _sm_core._open_client is _rbac_no_ssh,
+      repr((len(_RBAC_SSH_TRIES), _sm_core._open_client)))
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

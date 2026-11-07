@@ -56,6 +56,10 @@ updates:
     ignore:
       - dependency-name: "mcp"
         update-types: ["version-update:semver-major"]
+      # complexity.in pins prospector to the version Codacy runs, so the PR-side count matches
+      # Codacy's; a newer prospector cannot resolve against that pin, and the grouped update failed
+      # whole every week trying to (2026-11-07). Move the pin by hand when Codacy's moves.
+      - dependency-name: "prospector"
 
   # The test matrix's tools (flake8, esprima), which run on 3.10 as well: pip-compile lockfiles
   # like the above, compiled on 3.10. A sibling of ci-requirements, not inside it, because a

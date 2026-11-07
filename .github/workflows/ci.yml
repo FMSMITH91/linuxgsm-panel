@@ -127,6 +127,24 @@ jobs:
           python -m pip install --quiet --require-hashes --only-binary :all: --no-binary=esprima \
             --no-build-isolation -r .github/ci-requirements-checks/checks.txt
 
+      - name: Install zsh and systemd-journal-remote
+        if: steps.scope.outputs.docs_only != 'true'
+        # Two unit checks need a tool the runner images do not ship, and skipped on every run until
+        # this: the nodesource flag driven through a real zsh login shell (part05), and the windowed
+        # journal read against a journal systemd-journal-remote builds (part39). The suite needs the
+        # binary, not the service: the package's socket would listen on 19532, so its units are
+        # masked before it is installed, and the step fails if anything listens there after. Not on
+        # a documentation-only pull request: the two checks skip there, as they did everywhere.
+        run: |
+          sudo systemctl mask systemd-journal-remote.socket systemd-journal-remote.service \
+            systemd-journal-upload.service
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends zsh systemd-journal-remote
+          test -x /usr/lib/systemd/systemd-journal-remote
+          if ss -ltn | grep -q ':19532 '; then
+            echo "::error::something listens on 19532 after the install"; exit 1
+          fi
+
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
         if: steps.scope.outputs.docs_only != 'true'
         # 40, under the job's 45. Each suite stops itself at its own limit (tests/suite_deadline.py:

@@ -302,20 +302,44 @@ def _scorecard127():
           got == {"Scorecard failed": "passing", "Scorecard running": "passing",
                   "control: a CI leg failed beside it": "failing", "control: Lighthouse failed": "failing",
                   "control: pip-audit failed": "failing", "control: open alerts": "failing"}, repr(got))
+
+
+def _repo_jobs127():
+    """Every job name and job id in this repository's workflows (a check run is named by either)."""
+    jobs = set()
+    for wf in os.listdir(os.path.join(_ROOT127, ".github", "workflows")):
+        if wf.endswith((".yml", ".yaml")):
+            jobs.update(_job_names127(wf))
+            with open(os.path.join(_ROOT127, ".github", "workflows", wf), encoding="utf-8") as f:
+                jobs.update(_re127.findall(r"^  ([A-Za-z0-9_-]+):\s*$", f.read(), _re127.M))
+    return jobs
+
+
+def _ignored127():
+    def _run(name, status, conclusion):
+        return [{"name": name, "status": status, "conclusion": conclusion}]
+    gh_own = {"Dependabot", "update-pip-graph"}     # GitHub's own jobs, filed under main's tip
+    got = {n: _gate127(_run(n, "completed", "failure")) for n in sorted(gh_own)}
+    check("update gate: a failed Dependabot update or dependency-graph submission (GitHub's own jobs, "
+          "filed under main's tip; a Dependabot failure did so on 2026-11-07) does not hold a commit back",
+          got == {n: "passing" for n in gh_own}, repr(got))
+    repo_jobs = _repo_jobs127()
     allowed = {n for wf in ("deploy.yml", "codacy-coverage.yml", "codeql-alerts.yml", "scorecard.yml")
-               for n in _job_names127(wf)}
+               for n in _job_names127(wf)} | gh_own
     check("update gate: every check it ignores is a job of a workflow that verifies no code (deploy, the "
-          "coverage upload, the alerts job's own run, Scorecard), the name is that job's, and none is a "
-          "required check",
+          "coverage upload, the alerts job's own run, Scorecard) or GitHub's own Dependabot and dependency "
+          "graph jobs, the name is that job's, no job of this repository shares a GitHub job's name, and "
+          "none is a required check",
           "Scorecard analysis" in _job_names127("scorecard.yml") and _so127._CI_IGNORE <= allowed
+          and not (gh_own & repo_jobs)
           and not any(_so127._ci_name_matches(r, n) for r in _so127._CI_REQUIRED for n in _so127._CI_IGNORE),
-          repr((sorted(_so127._CI_IGNORE), sorted(allowed))))
+          repr((sorted(_so127._CI_IGNORE), sorted(allowed), sorted(gh_own & repo_jobs))))
 
 
 try:
     _p9_arm(who="part127")
     os.makedirs(os.path.join(_TMP127, "const"))
-    for _fn127 in (_moves127, _discards127, _shells127, _helpers127, _scorecard127):
+    for _fn127 in (_moves127, _discards127, _shells127, _helpers127, _scorecard127, _ignored127):
         _fn127()
         _p9_restore_all()
         _p9_arm(who="part127")

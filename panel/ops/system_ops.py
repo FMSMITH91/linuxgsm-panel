@@ -1577,7 +1577,14 @@ _CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_fail
 # on 2026-10-22 a GitHub-side GraphQL error failed it twice on the same commit, and no panel was
 # offered that commit until a third run passed. Nothing that verifies code is in this set: CI,
 # CodeQL, the code-scanning alerts check, pip-audit, Gitleaks and Lighthouse all still gate.
-_CI_IGNORE = {"deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "Scorecard analysis"}
+#
+# "Dependabot" and "update-pip-graph" are GitHub's own jobs, not this repository's workflows:
+# Dependabot's weekly update run and the dependency graph's submission. Both are filed under main's
+# tip and look at the dependency files, not the commit's code. A failed Dependabot update marked
+# main's tip failing on 2026-10-28 and 2026-11-07, and no panel would have been offered that
+# commit until the next merge.
+_CI_IGNORE = {"deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "Scorecard analysis",
+              "Dependabot", "update-pip-graph"}
 # Checks a commit must CARRY before it can be 'passing', when it changed anything the CI and
 # CodeQL workflows run for (see _ci_suite_expected). "Every check that exists is green" was the
 # rule, and it is only a rule about the checks that exist so far. "Open code-scanning alerts" is
