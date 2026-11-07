@@ -33,7 +33,7 @@ jobs:
   # secret scanning, which is unconditional and unfiltered by design.
   secret-scan:
     name: Secret scanning (Gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Harden Runner

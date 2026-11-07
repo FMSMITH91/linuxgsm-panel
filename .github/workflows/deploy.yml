@@ -97,7 +97,7 @@ jobs:
       contents: read
       id-token: write  # the signed OIDC token the Tailscale step trades for an auth key (above)
       checks: read     # the verify step waits for the commit's security checks, not only CI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 20 of these minutes may be the verify step waiting for the checks CI does not include.
     timeout-minutes: 50
     steps:
