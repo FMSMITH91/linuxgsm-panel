@@ -14,6 +14,9 @@ compares git commits, not this file.
 
 ### Added
 
+- **See what an update brings before you install it.** When an update is available, the
+  Maintenance tab's Update card lists the changelog entries it adds, the same ones "What's new"
+  shows afterwards; tap one to read it. The commits are still there, folded underneath.
 - **Install the panel on a phone's home screen.** A phone's browser now offers "Install" or "Add to
   Home screen", and the panel then opens in its own window, also under a Tailscale Serve path.
 - **A light theme.** The Account page's "Language and theme" card offers System (the default),

@@ -559,14 +559,17 @@ if _HAVE142:
 _C3, _C2, _C1 = "c" * 40, "b" * 40, "a" * 40
 
 
-def _status142(walk, signed, branch=None):
+def _status142(walk, signed, branch=None, shows=None):
     """Run _compute_update_status over the walk `walk` (newest first), every commit passing CI.
 
-    Exactly the commits in `signed` are signed. Returns (status, commits CI was asked about).
+    Exactly the commits in `signed` are signed. `shows` maps "<rev>:<path>" to what `git show`
+    answers for it (anything else is unreadable). Returns (status, commits CI was asked about).
     """
     asked = []
 
     def _git(args, timeout=45):
+        if args[:1] == ["show"]:
+            return ((shows or {})[args[1]], "", 0) if args[1] in (shows or {}) else ("", "fatal", 128)
         if args[:2] == ["rev-list", "--first-parent"] and "--count" in args:
             return (str(len(walk)), "", 0)
         if args[:2] == ["rev-list", "--first-parent"]:
@@ -609,6 +612,38 @@ _st, _ = _status142([_C3], set(), branch="dev")
 _st2, _ = _status142([_C3], {_C3}, branch="dev")
 check("update card: on a tracked test branch an unsigned tip is not offered, a signed one is",
       _st.get("update_available") is False and _st2.get("update_available") is True, repr((_st, _st2)))
+
+
+# ── the card lists what the update adds to the changelog, before anyone clicks Update ──────────
+# Keyed as What's new keys it: by title. An entry whose body was edited, or that only moved, is
+# not news; one HEAD's changelog lacks is. Both reads must work, or every entry would read as new.
+_CL_HEAD142 = ("# Changelog\n\n## [Since 0.10.0-alpha]\n\n### Fixed\n\n- **An old fix.** Its first body.\n")
+_CL_NEW142 = ("# Changelog\n\n## [Since 0.10.0-alpha]\n\n### Added\n\n- **A new thing.** What it does,\n"
+              "  over two lines.\n\n### Fixed\n\n- **An old fix.** Its body, reworded.\n")
+_shows142 = {"HEAD:docs/CHANGELOG.md": _CL_HEAD142, _C3 + ":docs/CHANGELOG.md": _CL_NEW142}
+_st, _ = _status142([_C3], {_C3}, shows=_shows142)
+_want142 = [{"category": "Added", "title": "A new thing.", "body": "What it does, over two lines."}]
+check("update card: an update lists the changelog entries it adds, by title, with their text (an "
+      "old entry whose body changed is not one)",
+      _st.get("release_notes") == _want142 and _st.get("release_notes_more") == 0,
+      repr((_st.get("release_notes"), _st.get("release_notes_more"))))
+_st2, _ = _status142([_C3], {_C3}, branch="dev", shows=_shows142)
+check("update card: ...on a tracked test branch too",
+      _st2.get("release_notes") == _want142, repr(_st2.get("release_notes")))
+_st3, _ = _status142([_C3], {_C3}, shows={_C3 + ":docs/CHANGELOG.md": _CL_NEW142})
+check("update card: ...and none when this checkout's changelog cannot be read (every entry would "
+      "have read as new)", _st3.get("release_notes") == [] and _st3.get("update_available") is True,
+      repr(_st3.get("release_notes")))
+_many142 = _CL_NEW142.replace("### Added\n\n", "### Added\n\n" + "".join(
+    "- **Entry %d.** Body.\n" % i for i in range(12)))
+_st4, _ = _status142([_C3], {_C3}, shows={**_shows142, _C3 + ":docs/CHANGELOG.md": _many142})
+check("update card: ...five at most, the rest counted (13 new: 5 listed, 8 more)",
+      [n["title"] for n in _st4.get("release_notes") or []] == ["Entry %d." % i for i in range(5)]
+      and _st4.get("release_notes_more") == 8,
+      repr((_st4.get("release_notes"), _st4.get("release_notes_more"))))
+_st5, _ = _status142([_C3], set(), shows=_shows142)
+check("update card: ...and nothing offered carries no entries (up to date stays one line)",
+      "release_notes" not in _st5 and _st5.get("update_available") is False, repr(_st5))
 
 
 def _gate142(sig_rc, key, sig_text, valid):

@@ -509,3 +509,4 @@ be873231 README rewritten and shortened.
 f8f18f2d Cleared the CodeQL full-SSRF finding on the Discord webhook sink (constant host + validated id/token).
 b6b67bec The Telegram /update completion check compares the git commit, not the static VERSION.
 f5257a0c The Maintenance tab names the release you run.
+b4b1b89c See what an update brings before you install it.

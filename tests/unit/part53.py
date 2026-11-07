@@ -154,18 +154,21 @@ try:
 
     # ── a game's backup schedule: unreadable is refused, not "clear the override" ────────────────
     _sch53 = []
+    # Answers the stored schedule as the real one does (get_game_schedule), never the UNCHANGED
+    # marker: the route serialises it, and a stub echoing the marker logged a 500 every run.
     _p9_patch(_bk53, "set_game_schedule",
-              lambda sid, iv, kp: (_sch53.append((iv, kp)) or {"interval_days": iv, "keep": kp}))
+              lambda sid, iv, kp: (_sch53.append((iv, kp)) or {"interval_days": 7, "keep": None}))
     _url53 = "/api/panel/backup/game/%d/schedule" % P9_GS
     _bad53 = [_A53.post(_url53, json=_b).status_code
               for _b in ({"interval": "7d"}, {"keep": "five"}, {"interval": 7, "keep": [3]})]
     check("backup schedule: a value that is not a number is a 400, and the override is left alone "
           "(it was cleared, resetting the server to the global schedule)",
           _bad53 == [400] * 3 and _sch53 == [], repr((_bad53, _sch53)))
-    _A53.post(_url53, json={"interval": "7"})
-    _A53.post(_url53, json={"keep": ""})
+    _ok53 = [_A53.post(_url53, json={"interval": "7"}).status_code,
+             _A53.post(_url53, json={"keep": ""}).status_code]
     check("backup schedule: ...a number is set and an empty box still clears it (control)",
-          _sch53 == [(7, _bk53.UNCHANGED), (_bk53.UNCHANGED, None)], repr(_sch53))
+          _sch53 == [(7, _bk53.UNCHANGED), (_bk53.UNCHANGED, None)] and _ok53 == [200, 200],
+          repr((_sch53, _ok53)))
 
     # ── the panel host is not login-tested over SSH ──────────────────────────────────────────────
     _tst53 = []
