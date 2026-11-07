@@ -178,6 +178,10 @@ _SCOPED50 = {
 _ALWAYS50 = {"security.yml", "dependency-review.yml", "fuzz.yml", "cflite_pr.yml"}
 _RUN50 = "steps.scope.outputs.docs_only != 'true'"
 _DOCS50 = "steps.scope.outputs.docs_only == 'true'"
+_REUSE_AND50 = " && steps.reuse.outputs.reuse != 'true'"
+# ...or, in the coverage jobs, which measure after all when the pull request's report could not be
+# taken: ` && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')`.
+_TAKEN_AND50 = " && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')"
 _SCOPE_CMD50 = ('python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY" '
                 '--pr "$PR" --head-sha "$HEAD_SHA"')
 _SCOPE_ENV50 = ("EVENT: ${{ github.event_name }}", "PR: ${{ github.event.pull_request.number }}",
@@ -205,10 +209,20 @@ def _name50(step):
 
 
 def _if50(step):
-    """The step's `if:` expression, with any ${{ }} wrapper removed ("" when it has none)."""
+    """The step's `if:` expression, with any ${{ }} wrapper removed ("" when it has none).
+
+    A step skipped when a push to main reuses the pull request's pass (part153) ANDs its docs-only
+    gate with ` && steps.reuse.outputs.reuse != 'true'`; that clause, and the parentheses it puts
+    around an `||`, are taken off here, so what is judged is the docs-only gate alone.
+    """
     m = _re50.search(r"^(?:- | {8})if: (.*)$", step, _re50.M)
     e = m.group(1).strip() if m else ""
-    return e[3:-2].strip() if e.startswith("${{") and e.endswith("}}") else e
+    e = e[3:-2].strip() if e.startswith("${{") and e.endswith("}}") else e
+    for tail in (_REUSE_AND50, _TAKEN_AND50):
+        if e.endswith(tail):
+            e = e[:-len(tail)]
+            e = e[1:-1] if e.startswith("(") and e.endswith(")") else e
+    return e
 
 
 def _head_bad50(text):

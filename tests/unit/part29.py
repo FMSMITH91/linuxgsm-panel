@@ -480,9 +480,11 @@ def _ci1_only_docs_gated(root_step, run_step):
     """Whether neither step can fail quietly, and the one `if:` either has is the docs-only one.
 
     A documentation-only pull request skips both together (.github/scripts/pr_scope.py fails open,
-    so anything else runs them); nothing else may skip the root step or let it fail.
+    so anything else runs them), and so does a push to main that reuses the merged pull request's
+    pass on the same tree (.github/scripts/reuse_pr_result.py fails toward running; part153 holds
+    it); nothing else may skip the root step or let it fail.
     """
-    docs_if = ["steps.scope.outputs.docs_only != 'true'"]
+    docs_if = ["steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse != 'true'"]
     return (not _re29.search(r"^ {8}continue-on-error:", root_step, _re29.M)
             and _re29.findall(r"^ {8}if: (.*)$", root_step, _re29.M) == docs_if
             and _re29.findall(r"^ {8}if: (.*)$", run_step, _re29.M) == docs_if)
