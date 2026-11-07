@@ -296,11 +296,12 @@ function saveConfig(ev){
       if(d.success){
         // Mark saved values as the new baseline (preserves accordion state), and show the "set"
         // badge on the fields we just wrote — they're now overrides in the instance .cfg.
+        var inst=document.getElementById('cfg-form').getAttribute('data-cmpc-inst')||'';
         document.querySelectorAll('#cfg-groups [data-key]').forEach(function(i){
           i.setAttribute('data-orig', i.value);
           if(settings.hasOwnProperty(i.getAttribute('data-key'))){
             var b=i.parentElement.querySelector('.cfg-set-badge');
-            if(b){ b.textContent=document.getElementById('cfg-form').getAttribute('data-cmpc-inst')||''; b.className='badge cfg-set-badge bg-info text-dark'; }
+            if(b){ b.textContent=inst; b.className='badge cfg-set-badge bg-info text-dark'; }
           }
         });
         // The settings write changed the instance .cfg — refresh the Raw tab so it isn't stale.

@@ -9339,6 +9339,9 @@ _ANCHOR_LINE_PARSERS = {
     "_DTL_SECRET_LINE",
     # One line of master's linuxgsm.sh (re.M), `version="v26.5.0"`: the release update-lgsm installs.
     "_LATEST_VERSION_RE",
+    # One comment line of _default.cfg (splitlines()), `Title | https://…`; the URL becomes a link
+    # only after _CMPC_DOCS_RE fullmatches it, so nothing here decides what reaches an href.
+    "_CMPC_HEADING_RE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.
