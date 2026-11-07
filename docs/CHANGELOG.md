@@ -381,6 +381,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **The Install page draws before its game icons load.** The game icons start loading once the
+  page has finished drawing, so the search box and the game list appear sooner on a slow
+  connection. A game whose icon is missing keeps its initials.
+
 - **The bots show "typing…" the moment they receive a command, and stop as they answer.** It
   used to start only after 0.7 s, and only once the command began, so a quick reply or a command
   waiting behind another one showed nothing. It now starts on receipt, stays up while the command
@@ -818,6 +822,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+
+- **An update is no longer held back by a failed Dependabot run on GitHub.** GitHub files its own
+  weekly dependency-update job against the newest commit, and the panel read a failure there as
+  that commit failing its checks, so it was not offered until the next one. Those jobs check the
+  dependency files, not the code, and the panel now ignores them, as it already ignored the
+  repository's Scorecard rating.
 
 - **Maintenance → details shows all of its output, not the first 600 characters.** It used to stop
   two sections in, partway through a word. LinuxGSM's `details` is the one command that prints the
