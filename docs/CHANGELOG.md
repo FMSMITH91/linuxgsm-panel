@@ -148,6 +148,9 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The Maintenance tab names the release you run.** When the panel is up to date, the Update card
+  says which release that is, by its date and commit: "You're up to date: release 2026.11.7
+  (a1b2c3d)."
 - **The Install page draws before its game icons load.** The search box and the game list appear
   sooner on a slow connection.
 

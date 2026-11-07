@@ -514,6 +514,7 @@
   "Update available: {version} ({n} commit behind).": "Mise à jour disponible : {version} ({n} commit de retard).",
   "Update available: {version} ({n} commits behind).": "Mise à jour disponible : {version} ({n} commits de retard).",
   "You're up to date ({sha}).": "Vous êtes à jour ({sha}).",
+  "You're up to date: release {version} ({sha}).": "Vous êtes à jour : version {version} ({sha}).",
   "You're up to date.": "Vous êtes à jour.",
   "{done} — reloading…": "{done} — rechargement…",
   "Switch the panel to branch \"{branch}\"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically.": "Passer le panel sur la branche « {branch} » ?\n\nIl fait une sauvegarde, bascule sur cette branche et redémarre. S'il ne démarre pas, il revient automatiquement en arrière.",
