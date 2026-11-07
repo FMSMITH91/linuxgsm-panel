@@ -342,7 +342,7 @@ check("dependency audit: the workflow runs it on every pull request, on main and
 
 
 # ── the exemptions: reasoned, expiring, and the same list in Dependency Review ──────────────────
-# osv-scanner reads osv-scanner.toml from the scanned file's own directory only (docs, v2.6.0). Read
+# osv-scanner reads osv-scanner.toml from the scanned file's own directory only (docs, v2.7.0). Read
 # as text: the 3.10 CI leg has no tomllib.
 def _ignored27(text):
     """[[IgnoredVulns]] entries as dicts of their id, ignoreUntil and reason (raw text)."""
@@ -474,7 +474,7 @@ check("dependabot: ...and an entry whose only cooldown is in a comment is caught
 
 
 # ── Semgrep: the lockfile, and mcp pinned apart ────────────────────────────────────────────────
-# semgrep 1.180.0, the pinned release (1.179.0 and 1.181.0 alike), declares mcp==1.29.0 exactly, and
+# semgrep 1.183.0, the pinned release (1.179.0 to 1.182.x alike), declares mcp==1.29.0 exactly, and
 # 1.29.0 has GHSA-84m7-p3x7-pcfv, so mcp is compiled out of semgrep.txt (--unsafe-package) and pinned in semgrep-mcp.txt, the two
 # installed together with --no-deps. The same split was made for PyJWT in #375 and undone in #391;
 # semgrep.in says when to undo this one.

@@ -1235,7 +1235,7 @@ _ARGV = {
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
     # apt's default set, and nothing more: Ubuntu's phased rollouts are never forced (it took a
-    # "phased" choice that told apt to always include phased updates, until the owner's
+    # "phased" choice that told apt to always include phased updates, until that was changed to
     # "respect deferred updates"). A deferred update installs once its rollout reaches the host;
     # the OS Updates card lists it apart until then (system_ops.split_held).
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),

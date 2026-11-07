@@ -1,8 +1,8 @@
 """Part 92 of the unit suite: the debug report's security posture stays on the panel's page.
 
-The owner's decision of 2026-10-16 (review 1015d's A06A07b): the downloadable debug report is the
+Decided 2026-10-16 (review 1015d's A06A07b): the downloadable debug report is the
 file the GitHub issue form asks to have attached to a PUBLIC issue, and the issue's account names
-the owner. So what tells a reader which defence is weak -- 2FA counts, invites that grant
+whoever filed it. So what tells a reader which defence is weak -- 2FA counts, invites that grant
 superadmin, accounts that must change their password but hold an API token, the setup-token file,
 the firewall's ways in and default, fail2ban jails that cannot ban -- is shown on the in-panel
 report page only. Held here:
@@ -359,7 +359,7 @@ check("debug report Tailscale: the panel account as the operator is the flagged 
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 5. The owner's extension: Funnel, automatic security updates, trust_proxy beyond loopback and the
+# 5. Extended: Funnel, automatic security updates, trust_proxy beyond loopback and the
 #    session cookie's flags are posture too (decisions 1016a, pre-merge review lead 1)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _r24r_more_sections():
@@ -449,7 +449,7 @@ check("debug report posture gate: the backstop (POSTURE_RE) withholds the Funnel
       repr(_rpm92.get("error") or _rpm92["rep"].get("report", "")[-800:]))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 6. The privilege verdict is posture (the session lead, applying the owner's 2026-10-16 rule)
+# 6. The privilege verdict is posture (the session lead, applying the 2026-10-16 rule)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # "passwordless sudo works for this account, so the helper boundary does not constrain this panel"
 # was a line of the install section AND one of the file's public Verdicts (the summary and the

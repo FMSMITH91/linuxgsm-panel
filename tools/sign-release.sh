@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Sign a release: tools/sign-release.sh [--yes] <full commit id> [branch]   (branch defaults to main)
 #
-# A panel installs an update only when the commit carries a signature made with the owner's own
-# SSH key (install.sh, "Release signatures"). GitHub signs every squash merge with its own key,
-# which proves nothing against someone holding the GitHub account; this key lives only on the
-# owner's PC. Run this there, once a merged commit's checks have passed.
+# A panel installs an update only when the commit carries a signature made with the release SSH
+# key (install.sh, "Release signatures"). GitHub signs every squash merge with its own key, which
+# proves nothing against someone holding the GitHub account; the release key is kept off GitHub.
+# Run this where that key is, once a merged commit's checks have passed.
 #
 # What it does, in order, and it stops at the first thing that is not right:
 #   1. fetches <branch> by its full name and refuses unless <sha> is a full commit id on its
@@ -21,7 +21,9 @@
 #   4. commits <branch>/<sha>.sig to the branch release-signatures (created, with no history, when
 #      it does not exist yet), through a private index: your checkout, its index and HEAD are not
 #      touched. The commit is signed like any other (git commit-tree -S);
-#   5. pushes that branch, and for main starts the deploy of <sha> (gh workflow run deploy.yml).
+#   5. pushes that branch, and for main starts the deploy of <sha> (gh workflow run deploy.yml),
+#      unless <sha> itself changes only paths CI does not run for (ci.yml's paths-ignore): its
+#      deploy would wait 20 minutes for checks that never come, and then fail.
 #
 # Environment: SIGN_RELEASE_REMOTE (default origin), SIGN_RELEASE_KEY, SIGN_RELEASE_NO_DEPLOY=1 to
 # skip step 5's deploy.
@@ -174,7 +176,20 @@ if [[ -z "${PUSHED:-}" ]]; then
 fi
 unset GIT_INDEX_FILE
 
-if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]]; then
+# A commit that changes only what ci.yml's paths-ignore lists ('**/*.md', 'docs/**', LICENSE,
+# .gitignore, .editorconfig; system_ops._ci_path_ignored reads the same list) gets no CI or CodeQL
+# run, so the deploy's verify step, which waits for their checks on this exact commit, could only
+# time out. A root commit, or a diff git cannot produce, counts as code.
+ci_ignored_only() {
+    local changed
+    changed="$(git diff --name-only "$1^1" "$1" -- 2>/dev/null)" || return 1
+    [[ -n "${changed}" ]] || return 1
+    ! grep -qvE '(\.md$|^docs/|^LICENSE$|^\.gitignore$|^\.editorconfig$)' <<< "${changed}"
+}
+
+if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] && ci_ignored_only "${SHA}"; then
+    echo "sign-release: ${SHA:0:12} changes only documentation, which CI does not run for, so no deploy was started."
+elif [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]]; then
     if command -v gh >/dev/null 2>&1; then
         gh workflow run deploy.yml --ref main -f sha="${SHA}" \
             || echo "sign-release: could not start the deploy; run: gh workflow run deploy.yml --ref main -f sha=${SHA}" >&2

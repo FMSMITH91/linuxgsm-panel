@@ -124,7 +124,7 @@ jobs:
       # reach in time. What would close the race is the repository setting that has every outside
       # contributor's workflow approved before it runs (Settings > Actions > General > fork pull
       # request workflows: all outside contributors). As of 2026-10-03 it is set to first-time
-      # contributors only, an owner decision; cflite_cleanup.yml deletes what a fork uploaded.
+      # contributors only, a repository setting; cflite_cleanup.yml deletes what a fork uploaded.
       - name: Every stored fuzz artifact was made on main here
         if: steps.scope.outputs.run == 'true'
         env:

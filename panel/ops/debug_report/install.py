@@ -104,8 +104,7 @@ def verdict_text(euid, helper, sudo_ok):
 def _privilege_lines(res, facts):
     helper = bool(so._helper_present())
     ok, age = _sudo_probe()
-    # The verdict, and the sudo probe it is read from, are security posture (the owner's rule of
-    # 2026-10-16): "passwordless sudo works, so the helper boundary does not constrain this panel"
+    # The verdict, and the sudo probe it is read from, are security posture: "passwordless sudo works, so the helper boundary does not constrain this panel"
     # tells a reader of the public issue that whoever takes this panel has root. So both are on the
     # in-panel page only, like the 2FA and firewall lines, and the verdict is no longer one of the
     # file's Verdicts. A panel that can do nothing privileged is a fault, not posture: that finding

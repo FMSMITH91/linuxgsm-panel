@@ -4,7 +4,7 @@ name: Security scan (code)
 # dependencies), Bandit (Python security lint) and Semgrep (deep SAST). Split out of security.yml so it can be
 # path-filtered, which that workflow deliberately is not — see the note at the top of it.
 #
-# A docs-only or workflow-only change cannot alter what any of these three report, and together
+# A docs-only or workflow-only change cannot alter what any of these four report, and together
 # they are ~105s of runner time per pull request. A docs-only PULL REQUEST still runs the workflow
 # (its jobs are required checks), and each job's scope step skips the scan (.github/scripts/pr_scope.py). The exclusion list is a paths-IGNORE rather than
 # an allowlist on purpose: an unrecognised new path should fail OPEN and be scanned, never skipped.
@@ -28,7 +28,7 @@ on:
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
 # pushes don't queue up and waste runner minutes.
-# The event is part of the group: on main, the Monday scheduled run shares the ref with a push
+# The event is part of the group: on main, the daily scheduled run shares the ref with a push
 # run, and without it the schedule CANCELLED an in-progress push run, leaving "cancelled" required
 # checks on that commit, which the panel's update gate and deploy.yml read as a failure.
 concurrency:
@@ -166,7 +166,7 @@ jobs:
       # propagate), with a reason and an ignoreUntil date, after which it fails again and is looked
       # at afresh: tools/gamedig/osv-scanner.toml.
       #   requirements.txt:<path>: osv-scanner picks a parser by file NAME, so a pip lockfile not
-      #     called requirements.txt must say how to read it (docs/scan-source.md, v2.6.0).
+      #     called requirements.txt must say how to read it (docs/scan-source.md, v2.7.0).
       #   The count: osv-scanner prints `Scanned <path> file and found N packages` per lockfile.
       #     Each must have been read and have yielded packages, or the run fails: a lockfile it
       #     parsed as empty is otherwise reported clean.
@@ -297,7 +297,7 @@ jobs:
       # scheduled run uploads only while its commit is still main's head; a head that cannot be read
       # uploads as before. code_scanning_analyses.py answers "moved on" for the run that skipped.
       # A head that only added DOCUMENTATION on top of it is still current: that push runs none of
-      # the uploaders (the shared paths-ignore), so skipping here threw the week's scan away with
+      # the uploaders (the shared paths-ignore), so skipping here threw the day's scan away with
       # nothing to replace it. The script asks GitHub's compare API (moved_past).
       - name: Is the analysed commit still main's head? (scheduled runs only)
         id: still_head
@@ -477,7 +477,7 @@ jobs:
       # scheduled run uploads only while its commit is still main's head; a head that cannot be read
       # uploads as before. code_scanning_analyses.py answers "moved on" for the run that skipped.
       # A head that only added DOCUMENTATION on top of it is still current: that push runs none of
-      # the uploaders (the shared paths-ignore), so skipping here threw the week's scan away with
+      # the uploaders (the shared paths-ignore), so skipping here threw the day's scan away with
       # nothing to replace it. The script asks GitHub's compare API (moved_past).
       - name: Is the analysed commit still main's head? (scheduled runs only)
         id: still_head

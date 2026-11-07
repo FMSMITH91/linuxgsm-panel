@@ -787,7 +787,7 @@ def tailscale_ssh_status():
 # --ssh` itself, which worked because the panel had made its account the Tailscale operator, and
 # an operator needs no helper to change anything about tailscaled (tailscale_integration
 # .release_operator). The verb can only flip this one pref: `set` cannot change the tailnet.
-# Whether the owner chose, at install, to let the panel turn Tailscale SSH on for this host: the
+# Whether the operator chose, at install, to let the panel turn Tailscale SSH on for this host: the
 # root-owned panel.conf's `tailscale_ssh=yes` (install.sh _r25a_tailscale_ssh_choice). The helper
 # refuses `tailscale-ssh on` and an `up --ssh` without it (its _r25a_ssh_refusal), because the
 # tailnet a host joins decides who may log in here as root, and whoever opens a Connect login link
@@ -808,7 +808,7 @@ def _r25j_panel_conf():
 
 
 def tailscale_ssh_choice():
-    """The owner's install-time Tailscale SSH choice: "yes", "no", or "unrecorded".
+    """The operator's install-time Tailscale SSH choice: "yes", "no", or "unrecorded".
 
     "unrecorded" is a panel.conf with no `tailscale_ssh` key at all: the previous installer wrote it
     (the panel's self-update runs that root-owned installer once, so the first update to this code
@@ -1862,7 +1862,7 @@ def _ci_judge(sha, runs):
 
 # Which repository files a host RUNS, and which it does not, is DATA: .github/update-paths.txt,
 # read from the commit being offered (_update_rules). Only a change to a file it names `runtime`
-# raises "Update available" (the owner's rule). The lists were here once, and naming a new tool's
+# raises "Update available". The lists were here once, and naming a new tool's
 # config file in them (.sonarcloud.properties, #382) was then a change to a file the panel runs:
 # every panel was offered that one line as an update. A file in .github/, the rules name
 # themselves noise, and a commit's own rules decide what that commit changes.
@@ -1974,7 +1974,7 @@ def _no_runtime_update(base, target_sha, ci_state, behind, behind_tip):
     NOT an update: the badge, the card, the bots and the update notification all read
     update_available, and nothing the panel runs would change. #276 (2026-09-19) made every commit
     count ("am I running the latest?"), and from then on a CI-only merge raised "Update available"
-    on every panel, with an install that changed nothing. The owner's rule is the one restored: an
+    on every panel, with an install that changed nothing. The rule restored is: an
     update is offered only when a file the panel runs changes. The first commit that does is
     offered, with these behind it in the same pull. behind/target stay in the API for anything
     that wants them; the card shows its up-to-date line, which prints the running commit.
@@ -2016,7 +2016,7 @@ def _runtime_changelog(rev_range, runtime_only=True):
     return result
 
 
-# Release signatures. install.sh moves a checkout only to a commit signed with the owner's own SSH
+# Release signatures. install.sh moves a checkout only to a commit signed with the release SSH
 # key ("Release signatures" there has the why), so the card offers only such a commit: update_available
 # stays true exactly when the installer would install it. The signatures branch holds no code and is
 # never offered as a branch (panel_branches). The panel checks with the installed key — the
@@ -3172,7 +3172,7 @@ def reconcile_panel_port(port):
     conf = _r25j_panel_conf()
     # Also while the Tailscale SSH choice is unrecorded (that same previous installer's panel.conf):
     # the verb records "yes" for a host running Tailscale SSH, as install.sh does, so the first
-    # update to this code meets the owner's rule without waiting for the next (tailscale_ssh_choice).
+    # update to this code meets that rule without waiting for the next (tailscale_ssh_choice).
     unrecorded = conf is not None and "tailscale_ssh" not in conf
     if conf is not None and conf.get("panel_port") == str(int(port)) and not unrecorded:
         return "ok"

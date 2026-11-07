@@ -126,7 +126,7 @@ def _register_host_tailscale(app):
             log_action(current_user, "tailscale_ssh_enable", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
         if msg is so.TS_SSH_NOT_CHOSEN or msg is so.TS_SSH_NOT_RECORDED:
-            # The owner's install-time choice, not a failure: a stable code beside the sentence.
+            # The operator's install-time choice, not a failure: a stable code beside the sentence.
             return jsonify({"success": False, "code": "tailscale_ssh_not_chosen",
                             "message": i18n.tr(msg)}), 403
         return jsonify({"success": False, "message": msg}), 500
@@ -157,7 +157,7 @@ def _register_panel_update(app):
             data["boot_id"] = _BOOT_ID   # flips only when the panel process restarts
             return jsonify(data)
         except Exception:
-            # check_failed: the card shows one of its two states only (the owner's rule), and this
+            # check_failed: the card shows one of its two states only, and this
             # is not the not-a-git-checkout line — read as that, "Internal server error" was printed
             # as a third state and the Update button hidden. It reads as "You're up to date", as an
             # unreachable update source does; the reason stays here, in the API.

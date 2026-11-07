@@ -6163,7 +6163,7 @@ check("workflows: the coverage job holds no Codacy token, and hands its report o
 # ── CODACY_PROJECT_TOKEN is read only by main's copy of codacy-coverage.yml ─────────────────────
 # As a repository secret it was readable by a workflow on ANY branch pushed here, and the coverage
 # job that uploaded with it ran the code under test. The upload is now a workflow_run job, which
-# runs main's copy of its file with GITHUB_REF=main, in an environment the owner restricts to main
+# runs main's copy of its file with GITHUB_REF=main, in an environment restricted to main
 # (the file's header has the settings) — so an environment is possible at all without refusing
 # every pull request's upload. The report it uploads came from the tested code, so it is data:
 # never executed, a DTD or entity declaration refused (the reporter's parser resolves entities a

@@ -1,5 +1,5 @@
 # Which repository files a host RUNS, and which it does not. "Update available" is offered only
-# when a file named `runtime` here changes (the owner's rule); a change to `noise` alone is not an
+# when a file named `runtime` here changes; a change to `noise` alone is not an
 # update. Read by panel/ops/system_ops.py (_update_rules) FROM THE COMMIT BEING OFFERED, so naming a
 # new tool's config file here is itself a noise change: no panel is offered it. These lists used to
 # live in system_ops.py, and adding .sonarcloud.properties to them (#382) changed a file the panel

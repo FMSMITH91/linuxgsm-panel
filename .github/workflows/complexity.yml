@@ -8,8 +8,8 @@ name: Complexity
 #
 # It also runs Prospector (the repository's .prospector.yaml) over every changed Python file over
 # 150 KB, base and head, and fails when a finding's count rose. Codacy Cloud does not analyse a file
-# that size at all, so its required check reads nothing in app.py, system_ops.py, hosts.py,
-# _core.py or tools/panel-helper. This covers the pull-request side for Prospector, one of the
+# that size at all, so its required check reads nothing in any Python file over 150 KB (app.py, system_ops.py,
+# hosts.py, _core.py, tools/panel-helper, the largest route modules and many test parts). This covers the pull-request side for Prospector, one of the
 # tools Codacy would have run there; it does not make Codacy analyse those files.
 #
 # Pull requests ONLY, and in a workflow of its own: the panel's update gate reads every check run on

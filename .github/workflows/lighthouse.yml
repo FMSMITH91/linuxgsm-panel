@@ -9,8 +9,9 @@ name: Lighthouse
 # other check.
 
 on:
-  # Docs-only pushes/PRs skip the Lighthouse run — a README/LICENSE edit can't change the
-  # rendered UI it audits. Anything else still runs it.
+  # Docs-only pushes skip the Lighthouse run — a README/LICENSE edit can't change the rendered UI
+  # it audits. A pull request has no path filter (a required check must report): its scope step
+  # skips the audit for a docs-only one, and audits every other.
   push:
     branches: [ main ]
     paths-ignore:
@@ -22,11 +23,10 @@ on:
       - '.editorconfig'
       # Lighthouse boots the panel and audits RENDERED pages, so only things that can change what
       # a page looks like matter to it. Test files, the shell installers, the fuzzing harness and
-      # the bundled LinuxGSM data cannot — a tests-only PR was paying for a full app boot and
-      # audit to measure something it could not have altered.
+      # the shell installers cannot — a tests-only push was paying for a full app boot and audit
+      # to measure something it could not have altered. Pushes only: see pull_request below.
       - 'tests/**'
       - '.clusterfuzzlite/**'
-      - 'lgsm/**'
       - '*.sh'
   pull_request:
     branches: [ main ]

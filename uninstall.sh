@@ -656,7 +656,7 @@ fi
 # account: tailscaled's prefs still named `lgsmpanel`, and any account later made with that name
 # (by anything other than this panel's installer, whose own release would clear it) could join the
 # host to another tailnet or turn Tailscale SSH on without root. Cleared here, before the account
-# goes, and only when the operator IS that dedicated account: one an owner chose is theirs.
+# goes, and only when the operator IS that dedicated account: one the operator chose is theirs.
 _r25a_release_ts_operator() {
     command -v tailscale >/dev/null 2>&1 || return 0
     local _op=""

@@ -359,7 +359,7 @@ R24T_SSH_PREF = {"on": "true", "off": "false"}
 # The BackendStates of a node that has joined a tailnet and is in it (or on its way back in with
 # its own key). An `up` on one of these can only re-home it: see _r24t_joined.
 R24T_JOINED_STATES = ("Running", "Starting")
-# panel.conf's record of the owner's answer at install: may the panel turn Tailscale SSH on for this
+# panel.conf's record of the operator's answer at install: may the panel turn Tailscale SSH on for this
 # host? Only the exact word "yes" counts, and any other value is no. A missing key (an older
 # installer wrote this panel.conf) is recorded "yes" while Tailscale SSH is on, as install.sh
 # records a host already running it, and is otherwise no. See _r25a_ssh_refusal.
@@ -2442,7 +2442,7 @@ VERBS = {
     # Tailscale SSH on or off, and nothing else: `tailscale set` changes only the pref it names,
     # and cannot change which tailnet the node is in, so this is SSH on the tailnet the host has
     # already joined. The panel's account used to run it itself, as the operator. `on` only where
-    # the owner chose it at install (PRECHECKS, _r25a_ssh_refusal); `off` always.
+    # the operator chose it at install (PRECHECKS, _r25a_ssh_refusal); `off` always.
     "tailscale-ssh": ([v_choice("on", "off")],
                       lambda a: ["tailscale", "set", "--ssh=%s" % R24T_SSH_PREF[a[0]]], None),
     "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
@@ -5798,7 +5798,7 @@ def _r24t_joined(status):
 
 
 def _r25a_ssh_opted_in():
-    """Whether the owner chose, at install, to let the panel turn Tailscale SSH on for this host.
+    """Whether the operator chose, at install, to let the panel turn Tailscale SSH on for this host.
 
     With no choice recorded yet, whether _r25a_ssh_record_running just recorded "yes".
     """
@@ -5842,7 +5842,7 @@ def _r25a_ssh_refusal(args):
     not this host's accounts. A host not yet in a tailnet is joined through a login link (Connect),
     and whoever opens that link picks the tailnet. So a compromised panel account that could ask for
     SSH with the join, or switch it on afterwards, could hand some tailnet root logins here without
-    the owner ever choosing it. That choice is made at install instead (install.sh records it in
+    the operator ever choosing it. That choice is made at install instead (install.sh records it in
     the root-owned panel.conf), and the panel's account cannot change it. Joining WITHOUT SSH and
     turning SSH off stay open: neither grants a login.
 
@@ -5959,7 +5959,7 @@ def _r25j_funnel_refusal(port):
 
     Funnel is a property of the node's :443 LISTENER, not of a mount: a `funnel` write turns it on
     for every app on that listener (serve_v2.go setServe -> applyFunnel). So the port check alone
-    still let the panel's account put another app the owner serves at :443 on the public internet.
+    still let the panel's account put another app the operator serves at :443 on the public internet.
     Refused, as the panel's own _r12a_serve_verb refuses it, while that listener has a route that
     is not loopback on the panel's port (another app, a file share, a fixed reply, a raw TCP forward
     on 443), in the background config or a foreground session's, unless Funnel is already on there:
@@ -6158,7 +6158,7 @@ def do_tailscale_up_login(args, content):
     expired, or someone ran `tailscale down`) has joined a tailnet too, the same rule as
     _r24t_joined: it is REFUSED, because the login URL `up` prints there lets whoever opens it pick
     the tailnet, and with --ssh that tailnet gets root logins here. Re-authenticating it stays the
-    owner's job at the host (`sudo tailscale up`), where they see which account they sign in to.
+    operator's job at the host (`sudo tailscale up`), where they see which account they sign in to.
     Only a node with no key (never joined, or logged out) gets the URL: that is Connect.
 
     A status this cannot read still proceeds, unlike tailscale-up-key: it reads as root, so it
@@ -6166,7 +6166,7 @@ def do_tailscale_up_login(args, content):
     (the daemon still starting). Refusing there would break first-run Connect, and an `up` against
     a daemon that is not answering fails on its own; a node with a key answers status.
 
-    `yes` (with --ssh) has already been refused by PRECHECKS unless the owner chose Tailscale SSH at
+    `yes` (with --ssh) has already been refused by PRECHECKS unless the operator chose Tailscale SSH at
     install (_r25a_ssh_refusal): that link lets whoever opens it pick the tailnet that gets SSH."""
     ssh, routes = args[0], args[1]
     early = _r24t_up_login_early(_r24t_ts_json("status", "--json"))

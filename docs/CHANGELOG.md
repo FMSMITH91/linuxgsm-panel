@@ -74,14 +74,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
   bot typing until it replies (for up to two minutes). Instant answers are unchanged: no indicator,
   no extra request.
 
-- **Updates install only releases signed with the owner's key.** Every commit on main is signed by
+- **Updates install only signed releases.** Every commit on main is signed by
   GitHub's own key, which proves nothing if someone takes over the project's GitHub account. The
   installer already on a host now moves the panel only to a commit that also carries a signature
-  made with the owner's own SSH key (on the new `release-signatures` branch); anything else is held
+  made with the release SSH key (on the new `release-signatures` branch); anything else is held
   with "Not updated: held at …" and why, never swapped for another commit. Anything it cannot read
   (no key, no signatures, a failed fetch, no `ssh-keygen`) counts as unsigned. Root installs check
   with a root-owned copy of the key and stage the helper and the other root-owned pieces only from a
-  signed commit. The update card offers only a signed commit whose checks passed. The owner signs
+  signed commit. The update card offers only a signed commit whose checks passed. A release is signed
   with `tools/sign-release.sh`, which first shows every commit since the last signed release, the
   files changed and a warning for any change to the installer, the helper, the key or CI, and signs
   only once the commit id's first 12 characters are typed. It also starts the test host's deploy;

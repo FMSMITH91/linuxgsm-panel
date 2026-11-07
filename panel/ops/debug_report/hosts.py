@@ -663,7 +663,7 @@ def section_hosts(ctx):
 def _r32j_login_posture(res, rows, det):
     """Each remote's login class (root / non-root) and sudo use, for the in-panel report page only.
 
-    Owner's rule (2026-10-16): a privilege fact is never in the downloadable file, which is meant to
+    A privilege fact is never in the downloadable file, which is meant to
     be attached to a public issue; whether the panel logs in to a host as root is one, and whether
     it runs that host's commands under sudo (`sudo yes`, which the file still said: review 1022a)
     is the other half of the same fact.

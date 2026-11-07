@@ -570,7 +570,7 @@ def r36c_same_host_refusal(host, port, own_id=None):
 
     Every per-host lock (a reboot, an SSH port move, a bootstrap, a content job) keys on the row's
     id, so two rows naming one machine took different locks and two such actions ran on it at once.
-    The owner's rule: the SAME address and SSH port are one host; the same address on another port
+    The rule: the SAME address and SSH port are one host; the same address on another port
     may be another VM behind one IP, and is allowed. `own_id` is the row being edited. Every place
     a row's address or port is set asks this: add (the Hosts page and the setup wizard), edit, the
     Tailscale migration and an SSH port move.

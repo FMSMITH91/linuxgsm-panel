@@ -7,7 +7,9 @@ name: Codacy coverage
 #   coverage.xml   Cobertura, from the `coverage` job: the Python the suites run.
 #   lcov.info      LCOV, from the `js-coverage` job: the panel's own static/js, run in a browser.
 # A run whose js-coverage job failed has no lcov.info; the Python report still goes up, with a
-# warning here beside the red check that job already shows.
+# warning here beside the red check that job already shows. A documentation-only pull request has
+# no lcov.info either (ci.yml skips that upload), so its download step logs "Artifact not found";
+# that error is expected there and is not a failure.
 #
 # WHY THIS IS NOT A STEP OF THE COVERAGE JOB ANY MORE
 #   The upload needs CODACY_PROJECT_TOKEN, and as a repository secret that was readable by a
@@ -35,7 +37,7 @@ name: Codacy coverage
 #   Runs of this repository only: a fork's pull request never had the token (GitHub gives fork
 #   PRs no secrets), and its report does not get to meet it here either.
 #
-# ── One-time setup, so the token is scoped (repository owner) ─────────────────────────────────
+# ── How the token is scoped (repository settings; all three steps are done) ─────────────────────
 #  1. Settings -> Environments -> New environment, named `codacy`. Under "Deployment branches and
 #     tags" choose "Selected branches and tags" and add ONE rule: branch, `main`. No tag rule.
 #  2. In that environment, "Environment secrets" -> Add environment secret:
@@ -44,9 +46,8 @@ name: Codacy coverage
 #     The current token has been readable by every branch, so create a new one for this rather
 #     than moving the old value, and revoke the old one in Codacy once an upload has gone through.
 #  3. Settings -> Secrets and variables -> Actions -> Repository secrets: delete
-#     CODACY_PROJECT_TOKEN. Until this step the job keeps working off the repository secret (a job
-#     in an environment still sees repository secrets), so there is no gap in the uploads; after
-#     it, only this job, running main's copy of this file, can read the token.
+#     CODACY_PROJECT_TOKEN. (A job in an environment also sees repository secrets, which is why
+#     this step mattered.) Now only this job, running main's copy of this file, can read the token.
 #  Nothing is scoped until the rule in step 1 exists: an environment with no rules (which is what
 #  GitHub creates when a job first names one) admits every branch.
 # ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ jobs:
           github-token: ${{ github.token }}
 
       # continue-on-error: a CI run whose js-coverage job failed left no such artifact, and that
-      # job's own red check already says so. The step below then sends the Python report alone and
+      # job's own red check already says so; a documentation-only pull request leaves none either. The step below then sends the Python report alone and
       # warns; it does not pretend the JavaScript was measured.
       - name: Download the JavaScript coverage report CI made
         continue-on-error: true

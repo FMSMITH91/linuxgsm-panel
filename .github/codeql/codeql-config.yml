@@ -16,8 +16,8 @@
 # It used to be one 1 MB module, almost all of it inside a single try, and this file left it out
 # for time alone: the Python extractor took 1,446 s (24 minutes) on that one file, measured by a
 # probe run with no time limit (the whole Python analysis took 50 minutes with it and 9.5
-# without), while the 750 KB tests/unit/part06.py takes about 2 minutes. It was split into parts
-# of under 200 KB each, and codeql.yml checks every part is in the database, as it does the helper.
+# without), while tests/unit/part06.py (about 800 KB) takes about 2 minutes. It was split into parts
+# of about 200 KB each, and codeql.yml checks every part is in the database, as it does the helper.
 name: "linuxgsm-panel CodeQL config"
 
 paths-ignore:
@@ -68,7 +68,7 @@ query-filters:
 #
 # It is a note-level QUALITY rule, not a security one, and excluding it costs no coverage of
 # anything that could hurt. The cycle is thinning on its own as shared state moves to
-# panel/routes/_shared.py (six globals already), and the honest end state is app.py holding the
+# panel/routes/_shared.py, and the honest end state is app.py holding the
 # factory and little else — at which point this exclusion should go.
   - exclude:
       id: py/cyclic-import

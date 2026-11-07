@@ -421,7 +421,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 # via a redirect").
 # How long one ADDRESS gets to connect before the next is tried. socket.create_connection gives
 # each address the request's WHOLE timeout, one after another, and getaddrinfo lists IPv6 first.
-# On the owner's box (2026-11-05) about one IPv6 connect in nine to api.telegram.org hung while
+# On one measured host (2026-11-05) about one IPv6 connect in nine to api.telegram.org hung while
 # IPv4 never did (Google's IPv6 never failed: the route to Telegram, not the box), so a poll sat
 # 30 s (its timeout + 5) on a dead IPv6 connect before reaching IPv4: a message sent then went
 # unread for 30 s, and a reply waited 8 s. Measured on the box: two 30 s gaps in 10 minutes.

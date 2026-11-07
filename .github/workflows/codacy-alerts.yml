@@ -33,7 +33,7 @@ name: Codacy alerts
 #   - the file is over 150 KB: a ::warning:: and a summary section naming each entry Codacy cannot
 #     confirm, keeping it. Not a failure: this check lands on main's head, where the panel's update
 #     gate and deploy.yml read it, and it would be red every day until Codacy analyses the file
-#     again (client-side analysis of the files over 150 KB, the owner's switch), which nothing in
+#     again (client-side analysis of the files over 150 KB, a Codacy setting), which nothing in
 #     this repository can bring about. The pull-request side runs Prospector over such files
 #     (complexity_gate.py).
 #   - the line is still in a file Codacy analyses: FAILS. Codacy can see it, and stopped reporting

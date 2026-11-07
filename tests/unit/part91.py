@@ -1,6 +1,6 @@
 """Part 91 of the unit suite: Tailscale on the panel's own host goes through the helper.
 
-The owner's decision of 2026-10-16 (option 2). An account that is the tailscaled "operator" writes to tailscaled with no sudo and no helper: it
+Decided 2026-10-16 (option 2). An account that is the tailscaled "operator" writes to tailscaled with no sudo and no helper: it
 can log the host out, join it to another tailnet with an auth key, and turn Tailscale SSH on, which
 admits root logins by THAT tailnet's rules. The panel made its own account the operator, so the
 narrow sudo grant did not hold for Tailscale. Held here:
@@ -114,7 +114,7 @@ def _in_helper91(fake, argv, stdin=""):
     # whoever runs the suite.
     sudo_uid = os.environ.pop("SUDO_UID", None)
     _helper91.subprocess, _helper91.resolve = fake, (lambda n: "/usr/bin/" + n)
-    # The owner chose Tailscale SSH at install: these checks are about the joined-node rules, and
+    # The operator chose Tailscale SSH at install: these checks are about the joined-node rules, and
     # part93 holds the opt-in itself.
     _helper91.panel_conf = lambda: {"tailscale_ssh": "yes"}
     sys.stdin, sys.stdout, sys.stderr = _io91.StringIO(stdin), _io91.StringIO(), _io91.StringIO()
@@ -484,7 +484,7 @@ check("release_operator: a helper too old for the verb is logged as such, tellin
       and not any("re-run install.sh" in w for w in _rel_panel91["helper refused"][3]),
       repr((_rel_panel91["stale helper"][3], _rel_panel91["helper refused"][3])))
 _peruser91 = _release91("lgsmpanel", "lgsmpanel", system=False)
-check("release_operator: on a per-user install (the panel's account is the owner's own login) a "
+check("release_operator: on a per-user install (the panel's account is the operator's own login) a "
       "release logs that their own `tailscale serve`/`set` now need sudo; a system one does not",
       any("per-user install" in w and "need sudo" in w for w in _peruser91[3])
       and not any("per-user install" in w for w in _rel_panel91["the operator"][3]),
@@ -590,7 +590,7 @@ _insout91 = {"per-user": [], "system": [], "per-user, not ours": []}
 _install_release91("lgsmpanel", as_root=0, out=_insout91["per-user"])
 _install_release91("lgsmpanel", as_root=1, out=_insout91["system"])
 _install_release91("alice", as_root=0, out=_insout91["per-user, not ours"])
-check("install.sh: on a per-user install (the panel's account is the owner's own login) taking the "
+check("install.sh: on a per-user install (the panel's account is the operator's own login) taking the "
       "operator role back says, then, that their own `tailscale serve`/`set` now need sudo; a "
       "system install, and a release that did not happen, say nothing of it",
       "WARN This is a per-user install" in _insout91["per-user"][0]

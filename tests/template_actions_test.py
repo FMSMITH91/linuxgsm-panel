@@ -3954,7 +3954,7 @@ check("a.rel = 'noopener noreferrer'" in _upd,
 check(_upd.count("else if(d.message)") == 0,
       "js: the update card has no third 'behind but not installable' state",
       "a message-only branch is back")
-# ...and no reason line in either state: the owner's rule, given more than once and broken each
+# ...and no reason line in either state: a rule broken each
 # time a reason was added back ("N newer commits still being verified", "couldn't be verified",
 # "Couldn't reach the update source", "docs, tests or tooling"). Read on the code, comments
 # dropped: the only message the function may show is the not-a-git-checkout line, where there is no

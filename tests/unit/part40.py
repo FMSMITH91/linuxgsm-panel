@@ -1,6 +1,6 @@
 """Part 40 of the unit suite: renaming a file or folder from the file browser.
 
-The owner asked to rename what was just uploaded, through the file browser. POST
+Renaming what was just uploaded, through the file browser. POST
 /api/server/<id>/rename-path renames one file or folder within the folder it is in, and it is held
 to every gate the other file-browser writes have, plus the ones a rename needs of its own:
 

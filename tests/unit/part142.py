@@ -1,8 +1,8 @@
-"""Part 142 of the unit suite: an update installs only a release signed with the owner's own key.
+"""Part 142 of the unit suite: an update installs only a release signed with the release key.
 
 Every commit on main is a GitHub squash merge signed by GitHub's key, which proves nothing against
-someone holding the owner's GitHub account. install.sh now moves a checkout only to a commit that
-also carries a signature made with the owner's SSH key (tools/sign-release.sh), and the update card
+someone holding the project's GitHub account. install.sh now moves a checkout only to a commit that
+also carries a signature made with the release SSH key (tools/sign-release.sh), and the update card
 offers only such a commit. Held here:
 
 * install.sh's update target: a signed tip or pin moves; an unsigned one HOLDS at HEAD (or fails
@@ -24,7 +24,7 @@ offers only such a commit. Held here:
 
 HOW IT RUNS. Real install.sh functions cut out of the file and run under bash, against a real
 upstream repository and clone in a throwaway directory, with a throwaway ed25519 key (never the
-owner's); panel functions with their git reads stubbed or pointed at that clone.
+real release key); panel functions with their git reads stubbed or pointed at that clone.
 """
 import os
 import shutil as _shutil142
@@ -520,6 +520,38 @@ if _HAVE142:
               _r9.returncode == 0 and _signed142(_sc) and "filler 205" in _r9.stdout
               and "... and 5 older commits (205 in all)" in _r9.stdout,
               "rc=%s %s %s" % (_r9.returncode, _r9.stdout[-300:], _r9.stderr[-200:]))
+        # ── the deploy it starts on main, and the one it does not ────────────────────────────────
+        # A commit that changes only documentation gets no CI run, so the deploy's verify step
+        # could only wait 20 minutes for its checks and fail. `gh` is a bash function here (exported
+        # into the script's own bash), so nothing is dispatched anywhere.
+        _denv = {k: v for k, v in _senv.items() if k != "SIGN_RELEASE_NO_DEPLOY"}
+        _ghfn = 'gh() { echo "GH-CALLED $*"; }; export -f gh; exec bash "$0" --yes "$1"'
+        os.makedirs(os.path.join(_dev, "docs"), exist_ok=True)
+
+        def _deploy142(files, msg):
+            for path, body in files.items():
+                with open(os.path.join(_dev, path), "w", encoding="utf-8") as fh:
+                    fh.write(body)
+                _git142("-C", _dev, "add", path)
+            _git142("-C", _dev, "-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
+            _git142("-C", _dev, "push", "-q", "origin", "main")
+            sha = _git142("-C", _dev, "rev-parse", "HEAD")
+            return sha, _run142(["bash", "-c", _ghfn, _tool, sha], cwd=_dev, env=_denv, input="")
+
+        _sd, _rd = _deploy142({"README.md": "words\n", "docs/guide.md": "more words\n"}, "docs only")
+        check("sign-release.sh: a commit that changes only documentation is signed, and no deploy is "
+              "started for it (CI does not run for it, so the deploy could only time out)",
+              _rd.returncode == 0 and _signed142(_sd) and "GH-CALLED" not in _rd.stdout
+              and "no deploy was started" in _rd.stdout,
+              "rc=%s %s %s" % (_rd.returncode, _rd.stdout[-300:], _rd.stderr[-200:]))
+        _sm, _rm = _deploy142({"README.md": "words again\n", "app.py": "x = 1\n"}, "docs and code")
+        _sk, _rk = _deploy142({"install.sh": "#!/bin/bash\n# changed\n"}, "code only")
+        check("sign-release.sh: a commit that changes code, alone or beside documentation, starts the "
+              "deploy of exactly that commit (control)",
+              "GH-CALLED workflow run deploy.yml --ref main -f sha=%s" % _sm in _rm.stdout
+              and "GH-CALLED workflow run deploy.yml --ref main -f sha=%s" % _sk in _rk.stdout
+              and "no deploy was started" not in _rm.stdout + _rk.stdout,
+              "%s | %s" % (_rm.stdout[-200:], _rk.stdout[-200:]))
     finally:
         _shutil142.rmtree(_SB142, ignore_errors=True)
 

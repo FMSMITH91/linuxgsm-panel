@@ -699,7 +699,7 @@ check("renovate: ...and the count catches a pinned download with no marker (cont
 
 
 # ── what an install puts on the host, an update keeps current ──────────────────────────────────
-# The owner's rule: "The files it installs should also be the files it keeps updated". The systemd
+# The rule: the files an install writes are the files an update keeps current. The systemd
 # unit was the one piece a fresh install wrote and no update ever touched: a host kept whatever unit
 # it was first given. Every install step a fresh install runs (ensure_*, install_*, write_*) must be
 # run by the update path too; the only fresh-only writes allowed are named below with the reason.

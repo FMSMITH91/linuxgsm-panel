@@ -155,7 +155,6 @@ jobs:
         # ahead of the lanes 17-34 s. tests/unit/part143.py holds the order of the three limits.
         timeout-minutes: 40
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
-        # shellcheck is pre-installed on the ubuntu runners.
         # REQUIRE_TOOLS=1: a linter that is missing OR broken must fail this job rather than be
         # skipped. The probes in run-tests.sh cannot tell the two apart, and both printed
         # "skipping" before the script went on to say "All checks passed" — shown by execution,
@@ -377,16 +376,16 @@ jobs:
         # --parallel-mode + combine: each suite is its own process, and smoke/rbac fork threads.
         # || true on the suites themselves — the gate job decides pass/fail, this one only measures.
         #
-        # TIMED PER SUITE, and that is not decoration. This job runs 328-1021s while the matrix
-        # runs the same five suites in ~130s, and the spread between those two numbers is as
-        # unexplained as the gap. Tracing is NOT the cause — measured at 8.8s vs 8.8s for unit_test
-        # with and without `coverage run`. `|| true` means a suite that hangs here looks identical
+        # TIMED PER SUITE, and that is not decoration. This job takes far longer than the same
+        # suites take locally, and by an amount that varies from run to run; the per-suite numbers
+        # are what to reason from. Tracing was measured as NOT the cause locally (8.8s vs 8.8s for
+        # unit_test with and without `coverage run`). `|| true` means a suite that hangs here looks identical
         # to one that is merely slow, so without a per-suite number there is nothing to reason
         # from. The totals land in the step summary next to the coverage report.
         run: |
           echo "| suite | seconds |" > /tmp/suite_times.md
           echo "| --- | ---: |" >> /tmp/suite_times.md
-          for suite in unit template_actions smoke rbac manage setup_wizard perf_budget input_validation; do
+          for suite in unit template_actions smoke rbac manage setup_wizard perf_budget input_validation url_map; do
             _t0=$SECONDS
             rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
             python -m coverage run --parallel-mode --source=. \
@@ -397,11 +396,9 @@ jobs:
             # API — which is the one way I needed to read them.
             echo "| \`${suite}\` | $((SECONDS - _t0)) |" | tee -a /tmp/suite_times.md
           done
-          # Timed as well, and separately from the suites. Locally the five suites total 94s
-          # (measured plain AND under coverage — identical, tracing costs nothing here) while this
-          # job takes 697s on a runner. If the suites are not where it goes, it is in these three,
-          # and combine/xml/report over 13k statements with several parallel data files is the
-          # obvious candidate. Guessing which has been wrong twice today; measure it.
+          # Timed as well, and separately from the suites: if the suites are not where the job's
+          # time goes, it is in these three (combine/xml/report over many statements and several
+          # parallel data files). Measure rather than guess.
           _c0=$SECONDS; python -m coverage combine
           echo "| \`combine\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
           _c0=$SECONDS; python -m coverage xml -o coverage.xml
@@ -439,7 +436,7 @@ jobs:
       # own code on a pull request — and the upload needs CODACY_PROJECT_TOKEN, which as a
       # repository secret was readable by a workflow on any branch pushed here. codacy-coverage.yml
       # uploads the artifact above once this workflow completes, from main's copy of that file, in
-      # an environment the owner can restrict to main (its header has the settings).
+      # an environment restricted to main (its header has the settings).
 
   js-coverage:
     # Line coverage of the panel's OWN JavaScript (static/js/*.js — not static/vendor), for Codacy
@@ -585,7 +582,7 @@ jobs:
           set -euo pipefail
           d="$(mktemp -d)"
           cp tools/gamedig/package.json tools/gamedig/package-lock.json "${d}/"
-          (cd "${d}" && timeout 600 npm ci --ignore-scripts --omit=dev --no-audit --no-fund)
+          (cd "${d}" && timeout 420 npm ci --ignore-scripts --omit=dev --no-audit --no-fund)
           out="$(cd / && timeout 60 "${d}/node_modules/.bin/gamedig" --type minecraft 127.0.0.1:1 \
                    --givenPortOnly --maxRetries 1 --socketTimeout 1000 --attemptTimeout 3000 2>&1)" || true
           printf '%s\n' "${out}"

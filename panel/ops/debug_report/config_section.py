@@ -172,7 +172,7 @@ def _cookie_lines(ctx, cfg, res):
                  "trust_proxy %s" % (_scalar(cfg.get("use_https")),
                                      _scalar(cfg.get("tailscale_setup_done")),
                                      _scalar(cfg.get("trust_proxy")))
-    # The cookie's flags are posture (owner's decision, 2026-10-16): page-only, never the file.
+    # The cookie's flags are posture: page-only, never the file.
     if secure is _NO_APP:
         res.posture("- **Session cookie**: unknown (no app context) · %s" % reason)
         return
@@ -307,7 +307,7 @@ def _proxy_lines(ctx, cfg, res):
     _trusted_lines(ctx, cfg, res)
     _peer_and_origin_lines(cfg, res)
     if run is not _NO_APP and run and addr_class(_boot_bind(ctx)) != "loopback":
-        # A way round the proxy: posture, page-only (owner's decision, 2026-10-16).
+        # A way round the proxy: posture, page-only.
         res.posture("- [!] trust_proxy is on but the panel listens beyond loopback, so it can be "
                     "reached without going through the proxy")
         res.posture_find("warn", "Network", "trust_proxy is on but the panel listens beyond loopback")

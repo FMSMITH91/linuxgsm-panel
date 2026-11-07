@@ -1,7 +1,7 @@
 name: CodeQL
 
 # GitHub's semantic code analysis — deeper than the pattern-based bandit/semgrep
-# in security.yml. Finds data-flow bugs (injection, path traversal, etc.) and
+# in security-code.yml. Finds data-flow bugs (injection, path traversal, etc.) and
 # reports them in the repo's Security tab.
 
 on:
@@ -25,7 +25,7 @@ on:
   schedule:
     - cron: '23 5 * * *'
 
-# The event is part of the group: on main, the Monday scheduled run shares the ref with a push
+# The event is part of the group: on main, the daily scheduled run shares the ref with a push
 # run, and without it the schedule CANCELLED an in-progress push run, leaving "cancelled" required
 # checks on that commit, which the panel's update gate and deploy.yml read as a failure.
 concurrency:
@@ -212,7 +212,7 @@ jobs:
       # scheduled run uploads only while its commit is still main's head; a head that cannot be read
       # uploads as before. code_scanning_analyses.py answers "moved on" for the run that skipped.
       # A head that only added DOCUMENTATION on top of it is still current: that push runs none of
-      # the uploaders (the shared paths-ignore), so skipping here threw the week's scan away with
+      # the uploaders (the shared paths-ignore), so skipping here threw the day's scan away with
       # nothing to replace it. The script asks GitHub's compare API (moved_past).
       # A MANUAL run on main is the same case: its concurrency group is not the push run's either,
       # and it uploaded an older analysis over a push that landed while it ran, leaving that push

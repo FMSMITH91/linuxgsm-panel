@@ -391,7 +391,7 @@ check("host page backups: the default-schedule line says any other interval's nu
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The route's failure answer took the not-a-git-checkout branch ("Internal server error" printed,
 # Update hidden), and a fetch that failed printed "Update check failed." — third states, which the
-# owner's rule forbids: "Update available" or "You're up to date", nothing else.
+# the rule forbids: "Update available" or "You're up to date", nothing else.
 def _boom81(*_a, **_k):
     raise RuntimeError("p81: the update check broke")
 

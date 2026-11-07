@@ -1,6 +1,6 @@
 """Part 145 of the unit suite: `details` shows all of its output, and its secrets only to those who may.
 
-The owner's Details dialog (2026-11-05) ended at "Memory" on a lone "S": _run_sync_action cut every
+A Details dialog (2026-11-05) ended at "Memory" on a lone "S": _run_sync_action cut every
 read-only action's reply at 600 characters. LinuxGSM's `details` is the one command that prints
 passwords unmasked (fn_info_messages_password_strip skips DETAILS), and that cut was all that kept
 them from a VIEW_CONSOLE-only member. Held here:
@@ -74,7 +74,7 @@ finally:
     _p9_restore_all()
 
 check("details reply: the whole output reaches the dialog, not its first 600 characters "
-      "(the owner's ended at 'Memory' on a lone 'S')",
+      "(one ended at 'Memory' on a lone 'S')",
       len(_as_admin145) > 2000 and _as_admin145.rstrip().endswith("the end: rc-p145-bravo was here"),
       repr((len(_as_admin145), _as_admin145[-80:])))
 check("details reply: an administrator (MANAGE_SERVERS, who can open the configs) sees it unmasked",

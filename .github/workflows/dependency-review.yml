@@ -4,7 +4,7 @@ name: Dependency Review
 # severity, using the repo's dependency graph. This complements the other dependency layers rather
 # than duplicating them: Dependabot UPDATES existing deps, and the dependency audit
 # (security-code.yml: pip-audit and osv-scanner) scans the WHOLE current set of every lockfile on
-# every push, pull request and week. This is the review-time gate on what a PR is about to ADD.
+# every push, pull request and day. This is the review-time gate on what a PR is about to ADD.
 #
 # It only runs on pull_request (the action diffs the PR base against its head), so a push straight
 # to main won't trigger it; it stays dormant until a PR is opened. Skipped on a private repo
@@ -17,7 +17,6 @@ on:
   pull_request:
     branches: [ main ]
 
-# Least-privilege: this only needs to read the repo + its dependency graph.
 # Supersede rather than stack: Only the newest push's dependency diff is of any interest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

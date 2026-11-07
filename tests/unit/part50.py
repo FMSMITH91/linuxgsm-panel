@@ -364,7 +364,7 @@ check("docs-only: the PR alert gate passes a docs-only pull request by a step th
 # ── No Claude session links in the repository ────────────────────────────────────────────────────
 # Cloud and Remote Control sessions append a claude.ai session link to every commit ("Claude-Session:"
 # trailer) and pull request unless attribution.sessionUrl is false. Cloud sessions read only the
-# committed .claude/settings.json, so the switch has to live there. A session link is the owner's
+# committed .claude/settings.json, so the switch has to live there. A session link is a
 # private conversation; this repository is public.
 
 _cs50 = _json50.load(open(os.path.join(_root, ".claude", "settings.json"), encoding="utf-8"))

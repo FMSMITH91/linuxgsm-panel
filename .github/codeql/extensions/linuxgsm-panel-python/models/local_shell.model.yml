@@ -42,8 +42,9 @@
 # whose TODO reads 'Handle using args=["sh", "-c", <user-input>]'), and that element is "/bin/bash".
 # A row on eventlet.patcher.original("subprocess")'s Popen with Argument[0].ListElement was tried and
 # PROVED INERT: the canary probe (#394, 2026-10-03) raised every entry-row alert and nothing at
-# _core.py:711, on the four flows that reach it unwrapped. A row that matches nothing reads as
-# coverage, so it is not here. What reaches that shell without passing an entry row is _core's own
+# _core._exec_local_shell's Popen, on the four flows that reach it unwrapped.
+# A row that matches nothing reads as coverage, so it is not here.
+# What reaches that shell without passing an entry row is _core's own
 # three calls of _run_local with a privileged-verb builder's text (remote_write_command,
 # remote_content_cron_command, remote_command), whose arguments privileged.py validates and its
 # unit gates hold; a new direct caller of _run_local or _exec_local_shell fails part37.

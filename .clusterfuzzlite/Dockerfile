@@ -8,7 +8,7 @@
 # and run this image are pinned by SHA, but each runs a Docker image it names by TAG
 # (gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers:v1 and clusterfuzzlite-run-fuzzers:v1, in
 # their action.yml at that SHA), and so does scorecard.yml's action (ghcr.io/ossf/scorecard-action
-# :v2.4.4). Those still change with no commit here: trust accepted in Google's and OpenSSF's tags.
+# :v2.5.0). Those still change with no commit here: trust accepted in Google's and OpenSSF's tags.
 # Pinning them means replacing the actions with `docker run <image>@sha256:...`. Bump this one
 # deliberately:
 #   curl -sSL https://gcr.io/v2/oss-fuzz-base/base-builder-python/manifests/latest \

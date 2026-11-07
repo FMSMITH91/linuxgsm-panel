@@ -809,7 +809,7 @@
         <details class="uid-about mb-1">
           <summary class="small text-secondary"><span>Public SSH from the internet</span> (<span>port</span> <span data-ssh-public-ports>…</span>) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span>
             <i class="bi bi-info-circle uid-about-i" aria-hidden="true"></i></summary>
-          {# Tailscale SSH is off unless the owner chose it at install (system_ops.tailscale_ssh_allowed),
+          {# Tailscale SSH is off unless the operator chose it at install (system_ops.tailscale_ssh_allowed),
              so without it the way back in is sshd over the tailnet: the tailscale0 interface allowed. #}
           {% if status and status.tailscale_ssh.enabled %}
           <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
