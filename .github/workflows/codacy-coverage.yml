@@ -92,7 +92,7 @@ jobs:
     environment:
       name: codacy
       deployment: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: read   # to download an artifact of the CI run this follows; nothing else

@@ -41,7 +41,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # Code scanning uploads only work on public repos (or private w/ GitHub Advanced
     # Security). While the repo is private these jobs are SKIPPED (grey), not failed; they
@@ -260,7 +260,7 @@ jobs:
     name: Open code-scanning alerts (PR)
     if: github.event_name == 'pull_request'
     needs: analyze
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The wait below allows ten minutes for the other workflows' uploads; the rest is margin.
     timeout-minutes: 15
     permissions:
