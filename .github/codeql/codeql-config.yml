@@ -46,9 +46,14 @@ paths-ignore:
 #                                      origin remote, and a commit sha.
 #   lgsm_data._download                GET on raw.githubusercontent.com/GameServerManagers/LinuxGSM,
 #                                      with a validated release tag and a LinuxGSM data filename.
-# The three HTTP requests in notifications go through _OPENER, which refuses every redirect. The two
-# others use urlopen, which follows one, but only from GitHub's own fixed hosts. None of the six takes
-# a host or a path from a request. The ntfy server is the one host anyone chooses: it is stored in
+#   game_icons._cmpd_http_get          GET on https://linuxgsm.com only (_cmpd_allowed_url runs at the
+#                                      call: https, that one host, port 443, no userinfo), for the
+#                                      servers index page and the game pictures under
+#                                      /wp-content/uploads/ that it links. A size cap, a timeout, and
+#                                      an opener that refuses every redirect.
+# The three HTTP requests in notifications and the one in game_icons refuse every redirect. The two
+# others use urlopen, which follows one, but only from GitHub's own fixed hosts. None of the seven
+# takes a host or a path from a request. The ntfy server is the one host anyone chooses: it is stored in
 # config.json and read back later, a flow neither SSRF query traces, so _NTFY_URL_RE bounds it.
 query-filters:
   - exclude:

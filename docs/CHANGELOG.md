@@ -42,6 +42,21 @@ CI-verified commit regardless of this file — this changelog is for humans.
   on a phone, and the Save button stays in view. A save still changes only the lines you edited, in
   the server's own `.cfg`. The file editor now refuses to save an instance's `_default.cfg` and
   says why: LinuxGSM puts its own copy back every time it runs, so the change would be lost.
+- **Game pictures and search on the Install page.** Every game is a tile with its icon, its full
+  name and its LinuxGSM script name (for example `gmodserver`), and a search box narrows them as you
+  type, by name or script name. Pressing a tile picks that game in the form, which installs exactly
+  as before. The icons are LinuxGSM's own, from linuxgsm.com: the panel downloads each one the first
+  time it is shown, checks it is a real PNG, JPEG or WEBP picture, and keeps a copy under `data/`, so
+  your browser only ever loads them from the panel. A game without an icon shows its initials.
+- **Scheduled wipes for Rust.** On a Rust server's Files & Config page, the Schedule tab has a
+  Scheduled wipe card: a map wipe (map and saves; blueprints kept) or a full wipe (blueprints and
+  player data too), on the first Thursday of the month, every Thursday, or your own cron schedule,
+  at a time in your own timezone. Before every wipe the panel takes a LinuxGSM backup, and if that
+  backup fails nothing is wiped. By default it waits for the server to be empty (up to 12 hours).
+  A wipe the panel missed by more than 6 hours (it was not running) is skipped, not run late.
+  Every run is in the audit log, and a run that did not wipe sends an alert. Saving a schedule asks
+  you to confirm, and needs the same permission as Scheduled Tasks.
+
 - **Each server's page shows which LinuxGSM release it runs.** It appears under the game's own
   version (for example `LinuxGSM v26.4.0`), with "· v26.5.0 available" when LinuxGSM has a newer
   release. Running update-lgsm from the Maintenance menu updates it. The release is read in the

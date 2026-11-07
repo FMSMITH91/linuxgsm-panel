@@ -501,6 +501,60 @@
   </div>
 </div>
 
+{# The scheduled wipe, for the games whose LinuxGSM script has wipe/full-wipe (Rust). The panel runs
+   it (panel/routes/wipe_schedule.py): a backup first, and no wipe if that backup failed. The form
+   is rendered whole, and the script only fills its values, so nothing moves when it loads. #}
+{% if wipe_supported(server.game_type) %}
+<div class="card mt-3" id="wipe-card" data-sfsub="schedule" style="display:none;">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-eraser-fill"></i> Scheduled wipe <span class="badge bg-danger">Destructive</span></span>
+    <span class="text-secondary" style="font-size:.66rem;" id="wipe-state">Off</span>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">A map wipe deletes the map and saves and keeps blueprints. A full wipe also deletes blueprints and player data (not Rust+ pairing). The panel takes a LinuxGSM backup first and does not wipe if that backup fails.</p>
+    <form id="wipe-form" class="row g-2 align-items-end" data-action="saveWipeSchedule" data-args='["@event"]' data-on="submit">
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-kind">Wipe</label>
+        <select id="wipe-kind" class="form-select form-select-sm">
+          <option value="map">Map wipe</option>
+          <option value="full">Full wipe</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-preset">When</label>
+        <select id="wipe-preset" class="form-select form-select-sm" data-action="wipePresetChanged" data-on="change">
+          <option value="first-thursday">First Thursday of the month</option>
+          <option value="weekly-thursday">Every Thursday</option>
+          <option value="custom">Custom (cron)</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2" id="wipe-at-col">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-at">Time (your time)</label>
+        <input type="time" id="wipe-at" class="form-control form-control-sm" value="19:00">
+      </div>
+      <div class="col-12 col-md-3" id="wipe-cron-col" hidden>
+        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-cron">Cron (your time)</label>
+        <input type="text" id="wipe-cron" class="form-control form-control-sm font-monospace" placeholder="0 19 * * 4" spellcheck="false" data-no-i18n>
+      </div>
+      <div class="col-12 col-md-2 d-flex gap-2">
+        <button type="submit" class="btn btn-danger btn-sm flex-grow-1"><i class="bi bi-calendar-check"></i> Save</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="wipe-off" data-action="turnOffWipeSchedule" hidden>Turn off</button>
+      </div>
+      <div class="col-12">
+        <div class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" id="wipe-wait" checked>
+          <label class="form-check-label small" for="wipe-wait">Wait until the server is empty (up to 12 hours)</label>
+        </div>
+      </div>
+    </form>
+    <div class="small mt-2 text-secondary" id="wipe-next-row" hidden><span>Next wipe:</span> <span id="wipe-next" data-no-i18n></span></div>
+    <div class="small mt-1" id="wipe-last-row" hidden><span>Last run:</span> <span id="wipe-last" data-no-i18n></span></div>
+    <div class="small mt-1 text-warning" id="wipe-wait-row" hidden><span>Waiting:</span> <span id="wipe-wait-why" data-no-i18n></span></div>
+    <span id="wipe-msg" class="small"></span>
+  </div>
+</div>
+{% endif %}
+
 <!-- Alerts & notifications -->
 <div class="card" id="alerts-card" data-sfsub="alerts" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -557,4 +611,5 @@ var SERVER_NAME = {{ server.name|tojson }};   // the shared control bar names th
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
+{% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}
