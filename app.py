@@ -1054,7 +1054,7 @@ def _run_autoblock_now(app, remote_id):
     def _go():
         with app.app_context():
             try:
-                remote = RemoteServer.query.get(remote_id)
+                remote = db.session.get(RemoteServer, remote_id)
                 if remote:
                     _autoblock_reconcile(remote)
             except Exception:

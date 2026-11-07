@@ -743,7 +743,7 @@ try:
         _resp = c.post("/servers/%d/delete" % _tid, json={},
                        headers={"X-Requested-With": "XMLHttpRequest"})
         with app.app_context():
-            _still = _UGS.query.get(_tid) is not None
+            _still = db.session.get(_UGS, _tid) is not None
         check("uninstall: rc=%d (%s) -> row %s" % (_rc, _label, "deleted" if _expect_gone else "KEPT"),
               _still != _expect_gone, "row %s" % ("survived" if _still else "was deleted"))
         if not _expect_gone:
@@ -751,7 +751,7 @@ try:
                   (_resp.get_json() or {}).get("success") is False,
                   "got %r" % ((_resp.get_json() or {}).get("success"),))
         with app.app_context():   # clean up whatever survived
-            _left = _UGS.query.get(_tid)
+            _left = db.session.get(_UGS, _tid)
             if _left: db.session.delete(_left); db.session.commit()
 finally:
     _sm_core.run_privileged = _u_orig
@@ -844,7 +844,7 @@ try:
             check("uninstall %s: a clean firewall cleanup is no warning (control)" % _uf_name,
                   (_resp.get_json() or {}).get("warn") is False, repr(_resp.get_json()))
         with app.app_context():
-            _left = _UGS.query.get(_tid)
+            _left = db.session.get(_UGS, _tid)
             if _left: db.session.delete(_left); db.session.commit()
 finally:
     _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _uf_saved
@@ -970,7 +970,7 @@ try:
               and not any(r[2] == _ul_name for r in _ul.left()), repr(_ul.left()))
         with app.app_context():
             for _x in (_tid, _sid):
-                _left = _UGS.query.get(_x) if _x else None
+                _left = db.session.get(_UGS, _x) if _x else None
                 if _left: db.session.delete(_left); db.session.commit()
 finally:
     _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _ul_saved
@@ -1273,12 +1273,12 @@ try:
     _sresp = c.post("/servers/%d/delete" % _st_id, json={},
                     headers={"X-Requested-With": "XMLHttpRequest"})
     with app.app_context():
-        _st_left = _UGS.query.get(_st_id) is not None
+        _st_left = db.session.get(_UGS, _st_id) is not None
     check("stranded install: a row stuck at 'installing' with no live job CAN be removed",
           not _st_left,
           "still there — %r" % ((_sresp.get_json() or {}).get("message"),))
     with app.app_context():
-        _l = _UGS.query.get(_st_id)
+        _l = db.session.get(_UGS, _st_id)
         if _l: db.session.delete(_l); db.session.commit()
 finally:
     _sm_core.run_privileged = _u_orig2
@@ -1521,7 +1521,7 @@ with app.app_context():
 _rst_r = dc.post("/users/%d/edit" % admin2_id,
                  data={"is_superadmin": "on", "is_active": "on", "reset_password": "on"})
 with app.app_context():
-    a2 = User.query.get(admin2_id)
+    a2 = db.session.get(User, admin2_id)
     # Refused (_form_err redirects), not crashed: a 500 before the reset also left the old
     # password, and read as the guard holding (review 1015d).
     check("MANAGE_USERS user can't reset a superadmin's password (the request is refused, not crashed)",
@@ -1605,7 +1605,7 @@ if gid:
     check("POST /groups/<id>/edit tolerates bad ids -> not 5xx",
           r.status_code < 500, "got %d" % r.status_code)
     with app.app_context():
-        g = Group.query.get(gid)
+        g = db.session.get(Group, gid)
         check("edit_group kept only the valid host",
               g is not None and [rs.id for rs in g.servers] == [remote_id])
     # ...and ids no row can have: 5,000 digits (int() refuses past 4,300) and 2**64 (SQLite's
@@ -1621,7 +1621,7 @@ if gid:
         check("POST /groups/add with an id of %d digits -> not 5xx" % len(_hid),
               r.status_code < 500, "got %d" % r.status_code)
     with app.app_context():
-        g = Group.query.get(gid)
+        g = db.session.get(Group, gid)
         check("edit_group with oversized ids still kept the valid host",
               g is not None and [rs.id for rs in g.servers] == [remote_id])
         for _hg in Group.query.filter(Group.name.like(gtag + "_h%")).all():
