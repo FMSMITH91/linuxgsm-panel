@@ -3,7 +3,7 @@
 ClusterFuzzLite (its corpus, coverage and builds as Actions artifacts, and where they may come
 from; the PR run's fuzzing time and the harnesses' start-up), the root-only unit checks run as
 root in ci.yml, actionlint's shellcheck pass and its `vars` list, the Tailscale client the deploy
-job installs, and every `uses:` pinned to a commit.
+job installs, every `uses:` pinned to a commit, and every `runs-on:` pinned to an Ubuntu release.
 
 HOW IT RUNS. The workflows are read as TEXT, as part06 and part19 read them: the checks job
 installs no YAML parser. Where a workflow step's script can be run, it is: cut out of the file and
@@ -817,3 +817,15 @@ check("fuzz workflows: a file list shorter than the pull request's changed_files
       "fuzzes, as a changed or renamed-from in-scope file does; a whole out-of-scope list does not",
       all(_v == ["run=false", "run=true", "run=true", "run=true"] for _v in _r21d_scope.values()),
       repr(_r21d_scope))
+
+
+# GitHub moves `ubuntu-latest` to a new Ubuntu release over weeks (24.04 to 26.04 ran from 2026-10-19 to
+# 2026-11-19, actions/runner-images#14748), and during the move every job on it carries a notice. A job
+# names its release, as ci.yml's matrix does, so the image only changes in a commit that says so.
+_ro29 = [(wf, v.strip()) for wf in sorted(os.listdir(_WF29)) if wf.endswith(".yml")
+         for v in _re29.findall(r"^ +runs-on: *(.+)$", _code29(_wf29(wf)), _re29.M)]
+_ro29_bad = [(wf, v) for wf, v in _ro29
+             if not _re29.fullmatch(r"ubuntu-\d\d\.\d\d|\$\{\{ matrix\.os \}\}", v)]
+check("workflows: every job runs on a named Ubuntu release (ubuntu-NN.NN or ci.yml's matrix), never a "
+      "-latest label that moves under it", len(_ro29) >= 25 and not _ro29_bad,
+      "%d runs-on lines; off: %r" % (len(_ro29), _ro29_bad))

@@ -320,7 +320,7 @@ jobs:
 
   coverage:
     name: coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 30. Measured on main's nine push runs of 2026-10-10 to 2026-10-12: 982-1162 s (16.4-19.4
     # min), the "Measure" step 961-1136 s of it (652f166c: unit 441 s, smoke 630 s). 20 had left
     # 38 s, and a timed-out run here is a failed required check like a red one. On f896aeae and

@@ -50,7 +50,7 @@ jobs:
   # on main (GHSA-ch52-4w7c-c8xp, 2026-10-02) turned nothing red.
   dependency-audit:
     name: Dependency vulnerabilities (pip-audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -204,7 +204,7 @@ jobs:
 
   sast-bandit:
     name: Python security lint (Bandit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -314,7 +314,7 @@ jobs:
 
   sast-semgrep:
     name: Deep SAST (Semgrep)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
