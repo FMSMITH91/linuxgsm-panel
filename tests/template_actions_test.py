@@ -5335,27 +5335,27 @@ const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => 
 (async () => {
   const root = process.argv[2], out = {};
   // watchInstall: the row is gone.
-  let c = load(root + '/static/js/manage_servers.js');
+  let c = load(root + '/panel/static/js/manage_servers.js');
   c.respond = () => ({ok:true, json:() => ({status:'running', percent:10, elapsed:1})});
   c.watchInstall('7'); await flush();
   out.install_gone = {timers: Object.keys(c._instTimers).length, live: Object.keys(c.t.live).length};
-  c = load(root + '/static/js/manage_servers.js');
+  c = load(root + '/panel/static/js/manage_servers.js');
   c.respond = () => ({ok:true, json:() => ({status:'running', percent:10, elapsed:1})});
   c.els['install-row-8'] = mkEl();
   c.watchInstall('8'); await flush();
   out.install_there = {timers: Object.keys(c._instTimers).length, live: Object.keys(c.t.live).length};
   // watchBootstrap: the card is gone.
-  c = load(root + '/static/js/manage_remotes.js');
+  c = load(root + '/panel/static/js/manage_remotes.js');
   c.respond = () => ({ok:true, json:() => ({status:'running', step_name:'x', percent:5, elapsed:1})});
   c.watchBootstrap('3'); await flush();
   out.boot_gone = {timers: Object.keys(c._bsTimers).length, live: Object.keys(c.t.live).length};
-  c = load(root + '/static/js/manage_remotes.js');
+  c = load(root + '/panel/static/js/manage_remotes.js');
   c.respond = () => ({ok:true, json:() => ({status:'running', step_name:'x', percent:5, elapsed:1})});
   c.els['bootstrap-card-4'] = mkEl();
   c.watchBootstrap('4'); await flush();
   out.boot_there = {timers: Object.keys(c._bsTimers).length, live: Object.keys(c.t.live).length};
   // watchPanelRestart: same process for 5 ticks, then down for one, then a new one.
-  c = load(root + '/static/js/remote_manage_host.js');
+  c = load(root + '/panel/static/js/remote_manage_host.js');
   let boot = 'B1', down = false;
   c.respond = url => {
     if (url.indexOf('/api/panel/update-log') >= 0) {
@@ -5618,7 +5618,7 @@ function load(root, respond, catalog){
   }
   vm.createContext(ctx);
   for (const f of (catalog ? ['i18n.js'] : []).concat(['panel.js', 'server_files.js']))
-    vm.runInContext(fs.readFileSync(root + '/static/js/' + f, 'utf8'), ctx, {filename: f});
+    vm.runInContext(fs.readFileSync(root + '/panel/static/js/' + f, 'utf8'), ctx, {filename: f});
   ctx.toast = (m, k) => toasts.push([m, k]);
   return ctx;
 }
@@ -6141,9 +6141,9 @@ function load(root, reply, catalog, lang){
   ctx.toast = () => {}; ctx.refreshSection = () => {};
   if (catalog) { ctx.I18N = catalog; ctx.LANG = lang; }
   vm.createContext(ctx);
-  if (catalog) vm.runInContext(fs.readFileSync(root + '/static/js/i18n.js', 'utf8'), ctx, {filename: 'i18n.js'});
+  if (catalog) vm.runInContext(fs.readFileSync(root + '/panel/static/js/i18n.js', 'utf8'), ctx, {filename: 'i18n.js'});
   try {
-    vm.runInContext(fs.readFileSync(root + '/static/js/remote_manage_backups.js', 'utf8'), ctx,
+    vm.runInContext(fs.readFileSync(root + '/panel/static/js/remote_manage_backups.js', 'utf8'), ctx,
                     {filename: 'remote_manage_backups.js'});
   } catch (e) { /* its page-start calls need the whole page; the functions are defined first */ }
   return {ctx, doc, msg, result};

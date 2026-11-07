@@ -207,7 +207,7 @@ _orig_git, _orig_isgit_real = _so._git, _so._is_git_checkout
 _so._is_git_checkout = lambda: True
 _so._git = lambda args, timeout=45: (
     ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"]
-    else ("M\tapp.py\nD\ttemplates/base.html\n", "", 0) if list(args) == ["diff", "--name-status", "HEAD"]
+    else ("M\tapp.py\nD\tpanel/templates/base.html\n", "", 0) if list(args) == ["diff", "--name-status", "HEAD"]
     else ("", "", 0))
 _intg = _so.panel_integrity(force=True)   # force: each scenario mocks a different git state
 check("integrity: reports git checkout", _intg["git"] is True)
