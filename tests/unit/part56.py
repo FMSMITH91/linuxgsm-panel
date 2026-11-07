@@ -667,8 +667,10 @@ _out56 = _node56(_name56, (
     "global.refreshSection = () => Promise.resolve();   // its page fetch failed: nothing swapped\n"
     "global.fetch = () => Promise.resolve({json: () => Promise.resolve({success: true, games: 141})});\n"
     "const opt = {style: {display: ''}}, sel = {value: '', options: []};\n"
-    "global.document = {getElementById: id => ({'gmod-content-opt': opt, 'game-type-select': sel})[id] || null};\n"
+    "global.document = {getElementById: id => ({'gmod-content-opt': opt, 'game-type-select': sel})[id] || null,\n"
+    "  querySelectorAll: () => []};\n"
     + _cut47(_MS56, "function refreshGameList(") + "\n" + _cut47(_MS56, "function filterGamesForHost(") + "\n"
+    + _cut47(_MS56, "function syncGameTiles(") + "\n"
     "(async () => { const btn = {innerHTML: 'Refresh list', getAttribute: () => null, disabled: false};\n"
     "  refreshGameList(btn); await settle(); filterGamesForHost();\n"
     "  console.log(JSON.stringify({disabled: btn.disabled, label: btn.innerHTML, gmod: opt.style.display})); })();\n"))

@@ -170,7 +170,7 @@
   <!-- Edit form (collapsible) -->
   {% if group_manageable %}
   <div class="collapse" id="edit-group-{{ group.id }}">
-    <div class="card-body border-top" style="border-color: #30363d !important;">
+    <div class="card-body border-top" style="border-color: var(--border) !important;">
       <form method="POST" action="{{ url_for('edit_group', group_id=group.id) }}"
             class="ajax-form" data-ajax-refresh="#groups-list" data-ajax-reset="off">
         <div class="row">

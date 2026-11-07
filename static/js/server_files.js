@@ -81,20 +81,104 @@ if (_el_cfg_tabs) _el_cfg_tabs.addEventListener('click', function(ev){
 });
 
 // ── LinuxGSM settings (grouped) ──
+// One setting: its name, the file its value comes from, the field, and LinuxGSM's own help for it
+// from _default.cfg with a link to its page on docs.linuxgsm.com (panel/services/lgsm_cfg_form.py).
+// The help and headings are LinuxGSM's text, the values the operator's: none of it is translated.
+// One column on a phone: the help needs the width.
+var _CMPC_LAYER_CLS = {'instance':'bg-info text-dark', 'secrets-instance':'bg-warning text-dark',
+                       'common':'bg-secondary', 'secrets-common':'bg-warning text-dark'};
+function _cmpcDocsOk(u){ return typeof u === 'string' && new RegExp('^https://docs[.]linuxgsm[.]com(/[-\\w.~%/]*)?(#[-\\w.~%]*)?$').test(u); }
+function _cmpcHelpHtml(s){
+  var lines = String(s.help || '').split('\n').filter(function(x){ return x !== ''; });
+  if(!lines.length) return '';
+  if(lines.length === 1) return '<div class="cmpc-help" data-no-i18n>'+esc(lines[0])+'</div>';
+  return '<details class="cmpc-help"><summary data-no-i18n>'+esc(lines[0])+'</summary>'
+    + '<div class="cmpc-help-more" data-no-i18n>'+esc(lines.slice(1).join('\n'))+'</div></details>';
+}
 function fieldHtml(s){
   var def = s['default'];
-  return '<div class="col-6 col-md-4 col-xl-3 mb-1">'
-    + '<label class="form-label mb-1 d-flex align-items-center gap-1" style="font-size:.7rem;">'
+  var lc = _CMPC_LAYER_CLS[s.layer] || 'border text-secondary';
+  var docs = _cmpcDocsOk(s.docs) ? '<a class="cmpc-docs ms-auto" href="'+esc(s.docs)+'" target="_blank" rel="noopener noreferrer">'
+    + '<i class="bi bi-book"></i> <span>Docs</span></a>' : '';
+  return '<div class="col-12 col-sm-6 col-lg-4 col-xl-3 mb-1" data-cmpc-field data-cmpc-text="'+esc((s.key+' '+(s.heading||'')).toLowerCase())+'">'
+    + '<label class="form-label mb-1 d-flex align-items-center gap-1 w-100" style="font-size:.7rem;">'
     + '<span class="fb-key" data-no-i18n>'+esc(s.key)+'</span>'
-    + '<span class="badge bg-info text-dark cfg-set-badge" style="font-size:.5rem;'+(s.overridden?'':'display:none;')+'">set</span>'
-    + '</label>'
+    + '<span class="badge cfg-set-badge '+lc+'" data-no-i18n style="font-size:.55rem;">'+esc(s.layer_file||'')+'</span>'
+    + docs + '</label>'
     + '<input type="text" class="form-control form-control-sm" data-no-i18n data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
-    + (def!==''?' placeholder="'+esc(def)+'"':'') + '>'
+    + (def!==''?' placeholder="'+esc(def)+'"':'') + (s.masked?' readonly':'') + '>'
     + (def!==''?'<div class="text-secondary text-truncate" style="font-size:.62rem;">default: '
         + '<code class="cfg-copy-default" data-copy="'+esc(def)+'" style="cursor:pointer;" '
         + 'title="default: '+esc(def)+' — click to copy">'+esc(def)+'</code></div>':'')
+    + _cmpcHelpHtml(s)
     + '</div>';
 }
+// A section's body: its settings, under each LinuxGSM heading they sit beneath (## Backup, # Discord Alerts).
+function _cmpcSectionBody(grp){
+  var out = '', last = null, sub = -1;
+  grp.settings.forEach(function(s){
+    var h = s.heading || '';
+    if(h !== last){
+      last = h; sub++;
+      if(h) out += '<div class="col-12 cmpc-sub" data-cmpc-subhead="'+sub+'" data-no-i18n>'+esc(h)+'</div>';
+    }
+    out += fieldHtml(s).replace('data-cmpc-field', 'data-cmpc-field data-cmpc-sub="'+sub+'"');
+  });
+  return '<div class="row g-2">'+out+'</div>';
+}
+// What a config read says beyond its settings: no _default.cfg to list them from (said as that, not
+// as an empty form), or this viewer's secrets kept back — then the Raw box holds nothing to save.
+function _cmpcAfterLoad(d, g){
+  if(!(d.groups||[]).length && d.default_missing) g.innerHTML='<div class="text-warning small">LinuxGSM\'s _default.cfg for this server could not be found, so its settings can\'t be listed here. LinuxGSM puts it back the next time it runs a command; the Raw tab still works.</div>';
+  var mk=document.getElementById('cmpc-masked');
+  if(mk) mk.style.display = d.raw_hidden ? '' : 'none';
+  if(d.raw_hidden) _r26c_rawRead='unread';
+  _cmpcFilterApply();
+}
+// The filter box: settings whose name, heading or help holds the text; sections with none are
+// hidden, sections with some opened (and put back as they were when the box is emptied).
+// One section's fields (and the headings left with none): how many match.
+function _cmpcFilterFields(body, q){
+  var n = 0, subs = {};
+  body.querySelectorAll('[data-cmpc-field]').forEach(function(f){
+    var hit = !q || (f.getAttribute('data-cmpc-text') + ' ' + f.textContent.toLowerCase()).indexOf(q) >= 0;
+    f.style.display = hit ? '' : 'none';
+    if(hit){ n++; subs[f.getAttribute('data-cmpc-sub')] = true; }
+  });
+  body.querySelectorAll('[data-cmpc-subhead]').forEach(function(h){ h.style.display = subs[h.getAttribute('data-cmpc-subhead')] ? '' : 'none'; });
+  return n;
+}
+// A section while filtering: hidden with no match, opened with some; put back as it was after.
+function _cmpcFilterOpen(body, q, n){
+  body.parentElement.style.display = (q && !n) ? 'none' : '';
+  if(q){
+    if(!body.hasAttribute('data-cmpc-was')) body.setAttribute('data-cmpc-was', body.style.display);
+    _cmpcSectionOpen(body, n > 0);
+  } else if(body.hasAttribute('data-cmpc-was')){
+    _cmpcSectionOpen(body, body.getAttribute('data-cmpc-was') !== 'none');
+    body.removeAttribute('data-cmpc-was');
+  }
+}
+function _cmpcSectionOpen(body, open){
+  body.style.display = open ? '' : 'none';
+  var ic = body.parentElement.querySelector('[data-acc] i');
+  if(ic) ic.className = 'bi bi-caret-'+(open?'down':'right')+'-fill me-1';
+}
+function _cmpcFilterApply(){
+  var box = document.getElementById('cmpc-filter');
+  var q = box ? box.value.trim().toLowerCase() : '', shown = 0;
+  document.querySelectorAll('#cfg-groups [data-accbody]').forEach(function(body){
+    var n = _cmpcFilterFields(body, q);
+    _cmpcFilterOpen(body, q, n);
+    shown += n;
+  });
+  var none = document.getElementById('cmpc-filter-none');
+  if(none) none.style.display = (q && !shown) ? '' : 'none';
+}
+(function(){
+  var box = document.getElementById('cmpc-filter');
+  if(box) box.addEventListener('input', _cmpcFilterApply);
+})();
 // Click any "default: <value>" to copy that value to the clipboard (delegated, so it keeps working
 // after the config list re-renders). Uses the shared copyText() helper for the copy + confirmation.
 document.addEventListener('click', function(ev){
@@ -147,7 +231,7 @@ function loadConfig(){
     if(lgh) g.insertAdjacentHTML('beforeend', lgh);  // nosemgrep
     (d.groups||[]).forEach(function(grp, idx){
       var open = idx===0; // first group (Game Server Settings) expanded
-      var body = '<div class="row g-2">'+grp.settings.map(fieldHtml).join('')+'</div>';
+      var body = _cmpcSectionBody(grp);
       g.insertAdjacentHTML('beforeend',
         '<div class="mb-2 border rounded overflow-hidden">'  // nosemgrep
         + '<button type="button" class="cfg-acc-header btn btn-sm w-100 text-start d-flex justify-content-between align-items-center px-3 py-2" data-acc="'+idx+'">'
@@ -162,6 +246,7 @@ function loadConfig(){
     ta.value = d.raw||'';
     _r29j_rawShown = ta.value;
     _r26c_rawRead='ok';
+    if(typeof _cmpcAfterLoad === 'function') _cmpcAfterLoad(d, g);
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
 }
 // The warning's fix: the server writes a random adminpassword into the instance cfg; the re-read then
@@ -211,10 +296,12 @@ function saveConfig(ev){
       if(d.success){
         // Mark saved values as the new baseline (preserves accordion state), and show the "set"
         // badge on the fields we just wrote — they're now overrides in the instance .cfg.
+        var inst=document.getElementById('cfg-form').getAttribute('data-cmpc-inst')||'';
         document.querySelectorAll('#cfg-groups [data-key]').forEach(function(i){
           i.setAttribute('data-orig', i.value);
           if(settings.hasOwnProperty(i.getAttribute('data-key'))){
-            var b=i.parentElement.querySelector('.cfg-set-badge'); if(b) b.style.display='';
+            var b=i.parentElement.querySelector('.cfg-set-badge');
+            if(b){ b.textContent=inst; b.className='badge cfg-set-badge bg-info text-dark'; }
           }
         });
         // The settings write changed the instance .cfg — refresh the Raw tab so it isn't stale.
@@ -461,6 +548,9 @@ function openFile(path){
     var _ep=document.getElementById('editor-path');
     _ep.setAttribute('data-no-i18n','');   // the header must name the file being saved, not a translation of it
     _ep.textContent=path;
+    // An instance's _default.cfg: LinuxGSM puts its own copy back on every run, and a save is refused.
+    var dw=document.getElementById('cmpc-default-warn');
+    if(dw) dw.style.display = new RegExp('^([.]/)*lgsm/config-lgsm/[^/]+/_default[.]cfg$').test(path) ? '' : 'none';
     document.getElementById('editor').value=d.content||'';
     syncGutter();
     var edl=document.getElementById('editor-download');

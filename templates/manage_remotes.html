@@ -143,7 +143,7 @@
           </div>
           <a href="#" class="small text-secondary" style="font-size:.7rem;" data-action="toggleBsLog" data-args='[{{ remote.id }}]' data-prevent>show log</a>
           <a href="#" class="small text-secondary ms-2" style="font-size:.7rem;display:none;" id="bs-dismiss-{{ remote.id }}" data-action="dismissBootstrap" data-args='[{{ remote.id }}]' data-prevent>dismiss</a>
-          <pre id="bs-log-{{ remote.id }}" class="small mt-1" style="display:none;max-height:180px;overflow:auto;font-size:.68rem;background:#0d1117;padding:6px;border-radius:4px;"></pre>
+          <pre id="bs-log-{{ remote.id }}" class="small mt-1" style="display:none;max-height:180px;overflow:auto;font-size:.68rem;background:var(--bg);padding:6px;border-radius:4px;"></pre>
         </div>
       </div>
       {# ms-auto matters only once the row WRAPS: alone on its own line, justify-content-between

@@ -415,6 +415,10 @@ def register(app):
     _register_pages(app)
     _register_install(app)
     _register_uninstall_and_edit(app)
+    # The install page's game tiles, and the Schedule tab's Rust wipe card with its sweep.
+    from panel.routes import game_icons as _cmpd_icons, wipe_schedule as _cmpd_wipe
+    _cmpd_icons.register(app)
+    _cmpd_wipe.register(app)
 
 
 def _register_pages(app):

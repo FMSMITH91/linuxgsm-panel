@@ -1,6 +1,25 @@
 {% extends "base.html" %}
 {% block title %}{{ t('Install a Game Server') }}{% endblock %}
 {% block content %}
+<style>
+  /* The game picker: a grid of tiles, icon + name + script, filtered by the search box. A tile
+     fills the Game select (which the form posts), so the form and the install flow are unchanged. */
+  .game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .4rem;
+    max-height: 24rem; overflow-y: auto; padding: 2px; }
+  @media (max-width: 575.98px) { .game-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 22rem; } }
+  .game-tile { display: flex; align-items: center; gap: .5rem; min-width: 0; text-align: left; padding: .35rem .45rem;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: inherit; }
+  .game-tile:hover, .game-tile:focus-visible { border-color: var(--bs-primary, #0d6efd); }
+  .game-tile[aria-pressed="true"] { border-color: var(--bs-success, #198754); box-shadow: 0 0 0 2px rgba(25,135,84,.35); }
+  .game-tile:disabled { opacity: .45; }
+  .game-tile-art { position: relative; flex: 0 0 2.25rem; width: 2.25rem; height: 2.25rem; border-radius: 6px;
+    overflow: hidden; display: flex; align-items: center; justify-content: center; font-weight: 600;
+    font-size: .78rem; background: rgba(127,127,127,.18); }
+  .game-tile-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .game-tile-text { display: flex; flex-direction: column; min-width: 0; }
+  .game-tile-name { font-size: .78rem; line-height: 1.15; overflow-wrap: anywhere; }
+  .game-tile-script { font-size: .66rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h1 class="page-title mb-0"><i class="bi bi-plus-circle-fill"></i> Install a Game Server</h1>
@@ -94,6 +113,34 @@
         </div>
         {% endif %}
       </div>
+      {# The game picker. Rendered here, not built by script, so the first paint has every tile and
+         nothing moves when the script arrives. A tile only SETS the Game select above, which is
+         what the form posts, so the install flow is the one it always was. Icons come from the
+         panel's own /game-icon route (fetched and cached server-side from linuxgsm.com); a game
+         with none keeps its initials. Right under the Game select on a phone; last on a
+         wide screen (order-md-last), below the row of fields. #}
+      {% if games %}
+      <div class="col-12 order-md-last" id="game-picker">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <input type="search" id="game-search" class="form-control form-control-sm" style="max-width:22rem;"
+                 placeholder="Search games" aria-label="Search games by name or script name" autocomplete="off"
+                 data-action="filterGameTiles" data-args='["@self"]' data-on="input">
+          <span class="small text-secondary" id="game-search-none" hidden>No game matches that search.</span>
+        </div>
+        <div class="game-grid" id="game-grid">
+          {% for g in games %}
+          {% set _ws = g.name.replace(':', ' ').replace('-', ' ').split() %}
+          <button type="button" class="game-tile" data-game="{{ g.shortname }}" aria-pressed="false"
+                  data-search="{{ (g.name ~ ' ' ~ g.shortname ~ 'server')|lower }}"
+                  data-action="pickGameTile" data-args='["@self"]'>
+            <span class="game-tile-art" aria-hidden="true"><span data-no-i18n>{{ ((_ws[0][:1] ~ (_ws[1][:1] if _ws|length > 1 else _ws[0][1:2])) if _ws else '?')|upper }}</span><img src="{{ url_for('game_icon', script=g.shortname ~ 'server') }}" alt="" loading="lazy" width="36" height="36"></span>
+            <span class="game-tile-text"><span class="game-tile-name" data-no-i18n>{{ g.name }}</span>
+              <code class="game-tile-script text-secondary" data-no-i18n>{{ g.shortname }}server</code></span>
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
       <div class="col-md-3">
         <label class="form-label" for="server-name-input">Server Name <span class="text-secondary">(optional)</span></label>
         <input type="text" name="server_name" id="server-name-input" class="form-control" placeholder="Leave blank for default">

@@ -1786,10 +1786,10 @@ function initChart() {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { intersect: false, mode: 'index' },
       scales: {
-        y: { min: 0, max: 100, ticks: { color: '#8b98a5', maxTicksLimit: 5 }, grid: { color: 'rgba(255,255,255,.05)' } },
-        x: { ticks: { color: '#8b98a5', maxTicksLimit: 6, maxRotation: 0 }, grid: { display: false } }
+        y: { min: 0, max: 100, ticks: { color:_cmpbInk().tick, maxTicksLimit: 5 }, grid: { color:_cmpbInk().grid } },
+        x: { ticks: { color:_cmpbInk().tick, maxTicksLimit: 6, maxRotation: 0 }, grid: { display: false } }
       },
-      plugins: { legend: { labels: { color: '#c9d1d9', boxWidth: 12, boxHeight: 12 } } }
+      plugins: { legend: { labels: { color:_cmpbInk().legend, boxWidth: 12, boxHeight: 12 } } }
     }
   });
 }
@@ -1888,11 +1888,20 @@ function _pushStatsPoint(m) {
 
 var _histRange = '24h';
 
+// Chart text and grid in the page's colour scheme: the dark scheme's grey ticks are 2.9:1 on the
+// light scheme's white card. A declaration, so the module-scope _histX below can call it.
+function _cmpbInk(){
+  var de = document.documentElement;
+  var light = !!(de && de.getAttribute && de.getAttribute('data-bs-theme') === 'light');
+  return light ? {tick: '#4b5563', grid: 'rgba(0,0,0,.08)', legend: '#1f2937'}
+               : {tick: '#8b98a5', grid: 'rgba(255,255,255,.05)', legend: '#c9d1d9'};
+}
+
 var _histCharts = {};
 
 var _histTimes = {};
 
-var _histX = { ticks:{color:'#8b98a5', maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
+var _histX = { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
 
 function _histXScale(id){
   var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
@@ -1907,7 +1916,7 @@ function _histXScale(id){
         prev = d;
       });
     },
-    ticks:{ color:'#8b98a5', maxTicksLimit:6, maxRotation:0, autoSkip:true,
+    ticks:{ color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0, autoSkip:true,
       callback: function(value){ var t=(_histTimes[id]||[])[value]; return t ? [fmtT(t), fmtD(t)] : ''; } } };
 }
 
@@ -1931,7 +1940,7 @@ function _histChart(id, labels, datasets, yScales, xScale){
     type:'line', data:{ labels:labels, datasets:datasets },
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{intersect:false, mode:'index'}, scales:scales,
-      plugins:{ legend:{ labels:{color:'#c9d1d9', boxWidth:12, boxHeight:12} } } }
+      plugins:{ legend:{ labels:{color:_cmpbInk().legend, boxWidth:12, boxHeight:12} } } }
   });
 }
 
@@ -1965,15 +1974,15 @@ window.loadHistory = function(){
       _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
       _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
       var _xs = function(id){ return _histRange==='7d' ? _histX : _histXScale(id); };
-      var pctY = { y:{ min:0, max:100, ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} } };
+      var pctY = { y:{ min:0, max:100, ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} } };
       _histChart('hist-players', sL,
         [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
-        { y:{ min:0, ticks:{color:'#8b98a5', maxTicksLimit:5, precision:0}, grid:{color:'rgba(255,255,255,.05)'} } }, _xs('hist-players'));
+        { y:{ min:0, ticks:{color:_cmpbInk().tick, maxTicksLimit:5, precision:0}, grid:{color:_cmpbInk().grid} } }, _xs('hist-players'));
       _histChart('hist-server', sL, [
         Object.assign(_ds('CPU %', s.map(function(p){return p.cpu;}), '#3fb950', true), {yAxisID:'y'}),
         Object.assign(_ds('RAM MB', s.map(function(p){return p.ram;}), '#d29922', false), {yAxisID:'y1'})
-      ], { y:{ min:0, max:100, position:'left', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} },
-           y1:{ min:0, position:'right', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{display:false} } }, _xs('hist-server'));
+      ], { y:{ min:0, max:100, position:'left', ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} },
+           y1:{ min:0, position:'right', ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{display:false} } }, _xs('hist-server'));
       _histChart('hist-host', hL, [
         _ds('CPU %', h.map(function(p){return p.cpu;}), '#58a6ff', false),
         _ds('RAM %', h.map(function(p){return p.ram;}), '#3fb950', false),
@@ -2369,4 +2378,172 @@ function disableLogTimestamps(btn) {
       .catch(function () { /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
     }
   });
+}
+
+// ── Command history: Up/Down in the command box recall what was sent ─────────────────────────────
+// Per server, the last 50, in localStorage when the browser allows it and in this page otherwise.
+// Recorded by a listener on the form's own submit, which runs before the delegated sendCommand, so
+// the send itself is untouched: same Enter, same echo, same request. Down past the newest brings
+// back what was being typed before Up was first pressed.
+var _CMPA_HIST_MAX = 50;
+var _cmpaHistMem = [];      // the in-page copy, the only one when storage is refused
+var _cmpaBrowse = null;     // the list being stepped through, taken when Up is first pressed
+var _cmpaHistIdx = -1;      // where in it the box is; -1 = not browsing
+var _cmpaDraft = '';        // what was in the box before browsing began
+
+function _cmpaHistStoreKey() { return 'sd.cmdHistory.' + serverId; }   // i18n-ignore: a storage key
+
+function _cmpaHistLoad() {
+  try {
+    var raw = localStorage.getItem(_cmpaHistStoreKey());
+    var list = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(list)) {
+      return list.filter(function (s) { return typeof s === 'string' && s; }).slice(-_CMPA_HIST_MAX);
+    }
+  } catch (e) { /* private mode, or an entry that is not ours: the in-page copy */ }
+  return _cmpaHistMem.slice();
+}
+
+function _cmpaHistPush(cmd) {
+  var list = _cmpaHistLoad();
+  if (list[list.length - 1] !== cmd) list.push(cmd);
+  _cmpaHistMem = list.slice(-_CMPA_HIST_MAX);
+  try { localStorage.setItem(_cmpaHistStoreKey(), JSON.stringify(_cmpaHistMem)); } catch (e) { /* private mode */ }
+  _cmpaBrowse = null; _cmpaHistIdx = -1; _cmpaDraft = '';
+}
+
+// The box's next value for an Up (dir -1) or Down (+1), or null to leave the key alone.
+function _cmpaHistStep(dir, current) {
+  if (_cmpaHistIdx === -1) {
+    if (dir > 0) return null;                        // Down while not browsing: nothing to do
+    _cmpaBrowse = _cmpaHistLoad();
+    if (!_cmpaBrowse.length) return null;
+    _cmpaDraft = current;
+    _cmpaHistIdx = _cmpaBrowse.length;
+  }
+  _cmpaHistIdx = Math.max(0, _cmpaHistIdx + dir);
+  if (_cmpaHistIdx < _cmpaBrowse.length) return _cmpaBrowse[_cmpaHistIdx];
+  _cmpaHistIdx = -1;                                 // past the newest: back to the draft
+  return _cmpaDraft;
+}
+
+// Whether a keydown is not ours: an IME composing text uses the arrows to pick a candidate, and a
+// modified arrow (Shift to select, and the rest) keeps what the browser does with it.
+function _cmpaHistLeaves(e) {
+  if (e.isComposing || e.keyCode === 229) return true;
+  return !!(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
+}
+
+function _cmpaHistKey(e) {
+  if (_cmpaHistLeaves(e) || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  var v = _cmpaHistStep(e.key === 'ArrowUp' ? -1 : 1, e.target.value);
+  if (v === null) return;
+  e.preventDefault();
+  e.target.value = v;
+  try { e.target.setSelectionRange(v.length, v.length); } catch (err) { /* not a text box */ }
+}
+
+(function () {
+  var form = document.getElementById('command-form');
+  var input = document.getElementById('command-input');
+  if (!form || !input) return;
+  input.addEventListener('keydown', _cmpaHistKey);
+  // Typing ends browsing: the edited line is the new draft for the next Up.
+  input.addEventListener('input', function () { _cmpaBrowse = null; _cmpaHistIdx = -1; });
+  form.addEventListener('submit', function () {
+    var cmd = input.value.trim();
+    if (!cmd) return;
+    _cmpaHistPush(cmd);
+    // A command's echo and reply land in the live console: show it if a log was in its place.
+    if (_cmpaLogKind !== 'console') _cmpaSetView('console');
+  });
+})();
+
+// ── Quick commands: one tap sends, or fills the box for one that needs an argument ───────────────
+// A send goes through the box's own submit, so it is the same request, echo and history as typing
+// it; whatever was half-typed in the box is put back afterwards.
+function cmpaQuickCommand(btn) {
+  var form = document.getElementById('command-form');
+  var input = document.getElementById('command-input');
+  var cmd = btn && btn.getAttribute('data-cmd');
+  if (!form || !input || !cmd) return;
+  if (btn.getAttribute('data-fill') === '1') {
+    input.value = cmd + ' ';
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* not a text box */ }
+    return;
+  }
+  var draft = input.value, hadFocus = document.activeElement === input;
+  input.value = cmd;
+  form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+  input.value = draft;
+  if (!hadFocus) input.blur();     // sendCommand focuses the box; on a phone that opens the keyboard
+}
+
+// ── LinuxGSM's script log and the game's own log, read-only, in place of the live console ────────
+var _cmpaLogKind = 'console';
+var _cmpaConsoleTop = null;     // where the console was scrolled to; -1 = following the bottom
+var _cmpaLogSeq = 0;
+
+function cmpaShowLog(el) { _cmpaSetView(el && el.value ? el.value : 'console'); }
+
+function _cmpaSetView(kind) {
+  var view = document.getElementById('cmpa-log-view');
+  if (!view || !consoleEl) return;
+  var toLog = kind !== 'console';
+  if (toLog && _cmpaLogKind === 'console') _cmpaConsoleTop = consoleAtBottom() ? -1 : consoleEl.scrollTop;
+  _cmpaLogKind = kind;
+  consoleEl.hidden = toLog;
+  view.hidden = !toLog;
+  document.querySelectorAll('.cmpa-console-only').forEach(function (b) { b.classList.toggle('d-none', toLog); });
+  var sel = document.getElementById('cmpa-log-select');
+  if (sel && sel.value !== kind) sel.value = kind;
+  if (toLog) cmpaLoadLog();
+  else _cmpaBackToConsole();
+}
+
+// The console again, scrolled where it was left: at the bottom if it was following it.
+function _cmpaBackToConsole() {
+  _cmpaLogSeq++;                  // a read still in flight is no longer wanted
+  if (_cmpaConsoleTop === null || _cmpaConsoleTop === -1) stickConsole();
+  else consoleEl.scrollTop = _cmpaConsoleTop;
+}
+
+// What to show for one read's reply. "unreadable" is never an empty log: an SSH read that failed
+// comes back empty, and saying "empty" about a log the panel could not open would be a false fact.
+function _cmpaLogShown(d, kind) {
+  d = d || {};
+  if (d.error) return {file: '', text: '', note: d.error};
+  if (d.state === 'ok') {
+    var lines = Array.isArray(d.lines) ? d.lines : [];
+    return {file: d.file || '', text: lines.join('\n'), note: lines.length ? '' : t('This log is empty.')};
+  }
+  if (d.state === 'missing') {
+    return {file: '', text: '', note: kind === 'game'
+      ? t('No game log found. Not every game keeps one where LinuxGSM can link to it.')
+      : t('LinuxGSM has not written this log yet.')};
+  }
+  return {file: '', text: '', note: t("Couldn't read this log. The host may not have answered; try Refresh.")};
+}
+
+function cmpaLoadLog() {
+  var kind = _cmpaLogKind;
+  var out = document.getElementById('cmpa-log-output');
+  var note = document.getElementById('cmpa-log-note');
+  var file = document.getElementById('cmpa-log-file');
+  if (kind === 'console' || !out || !note || !file) return;
+  var seq = ++_cmpaLogSeq;
+  note.textContent = t('Loading…');
+  var show = function (d) {
+    if (seq !== _cmpaLogSeq) return;          // a newer read, or back on the console
+    var s = _cmpaLogShown(d, kind);
+    file.textContent = s.file;
+    out.textContent = s.text;
+    note.textContent = s.note;
+    out.scrollTop = out.scrollHeight;
+  };
+  fetch(MOUNT + '/api/server/' + serverId + '/log/' + kind, {cache: 'no-store'})
+    .then(function (r) { return r.json(); })
+    .then(show)
+    .catch(function () { show({state: 'unreadable'}); });
 }

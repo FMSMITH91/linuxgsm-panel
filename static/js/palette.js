@@ -49,6 +49,8 @@ var PALETTE_SECTIONS = [
     kw: 'api token bearer script bot integration curl' },
   { page: '/account',  hash: 'sec-language',     label: 'Your language',
     kw: 'language translate spanish french espanol francais locale' },
+  { page: '/account',  hash: 'sec-language',     label: 'Light or dark theme',
+    kw: 'theme light dark mode night appearance colour color scheme' },
   { page: '/account',  hash: 'sec-layout',       label: 'Dashboard layout',
     kw: 'layout dashboard tiles reorder rearrange panels customise customize' },
   { page: '/settings', hash: 'sec-branding',     label: 'Branding & accent colour',

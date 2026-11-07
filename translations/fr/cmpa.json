@@ -1,0 +1,13 @@
+{
+  "Which log to show": "Journal à afficher",
+  "Script log": "Journal du script",
+  "Game log": "Journal du jeu",
+  "Read the log again": "Relire le journal",
+  "Quick commands": "Commandes rapides",
+  "Send this command now": "Envoyer cette commande maintenant",
+  "Put this in the command box": "Mettre ceci dans la zone de commande",
+  "This log is empty.": "Ce journal est vide.",
+  "No game log found. Not every game keeps one where LinuxGSM can link to it.": "Aucun journal du jeu trouvé. Tous les jeux n'en tiennent pas un là où LinuxGSM peut y faire un lien.",
+  "LinuxGSM has not written this log yet.": "LinuxGSM n'a pas encore écrit ce journal.",
+  "Couldn't read this log. The host may not have answered; try Refresh.": "Impossible de lire ce journal. L'hôte n'a peut-être pas répondu ; essayez Actualiser."
+}

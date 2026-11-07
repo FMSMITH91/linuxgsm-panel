@@ -1185,10 +1185,11 @@ _out_l8_140 = _run_js75(_name_l8_140, (
     "              '5': 'arch-rolling', '6': 'debian'};\n"
     "global.fetch = (u) => Promise.resolve({ok: true,\n"
     "  json: () => Promise.resolve({os_slug: slug[u.split('/')[3]]})});\n"
-    "global.document = {getElementById: id => ({'game-type-select': sel, 'remote-select': host})[id] || null};\n"
+    "global.document = {getElementById: id => ({'game-type-select': sel, 'remote-select': host})[id] || null,\n"
+    "  querySelectorAll: () => []};\n"
     + "".join(_cut_or75(_js75("manage_servers.js"), "function %s(" % _f140) + "\n" for _f140 in (
         "_capForHost", "_osOlder", "_osVersionParts", "_osVersionBelow", "_withoutParenNote",
-        "_hostStillSelected", "filterGamesForHost"))
+        "_hostStillSelected", "filterGamesForHost", "syncGameTiles"))
     + "(async () => { const got = {};\n"
     "  for (const h of ['1', '2', '3', '4', '5', '6']) { host.value = h; filterGamesForHost(); await settle();\n"
     "    got[slug[h]] = [btl.textContent, btl.disabled]; }\n"

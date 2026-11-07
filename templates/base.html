@@ -1,8 +1,24 @@
 <!DOCTYPE html>
-<html lang="{{ current_lang|default('en') }}" data-bs-theme="dark">
+{# The colour scheme is decided HERE, before anything paints: a fixed choice by the server, and
+   "system" by the one-line script below, which runs before the first stylesheet. Deciding it later
+   would paint the page in the wrong scheme first. #}
+<html lang="{{ current_lang|default('en') }}" data-bs-theme="{{ 'light' if ui_theme == 'light' else 'dark' }}" data-theme-pref="{{ ui_theme|default('system') }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script nonce="{{ csp_nonce }}">
+    (function(d){ if (d.getAttribute('data-theme-pref') === 'system' && window.matchMedia
+        && window.matchMedia('(prefers-color-scheme: light)').matches) d.setAttribute('data-bs-theme', 'light'); })(document.documentElement);
+  </script>
+  {# Install as an app: the manifest is public (fetched without the session) and is built per
+     request, so its start_url and scope follow the prefix the panel is served under. #}
+  <link rel="manifest" href="{{ url_for('web_manifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  {# The browser bar takes the topbar's colour; "system" gives one per scheme. #}
+  {% if ui_theme == 'light' %}<meta name="theme-color" content="#ffffff">
+  {% elif ui_theme == 'dark' %}<meta name="theme-color" content="#111827">
+  {% else %}<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)">{% endif %}
   <script nonce="{{ csp_nonce }}">
     // Defined HERE, not in the footer: a page's own scripts (in the content block) parse before the
     // footer runs, which is why five templates grew their own copy — two of which returned the RAW
@@ -284,6 +300,8 @@
   </div>
 </main>
 
+{% if show_app_chrome and whats_new %}{% include "_whats_new.html" %}{% endif %}
+
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/socketio/socket.io.min.js') }}"></script>
 {# The only two values in panel.js the SERVER has to fill in. Kept inline so the 38KB of behaviour
@@ -340,6 +358,7 @@ window.CSRF = {{ csrf_token()|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/install_progress.js') }}"></script>
 {% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/chrome.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/app_shell.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

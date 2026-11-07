@@ -39,15 +39,34 @@
   </div>
 
   <div class="card" id="sec-language">
-    <div class="card-header"><i class="bi bi-translate"></i> Language</div>
+    <div class="card-header"><i class="bi bi-translate"></i> Language and theme</div>
     <div class="card-body">
-      <p class="text-secondary small mb-2">Choose the language for the panel interface. This preference is saved to your account and follows you across devices.</p>
-      <select class="form-select form-select-sm" style="max-width: 260px;" aria-label="Language"
-              data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
-        {% for code, name in languages.items() %}
-        <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
-        {% endfor %}
-      </select>
+      <p class="text-secondary small mb-2">Both are saved to your account and follow you across devices.</p>
+      {# One card for the two, side by side: a card each cost a phone another screen-height of
+         header and padding for one select. #}
+      <div class="row g-2">
+        <div class="col-6">
+          <label class="form-label" for="acct-lang">Language</label>
+          <select id="acct-lang" class="form-select form-select-sm"
+                  data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
+            {% for code, name in languages.items() %}
+            <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6">
+          <label class="form-label" for="acct-theme">Theme</label>
+          {# Read off current_user, like the layout card below: account.html is rendered from two
+             routes and neither passes it. #}
+          <select id="acct-theme" class="form-select form-select-sm"
+                  data-theme-select data-theme-url="{{ url_for('account_set_theme') }}">
+            <option value="system" {% if current_user.ui_theme == 'system' %}selected{% endif %}>System</option>
+            <option value="dark" {% if current_user.ui_theme == 'dark' %}selected{% endif %}>Dark</option>
+            <option value="light" {% if current_user.ui_theme == 'light' %}selected{% endif %}>Light</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-text">System follows your device's light or dark setting.</div>
     </div>
   </div>
 
