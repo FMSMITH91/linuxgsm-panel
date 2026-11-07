@@ -428,10 +428,13 @@ if _tout_cmpd is not None:
           _tout_cmpd.get("dis") == [False, True, True] and _tout_cmpd.get("afterBtl") == ["", 0]
           and _tout_cmpd.get("val") == "rust" and _tout_cmpd.get("events") == [["change", True]]
           and _tout_cmpd.get("pressed") == ["true", "false", "false"], repr(_tout_cmpd))
-# The icons wait for the page's load event: given their URLs in the markup, Chrome's lazy-load
-# distance fetched most of the grid at once and Lighthouse measured the install page's first
-# paint at 2.8 s (about 1.1 s elsewhere). The tile's <img> names its script in data-icon-script
-# only, and the script builds the URL (escaped: CodeQL's js/xss-through-dom, #487).
+# The icons wait for the page's load event, and then load only for the tiles the grid's own scroll
+# box shows. Given their URLs in the markup, Chrome's lazy-load distance fetched most of the grid at
+# once; and loaded all at once after load, the hundred-odd icon requests (each a linuxgsm.com fetch,
+# one at a time, until the panel caches it) were most of the page's requests, so Lighthouse's
+# simulator took their ~1 s as this host's response time and put the first paint at 4.5 s. The
+# tile's <img> names its script in data-icon-script only, and the script builds the URL (escaped:
+# CodeQL's js/xss-through-dom, #487).
 _tile_img_cmpd = _re152.search(r'<img [^>]*data-icon-script[^>]*>', _tpl_cmpd)
 check("install page: a tile names its icon's script in data-icon-script, so the markup itself fetches "
       "no icon",
@@ -445,8 +448,9 @@ check("install page: the URL the script builds is the icon route's own (/game-ic
 _wire_at_cmpd = _MS_cmpd.find("if (document.readyState === 'complete') startGameIcons();")
 _wire_cmpd = (_MS_cmpd[_wire_at_cmpd:_MS_cmpd.find("\n", _MS_cmpd.find("\n", _wire_at_cmpd) + 1)]
               if _wire_at_cmpd >= 0 else "/* MISSING the load wiring */")
-_name_icons_cmpd = ("install page: the icons start on the page's load event, not before, at the "
-                    "mount's /game-icon/ URL with the script name escaped")
+_name_icons_cmpd = ("install page: the icons start on the page's load event, not before, and then "
+                    "only for the tiles the grid's scroll box shows, at the mount's /game-icon/ URL "
+                    "with the script name escaped")
 _iout_cmpd = _run_js75(_name_icons_cmpd, (
     "global.window = global; const on = {}; global.MOUNT = '/p';\n"
     "window.addEventListener = (ev, fn) => { on[ev] = fn; };\n"
@@ -454,16 +458,31 @@ _iout_cmpd = _run_js75(_name_icons_cmpd, (
     "  return {src: '', getAttribute: k => (k in a ? a[k] : null), removeAttribute: k => { delete a[k]; },\n"
     "    has: () => 'data-icon-script' in a}; }\n"
     "const imgs = [img('rustserver'), img('../x\"><b')];\n"
-    "global.document = {readyState: 'loading', querySelectorAll: () => imgs.filter(i => i.has())};\n"
+    "const grid = {querySelectorAll: () => imgs.filter(i => i.has())};\n"
+    "global.document = {readyState: 'loading', getElementById: id => (id === 'game-grid' ? grid : null)};\n"
+    "const io = {seen: [], dropped: []};\n"
+    "global.IntersectionObserver = function (cb, opts) { io.cb = cb; io.opts = opts;\n"
+    "  this.observe = el => io.seen.push(el); this.unobserve = el => io.dropped.push(el); };\n"
+    + _cut_or75(_MS_cmpd, "function _loadGameIcon(") + "\n"
     + _cut_or75(_MS_cmpd, "function startGameIcons(") + "\n" + _wire_cmpd + "\n"
-    "const before = imgs.map(i => i.src);\n"
+    "const src = () => imgs.map(i => i.src);\n"
+    "const before = src();\n"
     "if (on.load) on.load();\n"
-    "console.log(JSON.stringify({before, after: imgs.map(i => i.src), left: imgs.map(i => i.has()),\n"
-    "  waited: typeof on.load}));\n"))
+    "const atLoad = src();\n"
+    "if (io.cb) io.cb([{target: imgs[0], isIntersecting: true}, {target: imgs[1], isIntersecting: false}]);\n"
+    "const inView = src();\n"
+    "if (io.cb) io.cb([{target: imgs[1], isIntersecting: true}]);\n"
+    "console.log(JSON.stringify({before, atLoad, inView, after: src(), left: imgs.map(i => i.has()),\n"
+    "  waited: typeof on.load, root: !!io.opts && io.opts.root === grid, observed: io.seen.length,\n"
+    "  dropped: io.dropped.map(d => imgs.indexOf(d))}));\n"))
 if _iout_cmpd is not None:
     check(_name_icons_cmpd,
           _iout_cmpd.get("before") == ["", ""] and _iout_cmpd.get("waited") == "function"
+          and _iout_cmpd.get("atLoad") == ["", ""] and _iout_cmpd.get("root") is True
+          and _iout_cmpd.get("observed") == 2
+          and _iout_cmpd.get("inView") == ["/p/game-icon/rustserver", ""]
           and _iout_cmpd.get("after") == ["/p/game-icon/rustserver", "/p/game-icon/..%2Fx%22%3E%3Cb"]
-          and _iout_cmpd.get("left") == [False, False], repr(_iout_cmpd))
+          and _iout_cmpd.get("left") == [False, False] and _iout_cmpd.get("dropped") == [0, 1],
+          repr(_iout_cmpd))
 check("part152: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP152_START, repr(_P9_TRIPPED[_TRIP152_START:]))
