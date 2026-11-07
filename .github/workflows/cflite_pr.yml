@@ -70,6 +70,7 @@ jobs:
               'panel/core/validation.py'
               'panel/core/clock.py'
               'panel/core/i18n.py'
+              'panel/core/whats_new.py'
               # The last module every harness pre-loads (part29 counts the pre-load too).
               'panel/core/config.py'
               'panel/security/privileged.py'

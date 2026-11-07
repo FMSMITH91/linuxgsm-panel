@@ -931,5 +931,6 @@
   "it has sudo rules of its own": "tiene sus propias reglas de sudo",
   "it is root": "es root",
   "it is the account the panel signs in to this host as": "es la cuenta con la que el panel inicia sesión en este host",
-  "it is the panel's own account": "es la propia cuenta del panel"
+  "it is the panel's own account": "es la propia cuenta del panel",
+  "What's new in this update:": "Novedades de esta actualización:"
 }

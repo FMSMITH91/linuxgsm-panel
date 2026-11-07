@@ -281,9 +281,19 @@
       <!-- Update status + actions -->
       <div class="col-md-6">
         <div id="pu-status" class="small text-secondary"><i class="bi bi-arrow-repeat"></i> Checking for updates…</div>
+        {# What the update brings, readable before anyone clicks Update: the changelog entries it adds
+           (the lines What's new shows after it), each opening to its text, then the commits, folded
+           under them when there are entries. renderUpdate fills both. #}
         <div id="pu-changes" class="small mt-2" style="display:none;">
-          <div class="text-secondary mb-1">Changes since your version:</div>
-          <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
+          <div id="pu-notes" style="display:none;">
+            <div class="text-secondary mb-1">What's new in this update:</div>
+            <ul id="pu-notes-list" class="wn-list mb-1"></ul>
+            <a id="pu-notes-more" class="small" target="_blank" rel="noopener noreferrer" style="display:none;"></a>
+          </div>
+          <details id="pu-commits">
+            <summary class="text-secondary">Changes since your version:</summary>
+            <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
+          </details>
         </div>
         {# flex-wrap: an update's outcome can be two sentences (the installer's own reason), and
            squeezed beside the buttons on a phone it became a 90px column. #pu-msg takes its own

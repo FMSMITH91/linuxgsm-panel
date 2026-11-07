@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 import subprocess
-from panel.core import i18n, terminal
+from panel.core import i18n, terminal, whats_new
 from panel.core.validation import canonical_ip, canonical_ip_or_network, ip_address_or_none
 import threading
 import time
@@ -2016,6 +2016,36 @@ def _runtime_changelog(rev_range, runtime_only=True):
     return result
 
 
+# The card lists, before anyone clicks Update, the CHANGELOG entries the update brings: the same
+# plain-language lines the What's-new card shows after it, which say far more than commit subjects.
+# Five, as What's new shows before folding: on a phone more push Update off the screen.
+_CHANGELOG_PATH = "docs/CHANGELOG.md"
+_RELEASE_NOTES_MAX = 5
+
+
+def _release_notes(target):
+    """What updating to `target` adds to the changelog, as (entries, how many more), newest first.
+
+    An entry is new when its key (whats_new: a hash of its bold title) is not in this checkout's
+    own CHANGELOG, so a bullet that only moved or had its body edited is not news. ([], 0) when
+    either file cannot be read: with HEAD's unreadable every entry would read as new, so the card
+    falls back to the commits alone. `target` is a sha the caller has already resolved."""
+    new, _, rc = _git(["show", "%s:%s" % (target, _CHANGELOG_PATH)])
+    old, _, orc = _git(["show", "HEAD:" + _CHANGELOG_PATH])
+    if rc != 0 or orc != 0 or not new or not old:
+        return [], 0
+    known = {e["key"] for e in whats_new.parse(old)}
+    notes = [{"category": e["category"], "title": e["title"], "body": e["body"]}
+             for e in whats_new.parse(new) if e["key"] not in known]
+    return notes[:_RELEASE_NOTES_MAX], max(0, len(notes) - _RELEASE_NOTES_MAX)
+
+
+def _release_notes_fields(target):
+    """_release_notes as the two keys an update-available status carries."""
+    notes, more = _release_notes(target)
+    return {"release_notes": notes, "release_notes_more": more}
+
+
 # Release signatures. install.sh moves a checkout only to a commit signed with the release SSH
 # key ("Release signatures" there has the why), so the card offers only such a commit: update_available
 # stays true exactly when the installer would install it. The signatures branch holds no code and is
@@ -2218,7 +2248,8 @@ def _compute_update_status():
                 "behind": len(rc_log) or behind_n, "behind_tip": behind_n,
                 "remote_version": tgt_ver or "?",
                 "target_sha": rem_full.strip(),
-                "changes": rc_log[:10]}
+                "changes": rc_log[:10],
+                **_release_notes_fields(rem_full.strip())}
 
     # Don't surface an update until the target commit has cleared CI on GitHub — otherwise
     # the badge pops the instant a push lands, before the workflows finish (or even if they
@@ -2366,6 +2397,7 @@ def _compute_update_status():
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
         "changes": shown_log[:10],
+        **_release_notes_fields(target_sha),
     }
 
 

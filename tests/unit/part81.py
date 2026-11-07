@@ -408,13 +408,15 @@ _RMH81 = _read81("panel", "static", "js", "remote_manage_host.js")
 _upd_prog81 = (
     "global.window = global; global.MOUNT = ''; global.escapeHtml = s => String(s); global.t = s => s;\n"
     "global.tfHtml = (k, v) => k.replace(/\\{(\\w+)\\}/g, (m, n) => (v[n] && v[n].html) || v[n]);\n"
-    "const el = () => ({innerHTML: '', textContent: '', style: {}, appendChild(){}});\n"
+    "const el = () => ({innerHTML: '', textContent: '', style: {}, appendChild(){}, setAttribute(){},\n"
+    "  removeAttribute(){}});\n"
     "const els = {'pu-status': el(), 'pu-update-btn': el(), 'pu-changes': el(), 'pu-current': el(),\n"
-    "  'pu-changes-list': el()};\n"
+    "  'pu-changes-list': el(), 'pu-notes': el(), 'pu-notes-list': el(), 'pu-notes-more': el(),\n"
+    "  'pu-commits': el()};\n"
     "els['pu-current'].textContent = '2026.10.13 · a1b2c3d';\n"
     "global.document = {getElementById: id => els[id] || null};\n"
     "let answer; global.fetch = () => answer;\n"
-    "%s\n%s\n%s\n"
+    "%s\n%s\n%s\n%s\n%s\n"
     "const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };\n"
     "const st = els['pu-status'], btn = els['pu-update-btn'];\n"
     "(async () => {\n"
@@ -427,7 +429,8 @@ _upd_prog81 = (
     "  answer = Promise.reject(new Error('offline'));\n"
     "  checkPanelUpdate(true); await settle(); const failedAfterOffer = [st.innerHTML, btn.style.display];\n"
     "  console.log(JSON.stringify({failedRoute, shaOnly, failedFirst, failedAfterOffer}));\n"
-    "})();\n") % (_line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("),
+    "})();\n") % (_line81(_RMH81, "var _r20cNoteCats"), _cut_or81(_RMH81, "function renderReleaseNotes("),
+                  _line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("),
                   _cut_or81(_RMH81, "function checkPanelUpdate("), _json81.dumps(_upd81))
 _card81 = _node81("remote_manage_host.js: the update card when the check fails", _upd_prog81)
 # The route's own answer is Python's to check, with or without node (review 1015a: it sat inside the
@@ -448,6 +451,79 @@ if _card81 is not None:
           (_card81.get("failedFirst") or [""])[0] == _ok81 + "You're up to date.</span>"
           and "Update available" in (_card81.get("failedAfterOffer") or [""])[0]
           and (_card81.get("failedAfterOffer") or ["", "x"])[1] == "", repr(_card81))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 8b. The update card shows what the update brings before anyone clicks Update
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The card listed commit subjects only. It now lists the changelog entries the update adds, as
+# What's new will after it (a category badge, the title, opening to the text), with the commits
+# folded under them; with no entries the commits are open, as before. All of it as text.
+_notes_prog81 = (
+    "global.window = global; global.MOUNT = ''; global.escapeHtml = s => String(s);\n"
+    "global.t = s => ({Added: 'Ajouté', Fixed: 'Corrigé'})[s] || s;\n"
+    "global.tf = (k, v) => global.t(k).replace(/\\{(\\w+)\\}/g, (m, n) => v[n]);\n"
+    "global.tfHtml = (k, v) => k.replace(/\\{(\\w+)\\}/g, (m, n) => (v[n] && v[n].html) || v[n]);\n"
+    "const el = (tag) => ({tag, innerHTML: '', textContent: '', style: {}, attrs: {}, kids: [],\n"
+    "  set innerHTML(v) { this._h = v; if (v === '') this.kids = []; }, get innerHTML() { return this._h || ''; },\n"
+    "  appendChild(c) { this.kids.push(c); return c; }, setAttribute(k, v) { this.attrs[k] = v; },\n"
+    "  removeAttribute(k) { delete this.attrs[k]; if (k === 'href') delete this.href; }});\n"
+    "const els = {'pu-status': el(), 'pu-update-btn': el(), 'pu-changes': el(), 'pu-current': el(),\n"
+    "  'pu-changes-list': el(), 'pu-notes': el(), 'pu-notes-list': el(), 'pu-notes-more': el(),\n"
+    "  'pu-commits': el()};\n"
+    "global.document = {getElementById: id => els[id] || null, createElement: el,\n"
+    "  createTextNode: s => ({tag: '#text', textContent: s})};\n"
+    "function appendSubject(li, s) { li.appendChild({tag: '#text', textContent: s}); }\n"
+    "%s\n%s\n%s\n%s\n"
+    "const text = n => n.tag === '#text' ? n.textContent : (n.textContent || '') + (n.kids || []).map(text).join('');\n"
+    "const card = () => ({\n"
+    "  notes: els['pu-notes-list'].kids.map(li => { const d = li.kids[0], s = d.kids[0];\n"
+    "    return {cat: s.kids[0].textContent, catRaw: 'data-no-i18n' in s.kids[0].attrs, title: s.kids[2].textContent,\n"
+    "            titleRaw: 'data-no-i18n' in s.kids[2].attrs, body: d.kids[1] ? d.kids[1].textContent : null}; }),\n"
+    "  notesShown: els['pu-notes'].style.display, commitsOpen: els['pu-commits'].open,\n"
+    "  changesShown: els['pu-changes'].style.display, more: els['pu-notes-more'].style.display,\n"
+    "  moreHref: els['pu-notes-more'].href || null, moreText: els['pu-notes-more'].textContent});\n"
+    "const base = {git: true, update_available: true, behind: 1, remote_version: '2026.11.8',\n"
+    "  current_sha: 'a1b2c3d', repo_url: 'https://github.com/o/r', changes: ['abc1234 x']};\n"
+    "const out = {};\n"
+    "renderUpdate(Object.assign({}, base, {target_sha: 'abcdef1234567',\n"
+    "  release_notes: [{category: 'Added', title: 'A <b>new</b> thing.', body: 'What it does.'},\n"
+    "                  {category: 'Odd', title: 'No body.', body: ''}], release_notes_more: 3}));\n"
+    "out.withNotes = card();\n"
+    "renderUpdate(Object.assign({}, base, {target_sha: 'not-a-sha', release_notes: [{category: 'Fixed', title: 'T', body: ''}],\n"
+    "  release_notes_more: 2}));\n"
+    "out.badSha = card();\n"
+    "renderUpdate(Object.assign({}, base, {target_sha: 'abcdef1234567'}));\n"
+    "out.none = card();\n"
+    "console.log(JSON.stringify(out));\n") % (
+        _line81(_RMH81, "var _r20cNoteCats"), _cut_or81(_RMH81, "function renderReleaseNotes("),
+        _line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("))
+_notes81 = _node81("remote_manage_host.js: the update card's changelog entries", _notes_prog81)
+if _notes81 is not None:
+    _wn81 = _notes81.get("withNotes") or {}
+    check("update card: an update lists the changelog entries it adds, as text: a translated category "
+          "badge, the title and its body (the card listed commit subjects only)",
+          _wn81.get("notes") == [
+              {"cat": "Ajouté", "catRaw": False, "title": "A <b>new</b> thing.", "titleRaw": True,
+               "body": "What it does."},
+              {"cat": "Odd", "catRaw": True, "title": "No body.", "titleRaw": True, "body": None}]
+          and _wn81.get("notesShown") == "" and _wn81.get("changesShown") == "", repr(_notes81))
+    check("update card: ...the commits fold under them, and the rest link to the offered commit's "
+          "changelog",
+          _wn81.get("commitsOpen") is False and _wn81.get("more") == ""
+          and _wn81.get("moreHref") == "https://github.com/o/r/blob/abcdef1234567/docs/CHANGELOG.md"
+          and _wn81.get("moreText") == "…and 3 more in the full changelog.", repr(_wn81))
+    check("update card: ...a target that is not a hex sha gets no link",
+          (_notes81.get("badSha") or {}).get("more") == "none"
+          and (_notes81.get("badSha") or {}).get("moreHref") is None, repr(_notes81.get("badSha")))
+    check("update card: ...and with no entries the list is hidden and the commits are open, as before "
+          "(a list left over from the last check is cleared)",
+          (_notes81.get("none") or {}).get("notes") == [] and (_notes81.get("none") or {}).get("notesShown") == "none"
+          and (_notes81.get("none") or {}).get("commitsOpen") is True
+          and (_notes81.get("none") or {}).get("changesShown") == "", repr(_notes81.get("none")))
+check("update card: the entries' chrome is translated (es, fr)",
+      all(k in c for c in (_ES81, _FR81) for k in ("What's new in this update:",
+                                                   "…and {n} more in the full changelog.")), "missing")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

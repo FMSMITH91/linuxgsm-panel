@@ -574,5 +574,6 @@
   "Installing Tailscale on the panel host… (up to a minute)": "Installation de Tailscale sur l'hôte du panel… (jusqu'à une minute)",
   "Configuring...": "Configuration...",
   "Any address": "Toute adresse",
-  "1.2.3.4 or 10.0.0.0/8": "1.2.3.4 ou 10.0.0.0/8"
+  "1.2.3.4 or 10.0.0.0/8": "1.2.3.4 ou 10.0.0.0/8",
+  "…and {n} more in the full changelog.": "…et {n} de plus dans le journal des modifications complet."
 }

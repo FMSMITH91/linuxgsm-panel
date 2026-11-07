@@ -318,6 +318,44 @@ function appendSubject(li, text, repo){
   if(last<text.length) li.appendChild(document.createTextNode(text.slice(last)));
 }
 
+// The changelog entries an update adds, as What's new will show them once it is installed: a
+// category badge and the title, opening to the body. The changelog's own English, as text only.
+// Returns how many it listed.
+var _r20cNoteCats={Added:1, Changed:1, Fixed:1, Removed:1, Security:1};
+function renderReleaseNotes(d, repo){
+  var box=document.getElementById('pu-notes'), ul=document.getElementById('pu-notes-list');
+  var more=document.getElementById('pu-notes-more');
+  var notes=Array.isArray(d.release_notes)?d.release_notes:[];
+  ul.innerHTML='';
+  notes.forEach(function(n){
+    var li=document.createElement('li'), det=document.createElement('details');
+    var sum=document.createElement('summary'), cat=document.createElement('span');
+    var title=document.createElement('span');
+    cat.className='badge wn-cat';
+    // A known category is a catalog word; anything else is the file's own text.
+    if(_r20cNoteCats[n.category]===1){ cat.textContent=t(n.category); }
+    else { cat.textContent=String(n.category||''); cat.setAttribute('data-no-i18n',''); }
+    title.textContent=String(n.title||''); title.setAttribute('data-no-i18n','');
+    sum.appendChild(cat); sum.appendChild(document.createTextNode(' ')); sum.appendChild(title);
+    det.appendChild(sum);
+    if(n.body){
+      var p=document.createElement('p'); p.className='wn-body'; p.setAttribute('data-no-i18n','');
+      p.textContent=String(n.body); det.appendChild(p);
+    }
+    li.appendChild(det); ul.appendChild(li);
+  });
+  // The rest are in the changelog of the commit being offered, linked only from a vetted repo URL
+  // and a sha that is hex, as the commit links are.
+  var extra=Number(d.release_notes_more)||0, sha=String(d.target_sha||'');
+  if(extra>0 && repo && /^[0-9a-f]{7,40}$/.test(sha)){
+    more.href=repo+'/blob/'+sha+'/docs/CHANGELOG.md';
+    more.textContent=tf('…and {n} more in the full changelog.', {n: extra});
+    more.style.display='';
+  } else { more.removeAttribute('href'); more.style.display='none'; }
+  box.style.display=notes.length?'':'none';
+  return notes.length;
+}
+
 // What the card last showed, so a check that could not be made puts it back (see checkPanelUpdate).
 var _r20cUpdateShown=null;
 function renderUpdate(d){
@@ -364,7 +402,10 @@ function renderUpdate(d){
       }
       ul.appendChild(li);
     });
-    changes.style.display=(d.changes&&d.changes.length)?'':'none';
+    var nNotes=renderReleaseNotes(d, repo);
+    // With entries above it, the commit list is the detail: folded. Without, it is all there is.
+    document.getElementById('pu-commits').open=!nNotes;
+    changes.style.display=(nNotes||(d.changes&&d.changes.length))?'':'none';
   } else {
     // Two states and nothing else: an update to install,
     // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
