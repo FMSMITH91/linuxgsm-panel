@@ -28,6 +28,7 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window
 from panel.services import lgsm_players as _lgp
 import concurrent.futures
 import functools
+import posixpath
 import re
 import shlex
 import threading
@@ -1703,7 +1704,8 @@ def _cmpa_log_rel(gs, kind):
     the game's gamelogdir is log/server itself. Which file in it is newest is decided on the host.
     """
     if kind == "script":
-        return "log/script/" + gs.lgsm_name + "-script.log"
+        name = gs.lgsm_name + "-script.log"
+        return posixpath.join("log", "script", name)
     return "log/server"
 
 
