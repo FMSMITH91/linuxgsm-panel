@@ -667,8 +667,8 @@ def _sc9_vars():
 # by hand: version = the action's default at that SHA (its action.yml); digest = pkgs.tailscale.com's
 # tarball, verified through Tailscale's distsign chain. A new action SHA fails here until that is
 # redone and the row added.
-_TS_PINS29 = {"99a8333667fff04fdd6cffb46dfd409f8329a7bf":
-              ("1.104.2", "512f613ed7d04fc7282f7dc5bd76aa105aae28168fbb9357eb749ebcbc29f0ae")}
+_TS_PINS29 = {"064b10558093f38325e838ddea35486bdc6b1d5c":
+              ("1.104.4", "624ea093d47d62cf56f17b8332d74b8decda4a1faa610ebc60a1de334b2b3dc9")}
 
 
 def _sc6_tailscale():
