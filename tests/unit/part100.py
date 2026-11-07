@@ -391,7 +391,7 @@ check("phased updates: a host with one real update and four deferred is announce
       _mx100.get("summary") == [(P9_HOST, 1)] and len(_mx100.get("told") or []) == 1
       and "1 security update of 1 waiting" in repr(_mx100.get("told")), repr(_mx100))
 
-_RMJ100 = open(os.path.join(_root, "static", "js", "remote_manage.js"), encoding="utf-8").read()
+_RMJ100 = open(os.path.join(_root, "panel", "static", "js", "remote_manage.js"), encoding="utf-8").read()
 
 
 def _cut_or100(head):
@@ -438,8 +438,8 @@ else:
 _cat100 = {}
 for _L100 in ("es", "fr"):
     _cat100[_L100] = {}
-    for _f100 in os.listdir(os.path.join(_root, "translations", _L100)):
-        with open(os.path.join(_root, "translations", _L100, _f100), encoding="utf-8") as _fh100:
+    for _f100 in os.listdir(os.path.join(_root, "panel", "translations", _L100)):
+        with open(os.path.join(_root, "panel", "translations", _L100, _f100), encoding="utf-8") as _fh100:
             _cat100[_L100].update(_json100.load(_fh100))
 _new100 = ["Held back by apt (Ubuntu's phased rollout, or kept back) — an upgrade does not install these yet.",
            "Couldn't read which of these apt is holding back."]

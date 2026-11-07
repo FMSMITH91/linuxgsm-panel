@@ -65,7 +65,7 @@ check("error replies: a permission denial carries `error` beside `message`, the 
 # The catch-all's 500 reply as it was before `error` (Refresh must not need that field to tell).
 _rep90["500"] = (500, {"success": False, "message": "MSG-500"})
 
-_FWJS90 = _read90("static", "js", "remote_firewall.js")
+_FWJS90 = _read90("panel", "static", "js", "remote_firewall.js")
 _name90 = "firewall refresh: a reply that is not a reading"
 _out90 = _node90(_name90, _DOM87 + _SETTLE47 + (
     "global.remoteId = 7; let unlisted = null, toasts = [];\n"
@@ -115,7 +115,7 @@ if _out90 is not None:
           repr(_o90))
 
 # ...and public SSH's mode label, which checks `error`, reads a real denial reply as unknown.
-_RMH90 = _read90("static", "js", "remote_manage_host.js")
+_RMH90 = _read90("panel", "static", "js", "remote_manage_host.js")
 _name90 = "public SSH label: an error reply"
 _out90 = _node90(_name90, (
     "var SSH_LABELS = {allow: 'a', limit: 'l', off: 'o'};\n"
@@ -136,7 +136,7 @@ if _out90 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. A live language switch past one element with unparseable data-i18n-vars
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_I18N90 = _read90("static", "js", "i18n.js")
+_I18N90 = _read90("panel", "static", "js", "i18n.js")
 _set90 = _I18N90[_I18N90.find("window.setLang = function"):]
 _set90 = _cut_or90(_set90, "window.setLang = function") if _set90 else "/* MISSING setLang */"
 _name90 = "live language switch: one bad data-i18n-vars"
@@ -162,7 +162,7 @@ if _out90 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. The OS-updates card's count is a number at the sink
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM90 = _read90("static", "js", "remote_manage.js")
+_RM90 = _read90("panel", "static", "js", "remote_manage.js")
 _name90 = "OS updates card: the count at the innerHTML sink"
 _out90 = _node90(_name90, _DOM87 + (
     "function isSecurityPkg(){ return false; } global.setInstallUpdatesState = () => {};\n"
@@ -185,7 +185,7 @@ if _out90 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # readEntries' error callback resolved the folder with none of its children, so a listing that
 # failed after its first batch dropped that batch too; and nothing said what was skipped.
-_SF90 = _read90("static", "js", "server_files.js")
+_SF90 = _read90("panel", "static", "js", "server_files.js")
 _drop90 = "card.addEventListener('drop', function(ev){"
 _name90 = "file drop: an unreadable part of a dropped folder"
 _out90 = _node90(_name90, _SETTLE47 + (

@@ -1506,7 +1506,7 @@ def _rv43_page_scripts(html):
         rel = _re43.sub(r"^.*?/static/", "", src.group(1)).split("?")[0]
         if rel.startswith("vendor/"):
             continue
-        with open(os.path.join(_ROOT43, "static", rel), encoding="utf-8") as fh:
+        with open(os.path.join(_ROOT43, "panel", "static", rel), encoding="utf-8") as fh:
             out.append((rel, fh.read()))
     return out
 
@@ -1532,7 +1532,7 @@ def _rv43_js_offers():
 
     -1 when any place builds the button itself instead.
     """
-    with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT43, "panel", "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
         src = fh.read()
     body = src.split("function _tsMigrateOffer", 1)
     rest = body[0] + (body[1].split("\n}\n", 1)[1] if len(body) > 1 else "")
@@ -1588,9 +1588,9 @@ def _rv43_hosts_offer():
     """The hosts page's after-join Migrate offer, run with and without the superadmin marker."""
     # The hosts page: manage_remotes.js builds the offer after a join; the template says, by one
     # marker element, whether this viewer may migrate. The script is run with and without it.
-    with open(os.path.join(_ROOT43, "templates", "manage_remotes.html"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT43, "panel", "templates", "manage_remotes.html"), encoding="utf-8") as fh:
         tpl = fh.read()
-    with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT43, "panel", "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
         js = "<script>%s</script>" % fh.read()
     prelude = ("<script>function _da(n, a) { return ' data-action=\"' + n + '\"'; }"
                "function escapeHtml(s) { return String(s); }</script>")

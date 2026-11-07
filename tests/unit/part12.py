@@ -126,7 +126,8 @@ def _p9_drain():
 
 
 # ── the app ─────────────────────────────────────────────────────────────────────────────────────
-_p9 = _P9Flask("app")     # the import name resolves templates/ and static/ at the repo root
+# The import name puts the app at the repo root; the UI folders are named as app.py names them.
+_p9 = _P9Flask("app", template_folder="panel/templates", static_folder="panel/static")
 _p9.config.update(
     SECRET_KEY="p09-unit-secret",
     SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_P9_TMP, "p09.db"),

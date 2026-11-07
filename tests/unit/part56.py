@@ -33,8 +33,8 @@ from panel.routes import remote_bootstrap as _rb56
 from panel.routes import remote_security as _rs56
 from panel.routes import remote_tailscale as _rt56
 
-_JS56 = os.path.join(_root, "static", "js")
-_TPL56 = os.path.join(_root, "templates")
+_JS56 = os.path.join(_root, "panel", "static", "js")
+_TPL56 = os.path.join(_root, "panel", "templates")
 _CFG56_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 
 
@@ -376,7 +376,7 @@ if _out56 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _catalog56(lang):
     out = {}
-    tdir = os.path.join(_root, "translations", lang)
+    tdir = os.path.join(_root, "panel", "translations", lang)
     for fname in sorted(os.listdir(tdir)):
         if fname.endswith(".json"):
             out.update(_json56.loads(_read56(tdir, fname)))

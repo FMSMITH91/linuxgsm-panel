@@ -739,7 +739,7 @@ def _cut130(src, head):
     return _cut47(src, head) if head in src else "/* MISSING %s */" % head
 
 
-_MR130 = _read130("static", "js", "manage_remotes.js")
+_MR130 = _read130("panel", "static", "js", "manage_remotes.js")
 _DOMX130 = _DOM121 + r"""
 document.createTextNode = s => { const n = new N('#text'); n._t = String(s); return n; };
 document.readyState = 'complete';
@@ -803,8 +803,8 @@ const seenMR = () => ({stats: st.innerHTML, stale: cls.has('opacity-50'), staleT
           repr(out))
 
 
-_DB130 = _read130("static", "js", "dashboard.js")
-_ST130 = _read130("static", "js", "server_tags.js")
+_DB130 = _read130("panel", "static", "js", "dashboard.js")
+_ST130 = _read130("panel", "static", "js", "server_tags.js")
 
 
 def _tag_filter_js130():

@@ -142,7 +142,7 @@ function bkRenderGames(fg, d){
       // since #330 (backups_unreadable, from the worker's `return sid, None`) and this page
       // read the field nowhere: every server on an unreachable host rendered "no backups yet",
       // while the SAME server's Files & Config card said the opposite. Same wording as the
-      // card (static/js/server_files.js), so the two pages cannot contradict each other.
+      // card (panel/static/js/server_files.js), so the two pages cannot contradict each other.
       : g.backups_unreadable
         ? '<div class="small text-warning mt-1">' + escapeHtml("Couldn't read this server's backups — the host didn't answer. This is not the same as there being none.") + '</div>'
         : '<div class="small text-secondary mt-1">no backups yet</div>';
@@ -176,7 +176,7 @@ function _uis_bkOpenIds(fg){
   return open;
 }
 // One server's finished backups behind a summary line: "2 backups, newest 1d ago". The same
-// markup as templates/_fold.html's fold(), so it looks and opens like every other fold.
+// markup as panel/templates/_fold.html's fold(), so it looks and opens like every other fold.
 function _uis_bkFold(g, isOpen, inner){
   var done = (g.backups||[]).filter(function(b){ return !b.in_progress; });
   var newest = done.reduce(function(a, b){ return Math.max(a, Number(b.created)||0); }, 0);

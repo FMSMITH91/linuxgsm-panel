@@ -1636,7 +1636,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   }
 }
 
-/* Folded sections (templates/_fold.html): help text, rarely used forms and long lists sit behind
+/* Folded sections (panel/templates/_fold.html): help text, rarely used forms and long lists sit behind
    one line the viewer opens, so the controls a page is for stay on the first screen. The marker is
    the panel's own chevron, turned when open, so every fold looks the same in every browser. */
 .uis-fold > .uis-fold-sum{
@@ -1900,7 +1900,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 [data-bs-theme="light"] .ip-track { background: rgb(0 0 0 / 10%); }
 [data-bs-theme="light"] .sidebar-nav a.active { box-shadow: inset 2px 0 0 var(--accent-ink); }
 
-/* ── WHAT'S NEW (templates/_whats_new.html) ── a native <dialog>, in the top layer. */
+/* ── WHAT'S NEW (panel/templates/_whats_new.html) ── a native <dialog>, in the top layer. */
 .wn-dialog {
   width: min(560px, calc(100vw - 2rem));
   max-height: min(80vh, 720px);

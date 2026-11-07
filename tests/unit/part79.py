@@ -48,7 +48,7 @@ def _read79(*parts):
 
 
 def _cat79(lang):
-    with open(os.path.join(_root, "translations", lang, "r20a.json"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "translations", lang, "r20a.json"), encoding="utf-8") as fh:
         return _json79.load(fh)
 
 

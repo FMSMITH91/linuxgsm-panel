@@ -289,7 +289,7 @@ check("cron table: the update job's row carries busy; LinuxGSM's monitor job nev
 check("cron table: a scheduled restart whose log holds the busy line (updateonstart) is not 'busy'; "
       "the update's alias u is",
       _rows141[2].get("busy") is False and _rows141[3].get("busy") is True, repr(_rows141[2:]))
-_srvjs141 = _read141("static", "js", "server_files.js")
+_srvjs141 = _read141("panel", "static", "js", "server_files.js")
 check("cron table's page: a busy run shows its own 'Not run' badge, before the OK one",
       "j.ok === true && j.busy" in _srvjs141
       and _srvjs141.index("j.ok === true && j.busy") < _srvjs141.index("else if(j.ok === true){"))
@@ -424,7 +424,7 @@ finally:
 check("install of FiveM that did not start: the result names the Cfx.re licence key; another game's does not",
       len(_fin141) == 2 and "sv_licenseKey" in _fin141[0][0] and _fin141[0][1] is True
       and "sv_licenseKey" not in _fin141[1][0], repr(_fin141))
-_sf_tpl141 = _read141("templates", "server_files.html")
+_sf_tpl141 = _read141("panel", "templates", "server_files.html")
 check("Config tab: FiveM's licence-key note, only on a FiveM server",
       "{% if server.game_type == 'fivem' %}" in _sf_tpl141
       and _sf_tpl141.index("{% if server.game_type == 'fivem' %}") < _sf_tpl141.index('id="lg265-fivem-key"')
@@ -588,7 +588,7 @@ check("AHL start: no note on a start without the warning, nor on a stop", _AHL_N
 check("AHL start from the button (run in the background): the note is said in the server's console",
       (P9_GS, "[panel] start: " + _AHL_NOTE141) in _ahl_push141, repr(_ahl_push141))
 import json as _json141  # noqa: E402
-_ahl_tr141 = {lang: _json141.loads(_read141("translations", lang, "lg265.json")).get(_AHL_NOTE141)
+_ahl_tr141 = {lang: _json141.loads(_read141("panel", "translations", lang, "lg265.json")).get(_AHL_NOTE141)
               for lang in ("es", "fr")}
 check("AHL note: es and fr translate it (a value of their own, not empty and not the English)",
       all(isinstance(v, str) and v.strip() and v != _AHL_NOTE141 for v in _ahl_tr141.values()),

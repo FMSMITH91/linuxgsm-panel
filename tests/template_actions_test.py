@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import suite_deadline as _suite_deadline  # noqa: E402
 del sys.path[0]
 _suite_deadline.arm(globals())
-TEMPLATES = ROOT / "templates"
+TEMPLATES = ROOT / "panel" / "templates"
 
 # Param names that, by this codebase's convention, are a DOM element passed via "@self".
 ELEMENT_PARAMS = {"btn", "cb", "el", "elem", "checkbox", "input", "button", "target", "chk", "node", "link"}
@@ -52,9 +52,9 @@ def skip(name, reason):
 
 
 # base.html's dispatcher and most of its handlers now live in a cacheable static file rather than
-# inline, so the handler definitions this test resolves against are in static/js as well as in the
+# inline, so the handler definitions this test resolves against are in panel/static/js as well as in the
 # templates. Both are searched; the filename is only ever used for reporting.
-STATIC_JS = ROOT / "static" / "js"
+STATIC_JS = ROOT / "panel" / "static" / "js"
 srcs = {p.name: p.read_text(encoding="utf-8") for p in sorted(TEMPLATES.glob("*.html"))}
 srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glob("*.js"))})
 
@@ -62,16 +62,16 @@ srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glo
 # Almost every gate in this file is "no bad pattern anywhere in `srcs`". Fed an EMPTY srcs they
 # all pass: `not []` is True, `x not in ""` is True, `all(... for x in [])` is True. Measured by
 # forcing both globs to return nothing — the suite reported 95/100 and 97/100, i.e. only the few
-# gates with their own positive control noticed. The trigger is not exotic: templates/ or
-# static/js/ moving is exactly the kind of change the panel/routes split already made once.
+# gates with their own positive control noticed. The trigger is not exotic: panel/templates/ or
+# panel/static/js/ moving is exactly the kind of change the panel/routes split already made once.
 #
 # The counts are floors, not inventories — they exist to catch "the sweep found nothing", not to
 # be maintained. tests/unit/part01._modpath does the same job by raising.
 _n_tpl = sum(1 for n in srcs if n.endswith(".html"))
 _n_js = sum(1 for n in srcs if n.endswith(".js"))
-check(_n_tpl >= 20, "sweep: the templates/ scan found files to read",
+check(_n_tpl >= 20, "sweep: the panel/templates/ scan found files to read",
       "%d .html — every template gate below would pass vacuously" % _n_tpl)
-check(_n_js >= 20, "sweep: the static/js/ scan found files to read",
+check(_n_js >= 20, "sweep: the panel/static/js/ scan found files to read",
       "%d .js — every JS gate below would pass vacuously" % _n_js)
 
 # ── 0. inline <script> blocks must still be JavaScript ────────────────────────────────────────
@@ -97,7 +97,7 @@ check(not _jinja_in_js,
       "templates: no Jinja statement/comment tags inside an inline <script> (they break JS parsers)",
       "; ".join(_jinja_in_js[:4]))
 
-# ── 0a. every static/js file must actually be JavaScript ──────────────────────────────────────
+# ── 0a. every panel/static/js file must actually be JavaScript ──────────────────────────────────────
 # Nothing here ever parsed the JS. Python tests render the pages but never execute a line of it,
 # so a syntax error ships silently and the whole file is simply dead in the browser — which is
 # exactly what happened: a trailing comment appended to a one-line if() swallowed the rest of the
@@ -106,15 +106,15 @@ try:
     import esprima
 except ImportError:
     esprima = None
-    skip("static/js: every file parses as JavaScript", "esprima not installed (pip install esprima)")
+    skip("panel/static/js: every file parses as JavaScript", "esprima not installed (pip install esprima)")
 if esprima:
     _broken = []
-    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
         try:
             esprima.parseScript(_p.read_text(encoding="utf-8"))
         except Exception as _e:
             _broken.append("%s: %s" % (_p.name, _e))
-    check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
+    check(not _broken, "panel/static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
 # ── 0a-ii. ...and no regex literal in it contains a quote ─────────────────────────────────────
 # Two tools read these files with a lexer that knows strings and comments but not regex literals:
@@ -126,7 +126,7 @@ if esprima:
 # Write a quote in a pattern as \x27 / \x22: the same character to the regex engine.
 if esprima:
     _quoted_re, _seen_hex_quote = [], False
-    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
         try:
             _toks = esprima.tokenize(_p.read_text(encoding="utf-8"), {"loc": True})
         except Exception:        # not JavaScript at all: the parse gate above reports it by name
@@ -138,10 +138,10 @@ if esprima:
                 _quoted_re.append("%s:%d %s" % (_p.name, _t.loc.start.line, _t.value))
             _seen_hex_quote = _seen_hex_quote or (_p.name == "panel.js" and "\\x27" in _t.value)
     # Positive control: the scan is reading regex tokens at all, including the rewritten one.
-    check(_seen_hex_quote, "static/js: the regex-literal scan sees panel.js's \\x27 pattern",
+    check(_seen_hex_quote, "panel/static/js: the regex-literal scan sees panel.js's \\x27 pattern",
           "no RegularExpression token with \\x27 in panel.js - the check below judged nothing")
     check(not _quoted_re,
-          "static/js: no regex literal contains a quote (the i18n scan and Lizard misread it)",
+          "panel/static/js: no regex literal contains a quote (the i18n scan and Lizard misread it)",
           "; ".join(_quoted_re[:3]))
 
 # ── Every swap of one region has to re-arm it the SAME way ────────────────────────────────────
@@ -155,7 +155,7 @@ if esprima:
 # and not from the text, because `refreshSection('#servers-list')` also appears in a COMMENT in
 # manage_servers.js, and a regex over the source reports that as a second, non-existent bug.
 if not esprima:
-    skip("static/js: every refreshSection of one region re-arms it the same way",
+    skip("panel/static/js: every refreshSection of one region re-arms it the same way",
          "esprima not installed")
 else:
     _rs = {}          # selector -> {afterName or None}
@@ -181,7 +181,7 @@ else:
             for _v in node:
                 _walk_calls(_v, fname, out, where)
 
-    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
         try:
             _ast = esprima.parseScript(_p.read_text(encoding="utf-8"), {"loc": True}).toDict()
         except Exception:
@@ -192,7 +192,7 @@ else:
           "found %d" % len(_rs))
     _mixed = {k: sorted(x or "(no hook)" for x in v) for k, v in _rs.items() if len(v) > 1}
     check(not _mixed,
-          "static/js: every refreshSection of one region re-arms it the same way",
+          "panel/static/js: every refreshSection of one region re-arms it the same way",
           "; ".join("%s %s at %s" % (k, v, _rs_where[k]) for k, v in sorted(_mixed.items())))
 
 # ── a FAILED poll is not the answer "nothing is installing" ──────────────────────────────────
@@ -205,7 +205,7 @@ else:
 if not esprima:
     skip("install_progress: a failed poll does not stop the poller", "esprima not installed")
 else:
-    _ip_src = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+    _ip_src = (ROOT / "panel" / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
     _ip_ast = esprima.parseScript(_ip_src, {"loc": True}).toDict()
 
     def _calls_named(node, name):
@@ -252,7 +252,7 @@ else:
     # ...and the frozen bar must say it is frozen, rather than looking like a live reading.
     check("markStale" in _ip_src and "ip-stale" in _ip_src,
           "install_progress: ...and a row it has stopped getting readings for is marked stale")
-    _css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+    _css = (ROOT / "panel" / "static" / "css" / "panel.css").read_text(encoding="utf-8")
     check(".ip-stale{" in _css,
           "install_progress: ...with a style, so 'stale' is visible and not just a class name")
 
@@ -353,7 +353,7 @@ if not esprima:
     skip("install_progress: a finished install is classified four ways", "esprima not installed")
 else:
     _ipo_ast = esprima.parseScript(
-        (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8"),
+        (ROOT / "panel" / "static" / "js" / "install_progress.js").read_text(encoding="utf-8"),
         {"loc": True}).toDict()
     _ipo_fn = _js_find_fn(_ipo_ast, "outcome")
     _ipo_cases = [
@@ -579,7 +579,7 @@ if not esprima:
          "esprima not installed")
 else:
     _ms_ast = esprima.parseScript(
-        (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8"),
+        (ROOT / "panel" / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8"),
         {"loc": True}).toDict()
     _dcl_bodies = []
 
@@ -683,11 +683,11 @@ if not esprima:
     # the count as a check that did not run.
     for _n in ("panel.js exports ensureCsrfFields for markup that arrives after load",
                "panel.js: refreshSection re-arms the token on the markup it swaps in",
-               "static/js: a native form.submit() re-arms its CSRF token first",
-               "static/js: the submit()-site walk found call sites at all"):
+               "panel/static/js: a native form.submit() re-arms its CSRF token first",
+               "panel/static/js: the submit()-site walk found call sites at all"):
         skip(_n, "esprima not installed (pip install esprima)")
 if esprima:
-    _csrf_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+    _csrf_js = (ROOT / "panel" / "static" / "js" / "panel.js").read_text(encoding="utf-8")
     check("window.ensureCsrfFields = function" in _csrf_js,
           "panel.js exports ensureCsrfFields for markup that arrives after load", "not exported")
     # It must run at the end of refreshSection, or every swapped-in form loses its token.
@@ -738,16 +738,16 @@ if esprima:
         return _submit_sites[0]
 
     _naked_submit = []
-    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
         _text = _p.read_text(encoding="utf-8")
         if ".submit()" not in _text:
             continue
         for _loc in _walk(esprima.parseScript(_text, options={"loc": True}), [], []):
             _naked_submit.append("%s:%s" % (_p.name, getattr(_loc, "line", "?")))
     # The positive control: an AST walk that matches nothing passes vacuously.
-    check(_csrf_submit_sites() > 0, "static/js: the submit()-site walk found call sites at all",
+    check(_csrf_submit_sites() > 0, "panel/static/js: the submit()-site walk found call sites at all",
           "found none, so the gate below proves nothing")
-    check(not _naked_submit, "static/js: a native form.submit() re-arms its CSRF token first",
+    check(not _naked_submit, "panel/static/js: a native form.submit() re-arms its CSRF token first",
           "form.submit() with no ensureCsrfFields in the same function at: %s" % _naked_submit[:4])
 
 # ── data-no-i18n has to survive a JS write ────────────────────────────────────────────────────
@@ -763,7 +763,7 @@ if esprima:
 # Structural, because this suite parses JavaScript and cannot execute it. Measured in a browser
 # against the real i18n.js before and after: guarded text now stays 'Online' and 'Status' while an
 # unguarded control still becomes 'Copias de seguridad'.
-_i18n_src = (ROOT / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+_i18n_src = (ROOT / "panel" / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
 check("function guardedAbove(" in _i18n_src and "el.parentNode" in _i18n_src,
       "i18n: there is a guardedAbove() that walks up the ancestors", "no ancestor check")
 _obs = _i18n_src[_i18n_src.index("new MutationObserver"):]
@@ -885,7 +885,7 @@ for _mu_id in ("eu-name", "cred-user"):
 # N security" warning erased itself six seconds after every page load, recorded no dismissal, and
 # flickered back on the next visibility poll. A flash is a transient reply to something the user
 # just did; a standing warning is not. Measured in a browser: banner still there, flash dismissed.
-_chrome_src = (ROOT / "static" / "js" / "chrome.js").read_text(encoding="utf-8")
+_chrome_src = (ROOT / "panel" / "static" / "js" / "chrome.js").read_text(encoding="utf-8")
 check("'.flash-container .alert-dismissible'" in _chrome_src
       or '".flash-container .alert-dismissible"' in _chrome_src,
       "chrome: the 6s auto-dismiss is scoped to the flash container",
@@ -896,8 +896,8 @@ check("'.flash-container .alert-dismissible'" in _chrome_src
 # returning null ever since: the row kept its old chips after a save, and the dashboard's tag
 # FILTER reads its truth from those very chips, so filtering by a tag just added hid the server
 # that now carries it.
-_tags_src = (ROOT / "static" / "js" / "server_tags.js").read_text(encoding="utf-8")
-_dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_tags_src = (ROOT / "panel" / "static" / "js" / "server_tags.js").read_text(encoding="utf-8")
+_dash_tpl = (ROOT / "panel" / "templates" / "dashboard.html").read_text(encoding="utf-8")
 check("getElementById('srv-tags-' + serverId)" in _tags_src
       and "getElementById('msrv-tags-" not in _tags_src,
       "tags: the chip repaint targets the id the dashboard actually renders",
@@ -928,11 +928,11 @@ check("tag.server_count" in _rtl_fn and "(tag.server_ids || []).length + ' serve
 
 # ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
 # A directory can legitimately be called Backups, Console, Status or Log — all keys in
-# translations/*/ — and without a guard the browser renders the name of a directory that does not
+# panel/translations/*/ — and without a guard the browser renders the name of a directory that does not
 # exist under that name, in the listing, the breadcrumb, the upload-destination label and the
 # editor header. `backups/` is a standard LinuxGSM directory. The file already knew: _conflictNode
 # guards the overwrite label for exactly this reason.
-_sf_src = (ROOT / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
+_sf_src = (ROOT / "panel" / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
 _sf_missing = []
 for _label, _needle in (
         ("the row's name span", "white-space:pre;\" data-no-i18n>'+esc(opts.name)"),
@@ -1185,7 +1185,7 @@ check(not _raw_body,
       "confirmDialog: a raw body: interpolates nothing but escapeHtml() output (bodyText is the safe one)",
       "; ".join(_raw_body[:3]))
 
-# ── 0d. no NEW unescaped value may reach an HTML sink in static/js ────────────────────────────
+# ── 0d. no NEW unescaped value may reach an HTML sink in panel/static/js ────────────────────────────
 # Moving the page scripts out of the templates put 306KB of JavaScript in front of the analysers
 # for the first time, and ~200 innerHTML findings appeared — on code that had not changed. Reading
 # them found one that mattered: the map name, which the QUERIED GAME SERVER supplies, went into
@@ -1452,7 +1452,7 @@ def _escapers_in(src):
 
     `function tsEsc(s){ return window.escapeHtml(s); }` is an escaper by any reading, but the scan
     below only knew the names in _ESCAPERS — so the moment the Tailscale pages' scripts moved out
-    of a <script> block and into static/js, four provably-escaped sinks read as unescaped and
+    of a <script> block and into panel/static/js, four provably-escaped sinks read as unescaped and
     wanted twelve baseline entries. Detecting the alias keeps the baseline a reviewable list.
 
     Deliberately exact: same single parameter, handed straight back out, nothing else in the body.
@@ -1509,7 +1509,7 @@ def _r16d_direct_sigs(_src):
 
 
 _found = {}
-for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
     _sigs_d = _r16d_direct_sigs(_p.read_text(encoding="utf-8"))
     if _sigs_d:
         _found.setdefault(_p.name, set()).update(_sigs_d)
@@ -1762,7 +1762,7 @@ def _r15d_case_b(_src, _helpers, _safe):
     return _sigs
 
 
-for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
     _sigs_p = _r15d_sink_sigs(_p.read_text(encoding="utf-8"))
     if _sigs_p:
         _found.setdefault(_p.name, set()).update(_sigs_p)
@@ -1819,7 +1819,7 @@ _r15d_sink_ctl = {
 # (the URL local is named by the local that holds the raw value, as any unsafe local is)
 _r20d_ctl_names = {"a URL local in a buffer": "link", "a helper returning raw after a ';' in a string": "lk"}
 check(all(_r20d_ctl_names.get(_k, "x.name") in _v for _k, _v in _r15d_sink_ctl.items()),
-      "static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;`, "
+      "panel/static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;`, "
       "behind a `||` fallback, concatenated or in a ternary's arm, is traced like one assigned to "
       "innerHTML (control)", repr(_r15d_sink_ctl))
 # A `return` in a comment or a string is not the helper's return (review 1015a).
@@ -1827,7 +1827,7 @@ _r21d_safe_ctl = (_safe_markup_helpers("function lk(x) {\n  // return the '<b>' 
                   _safe_markup_helpers("function lk(x) {\n  var s = 'return \"<b>\"';\n  return x.name;\n}\n"),
                   _safe_markup_helpers("function ok(x) {\n  // the badge\n  return '<b>on</b>';\n}\n"))
 check(_r21d_safe_ctl == (set(), set(), {"ok"}),
-      "static/js: ...a helper is safe markup by its own returns, not by a `return` in a comment or a "
+      "panel/static/js: ...a helper is safe markup by its own returns, not by a `return` in a comment or a "
       "string (control)", repr(_r21d_safe_ctl))
 
 # Every scanner in this file reads a value as interpolated only through `+` (review 1013a): a
@@ -1872,14 +1872,14 @@ _r20d_tl_ctl = [_r20d_template_interps(_c) for _c in (
     _r21d_html_for_scan("<a href=\"https://h/\">x</a><b onclick=\"f(`${y}`)\"></b>"),
     _r21d_html_for_scan("<p>it's</p><script>var a = 'don`t ${x}';</script>"))]
 check(not _r20d_tl and _r20d_tl_ctl == [[1], [1], [], [1], [1], []],
-      "static/js and templates: no template literal interpolates a value (`${…}`), which no XSS gate "
+      "panel/static/js and templates: no template literal interpolates a value (`${…}`), which no XSS gate "
       "here reads (with its control)", "; ".join(_r20d_tl[:4]) or repr(_r20d_tl_ctl))
 
 _baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
 _new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()
               for sig in sigs if sig not in _baseline.get(f, []))
 check(not _new,
-      "static/js: no NEW unescaped value reaches innerHTML (wrap it in escapeHtml, or explain it "
+      "panel/static/js: no NEW unescaped value reaches innerHTML (wrap it in escapeHtml, or explain it "
       "in tests/html_sink_baseline.json)",
       "; ".join(_new[:3]))
 # ...and no allowance outlives the sink it was for: an entry left behind after its code was fixed
@@ -1920,7 +1920,7 @@ def _js_function_body(src, name):
     return None
 
 
-_sd_js = (ROOT / "static" / "js" / "server_detail.js").read_text(encoding="utf-8")
+_sd_js = (ROOT / "panel" / "static" / "js" / "server_detail.js").read_text(encoding="utf-8")
 for _fn in ("_ansiRun", "renderAnsi"):
     _body = _js_function_body(_sd_js, _fn)
     # Vacuity guard: a renamed function would make every check below pass by finding nothing.
@@ -2017,7 +2017,7 @@ check("a.trim() === b.trim()" in _js_code_only(_js_function_body(_sd_js, "_sameL
 #   * a stat tile the user has hidden is simply absent, so _setStatText checks the element before
 #     writing to it - unguarded, the first hidden tile threw and stopped the rest of the handler;
 #   * the attached Ubuntu Pro card puts payload fields into markup only through e().
-_pj_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pj_js = (ROOT / "panel" / "static" / "js" / "panel.js").read_text(encoding="utf-8")
 _cdfb = _js_code_only(_js_function_body(_pj_js, "_cdFillBody") or "")
 check(len(_cdfb) > 100 and "opts.bodyNode" in _cdfb,
       "helpers: confirmDialog's _cdFillBody was found to check",
@@ -2129,10 +2129,10 @@ check(not _dupe_ids,
 # a page that no longer has them. Dead, but it cannot crash, and flagging it would push people to
 # delete a null check rather than a stale id.
 _TPL_IDS = set()
-for _tpl in sorted((ROOT / "templates").glob("*.html")):
+for _tpl in sorted((ROOT / "panel" / "templates").glob("*.html")):
     _TPL_IDS |= set(re.findall(r'\sid="([A-Za-z][\w:.-]*)"', _tpl.read_text(encoding="utf-8")))
 _JS_MADE_IDS = set()
-for _js in sorted((ROOT / "static" / "js").glob("*.js")):
+for _js in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
     _jsrc = _js.read_text(encoding="utf-8")
     _JS_MADE_IDS |= set(re.findall(r"""\.id\s*=\s*['"]([A-Za-z][\w:.-]*)['"]""", _jsrc))
     _JS_MADE_IDS |= set(re.findall(r"""id=["']([A-Za-z][\w:.-]*)["']""", _jsrc))
@@ -2140,12 +2140,12 @@ _KNOWN_IDS = _TPL_IDS | _JS_MADE_IDS
 _DEREF_ID = re.compile(
     r"""(?:getElementById\(\s*['"]|querySelector\(\s*['"]#)([A-Za-z][\w:.-]*)['"]\s*\)\s*[.\[]""")
 _dangling = []
-for _js in sorted((ROOT / "static" / "js").glob("*.js")):
+for _js in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
     for _id in sorted(set(_DEREF_ID.findall(_js.read_text(encoding="utf-8")))):
         if _id not in _KNOWN_IDS:
             _dangling.append("%s: #%s" % (_js.name, _id))
 check(not _dangling,
-      "static/js: no unguarded getElementById()/querySelector('#id') names an id no template renders",
+      "panel/static/js: no unguarded getElementById()/querySelector('#id') names an id no template renders",
       "; ".join(_dangling[:5]))
 
 # ── 0g. every Bootstrap toggle points at something that exists ────────────────────────────────
@@ -2153,7 +2153,7 @@ check(not _dangling,
 # finds no element, opens no modal, and raises nothing. Same failure the user sees — a click that
 # goes nowhere — from the opposite direction to the dangling-id check above.
 _bad_targets = []
-for _tpl in sorted((ROOT / "templates").glob("*.html")):
+for _tpl in sorted((ROOT / "panel" / "templates").glob("*.html")):
     _src = _tpl.read_text(encoding="utf-8")
     for _m in re.finditer(r'data-bs-target="#([A-Za-z][\w:.-]*)"', _src):
         if _m.group(1) not in _KNOWN_IDS:
@@ -2178,7 +2178,7 @@ check(not _bad_targets,
 _ON_ATTR = re.compile(r"""\son(?:click|change|submit|input|keydown|keyup|focus|blur|load|error|"""
                       r"""mouseover|mouseout|dblclick|paste|drop|dragover)\s*=\s*["']""")
 _csp_dead = []
-for _tpl in sorted((ROOT / "templates").glob("*.html")):
+for _tpl in sorted((ROOT / "panel" / "templates").glob("*.html")):
     _src = _tpl.read_text(encoding="utf-8")
     for _m in _ON_ATTR.finditer(_src):
         _csp_dead.append("%s:%d inline %s" % (_tpl.name, _src[:_m.start()].count("\n") + 1,
@@ -2186,7 +2186,7 @@ for _tpl in sorted((ROOT / "templates").glob("*.html")):
 # `el.onclick = fn` is a PROPERTY assignment and runs fine — the regex needs whitespace before
 # `on`, and a property access has a dot there, so those are not matched. Only the attribute shape
 # inside JS-built markup is.
-for _js in sorted((ROOT / "static" / "js").glob("*.js")):
+for _js in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
     _src = _js.read_text(encoding="utf-8")
     for _m in _ON_ATTR.finditer(_src):
         _csp_dead.append("%s:%d inline %s" % (_js.name, _src[:_m.start()].count("\n") + 1,
@@ -2197,7 +2197,7 @@ check(not _csp_dead,
 
 _SCRIPT_TAG = re.compile(r"<script\b[^>]*>", re.I)
 _unnonced = []
-for _tpl in sorted((ROOT / "templates").glob("*.html")):
+for _tpl in sorted((ROOT / "panel" / "templates").glob("*.html")):
     _src = _tpl.read_text(encoding="utf-8")
     for _m in _SCRIPT_TAG.finditer(_src):
         if "nonce=" not in _m.group(0):
@@ -2215,7 +2215,7 @@ check(not _unnonced,
 # 132 call sites use MOUNT today and none skip it.
 _ABS_FETCH = re.compile(r"""fetch\(\s*['"]/""")
 _unmounted = []
-for _f in sorted((ROOT / "static" / "js").glob("*.js")) + sorted((ROOT / "templates").glob("*.html")):
+for _f in sorted((ROOT / "panel" / "static" / "js").glob("*.js")) + sorted((ROOT / "panel" / "templates").glob("*.html")):
     _src = _f.read_text(encoding="utf-8")
     for _m in _ABS_FETCH.finditer(_src):
         _unmounted.append("%s:%d" % (_f.name, _src[:_m.start()].count("\n") + 1))
@@ -2342,7 +2342,7 @@ check(not _early, "no page loads a script before panel.js (must use {% block scr
 # Two rules carry the fix and BOTH must stay: mobile gives the tile the whole row (it already sits
 # alone there in the default order) so the number keeps full size, and ≥768px shrinks the number,
 # with a line-height that keeps the card the same height as its neighbours.
-_tile_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+_tile_css = (ROOT / "panel" / "static" / "css" / "panel.css").read_text(encoding="utf-8")
 # Matched on the PROPERTY, not one spelling of it. This was `width: 100%` and is now
 # `flex: 0 0 100%; max-width: 100%` — a full-row tile either way, but a literal-string gate failed
 # the refactor while the thing it protects still held. Accept either, and require a 100% so a rule
@@ -2369,7 +2369,7 @@ check(re.search(r"#host-summary\s*\{[^}]*font-size[^}]*line-height", _tile_css, 
 # The fix is to read Bootstrap's own variables, so the column tracks the row through hover and
 # striping without this file knowing what those states look like. Anything hardcoded here is the
 # bug coming back, so the gate is "derives from the table variables", not "is some colour".
-_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+_css = (ROOT / "panel" / "static" / "css" / "panel.css").read_text(encoding="utf-8")
 _m = re.search(r"\.table-responsive\s+\.table\s+th\.col-actions\s*,\s*"
                r"\.table-responsive\s+\.table\s+td\.col-actions\s*\{(.*?)\}", _css, re.S)
 check(_m is not None, "mobile: the sticky Actions column rule is still there to check",
@@ -2423,7 +2423,7 @@ if _m:
 # the page renders perfectly, minus every behaviour that script was carrying. No route test, no
 # template test and no render notices, because each side is individually fine.
 #
-# This became a live risk when the pages' inline <script> blocks moved into static/js: a rename or
+# This became a live risk when the pages' inline <script> blocks moved into panel/static/js: a rename or
 # a dropped file is now a dead page rather than a syntax error. asset_url() also content-hashes
 # what it finds, so a missing file loses the cache-busting query too.
 _missing = []
@@ -2434,9 +2434,9 @@ for _tpl in sorted(TEMPLATES.rglob("*.html")):
         _rel = _m.group(1)
         if "{" in _rel or not re.search(r"\.(js|css)$", _rel):
             continue                     # a Jinja-built path, or not an asset this can resolve
-        if not (ROOT / "static" / _rel).is_file():
-            _missing.append("%s -> static/%s" % (_tpl.name, _rel))
-check(not _missing, "every js/css asset a template names exists in static/", "; ".join(_missing))
+        if not (ROOT / "panel" / "static" / _rel).is_file():
+            _missing.append("%s -> panel/static/%s" % (_tpl.name, _rel))
+check(not _missing, "every js/css asset a template names exists in panel/static/", "; ".join(_missing))
 
 # ── upload drop zone: the browser's own drop handler must stay suppressed ─────────────────────
 # THE bug this guards: anything dropped on a page that has not called preventDefault() on dragover
@@ -2780,7 +2780,7 @@ check(_spb is not None and "dataset.canStop" in _spb_code and "dataset.canRestar
       "pending banner: switching the queued action re-decides 'do it now' from its permission",
       "showPendingBanner no longer shows/hides the button and its clause per data-can-stop / "
       "data-can-restart — a queued stop keeps whatever the page rendered for a restart")
-_sd_tpl = (ROOT / "templates" / "server_detail.html").read_text(encoding="utf-8")
+_sd_tpl = (ROOT / "panel" / "templates" / "server_detail.html").read_text(encoding="utf-8")
 check(all(('id="%s"' % _i) in _sd_tpl for _i in ("rpb-do", "rpb-now", "rpb-auto"))
       and "data-can-stop=" in _sd_tpl and "data-can-restart=" in _sd_tpl,
       "pending banner: every element and flag showPendingBanner reads is in the template",
@@ -2943,7 +2943,7 @@ _SECTION_PAGE_TEMPLATE = {
     "/server-management": "remote_manage.html",   # the panel host reuses the host template
     "/servers/install": "install_server.html",
 }
-_pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
+_pal_src = (ROOT / "panel" / "static" / "js" / "palette.js").read_text(encoding="utf-8")
 
 
 def _with_includes(name, _depth=0):
@@ -3517,7 +3517,7 @@ if _prefix_m and _suffix_m:
           % (_built, _concrete))
 
 # ── a page's data-action handlers must be defined in a script THAT PAGE LOADS ─────────────────
-# The existing dispatcher check asks whether a handler exists ANYWHERE in static/js. That is not
+# The existing dispatcher check asks whether a handler exists ANYWHERE in panel/static/js. That is not
 # the question a click asks. install_server.html was split out of manage_servers.html carrying
 # updatePort, suggestFreePort and refreshGameList — and none of the JS: the page loaded no script
 # at all, so picking a game did not set its port, the free-port hint never appeared, and the Retry
@@ -3617,7 +3617,7 @@ check(not _unreachable,
 # hidden. Verified by feeding the real payload through the real merge: the key comes back in
 # `hidden` every time. Both pages have this shape; both are checked.
 for _sf, _fn in (("dashboard.js", "showPanel"), ("server_detail.js", "showDetailPanel")):
-    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _src = (ROOT / "panel" / "static" / "js" / _sf).read_text(encoding="utf-8")
     _body = _src[_src.index("window.%s = function" % _fn):]
     _body = _body[:_body.index("\n};")]
     check("setAttribute('data-panel'" in _body and "btn.remove()" in _body,
@@ -3632,13 +3632,13 @@ for _sf, _fn in (("dashboard.js", "showPanel"), ("server_detail.js", "showDetail
 # live intervals and nine requests.
 for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsUpPoll"),
                      ("setup_tailscale.js", "_tsPoll")):
-    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _src = (ROOT / "panel" / "static" / "js" / _sf).read_text(encoding="utf-8")
     check(_needle in _src and "Date.now()" in _src,
           "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
           "no single-poll registry or no deadline")
 # ...and manage_remotes.js's deadline is read where it acts, as the other two files' are below: the
 # whole-file `Date.now()` above would pass on any unrelated use of it (review 1017c lead).
-_mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+_mr = (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
 _mr_dl = _js_code_only(_js_block_after(_mr, "if (Date.now() > _tsDeadline)") or "")
 check("var _tsDeadline = Date.now() +" in _mr and "clearInterval(t)" in _mr_dl
       and "delete _tsUpPolls[remoteId]" in _mr_dl,
@@ -3651,7 +3651,7 @@ check("var _tsDeadline = Date.now() +" in _mr and "clearInterval(t)" in _mr_dl
 # put a "Check again" control in the waiting line, wired to a function that re-reads the host.
 for _sf, _anchor, _fn in (("tailscale.js", "if (Date.now() > _deadline)", "tsCheckAgain"),
                           ("setup_tailscale.js", "if (Date.now() > _tsEnd)", "tsRefresh")):
-    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _src = (ROOT / "panel" / "static" / "js" / _sf).read_text(encoding="utf-8")
     _dl = _js_code_only(_js_block_after(_src, _anchor) or "")
     check("ts-wait" in _dl and "_da('%s')" % _fn in _dl and "Check again" in _dl
           and "press the button again" not in _dl,
@@ -3671,7 +3671,7 @@ check("ts-wait-" in _mr_dl2 and "_da('_tsUpWait', [remoteId])" in _mr_dl2 and "C
       "js: manage_remotes.js's tailscale-up deadline offers a 'Check again' that waits on the host again "
       "(it said 'press the button again', whose rerun of `tailscale up` skips the finalize)",
       " ".join(_mr_dl2.split())[:200])
-_tsc = (ROOT / "static" / "js" / "tailscale.js").read_text(encoding="utf-8")
+_tsc = (ROOT / "panel" / "static" / "js" / "tailscale.js").read_text(encoding="utf-8")
 check("refreshSection('#ts-page'" in (_js_function_body(_tsc, "tsCheckAgain") or ""),
       "js: tailscale.js's Check again re-renders the page from the host",
       _js_function_body(_tsc, "tsCheckAgain") or "no tsCheckAgain")
@@ -3681,7 +3681,7 @@ check("refreshSection('#ts-page'" in (_js_function_body(_tsc, "tsCheckAgain") or
 # isn't installed on this host yet" and an Install button, right after the operator approved the
 # machine — and the wizard's own poll stops on `running` alone, handing it exactly that state.
 _str = _js_code_only(_js_function_body(
-    (ROOT / "static" / "js" / "setup_tailscale.js").read_text(encoding="utf-8"), "tsRender") or "")
+    (ROOT / "panel" / "static" / "js" / "setup_tailscale.js").read_text(encoding="utf-8"), "tsRender") or "")
 _str_named, _str_running = _str.find("if(s.running && s.dns_name)"), _str.find("if(s.running){")
 _str_absent = _str.find("isn\\'t installed on this host yet")
 check(-1 not in (_str_named, _str_running, _str_absent)
@@ -3695,7 +3695,7 @@ check(-1 not in (_str_named, _str_running, _str_absent)
 # rule (and a refused/unreachable finalize has no such key), yet the sentence printed on all of them.
 # The wait (and its finalize) is _tsUpWait since review 1017c's "Check again", called by tailscaleUp.
 _mr_ts = _js_code_only(_js_function_body(
-    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "_tsUpWait") or "")
+    (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "_tsUpWait") or "")
 _ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
 _ufw_line_i = _mr_ts.find("'UFW now allows the tailscale0 interface.'")
 check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,
@@ -3707,7 +3707,7 @@ check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("allows the tailscale0") == 
 
 # ── an unanswered Tailscale probe is not "not installed" ─────────────────────────────────────
 _rts_js = _js_code_only(_js_function_body(
-    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "renderTailscaleStatus") or "")
+    (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "renderTailscaleStatus") or "")
 _rts_unr = _rts_js.find("if (status.unreachable) {")
 _rts_first = min([i for i in (_rts_js.find("if (installed && running)"), _rts_js.find("not installed"))
                   if i >= 0] or [-1])
@@ -3719,7 +3719,7 @@ check(len(_rts_js) > 300 and -1 < _rts_unr < _rts_first
       % (_rts_unr, _rts_first))
 
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
-_mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+_mr = (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
 _pb = _js_code_only(_js_function_body(_mr, "pollBootstrap"))
 check(len(_pb) > 400 and "bootstrap-status" in _pb,
       "js: pollBootstrap was found in manage_remotes.js",
@@ -3757,7 +3757,7 @@ check(re.search(r"function stop\(\) \{ clearInterval\(handle\); if \(_bootstrapP
 # refreshSection only re-runs a callback when one is NAMED, and loadSshStatus is the only thing
 # that fills that card — it ran once, at load. So after any Tailscale-SSH action the swap brought
 # back the server render and the card read "Currently: …", a literal ellipsis.
-_rh = (ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8")
+_rh = (ROOT / "panel" / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8")
 check(_rh.count("refreshSection('#conn-ssh-card', 'loadSshStatus')") == 4
       and "refreshSection('#conn-ssh-card')" not in _rh,
       "js: every #conn-ssh-card refresh re-runs loadSshStatus",
@@ -3832,8 +3832,8 @@ _wpr_early = _js_block_after(_wpr_log, "if(early){") or ""
 # the status line was squeezed into a column 90px wide and 313px tall (measured in a browser); the
 # row now wraps and the line takes a basis, so it drops under the buttons instead — only while it
 # says something, so an empty one adds no blank row (measured: row height = button height).
-_rm_tpl = (ROOT / "templates" / "remote_manage.html").read_text(encoding="utf-8")
-_rm_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+_rm_tpl = (ROOT / "panel" / "templates" / "remote_manage.html").read_text(encoding="utf-8")
+_rm_css = (ROOT / "panel" / "static" / "css" / "panel.css").read_text(encoding="utf-8")
 _pu_row = re.search(r'<div class="([^"]*)">\s*<button[^>]*data-action="checkPanelUpdate"', _rm_tpl)
 check(_pu_row is not None and "flex-wrap" in _pu_row.group(1).split()
       and re.search(r"#pu-msg:not\(:empty\)\{\s*flex:1 1 14rem;\s*min-width:0;\s*\}", _rm_css) is not None,
@@ -3868,7 +3868,7 @@ check("if(sb) sb.disabled=false;" in _wpr_early,
 # is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save
 # pressed before that turned auto-block off for the host, and the toast said "auto-blocking IPs
 # with N+ attempts" regardless — also for a non-superadmin, whose threshold the endpoint ignores.
-_rmj = (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
+_rmj = (ROOT / "panel" / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
 _st_fn = _js_code_only(_js_function_body(_rmj, "saveThreshold"))
 check(re.search(r"^var _autoblockKnown = false;", _rmj, re.M) is not None
       and "if(!_autoblockKnown){" in _st_fn and "return; }" in _st_fn.split("if(!_autoblockKnown){")[-1][:200]
@@ -3986,7 +3986,7 @@ check(len(_upd_offer) == 1 and "d.remote_version" in _upd_offer[0] and "d.remote
       and "<strong>v'" not in _upd_offer[0],
       "js: ...and its offer is the target's version beside the target's commit",
       repr(_upd_offer))
-_badge_js = (ROOT / "static" / "js" / "update_badge.js").read_text(encoding="utf-8")
+_badge_js = (ROOT / "panel" / "static" / "js" / "update_badge.js").read_text(encoding="utf-8")
 # The tooltip is one tf() sentence now (translated, the version filled in after), on its own line.
 _badge_title = [ln for ln in _badge_js.splitlines() if "tf('Version {v} is available" in ln]
 check(len(_badge_title) == 1 and "d.remote_version" in _badge_title[0]
@@ -4018,7 +4018,7 @@ check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
 # through getElementById without checking it is a page-wide crash waiting for a template change.
 import re as _re_dom
 for _js in ("server_files.js", "dashboard.js", "server_detail.js", "manage_servers.js"):
-    _src = (ROOT / "static" / "js" / _js).read_text(encoding="utf-8")
+    _src = (ROOT / "panel" / "static" / "js" / _js).read_text(encoding="utf-8")
     _bad = [ln for ln in _src.splitlines()
             if _re_dom.match(r"document\.getElementById\('[^']+'\)\s*\.", ln)]
     check(not _bad,
@@ -4035,7 +4035,7 @@ for _js in ("server_files.js", "dashboard.js", "server_detail.js", "manage_serve
 # the card region when they disagree. Verified in a rendered panel: installing -> failed, one
 # poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
 # because the sets now match.
-_dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_dashjs2 = (ROOT / "panel" / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
 check("failedShown" in _dashjs2 and "refreshSection('#server-cards'" in _dashjs2,
       "dashboard: a failure appearing while the page is open re-renders the card region")
 # ...and re-arms it while it is at it. The call used to pass no after-hook, so this swap left the
@@ -4047,7 +4047,7 @@ check(_dashjs2.count("refreshSection('#server-cards', 'afterDashRefresh')") == 2
 check("failedNow !== failedShown" in _dashjs2,
       "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
       "an unconditional refresh would re-fetch the page on every poll")
-_dash_tpl2 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_dash_tpl2 = (ROOT / "panel" / "templates" / "dashboard.html").read_text(encoding="utf-8")
 check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n         data-server-id='
       in _dash_tpl2,
       "dashboard: ...and each banner carries the id the comparison reads")
@@ -4062,14 +4062,14 @@ check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n    
 # the warning that this deletes every backup too. It moved from remote_manage_backups.js (host page
 # only) into panel.js so both pages get it from one place, delegated on document so it survives a
 # list re-render.
-_pjs = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pjs = (ROOT / "panel" / "static" / "js" / "panel.js").read_text(encoding="utf-8")
 check("uninstall-trigger" in _pjs and "requireText: short" in _pjs,
       "js: the uninstall gate lives in the shared script, so every page has it")
-_rmb = (ROOT / "static" / "js" / "remote_manage_backups.js").read_text(encoding="utf-8")
+_rmb = (ROOT / "panel" / "static" / "js" / "remote_manage_backups.js").read_text(encoding="utf-8")
 check("uninstall-trigger" not in _rmb,
       "js: ...and is not a second copy left behind on the host page",
       "the host page still carries its own handler — two copies will drift")
-_dash_tpl4 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_dash_tpl4 = (ROOT / "panel" / "templates" / "dashboard.html").read_text(encoding="utf-8")
 check(_dash_tpl4.count("uninstall-trigger") == 2,
       "dashboard: a server can be uninstalled from the row AND from a failed install's banner",
       "found %d uninstall triggers" % _dash_tpl4.count("uninstall-trigger"))
@@ -4088,10 +4088,10 @@ check("{% if can_uninstall %}" in _dash_tpl4,
 #
 # It is not gated identically, either: a FAILED install keeps Files & Config reachable, because
 # its LinuxGSM config is what survives and that page is where the usual causes are fixed.
-_dash_tpl3 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_dash_tpl3 = (ROOT / "panel" / "templates" / "dashboard.html").read_text(encoding="utf-8")
 check("btn btn-outline-secondary btn-sm srv-files" in _dash_tpl3,
       "dashboard: the Files & Config link carries a class the poll can find it by")
-_dashjs4 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_dashjs4 = (ROOT / "panel" / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
 check("link('.srv-files', busy && s.status !== 'failed')" in _dashjs4,
       "dashboard: ...and the poll re-enables it, on the same rule the template renders with",
       "the poll still only touches .srv-console")
@@ -4109,7 +4109,7 @@ check("link('.srv-console', busy)" in _dashjs4,
 # `{% set n_failed = ... %}` predicate is at 116; sliced from `var oo = ...` the JS window began
 # one line after the filter. So the pair asserted that the RENDERING does not say "installing" —
 # which it never would — and never looked at the predicate the change was about.
-_dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_dash_tpl = (ROOT / "panel" / "templates" / "dashboard.html").read_text(encoding="utf-8")
 _tile = _dash_tpl[_dash_tpl.index("{% set n_failed"):]
 _tile = _tile[:_tile.index('id="offline-other"') + _tile[_tile.index('id="offline-other"'):].index("</div>")]
 check("{% set n_failed" in _tile and "selectattr('status', 'equalto', 'failed')" in _tile,
@@ -4120,7 +4120,7 @@ check("installing" not in _tile,
       "the tile still counts or emits installs")
 check("n_failed" in _tile,
       "dashboard: ...and still names failures, which are the reason the arithmetic does not close")
-_dashjs = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_dashjs = (ROOT / "panel" / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
 _oo = _dashjs[_dashjs.index("var failed = data.filter("):]
 _oo = _oo[:_oo.index("// The failed-install banner")]
 check("data.filter(" in _oo and "'failed'" in _oo,
@@ -4140,16 +4140,16 @@ check("textContent = 'failed'" in _oo or "word.textContent = 'failed'" in _oo,
 # the wrong shape for something you want to keep an eye on. It is inline now: a row directly UNDER
 # the server on the dashboard, and a panel on the page you submitted from. It goes away when the
 # install does, not when you close it.
-_base_html = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+_base_html = (ROOT / "panel" / "templates" / "base.html").read_text(encoding="utf-8")
 check("js/install_progress.js" in _base_html,
       "base: install progress is available on every page with chrome")
-_inst_tpl = (ROOT / "templates" / "install_server.html").read_text(encoding="utf-8")
+_inst_tpl = (ROOT / "panel" / "templates" / "install_server.html").read_text(encoding="utf-8")
 check('data-ajax-after="watchInstallsNow"' in _inst_tpl,
       "install page: the form opens the progress panel as soon as the install is accepted")
 check('id="install-running"' in _inst_tpl and 'id="install-running-card"' in _inst_tpl,
       "install page: ...and the page it was submitted from has somewhere to show it")
 
-_ip = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+_ip = (ROOT / "panel" / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
 check("install-progress-stack" not in _ip and "ipc-close" not in _ip,
       "js: the dismissible corner card is gone, not merely hidden",
       "the corner stack is still built")
@@ -4166,7 +4166,7 @@ check("data-no-i18n" in _ip,
 # The two integration traps a row inside this table walks into. sortDashCol sorts every `tr`, and
 # filterServers shows or hides each one on its own text and tags — a progress row carries neither,
 # so unhandled it sorted away from its server and survived a filter that hid it.
-_dashjs3 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_dashjs3 = (ROOT / "panel" / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
 check("tb.querySelectorAll('tr[data-server-id]')" in _dashjs3,
       "js: sorting sorts the SERVER rows, not every tr in the table")
 # THREE paths reorder rows — the column sort, the up/down arrows and the drag handle — and only
@@ -4270,17 +4270,17 @@ else:
 # installing with no progress. Three things had to line up, and all three are pinned: the widget is
 # loaded on every chrome page, the install form names the hook that opens it immediately, and the
 # shared ajax-form handler actually RUNS that hook.
-_base_html = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+_base_html = (ROOT / "panel" / "templates" / "base.html").read_text(encoding="utf-8")
 check("js/install_progress.js" in _base_html,
       "base: the install-progress widget is loaded on every page with chrome")
-_inst_tpl = (ROOT / "templates" / "install_server.html").read_text(encoding="utf-8")
+_inst_tpl = (ROOT / "panel" / "templates" / "install_server.html").read_text(encoding="utf-8")
 check('data-ajax-after="watchInstallsNow"' in _inst_tpl,
       "install page: the form opens the progress widget as soon as the install is accepted")
 
 # data-ajax-after used to be handed ONLY to refreshSection, which runs only when data-ajax-refresh
 # is set. The install form deliberately has no refresh target — the list it would refresh is on
 # another page — so the attribute was silently ignored, which is the trap this pins shut.
-_pj = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pj = (ROOT / "panel" / "static" / "js" / "panel.js").read_text(encoding="utf-8")
 _dr = _pj[_pj.index("var doRefresh = function()"):]
 _dr = _dr[:_dr.index("};")]
 # ...through _actionFn, as refreshSection's hook is, so the deny list holds on this path too (part53).
@@ -4396,7 +4396,7 @@ else:
             for _v in node:
                 _f2b_ifs(_v, out)
 
-    _rm_js = (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
+    _rm_js = (ROOT / "panel" / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
     _f2b_fn = []
     _upro_fn(esprima.parseScript(_rm_js, {"loc": True}).toDict(), "loadSecurityBans", _f2b_fn)
     check(len(_f2b_fn) == 1, "sweep: loadSecurityBans was found to check",
@@ -4426,7 +4426,7 @@ else:
 
 # The widget names a server, and a server name is user-supplied. It must never be concatenated
 # into markup, and it must never be translated.
-_ip = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+_ip = (ROOT / "panel" / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
 check("innerHTML" not in _ip,
       "js: the install widget builds its DOM, never assembling a server name into markup")
 check("data-no-i18n" in _ip,
@@ -4435,7 +4435,7 @@ check("data-no-i18n" in _ip,
 # ── Ctrl/Cmd+K must not be cancelled on a page with no palette ────────────────────────────────
 # palette.js is loaded unconditionally by base.html; #cmdk renders only under show_app_chrome. On
 # login, force_password and the setup pages the shortcut was cancelled and nothing opened.
-_pal = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
+_pal = (ROOT / "panel" / "static" / "js" / "palette.js").read_text(encoding="utf-8")
 _kseg = _pal[_pal.index("e.key === 'k'"):]
 _kseg = _kseg[:_kseg.index("\n    }")]          # the whole Ctrl/Cmd+K branch
 check(_kseg.index("getElementById('cmdk')") < _kseg.index("e.preventDefault")
@@ -4447,7 +4447,7 @@ check(_kseg.index("getElementById('cmdk')") < _kseg.index("e.preventDefault")
 # navigator.clipboard is undefined on http://, which the panel serves by default, so the property
 # read threw before any promise existed and the rejection handler never ran: the click did nothing
 # at all, silently, on the page whose whole point is getting the codes out of the browser.
-_bc = (ROOT / "static" / "js" / "backup_codes.js").read_text(encoding="utf-8")
+_bc = (ROOT / "panel" / "static" / "js" / "backup_codes.js").read_text(encoding="utf-8")
 check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
       "js: the backup-codes copy guards navigator.clipboard and falls back",
       "an http:// install gets a button that does nothing")
@@ -4456,7 +4456,7 @@ check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
 # panel.js loads on every page, signed out included, and its only guard was "not the login page".
 # On /invite/<token> or the setup wizard, coming back to the tab after a minute pinged, got a 401,
 # and location.replace'd the visitor to /login — form gone, Back unable to return.
-_pj_src = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pj_src = (ROOT / "panel" / "static" / "js" / "panel.js").read_text(encoding="utf-8")
 _pj_se = _pj_src[_pj_src.index("window.sessionExpired = function"):]
 _pj_se = _pj_se[:_pj_se.index("location.replace(")]
 _pj_ping = _pj_src[_pj_src.index("function _pingAuth()"):]
@@ -4510,7 +4510,7 @@ check("_actionFn(el.getAttribute('data-action'))" in _pj_fire and "window[" not 
 # It parsed the reply and ignored it. The error handler answers any failure on a fetch with
 # parseable JSON ({success:false}, status 500), so a save that failed removed the banner and said
 # "You won't be reminded again" — and the reminder was back on the next page load.
-_otp_src = (ROOT / "static" / "js" / "otp_nag.js").read_text(encoding="utf-8")
+_otp_src = (ROOT / "panel" / "static" / "js" / "otp_nag.js").read_text(encoding="utf-8")
 _otp_fn = _js_function_body(_otp_src, "dismissOtpNagForever") or ""   # its body, not the file's tail
 check("/account/2fa/dismiss-nag" in _otp_fn,
       "otp nag: (control) the dismiss handler is where this check is looking", "sliced the wrong text")
@@ -4522,7 +4522,7 @@ check(re.search(r"\.success\)\)\s*throw", _otp_fn) is not None
 # ── the setup wizard takes an SSH password in a password field ────────────────────────────────
 # The shared credential input stayed type="text" when Password was chosen: the remote's root
 # password on screen in clear, and saved by the browser as plain autofill for "credential".
-_sr_src = (ROOT / "static" / "js" / "setup_remote.js").read_text(encoding="utf-8")
+_sr_src = (ROOT / "panel" / "static" / "js" / "setup_remote.js").read_text(encoding="utf-8")
 _sr_pw = _sr_src[_sr_src.index("if (this.value === 'password')"):]
 _sr_pw = _sr_pw[:_sr_pw.index("} else")]
 check("label.textContent = 'SSH Password'" in _sr_pw,
@@ -4558,7 +4558,7 @@ check("connect links" not in _st_help and "not reissued" in _st_help,
 # rule fires on.
 _BARE_ID_IN_TAG = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:\s+[^>]*?)?\s+id\s*(?:>|\s)")
 _id_offenders = []
-for _tpl in sorted((ROOT / "templates").rglob("*.html")):
+for _tpl in sorted((ROOT / "panel" / "templates").rglob("*.html")):
     _s = _tpl.read_text(encoding="utf-8")
     for _m in re.finditer(r"\{#.*?#\}", _s, re.S):
         _hit = _BARE_ID_IN_TAG.search(_m.group(0))
@@ -4600,7 +4600,7 @@ def _between(text, first, last=None):
     return "" if j < 0 else rest[:j]
 
 
-_dm_js = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_dm_js = (ROOT / "panel" / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
 _dm_win = _between(_dm_js, "function refreshMetrics()", "refreshMetrics();")
 check(bool(_dm_win),
       "dashboard: the metrics poll is where these checks think it is",
@@ -4625,7 +4625,7 @@ check("cell.innerHTML = (s && s.up)" in _dm_win,
       "dashboard: ...the same way for the per-server cells",
       "a server absent from the payload is not distinguished from one that is stopped")
 
-_ms_js2 = (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8")
+_ms_js2 = (ROOT / "panel" / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8")
 _ms_win = _between(_ms_js2, "function refreshMsrvMetrics()",
                    "// Same guard, and this is the expensive one")
 check(bool(_ms_win),
@@ -4639,7 +4639,7 @@ check('querySelectorAll(\'[id^="msrv-res-"]\')' in _ms_win
 # The reachability badge was rendered once by the server and never touched again, so a host that
 # died while the dashboard was open went on reading "Reachable" until someone pressed F5 — the one
 # fact on that card you would open the page to learn.
-_dm_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_dm_tpl = (ROOT / "panel" / "templates" / "dashboard.html").read_text(encoding="utf-8")
 check('id="host-reach-{{ remote.id }}"' in _dm_tpl,
       "dashboard: the reachability badge carries an id the poll can find it by",
       "no id means the poll can never repaint it")
@@ -4683,7 +4683,7 @@ check(_badge and not _tpl_drift,
 # Measured against a down host: the page loaded honest and, one refresh later, reported an
 # INACTIVE firewall with NOTHING OPEN. On this page that is the most alarming possible way to be
 # wrong, and the template's own comment says so about the half that was already right.
-_fw_js = (ROOT / "static" / "js" / "remote_firewall.js").read_text(encoding="utf-8")
+_fw_js = (ROOT / "panel" / "static" / "js" / "remote_firewall.js").read_text(encoding="utf-8")
 _fw_win = _between(_fw_js, "function refreshFirewall()", "data.enabled ? 'Active' : 'Inactive'")
 check(bool(_fw_win),
       "firewall: the refresh is where these checks think it is",
@@ -4698,8 +4698,8 @@ check("return;" in _fw_win,
 # Blocked IPs). The page makes no firewall read while it loads, so they render no state of their own —
 # only "Loading…" and no count — and the refresh above paints every one (ui-tidy-2: the standalone page
 # that rendered a read server-side is a redirect now).
-_fw_tpl = ((ROOT / "templates" / "_firewall_panel.html").read_text(encoding="utf-8")
-           + (ROOT / "templates" / "_firewall_blocks.html").read_text(encoding="utf-8"))
+_fw_tpl = ((ROOT / "panel" / "templates" / "_firewall_panel.html").read_text(encoding="utf-8")
+           + (ROOT / "panel" / "templates" / "_firewall_blocks.html").read_text(encoding="utf-8"))
 check("{% if" not in _fw_tpl.replace("{% if fw_games %}", "") and _fw_tpl.count("Loading…") >= 3
       and "No firewall rules yet." not in _fw_tpl and "No IPs are blocked." not in _fw_tpl
       and 'id="rules-count">&mdash;<' in _fw_tpl and 'id="blocks-count">&mdash;<' in _fw_tpl,
@@ -4790,7 +4790,7 @@ check("(g.key || '')]" in _fw_js_btn,
 #
 # The PANEL backup list next door is deliberately untouched: it reads the panel's own data dir,
 # which cannot be unreachable, so an empty list there really does mean none.
-_bk_js = (ROOT / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
+_bk_js = (ROOT / "panel" / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
 _bk_win = _between(_bk_js, "var tb=document.getElementById('bk-rows');", "// Poll while a backup")
 check(bool(_bk_win),
       "backups: the card's empty state is where this check thinks it is",
@@ -4810,7 +4810,7 @@ check(_bk_py.count('"backups_unreadable"') == 2,
 # which is exactly what the all-servers Backups page was: /api/panel/backups reported the third
 # state per server and this page rendered "no backups yet" regardless, next to a Files & Config
 # card on the same server saying the host had not answered. One fact, two pages, opposite answers.
-_bk_js2 = (ROOT / "static" / "js" / "remote_manage_backups.js").read_text(encoding="utf-8")
+_bk_js2 = (ROOT / "panel" / "static" / "js" / "remote_manage_backups.js").read_text(encoding="utf-8")
 _bk_win2 = _between(_bk_js2, "var table = rows", "var st=g.status")
 check(bool(_bk_win2),
       "backups: the all-servers page's empty state is where this check thinks it is",
@@ -5059,7 +5059,7 @@ check(all(_a11y_problems(_s) for _s in _a11y_neg.values()) and not _a11y_problem
 # h.count. Number() at the sink makes the banner safe whatever the server's types. The dismissal
 # signature (sig) is left raw on purpose — it reaches the page only through _da, which escapes.
 _ng_fn = _js_code_only(_js_block_after(
-    (ROOT / "static" / "js" / "nags.js").read_text(encoding="utf-8"),
+    (ROOT / "panel" / "static" / "js" / "nags.js").read_text(encoding="utf-8"),
     "window.osUpdatesNagCheck = function("))
 _ng_r0 = _ng_fn.find("var rows = hosts.map(")
 _ng_s0 = _ng_fn.find("var sec = hosts.reduce(")
@@ -5079,7 +5079,7 @@ check(_ng_rows and _ng_sec and "Number(h.count)" in _ng_rows and "Number(h.secur
 # fetch into el.innerHTML through o.attempts and o.bans. The ip and jails are escapeHtml'd, and
 # banned_now and blocked are only tested for truth, so the two counts are the whole of it.
 _tip_fn = _js_code_only(_js_block_after(
-    (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8"),
+    (ROOT / "panel" / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8"),
     "var rows=ips.map(function(o,i)"))
 _tip_raw = re.findall(r"(?<!Number\()o\.(?:attempts|bans)\b", _tip_fn or "")
 check(_tip_fn and "Number(o.attempts)" in _tip_fn and "Number(o.bans)" in _tip_fn and not _tip_raw,
@@ -5091,7 +5091,7 @@ check(_tip_fn and "Number(o.attempts)" in _tip_fn and "Number(o.bans)" in _tip_f
 # the page shows it as a warning. It always toasted green 'success', so "rule still open" read as
 # a clean uninstall.
 _un_fn = _js_code_only(_js_block_after(
-    (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8"),
+    (ROOT / "panel" / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8"),
     "function doUninstall(id, name, btn)"))
 check(_un_fn and "d.warn ? 'warning' : 'success'" in _un_fn,
       "uninstall: a reply with warn=true is toasted as a warning, not a green success",
@@ -5103,7 +5103,7 @@ check(_un_fn and "d.warn ? 'warning' : 'success'" in _un_fn,
 # The post-restart read is now the ONE status read (the watcher polls the log, which already carries
 # boot_id, so the log is not read again): finish is reached through `.then(function(s){ finish(s,
 # l); })`, and the same rule holds for it.
-_ul_src = _js_code_only((ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8"))
+_ul_src = _js_code_only((ROOT / "panel" / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8"))
 _ul_at = _ul_src.find("fetch(MOUNT+'/api/panel/update-status')",
                       _ul_src.find("function rmhReadRestartedStatus"))
 _ul_fin = _ul_src.find(".then(function(s){ finish(s, l); })", _ul_at) if _ul_at >= 0 else -1
@@ -5117,7 +5117,7 @@ check(_ul_fin >= 0 and ".catch(" in _ul_after,
 
 # ── every promise chain statement ends in a rejection handler ─────────────────────────────────
 # SonarCloud javascript:S9383, file-wide. The one-site check above caught one chain; 34 more sat
-# in static/js: .catch(h).finally(cleanup) (a cleanup that throws is unhandled), .catch(h).then(c)
+# in panel/static/js: .catch(h).finally(cleanup) (a cleanup that throws is unhandled), .catch(h).then(c)
 # (the same, for c), and chains with no handler at all — uploadFiles left "Checking N file(s)…" on
 # screen for good when its conflict step threw, and _walkEntry's Promise.all(...).then(resolve)
 # left a whole dropped folder pending when one sub-walk rejected.
@@ -5249,11 +5249,11 @@ def _pc_statements(tree):
 
 
 if not esprima:
-    skip("static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
+    skip("panel/static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
          "esprima not installed")
 else:
     _pc_seen, _pc_helpers_seen, _pc_bare = 0, set(), []
-    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    for _p in sorted((ROOT / "panel" / "static" / "js").glob("*.js")):
         try:
             _pc_tree = esprima.parseScript(_p.read_text(encoding="utf-8"), {"loc": True}).toDict()
         except Exception:
@@ -5287,7 +5287,7 @@ else:
           "sweep: the promise-chain scan finds helpers that return a chain (tsRefresh, _bkRestore)",
           "found %s" % sorted(_pc_helpers_seen))
     check(not _pc_bare,
-          "static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
+          "panel/static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
           "%d with no rejection handler: %s" % (len(_pc_bare), "; ".join(_pc_bare[:8])))
 
 
@@ -5417,8 +5417,8 @@ if _node:
           "js (node): ...and reads the status exactly once, after boot_id flips, to judge the outcome",
           repr(_nrs))
 else:
-    _ms_src = (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8")
-    _mr_src = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+    _ms_src = (ROOT / "panel" / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8")
+    _mr_src = (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
     check("if (!row) { stopInstall(id); return; }" in _ms_src,
           "js (no node): watchInstall stops its interval when the install row is gone", "")
     check("if (!card) { stopWatch(remoteId); return; }" in _mr_src,
@@ -6176,7 +6176,7 @@ async function scan(root, catalog, lang){
     unread: [{user: 'shz43', reason: 'R1'}], not_enrolled: [{user: 'sha43', reason: 'R2'}]});
   // Each language's section files merged into one catalog, as panel/core/i18n.py serves it.
   const catalog = lang => {
-    const dir = path.join(root, 'translations', lang), c = {};
+    const dir = path.join(root, 'panel', 'translations', lang), c = {};
     fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort()
       .forEach(f => Object.assign(c, JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))));
     return c;

@@ -101,7 +101,7 @@ finally:
     _p9_restore_all()
 check("config read: a read that did not happen answers raw \"\" with an error (the body fed below)",
       _R99.get("cfg", (0, {}))[1].get("raw") == "" and _R99["cfg"][1].get("error"), repr(_R99))
-_SF99 = _read99("static", "js", "server_files.js")
+_SF99 = _read99("panel", "static", "js", "server_files.js")
 _name99 = "raw config editor: a failed re-read after a settings save"
 _out99 = _js99(_name99, (
     "var serverId = 1; function _tr(s){ return s; }\n"
@@ -148,7 +148,7 @@ if _out99 is not None:
 # The page-load read of /api/installs had its own fetch, which armed the poll only on a reply listing
 # jobs: a failed request or an error reply armed nothing, so an install already running showed no
 # progress until it ended. The whole script runs here, its DOMContentLoaded handler fired by hand.
-_IP99 = _read99("static", "js", "install_progress.js")
+_IP99 = _read99("panel", "static", "js", "install_progress.js")
 _name99 = "install progress: the page-load read"
 _out99 = _node99(_name99, _SETTLE47 + _ANS99 + (
     "let onload = null, timers = {}, nextId = 1;\n"
@@ -190,7 +190,7 @@ if _out99 is not None:
 # #436 kept the banner on `known: false`, unless the reply had a wait or a job. But `pending_empty`
 # and `job` are the panel's own state, so that same reply says a wait or job is over: a wait banner
 # kept after its Cancel (the host down) contradicted the Power card. Only "reboot needed" stays.
-_NG99 = _read99("static", "js", "nags.js")
+_NG99 = _read99("panel", "static", "js", "nags.js")
 _name99 = "reboot banner: a wait or job the same reply says is over"
 _out99 = _js99(_name99, (
     "const nags = {}; let removed = [];\n"
@@ -234,7 +234,7 @@ if _out99 is not None:
 # catch-all's 500 read "undefined problem(s)"). Found by the repo-wide search for this class.
 check("diagnostics: the route's failure answer carries `error` and no checks (the body fed below)",
       _R99.get("diag", (0, {}))[1].get("error") and _R99["diag"][1].get("checks") == [], repr(_R99))
-_RH99 = _read99("static", "js", "remote_manage_host.js")
+_RH99 = _read99("panel", "static", "js", "remote_manage_host.js")
 _name99 = "diagnostics: an error reply"
 _out99 = _js99(_name99, (
     "const DIAG_ICON = {warn: 'w', ok: 'o', fail: 'f'}, DIAG_BADGE = {ok: 'g', warn: 'y', fail: 'r'};\n"
@@ -306,7 +306,7 @@ if _out99 is not None:
 # #436 left the card empty on an error reply, but Install updates kept the template's state:
 # disabled, titled "Checking for updates…", while nothing was checking. Now it is usable, as after a
 # Check that failed and on a host never checked.
-_RM99 = _read99("static", "js", "remote_manage.js")
+_RM99 = _read99("panel", "static", "js", "remote_manage.js")
 _fill99 = "(function(){\n  if(!document.getElementById('update-info')) return;"
 _name99 = "OS updates card: the page-load fill's error reply"
 _out99 = _js99(_name99, (

@@ -648,7 +648,7 @@ def _names60():
 
 
 def _catalog_keys60(lang):
-    root = os.path.join(_ROOT60, "translations", lang)
+    root = os.path.join(_ROOT60, "panel", "translations", lang)
     keys = set()
     for name in sorted(os.listdir(root)):
         if name.endswith(".json"):

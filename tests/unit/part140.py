@@ -417,8 +417,8 @@ check("pz page: the fix sets the password through the panel's one writer, says s
       and _aud140.success is True, repr((_r1.status_code, _r1j, _aud140)))
 check("pz page: ...and refuses a server that is not Project Zomboid, without writing",
       _r2.status_code == 400 and _pz_route_calls140 == ["p140pz"], repr(_r2.status_code))
-_sfjs140 = _read140("static", "js", "server_files.js")
-_sfhtml140 = _read140("templates", "server_files.html")
+_sfjs140 = _read140("panel", "static", "js", "server_files.js")
+_sfhtml140 = _read140("panel", "templates", "server_files.html")
 check("pz page: the Config tab carries the warning and its button for Project Zomboid only, and loadConfig "
       "shows it from the read's flag",
       "{% if server.game_type == 'pz' %}" in _sfhtml140 and 'id="lgc-pz-admin"' in _sfhtml140
@@ -1168,7 +1168,7 @@ finally:
 check("os cap: the picker's game list carries each capped game's cap on every distro LinuxGSM caps it on",
       _caps140 == {"btl": "debian-11 ubuntu-20.04", "onset": "debian-11 ubuntu-20.04"}, repr(_caps140))
 check("os cap: ...and the install page puts it on the option for the script",
-      'data-legacy-caps="{{ g.legacy_caps }}"' in _read140("templates", "install_server.html"))
+      'data-legacy-caps="{{ g.legacy_caps }}"' in _read140("panel", "templates", "install_server.html"))
 from unit.part75 import _cut_or75, _js75, _run_js75  # noqa: E402
 
 _name_l8_140 = "install page: a capped game is greyed out per the host's distro (Debian too)"
@@ -1234,7 +1234,7 @@ for _inst140, _want140, _why140 in _csgo_cases140:
           _got140 is _want140, repr(_got140))
 check("csgo: the note is hidden until the config read says it applies",
       'id="lgc-csgo-appid"' in _sfhtml140 and "csw.style.display = d.lgc_csgo_appid_note ? '' : 'none';"
-      in _read140("static", "js", "server_files.js")
+      in _read140("panel", "static", "js", "server_files.js")
       and _re140.search(r'id="lgc-csgo-appid"[^>]*style="display:none;"', _sfhtml140) is not None)
 
 

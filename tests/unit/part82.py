@@ -129,7 +129,7 @@ try:
           repr((_fw82, _upd82)))
 
     # The pages, fed exactly what the route answered.
-    _fwjs82 = _read82("static", "js", "remote_firewall.js")
+    _fwjs82 = _read82("panel", "static", "js", "remote_firewall.js")
     _body82 = _json82.dumps(_fw82["key"][1])
     _fw_out82 = _node82("remote_firewall.js: a refresh answered with a changed host key", _DOM82 + _SETTLE47 + (
         "global.fetch = () => Promise.resolve({json: () => Promise.resolve(%s)});\n"
@@ -155,7 +155,7 @@ try:
               and _fw_out82.get("blocks") == _fr_key82 and _fw_out82.get("count") == "—",
               repr(_fw_out82))
 
-    _rmjs82 = _read82("static", "js", "remote_manage.js")
+    _rmjs82 = _read82("panel", "static", "js", "remote_manage.js")
     _rm_out82 = _node82("remote_manage.js: check-updates and the live card on a changed host key", _DOM82 + _SETTLE47 + (
         "let answer = null;\n"
         "global.fetch = () => Promise.resolve({json: () => Promise.resolve(answer)});\n"

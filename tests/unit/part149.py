@@ -249,7 +249,7 @@ check("server page: a viewer who may not send commands or manage files gets neit
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. The page's script, run in node
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SD_CMPA_ = _read_cmpa_("static", "js", "server_detail.js")
+_SD_CMPA_ = _read_cmpa_("panel", "static", "js", "server_detail.js")
 _VARS_CMPA_ = "".join(m.group(0) + "\n" for m in _re_cmpa_.finditer(r"^var _(?:cmpa|CMPA)\w+ = [^\n]*;", _SD_CMPA_,
                                                                        _re_cmpa_.M))
 _HEADS_CMPA_ = ("function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush(",

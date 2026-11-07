@@ -231,7 +231,7 @@ check("keep-limits: a game backup ceiling well under the panel's (each one is a 
 
 # The controls in the template must BE number boxes carrying those bounds — the whole point of the
 # change is that the value is typed. A <select> here would silently take the feature back out.
-_rm_html = open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-8").read()
+_rm_html = open(os.path.join(_root, "panel", "templates", "remote_manage.html"), encoding="utf-8").read()
 import re as _re_bk
 for _id, _b in (("bk-keep", _lim["keep_days"]), ("fb-keep", _lim["full_keep"])):
     _tag = _re_bk.search(r'<(\w+)[^>]*\bid="%s"[^>]*>' % _id, _rm_html)
@@ -242,15 +242,15 @@ for _id, _b in (("bk-keep", _lim["keep_days"]), ("fb-keep", _lim["full_keep"])):
     check("backup UI: %s carries the server's min/max" % _id,
           'min="%d"' % _b["min"] in _attrs and 'max="%d"' % _b["max"] in _attrs, _attrs[:90])
 check("backup UI: the per-server override is a number box with a Default placeholder",
-      'placeholder="Default"' in open(os.path.join(_root, "static", "js",
+      'placeholder="Default"' in open(os.path.join(_root, "panel", "static", "js",
                                                    "remote_manage_backups.js"),
                                       encoding="utf-8").read())
 
 
 # ── update-noise filter: only real runtime changes should raise the "update available" badge ──
 check("runtime-path: app.py counts", _so._is_runtime_path("app.py") is True)
-check("runtime-path: a template counts", _so._is_runtime_path("templates/base.html") is True)
-check("runtime-path: static asset counts", _so._is_runtime_path("static/js/app.js") is True)
+check("runtime-path: a template counts", _so._is_runtime_path("panel/templates/base.html") is True)
+check("runtime-path: static asset counts", _so._is_runtime_path("panel/static/js/app.js") is True)
 check("runtime-path: requirements counts", _so._is_runtime_path("requirements.txt") is True)
 check("runtime-path: requirements.in (what the lockfile is compiled from) is noise",
       _so._is_runtime_path("requirements.in") is False)
@@ -413,8 +413,8 @@ check("runtime-path: the fuzz image's build files and the JS lint config are noi
       "beside them are not",
       _so._is_runtime_path(".clusterfuzzlite/Dockerfile") is False
       and _so._is_runtime_path(".clusterfuzzlite/build.sh") is False
-      and _so._is_runtime_path("static/js/.eslintrc.json") is False
-      and _so._is_runtime_path("static/js/remote_manage_host.js") is True
+      and _so._is_runtime_path("panel/static/js/.eslintrc.json") is False
+      and _so._is_runtime_path("panel/static/js/remote_manage_host.js") is True
       and _so._is_runtime_path("reset-password.sh") is True)
 # Every repo file install.sh stages root-owned (stage_root_source <repo path> <name>) is something
 # a host runs. Classified as noise, a commit changing only it is no longer offered as an update at
@@ -857,7 +857,7 @@ finally:
 check("integrity: parses modified status",
       {"path": "app.py", "status": "modified"} in _intg["modified"])
 check("integrity: parses deleted status",
-      {"path": "templates/base.html", "status": "deleted"} in _intg["modified"])
+      {"path": "panel/templates/base.html", "status": "deleted"} in _intg["modified"])
 
 # Repair must ONLY ever check out files git itself reported as changed — a caller
 # can't smuggle in an arbitrary path (path-traversal / arbitrary checkout).
@@ -3756,7 +3756,7 @@ finally:
 # The footer is the only place this is surfaced, so assert the template actually uses it — a
 # context value nothing renders is the shape [[template-reads-a-name-the-route-never-passed]]
 # warns about, in reverse.
-_base_html = open(os.path.join(_root, "templates", "base.html"), encoding="utf-8").read()
+_base_html = open(os.path.join(_root, "panel", "templates", "base.html"), encoding="utf-8").read()
 check("repo url: base.html links the panel name at it",
       'href="{{ panel_repo_url }}"' in _base_html)
 check("repo url: ...and the commit SHA at that exact commit",
@@ -4500,7 +4500,7 @@ finally:
 # MANAGE_REMOTES alone. `port` is entirely caller-chosen, and the GameServer lookup was cosmetic —
 # it only picked the UFW comment and fell back to "Game" when no row matched. So a user with a host
 # grant and only INSTALL_SERVER could open 22, 3306 or 6379 to the internet on a host whose
-# firewall they otherwise have no rights over. Nothing in templates/ or static/js/ calls it.
+# firewall they otherwise have no rights over. Nothing in panel/templates/ or panel/static/js/ calls it.
 _rv_src = open(os.path.join(_root, "panel", "routes", "remote_vps.py"), encoding="utf-8").read()
 _gp_at = _rv_src.find('"/api/remote/<int:remote_id>/game-port/<int:port>/open"')
 check("game-port: the route exists to be checked", _gp_at > 0)

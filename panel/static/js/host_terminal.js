@@ -1,7 +1,7 @@
 // The host terminal: xterm.js on one side, the panel's single Socket.IO connection on the other.
 //
-// Flat in static/js/ on purpose. The esprima parse gate and the JS i18n scanner both glob
-// static/js/*.js and neither recurses, so a file in static/js/terminal/ would be checked by
+// Flat in panel/static/js/ on purpose. The esprima parse gate and the JS i18n scanner both glob
+// panel/static/js/*.js and neither recurses, so a file in panel/static/js/terminal/ would be checked by
 // nothing at all.
 //
 // ES2017-era syntax only — the parse gate runs esprima 4.0.1, which rejects optional chaining,

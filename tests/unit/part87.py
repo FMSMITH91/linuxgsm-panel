@@ -142,7 +142,7 @@ check("OS updates banner: ...one granted only the panel host is not (the summary
       repr(_pg87))
 
 # ...and nags.js starts the banner on OS_NAG, whatever LOCAL_HOST_ID says.
-_NAGS87 = _read87("static", "js", "nags.js")
+_NAGS87 = _read87("panel", "static", "js", "nags.js")
 _at87 = _NAGS87.find("window.pollWhenVisible(window.osUpdatesNagCheck")
 _iife87 = (_NAGS87[_NAGS87.rfind("(function(){", 0, _at87):_NAGS87.index("})();", _at87) + 5]
            if _at87 >= 0 else "/* the OS-updates banner's start-up block was not found */")
@@ -191,7 +191,7 @@ if _out87 is not None:
 # to the host page's Network tab now (ui-tidy-2), whose cards only the refresh paints, held below.
 _CANT87 = "The panel can't reach this host right now"
 # Refresh repaints the card from the same read as the badge and the lists.
-_FWJS87 = _read87("static", "js", "remote_firewall.js")
+_FWJS87 = _read87("panel", "static", "js", "remote_firewall.js")
 _name87 = "firewall refresh: the UFW status line follows the read"
 _out87 = _node87(_name87, _DOM87 + _SETTLE47 + (
     "global.remoteId = 7; let unlisted = null;\n"
@@ -264,7 +264,7 @@ check("terminal: term_ready names the panel host \"Servidor del panel\" to an es
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Files & Config and the Backups page's per-server row added "Cada 5 días" as a filled template,
 # which a switch to English cannot map back to a key: it stayed Spanish until a reload.
-_SF87 = _read87("static", "js", "server_files.js")
+_SF87 = _read87("panel", "static", "js", "server_files.js")
 _name87 = "Files & Config: an interval with no listed option"
 _out87 = _node87(_name87, _DOM87 + (
     "var _bkShown = {interval: null, keep: null}, _bkDefault = {};\n"
@@ -286,7 +286,7 @@ if _out87 is not None:
           _out87 == {"value": "5", "text": "Every 5 days", "key": "Every {n} days", "vars": '{"n":5}', "sel": "5"},
           repr(_out87))
 
-_RMB87 = _read87("static", "js", "remote_manage_backups.js")
+_RMB87 = _read87("panel", "static", "js", "remote_manage_backups.js")
 _name87 = "Backups page: a server row's interval with no listed option"
 _out87 = _node87(_name87, _DOM87 + (
     "global.tfHtml = (k, v) => tf(k, v); global.schedNote = () => '';\n"
@@ -331,7 +331,7 @@ try:
     _mut87 = os.path.join(_td87, "mut")
     os.makedirs(os.path.join(_mut87, "js"))
     os.makedirs(os.path.join(_mut87, "tpl"))
-    _st87 = _read87("static", "js", "server_tags.js")
+    _st87 = _read87("panel", "static", "js", "server_tags.js")
     _marker87 = "el.setAttribute('data-i18n-title', 'Alerts are muted for this tag');"
     with open(os.path.join(_mut87, "js", "server_tags.js"), "w", encoding="utf-8") as _fh87:
         _fh87.write(_st87.replace(_marker87, ""))
@@ -376,7 +376,7 @@ finally:
 check("palette: a panel-host server's host is the label \"Panel Server\", flagged host_local (it was "
       "the typed row name \"my box\"); a remote's is its name",
       _pal87 == [("Panel Server", True), ("p9-host", False)], repr(_pal87))
-_PALJS87 = _read87("static", "js", "palette.js")
+_PALJS87 = _read87("panel", "static", "js", "palette.js")
 _srv87 = _PALJS87[_PALJS87.find("(servers || []).forEach("):_PALJS87.find("out.sort(")]
 check("palette: ...and the page shows it through its own catalog, t('Panel Server'), in the server and "
       "action rows (the meta line is guarded)",
@@ -387,7 +387,7 @@ check("palette: ...and the page shows it through its own catalog, t('Panel Serve
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 8. The remote page's badge names a changed host key in its tooltip
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM87 = _read87("static", "js", "remote_manage.js")
+_RM87 = _read87("panel", "static", "js", "remote_manage.js")
 _name87 = "remote page: the reachability badge's tooltip on a changed host key"
 _out87 = _node87(_name87, _DOM87 + _SETTLE47 + (
     "global.REMOTE_ID = 7; global.IS_LOCAL = false;\n"

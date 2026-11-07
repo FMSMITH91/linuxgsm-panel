@@ -314,7 +314,7 @@ def _register_remote_edit(app):
         remote = get_host_remote(remote_id)
         # A BLANK field is not an edit. `.get(key, default)` only falls back when the key is
         # ABSENT, and the edit form posts all three of these every time — without `required`,
-        # unlike the add form above it (templates/manage_remotes.html:25/29 have it, :193/:197 do
+        # unlike the add form above it (panel/templates/manage_remotes.html:25/29 have it, :193/:197 do
         # not). So clearing the box and saving used to store "" over the real name, host or SSH
         # user, and the guards below are all `if new_x and …`, which an empty string skips. A
         # remote with host "" is unreachable and its game servers unmanageable.
@@ -800,7 +800,7 @@ def _apply_edited_auth(remote):
     # "on that host" — console input, file writes, privileged verbs, firewall changes — onto
     # the PANEL HOST instead, the machine holding the database, the credential key and the
     # panel's own sudoers grant. The form never offers it: the select at
-    # templates/manage_remotes.html:210-212 lists exactly key/password/tailscale, so any other
+    # panel/templates/manage_remotes.html:210-212 lists exactly key/password/tailscale, so any other
     # value arrived from a forged request. An unknown value was no better — it falls through
     # `enforce_pin = auth_method not in ("tailscale", "local")` (_core.py:569) into the key
     # path with a method nothing recognises.

@@ -207,7 +207,7 @@ def _card71(answer):
 
     Its markup, and the outcome slot as the nodes _gmcOutcome put in it.
     """
-    src = open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8").read()
+    src = open(os.path.join(_root, "panel", "static", "js", "server_detail.js"), encoding="utf-8").read()
     prog = ("const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };\n"
             "const slot = {id: 'gmc-outcome-slot', className: '', removed: false, attrs: {}, kids: [],\n"
             "  remove() { this.removed = true; }, setAttribute(k, v) { this.attrs[k] = v; },\n"
@@ -493,9 +493,9 @@ _GATE_OPS71 = ("def install(remote, on_progress=None):\n"
 def _gate_tree71():
     """A throwaway tree holding the two fixture modules above; its root."""
     td = os.path.realpath(_tf71.mkdtemp(prefix="lgsm-unit-p71-scan-", dir=_TMP71))
-    for d in (("panel", "routes"), ("panel", "ops"), ("translations", "es")):
+    for d in (("panel", "routes"), ("panel", "ops"), ("panel", "translations", "es")):
         os.makedirs(os.path.join(td, *d))
-    for rel, text in (("app.py", ""), ("translations/es/x.json", "{}"),
+    for rel, text in (("app.py", ""), ("panel/translations/es/x.json", "{}"),
                       ("panel/routes/r.py", _GATE_ROUTES71), ("panel/ops/s.py", _GATE_OPS71)):
         with open(os.path.join(td, *rel.split("/")), "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -506,7 +506,7 @@ def _gates71():
     td = _gate_tree71()
     try:
         gaps = sorted(k for k, _w in _scan71.route_answer_gaps(
-            "es", root=td, translation_dir=os.path.join(td, "translations")))
+            "es", root=td, translation_dir=os.path.join(td, "panel", "translations")))
         steps = sorted(_scan71.step_name_keys(root=td))
         built = _scan71.step_names_built(root=td)
     finally:

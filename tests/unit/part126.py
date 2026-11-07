@@ -22,7 +22,7 @@ from unit.part121 import _DOM121, _node121
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 1. Files & Config's backup card while a schedule save is unanswered
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SF126 = _read106("static", "js", "server_files.js")
+_SF126 = _read106("panel", "static", "js", "server_files.js")
 _name126 = "Files & Config backup card: a schedule save that does not answer"
 _out126 = _js106(_name126, _PEND109 + (
     "var serverId = 1; const rows = [], status = [];\n"
@@ -70,7 +70,7 @@ if _out126 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. The dashboard's install-progress rows under an active filter
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_IP126 = _read106("static", "js", "install_progress.js")
+_IP126 = _read106("panel", "static", "js", "install_progress.js")
 _name126 = "install progress: a row built under an active dashboard filter"
 _out126 = _node121(_name126, _DOM121 + _SETTLE47 + _IP126 + r"""
 const poll = async () => { window.watchInstallsNow(); await settle(); await settle(); };

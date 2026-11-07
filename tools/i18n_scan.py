@@ -44,8 +44,8 @@ import re
 from html.parser import HTMLParser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLATE_DIR = os.path.join(ROOT, "templates")
-TRANSLATION_DIR = os.path.join(ROOT, "translations")
+TEMPLATE_DIR = os.path.join(ROOT, "panel", "templates")
+TRANSLATION_DIR = os.path.join(ROOT, "panel", "translations")
 
 # base.html's SKIP map. Content inside these never reaches the translator.
 SKIP_TAGS = {"script", "style", "textarea", "code", "pre", "noscript"}
@@ -406,7 +406,7 @@ def scan_templates(template_dir=TEMPLATE_DIR):
 # button label or a confirm dialog is translated on exactly the same terms as template text: it
 # needs a catalog entry, verbatim. Nothing warns when it has none — the host Specs card showed
 # "Memory" in Spanish and "Operating System" in English side by side for that reason.
-JS_DIR = os.path.join(ROOT, "static", "js")
+JS_DIR = os.path.join(ROOT, "panel", "static", "js")
 # Put this on a line to exempt its literals — the JS twin of data-no-i18n, for a string that is
 # a command, an identifier or a fragment of markup rather than something a person reads.
 JS_IGNORE = "i18n-ignore"

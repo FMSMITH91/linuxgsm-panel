@@ -5,7 +5,7 @@ name: Codacy coverage
 # one per language, sent with the reporter's partial/final flow — each `report --partial`, then one
 # `final` that tells Codacy the commit's coverage is complete:
 #   coverage.xml   Cobertura, from the `coverage` job: the Python the suites run.
-#   lcov.info      LCOV, from the `js-coverage` job: the panel's own static/js, run in a browser.
+#   lcov.info      LCOV, from the `js-coverage` job: the panel's own panel/static/js, run in a browser.
 # A run whose js-coverage job failed has no lcov.info; the Python report still goes up, with a
 # warning here beside the red check that job already shows. A documentation-only pull request has
 # no lcov.info either (ci.yml skips that upload), so its download step logs "Artifact not found";
@@ -30,7 +30,7 @@ name: Codacy coverage
 #   environment and the token in it included, into a request. A report declaring any DTD or entity
 #   is refused, and what is uploaded is a fresh serialisation of the elements, with no DTD at all.
 #   lcov.info gets the same treatment: plain ASCII text, every line one of LCOV's own records,
-#   every file a static/js/<name>.js path (no directory, no `..`), and what is uploaded is rebuilt
+#   every file a panel/static/js/<name>.js path (no directory, no `..`), and what is uploaded is rebuilt
 #   from the parsed numbers alone. That also keeps it from being XML: the reporter tries each XML
 #   parser on a report before its LCOV one, so an "lcov.info" carrying a DTD would meet the same
 #   entity problem. Either report failing its check stops the upload of both.
@@ -199,7 +199,7 @@ jobs:
           ET.ElementTree(root).write(dst, encoding="utf-8", xml_declaration=True)
           PY
           # lcov.info, when the js-coverage job made one: refused unless every line is an LCOV
-          # record about a static/js/<name>.js file, then rebuilt from the parsed numbers (SF, DA,
+          # record about a panel/static/js/<name>.js file, then rebuilt from the parsed numbers (SF, DA,
           # LF, LH), so nothing the report carried besides those numbers reaches the reporter.
           js_report="${JS_REPORT_DIR:-}/lcov.info"
           js_clean=""
@@ -232,7 +232,7 @@ jobs:
               refuse("is not plain ASCII text")
           if re.search(r"[^\n\x20-\x7e]", text):
               refuse("holds a control character")
-          path_re = re.compile(r"static/js/[A-Za-z0-9_-]+\.js")
+          path_re = re.compile(r"panel/static/js/[A-Za-z0-9_-]+\.js")
           num = r"[0-9]{1,9}"
           name = r",[\x20-\x2b\x2d-\x7e]{1,200}"
           fields = {
@@ -261,7 +261,7 @@ jobs:
                   if cur is not None:
                       refuse("begins a record inside another (line %d)" % no)
                   if not path_re.fullmatch(val):
-                      refuse("names a file that is not static/js/<name>.js (line %d)" % no)
+                      refuse("names a file that is not panel/static/js/<name>.js (line %d)" % no)
                   if val in files:
                       refuse("names %s twice" % val)
                   cur = files[val] = {}

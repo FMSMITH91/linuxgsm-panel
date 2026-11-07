@@ -300,7 +300,7 @@ else:
 
 
 # ── The page: LinuxGSM's text is escaped and only a docs.linuxgsm.com page is linked ────────────
-_SF_cmpc_ = open(os.path.join(_root, "static", "js", "server_files.js"), encoding="utf-8").read()
+_SF_cmpc_ = open(os.path.join(_root, "panel", "static", "js", "server_files.js"), encoding="utf-8").read()
 _out_cmpc_ = _node47(
     "function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')"
     ".replace(/\"/g,'&quot;').replace(/'/g,'&#39;'); }\n"

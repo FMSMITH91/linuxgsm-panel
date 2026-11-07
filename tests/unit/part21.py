@@ -463,12 +463,12 @@ def _b_file_integrity():
     _p21(_so21, "panel_integrity", lambda force=False: {
         "git": True, "verified": True, "clean": False, "count": 2, "current_sha": "abc1234",
         "modified": [{"path": "panel/x.py", "status": "modified"},
-                     {"path": "static/y.js", "status": "deleted"}]})
+                     {"path": "panel/static/y.js", "status": "deleted"}]})
     out["v"] = ("H a", "", 0)
     eq("file integrity: differing files are NAMED, repo-relative, with their status",
        _so21._diag_file_integrity(),
        ("fail", "2 panel file(s) differ from the installed version: panel/x.py (modified), "
-                "static/y.js (deleted)."))
+                "panel/static/y.js (deleted)."))
 
 
 def _b_integrity_during_update():

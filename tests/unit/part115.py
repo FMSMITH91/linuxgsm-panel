@@ -30,7 +30,7 @@ _TRIP115_START = len(_P9_TRIPPED)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 1. Files & Config's backup card: a settled save leaves the changed select showing what is stored
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SF115 = _read106("static", "js", "server_files.js")
+_SF115 = _read106("panel", "static", "js", "server_files.js")
 _name115b = "Files & Config backup card: the changed select after a settled save"
 _outb115 = _js106(_name115b, _PEND109 + (
     "var serverId = 1;\n"
@@ -87,7 +87,7 @@ if _outb115 is not None:
 # Every read that found a job running scheduled the next. Two Uninstalls confirmed before the card
 # redrew are two POSTs, each re-reading 1.5 s later whatever it answered: two chains, each polling
 # the host every 5 s for as long as the job ran.
-_SD115 = _read106("static", "js", "server_detail.js")
+_SD115 = _read106("panel", "static", "js", "server_detail.js")
 _name115g = "GMod content card: two Uninstalls confirmed before the redraw"
 _outg115 = _js106(_name115g, _PEND109 + (
     "var serverId = 1; global._esc = escapeHtml; global.tfHtml = (k, v) => k;\n"

@@ -745,7 +745,7 @@ def _server_name_refusal(server_name):
 
 # Best-effort default port per game for the install form. This is only a pre-install HINT — after
 # install the panel reads LinuxGSM's real port(s) via `details` and opens every one, so an imperfect
-# default self-corrects. static/js/manage_servers.js PORTS is the same table for the form.
+# default self-corrects. panel/static/js/manage_servers.js PORTS is the same table for the form.
 #
 # Keyed by LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt). "insurgency", "gesource",
 # "spigot", "paper", "bukkit", "mcbe", "7d2d", "valheim", "projectzomboid", "tshock", "mumble" and

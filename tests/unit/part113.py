@@ -33,11 +33,11 @@ _ROOT113 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 
 def _catalogs113():
-    """{lang: every key in translations/<lang>/*.json} for es and fr."""
+    """{lang: every key in panel/translations/<lang>/*.json} for es and fr."""
     keys = {}
     for lg in ("es", "fr"):
         keys[lg] = set()
-        root = os.path.join(_ROOT113, "translations", lg)
+        root = os.path.join(_ROOT113, "panel", "translations", lg)
         for name in sorted(os.listdir(root)):
             if name.endswith(".json"):
                 with open(os.path.join(root, name), encoding="utf-8") as fh:

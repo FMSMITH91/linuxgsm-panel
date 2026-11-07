@@ -1707,7 +1707,7 @@ def _drain_action_to_end(app, remote, server_id, entry):
     """Send what is left of `entry`'s output as its action finishes: ONE read (_final_drain_cmd).
 
     The poller drains an action's output only for a console someone is watching, so an action that
-    ran with nobody watching — every tab on it left (static/js/server_detail.js leaves a console
+    ran with nobody watching — every tab on it left (panel/static/js/server_detail.js leaves a console
     hidden for 30 s), or started by a bot or from the dashboard with no console open — had read
     nothing when it ended, and one 64 KB chunk from byte 0 was all it got: an update's start, and
     never the lines that say whether it worked. Now a watched action's end reads what is left whole,

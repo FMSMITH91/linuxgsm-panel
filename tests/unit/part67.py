@@ -672,7 +672,7 @@ try:
             _rst67[_k67] = _p9_client(P9_ADMIN).post("/api/panel/backup/restore", json={"name": "p67.tar.gz"}).get_json()
 finally:
     _as67(_LANG67_WAS)
-with open(_os67.path.join(_ROOT67, "static", "js", "remote_manage_backups.js"), encoding="utf-8") as _fh67:
+with open(_os67.path.join(_ROOT67, "panel", "static", "js", "remote_manage_backups.js"), encoding="utf-8") as _fh67:
     _bkjs67 = _fh67.read()
 _wants67 = _node47(_cut47(_bkjs67, "function _bkRestoreWantsPassphrase") + "\n"
                    + _cut47(_bkjs67, "function _bkRestoreWantsSkipSafety") + "\n"

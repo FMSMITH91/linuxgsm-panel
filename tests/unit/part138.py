@@ -585,7 +585,7 @@ try:
 finally:
     _files138.lgsm_get_values = _saved_gv138
 
-_bkjs138 = _read138("static", "js", "remote_manage_backups.js")
+_bkjs138 = _read138("panel", "static", "js", "remote_manage_backups.js")
 _cut_bk138 = _cut47(_bkjs138, "function bkBusyHtml(") + "\n" + _cut47(_bkjs138, "function bkGameStatus(")
 _prog_bk138 = ("global.escapeHtml = s => String(s); global._da = () => '';\n" + _cut_bk138 + "\n"
                "console.log(JSON.stringify([bkGameStatus({id: 1}, {busy: true, code: 'lgsm_postponed', msg: 'X'}),"
@@ -732,12 +732,12 @@ check("workshop-update: runnable, a long (background) action, allowed by the hel
       "workshop-update" in _app138.RUNNABLE_ACTIONS and "workshop-update" in _app138.LONG_ACTIONS
       and "workshop-update" in _priv138.LGSM_ACTIONS and '"workshop-update")' in _helper138
       and "workshop-update" in _smc138.SCOPED_LGSM_ACTIONS)
-_tpl138 = _read138("templates", "_server_actions.html")
+_tpl138 = _read138("panel", "templates", "_server_actions.html")
 check("Maintenance menu: workshop-update asks for confirmation first, like update and backup",
       "'fastdl','workshop-update'] else 'false'" in _tpl138)
 
 # ── the pages' scripts ──────────────────────────────────────────────────────────────────────────
-_nags138 = _read138("static", "js", "nags.js")
+_nags138 = _read138("panel", "static", "js", "nags.js")
 _prog_nags138 = (
     "global.window = global;\n"
     "window.tf = (s, v) => s.replace(/\\{(\\w+)\\}/g, (m, k) => v && k in v ? v[k] : m);\n"
@@ -792,7 +792,7 @@ check("reboot dialog: the warning lines are drawn in the players-online view onl
       "has no players to warn)", _nags138.count("_rbWarnNotes(ctx);") == 1
       and "_rbWarnNotes(ctx);" in _cut47(_nags138, "function _rbPlayers("))
 
-_sfjs138 = _read138("static", "js", "server_files.js")
+_sfjs138 = _read138("panel", "static", "js", "server_files.js")
 _prog_sf138 = ("global.window = global; window.escapeHtml = s => String(s);\n"
                "function esc(s){ return window.escapeHtml(s); }\n"
                + _cut47(_sfjs138, "function _lg264PlayersHtml(") + "\n"

@@ -51,7 +51,7 @@ _ROOT70 = _os70.path.dirname(_os70.path.dirname(_os70.path.dirname(_os70.path.ab
 
 def _cat70(lang):
     out = {}
-    folder = _os70.path.join(_ROOT70, "translations", lang)
+    folder = _os70.path.join(_ROOT70, "panel", "translations", lang)
     for name in sorted(_os70.listdir(folder)):
         if name.endswith(".json"):
             with open(_os70.path.join(folder, name), encoding="utf-8") as fh:
@@ -133,7 +133,7 @@ check("optimize database: a deferred VACUUM is said in the answer (`vacuumed` fa
       and bool(_busy_es70) and _opt_busy70.get("message") == _busy_es70
       and _opt_ok70.get("vacuumed") is True, repr((_opt_busy70, _opt_ok70)))
 
-with open(_os70.path.join(_ROOT70, "static", "js", "remote_manage_host.js"), encoding="utf-8") as _fh70:
+with open(_os70.path.join(_ROOT70, "panel", "static", "js", "remote_manage_host.js"), encoding="utf-8") as _fh70:
     _rmh70 = _fh70.read()
 
 
@@ -398,7 +398,7 @@ check("reboot: ...and the rollback's give-up reason does not claim a reboot happ
 with _patched():
     _patch(_so70, "_update_in_progress", lambda: True)
     _pb70 = _hr70._panel_host_blockers()
-with open(_os70.path.join(_ROOT70, "static", "js", "nags.js"), encoding="utf-8") as _fh70:
+with open(_os70.path.join(_ROOT70, "panel", "static", "js", "nags.js"), encoding="utf-8") as _fh70:
     _nags70 = _fh70.read()
 _DOM70 = ("function El(tag){ this.tag = tag; this.attrs = {}; this.children = []; }\n"
           "El.prototype.setAttribute = function(k, v){ this.attrs[k] = v; };\n"

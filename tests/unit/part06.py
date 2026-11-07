@@ -6388,12 +6388,12 @@ try:
     # ── the JavaScript report: the js-coverage job's lcov.info ──────────────────────────────────
     # Sent beside the Python report with the reporter's partial/final flow. It is DATA from the
     # tested code, reaching the job that holds the token, so it gets the XML's treatment: every
-    # line one of LCOV's records, every file static/js/<name>.js, and what is sent is rebuilt from
+    # line one of LCOV's records, every file panel/static/js/<name>.js, and what is sent is rebuilt from
     # the parsed numbers — which also keeps it from being XML, which the reporter would otherwise
     # hand to its XML parsers before its LCOV one.
-    _cc_lcov = ("TN:\nSF:static/js/panel.js\nFN:3,init\nFNDA:1,init\nFNF:1\nFNH:1\n"
+    _cc_lcov = ("TN:\nSF:panel/static/js/panel.js\nFN:3,init\nFNDA:1,init\nFNF:1\nFNH:1\n"
                 "DA:3,1\nDA:4,0\nDA:9,12,abcd==\nLF:3\nLH:2\nend_of_record\n"
-                "TN:\nSF:static/js/dashboard.js\nBRDA:5,0,0,1\nBRDA:5,0,1,-\nBRF:2\nBRH:1\n"
+                "TN:\nSF:panel/static/js/dashboard.js\nBRDA:5,0,0,1\nBRDA:5,0,1,-\nBRF:2\nBRH:1\n"
                 "DA:5,2\nLF:1\nLH:1\nend_of_record\n")
     _c = _cc_case(_cc_good, lcov=_cc_lcov)
     check("codacy-coverage: with an lcov.info as well, both go up as partial reports — the "
@@ -6407,26 +6407,26 @@ try:
           repr(_c[:4]))
     check("codacy-coverage: ...and the LCOV sent is rebuilt from its numbers (SF, DA, LF, LH), "
           "nothing else it carried",
-          _c[5] == ("SF:static/js/dashboard.js\nDA:5,2\nLF:1\nLH:1\nend_of_record\n"
-                    "SF:static/js/panel.js\nDA:3,1\nDA:4,0\nDA:9,12\nLF:3\nLH:2\nend_of_record\n"),
+          _c[5] == ("SF:panel/static/js/dashboard.js\nDA:5,2\nLF:1\nLH:1\nend_of_record\n"
+                    "SF:panel/static/js/panel.js\nDA:3,1\nDA:4,0\nDA:9,12\nLF:3\nLH:2\nend_of_record\n"),
           repr(_c[5]))
 
     def _cc_lc(*bodies):
-        """One record per body, each about a different static/js file."""
-        return "".join("TN:\nSF:static/js/f%d.js\n%s\nend_of_record\n" % (_i, _b)
+        """One record per body, each about a different panel/static/js file."""
+        return "".join("TN:\nSF:panel/static/js/f%d.js\n%s\nend_of_record\n" % (_i, _b)
                        for _i, _b in enumerate(bodies))
 
     _cc_js_bad = {
-        "path traversal": (_cc_lcov.replace("static/js/panel.js", "static/js/../../app.py"),
-                           "is not static/js/<name>.js"),
-        "absolute path": (_cc_lcov.replace("static/js/panel.js", "/etc/passwd"),
-                          "is not static/js/<name>.js"),
-        "subdirectory": (_cc_lcov.replace("static/js/panel.js", "static/js/sub/panel.js"),
-                         "is not static/js/<name>.js"),
-        "vendor file": (_cc_lcov.replace("static/js/panel.js", "static/vendor/x/panel.js"),
-                        "is not static/js/<name>.js"),
-        "not a .js file": (_cc_lcov.replace("static/js/panel.js", "static/js/panel.py"),
-                           "is not static/js/<name>.js"),
+        "path traversal": (_cc_lcov.replace("panel/static/js/panel.js", "panel/static/js/../../app.py"),
+                           "is not panel/static/js/<name>.js"),
+        "absolute path": (_cc_lcov.replace("panel/static/js/panel.js", "/etc/passwd"),
+                          "is not panel/static/js/<name>.js"),
+        "subdirectory": (_cc_lcov.replace("panel/static/js/panel.js", "panel/static/js/sub/panel.js"),
+                         "is not panel/static/js/<name>.js"),
+        "vendor file": (_cc_lcov.replace("panel/static/js/panel.js", "panel/static/vendor/x/panel.js"),
+                        "is not panel/static/js/<name>.js"),
+        "not a .js file": (_cc_lcov.replace("panel/static/js/panel.js", "panel/static/js/panel.py"),
+                           "is not panel/static/js/<name>.js"),
         "an XML document": ('<?xml version="1.0"?>\n<!DOCTYPE c [<!ENTITY x SYSTEM '
                             '"file:///etc/hostname">]>\n<coverage line-rate="1">&x;</coverage>\n',
                             "is not an LCOV record"),
@@ -6435,10 +6435,10 @@ try:
         "a malformed FN": (_cc_lc("FN:x,init\nDA:1,1"), "malformed FN"),
         "line 0": (_cc_lc("DA:0,1"), "or a line 0"),
         "a line twice": (_cc_lc("DA:1,1\nDA:1,2"), "twice, or a line 0"),
-        "a file twice": (_cc_lcov + _cc_lcov, "names static/js/panel.js twice"),
+        "a file twice": (_cc_lcov + _cc_lcov, "names panel/static/js/panel.js twice"),
         "a record outside a file": ("DA:1,1\n" + _cc_lc("DA:2,1"), "outside any file"),
-        "a record inside another": ("SF:static/js/a.js\n" + _cc_lc("DA:1,1"), "inside another"),
-        "no end": ("SF:static/js/a.js\nDA:1,1\n", "ends inside a record"),
+        "a record inside another": ("SF:panel/static/js/a.js\n" + _cc_lc("DA:1,1"), "inside another"),
+        "no end": ("SF:panel/static/js/a.js\nDA:1,1\n", "ends inside a record"),
         "a stray end": ("end_of_record\n" + _cc_lc("DA:1,1"), "never began"),
         "no file": ("TN:\n", "holds no line of any file"),
         "files with no lines": (_cc_lc("LF:0\nLH:0"), "holds no line of any file"),
@@ -6455,7 +6455,7 @@ try:
         _k for _k, _v in _cc_js_refused.items()
         if not (_v[0] != 0 and not _v[1] and not _v[5]
                 and (_cc_js_bad[_k][1] if _k in _cc_js_bad else "no regular lcov.info") in _v[3]))
-    check("codacy-coverage: an lcov.info with a path outside static/js/<name>.js, a record LCOV "
+    check("codacy-coverage: an lcov.info with a path outside panel/static/js/<name>.js, a record LCOV "
           "does not have, a malformed or repeated one, control characters, non-ASCII, XML, no "
           "lines at all, over 16 MB, or reached through a symlink stops BOTH uploads, and says why",
           len(_cc_js_refused) == len(_cc_js_bad) + 1 and not _cc_js_missed,
@@ -6537,7 +6537,7 @@ check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from
 # installs to, and the commands are run here against a fixture root: they take the panel's tree,
 # cron, log and links, and leave a gamedig link that points anywhere else, and a directory that
 # still holds something (a panel host's helper) — the sudo rm -rf a README hands out is tested.
-_rh_js = open(os.path.join(_root, "static", "js", "manage_remotes.js"), encoding="utf-8").read()
+_rh_js = open(os.path.join(_root, "panel", "static", "js", "manage_remotes.js"), encoding="utf-8").read()
 # find(), not index(): a renamed function or heading must fail the checks below by name.
 _rh_fn = _rh_js[_rh_js.find("function removeRemote(btn){"):] if "function removeRemote(btn){" in _rh_js else ""
 _rh_fn = _rh_fn[:_rh_fn.find("\n}\n")]
@@ -6551,7 +6551,7 @@ _rh_sec = _rh_sec[:_rh_sec.find("\n## ", 1)] if "\n## " in _rh_sec[1:] else _rh_
 _rh_cron = _privmod.WRITE_TARGETS["node-tools-cron"][0]
 check("delete host: the confirmation says what stays on the host, in its own translatable sentence",
       "'" + _rh_note + "'" in _rh_fn and "The README" in _rh_note
-      and all(_rh_note in json.load(open(os.path.join(_root, "translations", _lg, "actions.json"),
+      and all(_rh_note in json.load(open(os.path.join(_root, "panel", "translations", _lg, "actions.json"),
                                          encoding="utf-8")) for _lg in ("es", "fr")), _rh_fn[:400])
 check("delete host: README's 'Removing a host' names the paths the code installs to",
       "`%s`" % _privmod.GAMEDIG_DIR in _rh_sec and "`%s`" % _rh_cron in _rh_sec
@@ -7412,7 +7412,7 @@ check("install.sh: ...with SCRIPT_PATH only as a fallback, still shebang-checked
 # is at /lgsm-panel, so the panel reported success, cleared tailscale_setup_done and
 # tailscale_mount, and left Serve running — with PrefixMiddleware then no longer prefixing URLs
 # for a panel still served under the prefix.
-_ts_tpl = open(os.path.join(_root, "templates", "tailscale.html"), encoding="utf-8").read()
+_ts_tpl = open(os.path.join(_root, "panel", "templates", "tailscale.html"), encoding="utf-8").read()
 check("tailscale.html: disableServe does not hardcode the mount",
       "action: 'disable', mount: '/'" not in _ts_tpl)
 check("tailscale.html: the Mount Point field shows the route's default mount, not a fixed /",
@@ -7580,15 +7580,15 @@ check("tailscale.html: enableServe/disableServe receive @self rather than readin
       and _ts_tpl.count("""data-args='["@self"]'""") >= 2)
 
 # ── Vendored front-end libraries match their manifest ─────────────────────────────────────────
-# static/vendor/ holds ~650KB of third-party browser code: Bootstrap, its icons, Chart.js and the
+# panel/static/vendor/ holds ~650KB of third-party browser code: Bootstrap, its icons, Chart.js and the
 # Socket.IO client. Nothing was managing any of it — Dependabot reads pip and github-actions, there
 # is no package.json, and no scanner looks inside a minified bundle. The result was that Bootstrap's
 # JS sat at 5.3.0 while its CSS was 5.3.3 for months with nothing able to notice.
 #
-# static/vendor/VERSIONS.md is the manifest. This asserts it is true: every listed file exists, and
+# panel/static/vendor/VERSIONS.md is the manifest. This asserts it is true: every listed file exists, and
 # the version recorded for it is the version in that file's own banner comment. A bump is then a
 # deliberate edit to both, and a silent swap fails the build.
-_vendor_dir = os.path.join(_root, "static", "vendor")
+_vendor_dir = os.path.join(_root, "panel", "static", "vendor")
 _manifest = os.path.join(_vendor_dir, "VERSIONS.md")
 check("vendor: the manifest exists", os.path.isfile(_manifest))
 if os.path.isfile(_manifest):
@@ -7630,7 +7630,7 @@ if os.path.isfile(_manifest):
           % (_js[0][1] if _js else "?", _css[0][1] if _css else "?"))
 
 # ── One key, one section file ─────────────────────────────────────────────────────────────────
-# i18n.catalog() merges translations/<lang>/*.json in sorted FILENAME order, last write wins. That
+# i18n.catalog() merges panel/translations/<lang>/*.json in sorted FILENAME order, last write wins. That
 # order is alphabetical accident, not a decision — so a key present in two files has its translation
 # chosen by which file happens to sort later. Three dashboard tile labels were in two files each,
 # and two of those pairs DISAGREED: "Players Online" was both "Jugadores conectados" (common.json)
@@ -7638,13 +7638,13 @@ if os.path.isfile(_manifest):
 #
 # Duplicates are banned outright rather than only conflicting ones: an identical duplicate is the
 # state a conflicting one starts from, and the fix for both is the same — put the key in one file.
-_i18n_dir = os.path.join(_root, "translations")
+_i18n_dir = os.path.join(_root, "panel", "translations")
 # The sweeps below are all "no bad key anywhere". Fed an empty catalog every one of them passes —
 # two empty sets compare equal, `not {}` is True, and a missing-keys diff over nothing is empty.
 # Measured by pointing tools/i18n_scan's globs at "*.MUTATED": the suite reported 1888/1888 with
 # all three i18n gates green, having scanned zero files. Floors, not inventories.
 _i18n_seen = {_l: len(glob.glob(os.path.join(_i18n_dir, _l, "*.json"))) for _l in ("es", "fr")}
-check("sweep: the translations/ scan found catalog files to read",
+check("sweep: the panel/translations/ scan found catalog files to read",
       all(_n >= 4 for _n in _i18n_seen.values()),
       "%s — every i18n gate below would pass vacuously" % _i18n_seen)
 for _lang in ("es", "fr"):
@@ -7694,17 +7694,17 @@ finally:
     sys.path[:] = _i18n_path6
     for _i18n_m6 in set(sys.modules) - _i18n_mods6:
         del sys.modules[_i18n_m6]
-# The scanner has its own globs, and proof B above was exactly those drifting while templates/
-# and static/js/ were untouched. Assert it actually read something before trusting its answer.
-_i18n_found, _ = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
+# The scanner has its own globs, and proof B above was exactly those drifting while panel/templates/
+# and panel/static/js/ were untouched. Assert it actually read something before trusting its answer.
+_i18n_found, _ = _i18n_scan.scan_templates(os.path.join(_root, "panel", "templates"))
 check("sweep: i18n_scan read the templates (its own globs can drift)",
       len(_i18n_found) >= 400,
       "%d translatable strings — the gates below would pass on an empty scan" % len(_i18n_found))
-_i18n_js_seen = _i18n_scan.scan_js(os.path.join(_root, "static", "js"))
+_i18n_js_seen = _i18n_scan.scan_js(os.path.join(_root, "panel", "static", "js"))
 check("sweep: ...and the JS", len(_i18n_js_seen) >= 40,
       "%d strings — the JS catalog gate would pass on an empty scan" % len(_i18n_js_seen))
 _i18n_gaps = _i18n_scan.missing("es",
-                                template_dir=os.path.join(_root, "templates"),
+                                template_dir=os.path.join(_root, "panel", "templates"),
                                 translation_dir=_i18n_dir)
 check("i18n: every translatable template string is in the catalog",
       not _i18n_gaps,
@@ -7723,7 +7723,7 @@ check("i18n: every translatable template string is in the catalog",
 # A dynamic string that IS in the catalog is inert rather than broken — it is translated wherever
 # it appears as a node of its own — so only the ones with no entry are failures.
 _i18n_dyn_cat = _i18n_scan.load_catalog("es", translation_dir=_i18n_dir)
-_, _i18n_dyn = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
+_, _i18n_dyn = _i18n_scan.scan_templates(os.path.join(_root, "panel", "templates"))
 _i18n_unreachable = {_k: _v for _k, _v in _i18n_dyn.items() if _k not in _i18n_dyn_cat}
 check("i18n: no translatable string is glued to a {{ }} with no catalog entry to reach it",
       not _i18n_unreachable,
@@ -7739,7 +7739,7 @@ check("i18n: no translatable string is glued to a {{ }} with no catalog entry to
 # concatenation (that kind reaches the DOM welded to per-request text and no key can match it);
 # put `i18n-ignore` in a comment on the line to exempt one it gets wrong.
 _i18n_js_gaps = _i18n_scan.missing_js(
-    "es", js_dir=os.path.join(_root, "static", "js"), translation_dir=_i18n_dir)
+    "es", js_dir=os.path.join(_root, "panel", "static", "js"), translation_dir=_i18n_dir)
 check("i18n: every user-visible string in the JS is in the catalog",
       not _i18n_js_gaps,
       "%d untranslated: %s" % (len(_i18n_js_gaps),
@@ -7787,7 +7787,7 @@ check("peer check: an invalid host is refused before ping runs, not pinged",
 # closing the attribute early and turning the rest into further attributes on the tag. Reachable
 # through a remote's name (SAFE_LABEL_RE blocks < > " ' ` \ but not &) -> REMOTE_NAME ->
 # rebootNagRender. The CSP blocks the payload that would make it an XSS; the escaping is still wrong.
-_panel_js = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
+_panel_js = open(os.path.join(_root, "panel", "static", "js", "panel.js"), encoding="utf-8").read()
 _da_src = _panel_js[_panel_js.index("window._da = function"):]
 _da_src = _da_src[:_da_src.index("\n};")]
 # The quote is matched as /\x27/ (the same character) because a bare ' inside a regex literal is
@@ -7895,7 +7895,7 @@ check("uninstall.sh accounts for every panel path install.sh writes outside PANE
 # live .stat-label under "LIVE STAT TILES" and every stat tile rendered at .75rem/--text-muted
 # instead of the .66rem/#8b98a5 that rule asks for. Unused rules are only harmless when they do not
 # collide, which is why this checks the collision and not just the disuse.
-_css_raw = open(os.path.join(_root, "static", "css", "panel.css"), encoding="utf-8").read()
+_css_raw = open(os.path.join(_root, "panel", "static", "css", "panel.css"), encoding="utf-8").read()
 _css = re.sub(r"/\*.*?\*/", "", _css_raw, flags=re.S)      # comments describe rules; they are not rules
 
 # ── Every SGR code the server keeps has to be STYLED, or it is dropped in silence ──────────────
@@ -7983,8 +7983,8 @@ check("panel.css: ...and the scan really reads the file's rules",
       "found %d top-level class rules" % len(_css_rules))
 # ...and the dead selectors themselves are gone, with nothing in the UI asking for them.
 _markup = "".join(open(_p, encoding="utf-8").read()
-                  for _p in sorted(glob.glob(os.path.join(_root, "templates", "*.html")))
-                  + sorted(glob.glob(os.path.join(_root, "static", "js", "*.js"))))
+                  for _p in sorted(glob.glob(os.path.join(_root, "panel", "templates", "*.html")))
+                  + sorted(glob.glob(os.path.join(_root, "panel", "static", "js", "*.js"))))
 # Comments talk ABOUT class names ("shows an empty-state when nothing matches") without using them,
 # so strip them first or the prose answers for the markup.
 _markup = re.sub(r"<!--.*?-->|\{#.*?#\}|/\*.*?\*/", "", _markup, flags=re.S)
@@ -11252,11 +11252,11 @@ check("install.sh: ...while a fetch that failed still says it couldn't reach the
 # Matched INSIDE the tag (`id="eu-2fa-block" ... display:none`), not anywhere in the file — the
 # comment above that div explains the old behaviour and would satisfy a looser search. Same trap
 # the deploy gate hit.
-_mu_html = open(os.path.join(_root, "templates", "manage_users.html"), encoding="utf-8").read()
+_mu_html = open(os.path.join(_root, "panel", "templates", "manage_users.html"), encoding="utf-8").read()
 check("users page: the 2FA reset control is not hidden at render time",
       not re.search(r'id="eu-2fa-block"[^>]*display\s*:\s*none', _mu_html),
       "the block is display:none again — an admin looking for the 2FA reset finds nothing")
-_mu_js = open(os.path.join(_root, "static", "js", "manage_users.js"), encoding="utf-8").read()
+_mu_js = open(os.path.join(_root, "panel", "static", "js", "manage_users.js"), encoding="utf-8").read()
 check("users page: ...and the script disables it rather than hiding it",
       "box.disabled = !u.totp_enabled" in _mu_js,
       "nothing marks the switch inert for an account with no 2FA, so it would post a no-op")
@@ -12046,7 +12046,7 @@ finally:
 # actually run the check". loadIntegrity() then read `clean` alone and showed the green tick, so
 # the front end undid the back end's refusal. Driven in a rendered panel before this was fixed:
 # the tick appeared and the server's own message was shown nowhere.
-_integ_js6 = open(os.path.join(_root, "static", "js", "remote_manage_host.js"),
+_integ_js6 = open(os.path.join(_root, "panel", "static", "js", "remote_manage_host.js"),
                   encoding="utf-8").read()
 _fn6 = _integ_js6.split("function loadIntegrity()", 1)[-1].split("\nfunction ", 1)[0]
 check("integrity: the pane reads `verified`, not just `clean`",
@@ -12056,7 +12056,7 @@ check("integrity: ...and it tests it BEFORE deciding the files are clean",
       "d.verified" in _fn6 and "d.clean" in _fn6
       and _fn6.index("d.verified") < _fn6.index("d.clean"),
       "the clean branch runs first, so an unverified answer still renders the green tick")
-_rm_html6 = open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-8").read()
+_rm_html6 = open(os.path.join(_root, "panel", "templates", "remote_manage.html"), encoding="utf-8").read()
 check("integrity: ...and there is somewhere to SAY so",
       'id="diag-integrity-unknown"' in _rm_html6 and "diag-integrity-unknown" in _fn6,
       "nothing renders the reason, so an unverifiable host shows an empty panel instead")
@@ -12072,7 +12072,7 @@ check("integrity: ...and there is somewhere to SAY so",
 # The first byte back is the honest signal whatever the transport, so the claim moved to the
 # output handler. A reachable host's prompt lands in milliseconds and it reads the same as before
 # — verified at 150ms for both a local pty and a real remote.
-_ht_src6 = open(os.path.join(_root, "static", "js", "host_terminal.js"), encoding="utf-8").read()
+_ht_src6 = open(os.path.join(_root, "panel", "static", "js", "host_terminal.js"), encoding="utf-8").read()
 
 
 def _handler_body6(event):
@@ -12116,7 +12116,7 @@ check("terminal: the socket handshake path carries the mount prefix",
       _ht_io6 is not None and "MOUNT" in _ht_io6.group(1) and "/socket.io" in _ht_io6.group(1),
       "io(%s) — on a sub-path panel that asks the site root, and the page never connects"
       % (_ht_io6.group(1) if _ht_io6 else "<no `sock = io(...)` call found>"))
-_pjs6 = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
+_pjs6 = open(os.path.join(_root, "panel", "static", "js", "panel.js"), encoding="utf-8").read()
 check("terminal: ...the same way its sibling client does (positive control)",
       "MOUNT + '/socket.io'" in _pjs6,
       "panel.js does not prefix it either, so the gate above is asserting a shape nothing has — "
@@ -12545,7 +12545,7 @@ check("terminal: the leak checks left the session map as they found it",
       _tsmod.count() == _lk_base, "count %d, was %d" % (_tsmod.count(), _lk_base))
 
 # ── seven defects an adversarial review of this session's own terminal turned up ──────────────
-_ht_js7 = open(os.path.join(_root, "static", "js", "host_terminal.js"), encoding="utf-8").read()
+_ht_js7 = open(os.path.join(_root, "panel", "static", "js", "host_terminal.js"), encoding="utf-8").read()
 _ts_src7 = _modsrc("panel/ops/terminal_session.py")
 _htr_src7 = _modsrc("panel/routes/host_terminal.py")
 

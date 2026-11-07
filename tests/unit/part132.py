@@ -97,7 +97,7 @@ check("auto-block threshold: who may change it is unchanged — a non-superadmin
       and not _uit_th.get("viewer_saved"), repr(_uit_th.get("viewer_settings")) + repr(_uit_th.get("viewer_panel")))
 
 # The editor it links to: on the Security tab, editable by a superadmin, Save wired to saveThreshold.
-_RM132 = _read132("templates", "remote_manage.html")
+_RM132 = _read132("panel", "templates", "remote_manage.html")
 _top132 = _RM132[_RM132.find("<!-- Top offending IPs"):_RM132.find('<div id="sec-top">')]
 check("auto-block threshold: the Security tab's Top offenders card holds the editor (a superadmin's "
       "field and Save; a disabled field for anyone else)",
@@ -110,7 +110,7 @@ check("auto-block threshold: the Security tab's Top offenders card holds the edi
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _CAT132 = {}
 for _lang132 in ("es", "fr"):
-    for _f132 in sorted(_glob132.glob(os.path.join(_root, "translations", _lang132, "*.json"))):
+    for _f132 in sorted(_glob132.glob(os.path.join(_root, "panel", "translations", _lang132, "*.json"))):
         with open(_f132, encoding="utf-8") as _fh132:
             _CAT132.setdefault(_lang132, {}).update(_json132.load(_fh132))
 # Every translatable server message has a catalog key (the i18n gates hold that), so a key is where a
@@ -135,7 +135,7 @@ def _uit_strip(text, kind):
 
 
 _uit_said = []
-for _kind132, _pat132 in (("html", ("templates", "*.html")), ("js", ("static", "js", "*.js"))):
+for _kind132, _pat132 in (("html", ("panel", "templates", "*.html")), ("js", ("panel", "static", "js", "*.js"))):
     for _f132 in sorted(_glob132.glob(os.path.join(_root, *_pat132))):
         with open(_f132, encoding="utf-8") as _fh132:
             if "irewall page" in _uit_strip(_fh132.read(), _kind132):
@@ -153,7 +153,7 @@ check("firewall wording: the firewall-could-not-be-read note, the install's fail
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. Phone order on the Network tab: the rules right after the UFW badge (ui-dense: on the heading)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_CSS132 = _read132("static", "css", "panel.css")
+_CSS132 = _read132("panel", "static", "css", "panel.css")
 
 
 def _uit_order(page, ids):
@@ -167,7 +167,7 @@ for _page132 in ("local", "remote"):
     check("phone order (%s host page): the UFW badge, then Open Ports & Rules, then the forms — in the page's "
           "own order, which a phone shows as it is" % _page132,
           -1 not in _o132 and _o132 == sorted(_o132), repr(_o132))
-_PART132 = _read132("templates", "_firewall_panel.html")
+_PART132 = _read132("panel", "templates", "_firewall_panel.html")
 check("phone order: the rules card is the grid's right-hand column (fw-rules-card in .fw-layout)",
       '<div class="fw-layout">' in _PART132 and 'class="card mb-3 fw-rules-card"' in _PART132
       and "col-md-" not in _PART132, "")
@@ -244,7 +244,7 @@ check("old Firewall URL: ...a user without the right to manage the host, and a h
 check("old Firewall URL: ...and the redirect reads no firewall (the tab reads it when it opens)",
       _uit_reads == [], repr(len(_uit_reads)))
 check("old Firewall URL: the standalone template is gone, and nothing renders or links to it",
-      not os.path.exists(os.path.join(_root, "templates", "remote_firewall.html"))
+      not os.path.exists(os.path.join(_root, "panel", "templates", "remote_firewall.html"))
       and "remote_firewall.html" not in _read132("panel", "routes", "remote_vps.py"), "")
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -274,12 +274,12 @@ for _page132 in ("local", "remote"):
           "own, and Top offenders' link lands beside the list" % _page132,
           ("#fw-blocks", "network") not in _hrefs132 and ("#fw-blocks", "security") in _hrefs132,
           repr(sorted(h for h in _hrefs132 if h[0].startswith("#"))))
-_PAL132 = _read132("static", "js", "palette.js")
+_PAL132 = _read132("panel", "static", "js", "palette.js")
 check("blocked & banned: the palette finds Blocked IPs (\"block\" found only the Firewall row, which opens "
       "the Network tab), for the panel host and every remote",
       "page: '/server-management', hash: 'fw-blocks'" in _PAL132 and "{ hash: 'fw-blocks'," in _PAL132
       and "allow deny block network" not in _PAL132, "")
-_RMJS132 = _read132("static", "js", "remote_manage.js")
+_RMJS132 = _read132("panel", "static", "js", "remote_manage.js")
 _kept132 = _RMJS132.partition("function _uitKeptOutChanged(){")[2].partition("\n}")[0]
 check("blocked & banned: a block or unblock from Top offenders repaints the Blocked IPs list beside it",
       _RMJS132.count("_uitKeptOutChanged(); })") == 2

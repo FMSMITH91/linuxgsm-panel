@@ -787,7 +787,7 @@ def _f_node():
     node = _shutil33.which("node")
     if not node:
         return None
-    js = os.path.join(_ROOT33, "static", "js", "remote_manage_backups.js")
+    js = os.path.join(_ROOT33, "panel", "static", "js", "remote_manage_backups.js")
     r = _sp33.run([node, "-", js], input=_JS33, capture_output=True, text=True,  # nosec B603
                   timeout=60, check=False)
     try:
@@ -797,7 +797,7 @@ def _f_node():
 
 
 def _f_js_source():
-    src = open(os.path.join(_ROOT33, "static", "js", "remote_manage_backups.js"),
+    src = open(os.path.join(_ROOT33, "panel", "static", "js", "remote_manage_backups.js"),
                encoding="utf-8").read()
     check("backups page (no node): the manual status names its button and the schedule has its "
           "own line", all(("'“Back up game servers now” has never been run.'" in src,
@@ -843,7 +843,7 @@ def _f_js():
 
 
 def _f_template():
-    src = open(os.path.join(_ROOT33, "templates", "remote_manage.html"), encoding="utf-8").read()
+    src = open(os.path.join(_ROOT33, "panel", "templates", "remote_manage.html"), encoding="utf-8").read()
     i_now, i_auto, i_disk = (src.index('id="fb-now"'), src.index('id="fb-auto-enabled"'),
                              src.index('id="fb-disk"'))
     check("backups page: the manual status sits with its button, and the Automatic-backups row "

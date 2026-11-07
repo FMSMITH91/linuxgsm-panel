@@ -22,7 +22,7 @@ installed root-owned beside the helper with its path recorded in panel.conf.
 from pathlib import Path
 
 # The panel's checkout directory — the one every on-disk path is relative to: data/ (database,
-# secret key, credential key, TLS certs), translations/, templates/, static/, VERSION, and the
+# secret key, credential key, TLS certs), panel/translations/, panel/templates/, panel/static/, VERSION, and the
 # git tree that self-update and integrity-repair operate on.
 #
 # It is anchored HERE, once, and not recomputed from __file__ in each module. Before the modules

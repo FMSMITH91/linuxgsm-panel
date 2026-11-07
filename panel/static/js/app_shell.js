@@ -54,7 +54,7 @@
       });
   });
 
-  // "What's new" (templates/_whats_new.html): opened once the page is parsed, and recorded as seen
+  // "What's new" (panel/templates/_whats_new.html): opened once the page is parsed, and recorded as seen
   // however it is closed — the close button, "Got it" or Esc all fire `close`.
   var wn = document.getElementById('whats-new');
   if (wn && typeof wn.showModal === 'function') {

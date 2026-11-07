@@ -135,7 +135,7 @@ def _secrets_copy55():
 
 
 def _save_alerts55():
-    with open(os.path.join(_root, "static", "js", "server_files.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "static", "js", "server_files.js"), encoding="utf-8") as fh:
         src = fh.read()
     prog = (
         "global.MOUNT = ''; global.serverId = 1;\n"

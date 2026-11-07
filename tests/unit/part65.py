@@ -461,7 +461,7 @@ def _r15f_shortnames65():
 
 
 def _r15f_js_ports65():
-    with open(os.path.join(_ROOT65, "static", "js", "manage_servers.js"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT65, "panel", "static", "js", "manage_servers.js"), encoding="utf-8") as fh:
         js = fh.read()
     body = js[js.index("var PORTS = {"):]
     body = body[:body.index("};")]

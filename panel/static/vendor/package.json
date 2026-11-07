@@ -2,7 +2,7 @@
   "name": "linuxgsm-panel-vendored-browser-libraries",
   "version": "0.0.0",
   "private": true,
-  "description": "What static/vendor/ holds, for the dependency graph and osv-scanner. Nothing installs from this file; see VERSIONS.md.",
+  "description": "What panel/static/vendor/ holds, for the dependency graph and osv-scanner. Nothing installs from this file; see VERSIONS.md.",
   "dependencies": {
     "@xterm/xterm": "5.5.0",
     "bootstrap": "5.3.3",

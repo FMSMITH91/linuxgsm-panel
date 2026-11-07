@@ -53,7 +53,7 @@ check("docs-only: the script's list is ci.yml's push paths-ignore list (which pa
 _samples50 = ["README.md", "a/b/c.md", ".github/SECURITY.md", "docs/x.png", "docs/sub/y.py", "LICENSE",
               ".gitignore", ".gitattributes", ".editorconfig", "app.py", "docsx/y.py", "LICENSE.txt",
               "sub/LICENSE", "sub/.gitignore", ".github/workflows/ci.yml", "README.MD", "README.md.py",
-              "tools/panel-helper", "requirements.txt", "static/vendor/VERSIONS.md", "doc/x.md", "docs"]
+              "tools/panel-helper", "requirements.txt", "panel/static/vendor/VERSIONS.md", "doc/x.md", "docs"]
 _disagree50 = [p for p in _samples50 if PS.is_doc(p) != _so50._ci_path_ignored(p)]
 check("docs-only: ...and the files in it, and what it matches path by path, are the panel update "
       "gate's (system_ops._ci_path_ignored)",

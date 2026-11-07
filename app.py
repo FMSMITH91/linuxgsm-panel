@@ -1587,7 +1587,9 @@ class _R17cRowIdConverter(IntegerConverter):
 
 
 def create_app():
-    app = Flask(__name__)
+    # The UI lives in the panel package (panel/templates, panel/static), served at the same /static
+    # URL it always was, so a cached page, a bookmark and asset_url's hashes keep their paths.
+    app = Flask(__name__, template_folder="panel/templates", static_folder="panel/static", static_url_path="/static")
     cfg = load_config()
     # The commit this process loaded at start, for the debug report's header (R4). app.config, not
     # the module global alone: app.py runs as __main__ while the routes import a second copy.

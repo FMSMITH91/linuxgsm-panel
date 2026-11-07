@@ -41,8 +41,8 @@ from panel.routes import remote_security as _rs59
 from panel.routes import remote_vps as _rv59
 from panel.routes import tailscale as _tsr59
 
-_JS59 = os.path.join(_root, "static", "js")
-_TPL59 = os.path.join(_root, "templates")
+_JS59 = os.path.join(_root, "panel", "static", "js")
+_TPL59 = os.path.join(_root, "panel", "templates")
 _CFG59_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 
 
@@ -387,8 +387,8 @@ check("scripts: the update banner, the ban counts, the jail counters, the cores 
       and "hidden + ' game(s) are greyed out" not in _MSJ59, "a spliced count is back")
 _cat59 = {"es": {}, "fr": {}}
 for _L59 in ("es", "fr"):
-    for _f59 in os.listdir(os.path.join(_root, "translations", _L59)):
-        _cat59[_L59].update(_json59.loads(_read59(_root, "translations", _L59, _f59)))
+    for _f59 in os.listdir(os.path.join(_root, "panel", "translations", _L59)):
+        _cat59[_L59].update(_json59.loads(_read59(_root, "panel", "translations", _L59, _f59)))
 _words59 = ["update", "updates", "update available", "updates available", "security", "ban", "bans",
             "banned", "total", "failed", "cores", "value"]
 check("catalogs: every word the split counts and the argument box's fallback hand the walker is in es and fr",

@@ -207,7 +207,7 @@ check("files & config: the cron help (quick picks and field legend) is folded, t
       repr({i: _a134.folded.get(i) for i in ("cron-presets", "cron-msg", "cron-sched")} if _a134 else None))
 
 # ── the section script, in node ─────────────────────────────────────────────────────────────────
-_SF134 = _read134("static", "js", "server_files.js")
+_SF134 = _read134("panel", "static", "js", "server_files.js")
 _SFDOM134 = r"""
 function El(attrs){ this.attrs = attrs; this.style = {display: attrs.hidden ? 'none' : ''};
   const cl = new Set(attrs.active ? ['active'] : []);
@@ -425,7 +425,7 @@ check("server bar: Start / Stop / Restart stay buttons of their own, outside the
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. The page alerts: one line, every action kept
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_BASE134 = _read134("templates", "base.html")
+_BASE134 = _read134("panel", "templates", "base.html")
 _otp134 = _BASE134[_BASE134.find('id="otp-nag"'):_BASE134.find("js/otp_nag.js")]
 check("2FA alert: one compact line (uis-nag) holding Enable 2FA, Not now and Don't remind me, the reason "
       "kept as the sentence's tooltip",
@@ -433,7 +433,7 @@ check("2FA alert: one compact line (uis-nag) holding Enable 2FA, Not now and Don
       and 'data-action="dismissOtpNagForever"' in _otp134
       and 'title="You have full control of the panel' in _otp134
       and '<div class="small d-none d-sm-block">' not in _otp134, _otp134[:300])
-_NG134 = _read134("static", "js", "nags.js")
+_NG134 = _read134("panel", "static", "js", "nags.js")
 _RBDOM134 = r"""
 function E(tag){ this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.className = '';
   this.style = {}; this._text = ''; }
@@ -499,7 +499,7 @@ else:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. The Maintenance backups list: each server's backups folded, its controls outside the fold
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_BK134 = _read134("static", "js", "remote_manage_backups.js")
+_BK134 = _read134("panel", "static", "js", "remote_manage_backups.js")
 _BKPROG134 = (r"""
 global.window = global; global.MOUNT = '';
 global.escapeHtml = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -542,7 +542,7 @@ else:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 6. Account sessions: three, then "Show all N"; this device never hidden
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_AS134 = _read134("static", "js", "account_sessions.js")
+_AS134 = _read134("panel", "static", "js", "account_sessions.js")
 _ASPROG134 = (r"""
 function E(tag){ this.tagName = tag; this.children = []; this.attrs = {}; this.style = {}; this.on = {};
   const s = new Set(); this.classList = {add: c => s.add(c), remove: c => s.delete(c), has: c => s.has(c)};
@@ -624,7 +624,7 @@ check("settings: every field the page saved before the columns moved is still in
       _st134 is not None and _SETNAMES134 <= _st134.names
       and {"sec-branding", "sec-localization", "sec-security", "sec-reboots"} <= set(_st134.where),
       repr(sorted(_SETNAMES134 - (_st134.names if _st134 else set()))))
-_SETTPL134 = _read134("templates", "settings.html")
+_SETTPL134 = _read134("panel", "templates", "settings.html")
 check("settings: Host reboots sits in the right-hand column under Sessions & Security, Localization in "
       "the left under Branding (the columns were 350px apart)",
       _SETTPL134.find('id="sec-branding"') < _SETTPL134.find('id="sec-localization"')
@@ -642,13 +642,13 @@ check("custom commands: every command row keeps its Edit toggle and its Delete f
       and _cmh134.count("/delete\"") >= _cmh134.count('id="edit-cmd-'), _cmh134[:200])
 
 # The Details tab's Supported Commands: the first six, then the rest folded, none dropped.
-_SD134 = _read134("templates", "server_detail.html")
+_SD134 = _read134("panel", "templates", "server_detail.html")
 check("server details: Supported Commands shows six rows and folds the rest, every command still rendered",
       "_uis_cmd_rows(all_commands[:6])" in _SD134 and "_uis_cmd_rows(all_commands[6:])" in _SD134
       and "{% for c in all_commands %}" not in _SD134, "the Supported Commands table changed shape")
 
 # The Tailscale page: the explanation and the Serve form fold only when Serve already proxies the panel.
-_TS134 = _read134("templates", "tailscale.html")
+_TS134 = _read134("panel", "templates", "tailscale.html")
 check("tailscale: Recommended Access folds its explanation and Serve form only when the recommended "
       "method is already in use (method tailscale-serve), and renders them unfolded otherwise",
       "{% set _uis_ts_done = suggestion.method == 'tailscale-serve' %}" in _TS134
@@ -657,7 +657,7 @@ check("tailscale: Recommended Access folds its explanation and Serve form only w
 
 
 # The Maintenance tab's backup encryption: the why folded, the passphrase box and the warning not.
-_RM134 = _read134("templates", "remote_manage.html")
+_RM134 = _read134("panel", "templates", "remote_manage.html")
 _enc134 = _RM134[_RM134.find('id="bk-enc-box"'):]
 _encf134 = _enc134[_enc134.find("{% call fold('Why encrypt?'"):_enc134.find("{% endcall %}")]
 check("maintenance: backup encryption folds only its explanation; the status, the passphrase box, both "

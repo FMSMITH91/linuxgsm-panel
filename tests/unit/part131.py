@@ -191,7 +191,7 @@ check("network tab: nothing on the host pages links to the old Firewall page",
       len(_links131) == 2 and not any(_links131.values()), repr(_links131))
 # The Remote Servers list, as its template writes the button (the page needs more than part12's app
 # serves): it opens the host's Network tab, and nothing there names the old page's endpoint.
-_MR131 = _read131("templates", "manage_remotes.html")
+_MR131 = _read131("panel", "templates", "manage_remotes.html")
 check("network tab: the Remote Servers list's Firewall button opens the host's Network tab",
       "url_for('remote_manage', remote_id=remote.id) }}#network\" class=\"btn btn-outline-info btn-sm\" "
       "title=\"Open or close firewall ports\"" in _MR131 and "url_for('remote_firewall'" not in _MR131, "")
@@ -209,7 +209,7 @@ _pw131 = [h for h, tab in (_P131["local"].hrefs if "local" in _P131 else []) if 
 check("network tab: the Power card links a superadmin to the Settings page's Host reboots",
       len(_pw131) == 1 and _P131["local"].where.get("sec-power") == "controls", repr(_pw131))
 
-_PAL131 = _read131("static", "js", "palette.js")
+_PAL131 = _read131("panel", "static", "js", "palette.js")
 check("network tab: the command palette finds the panel host's firewall and Connection & SSH (its host rows "
       "expand over remote hosts only)",
       "page: '/server-management', hash: 'sec-firewall'" in _PAL131
@@ -217,9 +217,9 @@ check("network tab: the command palette finds the panel host's firewall and Conn
 
 _CAT131 = {}
 for _lang131 in ("es", "fr"):
-    for _f131 in sorted(os.listdir(os.path.join(_root, "translations", _lang131))):
+    for _f131 in sorted(os.listdir(os.path.join(_root, "panel", "translations", _lang131))):
         if _f131.endswith(".json"):
-            _CAT131.setdefault(_lang131, {}).update(_json131.loads(_read131("translations", _lang131, _f131)))
+            _CAT131.setdefault(_lang131, {}).update(_json131.loads(_read131("panel", "translations", _lang131, _f131)))
 _NEW131 = ("Network", "Go to the firewall rules", "Firewall — panel host",
            "Connection & SSH — panel host",
            "Lockout-safe: the current binding stays in place as a fallback, and the firewall and fail2ban are "
@@ -235,7 +235,7 @@ check("network tab: rendering the pages reached no real transport",
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # remote_manage.js's tab script, in node
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM131 = _read131("static", "js", "remote_manage.js")
+_RM131 = _read131("panel", "static", "js", "remote_manage.js")
 _HEAD131 = "(function(){\n  var nav = document.getElementById('mtab-nav'); if(!nav) return;"
 _IIFE131 = (_cut47(_RM131, _HEAD131) + ")();") if _HEAD131 in _RM131 else "/* MISSING the tab script */"
 _PROG131 = r"""

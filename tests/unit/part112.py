@@ -33,7 +33,7 @@ _TRIP112_START = len(_P9_TRIPPED)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 1. Files & Config's backup card reads again after a schedule save that failed
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SF112 = _read106("static", "js", "server_files.js")
+_SF112 = _read106("panel", "static", "js", "server_files.js")
 _name112f = "Files & Config backup card: a schedule save that failed"
 _outf112 = _js106(_name112f, _PEND109 + (
     "var serverId = 1; const seen = []; global.renderBackups = (d, s, keep) => { if (!keep) seen.push(d.tag); };\n"
@@ -65,7 +65,7 @@ if _outf112 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. The GMod content card: the first poll after a job started polls again when it misses
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SD112 = _read106("static", "js", "server_detail.js")
+_SD112 = _read106("panel", "static", "js", "server_detail.js")
 _name112g = "GMod content card: the first poll after Apply"
 _outg112 = _js106(_name112g, _PEND109 + (
     "var serverId = 1; global._esc = escapeHtml; global.tfHtml = (k, v) => k;\n"
@@ -104,7 +104,7 @@ if _outg112 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. Peer Reachability Check: a refusal is said as the route's reason, not as "not responding"
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_TS112 = _read106("static", "js", "tailscale.js")
+_TS112 = _read106("panel", "static", "js", "tailscale.js")
 _name112t = "Peer Reachability Check: the route's refusals"
 _outt112 = _js106(_name112t, _PEND109 + (
     "global.tfHtml = (k, v) => k.replace(/\\{(\\w+)\\}/g, (m, n) => escapeHtml(String(v[n])));\n"
@@ -135,7 +135,7 @@ if _outt112 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. The OS Updates card says a refused start was refused (integration of B's foreign-update refusal)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_RM112 = _read106("static", "js", "remote_manage.js")
+_RM112 = _read106("panel", "static", "js", "remote_manage.js")
 _name112o = "OS Updates card: a start the route refused"
 _outo112 = _js106(_name112o, _PEND109 + (
     "global.MOUNT = ''; global.REMOTE_ID = 3;\n"), _RM112, (

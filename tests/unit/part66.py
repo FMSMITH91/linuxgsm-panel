@@ -22,8 +22,8 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part47 import _cut47, _node47
 
-_JS66 = os.path.join(_root, "static", "js")
-_TPL66 = os.path.join(_root, "templates")
+_JS66 = os.path.join(_root, "panel", "static", "js")
+_TPL66 = os.path.join(_root, "panel", "templates")
 
 
 def _read66(*parts):
@@ -122,8 +122,8 @@ _ES66, _FR66 = _i18n66.load_catalog("es"), _i18n66.load_catalog("fr")
 _td66 = os.path.realpath(_tf66.mkdtemp(prefix="lgsm-unit-p66-i18n-"))
 try:
     _js66 = os.path.join(_td66, "js")
-    _tr66 = os.path.join(_td66, "translations")
-    _tpl66 = os.path.join(_td66, "templates")
+    _tr66 = os.path.join(_td66, "panel", "translations")
+    _tpl66 = os.path.join(_td66, "panel", "templates")
     for _d66 in (_js66, os.path.join(_tr66, "es"), _tpl66):
         os.makedirs(_d66)
     with open(os.path.join(_tr66, "es", "x.json"), "w", encoding="utf-8") as _fh66:

@@ -395,7 +395,7 @@ function saveRaw(){
 function renderBreadcrumb(){
   var parts = curDir? curDir.split('/'):[];
   // data-no-i18n on every element that holds a PATH SEGMENT. A directory can legitimately be
-  // called Backups, Console, Status or Log — all of them keys in translations/*/ — and the
+  // called Backups, Console, Status or Log — all of them keys in panel/translations/*/ — and the
   // walker would render the name of a directory that does not exist under that name. `backups/`
   // is a standard LinuxGSM directory, so this is not an exotic case. (This file already knew:
   // _conflictNode guards the overwrite label for exactly this reason.)

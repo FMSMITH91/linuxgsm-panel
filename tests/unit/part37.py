@@ -12,7 +12,7 @@ What it holds, one section each:
   the code shapes its rows assume, so a refactor cannot leave a model quietly matching nothing. A
   barrier cannot be scoped, so every place a whole script is quoted for a second shell (where the
   quote would hide what is inside) is listed here and must sit behind an entry-point sink.
-* V2: static/vendor/ is described to scanners by package.json + package-lock.json, and every file in
+* V2: panel/static/vendor/ is described to scanners by package.json + package-lock.json, and every file in
   it is tied to that manifest by sha256 and by the version its own banner states; a package a
   bundle names in a banner inside it is locked and pinned at that version. The Socket.IO client must
   carry socket.io-parser's two advisory fixes. Templates load the files by a content-hashed URL, and
@@ -586,13 +586,13 @@ def _f6_reach():
           not bad and not relative, "wrapper uses %r; relative imports %r" % (bad, relative))
 
 
-# ── V2: static/vendor/, its two manifests, and the files ────────────────────────────────────────
-_VENDOR37 = os.path.join(_root, "static", "vendor")
+# ── V2: panel/static/vendor/, its two manifests, and the files ────────────────────────────────────────
+_VENDOR37 = os.path.join(_root, "panel", "static", "vendor")
 _VENDOR_META37 = {"VERSIONS.md", "package.json", "package-lock.json"}
 
 
 def _vendor_files37():
-    """Every file under static/vendor/ except the manifests, relative to it."""
+    """Every file under panel/static/vendor/ except the manifests, relative to it."""
     out = set()
     for dp, _dns, fns in os.walk(_VENDOR37):
         for fn in fns:
@@ -603,7 +603,7 @@ def _vendor_files37():
 
 
 def _vendor_json37(name):
-    """static/vendor/<name> as a dict; {} when it is missing or not JSON."""
+    """panel/static/vendor/<name> as a dict; {} when it is missing or not JSON."""
     try:
         with open(os.path.join(_VENDOR37, name), encoding="utf-8") as fh:
             return _json37.load(fh)
@@ -631,7 +631,7 @@ def _v2_files(pj):
     """Every file is listed, and is the bytes its entry records."""
     vend = pj.get("vendored") or {}
     on_disk = _vendor_files37()
-    check("vendor: every file under static/vendor/ has a `vendored` entry in its package.json, and "
+    check("vendor: every file under panel/static/vendor/ has a `vendored` entry in its package.json, and "
           "every entry is a file there", len(on_disk) >= 9 and set(vend) == on_disk,
           "unlisted %r, missing %r" % (sorted(on_disk - set(vend)), sorted(set(vend) - on_disk)))
     bad = []
@@ -681,7 +681,7 @@ def _v2_versions(pj, lock):
 def _v2_versions_md(deps, vend):
     """VERSIONS.md's table agrees with package.json, row by row."""
     rows = _re37.findall(r"^\|\s*([^|]+?)\s*\|\s*([0-9][0-9.]*)\s*\|\s*`([^`]+)`\s*\|",
-                         _read29("static", "vendor", "VERSIONS.md"), _re37.M)
+                         _read29("panel", "static", "vendor", "VERSIONS.md"), _re37.M)
     pinned = {f: deps.get(ent.get("package")) for f, ent in vend.items()}
     off = ["%s: VERSIONS.md %s, package.json %s" % (f, v, pinned.get(f))
            for _n, v, f in rows if v != pinned.get(f)]
@@ -753,9 +753,9 @@ def _v2_embedded(pj, lock):
 
 
 def _v2_asset_urls():
-    """Templates load static/vendor's scripts and stylesheets by a URL that changes with the bytes."""
+    """Templates load panel/static/vendor's scripts and stylesheets by a URL that changes with the bytes."""
     bare, hashed = [], set()
-    for tpl in sorted(_glob37.glob(os.path.join(_root, "templates", "**", "*.html"), recursive=True)):
+    for tpl in sorted(_glob37.glob(os.path.join(_root, "panel", "templates", "**", "*.html"), recursive=True)):
         src = open(tpl, encoding="utf-8").read()
         bare += ["%s: %s" % (os.path.basename(tpl), m) for m in _re37.findall(
             r"url_for\(\s*['\"]static['\"]\s*,\s*filename\s*=\s*['\"](vendor/[^'\"]+\.(?:js|css))['\"]", src)]
@@ -771,10 +771,10 @@ def _v2_asset_urls():
 def _v2_update_paths():
     """The two scanner manifests are noise to the update card; the files they describe are runtime."""
     rules = _so37._parse_update_paths(_read29(".github", "update-paths.txt")) or {}
-    want = {"static/vendor/package.json": False, "static/vendor/package-lock.json": False}
-    want.update({"static/vendor/" + r: True for r in _vendor_files37()})
+    want = {"panel/static/vendor/package.json": False, "panel/static/vendor/package-lock.json": False}
+    want.update({"panel/static/vendor/" + r: True for r in _vendor_files37()})
     got = {p: _so37._is_runtime_path(p, rules) for p in want}
-    check("vendor: .github/update-paths.txt makes static/vendor's two scanner manifests noise (a "
+    check("vendor: .github/update-paths.txt makes panel/static/vendor's two scanner manifests noise (a "
           "lockfile-only bump offers no panel an update) and keeps every vendored file runtime",
           bool(rules) and len(want) >= 11 and got == want,
           "runtime?: %r" % {p: v for p, v in got.items() if v != want[p]})

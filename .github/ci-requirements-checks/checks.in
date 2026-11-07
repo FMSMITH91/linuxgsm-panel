@@ -1,5 +1,5 @@
 # The test matrix's lint and JS-parse tools: flake8, and esprima (tests/template_actions_test.py
-# parses static/js with it). The matrix runs 3.10 to 3.14, so this directory is compiled on 3.10 and
+# parses panel/static/js with it). The matrix runs 3.10 to 3.14, so this directory is compiled on 3.10 and
 # is its own Dependabot entry; a sibling of ci-requirements, because a directory's Dependabot scan
 # also reads the files one level below it. esprima is an sdist: it installs with
 # `--no-build-isolation` after build.txt, since build isolation would fetch setuptools unpinned.

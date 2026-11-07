@@ -327,7 +327,7 @@ failed=""; for s in tests/*_test.py; do PYTHON=./venv/bin/python ./tools/smoke-l
 
 CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, zizmor (on the workflows themselves), a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records the job's outbound connections and the processes it runs as root (in the job's public log, and with StepSecurity), routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
 
-The panel's own JavaScript (`static/js/`) is measured separately, in a real browser: `tools/js_coverage/run.py` boots a seeded panel in a throwaway copy of the tree, with every host command answered by a fake host, walks its pages and controls in headless Chrome, and writes V8's coverage as LCOV (`python tools/js_coverage/run.py --summary js-coverage.txt` with Chrome or Chromium installed; it never touches `data/`). CI sends that to Codacy beside the Python report.
+The panel's own JavaScript (`panel/static/js/`) is measured separately, in a real browser: `tools/js_coverage/run.py` boots a seeded panel in a throwaway copy of the tree, with every host command answered by a fake host, walks its pages and controls in headless Chrome, and writes V8's coverage as LCOV (`python tools/js_coverage/run.py --summary js-coverage.txt` with Chrome or Chromium installed; it never touches `data/`). CI sends that to Codacy beside the Python report.
 
 ### Layout
 
@@ -357,7 +357,7 @@ execs it), and **`db_maintenance.py`** (installed root-owned beside the privileg
 with its path recorded in `panel.conf`). The shell scripts stay for the same reason — the
 documented install and recovery one-liners fetch them from the repo root by raw URL.
 
-Anything needing an on-disk path (`data/`, `translations/`, the git tree) takes it from
+Anything needing an on-disk path (`data/`, `panel/translations/`, the git tree) takes it from
 `panel.REPO_ROOT` rather than recomputing it from `__file__`; `tests/unit/part01.py` has a gate
 that fails if any of them drifts back to being module-relative.
 

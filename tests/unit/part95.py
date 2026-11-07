@@ -55,7 +55,7 @@ def _cut_or95(src, head):
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # #434 counted what could not be read and toasted it, then handed the empty list to uploadEntries,
 # whose empty branch says "Nothing to upload — no files in what you dropped." The drop HAD files.
-_SF95 = _read95("static", "js", "server_files.js")
+_SF95 = _read95("panel", "static", "js", "server_files.js")
 _drop95 = "card.addEventListener('drop', function(ev){"
 _name95 = "file drop: nothing in a dropped folder could be read"
 _out95 = _node95(_name95, _SETTLE47 + (
@@ -194,7 +194,7 @@ def _js95(name, setup, cuts, body, src):
 # ── 2a. The install progress poll ─────────────────────────────────────────────────────────────
 # One failed poll answered by the catch-all became "nothing is installing": every live row settled
 # (a still-running install's was dropped) and stop() ended the poll until the install finished.
-_IP95 = _read95("static", "js", "install_progress.js")
+_IP95 = _read95("panel", "static", "js", "install_progress.js")
 _name95 = "install progress: an error reply to the poll"
 _out95 = _js95(_name95, (
     "var MOUNT = '', missed = 0, applied = [], stops = 0, stale = [];\n"
@@ -214,7 +214,7 @@ if _out95 is not None:
           _out95.get("none") == {"applied": [0], "stops": 1, "stale": [False], "missed": 0}, repr(_out95))
 
 # ── 2b. The Security tab's events, and the account's sessions ─────────────────────────────────
-_RM95 = _read95("static", "js", "remote_manage.js")
+_RM95 = _read95("panel", "static", "js", "remote_manage.js")
 _name95 = "security events: the route's failure answer"
 _out95 = _js95(_name95, "global.tfHtml = (k, v) => tf(k, v);\n", ("function _uidReadJson(", "var _UID_WHY", "function _uidFailHtml(",
                             "function loadSecurityEvents("), (
@@ -229,7 +229,7 @@ if _out95 is not None:
           all("Could not load events." in (_out95.get(k) or "") for k in ("route", "500"))
           and "No security events yet." in (_out95.get("none") or ""), repr(_out95))
 
-_AS95 = _read95("static", "js", "account_sessions.js")
+_AS95 = _read95("panel", "static", "js", "account_sessions.js")
 _name95 = "account sessions: an error reply"
 _out95 = _js95(_name95, (
     "const box = document.getElementById('sessions-list'); function mp(){ return ''; }\n"
@@ -245,7 +245,7 @@ if _out95 is not None:
           and "No active sessions." in (_out95.get("none") or ""), repr(_out95))
 
 # ── 2c. The panel's backups card: the listing, the players pre-check, the settings save ───────
-_RB95 = _read95("static", "js", "remote_manage_backups.js")
+_RB95 = _read95("panel", "static", "js", "remote_manage_backups.js")
 _name95 = "panel backups: error replies"
 _out95 = _js95(_name95, (
     "let listed = 0, dialogs = [], players = [];\n"
@@ -306,7 +306,7 @@ if _out95 is not None:
           _out95.get("500") == ["", ["unknown"]] and "Not checked yet" in (_out95.get("never") or [""])[0],
           repr(_out95))
 
-_RMH95 = _read95("static", "js", "remote_manage_host.js")
+_RMH95 = _read95("panel", "static", "js", "remote_manage_host.js")
 _name95 = "panel branch picker: the route's failure answer"
 _out95 = _js95(_name95, "", ("function loadPanelBranches(",), (
     "  const cur = document.getElementById('pu-branch-current'), sel = document.getElementById('pu-branch-select');\n"
@@ -322,7 +322,7 @@ if _out95 is not None:
           _out95.get("err") == ["…", "KEPT"] and _out95.get("ok") == ["dev", 2], repr(_out95))
 
 # ── 2e. The server page: history charts, the Players card ──────────────────────────────────────
-_SD95 = _read95("static", "js", "server_detail.js")
+_SD95 = _read95("panel", "static", "js", "server_detail.js")
 _name95 = "server page: error replies to history and the player list"
 _out95 = _js95(_name95, (
     "var serverId = 1, _histRange = '24h', drawn = 0, wanted = 'before';\n"
@@ -347,7 +347,7 @@ if _out95 is not None:
           _out95.get("players") == "before", repr(_out95))
 
 # ── 2f. The reboot and OS-updates banners ───────────────────────────────────────────────────────
-_NG95 = _read95("static", "js", "nags.js")
+_NG95 = _read95("panel", "static", "js", "nags.js")
 _name95 = "banners: a failed read keeps what a good one put up"
 _out95 = _js95(_name95, (
     "let removed = 0, cleared = 0, rendered = 0;\n"
@@ -377,7 +377,7 @@ if _out95 is not None:
           _out95.get("osErr") == 0 and _out95.get("osNone") == 1, repr(_out95))
 
 # ── 2g. The upload pre-check ──────────────────────────────────────────────────────────────────
-_SF95 = _read95("static", "js", "server_files.js")
+_SF95 = _read95("panel", "static", "js", "server_files.js")
 _name95 = "upload pre-check: an error reply"
 _out95 = _js95(_name95, (
     "var serverId = 1, curDir = 'here', calls = [];\n"

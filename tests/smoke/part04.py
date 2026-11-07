@@ -409,7 +409,7 @@ check("escaping: escapeHtml is defined inside <head>",
 check("escaping: it is defined exactly once",
       _home.count("window.escapeHtml = function") == 1)
 import pathlib as _pl_esc
-_tpl_dir = _pl_esc.Path(_SUITE_FILE).resolve().parent.parent / "templates"
+_tpl_dir = _pl_esc.Path(_SUITE_FILE).resolve().parent.parent / "panel" / "templates"
 _esc_tpls = sorted(_tpl_dir.glob("*.html"))
 check("escaping: the fallback sweep found templates to read", len(_esc_tpls) >= 20,
       "%d templates — the check below would pass vacuously" % len(_esc_tpls))

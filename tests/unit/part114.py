@@ -321,7 +321,7 @@ def _sentinel114():
 def _card_js114():
     import re
     from unit.part106 import _js106, _read106
-    src = _read106("static", "js", "remote_manage_host.js")
+    src = _read106("panel", "static", "js", "remote_manage_host.js")
     m = re.search(r"^var SSH_LABELS=.*$", src, re.M)
     name = "Public SSH card: the script that names its ports"
     out = _js106(name, (
