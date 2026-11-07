@@ -142,7 +142,7 @@ for (_sz150, _pu150), _src150 in _icons150.items():
 check("manifest: a 192 and a 512 icon, and a maskable 512, each a PNG of the size it claims",
       set(_icons150) == {("192x192", "any"), ("512x512", "any"), ("512x512", "maskable")}
       and all(_files_ok150) and len(_files_ok150) == 3, repr((_icons150, _files_ok150)))
-_mp150 = _anon150.get("/manifest.webmanifest", base_url="http://localhost/lgsm").get_json(force=True) or {}
+_mp150 = _anon150.get("/manifest.webmanifest", base_url="http://localhost/lgsm").get_json(force=True, silent=True) or {}
 check("manifest: under a path prefix (Tailscale Serve) start_url, scope and icons follow it",
       _mp150.get("start_url") == "/lgsm/" and _mp150.get("scope") == "/lgsm/"
       and all(i["src"].startswith("/lgsm/static/icons/") for i in _mp150.get("icons", [])), repr(_mp150))
@@ -230,12 +230,14 @@ try:
           _shown150 == _wn150.SHOW_MAX and "More changes" in _big150
           and "(%d)" % (49 - 5) in _big150 and "The rest are in the full changelog." in _big150,
           repr(_shown150))
+    # The viewer is behind BEFORE the admin dismisses: a dismissal that wrote every account would
+    # otherwise be overwritten here and never seen.
+    _put150(P9_VIEWER, whats_new_seen=_wn150.stamp(_fake150[1:]))
     _seen150 = _adm150.post("/api/account/whats-new/seen")
     check("what's new: dismissing records the changelog as it is now, and the dialog does not come back",
           _seen150.status_code == 200 and _row150(P9_ADMIN, "whats_new_seen") == (_wn150.stamp(_fake150),)
           and 'id="whats-new"' not in _adm150.get("/account").get_data(as_text=True),
           repr(_seen150.status_code))
-    _put150(P9_VIEWER, whats_new_seen=_wn150.stamp(_fake150[1:]))
     check("what's new: it is per account — another account behind the changelog still sees it",
           'id="whats-new"' in _p9_client(P9_VIEWER).get("/account").get_data(as_text=True))
     check("what's new: recording needs a signed-in account",

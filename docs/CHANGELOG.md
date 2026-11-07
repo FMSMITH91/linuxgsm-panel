@@ -17,10 +17,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **Install the panel on a phone's home screen.** The panel now has an app manifest and icons, so
   a phone's browser offers "Install" or "Add to Home screen", and the panel then opens in its own
   window without the browser's bars. It works under a Tailscale Serve path too.
-- **A light theme.** Account → Appearance offers System (the default, which follows the device's
-  light or dark setting), Dark and Light. The choice is saved to the account, so it follows you to
-  every device, and the page draws in it from the start, with no flash of the other one. The
-  console and the host terminal stay dark in both.
+- **A light theme.** The Account page's "Language and theme" card offers System (the default,
+  which follows the device's light or dark setting), Dark and Light. The choice is saved to the
+  account, so it follows you to every device, and the page draws in it from the start, with no
+  flash of the other one. The console and the host terminal stay dark in both.
 - **"What's new" after the panel updates.** The first time you open the panel after an update,
   a small window lists the changelog entries added since you last looked; close it and it does not
   come back until the next update. A new account sees nothing until then.
