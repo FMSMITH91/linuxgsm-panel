@@ -511,6 +511,19 @@ def _decode_output(b):
     return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _decode_command_output(b):
+    """Bytes a local or Tailscale command wrote -> text, as the paramiko transport returns it.
+
+    A bare CR is KEPT: CRLF becomes LF, and nothing else changes. Turning a lone CR into a line
+    break (what _decode_output does, as Popen(text=True) did before it) split every redraw a game
+    console writes into a line of its own. Paper's JLine console rewrites the input line with a CR
+    after each keystroke, so a command typed into a server on the panel's own host showed as
+    "> s", "> st", "> sta"... one line per letter, where a remote host's console showed the one
+    command; terminal.render applies the CR as an overwrite, which needs it to still be there.
+    """
+    return b.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+
 # How long a reader may still be draining after the command it reads has exited on its own: a
 # grandchild holding the pipe open gets this, not the caller's whole timeout over again. ONE
 # deadline for all of a command's readers, not one each.
@@ -759,7 +772,7 @@ def _finish(p, timeout, stdin_text=None):
     if truncated:
         _log.warning("local command output exceeded %d bytes and was truncated",
                      _MAX_OUTPUT_BYTES)
-    return _decode_output(out).strip(), _decode_output(err).strip(), rc
+    return _decode_command_output(out).strip(), _decode_command_output(err).strip(), rc
 
 
 def _in_tpool(fn):
@@ -1783,7 +1796,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
         if truncated:
             _log.warning("ssh command output exceeded %d bytes and was truncated",
                          _MAX_OUTPUT_BYTES)
-        return _decode_output(out).strip(), _decode_output(err).strip(), rc
+        return _decode_command_output(out).strip(), _decode_command_output(err).strip(), rc
     except Exception:
         # Generic message only; the real error is logged, not returned (it can
         # reach API responses — CodeQL py/stack-trace-exposure).
