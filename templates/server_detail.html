@@ -166,7 +166,8 @@
         {# LinuxGSM's other two logs, read-only, in place of the live console while one is chosen.
            The same permission as the Log download beside it and the file browser it comes from. #}
         {% if can_download_log %}
-        <select class="form-select form-select-sm w-auto" id="cmpa-log-select" aria-label="Which log to show"
+        <select class="form-select form-select-sm w-auto py-1" id="cmpa-log-select" aria-label="Which log to show"
+                style="font-size:.8rem;"
                 data-action="cmpaShowLog" data-args='["@self"]' data-on="change">
           <option value="console">Live Console</option>
           <option value="script">Script log</option>
@@ -203,7 +204,7 @@
          a window of a log file that, for most games, carries no per-line time — so every line is
          correctly unstamped and the column looks like a feature that does not work. Say why
          instead; it vanishes the moment a line arrives with a time. #}
-      <div class="px-3 pt-2 text-secondary" style="font-size:.7rem;" id="console-ts-notice" hidden>
+      <div class="px-3 pt-2 text-secondary cmpa-console-only" style="font-size:.7rem;" id="console-ts-notice" hidden>
         <i class="bi bi-info-circle"></i>
         <span>Times appear on lines as they arrive — the panel cannot know when older lines were written.</span>
         {# NO offer to turn LinuxGSM's logtimestamp on. It works — the log really is stamped at
@@ -219,7 +220,7 @@
       </div>
       {# Only when the log really is stamped: the way back for anyone who turned it on before the
          buffering above was measured. #}
-      <div class="px-3 pt-2 text-warning" style="font-size:.7rem;" id="console-ts-off" hidden>
+      <div class="px-3 pt-2 text-warning cmpa-console-only" style="font-size:.7rem;" id="console-ts-off" hidden>
         <i class="bi bi-exclamation-triangle"></i>
         <span>LinuxGSM is stamping this log, which delays live console output until 4KB has built up.</span>
         {% if can_download_log %}
@@ -249,8 +250,10 @@
         {% endif %}
       </div>
       {% if can_send_command %}
-      <div class="card-footer">
-        <form class="d-flex gap-2" id="command-form" data-action="sendCommand" data-args='["@event"]' data-on="submit">
+      {# One row on a wide screen (the quick commands beside the box), two on a phone. #}
+      <div class="card-footer d-flex flex-wrap align-items-center gap-2">
+        <form class="d-flex gap-2" id="command-form" data-action="sendCommand" data-args='["@event"]' data-on="submit"
+              style="flex:1 1 16rem;min-width:0;">
           <input type="text" name="command" class="form-control form-control-sm flex-grow-1"
                  placeholder="Enter game server command…" id="command-input"
                  aria-label="Game server command" autocomplete="off">
@@ -261,9 +264,9 @@
         {# One-tap commands for this game's console. One that takes an argument (shown with …) puts
            itself in the box for the rest to be typed; the others send at once, through the box. #}
         {% if quick_commands %}
-        <div class="d-flex flex-wrap gap-1 mt-2" role="group" aria-label="Quick commands">
+        <div class="d-flex flex-wrap gap-1" role="group" aria-label="Quick commands">
           {% for cmd, fills in quick_commands %}
-          <button type="button" class="btn btn-sm btn-outline-secondary py-0 font-monospace"
+          <button type="button" class="btn btn-sm btn-outline-secondary py-1 font-monospace"
                   data-action="cmpaQuickCommand" data-args='["@self"]' data-cmd="{{ cmd }}"
                   data-fill="{{ '1' if fills else '0' }}"
                   title="{{ t('Put this in the command box') if fills else t('Send this command now') }}"><span data-no-i18n>{{ cmd }}{% if fills %} …{% endif %}</span></button>
