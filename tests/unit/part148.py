@@ -6,7 +6,6 @@ input line with a CR after each keystroke, all on ONE line of the log; terminal.
 CRs as overwrites. The local and Tailscale transports turned each bare CR into a line break before
 that could happen. The paramiko transport never did, which is why only the panel host showed it.
 """
-import subprocess as _sp148
 import types
 
 from unit.part01 import check
@@ -32,10 +31,11 @@ check("console: a command typed on the panel host's own server is one line, not 
 
 # Tailscale: the same decode, over a stand-in `ssh` that prints the same bytes.
 _real_sub148, _real_ts148 = _smc148.subprocess, _smc148._resolve_ts_host
+_rs148 = _smc148._real_subprocess   # the real module, as the transports use it
 try:
     _smc148.subprocess = types.SimpleNamespace(
-        PIPE=_sp148.PIPE, DEVNULL=_sp148.DEVNULL,
-        Popen=lambda _argv, **kw: _sp148.Popen(["/bin/bash", "-c", _SH148], **kw))
+        PIPE=_rs148.PIPE, DEVNULL=_rs148.DEVNULL,
+        Popen=lambda _argv, **kw: _rs148.Popen(["/bin/bash", "-c", _SH148], **kw))
     _smc148._resolve_ts_host = lambda _server: "ts148.example.test"
     _ts_out148, _ts_err148, _ts_rc148 = _smc148._run_via_ssh_cli(
         types.SimpleNamespace(sudo_enabled=False, username="u148", host="ts148.example.test",
