@@ -247,3 +247,46 @@ finally:
     _p9_restore_all()
     for _uid150, (_t150, _s150) in _saved150.items():
         _put150(_uid150, theme=_t150, whats_new_seen=_s150)
+
+
+# ── Published titles stay put ───────────────────────────────────────────────────────────────────
+# An entry's key is a hash of its title, and a panel shows every key an account has not recorded,
+# so rewording a title already on main shows that old change to everyone again as if it were new
+# (2026-11-07: "Updates install only releases signed with the …" was reworded, and the update
+# showed it as the only "new" item). whats_new_published.txt lists every published key.
+def _published150():
+    """{key: title} from tests/unit/whats_new_published.txt (comments and blanks skipped)."""
+    out = {}
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "whats_new_published.txt"),
+              encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip() and not line.startswith("#"):
+                key, _sp, title = line.rstrip("\n").partition(" ")
+                out[key] = title
+    return out
+
+
+def _title_drift150(published, entries):
+    """(published titles no longer in `entries`, entries whose key is not published)."""
+    have = {e["key"] for e in entries}
+    return ([published[k] for k in published if k not in have],
+            [e["title"] for e in entries if e["key"] not in published])
+
+
+_pub150 = _published150()
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "docs", "CHANGELOG.md"), encoding="utf-8") as _fh150:
+    _cl150 = _fh150.read()
+_gone150, _new150 = _title_drift150(_pub150, _wn150.parse(_cl150))
+check("what's new: no published title was reworded or dropped (a reworded title re-shows an old "
+      "change as new to every account; put the old title back, or drop the line here only with "
+      "its entry)", not _gone150 and len(_pub150) > 100, repr(_gone150[:5]))
+check("what's new: every entry's key is listed in tests/unit/whats_new_published.txt (add one "
+      "line '<key> <title>' for a genuinely new entry)", not _new150,
+      "\n".join("%s %s" % (_wn150._cmpb_key(t), t) for t in _new150[:10]))
+# Control: the check sees a rename. Reword the first published title in a copy of the file.
+_first150 = next((t for t in _pub150.values() if "**" + t in _cl150), "")
+_ren150 = _title_drift150(
+    _pub150, _wn150.parse(_cl150.replace("**" + _first150, "**Renamed: " + _first150, 1)))
+check("what's new: (control) a reworded title is caught as dropped AND as unlisted",
+      bool(_first150) and _first150 in _ren150[0] and len(_ren150[1]) == 1, repr(_ren150))

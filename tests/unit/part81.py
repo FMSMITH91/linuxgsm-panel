@@ -419,12 +419,14 @@ _upd_prog81 = (
     "const st = els['pu-status'], btn = els['pu-update-btn'];\n"
     "(async () => {\n"
     "  renderUpdate(%s); const failedRoute = [st.innerHTML, btn.style.display];\n"
+    "  renderUpdate({git: true, update_available: false, current_sha: 'a1b2c3d'});\n"
+    "  const shaOnly = st.innerHTML;\n"
     "  _r20cUpdateShown = null; answer = Promise.reject(new Error('offline'));\n"
     "  checkPanelUpdate(true); await settle(); const failedFirst = [st.innerHTML, btn.style.display];\n"
     "  renderUpdate({git: true, update_available: true, behind: 2, remote_version: '2026.10.14', current_sha: 'a1b2c3d'});\n"
     "  answer = Promise.reject(new Error('offline'));\n"
     "  checkPanelUpdate(true); await settle(); const failedAfterOffer = [st.innerHTML, btn.style.display];\n"
-    "  console.log(JSON.stringify({failedRoute, failedFirst, failedAfterOffer}));\n"
+    "  console.log(JSON.stringify({failedRoute, shaOnly, failedFirst, failedAfterOffer}));\n"
     "})();\n") % (_line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("),
                   _cut_or81(_RMH81, "function checkPanelUpdate("), _json81.dumps(_upd81))
 _card81 = _node81("remote_manage_host.js: the update card when the check fails", _upd_prog81)
@@ -434,10 +436,13 @@ check("update card: the route's answer to a check it could not make still carrie
       _upd81.get("check_failed") is True and _upd81.get("message") == "Internal server error", repr(_upd81))
 if _card81 is not None:
     _ok81 = '<span class="text-success"><i class="bi bi-check-circle"></i> '
-    check("update card: a check the server could not make reads \"You're up to date (sha)\" (it printed "
-          "\"Internal server error\" and hid Update)",
-          (_card81.get("failedRoute") or [""])[0] == _ok81 + "You're up to date (a1b2c3d).</span>",
+    check("update card: a check the server could not make reads \"You're up to date: release <date> (sha)\" "
+          "(it printed \"Internal server error\" and hid Update)",
+          (_card81.get("failedRoute") or [""])[0]
+          == _ok81 + "You're up to date: release 2026.10.13 (a1b2c3d).</span>",
           repr((_upd81, _card81)))
+    check("update card: ...an answer with a commit but no release date still names the commit",
+          _card81.get("shaOnly") == _ok81 + "You're up to date (a1b2c3d).</span>", repr(_card81))
     check("update card: ...a fetch that failed shows no \"Update check failed.\" line: \"You're up to "
           "date\" with nothing shown yet, and an offer already shown stays offered",
           (_card81.get("failedFirst") or [""])[0] == _ok81 + "You're up to date.</span>"

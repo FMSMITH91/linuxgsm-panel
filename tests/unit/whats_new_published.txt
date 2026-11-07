@@ -1,0 +1,525 @@
+# Every "What's new" entry already on main, as <key> <title>. The key is a hash of the title
+# (panel/core/whats_new.py), and a panel shows any key it has not recorded as NEW, so a
+# reworded title shows an old change again to every account. tests/unit/part150.py holds
+# docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
+# listed here; delete a line only together with its entry.
+19647bdd Install the panel on a phone's home screen.
+755314b5 A light theme.
+2197b91d "What's new" after the panel updates.
+4bfdf94e The console remembers the commands you sent.
+8881d48b Quick commands under the console.
+f2495384 The script log and the game's own log on the server page.
+a5f4edd1 The LinuxGSM settings form explains each setting.
+ac7e6a7a Game pictures and search on the Install page.
+7dd403a0 Scheduled wipes for Rust.
+f390830d Each server's page shows which LinuxGSM release it runs.
+d6356dcc An opt-in debug log.
+e807148f The Telegram and Discord bots show "typing…" while a command is working.
+d5a7f0ad Updates install only signed releases.
+f85d910c Firewall settings and port blocks on the Network tab.
+61becd1c LinuxGSM v26.4.0 support.
+438e1d71 A one-click fix for Project Zomboid's default admin password.
+222dd46a A note for CS:GO servers about LinuxGSM's App ID switch.
+4b30aa78 A Refresh list button for LinuxGSM's game list.
+252134bf New file and New folder in the file browser.
+f534aacc Rename a file or folder in the file browser.
+51d8f69b Clean host reboots: running game servers are stopped first and come back after.
+e929bfbf With players on, the reboot asks.
+091a0a8d The wait is visible and bounded.
+db7cbcd1 A terminal in the browser, for the panel's own host and for every remote.
+2b3772c6 The install picker knows which games LinuxGSM caps at an older Ubuntu.
+14eacad0 A failed install says why, and offers what you can do about it.
+2b44c654 Game servers can be uninstalled from the dashboard.
+8c1fd1cf Install progress is shown where the server is.
+591f6eeb The update card's list of changes links each commit and PR
+47c4975f The sidebar footer links to the panel's repository, and its commit SHA to that exact commit
+b183185f Console history can have real timestamps, not just lines you watched arrive.
+f890024a Each console line now carries the time the panel saw it
+05075ddf Three remaining timestamps now render in your timezone too
+d0de1962 LinuxGSM's colour now survives into the console.
+45af2697 The installed game version is shown on the server detail page
+ea675bc6 Download the console log
+47783054 Line numbers in the file editor.
+e6050bb3 Drag and drop now takes folders, and actually works.
+5945591f An "Upload folder" button
+84df75d9 Downloads in the file browser
+7ca769a2 The Install page draws before its game icons load.
+048458ff The bots show "typing…" the moment they receive a command, and stop as they answer.
+9e779e1b Less scrolling, on a phone and on a desktop.
+0364ce9f Less scrolling on a host page's Network and Security tabs.
+795d1ba9 A Network tab on every host page.
+87362bdc The host page, tidied for a phone.
+00213056 Faster test runs.
+5951b83a A documentation-only pull request no longer runs the whole CI.
+604e3227 CodeQL now reads the whole smoke test suite.
+83404d0a The security scanners now read the tests too.
+b3e7d2ae Two more CI scanners: zizmor on the workflows, and Harden-Runner in every job but deploy.
+6be1dfbc A reboot request with no mode and players on now answers 409 instead of rebooting.
+35f53c8d Host reboots from a bootstrap or install.sh never reboot a host with game servers on it.
+339e9584 While a host is being rebooted, actions on its servers wait.
+3a55b4ee The panel host's helper now runs LinuxGSM as ./<script> from the game home instead of by its absolute path, so LinuxGSM's own monitor can see a start or stop the panel is running there and backs off instead of starting a second copy.
+72a558ce The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo lines.
+5261a7c7 A console tab left in the background stops costing the host a privileged read every two seconds.
+10d2b8e0 The debug report says what is wrong, covers far more of the panel, and is safer to post.
+95b8133e CI now catches on a pull request, or on main, what it used to let through.
+136171e4 SonarCloud is told what it was guessing.
+76b8e8f3 Every scanner's verdict is a merge requirement, on every pull request.
+d56c9f7d A pull request cannot merge into main until its checks pass.
+5bfaae48 A new check catches what Codacy's pull-request check misses.
+e879bcae Renovate proposes updates to the release binaries CI downloads.
+7cde0b7c The version is now the date of the commit the panel runs.
+867904ab Deleting a host says what stays on it.
+5e482bac LICENSE is the plain MIT text
+b7435dd8 Imported game servers get Autostart turned on, as a fresh install already does.
+ebada9dc The installer refuses a Python older than 3.10 by name
+86600806 A queued restart that LinuxGSM finishes with a non-zero exit is cleared after one attempt
+d29001e2 A panel bound to a public address with Tailscale Serve set up keeps serving its own HTTPS
+54757cd6 The update card answers one question: is there something to install?
+2699c002 The 2FA reset in Users → Edit is always visible
+78a32516 Backup retention is typed, not picked from a list.
+44440aae The pure helper layer moved out of app.py
+9999f58f A new test suite, tests/input_validation_test.py,
+83b21247 Running a test suite in-tree no longer edits your data/config.json.
+e53e7fcf The application modules now live in a panel/ package.
+a6817fcc LinuxGSM's data files are no longer committed here.
+e25f36b5 Uploads are roughly an order of magnitude faster
+fb504338 ssh_manager's shell quoting is now shlex.quote
+620e67f9 An update is no longer held back by a failed Dependabot run on GitHub.
+8a4b4556 Maintenance → details shows all of its output, not the first 600 characters.
+8657f0f5 The Telegram bot no longer goes quiet for half a minute at a time.
+48945f58 A command the panel feeds input to can no longer hang the panel.
+f1b8a8e2 LinuxGSM v26.5.0 compatibility.
+0fbf21f5 The Telegram bot no longer goes quiet for up to a minute after a dropped connection.
+8aae3832 Deleting a remote's SSH rule could cut the panel off from it.
+5746f924 Call of Duty, CoD 2, CoD: United Offensive and MoH: Allied Assault install on Ubuntu 26.04 again.
+aace2a42 Players can join a new Satisfactory server behind the panel's firewall.
+e18490db LinuxGSM's monitor no longer restarts a server in the middle of the panel's nightly update.
+ddacb955 Valheim backups no longer disconnect players every hour.
+b40b95f9 Existing Post Scriptum and SCP: Secret Laboratory ServerMod servers can be imported.
+a5b52200 New LinuxGSM games get the right default port.
+cede1400 The Autostart switch reads a monitor line written by hand.
+8f9fdd60 LinuxGSM's short command names count as maintenance.
+552fa93b A twenty-third full review on 2026-10-22: fixes.
+30b4440a A twenty-second full review on 2026-10-22: fixes.
+8df034d2 A twenty-first full review on 2026-10-22: fixes.
+0355b18a Installing OS updates no longer stops on a package apt would downgrade.
+b6e5225a A twentieth full review on 2026-10-17: fixes.
+60d66e82 A nineteenth full review on 2026-10-17: fixes.
+16d5ec88 An eighteenth full review on 2026-10-17: fixes.
+e194dba4 A seventeenth full review on 2026-10-17: fixes.
+1b6d6103 A sixteenth full review on 2026-10-16: fixes.
+39091daa OS updates respect Ubuntu's phased rollout.
+f0170ad8 A fifteenth full review on 2026-10-16: fixes.
+0d154ee2 A fourteenth full review on 2026-10-16: fixes.
+2cdc5c75 A thirteenth full review on 2026-10-16: fixes.
+600cfaad A twelfth full review on 2026-10-15: fixes.
+2e4de104 An eleventh full review on 2026-10-15: fixes.
+d254ee23 A tenth full review on 2026-10-15: fixes.
+378787b4 A ninth full review on 2026-10-13: fixes.
+ad0927bc An eighth full review on 2026-10-12: fixes.
+abb1abf9 A seventh full review on 2026-10-12: fixes.
+d6c44eef Phones (375 px wide).
+26532f2e A sixth full review on 2026-10-12: fixes.
+3a3dc7e1 A fifth full review on 2026-10-12: fixes.
+b70b84e3 A fourth full review on 2026-10-12: fixes.
+1c48d2f2 A third full review on 2026-10-11: fixes.
+f582dc17 A second full review on 2026-10-11, rerun after the first one's fixes: fixes.
+9849d0ff Findings from a full code review including the tests and CI (2026-10-11): fixes.
+51b0f195 The Tailscale page no longer shows "12/31/1" as the last-seen time of every connected device.
+b4f90642 A game server the panel starts on its own host now writes its files group-writable again (664), as it does when LinuxGSM's cron or a login starts it.
+4edb9b99 "Reboot now" no longer misses a LinuxGSM action that a newer one on the same server displaced.
+0afee564 The live console no longer shows a few lines twice when a server's page opens
+a57f8351 A backup that LinuxGSM reports as finished is "Backed up" only when its archive reads whole.
+8378c614 The file browser's editor, the Config card's Raw tab and uploads refuse a LinuxGSM config that turns logtimestamp on
+287dc2a7 Findings from a full code review (2026-10-08): fixes.
+3052dca8 The file browser fits a phone inside a folder with a long name, and its path shows a name's spaces.
+12d037c4 An imported server is stored on the port it really uses, read on its host.
+580c2909 The file browser lists every file under its real name, including one whose name ends in a space or holds a line break.
+909ebd23 Bootstrap and install.sh rebooted hosts with game servers running.
+18109fe4 The Power card said "Autostart servers come back on their own"
+f7e55711 Every Stop from the panel paged "went offline unexpectedly" about four and a half minutes later
+9fee87df An update's output no longer appears twice in the live console.
+8026a47d An update that ran with no console open keeps its result.
+113d81d6 Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4 and Minecraft Bedrock.
+827922ab A server whose query lists no player names is no longer counted as empty with people on it.
+136de821 Autostart shows what the server's crontab really has after an install.
+f40e2df8 The panel is published over Tailscale Serve at one address, and a leftover route to it no longer answers 502.
+51596799 The setup wizard no longer publishes the panel twice.
+83989d87 The Tailscale page can remove a leftover route on its own.
+5856517a The startup log, the setup-complete page and Recommended Access name the panel's own address.
+ff688fe6 The debug report names a leftover Serve route and how to remove it.
+add4b28e Uninstalling removes the panel's Tailscale Serve route.
+ee637223 An update says "this panel now serves HTTPS" only when that is new.
+3b3c38d6 The README no longer gives a tailscale serve command to copy.
+96e8652c The debug report's journal sections cover the panel's own output, not its sudo calls.
+d981978c A privileged command the panel gives up on no longer keeps running as root.
+767db9bf Call of Duty servers show the capacity the game reports.
+bb7b460b A running game the panel cannot query no longer runs LinuxGSM details every 45 seconds.
+90b0847e The debug report no longer calls a systemd unit an email address.
+7597322f The debug report's installer lines keep their paths and the commit they name.
+8b7f26dc The debug report's Privacy footer counts everything it replaced.
+28a27cd3 The debug report pseudonymises an account written before an address.
+84956ec7 The debug report no longer says a self-update that completed DIED.
+658a3082 The debug report prints Tailscale's health messages, not only how many there are.
+16619167 The debug report says "node key expiry disabled" for a node whose key does not expire.
+336c3e15 The debug report's update lines say what was actually checked.
+ea1a604b The debug report no longer says a background job never ran when it is not due yet.
+9184e214 With trust_proxy off, forwarded headers from a local account other than root are logged and counted.
+cfa6e3e3 The Backups page and the debug report no longer read the "Back up game servers now" button's last run as the automatic schedule's.
+0771e23d "Back up game servers now" moves each server's schedule clock.
+6d4a7c3a A server that always has players on is no longer silently never backed up.
+e843140f A backup host that is down sends one alert, not one an hour.
+925dc4ac A failing daily panel backup no longer stops the game-server backups.
+7d0c3cd0 A direct-SSH host that never answers can no longer stop every backup.
+6905849e A daily panel backup that cannot make its temp folder no longer leaves an empty "backup".
+92cf7e15 The debug report names the notification events that are off.
+07f6a07c Restarting or updating the panel no longer kills the game servers it started.
+4fc5f155 Panel-started game servers run at the game priority, not the panel's.
+bb8fdf34 Repairing the database, restoring a backup and updating the panel no longer leave a root install's panel stopped.
+0e3d10b5 An OS update can now restart the panel (root installs on Ubuntu 24.04 and 26.04).
+d1d4cc5d Restoring a backup on a per-user install with the helper no longer swaps the files under the running panel.
+3c0ff41b The local web terminal's jobs outlive a panel restart.
+ef83a7b0 The debug report names game servers inside the panel's cgroup.
+0f8093b6 Uninstalling a server removes its account's crontab.
+14c9b6d3 Adding a tool's settings file to the repository is no longer offered as a panel update.
+8ea1ab1d Installing a game on a minimal host no longer fails at "Downloading LinuxGSM".
+8cacf788 An update keeps the panel's systemd unit current, as it does everything else the installer put on the host.
+7ca796fb The installer installs wget, cron and ufw when they are missing.
+0a1329cb A docs, CI or test change no longer brings back "Panel update available" on Telegram or Discord.
+ea0b122e A file the panel runs that was moved into tools/ or docs/ counts as a change.
+9eef2612 Checking a lost install asks the host once, not once per poll.
+beec69cf Retrying a failed install can no longer be overwritten by the background check.
+656c09df Security tab event times are shown in your own time zone correctly.
+e3a095ec "Panel update available" is sent once per update, not after every restart.
+f7077f6f Malformed numbers no longer cause server errors.
+051a5d9d A scheduled-task change can no longer be lost or undone by another one.
+61762f08 A failed crontab read no longer wipes the account's scheduled tasks.
+f7a09d9f LinuxGSM config values with $, backticks, backslashes or quotes are saved as typed.
+b96de3fd Broken downloads now fail instead of saving a truncated file.
+06275a60 A locked database is no longer "repaired" into yesterday's backup.
+9cc93a18 The self-heal keeps the newest writes of a corrupt database.
+072ba4ae manage.py no longer runs the database self-heal
+af5e7d6c The updater no longer repairs a database it could not read.
+46323ba1 A GitHub outage no longer stalls every page that shows the game list.
+7787b838 The session and credential keys can no longer be read half-written
+020b6db8 Uninstalling removes the panel's sudo grants first,
+474219ce A FIFO in place of the panel's config.json no longer hangs the installer or the uninstaller.
+1324e903 The Tailscale login log is created fresh
+0dab9a56 SECURITY.md describes the sudo grant install.sh actually writes,
+fbf95404 A sign-in that can't be recorded is refused instead of going through half-registered.
+9cd8e3f3 One missed probe no longer pages you.
+9a005e26 A burst of alerts arrives as one message instead of dozens.
+6d923473 Changing your password, or signing out everywhere from an older login, never leaves an untracked session.
+5dd2abbc Infinity in a JSON body no longer causes a server error
+8bed03f1 Bad Garry's Mod content and config requests get a clear error
+8e92ea2c Retry can't start an install into a server that is being uninstalled.
+147f80e6 Only one panel restore runs at a time.
+36195126 Rebooting the panel host no longer sends "server went offline" alerts.
+a299e4f6 Blocking or unbanning an address on the panel host takes effect at once
+c09e77f3 Clicking Update no longer risks aborting the update it started.
+a0f7b461 Install and bootstrap progress stop polling once their row is gone.
+d89b5ffa "Still working — reload the page to check." stays put
+c815d88b Infinity or 1e400 in a request no longer causes a server error
+624cbf6b Opening a second terminal on the same connection now records that the first one closed.
+dee9a05d A failed port scan while setting up a Source server's extra ports is now logged.
+d1e6c6a8 The panel host's own Firewall card could say "permission denied" with the helper installed.
+4a840f66 On a remote host, a fail2ban log just under the 8 MB read limit is counted again.
+d9d1a944 Storing a host's first SSH key pin no longer freezes the panel while the database is busy.
+7187a15d On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel restarted.
+f9e5a362 The daily gamedig pass could write to a host that had just been deleted.
+195e74e8 An older "daily restart when empty" line could restart the server with players on it.
+aebd42e2 The panel's update card now says when an update stopped, or held, instead of spinning.
+bc5bc5dd On a shallow checkout the update decided on less history than it then acted on.
+a81415da "Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.
+34bb7096 Player counts and lists never worked on a fresh Ubuntu 24.04 or 26.04 install.
+5ec72e86 "1 RLock(s) were not greened" no longer prints on every start under Python 3.13+
+f632f9ac After an in-place Ubuntu release upgrade the panel could not start, and re-running the installer did not fix it.
+bc269d55 The live console no longer re-appends old output after an update and a start.
+b36ee992 The Tailscale page's Disable, and the SSH toggle, did the wrong thing.
+e049fba7 The firewall's delete guard protects the rules that keep you in.
+c2888b47 uninstall.sh removes what it installed, and only that.
+58c5c331 install.sh fails safe mid-update.
+b2a90394 "Is anyone on?" no longer answers "no" when it could not tell.
+7f57b059 A server's status is what the game's port says, and a failed read no longer overwrites it.
+984cdca2 Auto-blocking and the fail2ban watchers no longer act on reads that failed.
+aeab46bc An unreachable host no longer renders as idle and healthy.
+3f18b91f Database repair keeps the fullest copy.
+7b12e34d GMod shared content on a remote host is detected correctly.
+92b02405 A failed read can no longer be saved back over a real config.
+f1175443 A failed read no longer triggers something destructive.
+2eb014d5 "Nothing there" and "could not look" no longer render the same.
+09577e4a Actions that report success now check that they succeeded.
+5f07f478 An upload no longer overwrites a file because a check failed.
+3ebab8db On a phone, the dashboard's Actions column no longer covers the row.
+9b5afc55 The VPS bootstrap no longer acts on probes that never answered.
+b76ba02d Tailscale migration checks the new way in before closing the old one.
+a96f6bc4 A branch switch that failed to launch no longer changes the tracked branch.
+61faf62a Backups honour a server's own retention, and "Back up now" counts.
+24b182e4 Bans on imported Source servers survive a map change.
+8159c4c7 Installs that worked were reported as failures, and one that could not work was reported online.
+fdefcd10 Left 4 Dead 2 installs.
+dcecf0bc SteamCMD stopped working for every game on a host once ten accounts had used it.
+7641a23b On an install hardened by install.sh run as root, the panel could not manage a single game server.
+e1826ee5 Installing a game server failed at the dependency step on a hardened host, silently.
+967c98e4 The file editor saves exactly what it opened.
+7e0d8a7b Changing the SSH port works on Ubuntu 22.10 and later.
+6643577d The panel-login fail2ban jail never banned anyone on Debian or Ubuntu
+3be1318f Commands with a lot of output, and helper verbs run outside systemd, no longer hang.
+af6dd02e Console lines are no longer cut at 80 columns, and the player list with them.
+9dd5dea7 Pages no longer offer controls their route refuses, and a few that did nothing now work.
+5e6f697c Browser fixes in the translated UI and the dashboard.
+8741c6ac Bad requests and down hosts no longer answer 500.
+df04ea73 Scheduled Tasks edit and delete work on a crontab whose first line is indented.
+a328b667 Notifications that fail are logged, and a restart cannot replay a Telegram command.
+14c118d3 The install page says why the game list is empty
+b7c7bb42 Editing your own account can no longer leave the panel without a superadmin.
+c37ee31d A new host or server no longer inherits a deleted one's state.
+54d28412 Downloading a game backup whose name contains a newline or a non-Latin-1 character
+7fc33b11 Console text is no longer struck through, bolded or italicised at random.
+9c0dcecb The console no longer loses output, or cuts a line in half, during a busy burst.
+68165308 The panel no longer offers to turn LinuxGSM's logtimestamp on
+7582714b Console lines with a timestamp are no longer taller than lines without one.
+ea6d129d Console timestamps now appear on a server that only polls, and an empty column says why.
+d4fcbf5d Schedules are now set in your own time, not the host's.
+b2d5a607 A long action's output no longer vanishes when you reload the page.
+0ee968f5 "Watch the live console for progress" was not true of any long action.
+20502875 The Update button appeared for games that have no update command.
+8f7f5200 A game server could be installed on a port that does not exist.
+93db24ac The port picker could hand back a port that was already in use.
+5111a2c7 Installing to a host that was switched off returned a 500.
+9eb77271 The setup wizard could save a panel port that the panel cannot bind.
+bccacb1b Rotating a remote's SSH credential did not take effect.
+56e2d58a A new game server could inherit a deleted one's status.
+04379091 An update that changed only the privileged helper raised no "update available" badge.
+e3a9bd1b The self-update's CI gate read only the first 100 checks on a commit.
+dd8a1c62 Every host was given Ubuntu 24.04's package list, whatever it was actually running.
+5ce44990 Start/Stop/Restart on Files & Config reported a failure right after reporting success.
+d884bd7b Ctrl+A in the console selected the whole page.
+d3391d85 An unreachable host blanked the console on page load.
+d205c959 Restart and Stop on the dashboard fired with no confirmation.
+846b744c The live console kept throwing away its history.
+ca417d65 "Replace existing file" never replaced anything.
+90691e13 Running the installer the "other" way built a second panel instead of updating the first.
+eff6f749 Six endpoints answered HTTP 500 when a remote host was simply unreachable.
+448db605 Four buttons on the Remote Servers page did nothing.
+a120b7b5 A failed swap-file setup still wrote a swap entry to /etc/fstab.
+e1b1178c A parser could crash on a superscript digit.
+baa9dfde A dead constant in ssh_manager turned main red.
+13e6b00a The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.
+f93ce431 tailscale0 was never actually allowed through UFW.
+4fe4e629 The installer's update path never refreshed the root-owned helper.
+65a428a7 The "Repair database" button could never appear.
+0520b392 Disabling Tailscale Serve on a sub-path mount did not disable it.
+f4d4e27e Changing the panel's port dropped the fail2ban whitelist.
+bd284316 datetime.utcnow(), which Python has scheduled for removal, is gone
+d48d1efa dnspython 2.9.0 on Ubuntu 24.04 and 26.04 (CVE-2026-114605).
+65ef4030 msgpack 1.2.3 in the CI dependency audit's own tools
+c45d2630 TeamSpeak 3's ServerQuery (its admin console) is no longer open to the internet.
+85fe46c2 Test fixtures carry no real addresses.
+fcc20fd3 The repository no longer names the maintainer's own hosts.
+6ab18f8e Tailscale SSH on the panel's machine is your install-time choice.
+c49ce0ea Serve and Funnel publish only the panel's own port.
+776be550 On the panel's own machine, the panel account no longer controls Tailscale.
+ddc26e34 The downloadable debug report leaves out account security.
+6599ec92 The root helper no longer lets the panel account run commands as root through apt.
+4040cce2 CI's Semgrep job runs on an MCP SDK with no known advisory.
+b88a4595 A seventh full review on 2026-10-12: security.
+5eeabc8c A sixth full review on 2026-10-12: security.
+79cf6192 A fifth full review on 2026-10-12: security.
+c1d0fa86 A fourth full review on 2026-10-12: security.
+7316ab09 A third full review on 2026-10-11: security.
+dcafa4bb A second full review on 2026-10-11: security.
+158495e3 gamedig's dependency http-cache-semantics is 4.3.0, not 4.2.0.
+272d8883 Findings from a full code review including the tests and CI (2026-10-11): security.
+2c6365d9 Findings from a full code review (2026-10-08): security.
+4cc97f19 A stored server name is never put into the account check's shell text (GHSA-hh39-76g3-wxcx, reopened).
+58f5e71b A failed firewall step during an install no longer opens SSH.
+fb74461b An action's message never carries an internal error's text.
+2b6b6852 A malformed stored server name can no longer mute that server's offline alerts.
+4762bcf8 The browser's Socket.IO client is 4.8.4, past two HIGH advisories in the parser it bundles.
+6650b5ab Scanners can see the vendored browser libraries now.
+7deb1e49 gitleaks catches a Telegram bot token wherever it is written.
+ed586044 A pull request can no longer allowlist its own leaked secret.
+eee2e69e SECURITY.md says how to check an install set up before the setup-token fix
+db21e4f9 CodeQL sees Socket.IO input and the commands the panel runs.
+1adc6b3e CI's Semgrep job runs on a PyJWT with no known advisory.
+8c35bda4 Group forms reject ids that cannot be real ids.
+7dfe75e4 Moving SSH to another port no longer deletes the firewall rule your current SSH depends on.
+8cba3c5e Deleting a firewall rule by number can no longer hit a different rule.
+aef23c36 A password-login host with no usable stored password no longer signs in with the panel's own SSH key.
+9738590a The file browser can no longer delete LinuxGSM's files through a symlinked folder.
+910bd2c8 A backup code now works exactly once, even when two sign-ins race.
+f8b715f4 Only real game accounts can join the panel's game-account group.
+d123ed68 The privileged helper no longer takes its interpreter or environment from the caller.
+c5247f82 Root no longer reads files in the panel's directory through symlinks.
+a9e8f12b Hard links can no longer steer root's chown or chmod
+87975060 The self-update installer no longer runs inside the panel's checkout.
+723ee2ef Remote GMod content and mount operations run as the game account, not root.
+537fe425 An update from a local checkout unpacks as the panel's user,
+04d50dc2 Update snapshots and rollbacks no longer run as root inside the panel's own files.
+1e29af41 A stolen "remember me" cookie no longer works from someone else's machine.
+64b7cf14 Old pre-upgrade login cookies now die with a password change or "sign out everywhere".
+e6cae7f2 A request body sent in chunks is read before the request is authorized, like any other.
+ec958d5c "Monitor" now needs the restart permission.
+61257a95 An authenticator code can no longer sign in twice by racing itself.
+bfbe91a1 Chat bots now check who sent a command, not just which chat it came from.
+759dd9f6 The Discord bot no longer risks getting its token reset by reconnecting forever.
+5a8a4cab A stolen remember cookie from before per-device sessions no longer works from another machine.
+2841bea1 Discovery import no longer adopts an account that is root on its host.
+d39bf057 Uninstall never deletes a host's administrator account.
+8842b042 Garry's Mod shared content needs access to the host.
+280818e6 Deleting a tag needs access to every server that carries it.
+ba78989d Current-password and 2FA-code checks are throttled per account and audited.
+66c27e0a Tailscale peer check is superadmin-only.
+2b02205e The panel host's firewall can't be changed through the game-port routes by a delegated admin.
+6b5a6b4b An update whose checks could not be read is no longer installed.
+03a73065 An update isn't offered until its code-scanning check has run.
+b88db0d1 Semgrep findings now block an update.
+92b29d21 Auto-deploy waits for the security checks, not only CI,
+b2ecfc2a Switching the panel back to main no longer skips the update checks.
+bfe3b2a0 File and cron writes are refused for a game account that can become root on its host.
+7eed6638 Only a superadmin can edit or delete the panel host's own entry.
+4c5069ea A firewall rule is deleted by number only while it is still the rule that was checked.
+ebf276bc Telegram polling no longer follows redirects.
+29137bdc Enabling 2FA spends its code the same way sign-in does.
+518c4217 A delegated admin whose hosts include the panel's own no longer gets that host's controls.
+efe029ca You can no longer reset your own password or 2FA from the Users page.
+3e3ca8ac The login throttle can no longer be raced or reset.
+277ca654 The self-update no longer prunes old snapshots by splitting their names.
+77e9663b Editing an old Telegram message no longer runs its command again.
+3c8c5e6c The first-run wizard now needs a one-time setup token, so a stranger can no longer take a fresh install.
+e01e546a The wizard's last page no longer calls a panel that is still public "Private tailnet".
+75905d18 The setup wizard's own steps are on the audit log.
+ff9d346c Tailscale migrate and finalize refuse the panel's own host
+3ff62180 trust_proxy believes X-Forwarded-For only from the proxy.
+89caeb54 An IPv6 zone id no longer passes as an address.
+f4a572f8 A "*" in socketio_cors_origins is ignored.
+04d95de2 Usernames and group names cannot carry control or format characters.
+c93f218e The chat bots' !update can no longer hold every self-update at "still being verified".
+75943ed2 The post-restart "update complete" message goes only to a channel that is still authorised.
+abda5709 The terminal's input queue is counted, not re-summed on every keystroke
+3e914cc3 A delegated group admin can edit or delete only a group wholly within their reach.
+676112a9 An invite no longer outlives its minter, or its expiry, while its form is in flight.
+85e7aec7 A signed-in request is authorized once its body has arrived, not before.
+b66aab8b A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by name.
+d4f37875 A host's SSH key is pinned from the first connection, whichever part of the panel makes it.
+662631ad Changing a host's SSH port checks that sshd is what answers on the new port.
+3ca52c93 The firewall touches only the rules a game server owns.
+3d0d67d7 Root apt installs only the packages LinuxGSM lists for the game.
+f2f5717f A refused SSH connection is now closed.
+5d0cfc00 A new server or host no longer inherits a deleted one's state when SQLite reuses its id.
+28d3c1ab A deleted host, game server, user or group's id is no longer given to the next one, and work still running for a deleted row no longer lands on the row that took its id.
+f3d2119e Unbounded reads and rows are capped.
+44c52020 Changing the panel's own port audits what really happened.
+43a68bca A game server's account name can no longer carry a command
+9bd324c1 pip itself is hash-locked.
+113a7f23 The Codacy token is no longer readable by a workflow on any branch.
+e7a580c8 The code-scanning gate judges main only for a run that was exactly main's.
+8127c77d A compromised panel can no longer send root back to an old commit, or choose the branch root installs from.
+49c16392 A tag named like a branch can no longer stand in for it, and a commit main only reached through a merge no longer counts as main.
+63724323 The panel's Python dependencies are installed by hash.
+b25d8d65 Preparing a remote host no longer runs NodeSource's setup script as root.
+ab6d2bff gamedig is installed from a hash-locked lockfile, and root no longer fetches it every week.
+6a62e6e1 A ban now closes what the banned address already had open.
+14411037 API-token guessing reaches fail2ban.
+7e0da502 The whitelist protects every jail on the panel's own host.
+cb8c3af5 Tailscale peers are never banned from the panel login.
+fd65febb Values written into page scripts are JSON-escaped throughout
+976a9c12 A client banned for failed logins is refused when it arrives through Tailscale Funnel.
+d8a43668 The game-account group cannot be used to reach root.
+53ba4f48 A compromised panel account can no longer choose what root runs.
+2fce7cd2 Secrets the panel cannot read, or should not expose.
+d316d65e SSH hardening takes effect on cloud images.
+271c3ffc The weekly root cron no longer upgrades npm
+003ef6a8 Auto-block cannot cut off your tailnet, or take over your own rules.
+5f64d5d7 Hostile input can no longer freeze the panel.
+4e147a94 A delegated admin can no longer take over an account that reaches more than they do.
+66f25d37 Delegated admins and viewers see only what they can reach.
+d57010ee Session protection is enforced.
+3e48fa35 The privileged helper no longer follows links, or accepts content the panel does not write.
+0fd239e2 A game server can no longer be pointed at an account that is not its own.
+5b3e88da The login throttle can no longer be dodged by choosing a header.
+69aaa135 Session cookies and the console socket are tied to the right origin.
+bc374ef2 The setup wizard cannot be finished, or reopened, by someone else.
+022bf14c Two-factor authentication is harder to get around.
+22842360 Routes and sockets that did more than their permission allowed.
+fb1f7896 What players type can no longer steer moderation or Discord.
+1cee28f6 Stored values can no longer change where or how a command runs.
+459ead29 linuxgsm-panel-recover picks the right install, or asks.
+e77af7a4 Smaller hardening.
+db7ecbc6 CSRF could be skipped by sending an Authorization: Bearer header.
+40f519e0 A compromised remote host could inject markup into the panel.
+86c3aa93 X-Forwarded-Prefix was trusted from any client.
+0fc521ab The rolling database backup was left world-readable.
+2dea1f1a The self-signed TLS private key was written at the process umask, then chmodded.
+6846bd31 The sudoers grant is no longer NOPASSWD:ALL.
+035435e9 tailscale up on the panel's own host wrote root's output to /tmp.
+4243b838 A missing data/config.json reopened four unauthenticated setup endpoints.
+d9b5c4c6 Three VPS-preparation actions could be aimed at the panel's own host.
+5436810c The privileged helper carries every local escalation.
+bd05c98c The panel could not hear its own deprecation warnings.
+d96aead7 OS updates, surfaced in the panel
+c117ec34 OS-update alerts to Telegram/Discord
+393cf408 Ubuntu 26.04 support.
+73fd6e43 Overwrite prompt on file upload
+f029838e Start / Stop / Restart on Files & Config
+2bc90804 The mobile layout reclaims most of the first screen.
+c2dc5b15 Host status says what it means.
+9ddeb980 The dashboard tiles add up.
+714db89d Accessibility
+780d30db The Autostart switch follows the crontab instead of a database column that could go stale.
+528d0cc2 The users page renders one edit modal rather than one per user.
+697c6a9f The OS-update alert never actually ran.
+ce4b391c A failed apt check no longer reads as "System is up to date."
+ea24a959 Deleted hosts and servers no longer leave state behind.
+64dbee74 The pending-restart banner now accounts for the daily-restart schedule.
+f44bb514 Console output rendering: Minecraft commands no longer display as ssasay hi or >=>.
+685b5467 Cross-site scripting from a compromised remote host.
+d4011893 Symlink escape in the file browser.
+80a9ddc8 TOTP codes are single-use.
+85404742 Session fixation.
+09c4a32f The setup wizard is locked by database state
+29b67bb1 Failed API-token authentication is throttled.
+7a8ede20 Chat-bot actions are attributable.
+662b94c8 A panel restore no longer leaves the database and both encryption keys in /tmp
+6ec7b8c5 Shell identifiers are re-validated where they are used, not only when assigned, and are length-bounded.
+fe9f8cf3 SECURITY.md now documents an important limitation honestly: a root install grants the panel's service user unrestricted passwordless sudo, so there is currently no privilege boundary between a compromised panel and a rooted host. It explains why this cannot be narrowed by editing sudoers alone, and that remote-only installs can remove the grant entirely.
+07d39c07 Per-device session management
+c32379da Garry's Mod content mounting
+007db4b2 Two-way Discord command bot
+8b8656de Settings page
+db9de0fd Configurable alert thresholds
+6559d486 Metrics + player history charts
+847ef204 Weekly auto-update of npm + gamedig
+ab3b029d "Jail" column
+687d4270 Every scheduled task is now editable and deletable
+ab3101c0 Mods merged into a single Install/Remove list
+8146286c GMod content installs via LinuxGSM
+42cab5d6 Group-by-host
+472fd46c Removed the global notifications master switch — a channel's own enable toggle is the on/off.
+9ed3d735 start/stop/restart run in the background
+9c271b66 Account page
+bb42292e PaperMC / Velocity / Waterfall
+981dd46e Minecraft/Paper console
+6a0e296a Sidebar active-state
+d942f648 Import
+2d7d6a64 Remote public-IP resolution moved off the request path — an unreachable host no longer hangs a page.
+12c61907 Self-update snapshot
+aa657556 The panel no longer binds to loopback unless Tailscale Serve is actually configured to proxy it.
+31b1eabf Telegram command bot
+1191c01c Global ban list
+18953468 Proactive admin alerts
+2041cf38 In-game server names
+34cfa231 Sort + group-by-host
+8176afd1 Security whitelist
+fe7178a9 REST API tokens (Bearer auth).
+fd9bfb4c Auto-block
+a69aa3a7 Installs and bootstraps no longer reboot a host that has running game servers
+7ed2d552 Player-count polling runs concurrently, so a pass no longer scales with the number of servers.
+9854b6f7 Config writes go through a lock-safe read-modify-write, so concurrent writers can't lose changes.
+be873231 README rewritten and shortened.
+59301b1c A failed gamedig query now reads as unknown, not a bogus 0 players.
+428014ce Server controls are disabled while a server is installing or uninstalling.
+f8f18f2d Cleared the CodeQL full-SSRF finding on the Discord webhook sink (constant host + validated id/token).
+b6b67bec The Telegram /update completion check compares the git commit, not the static VERSION.
+f5257a0c The Maintenance tab names the release you run.
