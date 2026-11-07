@@ -303,7 +303,7 @@ function ufwAllowTailscale(){
 // turns out to be an issue — GitHub redirects that way, not the other.
 function appendSubject(li, text, repo){
   if(!repo){ li.appendChild(document.createTextNode(text)); return; }
-  var re=new RegExp('#([0-9]{1,9})\\b', 'g'), last=0;   // a string: lizard misreads this as a literal
+  var re=new RegExp('#(\\d{1,9})\\b', 'g'), last=0;   // a string: lizard misreads this as a literal
   for(var m=re.exec(text); m!==null; m=re.exec(text)){
     if(m.index>last) li.appendChild(document.createTextNode(text.slice(last, m.index)));
     var a=document.createElement('a');
