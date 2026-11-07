@@ -28,7 +28,7 @@ _CHANGELOG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.pat
 # otherwise get hundreds; the rest are counted, and the full changelog is one link away.
 SHOW_MAX = 40
 
-_HEADING_RE = re.compile(r"^###\s+(\S.*?)\s*\Z")
+_HEADING_RE = re.compile(r"^###\s+(\S[^\n]*)\Z")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _SPACE_RE = re.compile(r"\s+")
@@ -78,7 +78,7 @@ def _cmpb_add(entries, seen, category, cur):
 def _cmpb_heading(line):
     """The category a "### <category>" line opens; None for any other heading."""
     m = _HEADING_RE.match(line)
-    return m.group(1) if m else None
+    return m.group(1).rstrip() if m else None
 
 
 def parse(text):
