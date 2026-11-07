@@ -353,6 +353,8 @@ function renderReleaseNotes(d, repo){
     more.style.display='';
   } else { more.removeAttribute('href'); more.style.display='none'; }
   box.style.display=notes.length?'':'none';
+  // With entries above it, the commit list is the detail: folded. Without, it is all there is.
+  document.getElementById('pu-commits').open=!notes.length;
   return notes.length;
 }
 
@@ -402,10 +404,7 @@ function renderUpdate(d){
       }
       ul.appendChild(li);
     });
-    var nNotes=renderReleaseNotes(d, repo);
-    // With entries above it, the commit list is the detail: folded. Without, it is all there is.
-    document.getElementById('pu-commits').open=!nNotes;
-    changes.style.display=(nNotes||(d.changes&&d.changes.length))?'':'none';
+    changes.style.display=(renderReleaseNotes(d, repo)+(d.changes||[]).length)?'':'none';
   } else {
     // Two states and nothing else: an update to install,
     // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
