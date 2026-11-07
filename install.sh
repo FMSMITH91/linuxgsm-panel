@@ -3961,14 +3961,14 @@ warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Ser
 warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
 echo ""
 echo -e "${CYAN}Forgot the admin password?${NC} From a shell on this server (no web login needed):"
-# The checkout's reset-password.sh only for a per-user install, run as its own user. On a root
-# install that directory is the panel user's (and its home 0750, so reaching it takes root): the
-# alternative had ROOT run reset-password.sh and recover.sh out of a tree a compromised panel can
-# rewrite — the very thing the root-owned copy behind linuxgsm-panel-recover exists to prevent.
+# The checkout's recover.sh only for a per-user install, run as its own user. On a root install
+# that directory is the panel user's (and its home 0750, so reaching it takes root): the
+# alternative had ROOT run recover.sh out of a tree a compromised panel can rewrite — the very
+# thing the root-owned copy behind linuxgsm-panel-recover exists to prevent.
 if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     echo -e "    sudo linuxgsm-panel-recover"
 else
-    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash reset-password.sh${NC}"
+    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash recover.sh reset-password${NC}"
 fi
 echo ""
 

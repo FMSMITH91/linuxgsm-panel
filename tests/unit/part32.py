@@ -1016,7 +1016,7 @@ def _p32_install_ufw():
 # ═══ 8. the docs: no hand-written Serve line with an upstream ════════════════════════════════════
 def _p32_docs():
     bad = []
-    for rel in ("README.md", os.path.join("docs", "https.md")):
+    for rel in (os.path.join("docs", "README.md"), os.path.join("docs", "https.md")):
         for n, line in enumerate(_script_text(rel).splitlines(), 1):
             if re.search(r"tailscale\s+(?:serve|funnel)\b[^`\n]*\b(?:https?|https\+insecure)://", line):
                 bad.append("%s:%d" % (rel, n))

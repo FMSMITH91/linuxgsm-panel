@@ -1,12 +1,12 @@
 """The "What's new" card: which CHANGELOG entries a user has not seen yet.
 
-The changelog has no per-release sections to diff — the panel's version is the date of a commit,
-and every change lands as a bullet under `## [Unreleased]`. So "what changed since you last
-looked" is answered by CONTENT, not by version: each top-level bullet is keyed by a short hash of
-its bold title, and a user row remembers the keys that were in the file the last time they
+The changelog has no per-release sections to diff — each commit on main is a release named by its
+date, and every change lands as a bullet under `## [Since 0.10.0-alpha]`. So "what changed since
+you last looked" is answered by CONTENT, not by version: each top-level bullet is keyed by a short
+hash of its bold title, and a user row remembers the keys that were in the file the last time they
 dismissed the card (User.whats_new_seen). An entry whose key is not in that set is new to them.
 
-That also survives the file being reorganised: a bullet moved from [Unreleased] into a dated
+That also survives the file being reorganised: a bullet moved from that section into another
 section keeps its title, so it keeps its key and is not shown twice. A bullet whose TITLE is
 reworded reads as new, which is the one case where showing it again is arguably right.
 

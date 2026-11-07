@@ -1064,7 +1064,7 @@ for _label, _pat in _fixture_shapes:
 # Parsed with regex rather than PyYAML so this gate needs no dependency CI doesn't already install.
 _repo = _pl.Path(_UNIT_ROOT)
 _ci_yml = (_repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-_readme = (_repo / "README.md").read_text(encoding="utf-8")
+_readme = (_repo / "docs" / "README.md").read_text(encoding="utf-8")
 _ci_pairs = set(zip(
     [m for m in _re_fx.findall(r"- os: ubuntu-([0-9]{2}\.[0-9]{2})", _ci_yml)],
     [m for m in _re_fx.findall(r"\n\s+python: \"([0-9]+\.[0-9]+)\"", _ci_yml)],

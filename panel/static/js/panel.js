@@ -1,3 +1,9 @@
+// base.html's shared behaviour. The globals this file and panel/templates/*.html assign (window.X = ...)
+// are declared in .eslintrc.json beside it, so ESLint's no-undef is accurate: add a new one there.
+// Its XSS-heuristic findings (innerHTML sites) are left visible on purpose, not suppressed; when the
+// file was created each site was checked to escape with escapeHtml(), restore an element's own
+// markup, or assign a literal.
+
 // ── What the markup-driven dispatchers may call ─────────────────────────────────────────────
 // data-action and data-ajax-after name a global function, and the dispatcher called whatever
 // window[name] was — native fetch, open or eval included, and this file's own fetch WRAPPER, which

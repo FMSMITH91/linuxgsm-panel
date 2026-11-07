@@ -1024,26 +1024,26 @@ def _v4_prefix_doc():
 
 
 def _v5_verdict(text, gone, pinned):
-    """(ok, stale entries) for a CHANGELOG: no [Unreleased] entry may describe the removed split.
+    """(ok, stale entries) for a CHANGELOG: no entry since 0.10.0-alpha may describe the removed split.
 
     The gate rejects the stale description and nothing else. It used to need a PyJWT entry to EXIST
-    as well, so dropping or rewording that bullet, or cutting [Unreleased] into a release, would
+    as well, so dropping or rewording that bullet, or moving the section's entries into another, would
     have failed main over a prose edit with nothing stale in it.
     """
-    unreleased = text.split("\n## [Unreleased]", 1)[-1].split("\n## [", 1)[0]
+    unreleased = text.split("\n## [Since 0.10.0-alpha]", 1)[-1].split("\n## [", 1)[0]
     entries = [e for e in _re37.split(r"\n(?=- )", unreleased) if "PyJWT" in e]
     stale = [e.strip()[:70] for e in entries if _re37.search(r"pinned apart|--no-deps|semgrep-pyjwt", e)]
     return gone and pinned and not stale, stale
 
 
 def _v5_changelog():
-    """No [Unreleased] entry describes the PyJWT split #391 removed."""
+    """No entry since 0.10.0-alpha describes the PyJWT split #391 removed."""
     gone = not os.path.exists(os.path.join(_root, ".github", "ci-requirements", "semgrep-pyjwt.txt"))
     pinned = "\npyjwt==" in _read29(".github", "ci-requirements", "semgrep.txt").lower()
     ok, stale = _v5_verdict(_read29("docs", "CHANGELOG.md"), gone, pinned)
-    check("changelog: [Unreleased] describes Semgrep's PyJWT as CI installs it now (one hash "
+    check("changelog: [Since 0.10.0-alpha] describes Semgrep's PyJWT as CI installs it now (one hash "
           "lockfile, no split), not the split #391 removed", ok, "stale: %r" % stale)
-    head = "# Changelog\n\n## [Unreleased]\n\n### Security\n\n"
+    head = "# Changelog\n\n## [Since 0.10.0-alpha]\n\n### Security\n\n"
     probes = {
         "no entry": head + "- **Other.** Text.\n\n## [2026.9.1]\n\n- PyJWT is now pinned apart.\n",
         "a current entry": head + "- **PyJWT 2.15.** One hash lockfile.\n",
@@ -1051,7 +1051,7 @@ def _v5_changelog():
                                   "and both install with `--no-deps`.\n",
     }
     got = {k: _v5_verdict(v, True, True)[0] for k, v in probes.items()}
-    check("changelog: (control) the PyJWT gate passes an [Unreleased] with no PyJWT entry (one in an "
+    check("changelog: (control) the PyJWT gate passes a [Since 0.10.0-alpha] with no PyJWT entry (one in an "
           "older release does not count) or a current one, and fails the stale text",
           got == {"no entry": True, "a current entry": True, "the stale entry": False}, repr(got))
 

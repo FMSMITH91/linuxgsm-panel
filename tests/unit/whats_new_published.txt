@@ -49,10 +49,6 @@ e6050bb3 Drag and drop now takes folders, and actually works.
 0364ce9f Less scrolling on a host page's Network and Security tabs.
 795d1ba9 A Network tab on every host page.
 87362bdc The host page, tidied for a phone.
-00213056 Faster test runs.
-5951b83a A documentation-only pull request no longer runs the whole CI.
-604e3227 CodeQL now reads the whole smoke test suite.
-83404d0a The security scanners now read the tests too.
 b3e7d2ae Two more CI scanners: zizmor on the workflows, and Harden-Runner in every job but deploy.
 6be1dfbc A reboot request with no mode and players on now answers 409 instead of rebooting.
 35f53c8d Host reboots from a bootstrap or install.sh never reboot a host with game servers on it.
@@ -61,12 +57,6 @@ b3e7d2ae Two more CI scanners: zizmor on the workflows, and Harden-Runner in eve
 72a558ce The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo lines.
 5261a7c7 A console tab left in the background stops costing the host a privileged read every two seconds.
 10d2b8e0 The debug report says what is wrong, covers far more of the panel, and is safer to post.
-95b8133e CI now catches on a pull request, or on main, what it used to let through.
-136171e4 SonarCloud is told what it was guessing.
-76b8e8f3 Every scanner's verdict is a merge requirement, on every pull request.
-d56c9f7d A pull request cannot merge into main until its checks pass.
-5bfaae48 A new check catches what Codacy's pull-request check misses.
-e879bcae Renovate proposes updates to the release binaries CI downloads.
 7cde0b7c The version is now the date of the commit the panel runs.
 867904ab Deleting a host says what stays on it.
 5e482bac LICENSE is the plain MIT text
@@ -78,8 +68,6 @@ d29001e2 A panel bound to a public address with Tailscale Serve set up keeps ser
 2699c002 The 2FA reset in Users → Edit is always visible
 78a32516 Backup retention is typed, not picked from a list.
 44440aae The pure helper layer moved out of app.py
-9999f58f A new test suite, tests/input_validation_test.py,
-83b21247 Running a test suite in-tree no longer edits your data/config.json.
 e53e7fcf The application modules now live in a panel/ package.
 a6817fcc LinuxGSM's data files are no longer committed here.
 e25f36b5 Uploads are roughly an order of magnitude faster
@@ -304,8 +292,6 @@ eff6f749 Six endpoints answered HTTP 500 when a remote host was simply unreachab
 448db605 Four buttons on the Remote Servers page did nothing.
 a120b7b5 A failed swap-file setup still wrote a swap entry to /etc/fstab.
 e1b1178c A parser could crash on a superscript digit.
-baa9dfde A dead constant in ssh_manager turned main red.
-13e6b00a The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.
 f93ce431 tailscale0 was never actually allowed through UFW.
 4fe4e629 The installer's update path never refreshed the root-owned helper.
 65a428a7 The "Repair database" button could never appear.

@@ -323,7 +323,7 @@ try:
     # read as docs-only. The diff must be asked for with --no-renames, which lists both sides.
     _utr_args = []
     _so._git = lambda args, timeout=45: (_utr_args.append(list(args))
-                                         or ("reset-password.sh\ntools/reset-password.sh\n", "", 0))
+                                         or ("recover.sh\ntools/recover.sh\n", "", 0))
     check("update-touches-runtime: a runtime file renamed into tools/ is still a change, because "
           "the diff lists both sides of a rename",
           _so._update_touches_runtime("origin/main") is True
@@ -415,7 +415,7 @@ check("runtime-path: the fuzz image's build files and the JS lint config are noi
       and _so._is_runtime_path(".clusterfuzzlite/build.sh") is False
       and _so._is_runtime_path("panel/static/js/.eslintrc.json") is False
       and _so._is_runtime_path("panel/static/js/remote_manage_host.js") is True
-      and _so._is_runtime_path("reset-password.sh") is True)
+      and _so._is_runtime_path("recover.sh") is True)
 # Every repo file install.sh stages root-owned (stage_root_source <repo path> <name>) is something
 # a host runs. Classified as noise, a commit changing only it is no longer offered as an update at
 # all, so the host would never get it. tools/panel-helper and tools/gamedig/* sit in a noise
@@ -647,7 +647,7 @@ check("runtime-path: every module the panel imports, transitively, is named as o
 
 # ...and every repo file the installers and recovery tools read from the checkout.
 _cls_inst = set()
-for _cls_sh in ("install.sh", "uninstall.sh", "recover.sh", "reset-password.sh"):
+for _cls_sh in ("install.sh", "uninstall.sh", "recover.sh"):
     with open(os.path.join(_root, _cls_sh), encoding="utf-8") as _cls_fh:
         _cls_code = "\n".join(_l for _l in _cls_fh.read().splitlines()
                               if not _l.lstrip().startswith("#"))

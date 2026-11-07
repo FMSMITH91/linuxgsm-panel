@@ -1,16 +1,12 @@
 # Serving the panel over HTTPS
 
-**A fresh install already serves HTTPS** with a built-in self-signed cert (option 4
-below), so your login and session cookie are encrypted out of the box — you'll just
-see a one-time browser warning. That's the safe default; the options below give a
-*trusted* cert (no warning) and are listed best-first for a public deployment.
-A reverse proxy (`trust_proxy`) takes over TLS, and the panel stops serving its own
-self-signed cert. Tailscale Serve does too, but only once the panel is also bound to
-`127.0.0.1`: on any other bind the panel keeps its own TLS, so nothing else on the
-network sees plain HTTP, and Serve reaches it with `https+insecure://`.
+**A fresh install already serves HTTPS** with a built-in self-signed cert (option 4 below), so
+your login and session cookie are encrypted out of the box; you just see a one-time browser
+warning. The options below give a *trusted* cert, best-first. A reverse proxy (`trust_proxy`)
+takes over TLS, and so does Tailscale Serve once the panel is bound to `127.0.0.1`.
 
-**Never expose the panel on plain HTTP over the public internet** — your login
-password and session cookie would travel in cleartext.
+**Never expose the panel on plain HTTP over the public internet** — your login password and
+session cookie would travel in cleartext.
 
 The relevant `data/config.json` settings:
 
@@ -76,15 +72,11 @@ yourname.duckdns.org {
 
 ## 4. Built-in self-signed HTTPS — the default (no domain, no proxy)
 
-This is **on by default** (`"use_https": true`). It generates a **10-year**
-self-signed cert under `data/ssl/` and serves `https://<your-ip>:5000` directly —
-no renewal, no domain. To turn it off (serve plain HTTP), set `"use_https": false`
-and restart. It stands down when a reverse proxy (`trust_proxy`) is configured, and
-when Tailscale Serve is set up AND the panel is bound to `127.0.0.1`, since those
-terminate TLS with a real cert. Behind Serve on any other bind it stays on, and Serve
-reaches it with `https+insecure://`.
+This is **on by default** (`"use_https": true`): a **10-year** self-signed cert under
+`data/ssl/`, serving `https://<your-ip>:5000` directly, with no renewal and no domain. Set
+`"use_https": false` and restart to serve plain HTTP. It stands down behind a reverse proxy
+(`trust_proxy`), and behind Tailscale Serve when the panel is bound to `127.0.0.1`; on any other
+bind it stays on and Serve reaches it with `https+insecure://`.
 
-**Caveat:** browsers show a "Not secure / proceed anyway" warning (the cert isn't
-from a trusted CA), and it protects against *passive* eavesdropping but not a
-determined man-in-the-middle. It's strictly better than plain HTTP, but for
-serious public use prefer options 1–3, which give real, trusted certificates.
+**Caveat:** browsers warn that the cert isn't from a trusted CA, and it protects against passive
+eavesdropping but not a determined man-in-the-middle. For serious public use prefer options 1–3.
