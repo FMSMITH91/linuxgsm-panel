@@ -1703,7 +1703,7 @@ def _cmpa_log_rel(gs, kind):
     the game's gamelogdir is log/server itself. Which file in it is newest is decided on the host.
     """
     if kind == "script":
-        return "log/script/%s-script.log" % gs.lgsm_name
+        return "log/script/" + gs.lgsm_name + "-script.log"
     return "log/server"
 
 
