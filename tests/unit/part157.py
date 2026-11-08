@@ -11,6 +11,7 @@ HOW IT RUNS. Scripts in node on this part's own fixtures (part87's DOM stand-in,
 pages on part12's Flask app and client (part12 has run), every stub through _p9_patch and undone in
 the finally.
 """
+import datetime as _dt157
 import json as _json157
 import re as _re157
 
@@ -21,6 +22,7 @@ from unit.part99 import _SF99, _cut_or99, _js99, _line_or99, _read99
 from panel.ops import system_ops as _so157
 from panel.ops.ssh_manager import _core as _smc157
 from panel.routes import server_detail as _sd157
+from panel.services import wipe_schedule as _ws157
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -402,3 +404,23 @@ check("update card: an update made only of tooling commits lists the commit it c
       "branch's verified path (part06's text gates read the other path and missed it)",
       _uc157.get("main") == _want157, repr(_uc157))
 check("update card: ...and on a tracked non-default branch", _uc157.get("dev") == _want157, repr(_uc157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 9. A stored first-Thursday wipe fires on the first Thursday only
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The preset is stored as the cron line `0 19 1-7 * 4`, which cron reads as the 1st-7th OR any
+# Thursday. wipe_schedule.due, which the sweep and the card both use, re-parses that line and sets
+# "both" again from the entry's preset; part152 tested only spec_for's own spec, so losing that line
+# (a Rust wipe on every day 1-7 and every Thursday, up to ten a month) failed nothing.
+def _utc157(*a):
+    return _dt157.datetime(*a, tzinfo=_dt157.timezone.utc).timestamp()
+
+
+_ft157 = dict(preset="first-thursday", cron="0 19 1-7 * 4", tz="UTC", anchor=_utc157(2026, 11, 1))
+_due157 = {_k: _ws157.due(_ft157, now=_t) for _k, _t in (
+    ("mon 2nd", _utc157(2026, 11, 2, 19, 1)), ("thu 5th", _utc157(2026, 11, 5, 19, 1)))}
+check("wipe: a stored first-Thursday schedule is not due on another of the 1st-7th, and is due on the "
+      "first Thursday (the sweep's due() must keep the AND, which cron's line alone reads as OR)",
+      _due157 == {"mon 2nd": (None, _utc157(2026, 11, 5, 19)), "thu 5th": ("run", _utc157(2026, 11, 5, 19))},
+      repr(_due157))
