@@ -128,7 +128,35 @@ from panel.ops import backup as bk  # noqa: F401  # pylint: disable=unused-impor
 for _r28d_mod in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"):
     if _r28d_mod in sys.modules:
         sys.modules[_r28d_mod]._HELPER_STATE["present"] = False
+# The periodic tickers create_app() starts are not started here (review 1107). This suite runs 95-215 s on
+# CI, past the first beat of most of them: install-reconcile at 20 s, the update check at 30 s (a git fetch,
+# and the shared update-status cache), due-actions at 45 s, priority-keeper at 60 s, the backup ticker at
+# 120 s (which writes a real panel backup into DATA_DIR), the wipe sweep at 150 s. Each then worked on this
+# suite's rows through whatever stub a check had in place at that moment: an extra queued-action attempt,
+# extra queries in a counted block, a pool checkout, the backup lock a check waits on. A check that needs
+# one of those passes drives it by hand. The console poller and the terminal sweepers still start: a check reads a
+# running action's output from the poller's own ticks (part05).
+import app as _smoke_app_mod  # noqa: E402
+_SMOKE_NO_TICKERS = frozenset(("install-reconcile", "update-check", "due-actions", "priority-keeper",
+                               "backup-ticker", "wipe-schedule"))
+_smoke_real_supervisor = _smoke_app_mod._make_supervisor
+_smoke_supervised = []     # (name, started) for every worker create_app() handed the supervisor
+
+
+def _smoke_supervisor(flask_app):
+    """app._make_supervisor, without the periodic tickers above."""
+    _real = _smoke_real_supervisor(flask_app)
+
+    def _supervise(name, target):
+        _smoke_supervised.append((name, name not in _SMOKE_NO_TICKERS))
+        if name not in _SMOKE_NO_TICKERS:
+            _real(name, target)
+    return _supervise
+
+
+_smoke_app_mod._make_supervisor = _smoke_supervisor
 app = create_app()
+_smoke_app_mod._make_supervisor = _smoke_real_supervisor
 # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
 # The Funnel ban gate refreshes its set in a background thread after a failed login (where proxied
@@ -158,6 +186,12 @@ results = []
 
 def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
+
+
+check("smoke: create_app's periodic tickers (install reconcile, the update check, due actions, priority "
+      "keeper, the backup ticker, the wipe sweep) are not started in this suite; the console poller is",
+      sorted(_n for _n, _on in _smoke_supervised if not _on) == sorted(_SMOKE_NO_TICKERS)
+      and ("console-poller", True) in _smoke_supervised, repr(_smoke_supervised))
 
 
 def join_for(thread, seconds):
