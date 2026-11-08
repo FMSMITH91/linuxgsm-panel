@@ -405,12 +405,23 @@ def _register_panel_binding(app):
         if new_port == cur_port == stored_port and new_bind == cur_bind == _r34j_bind_now(cfg, cur_bind):
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
+        # ── The new binding's port opened FIRST, while nothing has changed ──
+        opened = _r37a_open_first(app, local, new_bind, new_port)
+        if opened is not None and not opened[0] and _r37a_fw_drops(app, local):
+            log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
+                       detail=f"{_r18a_bracketed(cur_bind)}:{cur_port} -> {_r18a_bracketed(new_bind)}:{new_port} "
+                              f"refused; firewall: {opened[1]}", success=False)
+            return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
+                "Not changed: the firewall could not open port {port}, so the panel would have restarted onto a "
+                "port it drops.", port=new_port), [opened[1]])}), 200
+
         # ── Save the new binding ──
         # Only these two keys, onto the file as it is now: the checks above ran `ss` and `ip`,
         # which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
         set_config_keys(cfg, port=new_port, bind_host=new_bind)
 
-        fw_notes, fw_ok, old_removed = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
+        fw_notes, fw_ok, old_removed = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port,
+                                                                   opened)
         fw_ok = _r32a_close_unapplied_port(app, local, stored_port, cur_port, new_port, fw_notes) and fw_ok
         f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, new_port, cur_port)
 
@@ -605,12 +616,47 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
     return bool(ok), (msg or ("updated" if ok else "not updated"))
 
 
-def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
+def _r37a_open_first(app, local, new_bind, new_port):
+    """Open the port a publicly reached binding needs, before anything is saved -> (ok, its note), or
+    None when the binding needs no open (or there is no local host row: no firewall to follow).
+
+    It was opened after the binding was saved, and a failure (the helper timing out on a held xtables
+    lock, a sudo refusal) was only a note: the panel restarted onto a port its firewall drops, the old
+    port's rule was closed too, and nothing of the panel could be reached (review 1107).
+    """
+    if not local or not _panel_bind_is_public(new_bind):
+        return None
+    try:
+        ok, why = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
+    except Exception:
+        app.logger.warning("change-port: firewall update failed", exc_info=True)
+        ok, why = False, "error"
+    return bool(ok), (i18n.Sentence("Firewall: opened {port}.", port=new_port) if ok
+                      else i18n.Sentence("FIREWALL NOT UPDATED — port {port} may be blocked ({why}).",
+                                         port=new_port, why=why))
+
+
+def _r37a_fw_drops(app, local):
+    """Whether the panel host's firewall may drop a port it has no rule for: UFW on, or not read.
+
+    A host without UFW, or with it off, drops nothing, and a move there goes ahead with the note, as
+    it always did.
+    """
+    try:
+        st = _sm.remote_ufw_status(local)
+    except Exception:
+        app.logger.warning("change-port: the firewall could not be read", exc_info=True)
+        return True
+    return bool(st.get("unreachable") or (st.get("installed") and st.get("enabled")))
+
+
+def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port, opened=None):
     """Open or close the panel's port for the new binding's exposure.
 
     -> (the reply's notes, whether the firewall now matches the binding, the address families whose
     public rule for the old port the close really removed). With no local host row there is no
-    firewall to follow, which is not a failure.
+    firewall to follow, which is not a failure. `opened`: _r37a_open_first's answer, the open
+    already made for a publicly reached binding.
     Each note is a whole i18n.Sentence: English in the audit row, translated in the reply.
     """
     # ── Bring the firewall in line with the resulting exposure ──
@@ -626,10 +672,8 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
         # whose docstring is "Refuses anything that would leave the panel unreachable".
         try:
             if now_public:
-                _fw_ok, _fw_msg = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
-                fw_notes.append(i18n.Sentence("Firewall: opened {port}.", port=new_port) if _fw_ok
-                                else i18n.Sentence("FIREWALL NOT UPDATED — port {port} may be blocked "
-                                                   "({why}).", port=new_port, why=_fw_msg))
+                _fw_ok, _fw_note = opened or _r37a_open_first(app, local, new_bind, new_port)
+                fw_notes.append(_fw_note)
             else:
                 # force: the panel's own move (the config already names new_port, so the guard
                 # would read this as the panel's web-port rule and refuse to close it).

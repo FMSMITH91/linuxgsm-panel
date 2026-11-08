@@ -11,7 +11,10 @@ import ipaddress as _ip154
 from types import SimpleNamespace as _NS154
 
 from unit.part01 import check
-from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_cfg, _p9_client, _p9_json, _p9_patch, _p9_patch_sm,
+                         _p9_restore_all, _p9_so)
+from unit.part108 import _ANY108
+from unit.part116 import _boot116, _saved116
 from unit import part135 as _p135
 from unit.part136 import _deny136
 from panel.core import i18n as _i18n154
@@ -304,6 +307,58 @@ _po_ok = {
 check("1107 A03 LOW: ...and goes past that gate with a tailscale0 rule, under tailscaled's default netfilter mode, "
       "when the panel dials 22, and for a Tailscale-SSH row (the controls)",
       all(r[1] == _PAST154 for r in _po_ok.values()), repr(_po_ok))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A09 LOW: change-port opens the new port before anything is saved
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _move154(open_ok=False, fw=None, bind=_ANY108):
+    """One change-port 5000 -> 5055 on stand-ins -> (reply, calls by kind, the port config.json names after)."""
+    calls = {"open": [], "close": [], "jail": [], "restart": [], "status": []}
+
+    def status(r):
+        calls["status"].append(1)
+        return dict(fw or {"installed": True, "enabled": True})
+
+    try:
+        _p9_arm(who="part154")
+        _p9_patch(_rs154, "remote_ufw_open_port",
+                  lambda r, p, *a, **k: (calls["open"].append(int(p)), (open_ok, "ok" if open_ok else "timed out"))[1])
+        _p9_patch(_rs154, "remote_ufw_close_port",
+                  lambda r, p, *a, **k: (calls["close"].append(int(p)), (True, "closed"))[1])
+        _p9_patch_sm("remote_ufw_status", status)
+        _p9_patch(_p9_so, "ensure_panel_fail2ban",
+                  lambda log, port, wl=None: (calls["jail"].append(int(port)), (True, "j"))[1])
+        _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": True})
+        _p9_patch(_p9_so, "port_in_use", lambda port: False)
+        _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
+        _p9_patch(_p9_so, "record_panel_port", lambda port: (True, ""))
+        _p9_patch(_p9_so, "restart_panel", lambda *a, **k: (calls["restart"].append(1), (True, "p154"))[1])
+        _saved116(port=5000, bind_host=_ANY108, tailscale_setup_done=True)
+        with _boot116(BOOT_PORT=5000):
+            body = _p9_json(_p9_client(P9_ADMIN).post("/api/panel/change-port", json={"port": 5055, "bind_host": bind}))
+        after = _p9_cfg.load_config().get("port")
+    finally:
+        _p9_restore_all()
+        _saved116(port=5000, bind_host=_ANY108)
+    return body, calls, after
+
+
+_cp_cut = {"UFW on": _move154(), "UFW unread": _move154(fw={"unreachable": True})}
+check("1107 A09 LOW: a move to a public port whose allow rule could not be added, on a firewall that is on or "
+      "unread, saves nothing, closes nothing, leaves the jail and does not restart; the answer says why",
+      all(b.get("success") is False and "could not open port 5055" in str(b.get("message"))
+          and (c["open"], c["close"], c["jail"], c["restart"], after) == ([5055], [], [], [], 5000)
+          for b, c, after in _cp_cut.values()), repr(_cp_cut))
+_cp_ok = {"UFW off": _move154(fw={"installed": True, "enabled": False}),
+          "UFW not installed": _move154(fw={"installed": False, "enabled": False}),
+          "the open worked": _move154(open_ok=True),
+          "a loopback bind behind Serve": _move154(bind="127.0.0.1")}   # NOSONAR(S1313)
+check("1107 A09 LOW: ...while with UFW off or not installed the move goes ahead with its note (nothing drops the "
+      "port), as it does when the open worked, and a loopback bind behind Serve opens nothing (the controls)",
+      all(b.get("success") is True and c["restart"] == [1] and after == 5055 for b, c, after in _cp_ok.values())
+      and _cp_ok["UFW off"][1]["close"] == [5000] and _cp_ok["the open worked"][1]["open"] == [5055]
+      and _cp_ok["the open worked"][1]["status"] == [] and _cp_ok["a loopback bind behind Serve"][1]["open"] == [],
+      repr({k: (b.get("success"), str(b.get("message"))[:120], c, a) for k, (b, c, a) in _cp_ok.items()}))
 
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))

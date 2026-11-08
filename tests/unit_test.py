@@ -1997,7 +1997,8 @@ _r16d_wrap_ts_handles()
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
 # part154 (review 1107's firewall and lock-out findings: the auto-block spares the panel's own source,
-# and the guards it found short) drives part135's stand-in hosts; imports part01, 12, 135 and 136.
+# and the guards it found short) drives part135's stand-in hosts and part12's app; imports part01, 12, 108,
+# 116, 135 and 136.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
