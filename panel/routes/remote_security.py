@@ -416,7 +416,10 @@ def _register_panel_binding(app):
         # ── Save the new binding ──
         # Only these two keys, onto the file as it is now: the checks above ran `ss` and `ip`,
         # which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
-        set_config_keys(cfg, port=new_port, bind_host=new_bind)
+        try:
+            set_config_keys(cfg, port=new_port, bind_host=new_bind)
+        except Exception:
+            return _r38a_not_saved(app, opened, cur_port, new_port)
 
         fw_notes, fw_ok, old_removed = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port,
                                                                    opened)
@@ -656,6 +659,30 @@ def _r37a_not_opened(app, local, opened, move, new_port, cur_port):
     return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
         "Not changed: the firewall could not open port {port}, so the panel would have restarted onto a "
         "port it drops.", port=new_port), notes)}), 200
+
+
+def _r38a_not_saved(app, opened, cur_port, new_port):
+    """The change-port answer when config.json could not take the new binding (a full disk, an unwritable file).
+
+    The open now comes first (_r37a_open_first), so a save that raised answered a bare 500 and left the
+    helper's port record on `new_port`, which the checks before the open set: Tailscale Serve could not
+    be re-pointed at the port still served until the next boot (review 1108 lead). The record goes back to
+    `cur_port`. The allow opened for `new_port` stays, said: the panel cannot tell it from one that was
+    there before (ufw keeps one rule for both), and nothing listens there.
+    """
+    app.logger.warning("change-port: the new binding could not be saved", exc_info=True)
+    rec_ok, rec_why = so.record_panel_port(cur_port)
+    notes = [] if rec_ok else [i18n.Sentence("Port {port} could not be recorded back as the panel's port for "
+                                             "Tailscale Serve ({why}).", port=cur_port, why=rec_why)]
+    if opened and opened[0]:
+        notes.append(i18n.Sentence("The firewall rule opened for port {port} is still there; remove it from the "
+                                   "firewall rules if you do not try again.", port=new_port))
+    log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
+               detail=f"-> {new_port} not saved: config.json could not be written; helper port record back on "
+                      f"{cur_port}: {'ok' if rec_ok else rec_why}", success=False)
+    return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
+        "Not changed: the new binding could not be saved to config.json, so the panel stays on port {port}.",
+        port=cur_port), notes)}), 500
 
 
 def _r37a_fw_drops(app, local):

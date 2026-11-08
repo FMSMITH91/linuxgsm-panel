@@ -17,6 +17,8 @@
   not refused with trust_proxy advice that is already applied.
 * lead (P1): with Tailscale Serve up, a viewer on the panel host's loopback (an SSH tunnel) still has its
   SSH session held by an IP block (every request was taken to come through Serve).
+* lead (P1): the panel's change-port, its new port already opened, answers a config.json that cannot be
+  written by putting the helper's port record back and saying what was left (it was a bare 500).
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -31,7 +33,10 @@ from datetime import timedelta as _td159
 from types import SimpleNamespace as _NS159
 
 from unit.part01 import check
-from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_core, _p9_patch, _p9_restore_all
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_client, _p9_core, _p9_json, _p9_patch,
+                         _p9_patch_sm, _p9_restore_all, _p9_so)
+from unit.part108 import _ANY108
+from unit.part116 import _boot116, _saved116
 from unit.part125 import _Box125
 from unit import part135 as _p135
 from unit.part136 import _OUT136, _deny136
@@ -504,6 +509,50 @@ check("1108 P1 lead: the panel host's Block with no row of its own (host_local's
       "lock-out evaluator without raising: the viewer's own address is refused, another address passes",
       _nr["another address"] is None and _nr["the viewer's own address"] is not None
       and not _nr["the viewer's own address"].startswith("raised"), repr(_nr))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# lead (P1): the panel's change-port with config.json unwritable, after the open
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _cp_unsaved159(save_raises):
+    """change-port 5000 -> 5055 with the open working -> (status, reply, helper records, restarts, port saved)."""
+    calls = {"record": [], "restart": []}
+
+    def save(cfg, **keys):
+        raise OSError(28, "No space left on device")
+    try:
+        _p9_arm(who="part159")
+        _p9_patch(_rs159, "remote_ufw_open_port", lambda r, p, *a, **k: (True, "ok"))
+        _p9_patch(_rs159, "remote_ufw_close_port", lambda r, p, *a, **k: (True, "closed"))
+        _p9_patch_sm("remote_ufw_status", lambda r: {"installed": True, "enabled": True})
+        _p9_patch(_p9_so, "ensure_panel_fail2ban", lambda log, port, wl=None: (True, "j"))
+        _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": True})
+        _p9_patch(_p9_so, "port_in_use", lambda port: False)
+        _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
+        _p9_patch(_p9_so, "record_panel_port", lambda port: (calls["record"].append(int(port)), (True, ""))[1])
+        _p9_patch(_p9_so, "restart_panel", lambda *a, **k: (calls["restart"].append(1), (True, "p159"))[1])
+        if save_raises:
+            _p9_patch(_rs159, "set_config_keys", save)
+        _saved116(port=5000, bind_host=_ANY108, tailscale_setup_done=True)
+        with _boot116(BOOT_PORT=5000):
+            resp = _p9_client(P9_ADMIN).post("/api/panel/change-port", json={"port": 5055, "bind_host": _ANY108})
+            status, body = resp.status_code, _p9_json(resp)
+        after = _p9_cfg.load_config().get("port")
+    finally:
+        _p9_restore_all()
+        _saved116(port=5000, bind_host=_ANY108)
+    return status, body, calls["record"], calls["restart"], after
+
+
+_cpu = _cp_unsaved159(True)
+_cpu_ok = _cp_unsaved159(False)
+check("1108 P1 lead: a panel change-port whose config.json cannot be written (after the new port was opened) answers "
+      "\"not changed\", puts the helper's port record back on the port still served, says the opened rule is left, "
+      "and does not restart",
+      _cpu[0] == 500 and _cpu[1].get("success") is False and "could not be saved" in str(_cpu[1].get("message"))
+      and "5055" in str(_cpu[1].get("message")) and _cpu[2][-1:] == [5000] and _cpu[3] == [] and _cpu[4] == 5000,
+      repr(_cpu))
+check("1108 P1 lead: ...while a save that works moves the panel and restarts it (the control)",
+      _cpu_ok[1].get("success") is True and _cpu_ok[3] == [1] and _cpu_ok[4] == 5055, repr(_cpu_ok))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))
