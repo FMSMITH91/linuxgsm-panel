@@ -1097,10 +1097,15 @@ _update_target_signed() {
         warn "Installing ${1:0:10} WITHOUT a release signature: PANEL_ALLOW_UNSIGNED_UPDATE=1 was given by hand." >&2
         return 0
     fi
+    # The reason is what is really missing. A root run whose host has no root-owned key file yet
+    # but a key at root's source floor (_release_key_file uses it) HAS a key: it was told "this host
+    # has no release key" and to rerun with PANEL_ALLOW_UNSIGNED_UPDATE=1, which installs the
+    # unsigned commit and stages root's helper from it, the step this gate exists to stop. And with
+    # no ssh-keygen nothing can be verified at all, which is not "not signed".
     if [[ "${RELEASE_SIG_FETCHED}" -ne 1 ]]; then
         RELEASE_SIG_WHY="the release signatures could not be fetched"
-    elif [[ "$(id -u)" -eq 0 ]] && [[ ! -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]]; then
-        RELEASE_SIG_WHY="this host has no release key (${HELPER_DIR}/${RELEASE_SIGNERS}); to recover, run as root: cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ${HELPER_DIR}/install.sh"
+    elif ! command -v ssh-keygen >/dev/null 2>&1; then
+        RELEASE_SIG_WHY="ssh-keygen is not installed, so no release signature can be checked; install it (apt-get install -y openssh-client) and run the update again"
     else
         local kd=""
         kd="$(mktemp -d 2>/dev/null)" || kd=""
