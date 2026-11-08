@@ -270,5 +270,40 @@ check("1107 A03 LOW: ...while a known viewer the range does not hold, a Cloudfla
       "alone is unknown still pass (the controls)",
       all(v is None for v in _ub_ok.values()), repr(_ub_ok))
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A03 LOW: "Disable public SSH" and the panel's tailnet session on a port Tailscale SSH does not answer
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _pub_off154(port=2222, ssh_on=True, iface=False, netfilter_on=False, auth="key", host=_TSH154):
+    """remote_set_public_ssh(.., "off") -> (ok, message, privileged calls); "past the gates" reads sshd's ports."""
+    sent = []
+    row = _NS154(is_local=False, auth_method=auth, host=host, port=port, id=None, name="pub154")
+    try:
+        _p9_arm(who="part154")
+        _p9_patch(_hosts154, "_tailnet_ssh_state", lambda s: (True, ssh_on, iface))
+        _p9_patch(_ue154, "ts_netfilter_on", lambda s: netfilter_on)
+        _p9_patch(_hosts154, "_r32b_public_ssh_ports", lambda s: ([], []))   # past the gates: the next read
+        _p9_patch(_hosts154._core, "run_privileged", lambda *a, **k: (sent.append(a[1:3]), ("", "", 1))[1])
+        ok, msg = _hosts154.remote_set_public_ssh(row, "off")
+    finally:
+        _p9_restore_all()
+    return ok, str(msg), sent
+
+
+_PAST154 = str(_hosts154._R32B_PORTS_UNREAD)
+_po_cut = _pub_off154()
+check("1107 A03 LOW: \"Disable public SSH\" is refused, nothing sent, when the panel dials the host's tailnet "
+      "address on 2222 (Tailscale SSH answers 22 only) with no tailscale0 rule and tailscaled not ahead of ufw",
+      _po_cut[0] is False and "port 2222" in _po_cut[1] and "Tailscale SSH" in _po_cut[1] and _po_cut[2] == [],
+      repr(_po_cut))
+_po_ok = {
+    "a tailscale0 rule": _pub_off154(iface=True),
+    "tailscaled's chain ahead of ufw": _pub_off154(netfilter_on=True),
+    "the panel dialling 22": _pub_off154(port=22),
+    "a Tailscale-SSH row": _pub_off154(auth="tailscale"),
+}
+check("1107 A03 LOW: ...and goes past that gate with a tailscale0 rule, under tailscaled's default netfilter mode, "
+      "when the panel dials 22, and for a Tailscale-SSH row (the controls)",
+      all(r[1] == _PAST154 for r in _po_ok.values()), repr(_po_ok))
+
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))

@@ -1,0 +1,3 @@
+{
+  "Refused — the panel connects to this host over Tailscale on port {port}, which Tailscale SSH does not answer (it answers port 22 only), so only the public SSH rule lets that connection in and removing it would cut the panel off. Allow the tailscale0 interface in UFW first.": "Rechazado: el panel se conecta a este host por Tailscale en el puerto {port}, que Tailscale SSH no atiende (solo atiende el puerto 22), así que solo la regla de SSH público deja pasar esa conexión y quitarla dejaría al panel sin acceso. Primero permite la interfaz tailscale0 en UFW."
+}

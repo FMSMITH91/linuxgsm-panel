@@ -5645,6 +5645,29 @@ def _r28b_panel_way_in_refusal(server):
                          port=getattr(server, "port", "") or 22)
 
 
+def _r37a_tailnet_dial_refusal(server, iface_allowed):
+    """The refusal for "off" when the panel's own tailnet session to sshd would lose its only way in, else None.
+
+    The gate above counts Tailscale SSH as a way back for the operator, and it is one, but it answers
+    port 22 only (tailscaled intercepts 22 on its own addresses), so a panel dialling the host's
+    tailnet address on 2222 reaches sshd, on tailscale0, through the public 2222 rule "off" deletes:
+    its next connection met the default deny (review 1107; #460 settled the same rule for the policy
+    and enable checks, _fwb_tailnet_way). That session keeps a way in through a tailscale0 rule
+    (`iface_allowed`, which "off" leaves) or tailscaled's own chain ahead of ufw (its default
+    netfilter mode). A public dial is _r28b_panel_way_in_refusal's; a Tailscale-SSH row dials 22.
+    """
+    dial = _r32b_dial_port(server)
+    if dial is None or dial == 22 or iface_allowed or _r32b_panel_dials_public(server):
+        return None
+    from panel.ops.ssh_manager import ufweval
+    if ufweval.ts_netfilter_on(server):
+        return None
+    return i18n.Sentence("Refused — the panel connects to this host over Tailscale on port {port}, which Tailscale SSH "
+                         "does not answer (it answers port 22 only), so only the public SSH rule lets that connection "
+                         "in and removing it would cut the panel off. Allow the tailscale0 interface in UFW first.",
+                         port=dial)
+
+
 def _r34b_ports_to_open(server, ports):
     """Allow/Limit's share of `ports` (_r32b_public_ssh_ports'): the ones public SSH is open on now.
 
@@ -5687,7 +5710,7 @@ def remote_set_public_ssh(server, mode):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
-        _cut = _r28b_panel_way_in_refusal(server)
+        _cut = _r28b_panel_way_in_refusal(server) or _r37a_tailnet_dial_refusal(server, iface_allowed)
         if _cut is not None:
             return False, _cut
     ports = _r32b_public_ssh_ports(server)[1]
