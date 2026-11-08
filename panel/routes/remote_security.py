@@ -405,21 +405,10 @@ def _register_panel_binding(app):
         if new_port == cur_port == stored_port and new_bind == cur_bind == _r34j_bind_now(cfg, cur_bind):
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
-        # ── The new binding's port opened FIRST, while nothing has changed ──
-        opened = _r37a_open_first(app, local, new_bind, new_port)
-        not_opened = _r37a_not_opened(app, local, opened, f"{_r18a_bracketed(cur_bind)}:{cur_port} -> "
-                                                         f"{_r18a_bracketed(new_bind)}:{new_port}", new_port,
-                                      cur_port)
-        if not_opened is not None:
-            return not_opened
-
-        # ── Save the new binding ──
-        # Only these two keys, onto the file as it is now: the checks above ran `ss` and `ip`,
-        # which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
-        try:
-            set_config_keys(cfg, port=new_port, bind_host=new_bind)
-        except Exception:
-            return _r38a_not_saved(app, opened, cur_port, new_port)
+        # ── The new binding's port opened FIRST, while nothing has changed; then the binding saved ──
+        opened, refused = _r38a_open_then_save(app, local, cfg, (cur_bind, cur_port), (new_bind, new_port))
+        if refused is not None:
+            return refused
 
         fw_notes, fw_ok, old_removed = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port,
                                                                    opened)
@@ -659,6 +648,26 @@ def _r37a_not_opened(app, local, opened, move, new_port, cur_port):
     return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
         "Not changed: the firewall could not open port {port}, so the panel would have restarted onto a "
         "port it drops.", port=new_port), notes)}), 200
+
+
+def _r38a_open_then_save(app, local, cfg, cur, new):
+    """Open the new binding's port, then save the binding -> (_r37a_open_first's answer, a refusal or None).
+
+    `cur` and `new` are (bind, port). Nothing is saved when the open failed on a firewall that drops the
+    port (_r37a_not_opened). Only these two keys are saved, onto the file as it is now: the checks before
+    ran `ss` and `ip`, which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
+    """
+    (cur_bind, cur_port), (new_bind, new_port) = cur, new
+    opened = _r37a_open_first(app, local, new_bind, new_port)
+    refused = _r37a_not_opened(app, local, opened, f"{_r18a_bracketed(cur_bind)}:{cur_port} -> "
+                                                   f"{_r18a_bracketed(new_bind)}:{new_port}", new_port, cur_port)
+    if refused is not None:
+        return opened, refused
+    try:
+        set_config_keys(cfg, port=new_port, bind_host=new_bind)
+    except Exception:
+        return opened, _r38a_not_saved(app, opened, cur_port, new_port)
+    return opened, None
 
 
 def _r38a_not_saved(app, opened, cur_port, new_port):
