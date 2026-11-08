@@ -20,7 +20,7 @@ from panel.core import i18n
 from panel.core.http import (_json_str, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
-    _game_backup_status, register_remote_state, register_server_state)
+    _game_backup_status, r36j_route_jobs, register_remote_state, register_server_state)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, claim_row, db, row_birth,
     row_label, still_held)
 from panel.ops import (backup as bk)
@@ -41,7 +41,7 @@ import time
 from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_jobs,
     _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
-from panel.services.monitoring import _mark_expected_offline
+from panel.services.monitoring import _end_offline_window, _mark_expected_offline
 import re
 from panel.core import (clock, runtime_stats, terminal)
 
@@ -735,22 +735,35 @@ def _lg264_lgsm_alerted(gs, reason):
 
     LinuxGSM appends "alerted" to its request after its backup-postponed alert, which it sends
     through the server's own LinuxGSM alert settings; with none on, that alert went nowhere and
-    the panel's report is the only one.
+    the panel's report is the only one. It appends it whether or not anything was sent
+    (command_monitor.sh, v26.5.0), and alert.sh sends through some channels only when their
+    address is set too (_R37B_ALERT_NEEDS): `emailalert="on"` with no `email` sent nothing.
     """
     if _lgp.note_code(reason) != "lgsm_postponed" or not getattr(reason, "alerted", False):
         return False
+    keys = _LG264_ALERT_TOGGLES + sorted({k for need in _R37B_ALERT_NEEDS.values() for k in need})
     try:
-        vals = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, _LG264_ALERT_TOGGLES)
+        vals = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, keys)
     except Exception:
         return False
-    return bool(vals) and any(str(vals.get(k, "")).strip().strip("\"'") == "on"
-                              for k in _LG264_ALERT_TOGGLES)
+    if not vals:
+        return False
+
+    def _val(k):
+        return str(vals.get(k, "")).strip().strip("\"'")
+    return any(_val(k) == "on" and all(_val(n) for n in _R37B_ALERT_NEEDS.get(k, ()))
+               for k in _LG264_ALERT_TOGGLES)
 
 
 # LinuxGSM's alert switches (its _default.cfg's ## Notification Alerts).
 _LG264_ALERT_TOGGLES = ["discordalert", "emailalert", "gotifyalert", "iftttalert", "matrixalert",
                         "ntfyalert", "pushbulletalert", "pushoveralert", "rocketchatalert",
                         "slackalert", "telegramalert"]
+# ...and what alert.sh needs set beside a switch before it sends through it (v26.5.0: `[ "${x}alert"
+# == "on" ] && [ -n "${...}" ]`). The rest it sends with the switch alone.
+_R37B_ALERT_NEEDS = {"emailalert": ("email",), "matrixalert": ("matrixhomeserver", "matrixtoken", "matrixroom"),
+                     "ntfyalert": ("ntfytopic",), "pushbulletalert": ("pushbullettoken",),
+                     "telegramalert": ("telegramtoken",)}
 
 
 def _run_due_game_backups(app):
@@ -1065,6 +1078,10 @@ def _lg264_queued_outcome(app, gs, act, oc):
     cleared then — kept, both would restart the server one after the other. Not a failed attempt.
     """
     msg = _lgp.outcome_message(oc, act, monitor=bool(getattr(gs, "autostart", True)))
+    # The server stayed up, so the quiet window _run_queued_action opened for it ends here, as the
+    # buttons' does (server_detail._lg264_said): kept, a crash in it was taken for this stop, and
+    # with the count still reading empty every tick opened it again, so it never lapsed.
+    _end_offline_window(gs.id)
     try:
         postponed = oc["code"] == "lgsm_postponed"
         log_action(None, ("lgsm_busy" if oc["code"] == "lgsm_busy"
@@ -1133,25 +1150,39 @@ def _run_due_restarts(app):
         # A cancelled action's failure count must not carry over — see _forget_unqueued_failures.
         _forget_unqueued_failures(pending)
         for gs in pending:
-            # Each server's action takes up to a minute and a half, so a later one can have been
-            # deleted, and its id taken, by the time it comes up: skipped, and its object is not
-            # read, since it would reload from the other row (models.RowReplaced).
-            if not still_held(gs):
+            if not _r37b_queued_ready(gs):
                 continue
             gname = gs.name
-            # Don't restart/stop a server that's being backed up right now — the backup already
-            # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.
-            # Both ways a backup can be running: the runners' flag, and the Backup button's long
-            # action, which sets no flag at all. Nor one its host's reboot holds: the reboot's
-            # stop honours a queued stop, and its restore clears a queued restart.
-            if _backup_in_progress(gs.id) or _reboot_holds(gs):
-                continue
             try:
                 _settle_queued_action(app, gs)
             except Exception:
                 # A refused write leaves the session needing a rollback before the next server.
                 db.session.rollback()
                 app.logger.debug("pending restart/stop of %s failed", gname, exc_info=True)
+
+
+def _r37b_queued_ready(gs):
+    """Whether _run_due_restarts may settle `gs`'s queued action now (else it waits for a later tick)."""
+    # Each server's action takes up to a minute and a half, so a later one can have been
+    # deleted, and its id taken, by the time it comes up: skipped, and its object is not
+    # read, since it would reload from the other row (models.RowReplaced).
+    if not still_held(gs):
+        return False
+    # Read its flags again: the list was read before the servers ahead of it took their
+    # minute and a half each, and a "restart/stop when empty" cancelled meanwhile was run
+    # anyway (and a cancelled stop, its flags reloaded as both off by an earlier server's
+    # commit, ran as a restart: _run_queued_action takes "not a stop" for a restart).
+    db.session.refresh(gs)
+    if not (gs.restart_pending or gs.stop_pending):
+        return False
+    # Don't restart/stop a server that's being backed up right now — the backup already
+    # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.
+    # Both ways a backup can be running: the runners' flag, and the Backup button's long
+    # action, which sets no flag at all. Nor one its host's reboot holds: the reboot's
+    # stop honours a queued stop, and its restore clears a queued restart. Nor one a
+    # scheduled wipe is running on (routes/wipe_schedule): LinuxGSM's wipe stops, deletes
+    # and starts it, and a restart in the middle starts it while its files are going.
+    return not (_backup_in_progress(gs.id) or _reboot_holds(gs) or "wipe" in r36j_route_jobs(gs.id))
 
 
 def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
