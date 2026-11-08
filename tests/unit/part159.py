@@ -358,8 +358,10 @@ _mv_r38h_lhok = {
     "a UDP DENY, a docker0 DENY and a v6 one on lo": _move159(
         ["2022/udp  DENY IN  Anywhere", "2022/tcp on docker0  DENY IN  Anywhere",
          "2022/tcp (v6) on lo  DENY IN  Anywhere (v6)", _TS0_159], None, local=True),
-    "an outbound DENY, a DENY below the allow": _move159(
-        ["2022/tcp  DENY OUT  Anywhere (out)", _HARD4_159], None, local=True),
+    "an outbound DENY": _move159(["2022/tcp  DENY OUT  Anywhere (out)", _HARD4_159], None, local=True),
+    # review 1109: the case its name used to claim, a DENY below an allow for the new port (none met).
+    "a DENY below the allow": _move159(["2022/tcp  ALLOW IN  Anywhere", "2022/tcp  DENY IN  Anywhere", _TS0_159],
+                                       None, local=True),
 }
 check("1108 r38h step 1: on the panel's host with public SSH off, a public DENY or REJECT first on the new port "
       "still refuses the move, naming it (%s); one a connection to it would not meet does not (%s), and the note "
@@ -367,7 +369,7 @@ check("1108 r38h step 1: on the panel's host with public SSH off, a public DENY 
       "new port is reached" % (", ".join(_mv_r38h_lhdeny), ", ".join(_mv_r38h_lhok)),
       all(r[0] is False and r[2] == [] and "is blocked by the firewall rule" in r[1] for r in _mv_r38h_lhdeny.values())
       and all(r[0] is True and r[2] == [] and "reached only through" not in r[1] for r in _mv_r38h_lhok.values())
-      and "were not copied: " + _HARD4_159 in _mv_r38h_lhok["an outbound DENY, a DENY below the allow"][1]
+      and "were not copied: " + _HARD4_159 in _mv_r38h_lhok["an outbound DENY"][1]
       and "Check that a rule of yours" in _mv_r38h_lhok["a UDP DENY, a docker0 DENY and a v6 one on lo"][1],
       repr({k: (r[0], r[1][:300], r[2]) for k, r in {**_mv_r38h_lhdeny, **_mv_r38h_lhok}.items()}))
 _V6_ADD159 = [("ufw-allow-from-port", ["::/0", "2022", "tcp", "SSH panel"])]
@@ -392,9 +394,9 @@ _mv_r38h_fam.update({
 _f159 = {k: (r[0], r[2]) for k, r in _mv_r38h_fam.items()}
 check("1108 r38h step 1: SSH public over one family only (IPv6, or IPv4 beside IPv6 rules) reads as public in that "
       "family: the new port gets a rule from anywhere in that family alone, never in the other (a v4 session there "
-      "gets its own source-only rule copied, nothing public; with the session unread, the public family's rule "
-      "alone); a public DENY first on the new port in either family refuses; public SSH to the host's one "
-      "address reads as public; "
+      "gets its own source-only rule copied, nothing public; with the session unread on a remote the panel dials, "
+      "refused, nothing sent: review 1109); a public DENY first on the new port in either family refuses; public SSH "
+      "to the host's one address is refused, naming that rule (review 1109, the OWNER RULE); "
       "a failed move takes the family's rule back out; a rule for one private or tailnet address is not public SSH, "
       "and nothing is opened to the internet for it (the OWNER RULE)",
       _f159["v6 public, v4 hardened, a v6 session"] == (True, _V6_ADD159)
@@ -404,11 +406,12 @@ check("1108 r38h step 1: SSH public over one family only (IPv6, or IPv4 beside I
       and _f159["the panel's host, v6 public only"] == (True, _V6_ADD159)
       and "Public SSH is off" not in _mv_r38h_fam["the panel's host, v6 public only"][1]
       and _f159["the panel's host, v4 public, a v6 game rule only"] == (True, _V4_ADD159)
-      and _f159["public SSH to the host's one address"] == (
-          True, [("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])])
+      and _f159["public SSH to the host's one address"] == (False, [])
+      and "depends on the firewall rule" in _mv_r38h_fam["public SSH to the host's one address"][1]
       and _f159["v6 public, a v6 session, the move fails"] == (
           False, _V6_ADD159 + [("ufw-delete-allow-from-port", ["::/0", "2022", "tcp"])])
-      and _f159["v6 public, v4 hardened, the session unread"] == (True, _V6_ADD159)
+      and _f159["v6 public, v4 hardened, the session unread"] == (False, [])
+      and "public over IPv6 only" in _mv_r38h_fam["v6 public, v4 hardened, the session unread"][1]
       and _f159["v6 public, a v4 DENY first on the new port"] == (False, [])
       and "is blocked by the firewall rule" in _mv_r38h_fam["v6 public, a v4 DENY first on the new port"][1]
       and _f159["public SSH to a private address only"] == (True, [])
@@ -678,9 +681,8 @@ def _way_back159(fn, netfilter_on=True, ifaces=("tailscale0",), off_tailnet=Fals
     """fn() with Tailscale running, Tailscale SSH off and no tailscale0 rule; tailscaled's chain as given."""
     try:
         _p9_arm(who="part159")
-        for mod in (_hosts159, _cp22_159):
-            _p9_patch(mod, "_tailnet_ssh_state", lambda s: (True, False, False))
-            _p9_patch(mod, "_r28b_panel_way_in_refusal", lambda s: None)
+        _p9_patch(_hosts159, "_tailnet_ssh_state", lambda s: (True, False, False))
+        _p9_patch(_hosts159, "_r28b_panel_way_in_refusal", lambda s: None)
         _p9_patch(_ue159, "ts_netfilter_on", lambda s: netfilter_on)
         _p9_patch(_hosts159, "_tsiface_names", lambda s: list(ifaces))
         _p9_patch(_hosts159, "_r11a_sshd_off_tailnet", lambda s: off_tailnet)

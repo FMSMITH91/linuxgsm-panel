@@ -680,7 +680,9 @@ def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0, added=""):
     finally:
         (_sm_core.run_privileged, _sm_core.write_root_file, _sm_hosts._sshd_socket_activated,
          _sm_hosts._sshd_current_ports, _sm_hosts._restart_ssh_listener) = saved
-    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] not in ("ufw-status", "ufw-show-added")]
+    # Reads, not rule changes: ufw-stored-rules is the IPV6= setting step 1 reads (review 1109).
+    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] not in ("ufw-status", "ufw-show-added",
+                                                                        "ufw-stored-rules")]
     return res, ufw, sent
 
 

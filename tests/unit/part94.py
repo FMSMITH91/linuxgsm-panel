@@ -165,7 +165,7 @@ _SSH94 = ("22/tcp", "LIMIT IN", "Anywhere", True, True)
 def _move94(*rows):
     """change_ssh_port 22 -> 2222 over `rows` (beside _SSH94), failing at sshd-validate.
 
-    -> (answer, the rules after but _SSH94, the verbs sent).
+    -> (answer, the rules after but _SSH94 (a marker row when it is gone), the verbs sent).
     """
     ufw = _Ufw94(_SSH94, *rows)
 
@@ -184,8 +184,14 @@ def _move94(*rows):
     _p9_patch(_hosts94, "_restart_ssh_listener", lambda *a, **k: None)
     res = _hosts94.change_ssh_port(NS(id=-9401, name="p94", host="p94.example.invalid", port=22,
                                       is_local=False, auth_method="key"), 2222)
-    return res, sorted(tuple(r) for r in ufw.rules if tuple(r) != _SSH94), [v for v, _a in ufw.verbs
-                                                                            if v != "ufw-status"]
+    rules = [tuple(r) for r in ufw.rules]
+    # _SSH94 is the operator's: left out of the compare only while it is still there. Dropped by equality,
+    # a move or revert that deleted the 22/tcp LIMIT ended "as it began" (review 1109).
+    if _SSH94 in rules:
+        rules.remove(_SSH94)
+    else:
+        rules.append(("the operator's 22/tcp LIMIT is gone",))
+    return res, sorted(rules), [v for v, _a in ufw.verbs if v != "ufw-status"]
 
 
 # No public way in to TCP 2222 over IPv6: none may be read as the operator's exact v6 rule.
