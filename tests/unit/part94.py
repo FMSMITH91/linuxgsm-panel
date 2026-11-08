@@ -158,9 +158,16 @@ class _Ufw94(_Ufw89):
         return super().run(server, verb, args, timeout, **k)
 
 
+# The host's public SSH rule: a move adds a public allow only where public SSH is already on (review 1108).
+_SSH94 = ("22/tcp", "LIMIT IN", "Anywhere", True, True)
+
+
 def _move94(*rows):
-    """change_ssh_port 22 -> 2222 over `rows`, failing at sshd-validate: (answer, rules after, verbs)."""
-    ufw = _Ufw94(*rows)
+    """change_ssh_port 22 -> 2222 over `rows` (beside _SSH94), failing at sshd-validate.
+
+    -> (answer, the rules after but _SSH94, the verbs sent).
+    """
+    ufw = _Ufw94(_SSH94, *rows)
 
     def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, **k):
         if verb.startswith("ufw-"):
@@ -177,7 +184,8 @@ def _move94(*rows):
     _p9_patch(_hosts94, "_restart_ssh_listener", lambda *a, **k: None)
     res = _hosts94.change_ssh_port(NS(id=-9401, name="p94", host="p94.example.invalid", port=22,
                                       is_local=False, auth_method="key"), 2222)
-    return res, sorted(tuple(r) for r in ufw.rules), [v for v, _a in ufw.verbs if v != "ufw-status"]
+    return res, sorted(tuple(r) for r in ufw.rules if tuple(r) != _SSH94), [v for v, _a in ufw.verbs
+                                                                            if v != "ufw-status"]
 
 
 # No public way in to TCP 2222 over IPv6: none may be read as the operator's exact v6 rule.

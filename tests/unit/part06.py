@@ -11747,6 +11747,11 @@ finally:
 
 # ...and the caller must act on the difference, not just receive it.
 _mon6 = _il6.import_module("panel.services.monitoring")
+# Review 1108: the panel host's reconcile also spares its own addresses and its signed-in superadmins,
+# both read live (part159 holds that). These checks are about the reads and counts around it: nothing
+# to spare here, restored after the last of them.
+_spare_saved6 = _mon6._r38a_spare_admins
+_mon6._r38a_spare_admins = lambda remote, new: new
 
 
 class _FakeRemote6:
@@ -12039,6 +12044,7 @@ try:
 finally:
     (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
      _mon6._autoblock_threshold, _mon6._whitelist_networks) = _ab_saved6
+    _mon6._r38a_spare_admins = _spare_saved6
 
 # ── "could not check" must not render as "all files match" ────────────────────────────────────
 # _compute_panel_integrity fails SAFE: when git cannot be run it answers clean:true WITH

@@ -1548,6 +1548,7 @@ def _r37a_spare_panel(remote, new):
     session's source, read from the host, and every global address of the panel's own host, any of
     which it may dial from next time), read once per cycle and only when there is something to block.
     Unread blocks nothing new this cycle, as the Block refuses; releases go ahead (the caller's).
+    The panel's own host has no session source: its admins' addresses are spared (_r38a_spare_admins).
     """
     if not new:
         return new
@@ -1556,8 +1557,10 @@ def _r37a_spare_panel(remote, new):
         _log.debug("autoblock: no new blocks on %s — the panel's own source address could not be read",
                    getattr(remote, "name", "?"))
         return set()
+    if not src and not is_local_server(remote):
+        return new                   # a host reached over Tailscale (tailnet-exempt)
     if not src:
-        return new                   # the panel's own host, or one reached over Tailscale (tailnet-exempt)
+        return _r38a_spare_admins(remote, new)
     from panel.routes.remote_security import _fwb_panel_host_addrs
     own = _fwb_panel_host_addrs()
     if own is None:
@@ -1566,6 +1569,57 @@ def _r37a_spare_panel(remote, new):
         return set()
     spare = own | {ip_address_or_none(src)}
     return {ip for ip in new if ip_address_or_none(ip) not in spare}
+
+
+def _r38a_spare_admins(remote, new):
+    """_r37a_spare_panel for the panel's OWN host: `new` less its own addresses and its admins' addresses.
+
+    The deny is on every port at the top of the panel host's UFW, so it cuts the admin's panel AND
+    SSH, and the manual Unblock is then out of reach from that address. And an admin's address can
+    reach the threshold honestly: a script at home (NAT shared with the admin's laptop) with an old
+    API token writes "panel api token blocked" on every refused request, and the jail's one-hour ban
+    lets it come back for more; twenty forgotten-password sign-ins in a week do it too (review 1108).
+    The manual Block refuses the viewer's own address; this spares the address of every live,
+    signed-in session of an account that manages the panel host (a superadmin: its Block, Unblock and
+    firewall are superadmin-only), an IPv6 one by its /64 as the sign-in throttle and the session
+    binding read a client, and the panel host's own global addresses.
+    Either unread: nothing new is blocked this cycle.
+    """
+    from panel.routes.remote_security import _fwb_panel_host_addrs
+    own = _fwb_panel_host_addrs()
+    if own is None:
+        _log.debug("autoblock: no new blocks on %s — the panel host's own addresses could not be read",
+                   getattr(remote, "name", "?"))
+        return set()
+    admins = _r38a_admin_buckets()
+    if admins is None:
+        _log.debug("autoblock: no new blocks on %s — the panel's signed-in sessions could not be read",
+                   getattr(remote, "name", "?"))
+        return set()
+    from panel.security.auth import throttle_key
+    return {ip for ip in new if ip_address_or_none(ip) not in own and throttle_key(ip) not in admins}
+
+
+def _r38a_admin_buckets():
+    """The throttle buckets (security.auth.throttle_key) of every live, signed-in superadmin session.
+
+    Active accounts only, logins that have not idled out; None when the sessions could not be read.
+    """
+    from panel.db.models import User, UserSession
+    from panel.security.auth import throttle_key
+    try:
+        buckets = set()
+        for sess, user in db.session.query(UserSession, User).join(User, UserSession.user_id == User.id).all():
+            if user.is_active and user.is_superadmin and sess.ip and not sess.is_expired():
+                buckets.add(throttle_key(str(sess.ip)))
+        return buckets
+    except Exception:
+        _log.debug("autoblock: the signed-in sessions could not be read", exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:   # nosec B110 - nothing more to undo; the caller blocks nothing new this cycle
+            pass
+        return None
 
 
 def _autoblock_apply(write, ips, what, failed):

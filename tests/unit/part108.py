@@ -124,7 +124,7 @@ def _ssh_stage108(root, socket_mode, calls):
         return "", "", 0
     _p9_patch(_p9_core, "run_command", _cmd)
     _p9_patch(_p9_core, "run_privileged", _priv)
-    _p9_patch(_hosts108, "_open_ssh_port_rule", lambda server, port, way_in: (False, None))
+    _p9_patch(_hosts108, "_open_ssh_port_rule", lambda server, port, way_in, served=None: (False, None))
     _p9_patch(_hosts108, "_r25b_close_added_ssh_rule", lambda *a, **k: None)
     _p9_patch(_hosts108, "_restart_ssh_listener", lambda *a, **k: calls.append("restart"))
     _p9_patch(_hosts108, "_sshd_holds_port", lambda *a, **k: (True, ""))

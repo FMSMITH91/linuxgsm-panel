@@ -1019,12 +1019,15 @@ def _fwc_protect_paths(groups, paths):
     my home IP" sequence (allow from home, then delete Anywhere) is refused while the panel connects
     from elsewhere, and so is deleting the proxy port's allow the viewer came in on. Read under a
     default deny: the incoming policy is not in this listing, and in doubt the rule is kept. A remote
-    whose SSH session could not be read keeps every SSH rule (unknown is not safe).
+    whose SSH session could not be read keeps every SSH rule (unknown is not safe), and a remote the
+    panel dials over the tailnet also every tailscale0 rule carrying sshd: the one its session would
+    get in by alone, which the read session protects, fell back to a warn when the read failed and was
+    deletable again (review 1108).
     """
     from panel.ops.ssh_manager import ufweval
     if paths["unread"]:
         for g in groups:
-            if g.get("is_ssh"):
+            if g.get("is_ssh") or (paths.get("tailnet") and g.get("is_tailscale")):
                 _fwc_protect(g, "ssh_unread")
         return
     for conn in paths["conns"]:
@@ -1639,30 +1642,42 @@ _FWB_VIEWER_UNKNOWN = i18n.Sentence("Couldn't tell which address you reach the p
                                     "then whether a rule keeps the panel reachable cannot be checked.")
 # The same unknown viewer, for a request that came over loopback naming no client it was forwarded for:
 # a browser on the panel's machine or an SSH tunnel (`ssh -L`), where trust_proxy cannot help (r37g).
+# A believed proxy here naming a client on this machine is that viewer too (review 1108), so the text names both.
 _R37G_VIEWER_LOCAL = i18n.Sentence("Couldn't tell which address you reach the panel from: this request came over the "
-                                   "panel's own machine's loopback with no proxy header (a browser on that machine, "
-                                   "an SSH tunnel, or a proxy that sends no X-Forwarded-For), so whether a rule "
-                                   "keeps the panel reachable cannot be checked.")
+                                   "panel's own machine's loopback, from a viewer on that machine (a browser there, an "
+                                   "SSH tunnel, or a proxy here that sends no X-Forwarded-For or names a client on "
+                                   "this machine), so whether a rule keeps the panel reachable cannot be checked.")
 # The headers a proxy names the client it forwards for in, believed or not (client_ip decides that).
 _R37G_FWD_HEADERS = ("X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Connecting-IP", "True-Client-IP")
 
 
 def _r37g_direct_loopback():
-    """Whether this request's socket peer is loopback and it names no client it was forwarded for.
+    """Whether this request reached the panel over this machine's loopback from a viewer ON this machine.
 
-    Then nothing stands between the viewer and the panel but this machine: a browser on it, or an SSH
-    tunnel's sshd dialling the panel for the admin. A proxy here sends one of _R37G_FWD_HEADERS (the
-    README's nginx block, Caddy, Tailscale Serve, cloudflared), and is the unknown viewer
-    _FWB_VIEWER_UNKNOWN answers. False outside a request.
+    Its socket peer is loopback and it names no client it was forwarded for: then nothing stands between
+    the viewer and the panel but this machine (a browser on it, or an SSH tunnel's sshd dialling the panel
+    for the admin). A proxy here sends one of _R37G_FWD_HEADERS (the README's nginx block, Caddy,
+    Tailscale Serve, cloudflared), and is the unknown viewer _FWB_VIEWER_UNKNOWN answers. Unless the
+    panel believes that proxy (the test client_ip itself uses) and the client it names is loopback too:
+    the viewer reached the PROXY over loopback (`ssh -L 8443:localhost:443` to nginx, a browser on the
+    host opening https://localhost), and refusing every block with trust_proxy advice already applied
+    took manual blocking away from them (review 1108). An unbelieved proxy is still unknown: client_ip
+    answers its loopback peer then too, which says nothing of who is behind it. False outside a request.
     """
     from panel.core.validation import ip_address_or_none
     try:
         from flask import request
         environ = request.environ
-        peer = ip_address_or_none((environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
-                                  or environ.get("REMOTE_ADDR"))
-        return (peer is not None and _fwb_unmapped(peer).is_loopback
-                and not any(h in request.headers for h in _R37G_FWD_HEADERS))
+        raw = (environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR") or environ.get("REMOTE_ADDR")
+        peer = ip_address_or_none(raw)
+        if peer is None or not _fwb_unmapped(peer).is_loopback:
+            return False
+        if not any(h in request.headers for h in _R37G_FWD_HEADERS):
+            return True
+        from panel.security import auth
+        named = ip_address_or_none(auth._forwarded_client_ip())
+        return (named is not None and _fwb_unmapped(named).is_loopback
+                and bool(auth._request_came_through_proxy(raw)))
     except Exception:
         _core._log.debug("firewall: the request's headers could not be read", exc_info=True)
         return False
@@ -1715,7 +1730,7 @@ def _fwc_ssh_conns(server, ts, paths):
         _core._log.debug("the panel's SSH session to the host could not be read", exc_info=True)
         conn = None
     if conn is None:
-        paths["unread"] = True
+        paths["unread"], paths["tailnet"] = True, tailnet
         paths["why"] = _FWB_TAILNET_GAP if tailnet and not ts[2] else _FWB_SOURCE_UNREAD
         return
     paths["addrs"] = conn.get("addrs")
@@ -1914,12 +1929,27 @@ def _fwc_in_use(server, paths, st):
         # which the measured session already is.
         named = ip_address_or_none(getattr(server, "host", None)) is None
         if named and conn_fams:
-            ssh_fams = conn_fams | ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
+            ssh_fams = conn_fams | (ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
+                                    & _r38a_name_families(server))
         else:
             ssh_fams = conn_fams or _fwb_in_use_versions(server)
         if st.get("ipv6") is not True:
             ssh_fams = (ssh_fams - ({6} - conn_fams)) or {4}
     return ssh_fams | conn_fams, ssh_fams
+
+
+def _r38a_name_families(server):
+    """The address families the panel can dial named remote `server` in: those its name resolves to here.
+
+    Only a family the name has a record in can come first in getaddrinfo's order: a provider's default
+    global IPv6 on eth0 (or a LAN's ULA) under a name with only an A record is never dialled, and holding
+    the host to an IPv6 way in refused a safe deny beside its IPv4 SSH rule with an untrue "no rule lets
+    SSH in" (review 1108). A name that does not resolve here answers both: nothing is known, so the
+    host's own public addresses decide, as before.
+    """
+    from panel.core.validation import ip_address_or_none
+    addrs = (ip_address_or_none(a) for a in hosts._r28b_resolve(getattr(server, "host", "")))
+    return {_fwb_unmapped(a).version for a in addrs if a is not None} or {4, 6}
 
 
 def _fwb_family_views(versions, groups, st, ssh_ports):
@@ -2342,7 +2372,14 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     allow_default = _fwc_default_allows(server)
     cut = next((c for c in paths["conns"] if c.version in families
                 and _fwc_cuts(groups, c, top, allow_default, paths)), None)
-    return None if cut is None else _fwc_cut_answer(cut)
+    if cut is not None:
+        return _fwc_cut_answer(cut)
+    # With Tailscale Serve up, every request was taken to come through Serve, a viewer on this machine's
+    # loopback too (`ssh -L` to the panel port): its SSH session was never read, so a block of the admin's
+    # own range passed and cut the tunnel (review 1108 lead). That viewer's session is held here as well.
+    if not port_known_needed and _core.is_local_server(server) and _r37g_direct_loopback():
+        return _r37g_session_refusal(server, groups, top, families, paths)
+    return None
 
 
 def _r37g_why_refusal(server, groups, top, families, paths, port_known_needed):

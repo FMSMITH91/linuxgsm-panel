@@ -197,7 +197,8 @@ def _public_ssh83():
 
 def _ssh_move83():
     def opened(*rows):
-        ufw, asked = _Ufw83(*rows), []
+        # Beside a public SSH rule: where public SSH is off, step 1 adds nothing public (review 1108).
+        ufw, asked = _Ufw83(_ALLOW_ROW83 % "22/tcp", *rows), []
         _p9_patch(_p9_core, "run_privileged", ufw.run)
         # The allow lands in the listing, as ufw's does: step 1 re-reads it to confirm the open.
         _p9_patch(_hosts83, "remote_ufw_open_port", lambda s, p, proto, comment="": asked.append(p) or ufw.rows.append(
