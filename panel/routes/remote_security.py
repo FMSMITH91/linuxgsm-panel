@@ -434,7 +434,7 @@ def _register_panel_binding(app):
         log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
                    detail=f"{_r18a_bracketed(cur_bind)}:{cur_port} -> {_r18a_bracketed(new_bind)}:{new_port}; "
                           f"firewall: {' '.join(fw_notes) or 'n/a'}; fail2ban: {f2b_msg}",
-                   success=fw_ok and f2b_ok)
+                   success=all((fw_ok, f2b_ok)))
         ok, restart_msg = so.restart_panel()
         if not ok:
             # The panel still listens where it did, and the steps above took that port's rule and
@@ -616,8 +616,9 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
 def _r37a_open_first(app, local, new_bind, new_port):
     """Open the port a publicly reached binding needs, before anything is saved -> (ok, its note).
 
-    None when the binding needs no open (or there is no local host row: no firewall to follow). It was opened after the binding was saved, and a failure (the helper timing out on a held xtables
-    lock, a sudo refusal) was only a note: the panel restarted onto a port its firewall drops, the old
+    None when the binding needs no open (or there is no local host row: no firewall to follow). It was
+    opened after the binding was saved, and a failure (the helper timing out on a held xtables lock, a
+    sudo refusal) was only a note: the panel restarted onto a port its firewall drops, the old
     port's rule was closed too, and nothing of the panel could be reached (review 1107).
     """
     if not local or not _panel_bind_is_public(new_bind):
