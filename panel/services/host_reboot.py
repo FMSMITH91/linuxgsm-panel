@@ -636,7 +636,7 @@ def host_player_state(remote, probes=None):
         probes = _probe_rows(remote, installed)
     unknown = _unread_rows(installed, probes)
     running = [gs for gs in installed if _session_of(probes, gs) == 1]
-    blockers += _lgp.census_blockers(running, probes, _blocker)
+    blockers += _lgp.census_blockers(installed, probes, _blocker)
     busy, unk2 = _count_players(running, _mon._batched_slots(running) if running else {})
     unknown += unk2
     return {"state": _rw.state_word(blockers, busy, unknown),
@@ -1604,15 +1604,17 @@ class _Job:
         """Once more, after the stops: anything running again (a monitor run, a cron) is stopped.
 
         Within what is left of the stop phase's budget: past it, a server found running is not
-        stopped again but recorded as still running, and the shutdown ends it. First it waits for
-        every LinuxGSM command still running on the host (lgsm_players.settled_probes): a `restart`
-        counting down when the reboot's stop came in starts the server again after it.
+        stopped again but recorded as still running, and the shutdown ends it. First it waits for every
+        LinuxGSM command still running on the plan's servers and on any found running
+        (lgsm_players.settled_probes): a `restart` counting down when the reboot's stop came in
+        starts the server again after it.
         """
         rows = [gs for gs in GameServer.query.filter_by(remote_id=self.remote_id, installed=True).all()
                 if gs.status not in ("installing", "configuring")]
         # Still running at the deadline: no probes, and _bounced undoes the plan and says why.
         probes, self.bounce_why = _lgp.settled_probes(lambda: _probe_rows(self.remote, rows),
-                                                      self._past_deadline, self._sleep)
+                                                      self._past_deadline, self._sleep,
+                                                      plan_ids={e["id"] for e in self.entries})
         known = {e["id"]: e for e in self.entries}
         for gs in rows:
             if (probes.get(gs.id) or {}).get("session") != 1:

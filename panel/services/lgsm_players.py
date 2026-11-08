@@ -465,15 +465,26 @@ def reboot_warn_budget(remote, passes, workers, base_for):
                                  for grp in groups], workers) for groups in passes)
 
 
-def census_blockers(running, probes, blocker):
+def census_blockers(installed, probes, blocker):
     """The host census's blockers from its probes: LinuxGSM maintenance, or its warning countdown.
 
-    `running`: the rows read running; `blocker(kind, name)`: host_reboot's. A countdown (the probe's
-    WARN: <self>-warning.lock's pid alive) is LinuxGSM about to stop or restart that server after
-    its warning, and a reboot's stop would wait it out and then warn again (reboot_allowance).
+    `installed`: every settled row; `blocker(kind, name)`: host_reboot's. Maintenance (MAINT) counts
+    on a STOPPED server too: a cron `update` downloading on a server nobody is playing on is still
+    cut through by the shutdown, and the reboot's rescan no longer waits on servers it did not stop
+    (settled_probes), so this is the one place it is decided, before anything is touched. A
+    countdown (the probe's WARN: <self>-warning.lock's pid alive) only on a running one: it is
+    LinuxGSM about to stop or restart that server after its warning, and a reboot's stop would wait
+    it out and then warn again (reboot_allowance); on a stopped server LinuxGSM's countdown ends at
+    its first status check, so a lock there is a command in its first seconds or a stale one.
     """
-    return [blocker("lgsm_warning" if probes[gs.id].get("warn") else "maintenance", gs.name)
-            for gs in running if probes[gs.id].get("maint") or probes[gs.id].get("warn")]
+    out = []
+    for gs in installed:
+        p = probes.get(gs.id) or {}
+        if p.get("session") == 1 and p.get("warn"):
+            out.append(blocker("lgsm_warning", gs.name))
+        elif p.get("maint"):
+            out.append(blocker("maintenance", gs.name))
+    return out
 
 
 def stop_passes(remote, entries):
@@ -494,12 +505,17 @@ def stop_passes(remote, entries):
 _LG264_SETTLE_EVERY = 5
 
 
-def settled_probes(read, past_deadline, sleep):
+def settled_probes(read, past_deadline, sleep, plan_ids=None):
     """The reboot's rescan probes once no LinuxGSM command runs on the host's servers: (probes, why).
 
     `read()`: {id: probe} (host_reboot._probe_rows). A command in flight (INFLIGHT, MAINT or a live
     warning lock) is waited out, re-read every _LG264_SETTLE_EVERY s with `sleep` (the job's, which
-    a Cancel ends). Measured on the test host: a `restart` counting down when the reboot's stop came
+    a Cancel ends). `plan_ids`: the servers the reboot stopped, waited on whatever their state; any
+    other server only while it is running (the ones the rescan acts on). A cron `update` on a server
+    that was stopped all along, or one server's */5 `monitor` read at the deadline, is nothing the
+    reboot did or will undo: waiting on it made the reboot sit out its whole stop budget and then
+    roll back (the census refuses maintenance on any server before anything is stopped). None:
+    every server. Measured on the test host: a `restart` counting down when the reboot's stop came
     in made that stop wait, then print "already stopped" during the restart's own stop; read then,
     the server was stopped, the reboot went ahead, and the restart started it again 2 s later —
     the shutdown would have ended it with no clean stop. Settled: (probes, ""), and a server found
@@ -508,7 +524,9 @@ def settled_probes(read, past_deadline, sleep):
     """
     while True:
         probes = read()
-        if not any(p.get("inflight") or p.get("maint") or p.get("warn") for p in probes.values()):
+        watched = [p for i, p in probes.items()
+                   if plan_ids is None or i in plan_ids or (p or {}).get("session") == 1]
+        if not any(p.get("inflight") or p.get("maint") or p.get("warn") for p in watched):
             return probes, ""
         if past_deadline():
             return {}, LG264_STILL_BUSY
