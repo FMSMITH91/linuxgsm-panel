@@ -12,6 +12,9 @@
   blocks nothing new that cycle.
 * LOW (P1): on a remote the panel dials over the tailnet, a session read that fails keeps its tailscale0
   rule protected (it fell back to a warn and could be deleted).
+* LOW (P1): on the panel host, a viewer a believed proxy here names as a loopback client (an SSH tunnel to
+  nginx, a browser on the host through it) is the local viewer: its blocks are decided by sshd's sessions,
+  not refused with trust_proxy advice that is already applied.
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -30,7 +33,7 @@ from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_core, _p9_patch, _p9_rest
 from unit.part125 import _Box125
 from unit import part135 as _p135
 from unit.part136 import _OUT136, _deny136
-from unit.part154 import _TS0_154, _proc154, _tsrow154
+from unit.part154 import _TS0_154, _lo154, _proc154, _tsrow154
 from panel.core.clock import utcnow as _now159
 from panel.db.models import User as _User159, UserSession as _US159, db as _db159
 from panel.ops import system_ops as _so159
@@ -418,6 +421,33 @@ check("1108 P1 LOW: on a remote the panel dials at its tailnet address, with its
       _ug_cut == "PROTECTED", repr(_ug_cut))
 check("1108 P1 LOW: ...while a remote dialled at a public address, and one Tailscale SSH answers on port 22, keep "
       "the warn (the controls)", all(v == "warn" for v in _ug_ok.values()), repr(_ug_ok))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# LOW (P1): a believed proxy naming a loopback client is the local viewer
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _proxied_block159(target, xff, believed, sessions=()):
+    """The panel host's IP-block refusal of `target` from 127.0.0.1 with X-Forwarded-For `xff` (text or None)."""
+    def fn():
+        _p9_patch(_auth159, "_request_came_through_proxy", lambda peer: believed)
+        return _fw159.fwc_block_ip_refusal(_p135._LOCAL135, target)
+    return _lo154(fn, headers={"X-Forwarded-For": xff}, sessions=sessions)
+
+
+_pl_ok = _proxied_block159(_ELSE_RANGE159, "127.0.0.1", True)   # NOSONAR(S1313)
+_pl_v6 = _proxied_block159(_ELSE_RANGE159, "::1", True)
+_pl_hit = _proxied_block159(_RANGE159, "127.0.0.1", True, sessions=[(_TUNNEL159, 22)])   # NOSONAR(S1313)
+check("1108 P1 LOW: on the panel host, a believed proxy here naming a loopback client (127.0.0.1 or ::1: an SSH "
+      "tunnel to nginx, a browser on the host through it) may block a range none of sshd's sessions comes from, "
+      "and a block of one that holds a session is refused naming it",
+      _pl_ok is None and _pl_v6 is None and _pl_hit is not None and _TUNNEL159 in _pl_hit and "trust_proxy" not in
+      _pl_hit, repr((_pl_ok, _pl_v6, _pl_hit)))
+_pl_cut = {
+    "an unbelieved proxy naming loopback": _proxied_block159(_ELSE_RANGE159, "127.0.0.1", False),   # NOSONAR(S1313)
+    "a believed proxy naming no address": _proxied_block159(_ELSE_RANGE159, "unknown", True),
+}
+check("1108 P1 LOW: ...while a proxy the panel does not believe (whatever it names), or a believed one naming no "
+      "address, still refuses every block, naming trust_proxy",
+      all(v is not None and "trust_proxy" in v for v in _pl_cut.values()), repr(_pl_cut))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))

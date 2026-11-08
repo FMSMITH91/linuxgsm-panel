@@ -1642,30 +1642,42 @@ _FWB_VIEWER_UNKNOWN = i18n.Sentence("Couldn't tell which address you reach the p
                                     "then whether a rule keeps the panel reachable cannot be checked.")
 # The same unknown viewer, for a request that came over loopback naming no client it was forwarded for:
 # a browser on the panel's machine or an SSH tunnel (`ssh -L`), where trust_proxy cannot help (r37g).
+# A believed proxy here naming a client on this machine is that viewer too (review 1108), so the text names both.
 _R37G_VIEWER_LOCAL = i18n.Sentence("Couldn't tell which address you reach the panel from: this request came over the "
-                                   "panel's own machine's loopback with no proxy header (a browser on that machine, "
-                                   "an SSH tunnel, or a proxy that sends no X-Forwarded-For), so whether a rule "
-                                   "keeps the panel reachable cannot be checked.")
+                                   "panel's own machine's loopback, from a viewer on that machine (a browser there, an "
+                                   "SSH tunnel, or a proxy here that sends no X-Forwarded-For or names a client on "
+                                   "this machine), so whether a rule keeps the panel reachable cannot be checked.")
 # The headers a proxy names the client it forwards for in, believed or not (client_ip decides that).
 _R37G_FWD_HEADERS = ("X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Connecting-IP", "True-Client-IP")
 
 
 def _r37g_direct_loopback():
-    """Whether this request's socket peer is loopback and it names no client it was forwarded for.
+    """Whether this request reached the panel over this machine's loopback from a viewer ON this machine.
 
-    Then nothing stands between the viewer and the panel but this machine: a browser on it, or an SSH
-    tunnel's sshd dialling the panel for the admin. A proxy here sends one of _R37G_FWD_HEADERS (the
-    README's nginx block, Caddy, Tailscale Serve, cloudflared), and is the unknown viewer
-    _FWB_VIEWER_UNKNOWN answers. False outside a request.
+    Its socket peer is loopback and it names no client it was forwarded for: then nothing stands between
+    the viewer and the panel but this machine (a browser on it, or an SSH tunnel's sshd dialling the panel
+    for the admin). A proxy here sends one of _R37G_FWD_HEADERS (the README's nginx block, Caddy,
+    Tailscale Serve, cloudflared), and is the unknown viewer _FWB_VIEWER_UNKNOWN answers. Unless the
+    panel believes that proxy (the test client_ip itself uses) and the client it names is loopback too:
+    the viewer reached the PROXY over loopback (`ssh -L 8443:localhost:443` to nginx, a browser on the
+    host opening https://localhost), and refusing every block with trust_proxy advice already applied
+    took manual blocking away from them (review 1108). An unbelieved proxy is still unknown: client_ip
+    answers its loopback peer then too, which says nothing of who is behind it. False outside a request.
     """
     from panel.core.validation import ip_address_or_none
     try:
         from flask import request
         environ = request.environ
-        peer = ip_address_or_none((environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
-                                  or environ.get("REMOTE_ADDR"))
-        return (peer is not None and _fwb_unmapped(peer).is_loopback
-                and not any(h in request.headers for h in _R37G_FWD_HEADERS))
+        raw = (environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR") or environ.get("REMOTE_ADDR")
+        peer = ip_address_or_none(raw)
+        if peer is None or not _fwb_unmapped(peer).is_loopback:
+            return False
+        if not any(h in request.headers for h in _R37G_FWD_HEADERS):
+            return True
+        from panel.security import auth
+        named = ip_address_or_none(auth._forwarded_client_ip())
+        return (named is not None and _fwb_unmapped(named).is_loopback
+                and bool(auth._request_came_through_proxy(raw)))
     except Exception:
         _core._log.debug("firewall: the request's headers could not be read", exc_info=True)
         return False
