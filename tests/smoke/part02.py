@@ -248,14 +248,19 @@ try:
               _gb_r.status_code == 200 and b"Invalid username or password." in _gb_r.data
               and bool(_gb_calls) is _proxied, "%d %r" % (_gb_r.status_code, _gb_calls))
     from panel.ops import system_ops as _gb_so
+    from panel.routes import remote_security as _gb_rsec
     _gb_deny = _gb_so.ufw_deny_ip
+    _gb_src = _gb_rsec._fwa_source_refusal
     try:
         _gb_so.ufw_deny_ip = lambda ip: (True, "blocked")
+        # The block's read of this machine's own firewall (unit part154 holds it), not this check's.
+        _gb_rsec._fwa_source_refusal = lambda *a: None
         _gb_calls.clear()
         c.post("/api/panel/security/block", json={"ip": "203.0.113.200"})
         _gb_blk = list(_gb_calls)
     finally:
         _gb_so.ufw_deny_ip = _gb_deny
+        _gb_rsec._fwa_source_refusal = _gb_src
     check("funnel gate: an admin's Block IP refreshes the set at once", _gb_blk == [0],
           repr(_gb_blk))
 finally:

@@ -23,12 +23,12 @@ def _parse_ufw_rule(detail):
     Structured so the UI can show clean columns instead of the raw string. Handles the optional
     `on <iface>` clause, the `# comment` suffix, and the `(v6)` family markers.
     """
-    v6 = "(v6)" in detail
-    s = detail.replace("(v6)", " ")
-    comment = ""
-    if "#" in s:
-        s, comment = s.split("#", 1)
-        comment = comment.strip()
+    # The comment first: "(v6)" typed in a hand-made comment filed an IPv4 rule under IPv6 (the panel's
+    # own comments cannot hold parentheses), and the comment lost the text (review 1107 lead).
+    rule, _sep, comment = detail.partition("#")
+    v6 = "(v6)" in rule
+    s = rule.replace("(v6)", " ")
+    comment = comment.strip()
     iface = ""
     m = re.search(r"\bon\s+(\S+)", s)
     if m:
@@ -1670,8 +1670,15 @@ def _fwc_paths(server, ts):
 def _fwc_ssh_conns(server, ts, paths):
     """_fwc_paths for a remote: the panel's SSH session, unless Tailscale already answers for it."""
     from panel.ops.ssh_manager import ufweval
-    tailnet, ts_way = _fwb_tailnet_way(server, ts)
-    if ts_way:
+    tailnet = _fwb_tailnet_way(server, ts)[0]
+    # Only Tailscale SSH answering the port the panel dials (22) holds the session whatever ufw says:
+    # tailscaled takes it ahead of netfilter. A tailnet interface rule (ts's third reading) is a way in
+    # only while it stays, and the delete guard is asking whether it may go: taking it as the answer
+    # left the host's only tailscale0 allow deletable (a "warn") beside an SSH rule kept to another
+    # source, and the panel's next session met the default deny (review 1107). So that session is read
+    # and evaluated like any other: exempt where tailscaled's own chain lets tailscale0 in ahead of
+    # ufw, otherwise the rule it gets in by alone is protected.
+    if tailnet and ts[1] and _fwb_dialled_port(server) == 22:
         return
     try:
         conn = hosts._fwb_ssh_conn(server)
@@ -1680,7 +1687,7 @@ def _fwc_ssh_conns(server, ts, paths):
         conn = None
     if conn is None:
         paths["unread"] = True
-        paths["why"] = _FWB_TAILNET_GAP if tailnet else _FWB_SOURCE_UNREAD
+        paths["why"] = _FWB_TAILNET_GAP if tailnet and not ts[2] else _FWB_SOURCE_UNREAD
         return
     paths["addrs"] = conn.get("addrs")
     paths["conns"] = [ufweval.Conn(conn["client"].version, conn["client"], conn["server"], conn["port"],
@@ -1857,18 +1864,26 @@ def _fwc_path_gaps(server, views, paths, default_allow):
 def _fwc_in_use(server, paths, st):
     """(the families views are needed for, the families SSH must stay open in for whoever administers it).
 
-    A remote: the panel's session's family (else _fwb_in_use_versions'). The panel's host: SSH in every
-    family the host has a public address in that ufw handles (the web viewer's family says nothing
-    about the admin's SSH), and the viewer's connections' families.
+    A remote: the panel's session's family (else _fwb_in_use_versions'), and both for a host dialled by
+    name, which may move the panel to the other family next time (as the delete guard holds); IPv6 only
+    where ufw handles it unless the session was measured over it. The panel's host: SSH in every family the
+    host has a public address in that ufw handles (the web viewer's family says nothing about the
+    admin's SSH), and the viewer's connections' families.
     """
+    from panel.core.validation import ip_address_or_none
     from panel.ops.ssh_manager import ufweval
     conn_fams = {c.version for c in paths["conns"]}
     if _core.is_local_server(server):
         ssh_fams = ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
     else:
-        ssh_fams = conn_fams or _fwb_in_use_versions(server)
-        if not conn_fams and st.get("ipv6") is not True:
-            ssh_fams = (ssh_fams - {6}) or {4}
+        # The measured family alone let a deny through on a named dual-stack host whose only SSH rule
+        # was IPv4: the next connection may go out over IPv6 first (getaddrinfo's order), and paramiko
+        # gives up on the first address that drops it (review 1107). An address literal is dialled in
+        # its own family, which the measured session already is.
+        named = ip_address_or_none(getattr(server, "host", None)) is None
+        ssh_fams = (conn_fams | _fwb_in_use_versions(server)) if named or not conn_fams else conn_fams
+        if st.get("ipv6") is not True:
+            ssh_fams = (ssh_fams - ({6} - conn_fams)) or {4}
     return ssh_fams | conn_fams, ssh_fams
 
 
@@ -2276,14 +2291,18 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     refuses, named as the firewall meets it. UFW off: the block is only stored, and turning it on is
     checked then. The rules unread refuses. Where the connections cannot be known: a remote's SSH
     session is already covered by the refusal for every port sshd serves; the panel's host refuses
-    when the block needs the port (`port_known_needed`) and it is not known.
+    when the block needs the port (`port_known_needed`) and it is not known, and whatever the block is
+    when the viewer itself is not known: a block of an address or range on every port cuts the viewer
+    off whichever port it comes in on (behind a proxy here the panel was not told to believe, the
+    viewer's own-address check reads 127.0.0.1 and passes a range that holds the admin's address).
     """
     groups, why = _fwc_enforced(server)
     if groups is None:
         return why
     paths = _fwc_paths(server, _fwb_ts_ways(server, groups, _fwssh_served_ports(server)))
     if paths["why"] is not None:
-        return paths["why"] if port_known_needed and _core.is_local_server(server) else None
+        needed = port_known_needed or paths["why"] is _FWB_VIEWER_UNKNOWN
+        return paths["why"] if needed and _core.is_local_server(server) else None
     allow_default = _fwc_default_allows(server)
     cut = next((c for c in paths["conns"] if c.version in families
                 and _fwc_cuts(groups, c, top, allow_default, paths)), None)
