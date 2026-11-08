@@ -16,6 +16,7 @@ import re as _re157
 
 from unit.part01 import check
 from unit.part12 import P9_ADMIN, P9_GS, P9_VIEWER, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from unit.part143 import _SD143_PATH, _fire143
 from unit.part99 import _SF99, _cut_or99, _js99, _line_or99, _read99
 from panel.ops.ssh_manager import _core as _smc157
 from panel.routes import server_detail as _sd157
@@ -267,3 +268,45 @@ _note157 = _re157.findall(r"why\.textContent = t\((\"[^\"]*\"|'[^']*')\)", _fg15
 check("install page: the greyed-out games note names no one distro (it said \"an older Ubuntu\" on a "
       "Debian host)", len(_note157) == 1 and "Ubuntu" not in _note157[0] and "Debian" not in _note157[0],
       repr(_note157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 6. The suite time limit's report during a unit part
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The unit runner arms the limit with its own globals, but binds part01's `results` there only after
+# the part loop, so a hang inside a part (the 22.04 freeze the limit was written for) printed the part
+# and never "the last one recorded". part143's child planted `results` in its own globals, so its
+# check passed on a shape the real runner does not have. Fired here with the runner's real shape:
+# `_part` in the globals, the checks only in another module.
+_NORES157 = (
+    "import importlib.util, sys, threading, types\n"
+    "s = importlib.util.spec_from_file_location('suite_deadline', %r)\n"
+    "sd = importlib.util.module_from_spec(s); s.loader.exec_module(sd)\n"
+    "m = types.ModuleType('standin157'); m.results = [(True, 'the check before the hang', '')]\n"
+    "sys.modules['standin157'] = m\n"
+    "_part = 'part99'\n"
+    "sd.arm(globals()%s)\n"
+    "def _stuck_157():\n"
+    "    lk = threading.Lock(); lk.acquire(); lk.acquire()\n"
+    "_stuck_157()\n")
+_dl157 = {_k: _fire143(_NORES157 % (_SD143_PATH, _arg), "nores" + _k)
+          for _k, _arg in (("named", ", results_from='standin157'"), ("unnamed", ""))}
+check("suite deadline: a runner whose checks live in a part's module (no `results` in its own globals) "
+      "still gets the count and the last check recorded in the report",
+      _dl157["named"][0] == 124 and "in part: part99" in _dl157["named"][1]
+      and "checks recorded so far: 1" in _dl157["named"][1]
+      and "the check before the hang" in _dl157["named"][1], repr(_dl157["named"][1][-1500:]))
+check("suite deadline: ...and without naming that module the report has only the part (control: the "
+      "unit runner's report until now)",
+      _dl157["unnamed"][0] == 124 and "in part: part99" in _dl157["unnamed"][1]
+      and "checks recorded so far" not in _dl157["unnamed"][1], repr(_dl157["unnamed"][1][-800:]))
+_arms157 = {}
+for _rn157, _pkg157 in (("unit_test.py", "unit"), ("smoke_test.py", "smoke")):
+    _src157 = _read99("tests", _rn157)
+    _arms157[_rn157] = (_re157.findall(r"\barm\(globals\(\)(?:, results_from=\"([\w.]+)\")?\)", _src157),
+                        _re157.search(r"^results = \[\]$", _read99("tests", _pkg157, "part01.py"), _re157.M)
+                        is not None)
+check("suite deadline: the unit and smoke runners, which bind `results` from part01 only after running "
+      "it, name part01's module for the report, and that module holds `results`",
+      _arms157 == {"unit_test.py": (["unit.part01"], True), "smoke_test.py": (["smoke.part01"], True)},
+      repr(_arms157))

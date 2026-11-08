@@ -219,7 +219,9 @@ if _r31j_ts_header:
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed here, after the Landlock block above:
 # faulthandler's watchdog is a second thread, and Landlock needs the process to have one.
-importlib.import_module("suite_deadline").arm(globals())
+# This runner binds `results` only after the part loop below, so while a part runs the report finds
+# the checks recorded so far, and the last one, in part01's module (results_from).
+importlib.import_module("suite_deadline").arm(globals(), results_from="unit.part01")
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
@@ -1997,7 +1999,7 @@ _r16d_wrap_ts_handles()
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
 # part157 (the twenty-fifth review's page-script and test-gate fixes, builder D) drives part12's app;
-# imports part01, 12 and 99.
+# imports part01, 12, 99 and 143.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
