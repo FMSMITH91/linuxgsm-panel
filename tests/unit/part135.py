@@ -498,6 +498,9 @@ def _on135(host, fn, *a, served=False, panel_ports=(5000,), **kw):
         _p9_patch(_ue135, "app_profiles", lambda s: None)
         _p9_patch(_ue135, "ts_netfilter_on", lambda s: False)
         _p9_patch(_fw135, "_fwb_tailscaled_port", lambda s: 41641)
+        # A name the stand-ins dial resolves to nothing, as the documentation names do in DNS: the
+        # suite asks no resolver (a check that needs records patches its own).
+        _p9_patch(_hosts135, "_r28b_resolve", lambda name: [])
         with _p9.test_request_context("/", environ_base={"REMOTE_ADDR": _VIEWER135}):
             return fn(*a, **kw)
     finally:

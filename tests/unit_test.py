@@ -2007,6 +2007,8 @@ _r16d_wrap_ts_handles()
 # unit.ts_nested too) drives part12's app; imports part01, 12, 99 and 143.
 # part158 (the console keeps an older log's lines through a read of the new one: the page's own
 # console functions in node, Clear/send/Restart/re-prime and Load older) imports part01, 05 and 47.
+# part159 (review 1108's firewall and lock-out fixes, builder A) drives part135's stand-in hosts and
+# part12's app; imports part01, 12, 135 and 136.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2022,7 +2024,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
-          "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part15")
+          "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

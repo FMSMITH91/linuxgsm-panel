@@ -1914,12 +1914,27 @@ def _fwc_in_use(server, paths, st):
         # which the measured session already is.
         named = ip_address_or_none(getattr(server, "host", None)) is None
         if named and conn_fams:
-            ssh_fams = conn_fams | ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
+            ssh_fams = conn_fams | (ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
+                                    & _r38a_name_families(server))
         else:
             ssh_fams = conn_fams or _fwb_in_use_versions(server)
         if st.get("ipv6") is not True:
             ssh_fams = (ssh_fams - ({6} - conn_fams)) or {4}
     return ssh_fams | conn_fams, ssh_fams
+
+
+def _r38a_name_families(server):
+    """The address families the panel can dial named remote `server` in: those its name resolves to here.
+
+    Only a family the name has a record in can come first in getaddrinfo's order: a provider's default
+    global IPv6 on eth0 (or a LAN's ULA) under a name with only an A record is never dialled, and holding
+    the host to an IPv6 way in refused a safe deny beside its IPv4 SSH rule with an untrue "no rule lets
+    SSH in" (review 1108). A name that does not resolve here answers both: nothing is known, so the
+    host's own public addresses decide, as before.
+    """
+    from panel.core.validation import ip_address_or_none
+    addrs = (ip_address_or_none(a) for a in hosts._r28b_resolve(getattr(server, "host", "")))
+    return {_fwb_unmapped(a).version for a in addrs if a is not None} or {4, 6}
 
 
 def _fwb_family_views(versions, groups, st, ssh_ports):
