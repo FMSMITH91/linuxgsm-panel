@@ -1,0 +1,16 @@
+{
+  "FastDL was not run: the panel could not read which LinuxGSM release this server's account runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again.": "FastDL no se ejecutó: el panel no pudo leer qué versión de LinuxGSM usa la cuenta de este servidor, y en v26.5.0 una respuesta equivocada borra la carpeta de FastDL. Inténtalo de nuevo.",
+  "LinuxGSM did not wipe: {players} player(s) online": "LinuxGSM no hizo el borrado: {players} jugador(es) conectado(s)",
+  "wipe exited {rc}: {last}": "el borrado terminó con código {rc}: {last}",
+  "Full wipe done": "Borrado completo hecho",
+  "Map wipe done": "Borrado de mapa hecho",
+  "LinuxGSM found nothing to wipe": "LinuxGSM no encontró nada que borrar",
+  "{command}: {result}": "{command}: {result}",
+  "not wiped: still waiting after {hours} hours ({reason})": "sin borrar: sigue esperando después de {hours} horas ({reason})",
+  "no reason recorded": "no se registró ningún motivo",
+  "a host reboot or a backup of this server is running": "hay un reinicio del host o una copia de seguridad de este servidor en curso",
+  "not wiped: the backup before it failed: {reason}": "sin borrar: falló la copia de seguridad previa: {reason}",
+  "a scheduled wipe of {name}": "un borrado programado de {name}",
+  "Full wipe done, but LinuxGSM reported a failure after it: {line}": "Borrado completo hecho, pero LinuxGSM informó de un fallo después: {line}",
+  "Map wipe done, but LinuxGSM reported a failure after it: {line}": "Borrado de mapa hecho, pero LinuxGSM informó de un fallo después: {line}"
+}

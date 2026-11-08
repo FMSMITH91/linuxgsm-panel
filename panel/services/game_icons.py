@@ -174,14 +174,16 @@ def _cmpd_fetch_index(now):
 
 
 def _cmpd_write(path, data):
-    """Write `path` atomically (a reader never sees half a file). Logged, never raised."""
+    """Write `path` atomically (a reader never sees half a file): True once written. Logged, never raised."""
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name("%s.%d.%d.tmp" % (path.name, os.getpid(), threading.get_ident()))
         tmp.write_bytes(data)
         os.replace(tmp, path)
+        return True
     except OSError:
         _log.warning("game icons: could not write the cache under data/", exc_info=True)
+        return False
 
 
 def _cmpd_cached(script):
@@ -209,8 +211,25 @@ def _cmpd_fetch_icon(script):
     if kind is None or ctype not in ("image/png", "image/jpeg", "image/webp"):
         _log.info("game icons: %s refused (%s)", script, why or "not a PNG/JPEG/WEBP image")
         return None
-    _cmpd_write(_CACHE_DIR / ("%s.%s" % (script, kind[1])), body)
+    if _cmpd_write(_CACHE_DIR / ("%s.%s" % (script, kind[1])), body):
+        _r37b_drop_other_formats(script, kind[1])
     return body, kind[0]
+
+
+def _r37b_drop_other_formats(script, kept):
+    """Remove `script`'s cached icon in every format but `kept`, once the new one is written.
+
+    An icon whose format changed upstream (a png re-uploaded as webp) was written beside the old
+    file, and _cmpd_cached, which looks in a fixed order, kept finding the old one, stale, so every
+    request for it fetched again under the module-wide lock. Only after a write that worked: a
+    failed write leaves the old copy as the only one there is.
+    """
+    for _mime, _magic, ext in _TYPES + (("image/webp", b"", "webp"),):
+        if ext != kept:
+            try:
+                (_CACHE_DIR / ("%s.%s" % (script, ext))).unlink(missing_ok=True)
+            except OSError:
+                _log.warning("game icons: could not remove an old cached icon", exc_info=True)
 
 
 def _cmpd_listed_name(script, known):

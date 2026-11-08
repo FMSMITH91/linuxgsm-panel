@@ -16,7 +16,7 @@ import re
 import time
 import zoneinfo
 
-from panel.core import terminal
+from panel.core import i18n, terminal
 from panel.core.config import load_config, update_config
 from panel.services import lgsm_players as _lgp
 
@@ -32,23 +32,25 @@ GRACE_SECONDS = 6 * 3600
 MAX_WAIT_SECONDS = 12 * 3600
 _CFG_KEY = "wipe_schedules"
 
-_NAMES = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8,
-          "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-          "sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
-_BOUNDS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+# Names only where cron takes them (cronie's entry.c passes MonthNames and DowNames to those two
+# fields' get_list, NULL to the rest): `0 mon * * *` is not minute 0, hour 1.
+_R37B_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8,
+                "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+_R37B_DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+_BOUNDS = ((0, 59, {}), (0, 23, {}), (1, 31, {}), (1, 12, _R37B_MONTHS), (0, 7, _R37B_DAYS))
 _ITEM_RE = re.compile(r"(\*|[0-9a-z]{1,3}(?:-[0-9a-z]{1,3})?)(?:/([0-9]{1,2}))?")
 
 
-def _cmpd_value(tok, lo, hi):
-    """One field value (a number or a month/day name) inside [lo, hi], else ValueError."""
-    v = _NAMES[tok] if tok in _NAMES else int(tok)
+def _cmpd_value(tok, lo, hi, names):
+    """One field value (a number, or one of this field's `names`) inside [lo, hi], else ValueError."""
+    v = names[tok] if tok in names else int(tok)
     if not lo <= v <= hi:
         raise ValueError("out of range")
     return v
 
 
-def _cmpd_field(text, lo, hi):
-    """The set of values one cron field means (`*`, `a-b`, lists, `/step`, names)."""
+def _cmpd_field(text, lo, hi, names):
+    """The set of values one cron field means (`*`, `a-b`, lists, `/step`, this field's names)."""
     out = set()
     for item in text.split(","):
         m = _ITEM_RE.fullmatch(item)
@@ -60,9 +62,9 @@ def _cmpd_field(text, lo, hi):
         if rng == "*":
             a, b = lo, hi
         elif "-" in rng:
-            a, b = (_cmpd_value(t, lo, hi) for t in rng.split("-"))
+            a, b = (_cmpd_value(t, lo, hi, names) for t in rng.split("-"))
         else:
-            a = b = _cmpd_value(rng, lo, hi)
+            a = b = _cmpd_value(rng, lo, hi, names)
         if a > b:
             raise ValueError("bad range")
         out.update(range(a, b + 1, step))
@@ -74,17 +76,20 @@ def parse_cron(line):
 
     Vixie semantics, as the host's cron reads it: with BOTH day-of-month and weekday restricted, a
     day matching either one fires. Weekday 7 is Sunday, like 0. No @macros: a wipe needs a time.
+    "Restricted" is cron's own test, not the field's meaning: cronie's (and Debian's) entry.c sets
+    DOM_STAR / DOW_STAR when the field's FIRST character is `*`, so `*/2` counts as a star and
+    `0 18 */2 * 4` is odd days that are Thursdays, never every odd day plus every Thursday.
     """
     parts = str(line or "").strip().lower().split()
     if len(parts) != 5 or len(str(line)) > 120:
         return None
     try:
-        sets = [_cmpd_field(p, lo, hi) for p, (lo, hi) in zip(parts, _BOUNDS)]
+        sets = [_cmpd_field(p, lo, hi, names) for p, (lo, hi, names) in zip(parts, _BOUNDS)]
     except (ValueError, KeyError):
         return None
     dow = {d % 7 for d in sets[4]}
     return {"minute": sets[0], "hour": sets[1], "dom": sets[2], "month": sets[3], "dow": dow,
-            "dom_star": parts[2] == "*", "dow_star": parts[4] == "*", "both": False}
+            "dom_star": parts[2].startswith("*"), "dow_star": parts[4].startswith("*"), "both": False}
 
 
 def spec_for(preset, at, cron):
@@ -229,23 +234,39 @@ def judge(out, rc, command):
     Refused: LinuxGSM's own players-online refusal (stoponlyifnoplayersallcommands) ended the run
     before anything was deleted. Only an exit 0 with LinuxGSM's own success line is a wipe; an exit
     0 with neither line is NOT read as one, since it says nothing about what was deleted.
+    The sentence is an i18n.Sentence: English in the audit row, the viewer's language on the card.
     """
     text = terminal.strip_escapes(out or "")
     oc = _lgp.outcome_of(text, rc, command)
     if oc is not None:
-        return "refused", "LinuxGSM did not wipe: %s player(s) online" % oc.get("players", "?")
+        return "refused", i18n.Sentence("LinuxGSM did not wipe: {players} player(s) online",
+                                        players=oc.get("players", "?"))
     done = _cmpd_done(text) if rc == 0 else None
     if done is not None:
         return done
     last = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    return "failed", "wipe exited %s: %s" % (rc, (last[-1] if last else "no output")[:200])
+    return "failed", i18n.Sentence("wipe exited {rc}: {last}", rc=rc,
+                                   last=(last[-1] if last else "no output")[:200])
 
 
 def _cmpd_done(text):
     """("wiped" | "nothing", sentence) for an exit-0 wipe's output, or None when it says neither."""
     wiped = _WIPED_RE.search(text)
-    if wiped and not _FAIL_RE.search(text):
-        return "wiped", "%s wipe done" % wiped.group(1)
+    if wiped and not _FAIL_RE.search(text, 0, wiped.start()):
+        # command_wipe.sh prints its success line after the files are gone and only then starts a
+        # server it stopped (exitbypass=1; command_start.sh). A FAIL after that line is the start's:
+        # the wipe happened, and was read as one that did not ("Scheduled wipe did not run"). The
+        # server left down is the monitor's to page (the wipe marks a restart, which must come back).
+        late = _FAIL_RE.search(text, wiped.end())
+        if late is None:
+            return "wiped", (i18n.Sentence("Full wipe done") if wiped.group(1) == "Full"
+                             else i18n.Sentence("Map wipe done"))
+        line = text[late.start():].splitlines()[0].strip()
+        if wiped.group(1) == "Full":
+            return "wiped", i18n.Sentence("Full wipe done, but LinuxGSM reported a failure after it: {line}",
+                                          line=line[:200])
+        return "wiped", i18n.Sentence("Map wipe done, but LinuxGSM reported a failure after it: {line}",
+                                      line=line[:200])
     if _NOT_REQUIRED_RE.search(text):
-        return "nothing", "LinuxGSM found nothing to wipe"
+        return "nothing", i18n.Sentence("LinuxGSM found nothing to wipe")
     return None
