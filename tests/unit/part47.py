@@ -79,7 +79,8 @@ def _node47(prog):
 R37E_STUBS47 = (
     "var _logAt, _r37e_gen = 0;\n"
     "function _r37e_inoOf(){ return null; } function _r37e_tag(){}\n"
-    "function _r37e_olderLog(){ return []; } function _r37e_keepOlderLog(){}\n")
+    "function _r37e_olderLog(){ return []; } function _r37e_keepOlderLog(){}\n"
+    "function _r38c_readingIno(){ return null; }\n")
 
 
 _SETTLE47 = "const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };\n"

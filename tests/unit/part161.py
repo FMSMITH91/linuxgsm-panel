@@ -7,6 +7,9 @@ Held here, each against the code path the finding named:
   new log (a Restart's `mv` falling inside the read): they were wiped with nothing to bring them
   back, and Load older put them back by their text BELOW the new log. The page's own functions run
   in node on part158's stand-in console, with the real _rebuild* helpers in place of its no-ops.
+* the local echo of a command sent while the page stands nowhere in the log (after Load older, a poll
+  while the socket is down) was untagged, so a read after a Restart wiped it; it now takes the log of
+  the page's newest line.
 * "Switch to main" with no signed release among the walked commits (unsigned, or no release key, or
   the signatures could not be fetched) said none of them "passed its automated checks", though none
   was judged by them. It now says none is a signed release this host could verify, in es/fr too;
@@ -62,7 +65,12 @@ _PROG161 = (
     # its lines ends), so the log it knew is the one its lines came from.
     "  loadMoreConsole(null); push(['e3'], [5, 14, 40]);\n"
     "  answer({lines: rows(['[ INFO ] Restarting', 'f1']), at: [0, 15, 20]}); await settle();\n"
-    "  out.again = shown();\n"
+    "  out.again = shown(); out.againAt = _logAt;\n"
+    # A command sent while the page stands nowhere in the log, then a Restart, then Load older: its
+    # echo is of the log the page's lines came from, so it stays with them.
+    "  send('ping'); push(['[ INFO ] Restarting', 'g1'], [6, 16, 20]); loadMoreConsole(null);\n"
+    "  answer({lines: rows(['[ INFO ] Restarting', 'g1', 'g2']), at: [0, 16, 30]}); await settle();\n"
+    "  out.echo = shown().slice(-6);\n"
     "  console.log(JSON.stringify(out)); })();\n")
 
 _h161 = _harness161()
@@ -91,7 +99,11 @@ elif _out161 is not None:
           and _out161.get("again") == ["c3", "c4", "[ INFO ] Restarting", "d1", "d2", "d3",
                                        "[ INFO ] Restarting", "e1", "e2", "e3", "[ INFO ] Restarting", "f1"],
           _json161.dumps(_out161))
-
+    check("console r38c: a command sent while the page stands nowhere in the log (after Load older) keeps "
+          "its echo through a Restart and the next Load older (it was untagged and wiped)",
+          _out161.get("againAt") is None
+          and _out161.get("echo") == ["[ INFO ] Restarting", "f1", "> ping", "[ INFO ] Restarting", "g1", "g2"],
+          _json161.dumps(_out161))
 
 # ── The branch switch's answer when no walked commit is a signed release ─────────────────────────
 _C161 = ("a3" * 20, "a2" * 20, "a1" * 20)

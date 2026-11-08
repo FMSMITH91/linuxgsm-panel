@@ -674,6 +674,18 @@ function _r37e_olderLog(ino, gen, was) {
   });
 }
 
+// The log the page is reading now: the one it stands in (_logAt), or, when it stands nowhere — after a
+// read that does not say where each of its lines ends (Load older, a poll while the socket is down) —
+// the log its newest line came from. Null when no line on the page says. The echo of a sent command
+// took _logAt's alone, so one sent then was untagged and a later read after a Restart wiped it.
+function _r38c_readingIno() {
+  var ino = _r37e_inoOf(_logAt), kids = consoleEl ? consoleEl.children : [];
+  for (var i = kids.length - 1; ino === null && i >= 0; i--) {
+    if (kids[i]._r37e) ino = kids[i]._r37e.ino;
+  }
+  return ino;
+}
+
 // Puts those lines back on the emptied console, before the read's own window is drawn; answers the
 // logs they came from, whose pushes _rebuildRestore must not place again below the window.
 function _r37e_keepOlderLog(nodes) {
@@ -1632,7 +1644,7 @@ function sendCommand(ev) {  // NOSONAR - the constant false is the data-action p
   echo.style.color = '#58a6ff';
   echo.textContent = '> ' + cmd;
   // Of the log the page is reading now: a read of a newer one keeps it with that log's lines.
-  _r37e_tag(echo, _r37e_inoOf(_logAt));
+  _r37e_tag(echo, _r38c_readingIno());
   consoleEl.appendChild(echo);
   consoleEl.scrollTop = consoleEl.scrollHeight;
   fetch(MOUNT + '/api/command/' + serverId, {
