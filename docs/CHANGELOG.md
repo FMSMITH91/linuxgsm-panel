@@ -248,6 +248,37 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **FastDL no longer guesses when it cannot read the LinuxGSM version.** If the version read failed,
+  FastDL answered LinuxGSM v26.5.0's "Rebuild from scratch?" with yes, which deletes everything in
+  the FastDL folder. It now refuses to run and says why.
+
+- **Scheduled wipes follow cron's day rules, and turning one off stops it.** A custom schedule such
+  as `*/2` in a day field now picks the same days cron does. Turning a wipe off or changing it while
+  its pre-wipe backup runs now stops that wipe, and a running wipe counts as busy for reboots and
+  restarts.
+
+- **A host reboot is no longer undone by an update on a stopped server.** LinuxGSM maintenance
+  running on a server the reboot does not stop now refuses the reboot up front, instead of the
+  reboot stopping every server, waiting out its time limit and rolling back.
+
+- **Switching the panel to another branch needs a signed release on it.** Since updates install only
+  signed releases, a switch to a branch whose newest commit is not one is refused before anything is
+  saved, so the panel no longer ends up following a branch it is not on.
+
+- **More firewall changes refuse to cut the panel off.** Deleting a remote's only Tailscale rule, a
+  default deny on a host the panel reaches by name with SSH open in only one address family,
+  "Disable public SSH" on a Tailscale connection to a port other than 22, and a panel port move
+  whose new port could not be opened are now refused.
+
+- **The console keeps your commands and their output after Clear and Restart.** After Clear, a
+  command you sent and the output before a Restart vanished when the console next re-read the log;
+  Load older lost lines the same way. Both now keep every line.
+
+- **Console history is kept per account and cleared when you sign out.** Command history was stored
+  in the browser per server only, so another account on the same browser could see it.
+
+- **The Mods tab says when a game has no mods.** It used to show "Loading mods…" for ever.
+
 - **The Install page asks for only the game icons you can see.** It used to request the icons for
   nearly every game at once, and on a panel that had not saved them yet each one was fetched from
   linuxgsm.com in turn, so the page kept loading for many seconds. The icons for the tiles in view
@@ -1018,6 +1049,20 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Auto-block never blocks the panel itself.** The hourly auto-block could add a permanent deny for
+  the address the panel connects to a remote host from, or for the panel host's own addresses, after
+  enough failed logins from them (a changed SSH key, or a shared home connection). The panel then
+  could not reach that host to undo it. Those addresses are now skipped, and when they cannot be
+  read nothing new is blocked that hour.
+
+- **Blocking an address on the panel host refuses your own.** The panel host's Block now refuses an
+  address or range that covers the one you are using, as a remote host's Block already did, and
+  refuses while it cannot tell your address (behind a proxy the panel was not told to trust).
+
+- **A fresh copy of the panel's code is checked against your release key.** When the panel's code
+  folder is missing and the installer clones it again, the clone is now checked against the release
+  key on hosts that keep the key only in the installer's own copy.
 
 - **dnspython 2.9.0 on Ubuntu 24.04 and 26.04 (CVE-2026-114605).** Older dnspython can spend
   unbounded CPU on a crafted DNS reply. Ubuntu 22.04 stays on 2.8.0, which has no fix; the risk
