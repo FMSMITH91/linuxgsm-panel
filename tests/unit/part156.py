@@ -7,6 +7,8 @@ Held here:
   servers it stopped and on any found running, so a cron `update` on a server that was stopped all
   along (or one server's `monitor` at the deadline) no longer makes it stop everything, sit out the
   stop budget and roll back.
+* A forced reboot's second stop (stoponlyifnoplayers set aside) of a game the panel runs under its
+  OWN account, on its own host, runs as that account directly, not `sudo -u <itself>`.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -16,7 +18,7 @@ import time as _time156
 
 from unit.part01 import check
 from unit.part05 import _root
-from unit.part12 import P9_GS, _p9, _p9_patch, _p9_restore_all
+from unit.part12 import P9_GS, _p9, _p9_patch, _p9_patch_sm, _p9_restore_all
 from panel.routes import _shared as _sh156
 from panel.services import host_reboot as _hr156, lgsm_players as _lgp156
 
@@ -53,8 +55,8 @@ check("A02A05 M rescan: a command on a server the plan holds, or on one found ru
 # The job passes its plan's ids: driven through _rescan with the deadline already past.
 _said156 = []
 try:
-    _p9_patch(_hr156, "_probe_rows", lambda remote, rows: {P9_GS: dict(_settled156[P9_GS]),
-                                                            _FAR156: dict(_settled156[_FAR156])})
+    _p9_patch(_hr156, "_probe_rows",
+              lambda remote, rows: {P9_GS: dict(_settled156[P9_GS]), _FAR156: dict(_settled156[_FAR156])})
     with _p9.app_context():
         _gs156 = _sh156.db.session.get(_sh156.GameServer, P9_GS)
         _j156 = object.__new__(_hr156._Job)
@@ -111,3 +113,33 @@ check("A02A05 M census: a warning lock on a stopped server is not a countdown; a
       "and an unread probe raises nothing",
       _cw156["state"] != "blocked" and [b["kind"] for b in _cr156["blockers"]] == ["lgsm_warning"]
       and _cu156["blockers"] == [], repr((_cw156, _cr156, _cu156)))
+
+
+# ── A02A05 L: the forced stop of a game under the panel's own account, on its own host ───────────
+# LinuxGSM refuses the plain stop for players; the second run must not be `sudo -u <itself>`.
+_E156 = "\x1b"
+_REFUSED156 = ("%s[K[%s[36m INFO %s[0m]%s[0m Stopping s156: 2 players are on the server: stop prevented%s[0m\n"
+               % ((_E156,) * 5))
+_ran156 = []
+try:
+    _p9_patch_sm("run_as_game_user", lambda *a, **k: (_REFUSED156, "", 0))
+    _p9_patch_sm("run_command", lambda server, cmd, timeout=30, sudo=False, **k: (
+        _ran156.append(cmd), ("", "", 0))[1])
+    _p9_patch_sm("is_local_server", lambda server: True)
+    _p9_patch(_hr156, "_own_account", lambda: "u156")
+    _p9_patch(_hr156, "probe_server", lambda remote, e: {"session": 0})
+    _p9_patch(_lgp156, "warn_minutes", lambda server, user, selfname, fresh=False: 0)
+    _js156 = object.__new__(_hr156._Job)
+    _js156.remote, _js156.job = object(), {"mode": "now"}
+    _es156 = {"id": 1, "user": "u156", "selfname": "s156", "game_type": "gmod", "name": "x"}
+    try:
+        _js156._stop_one(_es156)
+        _fs156 = (list(_ran156), _es156.get("stop"))
+    except Exception as _exc156s:  # noqa: BLE001 - reported by the check below, by name
+        _fs156 = repr(_exc156s)[:120]
+finally:
+    _p9_restore_all()
+check("A02A05 L forced reboot stop: a game under the panel's own account on its own host gets its second "
+      "stop (stoponlyifnoplayers set aside) as that account directly, not through `sudo -u <itself>`",
+      isinstance(_fs156, tuple) and len(_fs156[0]) == 1 and _fs156[0][0].startswith("cd /home/u156 && ")
+      and "readonly stoponlyifnoplayers=off" in _fs156[0][0] and _fs156[1] == "stopped", repr(_fs156))

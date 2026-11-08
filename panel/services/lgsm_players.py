@@ -620,14 +620,18 @@ def _lg264_forced_sh(user, selfname, aside="stoponlyifnoplayers=off"):
     return _LG264_FORCED_STOP % (_sm._quote("/home/" + user), aside, _sm._quote(selfname))
 
 
-def reboot_stop(remote, e, base, force=False):
+def reboot_stop(remote, e, base, force=False, account_shell=None):
     """A reboot's `stop` of plan entry `e`, given `base` seconds plus its warnings: its output.
 
     The ordinary LinuxGSM stop first (through the helper's lgsm-command on the panel's host, as
     every action). `force` (the reboot was asked for with players on, "now"): a stop LinuxGSM
     refused for stoponlyifnoplayers is run again with the setting set aside (_LG264_FORCED_STOP),
     so the server still gets its clean stop rather than the shutdown. LinuxGSM refuses before it
-    warns or stops anything, so the second run is the only one that does. The output is both runs'
+    warns or stops anything, so the second run is the only one that does. That run goes through
+    `account_shell` (host_reboot's, as interrupt_countdowns takes it): a game the panel runs under
+    its OWN account on its own host is run as that account directly, where `sudo -u <itself>` is
+    refused by the narrow grant and the server was left to the shutdown. None: shell_as_game_user.
+    The output is both runs'
     — a forced run that answered nothing (a sudo refusal, a transport timeout) keeps the first's
     refusal for refused(). `in_stop` is set on `e` while it runs (interrupt_countdowns). Never
     raises: the caller reads the server's state to decide, never the call.
@@ -640,9 +644,9 @@ def reboot_stop(remote, e, base, force=False):
                                               selfname=e["selfname"])
         out = out or ""
         if force and refused(out):
-            forced, _err, _rc = _sm.shell_as_game_user(remote, e["user"],
-                                                       _lg264_forced_sh(e["user"], e["selfname"]),
-                                                       timeout=timeout, selfname=e["selfname"])
+            forced, _err, _rc = (account_shell or _sm.shell_as_game_user)(
+                remote, e["user"], _lg264_forced_sh(e["user"], e["selfname"]),
+                timeout=timeout, selfname=e["selfname"])
             out = out + "\n" + (forced or "")
     except Exception:  # noqa: BLE001 - the state read decides, never the call
         _log.debug("stop of %s raised", e.get("id"), exc_info=True)

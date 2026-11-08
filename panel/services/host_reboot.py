@@ -1558,7 +1558,8 @@ class _Job:
 
     def _stop_one(self, e):
         # Never raises: the state read below decides, never the call.
-        out = _lgp.reboot_stop(self.remote, e, _stop_budget(e), force=self.job["mode"] == "now")
+        out = _lgp.reboot_stop(self.remote, e, _stop_budget(e), force=self.job["mode"] == "now",
+                               account_shell=_account_shell)
         # The rc is not the outcome (a refused stop exits 0 with the server still up, a stop of a
         # stopped server exits 0 too): the session is.
         sess = probe_server(self.remote, e).get("session")
