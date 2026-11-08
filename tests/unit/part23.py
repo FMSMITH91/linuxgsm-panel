@@ -426,10 +426,20 @@ def _supervisor23():
           repr(_rs23.snapshot("respawn")))
 
 
+_r37b_trees23 = {}
+
+
+def _r37b_calls_in23(path):
+    """Every call node in `path`, parsed once (the gates below read every file under panel/)."""
+    if path not in _r37b_trees23:
+        tree = _ast23.parse((_REPO23 / path).read_text(encoding="utf-8"))
+        _r37b_trees23[path] = [n for n in _ast23.walk(tree) if isinstance(n, _ast23.Call)]
+    return _r37b_trees23[path]
+
+
 def _calls23(path, attr):
     """[(first string argument, call node)] of every `<x>.<attr>(...)` / `<attr>(...)` call."""
-    tree = _ast23.parse((_REPO23 / path).read_text(encoding="utf-8"))
-    calls = [n for n in _ast23.walk(tree) if isinstance(n, _ast23.Call)]
+    calls = _r37b_calls_in23(path)
     out = []
     for n in calls:
         if (getattr(n.func, "attr", None) or getattr(n.func, "id", None)) == attr:
@@ -438,13 +448,24 @@ def _calls23(path, attr):
     return out
 
 
-# panel/routes/_shared.py: the backup-ticker's pass (_backup_ticker_pass) beats there, so that a
-# pass whose daily backup raised can still run the game sweeps and be counted as failed.
-_LOOP_FILES23 = ("app.py", "panel/services/monitoring.py", "panel/services/host_reboot.py",
-                 "panel/routes/server_files.py",
-                 "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
-                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py",
-                 "panel/routes/_shared.py")
+# app.py and EVERY module under panel/, not a list of the files loops lived in when it was
+# written (review 1107: #483's scheduled-wipe loop, in panel/routes/wipe_schedule.py, was in no
+# list, so the report lost it and both gates stayed green). part35's first-pass gate reads the same.
+_LOOP_FILES23 = ("app.py",) + tuple(sorted(p.relative_to(_REPO23).as_posix()
+                                           for p in (_REPO23 / "panel").rglob("*.py")))
+
+
+def _r37b_supervised23(path):
+    """Names started under a supervisor in `path`: `supervise(...)`, `_supervise(...)`, and the
+    `_make_supervisor(app)(name, ...)` a module that has no supervisor of its own calls."""
+    names = [name for attr in ("supervise", "_supervise") for name, _n in _calls23(path, attr)]
+    for n in _r37b_calls_in23(path):
+        inner = n.func
+        if (isinstance(inner, _ast23.Call)
+                and (getattr(inner.func, "attr", None) or getattr(inner.func, "id", None)) == "_make_supervisor"):
+            first = n.args[0] if n.args else None
+            names.append(first.value if isinstance(first, _ast23.Constant) else None)
+    return names
 
 
 def _names_gates23():
@@ -453,10 +474,16 @@ def _names_gates23():
     check("workers: every worker the report lists with a cadence has a loop that beats under that "
           "name", timed <= beats, "no beat for %r" % sorted(timed - beats))
     known = {n for n, _c in _w23.WORKERS}
-    supervised = {name for f in _LOOP_FILES23 for attr in ("supervise", "_supervise")
-                  for name, _n in _calls23(f, attr)} - {None}
+    supervised = {name for f in _LOOP_FILES23 for name in _r37b_supervised23(f)} - {None}
     check("workers: every supervised loop is in the report's list of workers",
           bool(supervised) and supervised <= known, "missing %r" % sorted(supervised - known))
+    # A loop that beats or records its first pass is one the report must name too: with neither
+    # in WORKERS, its silence (dead thread, every pass failing) is printed nowhere.
+    started = {name for f in _LOOP_FILES23 for attr in ("beat", "loop_started")
+               for name, _n in _calls23(f, attr)} - {None}
+    check("workers: every loop that beats or records its first pass is in the report's list of workers "
+          "(the scheduled-wipe sweep included)",
+          "wipe-schedule" in started and started <= known, "missing %r" % sorted(started - known))
 
 
 def _thread_gates23():

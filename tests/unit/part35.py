@@ -667,13 +667,11 @@ def _p35_loops_record():
               {"host-reboot": 15}], repr(got))
 
 
-_LOOP_FILES35 = ("app.py", "panel/services/monitoring.py", "panel/services/host_reboot.py",
-                 "panel/routes/server_files.py",
-                 "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
-                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py",
-                 "panel/routes/_shared.py")
-# The same files part23's beat gate reads (review 1012d: _shared.py was left out here, so a loop
-# there that slept before its first pass would have gone unread).
+# app.py and every module under panel/ (review 1107: a fixed list missed #483's wipe sweep in
+# panel/routes/wipe_schedule.py). The same files part23's beat gate reads (review 1012d: _shared.py
+# was left out here, so a loop there that slept before its first pass would have gone unread).
+_LOOP_FILES35 = ("app.py",) + tuple(sorted(p.relative_to(_REPO35).as_posix()
+                                           for p in (_REPO35 / "panel").rglob("*.py")))
 from unit.part23 import _LOOP_FILES23  # noqa: E402
 check("loops: the first-pass gate reads every file part23's beat gate reads",
       set(_LOOP_FILES35) == set(_LOOP_FILES23), repr(sorted(set(_LOOP_FILES23) ^ set(_LOOP_FILES35))))
@@ -854,9 +852,9 @@ def _p35_loops_gate():
             if problem:
                 bad.append("%s:%s %s" % (rel, node.name, problem))
     check("loops: every beating loop that sleeps before its first pass records that delay first, "
-          "and the delay it records is the one it sleeps (all nine: host_reboot's restore loop "
-          "is the ninth)",
-          not bad and recorded == 9, repr((bad, recorded)))
+          "and the delay it records is the one it sleeps (all ten: host_reboot's restore loop "
+          "is the ninth, the scheduled-wipe sweep the tenth)",
+          not bad and recorded == 10, repr((bad, recorded)))
     _ctl = [_loop_first_pass35(_ast35.parse(_c).body[0])[1] for _c in (
         "def f():\n    last = None\n    time.sleep(30)\n    while True:\n        beat()\n",
         "def f():\n    while True:\n        time.sleep(5)\n        beat()\n")]
