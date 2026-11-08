@@ -234,5 +234,41 @@ check("1107 A03 LOW: ...and set with a way in both families, for an address lite
       all(r[0] is True and r[2] == [("ufw-default", ["deny", "incoming"])] for r in _fam_ok.values()),
       repr({k: (r[0], r[1][:160]) for k, r in _fam_ok.items()}))
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A03 LOW: the panel host refuses an IP block while the viewer is unknown
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_RANGE154 = "198.51.100.0/24"      # NOSONAR(S1313) - a range holding the admin's address
+_PROXIED154 = "198.51.100.7"       # NOSONAR(S1313)
+
+
+def _ipblock154(viewer, via_proxy=False, seen=(), tunnel=False, target=_RANGE154):
+    """fwc_block_ip_refusal on the panel host, the viewer read as (viewer, via_proxy) -> its answer as text."""
+    host = _p135._Host135(rules=[_p135._SSH22, "5000/tcp  ALLOW IN  Anywhere", "443/tcp  ALLOW IN  Anywhere"])
+
+    def run():
+        _p9_patch(_fw154, "_fwb_panel_viewer",
+                  lambda: (None if viewer is None else _ip154.ip_address(viewer), via_proxy))
+        _p9_patch(_ue154, "inbound_from", lambda peer: [(_ip154.ip_address(a), p) for a, p in seen])
+        _p9_patch(_ue154, "tunnel_running", lambda: tunnel)
+        why = _fw154.fwc_block_ip_refusal(_p135._LOCAL135, target)
+        return None if why is None else str(why)
+
+    return _p135._on135(host, run)
+
+
+_ub = _ipblock154(None)
+check("1107 A03 LOW: on the panel host behind a proxy here the panel was not told to believe (viewer unknown), "
+      "blocking an address range is refused, naming trust_proxy",
+      _ub is not None and "trust_proxy" in _ub, repr(_ub))
+_ub_ok = {
+    "a viewer straight in, elsewhere": _ipblock154("203.0.113.20"),   # NOSONAR(S1313)
+    "a Cloudflare Tunnel": _ipblock154(_PROXIED154, via_proxy=True, tunnel=True),
+    "a proxy here, its port ambiguous": _ipblock154(_PROXIED154, via_proxy=True,
+                                                    seen=[(_PROXIED154, 443), (_PROXIED154, 8443)]),
+}
+check("1107 A03 LOW: ...while a known viewer the range does not hold, a Cloudflare Tunnel and a proxy whose port "
+      "alone is unknown still pass (the controls)",
+      all(v is None for v in _ub_ok.values()), repr(_ub_ok))
+
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))

@@ -2291,14 +2291,18 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     refuses, named as the firewall meets it. UFW off: the block is only stored, and turning it on is
     checked then. The rules unread refuses. Where the connections cannot be known: a remote's SSH
     session is already covered by the refusal for every port sshd serves; the panel's host refuses
-    when the block needs the port (`port_known_needed`) and it is not known.
+    when the block needs the port (`port_known_needed`) and it is not known, and whatever the block is
+    when the viewer itself is not known: a block of an address or range on every port cuts the viewer
+    off whichever port it comes in on (behind a proxy here the panel was not told to believe, the
+    viewer's own-address check reads 127.0.0.1 and passes a range that holds the admin's address).
     """
     groups, why = _fwc_enforced(server)
     if groups is None:
         return why
     paths = _fwc_paths(server, _fwb_ts_ways(server, groups, _fwssh_served_ports(server)))
     if paths["why"] is not None:
-        return paths["why"] if port_known_needed and _core.is_local_server(server) else None
+        needed = port_known_needed or paths["why"] is _FWB_VIEWER_UNKNOWN
+        return paths["why"] if needed and _core.is_local_server(server) else None
     allow_default = _fwc_default_allows(server)
     cut = next((c for c in paths["conns"] if c.version in families
                 and _fwc_cuts(groups, c, top, allow_default, paths)), None)
