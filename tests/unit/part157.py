@@ -18,6 +18,7 @@ from unit.part01 import check
 from unit.part12 import P9_ADMIN, P9_GS, P9_VIEWER, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from unit.part143 import _SD143_PATH, _fire143
 from unit.part99 import _SF99, _cut_or99, _js99, _line_or99, _read99
+from panel.ops import system_ops as _so157
 from panel.ops.ssh_manager import _core as _smc157
 from panel.routes import server_detail as _sd157
 
@@ -310,3 +311,44 @@ check("suite deadline: the unit and smoke runners, which bind `results` from par
       "it, name part01's module for the report, and that module holds `results`",
       _arms157 == {"unit_test.py": (["unit.part01"], True), "smoke_test.py": (["smoke.part01"], True)},
       repr(_arms157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 7. The branch SWITCH walk skips a commit that is not a signed release
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# part03 answers "signed" for every commit suite-wide, and part142 drives the real gate only through
+# the update card, so `if not signed(sha): continue` in _verified_branch_target could go and every
+# check stayed green: a switch would pin a CI-passing but UNSIGNED commit. Driven here with the gate
+# answering for a set, git and the CI state stubbed (the walk's newest first: C3, C2, C1).
+_C157 = ("c3" * 20, "c2" * 20, "c1" * 20)
+
+
+def _git157(args, timeout=45):
+    del timeout
+    return ((" ".join(_C157), "", 0) if args[:2] == ["rev-list", "--first-parent"] else ("", "", 0))
+
+
+def _gate157(signed):
+    """A _release_gate_for stand-in: a commit is a signed release when it is in `signed`."""
+    return lambda branch: (lambda sha: sha in signed)
+
+
+_sw157 = {}
+try:
+    _p9_patch(_so157, "_git", _git157)
+    _p9_patch(_so157, "_remote_ci_state", lambda sha: "passing")
+    for _k157, _signed157 in (("newest unsigned", {_C157[1], _C157[2]}), ("none signed", set()),
+                              ("newest signed", set(_C157))):
+        _p9_patch(_so157, "_release_gate_for", _gate157(frozenset(_signed157)))
+        _sha157, _why157 = _so157._verified_branch_target("main")
+        _sw157[_k157] = (_sha157, str(_why157))
+finally:
+    _p9_restore_all()
+check("branch switch: the walk skips a newest commit that passed CI but is not a signed release and "
+      "takes the newest signed one (nothing tested the switch walk with an unsigned commit)",
+      _sw157.get("newest unsigned") == (_C157[1], ""), repr(_sw157))
+check("branch switch: ...with no signed commit it switches to nothing and says none passed",
+      _sw157.get("none signed", ("x",))[0] == "" and "passed its automated checks" in _sw157["none signed"][1],
+      repr(_sw157))
+check("branch switch: ...and a signed newest commit is taken (positive control)",
+      _sw157.get("newest signed") == (_C157[0], ""), repr(_sw157))
