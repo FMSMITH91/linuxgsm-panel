@@ -1066,6 +1066,10 @@ compares git commits, not this file.
 
 ### Security
 
+- **A proxy's address can no longer add a line to the panel's log.** The warning written when a
+  forwarding header is not believed now replaces any line break in the address it names, so it
+  cannot forge a log line.
+
 - **Moving SSH to a new port keeps it off the internet.** On a host whose SSH is reachable only over
   Tailscale or one network interface, moving the SSH port opened the new port to everyone. The new
   port now gets the same scope as the rule that lets the panel in, and a deny rule ahead of it
