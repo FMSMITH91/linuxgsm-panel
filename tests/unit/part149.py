@@ -245,11 +245,19 @@ check("server page: a viewer who may not send commands or manage files gets neit
       _pages_cmpa_.get("viewer", (0,))[0] == 200 and 'id="console-output"' in _vw_cmpa_
       and "cmpaQuickCommand" not in _vw_cmpa_ and "cmpa-log-select" not in _vw_cmpa_,
       repr(_pages_cmpa_.get("viewer", (0, ""))[0]))
+_at_cmpa_ = [_adm_cmpa_.find(s) for s in ("var _CMPA_HIST_SCOPE = ", "js/console_history.js",
+                                          "js/server_detail.js")]
+check("server page: the command history's script loads after the values it reads and before "
+      "server_detail.js (whose quick commands end its Up/Down browsing)",
+      -1 not in _at_cmpa_ and _at_cmpa_ == sorted(_at_cmpa_), repr(_at_cmpa_))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. The page's script, run in node
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SD_CMPA_ = _read_cmpa_("panel", "static", "js", "server_detail.js")
+# The command history is console_history.js, loaded just before server_detail.js (which keeps the
+# quick commands and the log view): the two read as one, in the page's order.
+_SD_CMPA_ = (_read_cmpa_("panel", "static", "js", "console_history.js") + "\n"
+             + _read_cmpa_("panel", "static", "js", "server_detail.js"))
 _VARS_CMPA_ = "".join(m.group(0) + "\n" for m in _re_cmpa_.finditer(r"^var _(?:cmpa|CMPA)\w+ = [^\n]*;", _SD_CMPA_,
                                                                        _re_cmpa_.M))
 _HEADS_CMPA_ = ("function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush(",

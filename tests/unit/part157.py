@@ -93,6 +93,9 @@ check("console history: the server page keys it by the account, the server and t
       and _sa157.split(".")[2] != "0", repr(_pages157))
 
 _SD157 = _read99("panel", "static", "js", "server_detail.js")
+# The history is console_history.js, which the page loads just before server_detail.js; the quick
+# commands that end its browsing stay in server_detail.js. Cut from the two as the page runs them.
+_HS157 = _read99("panel", "static", "js", "console_history.js") + "\n" + _SD157
 _LS157 = ("const store = {}; global.localStorage = {\n"
           "  getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); },\n"
           "  removeItem: k => { delete store[k]; }, key: i => Object.keys(store)[i] || null,\n"
@@ -101,7 +104,7 @@ _name157 = "console history: the storage key"
 _out157 = _js99(_name157, _LS157 + (
     "var serverId = 7; var _CMPA_HIST_SCOPE = '3.7.100';\n"
     "store['sd.cmdHistory.7'] = JSON.stringify(['kick bob']); store['sd.consoleTs'] = '0';\n"
-    + "".join(_line_or99(_SD157, h) + "\n" for h in (
+    + "".join(_line_or99(_HS157, h) + "\n" for h in (
         "var _CMPA_HIST_MAX", "var _cmpaHistMem", "var _cmpaBrowse", "var _cmpaHistIdx", "var _cmpaDraft",
         "try { localStorage.removeItem('sd.cmdHistory.' + serverId)"))), (
     "function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush("), (
@@ -112,7 +115,7 @@ _out157 = _js99(_name157, _LS157 + (
     "  _CMPA_HIST_SCOPE = '3.7.200'; out.reborn = _cmpaHistLoad();\n"
     "  _CMPA_HIST_SCOPE = undefined; const before = Object.keys(store).length;\n"
     "  _cmpaHistPush('say hi'); out.unscoped = [_cmpaHistLoad(), Object.keys(store).length - before];\n"
-    "  console.log(JSON.stringify(out));\n"), _SD157)
+    "  console.log(JSON.stringify(out));\n"), _HS157)
 if _out157 is not None:
     check("console history: another account, or a re-created server with the same id, does not get "
           "this account's commands; the old server-id-only key is removed when the page loads",
@@ -151,7 +154,7 @@ _out157 = _js99(_name157, _LS157 + (
     "var serverId = 7; var _CMPA_HIST_SCOPE = '3.7.100';\n"
     "const input = document.getElementById('command-input'); input.focus = () => {};\n"
     "input.setSelectionRange = () => {}; document.activeElement = input;\n"
-    + "".join(_line_or99(_SD157, h) + "\n" for h in (
+    + "".join(_line_or99(_HS157, h) + "\n" for h in (
         "var _CMPA_HIST_MAX", "var _cmpaHistMem", "var _cmpaBrowse", "var _cmpaHistIdx", "var _cmpaDraft"))), (
     "function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush(",
     "function _cmpaHistStep(", "function cmpaQuickCommand("), (
@@ -160,7 +163,7 @@ _out157 = _js99(_name157, _LS157 + (
     "  const chip = document.createElement('button'); chip.attrs = {'data-cmd': 'say', 'data-fill': '1'};\n"
     "  cmpaQuickCommand(chip); const filled = input.value;\n"
     "  console.log(JSON.stringify({browsed: 'status', filled, down: _cmpaHistStep(1, input.value)}));\n"),
-    _SD157)
+    _HS157)
 if _out157 is not None:
     check("console history: a quick command that fills the box ends Up/Down browsing, so the next Down "
           "leaves the chip's text alone (it put back the draft from before browsing)",

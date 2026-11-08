@@ -25,7 +25,7 @@ function _actionFn(name){
 }
 
 // ── The console's command history ends with the session ─────────────────────────────────────
-// server_detail.js keeps each account's console commands per server in localStorage (Up/Down in the
+// console_history.js keeps each account's console commands per server in localStorage (Up/Down in the
 // command box), and they carry rcon and server passwords. A page drawn signed out (after Sign Out,
 // or a session that expired or was revoked) means nobody is signed in on this browser: drop them
 // all, so the next person to use it cannot read them from the box or from devtools.
