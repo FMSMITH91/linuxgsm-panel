@@ -5,6 +5,9 @@ Held here:
   really gives it: 1 (the failed start logs FAIL, its own core_exit.sh only unsets exitbypass, and
   command_start.sh's last core_exit.sh exits 1 from inside the wipe). Driven through the sweep, so
   the card's last run and the audit row are what is checked.
+* LinuxGSM answering "Wipe not required" (it never stopped the server) ends the monitor's quiet window
+  the wipe opened, as its players-online refusal does; the control (a wipe done) leaves it for the
+  restart that follows.
 
 HOW IT RUNS. Routes, workers and the reboot job's steps on part12's app with its transport tripwire
 armed and every host call stubbed (part155's sweep; a stand-in clock for the window). Nothing reaches
@@ -47,6 +50,23 @@ check("1108 r38b wipe judge: a non-zero exit after the success line with no FAIL
       "exit, is still a failure",
       _lone160[0] == "wiped" and str(_lone160[1]) == "Map wipe done, but LinuxGSM exited 124 after it"
       and _before160[0] == "failed" and _notreq160[0] == "failed", repr((_lone160, _before160, _notreq160)))
+
+# ── 2. "Wipe not required" ends the quiet window ────────────────────────────────────────────────
+try:
+    _p9_arm(who="part160")
+    _nothing160 = _sweep155((True, "Backed up", False),
+                            wipe_out=("[  OK  ] Wiping rustserver: Wipe not required\n", "", 0))
+    _p9_arm(who="part160")
+    _done160 = _sweep155((True, "Backed up", False))
+finally:
+    _p9_restore_all()
+check("1108 r38b wipe sweep: LinuxGSM answering 'Wipe not required' (the server was never stopped) ends "
+      "the monitor's quiet window the wipe opened; a wipe done leaves it for its restart (control)",
+      _nothing160["cmds"] == ["full-wipe"] and _nothing160.get("window_during") is True
+      and _nothing160["window_after"] is False
+      and ((_nothing160.get("entry") or {}).get("last") or {}).get("ok") is True
+      and _done160.get("window_during") is True and _done160["window_after"] is True,
+      repr((_nothing160, _done160)))
 
 check("part160: no check reached a host (the transport tripwire stayed quiet)",
       len(_P9_TRIPPED) == _TRIP160_START, repr(_P9_TRIPPED[_TRIP160_START:]))
