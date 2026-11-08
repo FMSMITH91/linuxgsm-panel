@@ -98,7 +98,6 @@ check("console history: the server page keys it by the account, the server and t
 # so the key moved with TZ and the history was lost. Rendered with the process in UTC+5:30, it must still
 # name the row's birth read as UTC.
 _tz_old157 = os.environ.get("TZ")
-_kz157 = _bz157 = None
 try:
     os.environ["TZ"] = "Asia/Kolkata"
     _time157.tzset()
