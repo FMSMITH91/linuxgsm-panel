@@ -245,7 +245,6 @@ def _move159(rules, session=_PUB_DEFAULT159, local=False, netfilter_on=False, up
     box = _Box159(rules, up=up)
     row = (_NS159(id=-159, name="Panel", host="127.0.0.1", port=22, auth_method="local", is_local=True)  # NOSONAR
            if local else _NS159(id=-159, name="p159", host=_TSH159, port=22, auth_method="key", is_local=False))
-    ok, msg = None, ""
     try:
         _p9_arm(who="part159")
         _p9_patch(_p9_core, "run_privileged", box.priv)
