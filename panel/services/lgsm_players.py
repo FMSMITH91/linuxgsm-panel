@@ -580,6 +580,17 @@ def window_reads(probe, order, plan_users, clock):
     return seen
 
 
+def unanswered_first(order, seen):
+    """`order` with the accounts a pass left out of `seen` (they did not answer: window_reads) first.
+
+    Asked first on the next pass, a dead account's 20 s timeout falls before the first kept read, not
+    between two of them, where three of them made the pass longer than a minute every time
+    (window_in_one_minute; review 1108). Plan accounts are always kept, so the ones whose locks go back
+    (last in host_reboot._await_window's order) still come last.
+    """
+    return [u for u in order if u not in seen] + [u for u in order if u in seen]
+
+
 def window_in_one_minute(seen, now):
     """Whether every read in `seen` (window_reads) and the moment `now` fall in the minute of the first.
 
