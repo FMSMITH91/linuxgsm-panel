@@ -258,7 +258,8 @@ def _undeny89():
 
 def _ssh_move89():
     def opened(*rows):
-        ufw, asked = _Ufw89(*rows), []
+        # Beside a public SSH rule: where public SSH is off, step 1 adds nothing public (review 1108).
+        ufw, asked = _Ufw89(("22/tcp", "ALLOW IN", "Anywhere", True, True), *rows), []
         _p9_patch(_p9_core, "run_privileged", ufw.run)
         # The allow lands in the table, as ufw's does: step 1 re-reads it to confirm the open.
         _p9_patch(_hosts89, "remote_ufw_open_port", lambda s, p, proto, comment="": asked.append(p) or ufw.rules.append(

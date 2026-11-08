@@ -427,7 +427,8 @@ def _v6_86():
     for k, rows in (("v6 deny", (_ALLOW_ROW83 % "2286/tcp", _V6ROW86 % ("2286/tcp (v6)", "DENY IN"))),
                     ("v4 allow only", (_ALLOW_ROW83 % "2286/tcp",)),
                     ("v6 allow only", (_V6ROW86 % ("2286/tcp (v6)", "ALLOW IN"),))):
-        _p9_patch(_p9_core, "run_privileged", _ufw_listing86(list(rows), opened))
+        # Beside a public SSH rule: where public SSH is off, step 1 adds nothing public (review 1108).
+        _p9_patch(_p9_core, "run_privileged", _ufw_listing86([_ALLOW_ROW83 % "22/tcp"] + list(rows), opened))
         del opened[:]
         _added, refusal = _hosts86._open_ssh_port_rule(NS(id=-86, name="p86"), 2286, ["22"])
         res[k] = (bool(refusal), list(opened))

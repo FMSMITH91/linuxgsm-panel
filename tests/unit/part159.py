@@ -2,6 +2,11 @@
 
 * MEDIUM (F1): a remote dialled by NAME is held to an IPv6 SSH way in only when the name resolves to
   IPv6 here: a provider's default global IPv6 on eth0 under an A-only name is never dialled.
+* MEDIUM + LOW (P1 carried lead 1): an SSH port move never writes a public allow where public SSH is
+  off (OWNER RULE: no port opened to the internet unasked). The new port gets the scope of the way the
+  panel's own session comes in (nothing where that already lets it in, the same source-only rule, or a
+  refusal naming the rule to add), and a rule that would refuse the panel's session on the new port (an
+  interface- or source-scoped DENY the public reading never saw) refuses the move.
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -15,7 +20,8 @@ import tempfile as _tf159
 from types import SimpleNamespace as _NS159
 
 from unit.part01 import check
-from unit.part12 import _P9_TRIPPED, _p9, _p9_patch, _p9_restore_all
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_core, _p9_patch, _p9_restore_all
+from unit.part125 import _Box125
 from unit import part135 as _p135
 from unit.part136 import _OUT136, _deny136
 from unit.part154 import _proc154
@@ -142,3 +148,147 @@ check("1108 P5: on a panel host with no /proc/net/tcp6, a loopback viewer may bl
       "sessions comes from, and a block of the range holding one is refused naming that session (not refused "
       "as \"can't read sshd's sessions\")",
       _lo_else is None and _lo_hit is not None and _TUNNEL159 in _lo_hit, repr((_lo_else, _lo_hit)))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# MEDIUM + LOW (P1): an SSH port move where public SSH is off, and a DENY ahead of the new port
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_TSH159 = "100.64.0.159"           # NOSONAR(S1313) - the remote's tailnet address (the panel dials it)
+_TSP159 = "100.100.9.159"          # NOSONAR(S1313) - the panel host's tailnet address
+_PUBH159 = "203.0.113.159"         # NOSONAR(S1313) - the remote's public address
+_ADMIN159 = "198.51.100.77"        # NOSONAR(S1313) - the panel's public source
+_ADMIN_NET159 = "198.51.100.0/24"  # NOSONAR(S1313)
+_TS0_159 = "Anywhere on tailscale0  ALLOW IN  Anywhere"
+_LIMIT22_159 = "22/tcp  LIMIT IN  Anywhere"
+_ALLOWS159 = ("ufw-allow-proto-port", "ufw-allow-port", "ufw-allow-from-port", "ufw-allow-port-family")
+
+
+class _Box159(_Box125):
+    """part125's stand-in host that succeeds, with its own ufw rule rows; what each allow verb was sent."""
+
+    def __init__(self, rules, **kw):
+        super().__init__(**kw)
+        self.rules, self.allows, self.from_rules = list(rules), [], []
+
+    def priv(self, server, verb, args=(), **kw):
+        if verb in _ALLOWS159 or verb.startswith("ufw-delete-allow"):
+            self.allows.append((verb, list(args)))
+        if verb == "ufw-allow-from-port":
+            self.from_rules.append("%s/tcp  ALLOW IN  %s" % (args[1], args[0]))
+        elif verb == "ufw-delete-allow-from-port":
+            self.from_rules = [r for r in self.from_rules if r != "%s/tcp  ALLOW IN  %s" % (args[1], args[0])]
+        return super().priv(server, verb, args, **kw)
+
+    def _answer(self, verb):
+        if verb == "ufw-status":
+            return ("Status: active\n\nTo  Action  From\n--  ------  ----\n"
+                    + "".join("[%2d] %s\n" % (n + 1, r) for n, r in enumerate(
+                        self.rules + self.from_rules + (["2022/tcp  ALLOW IN  Anywhere"] if self.added else [])))), "", 0
+        return super()._answer(verb)
+
+
+def _sess159(src, dst, iface):
+    return {"client": _ip159.ip_address(src), "server": _ip159.ip_address(dst), "port": 22, "iface": iface,
+            "addrs": _p135._addrs135(("eth0", _PUBH159), ("tailscale0", _TSH159))}
+
+
+_TS_SESS159 = _sess159(_TSP159, _TSH159, "tailscale0")
+_PUB_SESS159 = _sess159(_ADMIN159, _PUBH159, "eth0")
+
+
+def _move159(rules, session=_PUB_SESS159, local=False, netfilter_on=False, up=True):
+    """A 22 -> 2022 move on a stand-in with `rules` -> (ok, message, the allow verbs sent).
+
+    `session`: the panel's session as the remote reads it (None: unread). `local`: the panel's own host.
+    """
+    box = _Box159(rules, up=up)
+    row = (_NS159(id=-159, name="Panel", host="127.0.0.1", port=22, auth_method="local", is_local=True)  # NOSONAR
+           if local else _NS159(id=-159, name="p159", host=_TSH159, port=22, auth_method="key", is_local=False))
+    ok, msg = None, ""
+    try:
+        _p9_arm(who="part159")
+        _p9_patch(_p9_core, "run_privileged", box.priv)
+        _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))
+        _p9_patch(_p9_core, "write_root_file", box.write)
+        _p9_patch(_hosts159, "_sshd_socket_activated", lambda s: False)
+        _p9_patch(_hosts159, "_restart_ssh_listener", box.restart)
+        _p9_patch(_hosts159, "_point_f2b_sshd_at", lambda server, ports: ("updated", ""))
+        _p9_patch(_hosts159, "_fwb_ssh_conn", lambda s: session)
+        _p9_patch(_hosts159, "_tailscale_conn_state", lambda s: (True, False))
+        _p9_patch(_ue159, "ts_netfilter_on", lambda s: netfilter_on)
+        _p9_patch(_ue159, "app_profiles", lambda s: None)
+        ok, msg = _hosts159.change_ssh_port(row, 2022)
+    except Exception as e:     # a raise is an answer here, recorded as the failure
+        ok, msg = "raised", repr(e)
+    finally:
+        _p9_restore_all()
+    return ok, str(msg), box.allows
+
+
+_mv_off = {
+    "a tailnet session, the tailscale0 rule for every port": _move159([_TS0_159], _TS_SESS159),
+    "a tailnet session, tailscaled's own chain (no rule)": _move159([], _TS_SESS159, netfilter_on=True),
+    "the panel's host, public SSH off": _move159([_TS0_159], None, local=True),
+}
+check("1108 P1 MEDIUM: an SSH port move on a host whose public SSH is off (only the tailnet lets SSH in: a "
+      "tailscale0 rule, tailscaled's own chain, or the panel's own host) succeeds without adding ANY firewall "
+      "rule, and says that no rule (no public rule) was added (%s)" % ", ".join(_mv_off),
+      all(r[0] is True and r[2] == [] and "was added" in r[1] for r in _mv_off.values()),
+      repr({k: (r[0], r[1][:200], r[2]) for k, r in _mv_off.items()}))
+_mv_src = _move159(["22/tcp  ALLOW IN  " + _ADMIN_NET159, _TS0_159.replace("tailscale0", "tailscale1")])
+check("1108 P1 MEDIUM: ...and where the panel's session comes in by a source-only rule (its home range), the new "
+      "port gets that same source-only rule, nothing public, and the message names the source",
+      _mv_src[0] is True and _mv_src[2] == [("ufw-allow-from-port", [_ADMIN_NET159, "2022", "tcp", "SSH panel"])]
+      and _ADMIN_NET159 in _mv_src[1], repr(_mv_src))
+_mv_ref = {
+    "an SSH-only tailscale0 rule": _move159(["22/tcp on tailscale0  ALLOW IN  Anywhere"], _TS_SESS159),
+    "an eth0 rule from the home range": _move159(["22/tcp on eth0  ALLOW IN  " + _ADMIN_NET159]),
+    "the session unread": _move159([_TS0_159], None),
+}
+check("1108 P1 MEDIUM: ...and refused, no rule sent, where that rule cannot be copied by the panel (an interface "
+      "rule naming the port) or the panel's session could not be read (%s)" % ", ".join(_mv_ref),
+      all(r[0] is False and r[2] == [] and "Nothing was changed" in r[1] for r in _mv_ref.values())
+      and "22/tcp on tailscale0" in _mv_ref["an SSH-only tailscale0 rule"][1], repr(_mv_ref))
+_mv_pub = {
+    "public LIMIT 22, a home-range session": _move159([_LIMIT22_159]),
+    "public LIMIT 22 beside the tailscale0 rule": _move159([_TS0_159, _LIMIT22_159], _TS_SESS159),
+    "the panel's host, public LIMIT 22": _move159([_TS0_159, _LIMIT22_159], None, local=True),
+    "public LIMIT 22, the session unread": _move159([_LIMIT22_159], None),
+}
+check("1108 P1 MEDIUM: ...while where public SSH is on (a public rule lets the served port in) the new port is "
+      "opened to the public as before (the controls: %s)" % ", ".join(_mv_pub),
+      all(r[0] is True and r[2] == [("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])] for r in _mv_pub.values()),
+      repr({k: (r[0], r[1][:200], r[2]) for k, r in _mv_pub.items()}))
+_mv_deny = {
+    "an eth0 DENY on a range": _move159(["2000:2099/tcp on eth0  DENY IN  Anywhere", _LIMIT22_159]),
+    "a DENY from the panel's range": _move159(["2022/tcp  DENY IN  " + _ADMIN_NET159, _LIMIT22_159]),
+    "a REJECT on tailscale0": _move159(["2022/tcp on tailscale0  REJECT IN  Anywhere", _TS0_159], _TS_SESS159),
+}
+check("1108 P1 LOW: a DENY or REJECT the panel's own session would meet on the new port, ahead of any allow, is seen "
+      "(an interface rule, one from the panel's source range): the move is refused naming it, nothing sent (%s)"
+      % ", ".join(_mv_deny),
+      all(r[0] is False and r[2] == [] and "is blocked by the firewall rule" in r[1] for r in _mv_deny.values()),
+      repr({k: (r[0], r[1][:200], r[2]) for k, r in _mv_deny.items()}))
+_mv_nodeny = {
+    "a DENY on docker0": _move159(["2022/tcp on docker0  DENY IN  Anywhere", _LIMIT22_159]),
+    "a DENY on lo": _move159(["2022/tcp on lo  DENY IN  Anywhere", _LIMIT22_159]),
+    "a DENY from another source": _move159(["2022/tcp  DENY IN  192.0.2.0/24", _LIMIT22_159]),   # NOSONAR(S1313)
+    "a DENY from 127.0.0.1": _move159(["2022/tcp  DENY IN  127.0.0.1", _LIMIT22_159]),   # NOSONAR(S1313)
+    "a UDP DENY": _move159(["2022/udp  DENY IN  Anywhere", _LIMIT22_159]),
+    "an outbound DENY": _move159(["2022/tcp  DENY OUT  Anywhere (out)", _LIMIT22_159]),
+    "a routed DENY": _move159(["2022/tcp  DENY FWD  Anywhere", _LIMIT22_159]),
+    "a v6 DENY for a v4 session": _move159(["2022/tcp (v6) on eth0  DENY IN  Anywhere (v6)", _LIMIT22_159]),
+    "a DENY below the allow that lets it in": _move159([_TS0_159, "2022/tcp on tailscale0  DENY IN  Anywhere"],
+                                                         _TS_SESS159),
+}
+check("1108 P1 LOW: ...and a DENY the panel's session would not meet does not refuse it (docker0, lo, another "
+      "source, 127.0.0.1, UDP, OUT, FWD, the other family, below the allow that lets it in)",
+      all(r[0] is True for r in _mv_nodeny.values()),
+      repr({k: (r[0], r[1][:200], r[2]) for k, r in _mv_nodeny.items()}))
+_mv_rev = _move159(["22/tcp  ALLOW IN  " + _ADMIN_NET159], up=False)
+check("1108 P1 MEDIUM: a move that fails after the source-only rule went in takes exactly that rule back out",
+      _mv_rev[0] is False and _mv_rev[2] == [("ufw-allow-from-port", [_ADMIN_NET159, "2022", "tcp", "SSH panel"]),
+                                            ("ufw-delete-allow-from-port", [_ADMIN_NET159, "2022", "tcp"])],
+      repr(_mv_rev))
+
+check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
+      repr(_P9_TRIPPED[_TRIP159_START:]))

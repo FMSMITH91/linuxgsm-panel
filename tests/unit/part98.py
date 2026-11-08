@@ -628,7 +628,9 @@ def _r26j_inactive_opened98():
           lost[0][0] is False and "did not show port 2222/tcp open" in str(lost[0][1])
           and lost[2] == ["ufw-show-added"] * 2, repr(lost))
     unread = {"unknown verb": _inactive_open98("", added_rc=2), "empty": _inactive_open98("")}
-    active = _inactive_open98(_ADDED98 + "ufw limit 2222/tcp\n", status="Status: active\n")
+    # Active, with a public SSH rule: where public SSH is off, step 1 adds nothing public (review 1108).
+    active = _inactive_open98(_ADDED98 + "ufw limit 2222/tcp\n",
+                              status="Status: active\n[ 1] %-27sALLOW IN    Anywhere\n" % "22/tcp")
     check("ssh port move on a host whose UFW is inactive: ...stored rules that cannot be read (an "
           "older helper without the verb, an empty answer) open as before, NOT counted as added; an "
           "active firewall is read from `status` alone (control)",
