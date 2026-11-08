@@ -1730,10 +1730,9 @@ class _Job:
         any other server on the host (lgsm_players.window_reads), and, for the accounts whose locks go back,
         a second of the minute no monitor run can see.
         """
-        users = {}
-        for e in self.entries:
-            users.setdefault(e["user"], []).append(e["selfname"])
-        names = _lgp.window_names(users, _settled_rows(GameServer.query.filter_by(remote_id=self.remote_id).all()))
+        names = _lgp.window_names(self.entries, _settled_rows(
+            GameServer.query.filter_by(remote_id=self.remote_id).all()))
+        plan = {e["user"] for e in self.entries}
         if not names:
             return None
         aside = self._accounts()
@@ -1746,9 +1745,10 @@ class _Job:
         # closes for the last of them, the less of it is left: two seconds an account.
         window = (ARM_WINDOW[0], max(ARM_WINDOW[0] + 5, ARM_WINDOW[1] - 2 * len(aside)))
         while time.monotonic() < end:
-            seen = _lgp.window_reads(lambda u: window_probe(self.remote, u, names[u]), order, users)
+            seen = _lgp.window_reads(lambda u: window_probe(self.remote, u, names[u]), order, plan, time.monotonic)
             busy = any(s.get("inflight") for s in seen.values())
-            if _quiet_now(seen, aside, window):
+            # ...and the whole pass inside one minute: each read is judged on its own second.
+            if _quiet_now(seen, aside, window) and _lgp.window_in_one_minute(seen, time.monotonic()):
                 return None
             time.sleep(2)
         return ("a LinuxGSM command was running for one of its servers" if busy

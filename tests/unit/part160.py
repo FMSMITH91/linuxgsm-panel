@@ -11,11 +11,16 @@ Held here:
 * A host reboot's census refuses a LinuxGSM `debug` running on a server (foreground, outside tmux:
   the server reads as stopped and is in no plan). The quiet window before the reboot waits on it, so
   unrefused the reboot stopped every server, waited ARM_WAIT and rolled back, every time.
+* That quiet window opens only on a read pass that stays inside one minute of the host's clock: each
+  read is judged on its own second, so a pass slowed by an account that did not answer (20 s, left
+  out) read one account at :46 and the next at :06, and a cron line at :00 on the first was cut.
 
 HOW IT RUNS. Routes, workers and the reboot job's steps on part12's app with its transport tripwire
 armed and every host call stubbed (part155's sweep; a stand-in clock for the window). Nothing reaches
 a host or data/.
 """
+from types import SimpleNamespace as _NS160
+
 from unit.part01 import check
 from unit.part12 import P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_patch, _p9_restore_all
 from unit.part155 import _sweep155
@@ -106,6 +111,52 @@ check("1108 r38b reboot census: a LinuxGSM `debug` running on a server (it reads
       and "a LinuxGSM action on %s" % _nm160 in str(_rw160.blocked_sentence(_cd160["blockers"]))
       and _cq160["state"] != "blocked", repr((_probe160[-400:], _parsed160, _cd160, _cq160)))
 
+
+# ── 4. the quiet window's read pass stays inside one minute ─────────────────────────────────────
+def _pass160(slow):
+    """_Job._await_window over a plan account and two other accounts, `slow` the one that does not answer.
+
+    The host's clock is at second 46 when the window starts; a read that does not answer costs 20 s.
+    Returns (answer, [(account, host minute, sec)] of every read that answered).
+    """
+    clock, reads = [0.0], []
+
+    def probe(remote, user, selfnames):
+        if user == slow:
+            clock[0] += 20.0
+            return {"sec": None, "boot": None, "inflight": None}
+        at = 46 + clock[0]
+        reads.append((user, int(at // 60), int(at % 60)))
+        clock[0] += 0.5
+        return {"sec": int(at % 60), "boot": "b", "inflight": 0}
+
+    def nap(sec):
+        clock[0] += sec
+    rows = [_NS160(short_name="acctb", lgsm_name="vhserver"), _NS160(short_name="acctc", lgsm_name="csserver")]
+    try:
+        _p9_patch(_hr160, "window_probe", probe)
+        _p9_patch(_hr160, "_settled_rows", lambda r: rows)
+        _p9_patch(_hr160, "time", _NS160(monotonic=lambda: clock[0], sleep=nap, time=lambda: clock[0]))
+        with _p9.app_context():
+            j = object.__new__(_hr160._Job)
+            j.remote, j.remote_id = None, -1
+            j.entries = [{"id": P9_GS, "user": "accta", "selfname": "gmodserver", "owner": "panel"}]
+            try:
+                return j._await_window(), reads
+            except Exception as exc:  # noqa: BLE001 - reported by the check below, by name
+                return repr(exc)[:120], reads
+    finally:
+        _p9_restore_all()
+
+
+_slow160 = _pass160("acctb")
+_fast160 = _pass160(None)
+check("1108 r38b reboot: the quiet window does not open on a read pass that crossed a minute (an account "
+      "that did not answer between a read at :46 and one at :06); it opens on the next pass, whose reads "
+      "share a minute; a pass with every account answering opens at once (control)",
+      _slow160[0] is None and len(_slow160[1]) == 4 and _slow160[1][1][1] != _slow160[1][0][1]
+      and _slow160[1][2][1] == _slow160[1][3][1]
+      and _fast160[0] is None and len(_fast160[1]) == 3, repr((_slow160, _fast160)))
 
 check("part160: no check reached a host (the transport tripwire stayed quiet)",
       len(_P9_TRIPPED) == _TRIP160_START, repr(_P9_TRIPPED[_TRIP160_START:]))
