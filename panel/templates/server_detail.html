@@ -646,8 +646,8 @@ var _CAN_BAN = {{ 'true' if can_ban else 'false' }};
 var _CAN_SAY = {{ 'true' if can_say else 'false' }};
 var MOUNT = {{ (mount_prefix if mount_prefix and mount_prefix != '/' else '')|tojson }};
 var SERVER_NAME = {{ server.name|tojson }};
-{# The console's command history key (server_detail.js _cmpaHistStoreKey): this account, this server,
-   and the row's creation time, which a re-created server with a reused id does not share. #}
+// The console's command history key (server_detail.js _cmpaHistStoreKey): this account, this server,
+// and the row's creation time, which a re-created server with a reused id does not share.
 var _CMPA_HIST_SCOPE = {{ '%d.%d.%d'|format(current_user.id, server.id, (server.created_at.timestamp() if server.created_at else 0)|int)|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>

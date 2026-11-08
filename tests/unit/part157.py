@@ -100,13 +100,13 @@ _LS157 = ("const store = {}; global.localStorage = {\n"
 _name157 = "console history: the storage key"
 _out157 = _js99(_name157, _LS157 + (
     "var serverId = 7; var _CMPA_HIST_SCOPE = '3.7.100';\n"
-    "store['sd.cmdHistory.7'] = JSON.stringify(['rcon_password old']); store['sd.consoleTs'] = '0';\n"
+    "store['sd.cmdHistory.7'] = JSON.stringify(['kick bob']); store['sd.consoleTs'] = '0';\n"
     + "".join(_line_or99(_SD157, h) + "\n" for h in (
         "var _CMPA_HIST_MAX", "var _cmpaHistMem", "var _cmpaBrowse", "var _cmpaHistIdx", "var _cmpaDraft",
         "try { localStorage.removeItem('sd.cmdHistory.' + serverId)"))), (
     "function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush("), (
     "  const out = {legacy: store['sd.cmdHistory.7'] === undefined, ts: store['sd.consoleTs']};\n"
-    "  _cmpaHistPush('rcon_password secret');\n"
+    "  _cmpaHistPush('kick alice');\n"
     "  out.mine = _cmpaHistLoad(); out.keys = Object.keys(store).sort();\n"
     "  _CMPA_HIST_SCOPE = '4.7.100'; out.other = _cmpaHistLoad();\n"
     "  _CMPA_HIST_SCOPE = '3.7.200'; out.reborn = _cmpaHistLoad();\n"
@@ -116,12 +116,12 @@ _out157 = _js99(_name157, _LS157 + (
 if _out157 is not None:
     check("console history: another account, or a re-created server with the same id, does not get "
           "this account's commands; the old server-id-only key is removed when the page loads",
-          _out157.get("mine") == ["rcon_password secret"] and _out157.get("other") == []
+          _out157.get("mine") == ["kick alice"] and _out157.get("other") == []
           and _out157.get("reborn") == [] and _out157.get("legacy") is True
           and _out157.get("keys") == ["sd.cmdHistory.3.7.100", "sd.consoleTs"], repr(_out157))
     check("console history: ...and with no scope on the page it stays in the page, never under a key "
           "every account would share",
-          _out157.get("unscoped") == [["rcon_password secret", "say hi"], 0], repr(_out157))
+          _out157.get("unscoped") == [["kick alice", "say hi"], 0], repr(_out157))
 
 _PJ157 = _read99("panel", "static", "js", "panel.js")
 _name157 = "console history: dropped on a page drawn signed out"

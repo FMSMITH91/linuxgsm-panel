@@ -1064,7 +1064,7 @@ def _v5_changelog():
         "a current entry": head + "- **PyJWT 2.15.** One hash lockfile.\n",
         "the stale entry": head + "- **PyJWT.** PyJWT is now pinned apart from semgrep's lockfile, "
                                   "and both install with `--no-deps`.\n",
-        "renamed heading": "# Changelog\n\n## [Since 0.11.0-alpha]\n\n- **PyJWT.** Pinned apart again.\n",
+        "renamed heading": "# Changelog\n\n## [Since 0.11.0-alpha]\n\n- **PyJWT.** PyJWT is pinned apart again.\n",
         "no heading": "# Changelog\n\n- **PyJWT.** One hash lockfile.\n",
     }
     got = {k: _v5_verdict(v, True, True)[0] for k, v in probes.items()}
