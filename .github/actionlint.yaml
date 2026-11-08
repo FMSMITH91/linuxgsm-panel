@@ -1,7 +1,9 @@
 # actionlint ships a hardcoded list of GitHub-hosted runner labels and rejects anything outside
 # it. Its list (v1.7.12, the latest release) ends at ubuntu-24.04, so the ubuntu-26.04 runner —
 # generally available, and what ubuntu-latest becomes (actions/runner-images#14748) — is reported as
-# an unknown label and fails the lint. Every job names ubuntu-26.04 or ci.yml's matrix (part29).
+# an unknown label and fails the lint. Every job names a release (part29 accepts any ubuntu-NN.NN):
+# ubuntu-26.04, ubuntu-24.04 (five jobs, in ci.yml, complexity.yml and the two sonar workflows), or
+# ci.yml's matrix.
 #
 # `self-hosted-runner.labels` is the only mechanism actionlint offers for teaching it a label, so
 # it is used here despite ubuntu-26.04 being GitHub-hosted rather than self-hosted. That is the
