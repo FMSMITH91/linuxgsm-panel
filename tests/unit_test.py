@@ -2008,7 +2008,7 @@ _r16d_wrap_ts_handles()
 # part158 (the console keeps an older log's lines through a read of the new one: the page's own
 # console functions in node, Clear/send/Restart/re-prime and Load older) imports part01, 05 and 47.
 # part159 (review 1108's firewall and lock-out fixes, builder A) drives part135's stand-in hosts and
-# part12's app; imports part01, 12, 135 and 136.
+# part12's app; imports part01, 12, 135, 136 and 154.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
