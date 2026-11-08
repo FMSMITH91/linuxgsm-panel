@@ -352,3 +352,53 @@ check("branch switch: ...with no signed commit it switches to nothing and says n
       repr(_sw157))
 check("branch switch: ...and a signed newest commit is taken (positive control)",
       _sw157.get("newest signed") == (_C157[0], ""), repr(_sw157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 8. The update card counts and lists the same commits, on both of its paths
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# An update made only of test or tooling commits said "1 commit behind" over an empty list. part06's
+# gates for that read the text of system_ops.py from `def _compute_update_status` to the END of the
+# file and took the first match, which is the non-default-branch path: reverting the verified path's
+# fallback (`shown_log = rc_log`) left them green. Driven here on both paths, with every read the
+# function makes stubbed: the filtered changelog is empty, the unfiltered one holds one commit.
+_TIP157 = "ab" * 20
+_ONE157 = "ab12345 Tooling only (#1)"
+
+
+def _git_uc157(args, timeout=45):
+    del timeout
+    if args[:3] == ["rev-list", "--first-parent", "--count"]:
+        return "1\n", "", 0
+    if args[:3] == ["rev-list", "--first-parent", "-n"]:
+        return _TIP157 + "\n", "", 0
+    if args[:1] == ["rev-parse"]:
+        return (_TIP157[:7] if "--short" in args else _TIP157) + "\n", "", 0
+    return "", "", 0   # fetch, show-ref and merge-base --is-ancestor: all succeed
+
+
+def _changelog157(rev_range, runtime_only=True):
+    del rev_range
+    return [] if runtime_only else [_ONE157]
+
+
+_uc157 = {}
+try:
+    for _n157, _v157 in (("_git", _git_uc157), ("_is_git_checkout", lambda: True),
+                         ("panel_version", lambda: "1.0"), ("_release_gate_for", _gate157(frozenset([_TIP157]))),
+                         ("_remote_ci_state", lambda sha: "passing"), ("_update_touches_runtime", lambda ref: True),
+                         ("_runtime_changelog", _changelog157), ("version_for_commit", lambda commit="HEAD": "2.0"),
+                         ("_release_notes_fields", lambda target: {}), ("github_repo_url", lambda: ""),
+                         ("_ci_note_walk", lambda started, commits, offered: None)):
+        _p9_patch(_so157, _n157, _v157)
+    for _br157 in ("main", "dev"):
+        _p9_patch(_so157, "_tracked_branch", lambda _b=_br157: _b)
+        _st157 = _so157._compute_update_status()
+        _uc157[_br157] = {_k: _st157.get(_k) for _k in ("update_available", "behind", "changes", "target_sha")}
+finally:
+    _p9_restore_all()
+_want157 = {"update_available": True, "behind": 1, "changes": [_ONE157], "target_sha": _TIP157}
+check("update card: an update made only of tooling commits lists the commit it counts, on the default "
+      "branch's verified path (part06's text gates read the other path and missed it)",
+      _uc157.get("main") == _want157, repr(_uc157))
+check("update card: ...and on a tracked non-default branch", _uc157.get("dev") == _want157, repr(_uc157))
