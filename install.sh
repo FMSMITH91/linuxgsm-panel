@@ -29,14 +29,20 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # ─────────────────────────────────────────────────────────
 # LinuxGSM Panel — all-in-one installer / updater
 #
-#   Install OR update with ONE command:
+#   Install with ONE command:
 #     curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 #
 #   …or from a checkout:
 #     git clone https://github.com/FMSMITH91/linuxgsm-panel.git
 #     cd linuxgsm-panel && bash install.sh
 #
-# Re-running the command on an existing install performs a SAFE UPDATE:
+#   Update with the installer already on the host, which moves only to a signed release:
+#     cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh     (root install)
+#     bash ~/linuxgsm-panel/install.sh                                (per-user install)
+#   (or the panel's Update button). Not the curl command again: that runs GitHub's installer, which
+#   no release signature covers.
+#
+# Running the installer on an existing install performs a SAFE UPDATE:
 #   • snapshots the current code + database first,
 #   • pulls the new version, reinstalls deps, restarts the service,
 #   • health-checks that the panel actually comes back up, and
@@ -3786,6 +3792,7 @@ if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     systemctl enable --now linuxgsm-panel.service
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
+    UPDATE_HINT="the panel's Update button, or as root over SSH: cd / && sudo bash ${HELPER_DIR}/install.sh"
 else
     ensure_service_unit
     loginctl enable-linger "${PANEL_USER}" >/dev/null 2>&1 || warn "Could not enable linger (panel may not start on boot)."
@@ -3793,6 +3800,7 @@ else
     systemctl --user enable --now linuxgsm-panel.service
     SERVICE_HINT="systemctl --user status linuxgsm-panel"
     LOG_HINT="journalctl --user -u linuxgsm-panel -f"
+    UPDATE_HINT="the panel's Update button, or: bash ${PANEL_DIR}/install.sh"
     # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
     install_recovery_command
 fi
@@ -3813,7 +3821,9 @@ fi
 echo ""
 echo -e "  Status:  ${CYAN}${SERVICE_HINT}${NC}"
 echo -e "  Logs:    ${CYAN}${LOG_HINT}${NC}"
-echo -e "  Update:  ${CYAN}re-run this same command any time — it updates in place and rolls back if the update fails${NC}"
+# The installer already on the host, never the curl one-liner again: that runs GitHub's installer as
+# root, outside the release-signature check an update is held to (docs/README.md, SECURITY.md).
+echo -e "  Update:  ${CYAN}${UPDATE_HINT}${NC} (signed releases only; rolls back if the update fails)"
 echo ""
 # ── Hand the user the real URL(s) to open ──
 PORT="$(panel_port)"

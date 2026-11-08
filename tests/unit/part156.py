@@ -17,6 +17,9 @@ Held here:
 * install.sh's reason for not moving to an unsigned commit names what is really missing: a root run
   with a key at root's source floor (none placed yet) is "not signed with this host's release key",
   never "no release key, rerun with PANEL_ALLOW_UNSIGNED_UPDATE=1"; no ssh-keygen says so.
+* Nothing tells an operator to UPDATE or RECOVER by piping a script from GitHub into a shell: the
+  fresh install's banner names the installer already on the host (the signed path), as do
+  install.sh's header, recover.sh's and the README's recovery section.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -331,3 +334,24 @@ else:
     check("A10 L install.sh: with no ssh-keygen the reason says ssh-keygen is missing, not 'not signed'",
           _nossh156.startswith("rc=1 ") and "ssh-keygen is not installed" in _nossh156
           and "not signed" not in _nossh156, _nossh156)
+
+
+# ── A10 L: the update and recovery advice is the signed path, never `curl … | bash` again ───────
+_inst_tail156 = _INST156[_INST156.index('info "[4/4] Verifying the panel is up'):]
+_banner156 = [ln for ln in _inst_tail156.splitlines() if 'echo -e "  Update:' in ln]
+_hints156 = [ln.strip() for ln in _INST156.splitlines() if ln.strip().startswith("UPDATE_HINT=")]
+_rec156 = _read156("recover.sh")
+_readme156 = _read156("docs", "README.md")
+_hdr156 = _INST156[:_INST156.index("# Fresh install behaviour:")]
+check("A10 L install.sh: the fresh install's Update line names the installer already on the host (root: the "
+      "root-owned copy; per-user: the checkout's), never 're-run this same command' (the curl one-liner)",
+      len(_banner156) == 1 and "${UPDATE_HINT}" in _banner156[0] and "same command" not in _inst_tail156
+      and sorted(_hints156) == sorted([
+          'UPDATE_HINT="the panel\'s Update button, or as root over SSH: cd / && sudo bash ${HELPER_DIR}/install.sh"',
+          'UPDATE_HINT="the panel\'s Update button, or: bash ${PANEL_DIR}/install.sh"']), repr((_banner156, _hints156)))
+check("A10 L: install.sh's header offers curl only to install, and recover.sh's header and the README's recovery "
+      "section no longer pipe recover.sh from GitHub into a root shell",
+      "Install OR update with ONE command" not in _hdr156
+      and "sudo bash /usr/local/lib/linuxgsm-panel/install.sh" in _hdr156
+      and "recover.sh | sudo bash" not in _rec156 and "recover.sh | sudo bash" not in _readme156
+      and "curl" not in _rec156.split("set -euo pipefail", 1)[0], "")
