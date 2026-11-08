@@ -313,7 +313,7 @@ check("1107 A03 LOW: ...and goes past that gate with a tailscale0 rule, under ta
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _move154(open_ok=False, fw=None, bind=_ANY108):
     """One change-port 5000 -> 5055 on stand-ins -> (reply, calls by kind, the port config.json names after)."""
-    calls = {"open": [], "close": [], "jail": [], "restart": [], "status": []}
+    calls = {"open": [], "close": [], "jail": [], "restart": [], "status": [], "record": []}
 
     def status(r):
         calls["status"].append(1)
@@ -331,7 +331,7 @@ def _move154(open_ok=False, fw=None, bind=_ANY108):
         _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": True})
         _p9_patch(_p9_so, "port_in_use", lambda port: False)
         _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
-        _p9_patch(_p9_so, "record_panel_port", lambda port: (True, ""))
+        _p9_patch(_p9_so, "record_panel_port", lambda port: (calls["record"].append(int(port)), (True, ""))[1])
         _p9_patch(_p9_so, "restart_panel", lambda *a, **k: (calls["restart"].append(1), (True, "p154"))[1])
         _saved116(port=5000, bind_host=_ANY108, tailscale_setup_done=True)
         with _boot116(BOOT_PORT=5000):
@@ -349,6 +349,9 @@ check("1107 A09 LOW: a move to a public port whose allow rule could not be added
       all(b.get("success") is False and "could not open port 5055" in str(b.get("message"))
           and (c["open"], c["close"], c["jail"], c["restart"], after) == ([5055], [], [], [], 5000)
           for b, c, after in _cp_cut.values()), repr(_cp_cut))
+check("1107 A09 LOW (VPS proof): ...and the helper's port record, which the checks before the open set to 5055, "
+      "is put back on 5000, the port still served (or Serve could not be re-pointed until the next boot)",
+      all(c["record"][-1:] == [5000] and 5055 in c["record"] for _b, c, _a in _cp_cut.values()), repr(_cp_cut))
 _cp_ok = {"UFW off": _move154(fw={"installed": True, "enabled": False}),
           "UFW not installed": _move154(fw={"installed": False, "enabled": False}),
           "the open worked": _move154(open_ok=True),

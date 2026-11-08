@@ -408,7 +408,8 @@ def _register_panel_binding(app):
         # ── The new binding's port opened FIRST, while nothing has changed ──
         opened = _r37a_open_first(app, local, new_bind, new_port)
         not_opened = _r37a_not_opened(app, local, opened, f"{_r18a_bracketed(cur_bind)}:{cur_port} -> "
-                                                         f"{_r18a_bracketed(new_bind)}:{new_port}", new_port)
+                                                         f"{_r18a_bracketed(new_bind)}:{new_port}", new_port,
+                                      cur_port)
         if not_opened is not None:
             return not_opened
 
@@ -633,18 +634,28 @@ def _r37a_open_first(app, local, new_bind, new_port):
                                          port=new_port, why=why))
 
 
-def _r37a_not_opened(app, local, opened, move, new_port):
+def _r37a_not_opened(app, local, opened, move, new_port, cur_port):
     """The change-port answer when the new port could not be opened on a firewall that drops it, else None.
 
-    `opened` is _r37a_open_first's answer; `move` the audit row's "old -> new" words.
+    `opened` is _r37a_open_first's answer; `move` the audit row's "old -> new" words. The refusal
+    checks before it (_r25j_port_not_recorded) already recorded `new_port` with the helper, so the
+    record is put back on `cur_port`, the port still served, as _r30b_keep_old_port does: left on
+    the refused port, the helper refused to re-point Tailscale Serve at the port the panel serves
+    until the next boot (seen on the test VPS, review 1107).
     """
     if opened is None or opened[0] or not _r37a_fw_drops(app, local):
         return None
+    notes = [opened[1]]
+    rec_ok, rec_why = so.record_panel_port(cur_port)
+    if not rec_ok:
+        notes.append(i18n.Sentence("Port {port} could not be recorded back as the panel's port for Tailscale "
+                                   "Serve ({why}).", port=cur_port, why=rec_why))
     log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
-               detail=f"{move} refused; firewall: {opened[1]}", success=False)
+               detail=f"{move} refused; firewall: {opened[1]}; helper port record back on {cur_port}: "
+                      f"{'ok' if rec_ok else rec_why}", success=False)
     return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
         "Not changed: the firewall could not open port {port}, so the panel would have restarted onto a "
-        "port it drops.", port=new_port), [opened[1]])}), 200
+        "port it drops.", port=new_port), notes)}), 200
 
 
 def _r37a_fw_drops(app, local):
