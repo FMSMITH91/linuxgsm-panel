@@ -64,6 +64,9 @@ check("FastDL run with an unread release: LinuxGSM is never run, the run fails w
       "console says it was not run",
       _fd155["runs"] == [] and _fd155["began"] == [] and _fd_out155[2] != 0
       and "FastDL was not run" in _fd_out155[1]
+      # r37g (adversarial L2): an account on a release older than v23.3.0 has no core_modules.sh, so the
+      # refusal comes every time and "Try again" alone never helps; update-lgsm does.
+      and "update-lgsm" in _fd_out155[1]
       and len(_fd155["said"]) == 1 and _fd155["said"][0][0] == P9_GS
       and _fd155["said"][0][1].startswith("[panel] fastdl: FastDL was not run"),
       repr((_fd155, _fd_out155)))

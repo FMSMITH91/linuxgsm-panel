@@ -787,7 +787,8 @@ def _lg264_said(oc, action, gs, held, who, console=None):
 
 _R37B_FASTDL_UNREAD = i18n.Sentence(
     "FastDL was not run: the panel could not read which LinuxGSM release this server's account "
-    "runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again.")
+    "runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again; if this keeps happening, "
+    "run update-lgsm first (a release older than v23.3.0 has no lgsm/modules/core_modules.sh to read).")
 
 
 def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True):

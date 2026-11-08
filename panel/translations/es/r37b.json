@@ -1,5 +1,5 @@
 {
-  "FastDL was not run: the panel could not read which LinuxGSM release this server's account runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again.": "FastDL no se ejecutó: el panel no pudo leer qué versión de LinuxGSM usa la cuenta de este servidor, y en v26.5.0 una respuesta equivocada borra la carpeta de FastDL. Inténtalo de nuevo.",
+  "FastDL was not run: the panel could not read which LinuxGSM release this server's account runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again; if this keeps happening, run update-lgsm first (a release older than v23.3.0 has no lgsm/modules/core_modules.sh to read).": "FastDL no se ejecutó: el panel no pudo leer qué versión de LinuxGSM usa la cuenta de este servidor, y en v26.5.0 una respuesta equivocada borra la carpeta de FastDL. Inténtalo de nuevo; si sigue pasando, ejecuta update-lgsm primero (una versión anterior a v23.3.0 no tiene lgsm/modules/core_modules.sh que leer).",
   "LinuxGSM did not wipe: {players} player(s) online": "LinuxGSM no hizo el borrado: {players} jugador(es) conectado(s)",
   "wipe exited {rc}: {last}": "el borrado terminó con código {rc}: {last}",
   "Full wipe done": "Borrado completo hecho",
