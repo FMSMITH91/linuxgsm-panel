@@ -502,12 +502,17 @@ def _row_blockers(rows):
         if live:
             # One blocker for the server (the sentence names it once), every live action in it.
             out.append(_blocker("action", gs.name, ", ".join(a.get("action") or "" for a in live)))
-        out.extend(_blocker(kind, gs.name) for kind in _r36j_route_jobs(gs.id))
+        # A server-page action registers "action" for its run too (server_detail): named once, by
+        # the live chain's blocker above when it is a long one there.
+        out.extend(_blocker(kind, gs.name) for kind in _r36j_route_jobs(gs.id) if not (kind == "action" and live))
     return out
 
 
 def _r36j_route_jobs(gid):
-    """A content install, mods install/remove or Run now the routes are running on server `gid`."""
+    """What the routes and sweeps are running on server `gid`, by r36j kind (plus a content install).
+
+    A mods install/remove, a Run now, a scheduled wipe, a queued stop/restart, a server-page action.
+    """
     return (["content"] if _content_running(gid) else []) + r36j_route_jobs(gid)
 
 

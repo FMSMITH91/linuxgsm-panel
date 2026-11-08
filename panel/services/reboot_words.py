@@ -51,6 +51,7 @@ _BLOCKER_WORDS = {"install": i18n.Sentence("an install of {name}"),
                   "mods": i18n.Sentence("a mod install or removal on {name}"),
                   "cron": i18n.Sentence("a scheduled task started on {name}"),
                   "wipe": i18n.Sentence("a scheduled wipe of {name}"),
+                  "queued": i18n.Sentence("a queued stop or restart of {name}"),
                   "uninstall": i18n.Sentence("an uninstall of {name}"),
                   "maintenance": i18n.Sentence("LinuxGSM maintenance on {name}"),
                   # LinuxGSM v26.4.0 counting down in-game before a stop, restart, update or backup.

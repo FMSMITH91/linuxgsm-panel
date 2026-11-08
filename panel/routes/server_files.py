@@ -45,7 +45,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _r20b_audit_on_raise, game_account_write_refusal)
+    _r20b_audit_on_raise, _r39a_wipe_running, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1082,7 +1082,8 @@ def _last_output_line(clean):
 
 def _run_mods_action(gs, which, mod_id):
     """Install or remove a mod, audit it, and say whether a restart is pending: the route's answer."""
-    refused = _r36c_reboot_refused(gs, "mods_%s" % which)   # not while the host is being rebooted
+    # Not while the host is being rebooted, nor while the server's scheduled wipe is tried.
+    refused = _r36c_reboot_refused(gs, "mods_%s" % which) or _r39a_wipe_refused(gs, "mods_%s" % which)
     if refused is not None:
         return refused
     with _r20b_audit_on_raise(f"mods_{which}", target=gs.name, server=gs):
@@ -1533,6 +1534,22 @@ def _r36c_reboot_refused(gs, action):
     if not _hr.reboot_busy(gs.remote_id):
         return None
     why = _hr.busy_message(gs.remote.display_name)
+    log_action(current_user, action, target=gs.name, detail="refused: %s" % why, success=False,
+               server=gs)
+    return jsonify({"success": False, "message": i18n.tr(why)}), 409
+
+
+def _r39a_wipe_refused(gs, action):
+    """A 409 (audited) while gs's scheduled wipe is being tried (routes/wipe_schedule), else None.
+
+    Asked under the caller's own registration ("mods", "cron"), which the wipe waits on: a mods
+    install replacing the server's files, or a Run now of a `restart`/`update` line, in the middle
+    of LinuxGSM's wipe or the backup before it started the server while its files were going.
+    """
+    if not _r39a_wipe_running(gs.id):
+        return None
+    why = i18n.Sentence("A scheduled wipe of '{name}' is running. Try again once it has finished.",
+                        name=gs.name)
     log_action(current_user, action, target=gs.name, detail="refused: %s" % why, success=False,
                server=gs)
     return jsonify({"success": False, "message": i18n.tr(why)}), 409
@@ -2528,7 +2545,8 @@ def _register_cron_actions(app):
         # Registered while it starts, from before the reboot refusal (panel_state.r36j_route_job). The
         # job then runs detached on the host; from there a reboot's probe sees its LinuxGSM command.
         with r36j_route_job(gs.id, "cron"):
-            refused = _r36c_reboot_refused(gs, "cron_run_now") or _write_refused(gs, "cron_run_now")
+            refused = (_r36c_reboot_refused(gs, "cron_run_now") or _r39a_wipe_refused(gs, "cron_run_now")
+                       or _write_refused(gs, "cron_run_now"))
             if refused is not None:
                 return refused
             try:

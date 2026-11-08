@@ -224,7 +224,7 @@ def _cmpd_backup(gs, entry):
         ok, why, skipped = _shared._marked_backup(
             gs.id, gs.remote, gs.short_name, gs.lgsm_name, keep, game_type=gs.game_type, port=gs.port,
             force=not entry.get("wait_empty", True), query_type=gs.query_type,
-            held=functools.partial(still_held, gs))
+            held=functools.partial(still_held, gs), wipe_ok=True)
         # The card's own shape (a skip is "busy", not a red failure), and only while the row is still
         # this server's: a server deleted during the backup has its id taken by the next one created.
         if still_held(gs):
@@ -288,9 +288,28 @@ def _cmpd_attempt(app, gs, entry, now):
     with r36j_route_job(gs.id, "wipe"):
         if _shared._reboot_holds(gs) or _shared._backup_in_progress(gs.id):
             return _r37b_wait(gs.id, i18n.Sentence("a host reboot or a backup of this server is running"))
+        if _r39a_other_work(gs.id):
+            _r37b_wait(gs.id, i18n.Sentence("another action on this server is running"))
+            return None
         if _cmpd_backup_first(app, gs, entry) and _r37b_still_due(app, gs, entry):
             _cmpd_run_wipe(app, gs, entry)
     return None
+
+
+def _r39a_other_work(sid):
+    """Whether the panel is running anything else on server `sid` that a wipe must not run beside.
+
+    A queued "stop/restart when empty" being run, a Start/Stop/Restart or long action from the
+    server page, a chat bot or the bulk bar (registered "action" for its run, and the long ones
+    in the console's action chain), a mods install or removal, a Run now, a content install: all the
+    work the reboot census reads (host_reboot), less this wipe's own registration. Each of those
+    registers before it asks whether a wipe runs (_shared._r39a_wipe_running), and this is asked
+    after the wipe registers, so two that start together never both go ahead. Before, only a backup
+    and a host reboot were waited for: a queued restart already running had LinuxGSM's wipe, or the
+    backup before it, run beside its stop and start, and a queued stop came back up.
+    """
+    from panel.services import host_reboot as _hr
+    return bool([k for k in _hr._r36j_route_jobs(sid) if k != "wipe"] or _hr._q_live_actions(sid))
 
 
 def _r37b_still_due(app, gs, entry):

@@ -20,7 +20,7 @@ from panel.core import i18n
 from panel.core.http import (_json_str, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
-    _game_backup_status, r36j_route_jobs, register_remote_state, register_server_state)
+    _game_backup_status, r36j_route_job, r36j_route_jobs, register_remote_state, register_server_state)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, claim_row, db, row_birth,
     row_label, still_held)
 from panel.ops import (backup as bk)
@@ -570,7 +570,30 @@ def _button_backup_running(sid):
     return False
 
 
-def _marked_backup(sid, *args, runner=None, held=None, **kwargs):
+# What a backup and a queued stop/restart do not run beside: LinuxGSM's scheduled wipe (routes/
+# wipe_schedule registers "wipe" for its whole try) and a queued stop/restart being run ("queued",
+# _settle_queued_action). Each side registers before it asks about the other, so of two that start
+# together at least one sees the other and waits.
+_R39A_WIPE_KINDS = frozenset(("wipe",))
+_R39A_BACKUP_HOLD_KINDS = frozenset(("wipe", "queued"))
+_R39A_BACKUP_HELD = i18n.Sentence("a scheduled wipe or a queued stop or restart of this server is running")
+
+
+def _r39a_wipe_running(sid):
+    """Whether the scheduled wipe of server `sid` is being tried now (its backup, or LinuxGSM's wipe)."""
+    return bool(_R39A_WIPE_KINDS.intersection(r36j_route_jobs(sid)))
+
+
+def _r39a_backup_held(sid, wipe_ok=False):
+    """Whether a backup of server `sid` must wait: its scheduled wipe or its queued stop/restart is running.
+
+    `wipe_ok`: the backup is the wipe's own, so only a queued stop/restart holds it.
+    """
+    kinds = _R39A_BACKUP_HOLD_KINDS - _R39A_WIPE_KINDS if wipe_ok else _R39A_BACKUP_HOLD_KINDS
+    return bool(kinds.intersection(r36j_route_jobs(sid)))
+
+
+def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
     """run_game_backup, with the server marked RUNNING in _game_backup_status while it runs.
 
     Only the manual per-server route set that flag, so the two tickers backed servers up
@@ -587,9 +610,20 @@ def _marked_backup(sid, *args, runner=None, held=None, **kwargs):
     has no entry for forget_rows to drop, and the caller then writes nothing over the mark: it
     stayed "running" under the id, and a new server that took the id read as being backed up, so
     _run_due_restarts left it alone. Such a mark is removed here, whichever way the run ended.
+
+    Not while the server's scheduled wipe or a queued stop/restart of it runs (_r39a_backup_held):
+    answered as a skip, (False, why, True), so every caller leaves it due or queued for its next
+    pass. The hourly ticker, the queued sweep, a full run and "Back up now" ran LinuxGSM `backup`
+    in the middle of a wipe, archiving files as they were deleted, its stop and start racing the
+    wipe's. `wipe_ok` is the wipe's own backup, taken under its registration. Asked after the mark
+    goes in, as the wipe and the queued sweep register before they read the mark.
     """
     mark = {"running": True, "ok": None, "msg": "", "ts": time.time()}
     _game_backup_status[sid] = mark
+    if _r39a_backup_held(sid, wipe_ok):
+        if _game_backup_status.get(sid) is mark:
+            _game_backup_status.pop(sid, None)
+        return False, _R39A_BACKUP_HELD, True
     try:
         result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:
@@ -1166,7 +1200,16 @@ def _settle_queued_action(app, gs):
         gs.restart_pending = gs.stop_pending = False
         db.session.commit()
     elif decision == "restart":
-        _run_queued_action(app, gs)
+        # Registered for the run, then the wipe and the backups asked again: the status and player
+        # reads above take seconds, and _r37b_queued_ready asked before them. A wipe waits on this
+        # registration (routes/wipe_schedule._r39a_other_work) and a backup skips it
+        # (_r39a_backup_held): unregistered, a scheduled wipe started its backup, or LinuxGSM's
+        # wipe, beside a queued restart's stop and start, and brought back up a server queued to
+        # stop.
+        with r36j_route_job(gs.id, "queued"):
+            if _r39a_wipe_running(gs.id) or _backup_in_progress(gs.id):
+                return          # stays queued for the next tick
+            _run_queued_action(app, gs)
     # 'pending' (players on / unknown): leave the flags, retry next tick
 
 
@@ -1215,7 +1258,7 @@ def _r37b_queued_ready(gs):
     # stop honours a queued stop, and its restore clears a queued restart. Nor one a
     # scheduled wipe is running on (routes/wipe_schedule): LinuxGSM's wipe stops, deletes
     # and starts it, and a restart in the middle starts it while its files are going.
-    return not (_backup_in_progress(gs.id) or _reboot_holds(gs) or "wipe" in r36j_route_jobs(gs.id))
+    return not (_backup_in_progress(gs.id) or _reboot_holds(gs) or _r39a_wipe_running(gs.id))
 
 
 def _start_bootstrap_job(app, remote_id, job, opts, actor_id):

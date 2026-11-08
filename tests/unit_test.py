@@ -2012,6 +2012,8 @@ _r16d_wrap_ts_handles()
 # part161 (review 1108 C: the console keeps an old log's lines that land while a replacing read is out,
 # and the branch switch's unsigned answer) runs part158's console harness in node and stubs system_ops
 # through part12's patcher; imports part01, 12, 47 and 158.
+# part162 (review 1109 A: a scheduled wipe and what may run beside it, the reboot census's file-changing
+# commands, LinuxGSM's stock alert settings) drives part12's app with every host call stubbed; imports part01, 12.
 # part159 (review 1108's firewall and lock-out fixes, builder A) drives part135's stand-in hosts and
 # part12's app; imports part01, 12, 108, 116, 125, 135, 136 and 154.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
@@ -2030,7 +2032,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
-          "part160", "part161", "part15")
+          "part160", "part161", "part162", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
