@@ -281,22 +281,28 @@ def _run156(argv, **kw):
                       check=False, **kw)
 
 
-def _why156(sb, helper, floor, path=None):
-    """RELEASE_SIG_WHY of _update_target_signed on an unsigned commit, run as root (id -u answers 0)."""
+def _why156(sb, helper, floor, path=None, tail=None, panel_dir=None):
+    """RELEASE_SIG_WHY of _update_target_signed on an unsigned commit, run as root (id -u answers 0).
+
+    `tail`: shell run instead (die prints DIED and exits); `panel_dir`: the checkout, else sb/co.
+    """
     pre = ("set -uo pipefail\nwarn() { echo \"WARN $*\" >&2; }\n"
+           "die() { echo \"DIED ${*//$'\\n'/ }\"; exit 1; }\n"
            "id() { if [ \"$#\" -eq 1 ] && [ \"$1\" = -u ]; then echo 0; else command id \"$@\"; fi; }\n"
            "_gitc() { git -C %s \"$@\"; }\n_rootgit() { git --git-dir=%s \"$@\"; }\n"
            "PANEL_DIR=%s\nHELPER_DIR=%s\nROOT_SRC_FLOOR_FILE=%s\nROOT_SRC_FLOOR_SEED=%s\nDEFAULT_BRANCH=main\n"
            "UNSIGNED_OVERRIDE=\nRELEASE_SIG_NS=linuxgsm-panel-release\n"
-           "RELEASE_SIG_REF=refs/linuxgsm-panel/release-signatures\nRELEASE_SIGNERS=release-signers\n"
+           "RELEASE_SIG_BRANCH=release-signatures\nRELEASE_SIG_REF=refs/linuxgsm-panel/release-signatures\n"
+           "RELEASE_SIGNERS=release-signers\n"
            "RELEASE_SIG_FETCHED=1\n" % tuple(_shlex156.quote(x) for x in (
-               os.path.join(sb, "co"), os.path.join(sb, "root.git"), os.path.join(sb, "co"), helper, floor,
-               "0" * 40)))
+               panel_dir or os.path.join(sb, "co"), os.path.join(sb, "root.git"), panel_dir or os.path.join(sb, "co"),
+               helper, floor, "0" * 40)))
     names = ("_ref_exists", "_release_message", "_panel_started_run", "_unsigned_override", "_source_floor",
-             "_release_key_file", "_release_signed", "_update_target_signed")
+             "_release_key_file", "_release_signed", "_update_target_signed", "_fetch_release_signatures",
+             "_check_fresh_clone_signed")
     body = "".join(_shfn156(n) for n in names)
     env = dict(_ENV156, PATH=path) if path else _ENV156
-    tail = "_update_target_signed %s; echo \"rc=$? WHY=${RELEASE_SIG_WHY}\"\n" % ("d" * 40)
+    tail = tail or "_update_target_signed %s; echo \"rc=$? WHY=${RELEASE_SIG_WHY}\"\n" % ("d" * 40)
     r = _run156([_shutil156.which("bash") or "/bin/bash", "-c", pre + body + tail], env=env)
     return (r.stdout.strip().splitlines() or [""])[-1] + ("" if r.stdout.strip() else " ERR " + r.stderr[-300:])
 
@@ -338,6 +344,35 @@ else:
             if _w156:
                 os.symlink(_w156, os.path.join(_bin156, _t156))
         _nossh156 = _why156(_SB156, _helper156, _floor156, path=_bin156)
+        # The fresh-clone check (the panel deleted its checkout): this host trusts the key at root's
+        # source floor, so an unsigned tip is not installed; a signed one is; a host with no key
+        # anywhere is a first install, trusted on first use.
+        _fr156 = os.path.join(_SB156, "fresh")
+
+        def _fresh156():
+            _shutil156.rmtree(_fr156, ignore_errors=True)
+            _run156(["git", "clone", "-q", _up156, _fr156])
+            return _why156(_SB156, _helper156, _floor156, panel_dir=_fr156,
+                           tail="_check_fresh_clone_signed; echo PASSED\n")
+
+        _frno156 = _fresh156()
+        _frno_gone156 = not os.path.exists(_fr156)
+        _msg156 = os.path.join(_SB156, "msg")
+        with open(_msg156, "w", encoding="utf-8") as _fh156:
+            _fh156.write("linuxgsm-panel release\nbranch main\ncommit %s\n" % _a156)
+        _run156(["ssh-keygen", "-q", "-Y", "sign", "-f", _key156, "-n", "linuxgsm-panel-release", _msg156])
+        with open(_msg156 + ".sig", encoding="utf-8") as _fh156:
+            _blob156 = _run156(["git", "-C", _up156, "hash-object", "-w", "--stdin"],
+                               input=_fh156.read()).stdout.strip()
+        _sub156 = _run156(["git", "-C", _up156, "mktree"],
+                          input="100644 blob %s\t%s.sig\n" % (_blob156, _a156)).stdout.strip()
+        _top156 = _run156(["git", "-C", _up156, "mktree"], input="040000 tree %s\tmain\n" % _sub156).stdout.strip()
+        _sc156 = _run156(["git", "-C", _up156, "commit-tree", "-m", "sigs", _top156]).stdout.strip()
+        _run156(["git", "-C", _up156, "update-ref", "refs/heads/release-signatures", _sc156])
+        _fryes156 = _fresh156()
+        _run156(["git", "-C", _up156, "update-ref", "-d", "refs/heads/release-signatures"])
+        os.unlink(_floor156)
+        _frtofu156 = _fresh156()
     finally:
         _shutil156.rmtree(_SB156, ignore_errors=True)
     check("A10 L install.sh (root): a host with no root key copy yet but a key at root's source floor is told the "
@@ -346,6 +381,12 @@ else:
           and "PANEL_ALLOW_UNSIGNED_UPDATE" not in _floorkey156, _floorkey156)
     check("A10 L install.sh (root): ...while a host with no key anywhere still gets the no-key reason and its "
           "recovery", "no release key" in _nokey156 and "PANEL_ALLOW_UNSIGNED_UPDATE=1" in _nokey156, _nokey156)
+    check("A10 lead install.sh (root): a fresh clone on a host whose key is at root's source floor (no root copy "
+          "placed yet) is checked against it: an unsigned tip is refused and removed, a signed one kept",
+          _frno156.startswith("DIED") and "not a release signed" in _frno156 and _frno_gone156
+          and _fryes156 == "PASSED", repr((_frno156, _fryes156)))
+    check("A10 lead install.sh (root): ...and a host with no key anywhere still takes its first clone on trust",
+          _frtofu156 == "PASSED", _frtofu156)
     check("A10 L install.sh: with no ssh-keygen the reason says ssh-keygen is missing, not 'not signed'",
           _nossh156.startswith("rc=1 ") and "ssh-keygen is not installed" in _nossh156
           and "not signed" not in _nossh156, _nossh156)

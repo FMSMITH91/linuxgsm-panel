@@ -1330,10 +1330,22 @@ fetch_code() {
 # installer that runs is GitHub's anyway (SECURITY.md says to check the root key file after the
 # first update). When this host ALREADY trusts a key — root's copy beside the helper survives a
 # lost or deleted checkout — the clone must be a release that key signed, or nothing is installed
-# from it.
+# from it. "Trusts a key" is _release_key_file's answer, the same key an update checks against: a
+# host that took this version through an older installer has no root copy yet but has the key at
+# root's source floor, and testing for the root copy alone installed the tip unchecked there (and
+# root then staged its helper from that fresh clone). Only a host with neither is a first install.
 _check_fresh_clone_signed() {
-    [[ "$(id -u)" -eq 0 ]] && [[ -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]] || return 0
-    local sha=""
+    [[ "$(id -u)" -eq 0 ]] || return 0
+    local sha="" kd=""
+    if [[ ! -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]]; then
+        # No temporary directory to read the floor's key into: checked anyway (fail closed).
+        kd="$(mktemp -d 2>/dev/null)" || kd=""
+        if [[ -n "${kd}" ]] && ! _release_key_file "${kd}" >/dev/null 2>&1; then
+            rm -rf -- "${kd}" 2>/dev/null || true
+            return 0
+        fi
+        [[ -z "${kd}" ]] || rm -rf -- "${kd}" 2>/dev/null || true
+    fi
     sha="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sha=""
     _fetch_release_signatures || true
     _update_target_signed "${sha}" && return 0
