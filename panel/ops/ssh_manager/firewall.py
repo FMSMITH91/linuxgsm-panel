@@ -1670,8 +1670,15 @@ def _fwc_paths(server, ts):
 def _fwc_ssh_conns(server, ts, paths):
     """_fwc_paths for a remote: the panel's SSH session, unless Tailscale already answers for it."""
     from panel.ops.ssh_manager import ufweval
-    tailnet, ts_way = _fwb_tailnet_way(server, ts)
-    if ts_way:
+    tailnet = _fwb_tailnet_way(server, ts)[0]
+    # Only Tailscale SSH answering the port the panel dials (22) holds the session whatever ufw says:
+    # tailscaled takes it ahead of netfilter. A tailnet interface rule (ts's third reading) is a way in
+    # only while it stays, and the delete guard is asking whether it may go: taking it as the answer
+    # left the host's only tailscale0 allow deletable (a "warn") beside an SSH rule kept to another
+    # source, and the panel's next session met the default deny (review 1107). So that session is read
+    # and evaluated like any other: exempt where tailscaled's own chain lets tailscale0 in ahead of
+    # ufw, otherwise the rule it gets in by alone is protected.
+    if tailnet and ts[1] and _fwb_dialled_port(server) == 22:
         return
     try:
         conn = hosts._fwb_ssh_conn(server)
@@ -1680,7 +1687,7 @@ def _fwc_ssh_conns(server, ts, paths):
         conn = None
     if conn is None:
         paths["unread"] = True
-        paths["why"] = _FWB_TAILNET_GAP if tailnet else _FWB_SOURCE_UNREAD
+        paths["why"] = _FWB_TAILNET_GAP if tailnet and not ts[2] else _FWB_SOURCE_UNREAD
         return
     paths["addrs"] = conn.get("addrs")
     paths["conns"] = [ufweval.Conn(conn["client"].version, conn["client"], conn["server"], conn["port"],

@@ -8,13 +8,14 @@ HOW IT RUNS. Monitoring's reconcile and the firewall module over part135's stand
 part12's patcher with its transport tripwire armed. Nothing reaches a host, sudo, ufw or data/.
 """
 import ipaddress as _ip154
+from types import SimpleNamespace as _NS154
 
 from unit.part01 import check
 from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
 from unit import part135 as _p135
 from panel.core import i18n as _i18n154
 from panel.ops import system_ops as _so154
-from panel.ops.ssh_manager import ufweval as _ue154
+from panel.ops.ssh_manager import firewall as _fw154, hosts as _hosts154, ufweval as _ue154
 from panel.routes import host_local as _hl154, remote_security as _rs154
 from panel.security import banlist as _bl154
 from panel.services import monitoring as _mon154
@@ -144,6 +145,67 @@ _cut154 = _panel_block154(_VIEW154, "198.51.100.9", evaluator=_i18n154.Sentence(
 check("1107 A09 MEDIUM: a deny the panel's own connections would not survive (the row's evaluator) is refused on "
       "this card too, nothing sent",
       _cut154[0] is False and "lock you out of the panel" in _cut154[1] and _cut154[2] == [], repr(_cut154))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A03 MEDIUM: the tailscale0 rule is the panel's sole way in when tailscaled is not ahead of ufw
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_TSH154 = "100.100.5.5"            # NOSONAR(S1313) - the remote's tailnet address, which the row dials
+_TSP154 = "100.100.9.9"            # NOSONAR(S1313) - the panel host's tailnet address
+_TS0_154 = "Anywhere on tailscale0  ALLOW IN  Anywhere"
+_HOME154 = "22/tcp  ALLOW IN  203.0.113.0/24"   # NOSONAR(S1313) - an admin's home range
+
+
+def _tsrow154(port=22):
+    return _NS154(is_local=False, auth_method="key", host=_TSH154, port=port, id=None, name="ts154")
+
+
+def _tsconn154(port=22, iface="tailscale0"):
+    """hosts._fwb_ssh_conn's reading of the panel's session over the tailnet."""
+    return {"client": _ip154.ip_address(_TSP154), "server": _ip154.ip_address(_TSH154), "port": port,
+            "iface": iface, "addrs": _p135._addrs135(("eth0", "192.0.2.10"), ("tailscale0", _TSH154))}  # NOSONAR(S1313)
+
+
+def _ts_guard154(rows, ts_ssh=False, netfilter_on=False, port=22):
+    """The delete guard over `rows` on the tailnet remote -> {(port label, scope): PROTECTED | warn | -}."""
+    host = _p135._Host135(rules=rows, ts=(True, ts_ssh))
+
+    def run():
+        _p9_patch(_hosts154, "_fwb_ssh_conn", lambda s: _tsconn154(port))
+        _p9_patch(_ue154, "ts_netfilter_on", lambda s: netfilter_on)
+        return _fw154.remote_ufw_status(_tsrow154(port))
+
+    st = _p135._on135(host, run)
+    return {(g["port_label"], g["scope"]): "PROTECTED" if g["protected"] else ("warn" if g["warn"] else "-")
+            for g in st.get("groups", [])}
+
+
+def _ts0_154(guard):
+    return next((v for (label, scope), v in guard.items() if "tailscale0" in "%s %s" % (label, scope)), None)
+
+
+_m_cut = {
+    "beside a home-range SSH rule": _ts_guard154([_TS0_154, _HOME154]),
+    "beside an SSH rule on docker0": _ts_guard154([_TS0_154, "22/tcp on docker0  ALLOW IN  Anywhere"]),
+    "beside an SSH rule on lo": _ts_guard154([_TS0_154, "22/tcp on lo  ALLOW IN  Anywhere"]),
+    "beside a UDP 22 rule": _ts_guard154([_TS0_154, "22/udp  ALLOW IN  Anywhere"]),
+    "beside an SSH rule from 127.0.0.1": _ts_guard154([_TS0_154, "22/tcp  ALLOW IN  127.0.0.1"]),  # NOSONAR(S1313)
+    "beside an outbound SSH rule": _ts_guard154([_TS0_154, "22/tcp  ALLOW OUT  Anywhere (out)"]),
+    "beside a routed SSH rule": _ts_guard154([_TS0_154, "22/tcp  ALLOW FWD  Anywhere"]),
+    "Tailscale SSH on, the panel dialling 2222": _ts_guard154([_TS0_154, "2222/tcp  ALLOW IN  203.0.113.0/24"],  # NOSONAR(S1313)
+                                                             ts_ssh=True, port=2222),
+}
+check("1107 A03 MEDIUM: on a remote the panel dials at its tailnet address, with tailscaled not ahead of ufw "
+      "(nodivert/off), the host's only tailscale0 allow is PROTECTED beside an SSH rule that is no way in for the "
+      "panel's session (another source, docker0, lo, UDP, 127.0.0.1, OUT, FWD), and with Tailscale SSH on while "
+      "the panel dials another port",
+      all(_ts0_154(g) == "PROTECTED" for g in _m_cut.values()), repr(_m_cut))
+_m_ok = {
+    "tailscaled's own chain ahead of ufw": _ts_guard154([_TS0_154, _HOME154], netfilter_on=True),
+    "Tailscale SSH on, the panel dialling 22": _ts_guard154([_TS0_154, _HOME154], ts_ssh=True),
+}
+check("1107 A03 MEDIUM: ...and it is not protected where something else keeps the session in: tailscaled's "
+      "default netfilter mode, Tailscale SSH answering the port 22 the panel dials",
+      all(_ts0_154(g) not in ("PROTECTED", None) for g in _m_ok.values()), repr(_m_ok))
 
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))
