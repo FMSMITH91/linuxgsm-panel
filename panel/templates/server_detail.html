@@ -648,7 +648,7 @@ var MOUNT = {{ (mount_prefix if mount_prefix and mount_prefix != '/' else '')|to
 var SERVER_NAME = {{ server.name|tojson }};
 // The console's command history key (console_history.js _cmpaHistStoreKey): this account, this server,
 // and the row's creation time, which a re-created server with a reused id does not share.
-var _CMPA_HIST_SCOPE = {{ '%d.%d.%d'|format(current_user.id, server.id, (server.created_at.timestamp() if server.created_at else 0)|int)|tojson }};
+var _CMPA_HIST_SCOPE = {{ hist_scope|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/console_history.js') }}"></script>

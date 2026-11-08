@@ -16,15 +16,17 @@ HOW IT RUNS. Scripts in node on this part's own fixtures (part87's DOM stand-in,
 pages on part12's Flask app and client (part12 has run), every stub through _p9_patch and undone in
 the finally.
 """
+import calendar as _calendar157
 import datetime as _dt157
 import json as _json157
 import os
 import re as _re157
 import shutil as _shutil157
 import tempfile as _tf157
+import time as _time157
 
 from unit.part01 import check
-from unit.part12 import P9_ADMIN, P9_GS, P9_VIEWER, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from unit.part12 import P9_ADMIN, P9_GS, P9_VIEWER, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from unit.part143 import _SD143_PATH, _fire143
 from unit.part99 import _SF99, _cut_or99, _js99, _line_or99, _read99
 from unit import ts_nested as _tn157
@@ -91,6 +93,35 @@ check("console history: the server page keys it by the account, the server and t
       _sa157.startswith("%d.%d." % (P9_ADMIN, P9_GS)) and _sv157.startswith("%d.%d." % (P9_VIEWER, P9_GS))
       and _sa157.split(".")[2] == _sv157.split(".")[2] and _sa157.split(".")[2].isdigit()
       and _sa157.split(".")[2] != "0", repr(_pages157))
+
+# r37g (adversarial L5): created_at is naive UTC, and .timestamp() read it in the panel process's own zone,
+# so the key moved with TZ and the history was lost. Rendered with the process in UTC+5:30, it must still
+# name the row's birth read as UTC.
+_tz_old157 = os.environ.get("TZ")
+_kz157 = _bz157 = None
+try:
+    os.environ["TZ"] = "Asia/Kolkata"
+    _time157.tzset()
+    _p9_arm(who="part157")
+    _p9_patch(_sd157, "_maybe_resolve_public_ip", lambda *a, **k: None)
+    _p9_patch(_sd157, "_host_timezone_cached", lambda *a, **k: "")
+    _p9_patch(_smc157, "run_command", lambda *a, **k: ("", "", 1))
+    _rz157 = _p9_client(P9_ADMIN).get("/server/%d" % P9_GS)
+    _mz157 = _re157.search(r"var _CMPA_HIST_SCOPE = (\S+);", _rz157.get_data(as_text=True))
+    _kz157 = _json157.loads(_mz157.group(1)) if _mz157 else ""
+    with _p9.app_context():
+        _bz157 = _sd157.db.session.get(_sd157.GameServer, P9_GS).created_at
+finally:
+    _p9_restore_all()
+    if _tz_old157 is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = _tz_old157
+    _time157.tzset()
+check("console history: the key's birth part is the row's created_at read as UTC, whatever the panel "
+      "process's own time zone (it moved with TZ, losing the history)",
+      _bz157 is not None and _kz157 == "%d.%d.%d" % (P9_ADMIN, P9_GS, _calendar157.timegm(_bz157.utctimetuple())),
+      repr((_kz157, _bz157)))
 
 _SD157 = _read99("panel", "static", "js", "server_detail.js")
 # The history is console_history.js, which the page loads just before server_detail.js; the quick
