@@ -284,6 +284,17 @@ try:
        ["2001:db8::7", "::1"])
     check("zone id: ...one line each, no newline in either", len(_zignored) == 2
           and not any("\n" in ln or "FAKE" in ln for ln in _zignored), repr(_zignored))
+    # The function itself, for each of its three lines (Sonar pythonsecurity:S5145): a CR or LF in
+    # whatever address a caller hands it never starts a line of its own.
+    _zauth._ignored_proxy_warned.clear()
+    _zh.lines.clear()
+    with _zfl.test_request_context(headers={"X-Forwarded-For": "203.0.113.9"}):
+        for _zargs in ((None, False), (None, True), (7, True)):
+            _zauth._note_ignored_proxy("192.0.2.%d\r\nFAKE line" % len(_zh.lines),
+                                       local_uid=_zargs[0], declared=_zargs[1])
+    check("zone id: _note_ignored_proxy's three warnings each stay one line for an address holding "
+          "CR LF", len(_zh.lines) == 3 and not any("\n" in ln or "\r" in ln for ln in _zh.lines),
+          repr(_zh.lines))
 finally:
     _zapplog.removeHandler(_zh)
     _zapplog.disabled, _zapplog.level = _zapplog_saved
