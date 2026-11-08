@@ -1111,7 +1111,7 @@ _update_target_signed() {
     if [[ "${RELEASE_SIG_FETCHED}" -ne 1 ]]; then
         RELEASE_SIG_WHY="the release signatures could not be fetched"
     elif ! command -v ssh-keygen >/dev/null 2>&1; then
-        RELEASE_SIG_WHY="ssh-keygen is not installed, so no release signature can be checked; install it (apt-get install -y openssh-client) and run the update again"
+        RELEASE_SIG_WHY="ssh-keygen is not installed, so no release signature can be checked; install the openssh-client package and run the update again"
     else
         local kd=""
         kd="$(mktemp -d 2>/dev/null)" || kd=""
