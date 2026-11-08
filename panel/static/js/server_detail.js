@@ -604,8 +604,9 @@ function _rebuildHasRun(lines, run) {
 // lacks, appended. The pushes are one stretch of the log in order, so it is placed by its text the
 // way a poll's window is: what lies past the console's last line. A stretch the console holds whole
 // was written before the host read the log, and is already shown.
-function _rebuildRestore(mark) {
-  var since = _rebuildPushes.filter(function (p) { return p.n > mark; });
+// `skipInos`: logs whose lines the read kept above its window (_r37e_keepOlderLog) — not again here.
+function _rebuildRestore(mark, skipInos) {
+  var since = _rebuildPushes.filter(function (p) { return p.n > mark && !(skipInos && skipInos[_r37e_inoOf(p.at)]); });
   if (!since.length || !_consoleLines.length) return;
   var rows = [];
   since.forEach(function (p) { p.rows.forEach(function (r) { rows.push({row: r, p: p}); }); });
@@ -639,11 +640,15 @@ function _consoleLineEl() {
 // Clear the command, its echo, its output and every line the server printed before stopping were
 // gone. So each line is tagged with the log it came from (its inode, the `at` of the read or push
 // that brought it) and with the reads begun before it arrived (_r37e_gen), and a replacing read
-// keeps, in place and above its own window, the lines it CANNOT hold: from another log, and on the
-// page before that read began (a line that came after it is from the same log or a newer one, and
-// is put back by the read's own catch-up or _rebuildRestore, as it always was). A line with no
-// known log — the server-rendered seed, a read placed by its text — is replaced as before. A read that
-// may replace the console takes its number with `++_r37e_gen` as it starts.
+// keeps, in place and above its own window, the lines it CANNOT hold: from another log, one the page
+// already knew before that read began — the log of a line on the page then, or of where the page
+// stood in the log (_logAt). That includes a line of it that lands WHILE the read is out: the poller
+// can push the old log's last lines after the read began and before the host's read saw the new
+// one, and those were wiped with nothing to bring them back (the catch-up goes on in the new log).
+// A line of a log first seen during the read is a NEWER one, and is put back by the read's own
+// catch-up or _rebuildRestore, as it always was. A line with no known log — the server-rendered
+// seed, a read placed by its text — is replaced as before. A read that may replace the console
+// takes its number with `++_r37e_gen` and the log the page stands in as it starts.
 var _r37e_gen = 0;
 
 // The inode of the log a read or push's `at` ([chain, inode, offset]) places it in, or null.
@@ -655,19 +660,26 @@ function _r37e_tag(el, ino, line) {
   if (ino !== null && ino !== undefined) el._r37e = {ino: ino, gen: _r37e_gen, line: line};
 }
 
-// The lines a read started as `gen`, of the log `ino`, will replace but cannot hold, in page order:
-// from another log, and on the page before it began. None when the read did not say its log.
-function _r37e_olderLog(ino, gen) {
+// The lines a read started as `gen`, standing in the log `was`, of the log `ino`, will replace but
+// cannot hold, in page order: from another log the page knew before it began. None when the read did
+// not say its log.
+function _r37e_olderLog(ino, gen, was) {
   if (ino === null || ino === undefined || !consoleEl) return [];
+  var knew = {};
+  if (was !== null && was !== undefined) knew[was] = true;
+  Array.prototype.forEach.call(consoleEl.children, function (el) { if (el._r37e && el._r37e.gen < gen) knew[el._r37e.ino] = true; });
   return Array.prototype.filter.call(consoleEl.children, function (el) {
     var tag = el._r37e;
-    return !!tag && tag.ino !== ino && tag.gen < gen;
+    return !!tag && tag.ino !== ino && knew[tag.ino] === true;
   });
 }
 
-// Puts those lines back on the emptied console, before the read's own window is drawn.
+// Puts those lines back on the emptied console, before the read's own window is drawn; answers the
+// logs they came from, whose pushes _rebuildRestore must not place again below the window.
 function _r37e_keepOlderLog(nodes) {
-  nodes.forEach(function (el) { consoleEl.appendChild(el); if (el._r37e.line !== undefined) _consoleLines.push(el._r37e.line); });
+  var inos = {};
+  nodes.forEach(function (el) { consoleEl.appendChild(el); inos[el._r37e.ino] = true; if (el._r37e.line !== undefined) _consoleLines.push(el._r37e.line); });
+  return inos;
 }
 
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
@@ -865,7 +877,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
   if (!consoleEl || window._CAN_VIEW_CONSOLE === false) return;
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
-  var mark = _rebuildMark(), gen = ++_r37e_gen;
+  var mark = _rebuildMark(), gen = ++_r37e_gen, was = _r37e_inoOf(_logAt);
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
@@ -900,7 +912,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // does return something adopts it instead.
         _consolePrimed = true;
         // What the page holds from a log the server has since moved aside stays (_r37e_olderLog).
-        var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen);
+        var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen, was);
         _consoleLines = [];
         consoleEl.innerHTML = '';
         _r37e_keepOlderLog(kept);
@@ -1023,7 +1035,7 @@ function _r11c_resyncFrom(at) {
 function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-  var mark = _rebuildMark(), gen = ++_r37e_gen;
+  var mark = _rebuildMark(), gen = ++_r37e_gen, was = _r37e_inoOf(_logAt);
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
     .then(function(res) {
@@ -1049,12 +1061,12 @@ function loadMoreConsole(btn) {
         return;
       }
       var older = _loadOlderRows(data.lines);
-      var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen);
+      var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen, was);
       _consoleLines = [];
       consoleEl.innerHTML = '';
-      _r37e_keepOlderLog(kept);
+      var keptInos = _r37e_keepOlderLog(kept);
       _appendConsoleRows(older, null, undefined, _r37e_inoOf(data.at));
-      _rebuildRestore(mark);
+      _rebuildRestore(mark, keptInos);
       // A deeper window of the log is a superset of the priming one, so this console is primed. Left
       // unprimed (after Clear, or pressed before the first window came back) the next 30 s poll took
       // it for a console never primed and swapped the 2000 lines just loaded for its 250.
