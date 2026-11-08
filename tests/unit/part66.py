@@ -20,7 +20,7 @@ import tempfile as _tf66
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part47 import _R37E_STUBS47, _cut47, _node47
+from unit.part47 import R37E_STUBS47, _cut47, _node47
 
 _JS66 = os.path.join(_root, "panel", "static", "js")
 _TPL66 = os.path.join(_root, "panel", "templates")
@@ -45,7 +45,7 @@ def _node66(name, prog):
 # refreshConsole, clearConsole and the backlog helpers, cut from the real file, against a page of
 # stand-ins: `shown` is what the console holds, in order.
 _SD66 = _read66(_JS66, "server_detail.js")
-_CON66 = _R37E_STUBS47 + (
+_CON66 = R37E_STUBS47 + (
     "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
     "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
     "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"

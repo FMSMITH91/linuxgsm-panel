@@ -18,7 +18,7 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json,
                          _p9_patch, _p9_restore_all, _p9_so)
-from unit.part47 import _R37E_STUBS47, _cut47, _node47
+from unit.part47 import R37E_STUBS47, _cut47, _node47
 from panel.db.models import RemoteServer as _RS72, User as _U72, db as _db72
 from panel.security import auth as _auth72
 from panel.routes import remote_security as _rs72, server_files as _sf72
@@ -454,7 +454,7 @@ if _out72t is not None:
 # helpers are cut from the real file; `shown` is what the console holds, in order.
 
 _SD72 = _read72(_JS72, "server_detail.js")
-_CON72 = _R37E_STUBS47 + (
+_CON72 = R37E_STUBS47 + (
     "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
     "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
     "global.setTimeout = () => 0; global.clearTimeout = () => 0;\n"

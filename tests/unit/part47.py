@@ -76,7 +76,7 @@ def _node47(prog):
 # The older-log keep of server_detail.js (part158 runs the real ones), as no-ops: a harness that cuts
 # refreshConsole, loadMoreConsole or sendCommand to test something else stands them in, as it does the
 # page's other helpers. `var _logAt;` declares without resetting a value the harness already gave it.
-_R37E_STUBS47 = (
+R37E_STUBS47 = (
     "var _logAt, _r37e_gen = 0;\n"
     "function _r37e_inoOf(){ return null; } function _r37e_tag(){}\n"
     "function _r37e_olderLog(){ return []; } function _r37e_keepOlderLog(){}\n")

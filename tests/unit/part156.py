@@ -574,6 +574,7 @@ if _on156 is None:
 else:
     check("A12a L reboot dialog: when 'Reboot now' answers 409 (a player joined after it opened), the dialog is "
           "re-drawn with the players AND the plan it was opened with (warning lines, wait limit, After the reboot)",
-          _on156.get("n") == 2 and _on156.get("again") == _on156.get("first") is not None
+          _on156.get("n") == 2 and _on156.get("first") is not None
+          and _on156.get("again") == _on156.get("first")
           and (_on156.get("again") or {}).get("wait_hours") == 24
           and (_on156.get("players") or {}).get("state") == "busy", repr(_on156))
