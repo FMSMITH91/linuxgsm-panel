@@ -13,6 +13,7 @@ from types import SimpleNamespace as _NS154
 from unit.part01 import check
 from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
 from unit import part135 as _p135
+from unit.part136 import _deny136
 from panel.core import i18n as _i18n154
 from panel.ops import system_ops as _so154
 from panel.ops.ssh_manager import firewall as _fw154, hosts as _hosts154, ufweval as _ue154
@@ -206,6 +207,32 @@ _m_ok = {
 check("1107 A03 MEDIUM: ...and it is not protected where something else keeps the session in: tailscaled's "
       "default netfilter mode, Tailscale SSH answering the port 22 the panel dials",
       all(_ts0_154(g) not in ("PROTECTED", None) for g in _m_ok.values()), repr(_m_ok))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A03 LOW: a host dialled by name keeps SSH open in both families
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_NAMED154 = _NS154(is_local=False, auth_method="key", host="h154.example.net", port=22, id=None, name="n154")
+_V6_154 = "22/tcp (v6)  ALLOW IN  Anywhere (v6)"
+_fam_cut = {
+    "a v4-only SSH rule": _deny136([_p135._SSH22], server=_NAMED154),
+    "v6: UDP only": _deny136([_p135._SSH22, "22/udp (v6)  ALLOW IN  Anywhere (v6)"], server=_NAMED154),
+    "v6: OUT only": _deny136([_p135._SSH22, "22/tcp (v6)  ALLOW OUT  Anywhere (v6) (out)"], server=_NAMED154),
+    "v6: a DENY above the ALLOW": _deny136([_p135._SSH22, "22/tcp (v6)  DENY IN  Anywhere (v6)", _V6_154],
+                                           server=_NAMED154),
+}
+check("1107 A03 LOW: on a remote dialled by name, measured over IPv4, a default incoming deny is refused (nothing "
+      "sent, SSH's port named) while the IPv6 list has no way in for SSH (%s)" % ", ".join(_fam_cut),
+      all(r[0] is False and r[2] == [] and "No rule lets SSH in" in r[1] for r in _fam_cut.values()),
+      repr({k: (r[0], r[1][:160]) for k, r in _fam_cut.items()}))
+_fam_ok = {
+    "both families": _deny136([_p135._SSH22, _V6_154], server=_NAMED154),
+    "an address literal, v4 rule only": _deny136([_p135._SSH22]),
+    "a name, IPV6=no": _deny136([_p135._SSH22], server=_NAMED154, ipv6="no"),
+}
+check("1107 A03 LOW: ...and set with a way in both families, for an address literal dialled in its own family, "
+      "and where ufw does not handle IPv6 (the controls)",
+      all(r[0] is True and r[2] == [("ufw-default", ["deny", "incoming"])] for r in _fam_ok.values()),
+      repr({k: (r[0], r[1][:160]) for k, r in _fam_ok.items()}))
 
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))

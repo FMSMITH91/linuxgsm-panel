@@ -1864,18 +1864,26 @@ def _fwc_path_gaps(server, views, paths, default_allow):
 def _fwc_in_use(server, paths, st):
     """(the families views are needed for, the families SSH must stay open in for whoever administers it).
 
-    A remote: the panel's session's family (else _fwb_in_use_versions'). The panel's host: SSH in every
-    family the host has a public address in that ufw handles (the web viewer's family says nothing
-    about the admin's SSH), and the viewer's connections' families.
+    A remote: the panel's session's family (else _fwb_in_use_versions'), and both for a host dialled by
+    name, which may move the panel to the other family next time (as the delete guard holds); IPv6 only
+    where ufw handles it unless the session was measured over it. The panel's host: SSH in every family the
+    host has a public address in that ufw handles (the web viewer's family says nothing about the
+    admin's SSH), and the viewer's connections' families.
     """
+    from panel.core.validation import ip_address_or_none
     from panel.ops.ssh_manager import ufweval
     conn_fams = {c.version for c in paths["conns"]}
     if _core.is_local_server(server):
         ssh_fams = ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
     else:
-        ssh_fams = conn_fams or _fwb_in_use_versions(server)
-        if not conn_fams and st.get("ipv6") is not True:
-            ssh_fams = (ssh_fams - {6}) or {4}
+        # The measured family alone let a deny through on a named dual-stack host whose only SSH rule
+        # was IPv4: the next connection may go out over IPv6 first (getaddrinfo's order), and paramiko
+        # gives up on the first address that drops it (review 1107). An address literal is dialled in
+        # its own family, which the measured session already is.
+        named = ip_address_or_none(getattr(server, "host", None)) is None
+        ssh_fams = (conn_fams | _fwb_in_use_versions(server)) if named or not conn_fams else conn_fams
+        if st.get("ipv6") is not True:
+            ssh_fams = (ssh_fams - ({6} - conn_fams)) or {4}
     return ssh_fams | conn_fams, ssh_fams
 
 
