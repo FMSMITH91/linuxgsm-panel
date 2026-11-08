@@ -1,0 +1,4 @@
+{
+  "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second in-game warning, on the servers whose game can show one; where LinuxGSM's own player warning is set, after its countdown instead). The Power card shows what comes back.": "Reiniciando {host}: primero se detienen limpiamente sus servidores de juego en marcha (tras un aviso de {secs} segundos en el juego, en los servidores cuyo juego puede mostrarlo; donde está configurado el aviso a jugadores propio de LinuxGSM, tras su cuenta atrás). La tarjeta Energía muestra lo que vuelve.",
+  "Rebooting {host}: its running game servers are stopped cleanly first (where LinuxGSM's own player warning is set, after its countdown). The Power card shows what comes back.": "Reiniciando {host}: primero se detienen limpiamente sus servidores de juego en marcha (donde está configurado el aviso a jugadores propio de LinuxGSM, tras su cuenta atrás). La tarjeta Energía muestra lo que vuelve."
+}

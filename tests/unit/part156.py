@@ -9,6 +9,8 @@ Held here:
   stop budget and roll back.
 * A forced reboot's second stop (stoponlyifnoplayers set aside) of a game the panel runs under its
   OWN account, on its own host, runs as that account directly, not `sudo -u <itself>`.
+* "Reboot now" says a 60-second warning only where the panel sends one: servers LinuxGSM warns are
+  stopped after LinuxGSM's own countdown, and the reply says so.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -143,3 +145,35 @@ check("A02A05 L forced reboot stop: a game under the panel's own account on its 
       "stop (stoponlyifnoplayers set aside) as that account directly, not through `sudo -u <itself>`",
       isinstance(_fs156, tuple) and len(_fs156[0]) == 1 and _fs156[0][0].startswith("cd /home/u156 && ")
       and "readonly stoponlyifnoplayers=off" in _fs156[0][0] and _fs156[1] == "stopped", repr(_fs156))
+
+
+# ── A02A05 L: the reboot-now reply promises the panel's 60 s warning only where the panel sends it ─
+_rows156 = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+_nows156 = {}
+try:
+    _p9_patch(_hr156, "preflight", lambda remote, census: (True, None))
+    _p9_patch_sm("is_local_server", lambda server: False)
+    _p9_patch(_hr156, "warnable", lambda census: list(_rows156))
+    _p9_patch(_hr156, "start_clean_reboot", lambda remote, actor, origin, mode, delay=0: True)
+    _rem156 = type("R156", (), {"id": 915601, "name": "h156", "display_name": "h156"})()
+    with _p9.test_request_context("/"):
+        for _case156, _own156 in (("lgsm", []), ("mixed", _rows156[:1]), ("panel", list(_rows156))):
+            _p9_patch(_hr156._lgp, "panel_warned", lambda remote, rows, _o=_own156: list(_o))
+            _st156, _b156 = _hr156._reboot_now(_rem156, None, "web", {"probes": {}}, 0)
+            _nows156[_case156] = (_st156, str(_b156.get("message")),
+                                  getattr(_b156.get("message"), "template", None))
+except Exception as _exc156n:  # noqa: BLE001 - reported by the checks below, by name
+    _nows156["error"] = repr(_exc156n)[:160]
+finally:
+    _p9_restore_all()
+_cat156 = _read156("panel", "translations", "es", "r37c.json") + _read156("panel", "translations", "fr", "r37c.json")
+check("A02A05 L reboot now: when every warned server is LinuxGSM's to warn, the reply promises no 60-second "
+      "warning — it says they stop after LinuxGSM's own countdown",
+      _nows156.get("lgsm", ("",))[0] == 202 and "60-second" not in _nows156["lgsm"][1]
+      and "LinuxGSM's own player warning is set, after its countdown" in _nows156["lgsm"][1], repr(_nows156))
+check("A02A05 L reboot now: mixed, it names both; only the panel's, the 60-second warning as before; each "
+      "worded sentence has its es and fr entry",
+      "60-second" in _nows156.get("mixed", ("", ""))[1] and "after its countdown instead" in _nows156["mixed"][1]
+      and "60-second" in _nows156.get("panel", ("", ""))[1] and "LinuxGSM" not in _nows156["panel"][1]
+      and all(_t and ('"%s"' % _t) in _cat156
+              for _t in (_nows156["lgsm"][2], _nows156["mixed"][2])), repr(_nows156))

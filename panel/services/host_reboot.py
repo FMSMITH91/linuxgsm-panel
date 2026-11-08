@@ -920,23 +920,48 @@ def _reboot_now(remote, actor, origin, census, delay):
     if had:
         log_action(actor, "reboot_when_empty_cancel", target=remote.name, detail="superseded",
                    remote=remote)
-    warn = warnable(census)         # for the answer's words; the job warns from its own census
+    # For the answer's words; the job warns from its own census. As the job does, the panel's own
+    # countdown only where LinuxGSM does not warn (panel_warned): the rest stop after LinuxGSM's own
+    # countdown, warnplayerstimer minutes, and a reply promising "a 60-second warning" was false.
+    warn = warnable(census)
+    own = _lgp.panel_warned(remote, warn)
     started = start_clean_reboot(remote, actor, origin, "now", delay=delay)
     if not started:
         return 409, _pending_conflict(remote) or {"success": False, "error": "in_progress",
                                                   "message": "A reboot is already running."}
+    return 202, _r37c_now_body(remote, own, len(own) < len(warn), warning)
+
+
+def _r37c_now_body(remote, own, lgsm, warning):
+    """The answer to a reboot started now. `own`: the servers the panel's countdown warns; `lgsm`:
+    whether some are warned by LinuxGSM's own countdown instead.
+    """
     # Not "then they come back": a queued stop, or restoring turned off, keeps a server stopped.
     # And the warning only where it is sent: a game with no console message gets none.
-    msg = i18n.Sentence(
-        "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
-        "in-game warning, on the servers whose game can show one). The Power card shows what comes "
-        "back." if warn else
-        "Rebooting {host}: its running game servers are stopped cleanly first. The Power card shows "
-        "what comes back.", host=_host_label(remote), secs=COUNTDOWN[0])
+    host, secs = _host_label(remote), COUNTDOWN[0]
+    if own and lgsm:
+        msg = i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
+            "in-game warning, on the servers whose game can show one; where LinuxGSM's own player "
+            "warning is set, after its countdown instead). The Power card shows what comes back.",
+            host=host, secs=secs)
+    elif own:
+        msg = i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
+            "in-game warning, on the servers whose game can show one). The Power card shows what comes "
+            "back.", host=host, secs=secs)
+    elif lgsm:
+        msg = i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first (where LinuxGSM's own "
+            "player warning is set, after its countdown). The Power card shows what comes back.", host=host)
+    else:
+        msg = i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first. The Power card shows "
+            "what comes back.", host=host)
     body = {"success": True, "message": msg, "phase": "preflight"}
     if warning:
         body["warning"] = warning
-    return 202, body
+    return body
 
 
 # ── Wait for empty ──────────────────────────────────────────────────────────────────────────────
