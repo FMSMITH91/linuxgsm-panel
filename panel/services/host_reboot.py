@@ -1750,6 +1750,11 @@ class _Job:
             # ...and the whole pass inside one minute: each read is judged on its own second.
             if _quiet_now(seen, aside, window) and _lgp.window_in_one_minute(seen, time.monotonic()):
                 return None
+            # An account that did not answer (left out: window_reads) is asked first next pass, so
+            # its 20 s timeout falls before the first kept read, not between two of them, where the
+            # pass could never fit inside one minute. Plan accounts are always kept, so the ones
+            # whose locks go back still come last.
+            order = [u for u in order if u not in seen] + [u for u in order if u in seen]
             time.sleep(2)
         return ("a LinuxGSM command was running for one of its servers" if busy
                 else "the host did not answer in time")

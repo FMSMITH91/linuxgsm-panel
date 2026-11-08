@@ -589,10 +589,13 @@ def window_in_one_minute(seen, now):
     next minute passed, and a cron line on A at :00 started after A's read was cut by the shutdown
     (review 1108). The first read's `sec` was taken no earlier than its `at`, and is whole seconds
     (up to .999 more), so its minute ends no sooner than `at + 59 - sec`: the pass must end before.
+    A pass that kept no read at all (`seen` empty: no plan account, and every other one unreadable,
+    as on a forced reboot of a host whose census read nothing) has no minute to keep to: True, or
+    that reboot was rolled back every time (review 1108). A read kept without a second still is not.
     """
     stamped = [r for r in seen.values() if isinstance(r.get("sec"), int) and r.get("at") is not None]
     if not stamped:
-        return False
+        return not seen
     first = min(stamped, key=lambda r: r["at"])
     return now - first["at"] + first["sec"] < 59
 

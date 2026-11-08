@@ -113,8 +113,8 @@ check("1108 r38b reboot census: a LinuxGSM `debug` running on a server (it reads
 
 
 # ── 4. the quiet window's read pass stays inside one minute ─────────────────────────────────────
-def _pass160(slow):
-    """_Job._await_window over a plan account and two other accounts, `slow` the one that does not answer.
+def _pass160(slow, plan=("accta",), others=("acctb", "acctc")):
+    """_Job._await_window over the `plan` accounts and the `others`, `slow` the ones that do not answer.
 
     The host's clock is at second 46 when the window starts; a read that does not answer costs 20 s.
     Returns (answer, [(account, host minute, sec)] of every read that answered).
@@ -122,7 +122,7 @@ def _pass160(slow):
     clock, reads = [0.0], []
 
     def probe(remote, user, selfnames):
-        if user == slow:
+        if user in slow:
             clock[0] += 20.0
             return {"sec": None, "boot": None, "inflight": None}
         at = 46 + clock[0]
@@ -132,7 +132,7 @@ def _pass160(slow):
 
     def nap(sec):
         clock[0] += sec
-    rows = [_NS160(short_name="acctb", lgsm_name="vhserver"), _NS160(short_name="acctc", lgsm_name="csserver")]
+    rows = [_NS160(short_name=u, lgsm_name="vhserver") for u in others]
     try:
         _p9_patch(_hr160, "window_probe", probe)
         _p9_patch(_hr160, "_settled_rows", lambda r: rows)
@@ -140,7 +140,7 @@ def _pass160(slow):
         with _p9.app_context():
             j = object.__new__(_hr160._Job)
             j.remote, j.remote_id = None, -1
-            j.entries = [{"id": P9_GS, "user": "accta", "selfname": "gmodserver", "owner": "panel"}]
+            j.entries = [{"id": P9_GS, "user": u, "selfname": "gmodserver", "owner": "panel"} for u in plan]
             try:
                 return j._await_window(), reads
             except Exception as exc:  # noqa: BLE001 - reported by the check below, by name
@@ -149,14 +149,31 @@ def _pass160(slow):
         _p9_restore_all()
 
 
-_slow160 = _pass160("acctb")
-_fast160 = _pass160(None)
+_slow160 = _pass160(("acctb",))
+_fast160 = _pass160(())
 check("1108 r38b reboot: the quiet window does not open on a read pass that crossed a minute (an account "
       "that did not answer between a read at :46 and one at :06); it opens on the next pass, whose reads "
       "share a minute; a pass with every account answering opens at once (control)",
       _slow160[0] is None and len(_slow160[1]) == 4 and _slow160[1][1][1] != _slow160[1][0][1]
       and _slow160[1][2][1] == _slow160[1][3][1]
       and _fast160[0] is None and len(_fast160[1]) == 3, repr((_slow160, _fast160)))
+
+# A forced reboot of a host whose census read nothing: no plan, every account unreadable. The window
+# kept no read, so it had no minute to keep to, and was rolled back every time (review 1108 H).
+_none_r38h = _pass160(("acctb", "acctc"), plan=())
+# Three accounts outside the plan that hang, between the plan account's read and another's: asked
+# first on the next pass, their timeouts no longer split the kept reads across a minute.
+_hung_r38h = _pass160(("acctb", "acctc", "acctd"), others=("acctb", "acctc", "acctd", "accte"))
+check("1108 r38h reboot: a forced reboot whose window reads nothing (no plan account, every other one "
+      "unreadable) opens the window instead of rolling back; accounts that did not answer are asked "
+      "first on the next pass, so three hung ones between two kept reads still let it open, on reads "
+      "that share a minute; a read kept without a second is still no open window (control)",
+      _none_r38h == (None, [])
+      and _hung_r38h[0] is None and [r[0] for r in _hung_r38h[1][-2:]] == ["accta", "accte"]
+      and _hung_r38h[1][-1][1] == _hung_r38h[1][-2][1]
+      and _hr160._lgp.window_in_one_minute({}, 0.0) is True
+      and _hr160._lgp.window_in_one_minute({"accta": {"sec": None, "at": 0.0}}, 0.0) is False,
+      repr((_none_r38h, _hung_r38h)))
 
 check("part160: no check reached a host (the transport tripwire stayed quiet)",
       len(_P9_TRIPPED) == _TRIP160_START, repr(_P9_TRIPPED[_TRIP160_START:]))
