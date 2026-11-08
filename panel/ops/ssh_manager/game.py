@@ -1428,10 +1428,20 @@ _LG265_DIR_YES, _LG265_DIR_NO = "LG265_DIR", "LG265_NODIR"
 
 
 def fastdl_answers(server, user, selfname, game_type):
-    """The keystrokes for `fastdl` on this account's LinuxGSM release (see above)."""
+    """The keystrokes for `fastdl` on this account's LinuxGSM release (see above), or None.
+
+    None when the release could not be read, and the caller then does not run fastdl. Elsewhere an
+    unread release keeps the old behaviour (lgsm_data.release_at_least), but here the old answers
+    are the destructive ones: on an account that really runs v26.5.0 their first Y is "Rebuild
+    from scratch?", which deletes ${webdir}/fastdl. A script already on v26.5.0 needs no modules
+    read (update-lgsm only ever moves them to the newest release); anything older does, since
+    modules that differ from it mean LinuxGSM updates first (_lg265_fastdl_runs_new).
+    """
     from panel.ops.ssh_manager import hosts
-    if not _lg265_fastdl_runs_new(hosts.lgsm_release(server, user, selfname),
-                                  hosts.lgsm_modules_release(server, user, selfname)):
+    script_tag, modules_tag = hosts.lgsm_versions(server, user, selfname)
+    if not _lg265_fastdl_runs_new(script_tag, modules_tag):
+        if script_tag is None or modules_tag is None:
+            return None
         return ["Y"] * 8
     gmod = ["Y"] if game_type == "gmod" else []
     return (["N"] if _lg265_fastdl_dir_exists(server, user, selfname) else []) + gmod + ["Y"]

@@ -1,0 +1,3 @@
+{
+  "FastDL was not run: the panel could not read which LinuxGSM release this server's account runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again.": "FastDL n'a pas été lancé : le panneau n'a pas pu lire quelle version de LinuxGSM utilise le compte de ce serveur, et sur v26.5.0 une mauvaise réponse supprime le dossier FastDL. Réessayez."
+}

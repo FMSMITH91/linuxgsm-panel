@@ -1669,39 +1669,18 @@ def lgsm_release(server, account, selfname):
     return lgsm_data.release_tag(value)
 
 
-def lgsm_modules_release(server, account, selfname):
-    """The release of the LinuxGSM modules a game account's scripts share, as its tag, or None.
-
-    From `modulesversion=` in /home/<account>/lgsm/modules/core_modules.sh. Every instance script
-    in the account runs these modules, and update-lgsm from ONE instance moves them: a script can
-    then say v26.4.0 while its modules say v26.5.0 (measured on the test host). On that mismatch
-    LinuxGSM's check_version.sh runs update-lgsm first, which installs the newest release, and only
-    then runs the command. None when it cannot be read, as lgsm_release.
-    """
-    if not (account and selfname):
-        return None
-    path = _core._quote("/home/%s/lgsm/modules/core_modules.sh" % account)
-    try:
-        out, _err, rc = _core.read_as_game_user(
-            server, account, "grep -m1 -E '^modulesversion=' " + path, timeout=10,
-            selfname=selfname)
-    except Exception:
-        _core._log.debug("could not read the account's LinuxGSM modules version", exc_info=True)
-        return None
-    from panel.services import lgsm_data
-    line = (out or "").strip().splitlines()[:1] if rc == 0 else []
-    value = line[0].partition("=")[2].strip().strip("\"'") if line else ""
-    return lgsm_data.release_tag(value)
-
-
 def lgsm_versions(server, account, selfname):
     """(script release, modules release) of a game account's LinuxGSM, each a tag or None, in ONE read.
 
-    lgsm_release and lgsm_modules_release read the same two lines with a round trip each; the
-    server page asks for both on every load, so it reads them together. `grep -h -m1` stops at the
-    first match in EACH file, so the answer is at most one `version=` and one `modulesversion=`
-    line, and grep prints what it found even when the other file is missing (rc 2). An empty or
-    failed read is (None, None): never "no LinuxGSM".
+    The modules (`modulesversion=` in /home/<account>/lgsm/modules/core_modules.sh) are shared by
+    every instance script in the account, and update-lgsm from ONE instance moves them: a script can
+    then say v26.4.0 while its modules say v26.5.0 (measured on the test host). On that mismatch
+    LinuxGSM's check_version.sh runs update-lgsm first, which installs the newest release, and only
+    then runs the command. The server page and FastDL's answers ask for both, so one read.
+
+    `grep -h -m1` stops at the first match in EACH file, so the answer is at most one `version=`
+    and one `modulesversion=` line, and grep prints what it found even when the other file is
+    missing (rc 2). An empty or failed read is (None, None): never "no LinuxGSM".
     """
     if not (account and selfname):
         return None, None

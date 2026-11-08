@@ -785,6 +785,11 @@ def _lg264_said(oc, action, gs, held, who, console=None):
     return None, str(msg)
 
 
+_R37B_FASTDL_UNREAD = i18n.Sentence(
+    "FastDL was not run: the panel could not read which LinuxGSM release this server's account "
+    "runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again.")
+
+
 def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True):
     """Run a long action with its output teed to the host file the console tails: (out, err, rc).
 
@@ -793,9 +798,15 @@ def _run_teed(app, remote, server_id, short_name, action, selfname, monitor=True
     """
     # fastdl asks yes/no questions; which, and what each answer does, depends on the account's
     # LinuxGSM release (v26.5.0's first one deletes the directory on Y): _sm.fastdl_answers.
-    answers = (_sm.fastdl_answers(remote, short_name, selfname,
-                                  (selfname or "").removesuffix("server"))
-               if action == "fastdl" else None)
+    answers = None
+    if action == "fastdl":
+        answers = _sm.fastdl_answers(remote, short_name, selfname, (selfname or "").removesuffix("server"))
+        if answers is None:
+            # The release could not be read, and a wrong guess there deletes the FastDL folder:
+            # not run, and said so where the button told the operator to look.
+            msg = _R37B_FASTDL_UNREAD
+            _console_push(app, server_id, f"[panel] {action}: {msg}")
+            return "", str(msg), 1
     # tee_log makes run_as_game_user write the output where _action_log_path says
     # and hand the whole of it back at the end, so the audit entry and the bot's
     # completion summary are unchanged while the console tails the file.
