@@ -570,7 +570,8 @@ finally:
 _saved_gv138 = _files138.lgsm_get_values
 try:
     _gsx = type("G", (), {"remote": _srv138, "short_name": "a", "lgsm_name": "a"})()
-    _files138.lgsm_get_values = lambda *a, **k: {"discordalert": "on"}
+    _files138.lgsm_get_values = lambda *a, **k: {"discordalert": "on",
+                                                 "discordwebhook": "https://hooks.example.invalid/p138"}
     _n_al = _lgp138.note(_lgp138.BACKUP_QUEUED, "lgsm_postponed", alerted=True)
     _n_no = _lgp138.note(_lgp138.BACKUP_QUEUED, "lgsm_postponed", alerted=False)
     _a1 = _sh138._lg264_lgsm_alerted(_gsx, _n_al)

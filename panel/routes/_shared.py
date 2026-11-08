@@ -736,12 +736,16 @@ def _lg264_lgsm_alerted(gs, reason):
     LinuxGSM appends "alerted" to its request after its backup-postponed alert, which it sends
     through the server's own LinuxGSM alert settings; with none on, that alert went nowhere and
     the panel's report is the only one. It appends it whether or not anything was sent
-    (command_monitor.sh, v26.5.0), and alert.sh sends through some channels only when their
-    address is set too (_R37B_ALERT_NEEDS): `emailalert="on"` with no `email` sent nothing.
+    (command_monitor.sh, v26.5.0), and a channel delivers only once its address is filled in
+    (_R39A_ALERT_FIELDS): `emailalert="on"` with no `email` sent nothing. Nor with the address
+    LinuxGSM's _default.cfg ships (_R39A_STOCK_ALERT_VALUES): the merged config reads
+    `email="email@example.com"` or `telegramtoken="accesstoken"` for a channel switched on and never
+    filled in, which alert.sh sends to (or fails on), and the panel stayed silent on an overdue backup.
     """
     if _lgp.note_code(reason) != "lgsm_postponed" or not getattr(reason, "alerted", False):
         return False
-    keys = _LG264_ALERT_TOGGLES + sorted({k for need in _R37B_ALERT_NEEDS.values() for k in need})
+    keys = _LG264_ALERT_TOGGLES + sorted({k for need in _R39A_ALERT_FIELDS.values() for k in need}
+                                         | {"ntfyserver"})
     try:
         vals = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, keys)
     except Exception:
@@ -751,19 +755,48 @@ def _lg264_lgsm_alerted(gs, reason):
 
     def _val(k):
         return str(vals.get(k, "")).strip().strip("\"'")
-    return any(_val(k) == "on" and all(_val(n) for n in _R37B_ALERT_NEEDS.get(k, ()))
+    return any(_val(k) == "on" and all(_r39a_alert_field_set(n, _val) for n in _R39A_ALERT_FIELDS.get(k, ()))
                for k in _LG264_ALERT_TOGGLES)
+
+
+def _r39a_alert_field_set(name, val):
+    """Whether LinuxGSM alert setting `name` holds an address of the operator's: not blank, not the stock one.
+
+    `val(key)` reads the merged config. ntfy's stock topic "LinuxGSM" is the stock one only on the
+    stock server (the public ntfy.sh): on the operator's own server it may well be theirs.
+    """
+    v = val(name)
+    if not v or v == _R39A_STOCK_ALERT_VALUES.get(name):
+        return False
+    if name == "ntfytopic" and v == "LinuxGSM":
+        return val("ntfyserver").rstrip("/") not in ("", "https://ntfy.sh")
+    return True
 
 
 # LinuxGSM's alert switches (its _default.cfg's ## Notification Alerts).
 _LG264_ALERT_TOGGLES = ["discordalert", "emailalert", "gotifyalert", "iftttalert", "matrixalert",
                         "ntfyalert", "pushbulletalert", "pushoveralert", "rocketchatalert",
                         "slackalert", "telegramalert"]
-# ...and what alert.sh needs set beside a switch before it sends through it (v26.5.0: `[ "${x}alert"
-# == "on" ] && [ -n "${...}" ]`). The rest it sends with the switch alone.
-_R37B_ALERT_NEEDS = {"emailalert": ("email",), "matrixalert": ("matrixhomeserver", "matrixtoken", "matrixroom"),
-                     "ntfyalert": ("ntfytopic",), "pushbulletalert": ("pushbullettoken",),
-                     "telegramalert": ("telegramtoken",)}
+# ...and the settings each channel delivers to (lgsm/modules/alert_*.sh, v26.5.0). alert.sh tests some of
+# them before it sends (`[ "${emailalert}" == "on" ] && [ -n "${email}" ]`) and sends the rest with the
+# switch alone, but a blank or stock webhook, token or chat id delivers nothing either way. Failing
+# open: a channel counts only once every one of them is the operator's, else the panel alerts too.
+_R39A_ALERT_FIELDS = {"discordalert": ("discordwebhook",), "emailalert": ("email",),
+                      "gotifyalert": ("gotifytoken", "gotifywebhook"), "iftttalert": ("ifttttoken",),
+                      "matrixalert": ("matrixhomeserver", "matrixtoken", "matrixroom"),
+                      "ntfyalert": ("ntfytopic",), "pushbulletalert": ("pushbullettoken",),
+                      "pushoveralert": ("pushovertoken", "pushoveruserkey"),
+                      "rocketchatalert": ("rocketchatwebhook",), "slackalert": ("slackwebhook",),
+                      "telegramalert": ("telegramtoken", "telegramchatid")}
+# The placeholders LinuxGSM's _default.cfg ships in them (v26.5.0, every game's _default.cfg): a channel
+# switched on with one of these left in place was never filled in. matrixhomeserver's "matrix.org" is
+# a real server, and ntfy's "LinuxGSM" topic is judged with its server (_r39a_alert_field_set).
+_R39A_STOCK_ALERT_VALUES = {"discordwebhook": "webhook", "email": "email@example.com",
+                            "gotifytoken": "token", "gotifywebhook": "webhook", "ifttttoken": "accesstoken",
+                            "matrixtoken": "accesstoken", "pushbullettoken": "accesstoken",
+                            "pushovertoken": "accesstoken", "pushoveruserkey": "userkey",
+                            "rocketchatwebhook": "webhook", "slackwebhook": "webhook",
+                            "telegramtoken": "accesstoken"}
 
 
 def _run_due_game_backups(app):
