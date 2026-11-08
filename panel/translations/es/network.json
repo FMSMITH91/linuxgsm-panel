@@ -518,7 +518,6 @@
   "You're up to date.": "Estás al día.",
   "{done} — reloading…": "{done} — recargando…",
   "Switch the panel to branch \"{branch}\"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically.": "¿Cambiar el panel a la rama \"{branch}\"?\n\nHace una copia de seguridad, cambia a esa rama y se reinicia. Si no arranca, se revierte automáticamente.",
-  "UNVERIFIED: this installs the newest commit on \"{branch}\" as it is — branches other than main are not checked by the panel's update gate. Use it for testing.": "SIN VERIFICAR: esto instala el commit más reciente de \"{branch}\" tal cual — las ramas distintas de main no las comprueba el control de actualizaciones del panel. Úsalo para pruebas.",
   "{n} warning(s)": "{n} aviso(s)",
   "{n} problem(s)": "{n} problema(s)",
   "Size {size} · WAL {wal} · audit rows {rows}": "Tamaño {size} · WAL {wal} · filas de auditoría {rows}",

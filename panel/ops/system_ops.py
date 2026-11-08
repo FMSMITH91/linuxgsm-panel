@@ -2802,6 +2802,45 @@ def list_panel_branches():
     return branches, branch
 
 
+def _r37c_fetched_branch(branch):
+    """Fetch `branch` into its remote-tracking ref for a switch: (ref, "") or ("", why not)."""
+    ref = _REMOTE_TRACKING + branch
+    _, _, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
+                      "+refs/heads/%s:%s" % (branch, ref)], timeout=45)
+    _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
+    if frc != 0 or xrc != 0:
+        return "", i18n.Sentence("Couldn't fetch '{branch}' from the update source, so there is no "
+                                 "verified version to switch to.", branch=branch)
+    return ref, ""
+
+
+def _r37c_signed_branch_tip(branch):
+    """The tip of a branch other than main, for a SWITCH to it: (sha, "") or ("", why not). Call
+    under _update_lock (it fetches the ref a status check fetches).
+
+    Such a branch is not held to the CI gate (a test branch: its checks do not run here), but since
+    release signatures install.sh moves a checkout only to a commit signed for its branch, and
+    holds or stops otherwise. The switch saved panel_branch first and launched with an empty
+    target, so a switch to an unsigned tip left the panel TRACKING a branch its checkout was not
+    on: the card then read "up to date" (an unsigned tip is never offered) and main's releases
+    were no longer offered either. So the tip must be a signed release before anything is saved,
+    and that very commit is what the installer is handed — the commit the status check would offer.
+    """
+    ref, why = _r37c_fetched_branch(branch)
+    if not ref:
+        return "", why
+    tip, _, trc = _git(["rev-parse", "--verify", "--quiet", ref + "^{commit}"])
+    tip = (tip or "").strip()
+    if trc != 0 or not re.fullmatch(r"[0-9a-f]{40}", tip):
+        return "", i18n.Sentence("Couldn't read the versions of '{branch}', so there is no verified "
+                                 "version to switch to.", branch=branch)
+    if not _release_gate_for(branch)(tip):
+        return "", i18n.Sentence("Not switched: the newest commit of '{branch}' ({sha}) is not a signed "
+                                 "release, so the installer would not move to it.",
+                                 branch=branch, sha=tip[:7])
+    return tip, ""
+
+
 def _verified_branch_target(branch):
     """The newest commit of `branch` that passed the CI gate, for a SWITCH to it: (sha, "") or
     ("", why not). Call under _update_lock (it fetches the ref a status check fetches).
@@ -2811,13 +2850,9 @@ def _verified_branch_target(branch):
     nothing about which of the branch's commits may be installed; the walk is the branch's own
     first-parent line from its tip, judged by the same _remote_ci_state (required checks and all),
     newest first, and 'unknown' ends it exactly as it ends an update's."""
-    ref = _REMOTE_TRACKING + branch
-    _, _, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
-                      "+refs/heads/%s:%s" % (branch, ref)], timeout=45)
-    _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
-    if frc != 0 or xrc != 0:
-        return "", i18n.Sentence("Couldn't fetch '{branch}' from the update source, so there is no "
-                                 "verified version to switch to.", branch=branch)
+    ref, why = _r37c_fetched_branch(branch)
+    if not ref:
+        return "", why
     revs, _, rrc = _git(["rev-list", "--first-parent", "-n", "25", ref])
     if rrc != 0:
         # Not "none of the recent versions passed": none of them was read.
@@ -2863,8 +2898,9 @@ def panel_switch_branch(branch):
     # resets an empty target to the branch's tip — so switching (back) to main installed main's
     # newest commit whether or not its checks had finished, or passed: the one path around the CI
     # gate panel_self_update enforces. A branch the gate covers now gets the gate's answer (the
-    # newest verified commit, or a refusal saying why); any other branch is the explicit testing
-    # escape hatch it always was, and the messages say it installs an unverified tip.
+    # newest verified commit, or a refusal saying why); any other branch is the testing escape
+    # hatch it always was, CI-wise, but its tip must be a signed release (_r37c_signed_branch_tip):
+    # either way the config is written only once the installer will move to the commit named.
     target = ""
     # Whatever the branch: a switch IS an update, and one launched over a running one writes the
     # config and reaches the launcher before the launch is refused.
@@ -2880,12 +2916,16 @@ def panel_switch_branch(branch):
             "the panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
             "if it doesn't). This takes up to a minute.", branch=branch, sha=target[:7])
     else:
+        with _update_lock:
+            target, why = _r37c_signed_branch_tip(branch)
+        if not target:
+            return False, why
         msg = i18n.Sentence(
-            "Switching to '{branch}' — this installs that branch's newest commit AS IT IS: branches "
-            "other than {default} are not checked by the panel's update gate, so it is unverified "
-            "code, for testing. The panel is backing up and verifying it restarts cleanly "
-            "(auto-rollback if it doesn't). This takes up to a minute.",
-            branch=branch, default=_DEFAULT_BRANCH)
+            "Switching to '{branch}' at {sha}, its newest commit: a signed release, but branches other "
+            "than {default} are not checked by the panel's automated-checks gate, so it is for testing. "
+            "The panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
+            "if it doesn't). This takes up to a minute.",
+            branch=branch, sha=target[:7], default=_DEFAULT_BRANCH)
     try:
         from panel.core import config as _cfg
         _previous = (_cfg.load_config().get("panel_branch") or "").strip()
@@ -2893,8 +2933,8 @@ def panel_switch_branch(branch):
     except Exception:
         _log.exception("switch-branch: could not save tracked branch")
         return False, "Could not save the branch selection."
-    # target_ref empty (a non-gated branch only) → install.sh resets to the tip of PANEL_BRANCH. A
-    # pin is honoured only on that branch's first-parent line, which is where the walk found it.
+    # A pin is honoured only on that branch's first-parent line, which is where the walk (or the
+    # tip, for another branch) found it, and only when it is signed: what was checked is installed.
     ok, launch_msg = _launch_installer(target_ref=target, branch=branch, started_msg=msg)
     if not ok:
         # Put the tracked branch back. The config write above happens BEFORE the launch, and the

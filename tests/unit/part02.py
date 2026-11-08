@@ -2878,9 +2878,11 @@ try:
     SO._is_git_checkout = lambda: True
     # The branch exists on the remote: ls-remote names it, exactly (an empty answer is "no such
     # branch" now that the name is compared, not tail-matched).
+    # ...and its tip reads as a full commit id (a switch to a branch other than main is to its tip,
+    # once that is a signed release: part03 leaves the gate answering yes; part156).
     SO._git = lambda args, timeout=20, **k: (
         ("0" * 40 + "\trefs/heads/some-feature-branch", "", 0) if args[:1] == ["ls-remote"]
-        else ("", "", 0))
+        else ("b" * 40, "", 0) if args[:1] == ["rev-parse"] else ("", "", 0))
 
     SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (
         False, "install.sh is missing, so the panel can't self-update safely.")

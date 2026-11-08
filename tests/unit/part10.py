@@ -2080,7 +2080,10 @@ def _so7_branches():
     eq("so/panel_switch_branch: not a checkout is refused", SO.panel_switch_branch("dev"),
        (False, "The panel isn't a git checkout, so it can't switch branches."))
     SO._is_git_checkout = lambda: True
-    SO._git = lambda args, timeout=45: ("0123abc\trefs/heads/dev\n", "", 0)
+    # rev-parse names dev's tip in full: a switch to a branch other than main needs its tip (signed:
+    # part03 leaves the release gate answering yes) before it saves anything (part156).
+    SO._git = lambda args, timeout=45: (("a" * 40 if args[:1] == ["rev-parse"] else "0123abc\trefs/heads/dev\n"),
+                                        "", 0)
     _p7_cfgmod.load_config = lambda: {}
     _p7_cfgmod.update_config = _p7_raise(OSError("read-only"))
     _sw_launch = []

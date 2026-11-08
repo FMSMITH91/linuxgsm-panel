@@ -11,6 +11,9 @@ Held here:
   OWN account, on its own host, runs as that account directly, not `sudo -u <itself>`.
 * "Reboot now" says a 60-second warning only where the panel sends one: servers LinuxGSM warns are
   stopped after LinuxGSM's own countdown, and the reply says so.
+* A switch to a branch other than main is refused, before the tracked branch is saved, when that
+  branch's tip is not a signed release (install.sh would not move to it, and the panel was left
+  tracking a branch its checkout was not on); a signed tip is handed to the installer by its id.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -21,6 +24,8 @@ import time as _time156
 from unit.part01 import check
 from unit.part05 import _root
 from unit.part12 import P9_GS, _p9, _p9_patch, _p9_patch_sm, _p9_restore_all
+from panel.core import config as _cfg156
+from panel.ops import system_ops as _so156
 from panel.routes import _shared as _sh156
 from panel.services import host_reboot as _hr156, lgsm_players as _lgp156
 
@@ -177,3 +182,54 @@ check("A02A05 L reboot now: mixed, it names both; only the panel's, the 60-secon
       and "60-second" in _nows156.get("panel", ("", ""))[1] and "LinuxGSM" not in _nows156["panel"][1]
       and all(_t and ('"%s"' % _t) in _cat156
               for _t in (_nows156["lgsm"][2], _nows156["mixed"][2])), repr(_nows156))
+
+
+# ── A10 M / A02A05 L: a branch switch saves the branch only once the installer will move to it ───
+_TIP156 = "c" * 40
+
+
+def _git156(args, timeout=45):
+    if args[:1] == ["ls-remote"]:
+        return ("x\trefs/heads/%s\n" % args[-1].split("/", 2)[-1], "", 0)
+    if args[:1] == ["rev-parse"]:
+        return (_TIP156 + "\n", "", 0)
+    return ("", "", 0)
+
+
+def _switch156(signed):
+    cfg, launched, asked = {"panel_branch": "main"}, [], []
+    try:
+        _p9_patch(_so156, "_is_git_checkout", lambda: True)
+        _p9_patch(_so156, "_update_in_progress", lambda: False)
+        _p9_patch(_so156, "_git", _git156)
+        _p9_patch(_so156, "_release_gate_for",
+                  lambda branch: (lambda sha: (asked.append((branch, sha)), signed)[1]))
+        _p9_patch(_so156, "_launch_installer", lambda target_ref="", branch="", started_msg=None: (
+            launched.append((target_ref, branch)), (True, str(started_msg)))[1])
+        _p9_patch(_cfg156, "load_config", lambda: dict(cfg))
+        _p9_patch(_cfg156, "update_config", lambda fn: (fn(cfg), dict(cfg))[1])
+        got = _so156.panel_switch_branch("test-x")
+    except Exception as exc:  # noqa: BLE001 - reported by the checks below, by name
+        got = (None, repr(exc)[:160])
+    finally:
+        _p9_restore_all()
+    return got, cfg, launched, asked
+
+
+_no156 = _switch156(False)
+_yes156 = _switch156(True)
+check("A10 M switch-branch: a branch other than main whose tip is not a signed release is refused, saying "
+      "so — the tracked branch is NOT saved and no installer is launched",
+      _no156[0][0] is False and "is not a signed release" in str(_no156[0][1]) and _TIP156[:7] in str(_no156[0][1])
+      and _no156[1] == {"panel_branch": "main"} and _no156[2] == [] and _no156[3] == [("test-x", _TIP156)],
+      repr(_no156))
+check("A10 M switch-branch: a signed tip is switched to, handed to the installer by its full id (what was "
+      "checked is what is installed), and the message no longer says it installs the tip 'as it is'",
+      _yes156[0][0] is True and _yes156[2] == [(_TIP156, "test-x")] and _yes156[1] == {"panel_branch": "test-x"}
+      and "AS IT IS" not in _yes156[0][1] and "signed release" in _yes156[0][1], repr(_yes156))
+_newcat156 = (_read156("panel", "translations", "es", "r37c.json")
+              + _read156("panel", "translations", "fr", "r37c.json"))
+check("A10 M switch-branch: its sentences (refusal, switching, the dialog's) have es and fr entries",
+      _newcat156.count("Not switched: the newest commit of '{branch}' ({sha}) is not a signed release") == 2
+      and _newcat156.count("Switching to '{branch}' at {sha}, its newest commit: a signed release") == 2
+      and _newcat156.count("FOR TESTING: this installs the newest commit on") == 2, "")
