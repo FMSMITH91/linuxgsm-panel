@@ -190,8 +190,10 @@ _ALLOWS159 = ("ufw-allow-proto-port", "ufw-allow-port", "ufw-allow-from-port", "
 
 
 def _from_row159(src, port):
-    """The row `ufw status` lists for `allow from <src> to any port <port> proto tcp`: a family's every address
-    is listed as ufw lists it (Anywhere, or the `(v6)` row), any other source as given."""
+    """The row `ufw status` lists for `allow from <src> to any port <port> proto tcp`.
+
+    A family's every address is listed as ufw lists it (Anywhere, or the `(v6)` row), any other source as given.
+    """
     return {"0.0.0.0/0": "%s/tcp  ALLOW IN  Anywhere" % port,   # NOSONAR(S1313) - ufw's IPv4 "any" network
             "::/0": "%s/tcp (v6)  ALLOW IN  Anywhere (v6)" % port}.get(src, "%s/tcp  ALLOW IN  %s" % (port, src))
 
