@@ -420,12 +420,12 @@ _args156 = [a for ln in _INST156.splitlines() if not ln.lstrip().startswith("#")
             for a in _re156.findall(r'stage_root_source ("[^"]+"|[^\s)]+) ', ln)]
 _gd156 = _re156.search(r"^GAMEDIG_FILES=\(([^)]*)\)", _INST156, _re156.M)
 _staged156 = set()
-for _a156 in _args156:
-    _a156 = _a156.strip('"').replace("${RELEASE_SIGNERS}", "release-signers")
-    if "${f}" in _a156 and _gd156:
-        _staged156.update(_a156.replace("${f}", _g156) for _g156 in _gd156.group(1).split())
+for _arg156 in _args156:
+    _path156 = _arg156.strip('"').replace("${RELEASE_SIGNERS}", "release-signers")
+    if "${f}" in _path156 and _gd156:
+        _staged156.update(_path156.replace("${f}", _g156) for _g156 in _gd156.group(1).split())
     else:
-        _staged156.add(_a156)
+        _staged156.add(_path156)
 _re_flag156 = _re156.compile(_flag156.group(1)) if _flag156 else None
 _alts156 = _flag156.group(1)[2:-1].split("|") if _flag156 else []
 _unflagged156 = sorted(p for p in _staged156 if not (_re_flag156 and _re_flag156.match(p)))
@@ -444,6 +444,7 @@ check("A10 L sign-release.sh: ...and CI's workflows and the scripts they run",
 
 
 # ── A01 L: an account left with no What's new stamp is stamped at the next start ───────────────
+_NOLOGIN156 = "!"               # not a hash any password matches: these rows never sign in
 _TMP156 = _tf156.mkdtemp(prefix="lgsm-unit-p156-")
 _mig156 = _Flask156("unit_part156_mig")
 _mig156.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_TMP156, "nostamp.db"),
@@ -452,8 +453,8 @@ _models156.db.init_app(_mig156)
 try:
     with _mig156.app_context():
         _models156.db.create_all()
-        _models156.db.session.add(_models156.User(username="p156null", password_hash="!"))
-        _models156.db.session.add(_models156.User(username="p156kept", password_hash="!"))
+        _models156.db.session.add(_models156.User(username="p156null", password_hash=_NOLOGIN156))
+        _models156.db.session.add(_models156.User(username="p156kept", password_hash=_NOLOGIN156))
         _models156.db.session.commit()
         # The column is there already (an earlier start added it) and these rows were never stamped.
         _models156.db.session.execute(_sa_text156(

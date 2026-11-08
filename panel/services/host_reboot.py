@@ -929,39 +929,11 @@ def _reboot_now(remote, actor, origin, census, delay):
     if not started:
         return 409, _pending_conflict(remote) or {"success": False, "error": "in_progress",
                                                   "message": "A reboot is already running."}
-    return 202, _r37c_now_body(remote, own, len(own) < len(warn), warning)
-
-
-def _r37c_now_body(remote, own, lgsm, warning):
-    """The answer to a reboot started now. `own`: the servers the panel's countdown warns; `lgsm`:
-    whether some are warned by LinuxGSM's own countdown instead.
-    """
-    # Not "then they come back": a queued stop, or restoring turned off, keeps a server stopped.
-    # And the warning only where it is sent: a game with no console message gets none.
-    host, secs = _host_label(remote), COUNTDOWN[0]
-    if own and lgsm:
-        msg = i18n.Sentence(
-            "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
-            "in-game warning, on the servers whose game can show one; where LinuxGSM's own player "
-            "warning is set, after its countdown instead). The Power card shows what comes back.",
-            host=host, secs=secs)
-    elif own:
-        msg = i18n.Sentence(
-            "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
-            "in-game warning, on the servers whose game can show one). The Power card shows what comes "
-            "back.", host=host, secs=secs)
-    elif lgsm:
-        msg = i18n.Sentence(
-            "Rebooting {host}: its running game servers are stopped cleanly first (where LinuxGSM's own "
-            "player warning is set, after its countdown). The Power card shows what comes back.", host=host)
-    else:
-        msg = i18n.Sentence(
-            "Rebooting {host}: its running game servers are stopped cleanly first. The Power card shows "
-            "what comes back.", host=host)
-    body = {"success": True, "message": msg, "phase": "preflight"}
+    body = {"success": True, "phase": "preflight",
+            "message": _rw.rebooting_now(_host_label(remote), COUNTDOWN[0], bool(own), len(own) < len(warn))}
     if warning:
         body["warning"] = warning
-    return body
+    return 202, body
 
 
 # ── Wait for empty ──────────────────────────────────────────────────────────────────────────────
@@ -1640,7 +1612,7 @@ class _Job:
         # Still running at the deadline: no probes, and _bounced undoes the plan and says why.
         probes, self.bounce_why = _lgp.settled_probes(lambda: _probe_rows(self.remote, rows),
                                                       self._past_deadline, self._sleep,
-                                                      plan_ids={e["id"] for e in self.entries})
+                                                      plan_ids=_lgp.entry_ids(self.entries))
         known = {e["id"]: e for e in self.entries}
         for gs in rows:
             if (probes.get(gs.id) or {}).get("session") != 1:

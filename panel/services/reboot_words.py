@@ -202,3 +202,32 @@ def start_waits(d, detail, now, rollback=False):
         return "failed", ("a LinuxGSM command for it was still running a day after the reboot was "
                           "called off or did not happen; check the server")
     return "failed", "a LinuxGSM command for it was still running a day after the reboot; check the server"
+
+
+def rebooting_now(host, secs, own, lgsm):
+    """The answer to a reboot started now (host_reboot._reboot_now).
+
+    `own`: some servers get the panel's {secs}-second countdown; `lgsm`: some are warned by
+    LinuxGSM's own countdown instead (lgsm_players.panel_warned), warnplayerstimer minutes, so a
+    reply promising the panel's 60 s to them was false. Not "then they come back": a queued stop,
+    or restoring turned off, keeps a server stopped; and the warning only where it is sent: a game
+    with no console message gets none.
+    """
+    if own and lgsm:
+        return i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
+            "in-game warning, on the servers whose game can show one; where LinuxGSM's own player "
+            "warning is set, after its countdown instead). The Power card shows what comes back.",
+            host=host, secs=secs)
+    if own:
+        return i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
+            "in-game warning, on the servers whose game can show one). The Power card shows what comes "
+            "back.", host=host, secs=secs)
+    if lgsm:
+        return i18n.Sentence(
+            "Rebooting {host}: its running game servers are stopped cleanly first (where LinuxGSM's own "
+            "player warning is set, after its countdown). The Power card shows what comes back.", host=host)
+    return i18n.Sentence(
+        "Rebooting {host}: its running game servers are stopped cleanly first. The Power card shows "
+        "what comes back.", host=host)

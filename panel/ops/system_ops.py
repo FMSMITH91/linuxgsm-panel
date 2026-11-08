@@ -2815,12 +2815,12 @@ def _r37c_fetched_branch(branch):
 
 
 def _r37c_signed_branch_tip(branch):
-    """The tip of a branch other than main, for a SWITCH to it: (sha, "") or ("", why not). Call
-    under _update_lock (it fetches the ref a status check fetches).
+    """The tip of a branch other than main, for a SWITCH to it: (sha, "") or ("", why not).
 
-    Such a branch is not held to the CI gate (a test branch: its checks do not run here), but since
-    release signatures install.sh moves a checkout only to a commit signed for its branch, and
-    holds or stops otherwise. The switch saved panel_branch first and launched with an empty
+    Call under _update_lock (it fetches the ref a status check fetches). Such a branch is not
+    held to the CI gate (a test branch: its checks do not run here), but since release signatures
+    install.sh moves a checkout only to a commit signed for its branch, and holds or stops
+    otherwise. The switch saved panel_branch first and launched with an empty
     target, so a switch to an unsigned tip left the panel TRACKING a branch its checkout was not
     on: the card then read "up to date" (an unsigned tip is never offered) and main's releases
     were no longer offered either. So the tip must be a signed release before anything is saved,
@@ -2879,6 +2879,26 @@ def _verified_branch_target(branch):
                              "automated checks.", branch=branch)
 
 
+def _r37c_switch_target(branch):
+    """The commit a switch to `branch` installs and the message it starts with, or ("", why not)."""
+    with _update_lock:
+        target, why = (_verified_branch_target(branch) if branch == _DEFAULT_BRANCH
+                       else _r37c_signed_branch_tip(branch))
+    if not target:
+        return "", why
+    if branch == _DEFAULT_BRANCH:
+        return target, i18n.Sentence(
+            "Switching to '{branch}' at {sha}, its newest version that passed its automated checks — "
+            "the panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
+            "if it doesn't). This takes up to a minute.", branch=branch, sha=target[:7])
+    return target, i18n.Sentence(
+        "Switching to '{branch}' at {sha}, its newest commit: a signed release, but branches other "
+        "than {default} are not checked by the panel's automated-checks gate, so it is for testing. "
+        "The panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
+        "if it doesn't). This takes up to a minute.",
+        branch=branch, sha=target[:7], default=_DEFAULT_BRANCH)
+
+
 def panel_switch_branch(branch):
     """Point the panel at a different branch and check it out, with the SAME snapshot / health-check
     / auto-rollback safety as a normal update. Superadmin-gated at the route. Returns (ok, message)."""
@@ -2901,31 +2921,13 @@ def panel_switch_branch(branch):
     # newest verified commit, or a refusal saying why); any other branch is the testing escape
     # hatch it always was, CI-wise, but its tip must be a signed release (_r37c_signed_branch_tip):
     # either way the config is written only once the installer will move to the commit named.
-    target = ""
     # Whatever the branch: a switch IS an update, and one launched over a running one writes the
     # config and reaches the launcher before the launch is refused.
     if _update_in_progress():
         return False, "An update is being installed right now — switch once it has finished."
-    if branch == _DEFAULT_BRANCH:
-        with _update_lock:
-            target, why = _verified_branch_target(branch)
-        if not target:
-            return False, why
-        msg = i18n.Sentence(
-            "Switching to '{branch}' at {sha}, its newest version that passed its automated checks — "
-            "the panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
-            "if it doesn't). This takes up to a minute.", branch=branch, sha=target[:7])
-    else:
-        with _update_lock:
-            target, why = _r37c_signed_branch_tip(branch)
-        if not target:
-            return False, why
-        msg = i18n.Sentence(
-            "Switching to '{branch}' at {sha}, its newest commit: a signed release, but branches other "
-            "than {default} are not checked by the panel's automated-checks gate, so it is for testing. "
-            "The panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
-            "if it doesn't). This takes up to a minute.",
-            branch=branch, sha=target[:7], default=_DEFAULT_BRANCH)
+    target, msg = _r37c_switch_target(branch)
+    if not target:
+        return False, msg
     try:
         from panel.core import config as _cfg
         _previous = (_cfg.load_config().get("panel_branch") or "").strip()

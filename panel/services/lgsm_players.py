@@ -524,9 +524,7 @@ def settled_probes(read, past_deadline, sleep, plan_ids=None):
     """
     while True:
         probes = read()
-        watched = [p for i, p in probes.items()
-                   if plan_ids is None or i in plan_ids or (p or {}).get("session") == 1]
-        if not any(p.get("inflight") or p.get("maint") or p.get("warn") for p in watched):
+        if not _r37c_busy(probes, plan_ids):
             return probes, ""
         if past_deadline():
             return {}, LG264_STILL_BUSY
@@ -534,6 +532,17 @@ def settled_probes(read, past_deadline, sleep, plan_ids=None):
 
 
 LG264_STILL_BUSY = "LinuxGSM was still running a command on its game servers when their stops ended."
+
+
+def _r37c_busy(probes, plan_ids):
+    """Whether a LinuxGSM command runs on a server settled_probes waits on (see there)."""
+    return any(p.get("inflight") or p.get("maint") or p.get("warn") for i, p in probes.items()
+               if plan_ids is None or i in plan_ids or (p or {}).get("session") == 1)
+
+
+def entry_ids(entries):
+    """The server ids of a reboot plan's entries (settled_probes' plan_ids)."""
+    return {e["id"] for e in entries}
 
 
 def run_stop_passes(passes, stop_group, workers, cancelled, on_cancel):
