@@ -15,6 +15,7 @@ for (part20's _patch / _patched, undone at the end of each block). Nothing touch
 sudo, a real host or the checkout's data/.
 """
 import os as _os64
+import time as _time64
 import types as _types64
 
 from unit.part01 import check, skip
@@ -256,17 +257,27 @@ _TRUE64 = {"backup_keep_days": True, "autoblock_threshold": True, "reboot_wait_m
 
 
 def _read64(cfg):
-    """Every reader under test, against `cfg`; each answer, or the name of what it raised."""
+    """Every reader under test, against `cfg`; each answer, or the name of what it raised.
+
+    The prune runs over two daily archives, 2 and 20 days old, and answers (count, names deleted): with
+    no archives it answered 0 for every keep_days, so a reader that turned Infinity into 365 or `true`
+    into one day (deleting every daily archive older than a day) read the same as the default (14).
+    """
+    _now = _time64.time()
+    _arch = [{"name": "daily-2d.tar.gz", "kind": "daily", "created": _now - 2 * 86400},
+             {"name": "daily-20d.tar.gz", "kind": "daily", "created": _now - 20 * 86400}]
+    _gone = []
     with _patched():
         for _m in (_bk64, _hr64, _mon64):
             _patch(_m, "load_config", lambda: dict(cfg))
-        _patch(_bk64, "list_backups", lambda: [])
+        _patch(_bk64, "list_backups", lambda: list(_arch))
+        _patch(_bk64, "delete_backup", lambda name: (_gone.append(name), (True, ""))[1])
         gs = _try64(_bk64.game_schedule_from, cfg, 64)
         st = _try64(_bk64.get_settings)
         return {"settings_keep": st if isinstance(st, str) else st.get("keep_days"),
                 "full": _try64(_bk64.full_settings_from, cfg),
                 "game": gs if isinstance(gs, str) else (gs["interval_days"], gs["keep"]),
-                "prune": _try64(_bk64.prune_backups),
+                "prune": (_try64(_bk64.prune_backups), list(_gone)),
                 "threshold": _try64(_mon64._autoblock_threshold),
                 "wait": _try64(_hr64.wait_max_hours)}
 
@@ -276,7 +287,7 @@ _full64 = {"interval_days": _bk64.DEFAULT_FULL_INTERVAL, "keep": _bk64.DEFAULT_F
 check("config Infinity: the Backups settings, the full-backup defaults, a server's schedule and the daily "
       "prune read the defaults (each raised OverflowError: the Backups page 500'd, old archives never "
       "pruned)",
-      _inf64["settings_keep"] == _bk64.DEFAULT_KEEP_DAYS and _inf64["prune"] == 0
+      _inf64["settings_keep"] == _bk64.DEFAULT_KEEP_DAYS and _inf64["prune"] == (1, ["daily-20d.tar.gz"])
       and isinstance(_inf64["full"], dict)
       and {k: _inf64["full"].get(k) for k in _full64} == _full64
       and _inf64["game"] == (_bk64.DEFAULT_FULL_INTERVAL, _bk64.DEFAULT_FULL_KEEP), repr(_inf64))
@@ -288,13 +299,13 @@ _tru64 = _read64(_TRUE64)
 check("config true: a JSON boolean is no number (int(True) is 1: a one-attempt auto-block threshold, a "
       "one-hour reboot wait, a one-day backup retention, a one-day per-server interval)",
       _tru64["threshold"] == _mon64._AUTOBLOCK_DEFAULT_THRESHOLD and _tru64["wait"] == _hr64.DEFAULT_WAIT_HOURS
-      and _tru64["settings_keep"] == _bk64.DEFAULT_KEEP_DAYS
+      and _tru64["settings_keep"] == _bk64.DEFAULT_KEEP_DAYS and _tru64["prune"] == (1, ["daily-20d.tar.gz"])
       and isinstance(_tru64["full"], dict) and _tru64["full"].get("interval_days") == _bk64.DEFAULT_FULL_INTERVAL
       and _tru64["game"] == (_bk64.DEFAULT_FULL_INTERVAL, _bk64.DEFAULT_FULL_KEEP), repr(_tru64))
 _ok64 = _read64({"backup_keep_days": 30, "autoblock_threshold": 7, "reboot_wait_max_hours": 5,
                  "full_backup_interval_days": 3, "game_schedules": {"64": {"interval_days": 4, "keep": 5}}})
 check("config numbers: ...and a real number still reads (control)",
-      _ok64["settings_keep"] == 30 and _ok64["threshold"] == 7 and _ok64["wait"] == 5
+      _ok64["settings_keep"] == 30 and _ok64["threshold"] == 7 and _ok64["wait"] == 5 and _ok64["prune"] == (0, [])
       and _ok64["full"]["interval_days"] == 3 and _ok64["game"] == (4, 5), repr(_ok64))
 try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), autoblock_threshold=_INF64, session_lifetime_hours=_INF64,

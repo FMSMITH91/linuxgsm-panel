@@ -51,6 +51,9 @@ def lag_tick(state, lag):
 
 def hub_lag_loop(sleep, clock):
     """Time `sleep(1)` forever and record how late each wake-up was."""
+    # Its first beat comes after a sleep, like every loop that sleeps first: recorded, so a report in
+    # that first second says "first pass not due yet" rather than "never completed a pass".
+    runtime_stats.loop_started("hub-lag-watch", _LAG_TICK)
     state = {"ticks": 0, "max": -1.0, "minute": None, "minute_max": -1.0}
     while True:
         t0 = clock()

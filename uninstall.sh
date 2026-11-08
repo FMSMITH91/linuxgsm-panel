@@ -84,8 +84,36 @@ else
     svc() { systemctl --user "$@"; }
 fi
 
-if [[ ! -e "${UNIT_FILE}" ]] && [[ ! -d "${PANEL_DIR}" ]]; then
+# A system uninstall that stopped part-way (Ctrl-C, or any `set -e` stop) has already removed the
+# unit and the panel's files, and leaves the pieces that go later: the panel account (whose home
+# holds the SSH key that is root-capable on every managed remote), the sudoers grants, the sysctl
+# file, and the root-owned directory, cron and recovery command. Testing only the unit and the
+# directory answered "nothing to remove" to exactly the re-run that is meant to finish the job. Any
+# of these is an install to finish removing. Only pieces a SYSTEM install makes count: the account,
+# the grants and the sysctl file are root-only, and the shared root-owned set counts only while its
+# panel.conf names this install (a per-user install on the same host makes that set too).
+_r39d_leftover=""
+if [[ "${MODE}" = "system" ]]; then
+    if id "${SERVICE_USER}" >/dev/null 2>&1; then
+        _r39d_leftover="the '${SERVICE_USER}' account"
+    else
+        for _r39d_f in /etc/sudoers.d/linuxgsm-panel /etc/sudoers.d/00-linuxgsm-panel-terminal \
+                       /etc/sysctl.d/99-linuxgsm-panel.conf; do
+            if [[ -e "${_r39d_f}" ]]; then _r39d_leftover="${_r39d_f}"; break; fi
+        done
+    fi
+    _r39d_conf="${SHARED_CONF:-/usr/local/lib/linuxgsm-panel/panel.conf}"
+    if [[ -z "${_r39d_leftover}" ]] && [[ -r "${_r39d_conf}" ]] \
+       && [[ "$(sed -n 's/^panel_dir=//p' "${_r39d_conf}" 2>/dev/null | tail -n 1)" == "${PANEL_DIR}" ]]; then
+        _r39d_leftover="$(dirname "${_r39d_conf}")"
+    fi
+fi
+if [[ ! -e "${UNIT_FILE}" ]] && [[ ! -d "${PANEL_DIR}" ]] && [[ -z "${_r39d_leftover}" ]]; then
     die "No LinuxGSM Panel install found (${MODE} mode). Nothing to remove."
+fi
+if [[ -n "${_r39d_leftover}" ]] && [[ ! -e "${UNIT_FILE}" ]] && [[ ! -d "${PANEL_DIR}" ]]; then
+    info "The panel's service and files are already gone; finishing an uninstall that stopped part-way"
+    info "  (${_r39d_leftover} is still here)."
 fi
 
 info "Found a ${MODE} install:"

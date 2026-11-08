@@ -2021,6 +2021,9 @@ _r16d_wrap_ts_handles()
 # part12's app; imports part01, 12, 108, 116, 125, 135, 136 and 154.
 # part163 (review 1109's firewall and lock-out fixes, builder B) drives part159's port-move stand-in,
 # part135's stand-in hosts, part154's loopback runner and part12's app; imports part01, 12, 135, 154 and 159.
+# part165 (review 1109 D: the installer's recorded root-grant choice, a partial uninstall's re-run, a
+# by-hand update of a switched branch, and the guard's double-quoted -c read: it reads the runner's bound
+# unit.ts_nested too) runs install.sh/uninstall.sh text under bash; imports part01 and 05.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2037,7 +2040,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
-          "part160", "part161", "part162", "part163", "part164", "part15")
+          "part160", "part161", "part162", "part163", "part164", "part165", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

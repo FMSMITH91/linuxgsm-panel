@@ -637,8 +637,11 @@ check("global bans: the add form is still there under one sentence, the rest of 
       repr(sorted(_bn134.names) if _bn134 else None))
 _cm134 = _PG134.get("commands")
 _cmh134 = _pg134.get("commands", (0, ""))[1]
+# At least one row: two equal counts of nothing passed with no command rendered at all (review 1109 T10);
+# part12's "Say" command is in the database by now.
 check("custom commands: every command row keeps its Edit toggle and its Delete form",
-      _cm134 is not None and _cmh134.count('data-bs-target="#edit-cmd-') == _cmh134.count('id="edit-cmd-')
+      _cm134 is not None and _cmh134.count('id="edit-cmd-') >= 1
+      and _cmh134.count('data-bs-target="#edit-cmd-') == _cmh134.count('id="edit-cmd-')
       and _cmh134.count("/delete\"") >= _cmh134.count('id="edit-cmd-'), _cmh134[:200])
 
 # The Details tab's Supported Commands: the first six, then the rest folded, none dropped.
