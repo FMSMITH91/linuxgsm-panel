@@ -55,12 +55,19 @@
   });
 
   // "What's new" (panel/templates/_whats_new.html): opened once the page is parsed, and recorded as seen
-  // however it is closed — the close button, "Got it" or Esc all fire `close`.
+  // however it is closed — the close button, "Got it" or Esc all fire `close`. What is recorded is the
+  // changelog this page was rendered from (data-seen-stamp), so an update that lands while the dialog
+  // is open keeps its own entries for the next page.
   var wn = document.getElementById('whats-new');
   if (wn && typeof wn.showModal === 'function') {
     wn.addEventListener('close', function(){
       var url = wn.getAttribute('data-seen-url');
-      if (url) fetch(url, {method: 'POST', cache: 'no-store', keepalive: true}).catch(function(){});
+      var shown = wn.getAttribute('data-seen-stamp') || '';
+      if (url) {
+        fetch(url, {method: 'POST', cache: 'no-store', keepalive: true,
+                    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stamp: shown})})
+          .catch(function(){});
+      }
       wn.remove();
     });
     try { wn.showModal(); } catch (_e) { /* already open, or not in the document */ }

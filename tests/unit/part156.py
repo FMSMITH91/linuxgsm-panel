@@ -24,6 +24,9 @@ Held here:
   runs (install.sh's stage_root_source callers), held equal to them here.
 * An account with no "What's new" stamp (an upgrade that died between adding the column and
   stamping it, a changelog unreadable then) is stamped at the next start, not left NULL for good.
+* Closing "What's new" records the changelog the page was rendered from, not the one on disk when
+  the POST lands: entries an update added meanwhile are shown on the next page. An older tab never
+  takes back what a newer one recorded; a malformed stamp, or none, records the file as before.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -38,7 +41,7 @@ import time as _time156
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import P9_GS, _p9, _p9_patch, _p9_patch_sm, _p9_restore_all
+from unit.part12 import P9_ADMIN, P9_GS, _p9, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
 from flask import Flask as _Flask156
 from sqlalchemy import text as _sa_text156
 
@@ -427,3 +430,71 @@ check("A01 L what's new: an account with no stamp (the start that added the colu
       "or the changelog could not be read) is stamped at the next start; a stamped one is left alone",
       bool(_now156) and _st156.get("p156null") == _now156 and _st156.get("p156kept") == "abc:1",
       repr({k: (v or "")[:20] for k, v in _st156.items()}))
+
+
+# ── A01 L: dismissing "What's new" records what the page showed, not the changelog at POST time ─
+def _wnrow156():
+    with _p9.app_context():
+        return _models156.db.session.get(_models156.User, P9_ADMIN).whats_new_seen
+
+
+def _wnput156(v):
+    with _p9.app_context():
+        _models156.db.session.get(_models156.User, P9_ADMIN).whats_new_seen = v
+        _models156.db.session.commit()
+
+
+def _wnkeys156(v):
+    return set((v or "").partition(":")[2].split(",")) - {""}
+
+
+_c1_156 = [{"category": "Added", "title": "C1 entry %d" % i, "body": "", "key": "%08x" % (0x156000 + i)}
+           for i in range(6)]
+_c2_156 = [{"category": "Fixed", "title": "C2 entry %d" % i, "body": "", "key": "%08x" % (0x156100 + i)}
+           for i in range(2)] + _c1_156
+_wnsaved156 = _wnrow156()
+_wn156r = {}
+try:
+    _wcl156 = _p9_client(P9_ADMIN)
+    _cur156 = {"e": _c1_156}
+    _p9_patch(_wn156, "current_entries", lambda path=None: _cur156["e"])
+    _wnput156(_wn156.stamp(_c1_156[3:]))                          # behind C1 by three entries
+    _pg156 = _wcl156.get("/account").get_data(as_text=True)
+    _m156 = _re156.search(r'data-seen-stamp="([^"]*)"', _pg156)
+    _wn156r["rendered"] = _m156.group(1) if _m156 else None
+    _cur156["e"] = _c2_156                                        # an update lands; then the dialog is closed
+    _wn156r["post"] = _wcl156.post("/api/account/whats-new/seen", json={"stamp": _wn156r["rendered"]}).status_code
+    _wn156r["row"] = _wnrow156()
+    _nx156 = _wcl156.get("/account").get_data(as_text=True)
+    _wn156r["next"] = _nx156[_nx156.find('<dialog id="whats-new"'):_nx156.find("</dialog>")]
+    # An older tab closed after a newer one: what the newer recorded stays.
+    _wnput156(_wn156.stamp(_c2_156))
+    _wcl156.post("/api/account/whats-new/seen", json={"stamp": _wn156.stamp(_c1_156[3:])})
+    _wn156r["older"] = _wnrow156()
+    # Not a stamp (or none, a tab from before this): the changelog as it is, as before.
+    _wnput156(_wn156.stamp(_c1_156))
+    _wcl156.post("/api/account/whats-new/seen", json={"stamp": "zz:" + "1" * 9000})
+    _wn156r["bad"] = _wnrow156()
+    _wnput156(_wn156.stamp(_c1_156))
+    _wcl156.post("/api/account/whats-new/seen")
+    _wn156r["none"] = _wnrow156()
+except Exception as _exc156x:  # noqa: BLE001 - reported by the checks below, by name
+    _wn156r["error"] = repr(_exc156x)[:160]
+finally:
+    _p9_restore_all()
+    _wnput156(_wnsaved156)
+check("A01 L what's new: the dialog carries the stamp of the changelog it was rendered from",
+      _wn156r.get("rendered") == _wn156.stamp(_c1_156), repr(_wn156r.get("rendered"))[:120])
+check("A01 L what's new: closing it after an update landed records only what the page showed — the "
+      "update's own entries are on the next page, and only they",
+      _wn156r.get("post") == 200 and _wnkeys156(_wn156r.get("row")) == {e["key"] for e in _c1_156}
+      and all("C2 entry %d" % i in _wn156r.get("next", "") for i in range(2))
+      and "C1 entry" not in _wn156r.get("next", "x"), repr({k: str(v)[:80] for k, v in _wn156r.items()}))
+check("A01 L what's new: a dialog closed in an older tab does not take back what a newer one recorded; a "
+      "malformed stamp, or none, records the changelog as it is",
+      _wnkeys156(_wn156r.get("older")) == {e["key"] for e in _c2_156}
+      and _wn156r.get("bad") == _wn156.stamp(_c2_156) and _wn156r.get("none") == _wn156.stamp(_c2_156),
+      repr({k: str(v)[:60] for k, v in _wn156r.items()}))
+_appjs156 = _read156("panel", "static", "js", "app_shell.js")
+check("A01 L what's new: the page posts the stamp it was rendered with when the dialog closes",
+      "wn.getAttribute('data-seen-stamp')" in _appjs156 and "JSON.stringify({stamp: shown})" in _appjs156, "")
