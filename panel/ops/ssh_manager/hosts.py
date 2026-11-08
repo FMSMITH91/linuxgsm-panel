@@ -1669,39 +1669,18 @@ def lgsm_release(server, account, selfname):
     return lgsm_data.release_tag(value)
 
 
-def lgsm_modules_release(server, account, selfname):
-    """The release of the LinuxGSM modules a game account's scripts share, as its tag, or None.
-
-    From `modulesversion=` in /home/<account>/lgsm/modules/core_modules.sh. Every instance script
-    in the account runs these modules, and update-lgsm from ONE instance moves them: a script can
-    then say v26.4.0 while its modules say v26.5.0 (measured on the test host). On that mismatch
-    LinuxGSM's check_version.sh runs update-lgsm first, which installs the newest release, and only
-    then runs the command. None when it cannot be read, as lgsm_release.
-    """
-    if not (account and selfname):
-        return None
-    path = _core._quote("/home/%s/lgsm/modules/core_modules.sh" % account)
-    try:
-        out, _err, rc = _core.read_as_game_user(
-            server, account, "grep -m1 -E '^modulesversion=' " + path, timeout=10,
-            selfname=selfname)
-    except Exception:
-        _core._log.debug("could not read the account's LinuxGSM modules version", exc_info=True)
-        return None
-    from panel.services import lgsm_data
-    line = (out or "").strip().splitlines()[:1] if rc == 0 else []
-    value = line[0].partition("=")[2].strip().strip("\"'") if line else ""
-    return lgsm_data.release_tag(value)
-
-
 def lgsm_versions(server, account, selfname):
     """(script release, modules release) of a game account's LinuxGSM, each a tag or None, in ONE read.
 
-    lgsm_release and lgsm_modules_release read the same two lines with a round trip each; the
-    server page asks for both on every load, so it reads them together. `grep -h -m1` stops at the
-    first match in EACH file, so the answer is at most one `version=` and one `modulesversion=`
-    line, and grep prints what it found even when the other file is missing (rc 2). An empty or
-    failed read is (None, None): never "no LinuxGSM".
+    The modules (`modulesversion=` in /home/<account>/lgsm/modules/core_modules.sh) are shared by
+    every instance script in the account, and update-lgsm from ONE instance moves them: a script can
+    then say v26.4.0 while its modules say v26.5.0 (measured on the test host). On that mismatch
+    LinuxGSM's check_version.sh runs update-lgsm first, which installs the newest release, and only
+    then runs the command. The server page and FastDL's answers ask for both, so one read.
+
+    `grep -h -m1` stops at the first match in EACH file, so the answer is at most one `version=`
+    and one `modulesversion=` line, and grep prints what it found even when the other file is
+    missing (rc 2). An empty or failed read is (None, None): never "no LinuxGSM".
     """
     if not (account and selfname):
         return None, None
@@ -5645,6 +5624,29 @@ def _r28b_panel_way_in_refusal(server):
                          port=getattr(server, "port", "") or 22)
 
 
+def _r37a_tailnet_dial_refusal(server, iface_allowed):
+    """The refusal for "off" when the panel's own tailnet session to sshd would lose its only way in, else None.
+
+    The gate above counts Tailscale SSH as a way back for the operator, and it is one, but it answers
+    port 22 only (tailscaled intercepts 22 on its own addresses), so a panel dialling the host's
+    tailnet address on 2222 reaches sshd, on tailscale0, through the public 2222 rule "off" deletes:
+    its next connection met the default deny (review 1107; #460 settled the same rule for the policy
+    and enable checks, _fwb_tailnet_way). That session keeps a way in through a tailscale0 rule
+    (`iface_allowed`, which "off" leaves) or tailscaled's own chain ahead of ufw (its default
+    netfilter mode). A public dial is _r28b_panel_way_in_refusal's; a Tailscale-SSH row dials 22.
+    """
+    dial = _r32b_dial_port(server)
+    if dial is None or dial == 22 or iface_allowed or _r32b_panel_dials_public(server):
+        return None
+    from panel.ops.ssh_manager import ufweval
+    if ufweval.ts_netfilter_on(server):
+        return None
+    return i18n.Sentence("Refused — the panel connects to this host over Tailscale on port {port}, which Tailscale SSH "
+                         "does not answer (it answers port 22 only), so only the public SSH rule lets that connection "
+                         "in and removing it would cut the panel off. Allow the tailscale0 interface in UFW first.",
+                         port=dial)
+
+
 def _r34b_ports_to_open(server, ports):
     """Allow/Limit's share of `ports` (_r32b_public_ssh_ports'): the ones public SSH is open on now.
 
@@ -5687,7 +5689,7 @@ def remote_set_public_ssh(server, mode):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
-        _cut = _r28b_panel_way_in_refusal(server)
+        _cut = _r28b_panel_way_in_refusal(server) or _r37a_tailnet_dial_refusal(server, iface_allowed)
         if _cut is not None:
             return False, _cut
     ports = _r32b_public_ssh_ports(server)[1]

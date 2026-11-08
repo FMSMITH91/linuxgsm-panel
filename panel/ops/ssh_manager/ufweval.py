@@ -369,6 +369,22 @@ def _proc_addr(text):
         return None
 
 
+def _established():
+    """[(local (address, port), remote (address, port))] of this host's ESTABLISHED TCP sockets (OSError: unread)."""
+    rows = []
+    for table in _PROC_TCP.values():
+        with open(table) as fh:
+            next(fh, None)
+            for line in fh:
+                cols = line.split()
+                if len(cols) < 4 or cols[3] != "01":
+                    continue
+                local, remote = _proc_addr(cols[1]), _proc_addr(cols[2])
+                if local and remote:
+                    rows.append((local, remote))
+    return rows
+
+
 def inbound_from(peer):
     """[(local address, local port)] of the ESTABLISHED TCP connections from address `peer` to this host.
 
@@ -376,21 +392,26 @@ def inbound_from(peer):
     where it arrived (the proxy's address and port) as the kernel holds it. Loopback ends are not
     counted. None when the tables could not be read.
     """
-    found = []
     try:
-        for table in _PROC_TCP.values():
-            with open(table) as fh:
-                next(fh, None)
-                for line in fh:
-                    cols = line.split()
-                    if len(cols) < 4 or cols[3] != "01":
-                        continue
-                    local, remote = _proc_addr(cols[1]), _proc_addr(cols[2])
-                    if local and remote and remote[0] == peer and not local[0].is_loopback:
-                        found.append(local)
+        found = [local for local, remote in _established() if remote[0] == peer and not local[0].is_loopback]
     except OSError:
         return None
     return sorted(set(found), key=lambda x: (x[0].version, int(x[0]), x[1]))
+
+
+def inbound_to(ports):
+    """[(remote address, local address, local port)] of the ESTABLISHED TCP connections to `ports` here.
+
+    Another machine's connections to this host's sshd, say, as the kernel holds them: neither end
+    loopback (a connection the kernel answers on `lo` is no other machine's). None when the tables
+    could not be read.
+    """
+    try:
+        found = [(remote[0], local[0], local[1]) for local, remote in _established()
+                 if local[1] in ports and not local[0].is_loopback and not remote[0].is_loopback]
+    except OSError:
+        return None
+    return sorted(set(found), key=lambda x: (x[0].version, int(x[0]), x[2]))
 
 
 def tunnel_running():

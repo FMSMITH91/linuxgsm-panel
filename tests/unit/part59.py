@@ -26,7 +26,7 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (_p9, _p9_arm, P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg,
                          _p9_cfg_put, _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
-from unit.part47 import _cut47, _node47
+from unit.part47 import R37E_STUBS47, _cut47, _node47
 from unit.part56 import _flows56
 from panel.db.models import GameServer as _GS59, db as _db59
 from panel.ops import backup as _bk59
@@ -397,7 +397,7 @@ check("catalogs: every word the split counts and the argument box's fallback han
 
 # ── the console: a panel push the rebuild's backlog lacks comes back ────────────────────────────
 _SD59 = _read59(_JS59, "server_detail.js")
-_CON59 = (
+_CON59 = R37E_STUBS47 + (
     "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
     "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
     "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"

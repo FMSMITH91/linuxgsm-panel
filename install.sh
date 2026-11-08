@@ -29,14 +29,20 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # ─────────────────────────────────────────────────────────
 # LinuxGSM Panel — all-in-one installer / updater
 #
-#   Install OR update with ONE command:
+#   Install with ONE command:
 #     curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 #
 #   …or from a checkout:
 #     git clone https://github.com/FMSMITH91/linuxgsm-panel.git
 #     cd linuxgsm-panel && bash install.sh
 #
-# Re-running the command on an existing install performs a SAFE UPDATE:
+#   Update with the installer already on the host, which moves only to a signed release:
+#     cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh     (root install)
+#     bash ~/linuxgsm-panel/install.sh                                (per-user install)
+#   (or the panel's Update button). Not the curl command again: that runs GitHub's installer, which
+#   no release signature covers.
+#
+# Running the installer on an existing install performs a SAFE UPDATE:
 #   • snapshots the current code + database first,
 #   • pulls the new version, reinstalls deps, restarts the service,
 #   • health-checks that the panel actually comes back up, and
@@ -1097,10 +1103,15 @@ _update_target_signed() {
         warn "Installing ${1:0:10} WITHOUT a release signature: PANEL_ALLOW_UNSIGNED_UPDATE=1 was given by hand." >&2
         return 0
     fi
+    # The reason is what is really missing. A root run whose host has no root-owned key file yet
+    # but a key at root's source floor (_release_key_file uses it) HAS a key: it was told "this host
+    # has no release key" and to rerun with PANEL_ALLOW_UNSIGNED_UPDATE=1, which installs the
+    # unsigned commit and stages root's helper from it, the step this gate exists to stop. And with
+    # no ssh-keygen nothing can be verified at all, which is not "not signed".
     if [[ "${RELEASE_SIG_FETCHED}" -ne 1 ]]; then
         RELEASE_SIG_WHY="the release signatures could not be fetched"
-    elif [[ "$(id -u)" -eq 0 ]] && [[ ! -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]]; then
-        RELEASE_SIG_WHY="this host has no release key (${HELPER_DIR}/${RELEASE_SIGNERS}); to recover, run as root: cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ${HELPER_DIR}/install.sh"
+    elif ! command -v ssh-keygen >/dev/null 2>&1; then
+        RELEASE_SIG_WHY="ssh-keygen is not installed, so no release signature can be checked; install the openssh-client package and run the update again"
     else
         local kd=""
         kd="$(mktemp -d 2>/dev/null)" || kd=""
@@ -1319,10 +1330,22 @@ fetch_code() {
 # installer that runs is GitHub's anyway (SECURITY.md says to check the root key file after the
 # first update). When this host ALREADY trusts a key — root's copy beside the helper survives a
 # lost or deleted checkout — the clone must be a release that key signed, or nothing is installed
-# from it.
+# from it. "Trusts a key" is _release_key_file's answer, the same key an update checks against: a
+# host that took this version through an older installer has no root copy yet but has the key at
+# root's source floor, and testing for the root copy alone installed the tip unchecked there (and
+# root then staged its helper from that fresh clone). Only a host with neither is a first install.
 _check_fresh_clone_signed() {
-    [[ "$(id -u)" -eq 0 ]] && [[ -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]] || return 0
-    local sha=""
+    [[ "$(id -u)" -eq 0 ]] || return 0
+    local sha="" kd=""
+    if [[ ! -f "${HELPER_DIR}/${RELEASE_SIGNERS}" ]]; then
+        # No temporary directory to read the floor's key into: checked anyway (fail closed).
+        kd="$(mktemp -d 2>/dev/null)" || kd=""
+        if [[ -n "${kd}" ]] && ! _release_key_file "${kd}" >/dev/null 2>&1; then
+            rm -rf -- "${kd}" 2>/dev/null || true
+            return 0
+        fi
+        [[ -z "${kd}" ]] || rm -rf -- "${kd}" 2>/dev/null || true
+    fi
     sha="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sha=""
     _fetch_release_signatures || true
     _update_target_signed "${sha}" && return 0
@@ -3781,6 +3804,7 @@ if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     systemctl enable --now linuxgsm-panel.service
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
+    UPDATE_HINT="the panel's Update button, or as root over SSH: cd / && sudo bash ${HELPER_DIR}/install.sh"
 else
     ensure_service_unit
     loginctl enable-linger "${PANEL_USER}" >/dev/null 2>&1 || warn "Could not enable linger (panel may not start on boot)."
@@ -3788,6 +3812,7 @@ else
     systemctl --user enable --now linuxgsm-panel.service
     SERVICE_HINT="systemctl --user status linuxgsm-panel"
     LOG_HINT="journalctl --user -u linuxgsm-panel -f"
+    UPDATE_HINT="the panel's Update button, or: bash ${PANEL_DIR}/install.sh"
     # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
     install_recovery_command
 fi
@@ -3808,7 +3833,9 @@ fi
 echo ""
 echo -e "  Status:  ${CYAN}${SERVICE_HINT}${NC}"
 echo -e "  Logs:    ${CYAN}${LOG_HINT}${NC}"
-echo -e "  Update:  ${CYAN}re-run this same command any time — it updates in place and rolls back if the update fails${NC}"
+# The installer already on the host, never the curl one-liner again: that runs GitHub's installer as
+# root, outside the release-signature check an update is held to (docs/README.md, SECURITY.md).
+echo -e "  Update:  ${CYAN}${UPDATE_HINT}${NC} (signed releases only; rolls back if the update fails)"
 echo ""
 # ── Hand the user the real URL(s) to open ──
 PORT="$(panel_port)"

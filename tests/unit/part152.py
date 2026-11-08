@@ -463,6 +463,7 @@ _iout_cmpd = _run_js75(_name_icons_cmpd, (
     "const io = {seen: [], dropped: []};\n"
     "global.IntersectionObserver = function (cb, opts) { io.cb = cb; io.opts = opts;\n"
     "  this.observe = el => io.seen.push(el); this.unobserve = el => io.dropped.push(el); };\n"
+    + "var _r37d_iconWatch = null;\n"   # the module's one observer (manage_servers.js, part157)
     + _cut_or75(_MS_cmpd, "function _loadGameIcon(") + "\n"
     + _cut_or75(_MS_cmpd, "function startGameIcons(") + "\n" + _wire_cmpd + "\n"
     "const src = () => imgs.map(i => i.src);\n"

@@ -1428,10 +1428,20 @@ _LG265_DIR_YES, _LG265_DIR_NO = "LG265_DIR", "LG265_NODIR"
 
 
 def fastdl_answers(server, user, selfname, game_type):
-    """The keystrokes for `fastdl` on this account's LinuxGSM release (see above)."""
+    """The keystrokes for `fastdl` on this account's LinuxGSM release (see above), or None.
+
+    None when the release could not be read, and the caller then does not run fastdl. Elsewhere an
+    unread release keeps the old behaviour (lgsm_data.release_at_least), but here the old answers
+    are the destructive ones: on an account that really runs v26.5.0 their first Y is "Rebuild
+    from scratch?", which deletes ${webdir}/fastdl. A script already on v26.5.0 needs no modules
+    read (update-lgsm only ever moves them to the newest release); anything older does, since
+    modules that differ from it mean LinuxGSM updates first (_lg265_fastdl_runs_new).
+    """
     from panel.ops.ssh_manager import hosts
-    if not _lg265_fastdl_runs_new(hosts.lgsm_release(server, user, selfname),
-                                  hosts.lgsm_modules_release(server, user, selfname)):
+    script_tag, modules_tag = hosts.lgsm_versions(server, user, selfname)
+    if not _lg265_fastdl_runs_new(script_tag, modules_tag):
+        if script_tag is None or modules_tag is None:
+            return None
         return ["Y"] * 8
     gmod = ["Y"] if game_type == "gmod" else []
     return (["N"] if _lg265_fastdl_dir_exists(server, user, selfname) else []) + gmod + ["Y"]
@@ -1936,9 +1946,19 @@ def _lg264_bk_request(server, user, selfname):
         parts = line.strip().split("\t")
         if len(parts) == 4 and parts[3] == _LG264_BK_END:
             r = parts[0].strip()
-            requested = None if r == "-" else (int(r) if r.isascii() and r.isdecimal() else 0)
-            return {"requested": requested, "alerted": parts[1] == "1", "monitor": parts[2] == "1"}
+            return {"requested": None if r == "-" else _r37b_epoch_or_zero(r), "alerted": parts[1] == "1",
+                    "monitor": parts[2] == "1"}
     return None
+
+
+def _r37b_epoch_or_zero(r):
+    """The request lock's first line as an epoch; 0 for anything else.
+
+    The game account writes that file, so the line is capped before int() (an epoch is ten
+    digits): past CPython's 4300-digit limit int() raised ValueError out of every backup of the
+    server, the pre-wipe one included.
+    """
+    return int(r) if r.isascii() and r.isdecimal() and len(r) <= 12 else 0
 
 
 def _lg264_bk_note(sentence, code, req=None):

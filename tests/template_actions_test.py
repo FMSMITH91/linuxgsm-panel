@@ -3353,13 +3353,14 @@ else:
 _rc_body = _js_function_body(_sd_js, "refreshConsole") or ""
 check(len(_rc_body) > 200, "console times: refreshConsole() was found",
       "extractor got %d chars — the checks below prove nothing" % len(_rc_body))
-check(re.search(r"_appendConsoleRows\(_newConsoleRows\([^)]*\)\s*,\s*data\.now\s*\)", _rc_body),
+# (Later arguments — the log the rows came from, _r37e — do not change the clock it is given.)
+check(re.search(r"_appendConsoleRows\(_newConsoleRows\([^)]*\)\s*,\s*data\.now\s*[,)]", _rc_body),
       "console times: the poll DELTA is stamped with the panel's clock",
       "the delta is appended with no fallback timestamp — a socket-less install would never show one")
 # The priming pass gets NO fallback clock. A row that carries LinuxGSM's OWN stamp still keeps it
 # (that is a real time for a line written before the panel looked); what must never happen is the
 # panel dating an unstamped history line to the moment the page opened.
-check(re.search(r"_appendConsoleRows\(rows\)\s*;", _rc_body),
+check(re.search(r"_appendConsoleRows\(rows(\s*,\s*undefined\s*,[^;]*)?\)\s*;", _rc_body),
       "console times: ...and the priming window gets no fallback clock, because it is history",
       "the priming pass is being given data.now, which dates a week of history to right now")
 # The notice that explains an empty column. Without it, "correct" and "broken" look identical.

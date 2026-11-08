@@ -9,9 +9,10 @@
 #   sudo linuxgsm-panel-recover list-users
 #   sudo linuxgsm-panel-recover setup-token             # the first-run wizard's link, again
 #
-# No command yet (older install) or a fresh shell? Same one-liner style as the installer:
-#   curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/recover.sh | sudo bash
-#   curl -fsSL .../recover.sh | sudo bash -s -- disable-2fa alice
+# No command yet (an older install)? Update with the installer already on the host, which places
+# it: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or
+# `bash ~/linuxgsm-panel/install.sh` (per-user). Never pipe a copy of this file from GitHub into a
+# root shell: no release signature covers it.
 set -euo pipefail
 
 # All three overridable, for the reason the HOMES comment already gives. The unit paths were

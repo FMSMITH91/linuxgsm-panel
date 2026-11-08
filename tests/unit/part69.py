@@ -19,7 +19,7 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
                          _p9_restore_all, _p9_trip)
-from unit.part47 import _cut47, _node47
+from unit.part47 import R37E_STUBS47, _cut47, _node47
 from panel.db.models import User as _User69, db as _db69
 from panel.ops import backup as _bk69, system_ops as _so69
 
@@ -639,7 +639,7 @@ check("i18n gate: a message built in English and handed to a keyword-only wrappe
 # backlog rows between Clear's cut and those pushes be filtered out? No: while a catch-up runs every
 # panel push is held (_resyncTake), so the pushes since Clear are exactly the ones it shows.
 _SD69 = _read69(_JS69, "server_detail.js")
-_CON69 = (
+_CON69 = R37E_STUBS47 + (
     "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
     "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
     "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"

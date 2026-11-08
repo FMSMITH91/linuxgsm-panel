@@ -203,7 +203,7 @@ def judged_text(script, kw, depth=0):
 
 
 def nested_scripts(script, kw):
-    """The script each shell `script` runs with no -c reads (_nested_one), per command it splits into."""
+    """The script each shell `script` runs reads (_nested_one), per command it splits into, and its -c scripts."""
     _out, _piped = [], False
     _parts = SPLIT.split(_runner("_r26d_strip_single")(script))
     for _k, _part in enumerate(_parts):
@@ -214,6 +214,29 @@ def nested_scripts(script, kw):
         _text = _nested_one(_argv, _piped, kw, script) if _argv else None
         if _text is not None:
             _out.append(_text)
+    return _out + [_t for _t in _single_quoted_c(script) if _t not in _out]
+
+
+def _single_quoted_c(script):
+    """The -c scripts, written in '…', of the shells `script` runs.
+
+    The split above reads the script with each '…' emptied (a quoted word is no command), so `bash -c 'sh f'`
+    read as `bash -c ''` and f was never read (review 1107). Read here from the words as the shell quotes
+    them; a script shlex cannot split (an apostrophe in a comment) adds nothing, as before.
+    """
+    if "'" not in script:
+        return []
+    try:
+        _ws = shlex.split(script)
+    except ValueError:
+        return []
+    _out = []
+    for _k, _w in enumerate(_ws):
+        if os.path.basename(_w.lstrip("$(`{!")) not in SHELLS:
+            continue
+        _c, _j = _runner("_r18d_shell_opts")(_ws, _k + 1)
+        if _c and _j < len(_ws) and _ws[_j].strip():
+            _out.append(_ws[_j])
     return _out
 
 
@@ -261,7 +284,7 @@ def _redirects(argv):
 
 
 def _nested_one(argv, piped, kw, script):
-    """The script the shell argv[0] reads: None for a -c (read already), a file's text, its stdin, or unread.
+    """The script the shell argv[0] reads: its -c script, a file's text, its stdin, or unread.
 
     A pipe, a here-document or here-string, and a file not there yet (the script may write it first) or named
     relative to a directory the script may change to, are what the reader cannot see.
@@ -270,7 +293,10 @@ def _nested_one(argv, piped, kw, script):
     _stdin = "|" if _stdin is None and piped else _stdin
     _c, _j = _runner("_r18d_shell_opts")(_argv, 1)
     if _c:
-        return None
+        # Its -c script, read in turn (judged_text) as the top level reads one. It was None, "read already"
+        # as part of the outer text, so a script FILE it runs (`bash -c "sh /x/f.sh"`) was never read, and a
+        # tailscale in it ran neither shimmed nor judged (review 1107).
+        return _argv[_j] if _j < len(_argv) else ""
     if _j < len(_argv) and not stdin_flag(_argv[1:_j]):
         return _nested_file(_argv[_j], kw, script)
     if _stdin == "|":

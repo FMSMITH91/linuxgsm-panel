@@ -1557,6 +1557,10 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True, self
     target = _pp.join(apdir, fn)
     if not (target.startswith(f"/home/{user}/")):
         return False, "Invalid path"
+    if _CMPC_DEFAULT_CFG_RE.fullmatch(target):
+        # As write_file refuses it: an upload over LinuxGSM's _default.cfg said "Uploaded" and was
+        # put back at LinuxGSM's next run. (A rename onto it is refused already: the name is taken.)
+        return False, CMPC_DEFAULT_CFG_REFUSED
     refusal = _r23b_upload_refusal(server, user, target, (data_bytes, overwrite), selfname)
     if refusal:
         return False, refusal

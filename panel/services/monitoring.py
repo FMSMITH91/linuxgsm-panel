@@ -38,7 +38,8 @@ from panel.ops.ssh_manager import (
     _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
     is_local_server, lgsm_get_values, metrics_for_game,
     remote_fail2ban_attempt_counts,
-    fwa_block_target, remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
+    fwa_block_target, fwa_panel_source, remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip,
+    run_command,
     run_privileged,
     server_live_metrics, tailnet_exempt_ips, ufw_lock,
     console_status as sm_console_status,
@@ -1416,7 +1417,8 @@ def _autoblock_reconcile(remote):
     """Make the host's 'panel-autoblock' UFW rules match the current offenders.
 
     Block any IP whose failed-attempt count over the last 7 days is at/above the threshold and
-    isn't already blocked (by us or manually), tailnet-exempt, or whitelisted; and release only our
+    isn't already blocked (by us or manually), tailnet-exempt, whitelisted, or an address the panel
+    itself reaches the host from (_r37a_spare_panel); and release only our
     own auto-blocks that have since dropped below the threshold (or been whitelisted).
 
     "Manually" is real now: the blocked-IP readers return every all-ports deny, tagging one the
@@ -1448,8 +1450,8 @@ def _autoblock_reconcile(remote):
     # guarded a few lines above: an audit row recording an action that did not happen is worse
     # than no row.
     failed = []
-    # over threshold, not blocked yet → auto-block
-    added = _autoblock_apply(deny, qualify - set(blocked.keys()), "block %s", failed)
+    # over threshold, not blocked yet → auto-block (never an address the panel reaches the host from)
+    added = _autoblock_apply(deny, _r37a_spare_panel(remote, qualify - set(blocked.keys())), "block %s", failed)
     # our auto-block fell below threshold / got whitelisted → release
     removed = _autoblock_apply(undeny, auto - qualify, "release %s", failed)
     if failed:
@@ -1533,6 +1535,37 @@ def _autoblock_offenders(remote, counts, threshold):
     qualify -= tailnet_exempt_ips(remote, qualify)   # never auto-block your own tailnet (Tailscale up)
     _nets = _whitelist_networks()
     return {ip for ip in qualify if not _whitelisted(ip, _nets)}   # never auto-block a whitelisted IP
+
+
+def _r37a_spare_panel(remote, new):
+    """The new auto-blocks for `remote` less any address the panel's own connection may come from.
+
+    Nothing at all when that could not be read. The deny is on every port at the top of the host's UFW, and taking it off again goes over SSH: a
+    deny for the panel's own source cut the panel off the host for good, with console access the only
+    way back. And the panel's source can rack up the threshold honestly: a host whose key or password
+    changed is retried by the monitor until the row is edited, and a NAT address is shared with every
+    laptop behind it. So the manual Block's named checks apply here too (remote_security: the
+    session's source, read from the host, and every global address of the panel's own host, any of
+    which it may dial from next time), read once per cycle and only when there is something to block.
+    Unread blocks nothing new this cycle, as the Block refuses; releases go ahead (the caller's).
+    """
+    if not new:
+        return new
+    src = fwa_panel_source(remote)
+    if src is None:
+        _log.debug("autoblock: no new blocks on %s — the panel's own source address could not be read",
+                   getattr(remote, "name", "?"))
+        return set()
+    if not src:
+        return new                   # the panel's own host, or one reached over Tailscale (tailnet-exempt)
+    from panel.routes.remote_security import _fwb_panel_host_addrs
+    own = _fwb_panel_host_addrs()
+    if own is None:
+        _log.debug("autoblock: no new blocks on %s — the panel host's own addresses could not be read",
+                   getattr(remote, "name", "?"))
+        return set()
+    spare = own | {ip_address_or_none(src)}
+    return {ip for ip in new if ip_address_or_none(ip) not in spare}
 
 
 def _autoblock_apply(write, ips, what, failed):

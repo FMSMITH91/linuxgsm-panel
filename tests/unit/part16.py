@@ -640,6 +640,9 @@ try:
     _p9_patch(_p9_so, "ensure_panel_fail2ban", lambda *a, **k: _cp16["f2b"])
     _p9_patch(_p9_so, "restart_panel", lambda *a, **k: _cp16["restart"])
     _p9_patch(_p9_so, "port_in_use", lambda port: False)
+    # UFW read as off: a failed open on a firewall that is on refuses the move before anything is
+    # saved (review 1107, part154); off, the move goes ahead and its audit row is what is held here.
+    _p9_patch_sm("remote_ufw_status", lambda server: {"installed": True, "enabled": False})
     _f2b16_installed = [True]
     _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": _f2b16_installed[0]})
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, bind_host=_ANY16))

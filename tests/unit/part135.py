@@ -504,9 +504,15 @@ def _on135(host, fn, *a, served=False, panel_ports=(5000,), **kw):
         _p9_restore_all()
 
 
-def _deny_in135(rules, server=_REMOTE135, **kw):
+def _deny_in135(rules, server=_REMOTE135, conn=None, **kw):
+    """Default incoming deny on stand-in rules -> (result, what was sent); `conn` the session's reading."""
     host = _Host135(rules=rules, incoming="allow", ts=kw.pop("ts", (False, False)))
-    res = _on135(host, _fw135.remote_ufw_set_default, server, "incoming", "deny", **kw)
+
+    def run(*a):
+        if conn is not None:
+            _p9_patch(_hosts135, "_fwb_ssh_conn", lambda s: conn)
+        return _fw135.remote_ufw_set_default(*a)
+    res = _on135(host, run, server, "incoming", "deny", **kw)
     return res, host.changes()
 
 
@@ -547,7 +553,10 @@ check("default incoming deny: ...set where a real way in exists (%s) — the pos
 # SSH reachable over the tailnet, but the panel dials this key-auth host on its public port 22.
 _TS0 = "Anywhere on tailscale0  ALLOW IN  Anywhere"
 _ts_only135 = _deny_in135([_TS0], ts=(True, False))
-_ts_rem135 = _deny_in135([_TS0], server=_TSREMOTE135, ts=(True, False))
+# Reached over the tailnet with Tailscale SSH off, the session is sshd's, from the panel's tailnet address on
+# tailscale0 (review 1107: it is read and evaluated, not taken as kept open by the tailscale0 rule).
+_ts_rem135 = _deny_in135([_TS0], server=_TSREMOTE135, ts=(True, False),
+                         conn=_conn135("100.100.9.9", _NS135(host="100.100.5.5", port=22), iface="tailscale0"))  # NOSONAR(S1313)
 _ts_ssh135 = _deny_in135([], server=_TSREMOTE135, ts=(True, True))
 check("default incoming deny: the PANEL's own way in counts too — a key host it dials on 22 with only a tailscale0 "
       "allow is refused; a host it reaches over Tailscale with that allow, or with Tailscale SSH, is set",
@@ -728,6 +737,7 @@ _SETTINGS135 = {"read_ok": True, "installed": True, "enabled": True, "incoming":
                 "routed": "disabled", "logging": "low", "ipv6": True}
 _rcalls135 = []
 _routes135 = {}
+_a_blockok135 = None
 try:
     _p9_arm(who="part135")
     _p9_patch(_fw135, "remote_ufw_settings", lambda r: dict(_SETTINGS135))
@@ -749,6 +759,8 @@ try:
     _routes135["junk"] = _A135.post(_base135 + "settings", json={"setting": "rm -rf", "value": "x; id"})
     _routes135["block"] = _A135.post(_base135 + "block-port", json={"port": "27015:27020", "protocol": "udp",
                                                                     "family": "v4", "action": "reject"})
+    # Read before the junk post below writes the newest row (review 1107: only the junk row was read).
+    _a_blockok135 = _p9_audit("remote_port_block")
     _routes135["blockjunk"] = _A135.post(_base135 + "block-port", json={"port": "1;id", "protocol": "x",
                                                                         "family": "y", "action": "z"})
     _V135 = _p9_client(P9_VIEWER)
@@ -775,6 +787,10 @@ check("routes: block-port passes the spec, protocol, family and action; its audi
       ("block", "27015:27020", "udp", "v4", "reject", "") in _rcalls135 and _rj135["block"][1]["success"] is True
       and _a_block135.target and _a_block135.target.endswith(":(not a port)/(not a protocol)")
       and _a_block135.detail == "(not a value) (not a value)", repr((_rcalls135, _a_block135)))
+check("routes: ...and a valid block's audit row names its port range, protocol, action and family "
+      "(only the junk request's row was read, so a regression blanking every real block's row passed)",
+      _a_blockok135 is not None and _a_blockok135.target and _a_blockok135.target.endswith(":27015:27020/udp")
+      and _a_blockok135.detail == "reject v4", repr(_a_blockok135))
 check("routes: an account without MANAGE_REMOTES reaches neither new route (GET or POST)",
       all(st in (302, 403) for st in _routes135["viewer"]), repr(_routes135["viewer"]))
 # A DELEGATED host admin: MANAGE_REMOTES through a group whose grant covers the panel's own host and

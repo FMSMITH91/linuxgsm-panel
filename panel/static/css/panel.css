@@ -1833,8 +1833,15 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 [data-bs-theme="light"] .text-primary { color: #1d4ed8 !important; }
 [data-bs-theme="light"] .text-light { color: var(--text) !important; }
 
-/* ...except inside the console, which stays dark: its placeholder keeps the dark scheme's grey. */
+/* ...except inside the console, which stays dark: its placeholder keeps the dark scheme's grey, and
+   a line it colours (the "Some output … is not shown" gap is .text-warning) keeps the dark scheme's
+   colour, which the light one above drew at about 2.7:1 on the console's near-black. */
 [data-bs-theme="light"] .console-output .text-secondary { color: #9ca3af !important; }
+[data-bs-theme="light"] .console-output .text-success { color: #34d399 !important; }
+[data-bs-theme="light"] .console-output .text-danger { color: #f87171 !important; }
+[data-bs-theme="light"] .console-output .text-warning { color: #fbbf24 !important; }
+[data-bs-theme="light"] .console-output .text-info { color: #67e8f9 !important; }
+[data-bs-theme="light"] .console-output .text-primary { color: #93c5fd !important; }
 
 [data-bs-theme="light"] .btn-outline-success {
   color: #047857;

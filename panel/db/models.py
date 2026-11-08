@@ -1605,10 +1605,17 @@ _LIGHT_MIGRATIONS = {
 
 
 def _cmpb_stamp_whats_new():
-    """Stamp every existing account with the changelog as it is now (once, as the column arrives).
+    """Stamp every account that has no stamp with the changelog as it is now.
 
+    Run at EVERY start, not only the one that adds the column. A NULL row never shows the card, so
+    it is never dismissed and never stamped by the route: an upgrade that died between the ALTER
+    (autocommitted) and this UPDATE's commit, a changelog unreadable at that start, or an account
+    created while it was unreadable (the column default is then NULL) stayed NULL for good, never
+    to see "What's new" again. Asked first, so a start with nothing to stamp writes nothing.
     Committed by _run_light_migrations' own commit, BEFORE the index build that follows it.
     """
+    if db.session.execute(text("SELECT 1 FROM user WHERE whats_new_seen IS NULL LIMIT 1")).first() is None:
+        return
     stamp = _cmpb_whats_new_stamp()
     if stamp:
         db.session.execute(text("UPDATE user SET whats_new_seen = :s WHERE whats_new_seen IS NULL"),
@@ -1624,11 +1631,11 @@ def _run_light_migrations():
     insp = inspect(db.engine)
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
     _audit_ids_new = "audit_log" in existing and "game_server_id" not in existing["audit_log"]
-    _seen_new = "user" in existing and "whats_new_seen" not in existing["user"]
+    _has_user = "user" in existing
     for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
-    if _seen_new:
+    if _has_user:
         _cmpb_stamp_whats_new()
     if _audit_ids_new:
         _backfill_audit_object_ids()

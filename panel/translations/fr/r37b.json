@@ -1,0 +1,16 @@
+{
+  "FastDL was not run: the panel could not read which LinuxGSM release this server's account runs, and on v26.5.0 a wrong answer deletes the FastDL folder. Try again; if this keeps happening, run update-lgsm first (a release older than v23.3.0 has no lgsm/modules/core_modules.sh to read).": "FastDL n'a pas été lancé : le panneau n'a pas pu lire quelle version de LinuxGSM utilise le compte de ce serveur, et sur v26.5.0 une mauvaise réponse supprime le dossier FastDL. Réessayez ; si cela se reproduit, lancez d'abord update-lgsm (une version antérieure à v23.3.0 n'a pas de lgsm/modules/core_modules.sh à lire).",
+  "LinuxGSM did not wipe: {players} player(s) online": "LinuxGSM n'a pas fait le wipe : {players} joueur(s) en ligne",
+  "wipe exited {rc}: {last}": "le wipe s'est terminé avec le code {rc} : {last}",
+  "Full wipe done": "Wipe complet effectué",
+  "Map wipe done": "Wipe de carte effectué",
+  "LinuxGSM found nothing to wipe": "LinuxGSM n'a rien trouvé à effacer",
+  "{command}: {result}": "{command} : {result}",
+  "not wiped: still waiting after {hours} hours ({reason})": "pas de wipe : toujours en attente après {hours} heures ({reason})",
+  "no reason recorded": "aucune raison enregistrée",
+  "a host reboot or a backup of this server is running": "un redémarrage de l'hôte ou une sauvegarde de ce serveur est en cours",
+  "not wiped: the backup before it failed: {reason}": "pas de wipe : la sauvegarde préalable a échoué : {reason}",
+  "a scheduled wipe of {name}": "un wipe planifié de {name}",
+  "Full wipe done, but LinuxGSM reported a failure after it: {line}": "Wipe complet effectué, mais LinuxGSM a signalé un échec ensuite : {line}",
+  "Map wipe done, but LinuxGSM reported a failure after it: {line}": "Wipe de carte effectué, mais LinuxGSM a signalé un échec ensuite : {line}"
+}

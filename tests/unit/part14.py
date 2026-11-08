@@ -1200,6 +1200,8 @@ try:
             return ("x\trefs/heads/%s" % args[-1].split("/")[-1], "", 0)
         if args[0] == "rev-list":
             return ("\n".join(_SW14), "", 0)
+        if args[0] == "rev-parse":
+            return ("4" * 40, "", 0)            # another branch's tip
         return ("", "", 0)
     _so14._git = _sw_git
     _sw14_launch = []
@@ -1244,20 +1246,22 @@ try:
           _s_busy[0][0] is False and not _s_busy[1] and "being installed" in _s_busy[0][1],
           repr(_s_busy[0]))
     _s_dev = _sw14_run("dev", {})
-    check("switch-branch: another branch is still the testing escape hatch — its tip, unpinned — "
-          "and the message says it is unverified",
-          _s_dev[0][0] is True and _s_dev[1] and _s_dev[1][0][:2] == ("", "dev")
-          and "unverified" in _s_dev[0][1] and not any(a[0] == "fetch" for a in _sw14_git),
-          repr(_s_dev))
+    check("switch-branch: another branch is still the testing escape hatch CI-wise — its tip, pinned "
+          "once it is a signed release, fetched first — and the message says it is for testing",
+          _s_dev[0][0] is True and _s_dev[1] and _s_dev[1][0][:2] == ("4" * 40, "dev")
+          and "for testing" in _s_dev[0][1] and "4444444" in _s_dev[0][1]
+          and ["fetch", "--quiet", "--no-tags", "origin", "+refs/heads/dev:refs/remotes/origin/dev"] in _sw14_git
+          and _s_dev[2].get("panel_branch") == "dev", repr(_s_dev))
 finally:
     (_so14._git, _so14._is_git_checkout, _so14._remote_ci_state, _so14._launch_installer,
      _so14._update_in_progress) = _sw14_saved
     _cfg14.load_config, _cfg14.update_config = _sw14_cfg_saved
 _rmh14 = open(os.path.join(_root, "panel", "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
 check("switch-branch (UI): the confirm dialog says which it installs — main's newest verified "
-      "version, or another branch's tip as UNVERIFIED",
+      "version, or another branch's tip, for testing, only when it is a signed release",
       "It installs the newest version of main that has passed its automated checks." in _rmh14
-      and "UNVERIFIED: this installs the newest commit on" in _rmh14, "")
+      and "FOR TESTING: this installs the newest commit on" in _rmh14
+      and "if it is a signed release (if not, nothing is switched)" in _rmh14, "")
 
 # ── the DevTools endpoint: a slow answer is waited for, not a failed run ─────────────────────────
 # main's js coverage job died on one 5 s read of Chrome's /json/version (the browser had accepted

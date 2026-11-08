@@ -1083,6 +1083,8 @@ try:
           _d.get("installed") is False and _d.get("jails") == [] and "error" in _d, repr(_d))
 
     _hl_calls.clear()
+    # The panel's own connections read as ufw meets them (part154 holds that half of the route).
+    _p9_patch(_p9_rs, "_fwa_source_refusal", lambda *a: None)
     _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (True, "blocked")))
     _p9_patch(_p9_so, "ufw_undeny_ip", _hl_rec("ufw_undeny_ip", (True, "unblocked")))
     _p9_patch(_p9_banlist, "refresh_soon", _hl_rec("refresh_soon", None))

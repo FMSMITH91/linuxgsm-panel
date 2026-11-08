@@ -23,12 +23,12 @@ def _parse_ufw_rule(detail):
     Structured so the UI can show clean columns instead of the raw string. Handles the optional
     `on <iface>` clause, the `# comment` suffix, and the `(v6)` family markers.
     """
-    v6 = "(v6)" in detail
-    s = detail.replace("(v6)", " ")
-    comment = ""
-    if "#" in s:
-        s, comment = s.split("#", 1)
-        comment = comment.strip()
+    # The comment first: "(v6)" typed in a hand-made comment filed an IPv4 rule under IPv6 (the panel's
+    # own comments cannot hold parentheses), and the comment lost the text (review 1107 lead).
+    rule, _sep, comment = detail.partition("#")
+    v6 = "(v6)" in rule
+    s = rule.replace("(v6)", " ")
+    comment = comment.strip()
     iface = ""
     m = re.search(r"\bon\s+(\S+)", s)
     if m:
@@ -1637,6 +1637,35 @@ _FWB_VIEWER_UNKNOWN = i18n.Sentence("Couldn't tell which address you reach the p
                                     "proxy here serves the panel, set \"trust_proxy\": true in config.json (and add its "
                                     "account to \"trusted_proxy_users\" if the panel does not already believe it); until "
                                     "then whether a rule keeps the panel reachable cannot be checked.")
+# The same unknown viewer, for a request that came over loopback naming no client it was forwarded for:
+# a browser on the panel's machine or an SSH tunnel (`ssh -L`), where trust_proxy cannot help (r37g).
+_R37G_VIEWER_LOCAL = i18n.Sentence("Couldn't tell which address you reach the panel from: this request came over the "
+                                   "panel's own machine's loopback with no proxy header (a browser on that machine, "
+                                   "an SSH tunnel, or a proxy that sends no X-Forwarded-For), so whether a rule "
+                                   "keeps the panel reachable cannot be checked.")
+# The headers a proxy names the client it forwards for in, believed or not (client_ip decides that).
+_R37G_FWD_HEADERS = ("X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Connecting-IP", "True-Client-IP")
+
+
+def _r37g_direct_loopback():
+    """Whether this request's socket peer is loopback and it names no client it was forwarded for.
+
+    Then nothing stands between the viewer and the panel but this machine: a browser on it, or an SSH
+    tunnel's sshd dialling the panel for the admin. A proxy here sends one of _R37G_FWD_HEADERS (the
+    README's nginx block, Caddy, Tailscale Serve, cloudflared), and is the unknown viewer
+    _FWB_VIEWER_UNKNOWN answers. False outside a request.
+    """
+    from panel.core.validation import ip_address_or_none
+    try:
+        from flask import request
+        environ = request.environ
+        peer = ip_address_or_none((environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
+                                  or environ.get("REMOTE_ADDR"))
+        return (peer is not None and _fwb_unmapped(peer).is_loopback
+                and not any(h in request.headers for h in _R37G_FWD_HEADERS))
+    except Exception:
+        _core._log.debug("firewall: the request's headers could not be read", exc_info=True)
+        return False
 
 
 # ── the connections the panel depends on (ufweval's tuples) ──
@@ -1670,8 +1699,15 @@ def _fwc_paths(server, ts):
 def _fwc_ssh_conns(server, ts, paths):
     """_fwc_paths for a remote: the panel's SSH session, unless Tailscale already answers for it."""
     from panel.ops.ssh_manager import ufweval
-    tailnet, ts_way = _fwb_tailnet_way(server, ts)
-    if ts_way:
+    tailnet = _fwb_tailnet_way(server, ts)[0]
+    # Only Tailscale SSH answering the port the panel dials (22) holds the session whatever ufw says:
+    # tailscaled takes it ahead of netfilter. A tailnet interface rule (ts's third reading) is a way in
+    # only while it stays, and the delete guard is asking whether it may go: taking it as the answer
+    # left the host's only tailscale0 allow deletable (a "warn") beside an SSH rule kept to another
+    # source, and the panel's next session met the default deny (review 1107). So that session is read
+    # and evaluated like any other: exempt where tailscaled's own chain lets tailscale0 in ahead of
+    # ufw, otherwise the rule it gets in by alone is protected.
+    if tailnet and ts[1] and _fwb_dialled_port(server) == 22:
         return
     try:
         conn = hosts._fwb_ssh_conn(server)
@@ -1680,7 +1716,7 @@ def _fwc_ssh_conns(server, ts, paths):
         conn = None
     if conn is None:
         paths["unread"] = True
-        paths["why"] = _FWB_TAILNET_GAP if tailnet else _FWB_SOURCE_UNREAD
+        paths["why"] = _FWB_TAILNET_GAP if tailnet and not ts[2] else _FWB_SOURCE_UNREAD
         return
     paths["addrs"] = conn.get("addrs")
     paths["conns"] = [ufweval.Conn(conn["client"].version, conn["client"], conn["server"], conn["port"],
@@ -1693,7 +1729,7 @@ def _fwc_web_conns(server, ts_running, addrs):
         return _fwc_serve_conns(addrs), None
     viewer, via_proxy = _fwb_panel_viewer()
     if viewer is None:
-        return [], _FWB_VIEWER_UNKNOWN
+        return [], (_R37G_VIEWER_LOCAL if _r37g_direct_loopback() else _FWB_VIEWER_UNKNOWN)
     if not via_proxy:
         return _fwc_direct_conns(server, ts_running, viewer, addrs), None
     return _fwc_proxy_conns(server, viewer, addrs)
@@ -1857,18 +1893,32 @@ def _fwc_path_gaps(server, views, paths, default_allow):
 def _fwc_in_use(server, paths, st):
     """(the families views are needed for, the families SSH must stay open in for whoever administers it).
 
-    A remote: the panel's session's family (else _fwb_in_use_versions'). The panel's host: SSH in every
-    family the host has a public address in that ufw handles (the web viewer's family says nothing
-    about the admin's SSH), and the viewer's connections' families.
+    A remote: the panel's session's family (else _fwb_in_use_versions'), and for a host dialled by name
+    every family it has a public address in too, which may move the panel to that family next time; IPv6
+    only where ufw handles it unless the session was measured over it. The panel's host: SSH in every family the
+    host has a public address in that ufw handles (the web viewer's family says nothing about the
+    admin's SSH), and the viewer's connections' families.
     """
+    from panel.core.validation import ip_address_or_none
     from panel.ops.ssh_manager import ufweval
     conn_fams = {c.version for c in paths["conns"]}
     if _core.is_local_server(server):
         ssh_fams = ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
     else:
-        ssh_fams = conn_fams or _fwb_in_use_versions(server)
-        if not conn_fams and st.get("ipv6") is not True:
-            ssh_fams = (ssh_fams - {6}) or {4}
+        # The measured family alone let a deny through on a named dual-stack host whose only SSH rule
+        # was IPv4: the next connection may go out over IPv6 first (getaddrinfo's order), and paramiko
+        # gives up on the first address that drops it (review 1107). But only a family the host has a
+        # public address in: an IPv4-only host's name has nothing to resolve to over IPv6, and holding it
+        # to an IPv6 way in refused a safe deny beside its usual single-source IPv4 SSH rule (the session
+        # read the host's addresses; unread, both). An address literal is dialled in its own family,
+        # which the measured session already is.
+        named = ip_address_or_none(getattr(server, "host", None)) is None
+        if named and conn_fams:
+            ssh_fams = conn_fams | ufweval.host_families(paths.get("addrs"), st.get("ipv6") is True)
+        else:
+            ssh_fams = conn_fams or _fwb_in_use_versions(server)
+        if st.get("ipv6") is not True:
+            ssh_fams = (ssh_fams - ({6} - conn_fams)) or {4}
     return ssh_fams | conn_fams, ssh_fams
 
 
@@ -2276,18 +2326,55 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     refuses, named as the firewall meets it. UFW off: the block is only stored, and turning it on is
     checked then. The rules unread refuses. Where the connections cannot be known: a remote's SSH
     session is already covered by the refusal for every port sshd serves; the panel's host refuses
-    when the block needs the port (`port_known_needed`) and it is not known.
+    when the block needs the port (`port_known_needed`) and it is not known, and whatever the block is
+    when the viewer itself is not known: a block of an address or range on every port cuts the viewer
+    off whichever port it comes in on (behind a proxy here the panel was not told to believe, the
+    viewer's own-address check reads 127.0.0.1 and passes a range that holds the admin's address). A
+    viewer on this machine's loopback with no proxy in front is not that: an address block cannot cut its
+    leg to the panel, only the SSH session it may come through (_r37g_session_refusal).
     """
     groups, why = _fwc_enforced(server)
     if groups is None:
         return why
     paths = _fwc_paths(server, _fwb_ts_ways(server, groups, _fwssh_served_ports(server)))
     if paths["why"] is not None:
-        return paths["why"] if port_known_needed and _core.is_local_server(server) else None
+        return _r37g_why_refusal(server, groups, top, families, paths, port_known_needed)
     allow_default = _fwc_default_allows(server)
     cut = next((c for c in paths["conns"] if c.version in families
                 and _fwc_cuts(groups, c, top, allow_default, paths)), None)
     return None if cut is None else _fwc_cut_answer(cut)
+
+
+def _r37g_why_refusal(server, groups, top, families, paths, port_known_needed):
+    """_fwc_block_refusal where the panel's own connections are not known (paths["why"]): see there."""
+    if paths["why"] is _R37G_VIEWER_LOCAL and not port_known_needed:
+        return _r37g_session_refusal(server, groups, top, families, paths)
+    needed = port_known_needed or paths["why"] is _FWB_VIEWER_UNKNOWN
+    return paths["why"] if needed and _core.is_local_server(server) else None
+
+
+def _r37g_session_refusal(server, groups, top, families, paths):
+    """_fwc_block_refusal for a viewer on this machine's loopback with no proxy in front (_R37G_VIEWER_LOCAL).
+
+    ufw never filters loopback (before.rules accept `-i lo`), so the block cannot cut the viewer's own
+    leg to the panel; what it can cut is how such a viewer reaches the machine at all, an SSH tunnel:
+    an established connection to one of sshd's ports. Refusing every block here took manual blocking
+    away from an admin on `ssh -L` with advice (trust_proxy) that could not help (review 1107). Each
+    session the block would cut refuses, named: the panel cannot tell the viewer's tunnel from another
+    session (a scanner's unauthenticated one ends within sshd's LoginGraceTime). Unread refuses.
+    """
+    from panel.ops.ssh_manager import ufweval
+    sessions = ufweval.inbound_to(_fwssh_served_ports(server))
+    if sessions is None:
+        return _R37G_VIEWER_LOCAL
+    allow_default = _fwc_default_allows(server)
+    for src, dst, port in sessions:
+        conn = ufweval.Conn(src.version, src, dst, port, ufweval.iface_of(paths.get("addrs"), dst), "ssh")
+        if conn.version in families and _fwc_cuts(groups, conn, top, allow_default, paths):
+            return i18n.Sentence("Blocking that would cut off an open SSH connection to this host (from {src} to "
+                                 "{dst}, port {port}/tcp, on {iface}); you reach the panel over this machine's "
+                                 "loopback, so it may be your SSH tunnel.", **_fwc_shown(conn))
+    return None
 
 
 def _fwc_enforced(server):

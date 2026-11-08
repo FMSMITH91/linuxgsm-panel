@@ -1707,7 +1707,7 @@ _MON_STUBBED10 = ("run_command", "run_privileged", "_remote_listening_ports", "h
                   "sm_game_engine", "sm_console_status", "sm_player_count_via_lgsm_query",
                   "sm_get_server_status", "remote_fail2ban_attempt_counts",
                   "remote_ufw_blocked_ips", "remote_ufw_deny_ip", "remote_ufw_undeny_ip",
-                  "tailnet_exempt_ips", "load_config", "notifications", "time", "db",
+                  "tailnet_exempt_ips", "fwa_panel_source", "load_config", "notifications", "time", "db",
                   "_probe_host", "_query_server_slots", "_query_host_metrics",
                   "_lgsm_maintenance_running", "_host_reachable", "_host_idle_state",
                   "_host_disk_pct", "_host_load_mem",
@@ -2098,6 +2098,9 @@ try:
     _mon10.remote_ufw_blocked_ips = lambda r: {"192.0.2.70": _mon10._AUTOBLOCK_TAG,
                                                 "192.0.2.80": ""}    # a MANUAL block: untouched
     _mon10.tailnet_exempt_ips = lambda r, ips: {"100.64.0.7"}
+    # No source of the panel's own to spare (as for a host reached over Tailscale), so nothing is
+    # read from this machine either; part154 covers the addresses the panel does come from.
+    _mon10.fwa_panel_source = lambda r: ""
     _mon10.remote_ufw_deny_ip = lambda r, ip, tag=None: (
         _ab_calls10.append(("deny", ip, tag)) or (ip != "192.0.2.60", "x"))
     _mon10.remote_ufw_undeny_ip = lambda r, ip: (_ab_calls10.append(("undeny", ip)) or (False, "x"))
@@ -2123,7 +2126,7 @@ try:
     check("monitor autoblock (remote): an unreadable fail2ban tally changes NOTHING",
           _abn10 == (0, 0) and _ab_calls10 == [], repr((_abn10, _ab_calls10)))
     _mon_restore10("load_config", "remote_fail2ban_attempt_counts", "remote_ufw_blocked_ips",
-                   "tailnet_exempt_ips", "remote_ufw_deny_ip", "remote_ufw_undeny_ip")
+                   "tailnet_exempt_ips", "fwa_panel_source", "remote_ufw_deny_ip", "remote_ufw_undeny_ip")
 
     # ── the database-backed passes ─────────────────────────────────────────────────────────────
     with _dbapp10.app_context():

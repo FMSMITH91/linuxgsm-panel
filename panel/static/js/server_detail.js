@@ -631,17 +631,60 @@ function _consoleLineEl() {
   return div;
 }
 
+// ── Lines from an older log outlive a read of the new one ───────────────────────────────────────
+// LinuxGSM's start (a Restart, a Start, the monitor bringing a crashed server back) moves the
+// console log aside and begins a new one, and a read that REPLACES the console — the priming window
+// after Clear, Load older — reads only the log there is now. Everything on the page from the old log
+// was wiped with nothing to bring it back: send a command, Restart, and at the 30 s re-prime after a
+// Clear the command, its echo, its output and every line the server printed before stopping were
+// gone. So each line is tagged with the log it came from (its inode, the `at` of the read or push
+// that brought it) and with the reads begun before it arrived (_r37e_gen), and a replacing read
+// keeps, in place and above its own window, the lines it CANNOT hold: from another log, and on the
+// page before that read began (a line that came after it is from the same log or a newer one, and
+// is put back by the read's own catch-up or _rebuildRestore, as it always was). A line with no
+// known log — the server-rendered seed, a read placed by its text — is replaced as before. A read that
+// may replace the console takes its number with `++_r37e_gen` as it starts.
+var _r37e_gen = 0;
+
+// The inode of the log a read or push's `at` ([chain, inode, offset]) places it in, or null.
+function _r37e_inoOf(at) { return Array.isArray(at) && at.length === 3 ? at[1] : null; }
+
+// Tags a console line with its log's inode and the reads begun before it; the raw line for a log
+// line (its text on the page carries the time gutter), none for the local echo of a sent command.
+function _r37e_tag(el, ino, line) {
+  if (ino !== null && ino !== undefined) el._r37e = {ino: ino, gen: _r37e_gen, line: line};
+}
+
+// The lines a read started as `gen`, of the log `ino`, will replace but cannot hold, in page order:
+// from another log, and on the page before it began. None when the read did not say its log.
+function _r37e_olderLog(ino, gen) {
+  if (ino === null || ino === undefined || !consoleEl) return [];
+  return Array.prototype.filter.call(consoleEl.children, function (el) {
+    var tag = el._r37e;
+    return !!tag && tag.ino !== ino && tag.gen < gen;
+  });
+}
+
+// Puts those lines back on the emptied console, before the read's own window is drawn.
+function _r37e_keepOlderLog(nodes) {
+  nodes.forEach(function (el) { consoleEl.appendChild(el); if (el._r37e.line !== undefined) _consoleLines.push(el._r37e.line); });
+}
+
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
 // for rows that do not — used only where the caller knows the panel WATCHED them arrive. `at` is
-// where in the log the rows end, when the caller knows it (a push, a catch-up): _logAt.
-function _appendConsoleRows(rows, fallbackTs, at) {
+// where in the log the rows end, when the caller knows it (a push, a catch-up): _logAt. `ino` is the
+// log they came from when `at` does not say it (a window: _r37e_tag).
+function _appendConsoleRows(rows, fallbackTs, at, ino) {
   if (!rows.length) return;
   var frag = document.createDocumentFragment();
+  var from = _r37e_inoOf(at);
+  if (from === null && ino !== undefined) from = ino;
   rows.forEach(function (row) {
     var div = _consoleLineEl();
     var ts = row.t || fallbackTs;
     if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, row.line);
+    _r37e_tag(div, from, row.line);
     frag.appendChild(div);
   });
   consoleEl.appendChild(frag);
@@ -822,7 +865,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
   if (!consoleEl || window._CAN_VIEW_CONSOLE === false) return;
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
-  var mark = _rebuildMark();
+  var mark = _rebuildMark(), gen = ++_r37e_gen;
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
@@ -856,13 +899,16 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // the page of a server that happens to be down. Staying unprimed means the next poll that
         // does return something adopts it instead.
         _consolePrimed = true;
+        // What the page holds from a log the server has since moved aside stays (_r37e_olderLog).
+        var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen);
         _consoleLines = [];
         consoleEl.innerHTML = '';
+        _r37e_keepOlderLog(kept);
         floor = _panelLinesWiped();
         // The priming window is history, so it gets NO arrival time — but a row that carries
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
-        _appendConsoleRows(rows);
+        _appendConsoleRows(rows, undefined, undefined, _r37e_inoOf(data.at));
         // A window that says where in the log it ends is caught up from there (_primeAt): what was
         // pushed before this answer lies in it or in the catch-up's answer. One that does not (a panel
         // older than this) has the pushes since its read put back by their text, as before.
@@ -887,7 +933,9 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // lines and a hidden spell is usually longer, so the lines before it would never be shown —
         // the return's 2000-line read stitches to the page's end, which would then be this window's.
         // That read brings these lines too.
-        if (!_returnOwed) _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
+        if (!_returnOwed) {
+          _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now, undefined, _r37e_inoOf(data.at));
+        }
       }
       showPanelBacklog(panelLines);
       // The priming wipe took any panel push already shown; put back those the backlog lacks —
@@ -959,8 +1007,9 @@ function _loadOlderRows(list) {
 // lines the deeper window does not contain (the server-rendered seed, the local command echo), so
 // no overlap matched and every line was appended twice — 1022 duplicates in the first test of it.
 // A deeper window of the same file is simply a superset of the tail, so showing it as-is is both
-// correct and what the button says. The only thing this can drop is a websocket line not yet
-// flushed to the log file, which the next poll brings back.
+// correct and what the button says — of the same file: what the page holds from an older log (the
+// server restarted since) is kept above it (_r37e_olderLog). The only thing this can drop is a
+// websocket line not yet flushed to the log file, which the next poll brings back.
 // After Load older rebuilt the console: a catch-up still in flight was asked from the page's OLD
 // place, and its answer appends everything from there without matching — so every line between
 // that place and the rebuilt window's end showed twice. Ask it again from where the console now
@@ -974,7 +1023,7 @@ function _r11c_resyncFrom(at) {
 function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-  var mark = _rebuildMark();
+  var mark = _rebuildMark(), gen = ++_r37e_gen;
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
     .then(function(res) {
@@ -1000,9 +1049,11 @@ function loadMoreConsole(btn) {
         return;
       }
       var older = _loadOlderRows(data.lines);
+      var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen);
       _consoleLines = [];
       consoleEl.innerHTML = '';
-      _appendConsoleRows(older, null);
+      _r37e_keepOlderLog(kept);
+      _appendConsoleRows(older, null, undefined, _r37e_inoOf(data.at));
       _rebuildRestore(mark);
       // A deeper window of the log is a superset of the priming one, so this console is primed. Left
       // unprimed (after Clear, or pressed before the first window came back) the next 30 s poll took
@@ -1568,6 +1619,8 @@ function sendCommand(ev) {  // NOSONAR - the constant false is the data-action p
   echo.className = 'console-line';
   echo.style.color = '#58a6ff';
   echo.textContent = '> ' + cmd;
+  // Of the log the page is reading now: a read of a newer one keeps it with that log's lines.
+  _r37e_tag(echo, _r37e_inoOf(_logAt));
   consoleEl.appendChild(echo);
   consoleEl.scrollTop = consoleEl.scrollHeight;
   fetch(MOUNT + '/api/command/' + serverId, {
@@ -1889,7 +1942,7 @@ function _pushStatsPoint(m) {
 var _histRange = '24h';
 
 // Chart text and grid in the page's colour scheme: the dark scheme's grey ticks are 2.9:1 on the
-// light scheme's white card. A declaration, so the module-scope _histX below can call it.
+// light scheme's white card. Read when a chart is built; _r37d_inkCharts repaints the built ones.
 function _cmpbInk(){
   var de = document.documentElement;
   var light = !!(de && de.getAttribute && de.getAttribute('data-bs-theme') === 'light');
@@ -1901,7 +1954,8 @@ var _histCharts = {};
 
 var _histTimes = {};
 
-var _histX = { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
+// The 7-day x axis, in the scheme in force when a chart is built (it was taken once, at load).
+function _histX(){ return { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} }; }
 
 function _histXScale(id){
   var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
@@ -1935,13 +1989,38 @@ function _histChart(id, labels, datasets, yScales, xScale){
     existing.update('none');
     return;
   }
-  var scales = { x:(xScale||_histX) }; for(var k in yScales){ scales[k]=yScales[k]; }
+  var scales = { x:(xScale||_histX()) }; for(var k in yScales){ scales[k]=yScales[k]; }
   _histCharts[id] = new Chart(el.getContext('2d'), {
     type:'line', data:{ labels:labels, datasets:datasets },
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{intersect:false, mode:'index'}, scales:scales,
       plugins:{ legend:{ labels:{color:_cmpbInk().legend, boxWidth:12, boxHeight:12} } } }
   });
+}
+
+// A live change of colour scheme (Account "System" following the device, app_shell.js) flips
+// data-bs-theme without a reload. Each chart took its ink when it was built, and History refreshes
+// in place, so the old scheme's ticks stayed (2.9:1 grey on white, or dark grey on near-black) until
+// a reload. Repaint every built chart's ticks, grid lines and legend when the scheme changes.
+function _r37d_inkChart(chart){
+  if (!chart || !chart.options) return;
+  var ink = _cmpbInk(), sc = chart.options.scales || {};
+  Object.keys(sc).forEach(function(k){
+    var s = sc[k] || {};
+    if (s.ticks) s.ticks.color = ink.tick;
+    if (s.grid && s.grid.display !== false) s.grid.color = ink.grid;
+  });
+  var lg = chart.options.plugins && chart.options.plugins.legend;
+  if (lg && lg.labels) lg.labels.color = ink.legend;
+  chart.update('none');
+}
+function _r37d_inkCharts(){
+  _r37d_inkChart(statsChart);
+  Object.keys(_histCharts).forEach(function(id){ _r37d_inkChart(_histCharts[id]); });
+}
+var _r37d_inkWatch = typeof MutationObserver !== 'undefined' ? new MutationObserver(_r37d_inkCharts) : null;
+if (_r37d_inkWatch && document.documentElement) {
+  _r37d_inkWatch.observe(document.documentElement, {attributes: true, attributeFilter: ['data-bs-theme']});
 }
 
 function _histLbl(iso){
@@ -1973,7 +2052,7 @@ window.loadHistory = function(){
       // Parsed timestamps for the date-aware 24h axis; refreshed every load so in-place updates stay in sync.
       _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
       _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
-      var _xs = function(id){ return _histRange==='7d' ? _histX : _histXScale(id); };
+      var _xs = function(id){ return _histRange==='7d' ? _histX() : _histXScale(id); };
       var pctY = { y:{ min:0, max:100, ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} } };
       _histChart('hist-players', sL,
         [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
@@ -2380,84 +2459,7 @@ function disableLogTimestamps(btn) {
   });
 }
 
-// ── Command history: Up/Down in the command box recall what was sent ─────────────────────────────
-// Per server, the last 50, in localStorage when the browser allows it and in this page otherwise.
-// Recorded by a listener on the form's own submit, which runs before the delegated sendCommand, so
-// the send itself is untouched: same Enter, same echo, same request. Down past the newest brings
-// back what was being typed before Up was first pressed.
-var _CMPA_HIST_MAX = 50;
-var _cmpaHistMem = [];      // the in-page copy, the only one when storage is refused
-var _cmpaBrowse = null;     // the list being stepped through, taken when Up is first pressed
-var _cmpaHistIdx = -1;      // where in it the box is; -1 = not browsing
-var _cmpaDraft = '';        // what was in the box before browsing began
-
-function _cmpaHistStoreKey() { return 'sd.cmdHistory.' + serverId; }   // i18n-ignore: a storage key
-
-function _cmpaHistLoad() {
-  try {
-    var raw = localStorage.getItem(_cmpaHistStoreKey());
-    var list = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(list)) {
-      return list.filter(function (s) { return typeof s === 'string' && s; }).slice(-_CMPA_HIST_MAX);
-    }
-  } catch (e) { /* private mode, or an entry that is not ours: the in-page copy */ }
-  return _cmpaHistMem.slice();
-}
-
-function _cmpaHistPush(cmd) {
-  var list = _cmpaHistLoad();
-  if (list[list.length - 1] !== cmd) list.push(cmd);
-  _cmpaHistMem = list.slice(-_CMPA_HIST_MAX);
-  try { localStorage.setItem(_cmpaHistStoreKey(), JSON.stringify(_cmpaHistMem)); } catch (e) { /* private mode */ }
-  _cmpaBrowse = null; _cmpaHistIdx = -1; _cmpaDraft = '';
-}
-
-// The box's next value for an Up (dir -1) or Down (+1), or null to leave the key alone.
-function _cmpaHistStep(dir, current) {
-  if (_cmpaHistIdx === -1) {
-    if (dir > 0) return null;                        // Down while not browsing: nothing to do
-    _cmpaBrowse = _cmpaHistLoad();
-    if (!_cmpaBrowse.length) return null;
-    _cmpaDraft = current;
-    _cmpaHistIdx = _cmpaBrowse.length;
-  }
-  _cmpaHistIdx = Math.max(0, _cmpaHistIdx + dir);
-  if (_cmpaHistIdx < _cmpaBrowse.length) return _cmpaBrowse[_cmpaHistIdx];
-  _cmpaHistIdx = -1;                                 // past the newest: back to the draft
-  return _cmpaDraft;
-}
-
-// Whether a keydown is not ours: an IME composing text uses the arrows to pick a candidate, and a
-// modified arrow (Shift to select, and the rest) keeps what the browser does with it.
-function _cmpaHistLeaves(e) {
-  if (e.isComposing || e.keyCode === 229) return true;
-  return !!(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
-}
-
-function _cmpaHistKey(e) {
-  if (_cmpaHistLeaves(e) || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
-  var v = _cmpaHistStep(e.key === 'ArrowUp' ? -1 : 1, e.target.value);
-  if (v === null) return;
-  e.preventDefault();
-  e.target.value = v;
-  try { e.target.setSelectionRange(v.length, v.length); } catch (err) { /* not a text box */ }
-}
-
-(function () {
-  var form = document.getElementById('command-form');
-  var input = document.getElementById('command-input');
-  if (!form || !input) return;
-  input.addEventListener('keydown', _cmpaHistKey);
-  // Typing ends browsing: the edited line is the new draft for the next Up.
-  input.addEventListener('input', function () { _cmpaBrowse = null; _cmpaHistIdx = -1; });
-  form.addEventListener('submit', function () {
-    var cmd = input.value.trim();
-    if (!cmd) return;
-    _cmpaHistPush(cmd);
-    // A command's echo and reply land in the live console: show it if a log was in its place.
-    if (_cmpaLogKind !== 'console') _cmpaSetView('console');
-  });
-})();
+// The command box's Up/Down history is console_history.js, loaded before this file.
 
 // ── Quick commands: one tap sends, or fills the box for one that needs an argument ───────────────
 // A send goes through the box's own submit, so it is the same request, echo and history as typing
@@ -2468,6 +2470,9 @@ function cmpaQuickCommand(btn) {
   var cmd = btn && btn.getAttribute('data-cmd');
   if (!form || !input || !cmd) return;
   if (btn.getAttribute('data-fill') === '1') {
+    // A value set from script fires no `input` event, so end Up/Down browsing here as typing does:
+    // otherwise the next Down put back the draft from before browsing over the chip's text.
+    _cmpaHistEnd();
     input.value = cmd + ' ';
     input.focus();
     try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* not a text box */ }

@@ -1063,7 +1063,7 @@ var REMOTE_NAME = {{ remote.name|tojson }};
    Ubuntu Pro line below does, because a {% set %} inside the content block is not seen here. #}
 {% if (not remote.is_local) or current_user.is_superadmin %}
 <script nonce="{{ csp_nonce }}">
-var remoteId = REMOTE_ID;   // remote_firewall.js's name for it, as remote_firewall.html sets it
+var remoteId = REMOTE_ID;   // remote_firewall.js's name for REMOTE_ID
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_firewall.js') }}"></script>
 {% endif %}

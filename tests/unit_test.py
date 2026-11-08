@@ -219,7 +219,9 @@ if _r31j_ts_header:
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed here, after the Landlock block above:
 # faulthandler's watchdog is a second thread, and Landlock needs the process to have one.
-importlib.import_module("suite_deadline").arm(globals())
+# This runner binds `results` only after the part loop below, so while a part runs the report finds
+# the checks recorded so far, and the last one, in part01's module (results_from).
+importlib.import_module("suite_deadline").arm(globals(), results_from="unit.part01")
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
@@ -360,11 +362,9 @@ def _r16d_real_spawners(how):
 # The script a shell runs (_r16d_shell_text, _r35d_shell_at): its -c script, or with no -c the file or stdin it
 # is handed and each nested shell's, lives in tests/unit/ts_nested.py (the runner is held to 1700 lines of
 # code); it calls this file's PATH, wrapper and option readers, which it is handed below
-# (_r36d_ts_nested.bind). A script it cannot see is _R35D_UNREAD.
-_r36d_tn_spec = importlib.util.spec_from_file_location(
-    "_r36d_ts_nested", os.path.join(_root, "tests", "unit", "ts_nested.py"))
-_r36d_ts_nested = importlib.util.module_from_spec(_r36d_tn_spec)
-_r36d_tn_spec.loader.exec_module(_r36d_ts_nested)
+# (_r36d_ts_nested.bind). A script it cannot see is _R35D_UNREAD. Imported as unit.ts_nested, so a part can
+# drive the bound reader too (part157).
+_r36d_ts_nested = importlib.import_module("unit.ts_nested")
 _R35D_UNREAD, _r36d_text_words = _r36d_ts_nested.UNREAD, _r36d_ts_nested.text_words
 _r16d_shell_text, _r35d_shell_at = _r36d_ts_nested.shell_text, _r36d_ts_nested.shell_at
 _r36d_ts_nested.bind(globals())
@@ -1996,6 +1996,17 @@ _r16d_wrap_ts_handles()
 # new" from the CHANGELOG entries an account has not seen) drives part12's app; imports part01 and 12.
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
+# part154 (review 1107's firewall and lock-out findings: the auto-block spares the panel's own source,
+# and the guards it found short) drives part135's stand-in hosts and part12's app; imports part01, 12, 108,
+# 116, 135 and 136.
+# part155 (review 1107 B: FastDL refused on an unread LinuxGSM release, scheduled wipes and the other
+# game operations) drives part12's app with every host call stubbed; imports part01 and 12.
+# part156 (review 1107's reboot, update, install and What's new fixes) drives part12's app and runs
+# nags.js in node with part47's helpers; imports part01, 05, 12 and 47.
+# part157 (the twenty-fifth review's page-script and test-gate fixes, builder D; it drives the runner's bound
+# unit.ts_nested too) drives part12's app; imports part01, 12, 99 and 143.
+# part158 (the console keeps an older log's lines through a read of the new one: the page's own
+# console functions in node, Clear/send/Restart/re-prime and Load older) imports part01, 05 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2011,7 +2022,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
-          "part151", "part152", "part153", "part15")
+          "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

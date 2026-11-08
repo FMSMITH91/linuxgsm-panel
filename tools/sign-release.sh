@@ -108,8 +108,13 @@ N_COMMITS="$(git rev-list --first-parent --count "${RANGE}")"
 (( N_COMMITS > 200 )) && echo "... and $(( N_COMMITS - 200 )) older commits (${N_COMMITS} in all)"
 echo "--------------------------------------------------------------------------------"
 git --no-pager diff --stat=120 "${FROM}" "${SHA}" | tail -n 60
+# Every file root installs from a signed release and runs (install.sh's stage_root_source callers:
+# the helper, the release key, db_maintenance.py, the installer, recover.sh, uninstall.sh and
+# gamedig's three files), and CI's workflows and the scripts they run. A unit check holds this list
+# equal to those callers: the db_maintenance.py root runs at every update showed up only as a
+# --stat line among many.
 FLAGGED="$(git diff --name-only "${FROM}" "${SHA}" \
-           | grep -E '^(\.github/workflows/|release-signers$|install\.sh$|tools/panel-helper$)' || true)"
+           | grep -E '^(\.github/workflows/|\.github/scripts/|release-signers$|install\.sh$|tools/panel-helper$|db_maintenance\.py$|recover\.sh$|uninstall\.sh$|tools/gamedig/)' || true)"
 if [[ -n "${FLAGGED}" ]]; then
     echo "################################################################################"
     echo "!!! WARNING: this release changes what runs as root, the release key, or CI:"

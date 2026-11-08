@@ -299,7 +299,6 @@
   "Make your current dashboard arrangement the default for this panel? New accounts start from it, and anyone who resets their layout returns to it. Users who have arranged their own layout keep theirs.": "Faire de la disposition actuelle de votre tableau de bord la disposition par défaut de ce panneau ? Les nouveaux comptes partent de celle-ci, et quiconque réinitialise sa disposition y revient. Les utilisateurs qui ont organisé la leur la conservent.",
   "Remove this panel’s default layout? Accounts without their own arrangement go back to the built-in order. Nobody’s personal layout is affected.": "Supprimer la disposition par défaut de ce panneau ? Les comptes sans disposition propre reviennent à l’ordre intégré. La disposition personnelle de chacun n’est pas modifiée.",
   "Restart the server now to load the change? Anyone currently playing will be disconnected.": "Redémarrer le serveur maintenant pour charger la modification ?\n\nToute personne en train de jouer sera déconnectée.",
-  "game(s) are greyed out: LinuxGSM caps them at an older Ubuntu than this host runs.": "jeu(x) grisé(s) : LinuxGSM les limite à une version d’Ubuntu plus ancienne que celle de cet hôte.",
   "A name can't contain a slash (/) — it names one thing in this folder, never a path.": "Un nom ne peut pas contenir de barre oblique (/) : il désigne un seul élément dans ce dossier, jamais un chemin.",
   "New file": "Nouveau fichier",
   "New folder": "Nouveau dossier",

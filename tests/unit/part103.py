@@ -22,7 +22,7 @@ from sqlalchemy.exc import OperationalError as _OpErr103
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part47 import _SETTLE47, _cut47, _node47
+from unit.part47 import R37E_STUBS47, _SETTLE47, _cut47, _node47
 from unit.part87 import _DOM87
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
                          _p9_restore_all, _p9_sd, _p9_sf)
@@ -108,7 +108,7 @@ check("custom command: a send that FAILED and whose audit row could not be writt
 _SD103 = _read103("panel", "static", "js", "server_detail.js")
 _name103 = "console send box: an unwritten audit row"
 _out103 = _js103(_name103, (
-    "var serverId = 1; let toasts = [];\n"
+    R37E_STUBS47 + "var serverId = 1; let toasts = [];\n"
     "global.toast = (m, k) => toasts.push([m, k]);\n"
     "var consoleEl = document.getElementById('console');\n"
     "const inp = document.getElementById('command-input'); inp.focus = () => {};\n"), _SD103,

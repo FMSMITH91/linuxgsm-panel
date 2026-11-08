@@ -2869,7 +2869,7 @@ check("verify_totp rejects empty", not verify_totp(_sec, ""))
 # gate does not save you: it refuses only "pending"/"failing", and a non-default branch reports
 # "unverified", which passes.
 from panel.core import config as SO_cfgmod   # noqa: E402
-_sb_saved = (SO._git, SO._is_git_checkout, SO._launch_installer)
+_sb_saved = (SO._git, SO._is_git_checkout, SO._launch_installer, SO._release_gate_for)
 _sb_cfg_saved = (SO_cfgmod.load_config, SO_cfgmod.update_config)
 try:
     _sb_cfg = {"panel_branch": "main"}
@@ -2878,9 +2878,12 @@ try:
     SO._is_git_checkout = lambda: True
     # The branch exists on the remote: ls-remote names it, exactly (an empty answer is "no such
     # branch" now that the name is compared, not tail-matched).
+    # ...and its tip reads as a full commit id, signed (a switch to a branch other than main is to
+    # its tip, once that is a signed release; part156).
+    SO._release_gate_for = lambda branch: (lambda sha: True)
     SO._git = lambda args, timeout=20, **k: (
         ("0" * 40 + "\trefs/heads/some-feature-branch", "", 0) if args[:1] == ["ls-remote"]
-        else ("", "", 0))
+        else ("b" * 40, "", 0) if args[:1] == ["rev-parse"] else ("", "", 0))
 
     SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (
         False, "install.sh is missing, so the panel can't self-update safely.")
@@ -2899,7 +2902,7 @@ try:
           _ok2 is True and _sb_cfg.get("panel_branch") == "some-feature-branch",
           "tracked %r" % (_sb_cfg.get("panel_branch"),))
 finally:
-    (SO._git, SO._is_git_checkout, SO._launch_installer) = _sb_saved
+    (SO._git, SO._is_git_checkout, SO._launch_installer, SO._release_gate_for) = _sb_saved
     (SO_cfgmod.load_config, SO_cfgmod.update_config) = _sb_cfg_saved
 
 # ── ...and "Update started" has to mean the updater actually STARTED ──────────────────────────

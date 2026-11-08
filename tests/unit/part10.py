@@ -2080,7 +2080,10 @@ def _so7_branches():
     eq("so/panel_switch_branch: not a checkout is refused", SO.panel_switch_branch("dev"),
        (False, "The panel isn't a git checkout, so it can't switch branches."))
     SO._is_git_checkout = lambda: True
-    SO._git = lambda args, timeout=45: ("0123abc\trefs/heads/dev\n", "", 0)
+    # rev-parse names dev's tip in full: a switch to a branch other than main needs its tip, signed
+    # (part03 leaves the release gate answering yes from here on), before it saves anything (part156).
+    SO._git = lambda args, timeout=45: (("a" * 40 if args[:1] == ["rev-parse"] else "0123abc\trefs/heads/dev\n"),
+                                        "", 0)
     _p7_cfgmod.load_config = lambda: {}
     _p7_cfgmod.update_config = _p7_raise(OSError("read-only"))
     _sw_launch = []
@@ -2397,6 +2400,21 @@ def _so7_ufw_deny_ufw_raise():
         [("ufw-delete-deny-ip", ["198.51.100.8"])]))
 
 
+def _so7_cutoff():
+    """The f2b-log-lines cutoff for 7 days on this clock now: the date datetime.now() - 7 days names."""
+    return (_p7_dt.now() - _p7_td(days=7)).strftime("%Y-%m-%d")
+
+
+def _so7_cut_sent(seen, before, after):
+    """The cutoff the first recorded f2b-log-lines call sent, when it is a date read around the call.
+
+    Before or after it (a run may cross midnight in between); otherwise `before`, which the
+    comparison then fails on.
+    """
+    _sent = seen[0][1][0] if seen and seen[0][1] else None
+    return _sent if _sent in (before, after) else before
+
+
 def _so7_fail2ban_history_top_offenders():
     # ── fail2ban history: top offenders and the reconcile's counts
     _f2b_log = ("2024-05-01 12:00:00,000 fail2ban.filter  [1]: INFO    [sshd] Found 203.0.113.5\n"
@@ -2407,11 +2425,15 @@ def _so7_fail2ban_history_top_offenders():
     SO._run_verb = _p7_verb_by({"f2b-log-lines": (_f2b_log, "", 0)}, log=_tv)
     SO.fail2ban_overview = lambda: {"jails": [{"banned_ips": ["203.0.113.5"]}]}
     SO.ufw_blocked_ips = _p7_raise(RuntimeError("ufw"))
+    # The cutoff is 7 calendar days on the clock at CALL time: read before and after the calls, and the
+    # one a call sent is right when it is either (review 1107: read only after, a run crossing local
+    # midnight between the call and the read failed both checks; part11's remote twin had the fix).
+    _cut_b7 = _so7_cutoff()
     _top = _p7_call(SO.fail2ban_top_ips, 20, "a week")
     SO.fail2ban_overview = _p7_raise(RuntimeError("f2b"))
     SO.ufw_blocked_ips = lambda shadowed=None: {"198.51.100.2": "panel-autoblock"}
     _top2 = _p7_call(SO.fail2ban_top_ips, 20, 7)
-    _cut7 = (_p7_dt.now() - _p7_td(days=7)).strftime("%Y-%m-%d")
+    _cut7 = _so7_cut_sent(_tv, _cut_b7, _so7_cutoff())
     eq("so/fail2ban_top_ips: ranked by attempts, annotated; junk `days` is 7; failed side reads blank",
        (_top, _tv[:1]),
        ([{"ip": "203.0.113.5", "attempts": 2, "bans": 1, "banned_now": True, "blocked": False, "jails": ["sshd"]},
@@ -2421,7 +2443,9 @@ def _so7_fail2ban_history_top_offenders():
           isinstance(_top2, list) and [r["banned_now"] for r in _top2] == [False, False]
           and [r["blocked"] for r in _top2] == [False, True], repr(_top2))
     del _tv[:]
+    _cut_b7 = _so7_cutoff()
     _ac = SO.fail2ban_attempt_counts("junk")
+    _cut7 = _so7_cut_sent(_tv, _cut_b7, _so7_cutoff())
     SO._run_verb = _p7_verb_by({"f2b-log-lines": ("", "sudo: a password is required", 1)})
     _ac_fail = SO.fail2ban_attempt_counts(3)
     eq("so/fail2ban_attempt_counts: every offender counted; a FAILED read is None, never {}",

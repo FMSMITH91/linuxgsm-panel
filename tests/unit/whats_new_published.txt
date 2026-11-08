@@ -3,6 +3,17 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+b4081d02 Auto-block never blocks the panel itself.
+baa81a64 Blocking an address on the panel host refuses your own.
+3714c0f0 A fresh copy of the panel's code is checked against your release key.
+a949d843 FastDL no longer guesses when it cannot read the LinuxGSM version.
+11e35d17 Scheduled wipes follow cron's day rules, and turning one off stops it.
+aa942260 A host reboot is no longer undone by an update on a stopped server.
+08597506 Switching the panel to another branch needs a signed release on it.
+b68a5711 More firewall changes refuse to cut the panel off.
+b47059cb The console keeps your commands and their output after Clear and Restart.
+a6a3e5ee Console history is kept per account and cleared when you sign out.
+990f7c76 The Mods tab says when a game has no mods.
 19647bdd Install the panel on a phone's home screen.
 755314b5 A light theme.
 2197b91d "What's new" after the panel updates.

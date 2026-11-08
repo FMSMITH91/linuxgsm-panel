@@ -2242,9 +2242,14 @@ def discover_linuxgsm_servers(server):
 
 
 def _discovered_count(x):
-    """A FOUND| field as a non-negative int; 0 for anything that is not plain digits."""
+    """A FOUND| field as a non-negative int; 0 for anything that is not plain digits, or too long.
+
+    The port comes from the game account's own LinuxGSM config (the first digit run of its port=
+    line), so its length is the account's to choose: past CPython's 4300-digit limit int() raised
+    ValueError out of the host's whole discovery. Nine digits covers every count and port.
+    """
     x = (x or "").strip()
-    return int(x) if x.isdecimal() else 0
+    return int(x) if x.isascii() and x.isdecimal() and len(x) <= 9 else 0
 
 
 def _discovered_instance(line):

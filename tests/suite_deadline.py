@@ -60,13 +60,20 @@ def suite_name(path):
     return base[:-len("_test.py")] if base.endswith("_test.py") else base.rsplit(".", 1)[0]
 
 
-def _where(where_globals):
-    """The part the suite is in and the last check it recorded, read when the limit fires."""
+def _where(where_globals, results_from=None):
+    """The part the suite is in and the last check it recorded, read when the limit fires.
+
+    `results_from` names the module holding the checks when the runner's own globals do not hold
+    them yet: the unit runner binds part01's `results` only after its part loop, so during a part
+    the report said neither how many checks had run nor the last one, the line it exists to print.
+    """
     lines = []
     part = where_globals.get("_part")
     if part:
         lines.append("in part: %s" % (part,))
     results = where_globals.get("results")
+    if not isinstance(results, list) and results_from:
+        results = getattr(sys.modules.get(results_from), "results", None)
     if isinstance(results, list):
         lines.append("checks recorded so far: %d" % len(results))
         if results:
@@ -153,7 +160,7 @@ def _fire(signum=None, frame=None):
       % (_state["suite"], _state["limit"], EXIT_CODE))
     w("Every thread's and every suspended greenlet's stack follows. %s=<seconds> changes the "
       "limit, 0 switches it off.\n" % ENV)
-    for line in _where(_state["globals"]):
+    for line in _where(_state["globals"], _state.get("results_from")):
         w("  " + line + "\n")
     w("\n-- OS threads (the main thread's top frame is this handler; the frame under it is where "
       "it was) --\n")
@@ -265,8 +272,11 @@ def kill(procs):
             pass
 
 
-def arm(caller_globals, environ=None, backstop=BACKSTOP):
+def arm(caller_globals, environ=None, backstop=BACKSTOP, results_from=None):
     """Start the limit for the suite whose runner's globals these are. Returns the limit (0 = off).
+
+    `results_from` is the module whose `results` list the report reads while the runner's globals
+    have none (see _where).
 
     `backstop` is how long after the limit faulthandler's watchdog ends the process if the handler
     could not run (tests/unit/part143.py shortens it to watch it fire). The timer stays armed
@@ -279,7 +289,7 @@ def arm(caller_globals, environ=None, backstop=BACKSTOP):
         return 0
     # A descriptor of its own: a check that swaps sys.stderr, or points fd 2 elsewhere for a while,
     # must not take the report with it. Not inherited by anything the suite starts (PEP 446).
-    _state.update(fd=os.dup(2), suite=suite, limit=limit, globals=caller_globals)
+    _state.update(fd=os.dup(2), suite=suite, limit=limit, globals=caller_globals, results_from=results_from)
     signal.signal(signal.SIGALRM, _fire)
     signal.setitimer(signal.ITIMER_REAL, limit)
     faulthandler.dump_traceback_later(limit + backstop, exit=True, file=_state["fd"])

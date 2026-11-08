@@ -613,12 +613,13 @@ function switchPanelBranch(){
   confirmDialog({title:'Switch panel branch', icon:'diagram-3', confirmClass:'btn-danger', confirmLabel:'Switch branch',
     // Says which of the two it will install. main goes to its newest version that passed its
     // automated checks (the server refuses if none has); any other branch installs its newest commit
-    // as it is — the panel's update gate does not check it — which this used to say only in passing.
+    // when that is a signed release (the server refuses otherwise) — the panel's automated-checks
+    // gate does not check it — which this used to say only in passing.
     bodyText:tf('Switch the panel to branch "{branch}"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically.', {branch: branch})
       +'\n\n'
       +(branch==='main'
         ? t('It installs the newest version of main that has passed its automated checks.')
-        : tf('UNVERIFIED: this installs the newest commit on "{branch}" as it is — branches other than main are not checked by the panel\'s update gate. Use it for testing.', {branch: branch})),
+        : tf('FOR TESTING: this installs the newest commit on "{branch}" if it is a signed release (if not, nothing is switched) — branches other than main are not checked by the panel\'s automated-checks gate.', {branch: branch})),
     onConfirm:function(){
       btn.disabled=true; if(logWrap) logWrap.style.display='';
       if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
