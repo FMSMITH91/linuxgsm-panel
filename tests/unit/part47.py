@@ -73,6 +73,15 @@ def _node47(prog):
         return {"error": (r.stdout + r.stderr)[-800:]}
 
 
+# The older-log keep of server_detail.js (part158 runs the real ones), as no-ops: a harness that cuts
+# refreshConsole, loadMoreConsole or sendCommand to test something else stands them in, as it does the
+# page's other helpers. `var _logAt;` declares without resetting a value the harness already gave it.
+_R37E_STUBS47 = (
+    "var _logAt, _r37e_gen;\n"
+    "function _r37e_inoOf(){ return null; } function _r37e_tag(){} function _r37e_readStart(){ return 0; }\n"
+    "function _r37e_olderLog(){ return []; } function _r37e_keepOlderLog(){}\n")
+
+
 _SETTLE47 = "const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };\n"
 
 
