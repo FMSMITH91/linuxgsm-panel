@@ -2995,6 +2995,13 @@ _r36d_text = [_r16d_shell_text(_c, _k) for _c, _k in (
 _r36d_cmdline = bool([_h for _h in _r20d_cmdline_candidates(["env", "-S", "bash -s"], dict(
     _r36d_in, env=_r35d_env)) if _h])
 os.unlink(_r36d_fifo)
+# A nested shell's -c script is read in turn, so a script file it runs is read with it, written in "…" or
+# '…' (review 1107: both were taken as read already, and the file's tailscale ran unread) (control).
+_r37d_nested_c = [_r16d_shell_text(["bash", "-c", _s % _r35d_file], {}) for _s in (
+    'bash -c "sh %s"', "bash -c 'sh %s'", "true; sudo -u x bash -ec 'exec sh %s'")]
+check("unit suite: ...and a script file a nested shell's -c script runs is read, its -c in double or "
+      "single quotes (control)", [_t.count("tailscale version") for _t in _r37d_nested_c] == [1] * 3,
+      repr(_r37d_nested_c))
 check("unit suite: ...a shell reading its script by a path naming its stdin, `bash - file`, a script past the "
       "size read, a FIFO, a nested shell with no -c (file, `<`, stdin, pipe, here-document, env -S), a "
       "backslash-newline and a bytes script are all read; a shell word that runs no shell is not (control)",
