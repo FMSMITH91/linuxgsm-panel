@@ -189,6 +189,13 @@ _LIMIT22_159 = "22/tcp  LIMIT IN  Anywhere"
 _ALLOWS159 = ("ufw-allow-proto-port", "ufw-allow-port", "ufw-allow-from-port", "ufw-allow-port-family")
 
 
+def _from_row159(src, port):
+    """The row `ufw status` lists for `allow from <src> to any port <port> proto tcp`: a family's every address
+    is listed as ufw lists it (Anywhere, or the `(v6)` row), any other source as given."""
+    return {"0.0.0.0/0": "%s/tcp  ALLOW IN  Anywhere" % port,   # NOSONAR(S1313) - ufw's IPv4 "any" network
+            "::/0": "%s/tcp (v6)  ALLOW IN  Anywhere (v6)" % port}.get(src, "%s/tcp  ALLOW IN  %s" % (port, src))
+
+
 class _Box159(_Box125):
     """part125's stand-in host that succeeds, with its own ufw rule rows; what each allow verb was sent."""
 
@@ -200,9 +207,9 @@ class _Box159(_Box125):
         if verb in _ALLOWS159 or verb.startswith("ufw-delete-allow"):
             self.allows.append((verb, list(args)))
         if verb == "ufw-allow-from-port":
-            self.from_rules.append("%s/tcp  ALLOW IN  %s" % (args[1], args[0]))
+            self.from_rules.append(_from_row159(args[0], args[1]))
         elif verb == "ufw-delete-allow-from-port":
-            self.from_rules = [r for r in self.from_rules if r != "%s/tcp  ALLOW IN  %s" % (args[1], args[0])]
+            self.from_rules = [r for r in self.from_rules if r != _from_row159(args[0], args[1])]
         return super().priv(server, verb, args, **kw)
 
     def _answer(self, verb):
@@ -322,6 +329,93 @@ check("1108 P1 MEDIUM: a move that fails after the source-only rule went in take
       _mv_rev[0] is False and _mv_rev[2] == [("ufw-allow-from-port", [_ADMIN_NET159, "2022", "tcp", "SSH panel"]),
                                             ("ufw-delete-allow-from-port", [_ADMIN_NET159, "2022", "tcp"])],
       repr(_mv_rev))
+
+# ── review 1108 H: the move's step 1 where the adversarial pass found it wrong ─────────────────────
+_ADMIN6_159 = "2001:db8:77::77"
+_PUBH6_159 = "2001:db8:159::159"
+_SSH6_PUB159 = "22/tcp (v6)  ALLOW IN  Anywhere (v6)"
+_HARD4_159 = "22/tcp  ALLOW IN  " + _ADMIN_NET159
+_V6_SESS159 = _sess159(_ADMIN6_159, _PUBH6_159, "eth0")
+_mv_r38h_unknown = {
+    "an application profile the panel cannot resolve": _move159(["Custom159  ALLOW IN  " + _ADMIN_NET159]),
+    "an interface rule, the session's interface not found": _move159(["22/tcp on eth0  ALLOW IN  Anywhere"],
+                                                                     _sess159(_ADMIN159, _PUBH159, None)),
+}
+check("1108 r38h step 1: where public SSH is off and no rule the panel can read lets its session in (an "
+      "unresolved application profile, an interface rule whose interface was not read), the default policy, not "
+      "read as allow, is not assumed to let it in on the new port: refused, nothing sent (%s)"
+      % ", ".join(_mv_r38h_unknown),
+      all(r[0] is False and r[2] == [] and "No firewall rule the panel can read lets its SSH connection" in r[1]
+          for r in _mv_r38h_unknown.values()),
+      repr({k: (r[0], r[1][:200], r[2]) for k, r in _mv_r38h_unknown.items()}))
+_mv_r38h_lhdeny = {
+    "a public DENY above the tailscale0 rule": _move159(["2022/tcp  DENY IN  Anywhere", _TS0_159], None, local=True),
+    "a public REJECT on a range, the hardened rule": _move159(["2000:2099/tcp  REJECT IN  Anywhere", _HARD4_159],
+                                                              None, local=True),
+}
+_mv_r38h_lhok = {
+    "a UDP DENY, a docker0 DENY and a v6 one on lo": _move159(
+        ["2022/udp  DENY IN  Anywhere", "2022/tcp on docker0  DENY IN  Anywhere",
+         "2022/tcp (v6) on lo  DENY IN  Anywhere (v6)", _TS0_159], None, local=True),
+    "an outbound DENY, a DENY below the allow": _move159(
+        ["2022/tcp  DENY OUT  Anywhere (out)", _HARD4_159], None, local=True),
+}
+check("1108 r38h step 1: on the panel's host with public SSH off, a public DENY or REJECT first on the new port "
+      "still refuses the move, naming it (%s); one a connection to it would not meet does not (%s), and the note "
+      "names the hardened rule on the old port that was not copied, or else asks for a check, never claiming the "
+      "new port is reached" % (", ".join(_mv_r38h_lhdeny), ", ".join(_mv_r38h_lhok)),
+      all(r[0] is False and r[2] == [] and "is blocked by the firewall rule" in r[1] for r in _mv_r38h_lhdeny.values())
+      and all(r[0] is True and r[2] == [] and "reached only through" not in r[1] for r in _mv_r38h_lhok.values())
+      and "were not copied: " + _HARD4_159 in _mv_r38h_lhok["an outbound DENY, a DENY below the allow"][1]
+      and "Check that a rule of yours" in _mv_r38h_lhok["a UDP DENY, a docker0 DENY and a v6 one on lo"][1],
+      repr({k: (r[0], r[1][:300], r[2]) for k, r in {**_mv_r38h_lhdeny, **_mv_r38h_lhok}.items()}))
+_V6_ADD159 = [("ufw-allow-from-port", ["::/0", "2022", "tcp", "SSH panel"])]
+_V4_ADD159 = [("ufw-allow-from-port", ["0.0.0.0/0", "2022", "tcp", "SSH panel"])]   # NOSONAR(S1313)
+_mv_r38h_fam = {
+    "v6 public, v4 hardened, a v6 session": _move159([_HARD4_159, _SSH6_PUB159], _V6_SESS159),
+    "v6 public, v4 hardened, a v4 session": _move159([_HARD4_159, _SSH6_PUB159]),
+    "the panel's host, v6 public only": _move159([_HARD4_159, _SSH6_PUB159], None, local=True),
+    "the panel's host, v4 public, a v6 game rule only": _move159([_LIMIT22_159, "80/tcp (v6)  ALLOW IN  Anywhere (v6)"],
+                                                                 None, local=True),
+    "public SSH to the host's one address": _move159([_PUBH159 + " 22/tcp  ALLOW IN  Anywhere"]),
+    "v6 public, a v6 session, the move fails": _move159([_HARD4_159, _SSH6_PUB159], _V6_SESS159, up=False),
+}
+_mv_r38h_fam.update({
+    "public SSH to a private address only": _move159(["10.159.0.5 22/tcp  ALLOW IN  Anywhere"],   # NOSONAR(S1313)
+                                                     None, local=True),
+    "public SSH to a tailnet address only": _move159([_TSH159 + " 22/tcp  ALLOW IN  Anywhere"], None, local=True),
+})
+_f159 = {k: (r[0], r[2]) for k, r in _mv_r38h_fam.items()}
+check("1108 r38h step 1: SSH public over one family only (IPv6, or IPv4 beside IPv6 rules) reads as public in that "
+      "family: the new port gets a rule from anywhere in that family alone, never in the other (a v4 session there "
+      "gets its own source-only rule copied, nothing public); public SSH to the host's one address reads as public; "
+      "a failed move takes the family's rule back out; a rule for one private or tailnet address is not public SSH, "
+      "and nothing is opened to the internet for it (the OWNER RULE)",
+      _f159["v6 public, v4 hardened, a v6 session"] == (True, _V6_ADD159)
+      and "over IPv6 only" in _mv_r38h_fam["v6 public, v4 hardened, a v6 session"][1]
+      and _f159["v6 public, v4 hardened, a v4 session"] == (
+          True, [("ufw-allow-from-port", [_ADMIN_NET159, "2022", "tcp", "SSH panel"])])
+      and _f159["the panel's host, v6 public only"] == (True, _V6_ADD159)
+      and "Public SSH is off" not in _mv_r38h_fam["the panel's host, v6 public only"][1]
+      and _f159["the panel's host, v4 public, a v6 game rule only"] == (True, _V4_ADD159)
+      and _f159["public SSH to the host's one address"] == (
+          True, [("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])])
+      and _f159["v6 public, a v6 session, the move fails"] == (
+          False, _V6_ADD159 + [("ufw-delete-allow-from-port", ["::/0", "2022", "tcp"])])
+      and _f159["public SSH to a private address only"] == (True, [])
+      and _f159["public SSH to a tailnet address only"] == (True, [])
+      and "Public SSH is off" in _mv_r38h_fam["public SSH to a tailnet address only"][1],
+      repr({k: (r[0], r[1][:240], r[2]) for k, r in _mv_r38h_fam.items()}))
+_OTHER_NET159 = "192.0.2.0/24"    # NOSONAR(S1313) - the operator's own home range
+_mv_r38h_two = _move159([_HARD4_159, "22/tcp  ALLOW IN  " + _OTHER_NET159])
+_mv_r38h_one = _move159([_HARD4_159])
+check("1108 r38h step 1 (lead): on a remote hardened to two sources, the move copies only the rule the panel's session "
+      "comes in by, and the note names the operator's other rule on the old port that was not copied; with one source "
+      "there is nothing else to name (control)",
+      _mv_r38h_two[0] is True and _mv_r38h_two[2] == [("ufw-allow-from-port", [_ADMIN_NET159, "2022", "tcp", "SSH panel"])]
+      and "were not copied: 22/tcp  ALLOW IN  " + _OTHER_NET159 in _mv_r38h_two[1]
+      and _mv_r38h_one[0] is True and "were not copied" not in _mv_r38h_one[1],
+      repr((_mv_r38h_two, _mv_r38h_one)))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # MEDIUM (P1): the panel host's auto-block spares its signed-in superadmins and its own addresses
