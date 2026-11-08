@@ -10,7 +10,7 @@ from panel.core.config import (DB_PATH, load_config)
 from panel.db.models import (LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.security import banlist as _banlist
-from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
+from panel.ops.ssh_manager import (fwa_block_target, host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
@@ -411,7 +411,31 @@ def _r13c_block_refusal(ip):
         return jsonify({"success": False, "message":
                         i18n.tr("{ip} is on the security whitelist — "
                                 "remove it there first to block it.", ip=ip)})
-    return None
+    return _r37a_lockout_refusal(lr, ip)
+
+
+def _r37a_lockout_refusal(lr, ip):
+    """The panel host's Block held to the remote route's lock-out checks (a JSON answer), or None.
+
+    This card and the panel host's own row (the Network tab's card, through remote_security) block the
+    same host, and only that route refused the viewer's own address: a superadmin whose address shows
+    among the top offenders (their own mistyped logins count) pressed Block here and cut themselves
+    off the panel's port. So the row's checks run here too, on the address the deny is written for
+    (fwa_block_target): the viewer's own address, and the panel's own connections read as ufw meets
+    them with the deny on top (a proxy on another machine, the viewer's address unknown). Called
+    under the panel host's ufw lock, which the deny takes again.
+    """
+    target = fwa_block_target(ip)
+    if target is None:
+        return None                  # not an address: the deny answers "Invalid IP address."
+    from panel.routes.remote_security import _fwa_block_refusal
+    why = _fwa_block_refusal(lr if lr is not None else _R37A_LOCAL_ROW, target)
+    return jsonify({"success": False, "message": i18n.tr(why)}) if why else None
+
+
+# The panel host when it has no row of its own (as the specs route stands one in).
+_R37A_LOCAL_ROW = SimpleNamespace(is_local=True, auth_method="local", sudo_enabled=False, linuxgsm_user="",
+                                  id=None, name=LOCAL_HOST_LABEL, host="127.0.0.1", port=22)  # NOSONAR(S1313)
 
 
 def _register_panel_blocking(app):
@@ -425,11 +449,14 @@ def _register_panel_blocking(app):
         # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
         # `{"unblock": "false"}` unblocked the address it asked to block.
         unblock = _r13b_json_flag(_json_body(), "unblock", False)
-        refused = None if unblock else _r13c_block_refusal(ip)
-        if refused:
-            return refused
+        # The refusal is decided, and the deny written, under one hold of the host's ufw lock (an
+        # RLock: ufw_deny_ip takes it again for its own read and write), as the remote route does.
         try:
-            ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
+            with so._r23a_local_ufw_lock():
+                refused = None if unblock else _r13c_block_refusal(ip)
+                if refused:
+                    return refused
+                ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
             # The address, never the request's text: the row records what was acted on.
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
                        target=canonical_ip(ip) or NOT_AN_IP, success=ok)

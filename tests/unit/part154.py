@@ -10,9 +10,13 @@ part12's patcher with its transport tripwire armed. Nothing reaches a host, sudo
 import ipaddress as _ip154
 
 from unit.part01 import check
-from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_patch, _p9_restore_all
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
 from unit import part135 as _p135
+from panel.core import i18n as _i18n154
+from panel.ops import system_ops as _so154
 from panel.ops.ssh_manager import ufweval as _ue154
+from panel.routes import host_local as _hl154, remote_security as _rs154
+from panel.security import banlist as _bl154
 from panel.services import monitoring as _mon154
 
 _TRIP154_START = len(_P9_TRIPPED)
@@ -79,6 +83,67 @@ _hi_ts = _reconcile154("", addrs=_no_read154, server=_p135._TSREMOTE135)
 check("1107 HIGH: a host with no source of the panel's to spare (reached over Tailscale) blocks every offender over the "
       "threshold, and the panel host's addresses are not read for it",
       _hi_ts == ((7, 1), sorted([_SRC154, _OWN154, _OWN6_154] + _ORDINARY154), [_OLD154]), repr(_hi_ts))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A09 MEDIUM: the panel host's Block card refuses what its row refuses
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_VIEW154 = "203.0.113.20"          # NOSONAR(S1313) - the superadmin pressing Block
+_VIEW6_154 = "2001:db8::7"         # NOSONAR(S1313)
+
+
+def _panel_block154(viewer, ip, unblock=False, evaluator=None):
+    """POST the panel host's Block as a superadmin seen at `viewer` -> (ok, message, firewall calls, evaluated)."""
+    calls, evaluated = [], []
+
+    def fwc(server, target):
+        evaluated.append((bool(getattr(server, "is_local", False)), target))
+        return evaluator
+
+    try:
+        _p9_arm(who="part154")
+        _p9_patch(_hl154, "tailnet_exempt_ips", lambda remote, ips: set())
+        _p9_patch(_hl154, "_whitelisted", lambda ip: False)
+        _p9_patch(_rs154, "client_ip", lambda: viewer)
+        _p9_patch(_rs154, "_whitelist_networks", lambda: [])
+        _p9_patch_sm("fwc_block_ip_refusal", fwc)
+        _p9_patch(_so154, "ufw_deny_ip", lambda a: (calls.append(("deny", a)), (True, "blocked"))[1])
+        _p9_patch(_so154, "ufw_undeny_ip", lambda a: (calls.append(("undeny", a)), (True, "unblocked"))[1])
+        _p9_patch(_bl154, "refresh_soon", lambda *a, **k: None)
+        body = _p9_client(P9_ADMIN).post("/api/panel/security/block",
+                                         json={"ip": ip, "unblock": unblock}).get_json(silent=True) or {}
+    finally:
+        _p9_restore_all()
+    return body.get("success"), str(body.get("message")), calls, evaluated
+
+
+_OWN_CASES154 = {
+    "the viewer's address": (_VIEW154, _VIEW154),
+    "its IPv4-mapped spelling": (_VIEW154, "::ffff:" + _VIEW154),
+    "a mapped viewer's IPv4 address": ("::ffff:" + _VIEW154, _VIEW154),
+    "an IPv6 viewer's address": (_VIEW6_154, _VIEW6_154),
+}
+_own154 = {k: _panel_block154(v, ip) for k, (v, ip) in _OWN_CASES154.items()}
+check("1107 A09 MEDIUM: the panel host's Block refuses the viewer's own address (as given, IPv4-mapped, a mapped "
+      "viewer, IPv6), says it would lock them out, and sends nothing to the firewall",
+      all(r[0] is False and "lock you out" in r[1] and r[2] == [] for r in _own154.values()), repr(_own154))
+_ok154 = {
+    "a neighbour": _panel_block154(_VIEW154, "203.0.113.21"),   # NOSONAR(S1313)
+    "the other family's viewer": _panel_block154(_VIEW6_154, _VIEW154),
+    "unblocking the viewer's own address": _panel_block154(_VIEW154, _VIEW154, unblock=True),
+}
+check("1107 A09 MEDIUM: ...while a neighbour of the viewer, the address of a viewer in the other family and an "
+      "unblock of the viewer's own address go through (controls), the block evaluated against the panel host",
+      _ok154["a neighbour"][:3] == (True, "blocked", [("deny", "203.0.113.21")])   # NOSONAR(S1313)
+      and _ok154["a neighbour"][3] == [(True, "203.0.113.21")]   # NOSONAR(S1313)
+      and _ok154["the other family's viewer"][:3] == (True, "blocked", [("deny", _VIEW154)])
+      and _ok154["unblocking the viewer's own address"][:3] == (True, "unblocked", [("undeny", _VIEW154)]),
+      repr(_ok154))
+_cut154 = _panel_block154(_VIEW154, "198.51.100.9", evaluator=_i18n154.Sentence(   # NOSONAR(S1313)
+    "Blocking that would lock you out of the panel: your connection to it comes in from {src} to {dst}, port "
+    "{port}/tcp, on {iface}.", src="198.51.100.9", dst="192.0.2.1", port=5000, iface="eth0"))   # NOSONAR(S1313)
+check("1107 A09 MEDIUM: a deny the panel's own connections would not survive (the row's evaluator) is refused on "
+      "this card too, nothing sent",
+      _cut154[0] is False and "lock you out of the panel" in _cut154[1] and _cut154[2] == [], repr(_cut154))
 
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))
