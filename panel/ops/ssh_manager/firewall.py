@@ -2337,15 +2337,20 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     if groups is None:
         return why
     paths = _fwc_paths(server, _fwb_ts_ways(server, groups, _fwssh_served_ports(server)))
-    if paths["why"] is _R37G_VIEWER_LOCAL and not port_known_needed:
-        return _r37g_session_refusal(server, groups, top, families, paths)
     if paths["why"] is not None:
-        needed = port_known_needed or paths["why"] is _FWB_VIEWER_UNKNOWN
-        return paths["why"] if needed and _core.is_local_server(server) else None
+        return _r37g_why_refusal(server, groups, top, families, paths, port_known_needed)
     allow_default = _fwc_default_allows(server)
     cut = next((c for c in paths["conns"] if c.version in families
                 and _fwc_cuts(groups, c, top, allow_default, paths)), None)
     return None if cut is None else _fwc_cut_answer(cut)
+
+
+def _r37g_why_refusal(server, groups, top, families, paths, port_known_needed):
+    """_fwc_block_refusal where the panel's own connections are not known (paths["why"]): see there."""
+    if paths["why"] is _R37G_VIEWER_LOCAL and not port_known_needed:
+        return _r37g_session_refusal(server, groups, top, families, paths)
+    needed = port_known_needed or paths["why"] is _FWB_VIEWER_UNKNOWN
+    return paths["why"] if needed and _core.is_local_server(server) else None
 
 
 def _r37g_session_refusal(server, groups, top, families, paths):

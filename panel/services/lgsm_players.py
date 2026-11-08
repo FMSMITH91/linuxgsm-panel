@@ -540,6 +540,36 @@ def _r37c_busy(probes, plan_ids):
                if plan_ids is None or i in plan_ids or (p or {}).get("session") == 1)
 
 
+def window_names(users, rows):
+    """{account: [selfnames]} the reboot's quiet window reads: the plan's (`users`), then `rows`' (window_reads)."""
+    names = {u: list(sn) for u, sn in users.items()}
+    for gs in rows:
+        held = names.setdefault(gs.short_name, [])
+        if gs.lgsm_name not in held:
+            held.append(gs.lgsm_name)
+    return names
+
+
+def window_reads(probe, order, plan_users):
+    """{account: probe(account)} for the reboot's quiet window (host_reboot._await_window), in `order`.
+
+    The window reads every server on the host, not only the plan's: the census refuses maintenance on
+    any server, stopped ones too, but only what runs at that moment, and a cron `update` or `backup`
+    that started on a stopped server outside the plan during the stop phase or the wait for the window
+    (the panel's own 05:00/05:15 lines), or the `monitor` restarting a crashed one, was waited on by
+    nothing and cut by the shutdown (review 1107). The rescan still leaves those out (the stop budget
+    and its rollback are the plan's); the window, bounded by ARM_WAIT, waits on them. An account the
+    plan holds no server of (`plan_users`) that does not answer is left out, as the census leaves a
+    server it cannot read out of the stops: a broken account must not refuse every reboot of its host.
+    """
+    seen = {}
+    for u in order:
+        read = probe(u)
+        if u in plan_users or read.get("inflight") is not None:
+            seen[u] = read
+    return seen
+
+
 def entry_ids(entries):
     """The server ids of a reboot plan's entries (settled_probes' plan_ids)."""
     return {e["id"] for e in entries}
