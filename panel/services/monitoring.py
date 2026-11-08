@@ -1538,10 +1538,9 @@ def _autoblock_offenders(remote, counts, threshold):
 
 
 def _r37a_spare_panel(remote, new):
-    """Of the addresses about to be auto-blocked on `remote`, those the panel's own connection to it
-    can never come from; nothing at all when that could not be read.
+    """The new auto-blocks for `remote` less any address the panel's own connection may come from.
 
-    The deny is on every port at the top of the host's UFW, and taking it off again goes over SSH: a
+    Nothing at all when that could not be read. The deny is on every port at the top of the host's UFW, and taking it off again goes over SSH: a
     deny for the panel's own source cut the panel off the host for good, with console access the only
     way back. And the panel's source can rack up the threshold honestly: a host whose key or password
     changed is retried by the monitor until the row is edited, and a NAT address is shared with every

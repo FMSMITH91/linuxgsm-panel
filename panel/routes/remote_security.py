@@ -407,13 +407,10 @@ def _register_panel_binding(app):
 
         # ── The new binding's port opened FIRST, while nothing has changed ──
         opened = _r37a_open_first(app, local, new_bind, new_port)
-        if opened is not None and not opened[0] and _r37a_fw_drops(app, local):
-            log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
-                       detail=f"{_r18a_bracketed(cur_bind)}:{cur_port} -> {_r18a_bracketed(new_bind)}:{new_port} "
-                              f"refused; firewall: {opened[1]}", success=False)
-            return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
-                "Not changed: the firewall could not open port {port}, so the panel would have restarted onto a "
-                "port it drops.", port=new_port), [opened[1]])}), 200
+        not_opened = _r37a_not_opened(app, local, opened, f"{_r18a_bracketed(cur_bind)}:{cur_port} -> "
+                                                         f"{_r18a_bracketed(new_bind)}:{new_port}", new_port)
+        if not_opened is not None:
+            return not_opened
 
         # ── Save the new binding ──
         # Only these two keys, onto the file as it is now: the checks above ran `ss` and `ip`,
@@ -617,10 +614,9 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
 
 
 def _r37a_open_first(app, local, new_bind, new_port):
-    """Open the port a publicly reached binding needs, before anything is saved -> (ok, its note), or
-    None when the binding needs no open (or there is no local host row: no firewall to follow).
+    """Open the port a publicly reached binding needs, before anything is saved -> (ok, its note).
 
-    It was opened after the binding was saved, and a failure (the helper timing out on a held xtables
+    None when the binding needs no open (or there is no local host row: no firewall to follow). It was opened after the binding was saved, and a failure (the helper timing out on a held xtables
     lock, a sudo refusal) was only a note: the panel restarted onto a port its firewall drops, the old
     port's rule was closed too, and nothing of the panel could be reached (review 1107).
     """
@@ -634,6 +630,20 @@ def _r37a_open_first(app, local, new_bind, new_port):
     return bool(ok), (i18n.Sentence("Firewall: opened {port}.", port=new_port) if ok
                       else i18n.Sentence("FIREWALL NOT UPDATED — port {port} may be blocked ({why}).",
                                          port=new_port, why=why))
+
+
+def _r37a_not_opened(app, local, opened, move, new_port):
+    """The change-port answer when the new port could not be opened on a firewall that drops it, else None.
+
+    `opened` is _r37a_open_first's answer; `move` the audit row's "old -> new" words.
+    """
+    if opened is None or opened[0] or not _r37a_fw_drops(app, local):
+        return None
+    log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
+               detail=f"{move} refused; firewall: {opened[1]}", success=False)
+    return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
+        "Not changed: the firewall could not open port {port}, so the panel would have restarted onto a "
+        "port it drops.", port=new_port), [opened[1]])}), 200
 
 
 def _r37a_fw_drops(app, local):
