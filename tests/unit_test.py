@@ -362,11 +362,9 @@ def _r16d_real_spawners(how):
 # The script a shell runs (_r16d_shell_text, _r35d_shell_at): its -c script, or with no -c the file or stdin it
 # is handed and each nested shell's, lives in tests/unit/ts_nested.py (the runner is held to 1700 lines of
 # code); it calls this file's PATH, wrapper and option readers, which it is handed below
-# (_r36d_ts_nested.bind). A script it cannot see is _R35D_UNREAD.
-_r36d_tn_spec = importlib.util.spec_from_file_location(
-    "_r36d_ts_nested", os.path.join(_root, "tests", "unit", "ts_nested.py"))
-_r36d_ts_nested = importlib.util.module_from_spec(_r36d_tn_spec)
-_r36d_tn_spec.loader.exec_module(_r36d_ts_nested)
+# (_r36d_ts_nested.bind). A script it cannot see is _R35D_UNREAD. Imported as unit.ts_nested, so a part can
+# drive the bound reader too (part157).
+_r36d_ts_nested = importlib.import_module("unit.ts_nested")
 _R35D_UNREAD, _r36d_text_words = _r36d_ts_nested.UNREAD, _r36d_ts_nested.text_words
 _r16d_shell_text, _r35d_shell_at = _r36d_ts_nested.shell_text, _r36d_ts_nested.shell_at
 _r36d_ts_nested.bind(globals())
@@ -1998,8 +1996,8 @@ _r16d_wrap_ts_handles()
 # new" from the CHANGELOG entries an account has not seen) drives part12's app; imports part01 and 12.
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
-# part157 (the twenty-fifth review's page-script and test-gate fixes, builder D) drives part12's app;
-# imports part01, 12, 99 and 143.
+# part157 (the twenty-fifth review's page-script and test-gate fixes, builder D; it drives the runner's bound
+# unit.ts_nested too) drives part12's app; imports part01, 12, 99 and 143.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2995,13 +2993,6 @@ _r36d_text = [_r16d_shell_text(_c, _k) for _c, _k in (
 _r36d_cmdline = bool([_h for _h in _r20d_cmdline_candidates(["env", "-S", "bash -s"], dict(
     _r36d_in, env=_r35d_env)) if _h])
 os.unlink(_r36d_fifo)
-# A nested shell's -c script is read in turn, so a script file it runs is read with it, written in "…" or
-# '…' (review 1107: both were taken as read already, and the file's tailscale ran unread) (control).
-_r37d_nested_c = [_r16d_shell_text(["bash", "-c", _s % _r35d_file], {}) for _s in (
-    'bash -c "sh %s"', "bash -c 'sh %s'", "true; sudo -u x bash -ec 'exec sh %s'")]
-check("unit suite: ...and a script file a nested shell's -c script runs is read, its -c in double or "
-      "single quotes (control)", [_t.count("tailscale version") for _t in _r37d_nested_c] == [1] * 3,
-      repr(_r37d_nested_c))
 check("unit suite: ...a shell reading its script by a path naming its stdin, `bash - file`, a script past the "
       "size read, a FIFO, a nested shell with no -c (file, `<`, stdin, pipe, here-document, env -S), a "
       "backslash-newline and a bytes script are all read; a shell word that runs no shell is not (control)",

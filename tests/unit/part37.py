@@ -192,17 +192,23 @@ def _f5_controls():
           "http.client, a third-party client and a WebSocket", got == want, repr(got))
 
 
+def _f5_named():
+    """module.function for every reviewed site the tripwire holds (_HTTP_REVIEWED37).
+
+    Review 1107: the justification was held to a hand-kept list of six, so game_icons, added to
+    _HTTP_REVIEWED37 by #487, could drop out of it with both checks green. A function nested in
+    another is named by the one around it.
+    """
+    return sorted({"%s.%s" % (os.path.splitext(os.path.basename(rel))[0], _F5_ENCLOSING37.get(func, func))
+                   for rel, func, _call in _HTTP_REVIEWED37 if func != "<module>"})
+
+
 def _f5_justification():
     """codeql-config.yml's py/partial-ssrf justification names every reviewed site."""
     text = _read29(".github", "codeql", "codeql-config.yml")
     head = text[:text.find("query-filters:")] if "query-filters:" in text else ""
     comment = "\n".join(ln for ln in head.splitlines() if ln.lstrip().startswith("#"))
-    # Every reviewed site the tripwire holds (review 1107: a hand-kept list of six, so game_icons, added
-    # to _HTTP_REVIEWED37 by #487, could drop out of the justification with both checks green). A
-    # function nested in another is named by the one around it.
-    named = sorted({"%s.%s" % (os.path.splitext(os.path.basename(rel))[0], _F5_ENCLOSING37.get(func, func))
-                    for rel, func, _call in _HTTP_REVIEWED37 if func != "<module>"})
-    missing = [n for n in named if n not in comment]
+    missing = [n for n in _f5_named() if n not in comment]
     check("outbound HTTP: the partial-ssrf exclusion's justification names every call site it "
           "rests on, and no longer says _post is the only one",
           bool(comment) and not missing and "ONLY outbound-HTTP sink" not in comment

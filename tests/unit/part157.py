@@ -6,6 +6,11 @@ Held here, each against the code path the finding named:
   "Loading mods…" for good under its own tab.
 * the console's command history: keyed by the account and the server's own row, dropped on any page
   drawn signed out, and a "fills the box" quick command ends Up/Down browsing.
+* the console's coloured lines in the light theme, and the charts after a live change of scheme.
+* the install page's tiles after Refresh list or Retry, and its greyed-out note on a non-Ubuntu host.
+* the suite time limit's report during a unit part; the branch switch's signed-release walk; the update
+  card's count and list on both paths; a stored first-Thursday wipe; the unit tailscale guard reading
+  the script file a nested shell's -c script runs.
 
 HOW IT RUNS. Scripts in node on this part's own fixtures (part87's DOM stand-in, part99's runner);
 pages on part12's Flask app and client (part12 has run), every stub through _p9_patch and undone in
@@ -13,12 +18,16 @@ the finally.
 """
 import datetime as _dt157
 import json as _json157
+import os
 import re as _re157
+import shutil as _shutil157
+import tempfile as _tf157
 
 from unit.part01 import check
 from unit.part12 import P9_ADMIN, P9_GS, P9_VIEWER, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from unit.part143 import _SD143_PATH, _fire143
 from unit.part99 import _SF99, _cut_or99, _js99, _line_or99, _read99
+from unit import ts_nested as _tn157
 from panel.ops import system_ops as _so157
 from panel.ops.ssh_manager import _core as _smc157
 from panel.routes import server_detail as _sd157
@@ -205,11 +214,11 @@ _out157 = _js99(_name157, (
     "  console.log(JSON.stringify({x7, x7light: _histX().ticks.color, live: ink(statsChart),\n"
     "    hist: ink(_histCharts['hist-host']), updates, watch: watched && [watched.el, watched.o]}));\n"), _SD157)
 if _out157 is not None:
-    _lightInk157 = ["#4b5563", "rgba(0,0,0,.08)", "#4b5563", None, "#4b5563", "#1f2937"]
+    _light_ink157 = ["#4b5563", "rgba(0,0,0,.08)", "#4b5563", None, "#4b5563", "#1f2937"]
     check("charts: a change of colour scheme on <html> repaints the live CPU chart's and every History "
           "chart's ticks, grid lines and legend in the new scheme, and leaves a hidden grid hidden (they "
           "kept the old scheme's ink until a reload)",
-          _out157.get("live") == _lightInk157 and _out157.get("hist") == _lightInk157
+          _out157.get("live") == _light_ink157 and _out157.get("hist") == _light_ink157
           and _out157.get("updates") == 2
           and _out157.get("watch") == [True, {"attributes": True, "attributeFilter": ["data-bs-theme"]}],
           repr(_out157))
@@ -424,3 +433,25 @@ check("wipe: a stored first-Thursday schedule is not due on another of the 1st-7
       "first Thursday (the sweep's due() must keep the AND, which cron's line alone reads as OR)",
       _due157 == {"mon 2nd": (None, _utc157(2026, 11, 5, 19)), "thu 5th": ("run", _utc157(2026, 11, 5, 19))},
       repr(_due157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 10. The unit tailscale guard reads the script file a nested shell's -c script runs
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ts_nested answered a nested shell with -c as "read already": its -c script was part of the outer
+# text, but a script FILE it ran was never read, so `bash -c 'bash -c "sh f.sh"'` with a tailscale in
+# f.sh ran the machine's binary unshimmed and unjudged (the dev machine has one; CI does not). Written
+# in '…' it was lost earlier still: the single-quote stripper empties '…' before the split. Driven on
+# the runner's own bound reader (unit_test.py imports it as unit.ts_nested and binds it).
+_tnd157 = _tf157.mkdtemp(prefix="lgsm-unit-p157-")
+try:
+    _tnf157 = os.path.join(_tnd157, "inner-157.sh")
+    with open(_tnf157, "w", encoding="utf-8") as _fh157:
+        _fh157.write("tailscale version\n")
+    _nested157 = [_tn157.shell_text(["bash", "-c", _s % _tnf157], {}) for _s in (
+        'bash -c "sh %s"', "bash -c 'sh %s'", "true; sudo -u x bash -ec 'exec sh %s'")]
+finally:
+    _shutil157.rmtree(_tnd157, ignore_errors=True)
+check("unit suite guard: a script file a nested shell's -c script runs is read with it, the -c in double "
+      "quotes, in single quotes, or behind sudo",
+      [(_t or "").count("tailscale version") for _t in _nested157] == [1] * 3, repr(_nested157))
