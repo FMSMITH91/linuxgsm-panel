@@ -1442,16 +1442,20 @@ def _note_ignored_proxy(addr, local_uid=None, declared=True):
         _ignored_proxy_warned.clear()       # bounded: a scan from many addresses cannot grow it
     _ignored_proxy_warned[key] = now
     log = logging.getLogger("panel.app")
+    # The peer's address with CR and LF replaced: it comes off the request, and a line break in it
+    # would forge a log line. Not left to %r, which neither CodeQL's nor Sonar's log-injection rule
+    # takes as a sanitiser.
+    shown = str(addr).replace("\r", " ").replace("\n", " ")
     if not declared:
         log.warning("ignoring X-Forwarded-For from %s (a local account, uid %s): without "
-                    "trust_proxy only a root-owned loopback peer (tailscaled) is believed", addr,
+                    "trust_proxy only a root-owned loopback peer (tailscaled) is believed", shown,
                     local_uid)
     elif local_uid is None:
         log.warning("ignoring X-Forwarded-For from %s; add it to trusted_proxies in config.json if "
-                    "it is your proxy", addr)
+                    "it is your proxy", shown)
     else:
         log.warning("ignoring X-Forwarded-For from %s (a local account, uid %s); add that account "
-                    "to trusted_proxy_users in config.json if it is your proxy", addr, local_uid)
+                    "to trusted_proxy_users in config.json if it is your proxy", shown, local_uid)
 
 
 def client_ip():
