@@ -23,12 +23,12 @@ def _parse_ufw_rule(detail):
     Structured so the UI can show clean columns instead of the raw string. Handles the optional
     `on <iface>` clause, the `# comment` suffix, and the `(v6)` family markers.
     """
-    v6 = "(v6)" in detail
-    s = detail.replace("(v6)", " ")
-    comment = ""
-    if "#" in s:
-        s, comment = s.split("#", 1)
-        comment = comment.strip()
+    # The comment first: "(v6)" typed in a hand-made comment filed an IPv4 rule under IPv6 (the panel's
+    # own comments cannot hold parentheses), and the comment lost the text (review 1107 lead).
+    rule, _sep, comment = detail.partition("#")
+    v6 = "(v6)" in rule
+    s = rule.replace("(v6)", " ")
+    comment = comment.strip()
     iface = ""
     m = re.search(r"\bon\s+(\S+)", s)
     if m:

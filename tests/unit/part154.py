@@ -360,5 +360,15 @@ check("1107 A09 LOW: ...while with UFW off or not installed the move goes ahead 
       and _cp_ok["the open worked"][1]["status"] == [] and _cp_ok["a loopback bind behind Serve"][1]["open"] == [],
       repr({k: (b.get("success"), str(b.get("message"))[:120], c, a) for k, (b, c, a) in _cp_ok.items()}))
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A03 lead: "(v6)" in a comment does not make a rule IPv6
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_pc = _fw154._parse_ufw_rule("22/tcp                     ALLOW IN    Anywhere                   # home (v6) box")
+_pc6 = _fw154._parse_ufw_rule("22/tcp (v6)                ALLOW IN    Anywhere (v6)              # home box")
+check("1107 A03 lead: an IPv4 rule whose hand-made comment says \"(v6)\" is read as IPv4, its comment kept whole; "
+      "a real (v6) row is still IPv6 (control)",
+      (_pc["v6"], _pc["comment"], _pc["from"], _pc6["v6"], _pc6["comment"], _pc6["from"])
+      == (False, "home (v6) box", "Anywhere", True, "home box", "Anywhere"), repr((_pc, _pc6)))
+
 check("1107 part154: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP154_START,
       repr(_P9_TRIPPED[_TRIP154_START:]))
