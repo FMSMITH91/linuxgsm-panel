@@ -212,3 +212,58 @@ if _out157 is not None:
     check("charts: ...and the 7-day x axis is drawn in the scheme in force when a chart is built (it was "
           "taken once, when the script loaded)",
           (_out157.get("x7"), _out157.get("x7light")) == ("#8b98a5", "#4b5563"), repr(_out157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 5. The install page's game tiles after Refresh list or Retry
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# refreshSection swaps #game-picker's contents: a new grid whose <img>s carry only data-icon-script.
+# startGameIcons ran once, on load, its observer rooted at the old grid, so every tile kept its
+# initials until a reload. And with no list on first render there was no #game-picker at all, so a
+# Retry that loaded one never showed the picker.
+_MS157 = _read99("panel", "static", "js", "manage_servers.js")
+_name157 = "install page: the tiles after a refreshed game list"
+_out157 = _js99(_name157, (
+    "global.window = global; global.MOUNT = '/p'; let synced = 0; function syncGameTiles(){ synced++; }\n"
+    "function img(u) { const a = {'data-icon-script': u};\n"
+    "  return {src: '', getAttribute: k => (k in a ? a[k] : null), removeAttribute: k => { delete a[k]; },\n"
+    "    has: () => 'data-icon-script' in a}; }\n"
+    "const mkGrid = names => { const imgs = names.map(img);\n"
+    "  return {imgs, querySelectorAll: () => imgs.filter(i => i.has())}; };\n"
+    "const picker = {hidden: true}; let grid = null;\n"
+    "document.getElementById = id => (id === 'game-grid' ? grid : id === 'game-picker' ? picker : null);\n"
+    "const obs = [];\n"
+    "global.IntersectionObserver = function (cb, opts) { const me = {cb, root: opts.root, seen: [], off: false};\n"
+    "  obs.push(me); this.observe = el => me.seen.push(el); this.unobserve = () => {};\n"
+    "  this.disconnect = () => { me.off = true; }; };\n"
+    + _line_or99(_MS157, "var _r37d_iconWatch") + "\n"), (
+    "function _loadGameIcon(", "function startGameIcons(", "function _r37d_gameTilesRefreshed("), (
+    "  const out = {};\n"
+    "  grid = mkGrid(['rustserver']); startGameIcons();\n"
+    "  grid = mkGrid(['csgoserver', 'gmodserver']); _r37d_gameTilesRefreshed();\n"
+    "  const io = obs[obs.length - 1];\n"
+    "  io.cb(io.seen.map(t => ({target: t, isIntersecting: true})));\n"
+    "  out.refresh = {observers: obs.length, oldOff: obs[0].off, root: io.root === grid,\n"
+    "    src: grid.imgs.map(i => i.src), synced, shown: !picker.hidden};\n"
+    "  grid = null; picker.hidden = true; _r37d_gameTilesRefreshed(); out.empty = picker.hidden;\n"
+    "  console.log(JSON.stringify(out));\n"), _MS157)
+if _out157 is not None:
+    check("install page: after Refresh list or a Retry swaps the picker in, the new tiles' icons load "
+          "(observed in the new grid, the old grid's observer dropped), the tiles are synced and the "
+          "picker is shown (the icons never loaded again, and a Retry from an empty list showed no picker)",
+          _out157.get("refresh") == {"observers": 2, "oldOff": True, "root": True,
+                                     "src": ["/p/game-icon/csgoserver", "/p/game-icon/gmodserver"],
+                                     "synced": 1, "shown": True}, repr(_out157))
+    check("install page: ...and a swap that brought no list leaves the picker hidden",
+          _out157.get("empty") is True, repr(_out157))
+_IS157 = _read99("panel", "templates", "install_server.html")
+check("install page: the picker is on the page even with no game list (hidden), so a Retry that "
+      "loads one has a picker to fill",
+      _re157.search(r'<div class="col-12 order-md-last" id="game-picker"\{% if not games %\} hidden'
+                    r'\{% endif %\}>\s*\{% if games %\}', _IS157) is not None, "")
+# #469 caps a Debian host by Debian releases (_capForHost); the note under the select said Ubuntu.
+_fg157 = _cut_or99(_MS157, "function filterGamesForHost(")
+_note157 = _re157.findall(r"why\.textContent = t\((\"[^\"]*\"|'[^']*')\)", _fg157)
+check("install page: the greyed-out games note names no one distro (it said \"an older Ubuntu\" on a "
+      "Debian host)", len(_note157) == 1 and "Ubuntu" not in _note157[0] and "Debian" not in _note157[0],
+      repr(_note157))

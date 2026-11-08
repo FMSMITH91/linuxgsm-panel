@@ -121,8 +121,10 @@
          manage_servers.js builds the icon's URL from it once the page has drawn, so the icons never
          hold back the first paint. Right under the Game select on a phone; last on a
          wide screen (order-md-last), below the row of fields. #}
+      {# Always on the page, hidden with no list, so a Retry that loads one has a picker to fill
+         (manage_servers.js refreshGameList swaps this element's contents). #}
+      <div class="col-12 order-md-last" id="game-picker"{% if not games %} hidden{% endif %}>
       {% if games %}
-      <div class="col-12 order-md-last" id="game-picker">
         <div class="d-flex align-items-center gap-2 mb-2">
           <input type="search" id="game-search" class="form-control form-control-sm" style="max-width:22rem;"
                  placeholder="Search games" aria-label="Search games by name or script name" autocomplete="off"
@@ -141,8 +143,8 @@
           </button>
           {% endfor %}
         </div>
-      </div>
       {% endif %}
+      </div>
       <div class="col-md-3">
         <label class="form-label" for="server-name-input">Server Name <span class="text-secondary">(optional)</span></label>
         <input type="text" name="server_name" id="server-name-input" class="form-control" placeholder="Leave blank for default">
