@@ -8,15 +8,18 @@ HOW IT RUNS. Monitoring's reconcile and the firewall module over part135's stand
 part12's patcher with its transport tripwire armed. Nothing reaches a host, sudo, ufw or data/.
 """
 import ipaddress as _ip154
+import os
+import struct as _st154
+import tempfile as _tf154
 from types import SimpleNamespace as _NS154
 
 from unit.part01 import check
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_cfg, _p9_client, _p9_json, _p9_patch, _p9_patch_sm,
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_client, _p9_json, _p9_patch, _p9_patch_sm,
                          _p9_restore_all, _p9_so)
 from unit.part108 import _ANY108
 from unit.part116 import _boot116, _saved116
 from unit import part135 as _p135
-from unit.part136 import _deny136
+from unit.part136 import _OUT136, _deny136
 from panel.core import i18n as _i18n154
 from panel.ops import system_ops as _so154
 from panel.ops.ssh_manager import firewall as _fw154, hosts as _hosts154, ufweval as _ue154
@@ -212,30 +215,70 @@ check("1107 A03 MEDIUM: ...and it is not protected where something else keeps th
       all(_ts0_154(g) not in ("PROTECTED", None) for g in _m_ok.values()), repr(_m_ok))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# A03 LOW: a host dialled by name keeps SSH open in both families
+# A03 LOW: a host dialled by name keeps SSH open in every family it has a public address in
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _NAMED154 = _NS154(is_local=False, auth_method="key", host="h154.example.net", port=22, id=None, name="n154")
 _V6_154 = "22/tcp (v6)  ALLOW IN  Anywhere (v6)"
+_REAL_CONN154 = _p135._conn135
+
+
+def _named154(rows, v6=("eth0", "2001:db8::10"), **kw):
+    """_deny136 on the named remote, whose session read also finds `v6` (iface, address, scope) on it.
+
+    v6 None: the host's IPv4 address alone; "unread": the session read without the host's addresses.
+    """
+    def conn(src, server, *a, **k):
+        res = _REAL_CONN154(src, server, *a, **k)
+        if res is not None and v6 == "unread":
+            res["addrs"] = None
+        elif res is not None and v6 is not None:
+            res["addrs"] = res["addrs"] + [(v6[0], _ip154.ip_address(v6[1]), v6[2] if len(v6) > 2 else "global")]
+        return res
+    return _deny136(rows, server=_NAMED154, extra=[(_p135, "_conn135", conn)], **kw)
+
+
 _fam_cut = {
-    "a v4-only SSH rule": _deny136([_p135._SSH22], server=_NAMED154),
-    "v6: UDP only": _deny136([_p135._SSH22, "22/udp (v6)  ALLOW IN  Anywhere (v6)"], server=_NAMED154),
-    "v6: OUT only": _deny136([_p135._SSH22, "22/tcp (v6)  ALLOW OUT  Anywhere (v6) (out)"], server=_NAMED154),
-    "v6: a DENY above the ALLOW": _deny136([_p135._SSH22, "22/tcp (v6)  DENY IN  Anywhere (v6)", _V6_154],
-                                           server=_NAMED154),
+    "a v4-only SSH rule": _named154([_p135._SSH22]),
+    "v6: UDP only": _named154([_p135._SSH22, "22/udp (v6)  ALLOW IN  Anywhere (v6)"]),
+    "v6: OUT only": _named154([_p135._SSH22, "22/tcp (v6)  ALLOW OUT  Anywhere (v6) (out)"]),
+    "v6: a DENY above the ALLOW": _named154([_p135._SSH22, "22/tcp (v6)  DENY IN  Anywhere (v6)", _V6_154]),
 }
-check("1107 A03 LOW: on a remote dialled by name, measured over IPv4, a default incoming deny is refused (nothing "
-      "sent, SSH's port named) while the IPv6 list has no way in for SSH (%s)" % ", ".join(_fam_cut),
+check("1107 A03 LOW: on a dual-stack remote dialled by name, measured over IPv4, a default incoming deny is refused "
+      "(nothing sent, SSH's port named) while the IPv6 list has no way in for SSH (%s)" % ", ".join(_fam_cut),
       all(r[0] is False and r[2] == [] and "No rule lets SSH in" in r[1] for r in _fam_cut.values()),
       repr({k: (r[0], r[1][:160]) for k, r in _fam_cut.items()}))
 _fam_ok = {
-    "both families": _deny136([_p135._SSH22, _V6_154], server=_NAMED154),
+    "both families": _named154([_p135._SSH22, _V6_154]),
     "an address literal, v4 rule only": _deny136([_p135._SSH22]),
-    "a name, IPV6=no": _deny136([_p135._SSH22], server=_NAMED154, ipv6="no"),
+    "a name, IPV6=no": _named154([_p135._SSH22], ipv6="no"),
 }
 check("1107 A03 LOW: ...and set with a way in both families, for an address literal dialled in its own family, "
       "and where ufw does not handle IPv6 (the controls)",
       all(r[0] is True and r[2] == [("ufw-default", ["deny", "incoming"])] for r in _fam_ok.values()),
       repr({k: (r[0], r[1][:160]) for k, r in _fam_ok.items()}))
+# The adversarial review's case (r37g): a name with nothing public over IPv6 resolves to IPv4 alone, so its
+# usual hardened single-source IPv4 SSH rule (from the panel's session's source) is the way in, and the deny
+# was refused as "no rule lets SSH in".
+_ADMIN_SSH154 = "22/tcp  ALLOW IN  " + _OUT136
+_fam_v4 = {
+    "IPv4 addresses only, a single-source v4 rule": _named154([_ADMIN_SSH154], v6=None),
+    "IPv4 addresses only, a v4 rule to anywhere": _named154([_p135._SSH22], v6=None),
+    "IPv6 link-local only": _named154([_ADMIN_SSH154], v6=("eth0", "fe80::10", "link")),
+    "IPv6 on docker0 only": _named154([_ADMIN_SSH154], v6=("docker0", "2001:db8:d::1")),
+}
+check("1107 r37g: on a remote dialled by name whose session read finds no public IPv6 address (IPv4 only, a "
+      "link-local or container-bridge IPv6 only), a default incoming deny beside an IPv4-only SSH rule is set "
+      "(%s)" % ", ".join(_fam_v4),
+      all(r[0] is True and r[2] == [("ufw-default", ["deny", "incoming"])] for r in _fam_v4.values()),
+      repr({k: (r[0], r[1][:160]) for k, r in _fam_v4.items()}))
+_fam_v4_cut = {
+    "dual-stack": _named154([_ADMIN_SSH154]),
+    "the host's addresses unread": _named154([_ADMIN_SSH154], v6="unread"),
+}
+check("1107 r37g: ...and with that same single-source IPv4 SSH rule it is still refused, nothing sent, where the "
+      "host has a public IPv6 address or its addresses were not read (%s)" % ", ".join(_fam_v4_cut),
+      all(r[0] is False and r[2] == [] and "No rule lets SSH in" in r[1] for r in _fam_v4_cut.values()),
+      repr({k: (r[0], r[1][:160]) for k, r in _fam_v4_cut.items()}))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # A03 LOW: the panel host refuses an IP block while the viewer is unknown
@@ -272,6 +315,99 @@ _ub_ok = {
 check("1107 A03 LOW: ...while a known viewer the range does not hold, a Cloudflare Tunnel and a proxy whose port "
       "alone is unknown still pass (the controls)",
       all(v is None for v in _ub_ok.values()), repr(_ub_ok))
+
+# r37g (adversarial F2): "unknown" was also a viewer on the panel machine's own loopback with no proxy in
+# front — a browser there, or an admin on `ssh -L` — whose leg to the panel ufw never filters. Refusing every
+# block for them took manual blocking away with advice (trust_proxy) that could not make it pass. Driven
+# through the real viewer reading (no _fwb_panel_viewer stand-in): the request's own peer and headers.
+_TUNNEL154 = "198.51.100.9"        # NOSONAR(S1313) - inside _RANGE154: the admin's SSH session's source
+_ELSEWHERE154 = "192.0.2.99"       # NOSONAR(S1313) - outside it
+
+
+def _lo154(fn, headers=None, sessions=()):
+    """fn() on the panel host, in a request from 127.0.0.1 with `headers`; sshd's sessions read as `sessions`
+    [(source, port)] (None: unread) -> its answer as text (an (ok, message) answer: the message)."""
+    host = _p135._Host135(rules=[_p135._SSH22, "5000/tcp  ALLOW IN  Anywhere"], incoming="allow")
+
+    def run():
+        _p9_patch(_ue154, "inbound_to", lambda ports: None if sessions is None else [
+            (_ip154.ip_address(a), _ip154.ip_address(_p135._HOST_ADDR135), p) for a, p in sessions if p in ports])
+        with _p9.test_request_context("/", environ_base={"REMOTE_ADDR": "127.0.0.1"},  # NOSONAR(S1313)
+                                      headers=headers or {}):
+            why = fn()
+        why = why[1] if isinstance(why, tuple) else why
+        return None if why is None else str(why)
+
+    return _p135._on135(host, run)
+
+
+def _lo_block154(target=_RANGE154, **kw):
+    return _lo154(lambda: _fw154.fwc_block_ip_refusal(_p135._LOCAL135, target), **kw)
+
+
+_lo_ok = {
+    "a browser on the host (no SSH session)": _lo_block154(),
+    "a tunnel from outside the range": _lo_block154(sessions=[(_ELSEWHERE154, 22)]),
+    "a session in the range on a port sshd does not serve": _lo_block154(sessions=[(_TUNNEL154, 443)]),
+}
+check("1107 r37g: on the panel host, a request from loopback naming no forwarded client (a browser there, an SSH "
+      "tunnel) may block an address range none of sshd's open sessions comes from",
+      all(v is None for v in _lo_ok.values()), repr(_lo_ok))
+_lo_cut = _lo_block154(sessions=[(_ELSEWHERE154, 22), (_TUNNEL154, 22)])
+_lo_unread = _lo_block154(sessions=None)
+check("1107 r37g: ...but not one that holds an open SSH session's source (it may be the viewer's tunnel), named, "
+      "nor any while sshd's sessions cannot be read — and neither answer tells them to set trust_proxy",
+      _lo_cut is not None and _TUNNEL154 in _lo_cut and "SSH tunnel" in _lo_cut and "trust_proxy" not in _lo_cut
+      and _lo_unread is not None and "loopback" in _lo_unread and "trust_proxy" not in _lo_unread,
+      repr((_lo_cut, _lo_unread)))
+_lo_proxy = {h: _lo_block154(headers={h: _PROXIED154}) for h in ("X-Forwarded-For", "X-Real-IP")}
+_lo_proxy["Forwarded"] = _lo_block154(headers={"Forwarded": "for=" + _PROXIED154})
+check("1107 r37g: ...while a request from loopback that names a client it forwards for (an X-Forwarded-For, "
+      "X-Real-IP or Forwarded the panel does not believe: a proxy here it was not told to trust) is still refused "
+      "every block, naming trust_proxy",
+      all(v is not None and "trust_proxy" in v for v in _lo_proxy.values()), repr(_lo_proxy))
+_lo_other = {
+    "a port block": _lo154(lambda: _fw154._fwa_port_block_refusal(_p135._LOCAL135, 8080, 8080, ("tcp",))),
+    "a default incoming deny": _lo154(lambda: _fw154.remote_ufw_set_default(_p135._LOCAL135, "incoming", "deny")),
+}
+check("1107 r37g: the guards that still refuse for that loopback viewer (a port block, a default incoming deny) "
+      "say why without the trust_proxy advice, which cannot help it",
+      all(v is not None and "loopback" in v and "trust_proxy" not in v for v in _lo_other.values()),
+      repr(_lo_other))
+
+
+def _proc154(rows):
+    """A /proc/net/tcp body: rows [(local addr, local port, remote addr, remote port, state)]."""
+    def end(a, port):
+        return "%08X:%04X" % (_st154.unpack("=I", _ip154.ip_address(a).packed)[0], port)
+    return "  sl  local_address rem_address   st\n" + "".join(
+        "   %d: %s %s %s 00000000:00000000 00:00000000 00000000  1000 0 1 1\n" % (n, end(la, lp), end(ra, rp), st)
+        for n, (la, lp, ra, rp, st) in enumerate(rows))
+
+
+def _inbound_to154(rows, ports=frozenset({22})):
+    with _tf154.TemporaryDirectory() as d:
+        t4 = os.path.join(d, "tcp")
+        if rows is not None:
+            with open(t4, "w") as fh:
+                fh.write(_proc154(rows))
+        try:
+            _p9_patch(_ue154, "_PROC_TCP", {4: t4})
+            return _ue154.inbound_to(ports)
+        finally:
+            _p9_restore_all()
+
+
+_HERE154 = _p135._HOST_ADDR135
+_it = _inbound_to154([(_HERE154, 22, _TUNNEL154, 50000, "01"),           # an SSH session: counted
+                      (_HERE154, 22, _ELSEWHERE154, 50001, "06"),        # TIME_WAIT: not
+                      (_HERE154, 443, _ELSEWHERE154, 50002, "01"),       # another port: not
+                      ("127.0.0.1", 22, "127.0.0.1", 50003, "01"),       # NOSONAR(S1313) - loopback: not
+                      ("0.0.0.0", 22, "0.0.0.0", 0, "0A")])              # NOSONAR(S1313) - the listener: not
+check("1107 r37g: ufweval.inbound_to reads /proc/net/tcp's ESTABLISHED connections to the given ports from other "
+      "machines (not TIME_WAIT, another port, loopback or the listener), and None when the table cannot be read",
+      _it == [(_ip154.ip_address(_TUNNEL154), _ip154.ip_address(_HERE154), 22)] and _inbound_to154(None) is None,
+      repr(_it))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # A03 LOW: "Disable public SSH" and the panel's tailnet session on a port Tailscale SSH does not answer
