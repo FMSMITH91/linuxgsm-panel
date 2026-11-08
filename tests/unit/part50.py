@@ -376,15 +376,16 @@ check("docs-only: the PR alert gate passes a docs-only pull request by a step th
       repr({k: _if50(v) for k, v in _pa_steps50.items()}))
 
 # ── No Claude session links in the repository ────────────────────────────────────────────────────
-# Cloud and Remote Control sessions append a claude.ai session link to every commit ("Claude-Session:"
-# trailer) and pull request unless attribution.sessionUrl is false. Cloud sessions read only the
-# committed .claude/settings.json, so the switch has to live there. A session link is a
-# private conversation; this repository is public.
+# A session link is a private conversation; this repository is public. The switch that keeps
+# them out of commits and pull requests (attribution.sessionUrl false) lives in the owner's
+# user-level Claude settings, not in the repository: the owner works only from the dev machine,
+# and asked (2026-11-08) that nothing of Claude Code's be uploaded. So .claude/ is gitignored as
+# a whole, and the walk below still fails the build on any link that reaches a tracked file.
 
-_cs50 = _json50.load(open(os.path.join(_root, ".claude", "settings.json"), encoding="utf-8"))
-check("session links: the committed .claude/settings.json turns the session link off "
-      "(attribution.sessionUrl is false, which cloud sessions read from the repository)",
-      (_cs50.get("attribution") or {}).get("sessionUrl") is False, repr(_cs50))
+with open(os.path.join(_root, ".gitignore"), encoding="utf-8") as _gi50:
+    _gi_lines50 = {_l.strip() for _l in _gi50}
+check("session links: .gitignore keeps the whole of .claude/ (local Claude Code state) out of the repository",
+      bool(_gi_lines50 & {"/.claude/", ".claude/", "/.claude", ".claude"}), repr(sorted(_gi_lines50)[:12]))
 _needle50 = ("claude.ai/code/" + "session_").encode()
 # Walked, not `git grep`: the suites run on a copy of the tree that is not a git checkout.
 # Skipped by name anywhere: tool output. Skipped only where the checkout puts them (the repo root,
