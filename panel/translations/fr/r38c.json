@@ -1,0 +1,3 @@
+{
+  "Not switched: none of the recent versions of '{branch}' is a signed release this host could verify, so the installer would not move to any of them.": "Non basculé : aucune des versions récentes de « {branch} » n'est une version signée que cet hôte a pu vérifier, l'installateur ne passerait donc à aucune d'elles."
+}

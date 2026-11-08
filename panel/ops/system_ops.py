@@ -2858,11 +2858,12 @@ def _verified_branch_target(branch):
         # Not "none of the recent versions passed": none of them was read.
         return "", i18n.Sentence("Couldn't read the versions of '{branch}', so there is no verified "
                                  "version to switch to.", branch=branch)
-    states = []
+    states, any_signed = [], False
     signed = _release_gate_for(branch)
     for sha in [c for c in (revs or "").split() if c]:
         if not signed(sha):
             continue   # not a signed release: the installer would not move to it
+        any_signed = True
         _ci_unknown_why["reason"] = ""
         st = _remote_ci_state(sha)
         if st == "passing":
@@ -2871,6 +2872,13 @@ def _verified_branch_target(branch):
             return "", i18n.Sentence("Not switched: '{branch}' couldn't be verified — {why}.",
                                      branch=branch, why=_ci_unknown_why["reason"] or _CI_WHY_UNREACHABLE)
         states.append(st)
+    if not any_signed:
+        # Not "none passed its automated checks": none was judged by them. No commit walked is a
+        # signed release this host can verify — unsigned, or its release key or the signatures
+        # could not be read (_release_gate_for answers False for every commit then).
+        return "", i18n.Sentence("Not switched: none of the recent versions of '{branch}' is a signed "
+                                 "release this host could verify, so the installer would not move to "
+                                 "any of them.", branch=branch)
     if "pending" in states:
         return "", i18n.Sentence("Not switched: no version of '{branch}' has finished its automated "
                                  "checks yet. Try again once they've passed (usually a few minutes).",

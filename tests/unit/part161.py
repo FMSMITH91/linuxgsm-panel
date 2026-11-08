@@ -7,10 +7,17 @@ Held here, each against the code path the finding named:
   new log (a Restart's `mv` falling inside the read): they were wiped with nothing to bring them
   back, and Load older put them back by their text BELOW the new log. The page's own functions run
   in node on part158's stand-in console, with the real _rebuild* helpers in place of its no-ops.
+* "Switch to main" with no signed release among the walked commits (unsigned, or no release key, or
+  the signatures could not be fetched) said none of them "passed its automated checks", though none
+  was judged by them. It now says none is a signed release this host could verify, in es/fr too;
+  signed commits that failed CI still get the old answer.
 """
 import json as _json161
 
+from panel.core import i18n as _i18n161
+from panel.ops import system_ops as _so161
 from unit.part01 import check, skip
+from unit.part12 import _p9_patch, _p9_restore_all
 from unit.part47 import _cut47, _node47
 from unit.part158 import _DOM158, _FUNCS158, _SD158
 
@@ -84,3 +91,43 @@ elif _out161 is not None:
           and _out161.get("again") == ["c3", "c4", "[ INFO ] Restarting", "d1", "d2", "d3",
                                        "[ INFO ] Restarting", "e1", "e2", "e3", "[ INFO ] Restarting", "f1"],
           _json161.dumps(_out161))
+
+
+# ── The branch switch's answer when no walked commit is a signed release ─────────────────────────
+_C161 = ("a3" * 20, "a2" * 20, "a1" * 20)
+
+
+def _git161(args, timeout=45):
+    del timeout
+    return (" ".join(_C161), "", 0) if args[:2] == ["rev-list", "--first-parent"] else ("", "", 0)
+
+
+def _gate161(signed):
+    """A _release_gate_for stand-in: a commit is a signed release when it is in `signed`."""
+    return lambda branch: (lambda sha: sha in signed)
+
+
+_sw161 = {}
+try:
+    _p9_patch(_so161, "_git", _git161)
+    _p9_patch(_so161, "_remote_ci_state", lambda sha: "failing")
+    for _k161, _signed161 in (("unsigned", frozenset()), ("failing", frozenset(_C161))):
+        _p9_patch(_so161, "_release_gate_for", _gate161(_signed161))
+        _sw161[_k161] = _so161._verified_branch_target("main")
+finally:
+    _p9_restore_all()
+_why161 = _sw161.get("unsigned", ("x", ""))[1]
+check("branch switch r38c: with no signed release among main's recent commits the switch says none is a "
+      "signed release this host could verify, not that none passed its automated checks (none was judged)",
+      _sw161.get("unsigned", ("x",))[0] == "" and "is a signed release this host could verify" in _why161
+      and "automated checks" not in _why161, repr(_sw161))
+check("branch switch r38c: ...and a Spanish or French viewer reads it in their language",
+      isinstance(_why161, _i18n161.Sentence)
+      and _i18n161.fill(_i18n161.translate("es", _why161.template), **_why161.vals).startswith(
+          "No se cambió: ninguna de las versiones recientes de 'main' es una versión firmada")
+      and _i18n161.fill(_i18n161.translate("fr", _why161.template), **_why161.vals).startswith(
+          "Non basculé : aucune des versions récentes de « main » n'est une version signée"),
+      repr(_why161))
+check("branch switch r38c: ...while signed commits that failed their checks still say none passed (control)",
+      _sw161.get("failing", ("x",))[0] == "" and "passed its automated checks" in _sw161["failing"][1],
+      repr(_sw161))
