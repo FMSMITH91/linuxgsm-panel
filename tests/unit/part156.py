@@ -27,6 +27,8 @@ Held here:
 * Closing "What's new" records the changelog the page was rendered from, not the one on disk when
   the POST lands: entries an update added meanwhile are shown on the next page. An older tab never
   takes back what a newer one recorded; a malformed stamp, or none, records the file as before.
+* The reboot dialog, re-drawn when "Reboot now" answers 409 (someone joined after it opened), keeps
+  the plan it was opened with: its warning lines, the wait limit and "After the reboot:".
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -41,6 +43,7 @@ import time as _time156
 
 from unit.part01 import check, skip
 from unit.part05 import _root
+from unit.part47 import _cut47, _node47
 from unit.part12 import P9_ADMIN, P9_GS, _p9, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
 from flask import Flask as _Flask156
 from sqlalchemy import text as _sa_text156
@@ -498,3 +501,37 @@ check("A01 L what's new: a dialog closed in an older tab does not take back what
 _appjs156 = _read156("panel", "static", "js", "app_shell.js")
 check("A01 L what's new: the page posts the stamp it was rendered with when the dialog closes",
       "wn.getAttribute('data-seen-stamp')" in _appjs156 and "JSON.stringify({stamp: shown})" in _appjs156, "")
+
+
+# ── A12a L: the reboot dialog keeps its plan when "Reboot now" answers 409 ───────────────────────
+_nags156 = _read156("panel", "static", "js", "nags.js")
+_prog156 = (
+    "global.window = global; global.MOUNT = '';\n"
+    "const renders = [];\n"
+    "function _rbOpen(label){ return {label: label}; }\n"
+    "function _rbRender(dlg, host, players, plan){ renders.push({players: players, plan: plan, host: host}); }\n"
+    "function _rbFailed(){ renders.push('failed'); }\n"
+    "function _rbDone(){ renders.push('done'); }\n"
+    "const PLAN = {servers: [{id: 1, name: 'a', warn_minutes: 5}], wait_hours: 24};\n"
+    "global.fetch = path => Promise.resolve({ok: true, json: () => Promise.resolve(\n"
+    "  path.indexOf('/players') >= 0 ? {state: 'idle', busy: []} : PLAN)});\n"
+    + _cut47(_nags156, "function _rbAnswer(") + "\n"
+    + _cut47(_nags156, "window.rebootHost = function(") + "\n"
+    "(async () => {\n"
+    "  window.rebootHost(7, 'h', false);\n"
+    "  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));\n"
+    "  const first = renders[0];\n"
+    "  _rbAnswer({}, first.host, {code: 409, d: {needs_choice: true, players: {state: 'busy', busy: [{id: 1}]}}});\n"
+    "  const again = renders[1];\n"
+    "  console.log(JSON.stringify({n: renders.length, first: first.plan, again: again && again.plan,\n"
+    "                              players: again && again.players}));\n"
+    "})();\n")
+_on156 = _node47(_prog156)
+if _on156 is None:
+    skip("A12a L reboot dialog keeps its plan on 409", "node is not installed")
+else:
+    check("A12a L reboot dialog: when 'Reboot now' answers 409 (a player joined after it opened), the dialog is "
+          "re-drawn with the players AND the plan it was opened with (warning lines, wait limit, After the reboot)",
+          _on156.get("n") == 2 and _on156.get("again") == _on156.get("first") is not None
+          and (_on156.get("again") or {}).get("wait_hours") == 24
+          and (_on156.get("players") or {}).get("state") == "busy", repr(_on156))
