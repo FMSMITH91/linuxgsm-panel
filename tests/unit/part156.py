@@ -20,11 +20,14 @@ Held here:
 * Nothing tells an operator to UPDATE or RECOVER by piping a script from GitHub into a shell: the
   fresh install's banner names the installer already on the host (the signed path), as do
   install.sh's header, recover.sh's and the README's recovery section.
+* tools/sign-release.sh's warning before signing lists every file root installs from a release and
+  runs (install.sh's stage_root_source callers), held equal to them here.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
 """
 import os
+import re as _re156
 import shlex as _shlex156
 import shutil as _shutil156
 import subprocess as _sp156  # nosec B404 - git, bash and ssh-keygen over this part's own scratch files
@@ -355,3 +358,33 @@ check("A10 L: install.sh's header offers curl only to install, and recover.sh's 
       and "sudo bash /usr/local/lib/linuxgsm-panel/install.sh" in _hdr156
       and "recover.sh | sudo bash" not in _rec156 and "recover.sh | sudo bash" not in _readme156
       and "curl" not in _rec156.split("set -euo pipefail", 1)[0], "")
+
+
+# ── A10 L: the signer's root-run warning lists every file root stages from a release ────────────
+_sign156 = _read156("tools", "sign-release.sh")
+_flag156 = _re156.search(r"FLAGGED=.*?grep -E '([^']+)'", _sign156, _re156.S)
+_args156 = [a for ln in _INST156.splitlines() if not ln.lstrip().startswith("#")
+            for a in _re156.findall(r'stage_root_source ("[^"]+"|[^\s)]+) ', ln)]
+_gd156 = _re156.search(r"^GAMEDIG_FILES=\(([^)]*)\)", _INST156, _re156.M)
+_staged156 = set()
+for _a156 in _args156:
+    _a156 = _a156.strip('"').replace("${RELEASE_SIGNERS}", "release-signers")
+    if "${f}" in _a156 and _gd156:
+        _staged156.update(_a156.replace("${f}", _g156) for _g156 in _gd156.group(1).split())
+    else:
+        _staged156.add(_a156)
+_re_flag156 = _re156.compile(_flag156.group(1)) if _flag156 else None
+_alts156 = _flag156.group(1)[2:-1].split("|") if _flag156 else []
+_unflagged156 = sorted(p for p in _staged156 if not (_re_flag156 and _re_flag156.match(p)))
+_stale156 = [a for a in _alts156 if not a.startswith("\\.github/")
+             and not any(_re156.match("^(%s)" % a, p) for p in _staged156)]
+check("A10 L sign-release.sh: its 'changes what runs as root' warning flags every file install.sh stages for "
+      "root from a release (db_maintenance.py, recover.sh, uninstall.sh, gamedig's files included), and "
+      "names none that root does not stage",
+      len(_staged156) >= 9 and _staged156 >= {"db_maintenance.py", "recover.sh", "uninstall.sh", "install.sh",
+                                              "tools/gamedig/install-gamedig.sh", "tools/panel-helper",
+                                              "release-signers"}
+      and _unflagged156 == [] and _stale156 == [], repr((sorted(_staged156), _unflagged156, _stale156)))
+check("A10 L sign-release.sh: ...and CI's workflows and the scripts they run",
+      bool(_re_flag156) and bool(_re_flag156.match(".github/workflows/ci.yml"))
+      and bool(_re_flag156.match(".github/scripts/complexity_gate.py")), "")
