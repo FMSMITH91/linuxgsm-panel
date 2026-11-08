@@ -381,6 +381,9 @@ _mv_r38h_fam = {
                                                                  None, local=True),
     "public SSH to the host's one address": _move159([_PUBH159 + " 22/tcp  ALLOW IN  Anywhere"]),
     "v6 public, a v6 session, the move fails": _move159([_HARD4_159, _SSH6_PUB159], _V6_SESS159, up=False),
+    "v6 public, v4 hardened, the session unread": _move159([_HARD4_159, _SSH6_PUB159], None),
+    "v6 public, a v4 DENY first on the new port": _move159(["2022/tcp  DENY IN  Anywhere", _HARD4_159, _SSH6_PUB159],
+                                                           None, local=True),
 }
 _mv_r38h_fam.update({
     "public SSH to a private address only": _move159(["10.159.0.5 22/tcp  ALLOW IN  Anywhere"],   # NOSONAR(S1313)
@@ -390,7 +393,9 @@ _mv_r38h_fam.update({
 _f159 = {k: (r[0], r[2]) for k, r in _mv_r38h_fam.items()}
 check("1108 r38h step 1: SSH public over one family only (IPv6, or IPv4 beside IPv6 rules) reads as public in that "
       "family: the new port gets a rule from anywhere in that family alone, never in the other (a v4 session there "
-      "gets its own source-only rule copied, nothing public); public SSH to the host's one address reads as public; "
+      "gets its own source-only rule copied, nothing public; with the session unread, the public family's rule "
+      "alone); a public DENY first on the new port in either family refuses; public SSH to the host's one "
+      "address reads as public; "
       "a failed move takes the family's rule back out; a rule for one private or tailnet address is not public SSH, "
       "and nothing is opened to the internet for it (the OWNER RULE)",
       _f159["v6 public, v4 hardened, a v6 session"] == (True, _V6_ADD159)
@@ -404,6 +409,9 @@ check("1108 r38h step 1: SSH public over one family only (IPv6, or IPv4 beside I
           True, [("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])])
       and _f159["v6 public, a v6 session, the move fails"] == (
           False, _V6_ADD159 + [("ufw-delete-allow-from-port", ["::/0", "2022", "tcp"])])
+      and _f159["v6 public, v4 hardened, the session unread"] == (True, _V6_ADD159)
+      and _f159["v6 public, a v4 DENY first on the new port"] == (False, [])
+      and "is blocked by the firewall rule" in _mv_r38h_fam["v6 public, a v4 DENY first on the new port"][1]
       and _f159["public SSH to a private address only"] == (True, [])
       and _f159["public SSH to a tailnet address only"] == (True, [])
       and "Public SSH is off" in _mv_r38h_fam["public SSH to a tailnet address only"][1],

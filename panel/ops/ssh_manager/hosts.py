@@ -4237,20 +4237,24 @@ def _r38a_scoped_open(server, before, port, served):
     # Public in every family listed: the public path. In one only, a rule from anywhere goes in for that
     # family alone (_r38h_family_public), so the other is not opened to the public by the move.
     public_on = fams == listed
-    if not _r26b_dials_after_bind(server):
-        if public_on:
-            return None
-        if fams:
-            return _r38h_family_public(server, before, port, min(fams))
-        return _r38a_public_off(before, port, served)
-    if public_on and not _r38a_scoped_deny(before, port):
+    dials = _r26b_dials_after_bind(server)
+    if dials and public_on and not _r38a_scoped_deny(before, port):
         return None                 # nothing but the public reading's own rules can refuse it
-    now = _r38a_session_conn(server)
-    if now is None:
-        return None if public_on else (False, i18n.Sentence(
+    now = _r38a_session_conn(server) if dials else None
+    if now is not None:
+        return _r38a_session_open(server, before, port, now, public_on, now.version in fams)
+    if public_on:
+        return None
+    if fams:
+        # Public in one family, and no session of the panel's known (its own host, Tailscale SSH, or one
+        # not read): that family's rule alone, as the public path did without reading the session (in
+        # both families then); the other family is still not opened.
+        return _r38h_family_public(server, before, port, min(fams))
+    if dials:
+        return False, i18n.Sentence(
             "Couldn't read the panel's own SSH connection to this host, and no public rule lets SSH in, so which "
-            "rule port {port} would need is not known. Nothing was changed.", port=port))
-    return _r38a_session_open(server, before, port, now, public_on, now.version in fams)
+            "rule port {port} would need is not known. Nothing was changed.", port=port)
+    return _r38a_public_off(before, port, served)
 
 
 def _r38a_public_off(before, port, served):
@@ -4298,14 +4302,18 @@ def _r38h_left_by(spec, version, ports, port):
 def _r38h_family_public(server, before, port, version, moved=None, apps=None):
     """_r38a_scoped_open where SSH is public in family `version` only: a rule from anywhere in that family alone.
 
-    (added, refusal). Its first public rule for `port` denying refuses the move; allowing, nothing is added.
+    (added, refusal). A public rule first on `port` denying it (either family) refuses the move; that family's
+    allowing it, nothing is added.
     Else `ufw allow from <every address of the family> to any port <port> proto tcp` (the panel's own to
     undo: (_R38A_FROM, network)), confirmed by a re-read: the panel's session `moved` let in by it, or,
     with none (the panel's host, a Tailscale-SSH row), that family's first public rule for `port` an allow.
     """
-    first = _ufw_first_public_rule(before, port, "tcp", scoped=False, v6=version == 6)
-    if first is not None:
-        return False, (None if _r38h_lets_in(first) else _r26j_blocked(port, first["detail"]))
+    blocking = _r22b_ssh_port_reading(before, port)[1]
+    if blocking is not None:
+        # Either family's public DENY first on `port` refuses, as on the public path.
+        return False, _r26j_blocked(port, blocking["detail"])
+    if _r38h_lets_in(_ufw_first_public_rule(before, port, "tcp", scoped=False, v6=version == 6)):
+        return False, None
     net = _R25B_V4_ANYWHERE if version == 4 else _R30J_V6_ANYWHERE
     _o, _e, rc = _core.run_privileged(server, "ufw-allow-from-port", [net, str(port), "tcp", "SSH panel"], timeout=15)
     added = (_R38A_FROM, net) if rc == 0 else False

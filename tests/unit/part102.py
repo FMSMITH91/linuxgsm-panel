@@ -509,7 +509,12 @@ def _ufw_table102():
               "udp": ("22/udp", "ALLOW IN", "Anywhere"), "out": ("22/tcp", "ALLOW OUT", "Anywhere"),
               "fwd": ("22/tcp", "ALLOW FWD", "Anywhere")}
     got_in = {k: _move102(sock_both, [_TJ102 % r, a2222]) for k, r in way_in.items()}
-    got_not = {k: _move102(sock_both, [_TJ102 % r, a2222]) for k, r in not_in.items()}
+    # A host that lists a (v6) rule has IPv6 on, so its `allow 2222/tcp` has the (v6) twin: public SSH in both
+    # families, and the move back adds 22/tcp for both (review 1108 H judges public SSH per family; part159 has
+    # the case where IPv6 SSH is not public).
+    a2222_v6 = _TJ102 % ("2222/tcp (v6)", "ALLOW IN", "Anywhere (v6)")
+    got_not = {k: _move102(sock_both, [_TJ102 % r, a2222] + ([a2222_v6] if "(v6)" in r[0] else []))
+               for k, r in not_in.items()}
     denied = _move102(sock_both, [_TJ102 % ("22/tcp", "DENY IN", "Anywhere"),
                                   _TJ102 % ("22/tcp", "ALLOW IN", "Anywhere"), a2222])
     check("ssh port: an ALLOW, LIMIT, bare 22 or a range covering 22/tcp is a way in, so the move back adds "
