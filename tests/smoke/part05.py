@@ -501,13 +501,22 @@ try:
           _lat_rooms and all(r == "console_%d" % gs_id for r in _lat_rooms),
           "rooms=%s" % _lat_rooms)
 
-    # fastdl asks yes/no questions and loops forever on EOF: it is the one action fed Y's.
+    # fastdl asks yes/no questions and loops forever on EOF: it is the one action fed Y's. On an
+    # account whose LinuxGSM release reads as v26.4.0 (a release that cannot be read is not run at
+    # all: v26.5.0's first Y deletes the FastDL folder, unit part155).
     _lat_kw.clear()
     _lat_cmds.clear()
-    with app.app_context():
-        _lat_gs = db.session.get(GameServer, gs_id)
-        app._run_action(_lat_gs, _lat_gs.remote, "fastdl", None)
-    check("long action: fastdl really ran", _pa_wait(_lat_cmds) and _lat_cmds[0] == "fastdl",
+    from panel.ops.ssh_manager import hosts as _lat_hosts
+    _lat_versions_saved = _lat_hosts.lgsm_versions
+    _lat_hosts.lgsm_versions = lambda server, account, selfname: ("v26.4.0", "v26.4.0")
+    try:
+        with app.app_context():
+            _lat_gs = db.session.get(GameServer, gs_id)
+            app._run_action(_lat_gs, _lat_gs.remote, "fastdl", None)
+        _lat_fastdl_ran = _pa_wait(_lat_cmds)
+    finally:
+        _lat_hosts.lgsm_versions = _lat_versions_saved
+    check("long action: fastdl really ran", _lat_fastdl_ran and _lat_cmds[0] == "fastdl",
           "cmds=%s" % _lat_cmds)
     check("long action: fastdl is the one that also needs its prompts answered (eight Y's)",
           _lat_kw and _lat_kw[0].get("answers") == ["Y"] * 8,
