@@ -443,9 +443,8 @@ check("runtime-path: every file install.sh stages root-owned counts as a change 
 # unnamed file would raise false updates instead: this fails the build until it is named. The tree
 # is walked, not asked of git: the throwaway tree tools/smoke-local.sh runs in has no .git. The
 # walk leaves out what .gitignore keeps out of the repository and what a run writes; on a checkout
-# it lists `git ls-files` (measured: 326 and 326, before .claude/settings.json was tracked). Only
-# .claude/worktrees is left out of .claude/ now: settings.json is tracked, and skipping the whole
-# directory left it unjudged here (review 1011d).
+# it lists `git ls-files` (measured: 326 and 326). .claude/ is left out whole: it is gitignored
+# (worktrees and local Claude Code state, nothing tracked since 2026-11-08).
 import fnmatch as _cls_fnm  # noqa: E402
 
 _CLS_SKIP_DIRS = {".git", "data", "venv", ".venv", "env", "__pycache__", ".pytest_cache",
@@ -457,14 +456,13 @@ _cls_files = []
 for _cls_dp, _cls_dns, _cls_fns in os.walk(_root):
     _cls_dns[:] = [_d for _d in _cls_dns
                    if _d not in _CLS_SKIP_DIRS and not _d.endswith(".egg-info")
-                   and os.path.relpath(os.path.join(_cls_dp, _d), _root) != os.path.join(".claude",
-                                                                                          "worktrees")]
+                   and os.path.relpath(os.path.join(_cls_dp, _d), _root) != ".claude"]
     _cls_files += [os.path.relpath(os.path.join(_cls_dp, _f), _root).replace(os.sep, "/")
                    for _f in _cls_fns
                    if not any(_cls_fnm.fnmatch(_f, _pat) for _pat in _CLS_SKIP_FILES)]
 _cls_unnamed = sorted(_f for _f in _cls_files if _so._path_class(_f) is None)
 check("runtime-path: every file in the repository is named as one a host runs or one it does not",
-      len(_cls_files) >= 300 and not _cls_unnamed and ".claude/settings.json" in _cls_files,
+      len(_cls_files) >= 300 and not _cls_unnamed,
       "files=%d unnamed=%r (name each in .github/update-paths.txt: `runtime <path>` if a host "
       "runs it, `noise <path>` if not)" % (len(_cls_files), _cls_unnamed[:8]))
 check("runtime-path: ...and a file named on neither side counts as one a host runs (control)",
