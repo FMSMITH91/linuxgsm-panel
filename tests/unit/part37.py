@@ -66,6 +66,8 @@ def _shipped_py37():
 # ── F5: every outbound-HTTP call site, reviewed ─────────────────────────────────────────────────
 # Third-party HTTP and WebSocket clients: importing one is a call site in the making.
 _HTTP_LIBS37 = ("requests", "httpx", "aiohttp", "urllib3", "pycurl", "websocket", "websockets")
+# A reviewed site inside a nested function, by the function it is nested in (as the justification names it).
+_F5_ENCLOSING37 = {"_connect": "_gateway_connector"}
 _HTTP_REVIEWED37 = {
     ("panel/services/notifications.py", "<module>", "build_opener"),
     ("panel/services/notifications.py", "_post", "_OPENER.open"),
@@ -195,9 +197,11 @@ def _f5_justification():
     text = _read29(".github", "codeql", "codeql-config.yml")
     head = text[:text.find("query-filters:")] if "query-filters:" in text else ""
     comment = "\n".join(ln for ln in head.splitlines() if ln.lstrip().startswith("#"))
-    named = ("notifications._post", "notifications.telegram_get_updates",
-             "notifications.telegram_get_me", "notifications._gateway_connector",
-             "system_ops._ci_fetch_page", "lgsm_data._download")
+    # Every reviewed site the tripwire holds (review 1107: a hand-kept list of six, so game_icons, added
+    # to _HTTP_REVIEWED37 by #487, could drop out of the justification with both checks green). A
+    # function nested in another is named by the one around it.
+    named = sorted({"%s.%s" % (os.path.splitext(os.path.basename(rel))[0], _F5_ENCLOSING37.get(func, func))
+                    for rel, func, _call in _HTTP_REVIEWED37 if func != "<module>"})
     missing = [n for n in named if n not in comment]
     check("outbound HTTP: the partial-ssrf exclusion's justification names every call site it "
           "rests on, and no longer says _post is the only one",
@@ -1030,7 +1034,12 @@ def _v5_verdict(text, gone, pinned):
     as well, so dropping or rewording that bullet, or moving the section's entries into another, would
     have failed main over a prose edit with nothing stale in it.
     """
-    unreleased = text.split("\n## [Since 0.10.0-alpha]", 1)[-1].split("\n## [", 1)[0]
+    # The newest section, whatever its heading says (review 1107: split on "[Since 0.10.0-alpha]" alone,
+    # a renamed heading read the preamble above the first section, and passed having read no entry).
+    sections = text.split("\n## [")
+    if len(sections) < 2:
+        return False, ["no '## [' section heading"]
+    unreleased = sections[1]
     entries = [e for e in _re37.split(r"\n(?=- )", unreleased) if "PyJWT" in e]
     stale = [e.strip()[:70] for e in entries if _re37.search(r"pinned apart|--no-deps|semgrep-pyjwt", e)]
     return gone and pinned and not stale, stale
@@ -1049,11 +1058,15 @@ def _v5_changelog():
         "a current entry": head + "- **PyJWT 2.15.** One hash lockfile.\n",
         "the stale entry": head + "- **PyJWT.** PyJWT is now pinned apart from semgrep's lockfile, "
                                   "and both install with `--no-deps`.\n",
+        "renamed heading": "# Changelog\n\n## [Since 0.11.0-alpha]\n\n- **PyJWT.** Pinned apart again.\n",
+        "no heading": "# Changelog\n\n- **PyJWT.** One hash lockfile.\n",
     }
     got = {k: _v5_verdict(v, True, True)[0] for k, v in probes.items()}
     check("changelog: (control) the PyJWT gate passes a [Since 0.10.0-alpha] with no PyJWT entry (one in an "
-          "older release does not count) or a current one, and fails the stale text",
-          got == {"no entry": True, "a current entry": True, "the stale entry": False}, repr(got))
+          "older release does not count) or a current one, and fails the stale text, under a renamed "
+          "newest heading too, and a changelog with no section",
+          got == {"no entry": True, "a current entry": True, "the stale entry": False,
+                  "renamed heading": False, "no heading": False}, repr(got))
 
 
 # ── F7: test modules import app one way; a cleanup that cannot delete a file says so ────────────
