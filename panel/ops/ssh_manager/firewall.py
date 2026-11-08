@@ -2372,7 +2372,14 @@ def _fwc_block_refusal(server, top, families, port_known_needed):
     allow_default = _fwc_default_allows(server)
     cut = next((c for c in paths["conns"] if c.version in families
                 and _fwc_cuts(groups, c, top, allow_default, paths)), None)
-    return None if cut is None else _fwc_cut_answer(cut)
+    if cut is not None:
+        return _fwc_cut_answer(cut)
+    # With Tailscale Serve up, every request was taken to come through Serve, a viewer on this machine's
+    # loopback too (`ssh -L` to the panel port): its SSH session was never read, so a block of the admin's
+    # own range passed and cut the tunnel (review 1108 lead). That viewer's session is held here as well.
+    if not port_known_needed and _core.is_local_server(server) and _r37g_direct_loopback():
+        return _r37g_session_refusal(server, groups, top, families, paths)
+    return None
 
 
 def _r37g_why_refusal(server, groups, top, families, paths, port_known_needed):

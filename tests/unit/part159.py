@@ -15,6 +15,8 @@
 * LOW (P1): on the panel host, a viewer a believed proxy here names as a loopback client (an SSH tunnel to
   nginx, a browser on the host through it) is the local viewer: its blocks are decided by sshd's sessions,
   not refused with trust_proxy advice that is already applied.
+* lead (P1): with Tailscale Serve up, a viewer on the panel host's loopback (an SSH tunnel) still has its
+  SSH session held by an IP block (every request was taken to come through Serve).
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -448,6 +450,38 @@ _pl_cut = {
 check("1108 P1 LOW: ...while a proxy the panel does not believe (whatever it names), or a believed one naming no "
       "address, still refuses every block, naming trust_proxy",
       all(v is not None and "trust_proxy" in v for v in _pl_cut.values()), repr(_pl_cut))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# lead (P1): Tailscale Serve up, a loopback viewer's SSH session is still held by an IP block
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _serve_block159(target, headers=None, sessions=(), believed=False):
+    """The panel host's IP-block refusal of `target` with the panel served over Tailscale, from 127.0.0.1."""
+    host = _p135._Host135(rules=[_p135._SSH22, _TS0_154], incoming="allow", ts=(True, False))
+
+    def run():
+        # tailscaled's default netfilter mode: its own chain lets tailscale0 (Serve's way in) in ahead of ufw.
+        _p9_patch(_ue159, "ts_netfilter_on", lambda s: True)
+        _p9_patch(_auth159, "_request_came_through_proxy", lambda peer: believed)
+        _p9_patch(_ue159, "inbound_to", lambda ports: [
+            (_ip159.ip_address(a), _ip159.ip_address(_p135._HOST_ADDR135), p) for a, p in sessions if p in ports])
+        with _p9.test_request_context("/", environ_base={"REMOTE_ADDR": "127.0.0.1"},  # NOSONAR(S1313)
+                                      headers=headers or {}):
+            why = _fw159.fwc_block_ip_refusal(_p135._LOCAL135, target)
+        return None if why is None else str(why)
+    return _p135._on135(host, run, served=True)
+
+
+_sv_hit = _serve_block159(_RANGE159, sessions=[(_TUNNEL159, 22)])
+_sv_ok = {
+    "a loopback viewer, no session in the range": _serve_block159(_ELSE_RANGE159, sessions=[(_TUNNEL159, 22)]),
+    "a tailnet viewer through Serve": _serve_block159(_RANGE159, headers={"X-Forwarded-For": _TSP159},
+                                                      sessions=[(_TUNNEL159, 22)], believed=True),
+}
+check("1108 P1 lead: with the panel served over Tailscale (tailscaled's chain letting tailscale0 in), a viewer on "
+      "the panel host's loopback (an SSH tunnel) is refused a block of the range its SSH session comes from, named",
+      _sv_hit is not None and _TUNNEL159 in _sv_hit, repr(_sv_hit))
+check("1108 P1 lead: ...while a range no session comes from, and any block by a tailnet viewer that came through "
+      "Serve, still pass (the controls)", all(v is None for v in _sv_ok.values()), repr(_sv_ok))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))
