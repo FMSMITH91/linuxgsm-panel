@@ -7,6 +7,9 @@
   panel's own session comes in (nothing where that already lets it in, the same source-only rule, or a
   refusal naming the rule to add), and a rule that would refuse the panel's session on the new port (an
   interface- or source-scoped DENY the public reading never saw) refuses the move.
+* MEDIUM (P1 carried lead 2): the panel host's hourly auto-block never denies the address of a live,
+  signed-in superadmin session (an IPv6 one by its /64) or the host's own addresses; unreadable, it
+  blocks nothing new that cycle.
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -17,6 +20,7 @@ import ipaddress as _ip159
 import os
 import struct as _st159
 import tempfile as _tf159
+from datetime import timedelta as _td159
 from types import SimpleNamespace as _NS159
 
 from unit.part01 import check
@@ -25,7 +29,12 @@ from unit.part125 import _Box125
 from unit import part135 as _p135
 from unit.part136 import _OUT136, _deny136
 from unit.part154 import _proc154
+from panel.core.clock import utcnow as _now159
+from panel.db.models import User as _User159, UserSession as _US159, db as _db159
+from panel.ops import system_ops as _so159
 from panel.ops.ssh_manager import firewall as _fw159, hosts as _hosts159, ufweval as _ue159
+from panel.security import auth as _auth159
+from panel.services import monitoring as _mon159
 
 _TRIP159_START = len(_P9_TRIPPED)
 
@@ -289,6 +298,94 @@ check("1108 P1 MEDIUM: a move that fails after the source-only rule went in take
       _mv_rev[0] is False and _mv_rev[2] == [("ufw-allow-from-port", [_ADMIN_NET159, "2022", "tcp", "SSH panel"]),
                                             ("ufw-delete-allow-from-port", [_ADMIN_NET159, "2022", "tcp"])],
       repr(_mv_rev))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# MEDIUM (P1): the panel host's auto-block spares its signed-in superadmins and its own addresses
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_HOME159 = "198.51.100.159"        # NOSONAR(S1313) - a superadmin's signed-in address (home NAT)
+_HOME6_159 = "2001:db8:159:1::5"   # a superadmin's IPv6 sign-in (a privacy address)
+_HOME6_NEXT159 = "2001:db8:159:1::99"   # the same /64, the next privacy address
+_HOME6_OTHER159 = "2001:db8:159:2::99"  # another /64: an ordinary offender
+_EXPIRED159 = "198.51.100.160"     # NOSONAR(S1313) - a superadmin login that has idled out
+_OFF159 = "198.51.100.161"         # NOSONAR(S1313) - a disabled superadmin's login
+_PLAIN159 = "198.51.100.162"       # NOSONAR(S1313) - an account that does not manage the panel host
+_OWN159 = "203.0.113.59"           # NOSONAR(S1313) - the panel host's own global address
+_STRANGER159 = "192.0.2.159"       # NOSONAR(S1313) - an ordinary offender
+_STALE159 = "192.0.2.160"          # NOSONAR(S1313) - an auto-block whose count fell under
+_LOCAL159 = _NS159(id=-1159, name="Panel", is_local=True, auth_method="local", host="127.0.0.1", port=22)  # NOSONAR
+
+
+def _users159():
+    """Three accounts and their logins in part12's database -> the user ids (removed at the end)."""
+    ids = []
+    with _p9.app_context():
+        for name, sa, active, logins in (
+                ("p159_sa", True, True, [(_HOME159, 0), (_HOME6_159, 0), (_EXPIRED159, 400)]),
+                ("p159_off", True, False, [(_OFF159, 0)]),
+                ("p159_plain", False, True, [(_PLAIN159, 0)])):
+            u = _User159(username=name, password_hash=_auth159.hash_password("x" + "Q7!long-p159-pw"),
+                         display_name=name, is_superadmin=sa, is_active=active)
+            _db159.session.add(u)
+            _db159.session.flush()
+            for n, (ip, days_idle) in enumerate(logins):
+                _db159.session.add(_US159(user_id=u.id, sid="p159-%s-%d" % (name, n), ip=ip, remember=False,
+                                          last_seen=_now159() - _td159(days=days_idle)))
+            ids.append(u.id)
+        _db159.session.commit()
+    return ids
+
+
+def _drop_users159(ids):
+    with _p9.app_context():
+        _US159.query.filter(_US159.user_id.in_(ids)).delete(synchronize_session=False)
+        _User159.query.filter(_User159.id.in_(ids)).delete(synchronize_session=False)
+        _db159.session.commit()
+
+
+def _local_reconcile159(addrs=True, sessions_raise=False):
+    """One reconcile of the panel host -> (result, denied, undenied)."""
+    denied, undenied = [], []
+    counts = {ip: 50 for ip in (_HOME159, _HOME6_NEXT159, _HOME6_OTHER159, _EXPIRED159, _OFF159, _PLAIN159,
+                                _OWN159, _STRANGER159)}
+    counts[_STALE159] = 1
+    try:
+        _p9_arm(who="part159")
+        _p9_patch(_mon159, "_autoblock_threshold", lambda: 20)
+        _p9_patch(_mon159, "tailnet_exempt_ips", lambda r, ips: set())
+        _p9_patch(_mon159, "_whitelist_networks", lambda: [])
+        _p9_patch(_so159, "fail2ban_attempt_counts", lambda days=7: dict(counts))
+        _p9_patch(_so159, "ufw_blocked_ips", lambda: {_STALE159: _mon159._AUTOBLOCK_TAG})
+        _p9_patch(_so159, "ufw_deny_ip", lambda ip, tag=None: (denied.append(ip), (True, "ok"))[1])
+        _p9_patch(_so159, "ufw_undeny_ip", lambda ip: (undenied.append(ip), (True, "ok"))[1])
+        _p9_patch(_ue159, "local_addrs", (lambda: _p135._addrs135(("eth0", _OWN159))) if addrs else (lambda: None))
+        if sessions_raise:
+            def _unreadable(self, now=None):
+                raise RuntimeError("p159: the session table could not be read")
+            _p9_patch(_US159, "is_expired", _unreadable)
+        with _p9.app_context():
+            out = _mon159._autoblock_reconcile(_LOCAL159)
+    except Exception as e:     # a raise is the failure, recorded as one rather than ending the part
+        out = "raised %r" % (e,)
+    finally:
+        _p9_restore_all()
+    return out, sorted(denied), sorted(undenied)
+
+
+_uids159 = _users159()
+try:
+    _ab_ok = _local_reconcile159()
+    _ab_unread = {"sessions unread": _local_reconcile159(sessions_raise=True),
+                  "own addresses unread": _local_reconcile159(addrs=False)}
+finally:
+    _drop_users159(_uids159)
+check("1108 P1 MEDIUM: the panel host's auto-block never denies the address of a live, signed-in superadmin "
+      "session (IPv4, or IPv6 by its /64) nor the host's own address, while it still denies an idled-out login's, "
+      "a disabled superadmin's, an account's that does not manage the panel host, another /64's and a stranger's",
+      _ab_ok[1] == sorted([_EXPIRED159, _OFF159, _PLAIN159, _HOME6_OTHER159, _STRANGER159])
+      and _ab_ok[2] == [_STALE159], repr(_ab_ok))
+check("1108 P1 MEDIUM: ...and with the signed-in sessions or the host's own addresses unreadable it denies nothing "
+      "new that cycle, while its own stale auto-block is still released",
+      all(r[1] == [] and r[2] == [_STALE159] for r in _ab_unread.values()), repr(_ab_unread))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))

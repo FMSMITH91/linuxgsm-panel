@@ -1674,7 +1674,11 @@ with app.app_context():
     _sv = {n: getattr(_am.so, n) for n in ("fail2ban_attempt_counts", "ufw_blocked_ips",
            "ufw_deny_ip", "ufw_undeny_ip")}
     _sv_tn, _sv_th, _sv_wl = _monmod.tailnet_exempt_ips, _monmod._autoblock_threshold, _monmod._whitelist_networks
+    # The panel host's reconcile spares its own addresses (review 1108), read with `ip`: none here.
+    _uemod = sys.modules["panel.ops.ssh_manager.ufweval"]
+    _sv_la = _uemod.local_addrs
     try:
+        _uemod.local_addrs = lambda: []
         _am.so.fail2ban_attempt_counts = lambda days=7: {
             "203.0.113.10": 80,    # over threshold  -> block
             "203.0.113.11": 5,     # under threshold -> ignore
@@ -1698,6 +1702,7 @@ with app.app_context():
         for _n, _v in _sv.items():
             setattr(_am.so, _n, _v)
         _monmod.tailnet_exempt_ips, _monmod._autoblock_threshold, _monmod._whitelist_networks = _sv_tn, _sv_th, _sv_wl
+        _uemod.local_addrs = _sv_la
         _r.is_local = _was_local
         db.session.commit()
 
