@@ -4,8 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
-from panel.ops.ssh_manager import (_r28b_panel_way_in_refusal, _r38a_ts_chain_way, _tailnet_ssh_state,
-                                   remote_ufw_close_port_22)
+from panel.ops.ssh_manager import (_r39b_off_refusal, remote_ufw_close_port_22)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, log_action, permission_required)
 from panel.core import i18n
 from panel.core.http import (_log_and_generic, _unreachable)
@@ -34,13 +33,10 @@ def register(app):
             # without a tailnet path: remote_set_public_ssh(..., "off") gates on
             # _tailnet_ssh_state, and the Tailscale migrate path proves a real tailnet login
             # before it closes anything. Same gate here, before the delete.
-            running, ssh_enabled, iface_allowed = _tailnet_ssh_state(remote)
-            if not (running and (ssh_enabled or iface_allowed or _r38a_ts_chain_way(remote))):
-                log_action(current_user, "remote_close_port_22", target=remote.name,
-                           detail=_NO_WAY_BACK, success=False, remote=remote)
-                return jsonify({"success": False, "message": i18n.tr(_NO_WAY_BACK)})
-            # ...nor while the panel's own connection comes in through it (remote_set_public_ssh).
-            _cut = _r28b_panel_way_in_refusal(remote)
+            # ...nor while the panel's own connection comes in through it, by the public rule or over the
+            # tailnet to a port Tailscale SSH does not answer: the gate remote_set_public_ssh("off") uses,
+            # one helper, so the two buttons cannot drift apart again (review 1109).
+            _cut = _r39b_off_refusal(remote, _NO_WAY_BACK)
             if _cut is not None:
                 log_action(current_user, "remote_close_port_22", target=remote.name, detail=str(_cut),
                            success=False, remote=remote)

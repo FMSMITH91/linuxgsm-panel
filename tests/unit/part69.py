@@ -286,12 +286,12 @@ try:
     _arm69()
     _lang69("es")
     _c69 = _p9_client(P9_ADMIN)
-    _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (False, False, False))
+    _p9_patch(_hosts69, "_tailnet_ssh_state", lambda remote: (False, False, False))
     _es3["no_way_back"] = _p9_json(_c69.post("/api/remote/%d/close-port-22" % P9_HOST)).get("message")
-    _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (True, True, True))
+    _p9_patch(_hosts69, "_tailnet_ssh_state", lambda remote: (True, True, True))
     _p9_patch(_cp69, "remote_ufw_close_port_22", lambda remote: (True, _i18n69.Sentence(
         "Public SSH rules removed from UFW (port {ports})", ports="22")))
-    _p9_patch(_cp69, "_r28b_panel_way_in_refusal", lambda remote: None)   # reached over the tailnet
+    _p9_patch(_hosts69, "_r28b_panel_way_in_refusal", lambda remote: None)   # reached over the tailnet
     _es3["closed"] = _p9_json(_c69.post("/api/remote/%d/close-port-22" % P9_HOST)).get("message")
     # The lockout guard, for real: remote_ufw_close_port → _r15a_guarded_spec_delete, whose firewall
     # read answers nothing.

@@ -350,7 +350,8 @@ def _lo_block154(target=_RANGE154, **kw):
 _lo_ok = {
     "a browser on the host (no SSH session)": _lo_block154(),
     "a tunnel from outside the range": _lo_block154(sessions=[(_ELSEWHERE154, 22)]),
-    "a session in the range on a port sshd does not serve": _lo_block154(sessions=[(_TUNNEL154, 443)]),
+    # Not 443: a proxy here that sends no forwarding header serves the panel there (review 1109, part163).
+    "a session in the range on a port neither sshd nor the panel serves": _lo_block154(sessions=[(_TUNNEL154, 27015)]),
 }
 check("1107 r37g: on the panel host, a request from loopback naming no forwarded client (a browser there, an SSH "
       "tunnel) may block an address range none of sshd's open sessions comes from",

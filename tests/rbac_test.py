@@ -1362,7 +1362,7 @@ def _check_host_routes_refuse_delegated_panel_host():
               (_rsec_mod, "remote_fail2ban_unban", (True, "ok")),
               (_rsec_mod, "remote_security_log", "log"),
               (_pro_mod, "pro_detach", (True, "ok")),
-              (_cp22_mod, "_tailnet_ssh_state", (True, True, True)),
+              (_cp22_mod, "_r39b_off_refusal", None),
               (_cp22_mod, "remote_ufw_close_port_22", (True, "ok")))
     _saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _stubs]
     for _m, _n, _r in _stubs:

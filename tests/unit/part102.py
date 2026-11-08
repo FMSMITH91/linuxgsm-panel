@@ -24,7 +24,7 @@ from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_c
 from panel.core import i18n as _i18n102
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.ops.ssh_manager import cron as _cron102, gmod as _gmod102, hosts as _hosts102
-from panel.routes import api as _api102, close_port22 as _cp102, remote_vps as _rv102
+from panel.routes import api as _api102, remote_vps as _rv102
 from panel.security import auth as _auth102
 
 _TRIP102_START = len(_P9_TRIPPED)
@@ -746,7 +746,7 @@ def _public_off102(client, key_rid):
           all(v == (True, True, False) for v in kept.values()), repr(kept))
     _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: ("", "", 0))
     _p9_patch(_hosts102, "_r28b_resolve", lambda name: ["203.0.113.8"])
-    _p9_patch(_cp102, "_tailnet_ssh_state", lambda server: (True, True, True))
+    _p9_patch(_hosts102, "_tailnet_ssh_state", lambda server: (True, True, True))
     deleted = []
     _p9_patch(_hosts102, "_r15c_delete_port_22", lambda server, ports=None: deleted.append(server.id))
     d = _p9_json(client.post("/api/remote/%d/close-port-22" % key_rid))
