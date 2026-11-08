@@ -204,9 +204,12 @@ check("wipe: 'Wipe not required' is a run with nothing to delete, not a failure"
 check("wipe: LinuxGSM's players-online refusal is 'refused', and nothing was wiped",
       _ws152.judge("[ INFO ] Stopping rustserver: 3 players are on the server: stop prevented\n", 0,
                    "wipe")[0] == "refused")
+# A non-zero exit WITH the success line (and no FAIL before it) is a wipe: LinuxGSM prints that line
+# only once the files are gone, and a start that fails after it exits 1 (part160, review 1108).
 check("wipe: a FAIL, a non-zero exit, or an exit 0 with no success line is a failure",
       _ws152.judge("removing .db file(s)... FAIL\nSuccess! Full wipe\n", 0, "full-wipe")[0] == "failed"
-      and _ws152.judge(_OK_cmpd, 1, "full-wipe")[0] == "failed"
+      and _ws152.judge("[ WARN ] Wiping rustserver: Server wipe will reset the map data\n", 1,
+                       "full-wipe")[0] == "failed"
       and _ws152.judge("", 0, "wipe")[0] == "failed")
 
 
