@@ -60,8 +60,11 @@ def _cmpd_view(gs):
 
 
 def _r37b_shown(english, record):
-    """A stored reason in the viewer's language: its sentence record (i18n.sentence_record) when it
-    restores to a sentence, else the English kept beside it (an entry stored before the record was)."""
+    """A stored reason in the viewer's language.
+
+    Its sentence record (i18n.sentence_record) when it restores to a sentence, else the English kept
+    beside it (an entry stored before the record was).
+    """
     built = i18n.sentence_restored(record) if record is not None else None
     if isinstance(built, (i18n.Sentence, i18n.Sentences)):
         return i18n.tr(built)
@@ -69,8 +72,11 @@ def _r37b_shown(english, record):
 
 
 def _r37b_said(sentence):
-    """A reason as stored: (English, its sentence record) — the English for the audit row and logs,
-    the record so the card can say it in whoever's language looks (_r37b_shown)."""
+    """A reason as stored: (English, its sentence record).
+
+    The English for the audit row and logs, the record so the card can say it in whoever's language
+    looks (_r37b_shown).
+    """
     return str(sentence)[:300], i18n.sentence_record(sentence)
 
 

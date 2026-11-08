@@ -375,9 +375,9 @@ try:
     _p9_arm(who="part155")
     _p9_patch(_files155, "lgsm_get_values",
               lambda server, user, selfname, keys: {k: _al_vals155.get(k, "") for k in keys})
-    for _name155, _cfg155 in (("email_no_address", {"emailalert": "on"}),
+    for _name155, _cfg155 in (("email_unset", {"emailalert": "on"}),
                               ("email", {"emailalert": "on", "email": "ops@example.invalid"}),
-                              ("telegram_no_token", {"telegramalert": "on"}),
+                              ("telegram_unset", {"telegramalert": "on"}),
                               ("discord", {"discordalert": "on"})):
         _al_vals155.clear()
         _al_vals155.update(_cfg155)
@@ -386,7 +386,7 @@ finally:
     _p9_restore_all()
 check("LinuxGSM's backup-postponed alert counts as sent only through a channel alert.sh sends on: email "
       "with no address, or Telegram with no token, sent nothing, so the panel's own alert still goes out",
-      _al155 == {"email_no_address": False, "email": True, "telegram_no_token": False, "discord": True},
+      _al155 == {"email_unset": False, "email": True, "telegram_unset": False, "discord": True},
       repr(_al155))
 
 check("part155: nothing it drove reached a real transport (every host call was stubbed)",

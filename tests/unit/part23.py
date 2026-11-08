@@ -456,8 +456,11 @@ _LOOP_FILES23 = ("app.py",) + tuple(sorted(p.relative_to(_REPO23).as_posix()
 
 
 def _r37b_supervised23(path):
-    """Names started under a supervisor in `path`: `supervise(...)`, `_supervise(...)`, and the
-    `_make_supervisor(app)(name, ...)` a module that has no supervisor of its own calls."""
+    """Names started under a supervisor in `path`.
+
+    `supervise(...)`, `_supervise(...)`, and the `_make_supervisor(app)(name, ...)` a module that
+    has no supervisor of its own calls.
+    """
     names = [name for attr in ("supervise", "_supervise") for name, _n in _calls23(path, attr)]
     for n in _r37b_calls_in23(path):
         inner = n.func
@@ -477,6 +480,11 @@ def _names_gates23():
     supervised = {name for f in _LOOP_FILES23 for name in _r37b_supervised23(f)} - {None}
     check("workers: every supervised loop is in the report's list of workers",
           bool(supervised) and supervised <= known, "missing %r" % sorted(supervised - known))
+    _r37b_started_gate23(known)
+
+
+def _r37b_started_gate23(known):
+    """Every loop that beats or records its first pass is one WORKERS names."""
     # A loop that beats or records its first pass is one the report must name too: with neither
     # in WORKERS, its silence (dead thread, every pass failing) is printed nowhere.
     started = {name for f in _LOOP_FILES23 for attr in ("beat", "loop_started")
