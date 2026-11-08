@@ -24,7 +24,7 @@ from flask_login import current_user, login_required
 
 from panel.core import clock, i18n, runtime_stats
 from panel.core.http import _json_body, _json_str, _log_and_generic, _r12c_json_flag
-from panel.core.panel_state import _full_backup_lock, _game_backup_status, r36j_route_job
+from panel.core.panel_state import _full_backup_lock, _game_backup_status, r36j_route_job, r36j_route_jobs
 from panel.db.models import GameServer, db, still_held
 from panel.ops import backup as bk
 from panel.ops import ssh_manager as _sm
@@ -118,7 +118,45 @@ def _cmpd_entry_from(body, gs):
     old = wipe.get(gs.id)
     if old is not None and wipe.same_server(old, gs) and isinstance(old.get("last"), dict):
         entry["last"] = old["last"]
+    if _r39a_same_pending(old, entry, gs):
+        # The wipe due now is still this schedule's: it goes on under the new settings rather than
+        # being dropped. The save an operator makes to untick "wait until empty" and force a wipe
+        # that is waiting for players reset it (anchor now, nothing pending), so the next sweep
+        # measured from the new anchor, the forced wipe never ran, and the card just showed next
+        # month. Its backup is kept (same server, same kind); `tried` is not, so the next sweep
+        # tries at once.
+        entry.update(anchor=old.get("anchor"), pending_since=old["pending_since"],
+                     backed_up=old.get("backed_up") or 0)
     return entry, None
+
+
+def _r39a_same_pending(old, entry, gs):
+    """Whether stored entry `old` is a wipe pending now that new `entry` schedules in the same way.
+
+    The same server and the same kind, cron line, preset and zone; only "wait until empty" may
+    differ. A changed schedule is a new one: what was pending is dropped (_r39a_dropped_pending).
+    """
+    return (old is not None and entry is not None and wipe.same_server(old, gs)
+            and bool(old.get("pending_since"))
+            and all(old.get(k) == entry.get(k) for k in ("kind", "cron", "preset", "tz")))
+
+
+def _r39a_dropped_pending(gs, old, entry):
+    """Audit a pending wipe a save drops (turned off, or rescheduled): it never runs. Never raises."""
+    if old is None or not old.get("pending_since") or not wipe.same_server(old, gs):
+        return
+    if entry is not None and entry.get("pending_since") == old.get("pending_since"):
+        return                  # carried over (_r39a_same_pending)
+    if "wipe" in r36j_route_jobs(gs.id):
+        # The sweep is trying it right now: a save during its backup is audited there
+        # (_r37b_still_due), and one during LinuxGSM's wipe did not stop the wipe.
+        return
+    try:
+        log_action(current_user, "wipe_server", target=gs.name, success=False, server=gs,
+                   detail="not wiped: its schedule was turned off or changed while the wipe waited (%s)"
+                          % str(old.get("wait") or "no reason recorded")[:200])
+    except Exception:
+        db.session.rollback()
 
 
 def _cmpd_save(gs, body):
@@ -131,9 +169,11 @@ def _cmpd_save(gs, body):
     entry, why = _cmpd_entry_from(body, gs) if enabled else (None, None)
     if why:
         return _cmpd_refuse(why)
+    old = wipe.get(gs.id)
     wipe.put(gs.id, entry)
     log_action(current_user, "wipe_schedule_server", target=gs.name,
                detail=wipe.describe(entry) if entry else "scheduled wipe turned off", server=gs)
+    _r39a_dropped_pending(gs, old, entry)
     return jsonify(_cmpd_view(gs))
 
 
@@ -197,10 +237,27 @@ def _cmpd_backup(gs, entry):
 def _cmpd_run_wipe(app, gs, entry):
     """Run LinuxGSM's wipe command and settle the pending wipe by what its output says."""
     cmd = wipe.WIPE_COMMANDS.get(entry.get("kind"), "wipe")
+    # Read before the try: a raise from its own config read is not the wipe's connection dropping.
+    timeout = _lgp.timeout_for(gs.remote, gs.short_name, gs.lgsm_name, "stop", 900)
     _mark_expected_offline(gs.id, "restart")
-    out, err, rc = _sm.run_as_game_user(
-        gs.remote, gs.short_name, cmd, selfname=gs.lgsm_name,
-        timeout=_lgp.timeout_for(gs.remote, gs.short_name, gs.lgsm_name, "stop", 900))
+    try:
+        out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, cmd, selfname=gs.lgsm_name,
+                                            timeout=timeout)
+    except Exception as exc:
+        if not getattr(exc, "command_started", False):
+            # Never sent (the connection did not open): nothing ran, so the server stays up and
+            # the wipe stays pending, its backup kept, for the next try. The window above ends.
+            _end_offline_window(gs.id)
+            raise
+        # Sent, and the connection dropped under it (paramiko; ssh_manager marks it): LinuxGSM's
+        # wipe runs on in its own scope and wipes and restarts the server. Left pending and backed
+        # up, the next try 5 minutes later ran the wipe AGAIN on the fresh map with no new backup,
+        # and every 5 minutes for 12 hours on a link that drops every long command. Ended instead,
+        # alerted, never retried: the operator checks what it did.
+        _cmpd_finish(app, gs, False, i18n.Sentence(
+            "{command}: the connection dropped while LinuxGSM's wipe ran; it may have wiped: check the "
+            "server", command=cmd))
+        return
     verdict, why = wipe.judge((out or "") + "\n" + (err or ""), rc, cmd)
     if verdict == "refused":
         # LinuxGSM kept it running (players on): the quiet window opened above ends, as a refused
