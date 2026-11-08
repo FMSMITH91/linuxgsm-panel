@@ -636,7 +636,7 @@ def host_player_state(remote, probes=None):
         probes = _probe_rows(remote, installed)
     unknown = _unread_rows(installed, probes)
     running = [gs for gs in installed if _session_of(probes, gs) == 1]
-    blockers += _lgp.census_blockers(running, probes, _blocker)
+    blockers += _lgp.census_blockers(installed, probes, _blocker)
     busy, unk2 = _count_players(running, _mon._batched_slots(running) if running else {})
     unknown += unk2
     return {"state": _rw.state_word(blockers, busy, unknown),
@@ -920,20 +920,17 @@ def _reboot_now(remote, actor, origin, census, delay):
     if had:
         log_action(actor, "reboot_when_empty_cancel", target=remote.name, detail="superseded",
                    remote=remote)
-    warn = warnable(census)         # for the answer's words; the job warns from its own census
+    # For the answer's words; the job warns from its own census. As the job does, the panel's own
+    # countdown only where LinuxGSM does not warn (panel_warned): the rest stop after LinuxGSM's own
+    # countdown, warnplayerstimer minutes, and a reply promising "a 60-second warning" was false.
+    warn = warnable(census)
+    own = _lgp.panel_warned(remote, warn)
     started = start_clean_reboot(remote, actor, origin, "now", delay=delay)
     if not started:
         return 409, _pending_conflict(remote) or {"success": False, "error": "in_progress",
                                                   "message": "A reboot is already running."}
-    # Not "then they come back": a queued stop, or restoring turned off, keeps a server stopped.
-    # And the warning only where it is sent: a game with no console message gets none.
-    msg = i18n.Sentence(
-        "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
-        "in-game warning, on the servers whose game can show one). The Power card shows what comes "
-        "back." if warn else
-        "Rebooting {host}: its running game servers are stopped cleanly first. The Power card shows "
-        "what comes back.", host=_host_label(remote), secs=COUNTDOWN[0])
-    body = {"success": True, "message": msg, "phase": "preflight"}
+    body = {"success": True, "phase": "preflight",
+            "message": _rw.rebooting_now(_host_label(remote), COUNTDOWN[0], bool(own), len(own) < len(warn))}
     if warning:
         body["warning"] = warning
     return 202, body
@@ -1558,7 +1555,8 @@ class _Job:
 
     def _stop_one(self, e):
         # Never raises: the state read below decides, never the call.
-        out = _lgp.reboot_stop(self.remote, e, _stop_budget(e), force=self.job["mode"] == "now")
+        out = _lgp.reboot_stop(self.remote, e, _stop_budget(e), force=self.job["mode"] == "now",
+                               account_shell=_account_shell)
         # The rc is not the outcome (a refused stop exits 0 with the server still up, a stop of a
         # stopped server exits 0 too): the session is.
         sess = probe_server(self.remote, e).get("session")
@@ -1604,15 +1602,17 @@ class _Job:
         """Once more, after the stops: anything running again (a monitor run, a cron) is stopped.
 
         Within what is left of the stop phase's budget: past it, a server found running is not
-        stopped again but recorded as still running, and the shutdown ends it. First it waits for
-        every LinuxGSM command still running on the host (lgsm_players.settled_probes): a `restart`
-        counting down when the reboot's stop came in starts the server again after it.
+        stopped again but recorded as still running, and the shutdown ends it. First it waits for every
+        LinuxGSM command still running on the plan's servers and on any found running
+        (lgsm_players.settled_probes): a `restart` counting down when the reboot's stop came in
+        starts the server again after it.
         """
         rows = [gs for gs in GameServer.query.filter_by(remote_id=self.remote_id, installed=True).all()
                 if gs.status not in ("installing", "configuring")]
         # Still running at the deadline: no probes, and _bounced undoes the plan and says why.
         probes, self.bounce_why = _lgp.settled_probes(lambda: _probe_rows(self.remote, rows),
-                                                      self._past_deadline, self._sleep)
+                                                      self._past_deadline, self._sleep,
+                                                      plan_ids=_lgp.entry_ids(self.entries))
         known = {e["id"]: e for e in self.entries}
         for gs in rows:
             if (probes.get(gs.id) or {}).get("session") != 1:

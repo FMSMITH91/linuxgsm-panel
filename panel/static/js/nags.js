@@ -244,7 +244,9 @@ function _rbDone(dlg, host, d){
 }
 function _rbAnswer(dlg, host, res){
   var d = res.d || {};
-  if (res.code === 409 && d.needs_choice) { _rbRender(dlg, host, d.players || null, null); return; }
+  // The preview fetched when the dialog opened (host.plan): its "Before each stop:" warnings, the wait's
+  // limit and "After the reboot:" matter most now, when someone joined after it opened.
+  if (res.code === 409 && d.needs_choice) { _rbRender(dlg, host, d.players || null, host.plan || null); return; }
   if (res.code >= 400) { _rbFailed(dlg, d); return; }
   _rbDone(dlg, host, d);
 }
@@ -263,6 +265,7 @@ window.rebootHost = function(hostId, label, isLocal, opts){
   var dlg = _rbOpen(label);
   var get = function(path){ return fetch(MOUNT+'/api/remote/'+hostId+path,{cache:'no-store'}).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }); };
   Promise.all([get('/players'), get('/reboot-plan?preview=1')]).then(function(res){
+    host.plan = res[1];
     _rbRender(dlg, host, res[0], res[1]);
   }).catch(function(){ _rbRender(dlg, host, null, null); });
 };

@@ -22,7 +22,7 @@
   </ul>
 {% endmacro %}
 <dialog id="whats-new" class="wn-dialog" aria-labelledby="wn-title"
-        data-seen-url="{{ url_for('account_whats_new_seen') }}">
+        data-seen-url="{{ url_for('account_whats_new_seen') }}" data-seen-stamp="{{ whats_new_stamp }}">
   <div class="wn-head">
     <h2 id="wn-title" class="wn-title"><i class="bi bi-stars" aria-hidden="true"></i> <span>What's new</span></h2>
     <form method="dialog"><button type="submit" class="btn-close" aria-label="Close"></button></form>

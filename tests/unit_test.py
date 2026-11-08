@@ -2001,6 +2001,8 @@ _r16d_wrap_ts_handles()
 # 116, 135 and 136.
 # part155 (review 1107 B: FastDL refused on an unread LinuxGSM release, scheduled wipes and the other
 # game operations) drives part12's app with every host call stubbed; imports part01 and 12.
+# part156 (review 1107's reboot, update, install and What's new fixes) drives part12's app and runs
+# nags.js in node with part47's helpers; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2016,7 +2018,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131",
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
-          "part151", "part152", "part153", "part151", "part152", "part154", "part155", "part15")
+          "part151", "part152", "part153", "part151", "part152", "part154", "part155", "part156", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

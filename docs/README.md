@@ -235,11 +235,7 @@ sudo linuxgsm-panel-recover disable-2fa <user>       # lost your authenticator
 sudo linuxgsm-panel-recover create-admin <user>      # or: promote / activate <user>
 ```
 
-Run `--help` for the full list. On an older install without the command, use the one-liner:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/recover.sh | sudo bash
-```
+Run `--help` for the full list. On an older install without the command, update it first with the installer already on the host (see [Updating](#updating)), which places the command. Don't pipe `recover.sh` from GitHub into a root shell: no release signature covers it.
 
 ## Development
 
