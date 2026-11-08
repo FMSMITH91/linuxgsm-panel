@@ -1996,7 +1996,8 @@ _r16d_wrap_ts_handles()
 # new" from the CHANGELOG entries an account has not seen) drives part12's app; imports part01 and 12.
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
-# part157 (the twenty-fifth review's page-script and test-gate fixes, builder D) imports part01 and 99.
+# part157 (the twenty-fifth review's page-script and test-gate fixes, builder D) drives part12's app;
+# imports part01, 12 and 99.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",

@@ -2381,7 +2381,12 @@ function disableLogTimestamps(btn) {
 }
 
 // ── Command history: Up/Down in the command box recall what was sent ─────────────────────────────
-// Per server, the last 50, in localStorage when the browser allows it and in this page otherwise.
+// Per account and server, the last 50, in localStorage when the browser allows it and in this page
+// otherwise. The key names the signed-in account and the server's own row (_CMPA_HIST_SCOPE,
+// server_detail.html), not just the server id: another account signed in on this browser must not
+// get these commands on Up (they carry rcon and server passwords), and a server deleted and
+// re-created takes its old id back (SQLite reuses a deleted row's id) but not its history. panel.js
+// drops every sd.cmdHistory.* key on a page drawn signed out (Sign Out, an expired or revoked session).
 // Recorded by a listener on the form's own submit, which runs before the delegated sendCommand, so
 // the send itself is untouched: same Enter, same echo, same request. Down past the newest brings
 // back what was being typed before Up was first pressed.
@@ -2391,11 +2396,19 @@ var _cmpaBrowse = null;     // the list being stepped through, taken when Up is 
 var _cmpaHistIdx = -1;      // where in it the box is; -1 = not browsing
 var _cmpaDraft = '';        // what was in the box before browsing began
 
-function _cmpaHistStoreKey() { return 'sd.cmdHistory.' + serverId; }   // i18n-ignore: a storage key
+// null without a scope: then the in-page copy only, never a key every account would share.
+function _cmpaHistStoreKey() {
+  if (typeof _CMPA_HIST_SCOPE !== 'string' || !_CMPA_HIST_SCOPE) return null;
+  return 'sd.cmdHistory.' + _CMPA_HIST_SCOPE;   // i18n-ignore: a storage key
+}
+// The key this history had before it named the account: whoever's it was, it is nobody's now.
+try { localStorage.removeItem('sd.cmdHistory.' + serverId); } catch (e) { /* private mode */ }   // i18n-ignore: a storage key
 
 function _cmpaHistLoad() {
+  var key = _cmpaHistStoreKey();
+  if (!key) return _cmpaHistMem.slice();
   try {
-    var raw = localStorage.getItem(_cmpaHistStoreKey());
+    var raw = localStorage.getItem(key);
     var list = raw ? JSON.parse(raw) : [];
     if (Array.isArray(list)) {
       return list.filter(function (s) { return typeof s === 'string' && s; }).slice(-_CMPA_HIST_MAX);
@@ -2408,7 +2421,8 @@ function _cmpaHistPush(cmd) {
   var list = _cmpaHistLoad();
   if (list[list.length - 1] !== cmd) list.push(cmd);
   _cmpaHistMem = list.slice(-_CMPA_HIST_MAX);
-  try { localStorage.setItem(_cmpaHistStoreKey(), JSON.stringify(_cmpaHistMem)); } catch (e) { /* private mode */ }
+  var key = _cmpaHistStoreKey();
+  if (key) { try { localStorage.setItem(key, JSON.stringify(_cmpaHistMem)); } catch (e) { /* private mode */ } }
   _cmpaBrowse = null; _cmpaHistIdx = -1; _cmpaDraft = '';
 }
 
@@ -2468,6 +2482,9 @@ function cmpaQuickCommand(btn) {
   var cmd = btn && btn.getAttribute('data-cmd');
   if (!form || !input || !cmd) return;
   if (btn.getAttribute('data-fill') === '1') {
+    // A value set from script fires no `input` event, so end Up/Down browsing here as typing does:
+    // otherwise the next Down put back the draft from before browsing over the chip's text.
+    _cmpaBrowse = null; _cmpaHistIdx = -1;
     input.value = cmd + ' ';
     input.focus();
     try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* not a text box */ }
