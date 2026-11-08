@@ -509,7 +509,12 @@ def _ufw_table102():
               "udp": ("22/udp", "ALLOW IN", "Anywhere"), "out": ("22/tcp", "ALLOW OUT", "Anywhere"),
               "fwd": ("22/tcp", "ALLOW FWD", "Anywhere")}
     got_in = {k: _move102(sock_both, [_TJ102 % r, a2222]) for k, r in way_in.items()}
-    got_not = {k: _move102(sock_both, [_TJ102 % r, a2222]) for k, r in not_in.items()}
+    # A host that lists a (v6) rule has IPv6 on, so its `allow 2222/tcp` has the (v6) twin: public SSH in both
+    # families, and the move back adds 22/tcp for both (review 1108 H judges public SSH per family; part159 has
+    # the case where IPv6 SSH is not public).
+    a2222_v6 = _TJ102 % ("2222/tcp (v6)", "ALLOW IN", "Anywhere (v6)")
+    got_not = {k: _move102(sock_both, [_TJ102 % r, a2222] + ([a2222_v6] if "(v6)" in r[0] else []))
+               for k, r in not_in.items()}
     denied = _move102(sock_both, [_TJ102 % ("22/tcp", "DENY IN", "Anywhere"),
                                   _TJ102 % ("22/tcp", "ALLOW IN", "Anywhere"), a2222])
     check("ssh port: an ALLOW, LIMIT, bare 22 or a range covering 22/tcp is a way in, so the move back adds "
@@ -542,8 +547,9 @@ def _ufw_reread102():
 
 def _bind_only102():
     # Public SSH "off" on a Tailscale-SSH row and on the panel host: only `on tailscale0` lets SSH in,
-    # no public 22 rule. A bind change on 22 (sshd serves it) must add no allow; a move onto 22 that
-    # sshd does not serve yet is still decided by the rules (control, the VPS sequence's direction).
+    # no public 22 rule. A bind change on 22 (sshd serves it) must add no allow; nor, since review 1108
+    # (OWNER RULE: no port opened to the internet unasked), does a move onto a port sshd does not serve
+    # yet: public SSH is off, so nothing public goes in (part159 holds the move where it is on).
     from panel.ops import system_ops as _so102
     _p9_patch(_so102, "host_has_ip", lambda addr: True)
     off = [_TJ102 % ("Anywhere on tailscale0", "ALLOW IN", "Anywhere"),
@@ -562,11 +568,11 @@ def _bind_only102():
     }
     check("ssh port: with public SSH off (only tailscale0 allowed), a bind change on the port sshd already "
           "serves adds no firewall rule on a Tailscale-SSH row or the panel host, socket-activated or not "
-          "(it added `allow 22/tcp` and left public SSH back on, adversarial F1); a move onto a port sshd "
-          "does not serve still opens it (control)",
+          "(it added `allow 22/tcp` and left public SSH back on, adversarial F1), nor does a move onto a port "
+          "sshd does not serve (review 1108)",
           all(got[k][0] == [] and got[k][2] is None for k in ("ts sshd_config", "ts socket", "local sshd_config",
                                                               "local socket"))
-          and got["ts move onto 2222"][0] == [2222], repr(got))
+          and got["ts move onto 2222"][0] == [], repr(got))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

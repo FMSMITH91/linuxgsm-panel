@@ -370,10 +370,21 @@ def _proc_addr(text):
 
 
 def _established():
-    """[(local (address, port), remote (address, port))] of this host's ESTABLISHED TCP sockets (OSError: unread)."""
-    rows = []
+    """[(local (address, port), remote (address, port))] of this host's ESTABLISHED TCP sockets (OSError: unread).
+
+    A table that does not exist is a family the kernel does not run: a host booted with
+    `ipv6.disable=1` has no /proc/net/tcp6, and raising on it read every sshd session as unread, so
+    each IP block from a loopback viewer was refused (review 1108). Only when no table could be
+    opened at all is nothing known.
+    """
+    rows, opened = [], 0
     for table in _PROC_TCP.values():
-        with open(table) as fh:
+        try:
+            fh = open(table)
+        except FileNotFoundError:
+            continue
+        opened += 1
+        with fh:
             next(fh, None)
             for line in fh:
                 cols = line.split()
@@ -382,6 +393,8 @@ def _established():
                 local, remote = _proc_addr(cols[1]), _proc_addr(cols[2])
                 if local and remote:
                     rows.append((local, remote))
+    if not opened:
+        raise FileNotFoundError("no /proc/net/tcp table could be opened")
     return rows
 
 

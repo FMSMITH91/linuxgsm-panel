@@ -232,8 +232,8 @@ def judge(out, rc, command):
     """("wiped" | "nothing" | "refused" | "failed", sentence) for one wipe run's output and exit.
 
     Refused: LinuxGSM's own players-online refusal (stoponlyifnoplayersallcommands) ended the run
-    before anything was deleted. Only an exit 0 with LinuxGSM's own success line is a wipe; an exit
-    0 with neither line is NOT read as one, since it says nothing about what was deleted.
+    before anything was deleted. Only LinuxGSM's own success line, with no FAIL before it, is a wipe;
+    an exit 0 with neither line is NOT read as one, since it says nothing about what was deleted.
     The sentence is an i18n.Sentence: English in the audit row, the viewer's language on the card.
     """
     text = terminal.strip_escapes(out or "")
@@ -241,7 +241,7 @@ def judge(out, rc, command):
     if oc is not None:
         return "refused", i18n.Sentence("LinuxGSM did not wipe: {players} player(s) online",
                                         players=oc.get("players", "?"))
-    done = _cmpd_done(text) if rc == 0 else None
+    done = _cmpd_done(text, rc)
     if done is not None:
         return done
     last = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -249,24 +249,35 @@ def judge(out, rc, command):
                                    last=(last[-1] if last else "no output")[:200])
 
 
-def _cmpd_done(text):
-    """("wiped" | "nothing", sentence) for an exit-0 wipe's output, or None when it says neither."""
+def _cmpd_done(text, rc):
+    """("wiped" | "nothing", sentence) for a wipe's output and exit, or None when it says neither."""
     wiped = _WIPED_RE.search(text)
     if wiped and not _FAIL_RE.search(text, 0, wiped.start()):
         # command_wipe.sh prints its success line after the files are gone and only then starts a
         # server it stopped (exitbypass=1; command_start.sh). A FAIL after that line is the start's:
         # the wipe happened, and was read as one that did not ("Scheduled wipe did not run"). The
         # server left down is the monitor's to page (the wipe marks a restart, which must come back).
+        # Whatever the exit code: a start that fails there logs FAIL (exitcode=1), its own core_exit.sh
+        # only unsets exitbypass, and command_start.sh's last core_exit.sh exits 1 from inside the
+        # wipe (LinuxGSM v26.5.0) — so this shape comes with exit 1, not 0.
         late = _FAIL_RE.search(text, wiped.end())
-        if late is None:
-            return "wiped", (i18n.Sentence("Full wipe done") if wiped.group(1) == "Full"
-                             else i18n.Sentence("Map wipe done"))
-        line = text[late.start():].splitlines()[0].strip()
-        if wiped.group(1) == "Full":
-            return "wiped", i18n.Sentence("Full wipe done, but LinuxGSM reported a failure after it: {line}",
-                                          line=line[:200])
-        return "wiped", i18n.Sentence("Map wipe done, but LinuxGSM reported a failure after it: {line}",
-                                      line=line[:200])
-    if _NOT_REQUIRED_RE.search(text):
+        line = text[late.start():].splitlines()[0].strip()[:200] if late else None
+        return "wiped", _r38b_wiped_said(wiped.group(1) == "Full", line, rc)
+    if rc == 0 and _NOT_REQUIRED_RE.search(text):
         return "nothing", i18n.Sentence("LinuxGSM found nothing to wipe")
     return None
+
+
+def _r38b_wiped_said(full, late, rc):
+    """The sentence for a wipe that happened: plain, or with the FAIL line after it (`late`), or its exit code."""
+    if late is not None:
+        if full:
+            return i18n.Sentence("Full wipe done, but LinuxGSM reported a failure after it: {line}", line=late)
+        return i18n.Sentence("Map wipe done, but LinuxGSM reported a failure after it: {line}", line=late)
+    if rc != 0:
+        # A non-zero exit with no FAIL line after the files went (a failed alert, a start cut off by
+        # the timeout): still a wipe, said with the exit code.
+        if full:
+            return i18n.Sentence("Full wipe done, but LinuxGSM exited {rc} after it", rc=rc)
+        return i18n.Sentence("Map wipe done, but LinuxGSM exited {rc} after it", rc=rc)
+    return i18n.Sentence("Full wipe done") if full else i18n.Sentence("Map wipe done")

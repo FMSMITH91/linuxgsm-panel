@@ -77,7 +77,8 @@ exit 1
     "pgrep": r'''#!/bin/bash
 pat="${@: -1}"
 s=$(printf '%s' "$pat" | sed -e 's#^/\[\(.\)\]\([^ ]*\) .*#\1\2#' -e 's#\[\.\]#.#g')
-case "$pat" in *"(monitor|"*) f="$FAKE_STATE/inflight/$s" ;; *) f="$FAKE_STATE/maint/$s" ;; esac
+case "$pat" in *"(monitor|"*) f="$FAKE_STATE/inflight/$s" ;; *"(debug|d)"*) f="$FAKE_STATE/debug/$s" ;;
+  *) f="$FAKE_STATE/maint/$s" ;; esac
 n=$(cat "$f" 2>/dev/null || echo 0)
 echo "$n"; [ "$n" -gt 0 ]
 ''',

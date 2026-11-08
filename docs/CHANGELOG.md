@@ -248,6 +248,22 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **A wipe whose server fails to start afterwards counts as done.** LinuxGSM exits with an error
+  when the restart after a wipe fails, so the wipe was recorded as not run and alerted, although the
+  files were gone. "Wipe not required" also no longer leaves a crash unalerted for a few minutes.
+
+- **Firewall changes on a host saved by name check what the name resolves to.** A host with an IPv6
+  address but no IPv6 DNS record was refused "Default incoming: deny" and "Enable firewall" with "No
+  rule lets SSH in", although an IPv4 SSH rule let the panel in.
+
+- **Blocking an address from the panel host works in more setups.** Blocks are no longer refused on
+  a host with IPv6 switched off, or from a browser reaching the panel through Tailscale Serve on the
+  host itself.
+
+- **The console keeps old-log lines that arrive while it re-reads the log.** Lines that landed
+  during a re-read after Clear, or during Load older, were wiped when the log rotated; a command
+  sent after Load older also kept its echo across a Restart.
+
 - **FastDL no longer guesses when it cannot read the LinuxGSM version.** If the version read failed,
   FastDL answered LinuxGSM v26.5.0's "Rebuild from scratch?" with yes, which deletes everything in
   the FastDL folder. It now refuses to run and says why.
@@ -1049,6 +1065,16 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Moving SSH to a new port keeps it off the internet.** On a host whose SSH is reachable only over
+  Tailscale or one network interface, moving the SSH port opened the new port to everyone. The new
+  port now gets the same scope as the rule that lets the panel in, and a deny rule ahead of it
+  refuses the move.
+
+- **The panel host's auto-block spares signed-in admins.** A stale API token or a repeatedly
+  throttled sign-in could build up enough fail2ban hits to have an admin's own address permanently
+  blocked, cutting off the panel and SSH. Addresses of signed-in accounts that can manage the panel
+  are now skipped, and when sessions cannot be read nothing new is blocked.
 
 - **Auto-block never blocks the panel itself.** The hourly auto-block could add a permanent deny for
   the address the panel connects to a remote host from, or for the panel host's own addresses, after

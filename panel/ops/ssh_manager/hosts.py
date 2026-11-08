@@ -4048,7 +4048,7 @@ def _r22b_ssh_port_reading(status_out, port):
     return blocking is None and firsts[0] is not None, blocking
 
 
-def _open_ssh_port_rule(server, port, panel_way_in):
+def _open_ssh_port_rule(server, port, panel_way_in, served=None):
     """Step 1 of change_ssh_port: let `port`/tcp through ufw. (added, refusal).
 
     `added` is truthy only when THIS call put the allow there, which is what makes it the revert's
@@ -4071,6 +4071,11 @@ def _open_ssh_port_rule(server, port, panel_way_in):
     rules are read with `ufw show added` (_r26j_inactive_open). A firewall that cannot be read, or
     an inactive one whose stored rules cannot be read either, is opened as it always was — but NOT
     counted as added: a rule that may have been there before is not one to delete on the way out.
+
+    On an active firewall the allow is public only where SSH already is: a public rule lets one of
+    `served` (the ports sshd serves now) in. Where public SSH is off, the new port gets the scope of
+    the way the panel's own session comes in, and any rule that would refuse that session on the new
+    port refuses the move (_r38a_scoped_open).
     """
     if str(port) in panel_way_in:
         return False, None
@@ -4079,14 +4084,355 @@ def _open_ssh_port_rule(server, port, panel_way_in):
         known = brc == 0 and firewall._ufw_is_active(before or "")
         if brc == 0 and not known:
             return _r26j_inactive_open(server, port)
-        is_open, first = _r22b_ssh_port_reading(before, port) if known else (False, None)
-        if is_open:
-            return False, None
-        if first is not None:
-            return False, _r26j_blocked(port, first["detail"])
-        added = _r25b_add_ssh_rule(server, port, known, before)
-        _r34b_note_added(port, added)
-        return added, (_r28j_open_unconfirmed(server, port, added) if known else None)
+        return _r38a_open_read(server, port, before, known, served or panel_way_in)
+
+
+def _r38a_open_read(server, port, before, known, served):
+    """_open_ssh_port_rule once `ufw status` was read: active (`known`), or not read. The caller holds ufw_lock."""
+    scoped = _r38a_scoped_open(server, before, port, served) if known else None
+    if scoped is not None:
+        return scoped
+    is_open, first = _r22b_ssh_port_reading(before, port) if known else (False, None)
+    if is_open:
+        return False, None
+    if first is not None:
+        return False, _r26j_blocked(port, first["detail"])
+    added = _r25b_add_ssh_rule(server, port, known, before)
+    _r34b_note_added(port, added)
+    return added, (_r28j_open_unconfirmed(server, port, added) if known else None)
+
+
+# ── step 1 where public SSH is off: the new port gets the scope of the panel's own way in (review 1108) ──
+# OWNER RULE: never open SSH (or any port) to the internet unasked. Step 1 read only the public rules, so on
+# a host whose SSH is tailnet-only (`allow in on tailscale0`, no public 22 rule) a port move added
+# `allow <port>/tcp` from Anywhere and turned public SSH back on without saying so. And an interface- or
+# source-scoped DENY ahead of the new port was invisible to that reading, so a port-only move "succeeded"
+# and the route pointed the panel at a port the firewall drops.
+def _r38a_family_rules(status_out, version):
+    """[(ufweval spec, rule text)] of one family's list in an active `ufw status numbered`, in ufw's order."""
+    from panel.ops.ssh_manager import ufweval
+    rules = []
+    for line in (status_out or "").splitlines():
+        # As _ufw_public_rules reads a row: its `[ N]` sliced off; the heading lines carry no action.
+        m = re.match(r"\s*\[\s*\d+\]\s*", line)
+        detail = re.sub(r"\s{2,}", "  ", (line[m.end():] if m else line).strip())
+        p = firewall._parse_ufw_rule(detail)
+        if not p["action"]:
+            continue
+        if (6 if (p["v6"] or firewall._fwb_names_v6(p)) else 4) == version:
+            rules.append((ufweval.row_spec(p), detail))
+    return rules
+
+
+def _r38a_first_decider(rules, conn, apps):
+    """The rule that decides `conn` under `rules`, and whether it lets it in: ufweval.decide's reading.
+
+    (None, None) when none does and the default policy decides.
+    """
+    from panel.ops.ssh_manager import ufweval
+    for spec, detail in rules:
+        m = ufweval.match(spec, conn, apps)
+        if m == ufweval.NO:
+            continue
+        allow = spec["action"] in ("ALLOW", "LIMIT")
+        if m == ufweval.YES and allow:
+            return (spec, detail), True
+        if not allow:
+            return (spec, detail), False
+    return None, None
+
+
+def _r38h_public_fams(server, status_out, ports):
+    """(the families the firewall lists, the ones of those whose SSH is open to the public now).
+
+    Public in a family: its first public rule for one of `ports` allows it (a rule for one of the host's
+    addresses counts: it is public there), or the default incoming policy is allow (every port is, then;
+    only on positive evidence). IPv4 is always listed; IPv6 only where its list has a row, so a host
+    with IPv6 off in ufw is judged on IPv4 alone, as before. Read per family, SSH public only over IPv6
+    (or only to one address) read as "off", and the move was refused naming the public rule as one the
+    panel could not copy (review 1108).
+    """
+    listed = {4, 6} if _r38a_family_rules(status_out, 6) else {4}
+    ports = [int(p) for p in ports or () if str(p).isdecimal()]
+    fams = {v for v in listed if any(_r38h_public_way(_ufw_first_public_rule(status_out, p, "tcp", v6=v == 6))
+                                     for p in ports)}
+    # The policy is read only when the rules leave a family closed, as before (one more host read).
+    return listed, (fams if fams == listed or not firewall.remote_ufw_default_allows_in(server) else set(listed))
+
+
+def _r38h_lets_in(rule):
+    """Whether a first public rule (or None) lets its connection in."""
+    return rule is not None and rule["action"] in ("ALLOW", "LIMIT")
+
+
+# Destinations the internet does not reach: private (RFC 1918, IPv6 unique-local) and link-local networks.
+_R38H_INNER_NETS = tuple(_ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"))  # NOSONAR(S1313)
+
+
+def _r38h_public_way(rule):
+    """Whether a first public rule lets SSH in from the internet: an allow, for no one address or a reachable one.
+
+    A rule for one private, link-local or tailnet address (`<a LAN address> 22/tcp ALLOW IN Anywhere`) is reached
+    only from that network: counted as public SSH, the move's `allow <port>/tcp` opened the new port to the
+    internet on a host whose SSH was not public (the OWNER RULE).
+    """
+    if not _r38h_lets_in(rule) or not _r21b_dest_scoped(rule):
+        return _r38h_lets_in(rule)
+    net = firewall._r14a_net(rule["to"].split()[0])
+    from panel.ops.ssh_manager import ufweval
+    return not (ufweval.in_tailnet(net.network_address)
+                or any(net.version == n.version and net.subnet_of(n) for n in _R38H_INNER_NETS))
+
+
+def _r38a_note(note):
+    """Record what step 1 did that the success message must say (the move's undo record carries it)."""
+    _r32b_move_undo()["r38a_note"] = note
+
+
+def _r38a_session_conn(server):
+    """The panel's SSH session to `server` as a ufweval.Conn, or None when it could not be read."""
+    from panel.ops.ssh_manager import ufweval
+    try:
+        conn = _fwb_ssh_conn(server)
+    except Exception:
+        _core._log.debug("the panel's SSH session to the host could not be read", exc_info=True)
+        return None
+    if conn is None:
+        return None
+    return ufweval.Conn(conn["client"].version, conn["client"], conn["server"], conn["port"], conn.get("iface"),
+                        "ssh")
+
+
+def _r38a_exempt(server, conn):
+    """ufweval.exempt for `conn`, Tailscale's facts read only where they can matter (a tailnet end)."""
+    from panel.ops.ssh_manager import ufweval
+    tailnet = bool(conn.iface and conn.iface.startswith("tailscale")) or (
+        conn.dst is not None and ufweval.in_tailnet(conn.dst))
+    if conn.iface == "lo" or not tailnet:
+        return conn.iface == "lo"
+    ts = {"ssh": conn.dport == 22 and bool(_tailscale_conn_state(server)[1]),
+          "netfilter_on": bool(conn.iface and conn.iface.startswith("tailscale")) and ufweval.ts_netfilter_on(server)}
+    return ufweval.exempt(conn, ts)
+
+
+def _r38a_scoped_open(server, before, port, served):
+    """_open_ssh_port_rule on an active firewall, before the public reading: (added, refusal), or None to go on.
+
+    None (the public path decides, as before): public SSH is on in every family ufw lists (a public rule lets
+    one of `served` in, or the default incoming policy is allow), and nothing ahead of the new port would refuse
+    the panel's own session there. Where it is on in one family only, the rule from anywhere goes in for that
+    family alone (_r38h_family_public; on a remote, only when it is the session's family). Otherwise nothing
+    public is added:
+      * the panel's host and a Tailscale-SSH row (no session of the panel's through sshd): nothing is
+        added, and the message says so; the old port stays served beside the new one;
+      * a remote the panel reaches through sshd: its session ($SSH_CONNECTION) moved to `port` is read
+        through the rules as ufw would. A rule that may refuse it refuses the move, named. Already let in
+        (an interface rule for every port, tailscaled's own chain, a range): nothing is added. Else the
+        rule that lets it in now is copied for `port` when it is a source-only rule (`ufw allow from <src>
+        to any port <port> proto tcp`, the panel's own to undo), and otherwise the move is refused, naming
+        the rule to add. A session that cannot be read refuses the move: which rule it needs is not known.
+    """
+    listed, fams = _r38h_public_fams(server, before, served)
+    # Public in every family listed: the public path. In one only, a rule from anywhere goes in for that
+    # family alone (_r38h_family_public), so the other is not opened to the public by the move.
+    public_on = fams == listed
+    dials = _r26b_dials_after_bind(server)
+    if dials and public_on and not _r38a_scoped_deny(before, port):
+        return None                 # nothing but the public reading's own rules can refuse it
+    now = _r38a_session_conn(server) if dials else None
+    if now is not None:
+        return _r38a_session_open(server, before, port, now, public_on, now.version in fams)
+    if public_on:
+        return None
+    if fams:
+        # Public in one family, and no session of the panel's known (its own host, Tailscale SSH, or one
+        # not read): that family's rule alone, as the public path did without reading the session (in
+        # both families then); the other family is still not opened.
+        return _r38h_family_public(server, before, port, min(fams))
+    if dials:
+        return False, i18n.Sentence(
+            "Couldn't read the panel's own SSH connection to this host, and no public rule lets SSH in, so which "
+            "rule port {port} would need is not known. Nothing was changed.", port=port)
+    return _r38a_public_off(before, port, served)
+
+
+def _r38a_public_off(before, port, served):
+    """_r38a_scoped_open on the panel's host or a Tailscale-SSH row with public SSH off: nothing added, and said.
+
+    A public DENY or REJECT first on `port` still refuses the move, as on the public path: skipped here,
+    a move onto a denied port succeeded and was told to close the old one (review 1108). The note claims
+    no way in on `port`: it names the operator's rules that let SSH in on the old port and not on it.
+    """
+    blocking = _r22b_ssh_port_reading(before, port)[1]
+    if blocking is not None:
+        return False, _r26j_blocked(port, blocking["detail"])
+    left = _r38h_uncopied(before, served, port)
+    _r38a_note(i18n.Sentences(
+        i18n.Sentence("Public SSH is off on this host (no rule lets SSH in from anywhere), so no public rule was "
+                      "added for port {port}.", port=port),
+        _r38h_left_note(port, left) if left else i18n.Sentence(
+            "Check that a rule of yours lets you in on port {port} before closing the old port.", port=port)))
+    return False, None
+
+
+def _r38h_left_note(port, left):
+    """The note naming the rules (`left`, their text) that let SSH in on the old port and not on `port`."""
+    return i18n.Sentence("These rules let SSH in on the old port and not on port {port}, and were not copied: "
+                         "{rules}. Add them for port {port}/tcp before closing the old port.", port=port,
+                         rules="; ".join(left))
+
+
+def _r38h_uncopied(status_out, served, port):
+    """The allow rules (their text) that may let SSH in on one of `served` and do not on `port`, both families."""
+    ports = [int(p) for p in served or () if str(p).isdecimal() and int(p) != int(port)]
+    return [detail for version in (4, 6) for spec, detail in _r38a_family_rules(status_out, version)
+            if spec["action"] in ("ALLOW", "LIMIT") and _r38h_left_by(spec, version, ports, int(port))]
+
+
+def _r38h_left_by(spec, version, ports, port):
+    """Whether allow rule `spec` may let SSH in on one of `ports` and does not on `port` (its profile unknown)."""
+    from panel.ops.ssh_manager import ufweval
+
+    def meets(p):
+        return ufweval.match(spec, ufweval.Conn(version, None, None, p, None, "ssh"), lambda name: None)
+    return meets(port) == ufweval.NO and any(meets(p) != ufweval.NO for p in ports)
+
+
+def _r38h_family_public(server, before, port, version, moved=None, apps=None):
+    """_r38a_scoped_open where SSH is public in family `version` only: a rule from anywhere in that family alone.
+
+    (added, refusal). A public rule first on `port` denying it (either family) refuses the move; that family's
+    allowing it, nothing is added.
+    Else `ufw allow from <every address of the family> to any port <port> proto tcp` (the panel's own to
+    undo: (_R38A_FROM, network)), confirmed by a re-read: the panel's session `moved` let in by it, or,
+    with none (the panel's host, a Tailscale-SSH row), that family's first public rule for `port` an allow.
+    """
+    blocking = _r22b_ssh_port_reading(before, port)[1]
+    if blocking is not None:
+        # Either family's public DENY first on `port` refuses, as on the public path.
+        return False, _r26j_blocked(port, blocking["detail"])
+    if _r38h_lets_in(_ufw_first_public_rule(before, port, "tcp", scoped=False, v6=version == 6)):
+        return False, None
+    net = _R25B_V4_ANYWHERE if version == 4 else _R30J_V6_ANYWHERE
+    _o, _e, rc = _core.run_privileged(server, "ufw-allow-from-port", [net, str(port), "tcp", "SSH panel"], timeout=15)
+    added = (_R38A_FROM, net) if rc == 0 else False
+    _r34b_note_added(port, added)
+    after, _e, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    ok = arc == 0 and (_r38a_first_decider(_r38a_family_rules(after, version), moved, apps)[1] if moved is not None
+                       else _r38h_lets_in(_ufw_first_public_rule(after, port, "tcp", scoped=False, v6=version == 6)))
+    if not ok:
+        return False, _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
+    _r38a_note(i18n.Sentence("SSH is public on this host over IPv{family} only, so the rule added for port {port}/tcp "
+                             "lets in anyone over IPv{family} only.", family=version, port=port))
+    return added, None
+
+
+def _r38a_session_open(server, before, port, now, public_on, family_public=False):
+    """_r38a_scoped_open with the panel's session `now` read: refuse, add nothing, or copy its way in (or None)."""
+    from panel.ops.ssh_manager import ufweval
+    moved = now._replace(dport=port)
+    rules = _r38a_family_rules(before, now.version)
+    apps = ufweval.app_lookup(server)
+    moved_exempt = _r38a_exempt(server, moved)
+    decider, lets_in = (None, None) if moved_exempt else _r38a_first_decider(rules, moved, apps)
+    if decider is not None and not lets_in:
+        return False, _r26j_blocked(port, decider[1])
+    if public_on:
+        return None
+    if moved_exempt or lets_in:
+        return _r38a_let_in(port)
+    if family_public:
+        return _r38h_family_public(server, before, port, now.version, moved, apps)
+    return _r38a_copy_way_in(server, port, now, moved, before, apps)
+
+
+def _r38a_scoped_deny(status_out, port):
+    """Whether a DENY or REJECT the public reading does not see may meet a TCP connection to `port`.
+
+    One with an interface, a source or a destination of its own: only then does the panel's session
+    decide anything on a host whose public SSH is on.
+    """
+    from panel.ops.ssh_manager import ufweval
+    for version in (4, 6):
+        anyone = ufweval.Conn(version, None, None, port, None, "ssh")
+        for spec, _detail in _r38a_family_rules(status_out, version):
+            if (spec["action"] in ("DENY", "REJECT") and (spec["iface"] or spec["src"] != ufweval.ANY
+                                                          or spec["dst"] != ufweval.ANY)
+                    and ufweval.match(spec, anyone, lambda name: None) != ufweval.NO):
+                return True
+    return False
+
+
+def _r38a_let_in(port):
+    """_r38a_scoped_open when the panel's session already gets in on `port`: nothing added, and said."""
+    _r38a_note(i18n.Sentence("No firewall rule was added: the way the panel's SSH connection comes in already "
+                             "lets port {port} in.", port=port))
+    return False, None
+
+
+def _r38a_copyable(spec):
+    """Whether the panel can add rule `spec` for another port itself.
+
+    A source-only rule (`ufw allow from <src> to any port <port> proto tcp`): on no interface, to no one
+    address, from no one source port, and not an application profile.
+    """
+    from panel.ops.ssh_manager import ufweval
+    return not (spec["iface"] or spec["dst"] != ufweval.ANY or spec["sports"] != ufweval.ANY
+                or spec["src"] in (None, ufweval.ANY) or isinstance(spec["dports"], tuple))
+
+
+def _r38a_copy_way_in(server, port, now, moved, before, apps):
+    """_r38a_scoped_open once nothing lets the moved session in: copy the rule `now` comes in by. (added, refusal).
+
+    Only that rule is copied: the note names the operator's other rules on the session's port that were not.
+    """
+    rules = _r38a_family_rules(before, now.version)
+    if _r38a_exempt(server, now):
+        # Tailscale SSH (port 22 alone) or tailscaled's chain lets the session in now, and not on `port`.
+        return False, i18n.Sentence("The panel's SSH connection comes in through Tailscale, which does not let "
+                                    "port {port} in, and no public rule lets SSH in. Add a rule letting the "
+                                    "tailscale0 interface in on port {port}/tcp first. Nothing was changed.", port=port)
+    decider, lets_in = _r38a_first_decider(rules, now, apps)
+    if not lets_in:
+        # No rule is known to let the session in: only an allow policy lets it in on `port` the same way.
+        # Public SSH reads off, so that policy was not read as allow; assumed, the move added nothing
+        # and pointed the panel at a port the default deny drops (review 1108).
+        if firewall.remote_ufw_default_allows_in(server):
+            return _r38a_let_in(port)
+        return False, i18n.Sentence("No firewall rule the panel can read lets its SSH connection to this host in (an "
+                                    "application profile, or a rule it could not match), and no public rule lets SSH "
+                                    "in, so which rule port {port} would need is not known. Nothing was changed.",
+                                    port=port)
+    spec, detail = decider
+    src = spec["src"]
+    if not _r38a_copyable(spec):
+        return False, i18n.Sentence("The panel's SSH connection comes in by the firewall rule `{rule}`, which the "
+                                    "panel can't add for port {port} itself, and no public rule lets SSH in. Add "
+                                    "the same rule for port {port}/tcp first. Nothing was changed.",
+                                    rule=detail, port=port)
+    _o, _e, rc = _core.run_privileged(server, "ufw-allow-from-port", [str(src), str(port), "tcp", "SSH panel"],
+                                      timeout=15)
+    added = (_R38A_FROM, str(src)) if rc == 0 else False
+    _r34b_note_added(port, added)
+    after, _e, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    if arc != 0 or not _r38a_first_decider(_r38a_family_rules(after, now.version), moved, apps)[1]:
+        return False, _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
+    _r38h_copied_note(before, now.dport, port, src, detail)
+    return added, None
+
+
+def _r38h_copied_note(before, old_port, port, src, detail):
+    """_r38a_copy_way_in's note: the source-only rule copied (`detail`, from `src`), and any rule on `old_port` not."""
+    left = [d for d in _r38h_uncopied(before, [old_port], port) if d != detail]
+    _r38a_note(i18n.Sentences(
+        i18n.Sentence("The firewall rule added for port {port}/tcp lets in only {source}, like the rule the panel's "
+                      "SSH connection comes in by.", port=port, source=str(src)),
+        _r38h_left_note(port, left) if left else ""))
+
+
+# _open_ssh_port_rule's `added` for a source-only rule copied from the panel's way in: (_R38A_FROM, source).
+_R38A_FROM = "from"
 
 
 def _r34b_note_added(port, added):
@@ -4235,10 +4581,11 @@ def _r25b_close_added_ssh_rule(server, port, added):
     to be dropped, so a failed close left a public allow for a port nothing serves under "nothing
     changed".
     """
-    if added == _R25B_V4_ADDED:
+    if added == _R25B_V4_ADDED or (isinstance(added, tuple) and added[0] == _R38A_FROM):
+        src = added[1] if isinstance(added, tuple) else _R25B_V4_ANYWHERE
         with _core.ufw_lock(server):
             return _rc_of(_core.run_privileged(server, "ufw-delete-allow-from-port",
-                                               [_R25B_V4_ANYWHERE, str(port), "tcp"], timeout=15)) == 0
+                                               [src, str(port), "tcp"], timeout=15)) == 0
     if added:
         # force: the rule step 1 added, for a port sshd may already be listening on.
         return bool(remote_ufw_close_port(server, port, "tcp", force=True)[0])
@@ -4975,9 +5322,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
     _way_in = [str(int(getattr(server, "port", 22) or 22))] if _r26b_dials_after_bind(server) else []
     if bind_addr and str(new_port) in served:
         _way_in = _way_in + [str(new_port)]
-    _ufw_added, _ufw_refused = _open_ssh_port_rule(server, new_port, _way_in)
+    _ufw_added, _ufw_refused = _open_ssh_port_rule(server, new_port, _way_in, served)
     if _ufw_refused:
         return False, _ufw_refused
+    # What step 1 did that the operator must hear: no public rule where public SSH is off (review 1108).
+    _fw_note = undo.pop("r38a_note", "")
     undo.update(port=new_port, added=_ufw_added, socket=socket_mode)
 
     # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
@@ -5124,7 +5473,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    and drop the snapshot: best effort, after the commit.
     _f2b, _gone = _r35b_after_commit(server, ports, _discard_verb)
     return True, _r35b_moved_message(new_port, bind_addr, _f2b,
-                                     i18n.Sentences(_unchecked, _r35j_snapshot_left_note(socket_mode, _gone)))
+                                     i18n.Sentences(_fw_note, _unchecked, _r35j_snapshot_left_note(socket_mode, _gone)))
 
 
 # The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`
@@ -5624,6 +5973,18 @@ def _r28b_panel_way_in_refusal(server):
                          port=getattr(server, "port", "") or 22)
 
 
+def _r38a_ts_chain_way(server):
+    """Whether regular SSH over the tailnet gets in with no tailscale0 rule: tailscaled's own chain, ahead of ufw.
+
+    In its default netfilter mode tailscaled's ts-input chain accepts tailscale0 before ufw reads a rule
+    (ufweval.exempt), so sshd answers there wherever it listens on the tailnet. The "off" and Close-22 gates
+    counted only a tailscale0 rule or Tailscale SSH, and refused such a host "no Tailscale way back" although
+    the operator had one (review 1108 lead; the policy and enable checks count it, firewall._fwb_ts_ways).
+    """
+    from panel.ops.ssh_manager import ufweval
+    return bool(ufweval.ts_netfilter_on(server) and _tsiface_names(server) and not _r11a_sshd_off_tailnet(server))
+
+
 def _r37a_tailnet_dial_refusal(server, iface_allowed):
     """The refusal for "off" when the panel's own tailnet session to sshd would lose its only way in, else None.
 
@@ -5685,7 +6046,7 @@ def remote_set_public_ssh(server, mode):
     # connection meets. Leaving them made 'limit' a rule nothing ever reached.
     if mode == "off":
         running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
-        if not (running and (ssh_enabled or iface_allowed)):
+        if not (running and (ssh_enabled or iface_allowed or _r38a_ts_chain_way(server))):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")

@@ -208,6 +208,10 @@ def _cmpd_run_wipe(app, gs, entry):
         _end_offline_window(gs.id)
         _r37b_wait(gs.id, why)
         return
+    if verdict == "nothing":
+        # "Wipe not required": LinuxGSM took neither branch that stops the server (command_wipe.sh's
+        # outer else, v26.5.0), so nothing restarts either — the window ends for the same reason.
+        _end_offline_window(gs.id)
     _cmpd_finish(app, gs, verdict in ("wiped", "nothing"),
                  i18n.Sentence("{command}: {result}", command=cmd, result=why))
 
