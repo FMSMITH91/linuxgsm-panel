@@ -45,7 +45,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _console_window_place, _r20b_audit_on_raise, game_account_write_refusal)
+    _console_window_place, _console_window_whole, _r20b_audit_on_raise, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1651,10 +1651,7 @@ def _read_console_window(remote, gs, want, host_tz):
         at, out, newlines = _console_window_place(out)
         readable = framed = rc == 0 and out.startswith("B") and out.endswith("E")
         body = out[1:-1] if framed else ""
-        # Whether the window holds the whole log: it has no more lines than were asked for. `newlines`
-        # is the log's newline count (None past _CATCHUP_REACH: not counted, so not whole), and the body
-        # ends in a newline unless the log ends mid-line, that fragment being one more line for `tail`.
-        whole = framed and newlines is not None and (newlines < want or (newlines == want and body.endswith("\n")))
+        whole = framed and _console_window_whole(newlines, body, want)
         if body.endswith("\n"):
             body = body[:-1]     # the file's own final newline, not an empty last line
         elif at is not None:

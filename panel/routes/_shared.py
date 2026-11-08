@@ -1941,6 +1941,18 @@ def _console_window_place(out):
     return [0, int(parts[0]), int(parts[1])], rest, (int(parts[2]) if len(parts) == 3 else None)
 
 
+def _console_window_whole(newlines, body, want):
+    """Whether a window of a log's last `want` lines holds the whole log: it has no more lines than that.
+
+    `newlines` is the log's newline count (_console_window_place; None past the read's reach: not
+    counted, so not whole), and `body` the window as read, which ends in a newline unless the log
+    ends mid-line, that fragment being one more line for `tail`.
+    """
+    if newlines is None:
+        return False
+    return newlines < want or (newlines == want and body.endswith("\n"))
+
+
 def _console_rows(lines, host_tz):
     """[{t, line}] for console text: LinuxGSM's own per-line timestamp parsed off the front.
 
