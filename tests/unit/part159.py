@@ -308,7 +308,7 @@ _mv_nodeny = {
                                                          _TS_SESS159),
 }
 check("1108 P1 LOW: ...and a DENY the panel's session would not meet does not refuse it (docker0, lo, another "
-      "source, 127.0.0.1, UDP, OUT, FWD, the other family, below the allow that lets it in)",
+      "source, a loopback source, UDP, OUT, FWD, the other family, below the allow that lets it in)",
       all(r[0] is True for r in _mv_nodeny.values()),
       repr({k: (r[0], r[1][:200], r[2]) for k, r in _mv_nodeny.items()}))
 _mv_rev = _move159(["22/tcp  ALLOW IN  " + _ADMIN_NET159], up=False)
@@ -439,7 +439,7 @@ check("1108 P1 LOW: ...while a remote dialled at a public address, and one Tails
 # LOW (P1): a believed proxy naming a loopback client is the local viewer
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _proxied_block159(target, xff, believed, sessions=()):
-    """The panel host's IP-block refusal of `target` from 127.0.0.1 with X-Forwarded-For `xff` (text or None)."""
+    """The panel host's IP-block refusal of `target` from loopback, with X-Forwarded-For `xff`."""
     def fn():
         _p9_patch(_auth159, "_request_came_through_proxy", lambda peer: believed)
         return _fw159.fwc_block_ip_refusal(_p135._LOCAL135, target)
@@ -449,7 +449,7 @@ def _proxied_block159(target, xff, believed, sessions=()):
 _pl_ok = _proxied_block159(_ELSE_RANGE159, "127.0.0.1", True)   # NOSONAR(S1313)
 _pl_v6 = _proxied_block159(_ELSE_RANGE159, "::1", True)
 _pl_hit = _proxied_block159(_RANGE159, "127.0.0.1", True, sessions=[(_TUNNEL159, 22)])   # NOSONAR(S1313)
-check("1108 P1 LOW: on the panel host, a believed proxy here naming a loopback client (127.0.0.1 or ::1: an SSH "
+check("1108 P1 LOW: on the panel host, a believed proxy here naming a loopback client (IPv4 or IPv6: an SSH "
       "tunnel to nginx, a browser on the host through it) may block a range none of sshd's sessions comes from, "
       "and a block of one that holds a session is refused naming it",
       _pl_ok is None and _pl_v6 is None and _pl_hit is not None and _TUNNEL159 in _pl_hit and "trust_proxy" not in
@@ -466,7 +466,7 @@ check("1108 P1 LOW: ...while a proxy the panel does not believe (whatever it nam
 # lead (P1): Tailscale Serve up, a loopback viewer's SSH session is still held by an IP block
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _serve_block159(target, headers=None, sessions=(), believed=False):
-    """The panel host's IP-block refusal of `target` with the panel served over Tailscale, from 127.0.0.1."""
+    """The panel host's IP-block refusal of `target` with the panel served over Tailscale, from loopback."""
     host = _p135._Host135(rules=[_p135._SSH22, _TS0_154], incoming="allow", ts=(True, False))
 
     def run():
