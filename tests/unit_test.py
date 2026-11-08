@@ -2015,7 +2015,8 @@ _r16d_wrap_ts_handles()
 # part159 (review 1108's firewall and lock-out fixes, builder A) drives part135's stand-in hosts and
 # part12's app; imports part01, 12, 108, 116, 125, 135, 136 and 154.
 # part165 (review 1109 D: the installer's recorded root-grant choice, a partial uninstall's re-run, a
-# by-hand update of a switched branch) runs install.sh/uninstall.sh text under bash; imports part01 and 05.
+# by-hand update of a switched branch, and the guard's double-quoted -c read: it reads the runner's bound
+# unit.ts_nested too) runs install.sh/uninstall.sh text under bash; imports part01 and 05.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",

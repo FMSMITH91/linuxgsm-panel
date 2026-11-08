@@ -45,7 +45,8 @@ from types import SimpleNamespace as _NS156
 from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part47 import _cut47, _node47
-from unit.part12 import P9_ADMIN, P9_GS, _p9, _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all
+from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_patch_sm,
+                         _p9_restore_all)
 from flask import Flask as _Flask156
 from sqlalchemy import text as _sa_text156
 
@@ -54,6 +55,10 @@ from panel.db import models as _models156
 from panel.ops import system_ops as _so156
 from panel.routes import _shared as _sh156
 from panel.services import host_reboot as _hr156, lgsm_players as _lgp156
+
+# Every block below that patches through _p9_patch arms the transport tripwire first (the docstring
+# said so, and none did: review 1109 T11); the part ends by reading what it recorded.
+_TRIP156_START = len(_P9_TRIPPED)
 
 
 def _read156(*parts):
@@ -88,6 +93,7 @@ check("A02A05 M rescan: a command on a server the plan holds, or on one found ru
 # The job passes its plan's ids: driven through _rescan with the deadline already past.
 _said156 = []
 try:
+    _p9_arm(who="part156")
     _p9_patch(_hr156, "_probe_rows",
               lambda remote, rows: {P9_GS: dict(_settled156[P9_GS]), _FAR156: dict(_settled156[_FAR156])})
     with _p9.app_context():
@@ -135,6 +141,7 @@ def _window156(entries, busy=None, unread=()):
     def nap(sec):
         clock[0] += sec
     try:
+        _p9_arm(who="part156")
         _p9_patch(_hr156, "window_probe", probe)
         _p9_patch(_hr156, "_settled_rows", lambda rows: [_OTHER156])
         _p9_patch(_hr156, "time", _NS156(monotonic=lambda: clock[0], sleep=nap, time=_time156.time))
@@ -172,6 +179,7 @@ check("1107 r37g reboot: ...and opens when nothing is in flight, or when only an
 # The census decides it instead, before anything is stopped: maintenance on a stopped server blocks;
 # a warning lock on a stopped one (LinuxGSM's countdown ends at its first status check) does not.
 try:
+    _p9_arm(who="part156")
     _p9_patch(_hr156._mon, "_host_reachable", lambda remote: True)
     _p9_patch(_hr156, "_row_blockers", lambda rows: [])
     _p9_patch(_hr156, "_host_blockers", lambda remote: [])
@@ -212,6 +220,7 @@ _REFUSED156 = ("%s[K[%s[36m INFO %s[0m]%s[0m Stopping s156: 2 players are on the
                % ((_E156,) * 5))
 _ran156 = []
 try:
+    _p9_arm(who="part156")
     _p9_patch_sm("run_as_game_user", lambda *a, **k: (_REFUSED156, "", 0))
     _p9_patch_sm("run_command", lambda server, cmd, timeout=30, sudo=False, **k: (
         _ran156.append(cmd), ("", "", 0))[1])
@@ -239,6 +248,7 @@ check("A02A05 L forced reboot stop: a game under the panel's own account on its 
 _rows156 = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
 _nows156 = {}
 try:
+    _p9_arm(who="part156")
     _p9_patch(_hr156, "preflight", lambda remote, census: (True, None))
     _p9_patch_sm("is_local_server", lambda server: False)
     _p9_patch(_hr156, "warnable", lambda census: list(_rows156))
@@ -282,6 +292,7 @@ def _git156(args, timeout=45):
 def _switch156(signed):
     cfg, launched, asked = {"panel_branch": "main"}, [], []
     try:
+        _p9_arm(who="part156")
         _p9_patch(_so156, "_is_git_checkout", lambda: True)
         _p9_patch(_so156, "_update_in_progress", lambda: False)
         _p9_patch(_so156, "_git", _git156)
@@ -558,6 +569,7 @@ _c2_156 = [{"category": "Fixed", "title": "C2 entry %d" % i, "body": "", "key": 
 _wnsaved156 = _wnrow156()
 _wn156r = {}
 try:
+    _p9_arm(who="part156")
     _wcl156 = _p9_client(P9_ADMIN)
     _cur156 = {"e": _c1_156}
     _p9_patch(_wn156, "current_entries", lambda path=None: _cur156["e"])
@@ -636,3 +648,5 @@ else:
           and _on156.get("again") == _on156.get("first")
           and (_on156.get("again") or {}).get("wait_hours") == 24
           and (_on156.get("players") or {}).get("state") == "busy", repr(_on156))
+check("part156: nothing its blocks drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP156_START, repr(_P9_TRIPPED[_TRIP156_START:]))

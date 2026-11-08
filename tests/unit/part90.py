@@ -12,8 +12,9 @@ Held here, each against the code path the finding named:
 * a dropped folder whose listing or files cannot all be read: what was listed is kept, and the skip
   is said.
 
-HOW IT RUNS. Routes on part12's Flask app and client (part12 has run), every stub through
-_p9_patch and undone in the finally. Scripts in node on this part's own fixtures.
+HOW IT RUNS. auth._deny inside a request context of part12's Flask app (part12 has run); no route
+is driven and nothing is stubbed, so there is no host call to trip on. Scripts in node on this part's
+own fixtures.
 """
 import json as _json90
 import os
@@ -22,10 +23,8 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part47 import _SETTLE47, _cut47, _node47
 from unit.part87 import _DOM87
-from unit.part12 import (_P9_TRIPPED, _p9)
+from unit.part12 import _p9
 from panel.security import auth as _auth90
-
-_TRIP90_START = len(_P9_TRIPPED)
 
 
 def _read90(*parts):
@@ -214,6 +213,3 @@ if _out90 is not None:
           _out90.get("uploaded") == [["addon/a.txt"], "here"]
           and _out90.get("toasts") == [["2 dropped items could not be read and are not uploaded.", "warning"]],
           repr(_out90))
-
-check("part90: nothing its routes drove reached a real transport (every host call was stubbed)",
-      len(_P9_TRIPPED) == _TRIP90_START, repr(_P9_TRIPPED[_TRIP90_START:][:6]))

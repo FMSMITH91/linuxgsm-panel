@@ -832,11 +832,22 @@ def _calls35(node, names):
                for n in _ast35.walk(node))
 
 
-def _beating_helpers35():
-    """Functions that beat for a loop that calls them: backup_ticker's beat is in _backup_ticker_pass."""
-    tree = _ast35.parse((_REPO35 / "panel/routes/_shared.py").read_text(encoding="utf-8"))
-    return {n.name for n in _ast35.walk(tree)
-            if isinstance(n, _ast35.FunctionDef) and _calls35(n, {"beat"})}
+def _beating_helpers35(files=None):
+    """Functions that beat for a loop that calls them: backup_ticker's beat is in _backup_ticker_pass.
+
+    From every file the gate reads, to a fixed point, so a helper's own caller counts too: read from
+    routes/_shared.py alone, process.hub_lag_loop (whose beat is in lag_tick) went unread once the gate
+    covered all of panel/ (review 1109 T78). `files` is (rel, source) pairs; the gate's own by default.
+    """
+    if files is None:
+        files = [(rel, (_REPO35 / rel).read_text(encoding="utf-8")) for rel in _LOOP_FILES35]
+    funcs = [n for _rel, src in files for n in _ast35.walk(_ast35.parse(src)) if isinstance(n, _ast35.FunctionDef)]
+    found = set()
+    while True:
+        more = {n.name for n in funcs if n.name not in found and _calls35(n, {"beat"} | found)}
+        if not more:
+            return found
+        found |= more
 
 
 def _p35_loops_gate():
@@ -852,9 +863,15 @@ def _p35_loops_gate():
             if problem:
                 bad.append("%s:%s %s" % (rel, node.name, problem))
     check("loops: every beating loop that sleeps before its first pass records that delay first, "
-          "and the delay it records is the one it sleeps (all ten: host_reboot's restore loop "
-          "is the ninth, the scheduled-wipe sweep the tenth)",
-          not bad and recorded == 10, repr((bad, recorded)))
+          "and the delay it records is the one it sleeps (all eleven: host_reboot's restore loop "
+          "is the ninth, the scheduled-wipe sweep the tenth, the hub-lag watch the eleventh)",
+          not bad and recorded == 11, repr((bad, recorded)))
+    _helpers = _beating_helpers35([("a.py", "def tick():\n    beat('x', 1)\n"),
+                                   ("b.py", "def step():\n    tick()\n\ndef loop():\n    while True:\n"
+                                            "        sleep(5)\n        step()\n\ndef idle():\n    work()\n")])
+    check("loops: a helper that beats is found in any file the gate reads, and so is a helper that calls "
+          "one, to any depth (control: one that calls neither is not)",
+          _helpers == {"tick", "step", "loop"} and "hub_lag_loop" in _beating_helpers35(), repr(_helpers))
     _ctl = [_loop_first_pass35(_ast35.parse(_c).body[0])[1] for _c in (
         "def f():\n    last = None\n    time.sleep(30)\n    while True:\n        beat()\n",
         "def f():\n    while True:\n        time.sleep(5)\n        beat()\n")]

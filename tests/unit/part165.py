@@ -11,6 +11,7 @@ Held here, each against the code path the finding named:
   while the panel account, its grants and the root-owned pieces were still there.
 * a by-hand update of a panel switched to another branch moved the code to main while config.json
   went on naming that branch; it now stops before fetching and names both ways on.
+* the unit suite's tailscale guard lost a nested shell's double-quoted -c script holding a separator.
 
 HOW IT RUNS. install.sh's and uninstall.sh's own text, cut out and run under bash in a throwaway
 directory, with every /etc path pointed into it and `id`, `visudo`, `_owner_read` stood in. Nothing
@@ -22,6 +23,7 @@ import shutil as _shutil165
 import subprocess as _sp165  # nosec B404 - bash over the repo's own scripts, in a throwaway dir
 import tempfile as _tf165
 
+from unit import ts_nested as _tn165
 from unit.part01 import check
 from unit.part05 import _root
 
@@ -376,3 +378,22 @@ check("install.sh: ...never prints a panel-written name it would not accept as P
       _st165["an unsafe name"][0] == 9 and "upload-pack" not in _st165["an unsafe name"][1]
       and _st165["nothing tracked"][0] == 0 and "GOES-ON" in _st165["nothing tracked"][1],
       repr(_st165))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. The unit tailscale guard reads a nested -c script in double quotes that holds a separator
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The split cut `bash -c "sh f.sh; true"` at the `;` inside the quotes, and the unbalanced piece left the
+# -c word `"sh`: f.sh was never read, so a tailscale in it was neither shimmed nor judged (review 1109
+# T10). Text only, on the runner's own bound reader (unit_test.py binds unit.ts_nested), under the
+# runner's Landlock block: nothing here runs a shell.
+_tnd165 = _tf165.mkdtemp(dir=_TMP165)
+_tnf165 = os.path.join(_tnd165, "inner-165.sh")
+with open(_tnf165, "w", encoding="utf-8") as _fh165:
+    _fh165.write("tailscale version\n")
+_dq165 = {_s: _tn165.shell_text(["bash", "-c", _s % _tnf165], {}) for _s in (
+    'bash -c "sh %s; true"', 'bash -c "sh %s && true"', 'bash -c "sh %s | cat"', 'bash -c "sh %s & wait"',
+    'bash -c "sh %s"', "bash -c 'sh %s; true'")}
+check("unit suite guard: a script file a nested shell's double-quoted -c script runs is read even when "
+      "that script holds a separator (; && | &), and the forms read before still are",
+      all((_t or "").count("tailscale version") >= 1 for _t in _dq165.values()),
+      repr({_k: (_v or "")[-200:] for _k, _v in _dq165.items()}))

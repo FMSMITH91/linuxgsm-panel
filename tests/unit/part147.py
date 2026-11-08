@@ -14,8 +14,8 @@ import time
 
 from unit.part01 import check
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_client, _p9_patch, _p9_patch_sm,
-                         _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch,
+                         _p9_patch_sm, _p9_restore_all)
 from panel.ops.ssh_manager import _core as _smc147, hosts as _hosts147
 from panel.routes import api as _api147
 from panel.services import lgsm_data as _lgd147
@@ -118,6 +118,7 @@ _NS147 = type("_Gs147", (), {"remote": None, "short_name": "csgoserver", "lgsm_n
 
 
 def _info147(release, latest):
+    _p9_arm(who="part147")
     _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: (release, "v26.5.0"))
     _p9_patch(_lgd147, "latest_release", lambda: latest)
     try:
@@ -135,6 +136,9 @@ check("behind: an unread release or an unread latest is never reported as out of
       and _info147("v26.4.0", None)["behind"] is False)
 
 try:
+    # Armed: the closing "nothing reached a real transport" check reads only what an armed tripwire
+    # records, and this part never armed it (review 1109 T11).
+    _p9_arm(who="part147")
     _p9_patch_sm("game_version", lambda *a, **k: {"reported": "", "build": "", "appid": "",
                                                    "updated": None, "label": "1.5"})
     _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: ("v26.4.0", "v26.4.0"))

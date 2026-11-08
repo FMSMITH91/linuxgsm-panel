@@ -5,7 +5,9 @@
 # database, a restored backup, or a hand edit. Every such command is now built by one choke point
 # (_core.game_user_cmd / game_user_exec_cmd), which refuses an unsafe name. Three parts hold that:
 #
-#   1. GATES over panel/**/*.py (AST, so comments and docstrings are not code): no `sudo -u` built
+#   1. GATES over panel/**/*.py and the root modules (app.py, manage.py, db_maintenance.py: outside
+#      panel/, and a `sudo -u` or ssh argv added there went unread, review 1109 T4) (AST, so comments
+#      and docstrings are not code): no `sudo -u` built
 #      with an unquoted interpolation; no `sudo -u` built anywhere BUT the two builders, which must
 #      validate first; and every helper call whose body names the LinuxGSM script passes it along
 #      (or the function checks it). Each gate has a CONTROL that proves it can fail. THIS part.
@@ -779,8 +781,13 @@ def _gh_scan(src, rel):
 
 
 def _gh_panel_modules():
-    """[(repo-relative path, source)] of every panel/**/*.py."""
+    """[(repo-relative path, source)] of every panel/**/*.py, and of every *.py at the repo's root."""
     out = []
+    for fn in sorted(os.listdir(_gh_root)):
+        path = os.path.join(_gh_root, fn)
+        if fn.endswith(".py") and os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                out.append((fn, f.read()))
     for dp, dns, fns in os.walk(os.path.join(_gh_root, "panel")):
         dns[:] = [d for d in dns if d != "__pycache__"]
         for fn in sorted(fns):
@@ -802,6 +809,9 @@ for _gh_rel, _gh_src in _gh_modules:
 
 check("GHSA-hh39 gate: the scan read the panel's modules (not an empty walk)",
       _gh_files >= 50, "%d files" % _gh_files)
+check("GHSA-hh39 gate: ...and the root modules beside panel/ (app.py, manage.py, db_maintenance.py)",
+      {"app.py", "manage.py", "db_maintenance.py"} <= {_r for _r, _s in _gh_modules},
+      repr(sorted(_r for _r, _s in _gh_modules if "/" not in _r)))
 check("GHSA-hh39 gate G1/G2/G3: every `sudo -u` is built by the checked builder, quoted, with the "
       "script name passed along",
       not _gh_problems, "; ".join(_gh_problems[:6]))

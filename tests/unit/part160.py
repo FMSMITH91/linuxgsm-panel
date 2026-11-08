@@ -82,6 +82,9 @@ _probe160 = _hr160._probe_sh("u160", "vhserver")
 _parsed160 = _hr160.parse_probe("SESSION=0\nLOCK=none\nASIDE=none\nCRON=\nINFLIGHT=1\nMAINT=0\nDEBUG=1\n"
                                 "WARN=0\nBOOT=b\nMID=m\nNOW=1\nSEC=20\nPROBE_OK\n")
 try:
+    # Armed here too: _p9_restore_all above took the tripwire away with the rest, and the closing
+    # "no check reached a host" check reads only what an armed tripwire records (review 1109 Q4).
+    _p9_arm(who="part160")
     _p9_patch(_hr160._mon, "_host_reachable", lambda remote: True)
     _p9_patch(_hr160, "_row_blockers", lambda rows: [])
     _p9_patch(_hr160, "_host_blockers", lambda remote: [])
@@ -134,6 +137,7 @@ def _pass160(slow, plan=("accta",), others=("acctb", "acctc")):
         clock[0] += sec
     rows = [_NS160(short_name=u, lgsm_name="vhserver") for u in others]
     try:
+        _p9_arm(who="part160")
         _p9_patch(_hr160, "window_probe", probe)
         _p9_patch(_hr160, "_settled_rows", lambda r: rows)
         _p9_patch(_hr160, "time", _NS160(monotonic=lambda: clock[0], sleep=nap, time=lambda: clock[0]))

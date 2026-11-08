@@ -459,18 +459,23 @@ def _delete_row94(sid):
 
 def _backup_marks94(rid):
     left = {}
+    # Which stand-in runners ran: each deletes its row, and a path that returned before its mark (and its
+    # runner) left nothing under the id either, so `left` alone passed for it (review 1109 T8b).
+    ran = []
     with _p9.app_context():
         # The full run: the server goes while it is being archived.
         sid = _new_server94(rid, "p94bk1")
         gs = db.session.get(GameServer, sid)
         tally = NS(keep_unread=False)
-        _p9_patch(_pb94, "run_game_backup", lambda *a, **k: _delete_row94(sid) or (True, "", False))
+        _p9_patch(_pb94, "run_game_backup",
+                  lambda *a, **k: ran.append("full run") or _delete_row94(sid) or (True, "", False))
         _pb94._full_backup_server(_p9, gs, (False, False), tally)
         left["full run"] = _gbs94.pop(sid, None)
         # The queued sweep.
         sid2 = _new_server94(rid, "p94bk2", backup_pending=True)
         gs2 = db.session.get(GameServer, sid2)
-        _p9_patch(_p9_sh, "run_game_backup", lambda *a, **k: _delete_row94(sid2) or (True, "", False))
+        _p9_patch(_p9_sh, "run_game_backup",
+                  lambda *a, **k: ran.append("queued") or _delete_row94(sid2) or (True, "", False))
         _p9_sh._back_up_queued(_p9, gs2)
         left["queued"] = _gbs94.pop(sid2, None)
         # The scheduled ticker, and a raise.
@@ -483,6 +488,7 @@ def _backup_marks94(rid):
                                       game_backup_due=lambda s: True))
 
         def _gone_raise(*a, **k):
+            ran.append("scheduled, raised")
             _delete_row94(sid3)
             raise RuntimeError("p94")
         _p9_patch(_p9_sh, "run_game_backup", _gone_raise)
@@ -496,9 +502,11 @@ def _backup_marks94(rid):
     mark["held"] = (_gbs94.pop(-9404, None) or {}).get("running")
     check("backup: a run whose server was deleted before its mark went in (so forget_rows had nothing "
           "to drop) leaves no \"running\" entry under the id — the full run, the queued sweep, and a "
-          "scheduled run that raised; a server still there keeps its mark for the caller (control)",
-          left == {"full run": None, "queued": None, "scheduled, raised": None} and mark == {"held": True},
-          repr((left, mark)))
+          "scheduled run that raised, each of which reached its runner; a server still there keeps its mark "
+          "for the caller (control)",
+          left == {"full run": None, "queued": None, "scheduled, raised": None} and mark == {"held": True}
+          and ran == ["full run", "queued", "scheduled, raised"],
+          repr((left, mark, ran)))
 
 
 def _leftover_cert94():

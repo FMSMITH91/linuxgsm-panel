@@ -214,17 +214,19 @@ def nested_scripts(script, kw):
         _text = _nested_one(_argv, _piped, kw, script) if _argv else None
         if _text is not None:
             _out.append(_text)
-    return _out + [_t for _t in _single_quoted_c(script) if _t not in _out]
+    return _out + [_t for _t in _quoted_c(script) if _t not in _out]
 
 
-def _single_quoted_c(script):
-    """The -c scripts, written in '…', of the shells `script` runs.
+def _quoted_c(script):
+    """The -c scripts, written in '…' or "…", of the shells `script` runs.
 
     The split above reads the script with each '…' emptied (a quoted word is no command), so `bash -c 'sh f'`
-    read as `bash -c ''` and f was never read (review 1107). Read here from the words as the shell quotes
-    them; a script shlex cannot split (an apostrophe in a comment) adds nothing, as before.
+    read as `bash -c ''` and f was never read (review 1107). It also cuts at a separator INSIDE "…":
+    `bash -c "sh f; true"` split into `bash -c "sh f` and `true"`, whose unbalanced quote left the -c word
+    `"sh`, so f was never read either (review 1109). Read here from the words as the shell quotes them,
+    for both quote styles; a script shlex cannot split (an apostrophe in a comment) adds nothing, as before.
     """
-    if "'" not in script:
+    if "'" not in script and '"' not in script:
         return []
     try:
         _ws = shlex.split(script)
