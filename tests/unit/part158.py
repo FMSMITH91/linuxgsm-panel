@@ -73,7 +73,7 @@ function shown(){ return consoleEl.children.map(c => c.textContent); }
 """
 
 _FUNCS158 = (
-    "function _r37e_inoOf(", "function _r37e_tag(", "function _r37e_readStart(", "function _r37e_olderLog(",
+    "function _r37e_inoOf(", "function _r37e_tag(", "function _r37e_olderLog(",
     "function _r37e_keepOlderLog(", "function _consoleLineEl(", "function _appendConsoleRows(",
     "function _trimConsole(", "function _sameLine(", "function _eqRange(", "function _newConsoleLines(",
     "function _newConsoleRows(", "function refreshConsole(", "function clearConsole(",

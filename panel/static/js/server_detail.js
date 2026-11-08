@@ -642,23 +642,17 @@ function _consoleLineEl() {
 // keeps, in place and above its own window, the lines it CANNOT hold: from another log, and on the
 // page before that read began (a line that came after it is from the same log or a newer one, and
 // is put back by the read's own catch-up or _rebuildRestore, as it always was). A line with no
-// known log — the server-rendered seed, a read placed by its text — is replaced as before.
+// known log — the server-rendered seed, a read placed by its text — is replaced as before. A read that
+// may replace the console takes its number with `++_r37e_gen` as it starts.
 var _r37e_gen = 0;
 
 // The inode of the log a read or push's `at` ([chain, inode, offset]) places it in, or null.
-function _r37e_inoOf(at) {
-  return Array.isArray(at) && at.length === 3 ? at[1] : null;
-}
+function _r37e_inoOf(at) { return Array.isArray(at) && at.length === 3 ? at[1] : null; }
 
 // Tags a console line with its log's inode and the reads begun before it; the raw line for a log
 // line (its text on the page carries the time gutter), none for the local echo of a sent command.
 function _r37e_tag(el, ino, line) {
   if (ino !== null && ino !== undefined) el._r37e = {ino: ino, gen: _r37e_gen, line: line};
-}
-
-// A read that may replace the console is starting: its number, for _r37e_olderLog.
-function _r37e_readStart() {
-  return ++_r37e_gen;
 }
 
 // The lines a read started as `gen`, of the log `ino`, will replace but cannot hold, in page order:
@@ -673,10 +667,7 @@ function _r37e_olderLog(ino, gen) {
 
 // Puts those lines back on the emptied console, before the read's own window is drawn.
 function _r37e_keepOlderLog(nodes) {
-  nodes.forEach(function (el) {
-    consoleEl.appendChild(el);
-    if (typeof el._r37e.line === 'string') _consoleLines.push(el._r37e.line);
-  });
+  nodes.forEach(function (el) { consoleEl.appendChild(el); if (el._r37e.line !== undefined) _consoleLines.push(el._r37e.line); });
 }
 
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
@@ -874,7 +865,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
   if (!consoleEl || window._CAN_VIEW_CONSOLE === false) return;
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
-  var mark = _rebuildMark(), gen = _r37e_readStart();
+  var mark = _rebuildMark(), gen = ++_r37e_gen;
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
@@ -1032,7 +1023,7 @@ function _r11c_resyncFrom(at) {
 function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-  var mark = _rebuildMark(), gen = _r37e_readStart();
+  var mark = _rebuildMark(), gen = ++_r37e_gen;
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
     .then(function(res) {

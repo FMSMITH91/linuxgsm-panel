@@ -77,8 +77,8 @@ def _node47(prog):
 # refreshConsole, loadMoreConsole or sendCommand to test something else stands them in, as it does the
 # page's other helpers. `var _logAt;` declares without resetting a value the harness already gave it.
 _R37E_STUBS47 = (
-    "var _logAt, _r37e_gen;\n"
-    "function _r37e_inoOf(){ return null; } function _r37e_tag(){} function _r37e_readStart(){ return 0; }\n"
+    "var _logAt, _r37e_gen = 0;\n"
+    "function _r37e_inoOf(){ return null; } function _r37e_tag(){}\n"
     "function _r37e_olderLog(){ return []; } function _r37e_keepOlderLog(){}\n")
 
 
