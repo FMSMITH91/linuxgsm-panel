@@ -2298,8 +2298,22 @@ def detect_game_ports(server, user, selfname=None, game_type=None):
 
 def _details_started(text):
     """`details`' Status line: True for STARTED, False for STOPPED, None when it has neither."""
-    status = re.search(r"^\s*status:\s*(started|stopped)\b", text, re.I | re.M)
-    return status.group(1).lower() == "started" if status else None
+    status = _r39c_details_status(text)
+    return status == "started" if status else None
+
+
+def _r39c_details_status(text):
+    """"started" or "stopped" from LinuxGSM's own Status line in `details`, or None.
+
+    LinuxGSM prints "Status:\tSTARTED|STOPPED" twice (info_messages.sh: in the game server block
+    and again as the very last line, fn_info_messages_statusbottom), and both come AFTER the
+    server name, description and start parameters, which are the game's config text. A
+    description reading "Wipe status: stopped until Thursday" (or one whose `\n` starts a line with
+    "Status: stopped") was read first and decided a running server was offline. So only a line
+    that IS a Status line counts, and the last one wins.
+    """
+    found = re.findall(r"^[ \t]*status:[ \t]*(started|stopped)\b", text or "", re.I | re.M)
+    return found[-1].lower() if found else None
 
 
 def get_server_status(server, game_server, distinguish_unresponsive=False):
@@ -2348,19 +2362,16 @@ def get_server_status(server, game_server, distinguish_unresponsive=False):
     # Strip ANSI color codes, then read the "Status:" line specifically. (Scanning
     # the whole blob is unsafe: the details output includes a query-check URL
     # containing "ismygameserver.online", which collides with a naive "online" check.)
-    clean = terminal.strip_escapes(text)
-    for line in clean.splitlines():
-        low = line.lower()
-        if "status:" in low:
-            if "started" in low:
-                if _really_serving(server, game_server):
-                    return "online"
-                # A session IS running; it is just not serving anyone. For most callers that is
-                # the same thing as offline and always has been. For a caller deciding whether
-                # there is something to ACT on it is not: see distinguish_unresponsive.
-                return "unresponsive" if distinguish_unresponsive else "offline"
-            if "stopped" in low:
-                return "offline"
+    status = _r39c_details_status(terminal.strip_escapes(text))
+    if status == "started":
+        if _really_serving(server, game_server):
+            return "online"
+        # A session IS running; it is just not serving anyone. For most callers that is
+        # the same thing as offline and always has been. For a caller deciding whether
+        # there is something to ACT on it is not: see distinguish_unresponsive.
+        return "unresponsive" if distinguish_unresponsive else "offline"
+    if status == "stopped":
+        return "offline"
     return "unknown"
 
 
