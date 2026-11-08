@@ -136,7 +136,7 @@ for _r28d_mod in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"):
 # extra queries in a counted block, a pool checkout, the backup lock a check waits on. A check that needs
 # one of those passes drives it by hand. The console poller and the terminal sweepers still start: a check reads a
 # running action's output from the poller's own ticks (part05).
-import app as _smoke_app_mod  # noqa: E402
+_smoke_app_mod = sys.modules["app"]   # the module create_app came from (one import form; part37)
 _SMOKE_NO_TICKERS = frozenset(("install-reconcile", "update-check", "due-actions", "priority-keeper",
                                "backup-ticker", "wipe-schedule"))
 _smoke_real_supervisor = _smoke_app_mod._make_supervisor
