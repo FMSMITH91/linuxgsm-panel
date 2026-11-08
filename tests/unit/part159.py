@@ -10,6 +10,8 @@
 * MEDIUM (P1 carried lead 2): the panel host's hourly auto-block never denies the address of a live,
   signed-in superadmin session (an IPv6 one by its /64) or the host's own addresses; unreadable, it
   blocks nothing new that cycle.
+* LOW (P1): on a remote the panel dials over the tailnet, a session read that fails keeps its tailscale0
+  rule protected (it fell back to a warn and could be deleted).
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -28,7 +30,7 @@ from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_core, _p9_patch, _p9_rest
 from unit.part125 import _Box125
 from unit import part135 as _p135
 from unit.part136 import _OUT136, _deny136
-from unit.part154 import _proc154
+from unit.part154 import _TS0_154, _proc154, _tsrow154
 from panel.core.clock import utcnow as _now159
 from panel.db.models import User as _User159, UserSession as _US159, db as _db159
 from panel.ops import system_ops as _so159
@@ -386,6 +388,36 @@ check("1108 P1 MEDIUM: the panel host's auto-block never denies the address of a
 check("1108 P1 MEDIUM: ...and with the signed-in sessions or the host's own addresses unreadable it denies nothing "
       "new that cycle, while its own stale auto-block is still released",
       all(r[1] == [] and r[2] == [_STALE159] for r in _ab_unread.values()), repr(_ab_unread))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# LOW (P1): an unread tailnet session keeps the tailscale0 rule protected
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _unread_guard159(rows, row, ts_ssh=False):
+    """The delete guard's answer for the tailscale0 rule among `rows` on `row`, its session unread."""
+    host = _p135._Host135(rules=rows, ts=(True, ts_ssh))
+
+    def run():
+        _p9_patch(_hosts159, "_fwb_ssh_conn", lambda s: None)
+        st = _fw159.remote_ufw_status(row)
+        g = next((g for g in st.get("groups", []) if "tailscale0" in "%s %s" % (g["port_label"], g["scope"])), None)
+        return None if g is None else ("PROTECTED" if g["protected"] else ("warn" if g["warn"] else "-"))
+    return _p135._on135(host, run)
+
+
+_HOME2222_159 = "2222/tcp  ALLOW IN  " + _ADMIN_NET159
+_ug_cut = _unread_guard159([_TS0_154, _HOME2222_159], _tsrow154(2222))
+_ug_ok = {
+    "dialled at a public address": _unread_guard159([_TS0_154, _HOME2222_159],
+                                                     _NS159(is_local=False, auth_method="key", host=_PUBH159,
+                                                            port=2222, id=None, name="pub159")),
+    "Tailscale SSH answering the port 22 it dials (never read)": _unread_guard159([_TS0_154, _HOME2222_159],
+                                                                                   _tsrow154(22), ts_ssh=True),
+}
+check("1108 P1 LOW: on a remote the panel dials at its tailnet address, with its SSH session unread, the host's "
+      "tailscale0 rule is PROTECTED (it fell back to a warn beside a home-range SSH rule and could be deleted)",
+      _ug_cut == "PROTECTED", repr(_ug_cut))
+check("1108 P1 LOW: ...while a remote dialled at a public address, and one Tailscale SSH answers on port 22, keep "
+      "the warn (the controls)", all(v == "warn" for v in _ug_ok.values()), repr(_ug_ok))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))

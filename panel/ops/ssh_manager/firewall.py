@@ -1019,12 +1019,15 @@ def _fwc_protect_paths(groups, paths):
     my home IP" sequence (allow from home, then delete Anywhere) is refused while the panel connects
     from elsewhere, and so is deleting the proxy port's allow the viewer came in on. Read under a
     default deny: the incoming policy is not in this listing, and in doubt the rule is kept. A remote
-    whose SSH session could not be read keeps every SSH rule (unknown is not safe).
+    whose SSH session could not be read keeps every SSH rule (unknown is not safe), and a remote the
+    panel dials over the tailnet also every tailscale0 rule carrying sshd: the one its session would
+    get in by alone, which the read session protects, fell back to a warn when the read failed and was
+    deletable again (review 1108).
     """
     from panel.ops.ssh_manager import ufweval
     if paths["unread"]:
         for g in groups:
-            if g.get("is_ssh"):
+            if g.get("is_ssh") or (paths.get("tailnet") and g.get("is_tailscale")):
                 _fwc_protect(g, "ssh_unread")
         return
     for conn in paths["conns"]:
@@ -1715,7 +1718,7 @@ def _fwc_ssh_conns(server, ts, paths):
         _core._log.debug("the panel's SSH session to the host could not be read", exc_info=True)
         conn = None
     if conn is None:
-        paths["unread"] = True
+        paths["unread"], paths["tailnet"] = True, tailnet
         paths["why"] = _FWB_TAILNET_GAP if tailnet and not ts[2] else _FWB_SOURCE_UNREAD
         return
     paths["addrs"] = conn.get("addrs")
