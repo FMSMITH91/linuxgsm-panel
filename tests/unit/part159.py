@@ -40,6 +40,7 @@ from panel.core.clock import utcnow as _now159
 from panel.db.models import User as _User159, UserSession as _US159, db as _db159
 from panel.ops import system_ops as _so159
 from panel.ops.ssh_manager import firewall as _fw159, hosts as _hosts159, ufweval as _ue159
+from panel.routes import host_local as _hl159, remote_security as _rs159
 from panel.security import auth as _auth159
 from panel.services import monitoring as _mon159
 
@@ -482,6 +483,27 @@ check("1108 P1 lead: with the panel served over Tailscale (tailscaled's chain le
       _sv_hit is not None and _TUNNEL159 in _sv_hit, repr(_sv_hit))
 check("1108 P1 lead: ...while a range no session comes from, and any block by a tailnet viewer that came through "
       "Serve, still pass (the controls)", all(v is None for v in _sv_ok.values()), repr(_sv_ok))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# lead (P1): the panel host's Block with no local row runs the evaluator on the stand-in row
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _norow159(target):
+    host = _p135._Host135(rules=[_p135._SSH22, "5000/tcp  ALLOW IN  Anywhere"], incoming="allow")
+
+    def run():
+        try:
+            why = _rs159._fwa_block_refusal(_hl159._R37A_LOCAL_ROW, target)
+        except Exception as e:     # the lead: a missing attribute would be the route's generic 500
+            return "raised %r" % (e,)
+        return None if why is None else str(why)
+    return _p135._on135(host, run)
+
+
+_nr = {"the viewer's own address": _norow159(_p135._VIEWER135), "another address": _norow159(_STRANGER159)}
+check("1108 P1 lead: the panel host's Block with no row of its own (host_local's stand-in row) runs the whole "
+      "lock-out evaluator without raising: the viewer's own address is refused, another address passes",
+      _nr["another address"] is None and _nr["the viewer's own address"] is not None
+      and not _nr["the viewer's own address"].startswith("raised"), repr(_nr))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))
