@@ -22,6 +22,8 @@ Held here:
   install.sh's header, recover.sh's and the README's recovery section.
 * tools/sign-release.sh's warning before signing lists every file root installs from a release and
   runs (install.sh's stage_root_source callers), held equal to them here.
+* An account with no "What's new" stamp (an upgrade that died between adding the column and
+  stamping it, a changelog unreadable then) is stamped at the next start, not left NULL for good.
 
 HOW IT RUNS. Pure helpers with their host reads stubbed; the reboot job's steps on part12's app
 with its transport tripwire armed. Nothing reaches a host or data/.
@@ -37,7 +39,11 @@ import time as _time156
 from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import P9_GS, _p9, _p9_patch, _p9_patch_sm, _p9_restore_all
-from panel.core import config as _cfg156
+from flask import Flask as _Flask156
+from sqlalchemy import text as _sa_text156
+
+from panel.core import config as _cfg156, whats_new as _wn156
+from panel.db import models as _models156
 from panel.ops import system_ops as _so156
 from panel.routes import _shared as _sh156
 from panel.services import host_reboot as _hr156, lgsm_players as _lgp156
@@ -388,3 +394,36 @@ check("A10 L sign-release.sh: its 'changes what runs as root' warning flags ever
 check("A10 L sign-release.sh: ...and CI's workflows and the scripts they run",
       bool(_re_flag156) and bool(_re_flag156.match(".github/workflows/ci.yml"))
       and bool(_re_flag156.match(".github/scripts/complexity_gate.py")), "")
+
+
+# ── A01 L: an account left with no What's new stamp is stamped at the next start ───────────────
+_TMP156 = _tf156.mkdtemp(prefix="lgsm-unit-p156-")
+_mig156 = _Flask156("unit_part156_mig")
+_mig156.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_TMP156, "nostamp.db"),
+                      SQLALCHEMY_TRACK_MODIFICATIONS=False)
+_models156.db.init_app(_mig156)
+try:
+    with _mig156.app_context():
+        _models156.db.create_all()
+        _models156.db.session.add(_models156.User(username="p156null", password_hash="!"))
+        _models156.db.session.add(_models156.User(username="p156kept", password_hash="!"))
+        _models156.db.session.commit()
+        # The column is there already (an earlier start added it) and these rows were never stamped.
+        _models156.db.session.execute(_sa_text156(
+            "UPDATE user SET whats_new_seen = NULL WHERE username = 'p156null'"))
+        _models156.db.session.execute(_sa_text156(
+            "UPDATE user SET whats_new_seen = 'abc:1' WHERE username = 'p156kept'"))
+        _models156.db.session.commit()
+        _models156._run_light_migrations()
+        _st156 = dict(_models156.db.session.execute(_sa_text156(
+            "SELECT username, whats_new_seen FROM user")).all())
+        _models156.db.session.remove()
+except Exception as _exc156w:  # noqa: BLE001 - reported by the check below, by name
+    _st156 = {"error": repr(_exc156w)[:160]}
+finally:
+    _shutil156.rmtree(_TMP156, ignore_errors=True)
+_now156 = _wn156.current_stamp()
+check("A01 L what's new: an account with no stamp (the start that added the column died before stamping it, "
+      "or the changelog could not be read) is stamped at the next start; a stamped one is left alone",
+      bool(_now156) and _st156.get("p156null") == _now156 and _st156.get("p156kept") == "abc:1",
+      repr({k: (v or "")[:20] for k, v in _st156.items()}))
