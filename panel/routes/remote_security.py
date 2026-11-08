@@ -655,7 +655,7 @@ def _r38a_open_then_save(app, local, cfg, cur, new):
 
     `cur` and `new` are (bind, port). Nothing is saved when the open failed on a firewall that drops the
     port (_r37a_not_opened). Only these two keys are saved, onto the file as it is now: the checks before
-    ran `ss` and `ip`, which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
+    ran `ss` and `ip`, which yield, and saving the whole dict reverted any write made meanwhile.
     """
     (cur_bind, cur_port), (new_bind, new_port) = cur, new
     opened = _r37a_open_first(app, local, new_bind, new_port)
