@@ -325,8 +325,10 @@ _ELSEWHERE154 = "192.0.2.99"       # NOSONAR(S1313) - outside it
 
 
 def _lo154(fn, headers=None, sessions=()):
-    """fn() on the panel host, in a request from 127.0.0.1 with `headers`; sshd's sessions read as `sessions`
-    [(source, port)] (None: unread) -> its answer as text (an (ok, message) answer: the message)."""
+    """fn() on the panel host, in a request from 127.0.0.1 with `headers` -> its answer as text.
+
+    sshd's sessions read as `sessions` [(source, port)] (None: unread); an (ok, message) answer gives its message.
+    """
     host = _p135._Host135(rules=[_p135._SSH22, "5000/tcp  ALLOW IN  Anywhere"], incoming="allow")
 
     def run():
@@ -403,9 +405,9 @@ _it = _inbound_to154([(_HERE154, 22, _TUNNEL154, 50000, "01"),           # an SS
                       (_HERE154, 22, _ELSEWHERE154, 50001, "06"),        # TIME_WAIT: not
                       (_HERE154, 443, _ELSEWHERE154, 50002, "01"),       # another port: not
                       ("127.0.0.1", 22, "127.0.0.1", 50003, "01"),       # NOSONAR(S1313) - loopback: not
-                      ("0.0.0.0", 22, "0.0.0.0", 0, "0A")])              # NOSONAR(S1313) - the listener: not
+                      (_HERE154, 22, _TUNNEL154, 50004, "0A")])          # LISTEN, the same ends: not
 check("1107 r37g: ufweval.inbound_to reads /proc/net/tcp's ESTABLISHED connections to the given ports from other "
-      "machines (not TIME_WAIT, another port, loopback or the listener), and None when the table cannot be read",
+      "machines (not TIME_WAIT or LISTEN, another port, loopback), and None when the table cannot be read",
       _it == [(_ip154.ip_address(_TUNNEL154), _ip154.ip_address(_HERE154), 22)] and _inbound_to154(None) is None,
       repr(_it))
 
