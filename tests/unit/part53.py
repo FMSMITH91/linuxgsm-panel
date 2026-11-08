@@ -39,7 +39,7 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg,
                          _p9_cfg_put, _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
-from unit.part47 import _cut47, _node47
+from unit.part47 import _R37E_STUBS47, _cut47, _node47
 from panel.db.models import AuditLog, CustomCommand, Group, RemoteServer, User, db
 from panel.ops import backup as _bk53
 from panel.routes import custom_commands as _cc53
@@ -454,7 +454,7 @@ if _out53 is not None:
 
 # ── Load older, and a priming window, while a catch-up is in flight ──────────────────────────────
 _name53 = "console: a rebuild restarts an in-flight catch-up"
-_out53 = _node53(_name53, _SETTLE53 + (
+_out53 = _node53(_name53, _SETTLE53 + _R37E_STUBS47 + (
     "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
     "var _resync = null, _logAt = [0, 1, 100], _consoleLines = [], _consolePrimed = false, _consoleSig = 'x';\n"
     "var _returnOwed = false, _primeOwed = false, restarted = [], primed = 0;\n"

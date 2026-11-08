@@ -631,17 +631,60 @@ function _consoleLineEl() {
   return div;
 }
 
+// ── Lines from an older log outlive a read of the new one ───────────────────────────────────────
+// LinuxGSM's start (a Restart, a Start, the monitor bringing a crashed server back) moves the
+// console log aside and begins a new one, and a read that REPLACES the console — the priming window
+// after Clear, Load older — reads only the log there is now. Everything on the page from the old log
+// was wiped with nothing to bring it back: send a command, Restart, and at the 30 s re-prime after a
+// Clear the command, its echo, its output and every line the server printed before stopping were
+// gone. So each line is tagged with the log it came from (its inode, the `at` of the read or push
+// that brought it) and with the reads begun before it arrived (_r37e_gen), and a replacing read
+// keeps, in place and above its own window, the lines it CANNOT hold: from another log, and on the
+// page before that read began (a line that came after it is from the same log or a newer one, and
+// is put back by the read's own catch-up or _rebuildRestore, as it always was). A line with no
+// known log — the server-rendered seed, a read placed by its text — is replaced as before. A read that
+// may replace the console takes its number with `++_r37e_gen` as it starts.
+var _r37e_gen = 0;
+
+// The inode of the log a read or push's `at` ([chain, inode, offset]) places it in, or null.
+function _r37e_inoOf(at) { return Array.isArray(at) && at.length === 3 ? at[1] : null; }
+
+// Tags a console line with its log's inode and the reads begun before it; the raw line for a log
+// line (its text on the page carries the time gutter), none for the local echo of a sent command.
+function _r37e_tag(el, ino, line) {
+  if (ino !== null && ino !== undefined) el._r37e = {ino: ino, gen: _r37e_gen, line: line};
+}
+
+// The lines a read started as `gen`, of the log `ino`, will replace but cannot hold, in page order:
+// from another log, and on the page before it began. None when the read did not say its log.
+function _r37e_olderLog(ino, gen) {
+  if (ino === null || ino === undefined || !consoleEl) return [];
+  return Array.prototype.filter.call(consoleEl.children, function (el) {
+    var tag = el._r37e;
+    return !!tag && tag.ino !== ino && tag.gen < gen;
+  });
+}
+
+// Puts those lines back on the emptied console, before the read's own window is drawn.
+function _r37e_keepOlderLog(nodes) {
+  nodes.forEach(function (el) { consoleEl.appendChild(el); if (el._r37e.line !== undefined) _consoleLines.push(el._r37e.line); });
+}
+
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
 // for rows that do not — used only where the caller knows the panel WATCHED them arrive. `at` is
-// where in the log the rows end, when the caller knows it (a push, a catch-up): _logAt.
-function _appendConsoleRows(rows, fallbackTs, at) {
+// where in the log the rows end, when the caller knows it (a push, a catch-up): _logAt. `ino` is the
+// log they came from when `at` does not say it (a window: _r37e_tag).
+function _appendConsoleRows(rows, fallbackTs, at, ino) {
   if (!rows.length) return;
   var frag = document.createDocumentFragment();
+  var from = _r37e_inoOf(at);
+  if (from === null && ino !== undefined) from = ino;
   rows.forEach(function (row) {
     var div = _consoleLineEl();
     var ts = row.t || fallbackTs;
     if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, row.line);
+    _r37e_tag(div, from, row.line);
     frag.appendChild(div);
   });
   consoleEl.appendChild(frag);
@@ -822,7 +865,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
   if (!consoleEl || window._CAN_VIEW_CONSOLE === false) return;
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
-  var mark = _rebuildMark();
+  var mark = _rebuildMark(), gen = ++_r37e_gen;
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
@@ -856,13 +899,16 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // the page of a server that happens to be down. Staying unprimed means the next poll that
         // does return something adopts it instead.
         _consolePrimed = true;
+        // What the page holds from a log the server has since moved aside stays (_r37e_olderLog).
+        var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen);
         _consoleLines = [];
         consoleEl.innerHTML = '';
+        _r37e_keepOlderLog(kept);
         floor = _panelLinesWiped();
         // The priming window is history, so it gets NO arrival time — but a row that carries
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
-        _appendConsoleRows(rows);
+        _appendConsoleRows(rows, undefined, undefined, _r37e_inoOf(data.at));
         // A window that says where in the log it ends is caught up from there (_primeAt): what was
         // pushed before this answer lies in it or in the catch-up's answer. One that does not (a panel
         // older than this) has the pushes since its read put back by their text, as before.
@@ -887,7 +933,9 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // lines and a hidden spell is usually longer, so the lines before it would never be shown —
         // the return's 2000-line read stitches to the page's end, which would then be this window's.
         // That read brings these lines too.
-        if (!_returnOwed) _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
+        if (!_returnOwed) {
+          _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now, undefined, _r37e_inoOf(data.at));
+        }
       }
       showPanelBacklog(panelLines);
       // The priming wipe took any panel push already shown; put back those the backlog lacks —
@@ -959,8 +1007,9 @@ function _loadOlderRows(list) {
 // lines the deeper window does not contain (the server-rendered seed, the local command echo), so
 // no overlap matched and every line was appended twice — 1022 duplicates in the first test of it.
 // A deeper window of the same file is simply a superset of the tail, so showing it as-is is both
-// correct and what the button says. The only thing this can drop is a websocket line not yet
-// flushed to the log file, which the next poll brings back.
+// correct and what the button says — of the same file: what the page holds from an older log (the
+// server restarted since) is kept above it (_r37e_olderLog). The only thing this can drop is a
+// websocket line not yet flushed to the log file, which the next poll brings back.
 // After Load older rebuilt the console: a catch-up still in flight was asked from the page's OLD
 // place, and its answer appends everything from there without matching — so every line between
 // that place and the rebuilt window's end showed twice. Ask it again from where the console now
@@ -974,7 +1023,7 @@ function _r11c_resyncFrom(at) {
 function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-  var mark = _rebuildMark();
+  var mark = _rebuildMark(), gen = ++_r37e_gen;
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
     .then(function(res) {
@@ -1000,9 +1049,11 @@ function loadMoreConsole(btn) {
         return;
       }
       var older = _loadOlderRows(data.lines);
+      var kept = _r37e_olderLog(_r37e_inoOf(data.at), gen);
       _consoleLines = [];
       consoleEl.innerHTML = '';
-      _appendConsoleRows(older, null);
+      _r37e_keepOlderLog(kept);
+      _appendConsoleRows(older, null, undefined, _r37e_inoOf(data.at));
       _rebuildRestore(mark);
       // A deeper window of the log is a superset of the priming one, so this console is primed. Left
       // unprimed (after Clear, or pressed before the first window came back) the next 30 s poll took
@@ -1568,6 +1619,8 @@ function sendCommand(ev) {  // NOSONAR - the constant false is the data-action p
   echo.className = 'console-line';
   echo.style.color = '#58a6ff';
   echo.textContent = '> ' + cmd;
+  // Of the log the page is reading now: a read of a newer one keeps it with that log's lines.
+  _r37e_tag(echo, _r37e_inoOf(_logAt));
   consoleEl.appendChild(echo);
   consoleEl.scrollTop = consoleEl.scrollHeight;
   fetch(MOUNT + '/api/command/' + serverId, {
