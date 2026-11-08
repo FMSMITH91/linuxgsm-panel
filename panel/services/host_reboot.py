@@ -100,8 +100,16 @@ DEFAULT_WAIT_HOURS = 24
 # the ones of those that are maintenance a reboot must not cut through: a `restart` among them, whose
 # start would bring the server back under the reboot (a daily cron restart at the reboot's minute).
 # With LinuxGSM's aliases (lgsm/modules/core_getopt.sh): `./<s> u` is the same update as `./<s> update`.
+# Every command that changes the server's files is maintenance too (v26.5.0's core_getopt.sh names):
+# a Rust wipe the operator's cron or the Terminal runs stops the server INSIDE its own process (no
+# `stop` process appears), so without its own name here the census read it as a stopped server with
+# nothing in flight and the reboot was sent mid-delete, or between its stop and its start; and the
+# mods installer, FastDL, the Unreal map compressor, clear-modules and MTA's resources write files
+# a reboot would leave half written.
 _MAINT_CMDS = ("update|u|force-update|fu|update-restart|ur|validate|v|backup|b|install|i|auto-install|"
-               "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules|restart|r")
+               "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules|restart|r|"
+               "full-wipe|fw|wipeall|wa|map-wipe|mw|wipe|w|wi|mods-install|mi|mods-remove|mr|fastdl|fd|"
+               "map-compressor|mc|clear-modules|cm|install-default-resources|ir")
 _INFLIGHT_CMDS = "monitor|m|start|st|stop|sp|debug|d|details|dt|" + _MAINT_CMDS
 _PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "DEBUG", "WARN", "BOOT", "MID", "NOW", "SEC")
 

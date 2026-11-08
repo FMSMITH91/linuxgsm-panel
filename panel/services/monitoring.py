@@ -689,9 +689,11 @@ _EXPECT_OFFLINE_WINDOW = 180    # a panel restart holds "server down" this long 
 # scripts with the server up) are deliberately absent. Each command with LinuxGSM's own aliases
 # (lgsm/modules/core_getopt.sh, real command names since v26.3.0 #5002): an operator's `./<s> u`
 # cron is the same update, and read as "went offline unexpectedly". `s` is sponsor, not a command
-# here.
+# here. A Rust wipe stops the server for its delete and starts it again (command_wipe.sh, v26.5.0), so
+# an operator's cron wipe is here with its aliases too (the panel's own scheduled wipe marks itself).
 _LGSM_MAINTENANCE_CMDS = ("update", "u", "force-update", "fu", "update-restart", "ur", "validate", "v",
-                          "mods-update", "mu", "workshop-update", "wu", "restart", "r", "backup", "b")
+                          "mods-update", "mu", "workshop-update", "wu", "restart", "r", "backup", "b",
+                          "full-wipe", "fw", "wipeall", "wa", "map-wipe", "mw", "wipe", "w", "wi")
 
 
 def _r28a_busy_words(remote, cmd):
