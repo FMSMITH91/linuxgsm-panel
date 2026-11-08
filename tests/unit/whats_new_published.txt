@@ -3,6 +3,12 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+d50aec72 A wipe whose server fails to start afterwards counts as done.
+a9b993d2 Firewall changes on a host saved by name check what the name resolves to.
+b40982c4 Blocking an address from the panel host works in more setups.
+0587d420 The console keeps old-log lines that arrive while it re-reads the log.
+5043a77c Moving SSH to a new port keeps it off the internet.
+50eb8c51 The panel host's auto-block spares signed-in admins.
 b4081d02 Auto-block never blocks the panel itself.
 baa81a64 Blocking an address on the panel host refuses your own.
 3714c0f0 A fresh copy of the panel's code is checked against your release key.
