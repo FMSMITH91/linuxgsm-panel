@@ -171,3 +171,44 @@ check("light theme: every semantic text colour it darkens for the white page kee
       "colour inside the always-dark console (the console's gap notice was dark brown on near-black)",
       {"success", "danger", "warning", "info"} <= set(_light157) & set(_dark157) and not _miss157,
       repr((_light157, _dark157, _inside157, _miss157)))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. The server page's charts follow a live change of colour scheme
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# app_shell.js flips <html data-bs-theme> live when "System" follows the device. The charts took their
+# ink when built (History refreshes in place, and the 7-day x axis was computed once at load), so they
+# kept the old scheme's ticks, grid and legend until a reload.
+_name157 = "charts: a live change of colour scheme"
+_out157 = _js99(_name157, (
+    "let scheme = 'dark', watched = null;\n"
+    "document.documentElement = {getAttribute: k => (k === 'data-bs-theme' ? scheme : null)};\n"
+    "global.MutationObserver = class { constructor(cb){ this.cb = cb; }\n"
+    "  observe(el, o){ watched = {el: el === document.documentElement, o, cb: this.cb}; } };\n"
+    "let updates = 0;\n"
+    "const mk = () => ({update: () => { updates++; }, options: {\n"
+    "  scales: {y: {ticks: {color: 'old'}, grid: {color: 'old'}}, y1: {ticks: {color: 'old'}, grid: {display: false}},\n"
+    "           x: {ticks: {color: 'old'}, grid: {display: false}}},\n"
+    "  plugins: {legend: {labels: {color: 'old'}}}}});\n"
+    "var statsChart = mk(); var _histCharts = {'hist-host': mk()};\n"
+    + _line_or99(_SD157, "var _r37d_inkWatch") + "\n"), (
+    "function _cmpbInk(", "function _histX(", "function _r37d_inkChart(", "function _r37d_inkCharts(",
+    "if (_r37d_inkWatch && document.documentElement)"), (
+    "  const x7 = _histX().ticks.color; scheme = 'light';\n"
+    "  if (watched) watched.cb();\n"
+    "  const ink = c => [c.options.scales.y.ticks.color, c.options.scales.y.grid.color, c.options.scales.y1.ticks.color,\n"
+    "    c.options.scales.y1.grid.color, c.options.scales.x.ticks.color, c.options.plugins.legend.labels.color];\n"
+    "  console.log(JSON.stringify({x7, x7light: _histX().ticks.color, live: ink(statsChart),\n"
+    "    hist: ink(_histCharts['hist-host']), updates, watch: watched && [watched.el, watched.o]}));\n"), _SD157)
+if _out157 is not None:
+    _lightInk157 = ["#4b5563", "rgba(0,0,0,.08)", "#4b5563", None, "#4b5563", "#1f2937"]
+    check("charts: a change of colour scheme on <html> repaints the live CPU chart's and every History "
+          "chart's ticks, grid lines and legend in the new scheme, and leaves a hidden grid hidden (they "
+          "kept the old scheme's ink until a reload)",
+          _out157.get("live") == _lightInk157 and _out157.get("hist") == _lightInk157
+          and _out157.get("updates") == 2
+          and _out157.get("watch") == [True, {"attributes": True, "attributeFilter": ["data-bs-theme"]}],
+          repr(_out157))
+    check("charts: ...and the 7-day x axis is drawn in the scheme in force when a chart is built (it was "
+          "taken once, when the script loaded)",
+          (_out157.get("x7"), _out157.get("x7light")) == ("#8b98a5", "#4b5563"), repr(_out157))
