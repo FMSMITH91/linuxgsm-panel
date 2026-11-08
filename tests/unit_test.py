@@ -2008,8 +2008,8 @@ _r16d_wrap_ts_handles()
 # part158 (the console keeps an older log's lines through a read of the new one: the page's own
 # console functions in node, Clear/send/Restart/re-prime and Load older) imports part01, 05 and 47.
 # part161 (review 1108 C: the console keeps an old log's lines that land while a replacing read is out,
-# and the branch switch's unsigned answer) runs part158's console harness in node; imports part01, 47
-# and 158.
+# and the branch switch's unsigned answer) runs part158's console harness in node and stubs system_ops
+# through part12's patcher; imports part01, 12, 47 and 158.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
