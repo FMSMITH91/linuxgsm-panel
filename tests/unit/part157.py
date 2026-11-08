@@ -391,8 +391,11 @@ finally:
 check("branch switch: the walk skips a newest commit that passed CI but is not a signed release and "
       "takes the newest signed one (nothing tested the switch walk with an unsigned commit)",
       _sw157.get("newest unsigned") == (_C157[1], ""), repr(_sw157))
-check("branch switch: ...with no signed commit it switches to nothing and says none passed",
-      _sw157.get("none signed", ("x",))[0] == "" and "passed its automated checks" in _sw157["none signed"][1],
+check("branch switch: ...with no signed commit it switches to nothing and says none is a signed release it "
+      "could verify (not that none passed its checks: none was judged by them; review 1108)",
+      _sw157.get("none signed", ("x",))[0] == ""
+      and "is a signed release this host could verify" in _sw157["none signed"][1]
+      and "passed its automated checks" not in _sw157["none signed"][1],
       repr(_sw157))
 check("branch switch: ...and a signed newest commit is taken (positive control)",
       _sw157.get("newest signed") == (_C157[0], ""), repr(_sw157))
