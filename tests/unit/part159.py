@@ -222,11 +222,17 @@ _TS_SESS159 = _sess159(_TSP159, _TSH159, "tailscale0")
 _PUB_SESS159 = _sess159(_ADMIN159, _PUBH159, "eth0")
 
 
-def _move159(rules, session=_PUB_SESS159, local=False, netfilter_on=False, up=True):
+_PUB_DEFAULT159 = object()   # "the public session", told apart from None (unread)
+
+
+def _move159(rules, session=_PUB_DEFAULT159, local=False, netfilter_on=False, up=True):
     """A 22 -> 2022 move on a stand-in with `rules` -> (ok, message, the allow verbs sent).
 
-    `session`: the panel's session as the remote reads it (None: unread). `local`: the panel's own host.
+    `session`: the panel's session as the remote reads it (None: unread; by default the public one).
+    `local`: the panel's own host.
     """
+    if session is _PUB_DEFAULT159:
+        session = _PUB_SESS159
     box = _Box159(rules, up=up)
     row = (_NS159(id=-159, name="Panel", host="127.0.0.1", port=22, auth_method="local", is_local=True)  # NOSONAR
            if local else _NS159(id=-159, name="p159", host=_TSH159, port=22, auth_method="key", is_local=False))
