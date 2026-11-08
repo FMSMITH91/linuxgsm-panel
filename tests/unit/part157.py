@@ -152,3 +152,22 @@ if _out157 is not None:
     check("console history: a quick command that fills the box ends Up/Down browsing, so the next Down "
           "leaves the chip's text alone (it put back the draft from before browsing)",
           _out157 == {"browsed": "status", "filled": "say ", "down": None}, repr(_out157))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. The console's coloured lines in the light theme
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The console stays near-black in both schemes, but the light theme's `.text-warning` (#92400e, for a
+# white page) also recoloured the console's "Some output … is not shown" line: about 2.7:1. Every
+# semantic text colour the light theme darkens must keep its dark-scheme value inside the console.
+_CSS157 = _read99("panel", "static", "css", "panel.css")
+_dark157 = dict(_re157.findall(r"^\s+\.text-(\w+)\s*\{\s*color:\s*(#[0-9a-f]{6}) !important;", _CSS157,
+                               _re157.M))
+_light157 = _re157.findall(r'^\[data-bs-theme="light"\] \.text-(\w+) \{', _CSS157, _re157.M)
+_inside157 = dict(_re157.findall(r'^\[data-bs-theme="light"\] \.console-output \.text-(\w+) \{ color: '
+                                 r'(#[0-9a-f]{6}) !important; \}', _CSS157, _re157.M))
+_miss157 = [_c for _c in _light157 if _c in _dark157 and _inside157.get(_c) != _dark157[_c]]
+check("light theme: every semantic text colour it darkens for the white page keeps the dark scheme's "
+      "colour inside the always-dark console (the console's gap notice was dark brown on near-black)",
+      {"success", "danger", "warning", "info"} <= set(_light157) & set(_dark157) and not _miss157,
+      repr((_light157, _dark157, _inside157, _miss157)))
