@@ -251,7 +251,6 @@ def _uninst165(mode="system", account=False, files=(), conf_dir=None):
     return _bash165(script)
 
 
-_PD165 = "/home/lgsmpanel/linuxgsm-panel"
 _un165 = {
     "nothing left": _uninst165(),
     "the panel account": _uninst165(account=True),
