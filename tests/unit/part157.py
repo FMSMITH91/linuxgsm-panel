@@ -156,7 +156,7 @@ _out157 = _js99(_name157, _LS157 + (
     "input.setSelectionRange = () => {}; document.activeElement = input;\n"
     + "".join(_line_or99(_HS157, h) + "\n" for h in (
         "var _CMPA_HIST_MAX", "var _cmpaHistMem", "var _cmpaBrowse", "var _cmpaHistIdx", "var _cmpaDraft"))), (
-    "function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush(",
+    "function _cmpaHistEnd(", "function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "function _cmpaHistPush(",
     "function _cmpaHistStep(", "function cmpaQuickCommand("), (
     "  _cmpaHistPush('status'); input.value = 'half';\n"
     "  input.value = _cmpaHistStep(-1, input.value);\n"

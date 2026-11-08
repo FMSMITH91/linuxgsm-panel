@@ -2472,7 +2472,7 @@ function cmpaQuickCommand(btn) {
   if (btn.getAttribute('data-fill') === '1') {
     // A value set from script fires no `input` event, so end Up/Down browsing here as typing does:
     // otherwise the next Down put back the draft from before browsing over the chip's text.
-    _cmpaBrowse = null; _cmpaHistIdx = -1;
+    _cmpaHistEnd();
     input.value = cmd + ' ';
     input.focus();
     try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* not a text box */ }

@@ -2,8 +2,8 @@
 // keep that file under the complexity gate's length limit. Loaded BEFORE server_detail.js and after
 // the page's inline values (serverId, _CMPA_HIST_SCOPE). Its submit listener reads two names that
 // server_detail.js defines (_cmpaLogKind, _cmpaSetView) only when a command is sent, by which time
-// that file has run; server_detail.js's cmpaQuickCommand in turn ends browsing through _cmpaBrowse
-// and _cmpaHistIdx here. Classic scripts share one global scope, so both see the same variables.
+// that file has run; server_detail.js's cmpaQuickCommand in turn ends browsing through _cmpaHistEnd
+// here. Classic scripts share one global scope, so both see the same variables.
 
 // ── Command history: Up/Down in the command box recall what was sent ─────────────────────────────
 // Per account and server, the last 50, in localStorage when the browser allows it and in this page
@@ -20,6 +20,10 @@ var _cmpaHistMem = [];      // the in-page copy, the only one when storage is re
 var _cmpaBrowse = null;     // the list being stepped through, taken when Up is first pressed
 var _cmpaHistIdx = -1;      // where in it the box is; -1 = not browsing
 var _cmpaDraft = '';        // what was in the box before browsing began
+
+// Ends Up/Down browsing: typing does it (the input listener below), and so does server_detail.js's
+// cmpaQuickCommand when a chip fills the box from script, which fires no `input` event.
+function _cmpaHistEnd() { _cmpaBrowse = null; _cmpaHistIdx = -1; }
 
 // null without a scope: then the in-page copy only, never a key every account would share.
 function _cmpaHistStoreKey() {
@@ -88,7 +92,7 @@ function _cmpaHistKey(e) {
   if (!form || !input) return;
   input.addEventListener('keydown', _cmpaHistKey);
   // Typing ends browsing: the edited line is the new draft for the next Up.
-  input.addEventListener('input', function () { _cmpaBrowse = null; _cmpaHistIdx = -1; });
+  input.addEventListener('input', _cmpaHistEnd);
   form.addEventListener('submit', function () {
     var cmd = input.value.trim();
     if (!cmd) return;
