@@ -476,6 +476,10 @@ def census_blockers(installed, probes, blocker):
     LinuxGSM about to stop or restart that server after its warning, and a reboot's stop would wait
     it out and then warn again (reboot_allowance); on a stopped server LinuxGSM's countdown ends at
     its first status check, so a lock there is a command in its first seconds or a stale one.
+    A `debug` run (the probe's DEBUG) blocks too: it runs the game in the foreground of someone's
+    shell, outside tmux, so the server reads as stopped and is in no plan, and the quiet window
+    before the reboot waits on it (window_reads) for as long as it runs. Not refused here, the reboot
+    stopped every server, told the players, waited ARM_WAIT and rolled back, every time (review 1108).
     """
     out = []
     for gs in installed:
@@ -484,6 +488,8 @@ def census_blockers(installed, probes, blocker):
             out.append(blocker("lgsm_warning", gs.name))
         elif p.get("maint"):
             out.append(blocker("maintenance", gs.name))
+        elif p.get("debug"):
+            out.append(blocker("action", gs.name, "debug"))
     return out
 
 

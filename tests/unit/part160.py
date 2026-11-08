@@ -8,15 +8,19 @@ Held here:
 * LinuxGSM answering "Wipe not required" (it never stopped the server) ends the monitor's quiet window
   the wipe opened, as its players-online refusal does; the control (a wipe done) leaves it for the
   restart that follows.
+* A host reboot's census refuses a LinuxGSM `debug` running on a server (foreground, outside tmux:
+  the server reads as stopped and is in no plan). The quiet window before the reboot waits on it, so
+  unrefused the reboot stopped every server, waited ARM_WAIT and rolled back, every time.
 
 HOW IT RUNS. Routes, workers and the reboot job's steps on part12's app with its transport tripwire
 armed and every host call stubbed (part155's sweep; a stand-in clock for the window). Nothing reaches
 a host or data/.
 """
 from unit.part01 import check
-from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_audit, _p9_audit_count, _p9_restore_all
+from unit.part12 import P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_patch, _p9_restore_all
 from unit.part155 import _sweep155
-from panel.services import wipe_schedule as _ws160
+from panel.db.models import GameServer as _GS160, db as _db160
+from panel.services import host_reboot as _hr160, reboot_words as _rw160, wipe_schedule as _ws160
 
 _TRIP160_START = len(_P9_TRIPPED)
 
@@ -67,6 +71,41 @@ check("1108 r38b wipe sweep: LinuxGSM answering 'Wipe not required' (the server 
       and ((_nothing160.get("entry") or {}).get("last") or {}).get("ok") is True
       and _done160.get("window_during") is True and _done160["window_after"] is True,
       repr((_nothing160, _done160)))
+
+# ── 3. the reboot census and a LinuxGSM `debug` ─────────────────────────────────────────────────
+_probe160 = _hr160._probe_sh("u160", "vhserver")
+_parsed160 = _hr160.parse_probe("SESSION=0\nLOCK=none\nASIDE=none\nCRON=\nINFLIGHT=1\nMAINT=0\nDEBUG=1\n"
+                                "WARN=0\nBOOT=b\nMID=m\nNOW=1\nSEC=20\nPROBE_OK\n")
+try:
+    _p9_patch(_hr160._mon, "_host_reachable", lambda remote: True)
+    _p9_patch(_hr160, "_row_blockers", lambda rows: [])
+    _p9_patch(_hr160, "_host_blockers", lambda remote: [])
+    _p9_patch(_hr160, "_count_players", lambda running, primaries: ([], []))
+    _p9_patch(_hr160._mon, "_batched_slots", lambda rows: {})
+    with _p9.app_context():
+        _gs160 = _db160.session.get(_GS160, P9_GS)
+        _quiet160 = {g.id: {"session": 0, "inflight": 0, "maint": 0, "debug": 0, "warn": 0}
+                     for g in _GS160.query.filter_by(remote_id=_gs160.remote_id).all()}
+        _dbg160 = dict(_quiet160)
+        _dbg160[P9_GS] = _parsed160
+        _cd160 = _hr160.host_player_state(_gs160.remote, probes=_dbg160)
+        _cq160 = _hr160.host_player_state(_gs160.remote, probes=dict(_quiet160))
+        _nm160 = _gs160.name
+except Exception as _exc160:  # noqa: BLE001 - reported by the check below, by name
+    _cd160 = _cq160 = {"state": repr(_exc160)[:120], "blockers": []}
+    _nm160 = None
+finally:
+    _p9_restore_all()
+check("1108 r38b reboot census: a LinuxGSM `debug` running on a server (it reads as stopped: no tmux) "
+      "refuses the reboot before anything is stopped, named as a LinuxGSM action on it; the probe reads "
+      "it with its own pgrep; a host with none is not blocked (control)",
+      """echo "DEBUG=$(pgrep -u "$(id -un)" -fc '/[v]hserver (debug|d)( |$)')";""" in _probe160
+      and _parsed160.get("debug") == 1 and _hr160.parse_probe("")["debug"] is None
+      and _cd160["state"] == "blocked"
+      and [(b["kind"], b["name"], b["detail"]) for b in _cd160["blockers"]] == [("action", _nm160, "debug")]
+      and "a LinuxGSM action on %s" % _nm160 in str(_rw160.blocked_sentence(_cd160["blockers"]))
+      and _cq160["state"] != "blocked", repr((_probe160[-400:], _parsed160, _cd160, _cq160)))
+
 
 check("part160: no check reached a host (the transport tripwire stayed quiet)",
       len(_P9_TRIPPED) == _TRIP160_START, repr(_P9_TRIPPED[_TRIP160_START:]))

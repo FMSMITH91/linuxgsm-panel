@@ -103,7 +103,7 @@ DEFAULT_WAIT_HOURS = 24
 _MAINT_CMDS = ("update|u|force-update|fu|update-restart|ur|validate|v|backup|b|install|i|auto-install|"
                "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules|restart|r")
 _INFLIGHT_CMDS = "monitor|m|start|st|stop|sp|debug|d|details|dt|" + _MAINT_CMDS
-_PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "WARN", "BOOT", "MID", "NOW", "SEC")
+_PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "DEBUG", "WARN", "BOOT", "MID", "NOW", "SEC")
 
 # The last finished outcome per host, shown on the Power card for a day: {at, text, ok}.
 _last_result = register_remote_state({})
@@ -191,6 +191,7 @@ def _probe_sh(user, selfname):
             + 'echo "CRON=$(crontab -l 2>/dev/null | grep -F -- "$s" | base64 -w0)"; '
             + 'echo "INFLIGHT=$(pgrep -u %s -fc %s)"; ' % (me, _q(_cmd_pattern(selfname, _INFLIGHT_CMDS)))
             + 'echo "MAINT=$(pgrep -u %s -fc %s)"; ' % (me, _q(_cmd_pattern(selfname, _MAINT_CMDS)))
+            + 'echo "DEBUG=$(pgrep -u %s -fc %s)"; ' % (me, _q(_cmd_pattern(selfname, "debug|d")))
             # LinuxGSM v26.4.0 counting down to a stop, restart, update or backup (its warning lock's
             # pid alive): a reboot's stop would wait it out and then warn again (lgsm_players).
             + 'w=$(head -n 1 "$L/$s-warning.lock" 2>/dev/null); W=0; case "$w" in ""|*[!0-9]*) ;; '
@@ -201,7 +202,7 @@ def _probe_sh(user, selfname):
 
 
 _UNREAD = {"ok": False, "session": None, "lock": None, "aside": None, "cron": None, "inflight": None,
-           "maint": None, "warn": None, "boot": None, "mid": None, "now": None, "sec": None}
+           "maint": None, "debug": None, "warn": None, "boot": None, "mid": None, "now": None, "sec": None}
 
 
 def _int_or_none(v):
@@ -237,7 +238,7 @@ def parse_probe(out):
     return {"ok": True, "session": sess, "lock": _word(raw.get("LOCK"), _LOCK_WORDS),
             "aside": _word(raw.get("ASIDE"), _LOCK_WORDS), "cron": _cron_lines(raw.get("CRON")),
             "inflight": _int_or_none(raw.get("INFLIGHT")), "maint": _int_or_none(raw.get("MAINT")),
-            "warn": _int_or_none(raw.get("WARN")),
+            "warn": _int_or_none(raw.get("WARN")), "debug": _int_or_none(raw.get("DEBUG")),
             "boot": raw.get("BOOT") or None, "mid": raw.get("MID") or None,
             "now": _int_or_none(raw.get("NOW")), "sec": _int_or_none(raw.get("SEC"))}
 
@@ -256,7 +257,8 @@ def probe_server(remote, gs_or_ident):
 
     {ok, session 0|1, lock monitoring|legacy|none, aside (the lock this feature moved aside, if
     any), cron (the crontab lines naming it), inflight (LinuxGSM commands for it running now),
-    maint (of those, maintenance), boot, mid, now, sec (the second of the host's minute)}. Every
+    maint (of those, maintenance), debug (of those, `debug`), boot, mid, now, sec (the second of the
+    host's minute)}. Every
     field is None when the probe did not answer — the tailscale and local transports return
     ("", "...timed out", -1) without raising — and None is "unknown", never "stopped".
     """
