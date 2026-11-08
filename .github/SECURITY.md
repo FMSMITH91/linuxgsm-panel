@@ -259,11 +259,15 @@ README's "Removing a host" lists it with the commands that remove it.
 
 ### What you can do today
 
-- **If you only manage remote servers from this panel**, delete `/etc/sudoers.d/linuxgsm-panel`
-  (and `/etc/sudoers.d/00-linuxgsm-panel-terminal`, if present). The panel keeps working for
+- **If you only manage remote servers from this panel**, run the installer once over SSH with
+  `cd / && sudo PANEL_LOCAL_GRANT=0 bash /usr/local/lib/linuxgsm-panel/install.sh`. It removes
+  `/etc/sudoers.d/linuxgsm-panel` and `/etc/sudoers.d/00-linuxgsm-panel-terminal`, and records the
+  choice in the root-owned `panel.conf`, so later updates keep it. The panel keeps working for
   remotes. Local-host management stops, and so do the panel's own root jobs: **Panel Server →
   Update** (and the bot's `/update`), restoring a panel backup, and the database repair. Then
   update by hand over SSH: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
+  `PANEL_LOCAL_GRANT=1` puts the grant back. If you deleted the file by hand before this setting
+  existed, the next update records that and leaves it deleted.
 - **If you do manage the local host**, treat the panel host as you would any machine where a
   network service can become root: keep it off the public internet, keep 2FA on, and keep it
   updated.
