@@ -737,6 +737,7 @@ _SETTINGS135 = {"read_ok": True, "installed": True, "enabled": True, "incoming":
                 "routed": "disabled", "logging": "low", "ipv6": True}
 _rcalls135 = []
 _routes135 = {}
+_a_blockok135 = None
 try:
     _p9_arm(who="part135")
     _p9_patch(_fw135, "remote_ufw_settings", lambda r: dict(_SETTINGS135))
@@ -758,6 +759,8 @@ try:
     _routes135["junk"] = _A135.post(_base135 + "settings", json={"setting": "rm -rf", "value": "x; id"})
     _routes135["block"] = _A135.post(_base135 + "block-port", json={"port": "27015:27020", "protocol": "udp",
                                                                     "family": "v4", "action": "reject"})
+    # Read before the junk post below writes the newest row (review 1107: only the junk row was read).
+    _a_blockok135 = _p9_audit("remote_port_block")
     _routes135["blockjunk"] = _A135.post(_base135 + "block-port", json={"port": "1;id", "protocol": "x",
                                                                         "family": "y", "action": "z"})
     _V135 = _p9_client(P9_VIEWER)
@@ -784,6 +787,10 @@ check("routes: block-port passes the spec, protocol, family and action; its audi
       ("block", "27015:27020", "udp", "v4", "reject", "") in _rcalls135 and _rj135["block"][1]["success"] is True
       and _a_block135.target and _a_block135.target.endswith(":(not a port)/(not a protocol)")
       and _a_block135.detail == "(not a value) (not a value)", repr((_rcalls135, _a_block135)))
+check("routes: ...and a valid block's audit row names its port range, protocol, action and family "
+      "(only the junk request's row was read, so a regression blanking every real block's row passed)",
+      _a_blockok135 is not None and _a_blockok135.target and _a_blockok135.target.endswith(":27015:27020/udp")
+      and _a_blockok135.detail == "reject v4", repr(_a_blockok135))
 check("routes: an account without MANAGE_REMOTES reaches neither new route (GET or POST)",
       all(st in (302, 403) for st in _routes135["viewer"]), repr(_routes135["viewer"]))
 # A DELEGATED host admin: MANAGE_REMOTES through a group whose grant covers the panel's own host and

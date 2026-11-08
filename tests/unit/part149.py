@@ -257,7 +257,8 @@ _HEADS_CMPA_ = ("function _cmpaHistStoreKey(", "function _cmpaHistLoad(", "funct
                 "function cmpaQuickCommand(", "function _cmpaLogShown(")
 _FORM_IIFE_CMPA_ = "(function () {\n  var form = document.getElementById('command-form');"
 _PRELUDE_CMPA_ = (
-    "global.window = global; global.serverId = 7; global.t = s => s;\n"
+    # The history key's scope as server_detail.html renders it: account 1, server 7, its row's birth.
+    "global.window = global; global.serverId = 7; global._CMPA_HIST_SCOPE = '1.7.100'; global.t = s => s;\n"
     "let store = {}, storeBroken = false;\n"
     "global.localStorage = {getItem(k){ if (storeBroken) throw new Error('denied'); return k in store ? store[k] : null; },\n"
     "  setItem(k, v){ if (storeBroken) throw new Error('denied'); store[k] = String(v); }};\n"
@@ -300,9 +301,9 @@ _hist_cmpa_ = _node_cmpa_("command history", (
     "const seen = [];\n"
     "for (const k of ['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown'])\n"
     "  { const e = key(k); seen.push([input.value, e.prevented]); }\n"
-    "const stored = JSON.parse(store['sd.cmdHistory.7'] || '[]');\n"
+    "const stored = JSON.parse(store['sd.cmdHistory.1.7.100'] || '[]');\n"
     "for (let i = 0; i < 60; i++) submit('cmd' + i);\n"
-    "const capped = JSON.parse(store['sd.cmdHistory.7'] || '[]');\n"
+    "const capped = JSON.parse(store['sd.cmdHistory.1.7.100'] || '[]');\n"
     "type(''); key('ArrowUp'); const newest = input.value; key('ArrowDown');\n"
     "type('edit'); key('ArrowUp'); const ime = key('ArrowUp', {isComposing: true}); const imeVal = input.value;\n"
     "const shifted = key('ArrowDown', {shiftKey: true});\n"
@@ -341,7 +342,7 @@ _chip_cmpa_ = _node_cmpa_("quick commands", (
     "const afterSend = {value: input.value, focused: input.focused, sent: sent.slice()};\n"
     "type('half typed'); cmpaQuickCommand(chip('say', '1'));\n"
     "console.log(JSON.stringify({afterSend, fill: input.value, fillFocused: input.focused, sentAfterFill: sent.length,\n"
-    "  hist: JSON.parse(store['sd.cmdHistory.7'] || '[]')}));\n"))
+    "  hist: JSON.parse(store['sd.cmdHistory.1.7.100'] || '[]')}));\n"))
 if _chip_cmpa_ is not None:
     check("quick commands: a chip sends through the box (same send, in the history), then puts back the "
           "half-typed draft and leaves the keyboard closed",

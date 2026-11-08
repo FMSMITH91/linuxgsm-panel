@@ -53,7 +53,7 @@ def _armed_early143(path):
     """
     with open(path, encoding="utf-8") as fh:
         code = _code143(fh.read())
-    arm = next((i for i, ln in enumerate(code) if re.search(r"\barm\(globals\(\)\)\s*(#.*)?$", ln)), -1)
+    arm = next((i for i, ln in enumerate(code) if re.search(r"\barm\(globals\(\)(, results_from=\"[\w.]+\")?\)\s*(#.*)?$", ln)), -1)
     first_re = (r'importlib\.import_module\("panel\.|^for _part in _PARTS:' if path.endswith("unit_test.py")
                 else r"\s*(from (app|panel|manage|smoke|unit)[ .]|import (app|panel|manage|unit)\b)")
     first = next((i for i, ln in enumerate(code) if re.search(first_re, ln)), len(code))

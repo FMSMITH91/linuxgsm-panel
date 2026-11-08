@@ -12991,7 +12991,10 @@ check("update card: ...but it can still be listed when that is all there is",
       "explain" % (_uc_all7,))
 # ...and the two fields are built from ONE name, so they cannot drift apart again.
 _ucs7 = _modsrc("panel/ops/system_ops.py")
-_uc_body7 = _ucs7.split("def _compute_update_status", 1)[-1]
+# The function only, not the rest of the file. Both of its paths (a tracked non-default branch, and
+# the verified target) carry their own fallback, and this text reads the first match, which is the
+# non-default one: part157 drives both paths, which is what holds the verified path's fallback.
+_uc_body7 = _ucs7.split("def _compute_update_status", 1)[-1].split("\ndef ", 1)[0]
 _uc_code7 = "\n".join(_l for _l in _uc_body7.splitlines() if not _l.lstrip().startswith("#"))
 _uc_behind7 = re.search(r'"behind":\s*len\((\w+)\)', _uc_code7)
 _uc_changes7 = re.search(r'"changes":\s*(\w+)\[', _uc_code7)

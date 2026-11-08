@@ -45,7 +45,9 @@ sys.path.insert(0, os.path.join(_root, "tests"))
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed before anything that could block.
 import suite_deadline as _suite_deadline  # noqa: E402
-_suite_deadline.arm(globals())
+# `results` is bound below by importing part01, which runs checks of its own: a hang inside it still
+# finds the ones recorded so far in part01's module (results_from).
+_suite_deadline.arm(globals(), results_from="smoke.part01")
 
 # Named, never globbed: a part's checks run only if it is on this list, which is what the unit
 # suite's gate compares against the files on disk.

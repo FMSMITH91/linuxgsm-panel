@@ -635,9 +635,13 @@ _out53 = _node53(_name53, _SETTLE53 + (
     "(async () => { refreshGameList({innerHTML: '', getAttribute: () => null}); await settle();\n"
     "  console.log(JSON.stringify({reloads, swaps})); })();\n"))
 if _out53 is not None:
+    # ...and the picker, whose hook restarts the tiles' icons (part157). This harness has no
+    # `document`: the picker swap used to sit behind a getElementById that threw here, so the check
+    # passed with that swap never made.
     check("install page: a refreshed game list replaces the game column and re-greys it for the chosen "
           "host, instead of reloading the page (which discarded the host and name chosen)",
-          _out53 == {"reloads": 0, "swaps": [["#game-col", "filterGamesForHost"]]}, repr(_out53))
+          _out53 == {"reloads": 0, "swaps": [["#game-col", "filterGamesForHost"],
+                                             ["#game-picker", "_r37d_gameTilesRefreshed"]]}, repr(_out53))
 check("install page: ...and the column it swaps is there to swap",
       'id="game-col"' in _read53(_TPL53, "install_server.html"))
 

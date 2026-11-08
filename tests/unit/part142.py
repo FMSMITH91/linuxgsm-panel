@@ -468,8 +468,11 @@ if _HAVE142:
         _r4 = _run142(["bash", _tool, _sa, "release-signatures"], cwd=_dev, env=_senv, input=_sa[:12] + "\n")
         check("sign-release.sh: refuses a commit not on origin/main's first-parent line, a short id, and "
               "the signatures branch as a branch",
-              _r2.returncode != 0 and "first-parent" in _r2.stderr and _r3.returncode != 0
-              and _r4.returncode != 0,
+              # Each by its own reason (review 1107): with the short-id or the signatures-branch guard
+              # gone, both runs still failed later (the first-parent match), and rc alone stayed green.
+              _r2.returncode != 0 and "first-parent" in _r2.stderr
+              and _r3.returncode != 0 and "not a full commit id" in _r3.stderr
+              and _r4.returncode != 0 and "holds signatures, not code" in _r4.stderr,
               "%s | %s | %s" % (_r2.stderr[-150:], _r3.stderr[-150:], _r4.stderr[-150:]))
         # ── what it shows, and the typed confirmation ────────────────────────────────────────────
         _git142("-C", _dev, "reset", "-q", "--hard", _sa)

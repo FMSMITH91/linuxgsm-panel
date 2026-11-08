@@ -24,6 +24,23 @@ function _actionFn(name){
   return fn;
 }
 
+// ── The console's command history ends with the session ─────────────────────────────────────
+// server_detail.js keeps each account's console commands per server in localStorage (Up/Down in the
+// command box), and they carry rcon and server passwords. A page drawn signed out (after Sign Out,
+// or a session that expired or was revoked) means nobody is signed in on this browser: drop them
+// all, so the next person to use it cannot read them from the box or from devtools.
+function _r37d_dropCmdHistory(){
+  try {
+    var drop = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf('sd.cmdHistory.') === 0) drop.push(k);   // i18n-ignore: a storage key
+    }
+    drop.forEach(function(k){ localStorage.removeItem(k); });
+  } catch (e) { /* storage refused: nothing was kept there */ }
+}
+if (window.SIGNED_IN !== true) _r37d_dropCmdHistory();
+
 // ── Live cross-user updates ───────────────────────────────────────────────
 // A shared Socket.IO connection (created lazily, reused by the console page) plus a
 // helper to subscribe to server-pushed events. Used so that when one user adds or

@@ -154,7 +154,9 @@ function filterGamesForHost() {
       note.textContent = hidden ? hidden + ' ' : '';
       if (hidden) {
         var why = document.createElement('span');
-        why.textContent = t('game(s) are greyed out: LinuxGSM caps them at an older Ubuntu than this host runs.');
+        // Any distro: since #469 a Debian host is capped by Debian releases (_capForHost), and the
+        // note said Ubuntu on it.
+        why.textContent = t("game(s) are greyed out: LinuxGSM caps them at an older release of this host's OS than it runs.");
         note.appendChild(why);
       }
     }
@@ -501,7 +503,9 @@ function refreshGameList(btn){
         btn.disabled = false; btn.innerHTML = orig;   // nosemgrep
         window.refreshSection('#game-col', 'filterGamesForHost');
         // ...and the tiles, which are drawn from the same list (a new game gets its tile).
-        if (document.getElementById('game-picker')) window.refreshSection('#game-picker', 'syncGameTiles');
+        // The picker is always on the page (hidden while there is no list), so a Retry from an empty
+        // list has a target; the hook draws the tiles' state and starts their icons on the new grid.
+        window.refreshSection('#game-picker', '_r37d_gameTilesRefreshed');
         return;
       }
       if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');
@@ -582,8 +586,10 @@ function _loadGameIcon(img) {
   img.removeAttribute('data-icon-script');
   img.src = MOUNT + '/game-icon/' + encodeURIComponent(script);
 }
+var _r37d_iconWatch = null;   // the icon observer of the grid now on the page
 function startGameIcons() {
   var grid = document.getElementById('game-grid');
+  if (_r37d_iconWatch) { _r37d_iconWatch.disconnect(); _r37d_iconWatch = null; }
   if (!grid) return;
   var imgs = grid.querySelectorAll('img[data-icon-script]');
   if (!('IntersectionObserver' in window)) { imgs.forEach(_loadGameIcon); return; }
@@ -596,7 +602,18 @@ function startGameIcons() {
       _loadGameIcon(e.target);
     });
   }, { root: grid, rootMargin: '0px 0px 48px 0px' });
+  _r37d_iconWatch = io;
   imgs.forEach(function (img) { io.observe(img); });
+}
+// Refresh list and Retry swap the picker's contents (refreshSection): a new grid whose <img>s carry
+// only data-icon-script. startGameIcons ran once, on load, with its observer rooted at the old grid,
+// now detached, so every new tile kept its initials until a reload. And a Retry from an empty list
+// fills a picker that was hidden: show it once it holds a grid.
+function _r37d_gameTilesRefreshed() {
+  var picker = document.getElementById('game-picker');
+  if (picker) picker.hidden = !document.getElementById('game-grid');
+  syncGameTiles();
+  startGameIcons();
 }
 document.addEventListener('DOMContentLoaded', syncGameTiles);
 if (document.readyState === 'complete') startGameIcons();

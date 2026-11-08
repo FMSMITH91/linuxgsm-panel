@@ -1889,7 +1889,7 @@ function _pushStatsPoint(m) {
 var _histRange = '24h';
 
 // Chart text and grid in the page's colour scheme: the dark scheme's grey ticks are 2.9:1 on the
-// light scheme's white card. A declaration, so the module-scope _histX below can call it.
+// light scheme's white card. Read when a chart is built; _r37d_inkCharts repaints the built ones.
 function _cmpbInk(){
   var de = document.documentElement;
   var light = !!(de && de.getAttribute && de.getAttribute('data-bs-theme') === 'light');
@@ -1901,7 +1901,8 @@ var _histCharts = {};
 
 var _histTimes = {};
 
-var _histX = { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
+// The 7-day x axis, in the scheme in force when a chart is built (it was taken once, at load).
+function _histX(){ return { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} }; }
 
 function _histXScale(id){
   var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
@@ -1935,13 +1936,38 @@ function _histChart(id, labels, datasets, yScales, xScale){
     existing.update('none');
     return;
   }
-  var scales = { x:(xScale||_histX) }; for(var k in yScales){ scales[k]=yScales[k]; }
+  var scales = { x:(xScale||_histX()) }; for(var k in yScales){ scales[k]=yScales[k]; }
   _histCharts[id] = new Chart(el.getContext('2d'), {
     type:'line', data:{ labels:labels, datasets:datasets },
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{intersect:false, mode:'index'}, scales:scales,
       plugins:{ legend:{ labels:{color:_cmpbInk().legend, boxWidth:12, boxHeight:12} } } }
   });
+}
+
+// A live change of colour scheme (Account "System" following the device, app_shell.js) flips
+// data-bs-theme without a reload. Each chart took its ink when it was built, and History refreshes
+// in place, so the old scheme's ticks stayed (2.9:1 grey on white, or dark grey on near-black) until
+// a reload. Repaint every built chart's ticks, grid lines and legend when the scheme changes.
+function _r37d_inkChart(chart){
+  if (!chart || !chart.options) return;
+  var ink = _cmpbInk(), sc = chart.options.scales || {};
+  Object.keys(sc).forEach(function(k){
+    var s = sc[k] || {};
+    if (s.ticks) s.ticks.color = ink.tick;
+    if (s.grid && s.grid.display !== false) s.grid.color = ink.grid;
+  });
+  var lg = chart.options.plugins && chart.options.plugins.legend;
+  if (lg && lg.labels) lg.labels.color = ink.legend;
+  chart.update('none');
+}
+function _r37d_inkCharts(){
+  _r37d_inkChart(statsChart);
+  Object.keys(_histCharts).forEach(function(id){ _r37d_inkChart(_histCharts[id]); });
+}
+var _r37d_inkWatch = typeof MutationObserver !== 'undefined' ? new MutationObserver(_r37d_inkCharts) : null;
+if (_r37d_inkWatch && document.documentElement) {
+  _r37d_inkWatch.observe(document.documentElement, {attributes: true, attributeFilter: ['data-bs-theme']});
 }
 
 function _histLbl(iso){
@@ -1973,7 +1999,7 @@ window.loadHistory = function(){
       // Parsed timestamps for the date-aware 24h axis; refreshed every load so in-place updates stay in sync.
       _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
       _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
-      var _xs = function(id){ return _histRange==='7d' ? _histX : _histXScale(id); };
+      var _xs = function(id){ return _histRange==='7d' ? _histX() : _histXScale(id); };
       var pctY = { y:{ min:0, max:100, ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} } };
       _histChart('hist-players', sL,
         [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
@@ -2381,7 +2407,12 @@ function disableLogTimestamps(btn) {
 }
 
 // ── Command history: Up/Down in the command box recall what was sent ─────────────────────────────
-// Per server, the last 50, in localStorage when the browser allows it and in this page otherwise.
+// Per account and server, the last 50, in localStorage when the browser allows it and in this page
+// otherwise. The key names the signed-in account and the server's own row (_CMPA_HIST_SCOPE,
+// server_detail.html), not just the server id: another account signed in on this browser must not
+// get these commands on Up (they carry rcon and server passwords), and a server deleted and
+// re-created takes its old id back (SQLite reuses a deleted row's id) but not its history. panel.js
+// drops every sd.cmdHistory.* key on a page drawn signed out (Sign Out, an expired or revoked session).
 // Recorded by a listener on the form's own submit, which runs before the delegated sendCommand, so
 // the send itself is untouched: same Enter, same echo, same request. Down past the newest brings
 // back what was being typed before Up was first pressed.
@@ -2391,11 +2422,19 @@ var _cmpaBrowse = null;     // the list being stepped through, taken when Up is 
 var _cmpaHistIdx = -1;      // where in it the box is; -1 = not browsing
 var _cmpaDraft = '';        // what was in the box before browsing began
 
-function _cmpaHistStoreKey() { return 'sd.cmdHistory.' + serverId; }   // i18n-ignore: a storage key
+// null without a scope: then the in-page copy only, never a key every account would share.
+function _cmpaHistStoreKey() {
+  if (typeof _CMPA_HIST_SCOPE !== 'string' || !_CMPA_HIST_SCOPE) return null;
+  return 'sd.cmdHistory.' + _CMPA_HIST_SCOPE;   // i18n-ignore: a storage key
+}
+// The key this history had before it named the account: whoever's it was, it is nobody's now.
+try { localStorage.removeItem('sd.cmdHistory.' + serverId); } catch (e) { /* private mode */ }   // i18n-ignore: a storage key
 
 function _cmpaHistLoad() {
+  var key = _cmpaHistStoreKey();
+  if (!key) return _cmpaHistMem.slice();
   try {
-    var raw = localStorage.getItem(_cmpaHistStoreKey());
+    var raw = localStorage.getItem(key);
     var list = raw ? JSON.parse(raw) : [];
     if (Array.isArray(list)) {
       return list.filter(function (s) { return typeof s === 'string' && s; }).slice(-_CMPA_HIST_MAX);
@@ -2408,7 +2447,8 @@ function _cmpaHistPush(cmd) {
   var list = _cmpaHistLoad();
   if (list[list.length - 1] !== cmd) list.push(cmd);
   _cmpaHistMem = list.slice(-_CMPA_HIST_MAX);
-  try { localStorage.setItem(_cmpaHistStoreKey(), JSON.stringify(_cmpaHistMem)); } catch (e) { /* private mode */ }
+  var key = _cmpaHistStoreKey();
+  if (key) { try { localStorage.setItem(key, JSON.stringify(_cmpaHistMem)); } catch (e) { /* private mode */ } }
   _cmpaBrowse = null; _cmpaHistIdx = -1; _cmpaDraft = '';
 }
 
@@ -2468,6 +2508,9 @@ function cmpaQuickCommand(btn) {
   var cmd = btn && btn.getAttribute('data-cmd');
   if (!form || !input || !cmd) return;
   if (btn.getAttribute('data-fill') === '1') {
+    // A value set from script fires no `input` event, so end Up/Down browsing here as typing does:
+    // otherwise the next Down put back the draft from before browsing over the chip's text.
+    _cmpaBrowse = null; _cmpaHistIdx = -1;
     input.value = cmd + ' ';
     input.focus();
     try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* not a text box */ }

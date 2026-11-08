@@ -7,10 +7,15 @@
 
 [[IgnoredVulns]]
 id = "GHSA-xcq7-p3pf-p88h"
-ignoreUntil = 2026-11-22
+ignoreUntil = 2026-12-06
 reason = """opentelemetry-api 1.37.0 in semgrep.txt (unbounded tracestate parsing, fixed in 1.45.1).
 Not fixable by a bump: every Semgrep release up to 1.184.0 pins opentelemetry-api~=1.37.0, so the
 resolver cannot take 1.45.1 while Semgrep is installed. CI-only: Semgrep runs in a CI job over this
 repository's own files with metrics off, and is handed no trace context from outside, so the
 tracestate parser never reads attacker input. Remove this entry when Semgrep raises the pin and the
-lock moves past 1.45.0."""
+lock moves past 1.45.0.
+Re-checked 2026-11-07 and renewed to 2026-12-06: Semgrep 1.184.0 (2026-11-05), the newest on PyPI,
+still declares opentelemetry-api~=1.37.0 (cli/pyproject.toml on its default branch too); the upstream
+requests to raise it are open. Pinning it apart as PyJWT once was would mean taking the whole
+opentelemetry family (the sdk and exporter each require one exact api version) outside the ranges
+Semgrep declares, for a medium advisory on input this job never receives."""

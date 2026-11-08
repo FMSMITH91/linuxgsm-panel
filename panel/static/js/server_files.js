@@ -1690,8 +1690,10 @@ function modRow(m, installed){
 }
 // One mods reading drawn into the card (loadMods); true, as it always draws something.
 function _r26c_modsDraw(d, load, body, uns){
-  // This game has no LinuxGSM mods installer (e.g. Call of Duty) — hide the whole card.
-  if(d.supported===false){ var card=document.getElementById('mods-card'); if(card) card.style.display='none'; return true; }
+  // This game has no LinuxGSM mods installer (e.g. Call of Duty): say so in the card. Hiding the
+  // card did not hide it: the Mods tab is always there, and opening it (_uis_sfShow) sets the card's
+  // display again, which showed "Loading mods…" for good.
+  if(d.supported===false){ load.style.display='none'; body.style.display='none'; uns.style.display=''; return true; }
   var avail=d.available||[], inst=d.installed||[];
   load.style.display='none';
   if(!avail.length && !inst.length){ uns.style.display=''; body.style.display='none'; return true; }
