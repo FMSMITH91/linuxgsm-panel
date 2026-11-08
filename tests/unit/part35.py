@@ -842,12 +842,16 @@ def _beating_helpers35(files=None):
     if files is None:
         files = [(rel, (_REPO35 / rel).read_text(encoding="utf-8")) for rel in _LOOP_FILES35]
     funcs = [n for _rel, src in files for n in _ast35.walk(_ast35.parse(src)) if isinstance(n, _ast35.FunctionDef)]
-    found = set()
-    while True:
-        more = {n.name for n in funcs if n.name not in found and _calls35(n, {"beat"} | found)}
-        if not more:
-            return found
-        found |= more
+    found, more = set(), {"beat"}
+    while more:
+        found |= more - {"beat"}
+        more = _r39d_callers35(funcs, found)
+    return found
+
+
+def _r39d_callers35(funcs, found):
+    """The names of `funcs` not yet in `found` that call beat or any of `found`."""
+    return {n.name for n in funcs if n.name not in found and _calls35(n, {"beat"} | found)}
 
 
 def _p35_loops_gate():
