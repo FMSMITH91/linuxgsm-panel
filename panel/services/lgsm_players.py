@@ -476,6 +476,10 @@ def census_blockers(installed, probes, blocker):
     LinuxGSM about to stop or restart that server after its warning, and a reboot's stop would wait
     it out and then warn again (reboot_allowance); on a stopped server LinuxGSM's countdown ends at
     its first status check, so a lock there is a command in its first seconds or a stale one.
+    A `debug` run (the probe's DEBUG) blocks too: it runs the game in the foreground of someone's
+    shell, outside tmux, so the server reads as stopped and is in no plan, and the quiet window
+    before the reboot waits on it (window_reads) for as long as it runs. Not refused here, the reboot
+    stopped every server, told the players, waited ARM_WAIT and rolled back, every time (review 1108).
     """
     out = []
     for gs in installed:
@@ -484,6 +488,8 @@ def census_blockers(installed, probes, blocker):
             out.append(blocker("lgsm_warning", gs.name))
         elif p.get("maint"):
             out.append(blocker("maintenance", gs.name))
+        elif p.get("debug"):
+            out.append(blocker("action", gs.name, "debug"))
     return out
 
 
@@ -540,9 +546,11 @@ def _r37c_busy(probes, plan_ids):
                if plan_ids is None or i in plan_ids or (p or {}).get("session") == 1)
 
 
-def window_names(users, rows):
-    """{account: [selfnames]} the reboot's quiet window reads: the plan's (`users`), then `rows`' (window_reads)."""
-    names = {u: list(sn) for u, sn in users.items()}
+def window_names(entries, rows):
+    """{account: [selfnames]} the reboot's quiet window reads: the plan's `entries`, then `rows`' (window_reads)."""
+    names = {}
+    for e in entries:
+        names.setdefault(e["user"], []).append(e["selfname"])
     for gs in rows:
         held = names.setdefault(gs.short_name, [])
         if gs.lgsm_name not in held:
@@ -550,7 +558,7 @@ def window_names(users, rows):
     return names
 
 
-def window_reads(probe, order, plan_users):
+def window_reads(probe, order, plan_users, clock):
     """{account: probe(account)} for the reboot's quiet window (host_reboot._await_window), in `order`.
 
     The window reads every server on the host, not only the plan's: the census refuses maintenance on
@@ -561,13 +569,32 @@ def window_reads(probe, order, plan_users):
     and its rollback are the plan's); the window, bounded by ARM_WAIT, waits on them. An account the
     plan holds no server of (`plan_users`) that does not answer is left out, as the census leaves a
     server it cannot read out of the stops: a broken account must not refuse every reboot of its host.
+    Each read kept carries `at`, `clock()` just before it was asked (window_in_one_minute).
     """
     seen = {}
     for u in order:
+        at = clock()
         read = probe(u)
         if u in plan_users or read.get("inflight") is not None:
-            seen[u] = read
+            seen[u] = dict(read, at=at)
     return seen
+
+
+def window_in_one_minute(seen, now):
+    """Whether every read in `seen` (window_reads) and the moment `now` fall in the minute of the first.
+
+    Each read is judged on its own second of the minute (host_reboot.QUIET_SECONDS), which holds only
+    while the whole pass stays inside one minute: a pass that read account A at second 46 and, after
+    an account that did not answer (20 s, left out) or a slow transport, account C at second 6 of the
+    next minute passed, and a cron line on A at :00 started after A's read was cut by the shutdown
+    (review 1108). The first read's `sec` was taken no earlier than its `at`, and is whole seconds
+    (up to .999 more), so its minute ends no sooner than `at + 59 - sec`: the pass must end before.
+    """
+    stamped = [r for r in seen.values() if isinstance(r.get("sec"), int) and r.get("at") is not None]
+    if not stamped:
+        return False
+    first = min(stamped, key=lambda r: r["at"])
+    return now - first["at"] + first["sec"] < 59
 
 
 def entry_ids(entries):

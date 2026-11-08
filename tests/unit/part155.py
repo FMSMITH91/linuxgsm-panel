@@ -273,8 +273,9 @@ check("parse_cron: month and weekday names only in their own fields (cron refuse
       and _ws155.parse_cron("0 0 * * jan") is None and _ws155.parse_cron("jan 0 * * *") is None
       and _ws155.parse_cron("0 0 * jan-mar mon-fri") is not None)
 
+# Exit 1, as LinuxGSM v26.5.0 ends a wipe whose start fails (command_start.sh's last core_exit.sh).
 _late155 = _ws155.judge("[  OK  ] Stopping rustserver\nremoving .map file(s)... OK\nSuccess! Full wipe\n"
-                        "[ FAIL ] Starting rustserver: Unable to start\n", 0, "full-wipe")
+                        "[ FAIL ] Starting rustserver: Unable to start\n", 1, "full-wipe")
 _early155 = _ws155.judge("removing .map file(s)... FAIL\nSuccess! Map wipe\n", 0, "wipe")
 check("wipe judge: a FAIL after LinuxGSM's success line (the start it runs after the wipe) is a wipe "
       "that happened, said with that failure; a FAIL before it is still a failed wipe",
