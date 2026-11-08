@@ -1946,9 +1946,19 @@ def _lg264_bk_request(server, user, selfname):
         parts = line.strip().split("\t")
         if len(parts) == 4 and parts[3] == _LG264_BK_END:
             r = parts[0].strip()
-            requested = None if r == "-" else (int(r) if r.isascii() and r.isdecimal() else 0)
-            return {"requested": requested, "alerted": parts[1] == "1", "monitor": parts[2] == "1"}
+            return {"requested": None if r == "-" else _r37b_epoch_or_zero(r), "alerted": parts[1] == "1",
+                    "monitor": parts[2] == "1"}
     return None
+
+
+def _r37b_epoch_or_zero(r):
+    """The request lock's first line as an epoch; 0 for anything else.
+
+    The game account writes that file, so the line is capped before int() (an epoch is ten
+    digits): past CPython's 4300-digit limit int() raised ValueError out of every backup of the
+    server, the pre-wipe one included.
+    """
+    return int(r) if r.isascii() and r.isdecimal() and len(r) <= 12 else 0
 
 
 def _lg264_bk_note(sentence, code, req=None):
