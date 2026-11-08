@@ -1601,8 +1601,10 @@ def _r38a_spare_admins(remote, new):
 
 
 def _r38a_admin_buckets():
-    """The throttle buckets (security.auth.throttle_key) of every live, signed-in session of an active
-    superadmin; None when the sessions could not be read."""
+    """The throttle buckets (security.auth.throttle_key) of every live, signed-in superadmin session.
+
+    Active accounts only, logins that have not idled out; None when the sessions could not be read.
+    """
     from panel.db.models import User, UserSession
     from panel.security.auth import throttle_key
     try:

@@ -163,8 +163,10 @@ _SSH94 = ("22/tcp", "LIMIT IN", "Anywhere", True, True)
 
 
 def _move94(*rows):
-    """change_ssh_port 22 -> 2222 over `rows` (beside _SSH94), failing at sshd-validate: (answer, rules
-    after but _SSH94, verbs)."""
+    """change_ssh_port 22 -> 2222 over `rows` (beside _SSH94), failing at sshd-validate.
+
+    -> (answer, the rules after but _SSH94, the verbs sent).
+    """
     ufw = _Ufw94(_SSH94, *rows)
 
     def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, **k):

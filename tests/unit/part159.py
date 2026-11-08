@@ -121,8 +121,11 @@ def _proc6_159(rows):
 
 
 def _tables159(fn, v4=True, v6=None):
-    """fn() with _PROC_TCP pointed at a tcp table holding one SSH session (False: absent) and a tcp6
-    table holding rows `v6` (None: absent, as on a kernel booted with ipv6.disable=1)."""
+    """fn() with _PROC_TCP pointed at a tcp and a tcp6 table.
+
+    The tcp table holds one SSH session (`v4` False: absent); the tcp6 one holds rows `v6` (None: absent,
+    as on a kernel booted with ipv6.disable=1).
+    """
     with _tf159.TemporaryDirectory() as d:
         t4, t6 = os.path.join(d, "tcp"), os.path.join(d, "tcp6")
         if v4:
