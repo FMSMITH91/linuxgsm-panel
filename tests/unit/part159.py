@@ -19,6 +19,8 @@
   SSH session held by an IP block (every request was taken to come through Serve).
 * lead (P1): the panel's change-port, its new port already opened, answers a config.json that cannot be
   written by putting the helper's port record back and saying what was left (it was a bare 500).
+* lead (P1): "Disable public SSH" and Close port 22 count tailscaled's own chain (its default netfilter
+  mode) as a Tailscale way back, as the policy and enable checks do (they refused "no way back").
 * LOW (P5): a panel host booted with IPv6 off (no /proc/net/tcp6) still reads sshd's sessions, so a
   loopback viewer's IP block is decided rather than refused as unread.
 
@@ -33,7 +35,7 @@ from datetime import timedelta as _td159
 from types import SimpleNamespace as _NS159
 
 from unit.part01 import check
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_client, _p9_core, _p9_json, _p9_patch,
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_client, _p9_core, _p9_json, _p9_patch,
                          _p9_patch_sm, _p9_restore_all, _p9_so)
 from unit.part108 import _ANY108
 from unit.part116 import _boot116, _saved116
@@ -45,7 +47,7 @@ from panel.core.clock import utcnow as _now159
 from panel.db.models import User as _User159, UserSession as _US159, db as _db159
 from panel.ops import system_ops as _so159
 from panel.ops.ssh_manager import firewall as _fw159, hosts as _hosts159, ufweval as _ue159
-from panel.routes import host_local as _hl159, remote_security as _rs159
+from panel.routes import close_port22 as _cp22_159, host_local as _hl159, remote_security as _rs159
 from panel.security import auth as _auth159
 from panel.services import monitoring as _mon159
 
@@ -553,6 +555,53 @@ check("1108 P1 lead: a panel change-port whose config.json cannot be written (af
       repr(_cpu))
 check("1108 P1 lead: ...while a save that works moves the panel and restarts it (the control)",
       _cpu_ok[1].get("success") is True and _cpu_ok[3] == [1] and _cpu_ok[4] == 5055, repr(_cpu_ok))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# lead (P1): tailscaled's own chain is a Tailscale way back for "off" and Close port 22
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_NO_WAY159 = "no Tailscale way back"
+
+
+def _way_back159(fn, netfilter_on=True, ifaces=("tailscale0",), off_tailnet=False):
+    """fn() with Tailscale running, Tailscale SSH off and no tailscale0 rule; tailscaled's chain as given."""
+    try:
+        _p9_arm(who="part159")
+        for mod in (_hosts159, _cp22_159):
+            _p9_patch(mod, "_tailnet_ssh_state", lambda s: (True, False, False))
+            _p9_patch(mod, "_r28b_panel_way_in_refusal", lambda s: None)
+        _p9_patch(_ue159, "ts_netfilter_on", lambda s: netfilter_on)
+        _p9_patch(_hosts159, "_tsiface_names", lambda s: list(ifaces))
+        _p9_patch(_hosts159, "_r11a_sshd_off_tailnet", lambda s: off_tailnet)
+        _p9_patch(_hosts159, "_r37a_tailnet_dial_refusal", lambda s, iface_allowed: None)
+        _p9_patch(_hosts159, "_r32b_public_ssh_ports", lambda s: (None, []))   # stop at the next gate
+        _p9_patch(_cp22_159, "remote_ufw_close_port_22", lambda r: (True, "closed p159"))
+        return fn()
+    finally:
+        _p9_restore_all()
+
+
+def _off159(**kw):
+    return str(_way_back159(lambda: _hosts159.remote_set_public_ssh(_tsrow154(22), "off"), **kw)[1])
+
+
+def _close22_159(**kw):
+    return str(_way_back159(lambda: _p9_json(_p9_client(P9_ADMIN).post("/api/remote/%d/close-port-22" % P9_HOST))
+                            .get("message"), **kw))
+
+
+_wb_ok = {"off": _off159(), "close 22": _close22_159()}
+check("1108 P1 lead: with Tailscale running, no tailscale0 rule and tailscaled in its default netfilter mode (its "
+      "chain lets tailscale0 in ahead of ufw), \"Disable public SSH\" and Close port 22 get past the no-way-back gate",
+      all(_NO_WAY159 not in v for v in _wb_ok.values()) and _wb_ok["close 22"] == "closed p159", repr(_wb_ok))
+_wb_cut = {
+    "off, nodivert/off mode": _off159(netfilter_on=False),
+    "off, sshd bound off the tailnet": _off159(off_tailnet=True),
+    "off, no Tailscale interface": _off159(ifaces=()),
+    "close 22, nodivert/off mode": _close22_159(netfilter_on=False),
+}
+check("1108 P1 lead: ...and still refused with no way back where tailscaled's chain is not ahead of ufw, sshd "
+      "listens only off the tailnet, or there is no Tailscale interface",
+      all(_NO_WAY159 in v for v in _wb_cut.values()), repr(_wb_cut))
 
 check("1108 part159: nothing reached a real transport", len(_P9_TRIPPED) == _TRIP159_START,
       repr(_P9_TRIPPED[_TRIP159_START:]))

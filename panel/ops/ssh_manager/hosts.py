@@ -5814,6 +5814,18 @@ def _r28b_panel_way_in_refusal(server):
                          port=getattr(server, "port", "") or 22)
 
 
+def _r38a_ts_chain_way(server):
+    """Whether regular SSH over the tailnet gets in with no tailscale0 rule: tailscaled's own chain, ahead of ufw.
+
+    In its default netfilter mode tailscaled's ts-input chain accepts tailscale0 before ufw reads a rule
+    (ufweval.exempt), so sshd answers there wherever it listens on the tailnet. The "off" and Close-22 gates
+    counted only a tailscale0 rule or Tailscale SSH, and refused such a host "no Tailscale way back" although
+    the operator had one (review 1108 lead; the policy and enable checks count it, firewall._fwb_ts_ways).
+    """
+    from panel.ops.ssh_manager import ufweval
+    return bool(ufweval.ts_netfilter_on(server) and _tsiface_names(server) and not _r11a_sshd_off_tailnet(server))
+
+
 def _r37a_tailnet_dial_refusal(server, iface_allowed):
     """The refusal for "off" when the panel's own tailnet session to sshd would lose its only way in, else None.
 
@@ -5875,7 +5887,7 @@ def remote_set_public_ssh(server, mode):
     # connection meets. Leaving them made 'limit' a rule nothing ever reached.
     if mode == "off":
         running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
-        if not (running and (ssh_enabled or iface_allowed)):
+        if not (running and (ssh_enabled or iface_allowed or _r38a_ts_chain_way(server))):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
