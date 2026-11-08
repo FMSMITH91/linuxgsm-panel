@@ -45,7 +45,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _r20b_audit_on_raise, game_account_write_refusal)
+    _console_window_place, _r20b_audit_on_raise, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1606,46 +1606,20 @@ def _console_window_cmd(log_path, want):
 
     A log within that reach also gets its newline count on the `@` line (`@<inode> <size> <newlines>`,
     of the same first <size> bytes): whether the window starts at the log's first line
-    (_console_window_whole). The page puts lines it keeps from an OLDER log directly above this
-    window, and says output is missing between them when it is only a tail of the new log.
+    (_read_console_window's `whole`). The page puts lines it keeps from an OLDER log directly above
+    this window, and says output is missing between them when it is only a tail of the new log.
     """
     reach = _CATCHUP_REACH
     return (f"L={log_path}; exec 3<\"$L\" 2>/dev/null || exit 1; "
             f"set -- $(stat -L -c '%i %s' /dev/fd/3 2>/dev/null); [ \"$#\" = 2 ] || exit 1; "
-            f"Y=$(($2 > {reach} ? $2 - {reach} : 0)); "
-            f"if [ \"$Y\" -gt 0 ]; then echo \"@$1 $2\"; "
-            f"else echo \"@$1 $2 $(head -c \"$2\" /dev/fd/3 2>/dev/null | wc -l)\"; fi; printf B; "
+            f"Y=$(($2 > {reach} ? $2 - {reach} : 0)); if [ \"$Y\" -gt 0 ]; then echo \"@$1 $2\"; else "
+            f"echo \"@$1 $2 $(head -c \"$2\" /dev/fd/3 2>/dev/null | wc -l)\"; fi; printf B; "
             f"{{ if [ \"$Y\" -gt 0 ]; then tail -c +$Y /dev/fd/3 | head -c $(($2 - Y + 1)) | tail -n +2; "
             f"else head -c \"$2\" /dev/fd/3; fi; }} 2>/dev/null | tail -{want} 2>/dev/null; printf E")
 
 
-def _console_window_place(out):
-    """(the place `@<inode> <size>` names as [0, inode, size] or None, the rest of the reply, the
-    log's newline count when the line carries one or None)."""
-    if not (out or "").startswith("@"):
-        return None, out or "", None
-    head, _nl, rest = out.partition("\n")
-    parts = head[1:].split()
-    if len(parts) not in (2, 3) or not all(p.isdecimal() and len(p) < 20 for p in parts):
-        return None, "", None
-    return [0, int(parts[0]), int(parts[1])], rest, (int(parts[2]) if len(parts) == 3 else None)
-
-
-def _console_window_whole(newlines, body, want):
-    """Whether a window of the last `want` lines holds the whole log: it has no more lines than that.
-
-    `newlines` is the log's newline count (None past _CATCHUP_REACH: not counted, so not whole), and
-    `body` the window as read, which ends in a newline unless the log ends mid-line, that fragment
-    being one more line for `tail`.
-    """
-    if newlines is None:
-        return False
-    return newlines < want or (newlines == want and (not body or body.endswith("\n")))
-
-
 def _read_console_window(remote, gs, want, host_tz):
-    """The last `want` lines of the console log: (readable, rows, where in the log they end or None,
-    whether they are the whole log)."""
+    """The console log's last `want` lines: (readable, rows, where in the log they end or None, whole log?)."""
     # Whether the log was actually READ, kept separate from what it held. The route knew this
     # and threw it away: a host that did not answer, a `tail -2000` that timed out on a slow
     # link, a log that does not exist and a genuinely empty log all left here as 200 with the
@@ -1675,10 +1649,12 @@ def _read_console_window(remote, gs, want, host_tz):
         # Where the window ends in the log: the place the page is caught up from. A reply without
         # one (no `@` line) is still a window, with no place: the page stitches it by its text.
         at, out, newlines = _console_window_place(out)
-        framed = rc == 0 and out.startswith("B") and out.endswith("E")
-        readable = framed
+        readable = framed = rc == 0 and out.startswith("B") and out.endswith("E")
         body = out[1:-1] if framed else ""
-        whole = framed and _console_window_whole(newlines, body, want)
+        # Whether the window holds the whole log: it has no more lines than were asked for. `newlines`
+        # is the log's newline count (None past _CATCHUP_REACH: not counted, so not whole), and the body
+        # ends in a newline unless the log ends mid-line, that fragment being one more line for `tail`.
+        whole = framed and newlines is not None and (newlines < want or (newlines == want and body.endswith("\n")))
         if body.endswith("\n"):
             body = body[:-1]     # the file's own final newline, not an empty last line
         elif at is not None:
@@ -2781,7 +2757,10 @@ def _register_console_routes(app):
         # `now` is the panel's clock at the moment it read this window, for the browser to stamp
         # the lines that are NEW since its last poll — those it did watch arrive. Sent from the
         # server rather than taken from Date.now() so every console time shares one clock.
-        body = {"lines": lines, "now": time.time(),
+        # `whole`: whether the window starts at the log's first line. Lines the page keeps from an OLDER
+        # log (the server restarted) sit directly above it; when it is only the new log's tail, the page
+        # says output is missing between the two rather than run them together.
+        body = {"lines": lines, "now": time.time(), "whole": whole,
                 # False = the console was not read, so `lines` is not a measurement of what the
                 # log holds. A caller must not redraw a scrollback from it.
                 "readable": readable,
@@ -2793,10 +2772,6 @@ def _register_console_routes(app):
         # dropped by their place, not by their text. Absent when the reply carried none.
         if at is not None:
             body["at"] = at
-        # Whether the window starts at the log's first line. Lines the page keeps from an OLDER log
-        # (the server restarted) sit directly above this window; when it is only the new log's tail,
-        # the page says output is missing between the two rather than run them together.
-        body["whole"] = whole
         return jsonify(body)
 
     @app.route("/api/server/<int:server_id>/log-timestamps", methods=["GET", "POST"])

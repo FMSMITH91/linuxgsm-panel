@@ -1925,6 +1925,22 @@ def _host_timezone_cached(remote, app=None):
     return tz
 
 
+def _console_window_place(out):
+    """/api/console's window reply: (the `@` line's place, the rest of the reply, its newline count).
+
+    server_files._console_window_cmd prints `@<inode> <size>`, and `<newlines>` after them for a log
+    within its reach; the place is [0, inode, size]. No `@` line: no place, the whole reply is the
+    rest. A malformed one: no place and no reply.
+    """
+    if not (out or "").startswith("@"):
+        return None, out or "", None
+    head, _nl, rest = out.partition("\n")
+    parts = head[1:].split()
+    if len(parts) not in (2, 3) or not all(p.isdecimal() and len(p) < 20 for p in parts):
+        return None, "", None
+    return [0, int(parts[0]), int(parts[1])], rest, (int(parts[2]) if len(parts) == 3 else None)
+
+
 def _console_rows(lines, host_tz):
     """[{t, line}] for console text: LinuxGSM's own per-line timestamp parsed off the front.
 
