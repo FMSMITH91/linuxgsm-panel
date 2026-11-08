@@ -56,6 +56,7 @@ function _r13c_reshowPanelPushes(){} function _r13c_primeWipesPushes(){ return f
 function _renderPanelLines(){} function _r11c_resyncFrom(){} function _notePanelPush(){ return true; }
 function _resyncTake(){ return false; } function _r13c_notePanelPush(){} function appendConsole(){}
 function _primeAt(at){ _logAt = at; }
+function _r39c_tailGap(){} function _r39c_notePrimeKeep(){} var _r39c_primeKeep = null;
 function toast(){} function tf(s){ return s; } function t(s){ return s; }
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
 // /api/command answers at once; each /api/console read takes the next answer queued, or waits for
