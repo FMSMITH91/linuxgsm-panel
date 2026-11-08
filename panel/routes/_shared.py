@@ -2001,6 +2001,34 @@ def _host_timezone_cached(remote, app=None):
     return tz
 
 
+def _console_window_place(out):
+    """/api/console's window reply: (the `@` line's place, the rest of the reply, its newline count).
+
+    server_files._console_window_cmd prints `@<inode> <size>`, and `<newlines>` after them for a log
+    within its reach; the place is [0, inode, size]. No `@` line: no place, the whole reply is the
+    rest. A malformed one: no place and no reply.
+    """
+    if not (out or "").startswith("@"):
+        return None, out or "", None
+    head, _nl, rest = out.partition("\n")
+    parts = head[1:].split()
+    if len(parts) not in (2, 3) or not all(p.isdecimal() and len(p) < 20 for p in parts):
+        return None, "", None
+    return [0, int(parts[0]), int(parts[1])], rest, (int(parts[2]) if len(parts) == 3 else None)
+
+
+def _console_window_whole(newlines, body, want):
+    """Whether a window of a log's last `want` lines holds the whole log: it has no more lines than that.
+
+    `newlines` is the log's newline count (_console_window_place; None past the read's reach: not
+    counted, so not whole), and `body` the window as read, which ends in a newline unless the log
+    ends mid-line, that fragment being one more line for `tail`.
+    """
+    if newlines is None:
+        return False
+    return newlines < want or (newlines == want and body.endswith("\n"))
+
+
 def _console_rows(lines, host_tz):
     """[{t, line}] for console text: LinuxGSM's own per-line timestamp parsed off the front.
 

@@ -491,14 +491,20 @@ def _cron_run_times_from(out, marker):
         cmd = _cron_log_command(line, marker)
         if cmd is None:
             continue
-        try:
-            epoch = int(float(line.split(None, 1)[0]))
-        except (ValueError, IndexError):
+        # Only an entry's FIRST line counts, and only a plain epoch: `-o short-unix` starts that
+        # line with `<seconds>.<micro>` in column 0 and indents a message's continuation lines,
+        # which any local account can fill (it sets its own comm to "cron"). `int(float(tok))`
+        # took one such line's `inf` and raised OverflowError, and the Scheduled Tasks card 500'd.
+        m = _R39C_CRON_EPOCH.match(line)
+        if not m:
             continue
-        times[cmd] = epoch   # chronological log → last occurrence wins
+        times[cmd] = int(m.group(1))   # chronological log → last occurrence wins
     return times
 
 
+# The journal's own timestamp at the start of an entry's first line: whole seconds (12 digits is
+# far past any real date) and an optional fraction, then a blank.
+_R39C_CRON_EPOCH = re.compile(r"([0-9]{1,12})(?:\.[0-9]{1,9})?[ \t]")
 # A cron command line is a few hundred bytes; a journal line longer than this is not one.
 _MAX_CRON_LOG_LINE = 4096
 # How close to the transport's output cap a journal read may come before it counts as truncated:
@@ -1168,7 +1174,7 @@ def _parse_backup_listing(out):
         if parts[0] == "LOCK":
             try:
                 lock_mtime = int(float(parts[1]))
-            except (ValueError, IndexError):
+            except (ValueError, IndexError, OverflowError):
                 lock_mtime = 0   # lock exists but its mtime is unreadable — see list_game_backups
             continue
         if len(parts) >= 4 and parts[0] == "F":

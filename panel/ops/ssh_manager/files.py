@@ -1520,7 +1520,7 @@ def _upload_dir_entries(out):
         nm = "\t".join(parts[3:])
         try:
             mt = int(float(mtime))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             mt = 0
         present[nm] = {"is_dir": typ == "d",
                        "size": int(size) if size.isdecimal() else 0, "mtime": mt}

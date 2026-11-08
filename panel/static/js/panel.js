@@ -1,5 +1,6 @@
-// base.html's shared behaviour. The globals this file and panel/templates/*.html assign (window.X = ...)
-// are declared in .eslintrc.json beside it, so ESLint's no-undef is accurate: add a new one there.
+// base.html's shared behaviour. Every global a script here reads but does not define itself (one this
+// file, another script or a template's inline <script> assigns, or a vendor library) is declared in
+// .eslintrc.json beside it, so ESLint's no-undef is accurate: add a new one there, and drop a gone one.
 // Its XSS-heuristic findings (innerHTML sites) are left visible on purpose, not suppressed; when the
 // file was created each site was checked to escape with escapeHtml(), restore an element's own
 // markup, or assign a literal.
