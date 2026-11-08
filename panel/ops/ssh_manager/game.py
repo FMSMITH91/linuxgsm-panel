@@ -2303,14 +2303,14 @@ def _details_started(text):
 
 
 def _r39c_details_status(text):
-    """"started" or "stopped" from LinuxGSM's own Status line in `details`, or None.
+    """The state LinuxGSM's own Status line in `details` gives: "started", "stopped", or None.
 
-    LinuxGSM prints "Status:\tSTARTED|STOPPED" twice (info_messages.sh: in the game server block
+    LinuxGSM prints "Status:<tab>STARTED|STOPPED" twice (info_messages.sh: in the game server block
     and again as the very last line, fn_info_messages_statusbottom), and both come AFTER the
     server name, description and start parameters, which are the game's config text. A
-    description reading "Wipe status: stopped until Thursday" (or one whose `\n` starts a line with
-    "Status: stopped") was read first and decided a running server was offline. So only a line
-    that IS a Status line counts, and the last one wins.
+    description reading "Wipe status: stopped until Thursday" (or one whose newline starts a line
+    with "Status: stopped") was read first and decided a running server was offline. So only a
+    line that IS a Status line counts, and the last one wins.
     """
     found = re.findall(r"^[ \t]*status:[ \t]*(started|stopped)\b", text or "", re.I | re.M)
     return found[-1].lower() if found else None
