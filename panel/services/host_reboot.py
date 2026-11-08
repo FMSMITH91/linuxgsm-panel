@@ -1724,25 +1724,27 @@ class _Job:
         """Wait (at most ARM_WAIT) for the moment the reboot may go; None when it is open.
 
         No LinuxGSM command in flight for ANY plan server (an update or a backup a cron started on
-        one the panel brings back would be cut off as surely as one on an Autostart server), and,
-        for the accounts whose locks go back, a second of the minute no monitor run can see.
+        one the panel brings back would be cut off as surely as one on an Autostart server), nor for
+        any other server on the host (_r37g_host_names), and, for the accounts whose locks go back,
+        a second of the minute no monitor run can see.
         """
         users = {}
         for e in self.entries:
             users.setdefault(e["user"], []).append(e["selfname"])
-        if not users:
+        names = _r37g_host_names(self.remote_id, users)
+        if not names:
             return None
         aside = self._accounts()
         # The accounts with nothing to put back are read first: the seconds that count are the
         # ones between an account's read and its lock going back, and those come last.
-        order = sorted(users, key=lambda u: u in aside)
+        order = sorted(names, key=lambda u: u in aside)
         end = time.monotonic() + ARM_WAIT
         busy = False
         # A shell per account runs between this read and the reboot, so the later the window
         # closes for the last of them, the less of it is left: two seconds an account.
         window = (ARM_WINDOW[0], max(ARM_WINDOW[0] + 5, ARM_WINDOW[1] - 2 * len(aside)))
         while time.monotonic() < end:
-            seen = {u: window_probe(self.remote, u, users[u]) for u in order}
+            seen = _r37g_window_reads(self.remote, order, names, users)
             busy = any(s.get("inflight") for s in seen.values())
             if _quiet_now(seen, aside, window):
                 return None
@@ -1758,6 +1760,36 @@ class _Job:
             if missing:
                 _log.warning("reboot: the locks of %s could not be confirmed back", missing)
         return send_reboot(self.remote)
+
+
+def _r37g_host_names(remote_id, users):
+    """{account: [selfnames]} the reboot's quiet window reads: the plan's (`users`), then every other server's.
+
+    The census refuses maintenance on any server, stopped ones too, but only what runs at that moment:
+    a cron `update` or `backup` that starts on a stopped server outside the plan during the stop
+    phase or the wait for the window (the panel's own 05:00/05:15 lines), or the `monitor` restarting
+    a crashed one, was waited on by nothing and cut by the shutdown (review 1107). The rescan still
+    leaves those out (the stop budget and its rollback are the plan's); the window, bounded by
+    ARM_WAIT, waits on them.
+    """
+    names = {u: list(sn) for u, sn in users.items()}
+    for gs in _settled_rows(GameServer.query.filter_by(remote_id=remote_id).all()):
+        held = names.setdefault(gs.short_name, [])
+        if gs.lgsm_name not in held:
+            held.append(gs.lgsm_name)
+    return names
+
+
+def _r37g_window_reads(remote, order, names, users):
+    """{account: window_probe} for the quiet window; an account the plan holds no server of that does not
+    answer is left out, as the census leaves a server it cannot read out of the stops (a broken account
+    must not refuse every reboot of its host)."""
+    seen = {}
+    for u in order:
+        read = window_probe(remote, u, names[u])
+        if u in users or read.get("inflight") is not None:
+            seen[u] = read
+    return seen
 
 
 def send_reboot(remote):

@@ -40,6 +40,7 @@ import shutil as _shutil156
 import subprocess as _sp156  # nosec B404 - git, bash and ssh-keygen over this part's own scratch files
 import tempfile as _tf156
 import time as _time156
+from types import SimpleNamespace as _NS156
 
 from unit.part01 import check, skip
 from unit.part05 import _root
@@ -110,6 +111,63 @@ finally:
 check("A02A05 M reboot: a cron update on a stopped server outside the plan does not make the job roll the "
       "reboot back at the deadline (_rescan hands settled_probes the plan's ids)",
       _r156 == ("", []), repr(_r156))
+
+# r37g (adversarial F3): so the rescan leaves those out, and the quiet window before the reboot waits on them
+# instead. A command that STARTS on a stopped server outside the plan after the census (the panel's own
+# 05:15 cron `update`, the */5 `monitor` restarting a crashed one) was waited on by nothing — the window
+# read only the plan's selfnames — and the shutdown cut it. The window is bounded by ARM_WAIT.
+_OTHER156 = _NS156(short_name="otheracct", lgsm_name="vhserver")
+
+
+def _window156(entries, busy=None, unread=()):
+    """_Job._await_window over a plan of `entries` and a host whose rows add _OTHER156 -> (answer, reads).
+
+    `busy`: the accounts whose read finds a LinuxGSM command in flight; `unread`: the ones that do not answer.
+    """
+    reads, clock = [], [0.0]
+
+    def probe(remote, user, selfnames):
+        reads.append((user, list(selfnames)))
+        if user in unread:
+            return {"sec": None, "boot": None, "inflight": None}
+        return {"sec": 20, "boot": "b", "inflight": 1 if user in (busy or ()) else 0}
+
+    def nap(sec):
+        clock[0] += sec
+    try:
+        _p9_patch(_hr156, "window_probe", probe)
+        _p9_patch(_hr156, "_settled_rows", lambda rows: [_OTHER156])
+        _p9_patch(_hr156, "time", _NS156(monotonic=lambda: clock[0], sleep=nap, time=_time156.time))
+        with _p9.app_context():
+            j = object.__new__(_hr156._Job)
+            j.remote, j.remote_id, j.entries = None, -1, entries
+            try:
+                return j._await_window(), reads
+            except Exception as exc:  # noqa: BLE001 - reported by the check below, by name
+                return repr(exc)[:120], reads
+    finally:
+        _p9_restore_all()
+
+
+_PLAN156 = [{"id": P9_GS, "user": "planacct", "selfname": "gmodserver", "owner": "panel"}]
+_wc156 = {
+    "a plan, the other server busy": _window156(_PLAN156, busy={"otheracct"}),
+    "no plan, the other server busy": _window156([], busy={"otheracct"}),
+}
+check("1107 r37g reboot: the quiet window before the reboot waits on a LinuxGSM command on a server outside the "
+      "plan too (reading its selfname), and gives up at ARM_WAIT saying a command was running (%s)"
+      % ", ".join(_wc156),
+      all(r[0] == "a LinuxGSM command was running for one of its servers" and ("otheracct", ["vhserver"]) in r[1]
+          for r in _wc156.values()), repr(_wc156))
+_wo156 = {
+    "nothing in flight": _window156(_PLAN156),
+    "the other account does not answer": _window156(_PLAN156, unread={"otheracct"}),
+}
+_wu156 = _window156(_PLAN156, unread={"planacct"})
+check("1107 r37g reboot: ...and opens when nothing is in flight, or when only an account the plan holds no server "
+      "of does not answer (as the census leaves it out); a plan account that does not answer still refuses",
+      all(r[0] is None for r in _wo156.values()) and _wu156[0] == "the host did not answer in time",
+      repr((_wo156, _wu156)))
 
 # The census decides it instead, before anything is stopped: maintenance on a stopped server blocks;
 # a warning lock on a stopped one (LinuxGSM's countdown ends at its first status check) does not.
