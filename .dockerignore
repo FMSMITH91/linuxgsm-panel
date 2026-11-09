@@ -9,8 +9,8 @@
 # A pattern without `**/` matches only at the root of the context, so the key and database names
 # are written with it: a nested worktree's data/cred_key is not caught by `/data`.
 # The fuzz build reads only tracked files under requirements.txt, panel/, tests/fuzz and
-# .clusterfuzzlite/, and none of those matches a line below. (.claude/settings.json is tracked and
-# is excluded on purpose: the build never reads it.)
+# .clusterfuzzlite/, and none of those matches a line below. (.claude/ is gitignored: worktrees and
+# local Claude Code state only.)
 .git
 .claude
 /data
