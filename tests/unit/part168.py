@@ -124,6 +124,24 @@ try:
     _git168("-C", _CO168, "reset", "-q", "--hard", _C168["C"])
     eq("system_ops._take_update_stop: with no stop ahead, the target and its state are kept",
        _so168._take_update_stop(_C168["D"], "passing", _REF168, lambda sha: True), (_C168["D"], "passing", None))
+    # ...and the card itself, end to end: _compute_update_status over the fixture clone, with the
+    # signature gate, the CI read and the runtime-diff test stood in (each has its own part).
+    _saved_card168 = (_so168._release_gate_for, _so168._update_touches_runtime, _so168._tracked_branch)
+    try:
+        _so168._release_gate_for = lambda branch: (lambda sha: True)
+        _so168._update_touches_runtime = lambda ref: True
+        _so168._tracked_branch = lambda: "main"
+        _ci168.clear()
+        _status168 = {}
+        for _h168 in ("A", "S2"):
+            _git168("-C", _CO168, "reset", "-q", "--hard", _C168[_h168])
+            _st168 = _so168._compute_update_status()
+            _status168[_h168] = (_st168.get("update_available"), _N168.get(_st168.get("target_sha"),
+                                                                             _st168.get("target_sha")))
+        eq("Update card: behind a stop it offers the stop (what install.sh will install), and past it the "
+           "newest release", _status168, {"A": (True, "S1"), "S2": (True, "D")})
+    finally:
+        _so168._release_gate_for, _so168._update_touches_runtime, _so168._tracked_branch = _saved_card168
 finally:
     _so168.PANEL_DIR, _so168._remote_ci_state = _saved168
 
