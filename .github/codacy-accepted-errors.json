@@ -32,6 +32,13 @@
       "reason": "The third rule on the _run() pre-helper fallback, and the most on-the-nose of them: shell=True on a composed string is exactly what SECURITY.md documents as the known trust-model limitation. Accepted rather than suppressed in source for the reason given on the -tainted-env-args entry: hiding it at the call site would hide the one thing the docs say is still open.",
       "acceptedOn": "2026-09-13",
       "lineText": "cmd, shell=True, capture_output=True, text=text, timeout=timeout,"
+    },
+    {
+      "filePath": "panel/install/requirements.txt",
+      "patternId": "Trivy_vulnerability_high",
+      "reason": "dnspython 2.8.0 (CVE-2026-114605, GHSA-45c3-73f7-pv4m) is pinned for Python 3.10 alone (Ubuntu 22.04's python3): the fix, 2.9.0, requires Python 3.11 and is pinned for 3.11 and newer on the line below. Denial of service only, through the panel's own DNS lookups. The owner accepted it on 2026-10-28 (Codacy issue ignored then, under the file's old path at the repository root) and again for Dependabot alert #31 on 2026-11-10 after #504 moved the lockfile here. Same triage and re-check date (2026-12-27) as the exemption in panel/install/osv-scanner.toml; remove both when dnspython ships a fix for 3.10 or the panel drops 3.10.",
+      "acceptedOn": "2026-11-10",
+      "lineText": "dnspython==2.8.0 ; python_version < \"3.11\" \\"
     }
   ]
 }
