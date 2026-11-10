@@ -525,7 +525,8 @@ def _reconcile107():
 def _repair_env107(base, verb_rc, restored):
     """A checkout at `base` the repair can launch from, through the helper; the restore's swap recorded."""
     os.makedirs(os.path.join(base, "venv", "bin"))
-    for rel in (("venv", "bin", "python3"), ("db_maintenance.py",), ("install.sh",)):
+    os.makedirs(os.path.join(base, "panel", "install"))
+    for rel in (("venv", "bin", "python3"), ("panel", "install", "db_maintenance.py"), ("install.sh",)):
         open(os.path.join(base, *rel), "w").close()
     _p9_patch(_so107, "PANEL_DIR", base)
     _p9_patch(_so107, "_is_system_service", lambda: True)

@@ -60,7 +60,7 @@ def _bash101(script, env=None):
 
 
 _INS101 = _read101("install.sh")
-_UNI101 = _read101("uninstall.sh")
+_UNI101 = _read101("panel", "install", "uninstall.sh")
 _ME101 = _pwd101.getpwuid(os.getuid())
 
 

@@ -906,11 +906,11 @@ check("complexity gate: pull requests only, hash-pinned Lizard and Pylint, self-
 # and every step that builds or fuzzes must wait on it.
 _sc_bad = []
 for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
-                                       "panel/core/terminal.py", "tests/fuzz/**", "requirements.txt",
+                                       "panel/core/terminal.py", "tests/fuzz/**", "panel/install/requirements.txt",
                                        ".github/ci-requirements/atheris.txt")),
                          ("cflite_pr.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
                                             "panel/core/terminal.py", "tests/fuzz/**",
-                                            ".clusterfuzzlite/**", "requirements.txt"))):
+                                            ".clusterfuzzlite/**", "panel/install/requirements.txt"))):
     _sc_txt = _rq_jobs.get(_sc_wf, ("", []))[0]
     _sc_steps = _sc_txt[_sc_txt.find("    steps:\n"):]
     # Harden-Runner is every job's first step (part42 holds that); the scope step comes next.
@@ -1024,7 +1024,7 @@ _sq_scope_bad = (
     + ["%s is excluded" % _f for _f in _sq_src if _sq_excluded(_f)])
 check("sonarcloud: its scope is pinned (keys, roots, exclusions) and excludes no source file",
       not _sq_scope_bad and len(_sq_src) >= 150
-      and {"app.py", "install.sh", "panel/ops/system_ops.py", "panel/templates/base.html",
+      and {"panel/install/app.py", "install.sh", "panel/ops/system_ops.py", "panel/templates/base.html",
            "panel/static/js/panel.js"} <= set(_sq_src),
       repr((_sq_scope_bad[:6], len(_sq_src))))
 

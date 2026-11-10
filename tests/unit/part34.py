@@ -951,8 +951,8 @@ def _section_banwatch_caller34(rig):
     line = _gate_line34()
     check("F report: the ban-gate line says the rule files were checked, so 'read 4m ago' does not "
           "read as a stalled watcher", "rule files unchanged, checked" in line, line)
-    watch = _calls34(_fn34("app.py", "_f2b_ban_watch"))
-    tick = _calls34(_fn34("app.py", "_ban_watch_tick"))
+    watch = _calls34(_fn34("panel/install/app.py", "_f2b_ban_watch"))
+    tick = _calls34(_fn34("panel/install/app.py", "_ban_watch_tick"))
     check("F ban-watch: the 90 s loop runs _ban_watch_tick, whose UFW read goes through the gate",
           all(("_ban_watch_tick" in watch, "_banlist.watch_ufw" in tick, "so.ufw_blocked_ips" not in tick)),
           repr((sorted(watch), sorted(tick))))

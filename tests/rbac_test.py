@@ -34,6 +34,7 @@ import textwrap
 # Allow running as `python tests/rbac_test.py` from the repo root.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+sys.path.insert(1, os.path.join(_ROOT, "panel", "install"))   # app.py, manage.py, db_maintenance.py
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed before anything that could block;
 # tests/ is on the path only for the import.
@@ -4578,7 +4579,7 @@ _r19d_fn_ctl = ast.parse("def register(app):\n    def _helper(a):\n        log_a
 check("audit ids: a log_action call is attributed to the function it is in, not an enclosing one (control)",
       {_r19d_fn_of(_r19d_fn_ctl)[id(_c)] for _c in ast.walk(_r19d_fn_ctl) if isinstance(_c, ast.Call)}
       == {"_helper"})
-for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROOT, "app.py")}):
+for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROOT, "panel", "install", "app.py")}):
     _tree = ast.parse(_f.read_text(encoding="utf-8"))
     _fn_of = _r19d_fn_of(_tree)
     for _n in ast.walk(_tree):

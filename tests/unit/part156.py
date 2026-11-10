@@ -459,7 +459,7 @@ else:
 _inst_tail156 = _INST156[_INST156.index('info "[4/4] Verifying the panel is up'):]
 _banner156 = [ln for ln in _inst_tail156.splitlines() if 'echo -e "  Update:' in ln]
 _hints156 = [ln.strip() for ln in _INST156.splitlines() if ln.strip().startswith("UPDATE_HINT=")]
-_rec156 = _read156("recover.sh")
+_rec156 = _read156("panel", "install", "recover.sh")
 _readme156 = _read156("docs", "README.md")
 _hdr156 = _INST156[:_INST156.index("# Fresh install behaviour:")]
 check("A10 L install.sh: the fresh install's Update line names the installer already on the host (root: the "

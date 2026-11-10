@@ -266,7 +266,7 @@ try:
 finally:
     _gb.refresh_soon = _gb_rs
     save_config(_gb_cfg0)
-_gb_app_src = open(os.path.join(os.path.dirname(os.path.abspath(_SUITE_FILE)), "..", "app.py"),
+_gb_app_src = open(os.path.join(os.path.dirname(os.path.abspath(_SUITE_FILE)), "..", "panel", "install", "app.py"),
                    encoding="utf-8").read()
 # The loop runs _ban_watch_tick; the tick feeds the set from the fail2ban reading it takes, and
 # UFW's through banlist.watch_ufw (which reads it when ufw's rule files changed; unit part34).
@@ -542,7 +542,7 @@ check("failed install: a server that really IS installing still gets the wait me
 # And the reconciler has to be looking at failed rows, or files that arrive after a repair
 # (the control bar's Update re-runs SteamCMD) are never adopted and the row stays unusable.
 _app_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_SUITE_FILE))),
-                             "app.py"), encoding="utf-8").read()
+                             "panel", "install", "app.py"), encoding="utf-8").read()
 check("failed install: the reconcile ticker re-checks failed rows, so a repair is noticed",
       '("installing", "configuring", "failed")' in _app_src)
 with app.app_context():

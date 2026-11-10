@@ -849,7 +849,7 @@ _s140 = _ts3_pass140.get("second") or (None, [], False, False)
 check("ts3 ServerQuery heal: a second pass leaves a done server alone (no firewall read), retries the "
       "failed one, and does not audit its failure again",
       _s140[0] == "failed" and _s140[2] is True and _s140[3] is True and _s140[1] == _f140[2], repr(_s140))
-_app_src140 = _read140("app.py")
+_app_src140 = _read140("panel", "install", "app.py")
 check("ts3 ServerQuery heal: the daily background pass runs it, on every host the panel has",
       "lgc_ts3_heal_pass" in _calls_in140(_app_src140, "_node_tools_cron_pass")
       and "lgc_heal_ts3_serverquery" in _calls_in140(_read140("panel", "services", "game_ports.py"),

@@ -2949,8 +2949,9 @@ try:
     # --on-active=2` also returns at once with a real status, so a refusal told the user their
     # database was being repaired offline while nothing ever ran and the flagged DB stayed flagged.
     os.makedirs(os.path.join(_li_dir, "venv", "bin"), exist_ok=True)
+    os.makedirs(os.path.join(_li_dir, "panel", "install"), exist_ok=True)
     for _li_p in (os.path.join(_li_dir, "venv", "bin", "python3"),
-                  os.path.join(_li_dir, "db_maintenance.py")):
+                  os.path.join(_li_dir, "panel", "install", "db_maintenance.py")):
         with open(_li_p, "w") as _li_fh2:
             _li_fh2.write("")
     _li_rc["rc"] = 1
@@ -3014,7 +3015,7 @@ _totp_bad = []
 # EVERY panel module, not a list of five: a new 2FA-gated action in a file the list did not name
 # (users.py, api.py, remote_security.py) was never opened, and a listed file that was renamed was
 # skipped by an `if not exists: continue`. The floor below fails a walk that found nothing to read.
-_totp_files = ["app.py"] + sorted(
+_totp_files = sorted(   # panel/install/app.py is under panel/
     os.path.relpath(_p, _totp_root)
     for _p in __import__("glob").glob(os.path.join(_totp_root, "panel", "**", "*.py"),
                                       recursive=True))

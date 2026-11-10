@@ -9,8 +9,8 @@ it one level along, where the next reorganisation would break it again.
 import os
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-while not os.path.exists(os.path.join(REPO_ROOT, "app.py")):
+while not os.path.exists(os.path.join(REPO_ROOT, "panel", "install", "app.py")):
     _parent = os.path.dirname(REPO_ROOT)
     if _parent == REPO_ROOT:
-        raise RuntimeError("could not find the repo root (no app.py above %s)" % __file__)
+        raise RuntimeError("could not find the repo root (no panel/install/app.py above %s)" % __file__)
     REPO_ROOT = _parent

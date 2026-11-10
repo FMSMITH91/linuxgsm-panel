@@ -11,8 +11,9 @@ marker, audits it. The step subtracts what this prints from its count and names 
 Usage:
     pins_not_here.py FILE
 
-FILE is one of the panel's two lockfiles, by name (requirements.txt, requirements-bootstrap.txt),
-read from the repository root this script sits in; any other name is refused (exit 2). The step
+FILE is one of the panel's two lockfiles, by repository path (panel/install/requirements.txt,
+panel/install/requirements-bootstrap.txt), read from the repository this script sits in; any other
+value is refused (exit 2). The step
 passes only those two, and a path taken from the command line is never opened as given.
 
 One line per such pin, `name==version ; marker`. Exits 1, printing nothing to stdout, when a marker
@@ -32,11 +33,12 @@ _PIN_MARKER = re.compile(r"^([A-Za-z0-9._-]+==[^\s;\\]+)[ \t]*;([^\\#\n]+)", re.
 
 # The repository root (this file is .github/scripts/pins_not_here.py), and the only files read.
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_LOCKFILES = {_n: os.path.join(_ROOT, _n) for _n in ("requirements.txt", "requirements-bootstrap.txt")}
+_LOCKFILES = {"panel/install/" + _n: os.path.join(_ROOT, "panel", "install", _n)
+              for _n in ("requirements.txt", "requirements-bootstrap.txt")}
 
 
 def lockfile_path(name):
-    """The root lockfile `name` names, or None for any other name (a path, `..`, another file)."""
+    """The lockfile `name` names, or None for any other name (a path, `..`, another file)."""
     return next((_p for _n, _p in _LOCKFILES.items() if _n == name), None)
 
 

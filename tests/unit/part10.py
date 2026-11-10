@@ -2139,7 +2139,8 @@ def _so7_panel_repair_database():
        SO.panel_repair_database(), (False, "The repair tool isn't available on this install."))
     os.makedirs(os.path.join(_pd, "venv", "bin"))
     open(os.path.join(_pd, "venv", "bin", "python"), "w").close()     # 'python', not 'python3'
-    open(os.path.join(_pd, "db_maintenance.py"), "w").close()
+    os.makedirs(os.path.join(_pd, "panel", "install"))
+    open(os.path.join(_pd, "panel", "install", "db_maintenance.py"), "w").close()
     SO._is_system_service = lambda: True
     SO._helper_present = lambda: True
     # An update this part launched earlier would be refused beside (review 1016f); this checks the
@@ -2166,7 +2167,7 @@ def _so7_panel_repair_database():
     _pr_want = ("sudo systemctl stop linuxgsm-panel.service; ( cd %s && %s %s update ); "
                 "sudo systemctl start linuxgsm-panel.service"
                 % (_p7_shlex.quote(_pd), _p7_shlex.quote(os.path.join(_pd, "venv", "bin", "python")),
-                   _p7_shlex.quote(os.path.join(_pd, "db_maintenance.py"))))
+                   _p7_shlex.quote(os.path.join(_pd, "panel", "install", "db_maintenance.py"))))
     check("so/panel_repair_database (pre-helper): stop, repair with the venv's python, start — one detached unit",
           isinstance(_pr_leg, tuple) and _pr_leg[0] is True and _pr_sp
           and _pr_sp[0][0] == ["sudo", "systemd-run", "--collect", "--on-active=2", "bash", "-c", _pr_want],

@@ -126,8 +126,10 @@ def _p9_drain():
 
 
 # ── the app ─────────────────────────────────────────────────────────────────────────────────────
-# The import name puts the app at the repo root; the UI folders are named as app.py names them.
-_p9 = _P9Flask("app", template_folder="panel/templates", static_folder="panel/static")
+# Rooted at the checkout, with the UI folders named as app.py names them (the import name alone would
+# root it at panel/install/, where app.py is).
+from unit import REPO_ROOT as _P9_ROOT   # noqa: E402
+_p9 = _P9Flask("app", root_path=_P9_ROOT, template_folder="panel/templates", static_folder="panel/static")
 _p9.config.update(
     SECRET_KEY="p09-unit-secret",
     SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_P9_TMP, "p09.db"),
@@ -3740,7 +3742,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
 else:
     _pb_skip("install.sh panel_port: read as the owner", "needs root, sudo and a daemon account")
 # uninstall.sh reads config.json the same way, and takes the sudo grants away first.
-_pb_un = open(os.path.join(_pb_root, "uninstall.sh"), encoding="utf-8").read()
+_pb_un = open(os.path.join(_pb_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 _pb_cr = _pb_un[_pb_un.index("_conf_read() {"):]
 _pb_cr = _pb_cr[:_pb_cr.index("\n}\n") + 3]
 _r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',

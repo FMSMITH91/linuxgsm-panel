@@ -94,11 +94,11 @@ if mode == "strict":
     sys.exit(1)
 deps = [{"name": n, "version": v, "vulns": []} for n, v in pins]
 rc = 0
-if mode == "drop1" and req == "requirements.txt":
+if mode == "drop1" and req == "panel/install/requirements.txt":
     deps = deps[1:]
-if mode == "skip1" and req == "requirements.txt":
+if mode == "skip1" and req == "panel/install/requirements.txt":
     deps[0] = {"name": deps[0]["name"], "skip_reason": "not on PyPI"}
-if mode == "vuln" and req == "requirements.txt":
+if mode == "vuln" and req == "panel/install/requirements.txt":
     deps[0]["vulns"] = [{"id": "GHSA-p27a-fixd", "fix_versions": ["9.9"]},
                         {"id": "GHSA-p27b-nofx", "fix_versions": []}]
     rc = 1
@@ -124,7 +124,7 @@ try:
     _pnh27 = _ilu27.module_from_spec(_pnh_spec27)
     _pnh_spec27.loader.exec_module(_pnh27)
     _pa_off27 = {_f: _pnh27.pins_not_here(_read27(_f))
-                 for _f in ("requirements.txt", "requirements-bootstrap.txt")}
+                 for _f in ("panel/install/requirements.txt", "panel/install/requirements-bootstrap.txt")}
     _pa_pins27 = {_f: len(_re27.findall(r"^[A-Za-z0-9._-]+==", _read27(_f), _re27.M))
                   - len(_pa_off27[_f]) for _f in _pa_off27}
     _pnh_sample27 = ('old==1.0 ; python_version < "3" \\\n    --hash=sha256:aa\n'
@@ -141,18 +141,19 @@ try:
     # Sonar pythonsecurity:S8707: the file comes from argv, so only the two root lockfiles are
     # read, by name. A path (absolute, relative, through ..) to anything, even to one of them, is
     # refused with exit 2 before anything is opened.
-    _pnh_refused27 = [_a for _a in ("../../etc/passwd", os.path.join(_root, "requirements.txt"),
-                                    "./requirements.txt", "tests/../requirements.txt", "")
+    _pnh_refused27 = [_a for _a in ("../../etc/passwd", os.path.join(_root, "panel", "install", "requirements.txt"),
+                                    "./requirements.txt", "tests/../requirements.txt", "", "requirements.txt",
+                                    "./panel/install/requirements.txt")
                       if _pnh27.lockfile_path(_a) is not None]
     with open(os.devnull, "w", encoding="utf-8") as _null27, \
             _ctx27.redirect_stdout(_null27), _ctx27.redirect_stderr(_null27):
         _pnh_rcs27 = (_pnh27.main(["pins_not_here.py", "../../etc/passwd"]),
-                      _pnh27.main(["pins_not_here.py", "requirements.txt"]))
-    check("pip-audit: the marker reader opens only requirements.txt or requirements-bootstrap.txt at "
-          "the repository root, and refuses any other argument",
+                      _pnh27.main(["pins_not_here.py", "panel/install/requirements.txt"]))
+    check("pip-audit: the marker reader opens only panel/install/requirements.txt or requirements-bootstrap.txt, "
+          "by that name, and refuses any other argument",
           not _pnh_refused27 and _pnh_rcs27 == (2, 0)
-          and _pnh27.lockfile_path("requirements.txt") == os.path.join(_root, "requirements.txt"),
-          repr((_pnh_refused27, _pnh_rcs27, _pnh27.lockfile_path("requirements.txt"))))
+          and _pnh27.lockfile_path("panel/install/requirements.txt") == os.path.join(_root, "panel", "install", "requirements.txt"),
+          repr((_pnh_refused27, _pnh_rcs27, _pnh27.lockfile_path("panel/install/requirements.txt"))))
     # `python` as the runner has it: this interpreter (setup-python's, with pip), so the step's
     # marker reader runs here exactly as there. P27_PYFAIL makes it fail.
     with open(os.path.join(_pa_tmp27, "python"), "w", encoding="utf-8") as _fh27:
@@ -175,7 +176,7 @@ try:
           [(_a[_a.index("-r") + 1], sorted(_t for _t in _a if _t.startswith("--")))
            for _a in _argv if "-r" in _a]
           == [(_f, ["--disable-pip", "--require-hashes", "--strict"])
-              for _f in ("requirements.txt", "requirements-bootstrap.txt")], repr(_argv))
+              for _f in ("panel/install/requirements.txt", "panel/install/requirements-bootstrap.txt")], repr(_argv))
     check("pip-audit: a clean audit of every pin passes, and says how many it read",
           _rc == 0 and all("%s: audited %d of its %d pinned packages" % (_f, _n, _n) in _out
                            for _f, _n in _pa_pins27.items()) and min(_pa_pins27.values()) >= 1,
@@ -184,9 +185,9 @@ try:
     # 3.11), so on every Python exactly one of the two is not pip-audit's: it is named, left out of
     # the count, and audited by osv-scanner. Counted as a pin, every audit read "33 of 34" and failed.
     check("pip-audit: ...a pin whose marker is false on this Python is named and left out of the count",
-          _rc == 0 and len(_pa_off27["requirements.txt"]) == 1
-          and all("requirements.txt: %s ; %s does not apply on this Python" % _p in _out
-                  for _p in _pa_off27["requirements.txt"]),
+          _rc == 0 and len(_pa_off27["panel/install/requirements.txt"]) == 1
+          and all("panel/install/requirements.txt: %s ; %s does not apply on this Python" % _p in _out
+                  for _p in _pa_off27["panel/install/requirements.txt"]),
           "off=%r out=%r" % (_pa_off27, _out[-600:]))
     _rc, _out, _argv = _pa27("all-pyfail", P27_PYFAIL="1")
     check("pip-audit: ...and markers it cannot evaluate fail the step, before pip-audit runs",
@@ -194,9 +195,9 @@ try:
           and _argv == [], "rc=%r argv=%r %s" % (_rc, _argv, _out[-400:]))
     _rc, _out, _ = _pa27("drop1")
     check("pip-audit: ...a pin the audit did not read fails the step, by file and count",
-          _rc not in (0, None) and ("audited %d of the %d packages pinned in requirements.txt"
-                                    % (_pa_pins27["requirements.txt"] - 1,
-                                       _pa_pins27["requirements.txt"])) in _out, _out[-400:])
+          _rc not in (0, None) and ("audited %d of the %d packages pinned in panel/install/requirements.txt"
+                                    % (_pa_pins27["panel/install/requirements.txt"] - 1,
+                                       _pa_pins27["panel/install/requirements.txt"])) in _out, _out[-400:])
     _rc, _out, _ = _pa27("skip1")
     check("pip-audit: ...a pin reported as skipped counts as not read", _rc not in (0, None)
           and "NOT checked" in _out, _out[-400:])
@@ -206,7 +207,7 @@ try:
           and "GHSA-p27b-nofx (no fix yet)" in _out and "::error::" in _out, _out[-600:])
     _rc, _out, _ = _pa27("strict")
     check("pip-audit: a pin it could not audit (--strict's exit) fails the step", _rc not in (0, None)
-          and "pip-audit failed on requirements.txt" in _out, _out[-400:])
+          and "pip-audit failed on panel/install/requirements.txt" in _out, _out[-400:])
 finally:
     _shutil27.rmtree(_pa_tmp27, ignore_errors=True)
 check("pip-audit: no step anywhere still runs pip-audit --no-deps (it does not stop the resolution)",
@@ -230,7 +231,7 @@ for _dp, _dns, _fns in os.walk(_root):
                     _locks27.add(_rel)
 check("osv-scanner: the repository's lockfiles were found (gamedig's, the panel's two, the CI "
       "tools')",
-      {"tools/gamedig/package-lock.json", "requirements.txt", "requirements-bootstrap.txt",
+      {"tools/gamedig/package-lock.json", "panel/install/requirements.txt", "panel/install/requirements-bootstrap.txt",
        ".github/ci-requirements/pip-audit.txt"} <= _locks27, repr(sorted(_locks27)))
 
 _OSV_STUB27 = r'''

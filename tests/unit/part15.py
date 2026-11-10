@@ -77,11 +77,11 @@ def _cv_ymd(tm):
 
 
 def _cv_dir(name, version=None):
-    """A copy of the panel with NO .git: just a VERSION file holding `version` (None: no file)."""
+    """A copy of the panel with NO .git: just panel/install/VERSION holding `version` (None: no file)."""
     path = os.path.join(_CV_SB, name)
-    os.makedirs(path)
+    os.makedirs(os.path.join(path, "panel", "install"))
     if version is not None:
-        with open(os.path.join(path, "VERSION"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(path, "panel", "install", "VERSION"), "w", encoding="utf-8") as fh:
             fh.write(version)
     return path
 
@@ -186,20 +186,21 @@ try:
     # placeholder or attribute that stopped matching fails here.
     _cv_arc_repo = os.path.join(_CV_SB, "arc-repo")
     _sp15.run(["git", "init", "-q", "-b", "main", _cv_arc_repo], capture_output=True, check=False)  # nosec B603 B607 - git, a fixed argv, on a fixture repo
-    for _cv_name in ("VERSION", ".gitattributes"):
+    os.makedirs(os.path.join(_cv_arc_repo, "panel", "install"))
+    for _cv_name in ("panel/install/VERSION", ".gitattributes"):
         shutil.copyfile(os.path.join(_root, _cv_name), os.path.join(_cv_arc_repo, _cv_name))
         _cv_git(_cv_arc_repo, "add", _cv_name)
     _cv_arc_sha = _cv_commit(_cv_arc_repo, "archived", "@%d +0000" % _CV_LATE)
     _cv_tar = os.path.join(_CV_SB, "arc.tar")
-    _cv_git(_cv_arc_repo, "archive", "-o", _cv_tar, _cv_arc_sha, "VERSION")
+    _cv_git(_cv_arc_repo, "archive", "-o", _cv_tar, _cv_arc_sha, "panel/install/VERSION")
     try:
         with _tar15.open(_cv_tar) as _cv_tf:
-            _cv_arc_text = _cv_tf.extractfile("VERSION").read().decode("utf-8")
+            _cv_arc_text = _cv_tf.extractfile("panel/install/VERSION").read().decode("utf-8")
     except (OSError, KeyError, AttributeError, _tar15.TarError) as _cv_e:
         _cv_arc_text = "(no archive: %r)" % (_cv_e,)
     check("calver: git archive fills the repository's VERSION with the commit's epoch",
           _cv_arc_text.strip() == str(_CV_LATE),
-          "archived VERSION is %r — check VERSION's placeholder and `VERSION export-subst` in "
+          "archived VERSION is %r — check VERSION's placeholder and `panel/install/VERSION export-subst` in "
           ".gitattributes" % _cv_arc_text)
     _cv_out = _cv_dir("arc-out", _cv_arc_text)
     check("calver: ...which a copy with no .git reads as that commit's date",

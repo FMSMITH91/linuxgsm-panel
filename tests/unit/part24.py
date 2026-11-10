@@ -307,7 +307,7 @@ def _config_keys_read():
 
 
 def _boot_keys_written():
-    with open(os.path.join(_REPO24, "app.py"), encoding="utf-8") as fh:
+    with open(os.path.join(_REPO24, "panel", "install", "app.py"), encoding="utf-8") as fh:
         tree = _ast24.parse(fh.read())
     out = set()
     for node in _ast24.walk(tree):
@@ -360,7 +360,7 @@ def _rs_calls():
     """{"read": {group}, "written": {group}} over panel/ and app.py, by the AST."""
     out = {"read": set(), "written": set(), "unjudged": set()}
     paths = _glob24.glob(os.path.join(_REPO24, "panel", "**", "*.py"), recursive=True)
-    for path in paths + [os.path.join(_REPO24, "app.py")]:
+    for path in paths:      # panel/install/app.py among them
         if path.endswith(os.path.join("core", "runtime_stats.py")):
             continue
         with open(path, encoding="utf-8") as fh:

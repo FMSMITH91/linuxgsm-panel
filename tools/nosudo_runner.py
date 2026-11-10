@@ -24,6 +24,7 @@ import runpy
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "panel", "install"))   # app.py, manage.py, db_maintenance.py
 
 BLOCKED = []
 # What a real `sudo -n` prints when it wants a password. Callers act on the non-zero rc.

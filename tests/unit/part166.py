@@ -193,7 +193,7 @@ eq("debug report: the unit it expects names the same app.py install.sh's unit do
 # A copy outside the repository, as the root-owned one in /usr/local/lib/linuxgsm-panel is: run from
 # the checkout, recover.sh's last fallback (its own directory) finds the repository's manage.py.
 _REC166 = os.path.join(_tf166.mkdtemp(dir=_SB166, prefix="helperdir-"), "recover.sh")
-with open(os.path.join(_root, "recover.sh"), encoding="utf-8") as _fh166, \
+with open(os.path.join(_root, "panel", "install", "recover.sh"), encoding="utf-8") as _fh166, \
         open(_REC166, "w", encoding="utf-8") as _out166:
     _out166.write(_fh166.read())
 _HOME166 = _tf166.mkdtemp(dir=_SB166, prefix="home-")

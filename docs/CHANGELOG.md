@@ -151,6 +151,12 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The files the installer reads now live in `panel/install/`.** `app.py`, `manage.py`,
+  `db_maintenance.py`, `recover.sh`, `uninstall.sh`, `VERSION`, `release-signers` and the
+  requirements files moved there from the top of the repository. On a per-user install, run
+  `./venv/bin/python panel/install/manage.py` and `bash ~/linuxgsm-panel/panel/install/uninstall.sh`.
+  `sudo linuxgsm-panel-recover` and the root-owned copies in `/usr/local/lib/linuxgsm-panel/` work as
+  before. A panel updates to this release only from the previous one or later.
 - **The Maintenance tab names the release you run.** When the panel is up to date, the Update card
   says which release that is, by its date and commit: "You're up to date: release 2026.11.7
   (a1b2c3d)."

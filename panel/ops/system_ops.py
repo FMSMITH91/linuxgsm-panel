@@ -33,6 +33,16 @@ except Exception:  # noqa: BLE001 - no eventlet: the plain module is the only on
 # self-update, integrity-repair and the db_maintenance lookup all need the CHECKOUT root.
 from panel import REPO_ROOT as _REPO_ROOT
 PANEL_DIR = str(_REPO_ROOT)
+# Where the installer-read files live (app.py, manage.py, db_maintenance.py, VERSION,
+# release-signers, requirements*.txt, recover.sh, uninstall.sh). They sat at the checkout root
+# before the root clean-up; a commit from before it still has them there.
+INSTALL_REL = "panel/install"
+
+
+def install_dir():
+    """PANEL_DIR's panel/install/, read from PANEL_DIR at each call."""
+    return os.path.join(PANEL_DIR, "panel", "install")
+
 
 # The branch the panel tracks out of the box. Switching to any other branch is opt-in
 # (panel_switch_branch) and stored in config as "panel_branch".
@@ -1446,7 +1456,7 @@ def _version_file():
     kept by hand before dates (a snapshot or rollback of an older install) and is shown as it is.
     """
     try:
-        with open(os.path.join(PANEL_DIR, "VERSION"), encoding="utf-8") as f:
+        with open(os.path.join(install_dir(), "VERSION"), encoding="utf-8") as f:
             raw = f.read().strip()
     except (OSError, UnicodeDecodeError):
         return "unknown"
@@ -2073,8 +2083,19 @@ def _release_key_text():
                 return fh.read(65536).strip()
         except (OSError, UnicodeDecodeError):
             return ""
-    out, _, rc = _git(["cat-file", "blob", "HEAD:" + _RELEASE_SIGNERS], timeout=10)
-    return out.strip() if rc == 0 else ""
+    return _release_key_at("HEAD")
+
+
+def _release_key_at(commit):
+    """Return `commit`'s release key as text, or "" when it has none.
+
+    It is in panel/install/, or at the checkout root in a commit from before the root clean-up.
+    """
+    for rel in (INSTALL_REL + "/" + _RELEASE_SIGNERS, _RELEASE_SIGNERS):
+        out, _, rc = _git(["cat-file", "blob", commit + ":" + rel], timeout=10)
+        if rc == 0:
+            return out.strip()
+    return ""
 
 
 def _release_key_at_floor():
@@ -2088,8 +2109,7 @@ def _release_key_at_floor():
     head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
     if hrc != 0 or not re.fullmatch(r"[0-9a-f]{40}", floor) or head.strip() != floor:
         return ""
-    out, _, rc = _git(["cat-file", "blob", floor + ":" + _RELEASE_SIGNERS], timeout=10)
-    return out.strip() if rc == 0 else ""
+    return _release_key_at(floor)
 
 
 def _release_signature_valid(key, sha, branch, sig):
@@ -3072,11 +3092,11 @@ def panel_repair_database():
     db_maintenance (health-check → rebuild readable data via SQLite .recover, else restore the last
     healthy backup → optimize → re-check), then starts the service again — the flagged database is
     copied aside first and never deleted. Same stop/repair/start the auto-updater uses. (ok, msg)."""
-    base = PANEL_DIR          # the checkout root: venv/ and db_maintenance.py both live there
+    base = PANEL_DIR          # the checkout root: venv/ lives there, db_maintenance.py in panel/install/
     py = os.path.join(base, "venv", "bin", "python3")
     if not os.path.exists(py):
         py = os.path.join(base, "venv", "bin", "python")
-    dbm = os.path.join(base, "db_maintenance.py")
+    dbm = os.path.join(install_dir(), "db_maintenance.py")
     if not os.path.exists(py) or not os.path.exists(dbm):
         return False, "The repair tool isn't available on this install."
     # Asked of the record itself, before this call announces: a second click (another tab, another
@@ -5295,7 +5315,7 @@ def panel_diagnostics(db_check=None, unit=None):
 # root refreshes them. Compared by git blob id, computed here in Python (the files are read, never
 # executed), against one `git ls-tree HEAD`.
 _ROOT_PIECES = (("panel-helper", "tools/panel-helper"), ("install.sh", "install.sh"),
-                ("db_maintenance.py", "db_maintenance.py"))
+                ("db_maintenance.py", INSTALL_REL + "/db_maintenance.py"))
 _ROOT_PIECE_MAX = 16 * 1024 * 1024
 _root_pieces_cache = {"at": 0.0, "res": None}
 _ROOT_PIECES_TTL = 60

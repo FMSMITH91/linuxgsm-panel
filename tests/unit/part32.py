@@ -711,7 +711,7 @@ def _p32_banner_funnel():
     lines = _banner(_UP32)
     check("banner: ...and is named when the panel's route IS funnelled",
           "  🌍 Funnel (public): %s/lgsm" % _HOST32 in lines, repr(lines))
-    main = _code(_script_text("app.py").split('if __name__ == "__main__":', 1)[1])
+    main = _code(_script_text("panel/install/app.py").split('if __name__ == "__main__":', 1)[1])
     check("banner: __main__ prints it AFTER the boot re-point (it read Serve as boot found it, before "
           "boot repaired it), and the root-URL line is gone",
           all([-1 < main.find("_boot_serve(app, cfg, port)") < main.find("_tailscale_banner("),
@@ -866,7 +866,7 @@ def _p32_report_boot():
 
 
 # ═══ 6. uninstall.sh ═════════════════════════════════════════════════════════════════════════════
-_UN32 = _script_text("uninstall.sh")
+_UN32 = _script_text("panel/install/uninstall.sh")
 # From the routes reader to the end of the teardown. Before the fix the region began at the
 # `if command -v tailscale` block (there was no reader), so the fallback start keeps that runnable.
 _UN_REGION32 = (_region(_UN32, "_TS_ROUTES_PY='", "\n# ── Remove the panel files")

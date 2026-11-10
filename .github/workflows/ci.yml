@@ -145,8 +145,8 @@ jobs:
         # the way install.sh installs it, so a Dependabot bump of it is proved on each Python here,
         # and the requirements below go in through the same pip the hosts use.
         run: |
-          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements-bootstrap.txt
-          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements-bootstrap.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements-checks/build.txt
           python -m pip install --quiet --require-hashes --only-binary :all: --no-binary=esprima \
@@ -428,7 +428,7 @@ jobs:
         # coverage is hash-pinned, like every CI tool. (This job used to hold CODACY_PROJECT_TOKEN in
         # a later step; the upload is codacy-coverage.yml's now, and this job holds no secret.)
         run: |
-          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements/coverage.txt
 
@@ -589,7 +589,7 @@ jobs:
       - name: Install dependencies
         if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         run: |
-          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
 
       - name: Measure
         if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
