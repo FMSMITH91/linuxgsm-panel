@@ -24,12 +24,21 @@ FAILS OPEN. Anything this cannot establish is "not docs-only", and everything ru
 It reads the pull request's WHOLE file list at its head, never one commit's: a docs-only first
 commit followed by a code commit is a code change.
 
-Usage:
-    pr_scope.py --event EVENT [--repo OWNER/NAME --pr N --head-sha SHA]
+PER JOB (--job NAME). Some jobs measure only part of the repository: coverage runs the suites
+over the panel's code, js coverage and Lighthouse drive the panel in a browser. With --job it also
+writes `skip=true|false`: true when every path the pull request changes is documentation or on that
+job's list in JOB_IRRELEVANT, paths that cannot change what the job measures (another workflow, a
+CI tool's lockfile it does not install, a scanner's configuration, and for the browser jobs the test
+suites). A path on no list counts as a change to the job, so a new kind of file runs everything.
+This script, reuse_pr_result.py and the job's own workflow are never on a list. The same fail-open
+cases as above write skip=false.
 
-Writes `docs_only=true|false` to $GITHUB_OUTPUT (when set) and says why on stdout. Always exits 0
-when it could decide either way; the steps it gates read `docs_only != 'true'` as "run", so a
-missing or garbled output runs them too.
+Usage:
+    pr_scope.py --event EVENT [--repo OWNER/NAME --pr N --head-sha SHA] [--job NAME]
+
+Writes `docs_only=true|false` (and with --job, `skip=true|false`) to $GITHUB_OUTPUT (when set) and
+says why on stdout. Always exits 0 when it could decide either way; the steps it gates read
+`docs_only != 'true'` / `skip != 'true'` as "run", so a missing or garbled output runs them too.
 """
 import argparse
 import json
@@ -64,6 +73,78 @@ def safe_slug(repo):
         return "".join(_SLUG_CHARS[c] for c in repo)
     except KeyError:
         return None
+
+
+# ── Per job: paths that cannot change what the job measures ──────────────────────────────────────
+# Glob patterns over the repository path: `**` matches across directories, `*` within one. Every
+# workflow file is on each list except the job's own, which JOB_WORKFLOW names.
+_ALWAYS_RUN = (".github/scripts/pr_scope.py", ".github/scripts/reuse_pr_result.py")
+# Read by a scanner or a bot alone, never by the panel or its test suites' measured code.
+_SCANNER_AND_BOT = (".codacy.yaml", ".prospector.yaml", ".semgrepignore", ".sonarcloud.properties",
+                    ".github/gitleaks.toml", ".github/codeql/**", ".github/actionlint.yaml",
+                    ".github/codacy-accepted-errors.json", ".github/dependabot.yml",
+                    ".github/renovate.json", ".clusterfuzzlite/**")
+# Lockfiles of tools the measuring jobs do not install (each job's own is put back by _JOB_KEEP).
+_OTHER_LOCKS = (".github/ci-requirements/**", ".github/ci-requirements-checks/**",
+                "tools/gamedig/package.json", "tools/gamedig/package-lock.json",
+                "tools/gamedig/osv-scanner.toml", "panel/static/vendor/package.json",
+                "panel/static/vendor/package-lock.json", "panel/install/requirements*.in",
+                "panel/install/osv-scanner.toml")
+# What the browser jobs never load: the test suites, the other tools, the CI's own scripts, and
+# the installer-side shell scripts and lists (the panel they drive is served from the checkout).
+_NOT_IN_A_BROWSER = ("tests/**", "tools/**", ".github/scripts/**", "install.sh", "panel/install/*.sh",
+                     "panel/install/update-stops")
+JOB_WORKFLOW = {"coverage": ".github/workflows/ci.yml", "js coverage": ".github/workflows/ci.yml",
+                "lighthouse": ".github/workflows/lighthouse.yml"}
+JOB_IRRELEVANT = {
+    "coverage": _SCANNER_AND_BOT + _OTHER_LOCKS,
+    "js coverage": _SCANNER_AND_BOT + _OTHER_LOCKS + _NOT_IN_A_BROWSER,
+    "lighthouse": _SCANNER_AND_BOT + _OTHER_LOCKS + _NOT_IN_A_BROWSER,
+}
+# Put back: what each job installs or runs from inside an otherwise irrelevant directory.
+_JOB_KEEP = {
+    "coverage": (".github/ci-requirements/coverage.in", ".github/ci-requirements/coverage.txt"),
+    "js coverage": ("tools/js_coverage/**",),
+    "lighthouse": ("tools/lhci_serve.py", "tools/lhci-login.js", ".github/lighthouserc.json"),
+}
+
+
+def _glob_re(pattern):
+    """A regex for one glob: `**/` any directories (or none), `**` anything, `*` and `?` within a name."""
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif pattern[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif pattern[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    return re.compile(out + r"\Z")
+
+
+def _matches(path, patterns):
+    return any(_glob_re(p).match(path) for p in patterns)
+
+
+def irrelevant_to(job, path):
+    """Whether `path` cannot change what `job` measures (documentation always cannot)."""
+    if job not in JOB_IRRELEVANT or not isinstance(path, str) or not path:
+        return False
+    if path in _ALWAYS_RUN or path == JOB_WORKFLOW[job] or _matches(path, _JOB_KEEP.get(job, ())):
+        return False
+    if is_doc(path) or (path.startswith(".github/workflows/") and path != JOB_WORKFLOW[job]):
+        return True
+    return _matches(path, JOB_IRRELEVANT[job])
+
+
+def job_skips(job, paths):
+    """Whether `paths` is non-empty and none of them can change what `job` measures."""
+    paths = list(paths)
+    return bool(paths) and all(irrelevant_to(job, p) for p in paths)
 
 
 def is_doc(path):
@@ -159,21 +240,45 @@ def _not_docs(paths):
     return ", ".join(code[:5]) + more
 
 
-def decide(event, repo, pr, head_sha):
-    """Return (docs_only, why)."""
+def _paths_or_why(event, repo, pr, head_sha):
+    """(the pull request's paths, None), or (None, why everything runs)."""
     if event != "pull_request":
-        return False, "not a pull request (%s): everything runs" % (event or "no event")
+        return None, "not a pull request (%s): everything runs" % (event or "no event")
     if not valid(repo, pr, head_sha):
-        return False, "no valid repository, pull request number and head commit: everything runs"
+        return None, "no valid repository, pull request number and head commit: everything runs"
     paths = read_paths(repo, int(pr), head_sha)
     if paths is None:
-        return False, "the pull request's file list could not be established: everything runs"
+        return None, "the pull request's file list could not be established: everything runs"
     if not paths:
-        return False, "the pull request changes no file: everything runs"
+        return None, "the pull request changes no file: everything runs"
+    return paths, None
+
+
+def decide(event, repo, pr, head_sha, paths=None):
+    """Return (docs_only, why). `paths`, when given, is the file list already read."""
+    if paths is None:
+        paths, why = _paths_or_why(event, repo, pr, head_sha)
+        if paths is None:
+            return False, why
     if not docs_only(paths):
         return False, "the pull request changes %s: everything runs" % _not_docs(paths)
     return True, ("DOCS-ONLY: all %d paths the pull request changes are documentation (%s), so this "
                   "job skips its steps that only read code" % (len(paths), ", ".join(DOCS_ONLY_PATTERNS)))
+
+
+def decide_job(job, paths):
+    """Return (skip, why) for `job` over the pull request's `paths` (None: it could not be read)."""
+    if job not in JOB_IRRELEVANT:
+        return False, "no list for job %r: it runs" % job
+    if paths is None:
+        return False, "the pull request's file list could not be established: it runs"
+    hit = sorted({p for p in paths if not irrelevant_to(job, p)})
+    if hit:
+        more = " and %d more" % (len(hit) - 5) if len(hit) > 5 else ""
+        return False, "%s: the pull request changes %s%s, so it runs" % (job, ", ".join(hit[:5]), more)
+    return job_skips(job, paths), ("%s SKIPS: none of the %d paths the pull request changes can change "
+                                   "what it measures (.github/scripts/pr_scope.py JOB_IRRELEVANT)"
+                                   % (job, len(paths)))
 
 
 def main(argv=None):
@@ -183,13 +288,20 @@ def main(argv=None):
     ap.add_argument("--repo", default="")
     ap.add_argument("--pr", default="")
     ap.add_argument("--head-sha", default="")
+    ap.add_argument("--job", default="")
     a = ap.parse_args(argv)
-    only, why = decide(a.event, a.repo, a.pr, a.head_sha)
+    paths, why = _paths_or_why(a.event, a.repo, a.pr, a.head_sha)
+    only, why = (False, why) if paths is None else decide(a.event, a.repo, a.pr, a.head_sha, paths)
+    lines = ["docs_only=%s" % ("true" if only else "false")]
+    print(("::notice::" if only else "") + why)
+    if a.job:
+        skip, jwhy = decide_job(a.job, paths)
+        lines.append("skip=%s" % ("true" if skip else "false"))
+        print(("::notice::" if skip else "") + jwhy)
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as fh:
-            fh.write("docs_only=%s\n" % ("true" if only else "false"))
-    print(("::notice::" if only else "") + why)
+            fh.write("".join(ln + "\n" for ln in lines))
     return 0
 
 
