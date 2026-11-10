@@ -381,10 +381,7 @@ _SHA28 = "a" * 40
 # written here as a '"key": "<20 characters>"' pair, Gitleaks' generic-api-key rule reads a secret.
 _sq28_known = {"key": next(iter(_sq28.KNOWN_OPEN)), "component": "P:.clusterfuzzlite/Dockerfile",
                "line": 10, "severity": "MINOR", "rule": "docker:S6471", "message": "root"}
-# The second known issue, its key taken the same way (the script's own KNOWN_OPEN, second entry).
-_sq28_known2 = {"key": list(_sq28.KNOWN_OPEN)[1], "component": "P:panel/routes/manage_servers.py",
-                "line": 272, "severity": "MAJOR", "rule": "pythonsecurity:S6350", "message": "injection"}
-_SQ28_KNOWN = [_sq28_known, _sq28_known2]
+_SQ28_KNOWN = [_sq28_known]
 _sq28_new = {"key": "NEW1", "component": "P:panel/x.py", "line": 3, "severity": "MAJOR",
              "rule": "python:S1481", "message": "Remove the unused local variable"}
 
@@ -458,11 +455,10 @@ with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
                  _sq28.main(["x", "--branch", "main", "--sha", "nope"]),
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
-check("sonar main gate: ...the known issues are the declined docker:S6471 and the false-positive "
-      "pythonsecurity:S6350, the self-test passes, and a malformed branch or commit is refused",
-      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny", "AaHGLIU1pBbOF45DrbDV"}
-      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"]
-      and "S6350" in _sq28.KNOWN_OPEN["AaHGLIU1pBbOF45DrbDV"] and _sq28_rcs == (0, 2, 2)
+check("sonar main gate: ...the known issue is the declined docker:S6471, the self-test "
+      "passes, and a malformed branch or commit is refused",
+      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny"}
+      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"] and _sq28_rcs == (0, 2, 2)
       and "self-test: " in _sq28_out.getvalue() and "SELF-TEST FAIL" not in _sq28_out.getvalue(),
       repr((_sq28_rcs, _sq28_out.getvalue()[-300:])))
 _smw28 = _read28(".github/workflows/sonar-main-issues.yml")

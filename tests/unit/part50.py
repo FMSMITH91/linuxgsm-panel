@@ -385,10 +385,10 @@ check("docs-only: the PR alert gate passes a docs-only pull request by a step th
 
 # ── No Claude session links in the repository ────────────────────────────────────────────────────
 # A session link is a private conversation; this repository is public. The switch that keeps
-# them out of commits and pull requests (attribution.sessionUrl false) lives in the owner's
-# user-level Claude settings, not in the repository: the owner works only from the dev machine,
-# and asked (2026-11-08) that nothing of Claude Code's be uploaded. So .claude/ is gitignored as
-# a whole, and the walk below still fails the build on any link that reaches a tracked file.
+# them out of commits and pull requests (attribution.sessionUrl false) lives in the user-level
+# Claude settings on the dev machine, not in the repository, and nothing of Claude Code's is
+# uploaded. So .claude/ is gitignored as a whole, and the walk below still fails the build on
+# any link that reaches a tracked file.
 
 with open(os.path.join(_root, ".gitignore"), encoding="utf-8") as _gi50:
     _gi_lines50 = {_l.strip() for _l in _gi50}

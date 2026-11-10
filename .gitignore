@@ -33,8 +33,8 @@ lgsm/backup/
 node_modules/
 
 # ── Claude Code: local only, never uploaded ──
-# Worktrees, local settings and session state. Session links are switched off in the owner's own
-# (user-level) Claude settings, which every session on the dev machine reads.
+# Worktrees, local settings and session state. Session links are switched off in the user-level
+# Claude settings, which every session on the dev machine reads.
 /.claude/
 
 # ── OS / editor cruft ──
