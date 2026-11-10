@@ -381,6 +381,10 @@ _SHA28 = "a" * 40
 # written here as a '"key": "<20 characters>"' pair, Gitleaks' generic-api-key rule reads a secret.
 _sq28_known = {"key": next(iter(_sq28.KNOWN_OPEN)), "component": "P:.clusterfuzzlite/Dockerfile",
                "line": 10, "severity": "MINOR", "rule": "docker:S6471", "message": "root"}
+# The second known issue, its key taken the same way (the script's own KNOWN_OPEN, second entry).
+_sq28_known2 = {"key": list(_sq28.KNOWN_OPEN)[1], "component": "P:panel/routes/manage_servers.py",
+                "line": 272, "severity": "MAJOR", "rule": "pythonsecurity:S6350", "message": "injection"}
+_SQ28_KNOWN = [_sq28_known, _sq28_known2]
 _sq28_new = {"key": "NEW1", "component": "P:panel/x.py", "line": 3, "severity": "MAJOR",
              "rule": "python:S1481", "message": "Remove the unused local variable"}
 
@@ -416,7 +420,7 @@ def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0)
     return problems, judged, calls, sleeps
 
 
-_sq1_ok = _sq28_drive([_sq28_known], analysed_after=2)
+_sq1_ok = _sq28_drive(list(_SQ28_KNOWN), analysed_after=2)
 check("sonar main gate: waits until SonarCloud lists an analysis of this commit, then passes main "
       "holding only the known issue",
       _sq1_ok[0] == [] and _sq1_ok[1] == _SHA28 and len(_sq1_ok[3]) == 2
@@ -428,12 +432,12 @@ check("sonar main gate: waits until SonarCloud lists an analysis of this commit,
 _sq28_out502 = _io28.StringIO()
 with _ctx28.redirect_stdout(_sq28_out502):
     try:
-        _sq1_502 = _sq28_drive([_sq28_known], fail_issues=2)
+        _sq1_502 = _sq28_drive(list(_SQ28_KNOWN), fail_issues=2)
     except OSError as _e28:
         _sq1_502 = ("raised", repr(_e28))
 check("sonar main gate: a 502 on the issue read is retried, then main is judged as usual",
       _sq1_502[0] == [] and _sq1_502[1] == _SHA28 and len(_sq1_502[3]) == 2, repr(_sq1_502))
-_sq1_new = _sq28_drive([_sq28_known, _sq28_new])
+_sq1_new = _sq28_drive(_SQ28_KNOWN + [_sq28_new])
 check("sonar main gate: ...an open issue that is not known fails, named with its file, line, rule "
       "and key",
       _sq1_new[0] == ["panel/x.py:3 MAJOR python:S1481: Remove the unused local variable [NEW1]"],
@@ -442,10 +446,10 @@ _sq1_empty = _sq28_drive([])
 check("sonar main gate: ...the known issue missing fails (an empty read is not a clean main)",
       any("AaDejKLMfWz637hiAQny" in _p and "not in SonarCloud's list" in _p for _p in _sq1_empty[0]),
       repr(_sq1_empty[0]))
-_sq1_short = _sq28_drive([_sq28_known], total=5)
+_sq1_short = _sq28_drive(list(_SQ28_KNOWN), total=5)
 check("sonar main gate: ...a list shorter than SonarCloud's own total fails",
       any("counts 5 open issue(s)" in _p for _p in _sq1_short[0]), repr(_sq1_short[0]))
-_sq1_sched = _sq28_drive([_sq28_known], sha=None)
+_sq1_sched = _sq28_drive(list(_SQ28_KNOWN), sha=None)
 check("sonar main gate: ...with no commit given (the schedule) it judges the analysed commit at once",
       _sq1_sched[0] == [] and _sq1_sched[1] == _SHA28 and _sq1_sched[3] == []
       and not any(_c[0] == "project_analyses/search" for _c in _sq1_sched[2]), repr(_sq1_sched))
@@ -454,10 +458,11 @@ with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
                  _sq28.main(["x", "--branch", "main", "--sha", "nope"]),
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
-check("sonar main gate: ...the known issue is the declined docker:S6471, the self-test "
-      "passes, and a malformed branch or commit is refused",
-      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny"}
-      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"] and _sq28_rcs == (0, 2, 2)
+check("sonar main gate: ...the known issues are the declined docker:S6471 and the false-positive "
+      "pythonsecurity:S6350, the self-test passes, and a malformed branch or commit is refused",
+      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny", "AaHGLIU1pBbOF45DrbDV"}
+      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"]
+      and "S6350" in _sq28.KNOWN_OPEN["AaHGLIU1pBbOF45DrbDV"] and _sq28_rcs == (0, 2, 2)
       and "self-test: " in _sq28_out.getvalue() and "SELF-TEST FAIL" not in _sq28_out.getvalue(),
       repr((_sq28_rcs, _sq28_out.getvalue()[-300:])))
 _smw28 = _read28(".github/workflows/sonar-main-issues.yml")
