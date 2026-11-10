@@ -83,7 +83,7 @@ _ALWAYS_RUN = (".github/scripts/pr_scope.py", ".github/scripts/reuse_pr_result.p
 _SCANNER_AND_BOT = (".codacy.yaml", ".prospector.yaml", ".semgrepignore", ".sonarcloud.properties",
                     ".github/gitleaks.toml", ".github/codeql/**", ".github/actionlint.yaml",
                     ".github/codacy-accepted-errors.json", ".github/dependabot.yml",
-                    ".github/renovate.json", ".clusterfuzzlite/**")
+                    ".github/renovate.json", ".github/lighthouserc.json", ".clusterfuzzlite/**")
 # Lockfiles of tools the measuring jobs do not install (each job's own is put back by _JOB_KEEP).
 _OTHER_LOCKS = (".github/ci-requirements/**", ".github/ci-requirements-checks/**",
                 "tools/gamedig/package.json", "tools/gamedig/package-lock.json",
@@ -134,8 +134,9 @@ def irrelevant_to(job, path):
     """Whether `path` cannot change what `job` measures (documentation always cannot)."""
     if job not in JOB_IRRELEVANT or not isinstance(path, str) or not path:
         return False
-    if path in _ALWAYS_RUN or path == JOB_WORKFLOW[job] or _matches(path, _JOB_KEEP.get(job, ())):
+    if path in _ALWAYS_RUN or _matches(path, _JOB_KEEP.get(job, ())):
         return False
+    # Every workflow but the job's own: that one decides what the job does.
     if is_doc(path) or (path.startswith(".github/workflows/") and path != JOB_WORKFLOW[job]):
         return True
     return _matches(path, JOB_IRRELEVANT[job])

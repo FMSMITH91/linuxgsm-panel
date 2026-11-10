@@ -323,7 +323,7 @@ _ON_REUSE153 = {
         "steps.scope.outputs.docs_only == 'true' && matrix.docs",
     ("ci.yml", "coverage", "Take the report the pull request's run made on the same tree"):
         _RUN153 + " && steps.reuse.outputs.reuse == 'true'",
-    ("ci.yml", "coverage", "Record that a documentation-only pull request measured nothing"):
+    ("ci.yml", "coverage", "Record that this pull request changed nothing coverage measures"):
         "steps.scope.outputs.docs_only == 'true'",
     ("ci.yml", "coverage", "Upload the report"): "",
     ("ci.yml", "js-coverage", "Take the report the pull request's run made on the same tree"):
@@ -390,6 +390,10 @@ def _wiring153(wf, job, name, work):
     text = _code29(_job29(_wf29(wf), job))
     if not text:
         return ["no such job"]
+    # The jobs that skip on their own list gate on `skip` where the rest gate on `docs_only`
+    # (pr_scope.py --job; part169 holds that they do): judged here as the same wiring.
+    if (wf, job) in {("ci.yml", "coverage"), ("ci.yml", "js-coverage"), ("lighthouse.yml", "lighthouse")}:
+        text = text.replace("steps.scope.outputs.skip", "steps.scope.outputs.docs_only")
     bad = _head_bad153(text, name)
     steps = _steps29(text)
     names = [_sname153(s) for s in steps]
