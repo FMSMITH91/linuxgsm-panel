@@ -166,12 +166,19 @@ def mcl_command(which, action, value="", reason=""):
         return None, why
     _path, add_verb, remove_verb = _MCL_LISTS[which]
     line = "%s %s" % (add_verb if action == "add" else remove_verb, target)
-    if action == "add" and which in ("bans", "ipbans") and reason:
-        reason, why = mcl_reason(reason)
-        if why:
-            return None, why
-        line += " " + reason
+    if action == "add" and which in ("bans", "ipbans"):
+        return _mcl_with_reason(line, reason)
     return line, None
+
+
+def _mcl_with_reason(line, reason):
+    """(a ban line with its checked reason after it, None), or (None, why the reason is refused)."""
+    if not reason:
+        return line, None
+    reason, why = mcl_reason(reason)
+    if why:
+        return None, why
+    return line + " " + reason, None
 
 
 def _mcl_list_reply(gs, which):
