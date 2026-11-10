@@ -835,8 +835,11 @@ def _dropin_path_ok(path):
 
 
 def _panel_file(panel_dir, name):
-    """install.sh's panel_file: panel/install/<name> where the install has it, <name> at its root
-    where it does not (the root clean-up moves the entry points in its second release)."""
+    """Where install.sh's panel_file finds `name` in the install at `panel_dir`.
+
+    panel/install/<name> where the install has it, <name> at its root where it does not: the root
+    clean-up moves the entry points there in its second release.
+    """
     moved = panel_dir + "/panel/install/" + name
     return moved if os.path.isfile(moved) else panel_dir + "/" + name
 

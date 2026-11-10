@@ -331,8 +331,10 @@ from unit.part06 import _inst_shfn as _inst_shfn156  # noqa: E402
 
 
 def _shfn156(name):
-    """One shell function out of install.sh, whole, with install.sh's file-placement helpers ahead of
-    it when it uses them (part06 _inst_shfn)."""
+    """One shell function out of install.sh, whole.
+
+    install.sh's file-placement helpers come ahead of it when it uses them (part06 _inst_shfn).
+    """
     return _inst_shfn156(name)
 
 

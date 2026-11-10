@@ -1,5 +1,6 @@
-"""Root clean-up, release 1: every reader of a root file the next release moves into panel/install/
-finds it there first and at the root second.
+"""Root clean-up, release 1: readers find a moved root file in panel/install/, else at the root.
+
+Every reader of a root file the next release moves into panel/install/ looks there first.
 
 An installed panel's update runs the installer it already has, root-owned. That copy reads
 requirements.txt, app.py, release-signers, recover.sh, uninstall.sh and db_maintenance.py at fixed
@@ -25,8 +26,7 @@ _SB166 = _tf166.mkdtemp(prefix="p166-")
 
 
 def _bash166(script, env=None, cwd=None):
-    # nosec B603 B607 - bash over this part's own fixture script
-    return _sp166.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=cwd,
+    return _sp166.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=cwd,  # nosec B603 B607 - bash over this part's own fixture script
                       env=dict(os.environ, **(env or {})), check=False)
 
 
@@ -93,7 +93,7 @@ def _key_repo166(tag, path):
     with open(os.path.join(d, path), "w", encoding="utf-8") as fh:
         fh.write("ssh-ed25519 KEY-AT-%s\n" % path)
     for argv in (["init", "-q"], ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "k"]):
-        _sp166.run(["git", "-C", d] + argv, capture_output=True, env=dict(os.environ, **env), check=True)  # nosec B603 B607
+        _sp166.run(["git", "-C", d] + argv, capture_output=True, env=dict(os.environ, **env), check=True)  # nosec B603 B607 - git over this part's own temp repo
     return d
 
 
