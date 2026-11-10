@@ -14,6 +14,10 @@ compares git commits, not this file.
 
 ### Added
 
+- **Updates no longer skip a release the next one depends on.** A panel that is several releases
+  behind first installs any release listed in `panel/install/update-stops`, then the newest one on
+  its next update. The Update card offers each in turn. If your panel's updates keep rolling back
+  to the same version, the README's Updating section has the one command that fixes it.
 - **See what an update brings before you install it.** When an update is available, the
   Maintenance tab's Update card lists the changelog entries it adds, the same ones "What's new"
   shows afterwards; tap one to read it. The commits are still there, folded underneath.

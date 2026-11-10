@@ -44,13 +44,22 @@ Then open **the link the installer prints at the end** — `https://your-server:
 ### Updating
 
 - **In the panel:** *Panel Server → Update* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
-- **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate.
+- **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate (or first a release it may not skip, below).
 
 Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
 
 **Only signed releases are installed.** The installer already on the host moves the panel only to a commit signed with the project's release SSH key, which is kept off GitHub. Anything else is held with "Not updated: held at …" and the reason. The host checks against its own copy of the public key (`release-signers`), never the copy inside the update. Installing with `curl … | bash` runs the installer from GitHub, so it is not covered by the signature: use it only for a first install, which has no key to check against yet; see [SECURITY.md](../.github/SECURITY.md) for what to check after the first update. If a host says it has no release key, run the installer by hand once over SSH with `PANEL_ALLOW_UNSIGNED_UPDATE=1`: `cd / && sudo PANEL_ALLOW_UNSIGNED_UPDATE=1 bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `PANEL_ALLOW_UNSIGNED_UPDATE=1 bash ~/linuxgsm-panel/install.sh` (per-user).
 
 **Versions are dates**: the date of the commit, in UTC, shown with the short commit (`2026.9.26 · a1b2c3d` in the footer).
+
+**Some releases cannot be skipped.** A release that the next one depends on (one that teaches the updater something) is listed in `panel/install/update-stops`. A panel further behind installs that release first, and the newest one on its next update: the Update card simply offers an update again.
+
+**If updates keep rolling back to the same version:** the panel's updater predates the 2026.11.10 root clean-up, which moved the files it reads into `panel/install/`. Run it once over SSH with the release that taught it the new place, then update as usual:
+
+```bash
+cd / && sudo PANEL_UPDATE_REF=41fa75df02363e2808192d1cfc26cd772757721d bash /usr/local/lib/linuxgsm-panel/install.sh   # root install
+PANEL_UPDATE_REF=41fa75df02363e2808192d1cfc26cd772757721d bash ~/linuxgsm-panel/install.sh                           # per-user
+```
 
 ## Uninstall
 

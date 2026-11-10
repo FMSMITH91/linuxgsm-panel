@@ -2168,6 +2168,63 @@ def _r17a_unread_status(cur_ver, cur_sha, branch):
             "message": "Couldn't read how far behind the update source this panel is."}
 
 
+# ─── Required stops: releases an update may not skip (install.sh _apply_update_stop) ─────────
+# The same rule as the installer's, so the card offers what the installer would install: the oldest
+# stop listed in the target commit's panel/install/update-stops that lies strictly between HEAD and
+# that target, on the branch's first-parent line. The newest release is offered after it.
+_UPDATE_STOPS = INSTALL_REL + "/update-stops"
+
+
+def _stop_ids(commit):
+    """The full commit ids `commit`'s list of required stops names, in its order ([] when none)."""
+    out, _, rc = _git(["cat-file", "blob", commit + ":" + _UPDATE_STOPS], timeout=10)
+    if rc != 0:
+        return []
+    return [w[0] for w in (ln.split() for ln in out.splitlines())
+            if w and re.fullmatch(r"[0-9a-f]{40}", w[0])]
+
+
+def _is_ancestor(older, newer):
+    _, _, rc = _git(["merge-base", "--is-ancestor", older, newer], timeout=10)
+    return rc == 0
+
+
+def _update_stop(target_sha, ref):
+    """The oldest required stop between HEAD and `target_sha` on `ref`'s first-parent line, or None."""
+    head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
+    head = head.strip()
+    cands = [s for s in _stop_ids(target_sha) if hrc == 0 and s not in (head, target_sha)
+             and _is_ancestor(head, s) and _is_ancestor(s, target_sha)]
+    if not cands:
+        return None
+    line, _, lrc = _git(["rev-list", "--first-parent", ref], timeout=30)
+    on_line = set(line.split()) if lrc == 0 else set()
+    stop = None
+    for s in (c for c in cands if c in on_line):
+        if stop is None or _is_ancestor(s, stop):
+            stop = s
+    return stop
+
+
+def _take_update_stop(target_sha, target_state, ref, signed):
+    """(target, CI state, commits behind it) with any required stop applied.
+
+    The stop replaces `target_sha` when one lies between HEAD and it (behind is then counted to the
+    stop). Target None means the stop cannot be installed yet (not signed, or its checks are not
+    passing), which the caller offers as no update: the installer would not move past the stop.
+    """
+    stop = _update_stop(target_sha, ref)
+    if stop is None:
+        return target_sha, target_state, None
+    if not signed(stop):
+        return None, "unsigned", None
+    state = _remote_ci_state(stop)
+    if state != "passing":
+        return None, state, None
+    n, _, rc = _git(["rev-list", "--first-parent", "--count", "HEAD.." + stop])
+    return stop, state, int(n.strip()) if rc == 0 and n.strip().isdecimal() else None
+
+
 def _compute_update_status():
     cur_ver = panel_version()
     if not _is_git_checkout():
@@ -2388,7 +2445,15 @@ def _compute_update_status():
         return out
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
+    # A required stop between HEAD and it is offered first, as the installer would install it.
+    stop_sha, target_state, stop_behind = _take_update_stop(target_sha, target_state, ref, signed)
+    if stop_sha is None:
+        return {**base, "update_available": False, "ci_state": target_state, "behind": behind_n,
+                "behind_tip": behind_n, "target_sha": target_sha,
+                "remote_version": version_for_commit(ref) or "?", "changes": []}
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
+    if stop_sha != target_sha:
+        target_sha, behind_target = stop_sha, stop_behind or behind_target
     # Don't nag if everything between here and the verified target is docs/CI/tests only — those
     # changes don't affect the running panel. (A later commit with real code will move the target
     # up and re-trigger the badge once it passes CI.) See _no_runtime_update.

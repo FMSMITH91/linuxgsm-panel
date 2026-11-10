@@ -34,6 +34,8 @@ runtime panel/install/requirements-bootstrap.txt
 # The release key an update is checked against (install.sh _release_key_file). Installed root-owned
 # beside the helper on a root install, and read from the installed commit on a per-user one.
 runtime panel/install/release-signers
+# The releases an update may not skip (install.sh _apply_update_stop), read from the commit offered.
+runtime panel/install/update-stops
 # Inside tools/, which is otherwise noise.
 #
 # tools/panel-helper is the root-owned end of the sudo boundary. It lives outside the panel's

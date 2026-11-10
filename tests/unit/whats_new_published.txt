@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+49f28f17 Updates no longer skip a release the next one depends on.
 0d9bc1de The files the installer reads now live in panel/install/.
 e2173cd9 A proxy's address can no longer add a line to the panel's log.
 d50aec72 A wipe whose server fails to start afterwards counts as done.

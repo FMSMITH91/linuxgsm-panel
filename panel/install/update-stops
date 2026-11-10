@@ -1,0 +1,13 @@
+# Releases no update may skip. A panel behind one installs it first, and the newest release on its
+# next update, so each step runs the installer the step before it placed (install.sh
+# _apply_update_stop; the Update card offers the same commit, system_ops._update_stop).
+#
+# Add a release here when the NEXT release depends on something it teaches the installed updater,
+# the recovery command or the helper, which run from root-owned copies a release replaces only once
+# it is installed. One line per release: its full commit id on main, then why. It must be a signed
+# release (tools/sign-release.sh), or no panel will move to it. Read from the commit an update would
+# install, so a stop added later counts for every panel whose installer reads this file.
+#
+# Only an updater that has this feature follows the list: a panel on an older release goes straight
+# to the newest one, as before. A release added here does nothing for panels already past it.
+41fa75df02363e2808192d1cfc26cd772757721d  root clean-up, release 1: the updater learns panel/install/ before release 2 moves the files there
