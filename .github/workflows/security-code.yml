@@ -307,7 +307,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Bandit results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -487,7 +487,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Semgrep results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: semgrep.sarif
           category: semgrep
