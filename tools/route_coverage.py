@@ -133,6 +133,7 @@ def _executed(cov_files, relpath):
 def _report(work, cov_path):
     """Import the app INSIDE the throwaway tree — create_app() creates data/ wherever it runs."""
     sys.path.insert(0, work)
+    sys.path.insert(1, os.path.join(work, "panel", "install"))   # app.py
     os.chdir(work)
     shutil.rmtree(os.path.join(work, "data"), ignore_errors=True)
     with open(cov_path, encoding="utf-8") as fh:

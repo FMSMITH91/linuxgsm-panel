@@ -154,7 +154,9 @@ if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "$(manage_of "${PANEL_DIR}")" ]]; then
         [[ "${conf_dir}" = "${PANEL_DIR}" ]] || SVC_USER=""
         PANEL_DIR="${conf_dir}"
     else
-        for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}" "${selfdir%/panel/install}"; do
+        # The checkout above panel/install/ BEFORE the script's own directory: run as the checkout's
+        # copy, ${selfdir} is <checkout>/panel/install, which holds manage.py itself but no venv/.
+        for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir%/panel/install}" "${selfdir}"; do
             if [[ -n "${d}" ]] && [[ -f "$(manage_of "${d}")" ]]; then
                 # The account came from the install this block is DISCARDING — a unit file's User=,
                 # or the owner of a directory that turned out to have no manage.py. Clearing it lets

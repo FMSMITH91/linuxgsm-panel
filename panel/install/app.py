@@ -36,6 +36,12 @@ Routes:
 import logging
 import os
 import re
+import sys
+
+# This file lives in panel/install/, and `python panel/install/app.py` puts panel/install/ first on
+# sys.path, not the checkout, so the panel package two levels up is not importable on its own.
+_CHECKOUT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _CHECKOUT)
 import threading
 import time
 import gzip as _gzip
@@ -96,8 +102,7 @@ green_write.install()
 from panel.core.clock import utcnow
 
 import secrets
-from flask import (Flask, current_app, g, has_request_context, jsonify, redirect, request, session,
-                   url_for)
+from flask import Flask, current_app, g, has_request_context, jsonify, redirect, request, session, url_for
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
@@ -131,8 +136,7 @@ from panel.security import banlist as _banlist
 from panel.core.validation import (MAX_PORT, MIN_PORT, _port_or, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none, whitelist_without)
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
-from panel.core.http import (_r23c_error_json, _wants_json, http_error_page, http_error_sentence,
-                              unreachable_error)
+from panel.core.http import _r23c_error_json, _wants_json, http_error_page, http_error_sentence, unreachable_error
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
@@ -145,8 +149,7 @@ from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupSta
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
-    remote_set_fail2ban_ignoreip, F2B_NOT_INSTALLED,
-    ensure_node_tools_cron, ensure_persistent_bans)
+    remote_set_fail2ban_ignoreip, F2B_NOT_INSTALLED, ensure_node_tools_cron, ensure_persistent_bans)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -1589,7 +1592,9 @@ class _R17cRowIdConverter(IntegerConverter):
 def create_app():
     # The UI lives in the panel package (panel/templates, panel/static), served at the same /static
     # URL it always was, so a cached page, a bookmark and asset_url's hashes keep their paths.
-    app = Flask(__name__, template_folder="panel/templates", static_folder="panel/static", static_url_path="/static")
+    # root_path: Flask would resolve the folders against this module's own directory, panel/install/.
+    # The URL is /static, from the folder's name.
+    app = Flask(__name__, root_path=_CHECKOUT, template_folder="panel/templates", static_folder="panel/static")
     cfg = load_config()
     # The commit this process loaded at start, for the debug report's header (R4). app.config, not
     # the module global alone: app.py runs as __main__ while the routes import a second copy.
@@ -3393,8 +3398,7 @@ if __name__ == "__main__":
     # /api/server/<id>/install-status claimed in app's, so both ran `details` (a full `du`) at once,
     # and the bind boot resolved was resolved again by the Tailscale routes. Registered before
     # create_app imports any route module, so every one of them gets this copy.
-    import sys as _sys
-    _sys.modules.setdefault("app", _sys.modules["__main__"])
+    sys.modules.setdefault("app", sys.modules["__main__"])
     app = create_app()
     cfg = load_config()
     # _r15a_cfg_int, as every other reader of this key does (firewall, the change-port form): a

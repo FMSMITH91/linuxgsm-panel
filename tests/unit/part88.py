@@ -435,7 +435,7 @@ check("panel-helper: ...and a real data/ is restored from and its staging direct
 # ════════════════════════════════════════════════════════════════════════════════════════════
 # The boot block runs only as __main__ (it binds a socket), so the check reads the one line that
 # decides what reaches socketio.run, and runs the reader it names on the hand-edited value.
-_APP88 = _read88("app.py")
+_APP88 = _read88("panel", "install", "app.py")
 _main88 = _APP88[_APP88.find('\nif __name__ == "__main__":'):]
 _bootport88 = [ln.strip() for ln in _main88.splitlines() if ln.strip().startswith("port = ")]
 check("app.py: the boot reads config.json's port as a number (a hand-edited \"5000\" binds 5000; "

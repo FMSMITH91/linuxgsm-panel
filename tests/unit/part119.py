@@ -115,7 +115,7 @@ def _f2b_boot119():
     check("login jail: the boot self-heal (no bind in config.json, boot resolved loopback behind Serve) writes "
           "the all-ports jail, as the whitelist edit does (it read no boot bind and banned the web port only)",
           got == {"boot resolved loopback": [True], "boot public": [False]}, repr(got))
-    text = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+    text = open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read()
     main = text[text.index('\nif __name__ == "__main__":'):]
     rec, start = main.find('app.config["BOOT_BIND"] = host'), main.find("target=_r34a_f2b_autostart")
     check("login jail: ...and app.py records BOOT_BIND before it starts the self-heal's thread (it was set "
@@ -302,7 +302,7 @@ def _install_uptodate119():
 
 # ── 6. uninstall.sh: the recorded port when config.json's cannot be read ───────────────────────────
 def _uninstall119():
-    text = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+    text = open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
     rec = text[text.index('_R32A_REC_PORT=""'):text.index("\n# ── Stop + remove the service")]
     warn = text[text.index('if [[ -z "${PANEL_PORT}" ]] && command -v ufw'):
                 text.index('_r32a_cfg_port="${PANEL_PORT}"')]

@@ -33,6 +33,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "panel", "install"))   # app.py, manage.py, db_maintenance.py
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed before anything that could block;
 # tests/ is on the path only for the import.
@@ -717,7 +718,7 @@ def _check_no_port_parsed_with_int_or():
     _root = _pl.Path(__file__).resolve().parent.parent
     offenders = []
     _int_or_sites = 0
-    for py in sorted((_root / "panel").rglob("*.py")) + [_root / "app.py"]:
+    for py in sorted((_root / "panel").rglob("*.py")) + [_root / "panel" / "install" / "app.py"]:
         _text = py.read_text(encoding="utf-8")
         _int_or_sites += sum(1 for node in ast.walk(ast.parse(_text)) if isinstance(node, ast.Call)
                              and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or")

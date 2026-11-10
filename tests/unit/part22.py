@@ -1273,7 +1273,7 @@ def _preformatted_log_calls():
     bad = []
     methods = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
     root = str(_ROOT22)
-    files = [os.path.join(root, "app.py")]
+    files = []      # panel/install/app.py is under panel/
     for dp, _dn, fn in os.walk(os.path.join(root, "panel")):
         files += [os.path.join(dp, f) for f in fn if f.endswith(".py")]
     for path in files:
@@ -1314,7 +1314,7 @@ check("R24: ...the gate recognises one (positive control)", _is_prebuilt_log(
 
 # ══ app.py: the boot record (R4, R19, R20) ══════════════════════════════════════════════════════
 def _create_app_assigns(key):
-    with open(os.path.join(str(_ROOT22), "app.py"), encoding="utf-8") as fh:
+    with open(os.path.join(str(_ROOT22), "panel", "install", "app.py"), encoding="utf-8") as fh:
         tree = _ast22.parse(fh.read())
     fn = next(n for n in tree.body if isinstance(n, _ast22.FunctionDef) and n.name == "create_app")
     src = _ast22.unparse(fn)
@@ -1325,7 +1325,7 @@ _ca22 = _create_app_assigns("PANEL_COMMIT")
 check("R4: create_app puts PANEL_COMMIT into app.config, and calls the debug-report hooks",
       _ca22[0] and "app.config['PANEL_COMMIT'] = PANEL_COMMIT" in _ca22[1]
       and "_attach_debug_logging(app, cfg)" in _ca22[1] and "_start_hub_lag_watch()" in _ca22[1])
-with open(os.path.join(str(_ROOT22), "app.py"), encoding="utf-8") as _fh22:
+with open(os.path.join(str(_ROOT22), "panel", "install", "app.py"), encoding="utf-8") as _fh22:
     _main22 = _fh22.read().split('if __name__ == "__main__":', 1)[1]
 check("R19/R20: the __main__ block records the bind and port, and goes through the recording helpers",
       "app.config[\"BOOT_BIND\"] = host" in _main22 and "app.config[\"BOOT_PORT\"] = port" in _main22

@@ -63,7 +63,7 @@ check("recovery CLI: with manage.py's flag set, neither a supervised ticker nor 
       "is started (and without it both still are)",
       _w51_on == [] and _w51_off == ["supervise-p51-worker", "hub-lag-watch"],
       repr((_w51_on, _w51_off)))
-with open(os.path.join(_root, "manage.py"), encoding="utf-8") as _f51:
+with open(os.path.join(_root, "panel", "install", "manage.py"), encoding="utf-8") as _f51:
     _msrc51 = _f51.read()
 check("recovery CLI: manage.py sets the no-workers flag BEFORE it builds the app",
       "os.environ[NO_WORKERS_ENV] = \"1\"" in _msrc51

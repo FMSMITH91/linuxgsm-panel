@@ -87,7 +87,7 @@ for _junk in (None, 0, 12, [], {}):
 # alone read zero flash() calls. The count of flash( calls read is the floor that says it read any.
 import re as _re_fl
 _leaky, _fl_calls = [], 0
-for _fl_rel in ["app.py"] + sorted(os.path.relpath(os.path.join(_d, _f), _UNIT_ROOT)
+for _fl_rel in sorted(os.path.relpath(os.path.join(_d, _f), _UNIT_ROOT)   # panel/install/app.py too
                                    for _d, _s, _fs in os.walk(os.path.join(_UNIT_ROOT, "panel"))
                                    for _f in _fs if _f.endswith(".py")):
     _app_src = open(os.path.join(_UNIT_ROOT, _fl_rel), encoding="utf-8").read()
@@ -606,7 +606,7 @@ _r31d_exported = _r31d_pkg_exported({_r31d_test_module(_f): _smg_ast.parse(_s)
 # same (review 1017c: 17 `_p9_patch(_p9_sd._sm, …)` sites went unseen, since only a bare name was read).
 _R32D_PKG_ATTRS = set().union(*_r31d_exported.values(), *(
     _r30d_pkg_aliases(_smg_ast.parse(open(_p, encoding="utf-8").read()))
-    for _p in [os.path.join(_root, "app.py")]
+    for _p in [os.path.join(_root, "panel", "install", "app.py")]
     + _smg_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
     + _smg_glob.glob(os.path.join(_root, "tools", "*.py"))))
 for _f in _r30d_smg_files:
@@ -731,11 +731,13 @@ def _nsr_subprocess_importers():
     import importlib as _il
     out = []
     files = _smg_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
-    for path in sorted(files) + [os.path.join(_root, "db_maintenance.py")]:
+    for path in sorted(files):
         tree = _smg_ast.parse(open(path, encoding="utf-8").read())
         if any(isinstance(n, _smg_ast.Import) and any(a.name == "subprocess" and not a.asname
                                                        for a in n.names) for n in tree.body):
             rel = os.path.relpath(path, _root)[:-3].replace(os.sep, ".")
+            # panel/install/ is not a package: its modules are imported by their own names.
+            rel = rel[len("panel.install."):] if rel.startswith("panel.install.") else rel
             out.append(_il.import_module(rel[:-len(".__init__")] if rel.endswith(".__init__")
                                          else rel))
     return out
@@ -1464,7 +1466,7 @@ _probe = (
     "heard=[];"
     "warnings.showwarning=lambda m,c,f,l,file=None,line=None: heard.append(c.__name__);"
     "warnings.warn('probe', DeprecationWarning);"
-    "print('HEARD' if heard else 'DEAF')" % _root
+    "print('HEARD' if heard else 'DEAF')" % os.path.join(_root, "panel", "install")
 )
 # skip(), not check(..., True, "skipped: ..."). The handler set _heard = True on ANY exception —
 # including the 120s TimeoutExpired and any OSError — which is verbatim the pattern skip()'s own
@@ -1485,7 +1487,7 @@ else:
     skip("importing app leaves -W always::DeprecationWarning working", _detail)
 
 # eventlet's own banner IS silenced now — by message, since it is not a DeprecationWarning at all.
-_quiet = _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import app" % _root],
+_quiet = _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import app" % os.path.join(_root, "panel", "install")],
                  capture_output=True, text=True, timeout=120, cwd=_root)
 check("eventlet's deprecation banner no longer prints on every start",
       "Eventlet is deprecated" not in _quiet.stderr, _quiet.stderr.strip()[:120])
@@ -3505,7 +3507,7 @@ check("node-tools cron: root re-runs install-gamedig.sh from GAMEDIG_DIR, guarde
 # rendering writes them there, the cron runs the script from there, and uninstall.sh removes only
 # links pointing there. A copy that drifted would leave a host whose cron runs nothing.
 _ntc_hd = _re_ntc.search(r'^HELPER_DIR="([^"]+)"$', _ntc_sh, _re_ntc.M)
-_ntc_un = open(os.path.join(_UNIT_ROOT, "uninstall.sh"), encoding="utf-8").read()
+_ntc_un = open(os.path.join(_UNIT_ROOT, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 check("gamedig: install.sh, privileged.py, the cron and uninstall.sh name ONE directory",
       _ntc_hd is not None and '\nGAMEDIG_DIR="${HELPER_DIR}/gamedig"\n' in _ntc_sh
       and _ntc_hd.group(1) + "/gamedig" == _priv.GAMEDIG_DIR
@@ -5016,7 +5018,7 @@ _SCAN_MODULES = sorted(
        if "__pycache__" not in _dp
        for f in _fs if f.endswith(".py") and not f.startswith("__")]
 )
-assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager", "_core.py") in _SCAN_MODULES, \
+assert os.path.join("panel", "install", "app.py") in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager", "_core.py") in _SCAN_MODULES, \
     "module discovery is looking at the wrong directory: %s" % _SCAN_MODULES[:5]
 # The two lists are kept APART on purpose, and which one the orphan check consults is the whole
 # point. _OS_UPDATE_LOG survived this gate all the way onto main and turned the branch red via
@@ -5138,7 +5140,7 @@ _rebinds = []
 _PS_IMPORTERS = [f for f in _SCAN_MODULES if not f.endswith("panel_state.py")
                  and "panel_state" in open(os.path.join(_root, f), encoding="utf-8").read()]
 check("panel_state rebind gate: it reads every module that names panel_state",
-      len(_PS_IMPORTERS) >= 10 and "app.py" in _PS_IMPORTERS
+      len(_PS_IMPORTERS) >= 10 and os.path.join("panel", "install", "app.py") in _PS_IMPORTERS
       and os.path.join("panel", "services", "monitoring.py") in _PS_IMPORTERS,
       repr(_PS_IMPORTERS))
 for _f in _PS_IMPORTERS + [f for f in _SCAN_TEST_USERS]:
@@ -5475,7 +5477,7 @@ def _r20d_imported(node):
     return [node.module] if isinstance(node, _ast_mp.ImportFrom) else []
 
 
-for _f in ("app.py", os.path.join("tools", "perf_bench.py")):
+for _f in (os.path.join("panel", "install", "app.py"), os.path.join("tools", "perf_bench.py")):
     _mp_src = open(os.path.join(_root, _f), encoding="utf-8").read()
     if "monkey_patch" not in _mp_src:
         continue
@@ -5494,9 +5496,11 @@ check("...a multi-name import is read by every name it imports (control)",
 # before importing any other modules" on every start under 3.14 (Ubuntu 26.04), a fix nothing can
 # apply. Run app.py's own start-up, up to and including the patch, in a fresh interpreter.
 import subprocess as _ev_sp
-_ev_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_ev_src = open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read()
 _ev_end = "del _w, _dd_del, _dd_rebind\n"
-_ev_pro = _ev_src[:_ev_src.index(_ev_end) + len(_ev_end)] if _ev_end in _ev_src else ""
+# With app.py's own __file__: its first lines put the checkout on sys.path from it.
+_ev_pro = ("__file__ = %r\n" % os.path.join(_root, "panel", "install", "app.py")
+           + _ev_src[:_ev_src.index(_ev_end) + len(_ev_end)]) if _ev_end in _ev_src else ""
 _ev_tail = ("\n_dd = getattr(threading, '_DeleteDummyThreadOnDel', None)\n"
             "print('HAS_DD=%s' % (_dd is not None))\n"
             "print('SAME=%s' % (_dd is None or (_dd.__del__.__defaults__[0]"
@@ -6629,7 +6633,8 @@ for _dp, _dn, _fn in _r21d_uc_walk:
                 _uc_sites.append("%s:%d" % (os.path.relpath(_f, _root), _i))
 check("create_game_user: nothing calls the bare user-create verb any more (the package and app.py, "
       "manage.py beside it)",
-      not _uc_sites and any(_d == _root and "app.py" in _f for _d, _dn, _f in _r21d_uc_walk),
+      not _uc_sites and any(_d == os.path.join(_root, "panel", "install") and "app.py" in _f
+                            for _d, _dn, _f in _r21d_uc_walk),
       "still calling it: %s" % _uc_sites)
 check("create_game_user: ...a call is read in either quote (control)",
       [bool(_R20D_UC.search(_c)) for _c in ("run('user-create')", 'run("user-create")',
@@ -7652,7 +7657,7 @@ finally:
 
 # The boot-time jail sync (app._r34a_f2b_autostart, started from __main__) is pinned by what it CALLS:
 # the guarded helper, and never ensure_panel_fail2ban directly (which rewrote the jail from defaults).
-_cu_src = open(os.path.join(_UNIT_ROOT, "app.py"), encoding="utf-8").read()
+_cu_src = open(os.path.join(_UNIT_ROOT, "panel", "install", "app.py"), encoding="utf-8").read()
 _cu_fn = next((n for n in _cu_ast.walk(_cu_ast.parse(_cu_src))
                if isinstance(n, _cu_ast.FunctionDef) and n.name == "_r34a_f2b_autostart"), None)
 _cu_calls = set()
@@ -8107,7 +8112,7 @@ try:
     os.makedirs(os.path.join(_rc_root, "emptyhomes"))
     _rc_helper = os.path.join(_rc_root, "usr-local-lib")      # stands in for HELPER_DIR
     os.makedirs(_rc_helper)
-    _shutil.copy(os.path.join(_root, "recover.sh"), os.path.join(_rc_helper, "recover.sh"))
+    _shutil.copy(os.path.join(_root, "panel", "install", "recover.sh"), os.path.join(_rc_helper, "recover.sh"))
     _rc_conf = os.path.join(_rc_root, "panel.conf")
     with open(_rc_conf, "w", encoding="utf-8") as _fh:        # exactly what install.sh writes
         _fh.write("db_path=%s/data/panel.db\ndata_dir=%s/data\npanel_dir=%s\n"
@@ -8294,7 +8299,7 @@ try:
     # host-shared pieces, so pointing it at a file that never exists makes every uninstall think
     # it is the only one and take them.
     try:
-        _dp_uninst = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+        _dp_uninst = open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
     except OSError:
         _dp_uninst = ""
     _dp_um = _re.findall(r'^[ \t]*(SHARED_CONF="[^"\n]*")[ \t]*$', _dp_uninst, _re.M)

@@ -238,10 +238,10 @@ def _tops30(dist):
 
 def _first_party30(top):
     return any(os.path.exists(os.path.join(_root, d, top + ext))
-               for d in ("", "tests", "tools") for ext in (".py", os.sep + "__init__.py"))
+               for d in ("", os.path.join("panel", "install"), "tests", "tools") for ext in (".py", os.sep + "__init__.py"))
 
 
-_base30 = _pins30("requirements.txt") | _pins30("requirements-bootstrap.txt")
+_base30 = _pins30("panel/install/requirements.txt") | _pins30("panel/install/requirements-bootstrap.txt")
 _dists30 = _dist_tops30()
 _unit_dir30 = os.path.join(_root, "tests", "unit")
 _unknown30 = set()

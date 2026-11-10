@@ -28,7 +28,7 @@ FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cf
 # becomes a fuzzer that dies on startup instead of a build that fails loudly.
 # Copied on its own first so this layer caches across source-only changes. It is a hashed lockfile
 # (see requirements.in): every file pip fetches must match a hash in it, and all of them are wheels.
-COPY requirements.txt $SRC/requirements.txt
+COPY panel/install/requirements.txt $SRC/requirements.txt
 RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r "$SRC/requirements.txt"
 
 # What the fuzz build reads, not the whole context. The harnesses import panel.* and nothing else

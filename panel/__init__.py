@@ -15,14 +15,16 @@ services.lgsm_data for the dependency list. Written lazily for exactly that reas
 inside a function body they cost nothing at import and cannot make a load-order cycle.
 The rule is enforced by a gate in tests/unit_test.py, which knows about these two.
 
-app.py, manage.py and db_maintenance.py stay at the repo root: the systemd unit
-execs app.py, recover.sh locates an install by manage.py, and db_maintenance.py is
-installed root-owned beside the helper with its path recorded in panel.conf.
+panel/install/ holds what the installer and recovery tools read by path, not by import:
+app.py (the systemd unit execs it), manage.py (recover.sh finds an install by it),
+db_maintenance.py (installed root-owned beside the helper), VERSION, release-signers,
+the requirements lockfiles, recover.sh and uninstall.sh. It is not a package; app.py
+and manage.py put the checkout on sys.path themselves.
 """
 from pathlib import Path
 
 # The panel's checkout directory — the one every on-disk path is relative to: data/ (database,
-# secret key, credential key, TLS certs), panel/translations/, panel/templates/, panel/static/, VERSION, and the
+# secret key, credential key, TLS certs), panel/translations/, panel/templates/, panel/static/, panel/install/VERSION, and the
 # git tree that self-update and integrity-repair operate on.
 #
 # It is anchored HERE, once, and not recomputed from __file__ in each module. Before the modules

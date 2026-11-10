@@ -48,10 +48,14 @@ jobs:
           # osv-scanner hold every lockfile to. It was `high`, so a moderate advisory a pull request
           # added (to gamedig's tree, or a CI tool's lockfile, which pip-audit never read) passed.
           fail-on-severity: low
-          # Reviewed advisories with no fix go in `allow-ghsas:`, comma-separated — none at the
-          # moment. Each must also be an expiring, reasoned [[IgnoredVulns]] entry in the
-          # osv-scanner.toml beside its lockfile, which is where the triage is written; a unit check
+          # Reviewed advisories with no fix go in `allow-ghsas:`, comma-separated. Each must also be
+          # an expiring, reasoned [[IgnoredVulns]] entry in the osv-scanner.toml beside its
+          # lockfile, which is where the triage is written; a unit check
           # (part27) holds the two lists together, so an exemption cannot be added here alone. When
           # that entry's date passes, the dependency audit fails, and the advisory is looked at
           # again: both entries renewed or removed. (GHSA-ch52-4w7c-c8xp, http-cache-semantics, was
           # removed from both when #417 moved gamedig's lock past the advisory's range.)
+          # GHSA-45c3-73f7-pv4m: dnspython 2.8.0, kept for Python 3.10 only (the fix needs 3.11);
+          # panel/install/osv-scanner.toml holds its triage and date. Listed once the lockfile moved
+          # into panel/install/, which made every pin in it read as newly added.
+          allow-ghsas: GHSA-45c3-73f7-pv4m

@@ -789,6 +789,14 @@ check("js coverage: a failed flow check (the 375px rename fit) fails the run wit
 
 
 # ── js_coverage's serve.py refuses subprocess in every module that imports it ───────────────────
+def _module_name53(path):
+    """The name `path` (a .py under the checkout) is imported by."""
+    rel = os.path.relpath(path, _root)[:-3].replace(os.sep, ".")
+    # panel/install/ is not a package: its modules are imported by their own names.
+    rel = rel[len("panel.install."):] if rel.startswith("panel.install.") else rel
+    return rel[:-len(".__init__")] if rel.endswith(".__init__") else rel
+
+
 def _subprocess_importers53():
     out = set()
     for dirpath, _dirs, files in os.walk(os.path.join(_root, "panel")):
@@ -798,9 +806,8 @@ def _subprocess_importers53():
                 tree = _ast53.parse(_read53(path))
                 if any(isinstance(n, _ast53.Import) and any(a.name == "subprocess" and not a.asname
                                                             for a in n.names) for n in tree.body):
-                    rel = os.path.relpath(path, _root)[:-3].replace(os.sep, ".")
-                    out.add(rel[:-len(".__init__")] if rel.endswith(".__init__") else rel)
-    return out | {"db_maintenance"}
+                    out.add(_module_name53(path))
+    return out
 
 
 def _subprocess_escapes53():

@@ -1036,7 +1036,7 @@ def _check_system_ops31():
 
 def _main_thread_targets31():
     """The names passed as target= to any call inside app.py's `if __name__ == "__main__":`."""
-    with open(os.path.join(_root, "app.py"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8") as fh:
         tree = _ast31.parse(fh.read())
     main = next(n for n in tree.body if isinstance(n, _ast31.If) and "__main__" in _ast31.dump(n.test))
     calls = [n for n in _ast31.walk(main) if isinstance(n, _ast31.Call)]
@@ -1217,7 +1217,7 @@ def _check_crontab31():
 
 # ══ 8. an uninstall stops the web terminal's scopes before it deletes the panel user ═════════════
 def _uninstall_src31():
-    with open(os.path.join(_root, "uninstall.sh"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8") as fh:
         return fh.read()
 
 

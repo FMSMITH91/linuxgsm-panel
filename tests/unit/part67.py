@@ -309,11 +309,11 @@ check("i18n: ...and every tr()/Sentence() template, the new ones included, with 
 
 
 def _scan_tree67(source):
-    """(spliced_py, literal_gaps_py("es")) over a throwaway tree whose app.py is `source`."""
+    """(spliced_py, literal_gaps_py("es")) over a throwaway tree whose panel/install/app.py is `source`."""
     root = _tempfile67.mkdtemp(prefix="lgsm-p67-scan-")
     try:
-        _os67.makedirs(_os67.path.join(root, "panel"))
-        with open(_os67.path.join(root, "app.py"), "w", encoding="utf-8") as fh:
+        _os67.makedirs(_os67.path.join(root, "panel", "install"))
+        with open(_os67.path.join(root, "panel", "install", "app.py"), "w", encoding="utf-8") as fh:
             fh.write(source)
         return (_scan67.spliced_py(root),
                 [t for t, _w in _scan67.literal_gaps_py("es", root=root)])

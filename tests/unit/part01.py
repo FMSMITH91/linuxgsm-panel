@@ -18,6 +18,7 @@ import sys
 from types import SimpleNamespace as NS
 
 sys.path.insert(0, _UNIT_ROOT)
+sys.path.insert(1, os.path.join(_UNIT_ROOT, "panel", "install"))   # app.py, manage.py, db_maintenance.py
 from panel.ops.ssh_manager import _core as _sm_core
 from panel.ops.ssh_manager import cron as _sm_cron
 from panel.ops.ssh_manager import files as _sm_files
@@ -584,9 +585,12 @@ for _dp, _dns, _fs in os.walk(os.path.join(_root, "panel")):
 check("layering: no panel package imports DOWN the stack at module level",
       not _layer_bad, "; ".join(sorted(set(_layer_bad))))
 # A count, because the failure above is silence: a gate that walks into nothing reports clean.
+# panel/install/ is not a layer: it holds the entry points (app.py, manage.py, db_maintenance.py),
+# which sit above every package, as they did at the repository root.
 _layer_total = sum(1 for _d, _dn, _fl in os.walk(os.path.join(_root, "panel"))
                    for _x in _fl if _x.endswith(".py") and _x != "__init__.py"
-                   and "__pycache__" not in _d)
+                   and "__pycache__" not in _d
+                   and os.path.relpath(_d, os.path.join(_root, "panel")).split(os.sep)[0] != "install")
 check("layering: the gate actually inspected every module under panel/",
       _layer_seen == _layer_total, "inspected %d of %d" % (_layer_seen, _layer_total))
 
@@ -932,7 +936,7 @@ eq("session lifetime: junk falls back to the defaults instead of breaking sign-i
 eq("session lifetime: 0 cannot expire every session on arrival; the form's bounds apply",
    _slt_safe({"session_lifetime_hours": 0, "remember_days": 10 ** 9}), (3600, _sl_td(days=90)))
 eq("session lifetime: missing keys are the defaults", _slt_safe({}), (8 * 3600, _sl_td(days=3)))
-_sl_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_sl_src = open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read()
 _sl_fn = next(n for n in _sl_ast.walk(_sl_ast.parse(_sl_src))
               if isinstance(n, _sl_ast.FunctionDef) and n.name == "create_app")
 check("session lifetime: create_app sets both lifetimes through _session_lifetimes()",
@@ -2586,7 +2590,7 @@ _cd_sources = []
 for _cd_dir in (os.path.join(_root, "panel"),):
     for _cd_base, _cd_dirs, _cd_names in os.walk(_cd_dir):
         _cd_sources += [os.path.join(_cd_base, n) for n in _cd_names if n.endswith(".py")]
-_cd_sources.append(os.path.join(_root, "app.py"))
+_cd_sources.append(os.path.join(_root, "panel", "install", "app.py"))
 _cd_sites, _cd_bad = 0, []
 for _cd_path in sorted(_cd_sources):
     _cd_tree = _cd_ast.parse(open(_cd_path, encoding="utf-8").read(), filename=_cd_path)

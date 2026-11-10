@@ -1339,11 +1339,13 @@ PY_SINK_KEYS = ("message", "error", "warning")
 
 
 def _py_files(root):
-    """app.py and every .py under panel/."""
-    paths = [os.path.join(root, "app.py")]
-    for path in sorted(glob.glob(os.path.join(root, "panel", "**", "*.py"), recursive=True)):
-        paths.append(path)
-    return paths
+    """Every .py under panel/ except the offline CLIs beside app.py.
+
+    manage.py and db_maintenance.py print to a terminal and never reach the UI.
+    """
+    cli = {os.path.join(root, "panel", "install", n) for n in ("manage.py", "db_maintenance.py")}
+    return [p for p in sorted(glob.glob(os.path.join(root, "panel", "**", "*.py"), recursive=True))
+            if p not in cli]
 
 
 def _py_call_name(node):
@@ -1908,7 +1910,7 @@ def _r16c_follow(table, name, i, follow):
 
 def _r16c_is_route(rel):
     rel = rel.replace(os.sep, "/")
-    return rel == "app.py" or rel.startswith("panel/routes/")
+    return rel == "panel/install/app.py" or rel.startswith("panel/routes/")
 
 
 def _r16c_answer_values(n, lines, wrappers=None):

@@ -56,7 +56,7 @@ Either way the updater snapshots the code and database (keeping the last 3), ins
 
 ```bash
 sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh   # root / system install
-bash ~/linuxgsm-panel/uninstall.sh                     # per-user install
+bash ~/linuxgsm-panel/panel/install/uninstall.sh       # per-user install
 #   add --yes to skip the "type yes to confirm" prompt
 ```
 
@@ -242,8 +242,8 @@ Run `--help` for the full list. On an older install without the command, update 
 ```bash
 git clone https://github.com/FMSMITH91/linuxgsm-panel.git && cd linuxgsm-panel
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python app.py
+pip install -r panel/install/requirements.txt
+python panel/install/app.py
 
 # The test tools CI installs beside them
 pip install --require-hashes -r .github/ci-requirements-checks/build.txt
@@ -257,7 +257,7 @@ Use `tools/smoke-local.sh`, not `tools/run-tests.sh` (what CI runs): the latter 
 
 CI also runs CodeQL, Bandit, Semgrep, zizmor, a dependency audit and fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records outbound connections and root processes in the job's public log, routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
 
-The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, `routes`; each package's module-level imports reach only the ones before it, enforced by `tests/unit/part01.py`). `app.py`, `manage.py`, `db_maintenance.py` and the shell scripts stay at the repo root because installed panels and the install/recovery one-liners address them by path.
+The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, `routes`; each package's module-level imports reach only the ones before it, enforced by `tests/unit/part01.py`). The files installed panels address by path (`app.py`, `manage.py`, `db_maintenance.py`, `recover.sh`, `uninstall.sh`, `VERSION`, `release-signers` and the requirements lockfiles) are in `panel/install/`. `install.sh` stays at the repo root because the install one-liner fetches it from there.
 
 ## Contributing
 

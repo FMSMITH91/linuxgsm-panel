@@ -343,7 +343,7 @@ check("panel source: (control) a write in a call split over lines, by an attribu
       (len(_r25d_planted91[0]), len(_r25d_planted91[1]), len(_r25d_planted91[2])) == (5, 3, 3),
       repr(_r25d_planted91[1:]))
 _names91 = [p for p in ("ensure_operator(", "tailscale-set-operator\"", "--operator=%s")
-            for src in (_TS_SRC91, _SO_SRC91, _read91("app.py"),
+            for src in (_TS_SRC91, _SO_SRC91, _read91("panel", "install", "app.py"),
                         _read91("panel", "routes", "tailscale.py"),
                         _read91("panel", "routes", "route_helpers.py")) if p in src]
 check("panel source: the panel's own account only READS tailscaled (every _run_ts call and every "
@@ -627,7 +627,7 @@ def _uninstall_off91(u_sudo):
     with open(sudo, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho \"$*\" >> '%s'\nexec \"$@\"\n" % sudo_log)
     os.chmod(sudo, 0o700)  # nosemgrep: insecure-file-permissions - a stand-in this part runs
-    un = _read91("uninstall.sh")
+    un = _read91("panel", "install", "uninstall.sh")
     fn = _fn91(un, "_ts_remove_routes")
     # _ts_panel_routes re-reads Serve before each `off`: answer with the route still there.
     script = ("set -euo pipefail\nok() { echo \"OK $*\"; }\nwarn() { echo \"WARN $*\"; }\n"
@@ -661,7 +661,7 @@ def _uninstall_read91(u_sudo):
         fh.write("#!/bin/sh\nP91_ROOT=1 exec \"$@\"\n")
     for name in ("tailscale", "fakesudo"):
         os.chmod(os.path.join(d, name), 0o700)  # nosemgrep: insecure-file-permissions - stand-ins
-    un = _read91("uninstall.sh")
+    un = _read91("panel", "install", "uninstall.sh")
     script = ("set -euo pipefail\nsudo_note() { :; }\nU_SUDO=%s\n%s\n%s\n"
               "_ts_panel_routes 5000 routes\n"
               % (u_sudo, un[un.index("_TS_ROUTES_PY='"):un.index("\n'\n", un.index("_TS_ROUTES_PY='")) + 2],

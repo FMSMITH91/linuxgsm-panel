@@ -1511,7 +1511,7 @@ def _startup_checks41():
 
 def _startup_wiring41():
     """app.py's start: the holds go in before the monitor thread exists, and both loops are supervised."""
-    with open(os.path.join(_ROOT41, "app.py"), encoding="utf-8") as fh:
+    with open(os.path.join(_ROOT41, "panel", "install", "app.py"), encoding="utf-8") as fh:
         src = fh.read()
     main = src[src.index('if __name__ == "__main__":'):]
     at = {k: main.find(k) for k in ("_host_reboot.resume_reboot_state(app)",

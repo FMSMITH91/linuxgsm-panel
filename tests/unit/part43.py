@@ -958,7 +958,7 @@ def _heal_carried43(audits):
 
 def _main_block43():
     """app.py's `if __name__ == "__main__":` block, or None."""
-    src = open(os.path.join(_ROOT43, "app.py"), encoding="utf-8").read()
+    src = open(os.path.join(_ROOT43, "panel", "install", "app.py"), encoding="utf-8").read()
     return next((n for n in ast.parse(src).body if isinstance(n, ast.If)
                  and "__main__" in ast.dump(n.test)), None)
 

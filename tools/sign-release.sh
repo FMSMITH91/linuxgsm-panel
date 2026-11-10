@@ -142,10 +142,15 @@ ssh-keygen -q -Y sign -f "${KEY}" -n "${NS}" "${TMP}/msg" >/dev/null 2>&1 \
 #    carries, which is what a host on the previous release trusts. So a release that rotates the
 #    key is signed with the old one. The first release that has the file has no parent copy, and
 #    is checked against its own.
-if git cat-file -e "${SHA}^1:release-signers" 2>/dev/null; then
-    git cat-file blob "${SHA}^1:release-signers" > "${TMP}/signers"
+#    The file is in panel/install/, or at the root in a commit from before the root clean-up.
+signers_at() {   # signers_at <commit>: that commit's release-signers, wherever it keeps it
+    git cat-file blob "$1:panel/install/release-signers" 2>/dev/null \
+        || git cat-file blob "$1:release-signers" 2>/dev/null
+}
+if git cat-file -e "${SHA}^1" 2>/dev/null && signers_at "${SHA}^1" > "${TMP}/signers"; then
+    :
 else
-    git cat-file blob "${SHA}:release-signers" > "${TMP}/signers" 2>/dev/null \
+    signers_at "${SHA}" > "${TMP}/signers" \
         || die "${SHA} has no release-signers to check the signature against."
 fi
 ssh-keygen -Y verify -f "${TMP}/signers" -I release -n "${NS}" -s "${TMP}/msg.sig" \

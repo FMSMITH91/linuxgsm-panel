@@ -141,7 +141,7 @@ finally:
 # per-row body is app._reconcile_stranded_install, whose work — once it holds the row's host check
 # — is _reconcile_checked_install; that is where the verdict branches live.
 import ast as _rt_ast                                                              # noqa: E402
-_rt_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_rt_src = open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read()
 _rt_fn = next((n for n in _rt_ast.walk(_rt_ast.parse(_rt_src))
                if isinstance(n, _rt_ast.FunctionDef) and n.name == "_reconcile_checked_install"),
               None)
@@ -248,19 +248,19 @@ check("backup UI: the per-server override is a number box with a Default placeho
 
 
 # ── update-noise filter: only real runtime changes should raise the "update available" badge ──
-check("runtime-path: app.py counts", _so._is_runtime_path("app.py") is True)
+check("runtime-path: app.py counts", _so._is_runtime_path("panel/install/app.py") is True)
 check("runtime-path: a template counts", _so._is_runtime_path("panel/templates/base.html") is True)
 check("runtime-path: static asset counts", _so._is_runtime_path("panel/static/js/app.js") is True)
-check("runtime-path: requirements counts", _so._is_runtime_path("requirements.txt") is True)
+check("runtime-path: requirements counts", _so._is_runtime_path("panel/install/requirements.txt") is True)
 check("runtime-path: requirements.in (what the lockfile is compiled from) is noise",
-      _so._is_runtime_path("requirements.in") is False)
+      _so._is_runtime_path("panel/install/requirements.in") is False)
 # pip's own lockfile is read by install.sh (it is what the venv's pip is installed from), so a
 # commit that changes only it, a Dependabot bump of pip, is an update; the .in it is compiled from
 # is not, exactly like requirements.in.
 check("runtime-path: requirements-bootstrap.txt (pip's lockfile) counts",
-      _so._is_runtime_path("requirements-bootstrap.txt") is True)
+      _so._is_runtime_path("panel/install/requirements-bootstrap.txt") is True)
 check("runtime-path: ...and requirements-bootstrap.in is noise",
-      _so._is_runtime_path("requirements-bootstrap.in") is False)
+      _so._is_runtime_path("panel/install/requirements-bootstrap.in") is False)
 check("runtime-path: install.sh counts", _so._is_runtime_path("install.sh") is True)
 check("runtime-path: README is noise", _so._is_runtime_path("README.md") is False)
 check("runtime-path: any .md is noise", _so._is_runtime_path("docs/SECURITY.md") is False)
@@ -415,7 +415,7 @@ check("runtime-path: the fuzz image's build files and the JS lint config are noi
       and _so._is_runtime_path(".clusterfuzzlite/build.sh") is False
       and _so._is_runtime_path("panel/static/js/.eslintrc.json") is False
       and _so._is_runtime_path("panel/static/js/remote_manage_host.js") is True
-      and _so._is_runtime_path("recover.sh") is True)
+      and _so._is_runtime_path("panel/install/recover.sh") is True)
 # Every repo file install.sh stages root-owned (stage_root_source <repo path> <name>) is something
 # a host runs. Classified as noise, a commit changing only it is no longer offered as an update at
 # all, so the host would never get it. tools/panel-helper and tools/gamedig/* sit in a noise
@@ -615,14 +615,16 @@ def _cls_resolve(mod):
     """The repo files that importing dotted `mod` runs: each package __init__ and the module."""
     parts, out = mod.split("."), []
     for _i in range(1, len(parts) + 1):
-        _base = os.path.join(_root, *parts[:_i])
-        for _cand in (_base + ".py", os.path.join(_base, "__init__.py")):
-            if os.path.isfile(_cand):
-                out.append(os.path.relpath(_cand, _root).replace(os.sep, "/"))
+        # A top-level name may be one of panel/install/'s modules (app, manage), on sys.path there.
+        for _top in ((_root,) if _i > 1 else (_root, os.path.join(_root, "panel", "install"))):
+            _base = os.path.join(_top, *parts[:_i])
+            for _cand in (_base + ".py", os.path.join(_base, "__init__.py")):
+                if os.path.isfile(_cand):
+                    out.append(os.path.relpath(_cand, _root).replace(os.sep, "/"))
     return out
 
 
-_cls_todo = ["app.py", "manage.py", "db_maintenance.py"]
+_cls_todo = ["panel/install/app.py", "panel/install/manage.py", "panel/install/db_maintenance.py"]
 while _cls_todo:
     _cls_f = _cls_todo.pop()
     if _cls_f in _cls_mods:
@@ -650,7 +652,7 @@ check("runtime-path: every module the panel imports, transitively, is named as o
 
 # ...and every repo file the installers and recovery tools read from the checkout.
 _cls_inst = set()
-for _cls_sh in ("install.sh", "uninstall.sh", "recover.sh"):
+for _cls_sh in ("install.sh", "panel/install/uninstall.sh", "panel/install/recover.sh"):
     with open(os.path.join(_root, _cls_sh), encoding="utf-8") as _cls_fh:
         _cls_code = "\n".join(_l for _l in _cls_fh.read().splitlines()
                               if not _l.lstrip().startswith("#"))

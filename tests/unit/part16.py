@@ -1813,7 +1813,7 @@ try:
     check("self-heal: with the CLI's flag set nothing is moved or restored",
           _h16_bytes(_h16_cli) == _H16_GARBAGE
           and not [n for n in os.listdir(_H16_DIR) if n.startswith("cli.db.corrupt-")])
-    with open(os.path.join(_REPO16, "manage.py"), encoding="utf-8") as _f:
+    with open(os.path.join(_REPO16, "panel", "install", "manage.py"), encoding="utf-8") as _f:
         _h16_msrc = _f.read()
     check("self-heal: manage.py sets that flag BEFORE it builds the app",
           "os.environ[NO_SELF_HEAL_ENV] = \"1\"" in _h16_msrc

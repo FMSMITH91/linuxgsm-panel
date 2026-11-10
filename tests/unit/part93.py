@@ -527,7 +527,7 @@ check("release_operator: ...a self-clear that fails too answers failed, and a he
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 6. uninstall.sh: the sudo note is never read as a Serve route
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_UN93 = _read93("uninstall.sh")
+_UN93 = _read93("panel", "install", "uninstall.sh")
 _SERVE93 = _json93.dumps({"TCP": {"443": {"HTTPS": True}}, "Web": {"h93.ts.net:443": {"Handlers": {
     "/lgsm": {"Proxy": "http://127.0.0.1:5000"}}}}})
 
@@ -662,7 +662,7 @@ check("install.sh: ...while a real PANEL_DIR, and a link root made, are still pr
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 8. Leads confirmed in review 1016b's A01: the boot's port, and a malformed saved order
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_APP93 = _read93("app.py")
+_APP93 = _read93("panel", "install", "app.py")
 _boot93 = [ln.strip() for ln in _APP93[_APP93.find('\nif __name__ == "__main__":'):].splitlines()
            if ln.strip().startswith("port = ")]
 _bootvals93 = {repr(v): _val93._port_or(v, 5000) for v in (0, 70000, 5000.7, "5000", 5001, True, -1)}

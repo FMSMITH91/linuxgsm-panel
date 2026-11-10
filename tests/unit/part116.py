@@ -318,7 +318,7 @@ def _manage116():
     From manage.py's text: importing manage builds a second app.
     """
     import ast as _ast116
-    with open(os.path.join(_root, "manage.py"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "install", "manage.py"), encoding="utf-8") as fh:
         tree = _ast116.parse(fh.read())
     fns = {n.name: n for n in tree.body if isinstance(n, _ast116.FunctionDef)}
     keep = [n for name, n in fns.items() if name.startswith("_r32a_")]
@@ -413,7 +413,7 @@ def _between116(text, start, end):
 
 
 def _uninstall116():
-    with open(os.path.join(_root, "uninstall.sh"), encoding="utf-8") as fh:
+    with open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8") as fh:
         text = fh.read()
     rec = text[text.index('_R32A_REC_PORT=""'):text.index("\n# ── Stop + remove the service")]
     ufw = _between116(text, '_r32a_cfg_port="${PANEL_PORT}"', 'PANEL_PORT="${_r32a_cfg_port}"\n')

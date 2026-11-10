@@ -59,6 +59,11 @@ def _paths():
                     return p, p + ".backup"
     except OSError:
         pass          # no panel.conf beside us — the checkout copy, handled below
+    # The checkout copy sits in panel/install/, so the panel package is two levels up. Added only
+    # when that directory really holds the package: the root-owned copy's is /usr/local, root's own.
+    checkout = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if os.path.isdir(os.path.join(checkout, "panel")) and checkout not in sys.path:
+        sys.path.insert(0, checkout)
     from panel.core.config import DB_PATH
     p = str(DB_PATH)
     return p, p + ".backup"

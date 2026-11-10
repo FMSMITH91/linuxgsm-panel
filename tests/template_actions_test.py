@@ -2873,7 +2873,7 @@ check(not _pw_capped, "password: no password field caps what can be typed into i
 _SAFE_BYPASS_FILES = {"account_2fa.html": 1}
 # app.py: the datetime-derived Markup. panel/db/models.py: _r21c_host_label's two fixed spans around
 # the escaped host name (Markup's % escapes it).
-_MARKUP_FILES = {"app.py": 1, "panel/db/models.py": 2}     # Python modules allowed a Markup(), and how many
+_MARKUP_FILES = {"panel/install/app.py": 1, "panel/db/models.py": 2}     # Python modules allowed a Markup(), and how many
 
 # `{% autoescape false %}` is a bypass too, of a whole block (review 1015d): counted as a site, so
 # one cannot pass a gate that read `|safe` alone. The tree has none.
@@ -2890,7 +2890,7 @@ check(_bypass_found == _SAFE_BYPASS_FILES,
 # An aliased import (`from markupsafe import Markup as M`) or a class with `__html__` emits markup
 # without the word `Markup(` (review 1015d): each counts as a site, so it needs listing too.
 _markup_found = {}
-for _p in sorted(list((ROOT / "panel").rglob("*.py")) + [ROOT / "app.py"]):
+for _p in sorted(list((ROOT / "panel").rglob("*.py")) + [ROOT / "panel" / "install" / "app.py"]):
     _n = len(re.findall(r"\bMarkup\s*\(|\bMarkup\s+as\b|\bdef\s+__html__\b", _p.read_text(encoding="utf-8")))
     if _n:
         _markup_found[_p.relative_to(ROOT).as_posix()] = _n

@@ -31,6 +31,7 @@ import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+sys.path.insert(1, os.path.join(_ROOT, "panel", "install"))   # app.py, manage.py, db_maintenance.py
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed before anything that could block;
 # tests/ is on the path only for the import.
@@ -148,7 +149,7 @@ def _docstring_drift(current):
     cannot go stale in the same commit that regenerates the baseline.
     """
     problems = []
-    _doc = (pathlib.Path(__file__).resolve().parent.parent / "app.py").read_text(
+    _doc = (pathlib.Path(__file__).resolve().parent.parent / "panel" / "install" / "app.py").read_text(
         encoding="utf-8").split('"""')[1]
     _live = {}
     for _key, _meta in current.items():    # every rule on one path: their methods together

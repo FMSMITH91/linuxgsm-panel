@@ -363,7 +363,7 @@ def _bash47(script, env=None, cwd=None):
 
 
 _INS47 = _read47(_root, "install.sh")
-_UNI47 = os.path.join(_root, "uninstall.sh")
+_UNI47 = os.path.join(_root, "panel", "install", "uninstall.sh")
 _SHIMS47 = ('ok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\ninfo() { echo "INFO $*"; }\n'
             'id() { echo 0; }\ninstall() { echo "INSTALL $*"; }\nln() { echo "LN $*"; }\nrm() { :; }\n'
             '_prepare_root_source() { :; }\n')
@@ -427,7 +427,8 @@ def _lockout_remedy47(tmp):
     unit = os.path.join(tmp, "rc.service")
     with open(unit, "w", encoding="utf-8") as fh:
         fh.write("[Service]\nUser=lgsmpanel\nWorkingDirectory=%s\n" % panel)
-    r = _sp47.run(["bash", os.path.join(_root, "recover.sh"), "list-users"], capture_output=True, text=True,  # nosec B603 B607 - the repo's own script
+    r = _sp47.run(["bash", os.path.join(_root, "panel", "install", "recover.sh"), "list-users"],  # nosec B603 B607 - the repo's own script
+                  capture_output=True, text=True,
                   timeout=60, stdin=_sp47.DEVNULL, check=False,
                   env=dict(os.environ, PATH=os.path.join(tmp, "bin") + os.pathsep + "/usr/bin:/bin",
                            PANEL_RECOVER_SYSTEM_UNIT=unit, PANEL_RECOVER_HOMES=os.path.join(tmp, "nohomes"),

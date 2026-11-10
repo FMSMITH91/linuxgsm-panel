@@ -109,8 +109,8 @@ jobs:
         if: steps.scope.outputs.docs_only != 'true'
         run: |
           set -uo pipefail
-          for f in requirements.txt requirements-bootstrap.txt; do
-            out="${RUNNER_TEMP}/pip-audit-${f%.txt}.json"
+          for f in panel/install/requirements.txt panel/install/requirements-bootstrap.txt; do
+            out="${RUNNER_TEMP}/pip-audit-$(basename "${f}" .txt).json"
             pins="$(grep -cE '^[A-Za-z0-9._-]+==' "${f}" || true)"
             # A pin whose marker is false on this Python is one pip-audit leaves out: name it, and
             # count only the rest (.github/scripts/pins_not_here.py).
@@ -175,7 +175,7 @@ jobs:
         run: |
           set -uo pipefail
           lockfiles=(tools/gamedig/package-lock.json panel/static/vendor/package-lock.json
-                     requirements.txt requirements-bootstrap.txt .github/ci-requirements*/*.txt)
+                     panel/install/requirements.txt panel/install/requirements-bootstrap.txt .github/ci-requirements*/*.txt)
           args=()
           for f in "${lockfiles[@]}"; do
             if [ ! -f "${f}" ]; then
