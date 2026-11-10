@@ -2340,15 +2340,21 @@ _PLACEMENT_NAMES = ("MOVED_DIR", "_tree_file", "panel_file", "stage_panel_file")
 
 
 def _inst_placement():
-    """install.sh's own file-placement helpers (MOVED_DIR, _tree_file, panel_file, stage_panel_file):
-    the root clean-up's readers find a moved root file through them."""
+    """Return install.sh's own file-placement helpers, cut from install.sh.
+
+    MOVED_DIR, _tree_file, panel_file and stage_panel_file: the root clean-up's readers find a
+    moved root file through them.
+    """
     _a = _inst.index('\nMOVED_DIR="panel/install"\n') + 1
     return _inst[_a:_inst.index('\nSRC=""\n', _a) + 1] + _inst_shfn_raw("stage_panel_file")
 
 
 def _inst_shfn(name):
-    """One shell function out of install.sh, whole, preceded by install.sh's file-placement helpers
-    when its body uses them (a function run on its own would otherwise call a name never defined)."""
+    """Return one shell function out of install.sh, whole.
+
+    install.sh's file-placement helpers come first when its body uses them: a function run on its
+    own would otherwise call a name never defined.
+    """
     _fn = _inst_shfn_raw(name)
     if name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
         return _inst_placement() + _fn
@@ -4085,7 +4091,8 @@ try:
     # it `"${PANEL_DIR}/venv/bin/pip" install`. Read every shell script (by extension or shebang),
     # comment lines dropped and `\` continuations joined; `python3-pip` (an apt package) is not pip.
     _PIP_UNHASHED_OK = {
-        ("install.sh", '"${req_txt}"'):   # requirements.txt, through panel_file (install_deps)
+        # requirements.txt, which install_deps finds through panel_file.
+        ("install.sh", '"${req_txt}"'):
             "an update can land an older pinned commit whose requirements.txt has no hashes, and "
             "--require-hashes would fail that install; pip checks hashes by itself whenever the "
             "file carries them, which every current one does",
