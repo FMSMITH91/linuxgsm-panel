@@ -114,7 +114,7 @@ git --no-pager diff --stat=120 "${FROM}" "${SHA}" | tail -n 60
 # equal to those callers: the db_maintenance.py root runs at every update showed up only as a
 # --stat line among many.
 FLAGGED="$(git diff --name-only "${FROM}" "${SHA}" \
-           | grep -E '^(\.github/workflows/|\.github/scripts/|release-signers$|install\.sh$|tools/panel-helper$|db_maintenance\.py$|recover\.sh$|uninstall\.sh$|tools/gamedig/)' || true)"
+           | grep -E '^(\.github/workflows/|\.github/scripts/|release-signers$|install\.sh$|tools/panel-helper$|db_maintenance\.py$|recover\.sh$|uninstall\.sh$|panel/install/release-signers$|panel/install/db_maintenance\.py$|panel/install/recover\.sh$|panel/install/uninstall\.sh$|tools/gamedig/)' || true)"
 if [[ -n "${FLAGGED}" ]]; then
     echo "################################################################################"
     echo "!!! WARNING: this release changes what runs as root, the release key, or CI:"

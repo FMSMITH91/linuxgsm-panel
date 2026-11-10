@@ -1436,7 +1436,10 @@ def _home_holds_a_panel(name):
         return True
     for entry in entries:
         d = os.path.join(home, entry)
-        if (os.path.isfile(os.path.join(d, "app.py"))
+        # app.py sits at the install's root, or in panel/install/ once the root clean-up has moved
+        # it there (install.sh _tree_file): this root-owned copy has to know both layouts.
+        if ((os.path.isfile(os.path.join(d, "app.py"))
+                or os.path.isfile(os.path.join(d, "panel", "install", "app.py")))
                 and os.path.isdir(os.path.join(d, "panel"))
                 and os.path.isdir(os.path.join(d, "data"))):
             return True

@@ -316,10 +316,25 @@ ok "Python ${PY_MM} found"
 # requirements.txt for the panel — an old clone it was run from was copied over the install with
 # its .git, a downgrade the update path waves through for a local source, and a fresh install from
 # some other Flask project installed that project as the panel.
+# ── Where a panel file sits ──────────────────────────────────────────────────────────────────
+# The root clean-up moves the files below out of the repository root into panel/install/, in two
+# releases. This one teaches every reader the new place (panel/install/<name> first, the root
+# second) and moves nothing, so a host that has run it can take the release that moves them. A host
+# that skips straight to that one fails its update at the dependency step and rolls back: its
+# installer reads requirements.txt at the root (shown on the test VPS, 2026-11-10).
+# The files: app.py manage.py db_maintenance.py VERSION release-signers requirements.txt
+# requirements-bootstrap.txt recover.sh uninstall.sh. install.sh itself stays at the root: it is
+# the address the documented one-line install fetches.
+MOVED_DIR="panel/install"
+_tree_file() {   # _tree_file <dir> <name>: <dir>/panel/install/<name> when it is there, else <dir>/<name>
+    if [[ -f "$1/${MOVED_DIR}/$2" ]]; then printf '%s\n' "$1/${MOVED_DIR}/$2"; else printf '%s\n' "$1/$2"; fi
+}
+panel_file() { _tree_file "${PANEL_DIR}" "$1"; }
+
 SRC=""
 if [[ -n "${PANEL_SELF_UPDATE:-}" ]]; then
     :   # the panel chose this run: fetch_code updates PANEL_DIR itself (see above)
-elif [[ -f "./app.py" ]] && [[ -f "./requirements.txt" ]]; then
+elif [[ -f "$(_tree_file . app.py)" ]] && [[ -f "$(_tree_file . requirements.txt)" ]]; then
     if [[ "$(readlink -f -- "${SCRIPT_PATH}" 2>/dev/null)" = "$(pwd -P)/install.sh" ]]; then
         SRC="$(pwd)"
         ok "Using the current checkout as source: ${SRC}"
@@ -348,7 +363,7 @@ _other_install=""
 if [[ "$(id -u)" -eq 0 ]]; then
     # Running as root: is there a per-user install under some human's home?
     for _h in /home/*; do
-        [[ -f "${_h}/linuxgsm-panel/app.py" ]] || continue
+        [[ -f "$(_tree_file "${_h}/linuxgsm-panel" app.py)" ]] || continue
         _u="$(basename "${_h}")"
         [[ "${_u}" = "${SERVICE_USER}" ]] && continue      # that IS the root-install location
         [[ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ]] || continue
@@ -424,7 +439,7 @@ _epoch_version() {
 # sequences included, which setup_link_token already refuses to do for the same reason.
 _version_file() {
     local raw
-    raw="$(_owner_read "${PANEL_DIR}/VERSION" | tr -d '[:space:]' | tr -cd '[:print:]')" || raw=""
+    raw="$(_owner_read "$(panel_file VERSION)" | tr -d '[:space:]' | tr -cd '[:print:]')" || raw=""
     raw="${raw:0:64}"   # a substring, not `| head -c`, whose early exit is a SIGPIPE under pipefail
     case "${raw}" in
         ''|\$Format:*) echo "unknown" ;;
@@ -564,7 +579,7 @@ setup_link_token() {
     if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]]; then
         as_owner="sudo -u ${PANEL_USER}"
     fi
-    tok="$(cd / && ${as_owner} "${PANEL_DIR}/venv/bin/python" "${PANEL_DIR}/manage.py" \
+    tok="$(cd / && ${as_owner} "${PANEL_DIR}/venv/bin/python" "$(panel_file manage.py)" \
                setup-token --raw 2>/dev/null | tail -n 1)" || return 0
     if [[ "${tok}" =~ ^[A-Za-z0-9_-]{20,128}$ ]]; then
         printf '%s' "${tok}"
@@ -1059,10 +1074,12 @@ _release_key_file() {
         fi
         [[ -f "${ROOT_SRC_FLOOR_FILE}" ]] || return 1
         floor="$(_source_floor 2>/dev/null)" || return 1
-        _rootgit cat-file blob "${floor}:${RELEASE_SIGNERS}" > "${dir}/key" 2>/dev/null || return 1
+        { _rootgit cat-file blob "${floor}:${MOVED_DIR}/${RELEASE_SIGNERS}" \
+            || _rootgit cat-file blob "${floor}:${RELEASE_SIGNERS}"; } > "${dir}/key" 2>/dev/null || return 1
     else
         [[ -d "${PANEL_DIR}/.git" ]] || return 1
-        _gitc cat-file blob "HEAD:${RELEASE_SIGNERS}" > "${dir}/key" 2>/dev/null || return 1
+        { _gitc cat-file blob "HEAD:${MOVED_DIR}/${RELEASE_SIGNERS}" \
+            || _gitc cat-file blob "HEAD:${RELEASE_SIGNERS}"; } > "${dir}/key" 2>/dev/null || return 1
     fi
     [[ -s "${dir}/key" ]] || return 1
     printf '%s\n' "${dir}/key"
@@ -1449,7 +1466,8 @@ _venv_stale() {
 # works. On the FRESH path it does not yet (the chown comes later), and there the requirements
 # came from a clone of REPO_URL that the operator asked for as root — so that path is unchanged.
 install_deps() {
-    local as_owner="" clear=""
+    local as_owner="" clear="" boot_txt req_txt
+    boot_txt="$(panel_file requirements-bootstrap.txt)"; req_txt="$(panel_file requirements.txt)"
     if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]] \
        && [[ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]]; then
         as_owner="sudo -u ${PANEL_USER}"
@@ -1465,15 +1483,15 @@ install_deps() {
     # hashed. A commit WITHOUT it — an update pinned to an older commit, or the rollback putting
     # one back — keeps the pip the venv already has, which installs requirements.txt as well
     # (22.04's own 22.0.2 does), rather than falling back to an unpinned upgrade.
-    if [[ -f "${PANEL_DIR}/requirements-bootstrap.txt" ]]; then
+    if [[ -f "${boot_txt}" ]]; then
         ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --require-hashes --only-binary :all: \
-            -r "${PANEL_DIR}/requirements-bootstrap.txt"
+            -r "${boot_txt}"
     else
         info "  (this version has no requirements-bootstrap.txt: keeping the venv's own pip)"
     fi
     # No --require-hashes: pip turns hash checking on by itself whenever a requirement carries a
     # hash, and an older pinned commit's requirements.txt may carry none (requirements.in).
-    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${req_txt}"
 }
 
 # What decides whether an update reinstalls dependencies: requirements.txt, and pip's own lockfile
@@ -1482,10 +1500,10 @@ install_deps() {
 # where a failed pipe in an assignment would end the update.
 _deps_digest() {
     local f out=""
-    [[ -f "${PANEL_DIR}/requirements.txt" ]] || return 0
+    [[ -f "$(panel_file requirements.txt)" ]] || return 0
     for f in requirements.txt requirements-bootstrap.txt; do
-        if [[ -f "${PANEL_DIR}/${f}" ]]; then
-            out="${out}$(sha256sum "${PANEL_DIR}/${f}" 2>/dev/null | awk '{print $1}' || true) "
+        if [[ -f "$(panel_file "${f}")" ]]; then
+            out="${out}$(sha256sum "$(panel_file "${f}")" 2>/dev/null | awk '{print $1}' || true) "
         fi
     done
     printf '%s\n' "${out}"
@@ -1700,7 +1718,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=${PANEL_USER}
 WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -1721,7 +1739,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -2402,6 +2420,27 @@ stage_root_source() {
     printf '%s\n' "${out}"
 }
 
+# A file root stages from its source: panel/install/<name> where that source has it, <name> at the
+# root where it does not (see _tree_file). stage_root_source keeps every check it makes on either.
+#
+# Root installing from the operator's own tree picks the path in THAT tree first: stage_root_source
+# reads the operator's tree only for a path the tree holds, and for any other it falls through to
+# root's verified clone, which fetches, checks signatures and can raise root's source floor. A miss
+# on the moved path there sent every operator run of today's layout down that branch for nothing,
+# with a false "root stages nothing from this checkout" (review of #503).
+stage_panel_file() {
+    local osrc=""
+    if [[ "$(id -u)" -eq 0 ]] && ! _checkout_is_roots && osrc="$(_operator_src)"; then
+        if _operator_file "${osrc}" "${MOVED_DIR}/$1" >/dev/null; then
+            stage_root_source "${MOVED_DIR}/$1" "$2"
+        else
+            stage_root_source "$1" "$2"
+        fi
+        return
+    fi
+    stage_root_source "${MOVED_DIR}/$1" "$2" || stage_root_source "$1" "$2"
+}
+
 # ── The recovery command ───────────────────────────────────────────────────────────────────────
 # `sudo linuxgsm-panel-recover` is what this installer prints as the lockout remedy and what
 # README documents, so it runs as ROOT. It used to be a symlink to ${PANEL_DIR}/recover.sh — a
@@ -2446,7 +2485,7 @@ install_recovery_command() {
     H_SUDO=""; [[ "$(id -u)" -ne 0 ]] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
        && _prepare_root_source \
-       && stage="$(stage_root_source recover.sh recover.sh)" \
+       && stage="$(stage_panel_file recover.sh recover.sh)" \
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
         ${H_SUDO} rm -f "${stage}" 2>/dev/null || true
@@ -2465,8 +2504,8 @@ install_recovery_command() {
                 warn "Removed the old link that pointed it at ${PANEL_DIR}/recover.sh."
             fi
         fi
-    elif [[ -f "${PANEL_DIR}/recover.sh" ]]; then
-        target="${PANEL_DIR}/recover.sh"
+    elif [[ -f "$(panel_file recover.sh)" ]]; then
+        target="$(panel_file recover.sh)"
         warn "Recovery command points into the checkout — no root-owned copy could be placed."
         warn "Re-run this installer as root so \`sudo linuxgsm-panel-recover\` is not panel-writable."
     fi
@@ -2476,7 +2515,7 @@ install_recovery_command() {
     # the same commit on every install and update; when it cannot be staged, a root-owned copy
     # already there is kept, and nothing in the checkout is ever pointed at.
     local ustage=""
-    if ustage="$(stage_root_source uninstall.sh uninstall.sh)"; then
+    if ustage="$(stage_panel_file uninstall.sh uninstall.sh)"; then
         ${H_SUDO} install -o root -g root -m 0755 "${ustage}" "${HELPER_DIR}/uninstall.sh" 2>/dev/null \
             || warn "Could not place the root-owned uninstaller at ${HELPER_DIR}/uninstall.sh."
         ${H_SUDO} rm -f "${ustage}" 2>/dev/null || true
@@ -2681,7 +2720,7 @@ install_root_tools() {
     # helper and from the same source. A commit that changes it was itself verified with the key
     # already here (root_source_commit), so this is how a new key arrives. A failure keeps the one
     # in place.
-    if _stage="$(stage_root_source "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}")"; then
+    if _stage="$(stage_panel_file "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}")"; then
         if ${H_SUDO} install -o root -g root -m 0644 "${_stage}" "${HELPER_DIR}/${RELEASE_SIGNERS}" 2>/dev/null; then
             ok "Release key installed at ${HELPER_DIR}/${RELEASE_SIGNERS}"
         else
@@ -2738,7 +2777,7 @@ install_root_tools() {
         fi
     fi
 
-    if _stage="$(stage_root_source db_maintenance.py db_maintenance.py)"; then
+    if _stage="$(stage_panel_file db_maintenance.py db_maintenance.py)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${DBM_DST}" 2>/dev/null; then
             ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
             INST_OK=0
@@ -3259,7 +3298,7 @@ write_sudoers_grant() {
 
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
-if [[ -f "${PANEL_DIR}/app.py" ]] && [[ -f "${UNIT_FILE}" ]]; then
+if [[ -f "$(panel_file app.py)" ]] && [[ -f "${UNIT_FILE}" ]]; then
     IS_UPDATE=1
 fi
 
@@ -3512,8 +3551,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     if [[ "$(id -u)" -eq 0 ]]; then
         [[ -f "/usr/local/lib/linuxgsm-panel/db_maintenance.py" ]] \
             && DBM_RUN="python3 /usr/local/lib/linuxgsm-panel/db_maintenance.py"
-    elif [[ -x "${PANEL_DIR}/venv/bin/python3" ]] && [[ -f "${PANEL_DIR}/db_maintenance.py" ]]; then
-        DBM_RUN="${PANEL_DIR}/venv/bin/python3 ${PANEL_DIR}/db_maintenance.py"
+    elif [[ -x "${PANEL_DIR}/venv/bin/python3" ]] && [[ -f "$(panel_file db_maintenance.py)" ]]; then
+        DBM_RUN="${PANEL_DIR}/venv/bin/python3 $(panel_file db_maintenance.py)"
     fi
     if [[ -n "${DBM_RUN}" ]]; then
         if ${DBM_RUN} update; then
@@ -3995,7 +4034,7 @@ echo -e "${CYAN}Forgot the admin password?${NC} From a shell on this server (no 
 if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     echo -e "    sudo linuxgsm-panel-recover"
 else
-    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash recover.sh reset-password${NC}"
+    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: bash $(panel_file recover.sh) reset-password${NC}"
 fi
 echo ""
 

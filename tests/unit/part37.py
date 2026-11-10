@@ -1027,7 +1027,7 @@ def _v4_prefix_doc():
     manage = _read29("manage.py")
     recover = "\n".join(ln for ln in _read29("recover.sh").splitlines() if not ln.lstrip().startswith("#"))
     real = ('sub.add_parser("list-users"' in manage and '["superadmin"] if u.is_superadmin' in manage
-            and '"${PANEL_DIR}/manage.py" "$@"' in recover)
+            and '"$(manage_of "${PANEL_DIR}")" "$@"' in recover)   # recover.sh runs the install's manage.py
     check("docs: SECURITY.md tells an operator whose install was set up before the setup token what to "
           "check (superadmins, the tailnet, sign-ins), by commands that exist and print what it says",
           bool(body) and not missing and real, "missing %r; commands real: %s" % (missing, real))

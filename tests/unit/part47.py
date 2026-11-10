@@ -369,8 +369,14 @@ _SHIMS47 = ('ok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\ninfo() { echo "
             '_prepare_root_source() { :; }\n')
 
 
+# install.sh's file-placement helpers, which install_recovery_command and the lockout remedy use to
+# find the root clean-up's moved files (stage_panel_file goes through the stage_root_source stub).
+_PLACE47 = (_INS47[_INS47.index('MOVED_DIR="panel/install"\n'):_INS47.index('\nSRC=""\n') + 1]
+            + _shfn47(_INS47, "stage_panel_file"))
+
+
 def _uninstall_copy47(tmp):
-    fn = _shfn47(_INS47, "install_recovery_command") + "install_recovery_command\n"
+    fn = _PLACE47 + _shfn47(_INS47, "install_recovery_command") + "install_recovery_command\n"
     env = "HELPER_DIR=/usr/local/lib/lgsmp\nPANEL_DIR=/home/p/linuxgsm-panel\nREPO_URL=x\nDEFAULT_BRANCH=main\n"
 
     def run(trusted, staged):
@@ -407,12 +413,13 @@ def _uninstall_copy47(tmp):
 def _lockout_remedy47(tmp):
     blk = _INS47[_INS47.index('echo -e "${CYAN}Forgot the admin password?'):]
     blk = blk[:blk.index("\nfi\n") + 4]
-    out = {k: _bash47("CYAN= NC= YELLOW= PANEL_DIR=/home/lgsmpanel/linuxgsm-panel RUN_AS_ROOT=%d\n" % k + blk).stdout
+    out = {k: _bash47("CYAN= NC= YELLOW= PANEL_DIR=/home/lgsmpanel/linuxgsm-panel RUN_AS_ROOT=%d\n" % k
+                      + _PLACE47 + blk).stdout
            for k in (1, 0)}
     check("install.sh: after a ROOT install the lockout remedy is only `sudo linuxgsm-panel-recover` — not the "
           "checkout's recover.sh, which root would run out of a panel-writable tree; a per-user install "
           "keeps the alternative", "linuxgsm-panel-recover" in out[1] and "recover.sh" not in out[1]
-          and "bash recover.sh reset-password" in out[0], repr(out))
+          and "bash /home/lgsmpanel/linuxgsm-panel/recover.sh reset-password" in out[0], repr(out))
     # recover.sh's own "re-run" line, reached by an account that is neither root nor the service user.
     panel = os.path.join(tmp, "rc-panel")
     os.makedirs(panel, exist_ok=True)

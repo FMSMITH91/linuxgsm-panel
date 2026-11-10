@@ -2881,6 +2881,9 @@ _iw_disarm = _iw_seg('    info "[5/6] Starting the service', "trap - ERR EXIT HU
 _iw_snapfn = ([ln.strip() for ln in _iw_src.splitlines()
                if ln.strip().startswith("snapshot_ok() {")] or [""])[0]
 # …[1/6] and [2/6] entire, which is what the ordering above is actually a claim about…
+# install.sh's file-placement helpers (MOVED_DIR, _tree_file, panel_file): the update window's
+# code finds the root clean-up's moved files through them, so every script below defines them.
+_iw_place = _iw_src[_iw_src.index('MOVED_DIR="panel/install"\n'):_iw_src.index('\nSRC=""\n')]
 _iw_stage12 = _iw_upto('    info "[1/6] Snapshotting', '    info "[3/6] Fetching')
 # …and the root-owned refresh at the END of the window. A leading newline anchors it to the
 # 4-space-indented copy inside the window, not the 8-space one in the already-up-to-date branch.
@@ -2913,6 +2916,7 @@ def _iw_run(scenario, panel_dir, backup, env=None):
         "RUN_AS_ROOT=0",
         "PANEL_USER='nobody'",
         "PANEL_DIR=%s" % _iw_shlex.quote(panel_dir),
+        _iw_place,
         "BACKUP=%s" % _iw_shlex.quote(backup),
         _iw_window,
         scenario,
@@ -2959,6 +2963,7 @@ def _iw_run_stage12(panel_dir, backup, evlog, data_tar_empty=False):
         "RUN_AS_ROOT=0",
         "PANEL_USER='nobody'",
         "PANEL_DIR=%s" % _iw_shlex.quote(panel_dir),
+        _iw_place,
         "BACKUP=%s" % _iw_shlex.quote(backup),
         _iw_stage12,
         "trap - ERR EXIT HUP INT TERM",
