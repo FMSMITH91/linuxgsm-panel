@@ -86,6 +86,30 @@ check("install.sh: recover.sh, uninstall.sh, release-signers and db_maintenance.
                             _inst), "")
 
 
+# ...and as ROOT installing from the operator's own tree, through the real stage_root_source: the
+# tree's own copy is staged, and root's verified clone (root_source_commit) is never asked for a
+# file the tree lacks at the moved path (review of #503: today's layout went down that branch).
+_opstub166 = ('id() { if [ "$#" -eq 1 ] && [ "$1" = -u ]; then echo 0; else command id "$@"; fi; }\n'
+              "_checkout_is_roots() { return 1; }\n_operator_src() { printf '%s\\n' \"${OPSRC}\"; }\n"
+              "_operator_file() { [[ -f \"$1/$2\" ]] && printf '%s\\n' \"$1/$2\"; }\n"
+              'root_source_commit() { echo ROOT-GIT >&2; return 1; }\nchown() { :; }\nH_SUDO=""\n')
+
+
+def _opstage166(tree):
+    hd = _tf166.mkdtemp(dir=_SB166, prefix="helper-")
+    r = _bash166(_inst_placement() + _opstub166 + "HELPER_DIR=%s\nPANEL_DIR=%s\n" % (
+        _shlex166.quote(hd), _shlex166.quote(os.path.join(_SB166, "nopanel")))
+        + _inst_shfn("stage_root_source") + 'out="$(stage_panel_file recover.sh recover.sh)" && cat "${out}"\n',
+        env={"OPSRC": tree})
+    return r.stdout.strip(), "ROOT-GIT" in r.stderr
+
+
+eq("stage_panel_file (root, operator's tree): today's layout stages the tree's root copy without asking "
+   "root's verified clone", _opstage166(_tree166("op-old", root=("recover.sh",))), ("root recover.sh", False))
+eq("stage_panel_file (root, operator's tree): ...and a moved layout stages panel/install/recover.sh",
+   _opstage166(_tree166("op-new", moved=("recover.sh",))), ("moved recover.sh", False))
+
+
 # ── _release_key_file: the installed commit's key, at either place ─────────────────────────────
 def _key_repo166(tag, path):
     d = os.path.join(_SB166, tag)
@@ -119,6 +143,29 @@ eq("install.sh _release_key_file: ...and one that keeps it at the root (every re
 check("install.sh _release_key_file: root's floor commit is read at both places too",
       '_rootgit cat-file blob "${floor}:${MOVED_DIR}/${RELEASE_SIGNERS}"' in _inst_shfn("_release_key_file")
       and '_rootgit cat-file blob "${floor}:${RELEASE_SIGNERS}"' in _inst_shfn("_release_key_file"), "")
+
+
+def _rootkey166(d):
+    hd = _tf166.mkdtemp(dir=_SB166, prefix="nokey-")
+    floor = os.path.join(hd, "floor")
+    with open(floor, "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    os.makedirs(os.path.join(d, ".k"), exist_ok=True)
+    r = _bash166("set -uo pipefail\n" + _inst_placement()
+                 + 'id() { if [ "$#" -eq 1 ] && [ "$1" = -u ]; then echo 0; else command id "$@"; fi; }\n'
+                 + '_rootgit() { git -C "${REPO}" "$@"; }\n_source_floor() { git -C "${REPO}" rev-parse HEAD; }\n'
+                 + "HELPER_DIR=%s\nROOT_SRC_FLOOR_FILE=%s\nRELEASE_SIGNERS=release-signers\n"
+                 % (_shlex166.quote(hd), _shlex166.quote(floor)) + _inst_shfn("_release_key_file")
+                 + 'k="$(_release_key_file %s)" && cat "${k}"\n' % _shlex166.quote(os.path.join(d, ".k")),
+                 env={"REPO": d, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+    return r.stdout.strip()
+
+
+eq("install.sh _release_key_file (root, no key placed yet): the key at root's floor commit is read from "
+   "panel/install/ there, and from the root in a floor that predates the move",
+   [_rootkey166(_key_repo166("rkey-new", "panel/install/release-signers")),
+    _rootkey166(_key_repo166("rkey-old", "release-signers"))],
+   ["ssh-ed25519 KEY-AT-panel/install/release-signers", "ssh-ed25519 KEY-AT-release-signers"])
 
 
 # ── The service unit starts the app.py the tree has, and the debug report expects the same ─────

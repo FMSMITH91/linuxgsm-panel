@@ -2420,9 +2420,24 @@ stage_root_source() {
     printf '%s\n' "${out}"
 }
 
-# A file root stages from the commit: panel/install/<name> where that commit has it, <name> at the
+# A file root stages from its source: panel/install/<name> where that source has it, <name> at the
 # root where it does not (see _tree_file). stage_root_source keeps every check it makes on either.
+#
+# Root installing from the operator's own tree picks the path in THAT tree first: stage_root_source
+# reads the operator's tree only for a path the tree holds, and for any other it falls through to
+# root's verified clone, which fetches, checks signatures and can raise root's source floor. A miss
+# on the moved path there sent every operator run of today's layout down that branch for nothing,
+# with a false "root stages nothing from this checkout" (review of #503).
 stage_panel_file() {
+    local osrc=""
+    if [[ "$(id -u)" -eq 0 ]] && ! _checkout_is_roots && osrc="$(_operator_src)"; then
+        if _operator_file "${osrc}" "${MOVED_DIR}/$1" >/dev/null; then
+            stage_root_source "${MOVED_DIR}/$1" "$2"
+        else
+            stage_root_source "$1" "$2"
+        fi
+        return
+    fi
     stage_root_source "${MOVED_DIR}/$1" "$2" || stage_root_source "$1" "$2"
 }
 
