@@ -26,7 +26,9 @@ _SB166 = _tf166.mkdtemp(prefix="p166-")
 
 
 def _bash166(script, env=None, cwd=None):
-    return _sp166.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=cwd,  # nosec B603 B607 - bash over this part's own fixture script
+    # bash over this part's own fixture script
+    return _sp166.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607
+                      timeout=60, cwd=cwd,
                       env=dict(os.environ, **(env or {})), check=False)
 
 
@@ -93,7 +95,9 @@ def _key_repo166(tag, path):
     with open(os.path.join(d, path), "w", encoding="utf-8") as fh:
         fh.write("ssh-ed25519 KEY-AT-%s\n" % path)
     for argv in (["init", "-q"], ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "k"]):
-        _sp166.run(["git", "-C", d] + argv, capture_output=True, env=dict(os.environ, **env), check=True)  # nosec B603 B607 - git over this part's own temp repo
+        # git over this part's own temp repo
+        _sp166.run(["git", "-C", d] + argv, capture_output=True,  # nosec B603 B607
+                   env=dict(os.environ, **env), check=True)
     return d
 
 
