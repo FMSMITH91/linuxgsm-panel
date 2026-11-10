@@ -2349,16 +2349,32 @@ def _inst_placement():
     return _inst[_a:_inst.index('\nSRC=""\n', _a) + 1] + _inst_shfn_raw("stage_panel_file")
 
 
+_STOP_NAMES = ("UPDATE_STOPS", "_stop_ids", "_stop_applies", "_apply_update_stop", "_signed_then_stop")
+
+
+def _inst_stops():
+    """Return install.sh's required-stop code, cut from install.sh.
+
+    UPDATE_STOPS and its functions, with the first-parent test they call.
+    """
+    _a = _inst.index("\n# ── Required stops: releases an update may not skip") + 1
+    return (_inst[_a:_inst.index("\n# Which commit an update moves this checkout TO", _a) + 1]
+            + _inst_shfn_raw("_on_first_parent_line"))
+
+
 def _inst_shfn(name):
     """Return one shell function out of install.sh, whole.
 
-    install.sh's file-placement helpers come first when its body uses them: a function run on its
-    own would otherwise call a name never defined.
+    install.sh's file-placement helpers come first when its body uses them, and its required-stop
+    code when it applies a stop: a function run on its own would otherwise call a name never defined.
     """
     _fn = _inst_shfn_raw(name)
-    if name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
-        return _inst_placement() + _fn
-    return _fn
+    _pre = ""
+    if name not in _STOP_NAMES and any(n in _fn for n in ("_apply_update_stop", "_signed_then_stop")):
+        _pre = _inst_placement() + _inst_stops()
+    elif name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
+        _pre = _inst_placement()
+    return _pre + _fn
 
 
 def _pad_history(repo, env=None, n=4000):

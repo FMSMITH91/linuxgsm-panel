@@ -1165,6 +1165,63 @@ _hold_unless_signed() {
     return 1
 }
 
+# ── Required stops: releases an update may not skip ──────────────────────────────────────────
+# A release that changes what the NEXT installer must know (release 1 of the root clean-up taught
+# the updater where release 2 moves its files) is a stop. A host further behind goes to the oldest
+# stop it has not installed first, and to the newest release on its next update: each step runs the
+# installer the step before it placed. The list is read from the commit the update would move to,
+# so a stop named after this installer shipped still counts.
+UPDATE_STOPS="update-stops"
+
+# _stop_ids <commit>: the full commit ids in <commit>'s list, one per line (the first word of each
+# line that is 40 hex characters; comments and anything else are skipped).
+_stop_ids() {
+    _gitc cat-file blob "$1:${MOVED_DIR}/${UPDATE_STOPS}" 2>/dev/null \
+        | awk '$1 ~ /^[0-9a-f]+$/ && length($1) == 40 { print $1 }'
+}
+
+# _stop_applies <stop> <head> <target>: the stop lies strictly between HEAD and the target, on the
+# branch's first-parent line. Forward only: HEAD must be its ancestor, so a stop never moves a
+# checkout backwards or sideways.
+_stop_applies() {
+    [[ "$1" != "$2" && "$1" != "$3" ]] \
+        && _gitc merge-base --is-ancestor "$2" "$1" 2>/dev/null \
+        && _gitc merge-base --is-ancestor "$1" "$3" 2>/dev/null \
+        && _on_first_parent_line _gitc "$1" "refs/remotes/origin/${DEFAULT_BRANCH}"
+}
+
+# _apply_update_stop <head>: point UPD_TARGET at the oldest stop between HEAD and it, if any, and
+# keep the release it would have been in UPD_FINAL. A checkout with no commit has no stop to take.
+_apply_update_stop() {
+    local _head="$1" _s="" _stop=""
+    UPD_STOP=""; UPD_FINAL=""
+    # main only: the stops are main's releases, signed for main. A tracked test branch is offered its
+    # tip by the panel (system_ops), and a main stop has no signature for that branch to pass.
+    [[ "${DEFAULT_BRANCH}" = "${TRUSTED_BRANCH:-main}" ]] || return 0
+    [[ -n "${_head}" && -n "${UPD_TARGET}" ]] || return 0
+    while IFS= read -r _s; do
+        _stop_applies "${_s}" "${_head}" "${UPD_TARGET}" || continue
+        if [[ -z "${_stop}" ]] || _gitc merge-base --is-ancestor "${_s}" "${_stop}" 2>/dev/null; then
+            _stop="${_s}"
+        fi
+    done < <(_stop_ids "${UPD_TARGET}")
+    [[ -n "${_stop}" ]] || return 0
+    UPD_FINAL="${UPD_TARGET}"; UPD_STOP="${_stop}"; UPD_TARGET="${_stop}"
+}
+
+# _signed_then_stop <head>: _hold_unless_signed for the target, then the stop, then the stop's own
+# signature. The target is checked FIRST: its list decides which commit is installed, so a list in a
+# commit not signed with the release key is never read (it could name an older, superseded release).
+# A stop that is not signed holds the update like any unsigned target, and is then not reported.
+_signed_then_stop() {
+    _hold_unless_signed "$1" || return 1
+    [[ "${UPD_WHY}" = "tip" || "${UPD_WHY}" = "pin" ]] || return 0
+    _apply_update_stop "$1"
+    [[ -n "${UPD_STOP}" ]] || return 0
+    _hold_unless_signed "$1" || return 1
+    [[ "${UPD_WHY}" != "hold" ]] || { UPD_STOP=""; UPD_FINAL=""; }
+}
+
 # Which commit an update moves this checkout TO, once the branch has been fetched into
 # refs/remotes/origin/<branch>. resolve_update_target asks it whether there is anything to do, and
 # fetch_code asks it again to do it: ONE decision. It used to be two copies, and fetch_code's had
@@ -1186,6 +1243,7 @@ _hold_unless_signed() {
 _choose_update_target() {
     local _tracking="refs/remotes/origin/${DEFAULT_BRANCH}" _head=""
     UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""; UPD_HOLD=""; UPD_HOLD_WHY=""
+    UPD_STOP=""; UPD_FINAL=""
     if ! _ref_exists _gitc "${_tracking}" \
        || ! UPD_TARGET="$(_gitc rev-parse --verify --quiet "${_tracking}^{commit}" 2>/dev/null)"; then
         UPD_TARGET=""
@@ -1205,7 +1263,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the tip of ${DEFAULT_BRANCH} is older than this checkout, which already contains it, so moving to it would go backwards"
             return 0
         fi
-        _hold_unless_signed "${_head}"
+        _signed_then_stop "${_head}"
         return
     fi
     # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
@@ -1272,7 +1330,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the pinned commit ${UPD_PIN} is on ${DEFAULT_BRANCH} but does not contain this checkout, so moving to it would drop commits the checkout has"
         fi
     fi
-    _hold_unless_signed "${_head}"
+    _signed_then_stop "${_head}"
 }
 
 # Copy the current checkout into PANEL_DIR (skips venv/data so we never clobber
@@ -1320,6 +1378,7 @@ fetch_code() {
         # why.
         _choose_update_target || die "${UPD_ERR}
      Nothing was reset."
+        [[ -z "${UPD_STOP:-}" ]] || echo "  ${UPD_STOP:0:10} is a release no update may skip, so this update installs it first; the next update moves on to ${UPD_FINAL:0:10}"
         case "${UPD_WHY}" in
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
@@ -3580,6 +3639,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     TO_VER="$(panel_version)"
     REQ_AFTER="$(_deps_digest)"
     ok "Code updated (${FROM_VER} → ${TO_VER})"
+    [[ -z "${UPD_STOP:-}" ]] || warn "That was a release no update may skip. Update once more to install the newest release (${UPD_FINAL:0:10})."
 
     # Most updates are code-only. Reinstalling deps means pip resolves + may rebuild wheels,
     # which pegs the CPU on a small VPS for no reason. Skip it when requirements.txt and pip's own
