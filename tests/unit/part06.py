@@ -2353,8 +2353,10 @@ _STOP_NAMES = ("UPDATE_STOPS", "_stop_ids", "_stop_applies", "_apply_update_stop
 
 
 def _inst_stops():
-    """Return install.sh's required-stop code (UPDATE_STOPS and its three functions), cut from install.sh,
-    with the first-parent test it calls."""
+    """Return install.sh's required-stop code, cut from install.sh.
+
+    UPDATE_STOPS and its three functions, with the first-parent test they call.
+    """
     _a = _inst.index("\n# ── Required stops: releases an update may not skip") + 1
     return (_inst[_a:_inst.index("\n# Which commit an update moves this checkout TO", _a) + 1]
             + _inst_shfn_raw("_on_first_parent_line"))

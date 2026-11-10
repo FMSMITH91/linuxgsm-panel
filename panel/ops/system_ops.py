@@ -2189,12 +2189,19 @@ def _is_ancestor(older, newer):
     return rc == 0
 
 
+def _stops_ahead(target_sha):
+    """The listed stops strictly between HEAD and `target_sha` (forward only), first-parent unchecked."""
+    head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
+    if hrc != 0:
+        return []
+    head = head.strip()
+    return [s for s in _stop_ids(target_sha) if s not in (head, target_sha)
+            and _is_ancestor(head, s) and _is_ancestor(s, target_sha)]
+
+
 def _update_stop(target_sha, ref):
     """The oldest required stop between HEAD and `target_sha` on `ref`'s first-parent line, or None."""
-    head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
-    head = head.strip()
-    cands = [s for s in _stop_ids(target_sha) if hrc == 0 and s not in (head, target_sha)
-             and _is_ancestor(head, s) and _is_ancestor(s, target_sha)]
+    cands = _stops_ahead(target_sha)
     if not cands:
         return None
     line, _, lrc = _git(["rev-list", "--first-parent", ref], timeout=30)
