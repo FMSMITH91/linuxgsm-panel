@@ -190,7 +190,13 @@ eq("debug report: the unit it expects names the same app.py install.sh's unit do
    _rend166, {_old166: _unit166(_old166, 1), _new166: _unit166(_new166, 1)})
 
 # ── recover.sh: the root-owned copy finds manage.py in either layout ───────────────────────────
-_REC166 = os.path.join(_root, "recover.sh")
+# A copy outside the repository, as the root-owned one in /usr/local/lib/linuxgsm-panel is: run from
+# the checkout, recover.sh's last fallback (its own directory) finds the repository's manage.py.
+_REC166 = os.path.join(_tf166.mkdtemp(dir=_SB166, prefix="helperdir-"), "recover.sh")
+with open(os.path.join(_root, "recover.sh"), encoding="utf-8") as _fh166, \
+        open(_REC166, "w", encoding="utf-8") as _out166:
+    _out166.write(_fh166.read())
+_HOME166 = _tf166.mkdtemp(dir=_SB166, prefix="home-")
 
 
 def _recover166(d):
@@ -200,8 +206,8 @@ def _recover166(d):
         fh.write('#!/bin/sh\necho "RAN $*"\n')
     os.chmod(py, 0o700)  # nosec B103 - an owner-only stand-in interpreter in this part's temp tree  # nosemgrep
     r = _sp166.run(["bash", _REC166, "list-users"], capture_output=True, text=True, timeout=60,  # nosec B603 B607
-                   env=dict(os.environ, PANEL_DIR=d), stdin=_sp166.DEVNULL, check=False)
-    return r.returncode, r.stdout.strip()
+                   env=dict(os.environ, PANEL_DIR=d, HOME=_HOME166), stdin=_sp166.DEVNULL, check=False)
+    return r.returncode, r.stdout.strip() or (r.stderr.strip().splitlines() or [""])[-1]
 
 
 eq("recover.sh: an install that has moved manage.py into panel/install/ is recovered with that manage.py",
@@ -211,7 +217,8 @@ eq("recover.sh: ...and one with manage.py at its root (every install today) stil
    _recover166(_tree166("rec-old", root=("manage.py",))),
    (0, "RAN %s list-users" % os.path.join(_SB166, "rec-old", "manage.py")))
 eq("recover.sh: ...while a directory with neither is not taken for an install",
-   _recover166(_tree166("rec-none"))[0], 1)
+   _recover166(_tree166("rec-none")),
+   (1, "Couldn't find a LinuxGSM Panel install on this host — run this ON the panel server."))
 
 # ── the helper: a home holding either layout is a panel account (never user-deleted) ───────────
 _hspec166 = _ilu166.spec_from_loader("p166_helper", _ilm166.SourceFileLoader(
