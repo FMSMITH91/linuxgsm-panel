@@ -92,6 +92,38 @@ eq("install.sh: a pin to the newest release stops at the stop too (the panel pin
    _named168(_target168(_C168["B"], _C168["D"])), ("S2", "S2", "D"))
 eq("install.sh: a pin whose own commit lists no stops goes to the pin (the list is read from the target)",
    _named168(_target168(_C168["A"], _C168["C"])), ("C", "", ""))
+# ...under the REAL signature gate (_hold_unless_signed), with only which commits are signed stood in.
+# The target's signature is checked BEFORE its list is read: an unsigned commit's list could name an
+# older, superseded release, and the update held on that commit before stops existed.
+_FN_GATE168 = ('warn() { echo "WARN $*" >&2; }\n'
+               + "".join(_inst_shfn(n) for n in ("_gitc", "_ref_exists", "_hold_unless_signed",
+                                                   "_choose_update_target"))
+               + '_update_target_signed() { case " ${SIGNED} " in *" $1 "*) return 0 ;; esac; '
+                 'RELEASE_SIG_WHY="not signed"; return 1; }\n')
+
+
+def _gate168(head, signed, branch="main"):
+    """(UPD_TARGET, UPD_WHY, UPD_STOP) at `head` when exactly `signed` (names) carry a signature."""
+    _git168("-C", _CO168, "reset", "-q", "--hard", _C168[head])
+    ids = " ".join(_C168[n] for n in signed)
+    # bash over install.sh's own functions, on this part's fixture clone
+    r = _sp168.run(["bash", "-c", "PANEL_DIR=%s\nDEFAULT_BRANCH=%s\nTRUSTED_BRANCH=main\nSIGNED=%s\n%s"
+                    'git -C "${PANEL_DIR}" update-ref refs/remotes/origin/%s refs/remotes/origin/main\n'
+                    '_choose_update_target; echo "T=${UPD_TARGET} W=${UPD_WHY} S=${UPD_STOP}"'
+                    % (_shlex168.quote(_CO168), branch, _shlex168.quote(ids), _FN_GATE168, branch)],  # nosec B603 B607
+                   capture_output=True, text=True, timeout=60, env=_GENV168, check=False)
+    m = _re168.search(r"T=(\S*) W=(\S*) S=(\S*)", r.stdout)
+    return _named168(m.groups()) if m else ("rc=%d %s" % (r.returncode, r.stderr[-300:]),)
+
+
+eq("install.sh (real gate): the newest release is unsigned, so its list is never read: the update "
+   "holds, with no stop taken", _gate168("A", ("S1", "S2")), ("A", "hold", ""))
+eq("install.sh (real gate): ...a signed newest release whose stop is unsigned holds too, and reports no stop",
+   _gate168("A", ("D",)), ("A", "hold", ""))
+eq("install.sh (real gate): ...and with both signed it installs the stop (control)", _gate168("A", ("D", "S1")),
+   ("S1", "tip", "S1"))
+eq("install.sh: a tracked test branch takes no stop (main's stops are signed for main, and the card offers "
+   "a test branch its tip)", _gate168("A", ("D", "S1"), branch="testing"), ("D", "tip", ""))
 check("install.sh: fetch_code says the release was required and which comes next, and the update's "
       "result line asks for one more update",
       '[[ -z "${UPD_STOP:-}" ]] || echo "  ${UPD_STOP:0:10} is a release no update may skip' in _inst
@@ -142,6 +174,24 @@ try:
            "newest release", _status168, {"A": (True, "S1"), "S2": (True, "D")})
     finally:
         _so168._release_gate_for, _so168._update_touches_runtime, _so168._tracked_branch = _saved_card168
+    # A git read the rule needs that fails is "cannot tell", never "no stop": the card would offer the
+    # newest release and the installer, reading the list itself, could install the stop instead.
+    _git_real168 = _so168._git
+    try:
+        _so168._git = lambda args, timeout=45: (("", "fatal", 128) if args[:1] == ["ls-tree"]
+                                                 else _git_real168(args, timeout=timeout))
+        _git168("-C", _CO168, "reset", "-q", "--hard", _C168["A"])
+        _unread168 = _so168._take_update_stop(_C168["D"], "passing", _REF168, lambda sha: True)
+        _so168._release_gate_for = lambda branch: (lambda sha: True)
+        _so168._update_touches_runtime = lambda ref: True
+        _so168._tracked_branch = lambda: "main"
+        _ust168 = _so168._compute_update_status()
+    finally:
+        _so168._git = _git_real168
+        _so168._release_gate_for, _so168._update_touches_runtime, _so168._tracked_branch = _saved_card168
+    eq("system_ops: an unreadable stop list is 'cannot tell', and the card offers nothing and says it could "
+       "not read the update source", (_unread168, _ust168.get("update_available"), _ust168.get("fetched")),
+       ((None, "unread", None), False, False))
 finally:
     _so168.PANEL_DIR, _so168._remote_ci_state = _saved168
 

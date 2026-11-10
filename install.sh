@@ -1195,6 +1195,9 @@ _stop_applies() {
 _apply_update_stop() {
     local _head="$1" _s="" _stop=""
     UPD_STOP=""; UPD_FINAL=""
+    # main only: the stops are main's releases, signed for main. A tracked test branch is offered its
+    # tip by the panel (system_ops), and a main stop has no signature for that branch to pass.
+    [[ "${DEFAULT_BRANCH}" = "${TRUSTED_BRANCH:-main}" ]] || return 0
     [[ -n "${_head}" && -n "${UPD_TARGET}" ]] || return 0
     while IFS= read -r _s; do
         _stop_applies "${_s}" "${_head}" "${UPD_TARGET}" || continue
@@ -1204,6 +1207,19 @@ _apply_update_stop() {
     done < <(_stop_ids "${UPD_TARGET}")
     [[ -n "${_stop}" ]] || return 0
     UPD_FINAL="${UPD_TARGET}"; UPD_STOP="${_stop}"; UPD_TARGET="${_stop}"
+}
+
+# _signed_then_stop <head>: _hold_unless_signed for the target, then the stop, then the stop's own
+# signature. The target is checked FIRST: its list decides which commit is installed, so a list in a
+# commit not signed with the release key is never read (it could name an older, superseded release).
+# A stop that is not signed holds the update like any unsigned target, and is then not reported.
+_signed_then_stop() {
+    _hold_unless_signed "$1" || return 1
+    [[ "${UPD_WHY}" = "tip" || "${UPD_WHY}" = "pin" ]] || return 0
+    _apply_update_stop "$1"
+    [[ -n "${UPD_STOP}" ]] || return 0
+    _hold_unless_signed "$1" || return 1
+    [[ "${UPD_WHY}" != "hold" ]] || { UPD_STOP=""; UPD_FINAL=""; }
 }
 
 # Which commit an update moves this checkout TO, once the branch has been fetched into
@@ -1247,8 +1263,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the tip of ${DEFAULT_BRANCH} is older than this checkout, which already contains it, so moving to it would go backwards"
             return 0
         fi
-        _apply_update_stop "${_head}"
-        _hold_unless_signed "${_head}"
+        _signed_then_stop "${_head}"
         return
     fi
     # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
@@ -1315,8 +1330,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the pinned commit ${UPD_PIN} is on ${DEFAULT_BRANCH} but does not contain this checkout, so moving to it would drop commits the checkout has"
         fi
     fi
-    [[ "${UPD_WHY}" != "pin" ]] || _apply_update_stop "${_head}"
-    _hold_unless_signed "${_head}"
+    _signed_then_stop "${_head}"
 }
 
 # Copy the current checkout into PANEL_DIR (skips venv/data so we never clobber

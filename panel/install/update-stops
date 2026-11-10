@@ -4,10 +4,14 @@
 #
 # Add a release here when the NEXT release depends on something it teaches the installed updater,
 # the recovery command or the helper, which run from root-owned copies a release replaces only once
-# it is installed. One line per release: its full commit id on main, then why. It must be a signed
-# release (tools/sign-release.sh), or no panel will move to it. Read from the commit an update would
-# install, so a stop added later counts for every panel whose installer reads this file.
+# it is installed. One line per release: its full commit id on main, then why.
+#
+# The entry goes in WITH the release that depends on it (a commit cannot name its own id, and the
+# list is read from the commit an update would install, after that commit's signature is checked):
+# an update to a target that does not list the stop skips it. The stop must be a signed release whose
+# checks passed, or panels behind it are offered nothing until it is.
 #
 # Only an updater that has this feature follows the list: a panel on an older release goes straight
-# to the newest one, as before. A release added here does nothing for panels already past it.
+# to the newest one, as before. The first entry is older than this feature, so it takes effect only
+# when a newer installer runs over an older checkout (a hand run, the deploy).
 41fa75df02363e2808192d1cfc26cd772757721d  root clean-up, release 1: the updater learns panel/install/ before release 2 moves the files there

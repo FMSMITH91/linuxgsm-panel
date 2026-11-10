@@ -2175,17 +2175,36 @@ def _r17a_unread_status(cur_ver, cur_sha, branch):
 _UPDATE_STOPS = INSTALL_REL + "/update-stops"
 
 
+class _StopUnread(Exception):
+    """A git read the stop rule needs failed, so whether a stop applies cannot be told."""
+
+
 def _stop_ids(commit):
-    """The full commit ids `commit`'s list of required stops names, in its order ([] when none)."""
+    """The listed ids in `commit`'s stop list that are commits here, in order ([] when it has none)."""
+    lst, _, lrc = _git(["ls-tree", commit, "--", _UPDATE_STOPS], timeout=10)
+    if lrc != 0:
+        raise _StopUnread
+    if not lst.strip():
+        return []
     out, _, rc = _git(["cat-file", "blob", commit + ":" + _UPDATE_STOPS], timeout=10)
     if rc != 0:
-        return []
-    return [w[0] for w in (ln.split() for ln in out.splitlines())
-            if w and re.fullmatch(r"[0-9a-f]{40}", w[0])]
+        raise _StopUnread
+    ids = [w[0] for w in (ln.split() for ln in out.splitlines()) if w and re.fullmatch(r"[0-9a-f]{40}", w[0])]
+    return [i for i in ids if _is_commit(i)]
+
+
+def _is_commit(sha):
+    """Whether `sha` names a commit here: rev-parse --quiet answers 1 for one that does not."""
+    _, _, rc = _git(["rev-parse", "--verify", "--quiet", sha + "^{commit}"], timeout=10)
+    if rc not in (0, 1):
+        raise _StopUnread
+    return rc == 0
 
 
 def _is_ancestor(older, newer):
     _, _, rc = _git(["merge-base", "--is-ancestor", older, newer], timeout=10)
+    if rc not in (0, 1):
+        raise _StopUnread
     return rc == 0
 
 
@@ -2193,19 +2212,25 @@ def _stops_ahead(target_sha):
     """The listed stops strictly between HEAD and `target_sha` (forward only), first-parent unchecked."""
     head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
     if hrc != 0:
-        return []
+        raise _StopUnread
     head = head.strip()
     return [s for s in _stop_ids(target_sha) if s not in (head, target_sha)
             and _is_ancestor(head, s) and _is_ancestor(s, target_sha)]
 
 
 def _update_stop(target_sha, ref):
-    """The oldest required stop between HEAD and `target_sha` on `ref`'s first-parent line, or None."""
+    """The oldest required stop between HEAD and `target_sha` on `ref`'s first-parent line, or None.
+
+    Raises _StopUnread when a read it needs fails: "no stop" would offer the target, and the
+    installer, reading the list itself, could then install a stop whose checks the card never asked.
+    """
     cands = _stops_ahead(target_sha)
     if not cands:
         return None
     line, _, lrc = _git(["rev-list", "--first-parent", ref], timeout=30)
-    on_line = set(line.split()) if lrc == 0 else set()
+    if lrc != 0:
+        raise _StopUnread
+    on_line = set(line.split())
     stop = None
     for s in (c for c in cands if c in on_line):
         if stop is None or _is_ancestor(s, stop):
@@ -2219,8 +2244,12 @@ def _take_update_stop(target_sha, target_state, ref, signed):
     The stop replaces `target_sha` when one lies between HEAD and it (behind is then counted to the
     stop). Target None means the stop cannot be installed yet (not signed, or its checks are not
     passing), which the caller offers as no update: the installer would not move past the stop.
+    State "unread" with target None: a read the rule needs failed, which the caller reports as such.
     """
-    stop = _update_stop(target_sha, ref)
+    try:
+        stop = _update_stop(target_sha, ref)
+    except _StopUnread:
+        return None, "unread", None
     if stop is None:
         return target_sha, target_state, None
     if not signed(stop):
@@ -2454,6 +2483,8 @@ def _compute_update_status():
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     # A required stop between HEAD and it is offered first, as the installer would install it.
     stop_sha, target_state, stop_behind = _take_update_stop(target_sha, target_state, ref, signed)
+    if target_state == "unread":
+        return _r17a_unread_status(cur_ver, cur_sha, branch)
     if stop_sha is None:
         return {**base, "update_available": False, "ci_state": target_state, "behind": behind_n,
                 "behind_tip": behind_n, "target_sha": target_sha,

@@ -2349,13 +2349,13 @@ def _inst_placement():
     return _inst[_a:_inst.index('\nSRC=""\n', _a) + 1] + _inst_shfn_raw("stage_panel_file")
 
 
-_STOP_NAMES = ("UPDATE_STOPS", "_stop_ids", "_stop_applies", "_apply_update_stop")
+_STOP_NAMES = ("UPDATE_STOPS", "_stop_ids", "_stop_applies", "_apply_update_stop", "_signed_then_stop")
 
 
 def _inst_stops():
     """Return install.sh's required-stop code, cut from install.sh.
 
-    UPDATE_STOPS and its three functions, with the first-parent test they call.
+    UPDATE_STOPS and its functions, with the first-parent test they call.
     """
     _a = _inst.index("\n# ── Required stops: releases an update may not skip") + 1
     return (_inst[_a:_inst.index("\n# Which commit an update moves this checkout TO", _a) + 1]
@@ -2370,7 +2370,7 @@ def _inst_shfn(name):
     """
     _fn = _inst_shfn_raw(name)
     _pre = ""
-    if name not in _STOP_NAMES and "_apply_update_stop" in _fn:
+    if name not in _STOP_NAMES and any(n in _fn for n in ("_apply_update_stop", "_signed_then_stop")):
         _pre = _inst_placement() + _inst_stops()
     elif name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
         _pre = _inst_placement()
