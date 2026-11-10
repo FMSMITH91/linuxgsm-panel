@@ -383,6 +383,67 @@
 {% endmacro %}
 {% endif %}
 
+{% if mc_lists_supported(server.game_type) and can_download_log %}
+{# A Java Minecraft server's operators, whitelist and bans (panel/routes/mc_lists.py): read from the
+   server's own files, changed by console command while it runs. Viewing needs the file manager's
+   permission (can_download_log); changing needs the command box's (can_send_command). The list box
+   has a fixed height, so the rows arriving after the first paint move nothing below the card. #}
+{% macro panel_mclists() %}
+<div class="card mb-3 panel-movable" data-panel="mclists" data-mtab="console" id="mcl-card"
+     data-can-change="{{ '1' if can_send_command else '0' }}">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Player Lists up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Player Lists down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Player Lists"><i class="bi bi-eye-slash"></i></button>
+  </span>
+  <div class="card-header"><i class="bi bi-person-lines-fill"></i> Player Lists</div>
+  <div class="card-body">
+    <div class="nav nav-tabs small mb-2 flex-nowrap overflow-auto" role="tablist" aria-label="Player Lists">
+      <button type="button" class="nav-link active py-1 px-2" role="tab" id="mcl-tab-ops" aria-selected="true"
+              aria-controls="mcl-panel" data-mcl-tab="ops" data-action="mclTab" data-args='["ops"]'>Operators</button>
+      <button type="button" class="nav-link py-1 px-2" role="tab" id="mcl-tab-whitelist" aria-selected="false"
+              aria-controls="mcl-panel" tabindex="-1" data-mcl-tab="whitelist" data-action="mclTab" data-args='["whitelist"]'>Whitelist</button>
+      <button type="button" class="nav-link py-1 px-2" role="tab" id="mcl-tab-bans" aria-selected="false"
+              aria-controls="mcl-panel" tabindex="-1" data-mcl-tab="bans" data-action="mclTab" data-args='["bans"]'>Banned players</button>
+      <button type="button" class="nav-link py-1 px-2" role="tab" id="mcl-tab-ipbans" aria-selected="false"
+              aria-controls="mcl-panel" tabindex="-1" data-mcl-tab="ipbans" data-action="mclTab" data-args='["ipbans"]'>Banned IPs</button>
+    </div>
+    <div id="mcl-panel" role="tabpanel" aria-labelledby="mcl-tab-ops">
+      <div class="form-check form-switch small mb-2" id="mcl-wl-row" hidden>
+        <input class="form-check-input" type="checkbox" role="switch" id="mcl-wl-on" disabled
+               data-action="mclWhitelistSwitch" data-args='["@self"]' data-on="change">
+        <label class="form-check-label" for="mcl-wl-on">Whitelist on: only players on this list can join</label>
+      </div>
+      <div class="border rounded small" style="height:12rem; overflow-y:auto;" id="mcl-box" aria-live="polite">
+        <div class="text-secondary p-2" id="mcl-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
+        <table class="table table-sm mb-0 align-middle" id="mcl-table" hidden>
+          <tbody id="mcl-rows" data-no-i18n></tbody>
+        </table>
+      </div>
+      {% if can_send_command %}
+      <form id="mcl-form" class="d-flex flex-wrap gap-2 mt-2" data-action="mclAdd" data-args='["@event"]' data-on="submit">
+        <input type="text" id="mcl-value" class="form-control form-control-sm" style="flex:1 1 9rem; min-width:0;"
+               maxlength="16" autocomplete="off" spellcheck="false" placeholder="Player name"
+               aria-label="Player name" disabled>
+        <input type="text" id="mcl-reason" class="form-control form-control-sm" style="flex:2 1 12rem; min-width:0;"
+               maxlength="100" autocomplete="off" placeholder="Reason (optional)" aria-label="Reason (optional)" hidden disabled>
+        <button type="submit" class="btn btn-sm btn-primary" id="mcl-add" disabled><i class="bi bi-plus-lg"></i> <span id="mcl-add-label">Add</span></button>
+      </form>
+      <div class="small mt-1" id="mcl-msg" role="status"></div>
+      {% else %}
+      <div class="form-text mt-2">Changing these lists needs permission to send console commands.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endmacro %}
+{% endif %}
+
 {# ── Console-tab panels, emitted in THIS user's order ──────────────────────────────────────────
    The declared list is built from the same conditions that define the macros above, so a stored key
    can never reach a macro that was not defined — which is exactly what stops a saved layout
@@ -397,13 +458,15 @@
      or has_permission('view_console') or can_send_command) else []) + ['controls', 'players'] %}
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
 {% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
+{% if mc_lists_supported(server.game_type) and can_download_log %}{% set panel_keys = panel_keys + ['mclists'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
 {# The name a hidden panel's chip shows: its card's title. `key|capitalize` printed "Content" for
    the Game Content card and "Controls" (no catalog entry) for the other, and the live chip
    (hidePanel) read the card header's raw text, "controls" for the card that has none. One table,
    handed to the page script as data-labels. #}
 {% set DETAIL_LABELS = {'controls': 'Controls', 'console': 'Live Console', 'players': 'Players',
-                        'commands': 'Commands', 'content': 'Game Content'} %}
+                        'commands': 'Commands', 'content': 'Game Content',
+                        'mclists': 'Player Lists'} %}
 {# data-declared, not a variable read in {% block scripts %}: Jinja blocks have separate
    scopes, so panel_keys is not visible there. #}
 <div id="detail-console" data-region="detail_console" data-declared='{{ panel_keys|tojson }}'
@@ -414,6 +477,7 @@
   {% elif key == 'players' %}{{ panel_players() }}
   {% elif key == 'commands' %}{{ panel_commands() }}
   {% elif key == 'content' %}{{ panel_content() }}
+  {% elif key == 'mclists' %}{{ panel_mclists() }}
   {% endif %}
   {% endfor %}
 </div>
@@ -653,4 +717,5 @@ var _CMPA_HIST_SCOPE = {{ hist_scope|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/console_history.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_detail.js') }}"></script>
+{% if mc_lists_supported(server.game_type) and can_download_log %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_mclists.js') }}"></script>{% endif %}
 {% endblock %}

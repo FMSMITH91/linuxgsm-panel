@@ -912,6 +912,9 @@ def register(app):
     _register_schedules(app)
     _register_commands(app)
     _cmpa_register_logs(app)
+    # A Minecraft server's operators, whitelist and bans (app.py is at its size limit).
+    from panel.routes import mc_lists as _mcl_routes
+    _mcl_routes.register(app)
     # Published on `app` because the module-level Telegram and Discord command bots drive a
     # start/stop/restart through this exact function, rather than a copy of its logic. It used to
     # be assigned at the end of register_routes(); now the module that owns it does the publishing,
