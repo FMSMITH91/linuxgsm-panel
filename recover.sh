@@ -57,6 +57,13 @@ elif [[ -f "${USER_UNIT}" ]]; then
     SVC_USER="$(id -un)"
 fi
 # A systemd --user install: run under sudo, $HOME is root's, so the USER_UNIT above isn't found.
+# Where an install keeps manage.py: panel/install/manage.py once the root clean-up has moved it
+# there, the install's root before that (install.sh's _tree_file says why). This copy runs
+# root-owned from the helper directory, so it has to find either layout.
+manage_of() {
+    if [[ -f "$1/panel/install/manage.py" ]]; then printf '%s\n' "$1/panel/install/manage.py"; else printf '%s\n' "$1/manage.py"; fi
+}
+
 # Scan every real user's home for the unit and adopt its owner as the service user.
 #
 # EVERY candidate is collected, not the first one found. /home/* is one directory per LOCAL USER,
@@ -79,7 +86,7 @@ if [[ -z "${PANEL_DIR}" ]]; then
     for uu in "${HOMES}"/*/.config/systemd/user/linuxgsm-panel.service; do
         [[ -f "${uu}" ]] || continue
         d="$(read_unit "${uu}" WorkingDirectory)"
-        [[ -n "${d}" ]] && [[ -f "${d}/manage.py" ]] || continue
+        [[ -n "${d}" ]] && [[ -f "$(manage_of "${d}")" ]] || continue
         CANDIDATES="${CANDIDATES}$(basename "$(dirname "$(dirname "$(dirname "$(dirname "${uu}")")")")")|${d}
 "
     done
@@ -99,7 +106,7 @@ if [[ -z "${PANEL_DIR}" ]]; then
         PANEL_DIR="$(printf '%s' "${CANDIDATES}" | head -1 | cut -d'|' -f2)"
     fi
 fi
-if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "${PANEL_DIR}/manage.py" ]]; then
+if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "$(manage_of "${PANEL_DIR}")" ]]; then
     # Nothing named the install, so ask the INSTALLER first, then try the two conventional
     # locations, then this script's own directory.
     #
@@ -141,14 +148,14 @@ if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "${PANEL_DIR}/manage.py" ]]; then
     conf_dir="$(read_unit "${PANEL_CONF}" panel_dir)"
     self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
     selfdir="$(cd "$(dirname "${self}")" 2>/dev/null && pwd)" || selfdir=""
-    if [[ -n "${conf_dir}" ]] && [[ -f "${conf_dir}/manage.py" ]]; then
+    if [[ -n "${conf_dir}" ]] && [[ -f "$(manage_of "${conf_dir}")" ]]; then
         # Same reason as the loop below: SVC_USER, where it is set at all, came from the install
         # being discarded here, and the `stat` further down derives it from the directory chosen.
         [[ "${conf_dir}" = "${PANEL_DIR}" ]] || SVC_USER=""
         PANEL_DIR="${conf_dir}"
     else
-        for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}"; do
-            if [[ -n "${d}" ]] && [[ -f "${d}/manage.py" ]]; then
+        for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}" "${selfdir%/panel/install}"; do
+            if [[ -n "${d}" ]] && [[ -f "$(manage_of "${d}")" ]]; then
                 # The account came from the install this block is DISCARDING — a unit file's User=,
                 # or the owner of a directory that turned out to have no manage.py. Clearing it lets
                 # the `stat -c '%U' "${PANEL_DIR}"` below derive the account from the directory
@@ -165,7 +172,7 @@ if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "${PANEL_DIR}/manage.py" ]]; then
         done
     fi
 fi
-if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "${PANEL_DIR}/manage.py" ]]; then
+if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "$(manage_of "${PANEL_DIR}")" ]]; then
     echo "Couldn't find a LinuxGSM Panel install on this host — run this ON the panel server." >&2
     exit 1
 fi
@@ -207,9 +214,9 @@ echo "Using ${PANEL_DIR} (service user ${SVC_USER})" >&2
 # Run AS THE PANEL'S USER so the SQLite database and its WAL files keep the correct
 # ownership (running as root could leave root-owned journal files the service can't write).
 if [[ "$(id -un)" = "${SVC_USER}" ]]; then
-    exec "${PY}" "${PANEL_DIR}/manage.py" "$@"
+    exec "${PY}" "$(manage_of "${PANEL_DIR}")" "$@"
 elif [[ "$(id -u)" -eq 0 ]]; then
-    exec sudo -u "${SVC_USER}" "${PY}" "${PANEL_DIR}/manage.py" "$@"
+    exec sudo -u "${SVC_USER}" "${PY}" "$(manage_of "${PANEL_DIR}")" "$@"
 else
     # Through the root-owned recovery command, not `sudo <this file>`: run from the checkout, that is
     # root running a file the panel user can rewrite (install_recovery_command in install.sh), and

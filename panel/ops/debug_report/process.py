@@ -788,7 +788,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=${PANEL_USER}
 WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -807,7 +807,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -834,10 +834,17 @@ def _dropin_path_ok(path):
     return path.startswith("/") and path.endswith(".conf") and ".." not in path.split("/")
 
 
+def _panel_file(panel_dir, name):
+    """install.sh's panel_file: panel/install/<name> where the install has it, <name> at its root
+    where it does not (the root clean-up moves the entry points in its second release)."""
+    moved = panel_dir + "/panel/install/" + name
+    return moved if os.path.isfile(moved) else panel_dir + "/" + name
+
+
 def render_unit(scope, user, panel_dir):
     """install.sh's unit text for `scope`, rendered in Python."""
-    return (UNIT_TEMPLATES[scope].replace("${PANEL_USER}", user)
-            .replace("${PANEL_DIR}", panel_dir))
+    return (UNIT_TEMPLATES[scope].replace("$(panel_file app.py)", _panel_file(panel_dir, "app.py"))
+            .replace("${PANEL_USER}", user).replace("${PANEL_DIR}", panel_dir))
 
 
 def directives(text):

@@ -3642,6 +3642,8 @@ check("helper self-update: the root installer starts in /, not in the panel-owne
       len(_pb_seen) == 1 and _pb_seen[0].get("cwd") == "/", repr(_pb_seen))
 _pb_src_blk = _pb_inst[_pb_inst.index('SRC=""\nif [[ -n "${PANEL_SELF_UPDATE:-}" ]]'):]
 _pb_src_blk = _pb_src_blk[:_pb_src_blk.index("\nfi\n") + 4]
+# ...preceded by install.sh's file-placement helpers, which it finds app.py and requirements.txt with.
+_pb_src_blk = _pb_inst[_pb_inst.index('MOVED_DIR="panel/install"\n'):_pb_inst.index('\nSRC=""\n') + 1] + _pb_src_blk
 _pb_ck = os.path.join(_PB, "checkout")
 os.makedirs(_pb_ck)
 for _n in ("app.py", "requirements.txt"):

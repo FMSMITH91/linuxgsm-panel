@@ -2246,8 +2246,10 @@ check("install.sh: requires a user UNIT file, not just an app.py, to call it an 
 _rec = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 check("install.sh: the recovery command is installed through one shared function",
       "install_recovery_command() {" in _rec and _rec.count("install_recovery_command") >= 4)
-check("install.sh: ...which takes recover.sh from the COMMIT, not the working tree",
-      "stage_root_source recover.sh recover.sh" in _rec)
+check("install.sh: ...which takes recover.sh from the COMMIT, not the working tree (stage_panel_file "
+      "goes through stage_root_source for both of its places)",
+      "stage_panel_file recover.sh recover.sh" in _rec
+      and 'stage_root_source "${MOVED_DIR}/$1" "$2" || stage_root_source "$1" "$2"' in _rec)
 check("install.sh: ...installs it root-owned beside the helper",
       '-o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh"' in _rec)
 # The point of the whole change: no call site may still symlink into the checkout directly.
@@ -2328,10 +2330,29 @@ def _rs_git(*a, cwd=None, inp=None):
                        env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")).stdout.strip()
 
 
-def _inst_shfn(name):
+def _inst_shfn_raw(name):
     """One shell function out of install.sh, whole: its definition line to its closing brace."""
     _i = _inst.index("\n" + name + "() {\n") + 1
     return _inst[_i:_inst.index("\n}\n", _i) + 3]
+
+
+_PLACEMENT_NAMES = ("MOVED_DIR", "_tree_file", "panel_file", "stage_panel_file")
+
+
+def _inst_placement():
+    """install.sh's own file-placement helpers (MOVED_DIR, _tree_file, panel_file, stage_panel_file):
+    the root clean-up's readers find a moved root file through them."""
+    _a = _inst.index('\nMOVED_DIR="panel/install"\n') + 1
+    return _inst[_a:_inst.index('\nSRC=""\n', _a) + 1] + _inst_shfn_raw("stage_panel_file")
+
+
+def _inst_shfn(name):
+    """One shell function out of install.sh, whole, preceded by install.sh's file-placement helpers
+    when its body uses them (a function run on its own would otherwise call a name never defined)."""
+    _fn = _inst_shfn_raw(name)
+    if name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
+        return _inst_placement() + _fn
+    return _fn
 
 
 def _pad_history(repo, env=None, n=4000):
@@ -3148,8 +3169,9 @@ def _su_find(start, end):
 
 
 def _su_run(body, env_lines, extra=""):
+    # install.sh's file-placement helpers: these cuts find the moved root files through panel_file.
     return _sh_sub.run(["bash", "-c", "set -uo pipefail\nwarn() { echo \"WARN $*\"; }\n"
-                        + extra + env_lines + body], capture_output=True, text=True)
+                        + extra + env_lines + _inst_placement() + body], capture_output=True, text=True)
 
 
 _su_sb = _tempfile.mkdtemp(prefix="selfupdate-")
@@ -3242,7 +3264,7 @@ try:
                 _fh.write(_c)
         return _sh_sub.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%s\n"
                             "d=\"$(_deps_digest)\"\necho \"DIGEST[${d}]\"\n"
-                            % (_su_shlex.quote(_d), _su_dd)],
+                            % (_su_shlex.quote(_d), _inst_placement() + _su_dd)],
                            capture_output=True, text=True).stdout
 
     _su_d_req = _su_digest({"requirements.txt": "flask==1\n"})
@@ -4063,7 +4085,7 @@ try:
     # it `"${PANEL_DIR}/venv/bin/pip" install`. Read every shell script (by extension or shebang),
     # comment lines dropped and `\` continuations joined; `python3-pip` (an apt package) is not pip.
     _PIP_UNHASHED_OK = {
-        ("install.sh", '"${PANEL_DIR}/requirements.txt"'):
+        ("install.sh", '"${req_txt}"'):   # requirements.txt, through panel_file (install_deps)
             "an update can land an older pinned commit whose requirements.txt has no hashes, and "
             "--require-hashes would fail that install; pip checks hashes by itself whenever the "
             "file carries them, which every current one does",
@@ -4118,11 +4140,11 @@ try:
                                           "    python -m pip install -r other.txt\n"
                                           "    apt-get install -y python3-pip git\n")[0]) == 3
           and _pip_verdicts("install.sh", '  "${P}/pip" install --quiet \\\n'
-                                          '      -r "${PANEL_DIR}/requirements.txt"\n'
+                                          '      -r "${req_txt}"\n'
                                           "  pip install --require-hashes --only-binary :all: "
                                           "-r x.txt\n") == ([], [
                                               ('pip" install --quiet -r '
-                                               '"${PANEL_DIR}/requirements.txt"'),
+                                               '"${req_txt}"'),
                                               ("pip install --require-hashes --only-binary :all: "
                                                "-r x.txt")]))
 

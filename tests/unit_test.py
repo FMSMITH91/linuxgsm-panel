@@ -2002,7 +2002,9 @@ _r16d_wrap_ts_handles()
 # part155 (review 1107 B: FastDL refused on an unread LinuxGSM release, scheduled wipes and the other
 # game operations) drives part12's app with every host call stubbed; imports part01 and 12.
 # part156 (review 1107's reboot, update, install and What's new fixes) drives part12's app and runs
-# nags.js in node with part47's helpers; imports part01, 05, 12 and 47.
+# nags.js in node with part47's helpers; runs install.sh functions through part06's extractor; imports part01, 05, 06, 12 and 47.
+# part166 (root clean-up, release 1: readers find a moved root file in panel/install/ or at the root)
+# runs install.sh's functions through part06's extractor; imports part01 and 06.
 # part157 (the twenty-fifth review's page-script and test-gate fixes, builder D; it drives the runner's bound
 # unit.ts_nested too) drives part12's app; imports part01, 12, 99 and 143.
 # part158 (the console keeps an older log's lines through a read of the new one: the page's own
@@ -2030,7 +2032,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
-          "part160", "part161", "part15")
+          "part160", "part161", "part166", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

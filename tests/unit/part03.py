@@ -432,6 +432,11 @@ _srs_paths = sorted(set(_re_bk.findall(
 _srs_paths = [_q.replace("${f}", _g) for _q in _srs_paths
               for _g in (["package.json", "package-lock.json", "install-gamedig.sh"]
                          if "${f}" in _q else [""])]
+# stage_panel_file <name> stages panel/install/<name> where the commit has it and <name> at the root
+# where it does not (the root clean-up): both are files a host runs.
+_srs_paths += [_q for _n in _re_bk.findall(r'(?:\$\(|^\s*)stage_panel_file\s+"?([A-Za-z0-9_.-]+)"?\s',
+                                          _srs_code, _re_bk.M)
+               for _q in (_n, "panel/install/" + _n)]
 _srs_paths = [_q for _q in _srs_paths if "$" not in _q]
 check("runtime-path: every file install.sh stages root-owned counts as a change the panel runs",
       len(_srs_paths) >= 6 and all(_so._is_runtime_path(_q) for _q in _srs_paths),
@@ -652,6 +657,11 @@ for _cls_sh in ("install.sh", "uninstall.sh", "recover.sh"):
     _cls_inst |= {_m for _m in _re_bk.findall(
         r"\$\{?(?:PANEL_DIR|SRC)\}?/([A-Za-z0-9_][A-Za-z0-9_./-]*)", _cls_code)
         if _m in set(_cls_files)}
+    # ...and what they find through install.sh's panel_file / recover.sh's manage_of: <name> at the
+    # root, or panel/install/<name> once the root clean-up has moved it.
+    _cls_inst |= {_q for _m in _re_bk.findall(r'\$\(panel_file "?([A-Za-z0-9_.-]+)"?\)', _cls_code)
+                  + _re_bk.findall(r'"\$1/(?:panel/install/)?([A-Za-z0-9_][A-Za-z0-9_.-]*)"', _cls_code)
+                  for _q in (_m, "panel/install/" + _m) if _q in set(_cls_files)}
 _cls_inst_bad = sorted(_f for _f in _cls_inst if _so._path_class(_f) != "runtime")
 check("runtime-path: every repo file the installers read from the checkout is named runtime",
       len(_cls_inst) >= 5 and not _cls_inst_bad,

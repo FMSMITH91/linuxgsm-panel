@@ -327,10 +327,13 @@ for _k156 in ("PANEL_ALLOW_UNSIGNED_UPDATE", "PANEL_SELF_UPDATE", "SUDO_UID", "P
     _ENV156.pop(_k156, None)
 
 
+from unit.part06 import _inst_shfn as _inst_shfn156  # noqa: E402
+
+
 def _shfn156(name):
-    """One shell function out of install.sh, whole: its definition line to its closing brace."""
-    i = _INST156.index("\n" + name + "() {\n") + 1
-    return _INST156[i:_INST156.index("\n}\n", i) + 3]
+    """One shell function out of install.sh, whole, with install.sh's file-placement helpers ahead of
+    it when it uses them (part06 _inst_shfn)."""
+    return _inst_shfn156(name)
 
 
 def _run156(argv, **kw):
@@ -476,6 +479,11 @@ _sign156 = _read156("tools", "sign-release.sh")
 _flag156 = _re156.search(r"FLAGGED=.*?grep -E '([^']+)'", _sign156, _re156.S)
 _args156 = [a for ln in _INST156.splitlines() if not ln.lstrip().startswith("#")
             for a in _re156.findall(r'stage_root_source ("[^"]+"|[^\s)]+) ', ln)]
+# stage_panel_file <name> stages panel/install/<name> or <name> (the root clean-up): root runs both.
+_args156 += [q for ln in _INST156.splitlines() if not ln.lstrip().startswith("#")
+             for a in _re156.findall(r'stage_panel_file ("[^"]+"|[^\s)]+) ', ln)
+             for q in (a, '"panel/install/%s"' % a.strip('"'))]
+_args156 = [a for a in _args156 if "MOVED_DIR" not in a and a != '"$1"']
 _gd156 = _re156.search(r"^GAMEDIG_FILES=\(([^)]*)\)", _INST156, _re156.M)
 _staged156 = set()
 for _arg156 in _args156:
