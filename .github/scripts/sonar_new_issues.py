@@ -39,6 +39,13 @@ KNOWN_OPEN = {
     "AaDejKLMfWz637hiAQny": "docker:S6471 in .clusterfuzzlite/Dockerfile: the fuzz image runs as "
                             "root, which is ClusterFuzzLite's build contract. A Dockerfile has no "
                             "NOSONAR, and it was left un-Accepted in SonarCloud (2026-09-29).",
+    "AaHGLIU1pBbOF45DrbDV": "pythonsecurity:S6350 in panel/routes/manage_servers.py "
+                            "host_account_state: a false positive. The account name reaches `id` "
+                            "shlex.quote()d, and it cannot start with '-': a typed name must match "
+                            "INSTANCE_NAME_RE (starts with a letter, _server_name_refusal), a default "
+                            "one is '<game id>server' with the id from GAME_TYPE_RE and LinuxGSM's "
+                            "list. It reopened on main's analysis of b4988c4 (2026-11-10), a commit "
+                            "that changed only a JSON file; the code is unchanged since #349.",
 }
 
 

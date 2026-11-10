@@ -454,10 +454,11 @@ with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
                  _sq28.main(["x", "--branch", "main", "--sha", "nope"]),
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
-check("sonar main gate: ...the known issue is the declined docker:S6471, the self-test "
-      "passes, and a malformed branch or commit is refused",
-      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny"}
-      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"] and _sq28_rcs == (0, 2, 2)
+check("sonar main gate: ...the known issues are the declined docker:S6471 and the false-positive "
+      "pythonsecurity:S6350, the self-test passes, and a malformed branch or commit is refused",
+      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny", "AaHGLIU1pBbOF45DrbDV"}
+      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"]
+      and "S6350" in _sq28.KNOWN_OPEN["AaHGLIU1pBbOF45DrbDV"] and _sq28_rcs == (0, 2, 2)
       and "self-test: " in _sq28_out.getvalue() and "SELF-TEST FAIL" not in _sq28_out.getvalue(),
       repr((_sq28_rcs, _sq28_out.getvalue()[-300:])))
 _smw28 = _read28(".github/workflows/sonar-main-issues.yml")
