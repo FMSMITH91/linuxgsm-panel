@@ -6419,11 +6419,11 @@ try:
                          "pr, report and marker": _cc_case(_cc_good, event="pull_request")})
     finally:
         _cc_marker[0] = False
-    check("codacy-coverage: a documentation-only pull request's marker passes with nothing uploaded; "
+    check("codacy-coverage: the marker of a pull request that changes nothing coverage measures passes with nothing uploaded; "
           "a push with it, or a pull request without it, and no report, is refused; a report beside "
           "it is uploaded",
           _cc_docs["pr, marker"][0] == 0 and not _cc_docs["pr, marker"][1]
-          and "documentation-only pull request" in _cc_docs["pr, marker"][3]
+          and "changes nothing coverage measures" in _cc_docs["pr, marker"][3]
           and all(_cc_docs[_k][0] != 0 and not _cc_docs[_k][1] and "holds no coverage.xml"
                   in _cc_docs[_k][3] for _k in ("push, marker", "pr, no marker"))
           and _cc_docs["pr, report and marker"][0] == 0

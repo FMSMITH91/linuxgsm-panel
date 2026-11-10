@@ -358,10 +358,11 @@ jobs:
           # Nothing in this job pushes or fetches with the job token: do not leave it in .git/config.
           persist-credentials: false
 
-      # A pull request that changes only documentation passes here without the steps below, and
-      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
-      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
-      - name: Does this pull request change anything but documentation?
+      # A pull request that changes nothing this job measures (documentation, or only files on its
+      # list in .github/scripts/pr_scope.py JOB_IRRELEVANT) passes here without the steps below, and
+      # still reports this job by its name, as a required check must. Anything else, and anything
+      # it cannot establish, runs them all.
+      - name: Does this pull request change anything this job measures?
         id: scope
         env:
           EVENT: ${{ github.event_name }}
@@ -370,7 +371,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
-          --pr "$PR" --head-sha "$HEAD_SHA"
+          --pr "$PR" --head-sha "$HEAD_SHA" --job "coverage"
 
       # On a push to main: whether the pull request this push merged already passed this job on the
       # exact tree pushed. When it did, the steps below are skipped and the job still reports success
@@ -381,7 +382,7 @@ jobs:
       # the pull request's head anonymously (the checkout keeps no token; this repository is public).
       - name: Did the merged pull request pass this job on the same tree?
         id: reuse
-        if: github.event_name == 'push' && steps.scope.outputs.docs_only != 'true'
+        if: github.event_name == 'push' && steps.scope.outputs.skip != 'true'
         env:
           CHECK_NAME: coverage
           GH_TOKEN: ${{ github.token }}
@@ -397,7 +398,7 @@ jobs:
       # below as this run's own. Cross-run download: github-token and run-id, with actions: read.
       # A download that fails does not fail the job: the steps below then measure, as on any run.
       - name: Take the report the pull request's run made on the same tree
-        if: steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse == 'true'
+        if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse == 'true'
         id: take
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -419,12 +420,12 @@ jobs:
       # sys.monitoring (PEP 669) is what makes it cheap, and it is the default from 3.14. Named
       # explicitly anyway so a future default change cannot quietly put the 904s back.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         with:
           python-version: "3.14"
 
       - name: Install dependencies
-        if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         # coverage is hash-pinned, like every CI tool. (This job used to hold CODACY_PROJECT_TOKEN in
         # a later step; the upload is codacy-coverage.yml's now, and this job holds no secret.)
         run: |
@@ -433,7 +434,7 @@ jobs:
             -r .github/ci-requirements/coverage.txt
 
       - name: Measure
-        if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         # --parallel-mode + combine: each suite is its own process, and smoke/rbac fork threads.
         # || true on the suites themselves — the gate job decides pass/fail, this one only measures.
         #
@@ -477,12 +478,14 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # On a documentation-only pull request nothing was measured, and codacy-coverage.yml, which
-      # follows every CI run, reads this file as the reason there is no report: without it, that
-      # upload failed for want of one, and its failure is filed on main's newest commit.
-      - name: Record that a documentation-only pull request measured nothing
-        if: steps.scope.outputs.docs_only == 'true'
-        run: echo "documentation-only pull request, so nothing was measured" > docs-only.txt
+      # On a pull request that changes nothing coverage measures (documentation, another workflow, a
+      # tool it does not install: pr_scope.py JOB_IRRELEVANT) nothing was measured, and
+      # codacy-coverage.yml, which follows every CI run, reads this file as the reason there is no
+      # report: without it, that upload failed for want of one, and its failure is filed on main's
+      # newest commit. The name is the one codacy-coverage.yml (run from main's copy) looks for.
+      - name: Record that this pull request changed nothing coverage measures
+        if: steps.scope.outputs.skip == 'true'
+        run: echo "the pull request changes nothing coverage measures, so nothing was measured" > docs-only.txt
 
       - name: Upload the report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -533,10 +536,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # A pull request that changes only documentation passes here without the steps below, and
-      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
-      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
-      - name: Does this pull request change anything but documentation?
+      # A pull request that changes nothing this job measures (documentation, or only files on its
+      # list in .github/scripts/pr_scope.py JOB_IRRELEVANT) passes here without the steps below, and
+      # still reports this job by its name, as a required check must. Anything else, and anything
+      # it cannot establish, runs them all.
+      - name: Does this pull request change anything this job measures?
         id: scope
         env:
           EVENT: ${{ github.event_name }}
@@ -545,7 +549,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
-          --pr "$PR" --head-sha "$HEAD_SHA"
+          --pr "$PR" --head-sha "$HEAD_SHA" --job "js coverage"
 
       # On a push to main: whether the pull request this push merged already passed this job on the
       # exact tree pushed. When it did, the steps below are skipped and the job still reports success
@@ -556,7 +560,7 @@ jobs:
       # the pull request's head anonymously (the checkout keeps no token; this repository is public).
       - name: Did the merged pull request pass this job on the same tree?
         id: reuse
-        if: github.event_name == 'push' && steps.scope.outputs.docs_only != 'true'
+        if: github.event_name == 'push' && steps.scope.outputs.skip != 'true'
         env:
           CHECK_NAME: js coverage
           GH_TOKEN: ${{ github.token }}
@@ -572,7 +576,7 @@ jobs:
       # below as this run's own. Cross-run download: github-token and run-id, with actions: read.
       # A download that fails does not fail the job: the steps below then measure, as on any run.
       - name: Take the report the pull request's run made on the same tree
-        if: steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse == 'true'
+        if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse == 'true'
         id: take
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -582,17 +586,17 @@ jobs:
           github-token: ${{ github.token }}
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         with:
           python-version: "3.12"
 
       - name: Install dependencies
-        if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         run: |
           python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
 
       - name: Measure
-        if: steps.scope.outputs.docs_only != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         run: |
           set -euo pipefail
           chrome=""
@@ -621,7 +625,7 @@ jobs:
           exit "${rc}"
 
       - name: Upload the report
-        if: steps.scope.outputs.docs_only != 'true'
+        if: steps.scope.outputs.skip != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: js-coverage
