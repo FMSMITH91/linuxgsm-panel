@@ -1,4 +1,4 @@
-"""Part 174 of the unit suite: Warn players first on the Schedule tab (panel/services/schedule_chains.py).
+r"""Part 174 of the unit suite: Warn players first on the Schedule tab (panel/services/schedule_chains.py).
 
 Held here:
 * Which games get the option: the consoles whose chat command the panel knows (Source/GoldSrc, idTech3,
@@ -19,11 +19,10 @@ HOW IT RUNS. No host is reached: _core.shell_as_game_user and _core._rewrite_cro
 and part12's transport tripwire is armed. The stand-in scripts run under bash in a temp dir.
 """
 import base64 as _b64_174
-import json as _json174
 import os as _os174
 import re as _re174
 import shutil as _shutil174
-import subprocess as _sp174
+import subprocess as _sp174  # nosec B404 - bash over lines this part composes, with stand-in functions
 import tempfile as _tmp174
 
 from unit.part01 import _root, check, eq
@@ -103,30 +102,25 @@ eq("schedule chains: the audit detail names the schedule, the action and every w
 
 # ── 5. shell safety, by running the line ────────────────────────────────────────────────────────
 _hostile174 = "it's \"q\" $HOME $(touch pwned1) `touch pwned2` \\ | & > pwned3 < x ( ) * ~ #"
-_stub174 = ("#!/bin/bash\n"
-            "printf '%s\\0' \"$#\" \"$@\" >> \"$T/argv\"\n"
-            "[ \"$1\" = send ] && [ -n \"${SEND_FAILS:-}\" ] && exit 1\n"
-            "exit 0\n")
+# The stand-ins are bash functions put before the line, not executable files: a function wins over
+# PATH and needs no chmod. `./cs2server` and `sleep` record each call's argv (NUL-separated) in $T/argv.
+_stub174 = ("./cs2server() { printf '%s\\0' \"$#\" \"$@\" >> \"$T/argv\"; "
+            "[ \"$1\" = send ] && [ -n \"${SEND_FAILS:-}\" ] && return 1; return 0; }\n"
+            "sleep() { printf '%s\\0' sleep \"$@\" >> \"$T/argv\"; return 0; }\n")
 
 
 def _run174(command, send_fails=False):
     """Run `command` as the recorder does (`bash -c`), in a temp dir; argv per step, sleeps and stray files."""
     tdir = _tmp174.mkdtemp(prefix="p174-")
     try:
-        os_bin = _os174.path.join(tdir, "bin")
-        _os174.mkdir(os_bin)
-        for path, body in ((_os174.path.join(tdir, "cs2server"), _stub174),
-                           (_os174.path.join(os_bin, "sleep"), _stub174.replace("\"$#\" \"$@\"", "sleep \"$@\""))):
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(body)
-            _os174.chmod(path, 0o700)
-        env = {"PATH": os_bin + ":/usr/bin:/bin", "T": tdir, "HOME": tdir}
+        env = {"PATH": "/usr/bin:/bin", "T": tdir, "HOME": tdir}
         if send_fails:
             env["SEND_FAILS"] = "1"
         # /home/<u> does not exist here, so `cd` is pointed at the temp dir; everything after it is
         # the composed text exactly as bash -c receives it.
-        prog = "cd() { builtin cd \"$T\"; }\n" + command
-        res = _sp174.run(["bash", "-c", prog], env=env, cwd=tdir, capture_output=True, timeout=20, check=False)
+        prog = "cd() { builtin cd \"$T\"; }\n" + _stub174 + command
+        res = _sp174.run(["bash", "-c", prog],  # nosec B603 B607 - the composed line under test
+                       env=env, cwd=tdir, capture_output=True, timeout=20, check=False)
         try:
             with open(_os174.path.join(tdir, "argv"), encoding="utf-8") as fh:
                 raw = fh.read().split("\0")[:-1]
@@ -141,14 +135,15 @@ def _run174(command, send_fails=False):
                 n = int(raw[0])
                 steps.append(raw[1:1 + n])
                 raw = raw[1 + n:]
-        stray = sorted(f for f in _os174.listdir(tdir) if f not in ("bin", "cs2server", "argv"))
+        stray = sorted(f for f in _os174.listdir(tdir) if f != "argv")
         return res.returncode, steps, stray
     finally:
         _shutil174.rmtree(tdir, ignore_errors=True)
 
 
 _hl174 = _sch174.compose("u1", "cs2server", "say", "update", [(5, _hostile174), (1, "bye")])
-_syn174 = _sp174.run(["bash", "-n", "-c", _hl174], capture_output=True, timeout=10, check=False)
+_syn174 = _sp174.run(["bash", "-n", "-c", _hl174],  # nosec B603 B607 - parse only (-n)
+                     capture_output=True, timeout=10, check=False)
 check("schedule chains: a message full of shell characters composes a line bash -n accepts",
       _syn174.returncode == 0, _syn174.stderr.decode(errors="replace"))
 _ran174 = _run174(_hl174)
@@ -257,7 +252,8 @@ check("cron add route: Warn players first adds ONE base64-recorded line whose co
       _r174["add"].status_code == 200 and _j174(_r174["add"]).get("success") is True and len(_aw174) == 1
       and len(_aw174[0][1]) == 1 and _dec174 == _composed174 and _aw174[0][0] == "p174cs"
       and any("/home/p174cs/.lgsm-cron" in i for _u, i in _r174["runner"]), repr((_aw174, _dec174)))
-_syn2_174 = _sp174.run(["bash", "-n", "-c", _dec174 or "("], capture_output=True, timeout=10, check=False)
+_syn2_174 = _sp174.run(["bash", "-n", "-c", _dec174 or "("],  # nosec B603 B607 - parse only (-n)
+                       capture_output=True, timeout=10, check=False)
 check("cron add route: the command decoded from the crontab line passes bash -n and runs each step's argv intact",
       _syn2_174.returncode == 0 and _run174(_dec174 or "")[1] == [
           ["send", "say " + _hostile174], ["sleep", "240"], ["send", "say bye"], ["sleep", "60"], ["restart"]],
