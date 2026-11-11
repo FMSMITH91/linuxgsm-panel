@@ -14,6 +14,10 @@ compares git commits, not this file.
 
 ### Added
 
+- **Scheduled restarts, stops and updates can warn players first.** On the Schedule tab, a
+  restart, stop or update can send up to five chat warnings before it runs, for example 5 and 1
+  minutes before. It is offered for Source, GoldSrc, idTech3 and Minecraft servers. The first
+  warning goes out at the scheduled time, and the form shows when the action itself happens.
 - **Steam Workshop items and collections on the server page.** Arma 3, DayZ, Squad and the other
   games whose LinuxGSM config has a Workshop list get an ordered list of items and collections, with
   titles from Steam and a Download now button. Garry's Mod and CS:GO get their collection, and
