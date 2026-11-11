@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+e9395339 Steam Workshop items and collections on the server page.
 5756cd36 The console no longer starts every line a quarter of the way across a phone screen.
 cc84da0d Plugins for PaperMC servers.
 fabb9266 Minecraft operators, whitelist and bans on the server page.

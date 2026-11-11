@@ -14,6 +14,11 @@ compares git commits, not this file.
 
 ### Added
 
+- **Steam Workshop items and collections on the server page.** Arma 3, DayZ, Squad and the other
+  games whose LinuxGSM config has a Workshop list get an ordered list of items and collections, with
+  titles from Steam and a Download now button. Garry's Mod and CS:GO get their collection, and
+  Project Zomboid gets its Workshop items and Mod IDs, with the Mod IDs in already-downloaded items
+  offered as one-tap adds.
 - **Plugins for PaperMC servers.** A PaperMC server's page has a Plugins card: search Modrinth for
   Paper, Spigot and Bukkit plugins built for the server's Minecraft version, and install one in a
   click. The panel downloads the file itself and checks it against Modrinth's checksum before it
