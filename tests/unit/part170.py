@@ -377,3 +377,35 @@ if _out170 is not None:
                                       ["/api/server/9/mc-lists/ipbans",
                                        {"action": "add", "value": "203.0.113.7", "reason": "bot farm"}]],
           repr(_out170))
+
+# After a change the card reads the list again; a server that ignored the command (`op` with a name
+# that is no Minecraft account) changes nothing and answers nothing the panel can read, so the card
+# says so instead of leaving "Sent to the server" up as if it had worked.
+_MCL170_NOT_APPLIED = ("The server did not apply this. A player's name must belong to an existing Minecraft "
+                       "account; the console shows the server's reply.")
+_name_ap170 = "mc lists card: a change the re-read list does not show is called out; one it shows is not"
+_ap170 = _run_js75(_name_ap170, (
+    "const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.serverId = 9; global.t = s => s;\n"
+    "global.tf = (s, v) => s.replace(/\\{(\\w+)\\}/g, (m, k) => v[k]);\n"
+    "function node(tag) { return {tag, children: [], attrs: {}, hidden: false, disabled: false, value: '',\n"
+    "  textContent: '', className: '', style: {}, classList: {toggle: () => 0},\n"
+    "  appendChild(c) { this.children.push(c); return c; }, setAttribute(k, v) { this.attrs[k] = String(v); },\n"
+    "  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }}; }\n"
+    "const els = {}; const mk = id => (els[id] = els[id] || node('div'));\n"
+    "mk('mcl-card').attrs['data-can-change'] = '1';\n"
+    "global.document = {getElementById: mk, readyState: 'complete', addEventListener: () => 0,\n"
+    "  querySelectorAll: () => [], createElement: node};\n"
+    "const reply = {success: true, running: true, can_change: true, entries: [{name: 'Steve', level: '3'}]};\n"
+    "global.fetch = (u, o) => Promise.resolve({json: () => Promise.resolve(o ? {success: true, message: 'sent'}\n"
+    "  : reply)});\n"
+    "global.setTimeout = fn => { fn(); return 0; };\n"
+    + _js170 + "\n"
+    "(async () => { await settle(); const out = {};\n"
+    "  els['mcl-value'].value = 'NoSuchPlayer'; window.mclAdd({preventDefault() {}}); await settle();\n"
+    "  out.missing = els['mcl-msg'].textContent;\n"
+    "  els['mcl-value'].value = 'steve'; window.mclAdd({preventDefault() {}}); await settle();\n"
+    "  out.present = els['mcl-msg'].textContent;\n"
+    "  console.log(JSON.stringify(out)); })();\n"))
+if _ap170 is not None:
+    check(_name_ap170, _ap170.get("missing") == _MCL170_NOT_APPLIED and _ap170.get("present") == "sent", repr(_ap170))

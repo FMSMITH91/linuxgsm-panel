@@ -33,5 +33,6 @@
   "Unban address": "Débannir l'adresse",
   "Unknown action.": "Action inconnue.",
   "Whitelist on: only players on this list can join": "Liste blanche activée : seuls les joueurs de cette liste peuvent se connecter",
-  "{action}: {name}": "{action} : {name}"
+  "{action}: {name}": "{action} : {name}",
+  "The server did not apply this. A player's name must belong to an existing Minecraft account; the console shows the server's reply.": "Le serveur ne l’a pas appliqué. Le nom d’un joueur doit correspondre à un compte Minecraft existant ; la console affiche la réponse du serveur."
 }

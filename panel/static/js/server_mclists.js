@@ -112,12 +112,24 @@
     showRows(which, d);
   }
 
-  function load(which) {
+  function load(which, after) {
     var seq = ++state.seq;
     fetch(url(which))
       .then(function (r) { return r.json(); })
-      .then(function (d) { show(which, seq, d); })
+      .then(function (d) { show(which, seq, d); if (after && seq === state.seq) after(d); })
       .catch(function () { show(which, seq, null); });
+  }
+
+  // Whether the list read after a change shows it. A server sends no answer the panel can read for
+  // a command it ignores: `op` with a name that is no Minecraft account changes nothing.
+  function applied(body, d) {
+    if (!d || d.success === false || d.error) return true;   // nothing to judge by
+    if (body.action === 'on' || body.action === 'off') {
+      return d.whitelist_on === null || d.whitelist_on === undefined || d.whitelist_on === (body.action === 'on');
+    }
+    var want = String(body.value || '').toLowerCase();
+    var there = (d.entries || []).some(function (e) { return String(e.name || e.ip || '').toLowerCase() === want; });
+    return there === (body.action === 'add');
   }
 
   function post(body) {
@@ -130,7 +142,16 @@
         var ok = !!(d && d.success);
         msg((d && d.message) || t('Failed'), ok ? 'text-success' : 'text-danger');
         // The server writes its file when it runs the command, a moment after the send.
-        if (ok) setTimeout(function () { if (state.which === which) load(which); }, 1500);
+        if (ok) {
+          setTimeout(function () {
+            if (state.which !== which) return;
+            load(which, function (after) {
+              if (!applied(body, after)) {
+                msg(t("The server did not apply this. A player's name must belong to an existing Minecraft account; the console shows the server's reply."), 'text-warning');
+              }
+            });
+          }, 1500);
+        }
         return ok;
       })
       .catch(function () { msg(t('Failed'), 'text-danger'); return false; });
