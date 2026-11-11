@@ -51,8 +51,15 @@ paths-ignore:
 #                                      servers index page and the game pictures under
 #                                      /wp-content/uploads/ that it links. A size cap, a timeout, and
 #                                      an opener that refuses every redirect.
-# The three HTTP requests in notifications and the one in game_icons refuse every redirect. The two
-# others use urlopen, which follows one, but only from GitHub's own fixed hosts. None of the seven
+#   modrinth._mdr_http_get             GET on https://api.modrinth.com (search, a project and its
+#                                      versions, each id checked as eight base62 characters) and on
+#                                      https://cdn.modrinth.com (a plugin file whose URL the API gave);
+#                                      _mdr_allowed runs at the call (https, those hosts, port 443, no
+#                                      userinfo). A size cap, a timeout, and an opener that refuses every
+#                                      redirect; a file is kept only when its sha512 is the API's.
+# The three HTTP requests in notifications and the ones in game_icons and modrinth refuse every
+# redirect. The two others use urlopen, which follows one, but only from GitHub's own fixed hosts. None
+# of the eight
 # takes a host or a path from a request. The ntfy server is the one host anyone chooses: it is stored in
 # config.json and read back later, a flow neither SSRF query traces, so _NTFY_URL_RE bounds it.
 query-filters:

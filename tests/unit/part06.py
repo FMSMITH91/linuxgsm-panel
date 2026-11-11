@@ -5768,8 +5768,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 238, was 236: two genuinely new views, panel/routes/mc_lists.py's read and change of a Java Minecraft
 # server's operators, whitelist and bans (/api/server/<id>/mc-lists/<list>, GET behind the file
 # browser's read gates, POST behind the console's send permission).
-check("register_routes: every one of the 238 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 238,
+# 242, was 238: four genuinely new views, panel/routes/modrinth_plugins.py's list, Modrinth search,
+# install and change (enable, disable, remove) of a PaperMC server's plugins
+# (/api/server/<id>/plugins[/search|/install|/change], each behind the file manager's permission).
+check("register_routes: every one of the 242 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 242,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
