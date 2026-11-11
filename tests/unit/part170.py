@@ -97,6 +97,8 @@ eq("mc lists: server.properties' white-list reads as on, off, or unknown (missin
    [True, False, None, None, None, None])
 
 # ── 4. the routes ───────────────────────────────────────────────────────────────────────────────
+# Not a hash any password produces, so this account cannot sign in.
+_NO_LOGIN170 = "!"
 with _p9.app_context():
     from panel.db.models import Group as _G170, RemoteServer as _RS170, User as _U170, db as _db170
     _sg170 = _G170(name="p170_send", description="", is_default=False)
@@ -104,7 +106,7 @@ with _p9.app_context():
     _sg170.servers.append(_db170.session.get(_RS170, P9_HOST))
     _db170.session.add(_sg170)
     _db170.session.flush()
-    _su170 = _U170(username="p170_send", password_hash="x", display_name="Sender", is_superadmin=False,
+    _su170 = _U170(username="p170_send", password_hash=_NO_LOGIN170, display_name="Sender", is_superadmin=False,
                    is_active=True)
     _su170.groups.append(_sg170)
     _db170.session.add(_su170)
@@ -124,8 +126,9 @@ def _read170(server, user, relpath, max_bytes=1048576):
 
 
 def _send170(server, user, command, timeout=20, selfname=None, mark=False):
-    if _send_rc170["raise"] is not None:
-        raise _send_rc170["raise"]
+    _exc170 = _send_rc170["raise"]
+    if isinstance(_exc170, BaseException):
+        raise _exc170
     _sent170.append((user, command, selfname))
     return ("", "no tmux session" if _send_rc170["rc"] else "", _send_rc170["rc"])
 

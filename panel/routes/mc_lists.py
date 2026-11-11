@@ -214,6 +214,33 @@ def _mcl_refused(gs, line, why, status):
     return jsonify({"success": False, "message": i18n.tr(why)}), status
 
 
+def _mcl_read_answer(gs, which):
+    """The list read's answer once its permission and the file manager's refusals have passed."""
+    try:
+        return jsonify(_mcl_list_reply(gs, which))
+    except ConnectionError:
+        return _unreachable("read a Minecraft list")
+    except Exception:
+        return jsonify({"success": False, "error": _log_and_generic("request failed")}), 500
+
+
+def _mcl_change_answer(gs, which, data):
+    """The change's answer once its permission has passed: checked, refused or sent, and audited."""
+    action = _json_str(data, "action")
+    line, why = mcl_command(which, action, _json_str(data, "value"), _json_str(data, "reason"))
+    if why:
+        # The list and the action, never the refused value: it is what failed the checks.
+        return _mcl_refused(gs, "%s %s" % (which, action if action in _MCL_ACTIONS else "?"), why, 400)
+    if gs.status != "online":
+        return _mcl_refused(gs, line, MCL_STOPPED, 409)
+    try:
+        return _mcl_send(gs, line)
+    except ConnectionError:
+        return _unreachable("send console command")
+    except Exception:
+        return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+
 def register(app):
     """The list read and the change route, and the template's `mc_lists_supported`."""
     app.jinja_env.globals["mc_lists_supported"] = mcl_supported
@@ -230,14 +257,7 @@ def register(app):
         if not mcl_supported(gs.game_type):
             return jsonify({"success": False, "error": i18n.tr(_MCL_NOT_JAVA)}), 400
         refused = _sf._read_refused(gs, "mc_list_read", _MCL_LISTS[which][0])
-        if refused is not None:
-            return refused
-        try:
-            return jsonify(_mcl_list_reply(gs, which))
-        except ConnectionError:
-            return _unreachable("read a Minecraft list")
-        except Exception:
-            return jsonify({"success": False, "error": _log_and_generic("request failed")}), 500
+        return refused if refused is not None else _mcl_read_answer(gs, which)
 
     @app.route("/api/server/<int:server_id>/mc-lists/<any(ops, whitelist, bans, ipbans):which>",
                methods=["POST"])
@@ -251,17 +271,4 @@ def register(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         if not mcl_supported(gs.game_type):
             return jsonify({"success": False, "message": i18n.tr(_MCL_NOT_JAVA)}), 400
-        data = _json_body()
-        action = _json_str(data, "action")
-        line, why = mcl_command(which, action, _json_str(data, "value"), _json_str(data, "reason"))
-        if why:
-            # The list and the action, never the refused value: it is what failed the checks.
-            return _mcl_refused(gs, "%s %s" % (which, action if action in _MCL_ACTIONS else "?"), why, 400)
-        if gs.status != "online":
-            return _mcl_refused(gs, line, MCL_STOPPED, 409)
-        try:
-            return _mcl_send(gs, line)
-        except ConnectionError:
-            return _unreachable("send console command")
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+        return _mcl_change_answer(gs, which, _json_body())
