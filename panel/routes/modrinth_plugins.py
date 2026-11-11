@@ -166,6 +166,19 @@ def _mdr_change(gs, action, name, new_name):
     return jsonify({"success": True, "message": i18n.tr(_MDR_CHANGED)})
 
 
+def _mdr_change_refused(gs, action, name, why):
+    """A refusal for a change that failed its checks (`why`) or may not be written as, else None."""
+    from panel.routes import server_files as _sf
+    if why:
+        # The action, never the refused name: it is what failed the checks. An unknown action is
+        # audited as a removal attempt, the most destructive it could have been.
+        verb = action if action in _MDR_ACTIONS else "remove"
+        return _mdr_refuse(gs, verb, action if action in _MDR_ACTIONS else "?", why)
+    return _sf._write_refused(gs, ("plugin_enable" if action == "enable" else "plugin_disable"
+                                   if action == "disable" else "plugin_remove"),
+                              "%s/%s" % (_MDR_DIR, name))
+
+
 def _mdr_gate(gs):
     """A refusal for a server that is not PaperMC, else None (the permission is asked inline)."""
     if not plugins_supported(gs.game_type):
@@ -252,7 +265,6 @@ def register(app):
     @server_access_required
     def api_server_plugins_change(server_id):
         """Enable, disable or remove one plugin jar in serverfiles/plugins/."""
-        from panel.routes import server_files as _sf
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"success": False, "message": "Permission denied"}), 403
@@ -262,14 +274,7 @@ def register(app):
         data = _json_body()
         action, name = _json_str(data, "action"), _json_str(data, "name")
         new_name, why = change_target(action, name)
-        if why:
-            # The action, never the refused name: it is what failed the checks.
-            # An unknown action is audited as a removal attempt: the most destructive it could be.
-            verb = action if action in _MDR_ACTIONS else "remove"
-            return _mdr_refuse(gs, verb, action if action in _MDR_ACTIONS else "?", why)
-        refused = _sf._write_refused(gs, ("plugin_enable" if action == "enable" else "plugin_disable"
-                                          if action == "disable" else "plugin_remove"),
-                                     "%s/%s" % (_MDR_DIR, name))
+        refused = _mdr_change_refused(gs, action, name, why)
         if refused is not None:
             return refused
         try:
