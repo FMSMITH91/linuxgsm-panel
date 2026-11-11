@@ -132,14 +132,15 @@ def _gcf_is_decoration(text):
 
 
 class _GcfKV:
-    """A key=value line taken apart: group(1) the key, group(2) the value, start/end(2) its span.
+    r"""A key=value line taken apart: group(1) the key, group(2) the value, start/end(2) its span.
 
-    String operations, not a regex: the pattern this replaces (`[ \\t]*([^\\s=#;\\[][^=]*?)[ \\t]*=[ \\t]*
-    (.*?)[ \\t]*\\Z`) backtracked super-linearly on a long line of blanks, and the file is the game
+    String operations, not a regex: the pattern this replaces (`[ \t]*([^\s=#;\[][^=]*?)[ \t]*=[ \t]*
+    (.*?)[ \t]*\Z`) backtracked super-linearly on a long line of blanks, and the file is the game
     account's to write. Same answers: the key is what precedes the first `=`, without the blanks
     round it, and may not start with a blank, `=`, `#`, `;` or `[`; the value is the rest, without
     the spaces and tabs round it.
     """
+
     __slots__ = ("_key", "_value", "_start")
 
     def __init__(self, key, value, start):
@@ -166,6 +167,7 @@ def _gcf_kv_match(body):
     rest = body[eq + 1:]
     lead = len(rest) - len(rest.lstrip(" \t"))
     return _GcfKV(key, rest[lead:].rstrip(" \t"), eq + 1 + lead)
+
 
 _GCF_KV_SECTION = re.compile(r"[ \t]*\[([^\]\r\n]+)\][ \t]*\Z")
 
