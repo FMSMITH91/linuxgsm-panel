@@ -191,6 +191,12 @@ def _mdr_pick(versions, project_id):
     return (releases or ok or [None])[0]
 
 
+def _mdr_file_ok(url, sha):
+    """Whether a file's URL is https on Modrinth's CDN and its sha512 is 128 lowercase hex digits."""
+    return (isinstance(url, str) and _mdr_allowed(url, _MDR_CDN_HOSTS)
+            and isinstance(sha, str) and bool(_MDR_SHA512.fullmatch(sha)))
+
+
 def file_plan(version):
     """(plan, None) for the version's primary file, or (None, why).
 
@@ -203,8 +209,7 @@ def file_plan(version):
     hashes = f.get("hashes") if isinstance(f.get("hashes"), dict) else {}
     url, sha = f.get("url"), hashes.get("sha512")
     name = safe_filename(f.get("filename"))
-    if not (isinstance(url, str) and _mdr_allowed(url, _MDR_CDN_HOSTS)) or name is None \
-            or not (isinstance(sha, str) and _MDR_SHA512.fullmatch(sha)):
+    if name is None or not _mdr_file_ok(url, sha):
         return None, NO_FILE
     size = f.get("size")
     if isinstance(size, int) and size > FILE_CAP:
