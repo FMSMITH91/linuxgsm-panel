@@ -638,6 +638,14 @@ def _gcf_todo(fmt, ext, fields, changes):
     return todo, None
 
 
+def _gcf_splice(fmt, content, fields, todo):
+    """`content` with each changed field's value text replaced, last first so earlier offsets hold."""
+    for fid in sorted(todo, key=lambda k: fields[k]["start"], reverse=True):
+        f = fields[fid]
+        content = content[:f["start"]] + _gcf_encode(fmt, f, todo[fid]) + content[f["end"]:]
+    return content
+
+
 def apply(rel, content, expected_hash, changes):
     """(new content, [(field, old value, new value)], None), or (None, [], why) when refused.
 
@@ -652,10 +660,7 @@ def apply(rel, content, expected_hash, changes):
     todo, why = _gcf_todo(fmt, _gcf_ext(rel), fields, changes)
     if why or not todo:
         return (None, [], why) if why else (content, [], None)
-    new = content
-    for fid in sorted(todo, key=lambda k: fields[k]["start"], reverse=True):
-        f = fields[fid]
-        new = new[:f["start"]] + _gcf_encode(fmt, f, todo[fid]) + new[f["end"]:]
+    new = _gcf_splice(fmt, content, fields, todo)
     fmt2, again = parse(rel, new)
     if fmt2 != fmt or not _gcf_same_fields(fields, again, todo):
         return None, [], UNSAFE
