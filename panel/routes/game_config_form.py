@@ -115,7 +115,15 @@ def _gcf_save_answer(gs):
 
 
 def _gcf_game_config_answer(gs):
-    """The game config file LinuxGSM's `details` names, with its form when it is a format the form reads."""
+    """The game config file LinuxGSM's `details` names, with its form when it is a format the form reads.
+
+    Asks the file browser's read refusal first, as every other read of the account's files does: a
+    row bound to a root-capable login must not hand its files to a delegated admin through here.
+    """
+    from panel.routes import server_files as _sf
+    refused = _sf._read_refused(gs, "read_file", "game config")
+    if refused is not None:
+        return refused
     try:
         found = _sm.lgsm_game_config(gs.remote, gs.short_name, gs.lgsm_name)
         return jsonify(found | {"form": form_for(found)})

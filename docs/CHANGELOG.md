@@ -14,6 +14,11 @@ compares git commits, not this file.
 
 ### Added
 
+- **A form for the game's own config file.** Files & Config's game config card has a Form view
+  beside the raw editor, for key=value, .ini, Source and idTech cfg, 7 Days to Die XML and JSON
+  files. Each setting is a field with the file's comments as help, passwords are hidden until shown,
+  and a save changes only the values you edited. Minecraft's server.properties and the other
+  non-.cfg config files LinuxGSM reports now open there too.
 - **Start checks the port first.** Starting a stopped server from the panel checks that its port is
   free. If another server on the host is running on it, or something else listens there, the panel
   says so and offers "Start anyway". If the host can't be read, the server starts as before.

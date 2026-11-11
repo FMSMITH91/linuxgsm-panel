@@ -458,6 +458,14 @@ try:
     _rrefuse176["on"] = True
     _r176["get_refused"] = _A176.get(_u176 + "?path=" + _rel176)
     _rrefuse176["on"] = False
+    # The game-config read itself asks the read refusal before LinuxGSM's `details` runs.
+    _gc_calls176 = []
+    _p9_patch_sm("lgsm_game_config", lambda s, u, n: _gc_calls176.append(n) or {
+        "rel": _rel176, "content": sample_properties, "exists": True, "error": None})
+    _rrefuse176["on"] = True
+    _r176["gc_refused"] = _A176.get("/api/server/%d/game-config" % _sid176)
+    _rrefuse176["on"] = False
+    _r176["gc_refused_calls"] = len(_gc_calls176)
     _r176["refusals"] = list(_refused176)
 finally:
     _p9_restore_all()
@@ -513,6 +521,10 @@ check("game config form: the file browser's refusals are asked - a refused write
       and ("write", "edit_file", _rel176) in _r176["refusals"]
       and ("read", "read_file", _rel176) in _r176["refusals"],
       repr(_r176["refusals"]))
+check("game config read: a refused read (a root-capable account) is a 409 and LinuxGSM's details never runs",
+      _r176["gc_refused"].status_code == 409 and _r176["gc_refused_calls"] == 0
+      and ("read", "read_file", "game config") in _r176["refusals"],
+      repr((_r176["gc_refused"].status_code, _r176["gc_refused_calls"], _r176["refusals"])))
 check("game config form: the re-read answers the file and its form; a missing file is an error, not a form",
       _j176(_r176["get"]).get("content") == sample_properties and _j176(_r176["get"])["form"]["hash"] == _h176
       and _r176["get_missing"].status_code == 400 and "form" not in _j176(_r176["get_missing"]),
