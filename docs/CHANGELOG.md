@@ -14,6 +14,12 @@ compares git commits, not this file.
 
 ### Added
 
+- **Minecraft operators, whitelist and bans on the server page.** A Minecraft Java or PaperMC
+  server's page has a Player Lists card. It shows the server's operators, whitelist and banned
+  players and addresses, and changes them through the server console while the server is running.
+  Names, addresses and reasons are checked before anything is sent, every change is in the audit
+  log, and the card says when the server did not apply a change (a name that is no Minecraft
+  account, for one).
 - **Updates no longer skip a release the next one depends on.** A panel that is several releases
   behind first installs any release listed in `panel/install/update-stops`, then the newest one on
   its next update. The Update card offers each in turn. If your panel's updates keep rolling back
