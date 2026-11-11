@@ -1067,7 +1067,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
     "browse_files", "read_file", "upload_check", "create_file", "create_folder", "list_cron",
     "lgsm_postponed", "lgsm_refused", "lgsm_busy", "mc_list_read", "mc_list_change", "plugin_list",
-    "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove",
+    "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove", "workshop_read", "workshop_save",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({

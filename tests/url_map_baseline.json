@@ -705,6 +705,28 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/workshop/pz-mods": {
+    "endpoint": "api_server_workshop_pz_mods",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_workshop_pz_mods"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/workshop/titles": {
+    "endpoint": "api_server_workshop_titles",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_workshop_titles"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/servers": {
     "endpoint": "api_servers",
     "guards": [
@@ -1125,6 +1147,18 @@
       "auth.py:decorated_function(manage_servers)[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_wipe_schedule"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "GET,POST /api/server/<int:server_id>/workshop": {
+    "endpoint": "api_server_workshop",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_workshop"
     ],
     "methods": [
       "GET",
