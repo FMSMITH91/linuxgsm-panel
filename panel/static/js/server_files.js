@@ -1367,13 +1367,14 @@ function cronLastRun(j){
   return out;
 }
 // A chain the panel composed (Warn players first) reads as its action and warnings, with the
-// messages and the full command in the tooltip; every other command shows as written.
-function cronCmdCell(j, roleTag){
+// messages and the full command in the tooltip; every other command shows as written. The cell is
+// left open for the caller's role tag.
+function cronCmdCell(j){
   if(j.chain && window.schChain){
     var tip = j.chain.steps.map(function(s){ return tf('{n} min before: {message}', {n: s.minutes, message: s.message}); }).join('\n')+'\n\n'+j.command;
-    return '<td data-label="Command" class="cron-cmd" title="'+escA(tip)+'">'+esc(window.schChain.summary(j.chain))+roleTag+'</td>';
+    return '<td data-label="Command" class="cron-cmd" title="'+esc(tip)+'">'+esc(window.schChain.summary(j.chain));
   }
-  return '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command)+roleTag+'</td>';
+  return '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command);
 }
 function cronRowChain(row){
   var raw=row.getAttribute('data-chain');
@@ -1398,7 +1399,7 @@ function loadCron(){
       rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
         + (j.chain ? ' data-chain="'+escA(JSON.stringify(j.chain))+'"' : '')+'>'
         + '<td data-label="Schedule" class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
-        + cronCmdCell(j, roleTag)
+        + cronCmdCell(j)+roleTag+'</td>'
         + '<td data-label="Last run" style="white-space:nowrap;">'+cronLastRun(j)+'</td>'
         + '<td class="text-end" style="white-space:nowrap;">'+actions+'</td></tr>';
     });
