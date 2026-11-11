@@ -14,6 +14,11 @@ compares git commits, not this file.
 
 ### Added
 
+- **Plugins for PaperMC servers.** A PaperMC server's page has a Plugins card: search Modrinth for
+  Paper, Spigot and Bukkit plugins built for the server's Minecraft version, and install one in a
+  click. The panel downloads the file itself and checks it against Modrinth's checksum before it
+  reaches the server. Installed plugins can be disabled, enabled again or removed; changes take
+  effect on the next start.
 - **Minecraft operators, whitelist and bans on the server page.** A Minecraft Java or PaperMC
   server's page has a Player Lists card. It shows the server's operators, whitelist and banned
   players and addresses, and changes them through the server console while the server is running.
