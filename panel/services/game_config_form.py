@@ -140,6 +140,20 @@ def _gcf_kv_comment(body, props):
     return m.group(2).strip() if m else None
 
 
+def _gcf_kv_line(body, props):
+    """What one line of a key=value file is: (kind, detail) - comment, section, join, entry or other."""
+    comment = _gcf_kv_comment(body, props)
+    if comment is not None:
+        return "comment", comment
+    sec = _GCF_KV_SECTION.match(body)
+    if sec:
+        return "section", sec.group(1).strip()
+    m = _GCF_KV.match(body)
+    if m and props and _gcf_odd_backslashes(m.group(2)):
+        return "join", m   # a value that goes on to the next line: the raw editor's to change
+    return ("entry", m) if m else ("other", None)
+
+
 def _gcf_parse_kv(text, props):
     """Fields of a key=value file. `props`: it is a .properties file (! comments, \\ line joins)."""
     out, section, pending, joining = [], "", [], False
@@ -147,19 +161,15 @@ def _gcf_parse_kv(text, props):
         if joining:   # a .properties value continued from the line above: not a field of its own
             joining = props and _gcf_odd_backslashes(body)
             continue
-        comment = _gcf_kv_comment(body, props)
-        if comment is not None:
-            if not _gcf_is_decoration(comment):
-                pending.append(comment)
+        kind, got = _gcf_kv_line(body, props)
+        if kind == "comment":
+            pending += [] if _gcf_is_decoration(got) else [got]
             continue
-        sec = _GCF_KV_SECTION.match(body)
-        m = None if sec else _GCF_KV.match(body)
-        if sec:
-            section = sec.group(1).strip()
-        elif m and props and _gcf_odd_backslashes(m.group(2)):
-            joining = True   # a value that goes on to the next line: the raw editor's to change
-        elif m:
-            out.append(_gcf_entry(m.group(1), off + m.start(2), off + m.end(2), m.group(2), section, pending))
+        if kind == "section":
+            section = got
+        elif kind == "entry":
+            out.append(_gcf_entry(got.group(1), off + got.start(2), off + got.end(2), got.group(2), section, pending))
+        joining = kind == "join"
         pending = []
     return out
 
@@ -231,6 +241,39 @@ def _gcf_xml_value(raw):
     return html.unescape(raw) if "&" in raw else raw
 
 
+def _gcf_xml_before(text, comments, ci, last_end, pos, section):
+    """Walk the comments before `pos`: (next comment index, the group, the comment right above or None)."""
+    above = None
+    while ci < len(comments) and comments[ci][0] < pos:
+        s, e, words = comments[ci]
+        ci += 1
+        if s >= last_end and "<property" not in words and _gcf_own_line(text, s):
+            section = words if len(words) <= _GCF_SECTION_MAX else section
+            gap = text[e:pos]
+            above = words if not gap.strip() and len(_GCF_EOL.findall(gap)) <= 1 else None
+    return ci, section, above
+
+
+def _gcf_xml_trail(text, comments, ci, end):
+    """(the comment starting on the same line after `end`, or None; the next comment index)."""
+    if ci < len(comments):
+        gap = text[end:comments[ci][0]]
+        if not gap.strip() and not _GCF_EOL.search(gap):
+            return comments[ci], ci + 1
+    return None, ci
+
+
+def _gcf_xml_field(m, section, help_text):
+    """The field for one <property> match, or None when its value uses an entity XML does not define."""
+    quoted = 3 if m.group(3) is not None else 4
+    value = _gcf_xml_value(m.group(quoted))
+    if value is None:
+        return None
+    name = m.group(1) if m.group(1) is not None else m.group(2)
+    return _gcf_entry(name, m.start(quoted), m.end(quoted), value, section, [help_text],
+                      '"' if quoted == 3 else "'")
+
+
 def _gcf_parse_xml(text):
     """Fields of a 7 Days to Die style XML file; None when it declares a DOCTYPE or an entity.
 
@@ -243,29 +286,14 @@ def _gcf_parse_xml(text):
     comments = [(m.start(), m.end(), _gcf_collapse(m.group(1))) for m in _GCF_XML_COMMENT.finditer(text)]
     out, section, ci, last_end = [], "", 0, 0
     for m in _GCF_XML_PROP.finditer(text):
-        above = None
-        while ci < len(comments) and comments[ci][0] < m.start():
-            s, e, words = comments[ci]
-            ci += 1
-            if s >= last_end and "<property" not in words and _gcf_own_line(text, s):
-                section = words if len(words) <= _GCF_SECTION_MAX else section
-                gap = text[e:m.start()]
-                above = words if not gap.strip() and len(_GCF_EOL.findall(gap)) <= 1 else None
+        ci, section, above = _gcf_xml_before(text, comments, ci, last_end, m.start(), section)
         if ci and comments[ci - 1][1] > m.start():
             continue
-        trail = None
-        if ci < len(comments):
-            gap = text[m.end():comments[ci][0]]
-            if not gap.strip() and not _GCF_EOL.search(gap):
-                trail, ci = comments[ci], ci + 1
+        trail, ci = _gcf_xml_trail(text, comments, ci, m.end())
         last_end = trail[1] if trail else m.end()
-        quoted = 3 if m.group(3) is not None else 4
-        value = _gcf_xml_value(m.group(quoted))
-        if value is None:
-            continue
-        name = m.group(1) if m.group(1) is not None else m.group(2)
-        out.append(_gcf_entry(name, m.start(quoted), m.end(quoted), value, section,
-                              [trail[2] if trail else (above or "")], '"' if quoted == 3 else "'"))
+        field = _gcf_xml_field(m, section, trail[2] if trail else (above or ""))
+        if field:
+            out.append(field)
     return out
 
 
@@ -277,70 +305,78 @@ class _GcfJsonError(ValueError):
     """The text is not JSON this module can place values in."""
 
 
+def _gcf_json_scalar(s, i):
+    """(end, value, style) of the string, number, true, false or null at `i`."""
+    if s[i] == '"':
+        val, end = json.decoder.scanstring(s, i + 1)
+        return end, val, "str"
+    m = _GCF_JSON_NUMBER.match(s, i)
+    if m:
+        return m.end(), json.loads(m.group(0)), "num"
+    for word, val in (("true", True), ("false", False), ("null", None)):
+        if s.startswith(word, i):
+            return i + len(word), val, ("null" if val is None else "bool")
+    raise _GcfJsonError("bad value")
+
+
 def _gcf_json_value(s, i, depth, sink, path):
     """Scan one JSON value at `i`: (end, value). Scalars at depth 1 and 2 are put in `sink`."""
     i = _GCF_JSON_WS.match(s, i).end()
     if i >= len(s):
         raise _GcfJsonError("end of text")
-    ch = s[i]
-    if ch == "{":
+    if s[i] == "{":
         return _gcf_json_object(s, i, depth, sink, path)
-    if ch == "[":
+    if s[i] == "[":
         return _gcf_json_array(s, i, depth, sink)
-    if ch == '"':
-        val, end = json.decoder.scanstring(s, i + 1)
-        style = "str"
-    else:
-        m = _GCF_JSON_NUMBER.match(s, i)
-        lit = next((w for w in ("true", "false", "null") if s.startswith(w, i)), None)
-        if m:
-            end, val, style = m.end(), json.loads(m.group(0)), "num"
-        elif lit:
-            end, val, style = i + len(lit), json.loads(lit), ("null" if lit == "null" else "bool")
-        else:
-            raise _GcfJsonError("bad value")
+    end, val, style = _gcf_json_scalar(s, i)
     if path is not None and 1 <= depth <= 2:
         sink.append((path, i, end, val, style))
     return end, val
 
 
+def _gcf_json_char(s, i, want, why):
+    """The index after `want` at `i` (blanks skipped first); raises when it is not there."""
+    i = _GCF_JSON_WS.match(s, i).end()
+    if s[i:i + 1] != want:
+        raise _GcfJsonError(why)
+    return i + 1
+
+
+def _gcf_json_more(s, i, close):
+    """After a member or element: (index after the comma, True), or (index after `close`, False)."""
+    i = _GCF_JSON_WS.match(s, i).end()
+    if s[i:i + 1] == ",":
+        return i + 1, True
+    if s[i:i + 1] == close:
+        return i + 1, False
+    raise _GcfJsonError("bad separator")
+
+
 def _gcf_json_object(s, i, depth, sink, path):
     obj, i = {}, _GCF_JSON_WS.match(s, i + 1).end()
-    if i < len(s) and s[i] == "}":
+    if s[i:i + 1] == "}":
         return i + 1, obj
-    while True:
-        i = _GCF_JSON_WS.match(s, i).end()
-        if i >= len(s) or s[i] != '"':
-            raise _GcfJsonError("bad key")
+    more = True
+    while more:
+        i = _gcf_json_char(s, i, '"', "bad key") - 1
         key, i = json.decoder.scanstring(s, i + 1)
-        i = _GCF_JSON_WS.match(s, i).end()
-        if i >= len(s) or s[i] != ":":
-            raise _GcfJsonError("no colon")
+        i = _gcf_json_char(s, i, ":", "no colon")
         child = (path + (key,)) if path is not None and depth < 2 else None
-        i, obj[key] = _gcf_json_value(s, i + 1, depth + 1, sink, child)
-        i = _GCF_JSON_WS.match(s, i).end()
-        if i < len(s) and s[i] == ",":
-            i += 1
-        elif i < len(s) and s[i] == "}":
-            return i + 1, obj
-        else:
-            raise _GcfJsonError("bad object")
+        i, obj[key] = _gcf_json_value(s, i, depth + 1, sink, child)
+        i, more = _gcf_json_more(s, i, "}")
+    return i, obj
 
 
 def _gcf_json_array(s, i, depth, sink):
     arr, i = [], _GCF_JSON_WS.match(s, i + 1).end()
-    if i < len(s) and s[i] == "]":
+    if s[i:i + 1] == "]":
         return i + 1, arr
-    while True:
+    more = True
+    while more:
         i, val = _gcf_json_value(s, i, depth + 1, sink, None)
         arr.append(val)
-        i = _GCF_JSON_WS.match(s, i).end()
-        if i < len(s) and s[i] == ",":
-            i += 1
-        elif i < len(s) and s[i] == "]":
-            return i + 1, arr
-        else:
-            raise _GcfJsonError("bad array")
+        i, more = _gcf_json_more(s, i, "]")
+    return i, arr
 
 
 def _gcf_json_scan(text):
@@ -355,30 +391,43 @@ def _gcf_json_scan(text):
     return doc, sink
 
 
-def _gcf_parse_json(text):
-    """Fields of a JSON object file; None when it is not one this module can place values in."""
+def _gcf_json_doc(text):
+    """(document, sink) when the scanner reads exactly what the standard parser reads, else (None, None)."""
     try:
         doc, sink = _gcf_json_scan(text)
-        # The scanner must read what the standard parser reads, or its positions are not trusted.
         if json.loads(text, parse_constant=_gcf_no_constant) != doc:
-            return None
+            return None, None
     except (ValueError, RecursionError):
+        return None, None
+    return doc, sink
+
+
+def _gcf_json_helps(doc, sink):
+    """{path of a key: its help}, from `_comment_<key>` members (a string, or a list of strings)."""
+    helps = {path[:-1] + (path[-1][len("_comment_"):],): val for path, _s, _e, val, _style in sink
+             if path[-1].startswith("_comment_") and isinstance(val, str)}
+    helps.update(_gcf_json_comment_lists(doc))
+    return helps
+
+
+def _gcf_json_shown(text, start, end, val, style):
+    """A JSON value as its field shows it: a string decoded, a number as written, null empty."""
+    if val is None:
+        return ""
+    if style == "bool":
+        return json.dumps(val)
+    return text[start:end] if style == "num" else val
+
+
+def _gcf_parse_json(text):
+    """Fields of a JSON object file; None when it is not one this module can place values in."""
+    doc, sink = _gcf_json_doc(text)
+    if doc is None:
         return None
-    helps = {}
-    for path, _s, _e, val, _style in sink:
-        if path[-1].startswith("_comment_") and isinstance(val, str):
-            helps[path[:-1] + (path[-1][len("_comment_"):],)] = val
-    for path, val in _gcf_json_comment_lists(doc):
-        helps[path] = val
-    out = []
-    for path, start, end, val, style in sink:
-        if path[-1].startswith("_comment"):
-            continue
-        shown = "" if val is None else (json.dumps(val) if style == "bool" else
-                                        (text[start:end] if style == "num" else val))
-        out.append(_gcf_entry(path[-1], start, end, shown, path[0] if len(path) == 2 else "",
-                              [helps.get(path, "")], style))
-    return out
+    helps = _gcf_json_helps(doc, sink)
+    return [_gcf_entry(path[-1], start, end, _gcf_json_shown(text, start, end, val, style),
+                       path[0] if len(path) == 2 else "", [helps.get(path, "")], style)
+            for path, start, end, val, style in sink if not path[-1].startswith("_comment")]
 
 
 def _gcf_no_constant(name):
@@ -387,12 +436,9 @@ def _gcf_no_constant(name):
 
 def _gcf_json_comment_lists(doc):
     """(path, text) for a `_comment_<key>` that is a list of strings, at the top or one level down."""
-    found = []
-    for scope, obj in [((), doc)] + [((k,), v) for k, v in doc.items() if isinstance(v, dict)]:
-        for k, v in obj.items():
-            if k.startswith("_comment_") and isinstance(v, list) and all(isinstance(x, str) for x in v):
-                found.append((scope + (k[len("_comment_"):],), "\n".join(v)))
-    return found
+    scopes = [((), doc)] + [((k,), v) for k, v in doc.items() if isinstance(v, dict)]
+    return [(scope + (k[len("_comment_"):],), "\n".join(v)) for scope, obj in scopes for k, v in obj.items()
+            if k.startswith("_comment_") and isinstance(v, list) and all(isinstance(x, str) for x in v)]
 
 
 # ── which format ─────────────────────────────────────────────────────────────────────────────────
@@ -417,22 +463,25 @@ def _gcf_claims(text):
     return cfg, kv, total
 
 
+def _gcf_pick(content):
+    """cfg, kv or None for a .cfg/.txt/.conf file, by what two lines in three look like.
+
+    A page of prose has lines that look like `word value`, so a bare majority is not enough.
+    """
+    cfg, kv, total = _gcf_claims(content)
+    if not total:
+        return None
+    if cfg >= kv and cfg * 3 >= total * 2:
+        return "cfg"
+    return "kv" if kv > cfg and kv * 3 >= total * 2 else None
+
+
 def detect(rel, content):
     """The format of the file at `rel` holding `content`: one of FORMATS, or None for the raw editor only."""
     if not isinstance(content, str) or "\x00" in content:
         return None
-    choices = _GCF_EXT_FORMATS.get(_gcf_ext(rel))
-    if not choices:
-        return None
-    if len(choices) == 1:
-        return choices[0]
-    cfg, kv, total = _gcf_claims(content)
-    # Two lines in three must read one way: a page of prose has lines that look like `word value`.
-    if total and cfg >= kv and cfg * 3 >= total * 2:
-        return "cfg"
-    if total and kv > cfg and kv * 3 >= total * 2:
-        return "kv"
-    return None
+    choices = _GCF_EXT_FORMATS.get(_gcf_ext(rel)) or (None,)
+    return choices[0] if len(choices) == 1 else _gcf_pick(content)
 
 
 def parse(rel, content):
@@ -455,19 +504,21 @@ def parse(rel, content):
     return fmt, fields
 
 
-def _gcf_classify(fmt, f):
-    """Set the field's kind (bool, number or text), its switch spellings, and whether it is secret."""
+def _gcf_kind(fmt, f):
+    """(kind, switch-on spelling, switch-off spelling) for a field: bool, number or text."""
     v, style = f["value"], f["style"]
-    f["on"] = f["off"] = None
-    if (fmt == "json" and style == "bool") or (fmt != "json" and v.lower() in _GCF_BOOL_WORDS):
-        f["kind"] = "bool"
-        f["on"], f["off"] = _gcf_spell(v, "true"), _gcf_spell(v, "false")
-    elif fmt != "json" and v in ("0", "1") and _GCF_TOGGLE_HELP.search(f["help"]):
-        f["kind"], f["on"], f["off"] = "bool", "1", "0"
-    elif (fmt == "json" and style == "num") or (fmt != "json" and _GCF_NUMBER.fullmatch(v)):
-        f["kind"] = "number"
-    else:
-        f["kind"] = "text"
+    if fmt == "json":
+        return {"bool": ("bool", "true", "false"), "num": ("number", None, None)}.get(style, ("text", None, None))
+    if v.lower() in _GCF_BOOL_WORDS:
+        return "bool", _gcf_spell(v, "true"), _gcf_spell(v, "false")
+    if v in ("0", "1") and _GCF_TOGGLE_HELP.search(f["help"]):
+        return "bool", "1", "0"
+    return ("number", None, None) if _GCF_NUMBER.fullmatch(v) else ("text", None, None)
+
+
+def _gcf_classify(fmt, f):
+    """Set the field's kind, its switch spellings, and whether it is secret (a switch never is)."""
+    f["kind"], f["on"], f["off"] = _gcf_kind(fmt, f)
     f["secret"] = f["kind"] != "bool" and is_secret_key(f["key"])
 
 
@@ -506,22 +557,32 @@ def _gcf_bad_chars(value):
 
 def _gcf_check(fmt, ext, f, value):
     """None when `value` may be written to field `f`, else why not."""
-    key = f["key"]
     if _gcf_bad_chars(value):
         return BAD_CHARS
     if len(value) > VALUE_MAX:
         return TOO_LONG
+    why = _gcf_check_kind(fmt, f, value)
+    if why or fmt not in ("kv", "cfg"):
+        return why
+    return _gcf_check_kv(ext, f, value) if fmt == "kv" else _gcf_check_cfg(f, value)
+
+
+def _gcf_check_kind(fmt, f, value):
+    """A switch takes only its two spellings, a number field a number."""
     if f["kind"] == "bool" and value not in (f["on"], f["off"]):
-        return i18n.Sentence(BAD_BOOL, key=key, on=f["on"], off=f["off"])
+        return i18n.Sentence(BAD_BOOL, key=f["key"], on=f["on"], off=f["off"])
     number = _GCF_JSON_NUMBER if fmt == "json" else _GCF_NUMBER
     if f["kind"] == "number" and not number.fullmatch(value):
-        return i18n.Sentence(BAD_NUMBER, key=key)
-    if fmt == "kv" and value != value.strip():
-        return i18n.Sentence(EDGE_SPACE, key=key)
-    if fmt == "kv" and ext == ".properties" and _gcf_odd_backslashes(value):
-        return i18n.Sentence(TRAIL_BACKSLASH, key=key)
-    if fmt == "cfg":
-        return _gcf_check_cfg(f, value)
+        return i18n.Sentence(BAD_NUMBER, key=f["key"])
+    return None
+
+
+def _gcf_check_kv(ext, f, value):
+    """key=value: the reader trims the value, and .properties joins a line ending in a backslash."""
+    if value != value.strip():
+        return i18n.Sentence(EDGE_SPACE, key=f["key"])
+    if ext == ".properties" and _gcf_odd_backslashes(value):
+        return i18n.Sentence(TRAIL_BACKSLASH, key=f["key"])
     return None
 
 
@@ -558,6 +619,25 @@ def _gcf_same_fields(old, new, changed):
     return True
 
 
+def _gcf_todo(fmt, ext, fields, changes):
+    """({field id: new value} for the values that change, None), or ({}, why) when one is refused."""
+    if not isinstance(changes, dict) or len(changes) > MAX_FIELDS:
+        return {}, BAD_CHANGES
+    todo = {}
+    for raw_id, value in changes.items():
+        fid = _gcf_field_id(raw_id, len(fields))
+        if fid is None:
+            return {}, NO_FIELD
+        if not isinstance(value, str):
+            return {}, BAD_CHANGES
+        why = None if value == fields[fid]["value"] else _gcf_check(fmt, ext, fields[fid], value)
+        if why:
+            return {}, why
+        if value != fields[fid]["value"]:
+            todo[fid] = value
+    return todo, None
+
+
 def apply(rel, content, expected_hash, changes):
     """(new content, [(field, old value, new value)], None), or (None, [], why) when refused.
 
@@ -569,23 +649,9 @@ def apply(rel, content, expected_hash, changes):
     fmt, fields = parse(rel, content)
     if fmt is None:
         return None, [], NO_FORM
-    if not isinstance(changes, dict) or len(changes) > MAX_FIELDS:
-        return None, [], BAD_CHANGES
-    todo = {}
-    for raw_id, value in changes.items():
-        fid = _gcf_field_id(raw_id, len(fields))
-        if fid is None:
-            return None, [], NO_FIELD
-        if not isinstance(value, str):
-            return None, [], BAD_CHANGES
-        if value == fields[fid]["value"]:
-            continue
-        why = _gcf_check(fmt, _gcf_ext(rel), fields[fid], value)
-        if why:
-            return None, [], why
-        todo[fid] = value
-    if not todo:
-        return content, [], None
+    todo, why = _gcf_todo(fmt, _gcf_ext(rel), fields, changes)
+    if why or not todo:
+        return (None, [], why) if why else (content, [], None)
     new = content
     for fid in sorted(todo, key=lambda k: fields[k]["start"], reverse=True):
         f = fields[fid]

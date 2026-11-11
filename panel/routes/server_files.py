@@ -11,7 +11,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
     RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
-    gmod_current_mounts, gmod_mount_paths, gmod_mount_setup, install_gmod_content, lgsm_game_config,
+    gmod_current_mounts, gmod_mount_paths, gmod_mount_setup, install_gmod_content,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
     console_has_control, stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
@@ -1864,22 +1864,7 @@ def _register_config_editor(app):
             return refused
         return _sf_config_write(gs, data)
 
-    @app.route("/api/server/<int:server_id>/game-config")
-    @login_required
-    @server_access_required
-    def api_server_game_config(server_id):
-        """The game's own server config file (detected via LinuxGSM details)."""
-        gs = get_game(server_id)
-        if not _can_manage_files():
-            return jsonify({"error": "Permission denied"}), 403
-        try:
-            found = lgsm_game_config(gs.remote, gs.short_name, gs.lgsm_name)
-            # The Form view's fields, when the file is a format it reads (else None: raw only).
-            return jsonify(found | {"form": _gcf_routes.form_for(found)})
-        except Exception:
-            return jsonify({"error": _log_and_generic("game config read failed")}), 200
-
-    # The Form view's re-read and save (panel/routes/game_config_form.py).
+    # The game's own config file, its Form view and that view's save (panel/routes/game_config_form.py).
     _gcf_routes.register(app)
 
 

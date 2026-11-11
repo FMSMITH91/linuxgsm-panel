@@ -1805,7 +1805,7 @@ try:
           _r.status_code == 500 and _p9_json(_r).get("message") == "Internal server error")
     _sf_write_result[0] = (True, "")
 
-    _p9_patch(_p9_sf, "lgsm_game_config", _raise_conn)
+    _p9_patch_sm("lgsm_game_config", _raise_conn)
     _r = _A.get(_sf_url + "/game-config")
     check("game-config: a read that raises answers an error body the page can show",
           _r.status_code == 200 and _p9_json(_r).get("error") == "Host unreachable")

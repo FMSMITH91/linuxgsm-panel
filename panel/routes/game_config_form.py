@@ -1,8 +1,9 @@
 """The Form view of the game's own config file, beside its raw editor on Files & Config.
 
-The fields come from panel/services/game_config_form.py. The game-config read (server_files'
-api_server_game_config) carries the form for the file it found; this module adds:
+The fields come from panel/services/game_config_form.py. Routes:
 
+* GET  /api/server/<id>/game-config - the file LinuxGSM's `details` names (ssh_manager's
+  lgsm_game_config), with its form.
 * GET  /api/server/<id>/game-config/form?path=<rel> - the file read again with its form, for the page
   to rebuild the form after the raw editor saved it.
 * POST /api/server/<id>/game-config/form - {path, hash, changes: {field id: value}}: only the changed
@@ -113,8 +114,27 @@ def _gcf_save_answer(gs):
         return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
 
+def _gcf_game_config_answer(gs):
+    """The game config file LinuxGSM's `details` names, with its form when it is a format the form reads."""
+    try:
+        found = _sm.lgsm_game_config(gs.remote, gs.short_name, gs.lgsm_name)
+        return jsonify(found | {"form": form_for(found)})
+    except Exception:
+        return jsonify({"error": _log_and_generic("game config read failed")}), 200
+
+
 def register(app):
-    """The form route. Its view asks the Settings tab's permission itself (rbac_test reads it)."""
+    """The game config routes. Each view asks the Settings tab's permission itself (rbac_test reads it)."""
+    @app.route("/api/server/<int:server_id>/game-config")
+    @login_required
+    @server_access_required
+    def api_server_game_config(server_id):
+        """The game's own server config file (detected via LinuxGSM details)."""
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        return _gcf_game_config_answer(gs)
+
     @app.route("/api/server/<int:server_id>/game-config/form", methods=["GET", "POST"])
     @login_required
     @server_access_required

@@ -397,17 +397,17 @@ try:
     _p9_arm(who="part176")
     _p9_patch_sm("read_file", _read176)
     _p9_patch_sm("write_file", _write176)
-    _p9_patch(_sf176, "lgsm_game_config", lambda s, u, n: {"rel": _rel176, "content": sample_properties,
+    _p9_patch_sm("lgsm_game_config", lambda s, u, n: {"rel": _rel176, "content": sample_properties,
                                                            "exists": True, "error": None})
     _p9_patch(_sf176, "_write_refused", _refuser176(_wrefuse176, "write"))
     _p9_patch(_sf176, "_read_refused", _refuser176(_rrefuse176, "read"))
     _A176, _V176 = _p9_client(P9_ADMIN), _p9_client(P9_VIEWER)
 
     _r176["read"] = _A176.get("/api/server/%d/game-config" % _sid176)
-    _p9_patch(_sf176, "lgsm_game_config", lambda s, u, n: {"rel": "a/start.sh", "content": "x=1\n",
+    _p9_patch_sm("lgsm_game_config", lambda s, u, n: {"rel": "a/start.sh", "content": "x=1\n",
                                                            "exists": True, "error": None})
     _r176["read_other"] = _A176.get("/api/server/%d/game-config" % _sid176)
-    _p9_patch(_sf176, "lgsm_game_config", lambda s, u, n: {"rel": None, "content": "", "exists": False,
+    _p9_patch_sm("lgsm_game_config", lambda s, u, n: {"rel": None, "content": "", "exists": False,
                                                            "error": "No editable game config file"})
     _r176["read_none"] = _A176.get("/api/server/%d/game-config" % _sid176)
 
@@ -500,7 +500,8 @@ check("game config form: the file browser's refusals are asked - a refused write
       "read reads nothing - with the path",
       _r176["refused"].status_code == 409 and _r176["refused_writes"] == 0
       and _r176["get_refused"].status_code == 409
-      and ("write", "edit_file", _rel176) in _r176["refusals"] and ("read", "read_file", _rel176) in _r176["refusals"],
+      and ("write", "edit_file", _rel176) in _r176["refusals"]
+      and ("read", "read_file", _rel176) in _r176["refusals"],
       repr(_r176["refusals"]))
 check("game config form: the re-read answers the file and its form; a missing file is an error, not a form",
       _j176(_r176["get"]).get("content") == sample_properties and _j176(_r176["get"])["form"]["hash"] == _h176
@@ -516,9 +517,10 @@ with open(_os176.path.join(_root, "panel", "static", "js", "server_files.js"), e
 _cut176 = _page176[_page176.index("var _gcfForm=null"):_page176.index("// After the raw editor saved")]
 _dom176 = r"""
 global.window = global; const els = {};
-function mk(tag){ const e = {tagName: tag, attrs: {}, children: [], dataset: {}, style: {}, value: '', checked: false,
-  classList: {list: [], add(...c){ this.list.push(...c); }, toggle(){}},
-  setAttribute(k, v){ this.attrs[k] = String(v); }, appendChild(c){ this.children.push(c); if (c.id) els[c.id] = c; },
+function mk(tag){ const e = {tagName: tag, attrs: {}, children: [], dataset: {}, style: {}, value: '',
+  checked: false, classList: {list: [], add(...c){ this.list.push(...c); }, toggle(){}},
+  setAttribute(k, v){ this.attrs[k] = String(v); },
+  appendChild(c){ this.children.push(c); if (c.id) els[c.id] = c; },
   replaceChildren(...c){ this.children = c; }};
   return e; }
 global.document = {createElement: mk, getElementById: (id) => els[id] || (els[id] = mk('div'))};
