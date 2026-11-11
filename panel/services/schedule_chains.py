@@ -164,17 +164,21 @@ def _sch_steps_from(sends):
     return steps
 
 
-def parse(command, user, selfname, verb):
-    """{"action", "steps": [{"minutes", "message"}]} for a command compose() wrote, else None."""
-    if not verb or not command:
-        return None
+def _sch_tokens(command, user):
+    """The shell words after `cd /home/<user> &&`, or None for a command that does not start so."""
     try:
-        toks = shlex.split(command)
+        toks = shlex.split(command or "")
     except ValueError:
         return None
-    if toks[:3] != ["cd", "/home/%s" % user, "&&"]:
+    return toks[3:] if toks[:3] == ["cd", "/home/%s" % user, "&&"] else None
+
+
+def parse(command, user, selfname, verb):
+    """{"action", "steps": [{"minutes", "message"}]} for a command compose() wrote, else None."""
+    toks = _sch_tokens(command, user) if verb else None
+    if toks is None:
         return None
-    sends, rest = _sch_sends(toks[3:], selfname, verb)
+    sends, rest = _sch_sends(toks, selfname, verb)
     if not sends or len(rest) != 2 or rest[0] != "./" + selfname:
         return None
     steps = _sch_steps_from(sends)
