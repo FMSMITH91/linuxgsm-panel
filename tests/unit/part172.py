@@ -205,7 +205,6 @@ check("console gutter css: ...and the phone's hanging indent is that width plus 
 
 # ── 3. the server page, rendered ─────────────────────────────────────────────────────────────────
 _cgm_sid = _p9_new_server(P9_HOST, "cgmserver", "mc", 25571, name="p172-mc", status="online")
-_cgm_page = (0, "")
 try:
     _p9_arm(who="part172")
     _p9_patch(_sd172, "_maybe_resolve_public_ip", lambda *a, **k: None)
