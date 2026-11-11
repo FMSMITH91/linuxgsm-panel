@@ -480,7 +480,8 @@ _mods_steps173 = (
     "  mk('wsc-items-add').value = 'https://evil.example/?id=43'; window.wscAdd('items', ev);\n"
     "  out.badMsg = els['wsc-msg'].textContent;\n"
     "  mk('wsc-items-add').value = '7'; window.wscAdd('items', ev); out.dupMsg = els['wsc-msg'].textContent;\n"
-    "  window.wscMove('items', 2, -1); window.wscMove('items', 0, -1); window.wscMove('items', 0, 5);\n"
+    "  window.wscMove('items', 2, -1); window.wscMove('items', 0, -1); window.wscMove('items', 2, 1);\n"
+    "  window.wscMove('items', 0, 5); out.moved = rows('wsc-items').map(r => r[0]);\n"
     "  window.wscRemove('items', 0); window.wscRemove('items', 9);\n"
     "  out.after = rows('wsc-items');\n"
     "  window.wscSave(); await settle();\n")
@@ -497,7 +498,8 @@ if _mods_js173 is not None:
           and any("/titles?ids=42" in g for g in _mods_js173.get("gets", [])), repr(_mods_js173))
     check("workshop card: move and remove reorder the list (out-of-range moves do nothing) and Save posts the ids "
           "in that order",
-          _mods_js173.get("posts") == [{"ids": ["42", "7"]}]
+          _mods_js173.get("moved") == ["1. <img src=x onerror=alert(1)>", "2. 42", "3. Seven"]
+          and _mods_js173.get("posts") == [{"ids": ["42", "7"]}]
           and [r[0] for r in _mods_js173.get("after", [])] == ["1. 42", "2. Seven"], repr(_mods_js173))
 
 _pz_steps173 = (
