@@ -130,6 +130,8 @@ _Rules = collections.namedtuple("_Rules", "withheld siblings")
 # One port the pass stored, kept for its audit row: the row as it was, the port it now has, what
 # else the move did (notes for the audit), and the GameServer the row is about.
 _Move = collections.namedtuple("_Move", "row port notes server")
+# Where a move's port came from, for its audit row.
+_FROM_DETAILS = "read from LinuxGSM details at panel start"
 
 
 def _row(gs):
@@ -281,15 +283,61 @@ def _store_read_port(host, row, port, now, rules):
     if gs is None:
         return None
     gs.port = port
+    # A port saved on the Settings tab while it ran (port_check.py) is settled by any move: this
+    # one stores either that port or what LinuxGSM now reads, which is the truer of the two.
+    gs.pending_port = None
     db.session.commit()
     _mon.forget_updown(row.id)
     notes = [n for n in (_cron_follows(host.remote, row, port),
                          _close_old_rule(host, row, now, rules, port)) if n]
-    _log.info("%s: stored port %s -> %s, as LinuxGSM reports", row.name, row.port, port)
+    _log.info("%s: stored port %s -> %s", row.name, row.port, port)
     return _Move(row, port, notes, gs)
 
 
-def _audit_moves(remote_id, moves):
+def move_rules(withheld_game_ports, sibling_port_blocks):
+    """manage_servers' two port rules as move_stored_port takes them."""
+    return _Rules(withheld_game_ports, sibling_port_blocks)
+
+
+def saved_port_refusal(remote, gs, port, rules):
+    """Why a port saved on the Settings tab may not become `gs`'s stored port, or None when it may.
+
+    The re-read's own rules for a port chosen in the panel: never SSH's or the panel's port
+    (port_refusal), never inside another server's block (withheld_game_ports). Whether something
+    listens on it is not asked here: the Start's port check (port_check.py) asks that, at the start.
+    """
+    return _saved_port_check(remote, gs, port, rules)[0]
+
+
+def _saved_port_check(remote, gs, port, rules):
+    """saved_port_refusal's answer, with what it read. -> (why or None, the host's rows, gs's _Row, protected)."""
+    rows = _host_rows(gs.remote_id)
+    row = next((r for r in rows if r.id == gs.id), None)
+    if row is None:
+        return "the server is gone", rows, None, frozenset()
+    protected = _sm.protected_host_ports(remote)
+    return (port_refusal(port, protected) or _held_by(port, rules.withheld(rows, row, protected)),
+            rows, row, protected)
+
+
+def move_stored_port(remote, gs, port, rules, source):
+    """Store `port` as `gs`'s port with the re-read's side effects, audited as port_resync. -> why not, or None.
+
+    The same move reconcile_stored_ports makes (_store_read_port): the monitor's up/down reset, the
+    restart-when-empty check pointed at the new port, this server's own firewall rule on the old one
+    closed when nothing else can need it. `source` says in the audit row where the port came from.
+    """
+    why, rows, row, protected = _saved_port_check(remote, gs, port, rules)
+    if why:
+        return why
+    host = _Host(remote, protected,
+                 functools.lru_cache(maxsize=1)(lambda: _sm._remote_listening_ports(remote)), rows)
+    move = _store_read_port(host, row, port, rows, rules)
+    _audit_moves(gs.remote_id, [move] if move else [], source)
+    return None
+
+
+def _audit_moves(remote_id, moves, source=_FROM_DETAILS):
     """Audit each of the host's moves as `port_resync`, once the pass has made all of them.
 
     Whether a moved row shares its new port is read from where the pass leaves the host's rows,
@@ -307,19 +355,19 @@ def _audit_moves(remote_id, moves):
     rows = _host_rows(remote_id)
     for move in moves:
         try:
-            _audit_move(move, rows)
+            _audit_move(move, rows, source)
         except Exception:  # noqa: BLE001 - the move stands; one audit row never stops the rest
             db.session.rollback()
             _log.warning("%s: its port move could not be audited", move.row.name, exc_info=True)
 
 
-def _audit_move(move, rows):
+def _audit_move(move, rows, source=_FROM_DETAILS):
     """Write the `port_resync` audit row for one move, and log a warning when it shares its port."""
     row, port = move.row, move.port
     shared = _sharing_note(row, port, rows)
     log_action(None, "port_resync", target=row.name, server=move.server,
-               detail="%s -> %s (read from LinuxGSM details at panel start; %s)"
-               % (row.port, port, "; ".join(move.notes + ([shared] if shared else []))))
+               detail="%s -> %s (%s; %s)"
+               % (row.port, port, source, "; ".join(move.notes + ([shared] if shared else []))))
     if shared:
         _log.warning("%s", shared)
 

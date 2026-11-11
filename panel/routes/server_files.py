@@ -1841,7 +1841,7 @@ def _sf_config_write(gs, data):
         log_action(current_user, "edit_config", target=gs.name,
                    detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
                    server=gs)
-        return jsonify({"success": ok, "message": i18n.tr(msg or ("Saved" if ok else "Failed"))})
+        return jsonify(_sd._pck_save_body(gs, data, ok, msg))   # a game port saved is followed there
     except Exception:
         return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 

@@ -292,6 +292,8 @@ function saveConfig(ev){
   fetch(MOUNT+'/api/server/'+serverId+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:settings})})
     .then(r=>r.json()).then(d=>{
       msg.textContent = d.success?'✓ Saved — restart the server to apply.':'✗ '+(d.message||'Failed');
+      // A game port saved: what the panel now watches, or that it waits for the next restart.
+      if (d.success && d.port_note) msg.textContent += ' ' + d.port_note;
       msg.className='small ms-2 '+(d.success?'text-success':'text-danger');
       if(d.success){
         // Mark saved values as the new baseline (preserves accordion state), and show the "set"

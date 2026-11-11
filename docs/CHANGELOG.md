@@ -14,6 +14,13 @@ compares git commits, not this file.
 
 ### Added
 
+- **Start checks the port first.** Starting a stopped server from the panel checks that its port is
+  free. If another server on the host is running on it, or something else listens there, the panel
+  says so and offers "Start anyway". If the host can't be read, the server starts as before.
+- **A port changed on the Settings tab is followed.** Saved while the server is stopped, the panel
+  watches the new port at once. Saved while it runs, the new port takes effect at the next start or
+  restart from the panel. Games that keep their port in their own config file still follow it when
+  the panel restarts or on Sync ports.
 - **Scheduled restarts, stops and updates can warn players first.** On the Schedule tab, a
   restart, stop or update can send up to five chat warnings before it runs, for example 5 and 1
   minutes before. It is offered for Source, GoldSrc, idTech3 and Minecraft servers. The first
