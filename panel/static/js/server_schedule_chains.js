@@ -45,7 +45,7 @@
   // typed is left alone.
   function refreshDefaults() {
     rows().forEach(function (row) {
-      var p = parts(row), n = parseInt(p.min.value, 10);
+      var p = parts(row), n = Number.parseInt(p.min.value, 10);
       if (p.text.getAttribute('data-auto') === '1' && n >= 1) p.text.value = defaultText(action(), n);
     });
   }
@@ -107,7 +107,7 @@
   function lead() {
     var most = 0;
     rows().forEach(function (row) {
-      var n = parseInt(parts(row).min.value, 10);
+      var n = Number.parseInt(parts(row).min.value, 10);
       if (n > most) most = n;
     });
     return most;
@@ -151,7 +151,7 @@
     if (!on()) return null;
     var warnings = rows().map(function (row) {
       var p = parts(row);
-      return {minutes: parseInt(p.min.value, 10), message: String(p.text.value || '').trim()};
+      return {minutes: Number.parseInt(p.min.value, 10), message: String(p.text.value || '').trim()};
     });
     return {action: action(), warnings: warnings};
   }
@@ -207,7 +207,7 @@
     box.addEventListener('change', function () { show(box.checked); });
     if (act) act.addEventListener('change', function () { refreshDefaults(); when(); });
     if (add) add.addEventListener('click', function () {
-      var n = rows().length ? Math.max(1, parseInt(parts(rows()[rows().length - 1]).min.value, 10) - 1) : 5;
+      var n = rows().length ? Math.max(1, Number.parseInt(parts(rows()[rows().length - 1]).min.value, 10) - 1) : 5;
       addRow(n, null);
       when();
     });
