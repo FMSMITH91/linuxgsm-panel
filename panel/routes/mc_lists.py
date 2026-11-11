@@ -246,7 +246,8 @@ def register(app):
     def api_server_mc_list_change(server_id, which):
         """Add to or remove from one list, or turn the whitelist on or off, by console command."""
         gs = get_game(server_id)
-        if not _mcl_can_change():
+        # Inline, not _mcl_can_change(): rbac_test reads each mutating view's own gate.
+        if not (current_user.is_superadmin or has_permission(current_user, SEND_COMMAND)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         if not mcl_supported(gs.game_type):
             return jsonify({"success": False, "message": i18n.tr(_MCL_NOT_JAVA)}), 400
