@@ -228,8 +228,11 @@ def resolve(project_id, mc_version=None):
     params = {"loaders": json.dumps(list(LOADERS)), "include_changelog": "false"}
     if mc_version:
         params["game_versions"] = json.dumps([mc_version])
-    project = _mdr_api("/project/" + project_id)
-    versions = _mdr_api("/project/%s/version" % project_id, params)
+    # Already held to valid_id (8 base62 characters); quoted as well, so the path segment can never be
+    # anything but one segment whatever the check above it allows.
+    seg = urllib.parse.quote(project_id, safe="")
+    project = _mdr_api("/project/" + seg)
+    versions = _mdr_api("/project/%s/version" % seg, params)
     if not isinstance(project, dict) or not isinstance(versions, list):
         return None, UNAVAILABLE
     version = _mdr_pick(versions, project_id)
