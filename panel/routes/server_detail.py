@@ -912,6 +912,9 @@ def register(app):
     _register_schedules(app)
     _register_commands(app)
     _cmpa_register_logs(app)
+    # A Minecraft server's operators, whitelist and bans (app.py is at its size limit).
+    from panel.routes import mc_lists as _mcl_routes
+    _mcl_routes.register(app)
     # A PaperMC server's plugins from Modrinth (app.py is at its size limit).
     from panel.routes import modrinth_plugins as _mdr_routes
     _mdr_routes.register(app)

@@ -628,6 +628,17 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/mc-lists/<any(ops, whitelist, bans, ipbans):which>": {
+    "endpoint": "api_server_mc_list",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_list"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/playerlist": {
     "endpoint": "api_server_playerlist",
     "guards": [
@@ -2027,6 +2038,17 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_install_dismiss"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/mc-lists/<any(ops, whitelist, bans, ipbans):which>": {
+    "endpoint": "api_server_mc_list_change",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_list_change"
     ],
     "methods": [
       "POST"

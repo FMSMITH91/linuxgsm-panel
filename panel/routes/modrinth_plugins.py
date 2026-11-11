@@ -186,28 +186,93 @@ def _mdr_gate(gs):
     return None
 
 
-def _register_reads(app):
+def _mdr_list_answer(gs):
+    """The list route's answer once its permission has passed."""
+    from panel.routes import server_files as _sf
+    bad = _mdr_gate(gs) or _sf._read_refused(gs, "plugin_list", _MDR_DIR)
+    if bad is not None:
+        return bad
+    try:
+        rows, why = installed(gs)
+        if why:
+            return jsonify({"success": False, "error": i18n.tr(why)})
+        return jsonify({"success": True, "plugins": rows, "mc_version": mc_version(gs)})
+    except ConnectionError:
+        return _unreachable("list plugins")
+    except Exception:
+        return jsonify({"success": False, "error": _log_and_generic("request failed")}), 500
+
+
+def _mdr_search_answer(gs):
+    """The search route's answer once its permission has passed; `mc` is dropped unless N.N[.N]."""
+    bad = _mdr_gate(gs)
+    if bad is not None:
+        return bad
+    mcv = request.args.get("mc", "")
+    if mcv and not _mr.valid_mc_version(mcv):
+        mcv = ""
+    hits, why = _mr.search(request.args.get("q", ""), mcv or None)
+    if why:
+        return jsonify({"success": False, "error": i18n.tr(why)}), 400 if why == _mr.BAD_QUERY else 502
+    return jsonify({"success": True, "hits": hits, "verified": bool(mcv)})
+
+
+def _mdr_install_answer(gs):
+    """The install route's answer once its permission has passed."""
+    from panel.routes import server_files as _sf
+    bad = _mdr_gate(gs)
+    if bad is not None:
+        return bad
+    project_id = _json_str(_json_body(), "project_id")
+    if not _mr.valid_id(project_id):
+        return _mdr_refuse(gs, "install", "?", _mr.BAD_ID)
+    refused = _sf._write_refused(gs, "plugin_install", _MDR_DIR)
+    if refused is not None:
+        return refused
+    try:
+        return _mdr_install(gs, project_id)
+    except ConnectionError:
+        return _unreachable("install a plugin")
+    except Exception:
+        return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+
+def _mdr_change_answer(gs):
+    """The change route's answer once its permission has passed."""
+    bad = _mdr_gate(gs)
+    if bad is not None:
+        return bad
+    data = _json_body()
+    action, name = _json_str(data, "action"), _json_str(data, "name")
+    new_name, why = change_target(action, name)
+    refused = _mdr_change_refused(gs, action, name, why)
+    if refused is not None:
+        return refused
+    try:
+        return _mdr_change(gs, action, name, new_name)
+    except ConnectionError:
+        return _unreachable("change a plugin")
+    except Exception:
+        return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+
+def register(app):
+    """The plugin list, search, install and change routes, and the template's `plugins_supported`.
+
+    Each view asks the file manager's permission itself (rbac_test reads each view's own gate), then
+    hands the rest to its module-level answer.
+    """
+    app.jinja_env.globals["plugins_supported"] = plugins_supported
+
     @app.route("/api/server/<int:server_id>/plugins")
     @login_required
     @server_access_required
     def api_server_plugins(server_id):
         """The installed plugin jars and the server's Minecraft version (None when it cannot be told)."""
-        from panel.routes import server_files as _sf
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        bad = _mdr_gate(gs) or _sf._read_refused(gs, "plugin_list", _MDR_DIR)
-        if bad is not None:
-            return bad
-        try:
-            rows, why = installed(gs)
-            if why:
-                return jsonify({"success": False, "error": i18n.tr(why)})
-            return jsonify({"success": True, "plugins": rows, "mc_version": mc_version(gs)})
-        except ConnectionError:
-            return _unreachable("list plugins")
-        except Exception:
-            return jsonify({"success": False, "error": _log_and_generic("request failed")}), 500
+        return _mdr_list_answer(gs)
 
     @app.route("/api/server/<int:server_id>/plugins/search")
     @login_required
@@ -217,48 +282,17 @@ def _register_reads(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        bad = _mdr_gate(gs)
-        if bad is not None:
-            return bad
-        mcv = request.args.get("mc", "")
-        if mcv and not _mr.valid_mc_version(mcv):
-            mcv = ""
-        hits, why = _mr.search(request.args.get("q", ""), mcv or None)
-        if why:
-            return jsonify({"success": False, "error": i18n.tr(why)}), 400 if why == _mr.BAD_QUERY else 502
-        return jsonify({"success": True, "hits": hits, "verified": bool(mcv)})
-
-
-def register(app):
-    """The plugin list, search, install and change routes, and the template's `plugins_supported`."""
-    app.jinja_env.globals["plugins_supported"] = plugins_supported
-    _register_reads(app)
+        return _mdr_search_answer(gs)
 
     @app.route("/api/server/<int:server_id>/plugins/install", methods=["POST"])
     @login_required
     @server_access_required
     def api_server_plugins_install(server_id):
         """Download one Modrinth plugin on the panel host, check its sha512, write it into plugins/."""
-        from panel.routes import server_files as _sf
         gs = get_game(server_id)
-        # Inline: rbac_test reads each mutating view's own gate.
         if not _can_manage_files():
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        bad = _mdr_gate(gs)
-        if bad is not None:
-            return bad
-        project_id = _json_str(_json_body(), "project_id")
-        if not _mr.valid_id(project_id):
-            return _mdr_refuse(gs, "install", "?", _mr.BAD_ID)
-        refused = _sf._write_refused(gs, "plugin_install", _MDR_DIR)
-        if refused is not None:
-            return refused
-        try:
-            return _mdr_install(gs, project_id)
-        except ConnectionError:
-            return _unreachable("install a plugin")
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+        return _mdr_install_answer(gs)
 
     @app.route("/api/server/<int:server_id>/plugins/change", methods=["POST"])
     @login_required
@@ -268,18 +302,4 @@ def register(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        bad = _mdr_gate(gs)
-        if bad is not None:
-            return bad
-        data = _json_body()
-        action, name = _json_str(data, "action"), _json_str(data, "name")
-        new_name, why = change_target(action, name)
-        refused = _mdr_change_refused(gs, action, name, why)
-        if refused is not None:
-            return refused
-        try:
-            return _mdr_change(gs, action, name, new_name)
-        except ConnectionError:
-            return _unreachable("change a plugin")
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+        return _mdr_change_answer(gs)

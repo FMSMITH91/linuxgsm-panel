@@ -437,6 +437,11 @@ _pa171, _pf171, _pv171, _pn171 = (_pages171.get(k, (0, ""))[1] for k in ("admin"
 check("server page: a PaperMC server shows the Plugins card and its script to a superadmin and a file manager",
       _pages171.get("admin", (0,))[0] == 200 and 'id="mdr-card"' in _pa171 and "js/server_plugins.js" in _pa171
       and 'id="mdr-card"' in _pf171 and "js/server_plugins.js" in _pf171, _pa171[:200])
+check("server page: a PaperMC page carries both Minecraft cards (Player Lists and Plugins); a vanilla page only "
+      "Player Lists",
+      'id="mcl-card"' in _pa171 and 'id="mdr-card"' in _pa171 and 'data-declared=' in _pa171
+      and '"mclists"' in _pa171 and '"plugins"' in _pa171
+      and 'id="mcl-card"' in _pn171 and 'id="mdr-card"' not in _pn171, repr(_pages171.get("vanilla", (0,))[0]))
 check("server page: a console viewer and a vanilla server get no Plugins card and no script",
       'id="mdr-card"' not in _pv171 and "server_plugins.js" not in _pv171
       and 'id="mdr-card"' not in _pn171 and "server_plugins.js" not in _pn171,
