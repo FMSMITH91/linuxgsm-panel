@@ -19,7 +19,6 @@
   "Save Workshop list": "Enregistrer la liste du Workshop",
   "Download now": "Télécharger maintenant",
   "Project Zomboid downloads Workshop items when the server next starts, so the Mod IDs of new items show here after that start.": "Project Zomboid télécharge les éléments du Workshop au prochain démarrage du serveur : les Mod IDs des nouveaux éléments apparaissent ici après ce démarrage.",
-  "Saving writes workshopmods in this server's LinuxGSM config. Download now runs workshop-update, which expands each collection into its items.": "Enregistrer écrit workshopmods dans la configuration LinuxGSM de ce serveur. Télécharger maintenant lance workshop-update, qui développe chaque collection en ses éléments.",
   "Not found on Steam, or not public": "Introuvable sur Steam, ou non public",
   "Collection of {n} items": "Collection de {n} éléments",
   "Move up in the list": "Monter dans la liste",
@@ -45,5 +44,6 @@
   "A list holds at most 200 Workshop ids.": "Une liste contient au plus 200 ids du Workshop.",
   "Each Workshop id can be in the list once.": "Chaque id du Workshop ne peut figurer qu'une fois dans la liste.",
   "Zomboid/Server/{name}.ini is not there yet. Project Zomboid writes it the first time the server starts; start it once, then add Workshop items here.": "Zomboid/Server/{name}.ini n'existe pas encore. Project Zomboid l'écrit au premier démarrage du serveur ; démarrez-le une fois, puis ajoutez ici des éléments du Workshop.",
-  "Saved.": "Enregistré."
+  "Saved.": "Enregistré.",
+  "Saving writes workshopmods in this server's LinuxGSM config. LinuxGSM's workshop-update downloads the list and expands each collection into its items.": "Enregistrer écrit workshopmods dans la configuration LinuxGSM de ce serveur. Le workshop-update de LinuxGSM télécharge la liste et développe chaque collection en ses éléments."
 }

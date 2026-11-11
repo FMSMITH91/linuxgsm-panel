@@ -527,7 +527,7 @@
       <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-save"></i>
         <span>Save collection</span></button>
     </form>
-    <div class="small text-secondary text-break" style="min-height:3em;" id="wsc-coll-info">
+    <div class="small text-secondary text-break" style="min-height:3.2em;" id="wsc-coll-info">
       <i class="bi bi-hourglass-split"></i></div>
     <div class="form-text">The game downloads this collection when it starts: a change applies at the next restart.</div>
     {% else %}
@@ -572,10 +572,10 @@
     {% if _wsc_kind == 'pz' %}
     <div class="form-text">Project Zomboid downloads Workshop items when the server next starts, so the Mod IDs of new items show here after that start.</div>
     {% else %}
-    <div class="form-text">Saving writes workshopmods in this server's LinuxGSM config. Download now runs workshop-update, which expands each collection into its items.</div>
+    <div class="form-text">Saving writes workshopmods in this server's LinuxGSM config. LinuxGSM's workshop-update downloads the list and expands each collection into its items.</div>
     {% endif %}
     {% endif %}
-    <div class="small mt-1" id="wsc-msg" role="status"></div>
+    <div class="small mt-1" style="min-height:1.5em;" id="wsc-msg" role="status"></div>
   </div>
 </div>
 {% endmacro %}

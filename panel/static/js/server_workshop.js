@@ -66,7 +66,9 @@
     var li = document.createElement('li');
     li.className = 'd-flex flex-wrap align-items-center gap-1 px-2 py-1 border-bottom';
     var text = document.createElement('div');
-    text.className = 'flex-grow-1 text-break';
+    text.className = 'text-break';
+    // A basis, so the three buttons stay beside the text on a phone instead of wrapping under it.
+    text.style.flex = '1 1 8rem';
     text.style.minWidth = '0';
     var title = document.createElement('div');
     var meta = document.createElement('div');
