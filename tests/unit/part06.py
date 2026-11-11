@@ -5765,8 +5765,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # page, read-only, behind the file browser's read gates. /game-icon/<script> (the install page's game
 # icons, fetched and cached so the browser loads them from the panel's own origin) and
 # /api/server/<id>/wipe-schedule (read or set a Rust server's scheduled map / full wipe).
-check("register_routes: every one of the 236 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 236,
+# 238, was 236: two genuinely new views, panel/routes/mc_lists.py's read and change of a Java Minecraft
+# server's operators, whitelist and bans (/api/server/<id>/mc-lists/<list>, GET behind the file
+# browser's read gates, POST behind the console's send permission).
+check("register_routes: every one of the 238 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 238,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
