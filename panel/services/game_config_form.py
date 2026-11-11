@@ -37,7 +37,6 @@ import unicodedata
 
 from panel.core import i18n
 
-FORMATS = ("kv", "cfg", "xml", "json")
 # A file with more fields than this is offered in the raw editor only.
 MAX_FIELDS = 2000
 VALUE_MAX = 4096
@@ -477,7 +476,7 @@ def _gcf_pick(content):
 
 
 def detect(rel, content):
-    """The format of the file at `rel` holding `content`: one of FORMATS, or None for the raw editor only."""
+    """The format of the file at `rel` holding `content`: kv, cfg, xml or json, or None for the raw editor only."""
     if not isinstance(content, str) or "\x00" in content:
         return None
     choices = _GCF_EXT_FORMATS.get(_gcf_ext(rel)) or (None,)

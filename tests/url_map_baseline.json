@@ -1104,6 +1104,18 @@
       "POST"
     ]
   },
+  "GET,POST /api/server/<int:server_id>/game-config/form": {
+    "endpoint": "api_server_game_config_form",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_game_config_form"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /api/server/<int:server_id>/gmod-content": {
     "endpoint": "api_gmod_content",
     "guards": [

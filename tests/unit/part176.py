@@ -209,9 +209,9 @@ eq("game config form: XML - only the value attribute's text changes, escaped for
    .replace("value=\"true\"", "value=\"false\""))
 eq("game config form: JSON - strings re-encoded, numbers and switches written bare, a null filled as a "
    "string, the file's own layout kept",
-   _apply176("s.json", sample_json, {"name": "no: é \"q\"", "max_players": "16",
+   _apply176("s.json", sample_json, {"name": "no: \u00e9 \"q\"", "max_players": "16",
                                      "lan": "true", "ratio": "2.5e1", "Password": "pw"})[0],
-   sample_json.replace("\"Name of the game\"", "\"no: é \\\"q\\\"\"").replace("\": 0,", "\": 16,")
+   sample_json.replace("\"Name of the game\"", "\"no: \u00e9 \\\"q\\\"\"").replace("\": 0,", "\": 16,")
    .replace("\"lan\": false", "\"lan\": true").replace("\"ratio\" : 1.5", "\"ratio\" : 2.5e1")
    .replace("\"Password\": null", "\"Password\": \"pw\""))
 _scan176 = _g176._gcf_json_scan
@@ -267,7 +267,7 @@ eq("game config form: JSON - one level of nesting is a group, deeper nesting and
     _js176["max_players"]["help"], _js176["visibility" if "visibility" in _js176 else "public"]["help"],
     _js176["motd"]["value"], _js176["Password"]["value"], _js176["lan"]["kind"], _js176["ratio"]["kind"]),
    (["", "visibility"], ["Password", "game_password", "lan", "max_players", "motd", "name", "public", "ratio"],
-    "Maximum number of players allowed.", "", "café \"quoted\"", "", "bool", "number"))
+    "Maximum number of players allowed.", "", "caf\u00e9 \"quoted\"", "", "bool", "number"))
 
 eq("game config form: the secret rule - a password/secret/token/apikey anywhere, or the WORD key, pass, "
    "pwd or rcon; not when another word says port, address or a switch",
@@ -301,7 +301,7 @@ eq("game config form: a value with a line break, a control character or a Unicod
    [_apply176(rel, text, {key: bad})[2] for rel, text, key in (
        ("server.cfg", sample_source, "hostname"), ("s.properties", sample_properties, "motd"),
        ("s.xml", sample_xml, "ServerName"), ("s.json", sample_json, "name"))
-    for bad in ("a\nb", "a\rb", "a\x00b", "a\x1bb", "a b", "a\x85b")],
+    for bad in ("a\nb", "a\rb", "a\x00b", "a\x1bb", "a\u2028b", "a\x85b")],
    [_g176.BAD_CHARS] * 24)
 eq("game config form: a value over 4096 characters is refused",
    _apply176("server.cfg", sample_source, {"hostname": "x" * 4097})[2], _g176.TOO_LONG)
@@ -353,7 +353,7 @@ eq("game config form: the audit text names each changed key with its values, a s
    _g176.audit_detail([({"key": "hostname", "secret": False}, "old", "new"),
                        ({"key": "rcon_password", "secret": True}, "ADMINPASSWORD", "s3cret"),
                        ({"key": "motd", "secret": False}, "x" * 70, "y")]),
-   "hostname: old -> new; rcon_password: changed (hidden); motd: " + "x" * 59 + "… -> y")
+   "hostname: old -> new; rcon_password: changed (hidden); motd: " + "x" * 59 + "\u2026 -> y")
 
 # ── 5. details naming the file ──────────────────────────────────────────────────────────────────
 eq("game config: details naming a server.properties, .ini, .xml or .json config is found, not only a .cfg; "
