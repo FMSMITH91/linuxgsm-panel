@@ -116,6 +116,10 @@
   .editor-wrap #editor:focus { box-shadow: none; background: transparent; }
   /* Command cells wrap at word/token boundaries (not between every character). */
   .cron-cmd { overflow-wrap: anywhere; white-space: pre-wrap; word-break: normal; }
+  /* Warn players first: a warning's minutes stay narrow, its message takes the rest of the row and
+     drops to its own line on a phone. */
+  #sch-steps .sch-min { width: 4.5rem; }
+  #sch-steps .sch-text { flex: 1 1 12rem; min-width: 0; }
   /* On phones the 4-column cron table can't fit, so stack each entry as a card — the command
      then gets the full width and wraps readably instead of shattering into ~7-char fragments. */
   @media (max-width: 576px) {
@@ -446,6 +450,33 @@
         <button type="submit" class="btn btn-primary btn-sm flex-grow-1" id="cron-submit"><i class="bi bi-plus-lg"></i> Add task</button>
         <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" data-action="cancelCronEdit">Cancel</button>
       </div>
+      {# Warn players first (server_schedule_chains.js): a restart, stop or update with chat warnings
+         before it, which the panel composes into one cron line. Only where the console's chat command
+         is known. The panel below opens on a click, so nothing moves until the viewer asks. #}
+      {% if sch_verb %}
+      <div class="col-12" id="sch-wrap">
+        <div class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" id="sch-on">
+          <label class="form-check-label small" for="sch-on">Warn players first</label>
+          <span class="text-secondary d-block" style="font-size:.66rem;">Chat messages in the game before a restart, stop or update. The first one goes out at the scheduled time.</span>
+        </div>
+        <div id="sch-panel" class="mt-1" hidden>
+          <div class="d-flex flex-wrap gap-2 align-items-end mb-1">
+            <div>
+              <label class="form-label mb-1" style="font-size:.7rem;" for="sch-action">Action</label>
+              <select id="sch-action" class="form-select form-select-sm">
+                <option value="restart">Restart</option>
+                <option value="stop">Stop</option>
+                <option value="update">Update</option>
+              </select>
+            </div>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="sch-add"><i class="bi bi-plus-lg"></i> Add a warning</button>
+          </div>
+          <div id="sch-steps"></div>
+          <div id="sch-when" class="text-secondary" style="font-size:.66rem;"></div>
+        </div>
+      </div>
+      {% endif %}
     </form>
     {# The quick picks and the field legend are help for writing a schedule, needed while learning
        the syntax and not after: folded, the form, the live explanation of what you typed and the
@@ -610,6 +641,7 @@ var serverId = {{ server.id|int }};
 var SERVER_NAME = {{ server.name|tojson }};   // the shared control bar names the server in its confirms
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
+{% if sch_verb %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_schedule_chains.js') }}"></script>{% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}

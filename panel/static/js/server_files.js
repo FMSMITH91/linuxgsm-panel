@@ -1366,6 +1366,20 @@ function cronLastRun(j){
   if(j.ok === false && j.error){ out += '<div class="text-danger" style="font-size:.66rem;word-break:break-all;white-space:normal;max-width:22rem;">'+esc(j.error)+'</div>'; }
   return out;
 }
+// A chain the panel composed (Warn players first) reads as its action and warnings, with the
+// messages and the full command in the tooltip; every other command shows as written.
+function cronCmdCell(j, roleTag){
+  if(j.chain && window.schChain){
+    var tip = j.chain.steps.map(function(s){ return tf('{n} min before: {message}', {n: s.minutes, message: s.message}); }).join('\n')+'\n\n'+j.command;
+    return '<td data-label="Command" class="cron-cmd" title="'+escA(tip)+'">'+esc(window.schChain.summary(j.chain))+roleTag+'</td>';
+  }
+  return '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command)+roleTag+'</td>';
+}
+function cronRowChain(row){
+  var raw=row.getAttribute('data-chain');
+  if(!raw) return null;
+  try { return JSON.parse(raw); } catch(e){ return null; }
+}
 function loadCron(){
   fetch(MOUNT+'/api/server/'+serverId+'/cron').then(r=>r.json()).then(d=>{
     var loading=document.getElementById('cron-loading');
@@ -1381,9 +1395,10 @@ function loadCron(){
       var roleTag = j.role
         ? ' <span class="badge bg-secondary align-middle" style="font-weight:normal;font-size:.6rem;" title="Panel-installed: this is your '+esc(j.role)+' line (also on the server-page toggle). You can still reschedule or delete it here.">'+esc(j.role)+'</span>'
         : '';
-      rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'">'
+      rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
+        + (j.chain ? ' data-chain="'+escA(JSON.stringify(j.chain))+'"' : '')+'>'
         + '<td data-label="Schedule" class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
-        + '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command)+roleTag+'</td>'
+        + cronCmdCell(j, roleTag)
         + '<td data-label="Last run" style="white-space:nowrap;">'+cronLastRun(j)+'</td>'
         + '<td class="text-end" style="white-space:nowrap;">'+actions+'</td></tr>';
     });
@@ -1398,10 +1413,16 @@ function saveCron(ev){
   ev.preventDefault();
   var sched=document.getElementById('cron-sched').value.trim();
   var cmd=document.getElementById('cron-cmd').value.trim();
-  if(!sched || !cmd){ cronMsg('Schedule and command are both required.','text-danger'); return false; }
+  // Warn players first (server_schedule_chains.js): the action and warnings go as `chain` and the
+  // panel composes the command, so the typed command is not sent.
+  var chain = window.schChain ? window.schChain.body() : null;
+  if(!sched || (!cmd && !chain)){ cronMsg('Schedule and command are both required.','text-danger'); return false; }
+  var bad = chain ? window.schChain.problem(chain) : '';
+  if(bad){ cronMsg('✗ '+bad,'text-danger'); return false; }
   var editing = cronEditRaw!==null;
   var url = MOUNT+'/api/server/'+serverId+'/cron'+(editing?'/update':'');
-  var body = editing ? {raw:cronEditRaw, schedule:sched, command:cmd} : {schedule:sched, command:cmd};
+  var body = chain ? {schedule:sched, chain:chain} : {schedule:sched, command:cmd};
+  if(editing) body.raw = cronEditRaw;
   cronMsg('Saving…','text-secondary');
   fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
@@ -1416,6 +1437,7 @@ function cancelCronEdit(){
   document.getElementById('cron-cmd').value='';
   document.getElementById('cron-submit').innerHTML='<i class="bi bi-plus-lg"></i> Add task';
   document.getElementById('cron-cancel').style.display='none';
+  if(window.schChain) window.schChain.reset();
   updateCronExplain();
 }
 var _el_cron_tbody = document.getElementById('cron-tbody');
@@ -1425,6 +1447,8 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     cronEditRaw=row.getAttribute('data-raw');
     document.getElementById('cron-sched').value=row.getAttribute('data-sched');
     document.getElementById('cron-cmd').value=row.getAttribute('data-cmd');
+    // A chain the panel composed re-opens as its action and warnings; anything else as its command.
+    if(window.schChain) window.schChain.fill(cronRowChain(row));
     updateCronExplain();
     document.getElementById('cron-submit').innerHTML='<i class="bi bi-save"></i> Save changes';
     document.getElementById('cron-cancel').style.display='';
@@ -1565,12 +1589,17 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
   window.updateCronExplain=function(){
     var el=document.getElementById('cron-desc'), nx=document.getElementById('cron-next');
     if(!el) return;
+    window.schNextRun = null;
+    if(window.schChain) window.schChain.when();
     var r=analyze(document.getElementById('cron-sched').value);
     if(r.empty){ el.className='text-secondary'; el.innerHTML='<i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.'; nx.textContent=''; return; }
     if(r.error){ el.className='text-danger'; el.textContent='✗ '+r.error; nx.textContent=''; return; }
     el.className='text-info'; el.textContent='“'+r.text+'”';
     if(r.reboot){ nx.textContent='Runs at each boot — no fixed clock time.'; return; }
     var runs=nextRuns(r.sets,3);
+    // Warn players first shows when its action lands after the next run (server_schedule_chains.js).
+    window.schNextRun = runs[0] || null;
+    if(window.schChain) window.schChain.when();
     nx.textContent = runs.length ? tf('Next: {runs}   (your browser’s time — the server may use a different zone)', {runs: runs.map(fmtWhen).join('  ·  ')}) : 'No upcoming runs within a year.';
   };
 })();
