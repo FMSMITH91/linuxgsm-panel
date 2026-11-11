@@ -21,6 +21,8 @@ out byte-identical is shown as a chain, so a line edited by hand on the host sta
 import re
 import shlex
 
+from panel.core.http import _json_str
+
 ACTIONS = ("restart", "stop", "update")
 MAX_STEPS = 5
 MAX_MINUTES = 60
@@ -151,6 +153,17 @@ def _sch_sends(toks, selfname, verb):
     return found, toks
 
 
+def _sch_steps_from(sends):
+    """[{"minutes", "message"}] from [(message, seconds slept after it)], or None for a gap not in minutes."""
+    mins, steps = 0, []
+    for text, secs in reversed(sends):
+        if secs % 60:
+            return None
+        mins += secs // 60
+        steps.insert(0, {"minutes": mins, "message": text})
+    return steps
+
+
 def parse(command, user, selfname, verb):
     """{"action", "steps": [{"minutes", "message"}]} for a command compose() wrote, else None."""
     if not verb or not command:
@@ -164,13 +177,8 @@ def parse(command, user, selfname, verb):
     sends, rest = _sch_sends(toks[3:], selfname, verb)
     if not sends or len(rest) != 2 or rest[0] != "./" + selfname:
         return None
-    mins, steps = 0, []
-    for text, secs in reversed(sends):
-        if secs % 60:
-            return None
-        mins += secs // 60
-        steps.insert(0, {"minutes": mins, "message": text})
-    good, why = check(rest[1], steps)
+    steps = _sch_steps_from(sends)
+    good, why = check(rest[1], steps) if steps else (None, BAD_MINUTES)
     if why or compose(user, selfname, verb, rest[1], good) != command:
         return None
     return {"action": rest[1], "steps": steps}
@@ -197,3 +205,35 @@ def from_request(gs, chain):
     if command is None:
         return None, None, NOT_SUPPORTED
     return command, (action, steps), None
+
+
+def cron_request(gs, data, action, gates):
+    """(command, audit detail, None) for a cron add or update request, or (None, None, the refusal reply).
+
+    `gates` are the route's write refusals, each called as gate(gs, action) and asked first, as every
+    cron write asks them. Then the typed command as it always was; or, when the form sent `chain`
+    (Warn players first), the chain composed from it with every warning in the audit detail. Same
+    permission and same writer either way: a chain is an ordinary cron line.
+    """
+    for gate in gates:
+        refused = gate(gs, action)
+        if refused is not None:
+            return None, None, refused
+    schedule = _json_str(data, "schedule")[:120]
+    chain = data.get("chain") if isinstance(data, dict) else None
+    if chain is None:
+        return _json_str(data, "command"), schedule, None
+    command, parts, why = from_request(gs, chain)
+    if why:
+        from flask import jsonify
+        from panel.core import i18n
+        return None, None, (jsonify({"success": False, "message": i18n.tr(why)}), 400)
+    return command, audit_detail(schedule, *parts), None
+
+
+def annotate(gs, jobs):
+    """Mark each listed cron job that is exactly a chain the panel composed (`chain`, else None)."""
+    verb = say_verb(gs.game_type)
+    for job in jobs:
+        job["chain"] = parse(job.get("command"), gs.short_name, gs.lgsm_name or gs.short_name, verb)
+    return jobs

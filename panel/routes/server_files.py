@@ -29,8 +29,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
-from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp)
-from panel.services import schedule_chains as _sch
+from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
 from itertools import count, groupby
 import re
 import secrets
@@ -1156,7 +1155,7 @@ def _cron_listing(app, gs):
             "Couldn't read the scheduled tasks — the host didn't answer. This is not the same as "
             "there being none.")})
     _sync_toggles_from_cron(gs, jobs)
-    return jsonify({"jobs": _sch_annotate(gs, jobs)})
+    return jsonify({"jobs": _sch.annotate(gs, jobs)})
 
 
 def _apply_gmod_selection(remote, gmod_user, games):
@@ -1803,10 +1802,8 @@ def _register_files_page(app):
                                # Every cron line on this page fires on the HOST's clock. Without
                                # saying which clock that is, "Daily 5am" is a number with no
                                # meaning — and the panel's own bootstrap sets new hosts to UTC.
-                               host_timezone=_host_timezone_cached(gs.remote, app),
-                               # Warn players first is offered only where the console's chat
-                               # command is known (schedule_chains.say_verb).
-                               sch_verb=_sch.say_verb(gs.game_type))
+                               # Warn players first only where the console's chat command is known.
+                               host_timezone=_host_timezone_cached(gs.remote, app), sch_verb=_sch.say_verb(gs.game_type))
 
 
 def _sf_config_read(gs):
@@ -2418,7 +2415,9 @@ def _register_cron_jobs(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
-        refused = _r36c_reboot_refused(gs, "cron_add") or _write_refused(gs, "cron_add")
+        # The write refusals first, as every cron write asks them; then a Warn players first chain,
+        # which the panel composes into the command (panel/services/schedule_chains.py).
+        command, detail, refused = _sch.cron_request(gs, data, "cron_add", (_r36c_reboot_refused, _write_refused))
         if refused is not None:
             return refused
         # Every field through _json_str. Read raw, a number or a dict was a 500 inside the writer
@@ -2426,9 +2425,6 @@ def _register_cron_jobs(app):
         # deleted nothing, and update appended its line beside the old one. A non-text value is
         # now "" and gets the writer's own refusal.
         schedule = _json_str(data, "schedule")
-        command, detail, why = _sch_cron_command(gs, data, schedule)
-        if why:
-            return jsonify({"success": False, "message": i18n.tr(why)}), 400
         try:
             with _r20b_audit_on_raise("cron_add", detail=detail, target=gs.name, server=gs):
                 ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
@@ -2450,39 +2446,12 @@ def _register_cron_jobs(app):
         return _r28b_cron_update(gs, _json_body())
 
 
-def _sch_cron_command(gs, data, schedule):
-    """(command, audit detail, None) for a cron add or update, or (None, None, refusal).
-
-    The typed command as it always was; or, when the form sent `chain` (Warn players first), the
-    chain the panel composes from it (panel/services/schedule_chains.py) with every warning in the
-    audit detail. Same permission and same writer either way: a chain is an ordinary cron line.
-    """
-    chain = data.get("chain") if isinstance(data, dict) else None
-    if chain is None:
-        return _json_str(data, "command"), schedule[:120], None
-    command, parts, why = _sch.from_request(gs, chain)
-    if why:
-        return None, None, why
-    return command, _sch.audit_detail(schedule[:120], *parts), None
-
-
-def _sch_annotate(gs, jobs):
-    """Mark each listed job that is exactly a chain the panel composed (`chain`, else None)."""
-    verb = _sch.say_verb(gs.game_type)
-    for job in jobs:
-        job["chain"] = _sch.parse(job.get("command"), gs.short_name, gs.lgsm_name or gs.short_name, verb)
-    return jobs
-
-
 def _r28b_cron_update(gs, data):
     """The cron/update route's work once access is checked: rewrite one task, then re-sync the switches."""
-    refused = _r36c_reboot_refused(gs, "cron_update") or _write_refused(gs, "cron_update")
+    command, detail, refused = _sch.cron_request(gs, data, "cron_update", (_r36c_reboot_refused, _write_refused))
     if refused is not None:
         return refused
     schedule = _json_str(data, "schedule")      # as cron_add reads them
-    command, detail, why = _sch_cron_command(gs, data, schedule)
-    if why:
-        return jsonify({"success": False, "message": i18n.tr(why)}), 400
     try:
         with _r20b_audit_on_raise("cron_update", detail=detail, target=gs.name, server=gs):
             ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
