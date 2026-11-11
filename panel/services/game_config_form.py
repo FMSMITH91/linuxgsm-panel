@@ -130,7 +130,7 @@ def _gcf_is_decoration(text):
 
 
 # key=value
-_GCF_KV = re.compile(r"[ \t]*([^\s=#;!\[][^=]*?)[ \t]*=[ \t]*(.*?)[ \t]*\Z")
+_GCF_KV = re.compile(r"[ \t]*([^\s=#;\[][^=]*?)[ \t]*=[ \t]*(.*?)[ \t]*\Z")
 _GCF_KV_SECTION = re.compile(r"[ \t]*\[([^\]\r\n]+)\][ \t]*\Z")
 
 
@@ -427,9 +427,10 @@ def detect(rel, content):
     if len(choices) == 1:
         return choices[0]
     cfg, kv, total = _gcf_claims(content)
-    if total and cfg >= kv and cfg * 2 >= total:
+    # Two lines in three must read one way: a page of prose has lines that look like `word value`.
+    if total and cfg >= kv and cfg * 3 >= total * 2:
         return "cfg"
-    if total and kv > cfg and kv * 2 >= total:
+    if total and kv > cfg and kv * 3 >= total * 2:
         return "kv"
     return None
 
