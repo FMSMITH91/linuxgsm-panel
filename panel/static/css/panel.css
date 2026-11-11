@@ -715,12 +715,29 @@
     }
     .console-output.ts-hidden .console-ts { display: none; }
 
-    /* ...and with the gutter switched off, neither the stamp nor its placeholder takes space. */
-    .console-output.ts-hidden .console-line::before { content: none; }
+    /* ...and with the gutter switched off, neither the stamp nor its placeholder takes space.
+       `ts-none` is the same collapse, set by server_detail.js (updateTsNotice) while NO line on
+       screen carries a stamp: an idle server's console is all history, which the panel cannot
+       date, so the reserved gutter was a blank column taking ~78px of a 375px phone screen. The
+       first stamped line removes the class and every line moves to the aligned column at once. */
+    .console-output.ts-hidden .console-line::before,
+    .console-output.ts-none .console-line::before { content: none; }
 
-    .console-output.ts-hidden .console-line {
+    .console-output.ts-hidden .console-line,
+    .console-output.ts-none .console-line {
       padding-left: 0;
       text-indent: 0;
+    }
+
+    /* A narrower gutter on phones: exactly eight digit widths, the "19:35:57" the stamp holds
+       (24-hour, tabular figures, so every character is one `ch` of the line's own font). The
+       desktop width keeps ~1rem of slack; here that slack is text room. The stamp, its
+       placeholder and the indent all use the same `ch`, so the three still agree by construction,
+       and nothing about line height or baseline changes (only widths move). */
+    @media (max-width: 767.98px) {
+      .console-line { padding-left: calc(8ch + .3rem); text-indent: calc(-8ch - .3rem); }
+      .console-ts,
+      .console-line:not([data-ts])::before { width: 8ch; }
     }
 
     /* ── ANSI COLOUR IN THE CONSOLE ──

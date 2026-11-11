@@ -231,7 +231,9 @@
         {% endif %}
       </div>
       <div class="card-body p-0">
-        <div class="console-output" id="console-output">
+        {# ts-none: the server-rendered tail is history and never carries a stamp, so the gutter starts
+           collapsed (server_detail.js updateTsNotice opens it when a stamped line arrives). #}
+        <div class="console-output ts-none" id="console-output">
           {% if not _can_view_console %}<div class="text-secondary">You don't have permission to view this server's console.</div>
           {% else %}{% for line in console_lines if line.strip() %}<div class="console-line" data-no-i18n>{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}{% endif %}
         </div>
