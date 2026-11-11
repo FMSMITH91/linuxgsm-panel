@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+6ed16c56 A form for the game's own config file.
 48585521 Start checks the port first.
 5e13f397 A port changed on the Settings tab is followed.
 fdee8c29 Scheduled restarts, stops and updates can warn players first.

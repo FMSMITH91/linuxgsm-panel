@@ -366,14 +366,151 @@ function loadGameCfg(){
     gameCfgRel=d.rel;
     document.getElementById('game-path').textContent=d.rel;
     document.getElementById('game-cfg').value=d.content||'';
+    _gcfShown=document.getElementById('game-cfg').value;
     document.getElementById('game-wrap').style.display='';
+    _gcfSet(d.form);
   }).catch(()=>{ document.getElementById('game-loading').innerHTML='<span class="text-danger">Failed to load game config</span>'; });
+}
+// ── Game config: the Form view (fields from panel/services/game_config_form.py) ──
+// _gcfForm is the form drawn; _gcfShown the text it and the raw box were filled from; _gcfOrig each
+// field's value as drawn, kept here rather than in a data- attribute so a secret's value is never
+// written into the page's markup. A secret's value reaches this page the way the raw editor's text
+// does (the same read, for the same people), and goes only into a password input's value property.
+var _gcfForm=null, _gcfShown=null, _gcfOrig={};
+function _gcfSet(form){
+  _gcfForm=form||null;
+  document.getElementById('gcf-switch').style.display=_gcfForm?'':'none';
+  if(!_gcfForm){ gcfView('raw'); return; }
+  _gcfDraw(_gcfForm);
+  gcfView(_gcfViewNow||'form');
+}
+var _gcfViewNow=null;
+function gcfView(which){
+  var form = which==='form' && !!_gcfForm;
+  _gcfViewNow = _gcfForm ? (form?'form':'raw') : _gcfViewNow;
+  _gcfPanes(form); _gcfDirtyNote(form && document.getElementById('game-cfg').value!==_gcfShown);
+}
+// Show one pane and press its button (the other pane hidden, its button released).
+function _gcfPanes(form){
+  [['gcf-form-pane', 'gcf-btn-form', form], ['gcf-raw-pane', 'gcf-btn-raw', !form]].forEach(function(p){
+    document.getElementById(p[0]).style.display = p[2] ? '' : 'none';
+    var b = document.getElementById(p[1]); b.setAttribute('aria-pressed', String(p[2])); b.classList.toggle('active', p[2]);
+  });
+}
+// The note shown on the form while the raw text holds edits the form does not show.
+function _gcfDirtyNote(dirty){
+  var note=document.getElementById('gcf-note'); note.style.display = dirty ? '' : 'none';
+  note.textContent = dirty ? 'The raw text has unsaved edits. The form shows the file as it was opened.' : '';
+}
+function _gcfDraw(form){
+  var box=document.getElementById('gcf-form');
+  box.replaceChildren(); _gcfOrig={};
+  form.groups.forEach(function(g){
+    if(g.name){
+      var h=document.createElement('div'); h.className='gcf-group'; h.setAttribute('data-no-i18n','');
+      h.textContent=g.name; box.appendChild(h);
+    }
+    g.fields.forEach(function(f){ box.appendChild(_gcfField(f)); });
+  });
+}
+function _gcfField(f){
+  var wrap=document.createElement('div'); wrap.className='gcf-field';
+  var id='gcf-f-'+f.id, input=document.createElement('input');
+  input.id=id; _gcfOrig[f.id]=f.value;
+  var label=document.createElement('label'); label.htmlFor=id; label.textContent=f.key;
+  label.setAttribute('data-no-i18n','');
+  if(f.kind==='bool'){
+    wrap.classList.add('form-check','form-switch');
+    input.type='checkbox'; input.className='form-check-input'; input.checked=(f.value===f.on);
+    label.className='form-check-label'; wrap.appendChild(input); wrap.appendChild(label);
+  } else {
+    label.className='form-label d-block'; wrap.appendChild(label);
+    input.className='form-control form-control-sm';
+    input.type = f.secret ? 'password' : (f.kind==='number' ? 'number' : 'text');
+    if(f.kind==='number') input.step='any';
+    if(f.secret) input.autocomplete='off';
+    input.spellcheck=false;
+    input.value=f.value;
+    if(f.secret){
+      var grp=document.createElement('div'); grp.className='input-group input-group-sm';
+      var eye=document.createElement('button'); eye.type='button'; eye.className='btn btn-outline-secondary';
+      eye.dataset.action='gcfReveal'; eye.dataset.args='["@self"]'; eye.dataset.field=String(f.id);
+      eye.title='Show'; eye.setAttribute('aria-label','Show'); eye.setAttribute('aria-pressed','false');
+      eye.appendChild(_icon('bi-eye'));
+      grp.appendChild(input); grp.appendChild(eye); wrap.appendChild(grp);
+    } else {
+      wrap.appendChild(input);
+    }
+  }
+  if(f.help){
+    var help=document.createElement('div'); help.className='gcf-help'; help.setAttribute('data-no-i18n','');
+    help.textContent=f.help; wrap.appendChild(help);
+  }
+  return wrap;
+}
+function gcfReveal(btn){
+  var input=document.getElementById('gcf-f-'+btn.dataset.field);
+  if(!input) return;
+  var show = input.type==='password';
+  input.type = show ? 'text' : 'password';
+  btn.title = show ? 'Hide' : 'Show'; btn.setAttribute('aria-label', btn.title);
+  btn.setAttribute('aria-pressed', show?'true':'false');
+  btn.replaceChildren(_icon(show?'bi-eye-slash':'bi-eye'));
+}
+// The changed fields only: {id: value as the file writes it}. A switch sends its own spelling back.
+function _gcfChanges(){
+  var out={}, any=false;
+  _gcfForm.groups.forEach(function(g){ g.fields.forEach(function(f){
+    var input=document.getElementById('gcf-f-'+f.id);
+    if(!input) return;
+    var v = f.kind==='bool' ? (input.checked?f.on:f.off) : input.value;
+    if(v!==_gcfOrig[f.id]){ out[f.id]=v; any=true; }
+  }); });
+  return any ? out : null;
+}
+function _gcfMsg(text, cls){ var m=document.getElementById('gcf-msg'); m.textContent=text; m.className='small ms-2 '+cls; }
+function saveGameForm(){
+  if(!_gcfForm || !gameCfgRel) return;
+  if(document.getElementById('game-cfg').value!==_gcfShown){
+    _gcfMsg('The raw text has unsaved edits. Save or undo them before saving the form.', 'text-danger');
+    return;
+  }
+  var changes=_gcfChanges();
+  if(!changes){ _gcfMsg('Nothing changed.', 'text-secondary'); return; }
+  _gcfMsg('Saving…', 'text-secondary');
+  fetch(MOUNT+'/api/server/'+serverId+'/game-config/form',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path:gameCfgRel, hash:_gcfForm.hash, changes:changes})})
+    .then(r=>r.json()).then(function(d){
+      _gcfMsg((d.success?'✓ ':'✗ ')+(d.message||'Failed'), d.success?'text-success':'text-danger');
+      if(d.success && typeof d.content==='string'){ _gcfFill(d.content, d.form); }
+    })
+    .catch(function(){ _gcfMsg('✗ Failed', 'text-danger'); });
+}
+// The file as a save left it: the raw box and the form both rebuilt from that text.
+function _gcfFill(content, form){
+  document.getElementById('game-cfg').value=content;
+  _gcfShown=document.getElementById('game-cfg').value;
+  _gcfSet(form);
+}
+// After the raw editor saved: the file read again, so the form is built from the text now there.
+function _gcfReload(){
+  if(!gameCfgRel) return;
+  fetch(MOUNT+'/api/server/'+serverId+'/game-config/form?path='+encodeURIComponent(gameCfgRel))
+    .then(r=>r.json()).then(function(d){
+      if(d.success && typeof d.content==='string') _gcfFill(d.content, d.form);
+      else _gcfStale();
+    })
+    .catch(_gcfStale);
+}
+function _gcfStale(){
+  _gcfForm=null; document.getElementById('gcf-switch').style.display='none'; gcfView('raw');
+  _gcfShown=document.getElementById('game-cfg').value;
 }
 function saveGameCfg(){
   if(!gameCfgRel) return;
   var msg=document.getElementById('game-msg'); msg.textContent='Saving…'; msg.className='small ms-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:gameCfgRel,content:document.getElementById('game-cfg').value})})
-    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved — restart to apply.':'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); })
+    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved — restart to apply.':'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); if(d.success) _gcfReload(); })
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small ms-2 text-danger'; });
 }
 function saveRaw(){

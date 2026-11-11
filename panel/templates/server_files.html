@@ -248,10 +248,27 @@
       <div id="game-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Locating game config file…</div>
       <div id="game-wrap" style="display:none;">
         <p class="small text-secondary mb-1" id="game-cfg-desc">Game's own config file — where this game's in-game settings, such as the player limit, actually live.</p>
-        <p class="small text-secondary mb-1"><code id="game-path"></code></p>
-        <textarea id="game-cfg" aria-labelledby="game-cfg-desc" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
-        <button class="btn btn-primary btn-sm mt-2" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
-        <span id="game-msg" class="small ms-2"></span>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+          <code id="game-path" class="small text-break"></code>
+          {# The Form | Raw switch: shown only when the file is a format the form reads
+             (panel/services/game_config_form.py). Both panes are the same height, so switching
+             moves nothing below them. #}
+          <div id="gcf-switch" class="btn-group btn-group-sm ms-auto" role="group" aria-label="Game config view" style="display:none;">
+            <button type="button" class="btn btn-outline-secondary" id="gcf-btn-form" aria-pressed="false" data-action="gcfView" data-args='["form"]'><i class="bi bi-ui-checks"></i> Form</button>
+            <button type="button" class="btn btn-outline-secondary" id="gcf-btn-raw" aria-pressed="true" data-action="gcfView" data-args='["raw"]'><i class="bi bi-code"></i> Raw</button>
+          </div>
+        </div>
+        <div id="gcf-form-pane" style="display:none;">
+          <div id="gcf-note" class="small text-warning mb-1" style="display:none;"></div>
+          <div id="gcf-form" class="gcf-scroll"></div>
+          <button class="btn btn-primary btn-sm mt-2" data-action="saveGameForm"><i class="bi bi-save"></i> Save changes</button>
+          <span id="gcf-msg" class="small ms-2"></span>
+        </div>
+        <div id="gcf-raw-pane">
+          <textarea id="game-cfg" aria-labelledby="game-cfg-desc" class="form-control font-monospace gcf-raw" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+          <button class="btn btn-primary btn-sm mt-2" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
+          <span id="game-msg" class="small ms-2"></span>
+        </div>
       </div>
       <div id="game-none" class="text-secondary small" style="display:none;"></div>
     </div>

@@ -5774,8 +5774,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 245, was 242: three genuinely new views, panel/routes/workshop.py's read and save of a server's Steam
 # Workshop list, Steam's titles for its ids, and the Mod IDs in a Project Zomboid server's downloaded
 # items (/api/server/<id>/workshop[/titles|/pz-mods], each behind the Settings tab's permission).
-check("register_routes: every one of the 245 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 245,
+# 246, was 245: one genuinely new view, panel/routes/game_config_form.py's re-read and save of the game
+# config file's Form view (/api/server/<id>/game-config/form, behind the Settings tab's permission).
+check("register_routes: every one of the 246 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 246,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
