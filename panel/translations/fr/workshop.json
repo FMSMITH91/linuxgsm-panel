@@ -30,7 +30,6 @@
   "Every Mod ID found is in the list.": "Tous les Mod IDs trouvés sont dans la liste.",
   "None found yet.": "Aucun trouvé pour l'instant.",
   "No collection is set.": "Aucune collection n'est définie.",
-  "{id}: not found on Steam, or not public.": "{id} : introuvable sur Steam, ou non public.",
   "This is a single item, not a collection.": "C'est un élément seul, pas une collection.",
   "Titles are unavailable: Steam did not answer. The ids can still be edited.": "Les titres ne sont pas disponibles : Steam n'a pas répondu. Les ids restent modifiables.",
   "The Workshop list could not be read from the server.": "La liste du Workshop n'a pas pu être lue sur le serveur.",

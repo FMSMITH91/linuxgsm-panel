@@ -122,16 +122,32 @@
     }
   }
 
-  function drawCollection() {
+  // The collection's line: Steam's title in a span the translator leaves alone, then the card's own words.
+  function setInfo(title, words) {
     var info = el('wsc-coll-info');
     if (!info) return;
+    info.textContent = '';
+    if (title) {
+      var s = document.createElement('span');
+      s.setAttribute('data-no-i18n', '');
+      s.textContent = title + (words ? ' · ' : '');
+      info.appendChild(s);
+    }
+    if (words) {
+      var w = document.createElement('span');
+      w.textContent = words;
+      info.appendChild(w);
+    }
+  }
+
+  function drawCollection() {
     var id = state.items[0];
-    if (!id) { info.textContent = t('No collection is set.'); return; }
+    if (!id) { setInfo('', t('No collection is set.')); return; }
     var d = state.titles[id];
-    if (!d) { info.textContent = id; return; }
-    if (!d.found) { info.textContent = tf('{id}: not found on Steam, or not public.', {id: id}); return; }
-    info.textContent = (d.title || id) + ' · ' + (d.collection ? tf('Collection of {n} items', {n: d.items})
-                                                    : t('This is a single item, not a collection.'));
+    if (!d) { setInfo(id, ''); return; }
+    if (!d.found) { setInfo(id, t('Not found on Steam, or not public')); return; }
+    setInfo(d.title || id, d.collection ? tf('Collection of {n} items', {n: d.items})
+                                        : t('This is a single item, not a collection.'));
   }
 
   function drawAll() {
@@ -169,8 +185,7 @@
 
   function failLoad(text) {
     ['wsc-items-note', 'wsc-mods-note'].forEach(function (id) { note(id, text); });
-    var info = el('wsc-coll-info');
-    if (info) info.textContent = text;
+    if (el('wsc-coll-info')) setInfo('', text);
   }
 
   function load() {

@@ -107,7 +107,7 @@ def split_ids(text):
     for token in re.split(r"[\s,;]+", text or ""):
         if not token:
             continue
-        (ids if token.isdigit() and valid_id(token) else ignored).append(token)
+        (ids if valid_id(token) else ignored).append(token)
     return ids, ignored
 
 
