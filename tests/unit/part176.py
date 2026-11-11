@@ -26,6 +26,7 @@ transport tripwire is armed, and the script runs in node through part75's runner
 """
 import json as _json176
 import os as _os176
+import time as _time176
 
 from unit.part01 import _root, check, eq
 from unit.part12 import (P9_ADMIN, P9_HOST, P9_VIEWER, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
@@ -284,6 +285,21 @@ eq("game config form: a switch is never masked, a secret-named text or number fi
      _fields176("a.cfg", "sv_password 1234\n")["sv_password"]["secret"],
      _fields176("a.ini", "UsePassword=true\n")["UsePassword"]["secret"])],
    [(False, True, False), (True, True, True, False)])
+
+# Long hostile lines (the file is the game account's to write): the line readers are linear. The
+# regexes they replaced backtracked: measured, the heading one took over 15 s on 40000 blanks and
+# the key=value one 0.49 s, growing with the square of the length (so ~4 s at 120000).
+# Each heading line sits among real settings, so the file reads as a cfg and its heading is parsed.
+_cfg176 = 'hostname "x"\nsv_password "y"\n'
+_slow176 = ["k" + " " * 120000 + "x\n", _cfg176 + "// ..." + " " * 40000 + "x\n",
+            _cfg176 + "// ... x" + " " * 40000 + "y\n"]
+_t0_176 = _time176.monotonic()
+for _text176 in _slow176:
+    _g176.build("server.properties", _text176)
+    _g176.build("server.cfg", _text176)
+_took176 = _time176.monotonic() - _t0_176
+check("game config form: lines of 40000-120000 blanks are read in linear time (well under 2 s for all six)",
+      _took176 < 2.0, "%.2fs" % _took176)
 
 # ── 4. refusals ─────────────────────────────────────────────────────────────────────────────────
 _hash176 = _g176.content_hash(sample_source)

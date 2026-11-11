@@ -129,7 +129,44 @@ def _gcf_is_decoration(text):
 
 
 # key=value
-_GCF_KV = re.compile(r"[ \t]*([^\s=#;\[][^=]*?)[ \t]*=[ \t]*(.*?)[ \t]*\Z")
+
+
+class _GcfKV:
+    """A key=value line taken apart: group(1) the key, group(2) the value, start/end(2) its span.
+
+    String operations, not a regex: the pattern this replaces (`[ \\t]*([^\\s=#;\\[][^=]*?)[ \\t]*=[ \\t]*
+    (.*?)[ \\t]*\\Z`) backtracked super-linearly on a long line of blanks, and the file is the game
+    account's to write. Same answers: the key is what precedes the first `=`, without the blanks
+    round it, and may not start with a blank, `=`, `#`, `;` or `[`; the value is the rest, without
+    the spaces and tabs round it.
+    """
+    __slots__ = ("_key", "_value", "_start")
+
+    def __init__(self, key, value, start):
+        self._key, self._value, self._start = key, value, start
+
+    def group(self, n):
+        return self._key if n == 1 else self._value
+
+    def start(self, _n=2):
+        return self._start
+
+    def end(self, _n=2):
+        return self._start + len(self._value)
+
+
+def _gcf_kv_match(body):
+    """A _GcfKV for a key=value line, or None."""
+    eq = body.find("=")
+    if eq < 0:
+        return None
+    key = body[:eq].lstrip(" \t").rstrip(" \t")
+    if not key or key[0].isspace() or key[0] in "=#;[":
+        return None
+    rest = body[eq + 1:]
+    lead = len(rest) - len(rest.lstrip(" \t"))
+    return _GcfKV(key, rest[lead:].rstrip(" \t"), eq + 1 + lead)
+
 _GCF_KV_SECTION = re.compile(r"[ \t]*\[([^\]\r\n]+)\][ \t]*\Z")
 
 
@@ -147,7 +184,7 @@ def _gcf_kv_line(body, props):
     sec = _GCF_KV_SECTION.match(body)
     if sec:
         return "section", sec.group(1).strip()
-    m = _GCF_KV.match(body)
+    m = _gcf_kv_match(body)
     if m and props and _gcf_odd_backslashes(m.group(2)):
         return "join", m   # a value that goes on to the next line: the raw editor's to change
     return ("entry", m) if m else ("other", None)
@@ -181,7 +218,27 @@ def _gcf_odd_backslashes(s):
 # Source / idTech console scripts
 _GCF_CFG = re.compile(r'[ \t]*(?:(?:set|seta|sets|setu|setb)[ \t]+)?([A-Za-z_][\w.\-+]*)[ \t]+'
                       r'(?:"([^"]*)"|([^"\s;][^";]*?))[ \t]*(?://.*)?\Z')
-_GCF_CFG_SECTION = re.compile(r"[ \t]*//[ \t]*\.{3,}[ \t]*([^.\r\n][^\r\n]*?)[ \t]*\.{3,}[ \t]*(?://)?[ \t]*\Z")
+
+
+def _gcf_cfg_section(body):
+    """The heading text of a `// ... Name ... //` line (the closing // optional), or None.
+
+    String operations for the same reason as _gcf_kv_match: the regex this replaces backtracked on a
+    long run of dots or blanks. At least three dots each side, and at least one character between.
+    """
+    s = body.strip(" \t")
+    if not s.startswith("//"):
+        return None
+    s = s[2:]
+    if s.endswith("//"):
+        s = s[:-2]
+    s = s.strip(" \t")
+    lead = len(s) - len(s.lstrip("."))
+    trail = len(s) - len(s.rstrip("."))
+    middle = s[lead:len(s) - trail]
+    if lead < 3 or trail < 3 or not middle:
+        return None
+    return middle
 
 
 def _gcf_cfg_line(body):
@@ -198,14 +255,15 @@ def _gcf_parse_cfg(text):
     """Fields of a Source / idTech cfg."""
     out, section, pending = [], "", []
     for off, body in _gcf_lines(text):
-        sec = _GCF_CFG_SECTION.match(body)
-        if sec:
-            section, pending = sec.group(1).strip()[:_GCF_SECTION_MAX], []
+        sec = _gcf_cfg_section(body)
+        if sec is not None:
+            section, pending = sec.strip()[:_GCF_SECTION_MAX], []
             continue
-        c = re.match(r"[ \t]*//+(.*)\Z", body)
-        if c:
-            if not _gcf_is_decoration(c.group(1)):
-                pending.append(c.group(1).strip())
+        lead = body.lstrip(" \t")
+        if lead.startswith("//"):
+            said = lead.lstrip("/")   # the text after the run of slashes
+            if not _gcf_is_decoration(said):
+                pending.append(said.strip())
             continue
         got = _gcf_cfg_line(body)
         if got:
@@ -456,7 +514,7 @@ def _gcf_claims(text):
         total += 1
         if _gcf_cfg_line(body):
             cfg += 1
-        m = _GCF_KV.match(body)
+        m = _gcf_kv_match(body)
         if m and not re.search(r"\s", m.group(1)):
             kv += 1
     return cfg, kv, total
