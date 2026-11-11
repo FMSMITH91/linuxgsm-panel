@@ -229,6 +229,7 @@ try:
               lambda *a, **k: ["# my notes", 'port="27017"', "# keep me", 'maxplayers="10"'])
     _p9_patch(_files_cmpc_, "_write_file_as_user", _capture_cmpc_)
     _p9_patch(_sf_cmpc_, "_write_refused", lambda gs, action, detail="": None)
+    _p9_patch(_sd_cmpc_, "_pck_after_save", lambda gs, settings: None)   # the saved port is part175's
     _rp_cmpc_ = _p9_json(_p9_client(P9_ADMIN).post("/api/server/%d/config" % P9_GS,
                                                     json={"settings": {"port": "27020"}}))
     _ws_cmpc_ = list(_writes_cmpc_)

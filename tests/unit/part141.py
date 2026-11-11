@@ -548,6 +548,7 @@ try:
     _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: (_ahl_out141[0], "", 0))
     _p9_patch_sm("_invalidate_port_scan", lambda rid: None)
     _p9_patch_sm("set_game_priority", lambda *a, **k: None)
+    _p9_patch_sm("_remote_listening_ports", lambda remote: None)   # the button's port check (part175)
     _p9_patch(_sd141, "_console_push", lambda app, sid, line, ts=None: _ahl_push141.append((sid, line)))
     _p9_patch(_sh141, "_console_push", lambda app, sid, line, ts=None: _ahl_push141.append((sid, line)))
     with _p9.app_context():
