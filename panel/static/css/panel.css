@@ -734,8 +734,12 @@
        desktop width keeps ~1rem of slack; here that slack is text room. The stamp, its
        placeholder and the indent all use the same `ch`, so the three still agree by construction,
        and nothing about line height or baseline changes (only widths move). */
-    @media (max-width: 767.98px) {
-      .console-line { padding-left: calc(8ch + .3rem); text-indent: calc(-8ch - .3rem); }
+    @media (width <= 767.98px) {
+      .console-line {
+        padding-left: calc(8ch + .3rem);
+        text-indent: calc(-8ch - .3rem);
+      }
+
       .console-ts,
       .console-line:not([data-ts])::before { width: 8ch; }
     }

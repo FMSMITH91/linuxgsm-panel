@@ -32,11 +32,11 @@ def _cgm_read(*parts):
         return fh.read()
 
 
-_cgm_SD = _cgm_read("panel", "static", "js", "server_detail.js")
-_cgm_CSS = _cgm_read("panel", "static", "css", "panel.css")
+_cgm_sd = _cgm_read("panel", "static", "js", "server_detail.js")
+_cgm_css = _cgm_read("panel", "static", "css", "panel.css")
 
 # ── 1. the page's console functions, in node ─────────────────────────────────────────────────────
-_cgm_DOM = r"""
+_cgm_dom = r"""
 class Txt { constructor(t){ this.data = String(t); } get textContent(){ return this.data; } }
 class El {
   constructor(tag){ this.tag = tag; this.children = []; this.className = ''; this.dataset = {};
@@ -84,13 +84,13 @@ const state = () => ({none: consoleEl.classList.contains('ts-none'),
                       hidden: consoleEl.classList.contains('ts-hidden'), notice: notice.hidden});
 """
 
-_cgm_FUNCS = ("function stampLine(", "function applyTsVisible(", "function updateTsNotice(",
+_cgm_funcs = ("function stampLine(", "function applyTsVisible(", "function updateTsNotice(",
               "window.toggleConsoleTs = function", "function _consoleLineEl(", "function _appendConsoleRows(",
               "function _appendConsole(", "function appendConsole(", "function _trimConsole(",
               "function clearConsole(", "function _renderPanelLines(", "function _loadOlderRows(",
               "function loadMoreConsole(")
 
-_cgm_RUN = r"""
+_cgm_run = r"""
 (async () => {
   const out = {}, T = 1700000000;
   // An idle server's page: the priming window is history, appended the way refreshConsole does.
@@ -128,10 +128,10 @@ _cgm_RUN = r"""
 """
 
 _cgm_name = "console gutter: collapsed with no stamp on screen, opened by the first"
-_cgm_missing = [h for h in _cgm_FUNCS if h not in _cgm_SD]
+_cgm_missing = [h for h in _cgm_funcs if h not in _cgm_sd]
 check("console gutter: every console function the node run cuts is in server_detail.js", not _cgm_missing,
       repr(_cgm_missing))
-_cgm_out = (_node47(_cgm_DOM + R37E_STUBS47 + "\n".join(_cut47(_cgm_SD, h) for h in _cgm_FUNCS) + _cgm_RUN)
+_cgm_out = (_node47(_cgm_dom + R37E_STUBS47 + "\n".join(_cut47(_cgm_sd, h) for h in _cgm_funcs) + _cgm_run)
             if not _cgm_missing else {"error": "functions missing"})
 if _cgm_out is None:
     skip(_cgm_name, "node is not installed here")
@@ -182,18 +182,18 @@ def _cgm_media(css, query):
     return "\n".join(out)
 
 
-_cgm_before = _cgm_rule(_cgm_CSS, ".console-output.ts-none .console-line::before") or {}
-_cgm_line = _cgm_rule(_cgm_CSS, ".console-output.ts-none .console-line") or {}
+_cgm_before = _cgm_rule(_cgm_css, ".console-output.ts-none .console-line::before") or {}
+_cgm_line = _cgm_rule(_cgm_css, ".console-output.ts-none .console-line") or {}
 check("console gutter css: with ts-none the unstamped line's placeholder takes no space",
       _cgm_before.get("content") == "none", repr(_cgm_before))
 check("console gutter css: ...and the hanging indent is gone, so text starts at the console's edge",
       _cgm_line.get("padding-left") == "0" and _cgm_line.get("text-indent") == "0", repr(_cgm_line))
 
-_cgm_mob = _cgm_media(_cgm_CSS, "(max-width: 767.98px)")
+_cgm_mob = _cgm_media(_cgm_css, "(width <= 767.98px)")
 _cgm_ts = _cgm_rule(_cgm_mob, ".console-ts") or {}
 _cgm_ph = _cgm_rule(_cgm_mob, ".console-line:not([data-ts])::before") or {}
 _cgm_ml = _cgm_rule(_cgm_mob, ".console-line") or {}
-_cgm_margin = (_cgm_rule(_cgm_CSS, ".console-ts") or {}).get("margin-right")
+_cgm_margin = (_cgm_rule(_cgm_css, ".console-ts") or {}).get("margin-right")
 _cgm_w = _cgm_ts.get("width")
 check("console gutter css: on a phone the stamp is narrower than the desktop 4.6rem, and its placeholder "
       "is the same width", bool(_cgm_w) and _cgm_w != "4.6rem" and _cgm_ph.get("width") == _cgm_w,
