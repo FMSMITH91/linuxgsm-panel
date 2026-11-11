@@ -157,24 +157,38 @@ def _wsc_listing(gs, rel):
     return out.get("entries") or []
 
 
+def _wsc_mod_dirs(entries):
+    """The folder names in an item's mods/ listing that can be read: plain names, not hidden."""
+    return [e["name"] for e in entries if e.get("is_dir") and _WSC_MOD_DIR.fullmatch(e.get("name") or "")
+            and not e["name"].startswith(".")]
+
+
+def _wsc_dir_mod(gs, folder, budget):
+    """(id, name) from one mod folder's mod.info, or None; each read spends one of `budget` (a one-item list).
+
+    Build 41 keeps mod.info in the mod's folder, Build 42 in its 42/ folder.
+    """
+    for rel in (folder + "/mod.info", folder + "/42/mod.info"):
+        if budget[0] <= 0:
+            return None
+        budget[0] -= 1
+        text, err = _sm.read_file(gs.remote, gs.short_name, rel, max_bytes=_WSC_MODINFO_MAX)
+        info = None if err else _wsc_mod_info(text)
+        if info:
+            return info
+    return None
+
+
 def _wsc_item_mods(gs, wid, budget):
     """The mods one downloaded item holds, as [{id, name, item}]; `budget` is a one-item list of reads left."""
     base = "%s/%s/mods" % (_WSC_PZ_CONTENT, wid)
-    entries = _wsc_listing(gs, base) or []
-    dirs = [e["name"] for e in entries if e.get("is_dir") and _WSC_MOD_DIR.fullmatch(e.get("name") or "")
-            and not e["name"].startswith(".")]
     found = []
-    for d in dirs[:_WSC_PZ_DIRS]:
-        # Build 41 keeps mod.info in the mod's folder, Build 42 in its 42/ folder.
-        for rel in ("%s/%s/mod.info" % (base, d), "%s/%s/42/mod.info" % (base, d)):
-            if budget[0] <= 0:
-                return found
-            budget[0] -= 1
-            text, err = _sm.read_file(gs.remote, gs.short_name, rel, max_bytes=_WSC_MODINFO_MAX)
-            info = None if err else _wsc_mod_info(text)
-            if info:
-                found.append({"id": info[0], "name": info[1], "item": wid})
-                break
+    for d in _wsc_mod_dirs(_wsc_listing(gs, base) or [])[:_WSC_PZ_DIRS]:
+        info = _wsc_dir_mod(gs, "%s/%s" % (base, d), budget)
+        if info:
+            found.append({"id": info[0], "name": info[1], "item": wid})
+        if budget[0] <= 0:
+            break
     return found
 
 
@@ -198,17 +212,22 @@ def _wsc_cfg_value(gs, key):
     return None if vals is None else str(vals.get(key) or "")
 
 
+def _wsc_read_pz(gs):
+    """(the Project Zomboid ini's two lists, None), or (None, why); an ini not written yet is empty lists."""
+    content, err = _sm.read_file(gs.remote, gs.short_name, pz_ini_rel(gs))
+    if err == _WSC_NO_FILE:
+        return {"kind": "pz", "items": [], "mods": [], "missing": True}, None
+    if err:
+        return None, err
+    items = ini_list(content, "WorkshopItems")
+    return {"kind": "pz", "items": [i for i in items if _ws.valid_id(i)], "mods": ini_list(content, "Mods"),
+            "missing": False, "ignored": [i for i in items if not _ws.valid_id(i)]}, None
+
+
 def _wsc_read(gs, kind):
     """(the card's view of the server's list, None), or (None, why)."""
     if kind == "pz":
-        content, err = _sm.read_file(gs.remote, gs.short_name, pz_ini_rel(gs))
-        if err == _WSC_NO_FILE:
-            return {"kind": "pz", "items": [], "mods": [], "missing": True}, None
-        if err:
-            return None, err
-        return {"kind": "pz", "items": [i for i in ini_list(content, "WorkshopItems") if _ws.valid_id(i)],
-                "mods": ini_list(content, "Mods"), "missing": False,
-                "ignored": [i for i in ini_list(content, "WorkshopItems") if not _ws.valid_id(i)]}, None
+        return _wsc_read_pz(gs)
     key = "workshopmods" if kind == "mods" else "wscollectionid"
     value = _wsc_cfg_value(gs, key)
     if value is None:
@@ -237,13 +256,18 @@ def _wsc_change(label, before, after):
     return "%s: %s -> %s" % (label, " ".join(before) or "(none)", " ".join(after) or "(none)")
 
 
+def _wsc_cfg_ids(kind, data):
+    """(ids, None) from a save's body: `ids` for workshopmods, one `id` (or "" to clear) for a collection."""
+    if kind == "mods":
+        return _ws.check_ids(data.get("ids"))
+    ids, why = _ws.check_ids([data["id"]] if data.get("id") else [])
+    return (None, _ws.BAD_ID) if why is None and len(ids) > 1 else (ids, why)
+
+
 def _wsc_save_cfg(gs, kind, data):
     """Write workshopmods or wscollectionid in the instance cfg: the save route's answer."""
     key = "workshopmods" if kind == "mods" else "wscollectionid"
-    raw = data.get("ids") if kind == "mods" else ([data["id"]] if data.get("id") else [])
-    ids, why = _ws.check_ids(raw)
-    if why is None and kind == "collection" and len(ids) > 1:
-        why = _ws.BAD_ID
+    ids, why = _wsc_cfg_ids(kind, data)
     if why:
         return _wsc_refuse(gs, key, why)
     before = _wsc_cfg_value(gs, key)
@@ -328,13 +352,17 @@ def _wsc_titles_answer(gs):
     return jsonify({"success": True, "titles": found, "complete": complete})
 
 
+def _wsc_pz_gate(gs):
+    """A refusal for a server that is not Project Zomboid or may not be read as, else None."""
+    from panel.routes import server_files as _sf
+    if workshop_kind(gs.game_type) != "pz":
+        return jsonify({"success": False, "error": i18n.tr(NOT_WORKSHOP)}), 400
+    return _sf._read_refused(gs, "workshop_read", _WSC_PZ_CONTENT)
+
+
 def _wsc_pz_mods_answer(gs):
     """The Mod ID search's answer: the mods in the given items already downloaded on the server."""
-    from panel.routes import server_files as _sf
-    kind, bad = _wsc_gate(gs)
-    if bad is None and kind != "pz":
-        bad = jsonify({"success": False, "error": i18n.tr(NOT_WORKSHOP)}), 400
-    bad = bad or _sf._read_refused(gs, "workshop_read", _WSC_PZ_CONTENT)
+    bad = _wsc_pz_gate(gs)
     if bad is not None:
         return bad
     items, why = _ws.check_ids([i for i in (request.args.get("items") or "").split(",") if i])

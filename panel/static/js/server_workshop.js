@@ -190,6 +190,20 @@
     if (el('wsc-coll-info')) setInfo('', text);
   }
 
+  // The server's list as the read route gave it, and what the card says about it.
+  function applyView(d) {
+    state.kind = d.kind;
+    state.items = (d.kind === 'pz' ? d.items : d.ids) || [];
+    state.mods = d.mods || [];
+    state.ready = true;
+    var coll = el('wsc-coll');
+    if (coll) coll.value = state.items[0] || '';
+    if (d.missing) msg(t('This server has no config file yet: Project Zomboid writes it on the first start.'), 'text-secondary');
+    if ((d.ignored || []).length) {
+      msg(tf('Not a Workshop id, so it is skipped and is dropped on save: {list}', {list: d.ignored.join(' ')}), 'text-warning');
+    }
+  }
+
   function load() {
     return fetch(url())
       .then(function (r) { return r.json(); })
@@ -198,16 +212,7 @@
           failLoad((d && d.error) || t('The Workshop list could not be read from the server.'));
           return;
         }
-        state.kind = d.kind;
-        state.items = (d.kind === 'pz' ? d.items : d.ids) || [];
-        state.mods = d.mods || [];
-        state.ready = true;
-        var coll = el('wsc-coll');
-        if (coll) coll.value = state.items[0] || '';
-        if (d.missing) msg(t('This server has no config file yet: Project Zomboid writes it on the first start.'), 'text-secondary');
-        if ((d.ignored || []).length) {
-          msg(tf('Not a Workshop id, so it is skipped and is dropped on save: {list}', {list: d.ignored.join(' ')}), 'text-warning');
-        }
+        applyView(d);
         drawAll();
         void loadTitles();
         void loadFound();
@@ -220,21 +225,26 @@
     msg(t('Not saved yet.'), 'text-secondary');
   }
 
+  // [message, class] when `value` cannot be added to `list`, else null.
+  function addProblem(list, value) {
+    if (list === 'items' && !value) {
+      return [t('A Workshop id is 1 to 20 digits, or a steamcommunity.com Workshop link that has one (…?id=123456789).'), 'text-danger'];
+    }
+    if (list === 'mods' && !MOD_RE.test(value)) {
+      return [t('A Mod ID is 1 to 64 letters, digits, spaces, dots, dashes or underscores (a leading backslash is kept), with no ; or =.'), 'text-danger'];
+    }
+    if (state[list].indexOf(value) >= 0) return [t('That is in the list already.'), 'text-warning'];
+    if (state[list].length >= MAX) return [t('A list holds at most 200 entries.'), 'text-danger'];
+    return null;
+  }
+
   window.wscAdd = function (list, ev) {
     if (ev) ev.preventDefault();
     if (!state.ready || ['items', 'mods'].indexOf(list) < 0) return false;
     var input = el('wsc-' + list + '-add');
     var value = list === 'items' ? idFrom(input.value) : String(input.value || '').trim();
-    if (list === 'items' && !value) {
-      msg(t('A Workshop id is 1 to 20 digits, or a steamcommunity.com Workshop link that has one (…?id=123456789).'), 'text-danger');
-      return false;
-    }
-    if (list === 'mods' && !MOD_RE.test(value)) {
-      msg(t('A Mod ID is 1 to 64 letters, digits, spaces, dots, dashes or underscores (a leading backslash is kept), with no ; or =.'), 'text-danger');
-      return false;
-    }
-    if (state[list].indexOf(value) >= 0) { msg(t('That is in the list already.'), 'text-warning'); return false; }
-    if (state[list].length >= MAX) { msg(t('A list holds at most 200 entries.'), 'text-danger'); return false; }
+    var why = addProblem(list, value);
+    if (why) { msg(why[0], why[1]); return false; }
     state[list].push(value);
     input.value = '';
     changed();

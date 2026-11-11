@@ -172,18 +172,17 @@ def _wsc_fetch(ids):
     return {wid: _wsc_entry(by_d.get(wid, {}), by_c.get(wid, {})) for wid in ids}
 
 
-def details(ids):
-    """({id: {"title", "found", "collection", "items"}}, True) for the valid ids given.
-
-    The second value is False when Steam did not answer for some of them: those ids are left out,
-    and the card shows them bare. Invalid ids are dropped before anything is asked.
-    """
+def _wsc_wanted(ids):
+    """The valid ids in `ids`, each once, in order, at most MAX_IDS."""
     wanted = []
     for wid in ids or []:
         if valid_id(wid) and wid not in wanted:
             wanted.append(wid)
-    wanted = wanted[:MAX_IDS]
-    now = time.monotonic()
+    return wanted[:MAX_IDS]
+
+
+def _wsc_cached(wanted, now):
+    """({id: entry} still fresh in the cache, [ids to ask Steam for])."""
     out, missing = {}, []
     with _wsc_lock:
         for wid in wanted:
@@ -192,16 +191,32 @@ def details(ids):
                 out[wid] = hit[1]
             else:
                 missing.append(wid)
+    return out, missing
+
+
+def _wsc_store(got, now):
+    """Keep Steam's answers in the cache (emptied first when it has grown past its cap)."""
+    with _wsc_lock:
+        if len(_wsc_cache) > _WSC_CACHE_MAX:
+            _wsc_cache.clear()
+        for wid, entry in got.items():
+            _wsc_cache[wid] = (now, entry)
+
+
+def details(ids):
+    """({id: {"title", "found", "collection", "items"}}, True) for the valid ids given.
+
+    The second value is False when Steam did not answer for some of them: those ids are left out,
+    and the card shows them bare. Invalid ids are dropped before anything is asked.
+    """
+    now = time.monotonic()
+    out, missing = _wsc_cached(_wsc_wanted(ids), now)
     complete = True
     for start in range(0, len(missing), _WSC_BATCH):
         got = _wsc_fetch(missing[start:start + _WSC_BATCH])
         if got is None:
             complete = False
             continue
-        with _wsc_lock:
-            if len(_wsc_cache) > _WSC_CACHE_MAX:
-                _wsc_cache.clear()
-            for wid, entry in got.items():
-                _wsc_cache[wid] = (now, entry)
+        _wsc_store(got, now)
         out.update(got)
     return out, complete
