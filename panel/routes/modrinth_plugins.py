@@ -39,7 +39,7 @@ _MDR_DISABLED = ".disabled"
 # A plugin file the card can act on: the names an install writes, enabled or disabled.
 _MDR_FILE = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,127}\.jar(?:\.disabled)?")
 _MDR_LIST_MAX = 500
-_MDR_ACTIONS = {"enable": "plugin_enable", "disable": "plugin_disable", "remove": "plugin_remove"}
+_MDR_ACTIONS = ("enable", "disable", "remove")
 
 NOT_PAPER = "Plugins can be installed on a PaperMC server only."
 UNREADABLE = "The plugins folder could not be read from the server, so it is not shown."
@@ -95,10 +95,19 @@ def installed(gs):
     return rows[:_MDR_LIST_MAX], None
 
 
-def _mdr_refuse(gs, action, detail, why, status=400):
+def _mdr_audit(gs, verb, detail, success):
+    """One audit row against the server for `verb` (install, enable, disable or remove).
+
+    The action is spelled out at the call, not looked up, so the audit-id gate can read each name.
+    """
+    log_action(current_user, ("plugin_enable" if verb == "enable" else "plugin_disable" if verb == "disable"
+                              else "plugin_remove" if verb == "remove" else "plugin_install"),
+               target=gs.name, detail=detail, success=success, server=gs)
+
+
+def _mdr_refuse(gs, verb, detail, why, status=400):
     """Audit an attempt refused before the server was touched, and answer it."""
-    log_action(current_user, action, target=gs.name, detail="%s (refused: %s)" % (detail, why),
-               success=False, server=gs)
+    _mdr_audit(gs, verb, "%s (refused: %s)" % (detail, why), False)
     return jsonify({"success": False, "message": i18n.tr(why)}), status
 
 
@@ -107,19 +116,19 @@ def _mdr_install(gs, project_id):
     from panel.routes import server_files as _sf
     info, why = _mr.resolve(project_id, mc_version(gs))
     if why:
-        return _mdr_refuse(gs, "plugin_install", project_id, why, 502 if why == _mr.UNAVAILABLE else 400)
+        return _mdr_refuse(gs, "install", project_id, why, 502 if why == _mr.UNAVAILABLE else 400)
     plan = info["plan"]
     detail = _sf._audit_safe("%s %s (%s, %s/%s)" % (info["title"], info["version_number"], plan["filename"],
                                                     project_id, info["version_id"]), 300)
     data, why = _mr.download(plan)
     if why:
-        return _mdr_refuse(gs, "plugin_install", detail, why, 502)
+        return _mdr_refuse(gs, "install", detail, why, 502)
     with _r20b_audit_on_raise("plugin_install", detail=detail, target=gs.name, server=gs):
         ok, msg = _sm.upload_file(gs.remote, gs.short_name, _MDR_DIR, plan["filename"], data,
                                   overwrite=False, selfname=gs.lgsm_name)
     if not ok and msg == _sm.UPLOAD_EXISTS:
-        return _mdr_refuse(gs, "plugin_install", detail + " (name taken)", EXISTS, 409)
-    log_action(current_user, "plugin_install", target=gs.name, detail=detail, success=ok, server=gs)
+        return _mdr_refuse(gs, "install", detail + " (name taken)", EXISTS, 409)
+    _mdr_audit(gs, "install", detail, ok)
     if not ok:
         return jsonify({"success": False, "message": _sm.write_failure_reason(msg) or "Failed"})
     return jsonify({"success": True, "name": plan["filename"],
@@ -143,14 +152,13 @@ def change_target(action, name):
 def _mdr_change(gs, action, name, new_name):
     """Rename or delete one plugin file as the game account and audit it: the change route's answer."""
     rel = "%s/%s" % (_MDR_DIR, name)
-    audit = _MDR_ACTIONS[action]
-    with _r20b_audit_on_raise(audit, detail=name, target=gs.name, server=gs):
+    with _r20b_audit_on_raise("plugin_" + action, detail=name, target=gs.name, server=gs):
         if action == "remove":
             ok, msg = _sm.delete_path(gs.remote, gs.short_name, rel, selfname=gs.lgsm_name)
         else:
             ok, msg = _sm.rename_path(gs.remote, gs.short_name, rel, new_name, selfname=gs.lgsm_name)
     detail = name if new_name is None else "%s -> %s" % (name, new_name)
-    log_action(current_user, audit, target=gs.name, detail=detail, success=ok, server=gs)
+    _mdr_audit(gs, action, detail, ok)
     if not ok:
         # delete_path can answer with the host's own output; only its fixed refusals are shown.
         said = _sm.delete_failure_reason(msg) if action == "remove" else msg
@@ -228,7 +236,7 @@ def register(app):
             return bad
         project_id = _json_str(_json_body(), "project_id")
         if not _mr.valid_id(project_id):
-            return _mdr_refuse(gs, "plugin_install", "?", _mr.BAD_ID)
+            return _mdr_refuse(gs, "install", "?", _mr.BAD_ID)
         refused = _sf._write_refused(gs, "plugin_install", _MDR_DIR)
         if refused is not None:
             return refused
@@ -256,9 +264,12 @@ def register(app):
         new_name, why = change_target(action, name)
         if why:
             # The action, never the refused name: it is what failed the checks.
-            audit = _MDR_ACTIONS.get(action, "plugin_remove")
-            return _mdr_refuse(gs, audit, action if action in _MDR_ACTIONS else "?", why)
-        refused = _sf._write_refused(gs, _MDR_ACTIONS[action], "%s/%s" % (_MDR_DIR, name))
+            # An unknown action is audited as a removal attempt: the most destructive it could be.
+            verb = action if action in _MDR_ACTIONS else "remove"
+            return _mdr_refuse(gs, verb, action if action in _MDR_ACTIONS else "?", why)
+        refused = _sf._write_refused(gs, ("plugin_enable" if action == "enable" else "plugin_disable"
+                                          if action == "disable" else "plugin_remove"),
+                                     "%s/%s" % (_MDR_DIR, name))
         if refused is not None:
             return refused
         try:

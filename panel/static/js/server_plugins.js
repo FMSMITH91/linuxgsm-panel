@@ -148,7 +148,7 @@
         return ok;
       })
       .catch(function () { msg(t('Failed'), 'text-danger'); return false; })
-      .then(function (ok) { state.busy = false; if (ok) loadInstalled(); return ok; });
+      .then(function (ok) { state.busy = false; if (ok) void loadInstalled(); return ok; });
   }
 
   window.mdrInstall = function (projectId, title) {
@@ -166,7 +166,7 @@
                    onConfirm: send});
   };
 
-  function start() { if (el('mdr-card')) loadInstalled(); }
+  function start() { if (el('mdr-card')) void loadInstalled(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 })();
