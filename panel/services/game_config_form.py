@@ -1,6 +1,6 @@
 """A form view of a game's own config file: its fields read out, and changed values written back.
 
-Pure functions: no Flask, no host access. The route (panel/routes/game_config_form.py) reads and
+Pure functions: no request handling, no host access. The route (panel/routes/game_config_form.py) reads and
 writes the file through the file editor's helpers; this module only turns text into fields and
 fields back into text.
 
@@ -34,6 +34,8 @@ import html
 import json
 import re
 import unicodedata
+
+from panel.core import i18n
 
 FORMATS = ("kv", "cfg", "xml", "json")
 # A file with more fields than this is offered in the raw editor only.
@@ -509,14 +511,14 @@ def _gcf_check(fmt, ext, f, value):
     if len(value) > VALUE_MAX:
         return TOO_LONG
     if f["kind"] == "bool" and value not in (f["on"], f["off"]):
-        return BAD_BOOL.format(key=key, on=f["on"], off=f["off"])
+        return i18n.Sentence(BAD_BOOL, key=key, on=f["on"], off=f["off"])
     number = _GCF_JSON_NUMBER if fmt == "json" else _GCF_NUMBER
     if f["kind"] == "number" and not number.fullmatch(value):
-        return BAD_NUMBER.format(key=key)
+        return i18n.Sentence(BAD_NUMBER, key=key)
     if fmt == "kv" and value != value.strip():
-        return EDGE_SPACE.format(key=key)
+        return i18n.Sentence(EDGE_SPACE, key=key)
     if fmt == "kv" and ext == ".properties" and _gcf_odd_backslashes(value):
-        return TRAIL_BACKSLASH.format(key=key)
+        return i18n.Sentence(TRAIL_BACKSLASH, key=key)
     if fmt == "cfg":
         return _gcf_check_cfg(f, value)
     return None
@@ -525,9 +527,9 @@ def _gcf_check(fmt, ext, f, value):
 def _gcf_check_cfg(f, value):
     key = f["key"]
     if '"' in value:
-        return CFG_QUOTE.format(key=key)
+        return i18n.Sentence(CFG_QUOTE, key=key)
     if f["style"] == "u" and (";" in value or "//" in value):
-        return CFG_BREAKS.format(key=key)
+        return i18n.Sentence(CFG_BREAKS, key=key)
     return None
 
 
