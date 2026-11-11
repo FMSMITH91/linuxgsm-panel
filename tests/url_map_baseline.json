@@ -650,6 +650,28 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/plugins": {
+    "endpoint": "api_server_plugins",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/plugins/search": {
+    "endpoint": "api_server_plugins_search",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins_search"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/stats": {
     "endpoint": "api_server_stats",
     "guards": [
@@ -2027,6 +2049,28 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_notify_empty"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/plugins/change": {
+    "endpoint": "api_server_plugins_change",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins_change"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/plugins/install": {
+    "endpoint": "api_server_plugins_install",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins_install"
     ],
     "methods": [
       "POST"

@@ -383,6 +383,53 @@
 {% endmacro %}
 {% endif %}
 
+{% if plugins_supported(server.game_type) and can_download_log %}
+{# A PaperMC server's plugins (panel/routes/modrinth_plugins.py): search Modrinth, install a build the
+   panel host downloaded and checked, and enable, disable or remove the jars in serverfiles/plugins/.
+   Everything here needs the file manager's permission (can_download_log): a plugin is code put on
+   the server, as an uploaded jar is. Both boxes have a fixed height, so rows arriving after the
+   first paint move nothing below the card. #}
+{% macro panel_plugins() %}
+<div class="card mb-3 panel-movable" data-panel="plugins" data-mtab="console" id="mdr-card">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Plugins up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Plugins down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Plugins"><i class="bi bi-eye-slash"></i></button>
+  </span>
+  <div class="card-header"><i class="bi bi-puzzle"></i> Plugins</div>
+  <div class="card-body">
+    <div class="small text-secondary mb-2" id="mdr-version" data-no-i18n>&nbsp;</div>
+    <form id="mdr-form" class="d-flex flex-wrap gap-2 mb-2" role="search" data-action="mdrSearch"
+          data-args='["@event"]' data-on="submit">
+      <input type="search" id="mdr-q" class="form-control form-control-sm" style="flex:1 1 10rem; min-width:0;"
+             maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search Modrinth plugins"
+             aria-label="Search Modrinth plugins">
+      <button type="submit" class="btn btn-sm btn-primary" id="mdr-search"><i class="bi bi-search"></i>
+        <span>Search</span></button>
+    </form>
+    <div class="border rounded small mb-2" style="height:12rem; overflow-y:auto;" id="mdr-results-box"
+         aria-live="polite">
+      <div class="text-secondary p-2" id="mdr-results-note">Search for a plugin, or leave the box empty to see the most downloaded.</div>
+      <ul class="list-unstyled mb-0" id="mdr-results" data-no-i18n></ul>
+    </div>
+    <div class="small fw-semibold mb-1">Installed</div>
+    <div class="border rounded small" style="height:10rem; overflow-y:auto;" id="mdr-installed-box"
+         aria-live="polite">
+      <div class="text-secondary p-2" id="mdr-installed-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
+      <ul class="list-unstyled mb-0" id="mdr-installed" data-no-i18n></ul>
+    </div>
+    <div class="small mt-1" id="mdr-msg" role="status"></div>
+    <div class="form-text">Changes take effect when the server next starts.</div>
+  </div>
+</div>
+{% endmacro %}
+{% endif %}
+
 {# ── Console-tab panels, emitted in THIS user's order ──────────────────────────────────────────
    The declared list is built from the same conditions that define the macros above, so a stored key
    can never reach a macro that was not defined — which is exactly what stops a saved layout
@@ -397,13 +444,15 @@
      or has_permission('view_console') or can_send_command) else []) + ['controls', 'players'] %}
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
 {% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
+{% if plugins_supported(server.game_type) and can_download_log %}{% set panel_keys = panel_keys + ['plugins'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
 {# The name a hidden panel's chip shows: its card's title. `key|capitalize` printed "Content" for
    the Game Content card and "Controls" (no catalog entry) for the other, and the live chip
    (hidePanel) read the card header's raw text, "controls" for the card that has none. One table,
    handed to the page script as data-labels. #}
 {% set DETAIL_LABELS = {'controls': 'Controls', 'console': 'Live Console', 'players': 'Players',
-                        'commands': 'Commands', 'content': 'Game Content'} %}
+                        'commands': 'Commands', 'content': 'Game Content',
+                        'plugins': 'Plugins'} %}
 {# data-declared, not a variable read in {% block scripts %}: Jinja blocks have separate
    scopes, so panel_keys is not visible there. #}
 <div id="detail-console" data-region="detail_console" data-declared='{{ panel_keys|tojson }}'
@@ -414,6 +463,7 @@
   {% elif key == 'players' %}{{ panel_players() }}
   {% elif key == 'commands' %}{{ panel_commands() }}
   {% elif key == 'content' %}{{ panel_content() }}
+  {% elif key == 'plugins' %}{{ panel_plugins() }}
   {% endif %}
   {% endfor %}
 </div>
@@ -653,4 +703,5 @@ var _CMPA_HIST_SCOPE = {{ hist_scope|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/console_history.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_detail.js') }}"></script>
+{% if plugins_supported(server.game_type) and can_download_log %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_plugins.js') }}"></script>{% endif %}
 {% endblock %}

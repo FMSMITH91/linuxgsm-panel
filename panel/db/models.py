@@ -1066,7 +1066,8 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
     "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
     "browse_files", "read_file", "upload_check", "create_file", "create_folder", "list_cron",
-    "lgsm_postponed", "lgsm_refused", "lgsm_busy",
+    "lgsm_postponed", "lgsm_refused", "lgsm_busy", "plugin_list", "plugin_install", "plugin_enable",
+    "plugin_disable", "plugin_remove",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
