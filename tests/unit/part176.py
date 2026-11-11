@@ -82,7 +82,7 @@ sample_properties = (
     "rcon.port=25575\n"
     "resource-pack=https\\://example.invalid/pack.zip\n"
     "long=one \\\n"
-    "  two\n"
+    "  two=2\n"
     "white-list=False\n")
 sample_ini = (
     "# Players can hurt and kill other players\r\n"
@@ -214,6 +214,14 @@ eq("game config form: JSON - strings re-encoded, numbers and switches written ba
    sample_json.replace("\"Name of the game\"", "\"no: é \\\"q\\\"\"").replace("\": 0,", "\": 16,")
    .replace("\"lan\": false", "\"lan\": true").replace("\"ratio\" : 1.5", "\"ratio\" : 2.5e1")
    .replace("\"Password\": null", "\"Password\": \"pw\""))
+_scan176 = _g176._gcf_json_scan
+try:
+    # A scanner that read something the standard parser does not: its positions are not trusted.
+    _g176._gcf_json_scan = lambda text: ({"other": 1}, [(("other",), 0, 1, 1, "num")])
+    _jdiverge176 = _g176.build("s.json", sample_json)
+finally:
+    _g176._gcf_json_scan = _scan176
+eq("game config form: JSON whose scan disagrees with the standard parser gets no form", _jdiverge176, None)
 _jnew176 = _apply176("s.json", sample_json, {"motd": "new \"m\""})[0]
 check("game config form: JSON - the written file is still JSON and reads the new value",
       _json176.loads(_jnew176)["motd"] == "new \"m\"" and _json176.loads(_jnew176)["deep"] == {"inner": {"x": 1}},
@@ -273,8 +281,9 @@ eq("game config form: the secret rule - a password/secret/token/apikey anywhere,
 eq("game config form: a switch is never masked, a secret-named text or number field is",
    [(_props176["enable-rcon"]["secret"], _props176["rcon.password"]["secret"], _props176["rcon.port"]["secret"]),
     (_src176["rcon_password"]["secret"], _xml176["ServerPassword"]["secret"],
-     _fields176("a.cfg", "sv_password 1234\n")["sv_password"]["secret"])],
-   [(False, True, False), (True, True, True)])
+     _fields176("a.cfg", "sv_password 1234\n")["sv_password"]["secret"],
+     _fields176("a.ini", "UsePassword=true\n")["UsePassword"]["secret"])],
+   [(False, True, False), (True, True, True, False)])
 
 # ── 4. refusals ─────────────────────────────────────────────────────────────────────────────────
 _hash176 = _g176.content_hash(sample_source)
@@ -284,8 +293,9 @@ eq("game config form: a save naming another text's hash is refused as changed si
    [_g176.CHANGED] * 4)
 eq("game config form: a field id that is not in the file, or a change map that is not a map, is refused",
    [_g176.apply("server.cfg", sample_source, _hash176, c)[2] for c in (
-       {"99": "x"}, {"-1": "x"}, {"01": "x"}, {"a": "x"}, {True: "x"}, ["x"], "x", {"0": 5}, {"0": None})],
-   [_g176.NO_FIELD] * 5 + [_g176.BAD_CHANGES] * 4)
+       {"99": "x"}, {"-1": "x"}, {-1: "x"}, {"01": "x"}, {"a": "x"}, {True: "x"}, ["x"], "x", {"0": 5},
+       {"0": None})],
+   [_g176.NO_FIELD] * 6 + [_g176.BAD_CHANGES] * 4)
 eq("game config form: a value with a line break, a control character or a Unicode line separator is "
    "refused in every format",
    [_apply176(rel, text, {key: bad})[2] for rel, text, key in (
