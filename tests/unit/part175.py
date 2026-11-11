@@ -70,8 +70,10 @@ _bg175, _crons175, _ufw175 = [], [], []
 def _listening175(remote):
     _live175["calls"] += 1
     v = _live175["v"]
-    if isinstance(v, Exception):
-        raise v
+    # Raised from a list: PyLint (E0702) reads a bare `raise v` as possibly raising None.
+    raised = [e for e in (v,) if isinstance(e, Exception)]
+    if raised:
+        raise raised[0]
     return v
 
 
