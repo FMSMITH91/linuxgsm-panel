@@ -79,6 +79,7 @@ def workshop_supported(game_type):
 
 def pz_ini_rel(gs):
     """The Project Zomboid server config, relative to the game account's home."""
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string - a file path, not a response
     return "Zomboid/Server/%s.ini" % gs.lgsm_name
 
 
@@ -253,6 +254,7 @@ def _wsc_refuse(gs, detail, why, status=400):
 
 def _wsc_change(label, before, after):
     """`label: a b -> a b c`, for the audit row."""
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string - audit text, not a response
     return "%s: %s -> %s" % (label, " ".join(before) or "(none)", " ".join(after) or "(none)")
 
 
