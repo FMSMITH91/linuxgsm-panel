@@ -163,11 +163,11 @@ def _wsc_entry(detail, collection):
 
 def _wsc_fetch(ids):
     """{id: entry} for one batch, or None when Steam did not answer both questions."""
-    details = _wsc_ask("GetPublishedFileDetails", ids, "publishedfiledetails")
+    files = _wsc_ask("GetPublishedFileDetails", ids, "publishedfiledetails")
     colls = _wsc_ask("GetCollectionDetails", ids, "collectiondetails")
-    if details is None or colls is None:
+    if files is None or colls is None:
         return None
-    by_d = {str(r.get("publishedfileid")): r for r in details}
+    by_d = {str(r.get("publishedfileid")): r for r in files}
     by_c = {str(r.get("publishedfileid")): r for r in colls}
     return {wid: _wsc_entry(by_d.get(wid, {}), by_c.get(wid, {})) for wid in ids}
 
