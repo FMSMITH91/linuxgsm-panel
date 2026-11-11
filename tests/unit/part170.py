@@ -116,7 +116,9 @@ with _p9.app_context():
 _mc170 = _p9_new_server(P9_HOST, "mcserver", "mc", 25565, name="p170-mc", status="online")
 _cs170 = _p9_new_server(P9_HOST, "p170cs", "css", 27115, name="p170-css", status="online")
 _files170 = {}
-_reads170, _sent170, _send_rc170 = [], [], {"rc": 0, "raise": None}
+_reads170, _sent170, _send_rc170 = [], [], {"rc": 0}
+# What the stand-in send raises, when anything: empty, it answers with _send_rc170's rc.
+_send_raises170 = []
 _read_refusal170 = {"on": False}
 
 
@@ -126,8 +128,7 @@ def _read170(server, user, relpath, max_bytes=1048576):
 
 
 def _send170(server, user, command, timeout=20, selfname=None, mark=False):
-    _exc170 = _send_rc170["raise"]
-    if isinstance(_exc170, BaseException):
+    for _exc170 in _send_raises170:
         raise _exc170
     _sent170.append((user, command, selfname))
     return ("", "no tmux session" if _send_rc170["rc"] else "", _send_rc170["rc"])
@@ -210,10 +211,11 @@ try:
     _send_rc170["rc"] = 3
     _p170["rc3"] = _A170.post(_url170 + "ops", json={"action": "remove", "value": "Steve"})
     _p170["rc3_audit"] = _p9_audit("mc_list_change")
-    _send_rc170["rc"], _send_rc170["raise"] = 0, ConnectionError("timed out")
+    _send_rc170["rc"] = 0
+    _send_raises170[:] = [ConnectionError("timed out")]
     _p170["raised"] = _A170.post(_url170 + "ops", json={"action": "remove", "value": "Steve"})
     _p170["raised_audit"] = _p9_audit("mc_list_change")
-    _send_rc170["raise"] = None
+    _send_raises170.clear()
 finally:
     _p9_restore_all()
     _p9_delete_server(_mc170)
