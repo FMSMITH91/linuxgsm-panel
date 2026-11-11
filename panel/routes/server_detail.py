@@ -915,6 +915,9 @@ def register(app):
     # A Minecraft server's operators, whitelist and bans (app.py is at its size limit).
     from panel.routes import mc_lists as _mcl_routes
     _mcl_routes.register(app)
+    # A PaperMC server's plugins from Modrinth (app.py is at its size limit).
+    from panel.routes import modrinth_plugins as _mdr_routes
+    _mdr_routes.register(app)
     # Published on `app` because the module-level Telegram and Discord command bots drive a
     # start/stop/restart through this exact function, rather than a copy of its logic. It used to
     # be assigned at the end of register_routes(); now the module that owns it does the publishing,
