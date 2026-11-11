@@ -154,7 +154,7 @@ def _gcf_kv_line(body, props):
 
 
 def _gcf_parse_kv(text, props):
-    """Fields of a key=value file. `props`: it is a .properties file (! comments, \\ line joins)."""
+    r"""Fields of a key=value file. `props`: it is a .properties file (! comments, \ line joins)."""
     out, section, pending, joining = [], "", [], False
     for off, body in _gcf_lines(text):
         if joining:   # a .properties value continued from the line above: not a field of its own

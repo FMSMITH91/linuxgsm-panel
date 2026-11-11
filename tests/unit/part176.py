@@ -183,7 +183,7 @@ eq("game config form: every sample saved with nothing changed is the same text (
 
 eq("game config form: Source cfg - only the changed values differ; an unquoted value given a blank is quoted",
    _apply176("server.cfg", sample_source, {"hostname": "My Server", "sv_lan": "1", "sv_region": "3",
-                                           "exec": "my bans.cfg", "rcon_password": "s3cret"})[0],
+                                           "exec": "my bans.cfg", "rcon_password": "s3cret"})[0],  # nosec B105 - test sample, not a credential
    sample_source.replace("\"SERVERNAME\"", "\"My Server\"").replace("\nsv_lan 0\n", "\nsv_lan 1\n")
    .replace("sv_region -1   //", "sv_region 3   //").replace("exec banned_user.cfg", "exec \"my bans.cfg\"")
    .replace("\"ADMINPASSWORD\"", "\"s3cret\""))
@@ -210,7 +210,7 @@ eq("game config form: XML - only the value attribute's text changes, escaped for
 eq("game config form: JSON - strings re-encoded, numbers and switches written bare, a null filled as a "
    "string, the file's own layout kept",
    _apply176("s.json", sample_json, {"name": "no: \u00e9 \"q\"", "max_players": "16",
-                                     "lan": "true", "ratio": "2.5e1", "Password": "pw"})[0],
+                                     "lan": "true", "ratio": "2.5e1", "Password": "pw"})[0],  # nosec B105 - test sample, not a credential
    sample_json.replace("\"Name of the game\"", "\"no: \u00e9 \\\"q\\\"\"").replace("\": 0,", "\": 16,")
    .replace("\"lan\": false", "\"lan\": true").replace("\"ratio\" : 1.5", "\"ratio\" : 2.5e1")
    .replace("\"Password\": null", "\"Password\": \"pw\""))
@@ -350,9 +350,9 @@ eq("game config form: the read-back check compares every field - a changed key, 
     _ver176([{"key": "a", "section": "", "value": "1"}], [], {})],
    [True, False, False, False, True, False])
 eq("game config form: the audit text names each changed key with its values, a secret only as changed",
-   _g176.audit_detail([({"key": "hostname", "secret": False}, "old", "new"),
-                       ({"key": "rcon_password", "secret": True}, "ADMINPASSWORD", "s3cret"),
-                       ({"key": "motd", "secret": False}, "x" * 70, "y")]),
+   _g176.audit_detail([({"key": "hostname", "secret": False}, "old", "new"),  # nosec B105 - test sample, not a credential
+                       ({"key": "rcon_password", "secret": True}, "ADMINPASSWORD", "s3cret"),  # nosec B105 - test sample, not a credential
+                       ({"key": "motd", "secret": False}, "x" * 70, "y")]),  # nosec B105 - test sample, not a credential
    "hostname: old -> new; rcon_password: changed (hidden); motd: " + "x" * 59 + "\u2026 -> y")
 
 # ── 5. details naming the file ──────────────────────────────────────────────────────────────────

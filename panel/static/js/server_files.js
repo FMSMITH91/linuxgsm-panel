@@ -388,16 +388,19 @@ var _gcfViewNow=null;
 function gcfView(which){
   var form = which==='form' && !!_gcfForm;
   _gcfViewNow = _gcfForm ? (form?'form':'raw') : _gcfViewNow;
-  document.getElementById('gcf-form-pane').style.display=form?'':'none';
-  document.getElementById('gcf-raw-pane').style.display=form?'none':'';
-  document.getElementById('gcf-btn-form').setAttribute('aria-pressed', form?'true':'false');
-  document.getElementById('gcf-btn-raw').setAttribute('aria-pressed', form?'false':'true');
-  document.getElementById('gcf-btn-form').classList.toggle('active', form);
-  document.getElementById('gcf-btn-raw').classList.toggle('active', !form);
-  var note=document.getElementById('gcf-note');
-  var dirty = form && document.getElementById('game-cfg').value!==_gcfShown;
+  _gcfPanes(form); _gcfDirtyNote(form && document.getElementById('game-cfg').value!==_gcfShown);
+}
+// Show one pane and press its button (the other pane hidden, its button released).
+function _gcfPanes(form){
+  [['gcf-form-pane', 'gcf-btn-form', form], ['gcf-raw-pane', 'gcf-btn-raw', !form]].forEach(function(p){
+    document.getElementById(p[0]).style.display = p[2] ? '' : 'none';
+    var b = document.getElementById(p[1]); b.setAttribute('aria-pressed', String(p[2])); b.classList.toggle('active', p[2]);
+  });
+}
+// The note shown on the form while the raw text holds edits the form does not show.
+function _gcfDirtyNote(dirty){
+  var note=document.getElementById('gcf-note'); note.style.display = dirty ? '' : 'none';
   note.textContent = dirty ? 'The raw text has unsaved edits. The form shows the file as it was opened.' : '';
-  note.style.display = dirty ? '' : 'none';
 }
 function _gcfDraw(form){
   var box=document.getElementById('gcf-form');
