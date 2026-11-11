@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+5756cd36 The console no longer starts every line a quarter of the way across a phone screen.
 fabb9266 Minecraft operators, whitelist and bans on the server page.
 49f28f17 Updates no longer skip a release the next one depends on.
 0d9bc1de The files the installer reads now live in panel/install/.

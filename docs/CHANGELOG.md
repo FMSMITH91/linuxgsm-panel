@@ -264,6 +264,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **The console no longer starts every line a quarter of the way across a phone screen.** The
+  column for line times takes no space until a line with a time is on screen, and on phones it is
+  narrower when it does.
+
 - **A wipe whose server fails to start afterwards counts as done.** LinuxGSM exits with an error
   when the restart after a wipe fails, so the wipe was recorded as not run and alerted, although the
   files were gone. "Wipe not required" also no longer leaves a crash unalerted for a few minutes.
