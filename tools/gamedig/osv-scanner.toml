@@ -5,7 +5,7 @@
 # ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
 # entry to a reason and a date, and Dependency Review's allow-ghsas to this list.
 
-# None at the moment. GHSA-ch52-4w7c-c8xp (CVE-2026-93748, http-cache-semantics) was exempted here
+# GHSA-ch52-4w7c-c8xp (CVE-2026-93748, http-cache-semantics) was exempted here
 # until #417 moved the lock to 4.3.0, outside the advisory's <= 4.2.0 range; left in place, it would
 # have let a later lock that brought 4.2.0 back pass this audit and Dependency Review silently.
 # 4.3.0 is NOT fixed, though: its max-stale lines are identical to 4.2.0's and the upstream fix (#58)
@@ -13,3 +13,12 @@
 # got's `cache` option, so no cache exists). If the advisory's range is widened to cover 4.3.0, put
 # the entry back with that reachability reason and an ignoreUntil, and its two twins with it
 # (dependency-review.yml's allow-ghsas, .github/codacy-accepted-errors.json).
+
+[[IgnoredVulns]]
+id = "GHSA-474x-hrwr-fgx4"
+ignoreUntil = 2026-12-27
+reason = """gamedig 5.3.3 -> fast-xml-parser 5.8.0: quadratic CPU when scanning unterminated stop-node \
+tags, fixed in 5.12.0. Unreachable here: it needs the non-default stopNodes option, and gamedig's only \
+use (protocols/farmingsimulator.js) builds XMLParser({ ignoreAttributes: false }). gamedig pins \
+fast-xml-parser to exactly 5.8.0, so no bump of ours reaches 5.12.0. Remove this when a gamedig release \
+moves it; re-check by the date either way."""
