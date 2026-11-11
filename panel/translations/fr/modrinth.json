@@ -29,5 +29,8 @@
   "That is not a plugin file in this server's plugins folder.": "Ce n'est pas un fichier de plugin du dossier des plugins de ce serveur.",
   "Installed {name}. It loads when the server next starts.": "{name} installé. Il se charge au prochain démarrage du serveur.",
   "Done. The change takes effect when the server next starts.": "Terminé. Le changement prend effet au prochain démarrage du serveur.",
-  "That change does not fit this plugin file.": "Ce changement ne convient pas à ce fichier de plugin."
+  "That change does not fit this plugin file.": "Ce changement ne convient pas à ce fichier de plugin.",
+  "Not loaded": "Non chargé",
+  "Disable plugin": "Désactiver le plugin",
+  "Enable plugin": "Activer le plugin"
 }

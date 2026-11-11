@@ -49,13 +49,13 @@
     name.textContent = p.name;
     var info = document.createElement('span');
     info.className = 'text-secondary';
-    info.textContent = (p.enabled ? '' : t('Disabled') + ' · ') + sizeText(p.size);
+    info.textContent = (p.enabled ? '' : t('Not loaded') + ' · ') + sizeText(p.size);
     li.appendChild(name);
     li.appendChild(info);
     if (p.managed && NAME_RE.test(p.name)) {
-      li.appendChild(p.enabled ? button(t('Disable'), 'btn-outline-secondary', 'mdrChange', ['disable', p.name])
-                               : button(t('Enable'), 'btn-outline-success', 'mdrChange', ['enable', p.name]));
-      li.appendChild(button(t('Remove'), 'btn-outline-danger', 'mdrChange', ['remove', p.name]));
+      li.appendChild(p.enabled ? button(t('Disable plugin'), 'btn-outline-secondary', 'mdrChange', ['disable', p.name])
+                               : button(t('Enable plugin'), 'btn-outline-success', 'mdrChange', ['enable', p.name]));
+      li.appendChild(button(t('Remove plugin'), 'btn-outline-danger', 'mdrChange', ['remove', p.name]));
     }
     return li;
   }
@@ -161,7 +161,7 @@
     var send = function () { void post('/change', {action: action, name: name}, t('Working…')); };
     if (action !== 'remove') { send(); return; }
     // The styled dialog; the name goes in as text (bodyText), never as markup.
-    confirmDialog({title: t('Remove plugin'), icon: 'bi-trash', confirmLabel: t('Remove'),
+    confirmDialog({title: t('Remove plugin'), icon: 'bi-trash', confirmLabel: t('Remove plugin'),
                    confirmClass: 'btn-danger', bodyText: tf('Remove {name} from the plugins folder?', {name: name}),
                    onConfirm: send});
   };

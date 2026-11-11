@@ -78,6 +78,8 @@ _HTTP_REVIEWED37 = {
     ("panel/services/lgsm_data.py", "_download", "urlopen"),
     ("panel/services/game_icons.py", "_cmpd_http_get", "build_opener"),
     ("panel/services/game_icons.py", "_cmpd_http_get", "opener.open"),
+    ("panel/services/modrinth.py", "_mdr_http_get", "build_opener"),
+    ("panel/services/modrinth.py", "_mdr_http_get", "opener.open"),
 }
 
 

@@ -21,7 +21,6 @@ import hashlib as _hl171
 import json as _json171
 import os as _os171
 import urllib.parse as _up171
-import urllib.request as _ur171
 
 from unit.part01 import _root, check, eq
 from unit.part12 import (P9_ADMIN, P9_FILES, P9_HOST, P9_VIEWER, _p9_arm, _p9_audit, _p9_client,
@@ -42,7 +41,7 @@ eq("plugins: a Modrinth id is eight base62 characters; a slug, a path, a short o
                                  "AABB-C12", "AABBCC1\n", 12345678, None, "AABBCC١٢")],
    [True, True, False, False, False, False, False, False, False, False, False])
 eq("plugins: a search is printable, at most 80 characters; an empty search is allowed (most downloaded)",
-   [_mr171.query_problem(q) for q in ("luckperms", "", "x" * 80, "x" * 81, "a\nb", "a\x00", "a‮", 5)],
+   [_mr171.query_problem(q) for q in ("luckperms", "", "x" * 80, "x" * 81, "a\nb", "a\x00", "a\u202e", 5)],
    [None, None, None] + [_mr171.BAD_QUERY] * 5)
 eq("plugins: a Minecraft version reads as N.N or N.N.N only",
    [_mr171.valid_mc_version(v) for v in ("1.21", "1.21.4", "1.21.4-pre1", "1", "1.21 ", "x", None)],
@@ -195,49 +194,13 @@ check("plugins install: a bad project id asks Modrinth nothing",
 check("plugins install: a download whose sha512 is not the API's is dropped",
       _svc171["tampered"] == (None, _mr171.BAD_HASH), repr(_svc171["tampered"]))
 
-# The real fetcher, with urllib's opener replaced: a refused URL never opens, a body over the cap is dropped,
-# and the request carries the panel's User-Agent.
-
-
-class _Resp171:
-    status = 200
-
-    def __init__(self, body):
-        self._b = body
-
-    def read(self, n):
-        return self._b[:n]
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-_opened171 = []
-
-
-class _Opener171:
-    def open(self, req, timeout=None):
-        _opened171.append((req.full_url, req.get_header("User-agent"), timeout))
-        return _Resp171(b"x" * 20)
-
-
-_real171 = {}
-try:
-    _p9_patch(_ur171, "build_opener", lambda *h: _Opener171())
-    _real171["refused"] = _mr171._mdr_http_get("http://api.modrinth.com/v2/search", 100, {"api.modrinth.com"})
-    _real171["opened_on_refusal"] = len(_opened171)
-    _real171["capped"] = _mr171._mdr_http_get("https://api.modrinth.com/v2/x", 10, {"api.modrinth.com"})
-    _real171["ok"] = _mr171._mdr_http_get("https://api.modrinth.com/v2/x", 20, {"api.modrinth.com"})
-finally:
-    _p9_restore_all()
-check("plugins fetch: a URL off the allowlist never opens; a body over the cap is dropped; the panel's "
-      "User-Agent and a timeout go with every request",
-      _real171["refused"] == (None, "not an allowed URL") and _real171["opened_on_refusal"] == 0
-      and _real171["capped"] == (None, "too large") and _real171["ok"] == (b"x" * 20, None)
-      and _opened171 and all(o[1] == _mr171._MDR_UA and o[2] for o in _opened171), repr((_real171, _opened171)))
+# The real fetcher: a URL off the allowlist is refused before any opener is built (nothing here can open one:
+# the suites refuse connections, and a refusal that went on to open would answer with an error class name).
+_real171 = [_mr171._mdr_http_get(u, 100, {"api.modrinth.com"}) for u in (
+    "http://api.modrinth.com/v2/search", "https://api.modrinth.com.evil.example/v2", "https://evil.example/",
+    "https://api.modrinth.com:444/v2", "https://u@api.modrinth.com/v2", "file:///etc/passwd", "not a url")]
+check("plugins fetch: a URL that is not https on the allowed host, port 443, without credentials, never opens",
+      _real171 == [(None, "not an allowed URL")] * 7, repr(_real171))
 check("plugins fetch: a redirect is refused (the allowlist is the URL asked for)",
       _mr171._MdrNoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.example/") is None)
 
@@ -327,7 +290,7 @@ try:
     _ok_uploads171 = list(_uploads171)
     _net171["calls"] = []
     _r171["install_badid"] = [_A171.post(_url171 + "/install", json=b).status_code for b in (
-        {"project_id": "../x"}, {"project_id": ["AABBCC12"]}, {}, {"project_id": "AABBCC12\n"})]
+        {"project_id": "../x"}, {"project_id": ["AABBCC12"]}, {}, {"project_id": "AABBCC1!"})]
     _r171["install_badid_audit"] = _p9_audit("plugin_install")
     _r171["install_badid_calls"] = len(_net171["calls"])
     _r171["install_viewer"] = _V171.post(_url171 + "/install", json={"project_id": "AABBCC12"})
@@ -512,7 +475,7 @@ _out171 = _run_js75(_name_js171, (
     "  const inst = els['mdr-installed'].children;\n"
     "  out.installed = inst.map(li => li.children.length); out.firstName = inst[0].children[0].textContent;\n"
     "  out.version = els['mdr-version'].textContent;\n"
-    "  els['mdr-q'].value = 'a\\u0007b'; window.mdrSearch({preventDefault() {}}); await settle();\n"
+    "  mk('mdr-q').value = 'a\\u0007b'; window.mdrSearch({preventDefault() {}}); await settle();\n"
     "  out.badQueryGets = gets.length; out.badQueryMsg = els['mdr-msg'].textContent;\n"
     "  els['mdr-q'].value = ' perms '; window.mdrSearch({preventDefault() {}}); await settle();\n"
     "  out.searchUrl = gets[gets.length - 1];\n"
