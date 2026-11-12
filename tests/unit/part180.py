@@ -132,7 +132,7 @@ _slow_xml180 = _g180.build("s.xml", '<property name="A" value="1"/>\n' + "<!--" 
 _took180 = _time180.monotonic() - _t0_180
 check("game config form r41w: a cfg line of 40000 blanks inside an unquoted value and an XML file of 40000 "
       "unclosed comments are read in linear time (well under 2 s for both)",
-      _took180 < 2.0 and _slow_cfg180 is not None, "%.2fs" % _took180)
+      _took180 < 2.0 and _slow_cfg180 is not None and _slow_xml180 is not None, "%.2fs" % _took180)
 
 _latin180 = 'hostname "Caf\ufffd Gaming"\nsv_maxplayers 16\nsv_lan 0\n'
 eq("game config form r41w: a file read with bytes that were not UTF-8 (U+FFFD) has no form and its save is "

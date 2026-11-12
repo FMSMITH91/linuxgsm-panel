@@ -2323,7 +2323,7 @@ def _r41t_built_actions(ast):
     return found
 
 
-_r41t_script = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.S | re.I)
+_r41t_script = re.compile(r"<script\b([^>]*)>(.*?)</script\b[^>]*>", re.S | re.I)
 _r41t_win_by_js = {}            # js file -> names it puts on window
 _r41t_win, _r41t_unparsed = set(), []
 if esprima:
