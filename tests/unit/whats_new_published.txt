@@ -3,6 +3,26 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+4cfd8ed1 Saving a scheduled wipe no longer cancels the wipe that is waiting.
+3e7877cd A dropped connection during a scheduled wipe no longer repeats the wipe.
+a9be269f A wipe whose server needed a forced stop is no longer reported as failed.
+65491c90 Clean reboots wait for LinuxGSM wipes and mod installs.
+869c3e9c Overdue-backup alerts are sent when LinuxGSM's alert settings were never filled in.
+870c2271 Nothing else runs on a server during its scheduled wipe.
+e4e4f709 SSH port move reads public SSH past LAN-address rules.
+f59beea8 SSH port move stops when the panel's own connection can't be read.
+35a8bcc4 The console keeps the server's last lines across a restart's re-read.
+9e9c2946 The console says when the start of a new log is not shown.
+65af5a36 Scheduled Tasks no longer fails on a malformed cron log line.
+fa4a94df A server's description can no longer change its online status.
+f0f0c14e The command palette finds sections and actions in Spanish and French.
+c7e48a5b Re-running the uninstaller after it stopped part-way finishes the job.
+3f9a97d6 Updating by hand no longer moves a panel on another branch back to main behind its back.
+0b32eb06 Diagnostics no longer reports the event-loop watch as "never completed a pass" in its first second.
+fdb2115d Moving SSH never opens it wider than before.
+ee2b08fe Close port 22 checks the panel's Tailscale connection.
+cd90d121 Blocking and rule deletes behind a local proxy keep you connected.
+7f195f8c Dropping the panel host's sudo grant now sticks.
 6ed16c56 A form for the game's own config file.
 48585521 Start checks the port first.
 5e13f397 A port changed on the Settings tab is followed.
