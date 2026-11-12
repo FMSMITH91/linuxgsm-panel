@@ -225,6 +225,18 @@ def eq(name, got, want):
     check(name, got == want, "got %r want %r" % (got, want))
 
 
+def ufw_stored_answer(ipv6="no"):
+    """ufw-stored-rules' answer (out, err, rc) from a host whose /etc/default/ufw says IPV6=`ipv6`.
+
+    For a stand-in host whose firewall lists no `(v6)` row: an SSH port move reads these files to learn
+    whether ufw would write the new port's rule for IPv6 too, and refuses when they cannot be read
+    (review 1109). IPV6=no keeps such a stand-in's move on the public path it always took.
+    """
+    from panel.security import privileged as _priv01
+    texts = ("IPV6=%s\n" % ipv6, "", "", "")
+    return "".join("==> %s <==\n%s" % (p, t) for p, t in zip(_priv01.FWA_STORED_PATHS, texts)), "", 0
+
+
 # ── perf guard: importing `auth` must NOT compute the ~400ms bcrypt "dummy" hash.
 #    It's lazy (computed on the first bad-login attempt, warmed off-thread by init_auth)
 #    so panel startup stays fast — a regression here re-adds ~0.4s to every boot. This

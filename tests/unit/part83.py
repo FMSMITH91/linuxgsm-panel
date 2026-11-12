@@ -31,7 +31,7 @@ import subprocess as _sp83  # nosec B404 - runs bash over this part's own fixtur
 import tempfile as _tempfile83
 from types import SimpleNamespace as NS
 
-from unit.part01 import check
+from unit.part01 import check, ufw_stored_answer
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
                          _p9_core, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_sd, _p9_sf, _p9_sh)
 from panel.core import validation as _val83
@@ -103,6 +103,8 @@ class _Ufw83:
 
     def run(self, server, verb, args=(), timeout=30, **k):
         self.verbs.append(verb)
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return self.status(), "", 0
         if verb == "ufw-limit-port":

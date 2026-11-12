@@ -15,7 +15,7 @@ from types import SimpleNamespace as NS
 
 from sqlalchemy.exc import OperationalError as _OpErr98
 
-from unit.part01 import _root as _root98, check
+from unit.part01 import _root as _root98, check, ufw_stored_answer
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
                          _p9_restore_all, _p9_sd, _p9_sf, _p9_patch_sm)
 from panel.core import i18n as _i18n98
@@ -93,6 +93,8 @@ def _second_move98(show):
             return ("port 22\n", "", 0)          # sshd_config's Port: ignored under the socket
         if verb == "listening-sockets":
             return ("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n", "", 0)
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return ("Status: inactive\n", "", 0)
         if verb == "sshd-validate":
@@ -188,6 +190,8 @@ def _socket_parse98():
 
 def _ssh_port_card98(client, ts_rid, key_rid):
     def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, **k):
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return ("Status: active\n\nTo                         Action      From\n--                         "
                     "------      ----\n22/tcp                     LIMIT       Anywhere\n", "", 0)
@@ -230,6 +234,8 @@ def _bind_move98(auth):
             return ("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n" + new, "", 0)
         if verb == "sshd-restore-dropin":
             state["restored"] = True
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb in ("ufw-status", "listening-sockets-owner"):
             return ("", "p98: unread", 1)
         return ("", "", 0)
@@ -275,6 +281,8 @@ def _r26j_socket_bind98(addr, ip_out, ip_rc=0):
             new = ("LISTEN 0 4096 %s:2222 0.0.0.0:*\n" % ("[%s]" % addr if ":" in addr else addr)
                    if state["written"] else "")
             return ("LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\n" + new, "", 0)
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb in ("ufw-status", "listening-sockets-owner"):
             return ("", "p98: unread", 1)
         return ("", "", 0)
@@ -559,6 +567,8 @@ def _inactive_open98(added, added_rc=0, status="Status: inactive\n", lands=True)
         # The allow lands in what the firewall lists, as ufw's does: the open re-reads it (review
         # 1016e integration).
         asked.append(verb)
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return status + ("\n     To                         Action      From\n"
                              "     --                         ------      ----\n"

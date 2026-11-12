@@ -22,7 +22,7 @@ import subprocess as _sp120  # nosec B404 - bash over this part's own fixture ho
 import tempfile as _tf120
 from types import SimpleNamespace as NS
 
-from unit.part01 import check
+from unit.part01 import check, ufw_stored_answer
 from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_core, _p9_patch, _p9_restore_all
 from unit.part114 import _PUB_ADDR114, _TS_ADDR114
 from panel.ops.ssh_manager import files as _f120
@@ -92,6 +92,8 @@ class _Box120:
                 return "Status: inactive\n", "", 0
             return _HDR120 + "22/tcp                     LIMIT IN    Anywhere\n" + (
                 "2022/tcp                   ALLOW IN    Anywhere\n" if self.added else ""), "", 0
+        if verb == "ufw-stored-rules":       # ufw with IPv6 off: no (v6) row is listed (part01)
+            return ufw_stored_answer()
         if verb == "ufw-show-added":
             return ("Added user rules (see 'ufw status' for running firewall):\nufw limit 22/tcp\n"
                     + ("ufw allow 2022/tcp\n" if self.added else "")), "", 0

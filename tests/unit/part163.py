@@ -140,9 +140,9 @@ check("1109 lead (OWNER RULE): on a firewall listing no (v6) row while ufw's fil
       and _v4fail163[0] is False and _v4fail163[2] == _V4_ADD159 + [
           ("ufw-delete-allow-from-port", ["0.0.0.0/0", "2022", "tcp"])],    # NOSONAR(S1313)
       repr(({k: (r[0], r[1][:200], r[2]) for k, r in _v4only163.items()}, _v4fail163)))
-_v6off163 = {"IPV6=no": _move163([_PUB22_163], ipv6="no"), "the files unread": _move163([_PUB22_163], ipv6=None)}
-check("1109 lead: ...while with IPV6=no (ufw drops IPv6 whatever its rules say), or the files unread, the IPv4 "
-      "reading decides as before: the public path (controls; the unread case is the residual named in the report)",
+_v6off163 = {"IPV6=no": _move163([_PUB22_163], ipv6="no")}
+check("1109 lead: ...while with IPV6=no (ufw drops IPv6 whatever its rules say) the IPv4 reading decides as "
+      "before: the public path (control; the files unread is part178's: refused)",
       all(r[0] is True and r[2] == _PROXY_ADD163 for r in _v6off163.values()),
       repr({k: (r[0], r[1][:200], r[2]) for k, r in _v6off163.items()}))
 _both_ctl163 = _move159(_BOTH163)

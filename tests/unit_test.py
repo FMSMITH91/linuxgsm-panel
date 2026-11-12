@@ -2045,6 +2045,10 @@ _r16d_wrap_ts_handles()
 # part12's app; imports part01, 12, 108, 116, 125, 135, 136 and 154.
 # part163 (review 1109's firewall and lock-out fixes, builder B) drives part159's port-move stand-in,
 # part135's stand-in hosts, part154's loopback runner and part12's app; imports part01, 12, 135, 154 and 159.
+# part178 (review 1109's integration: an SSH port move with ufw's files unread, the empty cap table after
+# LinuxGSM v26.6.0, the complexity gate's failed git diff) drives part159's port-move stand-in through
+# part163's stored-file patch and part12's app, and part28's throwaway repositories; imports part01, 05,
+# 12, 28, 159 and 163, so it follows 163 (part177 is another change's).
 # part165 (review 1109 D: the installer's recorded root-grant choice, a partial uninstall's re-run, a
 # by-hand update of a switched branch, and the guard's double-quoted -c read: it reads the runner's bound
 # unit.ts_nested too) runs install.sh/uninstall.sh text under bash; imports part01 and 05.
@@ -2065,7 +2069,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
           "part160", "part161", "part162", "part163", "part164", "part165", "part166", "part167", "part168",
-          "part169", "part170", "part171", "part172", "part173", "part174", "part175", "part176", "part15")
+          "part169", "part170", "part171", "part172", "part173", "part174", "part175", "part176", "part178",
+          "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

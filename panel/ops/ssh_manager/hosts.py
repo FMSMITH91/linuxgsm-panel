@@ -4151,12 +4151,13 @@ def _r38h_public_fams(server, status_out, ports, port=None):
     below it. Read from the first rule alone, a LAN-address allow above `22/tcp ALLOW` read public SSH as
     off and the move was refused naming the public rule as one the panel could not copy (review 1109).
 
-    IPv4 is always listed; IPv6 where its list has a row, or, with IPv4's SSH public, where ufw's own files
-    say it handles IPv6 (IPV6=yes): ufw writes `allow proto tcp to any port N` for both families then, so
-    an IPv4-only public rule (`allow from 0.0.0.0/0`) with no `(v6)` row read as public in every family
+    IPv4 is listed; IPv6 where its list has a row, or, with IPv4's SSH public, where ufw's own files say
+    it handles IPv6 (IPV6=yes): ufw writes `allow proto tcp to any port N` for both families then, so an
+    IPv4-only public rule (`allow from 0.0.0.0/0`) with no `(v6)` row read as public in every family
     listed, and the public path opened the new port over IPv6, where SSH was not public (the OWNER RULE,
     review 1109). IPv6 is judged closed there and IPv4's rule from anywhere goes in alone. A host with IPv6
-    off, or whose files could not be read, is judged on IPv4 alone, as before.
+    off is judged on IPv4 alone. Where those files could not be read, nothing is listed (_r39b_listed) and
+    the move is refused, unless it would add nothing that could open IPv6.
 
     The held rule (_r39b_held): a rule for one public address of the host that shapes public SSH in a way
     the panel cannot copy for `port` (SSH public on that one address only, or denied there above the rule
@@ -4164,7 +4165,7 @@ def _r38h_public_fams(server, status_out, ports, port=None):
     every address, the move opened the new port where SSH was not public (the OWNER RULE).
     """
     readings = _r39b_family_readings(status_out, ports)
-    listed = _r39b_listed(server, status_out, readings[4][0])
+    listed = _r39b_listed(server, status_out, readings[4][0], port)
     readings = {v: readings[v] for v in listed}
     held, met = _r39b_held_and_met(status_out, readings, port)
     fams = {v for v, (pub, _h) in readings.items() if pub}
@@ -4181,14 +4182,34 @@ def _r39b_family_readings(status_out, ports):
     return {v: _r39b_family_way(status_out, ports, v == 6) for v in (4, 6)}
 
 
-def _r39b_listed(server, status_out, v4_public):
+def _r39b_listed(server, status_out, v4_public, port=None):
     """The families _r38h_public_fams judges: IPv4, and IPv6 where its list has a row or ufw handles IPv6.
 
     ufw's stored files are read only when IPv4's SSH is public (`v4_public`) and no `(v6)` row is listed.
+    None of them (an empty set) when those files could not be read and adding a rule for `port` might
+    open it over IPv6 (_r40_unread_v6_harmless says when it cannot): on a host with IPv6 on, the public
+    path's `allow proto tcp to any port N` opens both families, so judging IPv4 alone there opened the new
+    port over IPv6 where SSH was not public (the OWNER RULE). _r38a_scoped_open refuses the move then.
     """
-    if _r38a_family_rules(status_out, 6) or (v4_public and _r39b_ufw_v6_on(server)):
+    if _r38a_family_rules(status_out, 6):
         return {4, 6}
-    return {4}
+    if not v4_public:
+        return {4}
+    v6_on = _r40_ufw_v6_state(server)
+    if v6_on is None and not _r40_unread_v6_harmless(server, status_out, port):
+        return set()
+    return {4, 6} if v6_on else {4}
+
+
+def _r40_unread_v6_harmless(server, status_out, port):
+    """With ufw's files unread: whether the move adds nothing that could open `port` over IPv6.
+
+    So when IPv4's first public rule for `port` already lets it in (step 1 adds nothing then), or the
+    default incoming policy is allow (every port is public in both families already).
+    """
+    if port is None or not str(port).isdecimal():
+        return False
+    return _r39b_port_way(status_out, int(port), False)[0] or firewall.remote_ufw_default_allows_in(server)
 
 
 def _r39b_held_and_met(status_out, readings, port):
@@ -4204,10 +4225,14 @@ def _r39b_held_and_met(status_out, readings, port):
     return held, met
 
 
-def _r39b_ufw_v6_on(server):
-    """Whether ufw's stored settings say it handles IPv6 (IPV6=yes in /etc/default/ufw); False when unread."""
+def _r40_ufw_v6_state(server):
+    """Whether ufw's stored settings say it handles IPv6: True (IPV6=yes), False (IPV6=no), or None.
+
+    None when /etc/default/ufw could not be read or names neither: not known, so never a reason to add a
+    rule that may open IPv6.
+    """
     stored = firewall._fwa_read_stored(server)
-    return stored is not None and firewall._fwa_stored_values(stored)["ipv6"] is True
+    return None if stored is None else firewall._fwa_stored_values(stored)["ipv6"]
 
 
 def _r39b_family_way(status_out, ports, v6):
@@ -4324,13 +4349,9 @@ def _r38a_scoped_open(server, before, port, served):
         the rule to add. A session that cannot be read refuses the move: which rule it needs is not known.
     """
     listed, fams, held, met = _r38h_public_fams(server, before, served, port)
-    if held is not None:
-        # A rule for one public address shapes public SSH, and the panel has no verb that adds it for
-        # `port`: widened to every address, the new port went public where SSH was not (the OWNER RULE).
-        return False, i18n.Sentence(
-            "Public SSH on this host depends on the firewall rule `{rule}`, which is for one of the host's "
-            "addresses, and the panel can't add that rule for port {port} itself. Add the same rule for port "
-            "{port}/tcp first. Nothing was changed.", rule=held["detail"], port=port)
+    refusal = _r40_public_refusal(listed, held, port)
+    if refusal is not None:
+        return False, refusal
     # Public in every family listed: the public path. In one only, a rule from anywhere goes in for that
     # family alone (_r38h_family_public), so the other is not opened to the public by the move.
     public_on = fams == listed
@@ -4350,6 +4371,29 @@ def _r38a_scoped_open(server, before, port, served):
         # the other family is still not opened.
         return _r38h_family_public(server, before, port, min(fams))
     return _r38a_public_off(before, port, served, met)
+
+
+def _r40_public_refusal(listed, held, port):
+    """Why _r38a_scoped_open refuses the move before anything is read further, else None.
+
+    `held`: a rule for one public address shapes public SSH, and the panel has no verb that adds it for
+    `port`: widened to every address, the new port went public where SSH was not (the OWNER RULE).
+    No family `listed`: IPv4's SSH is public, no `(v6)` row is listed, and ufw's files could not be read,
+    so whether ufw would write the new port's rule for IPv6 too is not known (_r39b_listed). Judged as
+    IPv4 alone, the public path opened it over IPv6 where SSH was not public on a host with IPv6 on.
+    """
+    if held is not None:
+        return i18n.Sentence(
+            "Public SSH on this host depends on the firewall rule `{rule}`, which is for one of the host's "
+            "addresses, and the panel can't add that rule for port {port} itself. Add the same rule for port "
+            "{port}/tcp first. Nothing was changed.", rule=held["detail"], port=port)
+    if not listed:
+        return i18n.Sentence(
+            "SSH is public on this host over IPv4 only, and UFW's settings (/etc/default/ufw) could not be "
+            "read, so whether a rule for port {port} would also open it over IPv6 is not known. Add an IPv4 "
+            "rule for port {port}/tcp first (ufw allow from 0.0.0.0/0 to any port {port} proto tcp), or try "
+            "again. Nothing was changed.", port=port)
+    return None
 
 
 def _r39b_unread_refusal(fams, port):

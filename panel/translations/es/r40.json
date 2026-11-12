@@ -1,0 +1,3 @@
+{
+  "SSH is public on this host over IPv4 only, and UFW's settings (/etc/default/ufw) could not be read, so whether a rule for port {port} would also open it over IPv6 is not known. Add an IPv4 rule for port {port}/tcp first (ufw allow from 0.0.0.0/0 to any port {port} proto tcp), or try again. Nothing was changed.": "El SSH es público en este host solo por IPv4, y no se pudo leer la configuración de UFW (/etc/default/ufw), así que no se sabe si una regla para el puerto {port} lo abriría también por IPv6. Añade primero una regla IPv4 para el puerto {port}/tcp (ufw allow from 0.0.0.0/0 to any port {port} proto tcp), o inténtalo de nuevo. No se cambió nada."
+}

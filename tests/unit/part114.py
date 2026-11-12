@@ -22,7 +22,7 @@ a host, sudo or the checkout's data/.
 """
 from types import SimpleNamespace as NS
 
-from unit.part01 import check
+from unit.part01 import check, ufw_stored_answer
 from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_core, _p9_patch, _p9_restore_all
 from panel.core import i18n as _i18n114
 from panel.ops.ssh_manager import hosts as _hosts114
@@ -76,6 +76,8 @@ class _Ufw114:
     def __call__(self, server, verb, args=(), **kw):
         if verb in self.fail:
             return "", "ERROR: Could not acquire lock", 1
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return self.status(), "", 0
         if verb == "sshd-effective-config":
@@ -364,6 +366,8 @@ def _move_raise114():
 
         def _priv(server, verb, args=(), _c=case, **kw):
             sent.append((verb, list(args)))
+            if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+                return ufw_stored_answer()
             if verb == "ufw-status":     # the allow, once added, is there to read back
                 # ...and gone once deleted (the undo's close reads it back, and retries one still there)
                 added = [v for v, _a in sent if v in ("ufw-allow-proto-port", "ufw-delete-allow-proto-port")][-1:] == [
