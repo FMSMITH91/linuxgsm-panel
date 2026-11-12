@@ -683,8 +683,11 @@ def _host_sample_row(rid, now, m):
 
 
 def host_has_history(remote_id):
-    """Whether host `remote_id` has any HostSample: the host page draws its History card's chart area
-    only then, and a one-line "No history yet" otherwise, so neither state changes height on load."""
+    """Whether host `remote_id` has any HostSample.
+
+    The host page draws its History card's chart area only then, and a one-line "No history yet"
+    otherwise, so neither state changes height on load.
+    """
     return db.session.query(HostSample.id).filter(HostSample.remote_id == remote_id).first() is not None
 
 
