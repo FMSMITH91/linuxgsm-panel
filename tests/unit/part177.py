@@ -38,6 +38,7 @@ from panel.ops import system_ops as _so177, tailscale_integration as _ts177
 from panel.core.clock import utcnow as _now177
 from panel.db import models as _m177
 from panel.db.models import Group as _Group177, User as _User177, db as _db177
+from panel.ops import netdev as _netdev177
 from panel.ops.ssh_manager import _core as _core177
 from panel.security import auth as _auth177
 from panel.services import monitoring as _mon177
@@ -91,8 +92,8 @@ eq("host read: the /proc/net/dev line prints every interface's received and sent
 
 # ── 2. which interfaces count ───────────────────────────────────────────────────────────────────
 eq("host traffic: physical interfaces count; lo, veth, docker, br-, virbr, tailscale and wg do not",
-   [_core177._hch_net_counted(n) for n in ("ens3", "eth0", "enp0s3", "lo", "lowpan0", "veth1a", "docker0",
-                                           "br-1f2e", "virbr0", "tailscale0", "wg0")],
+   [_netdev177.counted(n) for n in ("ens3", "eth0", "enp0s3", "lo", "lowpan0", "veth1a", "docker0",
+                                    "br-1f2e", "virbr0", "tailscale0", "wg0")],
    [True, True, True, False, True, False, False, False, False, False, False])
 _host177, _acc177 = _core177._parse_host_sample("\n".join(_lines177 or []) + "\nNETIF eth2 x 5\nNETIF eth3\n")
 eq("host traffic: the parsed read sums received and sent bytes over the counted interfaces only, and skips a "
