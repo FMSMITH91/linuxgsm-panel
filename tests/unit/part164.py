@@ -34,7 +34,8 @@ from panel.ops.ssh_manager import game as _game164
 from panel.routes import server_files as _sf164
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_client, _p9_json, _p9_patch, _p9_patch_sm, _p9_restore_all
+from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_patch_sm,
+                         _p9_restore_all)
 from unit.part38 import _HARNESS38, _PANEL38, _SRC38
 from unit.part47 import _cut47, _node47
 from unit.part158 import _FUNCS158, _SD158
@@ -88,6 +89,7 @@ def _details164(description, status):
 
 _st164 = {}
 try:
+    _p9_arm(who="part164")     # so the closing "nothing reached a real transport" check can see a trip
     _p9_patch(_game164, "_really_serving", lambda server, gs: True)
     _gs164 = NS(short_name="rustserver", lgsm_name="rustserver")
     for _k164, _desc164, _state164 in (
@@ -182,6 +184,10 @@ def _bash164(remote, user, cmd, timeout=15, selfname=None):
 _whole164 = {}
 _log164 = _os164.path.join(_TMP164, "console.log")
 try:
+    _p9_arm(who="part164")
+    # /api/console reads the host's timezone first; P9_GS's host has none stored, so unstubbed that
+    # started a real lookup on the fixture address.
+    _p9_patch(_sf164, "_host_timezone_cached", lambda *a, **k: "")
     _p9_patch_sm("read_as_game_user", _bash164)
     _gsw164 = NS(console_log=_log164, short_name="gm", lgsm_name="gm")
     for _k164, _text164, _want164 in (("short", "a\nb\nc\n", 50), ("exact", "a\nb\nc\n", 3), ("longer", "a\nb\nc\n", 2),

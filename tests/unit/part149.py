@@ -179,6 +179,11 @@ try:
     _R_CMPA_["viewer"] = _get_cmpa_(P9_VIEWER, "script")
     _R_CMPA_["viewer_reads"] = list(_reads_cmpa_)
     _R_CMPA_["other"] = _p9_client(P9_ADMIN).get("/api/server/%d/log/..%%2Fetc" % P9_GS).status_code
+    # ...and a one-segment name: the traversal above 404s on its slash under any rule, so it alone
+    # could not tell the route's two-log limit from a plain <kind>.
+    _reads_cmpa_.clear()
+    _R_CMPA_["other1"] = _p9_client(P9_ADMIN).get("/api/server/%d/log/config" % P9_GS).status_code
+    _R_CMPA_["other1_reads"] = list(_reads_cmpa_)
     _answer_cmpa_(("", "Command timed out", -1))
     _R_CMPA_["timeout"] = _get_cmpa_(P9_ADMIN, "game")
     _answer_cmpa_(ConnectionError("host down"))
@@ -205,7 +210,8 @@ check("log route: VIEW_CONSOLE alone is refused (403) and nothing is read: the f
       _R_CMPA_.get("viewer", (None,))[0] == 403 and _R_CMPA_.get("viewer_reads") == [],
       repr((_R_CMPA_.get("viewer"), _R_CMPA_.get("viewer_reads"))))
 check("log route: only the two logs it knows; any other name is not a route",
-      _R_CMPA_.get("other") == 404, repr(_R_CMPA_.get("other")))
+      _R_CMPA_.get("other") == 404 and _R_CMPA_.get("other1") == 404 and _R_CMPA_.get("other1_reads") == [],
+      repr((_R_CMPA_.get("other"), _R_CMPA_.get("other1"), _R_CMPA_.get("other1_reads"))))
 check("log route: a read that timed out or raised answers \"unreadable\", never an empty log",
       _R_CMPA_.get("timeout", (0, {}))[1].get("state") == "unreadable"
       and _R_CMPA_.get("raised", (0, {}))[1].get("state") == "unreadable"

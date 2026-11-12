@@ -1485,7 +1485,12 @@ def _r14d_modfile(dotted):
     _p = os.path.join(_root, *dotted.split("."))
     if os.path.isfile(os.path.join(_p, "__init__.py")):
         return os.path.join(_p, "__init__.py")
-    return _p + ".py" if os.path.isfile(_p + ".py") else None
+    if os.path.isfile(_p + ".py"):
+        return _p + ".py"
+    # app, manage and db_maintenance live in panel/install/, which the runner puts on sys.path after
+    # the root: `import app` binds that file, so every stub through it is read too.
+    _pi = os.path.join(_root, "panel", "install", dotted + ".py")
+    return _pi if "." not in dotted and os.path.isfile(_pi) else None
 
 
 _stub_names_cache = {}
@@ -2144,6 +2149,16 @@ check("stub gate: a `from panel… import mod`, an `import … as`, and a part's
       and {"run_command", "_core"} <= (_r14d_stub_names("panel.ops.ssh_manager._core")
                                        | _r14d_stub_names("panel.ops.ssh_manager")),
       repr(_stub_ctl_al))
+_r41t_inst_tree = _ast_scan.parse("import sys\nimport app as _a\n_d = sys.modules['db_maintenance']\n"
+                                   "_a.create_appx = 1\n_d.no_such_dbm_name = 1\n_a.create_app = 1\n")
+_r41t_inst_al = _r14d_aliases(_r41t_inst_tree, {})
+_r41t_inst_bad = [_t[2] for _t in (_r15d_stub_target(_n, _r41t_inst_al) for _n in _ast_scan.walk(_r41t_inst_tree))
+                  if _t and _t[1] not in _r14d_stub_names(_t[0])]
+check("stub gate: `import app` and sys.modules['db_maintenance'] (both in panel/install/) are read as "
+      "aliases, and a misspelled stub through each is named (control)",
+      _r41t_inst_al == {"_a": "app", "_d": "db_maintenance"}
+      and sorted(_r41t_inst_bad) == ["_a.create_appx", "_d.no_such_dbm_name"],
+      repr((_r41t_inst_al, _r41t_inst_bad)))
 # The reader the gate stands on, against a module with a name in each place one can be bound.
 _tn_dir = _tempfile.mkdtemp(prefix="toplevel-names-")
 try:

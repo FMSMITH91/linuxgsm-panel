@@ -963,9 +963,13 @@ def _countdown_checks41():
     _fresh41()
     r, h, _rows = _std_host41()
     t0 = _CLOCK41.time()
+    stamps = {}
+    _stamp_stops41(stamps)
     HR.request_reboot(r, "now", None, "web")
+    # Timed to the first stop, as the no-console-message case is: the whole run also waits for the
+    # arming window, whose worst case (ARM_WAIT) covered a spurious 60 s countdown too.
     check("countdown: nobody on — no warning and no minute's wait",
-          _all41(not _lines41(h, "say "), _CLOCK41.time() - t0 < 60 + 120))
+          _all41(not _lines41(h, "say "), stamps.get("stop", t0 + 99) - t0 < 60), repr(stamps))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

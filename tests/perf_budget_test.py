@@ -373,10 +373,21 @@ def _get_page_paths(admin_id):
                 continue
             for k, v in subs.items():
                 p = p.replace(k, v)
+            # <any(a, b):x> is a fixed list: its first option is a real page of that rule.
+            p = _pb_re.sub(r"<any\(\s*([^,)\s]+)[^)]*\):[a-z_]+>", r"\1", p)
             if "<" not in p:
                 paths.append(p)
+            else:
+                _r41t_unswept.append(str(rule))
     paths.sort()
     return paths
+
+
+# The GET rules the sweep cannot request (no row id stands in for a name, a token or a file).
+# Pinned, so a new page the sweep skips fails by name instead of dropping out unseen.
+_r41t_unswept = []
+_r41t_unswept_known = {"/api/i18n/<lang>", "/api/panel/backup/download/<path:name>", "/game-icon/<script>",
+                       "/invite/<token>", "/set-language/<lang>"}
 
 
 def _signed_in_client(user_id):
@@ -514,6 +525,12 @@ try:
     admin_id = _seed_admin_and_hosts()
     seed_servers(0, SERVERS_SMALL)
     paths = _get_page_paths(admin_id)
+    check("perf: the sweep requests every GET page but the pinned few it cannot (a new page left out "
+          "is named here)", set(_r41t_unswept) == _r41t_unswept_known,
+          repr(sorted(set(_r41t_unswept) ^ _r41t_unswept_known)))
+    check("perf: an <any(...)> page is swept through its first option",
+          any(p.endswith("/mc-lists/ops") for p in paths) and any(p.endswith("/log/script") for p in paths),
+          repr([p for p in paths if "/mc-lists/" in p or "/log/" in p]))
     c = _signed_in_client(admin_id)
 
     t0 = time.perf_counter()

@@ -234,7 +234,9 @@ def _quoted_c(script):
         return []
     _out = []
     for _k, _w in enumerate(_ws):
-        if os.path.basename(_w.lstrip("$(`{!")) not in SHELLS:
+        # The shell name after the word's last separator: `x;bash` and `echo|bash` are one shlex word
+        # each, and their nested -c script went unread (review 1112).
+        if os.path.basename(re.split(r"[;&|()`]", _w)[-1].lstrip("$(`{!")) not in SHELLS:
             continue
         _c, _j = _runner("_r18d_shell_opts")(_ws, _k + 1)
         if _c and _j < len(_ws) and _ws[_j].strip():

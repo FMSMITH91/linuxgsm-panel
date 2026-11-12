@@ -166,7 +166,10 @@ try:
 
     # ── panel_version: git first, then VERSION ───────────────────────────────────────────────────
     _cv_set_tz(_CV_EAST)
-    with open(os.path.join(_cv_repo, "VERSION"), "w", encoding="utf-8") as _cv_fh:
+    # Where the panel reads VERSION (panel/install/, since the root clean-up): planted at the root, the
+    # file was never read and the check passed whatever the order of git and VERSION.
+    os.makedirs(os.path.join(_cv_repo, "panel", "install"), exist_ok=True)
+    with open(os.path.join(_cv_repo, "panel", "install", "VERSION"), "w", encoding="utf-8") as _cv_fh:
         _cv_fh.write("%d\n" % _CV_OLD_AUTHOR)     # a checkout's VERSION is not what it reads
     check("calver: a git checkout's version is HEAD's date, whatever its VERSION file says",
           _cv_version_at(_cv_repo) == "2027.1.1", repr(_cv_version_at(_cv_repo)))
