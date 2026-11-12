@@ -12,7 +12,7 @@ from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.security import banlist as _banlist
 from panel.ops.ssh_manager import (fwa_block_target, host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
-from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
+from panel.services.monitoring import (_autoblock_threshold, _whitelisted, host_has_history)
 from types import (SimpleNamespace)
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag)
@@ -71,7 +71,8 @@ def _register_server_management(app):
         # panel_bound_port: what the "Public panel access" label names (remote_vps.remote_manage).
         return render_template("remote_manage.html", remote=local, status=status, config=cfg,
                                funnel_facts=ts.panel_funnel_facts(cfg),
-                               panel_bound_port=ts._r13b_bound_port(cfg))
+                               panel_bound_port=ts._r13b_bound_port(cfg),
+                               hh_has_history=host_has_history(local.id))
 
     @app.route("/api/server-management")
     @login_required

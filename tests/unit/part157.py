@@ -123,6 +123,8 @@ check("console history: the key's birth part is the row's created_at read as UTC
       repr((_kz157, _bz157)))
 
 _SD157 = _read99("panel", "static", "js", "server_detail.js")
+# The History chart helpers both the server page and the host page load (part177 covers the host's).
+_HC157 = _read99("panel", "static", "js", "history_charts.js")
 # The history is console_history.js, which the page loads just before server_detail.js; the quick
 # commands that end its browsing stay in server_detail.js. Cut from the two as the page runs them.
 _HS157 = _read99("panel", "static", "js", "console_history.js") + "\n" + _SD157
@@ -237,7 +239,7 @@ _out157 = _js99(_name157, (
     "           x: {ticks: {color: 'old'}, grid: {display: false}}},\n"
     "  plugins: {legend: {labels: {color: 'old'}}}}});\n"
     "var statsChart = mk(); var _histCharts = {'hist-host': mk()};\n"
-    + _line_or99(_SD157, "var _r37d_inkWatch") + "\n"), (
+    + _line_or99(_HC157, "var _r37d_inkWatch") + "\n"), (
     "function _cmpbInk(", "function _histX(", "function _r37d_inkChart(", "function _r37d_inkCharts(",
     "if (_r37d_inkWatch && document.documentElement)"), (
     "  const x7 = _histX().ticks.color; scheme = 'light';\n"
@@ -245,7 +247,7 @@ _out157 = _js99(_name157, (
     "  const ink = c => [c.options.scales.y.ticks.color, c.options.scales.y.grid.color, c.options.scales.y1.ticks.color,\n"
     "    c.options.scales.y1.grid.color, c.options.scales.x.ticks.color, c.options.plugins.legend.labels.color];\n"
     "  console.log(JSON.stringify({x7, x7light: _histX().ticks.color, live: ink(statsChart),\n"
-    "    hist: ink(_histCharts['hist-host']), updates, watch: watched && [watched.el, watched.o]}));\n"), _SD157)
+    "    hist: ink(_histCharts['hist-host']), updates, watch: watched && [watched.el, watched.o]}));\n"), _HC157)
 if _out157 is not None:
     _light_ink157 = ["#4b5563", "rgba(0,0,0,.08)", "#4b5563", None, "#4b5563", "#1f2937"]
     check("charts: a change of colour scheme on <html> repaints the live CPU chart's and every History "

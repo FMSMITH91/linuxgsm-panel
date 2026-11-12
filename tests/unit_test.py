@@ -2027,6 +2027,9 @@ _r16d_wrap_ts_handles()
 # routes on part12's app with every host call stubbed, the page scripts in node) imports part01, 12 and 75.
 # part176 (the game config's Form view: the parsers and value writers on sample files, the routes on part12's
 # app with every host call stubbed, the page script in node) imports part01, 12 and 75.
+# part177 (network traffic in the host history and the host page's History card: the /proc/net/dev line under
+# bash on sample files, the sampler and the routes on part12's app with the host read stubbed, the page scripts in
+# node) imports part01, 12, 75 and 131.
 # part157 (the twenty-fifth review's page-script and test-gate fixes, builder D; it drives the runner's bound
 # unit.ts_nested too) drives part12's app; imports part01, 12, 99 and 143.
 # part158 (the console keeps an older log's lines through a read of the new one: the page's own
@@ -2055,7 +2058,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
           "part160", "part161", "part166", "part167", "part168", "part169", "part170",
-          "part171", "part172", "part173", "part174", "part175", "part176", "part15")
+          "part171", "part172", "part173", "part174", "part175", "part176", "part177",
+          "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

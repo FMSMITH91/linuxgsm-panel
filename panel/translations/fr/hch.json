@@ -1,0 +1,7 @@
+{
+  "Received": "Reçu",
+  "Host network · received and sent": "Réseau de l'hôte · reçu et envoyé",
+  "Network · received and sent": "Réseau · reçu et envoyé",
+  "No history yet. A sample is recorded every minute while this host has a game server installed.": "Pas encore d'historique. Un échantillon est enregistré chaque minute tant que cet hôte a un serveur de jeu installé.",
+  "range must be 24h or 7d": "La plage doit être 24h ou 7d"
+}

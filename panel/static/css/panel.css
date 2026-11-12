@@ -2046,3 +2046,31 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
+
+/* Host page History card (remote_history.js): each chart a fixed height. When samples that were shown
+   are gone (aged out with the page open), "No history yet" is laid over the chart area, which keeps
+   its size (.hh-over). */
+.hh-body {
+  position: relative;
+}
+
+.hh-plot {
+  position: relative;
+  height: 140px;
+}
+
+@media (width <= 767.98px) {
+  .hh-plot {
+    height: 110px;
+  }
+}
+
+.hh-over {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
