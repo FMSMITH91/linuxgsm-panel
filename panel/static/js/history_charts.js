@@ -106,7 +106,7 @@ function _hch_rateDs(label, data, color){ return Object.assign(_ds(label, data, 
 
 // A rate in kbit/s as text: kbit/s up to 1000, Mbit/s above it.
 function _hch_rate(v){
-  if (v === null || v === undefined || isNaN(v)) return '';
+  if (v === null || v === undefined || Number.isNaN(v)) return '';
   return v >= 1000 ? (v / 1000).toFixed(1) + ' Mbit/s' : Math.round(v) + ' kbit/s';  // i18n-ignore
 }
 
