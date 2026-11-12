@@ -1,6 +1,6 @@
 r"""Part 179 of the unit suite: review 1112's SSH port move under a default allow, and stacked interfaces.
 
-* OWNER RULE: under a default incoming ALLOW policy, a DENY for one public address of the host with no
+* SAFETY RULE: under a default incoming ALLOW policy, a DENY for one public address of the host with no
   rule for everyone below it shapes public SSH (the policy lets SSH in on every address but that one).
   An SSH port move dropped it and the allow policy let the new port in on the one address where SSH was
   refused. The move is refused naming it, as with a rule for everyone below it (adversarial M1), until
@@ -32,7 +32,7 @@ _DENY6_179 = "2001:db8::9 22/tcp  DENY IN  Anywhere (v6)"      # NOSONAR(S1313) 
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# OWNER RULE: a held one-address DENY under a default incoming allow, with or without a rule below it
+# SAFETY RULE: a held one-address DENY under a default incoming allow, with or without a rule below it
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _status179(rules):
     """An active `ufw status numbered` listing `rules` in order."""
@@ -54,7 +54,7 @@ def _fams179(rules, allow_in):
 
 _fam179 = {"no rule below": _fams179([_DENY_OTHER163], True),
            "an allow for everyone below": _fams179([_DENY_OTHER163, _PUB22_163], True)}
-check("1112 A03 (OWNER RULE): under a default incoming allow, _r38h_public_fams holds a DENY for one public "
+check("1112 A03 (no public port): under a default incoming allow, _r38h_public_fams holds a DENY for one public "
       "address of the host both with and without a rule for everyone below it (SSH is public by the policy on "
       "every address but that one): the variant with nothing below it was dropped, held None",
       all(r[2] == _DENY_OTHER163 for r in _fam179.values()), repr(_fam179))
@@ -81,7 +81,7 @@ def _move_allow179(rules, *a, **kw):
 _mv179 = {"a remote, no rule below": _move_allow179([_DENY_OTHER163]),
           "a remote, an allow for everyone below": _move_allow179([_DENY_OTHER163, _PUB22_163]),
           "the panel's host, no rule below": _move_allow179([_DENY_OTHER163], None, local=True)}
-check("1112 A03 (OWNER RULE): change_ssh_port under a default incoming allow, with SSH denied on one public "
+check("1112 A03 (no public port): change_ssh_port under a default incoming allow, with SSH denied on one public "
       "address of the host, is refused naming that DENY and sends no allow verb, both with no rule below it "
       "and with an allow for everyone below it (%s): with nothing below, the new port opened on that address"
       % ", ".join(_mv179),
@@ -131,7 +131,7 @@ def _route179(rules, session=_SESS_DEFAULT179, box=None, allow_in=True):
 
 _rt179 = {"no rule below": _route179([_DENY_OTHER163]),
           "an allow for everyone below": _route179([_DENY_OTHER163, _PUB22_163])}
-check("1112 A03 (route, OWNER RULE): POST /api/remote/<id>/ssh-port under a default incoming allow, SSH denied on "
+check("1112 A03 (route, no public port): POST /api/remote/<id>/ssh-port under a default incoming allow, SSH denied on "
       "one public address of the host, answers the refusal naming that DENY, sends no allow verb, and audits the "
       "move as failed, with and without a rule for everyone below the DENY",
       all(r[0] == 200 and r[1].get("success") is False and _HELD179 in (r[1].get("message") or "") and r[2] == []
@@ -144,7 +144,7 @@ check("1112 A03 (route): ...and with the same DENY for 2022 already the route mo
       repr((_rtok179[0], _rtok179[1], _rtok179[2])))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# OWNER RULE: an unread `ufw status`, or an inactive firewall's unread stored rules, refuses step 1
+# SAFETY RULE: an unread `ufw status`, or an inactive firewall's unread stored rules, refuses step 1
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _UNREAD_ST179 = "Couldn't read the firewall (ufw status), so whether opening port 2022/tcp would make SSH"
 _UNREAD_ADDED179 = "its stored rules (ufw show added) could not be read"
@@ -169,7 +169,7 @@ def _step1_179(status_rc, added=("", "", 0)):
 
 
 _st179 = {"a failed read": _step1_179(1), "a timed-out read": _step1_179(124)}
-check("1112 T8b (OWNER RULE): step 1 of an SSH port move refuses when `ufw status` cannot be read, naming the "
+check("1112 T8b (no public port): step 1 of an SSH port move refuses when `ufw status` cannot be read, naming the "
       "unread read and sending no allow verb (%s): it added `allow 2022/tcp` from Anywhere blind, on a host "
       "whose SSH may be tailnet-only, and kept it after a failed move" % ", ".join(_st179),
       all(r[0][0] is False and _UNREAD_ST179 in str(r[0][1]) and "Nothing was changed" in str(r[0][1])
@@ -194,7 +194,7 @@ class _UnreadBox179(_Box159):
 
 
 _rtst179 = _route179([], box=_UnreadBox179([]), allow_in=False)
-check("1112 T8b (route, OWNER RULE): POST /api/remote/<id>/ssh-port on a host whose `ufw status` cannot be read "
+check("1112 T8b (route, no public port): POST /api/remote/<id>/ssh-port on a host whose `ufw status` cannot be read "
       "answers the refusal, sends no allow verb, and audits the move as failed",
       _rtst179[0] == 200 and _rtst179[1].get("success") is False
       and _UNREAD_ST179 in (_rtst179[1].get("message") or "") and _rtst179[2] == []

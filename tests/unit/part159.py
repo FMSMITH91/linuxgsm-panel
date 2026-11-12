@@ -3,7 +3,7 @@
 * MEDIUM (F1): a remote dialled by NAME is held to an IPv6 SSH way in only when the name resolves to
   IPv6 here: a provider's default global IPv6 on eth0 under an A-only name is never dialled.
 * MEDIUM + LOW (P1 carried lead 1): an SSH port move never writes a public allow where public SSH is
-  off (OWNER RULE: no port opened to the internet unasked). The new port gets the scope of the way the
+  off (SAFETY RULE: no port opened to the internet unasked). The new port gets the scope of the way the
   panel's own session comes in (nothing where that already lets it in, the same source-only rule, or a
   refusal naming the rule to add), and a rule that would refuse the panel's session on the new port (an
   interface- or source-scoped DENY the public reading never saw) refuses the move.
@@ -396,9 +396,9 @@ check("1108 r38h step 1: SSH public over one family only (IPv6, or IPv4 beside I
       "family: the new port gets a rule from anywhere in that family alone, never in the other (a v4 session there "
       "gets its own source-only rule copied, nothing public; with the session unread on a remote the panel dials, "
       "refused, nothing sent: review 1109); a public DENY first on the new port in either family refuses; public SSH "
-      "to the host's one address is refused, naming that rule (review 1109, the OWNER RULE); "
+      "to the host's one address is refused, naming that rule (review 1109, the no-public-port rule); "
       "a failed move takes the family's rule back out; a rule for one private or tailnet address is not public SSH, "
-      "and nothing is opened to the internet for it (the OWNER RULE)",
+      "and nothing is opened to the internet for it (the no-public-port rule)",
       _f159["v6 public, v4 hardened, a v6 session"] == (True, _V6_ADD159)
       and "over IPv6 only" in _mv_r38h_fam["v6 public, v4 hardened, a v6 session"][1]
       and _f159["v6 public, v4 hardened, a v4 session"] == (

@@ -550,7 +550,7 @@ def _ufw_reread102():
 def _bind_only102():
     # Public SSH "off" on a Tailscale-SSH row and on the panel host: only `on tailscale0` lets SSH in,
     # no public 22 rule. A bind change on 22 (sshd serves it) must add no allow; nor, since review 1108
-    # (OWNER RULE: no port opened to the internet unasked), does a move onto a port sshd does not serve
+    # (SAFETY RULE: no port opened to the internet unasked), does a move onto a port sshd does not serve
     # yet: public SSH is off, so nothing public goes in (part159 holds the move where it is on).
     from panel.ops import system_ops as _so102
     _p9_patch(_so102, "host_has_ip", lambda addr: True)

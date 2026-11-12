@@ -4120,7 +4120,7 @@ def _r38a_open_read(server, port, before, known, served):
 
 
 # ── step 1 where public SSH is off: the new port gets the scope of the panel's own way in (review 1108) ──
-# OWNER RULE: never open SSH (or any port) to the internet unasked. Step 1 read only the public rules, so on
+# SAFETY RULE: never open SSH (or any port) to the internet unasked. Step 1 read only the public rules, so on
 # a host whose SSH is tailnet-only (`allow in on tailscale0`, no public 22 rule) a port move added
 # `allow <port>/tcp` from Anywhere and turned public SSH back on without saying so. And an interface- or
 # source-scoped DENY ahead of the new port was invisible to that reading, so a port-only move "succeeded"
@@ -4171,7 +4171,7 @@ def _r38h_public_fams(server, status_out, ports, port=None):
     IPv4 is listed; IPv6 where its list has a row, or, with IPv4's SSH public, where ufw's own files say
     it handles IPv6 (IPV6=yes): ufw writes `allow proto tcp to any port N` for both families then, so an
     IPv4-only public rule (`allow from 0.0.0.0/0`) with no `(v6)` row read as public in every family
-    listed, and the public path opened the new port over IPv6, where SSH was not public (the OWNER RULE,
+    listed, and the public path opened the new port over IPv6, where SSH was not public (the no-public-port rule,
     review 1109). IPv6 is judged closed there and IPv4's rule from anywhere goes in alone. A host with IPv6
     off is judged on IPv4 alone. Where those files could not be read, nothing is listed (_r39b_listed) and
     the move is refused, unless it would add nothing that could open IPv6.
@@ -4179,7 +4179,7 @@ def _r38h_public_fams(server, status_out, ports, port=None):
     The held rule (_r39b_held): a rule for one public address of the host that shapes public SSH in a way
     the panel cannot copy for `port` (SSH public on that one address only, or denied there above the rule
     letting everyone else in), with no rule of the operator's doing the same for `port` yet. Widened to
-    every address, the move opened the new port where SSH was not public (the OWNER RULE).
+    every address, the move opened the new port where SSH was not public (the no-public-port rule).
     """
     readings = _r39b_family_readings(status_out, ports)
     listed = _r39b_listed(server, status_out, readings[4][0], port)
@@ -4211,7 +4211,7 @@ def _r39b_listed(server, status_out, v4_public, port=None):
     None of them (an empty set) when those files could not be read and adding a rule for `port` might
     open it over IPv6 (_r40_unread_v6_harmless says when it cannot): on a host with IPv6 on, the public
     path's `allow proto tcp to any port N` opens both families, so judging IPv4 alone there opened the new
-    port over IPv6 where SSH was not public (the OWNER RULE). _r38a_scoped_open refuses the move then.
+    port over IPv6 where SSH was not public (the no-public-port rule). _r38a_scoped_open refuses the move then.
     """
     if _r38a_family_rules(status_out, 6):
         return {4, 6}
@@ -4305,7 +4305,7 @@ def _r41f_policy_deny(status_out, ports, listed, port):
 
     SSH is public by the policy then on every address but that one. The DENY does not follow SSH to the new
     port on its own, so the allow policy let the new port in on the one address where SSH was refused (the
-    OWNER RULE). None where a served port of that family is public on every address anyway, or where a DENY
+    SAFETY RULE). None where a served port of that family is public on every address anyway, or where a DENY
     for that address already covers `port` (_r39b_held_met).
     """
     ports = [int(p) for p in ports or () if str(p).isdecimal()]
@@ -4441,7 +4441,7 @@ def _r40_public_refusal(listed, held, port):
     """Why _r38a_scoped_open refuses the move before anything is read further, else None.
 
     `held`: a rule for one public address shapes public SSH, and the panel has no verb that adds it for
-    `port`: widened to every address, the new port went public where SSH was not (the OWNER RULE).
+    `port`: widened to every address, the new port went public where SSH was not (the no-public-port rule).
     No family `listed`: IPv4's SSH is public, no `(v6)` row is listed, and ufw's files could not be read,
     so whether ufw would write the new port's rule for IPv6 too is not known (_r39b_listed). Judged as
     IPv4 alone, the public path opened it over IPv6 where SSH was not public on a host with IPv6 on.

@@ -1,6 +1,6 @@
 r"""Part 178 of the unit suite: review 1109's integration fixes.
 
-* OWNER RULE: an SSH port move on a host whose IPv4 SSH is public, whose firewall lists no `(v6)` row,
+* SAFETY RULE: an SSH port move on a host whose IPv4 SSH is public, whose firewall lists no `(v6)` row,
   and whose ufw files (/etc/default/ufw) could not be read is refused, naming what to add. It was judged
   as IPv4 alone, and the public path's `allow proto tcp to any port N` opens both families on a host with
   IPv6 on, so the new port went public over IPv6 where SSH was not. It goes on where it adds nothing
@@ -36,14 +36,14 @@ _TRIP178_START = len(_P9_TRIPPED)
 _UNREAD178 = "could not be read, so whether a rule for port 2022 would also open it over IPv6 is not known"
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# OWNER RULE: ufw's files unread, IPv4 SSH public, no (v6) row -> refused, nothing sent
+# SAFETY RULE: ufw's files unread, IPv4 SSH public, no (v6) row -> refused, nothing sent
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _refused178 = {
     "a remote, IPv4 public SSH": _move163([_PUB22_163], ipv6=None),
     "a remote, a LIMIT": _move163(["22/tcp  LIMIT IN  Anywhere"], ipv6=None),
     "the panel's host": _move163([_PUB22_163], None, ipv6=None, local=True),
 }
-check("1109 finding 4 (OWNER RULE): an SSH port move where IPv4 SSH is public, no (v6) row is listed and ufw's "
+check("1109 finding 4 (no public port): an SSH port move where IPv4 SSH is public, no (v6) row is listed and ufw's "
       "files could not be read is refused, naming the IPv4 rule to add, with nothing sent (%s): judged as IPv4 "
       "alone, the public path's both-family allow opened the new port over IPv6 on a host with IPv6 on"
       % ", ".join(_refused178),
