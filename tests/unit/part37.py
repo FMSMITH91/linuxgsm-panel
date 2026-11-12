@@ -57,8 +57,7 @@ def _rel37(path):
 
 def _shipped_py37():
     """Every Python file a panel runs: what install.sh installs from .github/update-paths.txt."""
-    files = [os.path.join(_root, f) for f in ("app.py", "manage.py", "db_maintenance.py")]
-    files += sorted(_glob37.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))
+    files = sorted(_glob37.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))   # panel/install/ too
     files.append(os.path.join(_root, "tools", "panel-helper"))
     return [f for f in files if os.path.isfile(f)]
 
@@ -79,6 +78,10 @@ _HTTP_REVIEWED37 = {
     ("panel/services/lgsm_data.py", "_download", "urlopen"),
     ("panel/services/game_icons.py", "_cmpd_http_get", "build_opener"),
     ("panel/services/game_icons.py", "_cmpd_http_get", "opener.open"),
+    ("panel/services/modrinth.py", "_mdr_http_get", "build_opener"),
+    ("panel/services/modrinth.py", "_mdr_http_get", "opener.open"),
+    ("panel/services/steam_workshop.py", "_wsc_http_post", "build_opener"),
+    ("panel/services/steam_workshop.py", "_wsc_http_post", "opener.open"),
 }
 
 
@@ -563,7 +566,7 @@ def _local_shell_callers37():
             visit(child, inner)
 
     for f in _glob37.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True) + [
-            os.path.join(_root, "app.py")]:
+            os.path.join(_root, "panel", "install", "app.py")]:
         visit(_ast37.parse(open(f, encoding="utf-8").read()), "<module>")
     return found
 
@@ -1024,10 +1027,10 @@ def _v4_prefix_doc():
             "tailscale status --json | jq -r .CurrentTailnet.Name", "tailscale serve status", "`login`",
             "not an all-clear")
     missing = [n for n in need if n not in body]
-    manage = _read29("manage.py")
-    recover = "\n".join(ln for ln in _read29("recover.sh").splitlines() if not ln.lstrip().startswith("#"))
+    manage = _read29("panel", "install", "manage.py")
+    recover = "\n".join(ln for ln in _read29("panel", "install", "recover.sh").splitlines() if not ln.lstrip().startswith("#"))
     real = ('sub.add_parser("list-users"' in manage and '["superadmin"] if u.is_superadmin' in manage
-            and '"${PANEL_DIR}/manage.py" "$@"' in recover)
+            and '"$(manage_of "${PANEL_DIR}")" "$@"' in recover)   # recover.sh runs the install's manage.py
     check("docs: SECURITY.md tells an operator whose install was set up before the setup token what to "
           "check (superadmins, the tailnet, sign-ins), by commands that exist and print what it says",
           bool(body) and not missing and real, "missing %r; commands real: %s" % (missing, real))

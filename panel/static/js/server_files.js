@@ -292,6 +292,8 @@ function saveConfig(ev){
   fetch(MOUNT+'/api/server/'+serverId+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:settings})})
     .then(r=>r.json()).then(d=>{
       msg.textContent = d.success?'✓ Saved — restart the server to apply.':'✗ '+(d.message||'Failed');
+      // A game port saved: what the panel now watches, or that it waits for the next restart.
+      if (d.success && d.port_note) msg.textContent += ' ' + d.port_note;
       msg.className='small ms-2 '+(d.success?'text-success':'text-danger');
       if(d.success){
         // Mark saved values as the new baseline (preserves accordion state), and show the "set"
@@ -364,14 +366,151 @@ function loadGameCfg(){
     gameCfgRel=d.rel;
     document.getElementById('game-path').textContent=d.rel;
     document.getElementById('game-cfg').value=d.content||'';
+    _gcfShown=document.getElementById('game-cfg').value;
     document.getElementById('game-wrap').style.display='';
+    _gcfSet(d.form);
   }).catch(()=>{ document.getElementById('game-loading').innerHTML='<span class="text-danger">Failed to load game config</span>'; });
+}
+// ── Game config: the Form view (fields from panel/services/game_config_form.py) ──
+// _gcfForm is the form drawn; _gcfShown the text it and the raw box were filled from; _gcfOrig each
+// field's value as drawn, kept here rather than in a data- attribute so a secret's value is never
+// written into the page's markup. A secret's value reaches this page the way the raw editor's text
+// does (the same read, for the same people), and goes only into a password input's value property.
+var _gcfForm=null, _gcfShown=null, _gcfOrig={};
+function _gcfSet(form){
+  _gcfForm=form||null;
+  document.getElementById('gcf-switch').style.display=_gcfForm?'':'none';
+  if(!_gcfForm){ gcfView('raw'); return; }
+  _gcfDraw(_gcfForm);
+  gcfView(_gcfViewNow||'form');
+}
+var _gcfViewNow=null;
+function gcfView(which){
+  var form = which==='form' && !!_gcfForm;
+  _gcfViewNow = _gcfForm ? (form?'form':'raw') : _gcfViewNow;
+  _gcfPanes(form); _gcfDirtyNote(form && document.getElementById('game-cfg').value!==_gcfShown);
+}
+// Show one pane and press its button (the other pane hidden, its button released).
+function _gcfPanes(form){
+  [['gcf-form-pane', 'gcf-btn-form', form], ['gcf-raw-pane', 'gcf-btn-raw', !form]].forEach(function(p){
+    document.getElementById(p[0]).style.display = p[2] ? '' : 'none';
+    var b = document.getElementById(p[1]); b.setAttribute('aria-pressed', String(p[2])); b.classList.toggle('active', p[2]);
+  });
+}
+// The note shown on the form while the raw text holds edits the form does not show.
+function _gcfDirtyNote(dirty){
+  var note=document.getElementById('gcf-note'); note.style.display = dirty ? '' : 'none';
+  note.textContent = dirty ? 'The raw text has unsaved edits. The form shows the file as it was opened.' : '';
+}
+function _gcfDraw(form){
+  var box=document.getElementById('gcf-form');
+  box.replaceChildren(); _gcfOrig={};
+  form.groups.forEach(function(g){
+    if(g.name){
+      var h=document.createElement('div'); h.className='gcf-group'; h.setAttribute('data-no-i18n','');
+      h.textContent=g.name; box.appendChild(h);
+    }
+    g.fields.forEach(function(f){ box.appendChild(_gcfField(f)); });
+  });
+}
+function _gcfField(f){
+  var wrap=document.createElement('div'); wrap.className='gcf-field';
+  var id='gcf-f-'+f.id, input=document.createElement('input');
+  input.id=id; _gcfOrig[f.id]=f.value;
+  var label=document.createElement('label'); label.htmlFor=id; label.textContent=f.key;
+  label.setAttribute('data-no-i18n','');
+  if(f.kind==='bool'){
+    wrap.classList.add('form-check','form-switch');
+    input.type='checkbox'; input.className='form-check-input'; input.checked=(f.value===f.on);
+    label.className='form-check-label'; wrap.appendChild(input); wrap.appendChild(label);
+  } else {
+    label.className='form-label d-block'; wrap.appendChild(label);
+    input.className='form-control form-control-sm';
+    input.type = f.secret ? 'password' : (f.kind==='number' ? 'number' : 'text');
+    if(f.kind==='number') input.step='any';
+    if(f.secret) input.autocomplete='off';
+    input.spellcheck=false;
+    input.value=f.value;
+    if(f.secret){
+      var grp=document.createElement('div'); grp.className='input-group input-group-sm';
+      var eye=document.createElement('button'); eye.type='button'; eye.className='btn btn-outline-secondary';
+      eye.dataset.action='gcfReveal'; eye.dataset.args='["@self"]'; eye.dataset.field=String(f.id);
+      eye.title='Show'; eye.setAttribute('aria-label','Show'); eye.setAttribute('aria-pressed','false');
+      eye.appendChild(_icon('bi-eye'));
+      grp.appendChild(input); grp.appendChild(eye); wrap.appendChild(grp);
+    } else {
+      wrap.appendChild(input);
+    }
+  }
+  if(f.help){
+    var help=document.createElement('div'); help.className='gcf-help'; help.setAttribute('data-no-i18n','');
+    help.textContent=f.help; wrap.appendChild(help);
+  }
+  return wrap;
+}
+function gcfReveal(btn){
+  var input=document.getElementById('gcf-f-'+btn.dataset.field);
+  if(!input) return;
+  var show = input.type==='password';
+  input.type = show ? 'text' : 'password';
+  btn.title = show ? 'Hide' : 'Show'; btn.setAttribute('aria-label', btn.title);
+  btn.setAttribute('aria-pressed', show?'true':'false');
+  btn.replaceChildren(_icon(show?'bi-eye-slash':'bi-eye'));
+}
+// The changed fields only: {id: value as the file writes it}. A switch sends its own spelling back.
+function _gcfChanges(){
+  var out={}, any=false;
+  _gcfForm.groups.forEach(function(g){ g.fields.forEach(function(f){
+    var input=document.getElementById('gcf-f-'+f.id);
+    if(!input) return;
+    var v = f.kind==='bool' ? (input.checked?f.on:f.off) : input.value;
+    if(v!==_gcfOrig[f.id]){ out[f.id]=v; any=true; }
+  }); });
+  return any ? out : null;
+}
+function _gcfMsg(text, cls){ var m=document.getElementById('gcf-msg'); m.textContent=text; m.className='small ms-2 '+cls; }
+function saveGameForm(){
+  if(!_gcfForm || !gameCfgRel) return;
+  if(document.getElementById('game-cfg').value!==_gcfShown){
+    _gcfMsg('The raw text has unsaved edits. Save or undo them before saving the form.', 'text-danger');
+    return;
+  }
+  var changes=_gcfChanges();
+  if(!changes){ _gcfMsg('Nothing changed.', 'text-secondary'); return; }
+  _gcfMsg('Saving…', 'text-secondary');
+  fetch(MOUNT+'/api/server/'+serverId+'/game-config/form',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path:gameCfgRel, hash:_gcfForm.hash, changes:changes})})
+    .then(r=>r.json()).then(function(d){
+      _gcfMsg((d.success?'✓ ':'✗ ')+(d.message||'Failed'), d.success?'text-success':'text-danger');
+      if(d.success && typeof d.content==='string'){ _gcfFill(d.content, d.form); }
+    })
+    .catch(function(){ _gcfMsg('✗ Failed', 'text-danger'); });
+}
+// The file as a save left it: the raw box and the form both rebuilt from that text.
+function _gcfFill(content, form){
+  document.getElementById('game-cfg').value=content;
+  _gcfShown=document.getElementById('game-cfg').value;
+  _gcfSet(form);
+}
+// After the raw editor saved: the file read again, so the form is built from the text now there.
+function _gcfReload(){
+  if(!gameCfgRel) return;
+  fetch(MOUNT+'/api/server/'+serverId+'/game-config/form?path='+encodeURIComponent(gameCfgRel))
+    .then(r=>r.json()).then(function(d){
+      if(d.success && typeof d.content==='string') _gcfFill(d.content, d.form);
+      else _gcfStale();
+    })
+    .catch(_gcfStale);
+}
+function _gcfStale(){
+  _gcfForm=null; document.getElementById('gcf-switch').style.display='none'; gcfView('raw');
+  _gcfShown=document.getElementById('game-cfg').value;
 }
 function saveGameCfg(){
   if(!gameCfgRel) return;
   var msg=document.getElementById('game-msg'); msg.textContent='Saving…'; msg.className='small ms-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:gameCfgRel,content:document.getElementById('game-cfg').value})})
-    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved — restart to apply.':'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); })
+    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved — restart to apply.':'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); if(d.success) _gcfReload(); })
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small ms-2 text-danger'; });
 }
 function saveRaw(){
@@ -1366,6 +1505,21 @@ function cronLastRun(j){
   if(j.ok === false && j.error){ out += '<div class="text-danger" style="font-size:.66rem;word-break:break-all;white-space:normal;max-width:22rem;">'+esc(j.error)+'</div>'; }
   return out;
 }
+// A chain the panel composed (Warn players first) reads as its action and warnings, with the
+// messages and the full command in the tooltip; every other command shows as written. The cell is
+// left open for the caller's role tag.
+function cronCmdCell(j){
+  if(j.chain && window.schChain){
+    var tip = j.chain.steps.map(function(s){ return tf('{n} min before: {message}', {n: s.minutes, message: s.message}); }).join('\n')+'\n\n'+j.command;
+    return '<td data-label="Command" class="cron-cmd" title="'+esc(tip)+'">'+esc(window.schChain.summary(j.chain));
+  }
+  return '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command);
+}
+function cronRowChain(row){
+  var raw=row.getAttribute('data-chain');
+  if(!raw) return null;
+  try { return JSON.parse(raw); } catch(e){ return null; }
+}
 function loadCron(){
   fetch(MOUNT+'/api/server/'+serverId+'/cron').then(r=>r.json()).then(d=>{
     var loading=document.getElementById('cron-loading');
@@ -1381,9 +1535,10 @@ function loadCron(){
       var roleTag = j.role
         ? ' <span class="badge bg-secondary align-middle" style="font-weight:normal;font-size:.6rem;" title="Panel-installed: this is your '+esc(j.role)+' line (also on the server-page toggle). You can still reschedule or delete it here.">'+esc(j.role)+'</span>'
         : '';
-      rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'">'
+      rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
+        + (j.chain ? ' data-chain="'+escA(JSON.stringify(j.chain))+'"' : '')+'>'
         + '<td data-label="Schedule" class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
-        + '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command)+roleTag+'</td>'
+        + cronCmdCell(j)+roleTag+'</td>'
         + '<td data-label="Last run" style="white-space:nowrap;">'+cronLastRun(j)+'</td>'
         + '<td class="text-end" style="white-space:nowrap;">'+actions+'</td></tr>';
     });
@@ -1398,10 +1553,16 @@ function saveCron(ev){
   ev.preventDefault();
   var sched=document.getElementById('cron-sched').value.trim();
   var cmd=document.getElementById('cron-cmd').value.trim();
-  if(!sched || !cmd){ cronMsg('Schedule and command are both required.','text-danger'); return false; }
+  // Warn players first (server_schedule_chains.js): the action and warnings go as `chain` and the
+  // panel composes the command, so the typed command is not sent.
+  var chain = window.schChain ? window.schChain.body() : null;
+  if(!sched || (!cmd && !chain)){ cronMsg('Schedule and command are both required.','text-danger'); return false; }
+  var bad = chain ? window.schChain.problem(chain) : '';
+  if(bad){ cronMsg('✗ '+bad,'text-danger'); return false; }
   var editing = cronEditRaw!==null;
   var url = MOUNT+'/api/server/'+serverId+'/cron'+(editing?'/update':'');
-  var body = editing ? {raw:cronEditRaw, schedule:sched, command:cmd} : {schedule:sched, command:cmd};
+  var body = chain ? {schedule:sched, chain:chain} : {schedule:sched, command:cmd};
+  if(editing) body.raw = cronEditRaw;
   cronMsg('Saving…','text-secondary');
   fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
@@ -1416,6 +1577,7 @@ function cancelCronEdit(){
   document.getElementById('cron-cmd').value='';
   document.getElementById('cron-submit').innerHTML='<i class="bi bi-plus-lg"></i> Add task';
   document.getElementById('cron-cancel').style.display='none';
+  if(window.schChain) window.schChain.reset();
   updateCronExplain();
 }
 var _el_cron_tbody = document.getElementById('cron-tbody');
@@ -1425,6 +1587,8 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     cronEditRaw=row.getAttribute('data-raw');
     document.getElementById('cron-sched').value=row.getAttribute('data-sched');
     document.getElementById('cron-cmd').value=row.getAttribute('data-cmd');
+    // A chain the panel composed re-opens as its action and warnings; anything else as its command.
+    if(window.schChain) window.schChain.fill(cronRowChain(row));
     updateCronExplain();
     document.getElementById('cron-submit').innerHTML='<i class="bi bi-save"></i> Save changes';
     document.getElementById('cron-cancel').style.display='';
@@ -1565,12 +1729,17 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
   window.updateCronExplain=function(){
     var el=document.getElementById('cron-desc'), nx=document.getElementById('cron-next');
     if(!el) return;
+    window.schNextRun = null;
+    if(window.schChain) window.schChain.when();
     var r=analyze(document.getElementById('cron-sched').value);
     if(r.empty){ el.className='text-secondary'; el.innerHTML='<i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.'; nx.textContent=''; return; }
     if(r.error){ el.className='text-danger'; el.textContent='✗ '+r.error; nx.textContent=''; return; }
     el.className='text-info'; el.textContent='“'+r.text+'”';
     if(r.reboot){ nx.textContent='Runs at each boot — no fixed clock time.'; return; }
     var runs=nextRuns(r.sets,3);
+    // Warn players first shows when its action lands after the next run (server_schedule_chains.js).
+    window.schNextRun = runs[0] || null;
+    if(window.schChain) window.schChain.when();
     nx.textContent = runs.length ? tf('Next: {runs}   (your browser’s time — the server may use a different zone)', {runs: runs.map(fmtWhen).join('  ·  ')}) : 'No upcoming runs within a year.';
   };
 })();

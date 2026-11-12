@@ -109,8 +109,8 @@ jobs:
         if: steps.scope.outputs.docs_only != 'true'
         run: |
           set -uo pipefail
-          for f in requirements.txt requirements-bootstrap.txt; do
-            out="${RUNNER_TEMP}/pip-audit-${f%.txt}.json"
+          for f in panel/install/requirements.txt panel/install/requirements-bootstrap.txt; do
+            out="${RUNNER_TEMP}/pip-audit-$(basename "${f}" .txt).json"
             pins="$(grep -cE '^[A-Za-z0-9._-]+==' "${f}" || true)"
             # A pin whose marker is false on this Python is one pip-audit leaves out: name it, and
             # count only the rest (.github/scripts/pins_not_here.py).
@@ -175,7 +175,7 @@ jobs:
         run: |
           set -uo pipefail
           lockfiles=(tools/gamedig/package-lock.json panel/static/vendor/package-lock.json
-                     requirements.txt requirements-bootstrap.txt .github/ci-requirements*/*.txt)
+                     panel/install/requirements.txt panel/install/requirements-bootstrap.txt .github/ci-requirements*/*.txt)
           args=()
           for f in "${lockfiles[@]}"; do
             if [ ! -f "${f}" ]; then
@@ -307,7 +307,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Bandit results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -487,7 +487,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Semgrep results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: semgrep.sarif
           category: semgrep

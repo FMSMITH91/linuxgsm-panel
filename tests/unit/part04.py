@@ -1071,7 +1071,7 @@ check("notify: EVENTS entries are (label:str, default:bool)",
 # monitoring, host_reboot, certs and the routes, and an unregistered key there never fires
 # (event_enabled defaults to False for a key EVENTS does not have).
 _used_keys = set()
-for _nk_py in [_pl.Path(_UNIT_ROOT) / "app.py"] + sorted((_pl.Path(_UNIT_ROOT) / "panel").rglob("*.py")):
+for _nk_py in sorted((_pl.Path(_UNIT_ROOT) / "panel").rglob("*.py")):   # panel/install/app.py too
     _used_keys |= set(_re.findall(r'notifications\.notify\(\s*"(\w+)"',
                                   _nk_py.read_text(encoding="utf-8")))
 check("notify: every notify() key in app.py and panel/ is registered in EVENTS",

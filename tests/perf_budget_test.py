@@ -29,6 +29,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "panel", "install"))   # app.py, manage.py, db_maintenance.py
 # A suite past its time limit prints every thread's and greenlet's stack, then exits 124
 # (tests/suite_deadline.py). Armed before anything that could block;
 # tests/ is on the path only for the import.

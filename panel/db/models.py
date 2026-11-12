@@ -753,6 +753,10 @@ class GameServer(db.Model):
     game_display = db.Column(db.String(120), default="")
     port = db.Column(db.Integer, nullable=False)
     query_port = db.Column(db.Integer, nullable=True)
+    # A game port saved on the Settings tab while the server ran (services/port_check.py): the
+    # running process still holds `port`, so `port` stays until the next panel Start or Restart
+    # moves it here. NULL when nothing is waiting.
+    pending_port = db.Column(db.Integer, nullable=True)
     query_type = db.Column(db.String(40), nullable=True)  # gamedig type override (else GAMEDIG_TYPE map)
     status = db.Column(db.String(32), default="offline")
     # Why the last install failed, in the operator's words, and whether a retry could ever help.
@@ -1066,7 +1070,8 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
     "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
     "browse_files", "read_file", "upload_check", "create_file", "create_folder", "list_cron",
-    "lgsm_postponed", "lgsm_refused", "lgsm_busy",
+    "lgsm_postponed", "lgsm_refused", "lgsm_busy", "mc_list_read", "mc_list_change", "plugin_list",
+    "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove", "workshop_read", "workshop_save",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
@@ -1560,6 +1565,8 @@ _LIGHT_MIGRATIONS = {
     ("game_server", "reboot_restore"): "ALTER TABLE game_server ADD COLUMN reboot_restore TEXT",
     # NULL on upgrade: every existing TeamSpeak 3 server gets the one-time ServerQuery close.
     ("game_server", "lgc_ts3_query"): "ALTER TABLE game_server ADD COLUMN lgc_ts3_query VARCHAR(8)",
+    # NULL on upgrade: no port was saved while a server ran before this column existed.
+    ("game_server", "pending_port"): "ALTER TABLE game_server ADD COLUMN pending_port INTEGER",
     # NULL on upgrade, then backfilled once by _backfill_audit_object_ids (see there).
     ("audit_log", "game_server_id"): "ALTER TABLE audit_log ADD COLUMN game_server_id INTEGER",
     ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",

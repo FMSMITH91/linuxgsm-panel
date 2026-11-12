@@ -11,7 +11,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
     RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
-    gmod_current_mounts, gmod_mount_paths, gmod_mount_setup, install_gmod_content, lgsm_game_config,
+    gmod_current_mounts, gmod_mount_paths, gmod_mount_setup, install_gmod_content,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
     console_has_control, stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
@@ -25,11 +25,12 @@ from panel.ops import socket_hooks as _socket_hooks
 # The audit write that rolls back instead of raising (_r25b_audit), through the module so a stub on
 # server_detail's log_action is the one seam for both routes.
 from panel.routes import server_detail as _sd
+from panel.routes import game_config_form as _gcf_routes
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
     _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
-from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp)
+from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
 from itertools import count, groupby
 import re
 import secrets
@@ -1157,7 +1158,7 @@ def _cron_listing(app, gs):
             "Couldn't read the scheduled tasks — the host didn't answer. This is not the same as "
             "there being none.")})
     _sync_toggles_from_cron(gs, jobs)
-    return jsonify({"jobs": jobs})
+    return jsonify({"jobs": _sch.annotate(gs, jobs)})
 
 
 def _apply_gmod_selection(remote, gmod_user, games):
@@ -1815,7 +1816,8 @@ def _register_files_page(app):
                                # Every cron line on this page fires on the HOST's clock. Without
                                # saying which clock that is, "Daily 5am" is a number with no
                                # meaning — and the panel's own bootstrap sets new hosts to UTC.
-                               host_timezone=_host_timezone_cached(gs.remote, app))
+                               # Warn players first only where the console's chat command is known.
+                               host_timezone=_host_timezone_cached(gs.remote, app), sch_verb=_sch.say_verb(gs.game_type))
 
 
 def _sf_config_read(gs):
@@ -1853,7 +1855,7 @@ def _sf_config_write(gs, data):
         log_action(current_user, "edit_config", target=gs.name,
                    detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
                    server=gs)
-        return jsonify({"success": ok, "message": i18n.tr(msg or ("Saved" if ok else "Failed"))})
+        return jsonify(_sd._pck_save_body(gs, data, ok, msg))   # a game port saved is followed there
     except Exception:
         return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -1875,18 +1877,8 @@ def _register_config_editor(app):
             return refused
         return _sf_config_write(gs, data)
 
-    @app.route("/api/server/<int:server_id>/game-config")
-    @login_required
-    @server_access_required
-    def api_server_game_config(server_id):
-        """The game's own server config file (detected via LinuxGSM details)."""
-        gs = get_game(server_id)
-        if not _can_manage_files():
-            return jsonify({"error": "Permission denied"}), 403
-        try:
-            return jsonify(lgsm_game_config(gs.remote, gs.short_name, gs.lgsm_name))
-        except Exception:
-            return jsonify({"error": _log_and_generic("game config read failed")}), 200
+    # The game's own config file, its Form view and that view's save (panel/routes/game_config_form.py).
+    _gcf_routes.register(app)
 
 
 def _register_alerts(app):
@@ -2427,19 +2419,21 @@ def _register_cron_jobs(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
-        refused = _r36c_reboot_refused(gs, "cron_add") or _write_refused(gs, "cron_add")
+        # The write refusals first, as every cron write asks them; then a Warn players first chain,
+        # which the panel composes into the command (panel/services/schedule_chains.py).
+        command, detail, refused = _sch.cron_request(gs, data, "cron_add", (_r36c_reboot_refused, _write_refused))
         if refused is not None:
             return refused
         # Every field through _json_str. Read raw, a number or a dict was a 500 inside the writer
         # with no audit row, and a list `raw` matched no line: delete answered "Deleted" having
         # deleted nothing, and update appended its line beside the old one. A non-text value is
         # now "" and gets the writer's own refusal.
-        schedule, command = _json_str(data, "schedule"), _json_str(data, "command")
+        schedule = _json_str(data, "schedule")
         try:
-            with _r20b_audit_on_raise("cron_add", detail=schedule[:120], target=gs.name, server=gs):
+            with _r20b_audit_on_raise("cron_add", detail=detail, target=gs.name, server=gs):
                 ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
             log_action(current_user, "cron_add", target=gs.name, success=ok,
-                       detail=schedule[:120], server=gs)
+                       detail=detail, server=gs)
             if ok:
                 _r21b_sync_after_cron_write(gs)
             return jsonify({"success": ok, "message": i18n.tr(msg) if msg else ("Added" if ok else "Failed")})
@@ -2458,16 +2452,16 @@ def _register_cron_jobs(app):
 
 def _r28b_cron_update(gs, data):
     """The cron/update route's work once access is checked: rewrite one task, then re-sync the switches."""
-    refused = _r36c_reboot_refused(gs, "cron_update") or _write_refused(gs, "cron_update")
+    command, detail, refused = _sch.cron_request(gs, data, "cron_update", (_r36c_reboot_refused, _write_refused))
     if refused is not None:
         return refused
     schedule = _json_str(data, "schedule")      # as cron_add reads them
     try:
-        with _r20b_audit_on_raise("cron_update", detail=schedule[:120], target=gs.name, server=gs):
+        with _r20b_audit_on_raise("cron_update", detail=detail, target=gs.name, server=gs):
             ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
-                                      schedule, _json_str(data, "command"), gs.lgsm_name)
+                                      schedule, command, gs.lgsm_name)
         log_action(current_user, "cron_update", target=gs.name, success=ok,
-                   detail=schedule[:120], server=gs)
+                   detail=detail, server=gs)
         if ok:
             # As add and delete do: every line is editable, the `monitor` one included, so an
             # edit can take away (or give) the Autostart or Daily-restart line, and the switches

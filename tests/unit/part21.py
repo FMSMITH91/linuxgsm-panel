@@ -742,7 +742,7 @@ def _e_root_pieces():
     same = _so21._git_blob_id(os.path.join(rdir, "install.sh"))
     _p21(_so21, "_root_dir", lambda: rdir)
     _p21(_so21, "_head_blobs", lambda: {"install.sh": same, "tools/panel-helper": "1" * 40,
-                                        "db_maintenance.py": "2" * 40})
+                                        "panel/install/db_maintenance.py": "2" * 40})
     states = {k: v["state"] for k, v in _so21.root_piece_state(force=True).items()}
     eq("root pieces: the installed copy = HEAD's / DIFFERS / unreadable, never 'differs' for one "
        "it could not read", states,
@@ -761,12 +761,12 @@ def _e_root_pieces():
 def _e_head_blobs_parse():
     seen = []
     _p21(_so21, "_git", lambda args, timeout=45: (seen.append(list(args)), (
-        "100755 blob %s\tdb_maintenance.py\n100755 blob %s\tinstall.sh\n"
+        "100755 blob %s\tinstall.sh\n100755 blob %s\tpanel/install/db_maintenance.py\n"
         "100755 blob %s\ttools/panel-helper" % ("1" * 40, "2" * 40, "3" * 40), "", 0))[1])
     got = _so21._head_blobs()
     eq("root pieces: ONE git ls-tree names HEAD's blob for all three pieces",
        (got, len(seen), seen[0][:3] if seen else None),
-       ({"db_maintenance.py": "1" * 40, "install.sh": "2" * 40, "tools/panel-helper": "3" * 40},
+       ({"install.sh": "1" * 40, "panel/install/db_maintenance.py": "2" * 40, "tools/panel-helper": "3" * 40},
         1, ["ls-tree", "HEAD", "--"]))
     _p21(_so21, "_git", lambda args, timeout=45: ("", "fatal", 128))
     rdir = os.path.join(_T21, "rootdir-unknown")

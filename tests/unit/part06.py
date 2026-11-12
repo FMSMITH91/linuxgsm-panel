@@ -2246,8 +2246,10 @@ check("install.sh: requires a user UNIT file, not just an app.py, to call it an 
 _rec = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 check("install.sh: the recovery command is installed through one shared function",
       "install_recovery_command() {" in _rec and _rec.count("install_recovery_command") >= 4)
-check("install.sh: ...which takes recover.sh from the COMMIT, not the working tree",
-      "stage_root_source recover.sh recover.sh" in _rec)
+check("install.sh: ...which takes recover.sh from the COMMIT, not the working tree (stage_panel_file "
+      "goes through stage_root_source for both of its places)",
+      "stage_panel_file recover.sh recover.sh" in _rec
+      and 'stage_root_source "${MOVED_DIR}/$1" "$2" || stage_root_source "$1" "$2"' in _rec)
 check("install.sh: ...installs it root-owned beside the helper",
       '-o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh"' in _rec)
 # The point of the whole change: no call site may still symlink into the checkout directly.
@@ -2328,10 +2330,51 @@ def _rs_git(*a, cwd=None, inp=None):
                        env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")).stdout.strip()
 
 
-def _inst_shfn(name):
+def _inst_shfn_raw(name):
     """One shell function out of install.sh, whole: its definition line to its closing brace."""
     _i = _inst.index("\n" + name + "() {\n") + 1
     return _inst[_i:_inst.index("\n}\n", _i) + 3]
+
+
+_PLACEMENT_NAMES = ("MOVED_DIR", "_tree_file", "panel_file", "stage_panel_file")
+
+
+def _inst_placement():
+    """Return install.sh's own file-placement helpers, cut from install.sh.
+
+    MOVED_DIR, _tree_file, panel_file and stage_panel_file: the root clean-up's readers find a
+    moved root file through them.
+    """
+    _a = _inst.index('\nMOVED_DIR="panel/install"\n') + 1
+    return _inst[_a:_inst.index('\nSRC=""\n', _a) + 1] + _inst_shfn_raw("stage_panel_file")
+
+
+_STOP_NAMES = ("UPDATE_STOPS", "_stop_ids", "_stop_applies", "_apply_update_stop", "_signed_then_stop")
+
+
+def _inst_stops():
+    """Return install.sh's required-stop code, cut from install.sh.
+
+    UPDATE_STOPS and its functions, with the first-parent test they call.
+    """
+    _a = _inst.index("\n# ── Required stops: releases an update may not skip") + 1
+    return (_inst[_a:_inst.index("\n# Which commit an update moves this checkout TO", _a) + 1]
+            + _inst_shfn_raw("_on_first_parent_line"))
+
+
+def _inst_shfn(name):
+    """Return one shell function out of install.sh, whole.
+
+    install.sh's file-placement helpers come first when its body uses them, and its required-stop
+    code when it applies a stop: a function run on its own would otherwise call a name never defined.
+    """
+    _fn = _inst_shfn_raw(name)
+    _pre = ""
+    if name not in _STOP_NAMES and any(n in _fn for n in ("_apply_update_stop", "_signed_then_stop")):
+        _pre = _inst_placement() + _inst_stops()
+    elif name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
+        _pre = _inst_placement()
+    return _pre + _fn
 
 
 def _pad_history(repo, env=None, n=4000):
@@ -3148,8 +3191,9 @@ def _su_find(start, end):
 
 
 def _su_run(body, env_lines, extra=""):
+    # install.sh's file-placement helpers: these cuts find the moved root files through panel_file.
     return _sh_sub.run(["bash", "-c", "set -uo pipefail\nwarn() { echo \"WARN $*\"; }\n"
-                        + extra + env_lines + body], capture_output=True, text=True)
+                        + extra + env_lines + _inst_placement() + body], capture_output=True, text=True)
 
 
 _su_sb = _tempfile.mkdtemp(prefix="selfupdate-")
@@ -3242,7 +3286,7 @@ try:
                 _fh.write(_c)
         return _sh_sub.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%s\n"
                             "d=\"$(_deps_digest)\"\necho \"DIGEST[${d}]\"\n"
-                            % (_su_shlex.quote(_d), _su_dd)],
+                            % (_su_shlex.quote(_d), _inst_placement() + _su_dd)],
                            capture_output=True, text=True).stdout
 
     _su_d_req = _su_digest({"requirements.txt": "flask==1\n"})
@@ -3377,7 +3421,7 @@ try:
 
     # recover.sh runs manage.py with the same venv: say what happened instead of a traceback, and
     # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
-    _su_rec_all = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
+    _su_rec_all = open(os.path.join(_root, "panel", "install", "recover.sh"), encoding="utf-8").read()
     _su_rec = _su_rec_all[_su_rec_all.index('VENV_PY="$('):
                           _su_rec_all.index('if [[ -n "${STALE_WHY}" ]]; then')] if (
         'VENV_PY="$(' in _su_rec_all and 'if [[ -n "${STALE_WHY}" ]]; then' in _su_rec_all) else ""
@@ -3862,7 +3906,7 @@ try:
                     gaps.append("%s needs %s, but %s is pinned" % (name, rd, pins[sub_name]))
         return pins, gaps
 
-    _rq_txt = open(os.path.join(_root, "requirements.txt"), encoding="utf-8").read()
+    _rq_txt = open(os.path.join(_root, "panel", "install", "requirements.txt"), encoding="utf-8").read()
     _rq_pins, _rq_gaps = _rq_closure_gaps(_rq_txt)
     check("requirements.txt: pins every package the panel's dependencies pull in",
           len(_rq_pins) > 12 and not _rq_gaps, "; ".join(_rq_gaps[:6]))
@@ -3959,7 +4003,7 @@ try:
                 gaps.append("%s is not locked in requirements.txt" % _n)
         return gaps
 
-    _rq_in = open(os.path.join(_root, "requirements.in"), encoding="utf-8").read()
+    _rq_in = open(os.path.join(_root, "panel", "install", "requirements.in"), encoding="utf-8").read()
     _rq_in_names = [_l for _l in _rq_in.splitlines()
                     if _l.strip() and not _l.lstrip().startswith("#")]
     check("requirements.in: every dependency in it is locked in requirements.txt, with no marker",
@@ -4001,7 +4045,7 @@ try:
     _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
                    encoding="utf-8").read()
     # The pins as written (--disable-pip), not a fresh resolution; part27 runs the step itself.
-    _rq_pa = re.search(r"^\s*for f in requirements\.txt requirements-bootstrap\.txt; do\n"
+    _rq_pa = re.search(r"^\s*for f in panel/install/requirements\.txt panel/install/requirements-bootstrap\.txt; do\n"
                        r"(?:.*\n)*?\s*pip-audit --strict --require-hashes --disable-pip -r \"\$\{f\}\" ",
                        _rq_sec, re.M)
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
@@ -4013,7 +4057,7 @@ try:
     # requirements.txt: a pip-compile lockfile beside its .in, compiled on the oldest supported
     # Python (Dependabot re-runs pip-compile on the Python the header names), every entry pinned to
     # one version and hashed, pip among them; installed and audited in CI, reviewed when it changes.
-    _bs_txt = open(os.path.join(_root, "requirements-bootstrap.txt"), encoding="utf-8").read()
+    _bs_txt = open(os.path.join(_root, "panel", "install", "requirements-bootstrap.txt"), encoding="utf-8").read()
     _bs_ents = [" ".join(_e.split()) for _e in re.sub(r"\\\n", " ", "\n".join(
         _l for _l in _bs_txt.splitlines() if not _l.lstrip().startswith("#"))).splitlines()
         if _e.strip()]
@@ -4033,16 +4077,16 @@ try:
           "oldest supported Python, from a directory Dependabot's pip entry reads",
           _rq_header_python(_bs_txt) == _RQ_PYTHONS[0][:-2]
           and "--output-file=requirements-bootstrap.txt" in _bs_txt
-          and os.path.exists(os.path.join(_root, "requirements-bootstrap.in"))
-          and re.search(r'- package-ecosystem: "pip"\n    directory: "/"\n',
+          and os.path.exists(os.path.join(_root, "panel", "install", "requirements-bootstrap.in"))
+          and re.search(r'- package-ecosystem: "pip"\n    directory: "/panel/install"\n',
                         open(os.path.join(_root, ".github", "dependabot.yml"),
                              encoding="utf-8").read()) is not None,
           repr(_rq_header_python(_bs_txt)))
     _bs_ci = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
     _bs_ci_checks = _bs_ci[_bs_ci.index("\n  checks:\n"):_bs_ci.index("\n  coverage:\n")]
     _bs_ci_boot = re.search(r"python -m pip install --quiet --require-hashes --only-binary :all: "
-                            r"-r requirements-bootstrap\.txt\n", _bs_ci_checks)
-    _bs_ci_req = re.search(r"python -m pip install [^\n]*-r requirements\.txt\n", _bs_ci_checks)
+                            r"-r panel/install/requirements-bootstrap\.txt\n", _bs_ci_checks)
+    _bs_ci_req = re.search(r"python -m pip install [^\n]*-r panel/install/requirements\.txt\n", _bs_ci_checks)
     _bs_dr = open(os.path.join(_root, ".github", "workflows", "dependency-review.yml"),
                   encoding="utf-8").read()
     check("requirements-bootstrap.txt: the test matrix installs it as install.sh does, before "
@@ -4063,7 +4107,8 @@ try:
     # it `"${PANEL_DIR}/venv/bin/pip" install`. Read every shell script (by extension or shebang),
     # comment lines dropped and `\` continuations joined; `python3-pip` (an apt package) is not pip.
     _PIP_UNHASHED_OK = {
-        ("install.sh", '"${PANEL_DIR}/requirements.txt"'):
+        # requirements.txt, which install_deps finds through panel_file.
+        ("install.sh", '"${req_txt}"'):
             "an update can land an older pinned commit whose requirements.txt has no hashes, and "
             "--require-hashes would fail that install; pip checks hashes by itself whenever the "
             "file carries them, which every current one does",
@@ -4118,11 +4163,11 @@ try:
                                           "    python -m pip install -r other.txt\n"
                                           "    apt-get install -y python3-pip git\n")[0]) == 3
           and _pip_verdicts("install.sh", '  "${P}/pip" install --quiet \\\n'
-                                          '      -r "${PANEL_DIR}/requirements.txt"\n'
+                                          '      -r "${req_txt}"\n'
                                           "  pip install --require-hashes --only-binary :all: "
                                           "-r x.txt\n") == ([], [
                                               ('pip" install --quiet -r '
-                                               '"${PANEL_DIR}/requirements.txt"'),
+                                               '"${req_txt}"'),
                                               ("pip install --require-hashes --only-binary :all: "
                                                "-r x.txt")]))
 
@@ -4285,7 +4330,7 @@ try:
           "with -I ran=%s, without ran=%s" % (_cas_ran_now, _cas_ran_old))
     # ...nor does any other Python root runs from install.sh or uninstall.sh.
     _cas_bare = []
-    for _sf in ("install.sh", "uninstall.sh"):
+    for _sf in ("install.sh", "panel/install/uninstall.sh"):
         for _ln, _line in enumerate(open(os.path.join(_root, _sf), encoding="utf-8"), 1):
             if _re.search(r"\bpython3 +(-c|-)( |$)", _line.split("#", 1)[0]):
                 _cas_bare.append("%s:%d" % (_sf, _ln))
@@ -4294,7 +4339,7 @@ try:
     # `-m` puts cwd on sys.path too, and venv's ensurepip child inherits the directory, which -I
     # on the parent does not cover: every `python3 -m` runs isolated AND from /.
     _cas_m = []
-    for _sf in ("install.sh", "uninstall.sh"):
+    for _sf in ("install.sh", "panel/install/uninstall.sh"):
         for _ln, _line in enumerate(open(os.path.join(_root, _sf), encoding="utf-8"), 1):
             _code = _line.split("#", 1)[0]
             if _re.search(r"\bpython3\b[^|;&]*\s-m\s", _code) and not (
@@ -4572,7 +4617,7 @@ try:
           in _banner, _banner[:200])
 
     # ── uninstall.sh must not report work it did not do ──────────────────────────────────────
-    _un_txt = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+    _un_txt = open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 
     def _un_fn(marker, end="\n}\n"):
         i = _un_txt.index(marker)
@@ -5202,7 +5247,7 @@ try:
         _shutil.rmtree(_ud_tmp, ignore_errors=True)
 
     # ── recover.sh must not pair a directory with another install's service user ─────────────
-    _rec_txt = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
+    _rec_txt = open(os.path.join(_root, "panel", "install", "recover.sh"), encoding="utf-8").read()
     _rec_fallback = _rec_txt[_rec_txt.index('for d in "/home/lgsmpanel/linuxgsm-panel"'):]
     _rec_fallback = _rec_fallback[:_rec_fallback.index("done\n")]
     check("recover.sh: choosing a different panel dir clears the discarded install's service user",
@@ -5621,7 +5666,7 @@ check("helper: restore copies exactly the four known members",
 # db_maintenance.repair must work from an explicit path — that is what lets a ROOT-OWNED copy run
 # under the system interpreter without importing the panel's config out of the checkout.
 check("db_maintenance: repair runs from an explicit path, no config import",
-      "argv[2]" in open(os.path.join(_root, "db_maintenance.py"), encoding="utf-8").read())
+      "argv[2]" in open(os.path.join(_root, "panel", "install", "db_maintenance.py"), encoding="utf-8").read())
 
 # ── register_routes is shrinking, and helpers do not drift back into it ──────────────────────
 # register_routes() was 6,570 lines holding 206 views AND 54 helper functions the views closed
@@ -5646,7 +5691,7 @@ if os.path.isdir(_routes_dir):
             if isinstance(_n, _ast_rr.FunctionDef)
             and any(isinstance(_d, _ast_rr.Call) and getattr(_d.func, "attr", "") == "route"
                     for _d in _n.decorator_list))
-_app_ast = _ast_rr.parse(open(os.path.join(_root, "app.py"), encoding="utf-8").read())
+_app_ast = _ast_rr.parse(open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read())
 _rr = next(n for n in _ast_rr.walk(_app_ast)
            if isinstance(n, _ast_rr.FunctionDef) and n.name == "register_routes")
 _rr_defs = [n for n in _rr.body if isinstance(n, _ast_rr.FunctionDef)]
@@ -5720,8 +5765,19 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # page, read-only, behind the file browser's read gates. /game-icon/<script> (the install page's game
 # icons, fetched and cached so the browser loads them from the panel's own origin) and
 # /api/server/<id>/wipe-schedule (read or set a Rust server's scheduled map / full wipe).
-check("register_routes: every one of the 236 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 236,
+# 238, was 236: two genuinely new views, panel/routes/mc_lists.py's read and change of a Java Minecraft
+# server's operators, whitelist and bans (/api/server/<id>/mc-lists/<list>, GET behind the file
+# browser's read gates, POST behind the console's send permission).
+# 242, was 238: four genuinely new views, panel/routes/modrinth_plugins.py's list, Modrinth search,
+# install and change (enable, disable, remove) of a PaperMC server's plugins
+# (/api/server/<id>/plugins[/search|/install|/change], each behind the file manager's permission).
+# 245, was 242: three genuinely new views, panel/routes/workshop.py's read and save of a server's Steam
+# Workshop list, Steam's titles for its ids, and the Mod IDs in a Project Zomboid server's downloaded
+# items (/api/server/<id>/workshop[/titles|/pz-mods], each behind the Settings tab's permission).
+# 246, was 245: one genuinely new view, panel/routes/game_config_form.py's re-read and save of the game
+# config file's Form view (/api/server/<id>/game-config/form, behind the Settings tab's permission).
+check("register_routes: every one of the 246 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 246,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -6374,11 +6430,11 @@ try:
                          "pr, report and marker": _cc_case(_cc_good, event="pull_request")})
     finally:
         _cc_marker[0] = False
-    check("codacy-coverage: a documentation-only pull request's marker passes with nothing uploaded; "
+    check("codacy-coverage: the marker of a pull request that changes nothing coverage measures passes with nothing uploaded; "
           "a push with it, or a pull request without it, and no report, is refused; a report beside "
           "it is uploaded",
           _cc_docs["pr, marker"][0] == 0 and not _cc_docs["pr, marker"][1]
-          and "documentation-only pull request" in _cc_docs["pr, marker"][3]
+          and "changes nothing coverage measures" in _cc_docs["pr, marker"][3]
           and all(_cc_docs[_k][0] != 0 and not _cc_docs[_k][1] and "holds no coverage.xml"
                   in _cc_docs[_k][3] for _k in ("push, marker", "pr, no marker"))
           and _cc_docs["pr, report and marker"][0] == 0
@@ -6709,7 +6765,7 @@ for _wf, _toks in _ci_installs:
                 _ci_unhashed.append("%s: %s" % (_wf, _path))
             # The panel's own set is all wheels: a source build would fetch its build tools
             # unpinned and unhashed, inside pip's isolated build environment.
-            if _path == "requirements.txt" and "--only-binary :all:" not in " ".join(_toks):
+            if _path == "panel/install/requirements.txt" and "--only-binary :all:" not in " ".join(_toks):
                 _ci_srcbuild.append("%s: %s" % (_wf, _path))
             _i += 2
             continue
@@ -6718,7 +6774,7 @@ for _wf, _toks in _ci_installs:
             continue
         _ci_named.append("%s: %s" % (_wf, _tk))
         _i += 1
-_ci_req_installs = sorted(_wf for _wf, _toks in _ci_installs if "requirements.txt" in _toks)
+_ci_req_installs = sorted(_wf for _wf, _toks in _ci_installs if "panel/install/requirements.txt" in _toks)
 check("workflows: no pip install names a package; every one installs a file, hash-checked, and the "
       "panel's own requirements.txt wheels only",
       len(_ci_installs) >= 10 and not _ci_named and not _ci_unhashed and not _ci_srcbuild
@@ -6842,7 +6898,7 @@ for _dp, _dns, _fns in os.walk(_root):
             _dki_need.append(_rp)
 check(".dockerignore: ...and keeps every file the fuzz build reads (requirements, build.sh, the "
       "harnesses, their seeds, the source)",
-      len(_dki_need) > 200 and "requirements.txt" in _dki_need
+      len(_dki_need) > 200 and "panel/install/requirements.txt" in _dki_need
       and ".clusterfuzzlite/build.sh" in _dki_need
       and any(_p.startswith("tests/fuzz/corpus/") for _p in _dki_need)
       and [_p for _p in _dki_need if _dki_out(_p)] == [],
@@ -7805,7 +7861,7 @@ check("_da: ...before the single quotes, or & would re-escape the & of &#39;",
 # that had "removed the panel" kept a root-owned helper tree, a weekly root cron still running
 # `npm install -g` every Sunday, and a host-wide vm.swappiness change — while the script's own
 # header and the README both described the removal as complete.
-_uninst = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+_uninst = open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 # Mentioning a path is not removing it — the `if [ -f <path> ]` guard mentions it too. Collect the
 # paths that actually appear as an argument to rm, so deleting the `rm` and keeping the guard (a
 # very easy edit to make by accident) reads as the regression it is.
@@ -8074,7 +8130,7 @@ def _rv_run():
                  "PANEL_RECOVER_SYSTEM_UNIT": os.path.join(_rv_root, "_no_system_unit"),
                  "PANEL_RECOVER_USER_UNIT": os.path.join(_rv_root, "_no_user_unit"),
                  "HOME": os.path.join(_rv_root, "_nohome")})
-    return _rv_sub.run(["bash", os.path.join(_root, "recover.sh"), "list-users"],
+    return _rv_sub.run(["bash", os.path.join(_root, "panel", "install", "recover.sh"), "list-users"],
                        capture_output=True, text=True, timeout=60, env=_env)
 
 
@@ -8325,7 +8381,7 @@ def _shell_part_ok(node, lits):
 
 _shell_bad, _shell_seen = [], 0
 for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
-                  + [os.path.join(_root, "app.py")]):
+                  + [os.path.join(_root, "panel", "install", "app.py")]):
     try:
         _tree = _sh_ast.parse(open(_py, encoding="utf-8").read())
     except SyntaxError:
@@ -8930,7 +8986,7 @@ check("bind: setup_wizard passes can_bind_address to bind_host_error",
 # credentials the operator had just revoked in panel.db.
 import ast as _2fa_ast                                                             # noqa: E402
 _2fa_sources = {
-    "manage.py cmd_disable_2fa": open(os.path.join(_root, "manage.py"), encoding="utf-8").read(),
+    "manage.py cmd_disable_2fa": open(os.path.join(_root, "panel", "install", "manage.py"), encoding="utf-8").read(),
     "tags.py": open(os.path.join(_root, "panel", "routes", "tags.py"), encoding="utf-8").read(),
     "admin_notifications.py": open(os.path.join(_root, "panel", "routes",
                                                 "admin_notifications.py"), encoding="utf-8").read(),
@@ -8957,7 +9013,7 @@ import sqlite3 as _dbm_sqlite                                                   
 import inspect as _tg_inspect                                                      # noqa: E402
 import json as _json                                                               # noqa: E402
 import importlib.util as _dbm_ilu                                                  # noqa: E402
-_dbm_spec = _dbm_ilu.spec_from_file_location("dbm_probe", os.path.join(_root, "db_maintenance.py"))
+_dbm_spec = _dbm_ilu.spec_from_file_location("dbm_probe", os.path.join(_root, "panel", "install", "db_maintenance.py"))
 _dbm = _dbm_ilu.module_from_spec(_dbm_spec)
 _dbm_spec.loader.exec_module(_dbm)
 
@@ -9437,8 +9493,7 @@ def _r19d_re_call(call, re_names, any_receiver=False):
 
 
 _anc_unclassified, _anc_seen = [], set()
-for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
-                 + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
+for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
     try:
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
@@ -9488,8 +9543,7 @@ _INLINE_DOLLAR_OK = {
     r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
 }
 _inline_bad, _inline_seen = [], set()
-for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
-                 + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
+for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
     _rel = os.path.relpath(_f, _root)
     try:
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
@@ -11545,7 +11599,7 @@ check("install.sh: ...and that is the name it actually writes",
       "install.sh does not write /etc/sudoers.d/%s" % _terminal_grant_name6)
 check("uninstall.sh: ...and the uninstaller removes that same file",
       "/etc/sudoers.d/%s" % _terminal_grant_name6
-      in open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read(),
+      in open(os.path.join(_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read(),
       "a general sudo rule would be left naming an account that no longer exists")
 
 _fn_src6 = _inst6[_fn_i6:_fn_j6 + 3] if _fn_j6 > _fn_i6 > -1 else ""

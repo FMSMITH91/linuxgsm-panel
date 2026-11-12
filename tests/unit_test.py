@@ -29,8 +29,8 @@ import sys
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # tests/ on the path too (ahead of the root), so `unit.partNN` resolves whichever directory this
-# is run from.
-sys.path[:0] = [os.path.join(_root, "tests"), _root]
+# is run from; panel/install/ after it, for app.py, manage.py and db_maintenance.py.
+sys.path[:0] = [os.path.join(_root, "tests"), _root, os.path.join(_root, "panel", "install")]
 
 # ── nothing in this suite may read or write the machine's own config.json (or its keys) ─────────
 # DATA_DIR is a fixed path inside the checkout, so a unit check that reached panel.core.config
@@ -2002,7 +2002,31 @@ _r16d_wrap_ts_handles()
 # part155 (review 1107 B: FastDL refused on an unread LinuxGSM release, scheduled wipes and the other
 # game operations) drives part12's app with every host call stubbed; imports part01 and 12.
 # part156 (review 1107's reboot, update, install and What's new fixes) drives part12's app and runs
-# nags.js in node with part47's helpers; imports part01, 05, 12 and 47.
+# nags.js in node with part47's helpers; runs install.sh functions through part06's extractor; imports part01, 05, 06, 12 and 47.
+# part166 (root clean-up, release 1: readers find a moved root file in panel/install/ or at the root)
+# runs install.sh's functions through part06's extractor; imports part01 and 06. part167 (release 2: the
+# files are in panel/install/) imports part01 and 166, so it follows 166. part168 (required update stops)
+# runs install.sh's functions through part06's extractor; imports part01 and 06.
+# part169 (CI: coverage, js coverage and Lighthouse skip what they do not measure) imports part01.
+# part170 (a Java Minecraft server's operators, whitelist and bans: the console lines and their refusals,
+# the routes on part12's app with every host call stubbed, the page and its card script in node) imports
+# part01, 12 and 75.
+# part171 (a PaperMC server's plugins from Modrinth: the checks on ids, queries, file names and hashes with the
+# network replaced, the routes on part12's app with every host call stubbed, the page and its card script in
+# node) imports part01, 12 and 75.
+# part172 (the console's timestamp gutter collapses while no line on screen is stamped: the page's
+# console functions in node, panel.css as text, the server page on part12's app) imports part01, 12
+# and 47.
+# part173 (a server's Steam Workshop list: ids, Mod IDs and the Project Zomboid ini with Steam's API replaced, the
+# routes on part12's app with every host call stubbed, the page and its card script in node) imports part01, 12
+# and 75.
+# part174 (Warn players first on the Schedule tab: the checks and the composed line, the line decoded and run with
+# stand-in scripts under bash, the routes on part12's app with every host call stubbed, the page and its script in
+# node) imports part01, 12 and 75.
+# part175 (the port check before a panel Start, and a port saved on the Settings tab followed: the
+# routes on part12's app with every host call stubbed, the page scripts in node) imports part01, 12 and 75.
+# part176 (the game config's Form view: the parsers and value writers on sample files, the routes on part12's
+# app with every host call stubbed, the page script in node) imports part01, 12 and 75.
 # part157 (the twenty-fifth review's page-script and test-gate fixes, builder D; it drives the runner's bound
 # unit.ts_nested too) drives part12's app; imports part01, 12, 99 and 143.
 # part158 (the console keeps an older log's lines through a read of the new one: the page's own
@@ -2040,7 +2064,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part132", "part133", "part134", "part135", "part136", "part137", "part138", "part140", "part141",
           "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150",
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
-          "part160", "part161", "part162", "part163", "part164", "part165", "part15")
+          "part160", "part161", "part162", "part163", "part164", "part165", "part166", "part167", "part168",
+          "part169", "part170", "part171", "part172", "part173", "part174", "part175", "part176", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

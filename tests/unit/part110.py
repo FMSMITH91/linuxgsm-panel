@@ -278,7 +278,8 @@ def _record_back110(client):
 def _repair110(client):
     base = os.path.join(_TMP110, "checkout")
     os.makedirs(os.path.join(base, "venv", "bin"))
-    for f in (("venv", "bin", "python3"), ("db_maintenance.py",)):
+    os.makedirs(os.path.join(base, "panel", "install"))
+    for f in (("venv", "bin", "python3"), ("panel", "install", "db_maintenance.py")):
         with open(os.path.join(base, *f), "w", encoding="utf-8") as fh:
             fh.write("")
     launched = []

@@ -369,7 +369,7 @@ from panel.services.bots import discord as _dc66  # noqa: E402
 
 def _py_files66():
     """app.py and every .py under panel/."""
-    paths = [os.path.join(_root, "app.py")]
+    paths = [os.path.join(_root, "panel", "install", "app.py")]
     for _dir, _sub, _files in os.walk(os.path.join(_root, "panel")):
         paths += [os.path.join(_dir, _f) for _f in _files if _f.endswith(".py")]
     return sorted(paths)

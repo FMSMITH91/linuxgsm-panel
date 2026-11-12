@@ -33,6 +33,16 @@ except Exception:  # noqa: BLE001 - no eventlet: the plain module is the only on
 # self-update, integrity-repair and the db_maintenance lookup all need the CHECKOUT root.
 from panel import REPO_ROOT as _REPO_ROOT
 PANEL_DIR = str(_REPO_ROOT)
+# Where the installer-read files live (app.py, manage.py, db_maintenance.py, VERSION,
+# release-signers, requirements*.txt, recover.sh, uninstall.sh). They sat at the checkout root
+# before the root clean-up; a commit from before it still has them there.
+INSTALL_REL = "panel/install"
+
+
+def install_dir():
+    """PANEL_DIR's panel/install/, read from PANEL_DIR at each call."""
+    return os.path.join(PANEL_DIR, "panel", "install")
+
 
 # The branch the panel tracks out of the box. Switching to any other branch is opt-in
 # (panel_switch_branch) and stored in config as "panel_branch".
@@ -1446,7 +1456,7 @@ def _version_file():
     kept by hand before dates (a snapshot or rollback of an older install) and is shown as it is.
     """
     try:
-        with open(os.path.join(PANEL_DIR, "VERSION"), encoding="utf-8") as f:
+        with open(os.path.join(install_dir(), "VERSION"), encoding="utf-8") as f:
             raw = f.read().strip()
     except (OSError, UnicodeDecodeError):
         return "unknown"
@@ -2073,8 +2083,19 @@ def _release_key_text():
                 return fh.read(65536).strip()
         except (OSError, UnicodeDecodeError):
             return ""
-    out, _, rc = _git(["cat-file", "blob", "HEAD:" + _RELEASE_SIGNERS], timeout=10)
-    return out.strip() if rc == 0 else ""
+    return _release_key_at("HEAD")
+
+
+def _release_key_at(commit):
+    """Return `commit`'s release key as text, or "" when it has none.
+
+    It is in panel/install/, or at the checkout root in a commit from before the root clean-up.
+    """
+    for rel in (INSTALL_REL + "/" + _RELEASE_SIGNERS, _RELEASE_SIGNERS):
+        out, _, rc = _git(["cat-file", "blob", commit + ":" + rel], timeout=10)
+        if rc == 0:
+            return out.strip()
+    return ""
 
 
 def _release_key_at_floor():
@@ -2088,8 +2109,7 @@ def _release_key_at_floor():
     head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
     if hrc != 0 or not re.fullmatch(r"[0-9a-f]{40}", floor) or head.strip() != floor:
         return ""
-    out, _, rc = _git(["cat-file", "blob", floor + ":" + _RELEASE_SIGNERS], timeout=10)
-    return out.strip() if rc == 0 else ""
+    return _release_key_at(floor)
 
 
 def _release_signature_valid(key, sha, branch, sig):
@@ -2146,6 +2166,99 @@ def _r17a_unread_status(cur_ver, cur_sha, branch):
     return {"git": True, "fetched": False, "update_available": False,
             "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
             "message": "Couldn't read how far behind the update source this panel is."}
+
+
+# ─── Required stops: releases an update may not skip (install.sh _apply_update_stop) ─────────
+# The same rule as the installer's, so the card offers what the installer would install: the oldest
+# stop listed in the target commit's panel/install/update-stops that lies strictly between HEAD and
+# that target, on the branch's first-parent line. The newest release is offered after it.
+_UPDATE_STOPS = INSTALL_REL + "/update-stops"
+
+
+class _StopUnread(Exception):
+    """A git read the stop rule needs failed, so whether a stop applies cannot be told."""
+
+
+def _stop_ids(commit):
+    """The listed ids in `commit`'s stop list that are commits here, in order ([] when it has none)."""
+    lst, _, lrc = _git(["ls-tree", commit, "--", _UPDATE_STOPS], timeout=10)
+    if lrc != 0:
+        raise _StopUnread
+    if not lst.strip():
+        return []
+    out, _, rc = _git(["cat-file", "blob", commit + ":" + _UPDATE_STOPS], timeout=10)
+    if rc != 0:
+        raise _StopUnread
+    ids = [w[0] for w in (ln.split() for ln in out.splitlines()) if w and re.fullmatch(r"[0-9a-f]{40}", w[0])]
+    return [i for i in ids if _is_commit(i)]
+
+
+def _is_commit(sha):
+    """Whether `sha` names a commit here: rev-parse --quiet answers 1 for one that does not."""
+    _, _, rc = _git(["rev-parse", "--verify", "--quiet", sha + "^{commit}"], timeout=10)
+    if rc not in (0, 1):
+        raise _StopUnread
+    return rc == 0
+
+
+def _is_ancestor(older, newer):
+    _, _, rc = _git(["merge-base", "--is-ancestor", older, newer], timeout=10)
+    if rc not in (0, 1):
+        raise _StopUnread
+    return rc == 0
+
+
+def _stops_ahead(target_sha):
+    """The listed stops strictly between HEAD and `target_sha` (forward only), first-parent unchecked."""
+    head, _, hrc = _git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], timeout=10)
+    if hrc != 0:
+        raise _StopUnread
+    head = head.strip()
+    return [s for s in _stop_ids(target_sha) if s not in (head, target_sha)
+            and _is_ancestor(head, s) and _is_ancestor(s, target_sha)]
+
+
+def _update_stop(target_sha, ref):
+    """The oldest required stop between HEAD and `target_sha` on `ref`'s first-parent line, or None.
+
+    Raises _StopUnread when a read it needs fails: "no stop" would offer the target, and the
+    installer, reading the list itself, could then install a stop whose checks the card never asked.
+    """
+    cands = _stops_ahead(target_sha)
+    if not cands:
+        return None
+    line, _, lrc = _git(["rev-list", "--first-parent", ref], timeout=30)
+    if lrc != 0:
+        raise _StopUnread
+    on_line = set(line.split())
+    stop = None
+    for s in (c for c in cands if c in on_line):
+        if stop is None or _is_ancestor(s, stop):
+            stop = s
+    return stop
+
+
+def _take_update_stop(target_sha, target_state, ref, signed):
+    """(target, CI state, commits behind it) with any required stop applied.
+
+    The stop replaces `target_sha` when one lies between HEAD and it (behind is then counted to the
+    stop). Target None means the stop cannot be installed yet (not signed, or its checks are not
+    passing), which the caller offers as no update: the installer would not move past the stop.
+    State "unread" with target None: a read the rule needs failed, which the caller reports as such.
+    """
+    try:
+        stop = _update_stop(target_sha, ref)
+    except _StopUnread:
+        return None, "unread", None
+    if stop is None:
+        return target_sha, target_state, None
+    if not signed(stop):
+        return None, "unsigned", None
+    state = _remote_ci_state(stop)
+    if state != "passing":
+        return None, state, None
+    n, _, rc = _git(["rev-list", "--first-parent", "--count", "HEAD.." + stop])
+    return stop, state, int(n.strip()) if rc == 0 and n.strip().isdecimal() else None
 
 
 def _compute_update_status():
@@ -2368,7 +2481,17 @@ def _compute_update_status():
         return out
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
+    # A required stop between HEAD and it is offered first, as the installer would install it.
+    stop_sha, target_state, stop_behind = _take_update_stop(target_sha, target_state, ref, signed)
+    if target_state == "unread":
+        return _r17a_unread_status(cur_ver, cur_sha, branch)
+    if stop_sha is None:
+        return {**base, "update_available": False, "ci_state": target_state, "behind": behind_n,
+                "behind_tip": behind_n, "target_sha": target_sha,
+                "remote_version": version_for_commit(ref) or "?", "changes": []}
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
+    if stop_sha != target_sha:
+        target_sha, behind_target = stop_sha, stop_behind or behind_target
     # Don't nag if everything between here and the verified target is docs/CI/tests only — those
     # changes don't affect the running panel. (A later commit with real code will move the target
     # up and re-trigger the badge once it passes CI.) See _no_runtime_update.
@@ -3072,11 +3195,11 @@ def panel_repair_database():
     db_maintenance (health-check → rebuild readable data via SQLite .recover, else restore the last
     healthy backup → optimize → re-check), then starts the service again — the flagged database is
     copied aside first and never deleted. Same stop/repair/start the auto-updater uses. (ok, msg)."""
-    base = PANEL_DIR          # the checkout root: venv/ and db_maintenance.py both live there
+    base = PANEL_DIR          # the checkout root: venv/ lives there, db_maintenance.py in panel/install/
     py = os.path.join(base, "venv", "bin", "python3")
     if not os.path.exists(py):
         py = os.path.join(base, "venv", "bin", "python")
-    dbm = os.path.join(base, "db_maintenance.py")
+    dbm = os.path.join(install_dir(), "db_maintenance.py")
     if not os.path.exists(py) or not os.path.exists(dbm):
         return False, "The repair tool isn't available on this install."
     # Asked of the record itself, before this call announces: a second click (another tab, another
@@ -5295,7 +5418,7 @@ def panel_diagnostics(db_check=None, unit=None):
 # root refreshes them. Compared by git blob id, computed here in Python (the files are read, never
 # executed), against one `git ls-tree HEAD`.
 _ROOT_PIECES = (("panel-helper", "tools/panel-helper"), ("install.sh", "install.sh"),
-                ("db_maintenance.py", "db_maintenance.py"))
+                ("db_maintenance.py", INSTALL_REL + "/db_maintenance.py"))
 _ROOT_PIECE_MAX = 16 * 1024 * 1024
 _root_pieces_cache = {"at": 0.0, "res": None}
 _ROOT_PIECES_TTL = 60

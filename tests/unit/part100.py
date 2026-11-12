@@ -69,7 +69,7 @@ def _force_hits100(paths):
     return hits
 
 
-_hits100 = _force_hits100(["panel", "tools", "app.py", "install.sh"])
+_hits100 = _force_hits100(["panel", "tools", "install.sh"])
 _ctl100 = os.path.join(_TMP100, "ctl")
 os.makedirs(_ctl100)
 with open(os.path.join(_ctl100, "x.py"), "w", encoding="utf-8") as _fh100:

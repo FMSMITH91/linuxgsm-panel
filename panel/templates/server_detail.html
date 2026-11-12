@@ -231,7 +231,9 @@
         {% endif %}
       </div>
       <div class="card-body p-0">
-        <div class="console-output" id="console-output">
+        {# ts-none: the server-rendered tail is history and never carries a stamp, so the gutter starts
+           collapsed (server_detail.js updateTsNotice opens it when a stamped line arrives). #}
+        <div class="console-output ts-none" id="console-output">
           {% if not _can_view_console %}<div class="text-secondary">You don't have permission to view this server's console.</div>
           {% else %}{% for line in console_lines if line.strip() %}<div class="console-line" data-no-i18n>{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}{% endif %}
         </div>
@@ -383,6 +385,202 @@
 {% endmacro %}
 {% endif %}
 
+{% if mc_lists_supported(server.game_type) and can_download_log %}
+{# A Java Minecraft server's operators, whitelist and bans (panel/routes/mc_lists.py): read from the
+   server's own files, changed by console command while it runs. Viewing needs the file manager's
+   permission (can_download_log); changing needs the command box's (can_send_command). The list box
+   has a fixed height, so the rows arriving after the first paint move nothing below the card. #}
+{% macro panel_mclists() %}
+<div class="card mb-3 panel-movable" data-panel="mclists" data-mtab="console" id="mcl-card"
+     data-can-change="{{ '1' if can_send_command else '0' }}">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Player Lists up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Player Lists down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Player Lists"><i class="bi bi-eye-slash"></i></button>
+  </span>
+  <div class="card-header"><i class="bi bi-person-lines-fill"></i> Player Lists</div>
+  <div class="card-body">
+    <div class="nav nav-tabs small mb-2 flex-wrap" role="tablist" aria-label="Player Lists">
+      <button type="button" class="nav-link active py-1 px-2" role="tab" id="mcl-tab-ops" aria-selected="true"
+              aria-controls="mcl-panel" data-mcl-tab="ops" data-action="mclTab" data-args='["ops"]'>Operators</button>
+      <button type="button" class="nav-link py-1 px-2" role="tab" id="mcl-tab-whitelist" aria-selected="false"
+              aria-controls="mcl-panel" tabindex="-1" data-mcl-tab="whitelist" data-action="mclTab" data-args='["whitelist"]'>Whitelist</button>
+      <button type="button" class="nav-link py-1 px-2" role="tab" id="mcl-tab-bans" aria-selected="false"
+              aria-controls="mcl-panel" tabindex="-1" data-mcl-tab="bans" data-action="mclTab" data-args='["bans"]'>Banned players</button>
+      <button type="button" class="nav-link py-1 px-2" role="tab" id="mcl-tab-ipbans" aria-selected="false"
+              aria-controls="mcl-panel" tabindex="-1" data-mcl-tab="ipbans" data-action="mclTab" data-args='["ipbans"]'>Banned IPs</button>
+    </div>
+    <div id="mcl-panel" role="tabpanel" aria-labelledby="mcl-tab-ops">
+      <div class="form-check form-switch small mb-2" id="mcl-wl-row" hidden>
+        <input class="form-check-input" type="checkbox" role="switch" id="mcl-wl-on" disabled
+               data-action="mclWhitelistSwitch" data-args='["@self"]' data-on="change">
+        <label class="form-check-label" for="mcl-wl-on">Whitelist on: only players on this list can join</label>
+      </div>
+      <div class="border rounded small" style="height:12rem; overflow-y:auto;" id="mcl-box" aria-live="polite">
+        <div class="text-secondary p-2" id="mcl-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
+        <table class="table table-sm mb-0 align-middle" id="mcl-table" hidden>
+          <thead class="visually-hidden"><tr><th scope="col">Player or address</th><th scope="col">Details</th>
+            <th scope="col">Actions</th></tr></thead>
+          <tbody id="mcl-rows" data-no-i18n></tbody>
+        </table>
+      </div>
+      {% if can_send_command %}
+      <form id="mcl-form" class="d-flex flex-wrap gap-2 mt-2" data-action="mclAdd" data-args='["@event"]' data-on="submit">
+        <input type="text" id="mcl-value" class="form-control form-control-sm" style="flex:1 1 9rem; min-width:0;"
+               maxlength="16" autocomplete="off" spellcheck="false" placeholder="Player name"
+               aria-label="Player name" disabled>
+        <input type="text" id="mcl-reason" class="form-control form-control-sm" style="flex:2 1 12rem; min-width:0;"
+               maxlength="100" autocomplete="off" placeholder="Reason (optional)" aria-label="Reason (optional)" hidden disabled>
+        <button type="submit" class="btn btn-sm btn-primary" id="mcl-add" disabled><i class="bi bi-plus-lg"></i> <span id="mcl-add-label">Add</span></button>
+      </form>
+      <div class="small mt-1" id="mcl-msg" role="status"></div>
+      {% else %}
+      <div class="form-text mt-2">Changing these lists needs permission to send console commands.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endmacro %}
+{% endif %}
+
+{% if plugins_supported(server.game_type) and can_download_log %}
+{# A PaperMC server's plugins (panel/routes/modrinth_plugins.py): search Modrinth, install a build the
+   panel host downloaded and checked, and enable, disable or remove the jars in serverfiles/plugins/.
+   Everything here needs the file manager's permission (can_download_log): a plugin is code put on
+   the server, as an uploaded jar is. Both boxes have a fixed height, so rows arriving after the
+   first paint move nothing below the card. #}
+{% macro panel_plugins() %}
+<div class="card mb-3 panel-movable" data-panel="plugins" data-mtab="console" id="mdr-card">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Plugins up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Plugins down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Plugins"><i class="bi bi-eye-slash"></i></button>
+  </span>
+  <div class="card-header"><i class="bi bi-puzzle"></i> Plugins</div>
+  <div class="card-body">
+    <div class="small text-secondary mb-2" id="mdr-version">&nbsp;</div>
+    <form id="mdr-form" class="d-flex flex-wrap gap-2 mb-2" role="search" data-action="mdrSearch"
+          data-args='["@event"]' data-on="submit">
+      <input type="search" id="mdr-q" class="form-control form-control-sm" style="flex:1 1 10rem; min-width:0;"
+             maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search Modrinth plugins"
+             aria-label="Search Modrinth plugins">
+      <button type="submit" class="btn btn-sm btn-primary" id="mdr-search"><i class="bi bi-search"></i>
+        <span>Search</span></button>
+    </form>
+    <div class="border rounded small mb-2" style="height:12rem; overflow-y:auto;" id="mdr-results-box"
+         aria-live="polite">
+      <div class="text-secondary p-2" id="mdr-results-note">Search for a plugin, or leave the box empty to see the most downloaded.</div>
+      <ul class="list-unstyled mb-0" id="mdr-results" data-no-i18n></ul>
+    </div>
+    <div class="small fw-semibold mb-1">Installed</div>
+    <div class="border rounded small" style="height:10rem; overflow-y:auto;" id="mdr-installed-box"
+         aria-live="polite">
+      <div class="text-secondary p-2" id="mdr-installed-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
+      <ul class="list-unstyled mb-0" id="mdr-installed" data-no-i18n></ul>
+    </div>
+    <div class="small mt-1" id="mdr-msg" role="status"></div>
+    <div class="form-text">Changes take effect when the server next starts.</div>
+  </div>
+</div>
+{% endmacro %}
+{% endif %}
+
+{% set _wsc_kind = workshop_kind(server.game_type) if can_download_log else None %}
+{% if _wsc_kind %}
+{# A server's Steam Workshop list (panel/routes/workshop.py): LinuxGSM's workshopmods (an ordered list of
+   item or collection ids), its wscollectionid (one collection, gmod and csgo), or Project Zomboid's
+   WorkshopItems= and Mods= in its own ini. Reading and saving need the Settings tab's permission
+   (can_download_log); Download now is the maintenance menu's workshop-update, shown only to whom that
+   menu offers it. Every box has a fixed height, so rows arriving after the first paint move nothing
+   below the card. Titles come from Steam through the panel and are drawn as text. #}
+{% set _wsc_dl = maintenance|selectattr('cmd', 'equalto', 'workshop-update')|list %}
+{% macro panel_workshop() %}
+<div class="card mb-3 panel-movable" data-panel="workshop" data-mtab="console" id="wsc-card" data-kind="{{ _wsc_kind }}">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Steam Workshop up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Steam Workshop down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Steam Workshop"><i class="bi bi-eye-slash"></i></button>
+  </span>
+  <div class="card-header"><i class="bi bi-collection"></i> Steam Workshop</div>
+  <div class="card-body">
+    {% if _wsc_kind == 'collection' %}
+    <form id="wsc-coll-form" class="d-flex flex-wrap gap-2 mb-1" data-action="wscSaveCollection"
+          data-args='["@event"]' data-on="submit">
+      <input type="text" id="wsc-coll" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+             maxlength="300" autocomplete="off" spellcheck="false" placeholder="Collection id or Workshop link"
+             aria-label="Workshop collection id or link">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-save"></i>
+        <span>Save collection</span></button>
+    </form>
+    <div class="small text-secondary text-break" style="min-height:3.2em;" id="wsc-coll-info">
+      <i class="bi bi-hourglass-split"></i></div>
+    <div class="form-text">The game downloads this collection when it starts: a change applies at the next restart.</div>
+    {% else %}
+    <div class="small fw-semibold mb-1">{% if _wsc_kind == 'pz' %}Workshop items{% else %}Workshop items and collections, in load order{% endif %}</div>
+    <div class="border rounded small mb-1" style="height:11rem; overflow-y:auto;" aria-live="polite">
+      <div class="text-secondary p-2" id="wsc-items-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
+      <ul class="list-unstyled mb-0" id="wsc-items" data-no-i18n></ul>
+    </div>
+    <form class="d-flex flex-wrap gap-2 mb-2" data-action="wscAdd" data-args='["items","@event"]' data-on="submit">
+      <input type="text" id="wsc-items-add" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+             maxlength="300" autocomplete="off" spellcheck="false" placeholder="Workshop id or link"
+             aria-label="Add a Workshop id or link">
+      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i>
+        <span>Add to list</span></button>
+    </form>
+    {% if _wsc_kind == 'pz' %}
+    <div class="small fw-semibold mb-1">Mod IDs to load</div>
+    <div class="border rounded small mb-1" style="height:8rem; overflow-y:auto;" aria-live="polite">
+      <div class="text-secondary p-2" id="wsc-mods-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
+      <ul class="list-unstyled mb-0" id="wsc-mods" data-no-i18n></ul>
+    </div>
+    <form class="d-flex flex-wrap gap-2 mb-1" data-action="wscAdd" data-args='["mods","@event"]' data-on="submit">
+      <input type="text" id="wsc-mods-add" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+             maxlength="65" autocomplete="off" spellcheck="false" placeholder="Mod ID"
+             aria-label="Add a Mod ID">
+      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i>
+        <span>Add to list</span></button>
+    </form>
+    <div class="small text-secondary mb-1">Mod IDs found in downloaded items:</div>
+    <div class="d-flex flex-wrap gap-1 mb-2 small" style="height:3.5rem; overflow-y:auto;" id="wsc-found"
+         aria-live="polite" data-no-i18n></div>
+    {% endif %}
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <button type="button" class="btn btn-sm btn-primary" data-action="wscSave"><i class="bi bi-save"></i>
+        <span>Save Workshop list</span></button>
+      {% if _wsc_kind == 'mods' and _wsc_dl %}
+      <button type="button" class="btn btn-sm btn-outline-secondary"
+              data-action="serverAction" data-args='["workshop-update","@self",true,true]'>
+        <i class="bi bi-cloud-download"></i> <span>Download now</span></button>
+      {% endif %}
+    </div>
+    {% if _wsc_kind == 'pz' %}
+    <div class="form-text">Project Zomboid downloads Workshop items when the server next starts, so the Mod IDs of new items show here after that start.</div>
+    {% else %}
+    <div class="form-text">Saving writes workshopmods in this server's LinuxGSM config. LinuxGSM's workshop-update downloads the list and expands each collection into its items.</div>
+    {% endif %}
+    {% endif %}
+    <div class="small mt-1" style="min-height:1.5em;" id="wsc-msg" role="status"></div>
+  </div>
+</div>
+{% endmacro %}
+{% endif %}
+
 {# ── Console-tab panels, emitted in THIS user's order ──────────────────────────────────────────
    The declared list is built from the same conditions that define the macros above, so a stored key
    can never reach a macro that was not defined — which is exactly what stops a saved layout
@@ -397,13 +595,18 @@
      or has_permission('view_console') or can_send_command) else []) + ['controls', 'players'] %}
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
 {% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
+{% if mc_lists_supported(server.game_type) and can_download_log %}{% set panel_keys = panel_keys + ['mclists'] %}{% endif %}
+{% if plugins_supported(server.game_type) and can_download_log %}{% set panel_keys = panel_keys + ['plugins'] %}{% endif %}
+{% if _wsc_kind %}{% set panel_keys = panel_keys + ['workshop'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
 {# The name a hidden panel's chip shows: its card's title. `key|capitalize` printed "Content" for
    the Game Content card and "Controls" (no catalog entry) for the other, and the live chip
    (hidePanel) read the card header's raw text, "controls" for the card that has none. One table,
    handed to the page script as data-labels. #}
 {% set DETAIL_LABELS = {'controls': 'Controls', 'console': 'Live Console', 'players': 'Players',
-                        'commands': 'Commands', 'content': 'Game Content'} %}
+                        'commands': 'Commands', 'content': 'Game Content',
+                        'mclists': 'Player Lists', 'plugins': 'Plugins',
+                        'workshop': 'Steam Workshop'} %}
 {# data-declared, not a variable read in {% block scripts %}: Jinja blocks have separate
    scopes, so panel_keys is not visible there. #}
 <div id="detail-console" data-region="detail_console" data-declared='{{ panel_keys|tojson }}'
@@ -414,6 +617,9 @@
   {% elif key == 'players' %}{{ panel_players() }}
   {% elif key == 'commands' %}{{ panel_commands() }}
   {% elif key == 'content' %}{{ panel_content() }}
+  {% elif key == 'mclists' %}{{ panel_mclists() }}
+  {% elif key == 'plugins' %}{{ panel_plugins() }}
+  {% elif key == 'workshop' %}{{ panel_workshop() }}
   {% endif %}
   {% endfor %}
 </div>
@@ -653,4 +859,7 @@ var _CMPA_HIST_SCOPE = {{ hist_scope|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/console_history.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_detail.js') }}"></script>
+{% if mc_lists_supported(server.game_type) and can_download_log %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_mclists.js') }}"></script>{% endif %}
+{% if plugins_supported(server.game_type) and can_download_log %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_plugins.js') }}"></script>{% endif %}
+{% if can_download_log and workshop_kind(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_workshop.js') }}"></script>{% endif %}
 {% endblock %}

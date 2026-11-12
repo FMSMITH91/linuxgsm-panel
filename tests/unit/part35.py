@@ -670,8 +670,9 @@ def _p35_loops_record():
 # app.py and every module under panel/ (review 1107: a fixed list missed #483's wipe sweep in
 # panel/routes/wipe_schedule.py). The same files part23's beat gate reads (review 1012d: _shared.py
 # was left out here, so a loop there that slept before its first pass would have gone unread).
-_LOOP_FILES35 = ("app.py",) + tuple(sorted(p.relative_to(_REPO35).as_posix()
-                                           for p in (_REPO35 / "panel").rglob("*.py")))
+# panel/install/app.py is under panel/.
+_LOOP_FILES35 = tuple(sorted(p.relative_to(_REPO35).as_posix()
+                             for p in (_REPO35 / "panel").rglob("*.py")))
 from unit.part23 import _LOOP_FILES23  # noqa: E402
 check("loops: the first-pass gate reads every file part23's beat gate reads",
       set(_LOOP_FILES35) == set(_LOOP_FILES23), repr(sorted(set(_LOOP_FILES23) ^ set(_LOOP_FILES35))))

@@ -66,8 +66,8 @@ superadmin, or join the host to a tailnet of their own with Tailscale SSH on. Fi
 neither, so "my install was already set up" is not an all-clear. On each install set up on an older
 commit:
 
-1. **Superadmins.** `sudo linuxgsm-panel-recover list-users` (or `manage.py list-users` in the panel's
-   directory) lists every account, marking each `[superadmin]`. Look for one you did not create.
+1. **Superadmins.** `sudo linuxgsm-panel-recover list-users` (or `panel/install/manage.py list-users` in the
+   panel's directory) lists every account, marking each `[superadmin]`. Look for one you did not create.
 2. **The tailnet.** On the panel's host, `tailscale status --json | jq -r .CurrentTailnet.Name` names the
    tailnet the host is in, and `tailscale status` lists the machines that can reach it. If the tailnet
    is not yours, `sudo tailscale logout`. `tailscale serve status` shows what the host publishes, and
@@ -95,9 +95,9 @@ What it does not cover:
 
 - **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
   with no key yet has nothing to check against. After the first update, check that
-  `/usr/local/lib/linuxgsm-panel/release-signers` (root install) or the checkout's `release-signers`
-  (per-user) is the release key: `ssh-keygen -lf` on it should print the same fingerprint as the
-  repository's `release-signers` on GitHub.
+  `/usr/local/lib/linuxgsm-panel/release-signers` (root install) or the checkout's
+  `panel/install/release-signers` (per-user) is the release key: `ssh-keygen -lf` on it should print the same fingerprint as the
+  repository's `panel/install/release-signers` on GitHub.
 - **A host that has no key yet holds** every update, saying so, until it is updated once by hand
   through its old installer or with `PANEL_ALLOW_UNSIGNED_UPDATE=1` over SSH.
 - **The test host's deploy** ships the commit's own installer. It runs only when started by hand,

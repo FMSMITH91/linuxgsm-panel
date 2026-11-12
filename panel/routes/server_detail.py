@@ -26,6 +26,7 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window as _mon_end_offline_window,
                                        _mark_expected_offline)
 from panel.services import lgsm_players as _lgp
+from panel.services import port_check as _pck
 import concurrent.futures
 import functools
 import posixpath
@@ -254,6 +255,66 @@ def _noop_power_refusal(gs, remote, action):
     return None
 
 
+def _pck_rules():
+    """manage_servers' port rules, as game_ports' mover takes them (imported here: a route module)."""
+    from panel.routes.manage_servers import sibling_port_blocks, withheld_game_ports
+    return _pck.move_rules(withheld_game_ports, sibling_port_blocks)
+
+
+def _pck_gate(gs, remote, action, actor, port_gate):
+    """The port check before a panel Start, or a Restart of a server not online: a refusal, or None.
+
+    `port_gate` is None for callers that never check (the chat bots, the bulk worker), "check" for
+    the page's action endpoint, and "force" for its "Start anyway", which skips the check and is
+    audited as a forced start. See panel/services/port_check.py.
+    """
+    if port_gate is None or not _pck.wants_check(gs, action):
+        return None
+    if port_gate == "force":
+        log_action(actor, f"force_{action}_server", target=gs.name, server=gs,
+                   detail="started with the port check skipped")
+        return None
+    return _pck.start_refusal(gs, remote)
+
+
+def _pck_power_refusal(gs, remote, action, actor, port_gate):
+    """_noop_power_refusal, then the port check (_pck_gate). -> the refusal, or None.
+
+    With neither, a Start or Restart goes ahead, so a port saved while the server ran is moved to
+    first (port_check.follow_pending): the start binds it, and the panel watches it from now on.
+    """
+    refusal = _noop_power_refusal(gs, remote, action) or _pck_gate(gs, remote, action, actor, port_gate)
+    if refusal is None and action in ("start", "restart") and gs.pending_port:
+        _pck.follow_pending(gs, remote, _pck_rules())
+    return refusal
+
+
+def _pck_after_save(gs, settings):
+    """Follow a game port the Settings tab just saved (port_check.after_settings_save). -> a note, or None.
+
+    Never raises: the save has happened, and a port not followed now is followed by the next panel
+    start's re-read.
+    """
+    if _pck.saved_port(gs, settings) is None:
+        return None
+    try:
+        return _pck.after_settings_save(gs, settings, _live_run_state(gs, gs.remote), _pck_rules())
+    except Exception:
+        db.session.rollback()
+        _log.warning("a port saved on the Settings tab could not be followed", exc_info=True)
+        return None
+
+
+def _pck_save_body(gs, data, ok, msg):
+    """The Settings tab save's reply body, with the note on a game port it saved (_pck_after_save)."""
+    body = {"success": ok, "message": i18n.tr(msg or ("Saved" if ok else "Failed"))}
+    # The settings map only: the raw editor's text is the whole file, not a key that was set.
+    note = _pck_after_save(gs, data.get("settings")) if ok and data.get("raw") is None else None
+    if note:
+        body["port_note"] = i18n.tr(note)   # the Settings tab shows it beside "Saved"
+    return body
+
+
 def _after_power_action(app, gs, remote, short_name, action, rc):
     """The bookkeeping after an action that exited `rc`: port scan, queued flags, CPU priority.
 
@@ -412,7 +473,7 @@ def _r39a_wipe_refusal(server_id, name, action):
                          "it has finished.", name=name, action=action)
 
 
-def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
+def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_gate=None):
     """Execute a whitelisted action (permission already checked).
 
     Returns (ok, message). Long actions run in the background.
@@ -428,6 +489,9 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     then have nothing more to say, leaving the chat silent on whether it worked. The
     synchronous branch never calls it, because there the return value already IS the
     outcome.
+
+    `port_gate`: see _pck_gate. A Start or Restart that goes ahead moves the stored port to one
+    saved on the Settings tab while the server ran (port_check.follow_pending).
     """
     # The host is being rebooted cleanly: its plan has decided who brings each server back, and a
     # start, stop or update in the middle of the stop phase would be a second hand on the same
@@ -451,7 +515,7 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     if action in ("start", "stop", "restart") and gs.reboot_restore:
         _hr.exclude_row(gs, actor, action, origin=origin)
     # A power action that is already a no-op is refused — see _noop_power_refusal.
-    refusal = _noop_power_refusal(gs, remote, action)
+    refusal = _pck_power_refusal(gs, remote, action, actor, port_gate)
     if refusal:
         return False, refusal
     if action in ("start", "stop", "restart"):
@@ -968,6 +1032,15 @@ def register(app):
     _register_schedules(app)
     _register_commands(app)
     _cmpa_register_logs(app)
+    # A Minecraft server's operators, whitelist and bans (app.py is at its size limit).
+    from panel.routes import mc_lists as _mcl_routes
+    _mcl_routes.register(app)
+    # A PaperMC server's plugins from Modrinth (app.py is at its size limit).
+    from panel.routes import modrinth_plugins as _mdr_routes
+    _mdr_routes.register(app)
+    # A server's Steam Workshop list: items, a collection, or Project Zomboid's ini (app.py is at its size limit).
+    from panel.routes import workshop as _wsc_routes
+    _wsc_routes.register(app)
     # Published on `app` because the module-level Telegram and Discord command bots drive a
     # start/stop/restart through this exact function, rather than a copy of its logic. It used to
     # be assigned at the end of register_routes(); now the module that owns it does the publishing,
@@ -1115,9 +1188,9 @@ def _register_actions(app):
                             "message": i18n.tr("Unsupported action: {action}", action=action)}), 400
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
+        force = _r13b_json_flag(data, "force", False)
         try:
-            ok, msg = _run_action(app, gs, gs.remote, action, current_user)
-            return jsonify({"success": ok, "message": _r15e_said(msg)})
+            return jsonify(_pck_reply(app, gs, action, force))
         except SQLAlchemyError as e:
             # The form route's answer (server_action): a commit that raised — an audit row, a
             # status — is not the action failing, and a long one is already running. This answered
@@ -1133,6 +1206,15 @@ def _register_actions(app):
             return jsonify({"success": False, "code": "action_unsure", "message": i18n.tr(_R25B_ACTION_UNSURE)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+
+def _pck_reply(app, gs, action, force):
+    """api_server_action's reply body: _run_action with the port check, and a port refusal flagged."""
+    ok, msg = _run_action(app, gs, gs.remote, action, current_user, port_gate="force" if force else "check")
+    body = {"success": ok, "message": _r15e_said(msg)}
+    if isinstance(msg, _pck.PortBusy):
+        body["port_in_use"] = True   # the page offers "Start anyway" (force) for this one
+    return body
 
 
 def _register_bulk_action(app):

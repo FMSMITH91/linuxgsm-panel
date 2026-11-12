@@ -457,7 +457,8 @@ from panel.ops import backup as _bk104  # noqa: E402
 
 _rp_dir104 = _tf104.mkdtemp(dir=_TMP104)
 os.makedirs(os.path.join(_rp_dir104, "venv", "bin"))
-for _f104 in (os.path.join("venv", "bin", "python3"), "db_maintenance.py"):
+os.makedirs(os.path.join(_rp_dir104, "panel", "install"))
+for _f104 in (os.path.join("venv", "bin", "python3"), os.path.join("panel", "install", "db_maintenance.py")):
     open(os.path.join(_rp_dir104, _f104), "w").close()
 _rp_saved104 = (_so104.PANEL_DIR, _so104._update_in_progress, _bk104.restore_pending,
                 _so104._is_system_service, _so104._helper_present, _so104._run_verb)

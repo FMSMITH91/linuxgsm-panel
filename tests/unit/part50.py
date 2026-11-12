@@ -178,6 +178,13 @@ _SCOPED50 = {
 _ALWAYS50 = {"security.yml", "dependency-review.yml", "fuzz.yml", "cflite_pr.yml"}
 _RUN50 = "steps.scope.outputs.docs_only != 'true'"
 _DOCS50 = "steps.scope.outputs.docs_only == 'true'"
+# The jobs that skip on their OWN list (pr_scope.py --job, part169): the same wiring, on `skip`.
+_PER_JOB50 = {("ci.yml", "coverage"), ("ci.yml", "js-coverage"), ("lighthouse.yml", "lighthouse")}
+
+
+def _gate50(key, docs_gate):
+    """`docs_gate` as job `key` (workflow, job, ...) spells it: on `skip` for the per-job ones."""
+    return docs_gate.replace("outputs.docs_only", "outputs.skip") if key[:2] in _PER_JOB50 else docs_gate
 _REUSE_AND50 = " && steps.reuse.outputs.reuse != 'true'"
 # ...or, in the coverage jobs, which measure after all when the pull request's report could not be
 # taken: ` && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')`.
@@ -190,7 +197,7 @@ _SCOPE_ENV50 = ("EVENT: ${{ github.event_name }}", "PR: ${{ github.event.pull_re
 # anyway, by (workflow, job, step): each with the reason it is not gated like the rest.
 _DOCS_STEPS50 = {
     ("ci.yml", "checks", "Documentation-only pull request, so the unit suite alone (it reads the docs)"),
-    ("ci.yml", "coverage", "Record that a documentation-only pull request measured nothing"),
+    ("ci.yml", "coverage", "Record that this pull request changed nothing coverage measures"),
     ("codeql.yml", "pr-alerts",
      "Documentation-only pull request, so nothing was analysed and there is nothing to judge"),
 }
@@ -249,14 +256,15 @@ def _scope_at50(steps, names):
 
 def _step_bad50(key, cond):
     """What is wrong with one step after the scope step, given its `if:`; "" when nothing is."""
+    run, docs = _gate50(key, _RUN50), _gate50(key, _DOCS50)
     if key in _DOCS_STEPS50:
-        return "" if _DOCS50 in cond else "not gated to docs-only pull requests"
+        return "" if docs in cond else "not gated to docs-only pull requests"
     if key in _UNGATED50:
         want = _UNGATED50[key]
         ok = not cond if want is None else want in cond
         return "" if ok else "its exemption's reason no longer holds (%r)" % cond
-    gated = _RUN50 in [c.strip() for c in _re50.split(r"&&|\|\|", cond)]
-    if not gated or ("||" in cond and cond != _RUN50 + " || matrix.docs"):
+    gated = run in [c.strip() for c in _re50.split(r"&&|\|\|", cond)]
+    if not gated or ("||" in cond and cond != run + " || matrix.docs"):
         return "not skipped on a docs-only pull request (if: %r)" % cond
     return ""
 
@@ -359,7 +367,7 @@ _cov_up50 = next((s for s in _steps29(_cov50) if _name29(s) == "Upload the repor
 _cc50 = _wf29("codacy-coverage.yml")
 check("docs-only: the coverage job leaves docs-only.txt in its artifact instead of a report, which is "
       "the file codacy-coverage.yml reads as the reason there is none",
-      'echo "documentation-only pull request, so nothing was measured" > docs-only.txt' in _cov50
+      'echo "the pull request changes nothing coverage measures, so nothing was measured" > docs-only.txt' in _cov50
       and "            docs-only.txt\n" in _cov_up50 + "\n" and 'REPORT_DIR}/docs-only.txt' in _cc50
       and '[ "${WR_EVENT}" = "pull_request" ]' in _cc50, _cov_up50[-200:])
 _pa50 = _code29(_job29(_wf29("codeql.yml"), "pr-alerts"))
@@ -377,10 +385,10 @@ check("docs-only: the PR alert gate passes a docs-only pull request by a step th
 
 # ── No Claude session links in the repository ────────────────────────────────────────────────────
 # A session link is a private conversation; this repository is public. The switch that keeps
-# them out of commits and pull requests (attribution.sessionUrl false) lives in the owner's
-# user-level Claude settings, not in the repository: the owner works only from the dev machine,
-# and asked (2026-11-08) that nothing of Claude Code's be uploaded. So .claude/ is gitignored as
-# a whole, and the walk below still fails the build on any link that reaches a tracked file.
+# them out of commits and pull requests (attribution.sessionUrl false) lives in the user-level
+# Claude settings on the dev machine, not in the repository, and nothing of Claude Code's is
+# uploaded. So .claude/ is gitignored as a whole, and the walk below still fails the build on
+# any link that reaches a tracked file.
 
 with open(os.path.join(_root, ".gitignore"), encoding="utf-8") as _gi50:
     _gi_lines50 = {_l.strip() for _l in _gi50}

@@ -126,8 +126,10 @@ def _p9_drain():
 
 
 # ── the app ─────────────────────────────────────────────────────────────────────────────────────
-# The import name puts the app at the repo root; the UI folders are named as app.py names them.
-_p9 = _P9Flask("app", template_folder="panel/templates", static_folder="panel/static")
+# Rooted at the checkout, with the UI folders named as app.py names them (the import name alone would
+# root it at panel/install/, where app.py is).
+from unit import REPO_ROOT as _P9_ROOT   # noqa: E402
+_p9 = _P9Flask("app", root_path=_P9_ROOT, template_folder="panel/templates", static_folder="panel/static")
 _p9.config.update(
     SECRET_KEY="p09-unit-secret",
     SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_P9_TMP, "p09.db"),
@@ -1810,7 +1812,7 @@ try:
           _r.status_code == 500 and _p9_json(_r).get("message") == "Internal server error")
     _sf_write_result[0] = (True, "")
 
-    _p9_patch(_p9_sf, "lgsm_game_config", _raise_conn)
+    _p9_patch_sm("lgsm_game_config", _raise_conn)
     _r = _A.get(_sf_url + "/game-config")
     check("game-config: a read that raises answers an error body the page can show",
           _r.status_code == 200 and _p9_json(_r).get("error") == "Host unreachable")
@@ -3649,6 +3651,8 @@ check("helper self-update: the root installer starts in /, not in the panel-owne
       len(_pb_seen) == 1 and _pb_seen[0].get("cwd") == "/", repr(_pb_seen))
 _pb_src_blk = _pb_inst[_pb_inst.index('SRC=""\nif [[ -n "${PANEL_SELF_UPDATE:-}" ]]'):]
 _pb_src_blk = _pb_src_blk[:_pb_src_blk.index("\nfi\n") + 4]
+# ...preceded by install.sh's file-placement helpers, which it finds app.py and requirements.txt with.
+_pb_src_blk = _pb_inst[_pb_inst.index('MOVED_DIR="panel/install"\n'):_pb_inst.index('\nSRC=""\n') + 1] + _pb_src_blk
 _pb_ck = os.path.join(_PB, "checkout")
 os.makedirs(_pb_ck)
 for _n in ("app.py", "requirements.txt"):
@@ -3745,7 +3749,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
 else:
     _pb_skip("install.sh panel_port: read as the owner", "needs root, sudo and a daemon account")
 # uninstall.sh reads config.json the same way, and takes the sudo grants away first.
-_pb_un = open(os.path.join(_pb_root, "uninstall.sh"), encoding="utf-8").read()
+_pb_un = open(os.path.join(_pb_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 _pb_cr = _pb_un[_pb_un.index("_conf_read() {"):]
 _pb_cr = _pb_cr[:_pb_cr.index("\n}\n") + 3]
 _r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',

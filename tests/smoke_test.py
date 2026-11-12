@@ -39,6 +39,7 @@ import sys
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _root)
+sys.path.insert(1, os.path.join(_root, "panel", "install"))   # app.py, manage.py, db_maintenance.py
 # tests/ on the path too, so `smoke.partNN` resolves however this is run (tools/nosudo_runner.py
 # runs it with runpy, which does not put the script's own directory on the path).
 sys.path.insert(0, os.path.join(_root, "tests"))

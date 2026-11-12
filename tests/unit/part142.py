@@ -349,12 +349,12 @@ check("root_source_commit: fetches the signatures into root's own clone, by full
       _rsc142[-400:])
 _irt142 = _inst_shfn("install_root_tools")
 check("install_root_tools: places the release key root-owned beside the helper, from root's own source",
-      'stage_root_source "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}"' in _irt142
+      'stage_panel_file "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}"' in _irt142   # root's own source, either place
       and 'install -o root -g root -m 0644 "${_stage}" "${HELPER_DIR}/${RELEASE_SIGNERS}"' in _irt142,
       _irt142[:200])
 check("install.sh: ssh-keygen is a prerequisite (openssh-client), and release-signers is runtime",
       "cron ufw openssh-client" in _inst and "command -v ssh-keygen" in _inst
-      and "\nruntime release-signers\n" in open(os.path.join(_root, ".github", "update-paths.txt")).read(),
+      and "\nruntime panel/install/release-signers\n" in open(os.path.join(_root, ".github", "update-paths.txt")).read(),
       "")
 
 # ── root_source_commit, run: root stages only from a commit signed for its branch ──────────────

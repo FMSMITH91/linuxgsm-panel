@@ -451,8 +451,9 @@ def _calls23(path, attr):
 # app.py and EVERY module under panel/, not a list of the files loops lived in when it was
 # written (review 1107: #483's scheduled-wipe loop, in panel/routes/wipe_schedule.py, was in no
 # list, so the report lost it and both gates stayed green). part35's first-pass gate reads the same.
-_LOOP_FILES23 = ("app.py",) + tuple(sorted(p.relative_to(_REPO23).as_posix()
-                                           for p in (_REPO23 / "panel").rglob("*.py")))
+# panel/install/app.py is under panel/.
+_LOOP_FILES23 = tuple(sorted(p.relative_to(_REPO23).as_posix()
+                             for p in (_REPO23 / "panel").rglob("*.py")))
 
 
 def _r37b_supervised23(path):
@@ -496,7 +497,7 @@ def _r37b_started_gate23(known):
 
 def _thread_gates23():
     known = {n for n, _c in _w23.WORKERS}
-    threads = [n for _name, n in _calls23("app.py", "Thread")]
+    threads = [n for _name, n in _calls23("panel/install/app.py", "Thread")]
     kws = [{k.arg: k.value for k in n.keywords} for n in threads]
     unnamed = [n.lineno for n, kw in zip(threads, kws) if "name" not in kw]
     check("workers: every thread app.py starts is named (threading.enumerate() can tell them apart)",

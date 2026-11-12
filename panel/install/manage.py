@@ -7,14 +7,14 @@ database, so it needs no login.
 
 Run from the panel directory with its venv (or `sudo linuxgsm-panel-recover`):
 
-    ./venv/bin/python manage.py list-users
-    ./venv/bin/python manage.py reset-password            # pick from a menu (or the sole admin)
-    ./venv/bin/python manage.py reset-password <username> # a specific user
-    ./venv/bin/python manage.py disable-2fa               # pick from a menu
-    ./venv/bin/python manage.py create-admin <username>
-    ./venv/bin/python manage.py promote <username>
-    ./venv/bin/python manage.py activate <username>
-    ./venv/bin/python manage.py setup-token               # the first-run wizard's link, again
+    ./venv/bin/python panel/install/manage.py list-users
+    ./venv/bin/python panel/install/manage.py reset-password            # pick from a menu (or the sole admin)
+    ./venv/bin/python panel/install/manage.py reset-password <username> # a specific user
+    ./venv/bin/python panel/install/manage.py disable-2fa               # pick from a menu
+    ./venv/bin/python panel/install/manage.py create-admin <username>
+    ./venv/bin/python panel/install/manage.py promote <username>
+    ./venv/bin/python panel/install/manage.py activate <username>
+    ./venv/bin/python panel/install/manage.py setup-token               # the first-run wizard's link, again
 
 Run interactively with no username and you get a numbered menu of users to choose
 from. Passwords are read interactively (never echoed, never in shell history)
@@ -25,6 +25,13 @@ import getpass
 import os
 import sys
 import warnings
+
+# This file lives in panel/install/ beside app.py; the panel package is two levels up, in the
+# checkout. Both named here, so it runs however it is started (`python -I` adds neither).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.dirname(os.path.dirname(_HERE))):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 # This offline CLI doesn't run the web server, but importing the app pulls in eventlet, which prints
 # an EventletDeprecationWarning (it subclasses Warning, NOT DeprecationWarning, so a

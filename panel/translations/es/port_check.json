@@ -1,0 +1,8 @@
+{
+  "Port in use": "Puerto en uso",
+  "Start anyway": "Iniciar de todos modos",
+  "Port {port} is in use by {name}, which is running. Stop it first, or start anyway.": "El puerto {port} lo usa {name}, que está en marcha. Detenlo primero o inicia de todos modos.",
+  "Port {port} is already in use on this host (not by a server the panel knows). Start anyway?": "El puerto {port} ya está en uso en este host (no por un servidor que el panel conozca). ¿Iniciar de todos modos?",
+  "The panel now watches port {port} for this server.": "El panel vigila ahora el puerto {port} para este servidor.",
+  "Port {port} takes effect at the next restart. Until then the panel keeps watching port {old}, which the running server still uses.": "El puerto {port} se aplica en el próximo reinicio. Hasta entonces el panel sigue vigilando el puerto {old}, que el servidor en marcha aún usa."
+}

@@ -319,10 +319,25 @@ ok "Python ${PY_MM} found"
 # requirements.txt for the panel — an old clone it was run from was copied over the install with
 # its .git, a downgrade the update path waves through for a local source, and a fresh install from
 # some other Flask project installed that project as the panel.
+# ── Where a panel file sits ──────────────────────────────────────────────────────────────────
+# The root clean-up moves the files below out of the repository root into panel/install/, in two
+# releases. This one teaches every reader the new place (panel/install/<name> first, the root
+# second) and moves nothing, so a host that has run it can take the release that moves them. A host
+# that skips straight to that one fails its update at the dependency step and rolls back: its
+# installer reads requirements.txt at the root (shown on the test VPS, 2026-11-10).
+# The files: app.py manage.py db_maintenance.py VERSION release-signers requirements.txt
+# requirements-bootstrap.txt recover.sh uninstall.sh. install.sh itself stays at the root: it is
+# the address the documented one-line install fetches.
+MOVED_DIR="panel/install"
+_tree_file() {   # _tree_file <dir> <name>: <dir>/panel/install/<name> when it is there, else <dir>/<name>
+    if [[ -f "$1/${MOVED_DIR}/$2" ]]; then printf '%s\n' "$1/${MOVED_DIR}/$2"; else printf '%s\n' "$1/$2"; fi
+}
+panel_file() { _tree_file "${PANEL_DIR}" "$1"; }
+
 SRC=""
 if [[ -n "${PANEL_SELF_UPDATE:-}" ]]; then
     :   # the panel chose this run: fetch_code updates PANEL_DIR itself (see above)
-elif [[ -f "./app.py" ]] && [[ -f "./requirements.txt" ]]; then
+elif [[ -f "$(_tree_file . app.py)" ]] && [[ -f "$(_tree_file . requirements.txt)" ]]; then
     if [[ "$(readlink -f -- "${SCRIPT_PATH}" 2>/dev/null)" = "$(pwd -P)/install.sh" ]]; then
         SRC="$(pwd)"
         ok "Using the current checkout as source: ${SRC}"
@@ -351,7 +366,7 @@ _other_install=""
 if [[ "$(id -u)" -eq 0 ]]; then
     # Running as root: is there a per-user install under some human's home?
     for _h in /home/*; do
-        [[ -f "${_h}/linuxgsm-panel/app.py" ]] || continue
+        [[ -f "$(_tree_file "${_h}/linuxgsm-panel" app.py)" ]] || continue
         _u="$(basename "${_h}")"
         [[ "${_u}" = "${SERVICE_USER}" ]] && continue      # that IS the root-install location
         [[ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ]] || continue
@@ -427,7 +442,7 @@ _epoch_version() {
 # sequences included, which setup_link_token already refuses to do for the same reason.
 _version_file() {
     local raw
-    raw="$(_owner_read "${PANEL_DIR}/VERSION" | tr -d '[:space:]' | tr -cd '[:print:]')" || raw=""
+    raw="$(_owner_read "$(panel_file VERSION)" | tr -d '[:space:]' | tr -cd '[:print:]')" || raw=""
     raw="${raw:0:64}"   # a substring, not `| head -c`, whose early exit is a SIGPIPE under pipefail
     case "${raw}" in
         ''|\$Format:*) echo "unknown" ;;
@@ -567,7 +582,7 @@ setup_link_token() {
     if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]]; then
         as_owner="sudo -u ${PANEL_USER}"
     fi
-    tok="$(cd / && ${as_owner} "${PANEL_DIR}/venv/bin/python" "${PANEL_DIR}/manage.py" \
+    tok="$(cd / && ${as_owner} "${PANEL_DIR}/venv/bin/python" "$(panel_file manage.py)" \
                setup-token --raw 2>/dev/null | tail -n 1)" || return 0
     if [[ "${tok}" =~ ^[A-Za-z0-9_-]{20,128}$ ]]; then
         printf '%s' "${tok}"
@@ -1062,10 +1077,12 @@ _release_key_file() {
         fi
         [[ -f "${ROOT_SRC_FLOOR_FILE}" ]] || return 1
         floor="$(_source_floor 2>/dev/null)" || return 1
-        _rootgit cat-file blob "${floor}:${RELEASE_SIGNERS}" > "${dir}/key" 2>/dev/null || return 1
+        { _rootgit cat-file blob "${floor}:${MOVED_DIR}/${RELEASE_SIGNERS}" \
+            || _rootgit cat-file blob "${floor}:${RELEASE_SIGNERS}"; } > "${dir}/key" 2>/dev/null || return 1
     else
         [[ -d "${PANEL_DIR}/.git" ]] || return 1
-        _gitc cat-file blob "HEAD:${RELEASE_SIGNERS}" > "${dir}/key" 2>/dev/null || return 1
+        { _gitc cat-file blob "HEAD:${MOVED_DIR}/${RELEASE_SIGNERS}" \
+            || _gitc cat-file blob "HEAD:${RELEASE_SIGNERS}"; } > "${dir}/key" 2>/dev/null || return 1
     fi
     [[ -s "${dir}/key" ]] || return 1
     printf '%s\n' "${dir}/key"
@@ -1151,6 +1168,63 @@ _hold_unless_signed() {
     return 1
 }
 
+# ── Required stops: releases an update may not skip ──────────────────────────────────────────
+# A release that changes what the NEXT installer must know (release 1 of the root clean-up taught
+# the updater where release 2 moves its files) is a stop. A host further behind goes to the oldest
+# stop it has not installed first, and to the newest release on its next update: each step runs the
+# installer the step before it placed. The list is read from the commit the update would move to,
+# so a stop named after this installer shipped still counts.
+UPDATE_STOPS="update-stops"
+
+# _stop_ids <commit>: the full commit ids in <commit>'s list, one per line (the first word of each
+# line that is 40 hex characters; comments and anything else are skipped).
+_stop_ids() {
+    _gitc cat-file blob "$1:${MOVED_DIR}/${UPDATE_STOPS}" 2>/dev/null \
+        | awk '$1 ~ /^[0-9a-f]+$/ && length($1) == 40 { print $1 }'
+}
+
+# _stop_applies <stop> <head> <target>: the stop lies strictly between HEAD and the target, on the
+# branch's first-parent line. Forward only: HEAD must be its ancestor, so a stop never moves a
+# checkout backwards or sideways.
+_stop_applies() {
+    [[ "$1" != "$2" && "$1" != "$3" ]] \
+        && _gitc merge-base --is-ancestor "$2" "$1" 2>/dev/null \
+        && _gitc merge-base --is-ancestor "$1" "$3" 2>/dev/null \
+        && _on_first_parent_line _gitc "$1" "refs/remotes/origin/${DEFAULT_BRANCH}"
+}
+
+# _apply_update_stop <head>: point UPD_TARGET at the oldest stop between HEAD and it, if any, and
+# keep the release it would have been in UPD_FINAL. A checkout with no commit has no stop to take.
+_apply_update_stop() {
+    local _head="$1" _s="" _stop=""
+    UPD_STOP=""; UPD_FINAL=""
+    # main only: the stops are main's releases, signed for main. A tracked test branch is offered its
+    # tip by the panel (system_ops), and a main stop has no signature for that branch to pass.
+    [[ "${DEFAULT_BRANCH}" = "${TRUSTED_BRANCH:-main}" ]] || return 0
+    [[ -n "${_head}" && -n "${UPD_TARGET}" ]] || return 0
+    while IFS= read -r _s; do
+        _stop_applies "${_s}" "${_head}" "${UPD_TARGET}" || continue
+        if [[ -z "${_stop}" ]] || _gitc merge-base --is-ancestor "${_s}" "${_stop}" 2>/dev/null; then
+            _stop="${_s}"
+        fi
+    done < <(_stop_ids "${UPD_TARGET}")
+    [[ -n "${_stop}" ]] || return 0
+    UPD_FINAL="${UPD_TARGET}"; UPD_STOP="${_stop}"; UPD_TARGET="${_stop}"
+}
+
+# _signed_then_stop <head>: _hold_unless_signed for the target, then the stop, then the stop's own
+# signature. The target is checked FIRST: its list decides which commit is installed, so a list in a
+# commit not signed with the release key is never read (it could name an older, superseded release).
+# A stop that is not signed holds the update like any unsigned target, and is then not reported.
+_signed_then_stop() {
+    _hold_unless_signed "$1" || return 1
+    [[ "${UPD_WHY}" = "tip" || "${UPD_WHY}" = "pin" ]] || return 0
+    _apply_update_stop "$1"
+    [[ -n "${UPD_STOP}" ]] || return 0
+    _hold_unless_signed "$1" || return 1
+    [[ "${UPD_WHY}" != "hold" ]] || { UPD_STOP=""; UPD_FINAL=""; }
+}
+
 # Which commit an update moves this checkout TO, once the branch has been fetched into
 # refs/remotes/origin/<branch>. resolve_update_target asks it whether there is anything to do, and
 # fetch_code asks it again to do it: ONE decision. It used to be two copies, and fetch_code's had
@@ -1172,6 +1246,7 @@ _hold_unless_signed() {
 _choose_update_target() {
     local _tracking="refs/remotes/origin/${DEFAULT_BRANCH}" _head=""
     UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""; UPD_HOLD=""; UPD_HOLD_WHY=""
+    UPD_STOP=""; UPD_FINAL=""
     if ! _ref_exists _gitc "${_tracking}" \
        || ! UPD_TARGET="$(_gitc rev-parse --verify --quiet "${_tracking}^{commit}" 2>/dev/null)"; then
         UPD_TARGET=""
@@ -1191,7 +1266,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the tip of ${DEFAULT_BRANCH} is older than this checkout, which already contains it, so moving to it would go backwards"
             return 0
         fi
-        _hold_unless_signed "${_head}"
+        _signed_then_stop "${_head}"
         return
     fi
     # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
@@ -1258,7 +1333,7 @@ _choose_update_target() {
             UPD_HOLD_WHY="the pinned commit ${UPD_PIN} is on ${DEFAULT_BRANCH} but does not contain this checkout, so moving to it would drop commits the checkout has"
         fi
     fi
-    _hold_unless_signed "${_head}"
+    _signed_then_stop "${_head}"
 }
 
 # Copy the current checkout into PANEL_DIR (skips venv/data so we never clobber
@@ -1306,6 +1381,7 @@ fetch_code() {
         # why.
         _choose_update_target || die "${UPD_ERR}
      Nothing was reset."
+        [[ -z "${UPD_STOP:-}" ]] || echo "  ${UPD_STOP:0:10} is a release no update may skip, so this update installs it first; the next update moves on to ${UPD_FINAL:0:10}"
         case "${UPD_WHY}" in
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
@@ -1452,7 +1528,8 @@ _venv_stale() {
 # works. On the FRESH path it does not yet (the chown comes later), and there the requirements
 # came from a clone of REPO_URL that the operator asked for as root — so that path is unchanged.
 install_deps() {
-    local as_owner="" clear=""
+    local as_owner="" clear="" boot_txt req_txt
+    boot_txt="$(panel_file requirements-bootstrap.txt)"; req_txt="$(panel_file requirements.txt)"
     if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]] \
        && [[ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]]; then
         as_owner="sudo -u ${PANEL_USER}"
@@ -1468,15 +1545,15 @@ install_deps() {
     # hashed. A commit WITHOUT it — an update pinned to an older commit, or the rollback putting
     # one back — keeps the pip the venv already has, which installs requirements.txt as well
     # (22.04's own 22.0.2 does), rather than falling back to an unpinned upgrade.
-    if [[ -f "${PANEL_DIR}/requirements-bootstrap.txt" ]]; then
+    if [[ -f "${boot_txt}" ]]; then
         ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --require-hashes --only-binary :all: \
-            -r "${PANEL_DIR}/requirements-bootstrap.txt"
+            -r "${boot_txt}"
     else
         info "  (this version has no requirements-bootstrap.txt: keeping the venv's own pip)"
     fi
     # No --require-hashes: pip turns hash checking on by itself whenever a requirement carries a
     # hash, and an older pinned commit's requirements.txt may carry none (requirements.in).
-    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${req_txt}"
 }
 
 # What decides whether an update reinstalls dependencies: requirements.txt, and pip's own lockfile
@@ -1485,10 +1562,10 @@ install_deps() {
 # where a failed pipe in an assignment would end the update.
 _deps_digest() {
     local f out=""
-    [[ -f "${PANEL_DIR}/requirements.txt" ]] || return 0
+    [[ -f "$(panel_file requirements.txt)" ]] || return 0
     for f in requirements.txt requirements-bootstrap.txt; do
-        if [[ -f "${PANEL_DIR}/${f}" ]]; then
-            out="${out}$(sha256sum "${PANEL_DIR}/${f}" 2>/dev/null | awk '{print $1}' || true) "
+        if [[ -f "$(panel_file "${f}")" ]]; then
+            out="${out}$(sha256sum "$(panel_file "${f}")" 2>/dev/null | awk '{print $1}' || true) "
         fi
     done
     printf '%s\n' "${out}"
@@ -1703,7 +1780,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=${PANEL_USER}
 WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -1724,7 +1801,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -2405,6 +2482,27 @@ stage_root_source() {
     printf '%s\n' "${out}"
 }
 
+# A file root stages from its source: panel/install/<name> where that source has it, <name> at the
+# root where it does not (see _tree_file). stage_root_source keeps every check it makes on either.
+#
+# Root installing from the operator's own tree picks the path in THAT tree first: stage_root_source
+# reads the operator's tree only for a path the tree holds, and for any other it falls through to
+# root's verified clone, which fetches, checks signatures and can raise root's source floor. A miss
+# on the moved path there sent every operator run of today's layout down that branch for nothing,
+# with a false "root stages nothing from this checkout" (review of #503).
+stage_panel_file() {
+    local osrc=""
+    if [[ "$(id -u)" -eq 0 ]] && ! _checkout_is_roots && osrc="$(_operator_src)"; then
+        if _operator_file "${osrc}" "${MOVED_DIR}/$1" >/dev/null; then
+            stage_root_source "${MOVED_DIR}/$1" "$2"
+        else
+            stage_root_source "$1" "$2"
+        fi
+        return
+    fi
+    stage_root_source "${MOVED_DIR}/$1" "$2" || stage_root_source "$1" "$2"
+}
+
 # ── The recovery command ───────────────────────────────────────────────────────────────────────
 # `sudo linuxgsm-panel-recover` is what this installer prints as the lockout remedy and what
 # README documents, so it runs as ROOT. It used to be a symlink to ${PANEL_DIR}/recover.sh — a
@@ -2449,7 +2547,7 @@ install_recovery_command() {
     H_SUDO=""; [[ "$(id -u)" -ne 0 ]] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
        && _prepare_root_source \
-       && stage="$(stage_root_source recover.sh recover.sh)" \
+       && stage="$(stage_panel_file recover.sh recover.sh)" \
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
         ${H_SUDO} rm -f "${stage}" 2>/dev/null || true
@@ -2468,8 +2566,8 @@ install_recovery_command() {
                 warn "Removed the old link that pointed it at ${PANEL_DIR}/recover.sh."
             fi
         fi
-    elif [[ -f "${PANEL_DIR}/recover.sh" ]]; then
-        target="${PANEL_DIR}/recover.sh"
+    elif [[ -f "$(panel_file recover.sh)" ]]; then
+        target="$(panel_file recover.sh)"
         warn "Recovery command points into the checkout — no root-owned copy could be placed."
         warn "Re-run this installer as root so \`sudo linuxgsm-panel-recover\` is not panel-writable."
     fi
@@ -2479,7 +2577,7 @@ install_recovery_command() {
     # the same commit on every install and update; when it cannot be staged, a root-owned copy
     # already there is kept, and nothing in the checkout is ever pointed at.
     local ustage=""
-    if ustage="$(stage_root_source uninstall.sh uninstall.sh)"; then
+    if ustage="$(stage_panel_file uninstall.sh uninstall.sh)"; then
         ${H_SUDO} install -o root -g root -m 0755 "${ustage}" "${HELPER_DIR}/uninstall.sh" 2>/dev/null \
             || warn "Could not place the root-owned uninstaller at ${HELPER_DIR}/uninstall.sh."
         ${H_SUDO} rm -f "${ustage}" 2>/dev/null || true
@@ -2731,7 +2829,7 @@ install_root_tools() {
     # helper and from the same source. A commit that changes it was itself verified with the key
     # already here (root_source_commit), so this is how a new key arrives. A failure keeps the one
     # in place.
-    if _stage="$(stage_root_source "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}")"; then
+    if _stage="$(stage_panel_file "${RELEASE_SIGNERS}" "${RELEASE_SIGNERS}")"; then
         if ${H_SUDO} install -o root -g root -m 0644 "${_stage}" "${HELPER_DIR}/${RELEASE_SIGNERS}" 2>/dev/null; then
             ok "Release key installed at ${HELPER_DIR}/${RELEASE_SIGNERS}"
         else
@@ -2788,7 +2886,7 @@ install_root_tools() {
         fi
     fi
 
-    if _stage="$(stage_root_source db_maintenance.py db_maintenance.py)"; then
+    if _stage="$(stage_panel_file db_maintenance.py db_maintenance.py)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${DBM_DST}" 2>/dev/null; then
             ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
             INST_OK=0
@@ -3360,7 +3458,7 @@ print(b.strip() if isinstance(b, str) else "")' 2>/dev/null)" || _b=""
 
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
-if [[ -f "${PANEL_DIR}/app.py" ]] && [[ -f "${UNIT_FILE}" ]]; then
+if [[ -f "$(panel_file app.py)" ]] && [[ -f "${UNIT_FILE}" ]]; then
     IS_UPDATE=1
 fi
 
@@ -3636,8 +3734,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     if [[ "$(id -u)" -eq 0 ]]; then
         [[ -f "/usr/local/lib/linuxgsm-panel/db_maintenance.py" ]] \
             && DBM_RUN="python3 /usr/local/lib/linuxgsm-panel/db_maintenance.py"
-    elif [[ -x "${PANEL_DIR}/venv/bin/python3" ]] && [[ -f "${PANEL_DIR}/db_maintenance.py" ]]; then
-        DBM_RUN="${PANEL_DIR}/venv/bin/python3 ${PANEL_DIR}/db_maintenance.py"
+    elif [[ -x "${PANEL_DIR}/venv/bin/python3" ]] && [[ -f "$(panel_file db_maintenance.py)" ]]; then
+        DBM_RUN="${PANEL_DIR}/venv/bin/python3 $(panel_file db_maintenance.py)"
     fi
     if [[ -n "${DBM_RUN}" ]]; then
         if ${DBM_RUN} update; then
@@ -3665,6 +3763,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     TO_VER="$(panel_version)"
     REQ_AFTER="$(_deps_digest)"
     ok "Code updated (${FROM_VER} → ${TO_VER})"
+    [[ -z "${UPD_STOP:-}" ]] || warn "That was a release no update may skip. Update once more to install the newest release (${UPD_FINAL:0:10})."
 
     # Most updates are code-only. Reinstalling deps means pip resolves + may rebuild wheels,
     # which pegs the CPU on a small VPS for no reason. Skip it when requirements.txt and pip's own
@@ -4119,7 +4218,7 @@ echo -e "${CYAN}Forgot the admin password?${NC} From a shell on this server (no 
 if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     echo -e "    sudo linuxgsm-panel-recover"
 else
-    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash recover.sh reset-password${NC}"
+    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: bash $(panel_file recover.sh) reset-password${NC}"
 fi
 echo ""
 

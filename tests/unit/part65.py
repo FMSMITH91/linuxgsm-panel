@@ -571,7 +571,7 @@ def _r16d_game_tables65(source):
 def _r16d_found_tables65():
     """{"<file>:<NAME>": keys} over app.py and every panel module."""
     found = {}
-    _files = [os.path.join(_ROOT65, "app.py")] + sorted(
+    _files = sorted(   # panel/install/app.py is under panel/
         os.path.join(_d, _f) for _d, _s, _fs in os.walk(os.path.join(_ROOT65, "panel"))
         for _f in _fs if _f.endswith(".py"))
     for _path in _files:
@@ -581,7 +581,7 @@ def _r16d_found_tables65():
     return found
 
 
-_R16D_MUST_FIND65 = {"panel/ops/ssh_manager/game.py:_ENG_VALVE", "app.py:_PORT_SPAN",
+_R16D_MUST_FIND65 = {"panel/ops/ssh_manager/game.py:_ENG_VALVE", "panel/install/app.py:_PORT_SPAN",
                      "panel/services/host_reboot.py:_TELNET_STOP_GAMES", "panel/ops/ssh_manager/game.py:_MC_NO_BAN"}
 
 

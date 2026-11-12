@@ -31,6 +31,7 @@ from datetime import timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
+sys.path.insert(1, os.path.join(ROOT, "panel", "install"))   # app.py, manage.py, db_maintenance.py
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 MARKER = ".js-coverage-throwaway"

@@ -14,6 +14,42 @@ compares git commits, not this file.
 
 ### Added
 
+- **A form for the game's own config file.** Files & Config's game config card has a Form view
+  beside the raw editor, for key=value, .ini, Source and idTech cfg, 7 Days to Die XML and JSON
+  files. Each setting is a field with the file's comments as help, passwords are hidden until shown,
+  and a save changes only the values you edited. Minecraft's server.properties and the other
+  non-.cfg config files LinuxGSM reports now open there too.
+- **Start checks the port first.** Starting a stopped server from the panel checks that its port is
+  free. If another server on the host is running on it, or something else listens there, the panel
+  says so and offers "Start anyway". If the host can't be read, the server starts as before.
+- **A port changed on the Settings tab is followed.** Saved while the server is stopped, the panel
+  watches the new port at once. Saved while it runs, the new port takes effect at the next start or
+  restart from the panel. Games that keep their port in their own config file still follow it when
+  the panel restarts or on Sync ports.
+- **Scheduled restarts, stops and updates can warn players first.** On the Schedule tab, a
+  restart, stop or update can send up to five chat warnings before it runs, for example 5 and 1
+  minutes before. It is offered for Source, GoldSrc, idTech3 and Minecraft servers. The first
+  warning goes out at the scheduled time, and the form shows when the action itself happens.
+- **Steam Workshop items and collections on the server page.** Arma 3, DayZ, Squad and the other
+  games whose LinuxGSM config has a Workshop list get an ordered list of items and collections, with
+  titles from Steam and a Download now button. Garry's Mod and CS:GO get their collection, and
+  Project Zomboid gets its Workshop items and Mod IDs, with the Mod IDs in already-downloaded items
+  offered as one-tap adds.
+- **Plugins for PaperMC servers.** A PaperMC server's page has a Plugins card: search Modrinth for
+  Paper, Spigot and Bukkit plugins built for the server's Minecraft version, and install one in a
+  click. The panel downloads the file itself and checks it against Modrinth's checksum before it
+  reaches the server. Installed plugins can be disabled, enabled again or removed; changes take
+  effect on the next start.
+- **Minecraft operators, whitelist and bans on the server page.** A Minecraft Java or PaperMC
+  server's page has a Player Lists card. It shows the server's operators, whitelist and banned
+  players and addresses, and changes them through the server console while the server is running.
+  Names, addresses and reasons are checked before anything is sent, every change is in the audit
+  log, and the card says when the server did not apply a change (a name that is no Minecraft
+  account, for one).
+- **Updates no longer skip a release the next one depends on.** A panel that is several releases
+  behind first installs any release listed in `panel/install/update-stops`, then the newest one on
+  its next update. The Update card offers each in turn. If your panel's updates keep rolling back
+  to the same version, the README's Updating section has the one command that fixes it.
 - **See what an update brings before you install it.** When an update is available, the
   Maintenance tab's Update card lists the changelog entries it adds, the same ones "What's new"
   shows afterwards; tap one to read it. The commits are still there, folded underneath.
@@ -151,6 +187,12 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The files the installer reads now live in `panel/install/`.** `app.py`, `manage.py`,
+  `db_maintenance.py`, `recover.sh`, `uninstall.sh`, `VERSION`, `release-signers` and the
+  requirements files moved there from the top of the repository. On a per-user install, run
+  `./venv/bin/python panel/install/manage.py` and `bash ~/linuxgsm-panel/panel/install/uninstall.sh`.
+  `sudo linuxgsm-panel-recover` and the root-owned copies in `/usr/local/lib/linuxgsm-panel/` work as
+  before. A panel updates to this release only from the previous one or later.
 - **The Maintenance tab names the release you run.** When the panel is up to date, the Update card
   says which release that is, by its date and commit: "You're up to date: release 2026.11.7
   (a1b2c3d)."
@@ -247,6 +289,10 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **The console no longer starts every line a quarter of the way across a phone screen.** The
+  column for line times takes no space until a line with a time is on screen, and on phones it is
+  narrower when it does.
 
 - **A wipe whose server fails to start afterwards counts as done.** LinuxGSM exits with an error
   when the restart after a wipe fails, so the wipe was recorded as not run and alerted, although the

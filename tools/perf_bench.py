@@ -28,6 +28,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "panel", "install"))   # app.py, manage.py, db_maintenance.py
 
 # BEFORE any panel import, exactly as app.py does it. This file used to import ssh_manager (and so
 # eventlet, paramiko and Flask) first and only monkey_patch later, by way of `import app` — at which

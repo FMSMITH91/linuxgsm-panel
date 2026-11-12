@@ -44,7 +44,7 @@ Then open **the link the installer prints at the end** — `https://your-server:
 ### Updating
 
 - **In the panel:** *Panel Server → Update* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
-- **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate.
+- **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate (or first a release it may not skip, below).
 
 Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
 
@@ -52,11 +52,20 @@ Either way the updater snapshots the code and database (keeping the last 3), ins
 
 **Versions are dates**: the date of the commit, in UTC, shown with the short commit (`2026.9.26 · a1b2c3d` in the footer).
 
+**Some releases cannot be skipped.** A release that the next one depends on (one that teaches the updater something) is listed in `panel/install/update-stops`. A panel further behind installs that release first, and the newest one on its next update: the Update card simply offers an update again.
+
+**If updates keep rolling back to the same version:** the panel's updater predates the 2026.11.10 root clean-up, which moved the files it reads into `panel/install/`. Run it once over SSH with the release that taught it the new place, then update as usual:
+
+```bash
+cd / && sudo PANEL_UPDATE_REF=41fa75df02363e2808192d1cfc26cd772757721d bash /usr/local/lib/linuxgsm-panel/install.sh   # root install
+PANEL_UPDATE_REF=41fa75df02363e2808192d1cfc26cd772757721d bash ~/linuxgsm-panel/install.sh                           # per-user
+```
+
 ## Uninstall
 
 ```bash
 sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh   # root / system install
-bash ~/linuxgsm-panel/uninstall.sh                     # per-user install
+bash ~/linuxgsm-panel/panel/install/uninstall.sh       # per-user install
 #   add --yes to skip the "type yes to confirm" prompt
 ```
 
@@ -242,8 +251,8 @@ Run `--help` for the full list. On an older install without the command, update 
 ```bash
 git clone https://github.com/FMSMITH91/linuxgsm-panel.git && cd linuxgsm-panel
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python app.py
+pip install -r panel/install/requirements.txt
+python panel/install/app.py
 
 # The test tools CI installs beside them
 pip install --require-hashes -r .github/ci-requirements-checks/build.txt
@@ -257,7 +266,7 @@ Use `tools/smoke-local.sh`, not `tools/run-tests.sh` (what CI runs): the latter 
 
 CI also runs CodeQL, Bandit, Semgrep, zizmor, a dependency audit and fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records outbound connections and root processes in the job's public log, routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
 
-The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, `routes`; each package's module-level imports reach only the ones before it, enforced by `tests/unit/part01.py`). `app.py`, `manage.py`, `db_maintenance.py` and the shell scripts stay at the repo root because installed panels and the install/recovery one-liners address them by path.
+The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, `routes`; each package's module-level imports reach only the ones before it, enforced by `tests/unit/part01.py`). The files installed panels address by path (`app.py`, `manage.py`, `db_maintenance.py`, `recover.sh`, `uninstall.sh`, `VERSION`, `release-signers` and the requirements lockfiles) are in `panel/install/`. `install.sh` stays at the repo root because the install one-liner fetches it from there.
 
 ## Contributing
 

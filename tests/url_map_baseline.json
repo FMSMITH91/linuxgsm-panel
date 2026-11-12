@@ -628,6 +628,17 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/mc-lists/<any(ops, whitelist, bans, ipbans):which>": {
+    "endpoint": "api_server_mc_list",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_list"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/playerlist": {
     "endpoint": "api_server_playerlist",
     "guards": [
@@ -650,6 +661,28 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/plugins": {
+    "endpoint": "api_server_plugins",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/plugins/search": {
+    "endpoint": "api_server_plugins_search",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins_search"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/stats": {
     "endpoint": "api_server_stats",
     "guards": [
@@ -667,6 +700,28 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_version"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/workshop/pz-mods": {
+    "endpoint": "api_server_workshop_pz_mods",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_workshop_pz_mods"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/workshop/titles": {
+    "endpoint": "api_server_workshop_titles",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_workshop_titles"
     ],
     "methods": [
       "GET"
@@ -1049,6 +1104,18 @@
       "POST"
     ]
   },
+  "GET,POST /api/server/<int:server_id>/game-config/form": {
+    "endpoint": "api_server_game_config_form",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_game_config_form"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /api/server/<int:server_id>/gmod-content": {
     "endpoint": "api_gmod_content",
     "guards": [
@@ -1092,6 +1159,18 @@
       "auth.py:decorated_function(manage_servers)[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_wipe_schedule"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "GET,POST /api/server/<int:server_id>/workshop": {
+    "endpoint": "api_server_workshop",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_workshop"
     ],
     "methods": [
       "GET",
@@ -2010,6 +2089,17 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/mc-lists/<any(ops, whitelist, bans, ipbans):which>": {
+    "endpoint": "api_server_mc_list_change",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_list_change"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/moderate": {
     "endpoint": "api_server_moderate",
     "guards": [
@@ -2027,6 +2117,28 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_notify_empty"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/plugins/change": {
+    "endpoint": "api_server_plugins_change",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins_change"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/plugins/install": {
+    "endpoint": "api_server_plugins_install",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_plugins_install"
     ],
     "methods": [
       "POST"

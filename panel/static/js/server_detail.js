@@ -493,6 +493,9 @@ function stampLine(div, ts) {
   g.textContent = d.toLocaleTimeString([], {hour12: false});
   g.title = d.toLocaleString();          // the full date, for a console left open overnight
   div.appendChild(g);                    // called before renderAnsi fills the line, so this is first
+  // A stamp opens the collapsed gutter itself (see updateTsNotice), whichever path wrote the line,
+  // so a stamped line never shows its time against text that starts at the left edge.
+  if (consoleEl) consoleEl.classList.remove('ts-none');
 }
 
 function applyTsVisible() {
@@ -509,11 +512,18 @@ function applyTsVisible() {
 //
 // So when nothing on screen is stamped, say why. It disappears the moment a line arrives with a
 // time, which is also the clearest possible demonstration of what the column does.
+//
+// The same test collapses the gutter (`ts-none`, panel.css): with no stamp on screen the column
+// would be blank, and on a phone it took a quarter of the width from every line. Read from the
+// DOM each time rather than tracked, so a trim, a Clear or a Load older that leaves no stamp
+// collapses it again, and the first stamped line opens it. The user's own Times switch is
+// `ts-hidden`, a separate class, so turning times off still hides them whatever this decides.
 function updateTsNotice() {
-  var n = document.getElementById('console-ts-notice');
-  if (!n || !consoleEl) return;
+  if (!consoleEl) return;
   var anyStamped = !!consoleEl.querySelector('.console-line[data-ts]');
-  n.hidden = anyStamped || !_tsOn;
+  consoleEl.classList.toggle('ts-none', !anyStamped);
+  var n = document.getElementById('console-ts-notice');
+  if (n) n.hidden = anyStamped || !_tsOn;
 }
 
 window.toggleConsoleTs = function () {
@@ -1142,6 +1152,9 @@ function loadMoreConsole(btn) {
       var backlog = _loadOlderRows(data.panel_lines);
       _renderPanelLines(backlog);
       _r13c_reshowPanelPushes(backlog, true);
+      // After the backlog, whose lines carry the panel's own times: the deeper window is history,
+      // so the gutter stays only if a stamped line is on screen once the rebuild is done.
+      updateTsNotice();
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       _r11c_resyncFrom(data.at);
       if (window.toast) toast(tf('Loaded {n} lines from the log', {n: older.length}), 'success');
@@ -1696,6 +1709,7 @@ function clearConsole() {
   // A cut, not "the backlog is shown": that wiped the lines pushed AFTER Clear for good
   // (_panelLinesWiped).
   _r15c_clearedAt = _lastPanelT;
+  updateTsNotice();        // nothing on screen is stamped now: the gutter collapses
 }
 
 function sendCommand(ev) {  // NOSONAR - the constant false is the data-action preventDefault contract (panel.js fire)

@@ -225,7 +225,7 @@ def _installed():
 def _pins():
     """[(name, locked version, marker or None)] from the checkout's requirements.txt."""
     from panel.ops import system_ops as so
-    with open(os.path.join(so.PANEL_DIR, "requirements.txt"), encoding="utf-8") as f:
+    with open(os.path.join(so.install_dir(), "requirements.txt"), encoding="utf-8") as f:
         text = f.read(1 << 20)
     pins = []
     for line in text.splitlines():

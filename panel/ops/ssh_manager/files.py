@@ -577,7 +577,10 @@ def _r21b_reported_config_rel(text, user):
     m = re.search("^" + re.escape(_R21B_REAL_HOME_MARK) + r"(/\S*?)/?$", text, re.M)
     if m:
         homes.append(m.group(1) + "/")
-    m = re.search(r"config file[^:\n]*:[ \t]*(/\S+\.cfg)", text, re.I)
+    # Not only .cfg: Minecraft's is server.properties, Project Zomboid's an .ini, 7 Days to Die's an
+    # .xml and Factorio's a .json, and `details` names each of them on this same line.
+    m = re.search(r"config file[^:\n]*:[ \t]*(/\S+\.(?:cfg|ini|properties|xml|json|txt|conf))(?!\S)",
+                  text, re.I)
     path = m.group(1) if m else ""
     home = next((h for h in homes if path.startswith(h)), None)
     return None if home is None else path[len(home):]

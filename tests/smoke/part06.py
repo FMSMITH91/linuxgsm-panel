@@ -1756,7 +1756,7 @@ try:  # noqa: MC0001
     import ast as _bkc_ast
     _bkc_direct = []
     for _bkc_py in sorted((_lgsm_pathlib.Path(_repo_root) / "panel").rglob("*.py")) + [
-            _lgsm_pathlib.Path(_repo_root) / "app.py"]:
+            _lgsm_pathlib.Path(_repo_root) / "panel" / "install" / "app.py"]:
         # Every REFERENCE to a writer, not only `<obj>.writer(...)` calls: a writer imported by
         # name (`from panel.ops.backup import record_game_backup`), a conditional callee
         # (`(a if x else b)(sid)`, as the safe helper itself uses) or a module-level call went

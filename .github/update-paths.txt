@@ -20,19 +20,22 @@ runtime panel/templates/
 runtime panel/translations/
 # The panel's entry points, the installers and recovery tools (install.sh re-stages recover.sh,
 # db_maintenance.py and itself root-owned on every update), the two lockfiles pip installs from,
-# and VERSION (the version a checkout without .git reports).
-runtime app.py
-runtime manage.py
-runtime db_maintenance.py
-runtime VERSION
+# and VERSION (the version a checkout without .git reports). All but install.sh live in
+# panel/install/, which panel/ already covers; each is named so no narrower noise entry takes it.
+runtime panel/install/app.py
+runtime panel/install/manage.py
+runtime panel/install/db_maintenance.py
+runtime panel/install/VERSION
 runtime install.sh
-runtime uninstall.sh
-runtime recover.sh
-runtime requirements.txt
-runtime requirements-bootstrap.txt
+runtime panel/install/uninstall.sh
+runtime panel/install/recover.sh
+runtime panel/install/requirements.txt
+runtime panel/install/requirements-bootstrap.txt
 # The release key an update is checked against (install.sh _release_key_file). Installed root-owned
 # beside the helper on a root install, and read from the installed commit on a per-user one.
-runtime release-signers
+runtime panel/install/release-signers
+# The releases an update may not skip (install.sh _apply_update_stop), read from the commit offered.
+runtime panel/install/update-stops
 # Inside tools/, which is otherwise noise.
 #
 # tools/panel-helper is the root-owned end of the sudo boundary. It lives outside the panel's
@@ -68,10 +71,10 @@ noise .dockerignore
 # it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
 # name in the .in. requirements-bootstrap.in is the same for pip's own lockfile,
 # requirements-bootstrap.txt, which install.sh does read, and which therefore counts.
-noise requirements.in
-noise requirements-bootstrap.in
+noise panel/install/requirements.in
+noise panel/install/requirements-bootstrap.in
 # osv-scanner's dated exemptions for requirements.txt (security-code.yml); nothing on a host reads it.
-noise osv-scanner.toml
+noise panel/install/osv-scanner.toml
 # Analysis and lint configuration, read by the scanners alone.
 noise .codacy.yaml
 noise .prospector.yaml

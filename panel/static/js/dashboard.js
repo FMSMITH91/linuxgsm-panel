@@ -678,15 +678,23 @@ function doAction(id, action, btn) {
   }
   _runAction(id, action, btn);   // start is not destructive — no prompt
 }
-function _runAction(id, action, btn) {
+// A start refused because its port is in use (panel/services/port_check.py): the reason, and a
+// "Start anyway" that sends the same action again with force, which skips the check.
+function _offerStartAnyway(id, action, btn, message) {
+  confirmDialog({ title: t('Port in use'), icon: 'exclamation-triangle', bodyText: message,
+                  confirmLabel: t('Start anyway'), confirmClass: 'btn-warning',
+                  onConfirm: function () { _runAction(id, action, btn, true); } });
+}
+function _runAction(id, action, btn, force) {
   var original = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + id + '/action', {  // nosemgrep
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ action: action })
+    body: JSON.stringify(force ? { action: action, force: true } : { action: action })
   })
   .then(r => r.json())
   .then(d => {
+    if (d.port_in_use && !force) { _offerStartAnyway(id, action, btn, d.message); return; }
     toast(d.message || (d.success ? tf('Server {action} issued', {action: action}) : 'Action failed'), d.success ? 'success' : 'danger');
     setTimeout(refreshStatus, 1500);
   })

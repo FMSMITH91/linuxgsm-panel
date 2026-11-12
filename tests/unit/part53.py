@@ -460,7 +460,7 @@ _out53 = _node53(_name53, _SETTLE53 + R37E_STUBS47 + (
     "var _returnOwed = false, _primeOwed = false, restarted = [], primed = 0;\n"
     "var consoleEl = {innerHTML: ''}, socket = {connected: true};\n"
     "function _rebuildMark(){ return 'm'; } function _rebuildRestore(){} function _renderPanelLines(){}\n"
-    "function _loadOlderRows(x){ return x || []; } function _r13c_reshowPanelPushes(){}\n"
+    "function _loadOlderRows(x){ return x || []; } function _r13c_reshowPanelPushes(){} function updateTsNotice(){}\n"
     "function _appendConsoleRows(rows, ts, at){ _logAt = Array.isArray(at) ? at : null; }\n"
     "function _startResync(prime){ restarted.push([prime, _logAt]); }\n"
     "function _primeCatchUp(){ primed++; }\n"
@@ -789,6 +789,14 @@ check("js coverage: a failed flow check (the 375px rename fit) fails the run wit
 
 
 # ── js_coverage's serve.py refuses subprocess in every module that imports it ───────────────────
+def _module_name53(path):
+    """The name `path` (a .py under the checkout) is imported by."""
+    rel = os.path.relpath(path, _root)[:-3].replace(os.sep, ".")
+    # panel/install/ is not a package: its modules are imported by their own names.
+    rel = rel[len("panel.install."):] if rel.startswith("panel.install.") else rel
+    return rel[:-len(".__init__")] if rel.endswith(".__init__") else rel
+
+
 def _subprocess_importers53():
     out = set()
     for dirpath, _dirs, files in os.walk(os.path.join(_root, "panel")):
@@ -798,9 +806,8 @@ def _subprocess_importers53():
                 tree = _ast53.parse(_read53(path))
                 if any(isinstance(n, _ast53.Import) and any(a.name == "subprocess" and not a.asname
                                                             for a in n.names) for n in tree.body):
-                    rel = os.path.relpath(path, _root)[:-3].replace(os.sep, ".")
-                    out.add(rel[:-len(".__init__")] if rel.endswith(".__init__") else rel)
-    return out | {"db_maintenance"}
+                    out.add(_module_name53(path))
+    return out
 
 
 def _subprocess_escapes53():

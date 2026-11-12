@@ -754,14 +754,16 @@ def _detail_panels(html):
 _det = c.get("/server/%d" % gs_id).get_data(as_text=True)
 _det_default = _detail_panels(_det)
 # Console first by default (ui-scroll): it is what the page is for. A saved order still wins, below.
+# This server is csgo, so it also has the Steam Workshop card (its wscollectionid, panel/routes/workshop.py):
+# a key none of the saved orders below names, so it renders after the ones they do.
 check("detail: the console panels render with keys",
-      _det_default == ["console", "controls", "players"], str(_det_default))
+      _det_default == ["console", "controls", "players", "workshop"], str(_det_default))
 _dp = c.post("/api/account/ui-order",
              json={"panels": {"detail_console": ["players", "console", "controls"]}})
 check("detail: saving the console panel order succeeds", _dp.status_code == 200)
 check("detail: the saved order is rendered server-side",
       _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
-      == ["players", "console", "controls"])
+      == ["players", "console", "controls", "workshop"])
 # The safety property: 'commands' and 'content' are not declared for this server, so no stored
 # value may summon them.
 c.post("/api/account/ui-order",
@@ -769,13 +771,13 @@ c.post("/api/account/ui-order",
 _det_evil = _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
 check("detail: a stored key for a gated panel renders NOTHING",
       "commands" not in _det_evil and "content" not in _det_evil
-      and _det_evil == ["controls", "console", "players"], str(_det_evil))
+      and _det_evil == ["controls", "console", "players", "workshop"], str(_det_evil))
 # Hiding works the same as on the dashboard, and the restore bar is tab-scoped so it cannot leak
 # onto the History/Details tabs.
 c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
                                       "hidden": {"detail_console": ["players"]}})
 _det_hid = c.get("/server/%d" % gs_id).get_data(as_text=True)
-check("detail: a hidden panel is not rendered", _detail_panels(_det_hid) == ["controls", "console"],
+check("detail: a hidden panel is not rendered", _detail_panels(_det_hid) == ["controls", "console", "workshop"],
       str(_detail_panels(_det_hid)))
 check("detail: the restore bar is scoped to the console tab",
       bool(_re_d.search(r'id="detail-console-hidden"[^>]*data-mtab="console"', _det_hid)))
@@ -816,7 +818,7 @@ check("regions: saving one page's layout does not wipe the other's",
       and _both.get("dash_tiles", [""])[0] == "host", str(_both))
 check("regions: the other page's order still renders",
       _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
-      == ["players", "console", "controls"])
+      == ["players", "console", "controls", "workshop"])
 # Within a region, keys the page could not have sent are preserved: a server without the gated
 # Commands panel must not erase where that panel sits on servers that DO have it.
 c.post("/api/account/ui-order", json={"panels": {"detail_console": ["commands", "controls",

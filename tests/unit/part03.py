@@ -141,7 +141,7 @@ finally:
 # per-row body is app._reconcile_stranded_install, whose work — once it holds the row's host check
 # — is _reconcile_checked_install; that is where the verdict branches live.
 import ast as _rt_ast                                                              # noqa: E402
-_rt_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_rt_src = open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read()
 _rt_fn = next((n for n in _rt_ast.walk(_rt_ast.parse(_rt_src))
                if isinstance(n, _rt_ast.FunctionDef) and n.name == "_reconcile_checked_install"),
               None)
@@ -248,19 +248,19 @@ check("backup UI: the per-server override is a number box with a Default placeho
 
 
 # ── update-noise filter: only real runtime changes should raise the "update available" badge ──
-check("runtime-path: app.py counts", _so._is_runtime_path("app.py") is True)
+check("runtime-path: app.py counts", _so._is_runtime_path("panel/install/app.py") is True)
 check("runtime-path: a template counts", _so._is_runtime_path("panel/templates/base.html") is True)
 check("runtime-path: static asset counts", _so._is_runtime_path("panel/static/js/app.js") is True)
-check("runtime-path: requirements counts", _so._is_runtime_path("requirements.txt") is True)
+check("runtime-path: requirements counts", _so._is_runtime_path("panel/install/requirements.txt") is True)
 check("runtime-path: requirements.in (what the lockfile is compiled from) is noise",
-      _so._is_runtime_path("requirements.in") is False)
+      _so._is_runtime_path("panel/install/requirements.in") is False)
 # pip's own lockfile is read by install.sh (it is what the venv's pip is installed from), so a
 # commit that changes only it, a Dependabot bump of pip, is an update; the .in it is compiled from
 # is not, exactly like requirements.in.
 check("runtime-path: requirements-bootstrap.txt (pip's lockfile) counts",
-      _so._is_runtime_path("requirements-bootstrap.txt") is True)
+      _so._is_runtime_path("panel/install/requirements-bootstrap.txt") is True)
 check("runtime-path: ...and requirements-bootstrap.in is noise",
-      _so._is_runtime_path("requirements-bootstrap.in") is False)
+      _so._is_runtime_path("panel/install/requirements-bootstrap.in") is False)
 check("runtime-path: install.sh counts", _so._is_runtime_path("install.sh") is True)
 check("runtime-path: README is noise", _so._is_runtime_path("README.md") is False)
 check("runtime-path: any .md is noise", _so._is_runtime_path("docs/SECURITY.md") is False)
@@ -415,7 +415,7 @@ check("runtime-path: the fuzz image's build files and the JS lint config are noi
       and _so._is_runtime_path(".clusterfuzzlite/build.sh") is False
       and _so._is_runtime_path("panel/static/js/.eslintrc.json") is False
       and _so._is_runtime_path("panel/static/js/remote_manage_host.js") is True
-      and _so._is_runtime_path("recover.sh") is True)
+      and _so._is_runtime_path("panel/install/recover.sh") is True)
 # Every repo file install.sh stages root-owned (stage_root_source <repo path> <name>) is something
 # a host runs. Classified as noise, a commit changing only it is no longer offered as an update at
 # all, so the host would never get it. tools/panel-helper and tools/gamedig/* sit in a noise
@@ -432,6 +432,11 @@ _srs_paths = sorted(set(_re_bk.findall(
 _srs_paths = [_q.replace("${f}", _g) for _q in _srs_paths
               for _g in (["package.json", "package-lock.json", "install-gamedig.sh"]
                          if "${f}" in _q else [""])]
+# stage_panel_file <name> stages panel/install/<name> where the commit has it and <name> at the root
+# where it does not (the root clean-up): both are files a host runs.
+_srs_paths += [_q for _n in _re_bk.findall(r'(?:\$\(|^\s*)stage_panel_file\s+"?([A-Za-z0-9_.-]+)"?\s',
+                                          _srs_code, _re_bk.M)
+               for _q in (_n, "panel/install/" + _n)]
 _srs_paths = [_q for _q in _srs_paths if "$" not in _q]
 check("runtime-path: every file install.sh stages root-owned counts as a change the panel runs",
       len(_srs_paths) >= 6 and all(_so._is_runtime_path(_q) for _q in _srs_paths),
@@ -610,14 +615,16 @@ def _cls_resolve(mod):
     """The repo files that importing dotted `mod` runs: each package __init__ and the module."""
     parts, out = mod.split("."), []
     for _i in range(1, len(parts) + 1):
-        _base = os.path.join(_root, *parts[:_i])
-        for _cand in (_base + ".py", os.path.join(_base, "__init__.py")):
-            if os.path.isfile(_cand):
-                out.append(os.path.relpath(_cand, _root).replace(os.sep, "/"))
+        # A top-level name may be one of panel/install/'s modules (app, manage), on sys.path there.
+        for _top in ((_root,) if _i > 1 else (_root, os.path.join(_root, "panel", "install"))):
+            _base = os.path.join(_top, *parts[:_i])
+            for _cand in (_base + ".py", os.path.join(_base, "__init__.py")):
+                if os.path.isfile(_cand):
+                    out.append(os.path.relpath(_cand, _root).replace(os.sep, "/"))
     return out
 
 
-_cls_todo = ["app.py", "manage.py", "db_maintenance.py"]
+_cls_todo = ["panel/install/app.py", "panel/install/manage.py", "panel/install/db_maintenance.py"]
 while _cls_todo:
     _cls_f = _cls_todo.pop()
     if _cls_f in _cls_mods:
@@ -645,13 +652,18 @@ check("runtime-path: every module the panel imports, transitively, is named as o
 
 # ...and every repo file the installers and recovery tools read from the checkout.
 _cls_inst = set()
-for _cls_sh in ("install.sh", "uninstall.sh", "recover.sh"):
+for _cls_sh in ("install.sh", "panel/install/uninstall.sh", "panel/install/recover.sh"):
     with open(os.path.join(_root, _cls_sh), encoding="utf-8") as _cls_fh:
         _cls_code = "\n".join(_l for _l in _cls_fh.read().splitlines()
                               if not _l.lstrip().startswith("#"))
     _cls_inst |= {_m for _m in _re_bk.findall(
         r"\$\{?(?:PANEL_DIR|SRC)\}?/([A-Za-z0-9_][A-Za-z0-9_./-]*)", _cls_code)
         if _m in set(_cls_files)}
+    # ...and what they find through install.sh's panel_file / recover.sh's manage_of: <name> at the
+    # root, or panel/install/<name> once the root clean-up has moved it.
+    _cls_inst |= {_q for _m in _re_bk.findall(r'\$\(panel_file "?([A-Za-z0-9_.-]+)"?\)', _cls_code)
+                  + _re_bk.findall(r'"\$1/(?:panel/install/)?([A-Za-z0-9_][A-Za-z0-9_.-]*)"', _cls_code)
+                  for _q in (_m, "panel/install/" + _m) if _q in set(_cls_files)}
 _cls_inst_bad = sorted(_f for _f in _cls_inst if _so._path_class(_f) != "runtime")
 check("runtime-path: every repo file the installers read from the checkout is named runtime",
       len(_cls_inst) >= 5 and not _cls_inst_bad,
