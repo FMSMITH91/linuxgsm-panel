@@ -2601,7 +2601,8 @@ _cd_sources = []
 for _cd_dir in (os.path.join(_root, "panel"),):
     for _cd_base, _cd_dirs, _cd_names in os.walk(_cd_dir):
         _cd_sources += [os.path.join(_cd_base, n) for n in _cd_names if n.endswith(".py")]
-_cd_sources.append(os.path.join(_root, "panel", "install", "app.py"))
+# (panel/install/app.py is inside panel/, so the walk already reads it: a second copy would let the
+# "found the places" floor below pass on one real site.)
 _cd_sites, _cd_bad = 0, []
 for _cd_path in sorted(_cd_sources):
     _cd_tree = _cd_ast.parse(open(_cd_path, encoding="utf-8").read(), filename=_cd_path)

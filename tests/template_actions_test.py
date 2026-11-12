@@ -2175,8 +2175,12 @@ check(not _bad_targets,
 # Both are what a person writes by habit, both look completely normal in review, and both fail
 # silently at runtime. The codebase is clean of both today (0 inline handlers, 39/39 scripts
 # nonce'd), which is what makes this a gate rather than a baseline.
-_ON_ATTR = re.compile(r"""\son(?:click|change|submit|input|keydown|keyup|focus|blur|load|error|"""
-                      r"""mouseover|mouseout|dblclick|paste|drop|dragover)\s*=\s*["']""")
+# Any on<event>, not a list of the common ones: an inline onmouseenter or onpointerdown is just as dead.
+_ON_ATTR = re.compile(r"""\son[a-z]+\s*=\s*["']""")
+check([bool(_ON_ATTR.search(_t)) for _t in ('<a onpointerdown="go()">', "<b onmouseenter='x()'>",
+                                           "el.onclick = fn;", '<i data-online="1">')]
+      == [True, True, False, False],
+      "CSP: the inline-handler scan matches any on<event> attribute, and not a property assignment", "")
 _csp_dead = []
 for _tpl in sorted((ROOT / "panel" / "templates").glob("*.html")):
     _src = _tpl.read_text(encoding="utf-8")
@@ -2223,6 +2227,118 @@ check(not _unmounted,
       "every fetch() uses window.MOUNT, not a root-absolute path (breaks a sub-path install)",
       "; ".join(_unmounted[:5]))
 
+# ── 0j. what the dispatcher can call: the names a script puts on `window` ────────────────────
+# panel.js's _actionFn calls a data-action only when it is an OWN property of window. A script puts
+# a name there three ways: a top-level `function x()`, a top-level `var x`, or `window.x = ...`.
+# A function local to an IIFE (every newer feature script is wrapped in one), or a top-level
+# `let`/`const`, is not on window, so a button naming it does nothing. Read off esprima's AST;
+# the regexes below still give each handler's params and body.
+def _r41t_walk(node, visit):
+    if isinstance(node, dict):
+        visit(node)
+        for _v in node.values():
+            _r41t_walk(_v, visit)
+    elif isinstance(node, list):
+        for _v in node:
+            _r41t_walk(_v, visit)
+
+
+def _r41t_window_names(ast):
+    """The names a parsed script makes own properties of window."""
+    out = set()
+    for _st in ast["body"]:
+        if _st["type"] == "FunctionDeclaration":
+            out.add(_st["id"]["name"])
+        elif _st["type"] == "VariableDeclaration" and _st["kind"] == "var":
+            out |= {_d["id"]["name"] for _d in _st["declarations"] if _d["id"]["type"] == "Identifier"}
+
+    def _visit(n):
+        _l = n.get("left") if n.get("type") == "AssignmentExpression" else None
+        if not (_l and _l["type"] == "MemberExpression" and _l["object"].get("name") == "window"
+                and _l["object"].get("type") == "Identifier"):
+            return
+        _pr = _l["property"]
+        if not _l["computed"] and _pr["type"] == "Identifier":
+            out.add(_pr["name"])
+        elif _l["computed"] and _pr["type"] == "Literal" and isinstance(_pr.get("value"), str):
+            out.add(_pr["value"])
+    _r41t_walk(ast, _visit)
+    return out
+
+
+def _r41t_built_actions(ast):
+    """String actions passed to a local builder whose parameter becomes a data-action:
+    `function button(label, action) { b.setAttribute('data-action', action); }` + `button(x, 'go')`."""
+    builders, found = {}, set()
+
+    def _target(n):        # the Identifier a data-action is set from, or None
+        if n.get("type") == "CallExpression" and n["callee"].get("type") == "MemberExpression" \
+                and n["callee"]["property"].get("name") == "setAttribute" and len(n["arguments"]) == 2 \
+                and n["arguments"][0].get("value") == "data-action":
+            return n["arguments"][1]
+        if n.get("type") == "AssignmentExpression" and n["left"].get("type") == "MemberExpression" \
+                and n["left"]["property"].get("name") == "action" \
+                and n["left"]["object"].get("type") == "MemberExpression" \
+                and n["left"]["object"]["property"].get("name") == "dataset":
+            return n["right"]
+        return None
+
+    def _fn(n):
+        if n.get("type") != "FunctionDeclaration":
+            return
+        _params = [_q.get("name") for _q in n["params"]]
+        _hits = []
+        _r41t_walk(n["body"], lambda m: _hits.append(_target(m)))
+        for _t in _hits:
+            if _t and _t.get("type") == "Identifier" and _t["name"] in _params:
+                builders[n["id"]["name"]] = _params.index(_t["name"])
+
+    def _call(n):
+        if n.get("type") == "CallExpression" and n["callee"].get("type") == "Identifier" \
+                and n["callee"]["name"] in builders:
+            _args = n["arguments"]
+            _k = builders[n["callee"]["name"]]
+            if _k < len(_args) and _args[_k].get("type") == "Literal" and isinstance(_args[_k].get("value"), str):
+                found.add(_args[_k]["value"])
+    _r41t_walk(ast, _fn)
+    _r41t_walk(ast, _call)
+    return found
+
+
+_r41t_script = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.S | re.I)
+_r41t_win_by_js = {}            # js file -> names it puts on window
+_r41t_win, _r41t_unparsed = set(), []
+if esprima:
+    for _p in sorted(STATIC_JS.glob("*.js")):
+        _r41t_win_by_js[_p.name] = _r41t_window_names(esprima.parseScript(_p.read_text(encoding="utf-8")).toDict())
+        _r41t_win |= _r41t_win_by_js[_p.name]
+    for _p in sorted(TEMPLATES.glob("*.html")):
+        for _m in _r41t_script.finditer(_p.read_text(encoding="utf-8")):
+            _ty = re.search(r"""\btype\s*=\s*["']([^"']+)""", _m.group(1))
+            if "src=" in _m.group(1) or (_ty and "javascript" not in _ty.group(1)):
+                continue            # an external file (read above), or JSON data
+            _body = re.sub(r"\{\{.*?\}\}", "0", _m.group(2), flags=re.S)
+            _body = re.sub(r"\{%.*?%\}|\{#.*?#\}", "", _body, flags=re.S)
+            try:
+                _r41t_win |= _r41t_window_names(esprima.parseScript(_body).toDict())
+            except Exception as _e:
+                _r41t_unparsed.append("%s: %s" % (_p.name, _e))
+    check(not _r41t_unparsed, "js: every inline template script parses, so its window names are read",
+          "; ".join(_r41t_unparsed[:3]))
+    _r41t_plant = esprima.parseScript(
+        "(function () { function localOnly() {} window.onWin = function () {}; window['inBrackets'] = 1; })();"
+        "var topVar = 1; let topLet = 2; const topConst = () => 0; function topFn() {}").toDict()
+    check(_r41t_window_names(_r41t_plant) == {"onWin", "inBrackets", "topVar", "topFn"},
+          "js: a handler counts as defined only when it is on window (an IIFE-local function or a "
+          "let/const does not)", repr(sorted(_r41t_window_names(_r41t_plant))))
+    _r41t_plant = esprima.parseScript(
+        "(function () { function mk(label, act) { var b = 0; b.setAttribute('data-action', act); return b; }"
+        " function mk2(act) { el.dataset.action = act; } function other(act) { b.setAttribute('title', act); }"
+        " mk('x', 'viaParam'); mk2('viaDataset'); other('notAnAction'); mk('y', someVar); })();").toDict()
+    check(_r41t_built_actions(_r41t_plant) == {"viaParam", "viaDataset"},
+          "js: an action passed to a local button builder is read at its call site",
+          repr(sorted(_r41t_built_actions(_r41t_plant))))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),
@@ -2236,7 +2352,8 @@ for src in srcs.values():
             name = m.group(1)
             params = [p.strip().split("=")[0].strip() for p in m.group(2).split(",") if p.strip()]
             defs.setdefault(name, (params, src[m.end():m.end() + 3000]))
-defined = set(defs)
+# Only a name on window is reachable (0j); without esprima, the regex scan is the fallback.
+defined = _r41t_win if esprima else set(defs)
 
 # Actions a template wires up with its OWN delegated listener (closest('[data-action="x"]'))
 # instead of the global window[name] dispatcher — those don't need a global function.
@@ -3528,12 +3645,15 @@ if _prefix_m and _suffix_m:
 # base.html's own scripts count for every page that extends it (panel.js, the dispatcher itself).
 _BASE_JS = set(re.findall(r"asset_url\('js/([\w.-]+)'\)",
                           (TEMPLATES / "base.html").read_text(encoding="utf-8")))
-_defs = {}                       # function name -> set of js files defining it
+_defs = {}                       # function name -> set of js files putting it on window (0j)
 for _js in sorted(STATIC_JS.glob("*.js")):
     _src = _js.read_text(encoding="utf-8")
-    for _fn in re.findall(r"^\s*(?:window\.)?function\s+([A-Za-z_$][\w$]*)", _src, re.M):
-        _defs.setdefault(_fn, set()).add(_js.name)
-    for _fn in re.findall(r"^\s*window\.([A-Za-z_$][\w$]*)\s*=\s*function", _src, re.M):
+    if esprima:
+        _fns = _r41t_win_by_js[_js.name]
+    else:
+        _fns = re.findall(r"^\s*(?:window\.)?function\s+([A-Za-z_$][\w$]*)", _src, re.M) + \
+            re.findall(r"^\s*window\.([A-Za-z_$][\w$]*)\s*=\s*function", _src, re.M)
+    for _fn in _fns:
         _defs.setdefault(_fn, set()).add(_js.name)
 
 # A PARTIAL loads no scripts — its includer does. So a partial's handlers are checked against
@@ -6273,6 +6393,16 @@ _JS_ASSIGNED = re.compile(r"""dataset\.action\s*=\s*['"]([A-Za-z_$][\w$]*)['"]""
                           r"""|setAttribute\(\s*['"]data-action['"]\s*,\s*['"]([A-Za-z_$][\w$]*)['"]""")
 _js_assigned = sorted({(_m.group(1) or _m.group(2), _p.name) for _p in STATIC_JS.glob("*.js")
                        for _m in _JS_ASSIGNED.finditer(_js_code_only(_p.read_text(encoding="utf-8")))})
+# ...and one a script passes to its own button builder (`button(label, 'mdrChange', args)`), whose
+# parameter becomes the data-action: the literal is at the call site, not at setAttribute.
+if esprima:
+    _js_assigned = sorted(set(_js_assigned) | {
+        (_a, _p.name) for _p in STATIC_JS.glob("*.js")
+        for _a in _r41t_built_actions(esprima.parseScript(_p.read_text(encoding="utf-8")).toDict())})
+    check({("wscRemove", "server_workshop.js"), ("mdrChange", "server_plugins.js"),
+           ("mdrInstall", "server_plugins.js")} <= set(_js_assigned),
+          "sweep: the script-assigned scan reads the actions passed to a button builder",
+          repr([_a for _a in _js_assigned if _a[1] in ("server_workshop.js", "server_plugins.js")]))
 check(len(_js_assigned) >= 8 and ("submitRename", "server_files.js") in _js_assigned,
       "sweep: the script-assigned data-action scan found its subjects",
       "found %r — the check below proves nothing" % (_js_assigned,))

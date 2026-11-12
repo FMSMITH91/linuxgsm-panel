@@ -313,8 +313,22 @@ def _pa_post(action):
 # bookkeeping (the outcome, the audit row, the priority nudge), and one still running at the restore
 # met the real transport, which dials the fixture host 127.0.0.1:22 (review 1109).
 import threading as _pa_th
+# A page Start runs the port check first, which reads the host's listening ports through
+# ssh_manager. Unstubbed, that read dialled the fixture host and the check passed only because the
+# dial failed (the gate fails open). Stubbed where it is defined (portscan): port 1 only listens.
+from panel.ops.ssh_manager import portscan as _pa_sm
+_pa_saved_scan = _pa_sm._remote_listening_ports
+_pa_scanned, _pa_listening = [], {1}
+
+
+def _pa_scan(remote):
+    _pa_scanned.append(remote.id)
+    return set(_pa_listening)
+
+
 _pa_before = set(_pa_th.enumerate())
 try:
+    _pa_sm._remote_listening_ports = _pa_scan
     _sm_core.run_as_game_user = _pa_rag
     # set_game_priority resolves in panel/routes/server_detail now, not app — a stub on app
     # would be installed on a name nothing reads.
@@ -342,6 +356,19 @@ try:
           _j.get("success") is True and "issued" in (_j.get("message") or ""), "got %s" % _j)
     check("power: that start really ran on the host", _pa_wait(_pa_ran) and _pa_wait(_pa_prio),
           "ran %s" % _pa_ran)
+    check("power: that start's port check read the host's listening ports (the stub, not a dial)",
+          bool(_pa_scanned), "scanned %s" % _pa_scanned)
+    # ...and a port the host reports as listening refuses the start, through the same route.
+    with app.app_context():
+        _pa_port = db.session.get(GameServer, gs_id).port
+    _pa_listening = {1, _pa_port}
+    _pa_status("online"); _sm_core.server_live_metrics = _pa_metrics(False)
+    _j = _pa_post("start")
+    _pa_listening = {1}
+    check("power: a start whose game port is already listening on the host is refused as port-in-use, "
+          "and never reaches the host",
+          _j.get("success") is False and _j.get("port_in_use") is True and _pa_port and not _pa_ran
+          and "already in use" in (_j.get("message") or ""), "port %r got %s ran %s" % (_pa_port, _j, _pa_ran))
     # A hung server: nothing listening, but processes alive. The column calls that offline —
     # refusing the stop would leave the one command that fixes it unreachable.
     _pa_status("offline")
@@ -412,9 +439,15 @@ try:
           "not backgrounded: %s" % sorted({"backup", "update"} - set(_LONG)))
 finally:
     _pa_started = [t for t in _pa_th.enumerate() if t not in _pa_before]
-    _pa_live = [t.name for t in _pa_started if t.join(15) or t.is_alive()]
+    # join_for, not t.join: a green join that times out RAISES on Python 3.13+, which skipped the
+    # restores below and the named check after them. One 15 s bound for all of them, not 15 s each.
+    _pa_deadline = _pt.monotonic() + 15
+    for _pa_t in _pa_started:
+        join_for(_pa_t, max(0.0, _pa_deadline - _pt.monotonic()))
+    _pa_live = [t.name for t in _pa_started if t.is_alive()]
     (_sm_core.server_live_metrics, _sm_core.run_as_game_user,
      _sm_core.set_game_priority) = _pa_saved
+    _pa_sm._remote_listening_ports = _pa_saved_scan
     _pa_status("offline")
 check("power: every worker the power-action checks started had ended before their stubs were restored (a "
       "worker past _pa_wait went on, and met the real transport once they were)",

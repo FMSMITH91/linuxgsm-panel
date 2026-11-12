@@ -36,6 +36,7 @@ _CASES169 = [
     ("panel/install/requirements.txt", False, False, False),     # what the panel installs
     ("tests/unit/part01.py", False, True, True),                  # coverage runs the suites
     ("tools/js_coverage/run.py", False, False, True),
+    ("tools/nosudo_runner.py", False, False, True),               # js coverage serves the panel under it
     ("tools/lhci_serve.py", False, True, False),
     ("tools/lhci-login.js", False, True, False),
     (".github/lighthouserc.json", True, True, False),            # Lighthouse's own config

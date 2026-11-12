@@ -5003,10 +5003,11 @@ import ast as _ast_scan
 # whole point of a structural check is that it covers what actually exists. Splitting app.py up
 # creates modules steadily, so the list reads the tree instead.
 #
-# It reads the root AND panel/: most modules moved into the package, while app.py, manage.py and
-# db_maintenance.py stay at the root because the systemd unit, recover.sh and the installer each
-# address them by path. A root-only listdir would now cover three modules and exempt eighteen —
-# which is why the assert below names one of each and is deliberately load-bearing.
+# It reads the root AND panel/: every module is in the package now, app.py, manage.py and
+# db_maintenance.py included (in panel/install/, where the systemd unit, recover.sh and the
+# installer address them by path). The root holds no module today; the listdir keeps one added
+# there from being exempt. The assert below names a module in each of two places in panel/ and is
+# deliberately load-bearing.
 _SCAN_MODULES = sorted(
     [f for f in os.listdir(_root)
      if f.endswith(".py") and not f.startswith((".", "_")) and f != "setup.py"]
