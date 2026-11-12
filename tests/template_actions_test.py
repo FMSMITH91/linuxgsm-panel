@@ -2253,35 +2253,53 @@ def _r41t_window_names(ast):
             out |= {_d["id"]["name"] for _d in _st["declarations"] if _d["id"]["type"] == "Identifier"}
 
     def _visit(n):
-        _l = n.get("left") if n.get("type") == "AssignmentExpression" else None
-        if not (_l and _l["type"] == "MemberExpression" and _l["object"].get("name") == "window"
-                and _l["object"].get("type") == "Identifier"):
-            return
-        _pr = _l["property"]
-        if not _l["computed"] and _pr["type"] == "Identifier":
-            out.add(_pr["name"])
-        elif _l["computed"] and _pr["type"] == "Literal" and isinstance(_pr.get("value"), str):
-            out.add(_pr["value"])
+        _nm = _r41t_window_member(n.get("left")) if n.get("type") == "AssignmentExpression" else None
+        if _nm:
+            out.add(_nm)
     _r41t_walk(ast, _visit)
     return out
 
 
+def _r41t_window_member(left):
+    """The name `window.x = ...` or `window['x'] = ...` assigns, or None."""
+    _obj = (left or {}).get("object") or {}
+    if (left or {}).get("type") != "MemberExpression" or _obj.get("name") != "window":
+        return None
+    _pr = left["property"]
+    if not left["computed"]:
+        return _pr["name"] if _pr["type"] == "Identifier" else None
+    return _pr["value"] if _pr["type"] == "Literal" and isinstance(_pr.get("value"), str) else None
+
+
+def _r41t_set_action_arg(n):
+    """The value `x.setAttribute('data-action', <value>)` sets, or None."""
+    if n.get("type") != "CallExpression" or n["callee"].get("type") != "MemberExpression":
+        return None
+    _args = n["arguments"]
+    if n["callee"]["property"].get("name") != "setAttribute" or len(_args) != 2:
+        return None
+    return _args[1] if _args[0].get("value") == "data-action" else None
+
+
+def _r41t_dataset_action_value(n):
+    """The value `x.dataset.action = <value>` assigns, or None."""
+    if n.get("type") != "AssignmentExpression" or n["left"].get("type") != "MemberExpression":
+        return None
+    _l = n["left"]
+    if _l["property"].get("name") != "action" or _l["object"].get("type") != "MemberExpression":
+        return None
+    return n["right"] if _l["object"]["property"].get("name") == "dataset" else None
+
+
 def _r41t_built_actions(ast):
-    """String actions passed to a local builder whose parameter becomes a data-action:
-    `function button(label, action) { b.setAttribute('data-action', action); }` + `button(x, 'go')`."""
+    """String actions passed to a local builder whose parameter becomes a data-action.
+
+    `function button(label, action) { b.setAttribute('data-action', action); }` + `button(x, 'go')`.
+    """
     builders, found = {}, set()
 
-    def _target(n):        # the Identifier a data-action is set from, or None
-        if n.get("type") == "CallExpression" and n["callee"].get("type") == "MemberExpression" \
-                and n["callee"]["property"].get("name") == "setAttribute" and len(n["arguments"]) == 2 \
-                and n["arguments"][0].get("value") == "data-action":
-            return n["arguments"][1]
-        if n.get("type") == "AssignmentExpression" and n["left"].get("type") == "MemberExpression" \
-                and n["left"]["property"].get("name") == "action" \
-                and n["left"]["object"].get("type") == "MemberExpression" \
-                and n["left"]["object"]["property"].get("name") == "dataset":
-            return n["right"]
-        return None
+    def _target(n):        # the node a data-action is set from, or None
+        return _r41t_set_action_arg(n) or _r41t_dataset_action_value(n)
 
     def _fn(n):
         if n.get("type") != "FunctionDeclaration":
