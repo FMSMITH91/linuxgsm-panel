@@ -3557,7 +3557,7 @@ finally:
 _p02_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _stats_src = open(os.path.join(_p02_root, "panel", "routes", "api.py"), encoding="utf-8").read()
 check("stats endpoint: the all-zero sample is rejected by the ram_total sentinel",
-      'm.get("ram_total")' in _stats_src)
+      '_readable = bool(m and m.get("ram_total"))' in _stats_src)
 check("stats endpoint: ...and an unreadable sample does not reach gs.status",
       "_readable and gs.installed and gs.status not in" in _stats_src)
 # game_procs is `ps -u <game user> | wc -l`: the tmux server, a cron update and an install's

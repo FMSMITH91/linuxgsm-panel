@@ -21,7 +21,9 @@ THE SAVED PORT. GameServer.port is what the monitor, the dashboard, the firewall
 A port saved on the Settings tab is LinuxGSM's `port=` key, which takes effect when the game next
 starts. Saved while the server is stopped, the stored port moves at once; saved while it runs, the
 running process still holds the old port, so the stored port stays and the new one waits in
-pending_port until the next panel Start or Restart, which checks and then moves to it. Only games
+pending_port until the next panel Start or Restart, which checks it and, once that start has run and
+exited 0 with no LinuxGSM outcome (a postponed or refused Restart leaves the old process on the old
+port), moves to it. Only games
 whose port IS the cfg `port=` key follow here (94 of LinuxGSM's games: the Settings form offers
 `port` only when the game's _default.cfg has it). The others keep their port in the game's own
 config and still follow at the next panel start's re-read or the Firewall page's Sync ports, as
@@ -65,6 +67,19 @@ def _pck_port(value):
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value if 1 <= value <= 65535 else None
+
+
+def held_ports(row, span):
+    """Every port server `row` holds on its host.
+
+    That is `span` ports from its stored port, and as many from a port saved while it ran (pending_port),
+    which its next start binds. A port that is not one adds none.
+    """
+    held = set()
+    for base in (_pck_port(row.port), _pck_port(getattr(row, "pending_port", None))):
+        if base is not None:
+            held.update(range(base, base + span))
+    return held
 
 
 def start_port(gs):
@@ -130,9 +145,9 @@ def _pck_refusal(gs, remote):
 
 
 def follow_pending(gs, remote, rules):
-    """As a panel Start or Restart goes ahead, move the stored port to a port saved while it ran.
+    """After a panel Start or Restart that ran cleanly, move the stored port to a port saved while it ran.
 
-    Logged, never raised: the start goes ahead either way, and the next panel start's re-read
+    Logged, never raised: the start has already run, and the next panel start's re-read
     still follows the port. A move refused by the re-read's rules leaves it pending.
     """
     port = _pck_port(gs.pending_port)

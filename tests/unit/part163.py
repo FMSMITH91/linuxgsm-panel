@@ -5,10 +5,10 @@
   other family was cut off.
 * LOW (Q1): a rule for one private, link-local or tailnet address above the public SSH rule no longer
   hides public SSH (the move was refused naming the public rule as one it could not copy).
-* LOW, OWNER RULE (Q1): SSH public on ONE public address of the host (or denied on one, above the rule
+* LOW, SAFETY RULE (Q1): SSH public on ONE public address of the host (or denied on one, above the rule
   letting everyone else in) is copied by nothing the panel has: the move is refused naming the rule,
   until the operator has the same rule for the new port. It used to open the new port on every address.
-* lead (Q1/Q4), OWNER RULE: a firewall that lists no `(v6)` row while ufw's files say IPV6=yes is not
+* lead (Q1/Q4), SAFETY RULE: a firewall that lists no `(v6)` row while ufw's files say IPV6=yes is not
   "IPv4 alone": ufw writes `allow proto tcp to any port N` for both families, so an IPv4-only public SSH
   rule made the new port public over IPv6 too. IPv4's rule from anywhere goes in alone.
 * LOW (A03): on the panel host, a loopback viewer (a proxy here that sends no forwarding header looks the
@@ -77,7 +77,7 @@ check("1109 Q1: public SSH listed below a rule for one private, link-local or ta
       repr({k: (r[0], r[1][:200], r[2]) for k, r in _in_got163.items()}))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# LOW, OWNER RULE (Q1): SSH public on one public address only, or denied on one -> refused, named
+# LOW, SAFETY RULE (Q1): SSH public on one public address only, or denied on one -> refused, named
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _DENY_OTHER163 = _OTHER_PUB163 + " 22/tcp  DENY IN  Anywhere"
 _held163 = {
@@ -89,7 +89,7 @@ _held163 = {
     "the panel's host, denied on one address": (_move159([_DENY_OTHER163] + _BOTH163, None, local=True),
                                                 _DENY_OTHER163),
 }
-check("1109 Q1 (OWNER RULE): where SSH is public on ONE public address of the host only, or denied on one above "
+check("1109 Q1 (no public port): where SSH is public on ONE public address of the host only, or denied on one above "
       "the rule letting everyone else in, the move is refused naming that rule, with nothing sent (%s): it opened "
       "the new port to the internet on every address of the family (both families with no v6 row)"
       % ", ".join(_held163),
@@ -104,7 +104,7 @@ _met163 = {
     "denied on one address, the operator's 2022 DENY for it": _move159(
         [_DENY_OTHER163, _OTHER_PUB163 + " 2022/tcp  DENY IN  Anywhere"] + _BOTH163),
 }
-check("1109 Q1 (OWNER RULE): ...and once the operator has the same rule for the new port, the move goes on: nothing "
+check("1109 Q1 (no public port): ...and once the operator has the same rule for the new port, the move goes on: nothing "
       "public added for an address-only allow (the operator's rule already does it, and the note says so on the "
       "panel's host), the public path below an address-only DENY the operator copied",
       _met163["public on one address, the operator's 2022 rule for it"][:3:2] == (True, [])
@@ -114,7 +114,7 @@ check("1109 Q1 (OWNER RULE): ...and once the operator has the same rule for the 
       repr({k: (r[0], r[1][:240], r[2]) for k, r in _met163.items()}))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# lead (Q1/Q4), OWNER RULE: no (v6) row listed is not "IPv4 alone"
+# lead (Q1/Q4), SAFETY RULE: no (v6) row listed is not "IPv4 alone"
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _STORED_TEXT163 = _p135._Host135()._stored()          # ufw's files as the helper prints them: IPV6=yes
 
@@ -132,7 +132,7 @@ _v4only163 = {
     "the panel's host, IPv4 public SSH and no v6 row": _move163([_PUB22_163, _TS0_159], None, local=True),
 }
 _v4fail163 = _move163([_PUB22_163], up=False)
-check("1109 lead (OWNER RULE): on a firewall listing no (v6) row while ufw's files say it handles IPv6 (IPV6=yes, "
+check("1109 lead (no public port): on a firewall listing no (v6) row while ufw's files say it handles IPv6 (IPV6=yes, "
       "so `allow proto tcp to any port N` is written for both families), IPv4 public SSH gets IPv4's rule from "
       "anywhere alone for the new port, never the both-family allow (%s); a failed move takes exactly that rule "
       "back out" % ", ".join(_v4only163),

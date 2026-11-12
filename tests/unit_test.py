@@ -2052,9 +2052,16 @@ _r16d_wrap_ts_handles()
 # LinuxGSM v26.6.0, the complexity gate's failed git diff) drives part159's port-move stand-in through
 # part163's stored-file patch and part12's app, and part28's throwaway repositories; imports part01, 05,
 # 12, 28, 159 and 163, so it follows 163 (part177 is another change's).
+# part179 (review 1112: an SSH port move under a default incoming allow, stacked interfaces in host traffic)
+# drives part159's port-move stand-in through part163's stored-file patch, part12's app and sampler, and
+# part177's /proc/net/dev runner; imports part01, 12, 159, 163 and 177, so it follows 177 and 178.
 # part165 (review 1109 D: the installer's recorded root-grant choice, a partial uninstall's re-run, a
 # by-hand update of a switched branch, and the guard's double-quoted -c read: it reads the runner's bound
 # unit.ts_nested too) runs install.sh/uninstall.sh text under bash; imports part01 and 05.
+# part181 (review 1112 r: a background action whose host call raises, a full backup's wipe-held skip, the
+# required update stop on a branch switch and in the debug report, the uninstaller copy removed last) drives
+# part12's app with every host call stubbed, git on its own scratch history, and uninstall.sh text under bash;
+# imports part01 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10",
           "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19", "part20", "part21",
           "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
@@ -2073,7 +2080,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159",
           "part160", "part161", "part162", "part163", "part164", "part165", "part166", "part167", "part168",
           "part169", "part170", "part171", "part172", "part173", "part174", "part175", "part176", "part177",
-          "part178", "part15")
+          "part178", "part179", "part180", "part181", "part182", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

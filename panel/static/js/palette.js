@@ -458,15 +458,26 @@ var PALETTE_HOST_SECTIONS = [
   }
 
   function runAction(action, id, name) {
-    function fire() {
+    // `force` is true only from the "Start anyway" below: a start refused because its port is in use
+    // (panel/services/port_check.py) is asked again with force, as the server page and dashboard do.
+    function fire(force) {
+      force = force === true;
       // No X-CSRFToken here on purpose: panel.js wraps fetch and adds it to every mutating
       // request. Setting it a second time would just be a second place to keep it right.
       fetch((window.MOUNT || '') + '/api/server/' + encodeURIComponent(id) + '/action', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action })
+        body: JSON.stringify(force ? { action: action, force: true } : { action: action })
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          if (d.port_in_use && !force && window.confirmDialog) {
+            window.confirmDialog({
+              title: _tr('Port in use'), icon: 'exclamation-triangle', bodyText: d.message || '',
+              confirmLabel: _tr('Start anyway'), confirmClass: 'btn-warning',
+              onConfirm: function () { fire(true); }
+            });
+            return;
+          }
           if (window.toast) {
             window.toast(d.message || (d.success ? window.tf('{action} issued for {name}', {action: _tr(ACTION_LABEL[action]), name: name})
                                                  : 'Action failed'),
@@ -483,11 +494,11 @@ var PALETTE_HOST_SECTIONS = [
         // the server's name is guarded (it is its owner's text). As one spliced sentence none of it
         // could match a catalog key.
         bodyNode: _actionBody(action, name),
-        onConfirm: fire
+        onConfirm: function () { fire(false); }
       });
       return;
     }
-    fire();
+    fire(false);
   }
 
   function go() {

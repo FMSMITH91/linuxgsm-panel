@@ -322,6 +322,12 @@ try:
         _gm_saved_un = _gm_mod.uninstall_gmod_content
         _gm_mod.uninstall_gmod_content = lambda *a, **k: (_gm_calls.append("uninstall"),
                                                           (True, ["cstrike"], "x"))[1]
+        # The "not on this host yet" refusal first asks which accounts hold the content: read here as
+        # nobody, so the refusal is the one this check names, not the couldn't-read one a failed
+        # content scan (a dial to the fixture host) gave.
+        _gm_saved_held = (_gm_mod._sm.gmod._r30b_content_holders, _gm_mod._sm.gmod._r28j_server_accounts)
+        _gm_mod._sm.gmod._r30b_content_holders = lambda *a, **k: {}
+        _gm_mod._sm.gmod._r28j_server_accounts = lambda *a, **k: frozenset()
         try:
             _gm_state.pop(gs_id, None)
             _gm_u = _gm_one.post("/api/server/%d/gmod-content" % gs_id,
@@ -345,12 +351,14 @@ try:
                               headers={"X-Requested-With": "XMLHttpRequest"})
         finally:
             _gm_mod.uninstall_gmod_content = _gm_saved_un
+            (_gm_mod._sm.gmod._r30b_content_holders, _gm_mod._sm.gmod._r28j_server_accounts) = _gm_saved_held
             _gm_mod.detect_content_user = lambda *a, **k: {"user": "gmodcontent", "present": {}}
         check("gmod content: a one-server admin cannot uninstall the host's shared content",
               _gm_u.status_code == 403 and "uninstall" not in _gm_refused_calls,
               "got %d %r calls=%r" % (_gm_u.status_code, _gm_u.get_json(), _gm_refused_calls))
         check("gmod content: ...nor download content the host does not have yet",
-              _gm_d.status_code == 403 and "install" not in _gm_refused_calls,
+              _gm_d.status_code == 403 and "install" not in _gm_refused_calls
+              and "Not on this host yet" in ((_gm_d.get_json() or {}).get("message") or ""),
               "got %d %r calls=%r" % (_gm_d.status_code, _gm_d.get_json(), _gm_refused_calls))
         check("gmod content: ...but may still mount content already on the host (control)",
               (_gm_m.get_json() or {}).get("success") is True,
@@ -809,10 +817,13 @@ def _cc_count():
 
 
 def _cc_add(name, template, **extra):
+    """Rows the add stored, or "HTTP <code>" for a 500: a crash stores nothing too, and is no refusal."""
     _before = _cc_count()
     data = {"name": name, "command_template": template, "scope": "all", "enabled": "on"}
     data.update(extra)
-    c.post("/commands/add", data=data)
+    _resp = c.post("/commands/add", data=data)
+    if _resp.status_code >= 500:
+        return "HTTP %d" % _resp.status_code
     return _cc_count() - _before
 
 

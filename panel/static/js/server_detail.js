@@ -2061,17 +2061,17 @@ window.loadHistory = function(){
       var _xs = function(id){ return _histRange==='7d' ? _histX() : _histXScale(id); };
       var pctY = { y:{ min:0, max:100, ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} } };
       _histChart('hist-players', sL,
-        [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
+        [ _ds(_hch_t('Players'), s.map(function(p){return p.players;}), '#58a6ff', true) ],
         { y:{ min:0, ticks:{color:_cmpbInk().tick, maxTicksLimit:5, precision:0}, grid:{color:_cmpbInk().grid} } }, _xs('hist-players'));
       _histChart('hist-server', sL, [
-        Object.assign(_ds('CPU %', s.map(function(p){return p.cpu;}), '#3fb950', true), {yAxisID:'y'}),
-        Object.assign(_ds('RAM MB', s.map(function(p){return p.ram;}), '#d29922', false), {yAxisID:'y1'})
+        Object.assign(_ds(_hch_t('CPU %'), s.map(function(p){return p.cpu;}), '#3fb950', true), {yAxisID:'y'}),
+        Object.assign(_ds(_hch_t('RAM MB'), s.map(function(p){return p.ram;}), '#d29922', false), {yAxisID:'y1'})
       ], { y:{ min:0, max:100, position:'left', ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} },
            y1:{ min:0, position:'right', ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{display:false} } }, _xs('hist-server'));
       _histChart('hist-host', hL, [
-        _ds('CPU %', h.map(function(p){return p.cpu;}), '#58a6ff', false),
-        _ds('RAM %', h.map(function(p){return p.ram;}), '#3fb950', false),
-        _ds('Disk %', h.map(function(p){return p.disk;}), '#d29922', false)
+        _ds(_hch_t('CPU %'), h.map(function(p){return p.cpu;}), '#58a6ff', false),
+        _ds(_hch_t('RAM %'), h.map(function(p){return p.ram;}), '#3fb950', false),
+        _ds(_hch_t('Disk %'), h.map(function(p){return p.disk;}), '#d29922', false)
       ], pctY, _xs('hist-host'));
       _histTimes['hist-net'] = _histTimes['hist-host'];
       _hch_netChart('hist-net', hL, h, _xs('hist-net'));

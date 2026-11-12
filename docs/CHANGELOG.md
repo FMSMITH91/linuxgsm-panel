@@ -191,6 +191,10 @@ compares git commits, not this file.
 
 ### Changed
 
+- **Test checks that read what they name.** Several suite checks could pass without exercising the
+  code they describe. They now read it, and each one was shown to fail when that code is broken. The
+  JS coverage job also runs for a change to the runner it serves the panel under.
+
 - **The files the installer reads now live in `panel/install/`.** `app.py`, `manage.py`,
   `db_maintenance.py`, `recover.sh`, `uninstall.sh`, `VERSION`, `release-signers` and the
   requirements files moved there from the top of the repository. On a per-user install, run
@@ -293,6 +297,55 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **SSH port move keeps the panel connected.** On a host where a firewall rule for one interface or
+  source may block the new port and the panel's own connection could not be read, the move now stops
+  instead of going ahead and losing the panel's access.
+
+- **Host network traffic counts each byte once.** The host page's traffic chart and history no
+  longer add bonds, bridges, VLANs, VM taps and VPN tunnels on top of the network card they run
+  over.
+
+- **A Start, Stop, Restart or update that fails because the host can't be reached is in the audit
+  log.** On a host reached over direct SSH, a background action whose connection failed left no
+  outcome row. It is now recorded as failed with the reason, as on Tailscale and local hosts.
+
+- **"Back up game servers now" names servers a scheduled wipe was holding.** A server skipped
+  because its scheduled wipe or a queued stop or restart was running is no longer reported as
+  "skipped (players online)". In "disconnect players" mode it is queued to back up afterwards.
+
+- **Switching back to main respects required update stops.** The switch now installs, and names, the
+  release no update may skip, as the installer does. While that release isn't signed or verified
+  yet, the switch is refused and nothing is changed.
+
+- **The debug report explains a required update stop.** The Updates section shows when the offered
+  version is a required stop and which release follows it, or which stop is holding the update and
+  why.
+
+- **An interrupted uninstall can be finished with the same command.** The root-owned copy of the
+  uninstaller is now removed last, so `sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh` is
+  still there to run again if the uninstall stops part-way.
+
+- **Project Zomboid Mod IDs with brackets or quotes save.** The Workshop card refused real Mod IDs
+  such as `Arsenal(26)GunFighter[MAIN MOD 2.0]`, and one in the server's list made every save fail.
+  Only what would break the Mods= line (`;`, `=` and line breaks) is refused now.
+
+- **A port saved while a server ran moves only after a restart that happened.** A restart LinuxGSM
+  postponed for players, or one that failed, no longer leaves the panel watching a port the running
+  game does not use. A port saved while a start is under way waits for the next start. A new install
+  is also no longer given that saved port.
+
+- **A scheduled Stop no longer pages "Server offline".** A server stopped by LinuxGSM's own stop (a
+  Schedule tab Stop with player warnings, a cron line) is recorded as stopped without an alert. A
+  crash still alerts.
+
+- **Game config form: long or unusual files and number-looking fields.** The form reads any config
+  in linear time, a file that is not UTF-8 opens in the raw editor only so a save cannot damage it,
+  and a field that holds digits (a seed, a password) accepts text.
+
+- **Start anyway from the command palette, and translated chart legends.** A palette Start refused
+  for a busy port now offers Start anyway; the history charts' CPU, RAM, Disk and Players legends
+  follow the page language; the Remove plugin dialog shows its icon.
 
 - **Saving a scheduled wipe no longer cancels the wipe that is waiting.** Unticking "wait until the
   server is empty" to force a wipe that was waiting for players now runs it on the next check.
@@ -1174,6 +1227,11 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **SSH port moves never open SSH wider than it was.** Under a default-allow firewall, an SSH port
+  move now stops when SSH is denied on one of the host's addresses, instead of letting the new port
+  in there. A move also stops, changing nothing, when the firewall's rules could not be read, rather
+  than opening the new port to everyone.
 
 - **The player-query tool's XML parser is the fixed release.** gamedig, which the panel uses to
   count players, came with a version of its XML parser that could be made to spend a long time on a

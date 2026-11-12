@@ -104,7 +104,7 @@ JOB_IRRELEVANT = {
 # Put back: what each job installs or runs from inside an otherwise irrelevant directory.
 _JOB_KEEP = {
     "coverage": (".github/ci-requirements/coverage.in", ".github/ci-requirements/coverage.txt"),
-    "js coverage": ("tools/js_coverage/**",),
+    "js coverage": ("tools/js_coverage/**", "tools/nosudo_runner.py"),  # run.py starts serve.py under it
     "lighthouse": ("tools/lhci_serve.py", "tools/lhci-login.js", ".github/lighthouserc.json"),
 }
 

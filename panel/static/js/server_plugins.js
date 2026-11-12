@@ -161,7 +161,7 @@
     var send = function () { void post('/change', {action: action, name: name}, t('Working…')); };
     if (action !== 'remove') { send(); return; }
     // The styled dialog; the name goes in as text (bodyText), never as markup.
-    confirmDialog({title: t('Remove plugin'), icon: 'bi-trash', confirmLabel: t('Remove plugin'),
+    confirmDialog({title: t('Remove plugin'), icon: 'trash', confirmLabel: t('Remove plugin'),
                    confirmClass: 'btn-danger', bodyText: tf('Remove {name} from the plugins folder?', {name: name}),
                    onConfirm: send});
   };

@@ -28,6 +28,7 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window
 from panel.services import lgsm_players as _lgp
 from panel.services import port_check as _pck
 import concurrent.futures
+import contextlib
 import functools
 import posixpath
 import re
@@ -278,15 +279,22 @@ def _pck_gate(gs, remote, action, actor, port_gate):
 
 
 def _pck_power_refusal(gs, remote, action, actor, port_gate):
-    """_noop_power_refusal, then the port check (_pck_gate). -> the refusal, or None.
+    """_noop_power_refusal, then the port check (_pck_gate). -> the refusal, or None."""
+    return _noop_power_refusal(gs, remote, action) or _pck_gate(gs, remote, action, actor, port_gate)
 
-    With neither, a Start or Restart goes ahead, so a port saved while the server ran is moved to
-    first (port_check.follow_pending): the start binds it, and the panel watches it from now on.
+
+def _pck_after_power(gs, remote, action, rc, bound):
+    """After a Start or Restart that ran: move the stored port to one saved while the server ran.
+
+    Only once it exited 0 with no LinuxGSM outcome (the caller passes only those): the game has then
+    been started on the saved port. A Restart LinuxGSM postponed or refused, a wipe's refusal, or a
+    failed run leaves the old process on the old port, so the stored port stays and the saved one
+    keeps waiting (port_check.follow_pending). `bound` is the port the start was issued on
+    (port_check.start_port, read before the run): a port saved DURING the run, which the game did not
+    bind, is not followed and waits for the next start.
     """
-    refusal = _noop_power_refusal(gs, remote, action) or _pck_gate(gs, remote, action, actor, port_gate)
-    if refusal is None and action in ("start", "restart") and gs.pending_port:
+    if rc == 0 and action in ("start", "restart") and gs.pending_port and _pck.start_port(gs) == bound:
         _pck.follow_pending(gs, remote, _pck_rules())
-    return refusal
 
 
 def _pck_after_save(gs, settings):
@@ -510,8 +518,8 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_
     synchronous branch never calls it, because there the return value already IS the
     outcome.
 
-    `port_gate`: see _pck_gate. A Start or Restart that goes ahead moves the stored port to one
-    saved on the Settings tab while the server ran (port_check.follow_pending).
+    `port_gate`: see _pck_gate. A Start or Restart that runs and exits 0 moves the stored port to
+    one saved on the Settings tab while the server ran (_pck_after_power, in the background worker).
     """
     # The host is being rebooted cleanly: its plan has decided who brings each server back, and a
     # start, stop or update in the middle of the stop phase would be a second hand on the same
@@ -816,7 +824,9 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 if not remote or not gs:
                     detail = "the server or its host is no longer configured"
                     return
-                with r36j_route_job(server_id, "action"):
+                bound = _pck.start_port(gs)     # the port this start binds (_pck_after_power)
+                with r36j_route_job(server_id, "action"), \
+                        _r41r_audit_raise(f"{action}_server", name, (actor, origin), (server_id, born)):
                     out, rc = _r39a_power_unless_wiping(app, remote, (server_id, short_name, selfname, name),
                                                         action)
                 if out is None:
@@ -829,6 +839,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 ok, detail = (rc == 0), terminal.strip_escapes(out or "")
                 ok, detail, held = _r40_power_outcome(app, gs, (out, rc), (action, actor, origin, name))
                 if held:
+                    _pck_after_power(gs, remote, action, rc, bound)
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)
@@ -839,6 +850,32 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
             _fire_on_done(on_done, ok, detail, action, server_id)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+@contextlib.contextmanager
+def _r41r_audit_raise(action, name, who, ident):
+    """Around a background action's host call: a raise is audited as its failed outcome, then re-raised.
+
+    The click's own request wrote no outcome row (a power action's is written when it finishes, a
+    long action's "_complete" row too), so a direct-SSH host that was down or refused the key left
+    nothing in the audit log, while a tailscale or local host — which answers rc -1 rather than
+    raising — was audited as failed (_shared._r20b_audit_raised). `who` is (user, origin): the
+    worker has no request to take the viewer from. The row is filed under the server only while
+    the id still holds the row the request saw (`ident` is (id, row_birth)), read after the raise,
+    since the call can run for minutes and the server be deleted meanwhile.
+    """
+    try:
+        yield
+    except Exception as exc:
+        from panel.routes._shared import _r20b_audit_raised
+        server_id, born = ident
+        try:
+            db.session.rollback()
+            gs = claim_row(GameServer, server_id, born)
+        except SQLAlchemyError:
+            gs = None
+        _r20b_audit_raised(action, exc, name, who=who[0], actor=who[1], server=gs)
+        raise
 
 
 def _r40_power_outcome(app, gs, result, ctx):
@@ -1018,8 +1055,9 @@ def _bg_action(app, gs, remote, action, on_done=None):
                         log_action(None, f"{action}_complete", target=name, success=False,
                                    detail=detail[:300], server=claim_row(GameServer, server_id, born))
                         return
-                    out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
-                                             monitor=autostart)
+                    with _r41r_audit_raise(f"{action}_complete", name, (None, None), (server_id, born)):
+                        out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
+                                                 monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
                 oc = _lgp.outcome_of(out, rc, action)

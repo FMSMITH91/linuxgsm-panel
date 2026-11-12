@@ -23,9 +23,9 @@ function _hch_drawHost(h){
   var ink = _cmpbInk();
   var pctY = { y:{ min:0, max:100, ticks:{color:ink.tick, maxTicksLimit:5}, grid:{color:ink.grid} } };
   var xs = function(id){ _histTimes[id] = times; return _hch_range === '7d' ? _histX() : _histXScale(id); };
-  _histChart('hh-cpu', L, [ _ds('CPU %', h.map(function(p){ return p.cpu; }), '#58a6ff', true) ], pctY, xs('hh-cpu'));
-  _histChart('hh-ram', L, [ _ds('RAM %', h.map(function(p){ return p.ram; }), '#3fb950', true) ], pctY, xs('hh-ram'));
-  _histChart('hh-disk', L, [ _ds('Disk %', h.map(function(p){ return p.disk; }), '#d29922', true) ], pctY, xs('hh-disk'));
+  _histChart('hh-cpu', L, [ _ds(_hch_t('CPU %'), h.map(function(p){ return p.cpu; }), '#58a6ff', true) ], pctY, xs('hh-cpu'));
+  _histChart('hh-ram', L, [ _ds(_hch_t('RAM %'), h.map(function(p){ return p.ram; }), '#3fb950', true) ], pctY, xs('hh-ram'));
+  _histChart('hh-disk', L, [ _ds(_hch_t('Disk %'), h.map(function(p){ return p.disk; }), '#d29922', true) ], pctY, xs('hh-disk'));
   _hch_netChart('hh-net', L, h, xs('hh-net'));
 }
 

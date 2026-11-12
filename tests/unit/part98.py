@@ -236,7 +236,9 @@ def _bind_move98(auth):
             state["restored"] = True
         if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
             return ufw_stored_answer()
-        if verb in ("ufw-status", "listening-sockets-owner"):
+        if verb == "ufw-status":            # no ufw on this host: step 1 has nothing to open
+            return ("", "sudo: ufw: command not found", 127)
+        if verb == "listening-sockets-owner":
             return ("", "p98: unread", 1)
         return ("", "", 0)
     _p9_patch(_p9_core, "run_privileged", _priv)
@@ -283,7 +285,9 @@ def _r26j_socket_bind98(addr, ip_out, ip_rc=0):
             return ("LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\n" + new, "", 0)
         if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
             return ufw_stored_answer()
-        if verb in ("ufw-status", "listening-sockets-owner"):
+        if verb == "ufw-status":            # no ufw on this host: step 1 has nothing to open
+            return ("", "sudo: ufw: command not found", 127)
+        if verb == "listening-sockets-owner":
             return ("", "p98: unread", 1)
         return ("", "", 0)
 
@@ -642,9 +646,12 @@ def _r26j_inactive_opened98():
     active = _inactive_open98(_ADDED98 + "ufw limit 2222/tcp\n",
                               status="Status: active\n[ 1] %-27sALLOW IN    Anywhere\n" % "22/tcp")
     check("ssh port move on a host whose UFW is inactive: ...stored rules that cannot be read (an "
-          "older helper without the verb, an empty answer) open as before, NOT counted as added; an "
-          "active firewall is read from `status` alone (control)",
-          all(v[:2] == ((False, None), [(2222, "tcp")]) for v in unread.values())
+          "older helper without the verb) refuse the move, naming the unread `ufw show added`, and open "
+          "nothing (opened blind, the allow from Anywhere applied once UFW came on); an empty answer that "
+          "reports success opens as before, NOT counted as added; an active firewall is read from `status` "
+          "alone (control)",
+          unread["unknown verb"][0][0] is False and "ufw show added" in str(unread["unknown verb"][0][1])
+          and unread["unknown verb"][1] == [] and unread["empty"][:2] == ((False, None), [(2222, "tcp")])
           and active == ((True, None), [(2222, "tcp")], []), repr((unread, active)))
 
 

@@ -2246,19 +2246,28 @@ def _take_update_stop(target_sha, target_state, ref, signed):
     passing), which the caller offers as no update: the installer would not move past the stop.
     State "unread" with target None: a read the rule needs failed, which the caller reports as such.
     """
+    return _r41r_stop_applied(target_sha, target_state, ref, signed)[:3]
+
+
+def _r41r_stop_applied(target_sha, target_state, ref, signed):
+    """_take_update_stop's answer plus the stop itself: (target, state, behind, stop or None).
+
+    The stop is named whether or not it can be installed yet, so a caller can say which commit
+    holds the update (the debug report, a branch switch's refusal).
+    """
     try:
         stop = _update_stop(target_sha, ref)
     except _StopUnread:
-        return None, "unread", None
+        return None, "unread", None, None
     if stop is None:
-        return target_sha, target_state, None
+        return target_sha, target_state, None, None
     if not signed(stop):
-        return None, "unsigned", None
+        return None, "unsigned", None, stop
     state = _remote_ci_state(stop)
     if state != "passing":
-        return None, state, None
+        return None, state, None, stop
     n, _, rc = _git(["rev-list", "--first-parent", "--count", "HEAD.." + stop])
-    return stop, state, int(n.strip()) if rc == 0 and n.strip().isdecimal() else None
+    return stop, state, int(n.strip()) if rc == 0 and n.strip().isdecimal() else None, stop
 
 
 def _compute_update_status():
@@ -2482,15 +2491,23 @@ def _compute_update_status():
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     # A required stop between HEAD and it is offered first, as the installer would install it.
-    stop_sha, target_state, stop_behind = _take_update_stop(target_sha, target_state, ref, signed)
+    stop_sha, target_state, stop_behind, stop = _r41r_stop_applied(target_sha, target_state, ref, signed)
     if target_state == "unread":
         return _r17a_unread_status(cur_ver, cur_sha, branch)
     if stop_sha is None:
+        # Held by the stop: the walk's verified commit is not offered, and the status names the
+        # stop and why (the debug report's Updates section reads it).
+        _ci_note_walk(walk_started, commits, None)
         return {**base, "update_available": False, "ci_state": target_state, "behind": behind_n,
                 "behind_tip": behind_n, "target_sha": target_sha,
+                "held_by_stop": {"sha": stop, "state": target_state},
                 "remote_version": version_for_commit(ref) or "?", "changes": []}
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
+    after_stop = {}
     if stop_sha != target_sha:
+        # Offered: the stop, with the walk's verified commit after it (recorded as what was offered).
+        _ci_note_walk(walk_started, commits, stop_sha)
+        after_stop = {"stop_sha": stop_sha, "stop_final": target_sha}
         target_sha, behind_target = stop_sha, stop_behind or behind_target
     # Don't nag if everything between here and the verified target is docs/CI/tests only — those
     # changes don't affect the running panel. (A later commit with real code will move the target
@@ -2521,6 +2538,7 @@ def _compute_update_status():
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
         "changes": shown_log[:10],
+        **after_stop,
         **_release_notes_fields(target_sha),
     }
 
@@ -3010,13 +3028,46 @@ def _verified_branch_target(branch):
                              "automated checks.", branch=branch)
 
 
+def _r41r_switch_stop(branch, target):
+    """A switch to main's verified `target` with the required-stop rule applied: (sha, why, final).
+
+    The same rule as an update's (_take_update_stop, HEAD-relative as install.sh's _apply_update_stop
+    is): a required stop between this checkout and `target` is what the installer installs, so it
+    is what the switch names and hands over, with `final` the newer release that follows it ("" when
+    no stop applies). A stop that is unsigned or whose checks have not passed holds the installer, so
+    the switch is refused before the tracked branch is saved; an unreadable stop list refuses too.
+    Call under _update_lock, after _verified_branch_target fetched the ref.
+    """
+    sha, state, _, stop = _r41r_stop_applied(target, "passing", _REMOTE_TRACKING + branch,
+                                             _release_gate_for(branch))
+    if state == "unread":
+        return "", i18n.Sentence("Not switched: couldn't read whether '{branch}' has a required update stop "
+                                 "before {sha}, so the version the installer would move to is not known.",
+                                 branch=branch, sha=target[:7]), ""
+    if not sha:
+        return "", i18n.Sentence("Not switched: '{branch}' has a required update stop ({stop}) before {sha}, "
+                                 "and the installer moves to it first, but its state is '{state}' (it must "
+                                 "be a signed release that passed its automated checks). Try again later.",
+                                 branch=branch, stop=(stop or "")[:7], sha=target[:7], state=state), ""
+    return sha, "", (target if sha != target else "")
+
+
 def _r37c_switch_target(branch):
     """The commit a switch to `branch` installs and the message it starts with, or ("", why not)."""
+    final = ""
     with _update_lock:
         target, why = (_verified_branch_target(branch) if branch == _DEFAULT_BRANCH
                        else _r37c_signed_branch_tip(branch))
+        if target and branch == _DEFAULT_BRANCH:
+            target, why, final = _r41r_switch_stop(branch, target)
     if not target:
         return "", why
+    if final:
+        return target, i18n.Sentence(
+            "Switching to '{branch}' at {sha}, a required update stop that no update may skip ({final}, its "
+            "newest verified version, is installed by the next update) — the panel is backing up, checking "
+            "it out and verifying it restarts cleanly (auto-rollback if it doesn't). This takes up to a "
+            "minute.", branch=branch, sha=target[:7], final=final[:7])
     if branch == _DEFAULT_BRANCH:
         return target, i18n.Sentence(
             "Switching to '{branch}' at {sha}, its newest version that passed its automated checks — "

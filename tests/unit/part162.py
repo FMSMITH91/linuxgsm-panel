@@ -42,6 +42,13 @@ class _Dropped162(Exception):
     """paramiko's mid-command drop as ssh_manager raises it (ConnectionError with command_started)."""
 
 
+# The schedules here run against the real clock, so a fixed "0 19 * * 4" made a fresh wipe due when a
+# run (plus the drop check's retry gap) crossed Thursday 19:00 UTC: a CI run at 18:56 saw two wipes.
+# These daily times sit 11-12 hours from now, so no scheduled time falls inside a run.
+_H162 = (_time162.gmtime().tm_hour + 12) % 24
+_CRON162, _CRON2_162 = "0 %d * * *" % _H162, "30 %d * * *" % _H162
+
+
 def _new_rust162(name):
     return _p9_new_server(P9_HOST, "rustserver", "rust", 28015, name=name)
 
@@ -51,7 +58,7 @@ def _pending162(sid, **extra):
     with _p9.app_context():
         from panel.db.models import GameServer, db
         gs = db.session.get(GameServer, sid)
-        entry = dict(_ws162.identity(gs), kind="full", preset="custom", at="", cron="0 19 * * 4", tz="UTC",
+        entry = dict(_ws162.identity(gs), kind="full", preset="custom", at="", cron=_CRON162, tz="UTC",
                      wait_empty=True, anchor=_time162.time() - 7200, pending_since=_time162.time() - 3600,
                      backed_up=int(_time162.time() - 3500), tried=0, wait="LinuxGSM did not wipe: 2 player(s) online")
     entry.update(extra)
@@ -105,9 +112,9 @@ def _save162(body, extra=None):
         _p9_delete_server(sid)
 
 
-_BODY162 = {"enabled": True, "kind": "full", "preset": "custom", "cron": "0 19 * * 4", "tz": "UTC"}
+_BODY162 = {"enabled": True, "kind": "full", "preset": "custom", "cron": _CRON162, "tz": "UTC"}
 _force162 = _save162(dict(_BODY162, wait_empty=False))
-_moved162 = _save162(dict(_BODY162, cron="0 20 * * 4"))
+_moved162 = _save162(dict(_BODY162, cron=_CRON2_162))
 _off162 = _save162({"enabled": False})
 _fl162 = ((_force162.get("entry") or {}).get("last") or {})
 check("1109 r39a wipe save: unticking 'wait until empty' on a wipe pending for players keeps that wipe "

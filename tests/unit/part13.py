@@ -1709,7 +1709,7 @@ _MON_STUBBED10 = ("run_command", "run_privileged", "_remote_listening_ports", "h
                   "remote_ufw_blocked_ips", "remote_ufw_deny_ip", "remote_ufw_undeny_ip",
                   "tailnet_exempt_ips", "fwa_panel_source", "load_config", "notifications", "time", "db",
                   "_probe_host", "_query_server_slots", "_query_host_metrics",
-                  "_lgsm_maintenance_running", "_host_reachable", "_host_idle_state",
+                  "_lgsm_maintenance_running", "_lgsm_stopped_on_purpose", "_host_reachable", "_host_idle_state",
                   "_host_disk_pct", "_host_load_mem",
                   "_host_restart_flags", "_server_max_config")
 _mon_saved10 = {k: getattr(_mon10, k) for k in _MON_STUBBED10}
@@ -2148,6 +2148,7 @@ try:
         # the same either way.
         _mon10._probe_host = lambda r, **_k: (r.id, _probes10[r.id])
         _mon10._lgsm_maintenance_running = lambda r, gs: False
+        _mon10._lgsm_stopped_on_purpose = lambda r, gs: False   # a crash: the monitoring lock is there
 
         def _sweep10(pa, pb):
             _probes10[_ids10["ra"]], _probes10[_ids10["rb"]] = pa, pb
@@ -2236,7 +2237,7 @@ try:
               and _db10.session.get(_GS10, _ids10["g1"]).status == "online"
               and any("persisting server status failed" in m for m in _cap_m10.msgs),
               repr((_commit_r10, _cap_m10.msgs)))
-        _mon_restore10("_probe_host", "_lgsm_maintenance_running")
+        _mon_restore10("_probe_host", "_lgsm_maintenance_running", "_lgsm_stopped_on_purpose")
 
         # ── _refresh_player_counts: one-shot empty, full on the transition, peak record ────────
         _counts10 = {}

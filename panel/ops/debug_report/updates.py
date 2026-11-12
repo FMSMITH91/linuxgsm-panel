@@ -24,7 +24,7 @@ import time
 from panel.ops.debug_report._base import Result, ago, cut_words
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}\Z")
-_CI_STATES = ("passing", "pending", "failing", "unknown", "unverified")
+_CI_STATES = ("passing", "pending", "failing", "unknown", "unverified", "unsigned")
 _STALE_CACHE_S = 35 * 60
 _LINE_MAX = 160
 _REASON_MAX = 120
@@ -150,8 +150,16 @@ def _remote_words(data, branch):
     """
     remote = _sha7(data.get("remote_sha"))
     target = data.get("target_sha")
+    held = _r41r_stop_hold(data)
+    if held:
+        return "held by required update stop %s (%s); origin/%s's verified %s waits for it" % (
+            held[0], held[1], branch, _sha7(target))
     if not (data.get("update_available") and target and remote == _sha7(target)):
         return "origin/%s %s" % (branch, remote)
+    if data.get("stop_sha") and _sha7(data.get("stop_sha")) == remote:
+        # A required stop is offered before the walk's verified commit, never origin's tip.
+        return "offered %s (a required update stop; %s is offered after it)" % (
+            remote, _sha7(data.get("stop_final")))
     newer = data.get("newer_unverified")
     if newer == 0:
         return "offered %s (origin/%s's tip)" % (remote, branch)
@@ -160,9 +168,23 @@ def _remote_words(data, branch):
     return "offered %s" % remote
 
 
+def _r41r_stop_hold(data):
+    """(stop sha7, its state) when a required update stop holds the update (#508), else None."""
+    held = data.get("held_by_stop")
+    if not isinstance(held, dict) or not held.get("sha"):
+        return None
+    state = held.get("state") if held.get("state") in _CI_STATES else "n/a"
+    return _sha7(held.get("sha")), state
+
+
 def _gate_words(data, branch, ci):
     """The CI gate line's text: what the check asked CI, or why it asked nothing."""
     behind = data.get("behind_tip", data.get("behind"))
+    held = _r41r_stop_hold(data)
+    if held and data.get("target_sha"):
+        # The walk's commit is verified and passing; the stop before it is what is not.
+        return "ci_state=%s · held: required update stop %s is %s · verified target %s (offered after it)" % (
+            ci, held[0], held[1], _sha7(data.get("target_sha")))
     if not data.get("target_sha"):
         if behind == 0:
             return ("not consulted: HEAD is not behind origin/%s, nothing newer to verify"
