@@ -4310,13 +4310,22 @@ def _r41f_policy_deny(status_out, ports, listed, port):
     """
     ports = [int(p) for p in ports or () if str(p).isdecimal()]
     for v in sorted(listed):
-        walks = [_r41f_port_walk(status_out, p, v == 6) for p in ports]
-        if any(d is None and (dec is None or _r38h_lets_in(dec)) for dec, d, _a in walks):
-            continue
-        deny = next((d for dec, d, _a in walks if dec is None and d is not None), None)
+        deny = _r41f_family_policy_deny(status_out, ports, v == 6)
         if deny is not None and not _r39b_held_met(status_out, deny, port):
             return deny
     return None
+
+
+def _r41f_family_policy_deny(status_out, ports, v6):
+    """_r41f_policy_deny for one family: the DENY that no rule for everyone follows, or None.
+
+    None also where one of `ports` is public on every address under the policy (no such DENY for it, and
+    no rule for everyone refusing it).
+    """
+    walks = [_r41f_port_walk(status_out, p, v6) for p in ports]
+    if any(d is None and (dec is None or _r38h_lets_in(dec)) for dec, d, _a in walks):
+        return None
+    return next((d for dec, d, _a in walks if dec is None and d is not None), None)
 
 
 def _r39b_reachable(rule):
@@ -4414,12 +4423,12 @@ def _r38a_scoped_open(server, before, port, served):
     now = _r38a_session_conn(server) if dials else None
     if now is not None:
         return _r38a_session_open(server, before, port, now, public_on, now.version in fams)
-    if public_on and not dials:
-        return None
     if dials:
-        # Public in every family, yet a DENY the public reading cannot see may meet the new port
-        # (_r38a_scoped_deny): only the panel's session says whether it would, and it was not read.
+        # The session was not read. Public in every family, a DENY the public reading cannot see may
+        # still meet the new port (_r38a_scoped_deny): only that session says whether it would.
         return False, _r39b_unread_refusal(fams, port, public_on)
+    if public_on:
+        return None
     if fams:
         # Public in one family, no session of the panel's through sshd (its own host, Tailscale SSH): that
         # family's rule alone, as the public path did without reading the session (in both families then);
