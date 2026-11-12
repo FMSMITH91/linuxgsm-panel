@@ -94,13 +94,18 @@ check("1112 A03: ...while with the same DENY for the new port already the move g
       _mvok179[0] is True and _mvok179[2] == _PROXY_ADD163, repr(_mvok179))
 
 
-def _route179(rules, session=_PUB_SESS159, box=None, allow_in=True):
+_SESS_DEFAULT179 = object()  # the default session; None already means "unread"
+
+
+def _route179(rules, session=_SESS_DEFAULT179, box=None, allow_in=True):
     """POST /api/remote/<P9_HOST>/ssh-port {port: 2022} over part159's stand-in (or `box`), IPV6=no.
 
     `session`: the panel's session as the remote reads it (None: unread); `allow_in`: the default incoming
     policy. -> (status, json, the allow verbs sent, the newest change_ssh_port audit row). The host row's
     SSH port is put back afterwards, so a move that went through does not shift the next call's.
     """
+    if session is _SESS_DEFAULT179:
+        session = _PUB_SESS159
     box = box or _Box159(rules)
     port0 = _p9_host_row(P9_HOST).port
     try:

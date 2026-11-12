@@ -70,8 +70,10 @@ def _pck_port(value):
 
 
 def held_ports(row, span):
-    """Every port server `row` holds on its host: `span` ports from its stored port, and as many from a
-    port saved while it ran (pending_port), which its next start binds. A port that is not one adds none.
+    """Every port server `row` holds on its host.
+
+    That is `span` ports from its stored port, and as many from a port saved while it ran (pending_port),
+    which its next start binds. A port that is not one adds none.
     """
     held = set()
     for base in (_pck_port(row.port), _pck_port(getattr(row, "pending_port", None))):

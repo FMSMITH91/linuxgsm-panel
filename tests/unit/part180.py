@@ -110,7 +110,7 @@ def _old_cfg_line180(body):
 _abc180 = ["set", "seta", "sets", "setu", "setb", "setx", " ", " ", "\t", '"', ";", "/", "//", "a", "Z", "_", ".",
            "-", "+", "1", "\n", "\r", "\x0b", "\xa0", "\u00e9", "\u0663", "\u212a", "\u0130", "k", "\u3000", "#", "="]
 _xabc180 = ["<!--", "-->", "<!-", "--", "-", ">", "<", "!", "a", "\n", " ", "<!-->", "<property"]
-_rng180 = _random180.Random(180)
+_rng180 = _random180.Random(180)  # nosec B311 - a seeded fuzz corpus, not security
 _cfg_bad180 = [b for b in ("".join(_rng180.choice(_abc180) for _ in range(_rng180.randint(0, 14)))
                            for _ in range(40000)) if _old_cfg_line180(b) != _g180._gcf_cfg_line(b)]
 _xml_bad180 = [t for t in ("".join(_rng180.choice(_xabc180) for _ in range(_rng180.randint(0, 14)))

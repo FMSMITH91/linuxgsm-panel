@@ -202,18 +202,18 @@ check("A02A05: ...and while that stop is unsigned the switch is refused naming i
       "too, before the tracked branch is saved (the installer would hold on a branch already saved as main)",
       _held_sw181[0] == "" and _S7_181 in _held_sw181[1] and "'unsigned'" in _held_sw181[1]
       and _call181[0] is False and _S7_181 in str(_call181[1]), repr((_sw181, _call181)))
-_dA181 = _dbg181.get("all signed", "")
+_da181 = _dbg181.get("all signed", "")
 check("A06A07: the debug report's Updates section says an offered stop is a required update stop with the newer "
       "release after it, never origin's tip, and the CI walk line names the stop as what was offered",
-      "offered %s (a required update stop; %s is offered after it)" % (_S7_181, _B7_181) in _dA181
-      and "origin/main's tip" not in _dA181 and "→ offered %s" % _S7_181 in _dA181, _dA181)
-_dB181 = _dbg181.get("stop unsigned", "")
+      "offered %s (a required update stop; %s is offered after it)" % (_S7_181, _B7_181) in _da181
+      and "origin/main's tip" not in _da181 and "→ offered %s" % _S7_181 in _da181, _da181)
+_db181 = _dbg181.get("stop unsigned", "")
 check("A06A07: ...and an update held by an unsigned stop is shown held by it, with the verified commit not "
       "called an unverified tip and the walk offering nothing",
-      "held by required update stop %s (unsigned)" % _S7_181 in _dB181
-      and "held: required update stop %s is unsigned" % _S7_181 in _dB181
-      and "ci_state=unsigned" in _dB181 and "newest unverified tip" not in _dB181
-      and "nothing offered" in _dB181, _dB181)
+      "held by required update stop %s (unsigned)" % _S7_181 in _db181
+      and "held: required update stop %s is unsigned" % _S7_181 in _db181
+      and "ci_state=unsigned" in _db181 and "newest unverified tip" not in _db181
+      and "nothing offered" in _db181, _db181)
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. uninstall.sh: the root-owned uninstaller copy outlives every slow step (A10)
