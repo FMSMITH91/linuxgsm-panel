@@ -15,8 +15,9 @@ two pages):
 * The routes on part12's app: the server history's host points carry rx/tx; the host history answers
   24h and 7d, refuses any other range, needs MANAGE_REMOTES and the host in the caller's reach, and
   is down-sampled like the server history.
-* The pages: the host page's History card and its scripts in order, the server page's network chart;
-  the shared chart script and the host card's script in node.
+* The pages: the host page's History card, drawn in the state the reply will confirm (the chart area
+  or one line of "No history yet"), its scripts in order, the server page's network chart; the
+  shared chart script and the host card's script in node.
 
 HOW IT RUNS. No host is reached: host_live_metrics and run_command are replaced, part12's transport
 tripwire is armed, the /proc/net/dev line runs on files in a temporary directory, and the page
@@ -29,16 +30,19 @@ import tempfile as _tempfile177
 from datetime import timedelta as _td177
 
 from unit.part01 import _root, check, eq
-from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, P9_HOST2, P9_VIEWER, _p9, _p9_arm, _p9_client,
+from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, P9_HOST2, P9_LOCAL, P9_VIEWER, _p9, _p9_arm, _p9_client,
                          _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part75 import _run_js75
+from unit.part131 import _STATUS131
+from panel.ops import system_ops as _so177, tailscale_integration as _ts177
 from panel.core.clock import utcnow as _now177
 from panel.db import models as _m177
-from panel.db.models import (Group as _Group177, HostSample as _HS177, MetricSample as _MS177, User as _User177,
-                             db as _db177)
+from panel.db.models import Group as _Group177, User as _User177, db as _db177
 from panel.ops.ssh_manager import _core as _core177
 from panel.security import auth as _auth177
 from panel.services import monitoring as _mon177
+
+_hs177, _ms177 = _m177.HostSample, _m177.MetricSample
 
 # ── 1. the /proc/net/dev line, run for real on sample files ─────────────────────────────────────
 proc_net_dev_sample = (
@@ -88,7 +92,7 @@ eq("host read: the /proc/net/dev line prints every interface's received and sent
 # ── 2. which interfaces count ───────────────────────────────────────────────────────────────────
 eq("host traffic: physical interfaces count; lo, veth, docker, br-, virbr, tailscale and wg do not",
    [_core177._hch_net_counted(n) for n in ("ens3", "eth0", "enp0s3", "lo", "lowpan0", "veth1a", "docker0",
-                                            "br-1f2e", "virbr0", "tailscale0", "wg0")],
+                                           "br-1f2e", "virbr0", "tailscale0", "wg0")],
    [True, True, True, False, True, False, False, False, False, False, False])
 _host177, _acc177 = _core177._parse_host_sample("\n".join(_lines177 or []) + "\nNETIF eth2 x 5\nNETIF eth3\n")
 eq("host traffic: the parsed read sums received and sent bytes over the counted interfaces only, and skips a "
@@ -168,7 +172,7 @@ check("migration: both network columns have an ALTER entry, and on an older host
 # ── 5. the sampler, on part12's app ─────────────────────────────────────────────────────────────
 _clock177 = {"at": 5000.0, "rx": 1000, "tx": 2000}
 with _p9.app_context():
-    _ms_floor177 = _db177.session.query(_db177.func.max(_MS177.id)).scalar() or 0
+    _ms_floor177 = _db177.session.query(_db177.func.max(_ms177.id)).scalar() or 0
 
 
 def _sample177(remote, force=False):
@@ -179,15 +183,15 @@ def _sample177(remote, force=False):
 
 def _clear177():
     """Drop this part's samples: P9_HOST's and P9_HOST2's HostSamples, and the MetricSamples it wrote."""
-    _HS177.query.filter(_HS177.remote_id.in_((P9_HOST, P9_HOST2))).delete(synchronize_session=False)
-    _MS177.query.filter(_MS177.id > _ms_floor177).delete(synchronize_session=False)
+    _hs177.query.filter(_hs177.remote_id.in_((P9_HOST, P9_HOST2, P9_LOCAL))).delete(synchronize_session=False)
+    _ms177.query.filter(_ms177.id > _ms_floor177).delete(synchronize_session=False)
     _db177.session.commit()
 
 
 def _host_rows177():
     with _p9.app_context():
         return [(r.net_rx_kbps, r.net_tx_kbps) for r in
-                _HS177.query.filter_by(remote_id=P9_HOST).order_by(_HS177.id.asc()).all()]
+                _hs177.query.filter_by(remote_id=P9_HOST).order_by(_hs177.id.asc()).all()]
 
 
 _r177 = {}
@@ -219,7 +223,7 @@ def _seed177(remote_id, n, minutes=1, rx=800.0, tx=None):
     """`n` HostSamples for `remote_id`, one every `minutes`, the newest a minute ago."""
     with _p9.app_context():
         now = _now177()
-        _db177.session.add_all([_HS177(remote_id=remote_id, ts=now - _td177(minutes=minutes * (n - i)),
+        _db177.session.add_all([_hs177(remote_id=remote_id, ts=now - _td177(minutes=minutes * (n - i)),
                                        cpu=1.0, ram_pct=2.0, disk_pct=3.0, net_rx_kbps=rx, net_tx_kbps=tx)
                                 for i in range(n)])
         _db177.session.commit()
@@ -233,7 +237,7 @@ def _scoped_user177():
         grp.servers.append(_db177.session.get(_m177.RemoteServer, P9_HOST))
         _db177.session.add(grp)
         _db177.session.flush()
-        u = _User177(username="p177_hosts", password_hash="x", display_name="Hosts",  # nosec B106
+        u = _User177(username="p177_hosts", password_hash=_os177.urandom(8).hex(), display_name="Hosts",
                      is_superadmin=False, is_active=True)
         u.groups.append(grp)
         _db177.session.add(u)
@@ -260,10 +264,13 @@ try:
     _p9_arm(who="part177")
     _trips177 = len(_P9_TRIPPED)
     _p9_patch_sm("run_command", lambda *a, **k: ("", "", 0))
+    _p9_patch(_so177, "get_server_status", lambda *a, **k: _STATUS131)
+    _p9_patch(_ts177, "panel_funnel_facts", lambda cfg: {})
+    _p9_patch(_core177, "run_privileged", lambda *a, **k: ("", "", 1))
+    _p9_patch(_core177, "run_command", lambda *a, **k: ("", "", 1))
     with _p9.app_context():
         _clear177()
-        from panel.db.models import GameServer as _GS177
-        _gs177 = _GS177.query.filter_by(remote_id=P9_HOST).first().id
+        _gs177 = _m177.GameServer.query.filter_by(remote_id=P9_HOST).first().id
     _seed177(P9_HOST, 3, rx=800.0, tx=None)
     _uid177, _gid177 = _scoped_user177()
     _A177, _V177, _S177 = _p9_client(P9_ADMIN), _p9_client(P9_VIEWER), _p9_client(_uid177)
@@ -276,6 +283,9 @@ try:
     _g177["scoped"] = _S177.get("/api/remote/%d/history" % P9_HOST).status_code
     _g177["scoped_other"] = _S177.get("/api/remote/%d/history" % P9_HOST2).status_code
     _g177["empty"] = _A177.get("/api/remote/%d/history" % P9_HOST2)
+    _g177["page_none"] = _A177.get("/remote/%d/manage" % P9_HOST2)
+    _seed177(P9_LOCAL, 1)
+    _g177["page_local"] = _A177.get("/server-management")
     # A week at one sample a minute: the cap holds, and 24h keeps only the last day.
     _seed177(P9_HOST2, 7 * 24 * 60 - 10, rx=None, tx=None)
     _g177["week"] = _A177.get("/api/remote/%d/history?range=7d" % P9_HOST2)
@@ -324,6 +334,21 @@ _card177 = _page177[_page177.find('id="hh-card"') - 60:_page177.find('id="hh-car
 check("host page: the History card is on the Overview tab with CPU, RAM, disk and network charts, a 24h/7d "
       "toggle and an empty state",
       all(i > 0 for i in _ix177) and 'data-mtab="overview"' in _card177, repr((_ix177, _card177)))
+
+
+def _hh_state177(resp):
+    """(chart area shown, "No history yet" shown) as the host page arrives, or the status code."""
+    if resp.status_code != 200:
+        return resp.status_code
+    html = resp.get_data(as_text=True)
+    tag = lambda i: html[html.find(i):html.find(">", html.find(i))]  # noqa: E731
+    return ("display:none" not in tag('id="hh-charts"'), "display:none" not in tag('id="hh-empty"'))
+
+
+eq("host page: the card arrives in the state the reply will confirm: the chart area for a host with samples "
+   "(a remote's page and the panel host's own), one line of No history yet for a host with none",
+   [_hh_state177(_g177[k]) for k in ("page", "page_local", "page_none")],
+   [(True, False), (True, False), (False, True)])
 check("host page: Chart.js, then the shared chart script, then the card's own script",
       all(i > 0 for i in _sx177) and _sx177 == sorted(_sx177), repr(_sx177))
 _sp177 = _g177["spage"].get_data(as_text=True) if _g177["spage"].status_code == 200 else ""
@@ -344,8 +369,8 @@ def _read177(*parts):
 hist_js = _read177("panel", "static", "js", "history_charts.js")
 host_js = _read177("panel", "static", "js", "remote_history.js")
 sd_js = _read177("panel", "static", "js", "server_detail.js")
-_sd_cut177 = sd_js[sd_js.find("function _r25c_histUnread("):sd_js.find("document.addEventListener('click'",
-                                                                        sd_js.find("window.loadHistory = "))]
+_sd_end177 = sd_js.find("document.addEventListener('click'", sd_js.find("window.loadHistory = "))
+_sd_cut177 = sd_js[sd_js.find("function _r25c_histUnread("):_sd_end177]
 
 js_stage = r"""
 global.window = global;
@@ -355,8 +380,10 @@ const canvas = id => ({id, getContext: () => ({id})});
 ['hh-cpu', 'hh-ram', 'hh-disk', 'hh-net', 'hist-players', 'hist-server', 'hist-host', 'hist-net']
   .forEach(id => { els[id] = canvas(id); });
 els['hh-card'] = {offsetParent: {}};
-els['hh-empty'] = {style: {display: 'none'}};
-els['hh-charts'] = {style: {}};
+const cls = () => ({on: new Set(), toggle(k, v){ if (v) this.on.add(k); else this.on.delete(k); },
+                    contains(k){ return this.on.has(k); }});
+els['hh-empty'] = {style: {display: ''}, classList: cls()};
+els['hh-charts'] = {style: {display: 'none'}};
 els['hist-empty'] = {style: {display: 'none'}};
 els['hist-charts'] = {style: {}};
 global.document = {getElementById: id => (id in els ? els[id] : null),
@@ -373,12 +400,14 @@ _prog177 = js_stage + hist_js + "\n" + host_js + "\n" + r"""
 (async () => {
   const out = {};
   out.fmt = [_hch_rate(999.4), _hch_rate(1000), _hch_rate(1530), _hch_rate(null), _hch_rate(undefined)];
+  const state = () => [els['hh-empty'].style.display, els['hh-empty'].classList.contains('hh-over'),
+                       els['hh-charts'].style.display, els['hh-charts'].style.visibility || ''];
   replyWith = {host: []}; window.loadHostHistory(); await settle();
-  out.empty = [els['hh-empty'].style.display, els['hh-charts'].style.visibility, Object.keys(built).length];
+  out.empty = state().concat([Object.keys(built).length]);
   replyWith = {host: [{t: '2026-11-12T10:00:00Z', cpu: 5, ram: 6, disk: 7, rx: 500, tx: 1500},
                       {t: '2026-11-12T10:01:00Z', cpu: 8, ram: 9, disk: 10, rx: null, tx: null}]};
   window.loadHostHistory(); await settle();
-  out.shown = [els['hh-empty'].style.display, els['hh-charts'].style.visibility];
+  out.shown = state();
   out.ids = Object.keys(built).sort();
   const net = built['hh-net'];
   out.net = net && net.data.datasets.map(d => [d.data, d.spanGaps]);
@@ -388,6 +417,9 @@ _prog177 = js_stage + hist_js + "\n" + host_js + "\n" + r"""
   els['hh-empty'].style.display = 'KEPT';
   replyWith = {error: 'boom'}; window.loadHostHistory(); await settle();
   out.err = els['hh-empty'].style.display;
+  els['hh-empty'].style.display = 'none';
+  replyWith = {host: []}; window.loadHostHistory(); await settle();
+  out.aged = state();
   const btn = {getAttribute: () => '7d', parentNode: {querySelectorAll: () => []}};
   clickFn({target: {closest: () => btn}}); await settle();
   out.range = [urls[urls.length - 1], net.destroyed === true];
@@ -398,17 +430,21 @@ _out177 = _run_js75("host page History card: empty state, charts, error replies,
 if _out177 is not None:
     eq("history charts: a rate reads kbit/s up to 1000 and Mbit/s above it; no rate is blank",
        _out177.get("fmt"), ["999 kbit/s", "1.0 Mbit/s", "1.5 Mbit/s", "", ""])
-    eq("host page History card: no samples says No history yet over the chart area, which keeps its height "
-       "(hidden, not removed), and builds no chart",
-       _out177.get("empty"), ["", "hidden", 0])
+    eq("host page History card: a card that arrived with no samples and gets none keeps its one line of No "
+       "history yet, and builds no chart",
+       _out177.get("empty"), ["", False, "none", "", 0])
     check("host page History card: samples show the CPU, RAM, disk and network charts; network has received "
           "and sent with gaps where there is no rate, Mbit/s on the axis and in the tooltip",
-          _out177.get("shown") == ["none", ""] and _out177.get("ids") == ["hh-cpu", "hh-disk", "hh-net", "hh-ram"]
+          _out177.get("shown") == ["none", False, "", ""]
+          and _out177.get("ids") == ["hh-cpu", "hh-disk", "hh-net", "hh-ram"]
           and _out177.get("net") == [[[500, None], False], [[1500, None], False]]
           and _out177.get("tick") == "1.5 Mbit/s" and _out177.get("tip") == "Sent: 1.5 Mbit/s"
           and _out177.get("cpu") == [5, 8], repr(_out177))
     eq("host page History card: an error reply keeps what is on screen (it is not No history yet)",
        _out177.get("err"), "KEPT")
+    eq("host page History card: charts on screen whose samples are gone keep their height (hidden, not removed) "
+       "with No history yet laid over them",
+       _out177.get("aged"), ["", True, "", "hidden"])
     eq("host page History card: the 7d button asks for range=7d and rebuilds the charts",
        _out177.get("range"), ["/api/remote/7/history?range=7d", True])
 

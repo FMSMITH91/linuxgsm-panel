@@ -2047,8 +2047,9 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   overflow-wrap: anywhere;
 }
 
-/* Host page History card (remote_history.js): each chart a fixed height, and "No history yet" laid
-   over the chart area, which keeps its size, so the card does not change height when data arrives. */
+/* Host page History card (remote_history.js): each chart a fixed height. When samples that were shown
+   are gone (aged out with the page open), "No history yet" is laid over the chart area, which keeps
+   its size (.hh-over). */
 .hh-body {
   position: relative;
 }
@@ -2058,7 +2059,13 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   height: 140px;
 }
 
-.hh-empty {
+@media (width <= 767.98px) {
+  .hh-plot {
+    height: 110px;
+  }
+}
+
+.hh-over {
   position: absolute;
   inset: 0;
   z-index: 1;

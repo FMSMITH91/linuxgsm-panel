@@ -115,6 +115,10 @@ function _hch_t(s){ return window.t ? window.t(s) : s; }
 // The network chart: received and sent, in kbit/s (Mbit/s above 1000), from a host series' rx/tx.
 function _hch_netChart(id, labels, points, xScale){
   var ink = _cmpbInk();
+  // The rate labels on the y axis are wider than a percentage's, so a phone-width chart has room for
+  // fewer time labels: four, not six, or the two-line labels the 24h axis draws run into each other.
+  var box = document.getElementById(id);
+  if (xScale && xScale.ticks && box && box.parentNode && box.parentNode.clientWidth < 420) xScale.ticks.maxTicksLimit = 4;
   _histChart(id, labels, [
     _hch_rateDs(_hch_t('Received'), points.map(function(p){ return p.rx; }), '#58a6ff'),
     _hch_rateDs(_hch_t('Sent'), points.map(function(p){ return p.tx; }), '#d29922')

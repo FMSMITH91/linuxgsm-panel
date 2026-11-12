@@ -682,6 +682,12 @@ def _host_sample_row(rid, now, m):
                       net_rx_kbps=rx, net_tx_kbps=tx)
 
 
+def host_has_history(remote_id):
+    """Whether host `remote_id` has any HostSample: the host page draws its History card's chart area
+    only then, and a one-line "No history yet" otherwise, so neither state changes height on load."""
+    return db.session.query(HostSample.id).filter(HostSample.remote_id == remote_id).first() is not None
+
+
 # Each host's last byte counters: remote id -> (read at, rx bytes, tx bytes). In memory only: a
 # rate needs two readings, and after a panel start the first sample simply has none. Registered,
 # so a deleted host's counters are not used for the next host given the same id.

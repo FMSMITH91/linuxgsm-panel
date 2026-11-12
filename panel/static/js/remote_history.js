@@ -3,12 +3,18 @@
 // screen, which is how often a sample is recorded.
 var _hch_range = '24h';
 
-// The chart area keeps its height (visibility, not display) so the card does not change size when
-// the reply arrives; "No history yet" is drawn over it instead.
+// The page arrives in the state the route expects (remote_manage.html), so a reply that agrees moves
+// nothing. Charts already on screen that the reply empties keep their height (visibility, not
+// display) with "No history yet" laid over them; the first samples for a card that had none show the
+// chart area, the one change of height, made once, when there is something to show.
 function _hch_showEmpty(empty){
   var e = document.getElementById('hh-empty'), c = document.getElementById('hh-charts');
-  if (e) e.style.display = empty ? '' : 'none';
-  if (c) c.style.visibility = empty ? 'hidden' : '';
+  if (!e || !c) return;
+  var shown = c.style.display !== 'none';
+  e.style.display = empty ? '' : 'none';
+  e.classList.toggle('hh-over', empty && shown);
+  c.style.visibility = (empty && shown) ? 'hidden' : '';
+  if (!empty) c.style.display = '';
 }
 
 function _hch_drawHost(h){
