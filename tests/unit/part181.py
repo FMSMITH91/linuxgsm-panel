@@ -105,7 +105,7 @@ try:
     _p9_patch(_sh_r181, "_r39a_backup_held", lambda sid, wipe_ok=False: sid == _h181)
     _p9_patch(_pb181, "_record_full_clock", lambda app, summary: _fb181["summary"].append(summary))
     _p9_patch(_pb181, "_record_game_clock", lambda app, sid, gname: None)
-    _p9_patch(_pb181.bk, "record_queued", lambda sid: _fb181["queued"].append(sid))
+    _p9_patch(_pb181.bk, "record_queued", _fb181["queued"].append)
     _A_fb181 = _p9_client(P9_ADMIN)
     _resp_fb181 = _A_fb181.post("/api/panel/backup/full", json={"mode": "now"})
     _p9_drain()
