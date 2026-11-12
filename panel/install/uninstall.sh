@@ -610,6 +610,7 @@ _gamedig_link_ours() {
     esac
     return 1
 }
+_r41r_lib_rm=0   # /usr/local/lib/linuxgsm-panel is this install's to remove, LAST (see the end)
 if [[ "${SHARED_MINE}" -eq 0 ]]; then
     warn "Leaving the host-wide pieces alone — they belong to another install still on this host:"
     warn "    ${OTHER_INSTALL:-${SHARED_OWNER}}"
@@ -620,13 +621,11 @@ elif [[ -d /usr/local/lib/linuxgsm-panel ]] || [[ -f /etc/cron.d/lgsm-node-tools
     sudo_note
     # The root-owned pieces install_root_tools() places OUTSIDE the panel directory: the helper,
     # the offline DB-repair copy, panel.conf (which records the install's paths) and the
-    # root-owned installer.
+    # root-owned installer — removed at the very end, not here: that directory holds the only
+    # root-owned copy of this uninstaller, and a run stopped in a slow step below (fail2ban's
+    # restart, the account's removal) is finished by running that copy again.
     if [[ -d /usr/local/lib/linuxgsm-panel ]]; then
-        if ${U_SUDO} rm -rf /usr/local/lib/linuxgsm-panel; then
-            ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy"
-        else
-            warn "Could not remove /usr/local/lib/linuxgsm-panel — remove it by hand."
-        fi
+        _r41r_lib_rm=1
     fi
     # The fail2ban jail the panel installs, and its filter and whitelist. These are root-owned
     # files OUTSIDE the panel directory (privileged.py's WRITE_TARGETS is the authoritative list),
@@ -758,6 +757,18 @@ if [[ "${MODE}" = "system" ]]; then
         else
             ok "Removed the dedicated panel user '${PANEL_USER}' (game-server users untouched)"
         fi
+    fi
+fi
+
+# Last of the removals: the root-owned directory with this uninstaller's root-owned copy in it.
+# Every step above that is stopped part-way leaves it, so `sudo bash <that copy>` can be run again
+# and finishes the job (the leftover check near the top counts the account, grants and sysctl
+# file). Running from that copy is still safe: bash reads this script through its open descriptor.
+if [[ "${_r41r_lib_rm}" -eq 1 ]]; then
+    if ${U_SUDO} rm -rf /usr/local/lib/linuxgsm-panel; then
+        ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy"
+    else
+        warn "Could not remove /usr/local/lib/linuxgsm-panel — remove it by hand."
     fi
 fi
 

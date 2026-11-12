@@ -28,6 +28,7 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window
 from panel.services import lgsm_players as _lgp
 from panel.services import port_check as _pck
 import concurrent.futures
+import contextlib
 import functools
 import posixpath
 import re
@@ -816,7 +817,8 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 if not remote or not gs:
                     detail = "the server or its host is no longer configured"
                     return
-                with r36j_route_job(server_id, "action"):
+                with r36j_route_job(server_id, "action"), \
+                        _r41r_audit_raise(f"{action}_server", name, (actor, origin), (server_id, born)):
                     out, rc = _r39a_power_unless_wiping(app, remote, (server_id, short_name, selfname, name),
                                                         action)
                 if out is None:
@@ -839,6 +841,32 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
             _fire_on_done(on_done, ok, detail, action, server_id)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+@contextlib.contextmanager
+def _r41r_audit_raise(action, name, who, ident):
+    """Around a background action's host call: a raise is audited as its failed outcome, then re-raised.
+
+    The click's own request wrote no outcome row (a power action's is written when it finishes, a
+    long action's "_complete" row too), so a direct-SSH host that was down or refused the key left
+    nothing in the audit log, while a tailscale or local host — which answers rc -1 rather than
+    raising — was audited as failed (_shared._r20b_audit_raised). `who` is (user, origin): the
+    worker has no request to take the viewer from. The row is filed under the server only while
+    the id still holds the row the request saw (`ident` is (id, row_birth)), read after the raise,
+    since the call can run for minutes and the server be deleted meanwhile.
+    """
+    try:
+        yield
+    except Exception as exc:
+        from panel.routes._shared import _r20b_audit_raised
+        server_id, born = ident
+        try:
+            db.session.rollback()
+            gs = claim_row(GameServer, server_id, born)
+        except SQLAlchemyError:
+            gs = None
+        _r20b_audit_raised(action, exc, name, who=who[0], actor=who[1], server=gs)
+        raise
 
 
 def _r40_power_outcome(app, gs, result, ctx):
@@ -1018,8 +1046,9 @@ def _bg_action(app, gs, remote, action, on_done=None):
                         log_action(None, f"{action}_complete", target=name, success=False,
                                    detail=detail[:300], server=claim_row(GameServer, server_id, born))
                         return
-                    out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
-                                             monitor=autostart)
+                    with _r41r_audit_raise(f"{action}_complete", name, (None, None), (server_id, born)):
+                        out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
+                                                 monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
                 oc = _lgp.outcome_of(out, rc, action)
