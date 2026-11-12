@@ -1810,11 +1810,9 @@ function _hhmmIn(date, tz) {
 }
 
 function renderDailyRestart() {
-  var el = document.getElementById('dailyrestart-time');
-  var hint = document.getElementById('dailyrestart-hosthint');
+  var el = document.getElementById('dailyrestart-time'), hint = document.getElementById('dailyrestart-hosthint');
   if (!el) return;
-  var hostTime = el.dataset.hostTime || '05:00';
-  var hostTz = el.dataset.hostTz || '';
+  var hostTime = el.dataset.hostTime || '05:00', hostTz = el.dataset.hostTz || '';
   var mine = _wallTimeIn(hostTime, hostTz, _viewerTz());
   if ('value' in el && el.tagName === 'INPUT') { el.value = mine; } else { el.textContent = mine; }
   if (!hint) return;
@@ -1825,10 +1823,8 @@ function renderDailyRestart() {
 // different and more useful statement than showing the host's number as if it were yours.
 // Only the values are set here; the words are in the template so they can be translated.
 function _showDailyRestartHostTime(hint, hostTime, hostTz) {
-  var tEl = document.getElementById('drh-time');
-  var tzEl = document.getElementById('drh-tz');
-  var onEl = document.getElementById('drh-on');
-  var unkEl = document.getElementById('drh-on-unknown');
+  var tEl = document.getElementById('drh-time'), tzEl = document.getElementById('drh-tz');
+  var onEl = document.getElementById('drh-on'), unkEl = document.getElementById('drh-on-unknown');
   if (tEl) tEl.textContent = hostTime;
   if (tzEl) tzEl.textContent = hostTz ? '(' + hostTz + ')' : '';
   if (onEl) onEl.hidden = !hostTz;
@@ -2484,8 +2480,7 @@ pollWhenVisible(_consolePoll, 30000);
 // The LinuxGSM line: the server's release, and "v26.5.0 available" when LinuxGSM has a newer one.
 // An unread release leaves the dash, and an unread latest says nothing about being behind.
 function _showLgsmVersion(info) {
-  var el = document.getElementById('lgsm-version');
-  var behind = document.getElementById('lgsm-behind');
+  var el = document.getElementById('lgsm-version'), behind = document.getElementById('lgsm-behind');
   if (!el || !behind || !info) return;
   if (info.release) el.textContent = info.release;
   if (info.behind && info.latest) {

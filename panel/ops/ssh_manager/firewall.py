@@ -1034,17 +1034,25 @@ def _fwc_protect_paths(groups, paths):
             if g.get("is_ssh") or (paths.get("tailnet") and g.get("is_tailscale")):
                 _fwc_protect(g, "ssh_unread")
         return
-    if paths.get("web_ports") and not paths["conns"]:
-        # The panel's host with this viewer's way in unknown (an unbelieved proxy, a headerless one, a port
-        # not told apart): unknown is not safe here either. Only the connections read above were held, so
-        # with none read the reverse proxy's own allow (`443/tcp`) was an ordinary delete (review 1109).
-        for g in groups:
-            if _r39b_may_admit_web(g, paths):
-                _fwc_protect(g, "web_unknown")
+    _r39b_protect_unknown_web(groups, paths)
     for conn in paths["conns"]:
         if not ufweval.exempt(conn, paths["ts"]):
             for g in _fwc_sole_ways(groups, conn, paths["apps"]):
                 _fwc_protect_for(g, conn)
+
+
+def _r39b_protect_unknown_web(groups, paths):
+    """On the panel's host with this viewer's way in unknown, protect every rule that may admit its web ports.
+
+    An unbelieved proxy, a headerless one, a port not told apart: unknown is not safe here either. Only
+    the connections read were held, so with none read the reverse proxy's own allow (`443/tcp`) was an
+    ordinary delete (review 1109). `paths["web_ports"]` is set only there (_fwc_paths).
+    """
+    if not paths.get("web_ports") or paths["conns"]:
+        return
+    for g in groups:
+        if _r39b_may_admit_web(g, paths):
+            _fwc_protect(g, "web_unknown")
 
 
 def _r39b_may_admit_web(g, paths):

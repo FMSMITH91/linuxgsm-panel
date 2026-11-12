@@ -4163,22 +4163,45 @@ def _r38h_public_fams(server, status_out, ports, port=None):
     letting everyone else in), with no rule of the operator's doing the same for `port` yet. Widened to
     every address, the move opened the new port where SSH was not public (the OWNER RULE).
     """
-    ports = [int(p) for p in ports or () if str(p).isdecimal()]
-    readings = {v: _r39b_family_way(status_out, ports, v == 6) for v in (4, 6)}
-    listed = {4, 6} if _r38a_family_rules(status_out, 6) or (readings[4][0] and _r39b_ufw_v6_on(server)) else {4}
+    readings = _r39b_family_readings(status_out, ports)
+    listed = _r39b_listed(server, status_out, readings[4][0])
     readings = {v: readings[v] for v in listed}
-    held = next((h for _pub, h in readings.values() if h is not None
-                 and not _r39b_held_met(status_out, h, port)), None)
-    # A held allow the operator has matched for `port` already: SSH public on that address only, the new
-    # port too. Its family is not public (nothing is added for it), and the message names that rule.
-    met = next((h for _pub, h in readings.values() if h is not None and _r38h_lets_in(h)
-                and _r39b_held_met(status_out, h, port)), None)
+    held, met = _r39b_held_and_met(status_out, readings, port)
     fams = {v for v, (pub, _h) in readings.items() if pub}
     if (fams == listed and held is None) or not firewall.remote_ufw_default_allows_in(server):
         # The policy is read only when the rules leave a family closed or hold a rule, as before (one more
         # host read). Allow: every port is public on every address already, the new one too.
         return listed, fams, held, met
     return listed, set(listed), None, None
+
+
+def _r39b_family_readings(status_out, ports):
+    """{4: _r39b_family_way's reading, 6: the same} over the decimal ones of `ports`."""
+    ports = [int(p) for p in ports or () if str(p).isdecimal()]
+    return {v: _r39b_family_way(status_out, ports, v == 6) for v in (4, 6)}
+
+
+def _r39b_listed(server, status_out, v4_public):
+    """The families _r38h_public_fams judges: IPv4, and IPv6 where its list has a row or ufw handles IPv6.
+
+    ufw's stored files are read only when IPv4's SSH is public (`v4_public`) and no `(v6)` row is listed.
+    """
+    if _r38a_family_rules(status_out, 6) or (v4_public and _r39b_ufw_v6_on(server)):
+        return {4, 6}
+    return {4}
+
+
+def _r39b_held_and_met(status_out, readings, port):
+    """(the held rule not yet matched for `port` or None, a held allow already matched for it or None).
+
+    `readings` is {family: (public, held rule or None)} of the families listed. A held allow the operator
+    has matched for `port` already: SSH public on that address only, the new port too. Its family is not
+    public (nothing is added for it), and the message names that rule.
+    """
+    helds = [h for _pub, h in readings.values() if h is not None]
+    held = next((h for h in helds if not _r39b_held_met(status_out, h, port)), None)
+    met = next((h for h in helds if _r38h_lets_in(h) and _r39b_held_met(status_out, h, port)), None)
+    return held, met
 
 
 def _r39b_ufw_v6_on(server):
@@ -4320,20 +4343,29 @@ def _r38a_scoped_open(server, before, port, served):
     if public_on:
         return None
     if dials:
-        # The panel reaches this host through sshd and its session was not read. With SSH public in one
-        # family, that family's rule alone went in, and a panel dialling the other was cut off.
-        return False, (i18n.Sentence(
-            "Couldn't read the panel's own SSH connection to this host, and SSH is public over IPv{family} only, "
-            "so whether port {port} would let the panel in is not known. Nothing was changed.",
-            family=min(fams), port=port) if fams else i18n.Sentence(
-            "Couldn't read the panel's own SSH connection to this host, and no public rule lets SSH in, so which "
-            "rule port {port} would need is not known. Nothing was changed.", port=port))
+        return False, _r39b_unread_refusal(fams, port)
     if fams:
         # Public in one family, no session of the panel's through sshd (its own host, Tailscale SSH): that
         # family's rule alone, as the public path did without reading the session (in both families then);
         # the other family is still not opened.
         return _r38h_family_public(server, before, port, min(fams))
     return _r38a_public_off(before, port, served, met)
+
+
+def _r39b_unread_refusal(fams, port):
+    """Why _r38a_scoped_open refuses a move on a remote the panel reaches through sshd, its session unread.
+
+    With SSH public in one family (`fams`), that family's rule alone went in, and a panel dialling the other
+    was cut off; with none, which rule the new port would need is not known.
+    """
+    if fams:
+        return i18n.Sentence(
+            "Couldn't read the panel's own SSH connection to this host, and SSH is public over IPv{family} only, "
+            "so whether port {port} would let the panel in is not known. Nothing was changed.",
+            family=min(fams), port=port)
+    return i18n.Sentence(
+        "Couldn't read the panel's own SSH connection to this host, and no public rule lets SSH in, so which "
+        "rule port {port} would need is not known. Nothing was changed.", port=port)
 
 
 def _r38a_public_off(before, port, served, met=None):

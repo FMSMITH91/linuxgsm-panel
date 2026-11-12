@@ -473,6 +473,26 @@ def _r39a_wipe_refusal(server_id, name, action):
                          "it has finished.", name=name, action=action)
 
 
+def _r40_action_blocked(gs, remote, action):
+    """Why `action` is not run on `gs` at all right now (installing, a clean reboot, a wipe), else None.
+
+    The single routes, the bulk worker and the chat bots all come through _run_action, so all of
+    them are refused here. One whole sentence per install reason: the reason was spliced into a
+    shared one.
+    """
+    busy = _install_busy_reason(gs)
+    if busy == "still installing":
+        return i18n.Sentence("'{name}' is still installing — '{action}' was not run.",
+                             name=gs.name, action=action)
+    if busy:
+        return i18n.Sentence("'{name}' is not installed — '{action}' was not run.",
+                             name=gs.name, action=action)
+    from panel.services import host_reboot as _hr
+    if _hr.reboot_busy(remote.id):
+        return _hr.busy_message(remote.display_name)
+    return _r39a_wipe_refusal(gs.id, gs.name, action)
+
+
 def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_gate=None):
     """Execute a whitelisted action (permission already checked).
 
@@ -497,21 +517,10 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_
     # start, stop or update in the middle of the stop phase would be a second hand on the same
     # server (panel/services/host_reboot.py). After the reboot is sent, an operator's own Start or
     # Stop wins instead: the server leaves the plan, so the restore never acts behind their back.
-    busy = _install_busy_reason(gs)
-    if busy:
-        # The single routes, the bulk worker and the chat bots all come through here.
-        # One whole sentence per reason: the reason was spliced into a shared one.
-        if busy == "still installing":
-            return False, i18n.Sentence("'{name}' is still installing — '{action}' was not run.",
-                                        name=gs.name, action=action)
-        return False, i18n.Sentence("'{name}' is not installed — '{action}' was not run.",
-                                    name=gs.name, action=action)
+    blocked = _r40_action_blocked(gs, remote, action)
+    if blocked:
+        return False, blocked
     from panel.services import host_reboot as _hr
-    if _hr.reboot_busy(remote.id):
-        return False, _hr.busy_message(remote.display_name)
-    wiping = _r39a_wipe_refusal(gs.id, gs.name, action)
-    if wiping:
-        return False, wiping
     if action in ("start", "stop", "restart") and gs.reboot_restore:
         _hr.exclude_row(gs, actor, action, origin=origin)
     # A power action that is already a no-op is refused — see _noop_power_refusal.
@@ -813,19 +822,8 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 if out is None:
                     detail = str(rc)        # refused: rc is the refusal (_r39a_power_unless_wiping)
                     return
-                clean = terminal.strip_escapes(out or "")
-                ok, detail = (rc == 0), clean
-                # The outcome is audited under the server only while it is still that server, and
-                # its bookkeeping (the queued flags, the priority nudge) is done only then.
-                held = still_held(gs)
-                oc = _lgp.outcome_of(out, rc, action)
-                if oc is not None:
-                    # The button answered "issued" long before: the console says what LinuxGSM did.
-                    ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
-                    return
-                log_action(actor, f"{action}_server", target=name, success=(rc == 0),
-                           detail=clean[-400:], actor=origin, server=gs if held else None)
-                detail = _lg265_ahl_said(app, gs, held, action, clean)
+                ok, detail = (rc == 0), terminal.strip_escapes(out or "")
+                ok, detail, held = _r40_power_outcome(app, gs, (out, rc), (action, actor, origin, name))
                 if held:
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
@@ -837,6 +835,29 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
             _fire_on_done(on_done, ok, detail, action, server_id)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def _r40_power_outcome(app, gs, result, ctx):
+    """A finished background start/stop/restart's (ok, detail, bookkeeping due), audited.
+
+    `result` is (out, rc); `ctx` is (action, actor, origin, server name). The outcome is audited
+    under the server only while it is still that server, and its bookkeeping (the queued flags,
+    the priority nudge, _after_power_action) is due only then. The caller runs that bookkeeping
+    itself, after it has this answer: the bookkeeping can raise after the action succeeded, and
+    the success must still reach on_done.
+    """
+    out, rc = result
+    action, actor, origin, name = ctx
+    clean = terminal.strip_escapes(out or "")
+    held = still_held(gs)
+    oc = _lgp.outcome_of(out, rc, action)
+    if oc is not None:
+        # The button answered "issued" long before: the console says what LinuxGSM did.
+        ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
+        return ok, detail, False
+    log_action(actor, f"{action}_server", target=name, success=(rc == 0),
+               detail=clean[-400:], actor=origin, server=gs if held else None)
+    return rc == 0, _lg265_ahl_said(app, gs, held, action, clean), held
 
 
 def _r39a_power_unless_wiping(app, remote, ident, action):
