@@ -7920,7 +7920,10 @@ _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
 # — which is how this check first reported a fix that was already in place.
 _uninst_cut = _uninst.rindex('if [[ "${MODE}" = "system" ]]; then')
-_uninst_common = _uninst[:_uninst_cut]
+# ...and after that branch's own closing `fi` (column 0): the root-owned directory is removed LAST,
+# below the account's removal, so a stopped run keeps the uninstaller copy it is re-run from.
+_uninst_sys_end = _uninst.find("\nfi\n", _uninst_cut)
+_uninst_common = _uninst[:_uninst_cut] + (_uninst[_uninst_sys_end + 4:] if _uninst_sys_end > 0 else "")
 _user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
                  "/usr/local/bin/linuxgsm-panel-recover"]
 

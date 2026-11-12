@@ -26,7 +26,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
     _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock,
-    _lg264_bk_status, _r39a_backup_held)
+    _lg264_bk_status, _r39a_backup_held, _R39A_BACKUP_HELD)
 
 
 class _FullBackupTally:
@@ -38,6 +38,7 @@ class _FullBackupTally:
         self.failures = []      # every failure, for the recorded summary
         self.alertable = []     # the subset whose servers aren't muted by a tag, for the alert
         self.queued = []
+        self.held = []          # skipped while its scheduled wipe or a queued stop/restart ran
         self.in_flight = []     # already being archived by the maintenance menu's Backup button
         self.keep_unread = False   # config.json unreadable: pruned to the maximum, not the setting
 
@@ -57,6 +58,9 @@ class _FullBackupTally:
             self.ok_n,
             (", %d failed" % self.fail_n) if self.fail_n else "",
             (", %d skipped (players online)" % self.skip_n) if self.skip_n else "")
+        if self.held:
+            summary += (", %d skipped (a scheduled wipe or a queued stop or restart was running: %s)"
+                        % (len(self.held), ", ".join(self.held)))
         if self.failures:
             summary += " — " + "; ".join(self.failures)
         if self.queued:
@@ -91,9 +95,17 @@ def _full_backup_server(app, gs, modes, tally):
         gs.id, gs.remote, gs.short_name, gs.lgsm_name, _keep,
         game_type=gs.game_type, port=gs.port, force=force,
         query_type=gs.query_type, runner=run_game_backup, held=functools.partial(still_held, gs))
+    # A server held by its wipe (or a queued stop/restart) is queued in "disconnect players" mode
+    # too: the operator asked for it to be backed up, and players were not what stopped it.
+    queue = defer or (force and _r41r_held_skip(reason, was_skipped))
     if still_held(gs):
-        _record_full_backup_outcome(gs, (ok, reason, was_skipped), defer, tally)
-        _schedule_after_full(app, ident, (ok, was_skipped), (defer, was_pending))
+        _record_full_backup_outcome(gs, (ok, reason, was_skipped), queue, tally)
+        _schedule_after_full(app, ident, (ok, was_skipped), (queue, was_pending))
+
+
+def _r41r_held_skip(reason, was_skipped):
+    """Whether a full run's skip was _marked_backup's wipe/queued-action hold, not players online."""
+    return bool(was_skipped) and reason is _R39A_BACKUP_HELD
 
 
 def _schedule_after_full(app, ident, result, queue):
@@ -126,13 +138,20 @@ def _schedule_after_full(app, ident, result, queue):
 
 
 def _record_full_backup_outcome(gs, result, defer, tally):
-    """One server's outcome in a full run: its status entry, its queue flag, the tally."""
+    """One server's outcome in a full run: its status entry, its queue flag, the tally.
+
+    `defer`: a skipped server is queued (backup_pending). A skip by the wipe/queued-action hold is
+    tallied apart from "players online", which it is not.
+    """
     ok, reason, was_skipped = result
     # ...and the outcome replaces the mark, which would otherwise hold the
     # restart sweep off this server for good.
     _game_backup_status[gs.id] = _lg264_bk_status(ok, reason, was_skipped)
     if was_skipped:
-        tally.skip_n += 1
+        if _r41r_held_skip(reason, was_skipped):
+            tally.held.append(gs.name)
+        else:
+            tally.skip_n += 1
         if defer:
             gs.backup_pending = True   # ticker backs it up once it empties
             db.session.commit()
