@@ -8019,11 +8019,12 @@ check("already_escalated: ...and it calls the decision rather than inlining one"
       "no _already_escalated() call inside _run_local")
 
 # ── LinuxGSM refuses a few games above a distro release, and the picker said nothing ───────────
-# btl and onset are refused above Ubuntu 20.04 by LinuxGSM's check_deps.sh (bf1942/bfv above 22.04
-# up to v26.3.0). The picker offered them on every host, so on a 24.04 box they could only ever fail —
-# with LinuxGSM's "not supported on Ubuntu 24.04.5" arriving minutes into the install, after the
-# account had been created. Measured on the test VPS for bf1942, bfv and btl. The serverlist's os
-# column is NOT the cap (it follows LinuxGSM's Docker image base: v26.4.0 left cod on 24.04).
+# Up to v26.5.0 LinuxGSM's check_deps.sh refused two games above Ubuntu 20.04 (bf1942/bfv above 22.04
+# up to v26.3.0); v26.6.0 dropped both and refuses none. The picker offered them on every host, so on
+# a 24.04 box they could only ever fail — with LinuxGSM's "not supported on Ubuntu 24.04.5" arriving
+# minutes into the install, after the account had been created. Measured on the test VPS for bf1942,
+# bfv and one of the two. The serverlist's os column is NOT the cap (it follows LinuxGSM's Docker image
+# base: v26.4.0 left cod on 24.04). The cap table is empty now, so an invented game (capd) stands in.
 from app import game_os_unsupported as _gosu, load_game_list as _lgl               # noqa: E402
 
 for _g, _h, _want, _why in (
@@ -8045,8 +8046,10 @@ for _g, _h, _want, _why in (
 # whatever an earlier suite had already cached.
 _app_mod = sys.modules["app"]   # loaded by the from-imports above; never `import app as` beside them
 from panel.services import lgsm_data as _ld                                        # noqa: E402
-_o_sl, _o_cache = _ld.serverlist, dict(_app_mod._GAME_LIST_CACHE)
+_o_sl, _o_cache, _o_caps = _ld.serverlist, dict(_app_mod._GAME_LIST_CACHE), dict(_ld._LGC_DISTRO_CAPS)
 try:
+    _ld._LGC_DISTRO_CAPS.clear()
+    _ld._LGC_DISTRO_CAPS["capd"] = {"ubuntu": "20.04", "debian": "11"}
     _ld.serverlist = lambda *a, **k: [
         {"shortname": "cs", "gameservername": "csserver", "gamename": "Counter-Strike 1.6",
          "os": "ubuntu-26.04"},
@@ -8054,7 +8057,7 @@ try:
          "os": "ubuntu-24.04"},
         {"shortname": "bf1942", "gameservername": "bf1942server", "gamename": "Battlefield 1942",
          "os": "ubuntu-26.04"},
-        {"shortname": "onset", "gameservername": "onsetserver", "gamename": "Onset",
+        {"shortname": "capd", "gameservername": "capdserver", "gamename": "Capped Game",
          "os": "ubuntu-20.04"},
         {"shortname": "noos", "gameservername": "noosserver", "gamename": "No OS Declared",
          "os": ""},
@@ -8064,9 +8067,9 @@ try:
     _flagged = {g["shortname"]: g.get("legacy_os") for g in _games if g.get("legacy_os")}
     check("game os: exactly the games LinuxGSM's check_deps refuses on newer releases are flagged "
           "(cod, left on ubuntu-24.04 in the os column, is not)",
-          set(_flagged) == {"onset"}, str(sorted(_flagged)))
+          set(_flagged) == {"capd"}, str(sorted(_flagged)))
     check("game os: ...and it carries the release it actually tops out at",
-          _flagged.get("onset") == "ubuntu-20.04", str(_flagged))
+          _flagged.get("capd") == "ubuntu-20.04", str(_flagged))
     check("game os: a game on the newest release is NOT flagged",
           not next((g for g in _games if g["shortname"] == "cs"), {}).get("legacy_os"))
     check("game os: ...nor one that declares no OS at all",
@@ -8075,6 +8078,8 @@ try:
           all("os" in g for g in _games), "a row lost its os field")
 finally:
     _ld.serverlist = _o_sl
+    _ld._LGC_DISTRO_CAPS.clear()
+    _ld._LGC_DISTRO_CAPS.update(_o_caps)
     _app_mod._GAME_LIST_CACHE.clear()
     _app_mod._GAME_LIST_CACHE.update(_o_cache)
 

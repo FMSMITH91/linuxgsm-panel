@@ -42,10 +42,11 @@ import uuid
 from panel.core import i18n, runtime_stats
 from panel.services import reboot_words as _rw
 from panel.core.config import _r15a_cfg_int, load_config
-from panel.core.panel_state import (_action_output, _expected_offline, _full_backup_lock,
+from panel.core.panel_state import (_expected_offline, _full_backup_lock,
                                     _host_reboots, _hr_lock, _install_jobs, _install_lock,
                                     _monitor_state, _reboot_awaiting, _reboot_when_empty, _rwe_lock,
-                                    r36j_route_jobs, register_remote_state)
+                                    live_actions as _q_live_actions, r36j_route_jobs,
+                                    register_remote_state)
 from panel.db.models import AuditLog, GameServer, RemoteServer, db, row_label
 from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
@@ -100,8 +101,16 @@ DEFAULT_WAIT_HOURS = 24
 # the ones of those that are maintenance a reboot must not cut through: a `restart` among them, whose
 # start would bring the server back under the reboot (a daily cron restart at the reboot's minute).
 # With LinuxGSM's aliases (lgsm/modules/core_getopt.sh): `./<s> u` is the same update as `./<s> update`.
+# Every command that changes the server's files is maintenance too (v26.5.0's core_getopt.sh names):
+# a Rust wipe the operator's cron or the Terminal runs stops the server INSIDE its own process (no
+# `stop` process appears), so without its own name here the census read it as a stopped server with
+# nothing in flight and the reboot was sent mid-delete, or between its stop and its start; and the
+# mods installer, FastDL, the Unreal map compressor, clear-modules and MTA's resources write files
+# a reboot would leave half written.
 _MAINT_CMDS = ("update|u|force-update|fu|update-restart|ur|validate|v|backup|b|install|i|auto-install|"
-               "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules|restart|r")
+               "ai|mods-update|mu|workshop-update|wu|update-lgsm|ul|uf|update-modules|restart|r|"
+               "full-wipe|fw|wipeall|wa|map-wipe|mw|wipe|w|wi|mods-install|mi|mods-remove|mr|fastdl|fd|"
+               "map-compressor|mc|clear-modules|cm|install-default-resources|ir")
 _INFLIGHT_CMDS = "monitor|m|start|st|stop|sp|debug|d|details|dt|" + _MAINT_CMDS
 _PROBE_KEYS = ("SESSION", "LOCK", "ASIDE", "CRON", "INFLIGHT", "MAINT", "DEBUG", "WARN", "BOOT", "MID", "NOW", "SEC")
 
@@ -478,48 +487,39 @@ _blocker = _rw.blocker
 
 def _row_blockers(rows):
     out = []
-    from panel.routes import _shared as _sh, manage_servers as _ms
+    from panel.routes import manage_servers as _ms
     for gs in rows:
         held = _ms._r35b_reboot_hold(gs)            # an install, or an uninstall, of it
-        if held:
-            out.append(_blocker(held, gs.name))
-            continue
-        with _install_lock:
-            job = _install_jobs.get(gs.id)
-        if job and job.get("status") == "running":
-            out.append(_blocker("install", gs.name))
-        if _sh._backup_in_progress(gs.id):
-            out.append(_blocker("backup", gs.name))
-        live = _q_live_actions(gs.id)
-        if live:
-            # One blocker for the server (the sentence names it once), every live action in it.
-            out.append(_blocker("action", gs.name, ", ".join(a.get("action") or "" for a in live)))
-        out.extend(_blocker(kind, gs.name) for kind in _r36j_route_jobs(gs.id))
+        out.extend([_blocker(held, gs.name)] if held else _r40_running_work(gs))
     return out
 
 
-def _r36j_route_jobs(gid):
-    """A content install, mods install/remove or Run now the routes are running on server `gid`."""
-    return (["content"] if _content_running(gid) else []) + r36j_route_jobs(gid)
+def _r40_running_work(gs):
+    """The census blockers for what is running on one server: an install, a backup, actions, route jobs."""
+    from panel.routes import _shared as _sh
+    out = []
+    with _install_lock:
+        job = _install_jobs.get(gs.id)
+    if job and job.get("status") == "running":
+        out.append(_blocker("install", gs.name))
+    if _sh._backup_in_progress(gs.id):
+        out.append(_blocker("backup", gs.name))
+    live = _q_live_actions(gs.id)
+    if live:
+        # One blocker for the server (the sentence names it once), every live action in it.
+        out.append(_blocker("action", gs.name, ", ".join(a.get("action") or "" for a in live)))
+    return out + [_blocker(kind, gs.name) for kind in _r36j_route_jobs(gs.id, live)]
 
 
-def _q_live_actions(gid):
-    """Every long LinuxGSM action still running on server `gid`, newest first.
+def _r36j_route_jobs(gid, live=()):
+    """What the routes and sweeps are running on server `gid`, by r36j kind (plus a content install).
 
-    The WHOLE registration chain, not its head. A later action displaces the running one into
-    `prev` (_shared._begin_action_tail), and the head is marked ended at the START of its final
-    read (_end_action_tail), before the displaced run is tailed again. Reading the head alone, an
-    update still downloading under a validate whose end read was out was no action at all, and a
-    reboot could stop the server under it. _button_backup_running walks the chain the same way
-    (which is why a displaced Backup-button backup was already seen, as a "backup").
+    A mods install/remove, a Run now, a scheduled wipe, a queued stop/restart, a server-page action.
+    A server-page action registers "action" for its run (server_detail): with `live` (the server's
+    running long actions) given, it is left out, since the live chain's blocker already names it.
     """
-    live, seen, e = [], set(), _action_output.get(gid)
-    while isinstance(e, dict) and id(e) not in seen:
-        seen.add(id(e))
-        if not e.get("ended") and not e.get("forgotten"):
-            live.append(e)
-        e = e.get("prev")
-    return live
+    jobs = (["content"] if _content_running(gid) else []) + r36j_route_jobs(gid)
+    return [k for k in jobs if not (k == "action" and live)]
 
 
 def _content_running(gid):

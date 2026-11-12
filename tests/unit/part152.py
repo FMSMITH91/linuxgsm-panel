@@ -18,8 +18,8 @@ import tempfile
 
 from unit.part01 import check
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_audit, _p9_client,
-                         _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm,
+from unit.part12 import (P9_ADMIN, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_audit,
+                         _p9_client, _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm,
                          _p9_restore_all)
 from unit.part75 import _cut_or75, _js75, _run_js75
 from panel.ops.ssh_manager import _core as _smc152
@@ -82,6 +82,9 @@ _saved_gi_cmpd = (_gi152._CACHE_DIR, _gi152._cmpd_http_get, dict(_gi152._state),
 _tmp_cmpd = pathlib.Path(tempfile.mkdtemp(prefix="lgsm-unit-p152-"))
 _KNOWN_cmpd = {"rustserver", "gmodserver", "vhserver"}
 try:
+    # Armed: the closing "nothing reached a real transport" check reads only what an armed tripwire
+    # records, and this part never armed it (review 1109 T11).
+    _p9_arm(who="part152")
     _gi152._CACHE_DIR = _tmp_cmpd
     _gi152._cmpd_http_get = _get_cmpd
     _gi152._state.update(index=None, index_at=0.0, index_failed_until=0.0)
@@ -230,6 +233,7 @@ def _run_cmpd(backup, wipe_out=(_OK_cmpd, "", 0), kind="full", pending=True, wai
                          pending_since=0, backed_up=0, tried=0, wait="")
         entry.update(opts.get("extra") or {})
         _ws152.put(sid, entry)
+        _p9_arm(who="part152")
         _p9_patch(_sh152, "_marked_backup",
                   lambda *a, **k: (backups.append((a[2], k.get("force"))), backup)[1])
         _p9_patch(_sh152, "_alert_backup", lambda *a, **k: None)
@@ -287,6 +291,7 @@ try:
     _ws152.put(_sid_cmpd, {"short_name": "rustserver", "remote_id": P9_HOST, "born": "2001-01-01 00:00:00",
                            "kind": "full", "preset": "custom", "cron": "* * * * *", "tz": "UTC",
                            "anchor": 0, "pending_since": 1})
+    _p9_arm(who="part152")
     _p9_patch(_sh152, "_marked_backup", lambda *a, **k: (_stale_cmds_cmpd.append("backup"), (True, "", False))[1])
     _p9_patch_sm("run_as_game_user", lambda *a, **k: (_stale_cmds_cmpd.append("wipe"), ("", "", 0))[1])
     _wr152.sweep(_p9)
@@ -330,6 +335,7 @@ check("wipe: wipe and full-wipe are LinuxGSM commands the panel and its helper m
 _rsid_cmpd = _p9_new_server(P9_HOST, "rustserver", "rust", 28015, name="p152-route")
 _csid_cmpd = _p9_new_server(P9_HOST, "csgoserver", "csgo", 27099, name="p152-cs")
 try:
+    _p9_arm(who="part152")
     _A2_cmpd = _p9_client(P9_ADMIN)
     _url_cmpd = "/api/server/%d/wipe-schedule" % _rsid_cmpd
     _set_cmpd = _A2_cmpd.post(_url_cmpd, json={"enabled": True, "kind": "full", "preset": "first-thursday",
@@ -345,6 +351,7 @@ try:
     _viewer_cmpd = _p9_client(P9_VIEWER).post(_url_cmpd, json={"enabled": False}).status_code
     _off_cmpd = _A2_cmpd.post(_url_cmpd, json={"enabled": False}).get_json()
 finally:
+    _p9_restore_all()
     _ws152.put(_rsid_cmpd, None)
     _p9_delete_server(_rsid_cmpd)
     _p9_delete_server(_csid_cmpd)
@@ -402,9 +409,9 @@ _tout_cmpd = _run_js75(_name_tiles_cmpd, (
     "  return {game, hidden: false, disabled: false, getAttribute: k => (k in a ? a[k] : null),\n"
     "    setAttribute: (k, v) => { a[k] = String(v); }, pressed: () => a['aria-pressed']}; }\n"
     "const tiles = [tile('rust', 'rust rustserver'), tile('gmod', \"garry's mod gmodserver\"),\n"
-    "  tile('btl', 'battalion: legacy btlserver')];\n"
+    "  tile('mohaa', 'medal of honor: allied assault mohaaserver')];\n"
     "const events = [], none = {hidden: true};\n"
-    "const sel = {value: '', options: [{value: 'rust', disabled: false}, {value: 'btl', disabled: true}],\n"
+    "const sel = {value: '', options: [{value: 'rust', disabled: false}, {value: 'mohaa', disabled: true}],\n"
     "  dispatchEvent: e => events.push([e.type, e.bubbles])};\n"
     "global.document = {querySelectorAll: () => tiles,\n"
     "  getElementById: id => ({'game-type-select': sel, 'game-search-none': none})[id] || null};\n"
@@ -412,23 +419,23 @@ _tout_cmpd = _run_js75(_name_tiles_cmpd, (
               for _f in ("filterGameTiles", "syncGameTiles", "pickGameTile"))
     + "const shown = () => tiles.filter(x => !x.hidden).map(x => x.game);\n"
     "filterGameTiles({value: 'GMODserv'}); const one = shown();\n"
-    "filterGameTiles({value: 'battalion legacy'}); const two = shown();\n"
+    "filterGameTiles({value: 'allied medal'}); const two = shown();\n"
     "filterGameTiles({value: 'zzz'}); const zero = [shown(), none.hidden];\n"
     "filterGameTiles({value: ''}); const all = [shown(), none.hidden];\n"
     "syncGameTiles(); const dis = tiles.map(x => x.disabled);\n"
-    "tiles[2].disabled = true; pickGameTile(tiles[2]); const afterBtl = [sel.value, events.length];\n"
+    "tiles[2].disabled = true; pickGameTile(tiles[2]); const afterOff = [sel.value, events.length];\n"
     "pickGameTile(tiles[0]);\n"
-    "console.log(JSON.stringify({one, two, zero, all, dis, afterBtl, val: sel.value, events,\n"
+    "console.log(JSON.stringify({one, two, zero, all, dis, afterOff, val: sel.value, events,\n"
     "  pressed: tiles.map(x => x.pressed())}));\n"))
 if _tout_cmpd is not None:
     check("install page: the search keeps the tiles whose name or script holds every word typed, and says "
           "when none does",
-          _tout_cmpd.get("one") == ["gmod"] and _tout_cmpd.get("two") == ["btl"]
-          and _tout_cmpd.get("zero") == [[], False] and _tout_cmpd.get("all") == [["rust", "gmod", "btl"], True],
+          _tout_cmpd.get("one") == ["gmod"] and _tout_cmpd.get("two") == ["mohaa"]
+          and _tout_cmpd.get("zero") == [[], False] and _tout_cmpd.get("all") == [["rust", "gmod", "mohaa"], True],
           repr(_tout_cmpd))
     check("install page: a tile mirrors the select (a game the host cannot install, or not offered, is "
           "disabled), and a click sets the select and fires its change; a disabled tile does nothing",
-          _tout_cmpd.get("dis") == [False, True, True] and _tout_cmpd.get("afterBtl") == ["", 0]
+          _tout_cmpd.get("dis") == [False, True, True] and _tout_cmpd.get("afterOff") == ["", 0]
           and _tout_cmpd.get("val") == "rust" and _tout_cmpd.get("events") == [["change", True]]
           and _tout_cmpd.get("pressed") == ["true", "false", "false"], repr(_tout_cmpd))
 # The icons wait for the page's load event, and then load only for the tiles the grid's own scroll

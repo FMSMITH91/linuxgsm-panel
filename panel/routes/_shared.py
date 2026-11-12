@@ -20,7 +20,7 @@ from panel.core import i18n
 from panel.core.http import (_json_str, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
-    _game_backup_status, r36j_route_jobs, register_remote_state, register_server_state)
+    _game_backup_status, r36j_route_job, r36j_route_jobs, register_remote_state, register_server_state)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, claim_row, db, row_birth,
     row_label, still_held)
 from panel.ops import (backup as bk)
@@ -570,7 +570,30 @@ def _button_backup_running(sid):
     return False
 
 
-def _marked_backup(sid, *args, runner=None, held=None, **kwargs):
+# What a backup and a queued stop/restart do not run beside: LinuxGSM's scheduled wipe (routes/
+# wipe_schedule registers "wipe" for its whole try) and a queued stop/restart being run ("queued",
+# _settle_queued_action). Each side registers before it asks about the other, so of two that start
+# together at least one sees the other and waits.
+_R39A_WIPE_KINDS = frozenset(("wipe",))
+_R39A_BACKUP_HOLD_KINDS = frozenset(("wipe", "queued"))
+_R39A_BACKUP_HELD = i18n.Sentence("a scheduled wipe or a queued stop or restart of this server is running")
+
+
+def _r39a_wipe_running(sid):
+    """Whether the scheduled wipe of server `sid` is being tried now (its backup, or LinuxGSM's wipe)."""
+    return bool(_R39A_WIPE_KINDS.intersection(r36j_route_jobs(sid)))
+
+
+def _r39a_backup_held(sid, wipe_ok=False):
+    """Whether a backup of server `sid` must wait: its scheduled wipe or its queued stop/restart is running.
+
+    `wipe_ok`: the backup is the wipe's own, so only a queued stop/restart holds it.
+    """
+    kinds = _R39A_BACKUP_HOLD_KINDS - _R39A_WIPE_KINDS if wipe_ok else _R39A_BACKUP_HOLD_KINDS
+    return bool(kinds.intersection(r36j_route_jobs(sid)))
+
+
+def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
     """run_game_backup, with the server marked RUNNING in _game_backup_status while it runs.
 
     Only the manual per-server route set that flag, so the two tickers backed servers up
@@ -587,9 +610,20 @@ def _marked_backup(sid, *args, runner=None, held=None, **kwargs):
     has no entry for forget_rows to drop, and the caller then writes nothing over the mark: it
     stayed "running" under the id, and a new server that took the id read as being backed up, so
     _run_due_restarts left it alone. Such a mark is removed here, whichever way the run ended.
+
+    Not while the server's scheduled wipe or a queued stop/restart of it runs (_r39a_backup_held):
+    answered as a skip, (False, why, True), so every caller leaves it due or queued for its next
+    pass. The hourly ticker, the queued sweep, a full run and "Back up now" ran LinuxGSM `backup`
+    in the middle of a wipe, archiving files as they were deleted, its stop and start racing the
+    wipe's. `wipe_ok` is the wipe's own backup, taken under its registration. Asked after the mark
+    goes in, as the wipe and the queued sweep register before they read the mark.
     """
     mark = {"running": True, "ok": None, "msg": "", "ts": time.time()}
     _game_backup_status[sid] = mark
+    if _r39a_backup_held(sid, wipe_ok):
+        if _game_backup_status.get(sid) is mark:
+            _game_backup_status.pop(sid, None)
+        return False, _R39A_BACKUP_HELD, True
     try:
         result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:
@@ -736,12 +770,16 @@ def _lg264_lgsm_alerted(gs, reason):
     LinuxGSM appends "alerted" to its request after its backup-postponed alert, which it sends
     through the server's own LinuxGSM alert settings; with none on, that alert went nowhere and
     the panel's report is the only one. It appends it whether or not anything was sent
-    (command_monitor.sh, v26.5.0), and alert.sh sends through some channels only when their
-    address is set too (_R37B_ALERT_NEEDS): `emailalert="on"` with no `email` sent nothing.
+    (command_monitor.sh, v26.5.0), and a channel delivers only once its address is filled in
+    (_R39A_ALERT_FIELDS): `emailalert="on"` with no `email` sent nothing. Nor with the address
+    LinuxGSM's _default.cfg ships (_R39A_STOCK_ALERT_VALUES): the merged config reads
+    `email="email@example.com"` or `telegramtoken="accesstoken"` for a channel switched on and never
+    filled in, which alert.sh sends to (or fails on), and the panel stayed silent on an overdue backup.
     """
     if _lgp.note_code(reason) != "lgsm_postponed" or not getattr(reason, "alerted", False):
         return False
-    keys = _LG264_ALERT_TOGGLES + sorted({k for need in _R37B_ALERT_NEEDS.values() for k in need})
+    keys = _LG264_ALERT_TOGGLES + sorted({k for need in _R39A_ALERT_FIELDS.values() for k in need}
+                                         | {"ntfyserver"})
     try:
         vals = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, keys)
     except Exception:
@@ -751,19 +789,48 @@ def _lg264_lgsm_alerted(gs, reason):
 
     def _val(k):
         return str(vals.get(k, "")).strip().strip("\"'")
-    return any(_val(k) == "on" and all(_val(n) for n in _R37B_ALERT_NEEDS.get(k, ()))
+    return any(_val(k) == "on" and all(_r39a_alert_field_set(n, _val) for n in _R39A_ALERT_FIELDS.get(k, ()))
                for k in _LG264_ALERT_TOGGLES)
+
+
+def _r39a_alert_field_set(name, val):
+    """Whether LinuxGSM alert setting `name` holds an address of the operator's: not blank, not the stock one.
+
+    `val(key)` reads the merged config. ntfy's stock topic "LinuxGSM" is the stock one only on the
+    stock server (the public ntfy.sh): on the operator's own server it may well be theirs.
+    """
+    v = val(name)
+    if not v or v == _R39A_STOCK_ALERT_VALUES.get(name):
+        return False
+    if name == "ntfytopic" and v == "LinuxGSM":
+        return val("ntfyserver").rstrip("/") not in ("", "https://ntfy.sh")
+    return True
 
 
 # LinuxGSM's alert switches (its _default.cfg's ## Notification Alerts).
 _LG264_ALERT_TOGGLES = ["discordalert", "emailalert", "gotifyalert", "iftttalert", "matrixalert",
                         "ntfyalert", "pushbulletalert", "pushoveralert", "rocketchatalert",
                         "slackalert", "telegramalert"]
-# ...and what alert.sh needs set beside a switch before it sends through it (v26.5.0: `[ "${x}alert"
-# == "on" ] && [ -n "${...}" ]`). The rest it sends with the switch alone.
-_R37B_ALERT_NEEDS = {"emailalert": ("email",), "matrixalert": ("matrixhomeserver", "matrixtoken", "matrixroom"),
-                     "ntfyalert": ("ntfytopic",), "pushbulletalert": ("pushbullettoken",),
-                     "telegramalert": ("telegramtoken",)}
+# ...and the settings each channel delivers to (lgsm/modules/alert_*.sh, v26.5.0). alert.sh tests some of
+# them before it sends (`[ "${emailalert}" == "on" ] && [ -n "${email}" ]`) and sends the rest with the
+# switch alone, but a blank or stock webhook, token or chat id delivers nothing either way. Failing
+# open: a channel counts only once every one of them is the operator's, else the panel alerts too.
+_R39A_ALERT_FIELDS = {"discordalert": ("discordwebhook",), "emailalert": ("email",),
+                      "gotifyalert": ("gotifytoken", "gotifywebhook"), "iftttalert": ("ifttttoken",),
+                      "matrixalert": ("matrixhomeserver", "matrixtoken", "matrixroom"),
+                      "ntfyalert": ("ntfytopic",), "pushbulletalert": ("pushbullettoken",),
+                      "pushoveralert": ("pushovertoken", "pushoveruserkey"),
+                      "rocketchatalert": ("rocketchatwebhook",), "slackalert": ("slackwebhook",),
+                      "telegramalert": ("telegramtoken", "telegramchatid")}
+# The placeholders LinuxGSM's _default.cfg ships in them (v26.5.0, every game's _default.cfg): a channel
+# switched on with one of these left in place was never filled in. matrixhomeserver's "matrix.org" is
+# a real server, and ntfy's "LinuxGSM" topic is judged with its server (_r39a_alert_field_set).
+_R39A_STOCK_ALERT_VALUES = {"discordwebhook": "webhook", "email": "email@example.com",
+                            "gotifytoken": "token", "gotifywebhook": "webhook", "ifttttoken": "accesstoken",
+                            "matrixtoken": "accesstoken", "pushbullettoken": "accesstoken",
+                            "pushovertoken": "accesstoken", "pushoveruserkey": "userkey",
+                            "rocketchatwebhook": "webhook", "slackwebhook": "webhook",
+                            "telegramtoken": "accesstoken"}
 
 
 def _run_due_game_backups(app):
@@ -1133,7 +1200,16 @@ def _settle_queued_action(app, gs):
         gs.restart_pending = gs.stop_pending = False
         db.session.commit()
     elif decision == "restart":
-        _run_queued_action(app, gs)
+        # Registered for the run, then the wipe and the backups asked again: the status and player
+        # reads above take seconds, and _r37b_queued_ready asked before them. A wipe waits on this
+        # registration (routes/wipe_schedule._r39a_other_work) and a backup skips it
+        # (_r39a_backup_held): unregistered, a scheduled wipe started its backup, or LinuxGSM's
+        # wipe, beside a queued restart's stop and start, and brought back up a server queued to
+        # stop.
+        with r36j_route_job(gs.id, "queued"):
+            if _r39a_wipe_running(gs.id) or _backup_in_progress(gs.id):
+                return          # stays queued for the next tick
+            _run_queued_action(app, gs)
     # 'pending' (players on / unknown): leave the flags, retry next tick
 
 
@@ -1182,7 +1258,7 @@ def _r37b_queued_ready(gs):
     # stop honours a queued stop, and its restore clears a queued restart. Nor one a
     # scheduled wipe is running on (routes/wipe_schedule): LinuxGSM's wipe stops, deletes
     # and starts it, and a restart in the middle starts it while its files are going.
-    return not (_backup_in_progress(gs.id) or _reboot_holds(gs) or "wipe" in r36j_route_jobs(gs.id))
+    return not (_backup_in_progress(gs.id) or _reboot_holds(gs) or _r39a_wipe_running(gs.id))
 
 
 def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
@@ -1923,6 +1999,34 @@ def _host_timezone_cached(remote, app=None):
     if not tz and app is not None and getattr(remote, "id", None) is not None:
         _maybe_resolve_host_timezone(app, remote.id)
     return tz
+
+
+def _console_window_place(out):
+    """/api/console's window reply: (the `@` line's place, the rest of the reply, its newline count).
+
+    server_files._console_window_cmd prints `@<inode> <size>`, and `<newlines>` after them for a log
+    within its reach; the place is [0, inode, size]. No `@` line: no place, the whole reply is the
+    rest. A malformed one: no place and no reply.
+    """
+    if not (out or "").startswith("@"):
+        return None, out or "", None
+    head, _nl, rest = out.partition("\n")
+    parts = head[1:].split()
+    if len(parts) not in (2, 3) or not all(p.isdecimal() and len(p) < 20 for p in parts):
+        return None, "", None
+    return [0, int(parts[0]), int(parts[1])], rest, (int(parts[2]) if len(parts) == 3 else None)
+
+
+def _console_window_whole(newlines, body, want):
+    """Whether a window of a log's last `want` lines holds the whole log: it has no more lines than that.
+
+    `newlines` is the log's newline count (_console_window_place; None past the read's reach: not
+    counted, so not whole), and `body` the window as read, which ends in a newline unless the log
+    ends mid-line, that fragment being one more line for `tail`.
+    """
+    if newlines is None:
+        return False
+    return newlines < want or (newlines == want and body.endswith("\n"))
 
 
 def _console_rows(lines, host_tz):

@@ -14,7 +14,7 @@ paramiko, the ssh CLI or a local subprocess would be running against whatever ma
 on. Transports differ in how they fail — paramiko RAISES, tailscale/local return ("", err, -1) — so
 the failure branches below are driven both ways where the code treats them differently.
 """
-from unit.part01 import (NS, SO, _r21d_urlopen_of, _sm_core, _sm_files, _sm_firewall, _sm_hosts, check, eq, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (NS, SO, _r21d_urlopen_of, _sm_core, _sm_files, _sm_firewall, _sm_hosts, check, eq, os, re, sys, ufw_stored_answer)  # noqa: F401,E402
 
 import json as _p8_json  # noqa: E402
 import subprocess as _p8_subprocess  # noqa: E402
@@ -546,8 +546,9 @@ class _Wire:
 
     Every privileged verb, shell command and root write is RECORDED. An answer may be a tuple, a
     callable (given the args or the command), an exception (raised — the paramiko shape), or a
-    list consumed in order (the last one repeats). Unlisted verbs answer ("", "", 0); unlisted
-    commands answer `cmd_default`.
+    list consumed in order (the last one repeats). Unlisted verbs answer ("", "", 0), but
+    ufw-stored-rules a host with IPv6 off in ufw (ufw_stored_answer); unlisted commands answer
+    `cmd_default`.
     """
 
     def __init__(self, verbs=None, cmds=None, cmd_default=("", "", 0), writes=None):
@@ -569,7 +570,8 @@ class _Wire:
 
     def run_privileged(self, server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
         self.calls.append(("verb", verb, list(args)))
-        return self._answer(self.verbs.get(verb, ("", "", 0)), list(args))
+        default = ufw_stored_answer() if verb == "ufw-stored-rules" else ("", "", 0)
+        return self._answer(self.verbs.get(verb, default), list(args))
 
     def run_command(self, server, command, timeout=30, sudo=None, stdin_text=None):
         self.calls.append(("cmd", command, sudo))

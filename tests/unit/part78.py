@@ -30,11 +30,11 @@ import tempfile as _tf78
 from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_host_row,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_set_host)
+                         _p9_json, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_set_host)
 from unit.part47 import _cut47, _node47
 from unit.part72 import _DOM72
 from panel.db.models import User as _U78, db as _db78
-from panel.routes import close_port22 as _cp78, server_detail as _sd78
+from panel.routes import server_detail as _sd78
 
 _JS78 = os.path.join(_root, "panel", "static", "js")
 _XHR78 = {"X-Requested-With": "XMLHttpRequest"}
@@ -91,7 +91,7 @@ try:
     def _down78(*_a, **_k):
         raise ConnectionError("p78: the host is switched off")
 
-    _p9_patch(_cp78, "_tailnet_ssh_state", _down78)
+    _p9_patch_sm("_tailnet_ssh_state", _down78)    # read by hosts._r39b_off_refusal, the route's gate
     _r78 = _p9_client(P9_ADMIN).post("/api/remote/%d/close-port-22" % P9_HOST, headers=_XHR78)
     _cp_body78 = _p9_json(_r78)
 finally:

@@ -256,8 +256,9 @@ var PALETTE_HOST_SECTIONS = [
         icon: 'bi bi-arrow-return-right',
         meta: host || undefined
       // Searched over the label AND the keyword list, so "mfa" finds Two-factor even though the
-      // word appears nowhere on screen.
-      }, sec.label + ' ' + sec.kw + (host ? ' ' + host : ''), 'sections', order);
+      // word appears nowhere on screen. The label as shown comes first: on an es/fr page the row
+      // reads "Copias de seguridad", and searching only the English left "copias" finding nothing.
+      }, t(sec.label) + ' ' + sec.label + ' ' + sec.kw + (host ? ' ' + host : ''), 'sections', order);
     }
     // The href without its query and its trailing slashes, trimmed with a loop: /\/+$/ restarts
     // at every slash of a run that is not at the end, and reads the rest of the run from each one.
@@ -296,7 +297,8 @@ var PALETTE_HOST_SECTIONS = [
         label: t('Reboot') + ' ' + name + '…',
         reboot: hostId, rname: name, rlocal: isLocal ? '1' : '',
         icon: 'bi bi-power'
-      }, 'reboot restart power ' + name, 'actions', order);   // i18n-ignore: search keywords, never shown
+      // The verb as shown, then the English keywords (search words, never shown).
+      }, t('Reboot') + ' reboot restart power ' + name, 'actions', order);   // i18n-ignore
     }
     available.forEach(function (p, hi) {
       var href = pathOf(p.href);
@@ -341,8 +343,9 @@ var PALETTE_HOST_SECTIONS = [
           icon: ACTION_ICON[act] || 'bi bi-play-fill',
           meta: [s.game, host].filter(Boolean).join(' · ')
         // Matchable by verb OR by name, so "restart" lists every server you could restart and
-        // "cod" lists everything you can do to that one.
-        }, act + ' ' + s.name + ' ' + (s.game || '') + ' ' + (host || ''),
+        // "cod" lists everything you can do to that one. The verb as shown first, so a Spanish
+        // viewer's "reiniciar" matches the row that reads "Reiniciar MyServer".
+        }, _tr(ACTION_LABEL[act]) + ' ' + act + ' ' + s.name + ' ' + (s.game || '') + ' ' + (host || ''),
            'actions', i * 10 + j);
       });
     });

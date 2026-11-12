@@ -76,19 +76,19 @@ def retired_game_by_script(gameservername):
 
 
 # The games LinuxGSM REFUSES to install above a distro release, as its own check_deps.sh refuses them
-# ("<game> is not supported on <distro> (requires Ubuntu <= 20.04 or Debian <= 11)."), read from
-# lgsm/modules/check_deps.sh at v26.4.0. That refusal is the only cap LinuxGSM has.
+# ("<game> is not supported on <distro> (requires Ubuntu <= 20.04 or Debian <= 11)."). That refusal is
+# the only cap LinuxGSM has. Up to v26.5.0 it named two games; v26.6.0 dropped both from serverlist.csv
+# (#5195) and its check_deps.sh refuses none, so the table is empty: the picker and the install route
+# still read it, for a cap a later release may bring back.
 #
 # serverlist.csv's `os` column is NOT one. It follows the base of LinuxGSM's Docker images (#5028):
 # at v26.4.0 138 games say ubuntu-26.04 while cod, cod2, coduo and mohaa stayed on ubuntu-24.04,
 # although #5069 made those four run on Ubuntu 26.04, Debian 13 and RHEL 9. Reading the column as a
 # cap refused them on every 26.04 host. Nor is a missing row in the distro's deps csv a signal:
-# every one of those files lists every game, btl and onset included. bf1942 and bfv were refused
+# every one of those files listed every game, the capped ones included. bf1942 and bfv were refused
 # above Ubuntu 22.04 / Debian 12 up to v26.3.0, and v26.4.0 dropped that check.
-_LGC_DISTRO_CAPS = {
-    "btl": {"ubuntu": "20.04", "debian": "11"},
-    "onset": {"ubuntu": "20.04", "debian": "11"},
-}
+# {shortname: {distro: newest version}}, e.g. {"ubuntu": "20.04", "debian": "11"}.
+_LGC_DISTRO_CAPS = {}
 
 
 def lgc_distro_cap(game_type, distro="ubuntu"):
@@ -101,7 +101,7 @@ def lgc_distro_caps(game_type):
     """Every cap of `game_type`, one '<distro>-<version>' per distro, space-separated ("" for none).
 
     The install picker compares the one for the chosen host's distro: the Ubuntu cap alone let a
-    Debian 12 host pick btl and onset, which LinuxGSM refuses above Debian 11.
+    Debian 12 host pick a game LinuxGSM refused above Debian 11.
     """
     return " ".join("%s-%s" % (d, v) for d, v in sorted(_LGC_DISTRO_CAPS.get(game_type or "", {}).items()))
 

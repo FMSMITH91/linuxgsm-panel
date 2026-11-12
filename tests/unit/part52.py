@@ -479,7 +479,7 @@ def _console52():
     for name, text in (("partial", "line1\nline2\nline3\npartial"), ("whole", "line1\nline2\nline3\n")):
         with open(log, "w", encoding="utf-8") as fh:
             fh.write(text)
-        ok, lines, at = _p9_sf._read_console_window(NS(), gs, 50, None)
+        ok, lines, at = _p9_sf._read_console_window(NS(), gs, 50, None)[:3]
         rows[name] = (ok, [r.get("line") for r in lines], at)
     check("console window: a log that ends mid-line primes WITHOUT the fragment (the catch-up from "
           "`at`, the file's end, brings that line whole), and `at` is still the end",

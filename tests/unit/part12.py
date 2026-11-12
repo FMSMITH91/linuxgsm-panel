@@ -582,7 +582,11 @@ try:
     _p9_drain()
     check("public IP: a host that already has one is not asked again", _ip_calls == ["p9-host2"])
 
+    # The raising reader records each call: a worker that never ran left the field empty too (review 1109).
+    _ip_raised = []
+
     def _ip_raise(r):
+        _ip_raised.append(r.id)
         raise ConnectionError("host down")
 
     _p9_patch(_p9_sh, "remote_public_ip", _ip_raise)
@@ -595,7 +599,7 @@ try:
     except Exception:
         _ip_ok = False
     check("public IP: an unreachable host leaves the field empty and the worker does not raise",
-          _ip_ok and _p9_host_row(P9_HOST2).public_ip is None)
+          _ip_ok and _p9_host_row(P9_HOST2).public_ip is None and _ip_raised == [P9_HOST2], repr(_ip_raised))
     _p9_sh._pubip_resolve_attempts.pop(P9_HOST2, None)
 
     # ── _host_timezone_cached / _maybe_resolve_host_timezone ─────────────────────────────────────
@@ -616,7 +620,10 @@ try:
     _p9_drain()
     check("host timezone: a host that already has a zone is not read again", _tz_calls == [P9_HOST2])
 
+    _tz_raised = []
+
     def _tz_raise(r):
+        _tz_raised.append(r.id)
         raise ConnectionError("down")
 
     _p9_patch_sm("host_timezone", _tz_raise)
@@ -629,7 +636,7 @@ try:
     except Exception:
         _tz_ok = False
     check("host timezone: a failed read stores nothing and does not raise",
-          _tz_ok and (_p9_host_row(P9_HOST2).timezone or "") == "")
+          _tz_ok and (_p9_host_row(P9_HOST2).timezone or "") == "" and _tz_raised == [P9_HOST2], repr(_tz_raised))
     _p9_sh._tz_resolve_attempts.pop(P9_HOST2, None)
 
     # ── _record_backup_outcome: audit always, alert on failure unless the server is muted ────────

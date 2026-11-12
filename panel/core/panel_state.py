@@ -335,3 +335,23 @@ def r36j_route_jobs(gid):
     """The kinds r36j_route_job has registered on server `gid` now, each once (for the reboot census)."""
     with _r36j_jobs_lock:
         return sorted(set(_r36j_jobs.get(gid) or ()))
+
+
+def live_actions(gid):
+    """Every long LinuxGSM action still running on server `gid` (_action_output), newest first.
+
+    The WHOLE registration chain, not its head. A later action displaces the running one into
+    `prev` (_shared._begin_action_tail), and the head is marked ended at the START of its final
+    read (_end_action_tail), before the displaced run is tailed again. Reading the head alone, an
+    update still downloading under a validate whose end read was out was no action at all, and a
+    reboot could stop the server under it. _button_backup_running walks the chain the same way
+    (which is why a displaced Backup-button backup was already seen, as a "backup"). Read by the
+    clean reboot's census (host_reboot) and the scheduled wipe's wait (wipe_schedule).
+    """
+    live, seen, e = [], set(), _action_output.get(gid)
+    while isinstance(e, dict) and id(e) not in seen:
+        seen.add(id(e))
+        if not e.get("ended") and not e.get("forgotten"):
+            live.append(e)
+        e = e.get("prev")
+    return live

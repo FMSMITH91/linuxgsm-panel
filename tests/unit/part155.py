@@ -382,7 +382,8 @@ try:
     for _name155, _cfg155 in (("email_unset", {"emailalert": "on"}),
                               ("email", {"emailalert": "on", "email": "ops@example.invalid"}),
                               ("telegram_unset", {"telegramalert": "on"}),
-                              ("discord", {"discordalert": "on"})):
+                              ("discord", {"discordalert": "on",
+                                           "discordwebhook": "https://hooks.example.invalid/p155"})):
         _al_vals155.clear()
         _al_vals155.update(_cfg155)
         _al155[_name155] = _sh155._lg264_lgsm_alerted(_al_gs155, _al_note155)

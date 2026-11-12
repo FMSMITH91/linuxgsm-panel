@@ -26,7 +26,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
     _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock,
-    _lg264_bk_status)
+    _lg264_bk_status, _r39a_backup_held)
 
 
 class _FullBackupTally:
@@ -508,6 +508,15 @@ def _register_game_backup(app):
         from panel.services import host_reboot as _hr
         if _hr.reboot_busy(gs.remote_id):
             _why = _hr.busy_message(gs.remote.display_name)
+            log_action(current_user, "game_backup", target=gs.name, detail="refused: %s" % _why,
+                       success=False, server=gs)
+            return jsonify({"success": False, "message": i18n.tr(_why)}), 409
+        if _r39a_backup_held(server_id):
+            # Its scheduled wipe (or a queued stop/restart) is running: LinuxGSM's backup would
+            # archive files as the wipe deleted them, its stop and start racing the wipe's. The
+            # worker's own run asks again under its mark (_shared._marked_backup).
+            _why = i18n.Sentence("A scheduled wipe or a queued stop or restart of {name} is running. Try "
+                                 "again once it has finished.", name=gs.name)
             log_action(current_user, "game_backup", target=gs.name, detail="refused: %s" % _why,
                        success=False, server=gs)
             return jsonify({"success": False, "message": i18n.tr(_why)}), 409

@@ -813,7 +813,7 @@ with _p9.app_context():
     _d135.groups.append(_g135)
     _db135.session.add(_d135)
     _db135.session.commit()
-    _D135 = _d135.id
+    _D135, _G135 = _d135.id, _g135.id
 _deleg135 = {}
 try:
     _p9_arm(who="part135")
@@ -833,6 +833,14 @@ try:
             _C135.post(_b135 + "open", json={"port": 27015}).status_code]
 finally:
     _p9_restore_all()
+    # Its own rows go with it, as part130's _r36j_drop_delegate130 does: a later part that lists users or
+    # groups must not meet this one's delegate (review 1109 T10).
+    with _p9.app_context():
+        for _m135, _rid135 in ((_User135, _D135), (_Group135, _G135)):
+            _row135 = _db135.session.get(_m135, _rid135)
+            if _row135 is not None:
+                _db135.session.delete(_row135)
+        _db135.session.commit()
 check("routes: a DELEGATED MANAGE_REMOTES admin whose grant covers the panel host is refused (403) its firewall "
       "settings and blocks there, as /firewall/open is; on a remote the same account is let through",
       _deleg135.get("panel host") == [403, 403, 403, 403]

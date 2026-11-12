@@ -226,14 +226,19 @@ def due(entry, now=None):
 _WIPED_RE = re.compile(r"Success!\s+(Full|Map) wipe\b")
 _NOT_REQUIRED_RE = re.compile(r"\[\s*OK\s*\][^\n\r]*\bWipe not required\b")
 _FAIL_RE = re.compile(r"\[\s*FAIL\s*\]|\.\.\.\s*FAIL\b|\bFailure!")
+# The wipe's own start line (command_wipe.sh fn_wipe_files: fn_print_start_nl "${wipetype}"), and the
+# stop's last word when even the tmux kill left the server running (command_stop.sh fn_stop_tmux).
+_R39A_START_RE = re.compile(r"\[\s*START\s*\][^\n\r]*\b(?:Full|Map) wipe\b")
+_R39A_UNSTOPPED_RE = re.compile(r"\[\s*FAIL\s*\][^\n\r]*\bUnable to stop\b")
 
 
 def judge(out, rc, command):
     """("wiped" | "nothing" | "refused" | "failed", sentence) for one wipe run's output and exit.
 
     Refused: LinuxGSM's own players-online refusal (stoponlyifnoplayersallcommands) ended the run
-    before anything was deleted. Only LinuxGSM's own success line, with no FAIL before it, is a wipe;
-    an exit 0 with neither line is NOT read as one, since it says nothing about what was deleted.
+    before anything was deleted. Only LinuxGSM's own success line, with no failed removal or stop
+    before it (_r39a_failed_before), is a wipe; an exit 0 with neither line is NOT read as one, since
+    it says nothing about what was deleted.
     The sentence is an i18n.Sentence: English in the audit row, the viewer's language on the card.
     """
     text = terminal.strip_escapes(out or "")
@@ -252,7 +257,7 @@ def judge(out, rc, command):
 def _cmpd_done(text, rc):
     """("wiped" | "nothing", sentence) for a wipe's output and exit, or None when it says neither."""
     wiped = _WIPED_RE.search(text)
-    if wiped and not _FAIL_RE.search(text, 0, wiped.start()):
+    if wiped and not _r39a_failed_before(text, wiped.start()):
         # command_wipe.sh prints its success line after the files are gone and only then starts a
         # server it stopped (exitbypass=1; command_start.sh). A FAIL after that line is the start's:
         # the wipe happened, and was read as one that did not ("Scheduled wipe did not run"). The
@@ -266,6 +271,22 @@ def _cmpd_done(text, rc):
     if rc == 0 and _NOT_REQUIRED_RE.search(text):
         return "nothing", i18n.Sentence("LinuxGSM found nothing to wipe")
     return None
+
+
+def _r39a_failed_before(text, end):
+    """Whether the output before the success line (at `end`) says the wipe, or the stop before it, failed.
+
+    Only the FAILs from the wipe's own start line on (a removal's " ... FAIL": fn_wipe_exit_code), and
+    the stop's "Unable to stop" (the files went from under a running server). Not any FAIL before the
+    line: a running server that ignores `quit` for its whole timeout (Rust's stopmode 4: 120 s) prints
+    the graceful step's "[ ERROR ] ... Graceful: sending "quit": ... FAIL", then LinuxGSM kills its tmux
+    session ("[  OK  ]"), wipes and prints "Success!" (exitbypass, LinuxGSM v26.5.0). That wipe was
+    recorded as one that did not run and alerted so, and the operator told to run it by hand would
+    wipe the fresh map again. Output with no start line (an older LinuxGSM) is judged as before.
+    """
+    starts = [m.start() for m in _R39A_START_RE.finditer(text, 0, end)]
+    return bool(_FAIL_RE.search(text, starts[-1] if starts else 0, end)
+                or _R39A_UNSTOPPED_RE.search(text, 0, end))
 
 
 def _r38b_wiped_said(full, late, rc):

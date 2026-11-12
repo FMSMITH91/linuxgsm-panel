@@ -606,9 +606,9 @@ def _r16d_check_tables65(names):
 
 def _r15f_game_keys65():
     names = _r15f_shortnames65()
-    check("game tables: the committed LinuxGSM shortname list is read (150 games at its v26.5.0 commit, "
+    check("game tables: the committed LinuxGSM shortname list is read (148 games at its v26.6.0 commit, "
           "and the ones these tables key on are in it)",
-          len(names) == 150 and {"gmod", "mcb", "vpmc", "zmr", "unt", "fivem", "luanti"} <= names,
+          len(names) == 148 and {"gmod", "mcb", "vpmc", "zmr", "unt", "fivem", "luanti"} <= names,
           repr(len(names)))
     _r16d_check_tables65(names)
     js = _r15f_js_ports65()

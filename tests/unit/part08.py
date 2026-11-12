@@ -9,7 +9,7 @@ import io as _gh_io
 import shlex as _gh_shlex
 
 from eventlet.timeout import Timeout as _EvTimeout08  # noqa: E402 - a timed-out green join raises it
-from unit.part01 import NS, _R20dOver, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, check, os  # noqa: E402
+from unit.part01 import NS, _R20dOver, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, check, os, ufw_stored_answer  # noqa: E402
 
 from panel.security import privileged as _gh_priv  # noqa: E402
 
@@ -658,6 +658,8 @@ def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0, added=""):
 
     def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
         sent.append((verb, list(args)))
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return (status or "", "", status_rc)
         if verb == "ufw-show-added":        # an inactive ufw's stored rules; "" reads as unread
@@ -680,7 +682,9 @@ def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0, added=""):
     finally:
         (_sm_core.run_privileged, _sm_core.write_root_file, _sm_hosts._sshd_socket_activated,
          _sm_hosts._sshd_current_ports, _sm_hosts._restart_ssh_listener) = saved
-    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] not in ("ufw-status", "ufw-show-added")]
+    # Reads, not rule changes: ufw-stored-rules is the IPV6= setting step 1 reads (review 1109).
+    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] not in ("ufw-status", "ufw-show-added",
+                                                                        "ufw-stored-rules")]
     return res, ufw, sent
 
 

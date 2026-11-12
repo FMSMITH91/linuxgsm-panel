@@ -374,14 +374,16 @@ finally:
 # ── a game LinuxGSM caps BELOW this host's release must be refused up front ───────────────
 # The picker marks these against the newest OS in the CATALOGUE — a stand-in, because the list
 # renders before a host is chosen. At install time the host IS chosen, so the comparison can
-# be the real one: LinuxGSM caps btl and onset at 20.04 and bf1942/bfv at 22.04, and on a
-# newer host those fail every time, minutes into the download, leaving a failed row behind.
-# Reported from the panel: Battalion 1944 offered and accepted on a 24.04 host.
+# be the real one: LinuxGSM capped two games at Ubuntu 20.04 up to v26.5.0 (none since v26.6.0),
+# and on a newer host those failed every time, minutes into the download, leaving a failed row
+# behind. Reported from the panel: a capped game offered and accepted on a 24.04 host.
 #
 # The catalogue is STUBBED, not read: this suite seeds a minimal serverlist.csv with no capped
 # game in it, so reading the real list would make every check below pass on an empty set. The
-# first version of this test did exactly that and reported it.
+# first version of this test did exactly that and reported it. LinuxGSM caps no game today, so the
+# cap table is stubbed too, with an invented game (capd) capped at 20.04.
 import panel.routes.manage_servers as _os_mod
+from panel.services import lgsm_data as _os_lgsm
 # The DEFINITION site, not the package: panel/ops/ssh_manager/__init__.py exposes these
 # through __getattr__ so there is one stub target, and a unit check enforces that — it caught
 # this exact line. See ssh-manager-stub-seam-scope.
@@ -392,7 +394,7 @@ _os_before = _appmod_ij._remote_listening_ports
 _os_real_list = _os_mod.load_game_list
 
 
-def _os_try(name, port, game="btl"):
+def _os_try(name, port, game="capd"):
     """POST an install and say whether a row was created.
 
     Under the seam for the same reason the content-capture POST is: an accepted install starts
@@ -413,11 +415,14 @@ def _os_try(name, port, game="btl"):
 
 
 _os_has = _os_mod.host_account_state
+_os_caps_saved = dict(_os_lgsm._LGC_DISTRO_CAPS)
 try:
+    _os_lgsm._LGC_DISTRO_CAPS.clear()
+    _os_lgsm._LGC_DISTRO_CAPS["capd"] = {"ubuntu": "20.04", "debian": "11"}
     _appmod_ij._remote_listening_ports = lambda r: {22}
     _os_mod.host_account_state = lambda r, n: "absent"
     _os_mod.load_game_list = lambda: [
-        {"shortname": "btl", "name": "BATTALION: Legacy", "os": "ubuntu-20.04",
+        {"shortname": "capd", "name": "Capped Game", "os": "ubuntu-20.04",
          "legacy_os": "ubuntu-20.04"},
         {"shortname": "csgo", "name": "CS:GO", "os": "ubuntu-24.04", "legacy_os": ""},
     ]
@@ -455,6 +460,8 @@ try:
           not _os_try("osnewcap", 28854),
           "the 20.04 cap is real whatever the host is, and a 26.04 box is further past it")
 finally:
+    _os_lgsm._LGC_DISTRO_CAPS.clear()
+    _os_lgsm._LGC_DISTRO_CAPS.update(_os_caps_saved)
     _os_mod.load_game_list = _os_real_list
     _os_mod.host_account_state = _os_has
     _os_sm.host_os_slug = _os_saved
@@ -1088,12 +1095,15 @@ finally:
 # remote_ufw_close_port_22 checks nothing either; "safe if Tailscale SSH is active" is its
 # docstring, not a guard.
 import panel.routes.close_port22 as _cpmod
-_cp_saved = (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22, _cpmod._r28b_panel_way_in_refusal)
+# The gate itself is hosts._r39b_off_refusal (shared with "off"): its readings are stubbed where it reads them
+# (_os_sm is the hosts module, imported above).
+_cp_saved = (_os_sm._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22, _os_sm._r28b_panel_way_in_refusal,
+             _os_sm._r37a_tailnet_dial_refusal)
 _cp_closed = []
 try:
     _cpmod.remote_ufw_close_port_22 = lambda r: (_cp_closed.append(getattr(r, "id", "?")),
                                                  (True, "Port 22 rule removed from UFW"))[1]
-    _cpmod._tailnet_ssh_state = lambda r: (False, False, False)      # no tailnet way back
+    _os_sm._tailnet_ssh_state = lambda r: (False, False, False)      # no tailnet way back
     _cpj = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
     check("close port 22: refused when there is no Tailscale way back into the host",
           _cpj.get("success") is False and not _cp_closed,
@@ -1105,17 +1115,18 @@ try:
     # allowed in UFW there is still nothing listening for you. This is the state the Tailscale
     # migrate path already refuses on, and the one the docstring's "safe if Tailscale SSH is
     # active" was being read as covering.
-    _cpmod._tailnet_ssh_state = lambda r: (True, False, False)
+    _os_sm._tailnet_ssh_state = lambda r: (True, False, False)
     _cpj2 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
     check("close port 22: ...and Tailscale running with SSH OFF is not a way back either",
           _cpj2.get("success") is False and not _cp_closed,
           "answered %s and called ufw for %s" % (str(_cpj2)[:120], _cp_closed))
     # The control: a host that really can be reached over the tailnet still closes, so the two
     # checks above cannot be passing on a route that refuses everything.
-    _cpmod._tailnet_ssh_state = lambda r: (True, True, False)
+    _os_sm._tailnet_ssh_state = lambda r: (True, True, False)
     # ...one the panel reaches over the tailnet, too (review 1016e refuses a host the panel itself
     # reaches on public port 22; unit part102 covers that side).
-    _cpmod._r28b_panel_way_in_refusal = lambda r: None
+    _os_sm._r28b_panel_way_in_refusal = lambda r: None
+    _os_sm._r37a_tailnet_dial_refusal = lambda r, iface_allowed: None    # dialled on 22 here (unit part163)
     _cpj3 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
     check("close port 22: a host with Tailscale SSH working still closes (positive control)",
           _cpj3.get("success") is True and _cp_closed == [remote_id],
@@ -1123,13 +1134,14 @@ try:
     # ...and so does one reachable only because tailscale0 is allowed in UFW, which is the
     # other half of the gate remote_set_public_ssh("off") applies.
     _cp_closed[:] = []
-    _cpmod._tailnet_ssh_state = lambda r: (True, False, True)
+    _os_sm._tailnet_ssh_state = lambda r: (True, False, True)
     _cpj4 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
     check("close port 22: ...and an allowed tailscale0 interface counts as a way back too",
           _cpj4.get("success") is True and _cp_closed == [remote_id],
           "answered %s and called ufw for %s" % (str(_cpj4)[:120], _cp_closed))
 finally:
-    (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22, _cpmod._r28b_panel_way_in_refusal) = _cp_saved
+    (_os_sm._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22, _os_sm._r28b_panel_way_in_refusal,
+     _os_sm._r37a_tailnet_dial_refusal) = _cp_saved
 
 # ── deleting a UFW rule by number, which nothing entered either ───────────────────────────
 # The route hands `num` to a helper whose whole job is refusing a delete that would lock the

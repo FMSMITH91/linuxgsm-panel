@@ -308,6 +308,12 @@ def _pa_post(action):
     return c.post("/api/server/%d/action" % gs_id, json={"action": action}).get_json() or {}
 
 
+# Every thread started while the stubs below are in place is joined before they are restored. _pa_wait
+# returns when a worker RECORDS its call, not when it ends: past it a power worker went on to its
+# bookkeeping (the outcome, the audit row, the priority nudge), and one still running at the restore
+# met the real transport, which dials the fixture host 127.0.0.1:22 (review 1109).
+import threading as _pa_th
+_pa_before = set(_pa_th.enumerate())
 try:
     _sm_core.run_as_game_user = _pa_rag
     # set_game_priority resolves in panel/routes/server_detail now, not app — a stub on app
@@ -405,9 +411,14 @@ try:
           "(backgrounded)", {"backup", "update"} <= set(_LONG),
           "not backgrounded: %s" % sorted({"backup", "update"} - set(_LONG)))
 finally:
+    _pa_started = [t for t in _pa_th.enumerate() if t not in _pa_before]
+    _pa_live = [t.name for t in _pa_started if t.join(15) or t.is_alive()]
     (_sm_core.server_live_metrics, _sm_core.run_as_game_user,
      _sm_core.set_game_priority) = _pa_saved
     _pa_status("offline")
+check("power: every worker the power-action checks started had ended before their stubs were restored (a "
+      "worker past _pa_wait went on, and met the real transport once they were)",
+      not _pa_live, "%d alive at the end, still running after the join: %r" % (len(_pa_started), _pa_live))
 
 # ── A long action's output reaches the console the panel told you to watch ───────────────
 # Accepting an update answers "'update' started — watch the live console for progress." That
@@ -607,7 +618,7 @@ try:
     # 2c. ...and two runs of the SAME action, each on its own worker, as _bg_action runs them.
     # Ownership was decided by the action NAME, so the first validate to finish popped the
     # registration of the second, still running. Each worker now ends only its own entry.
-    import threading as _lat_thr
+    _lat_thr = _pa_th           # threading, imported above for the power-action checks
     _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
 
     def _lat_worker(began, go):

@@ -165,7 +165,7 @@ _SSH94 = ("22/tcp", "LIMIT IN", "Anywhere", True, True)
 def _move94(*rows):
     """change_ssh_port 22 -> 2222 over `rows` (beside _SSH94), failing at sshd-validate.
 
-    -> (answer, the rules after but _SSH94, the verbs sent).
+    -> (answer, the rules after but _SSH94 (a marker row when it is gone), the verbs sent).
     """
     ufw = _Ufw94(_SSH94, *rows)
 
@@ -184,8 +184,14 @@ def _move94(*rows):
     _p9_patch(_hosts94, "_restart_ssh_listener", lambda *a, **k: None)
     res = _hosts94.change_ssh_port(NS(id=-9401, name="p94", host="p94.example.invalid", port=22,
                                       is_local=False, auth_method="key"), 2222)
-    return res, sorted(tuple(r) for r in ufw.rules if tuple(r) != _SSH94), [v for v, _a in ufw.verbs
-                                                                            if v != "ufw-status"]
+    rules = [tuple(r) for r in ufw.rules]
+    # _SSH94 is the operator's: left out of the compare only while it is still there. Dropped by equality,
+    # a move or revert that deleted the 22/tcp LIMIT ended "as it began" (review 1109).
+    if _SSH94 in rules:
+        rules.remove(_SSH94)
+    else:
+        rules.append(("the operator's 22/tcp LIMIT is gone",))
+    return res, sorted(rules), [v for v, _a in ufw.verbs if v != "ufw-status"]
 
 
 # No public way in to TCP 2222 over IPv6: none may be read as the operator's exact v6 rule.
@@ -459,18 +465,23 @@ def _delete_row94(sid):
 
 def _backup_marks94(rid):
     left = {}
+    # Which stand-in runners ran: each deletes its row, and a path that returned before its mark (and its
+    # runner) left nothing under the id either, so `left` alone passed for it (review 1109 T8b).
+    ran = []
     with _p9.app_context():
         # The full run: the server goes while it is being archived.
         sid = _new_server94(rid, "p94bk1")
         gs = db.session.get(GameServer, sid)
         tally = NS(keep_unread=False)
-        _p9_patch(_pb94, "run_game_backup", lambda *a, **k: _delete_row94(sid) or (True, "", False))
+        _p9_patch(_pb94, "run_game_backup",
+                  lambda *a, **k: ran.append("full run") or _delete_row94(sid) or (True, "", False))
         _pb94._full_backup_server(_p9, gs, (False, False), tally)
         left["full run"] = _gbs94.pop(sid, None)
         # The queued sweep.
         sid2 = _new_server94(rid, "p94bk2", backup_pending=True)
         gs2 = db.session.get(GameServer, sid2)
-        _p9_patch(_p9_sh, "run_game_backup", lambda *a, **k: _delete_row94(sid2) or (True, "", False))
+        _p9_patch(_p9_sh, "run_game_backup",
+                  lambda *a, **k: ran.append("queued") or _delete_row94(sid2) or (True, "", False))
         _p9_sh._back_up_queued(_p9, gs2)
         left["queued"] = _gbs94.pop(sid2, None)
         # The scheduled ticker, and a raise.
@@ -483,6 +494,7 @@ def _backup_marks94(rid):
                                       game_backup_due=lambda s: True))
 
         def _gone_raise(*a, **k):
+            ran.append("scheduled, raised")
             _delete_row94(sid3)
             raise RuntimeError("p94")
         _p9_patch(_p9_sh, "run_game_backup", _gone_raise)
@@ -496,9 +508,11 @@ def _backup_marks94(rid):
     mark["held"] = (_gbs94.pop(-9404, None) or {}).get("running")
     check("backup: a run whose server was deleted before its mark went in (so forget_rows had nothing "
           "to drop) leaves no \"running\" entry under the id — the full run, the queued sweep, and a "
-          "scheduled run that raised; a server still there keeps its mark for the caller (control)",
-          left == {"full run": None, "queued": None, "scheduled, raised": None} and mark == {"held": True},
-          repr((left, mark)))
+          "scheduled run that raised, each of which reached its runner; a server still there keeps its mark "
+          "for the caller (control)",
+          left == {"full run": None, "queued": None, "scheduled, raised": None} and mark == {"held": True}
+          and ran == ["full run", "queued", "scheduled, raised"],
+          repr((left, mark, ran)))
 
 
 def _leftover_cert94():

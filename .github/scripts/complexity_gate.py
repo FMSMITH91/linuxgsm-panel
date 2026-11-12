@@ -86,6 +86,19 @@ def _git(*args, cwd=None):
                           check=False)
 
 
+def _git_out(*args, cwd=None):
+    """Return git's stdout, or raise RuntimeError when git failed: a diff that did not run lists no file.
+
+    The changed-file and rename lists come from here. Read without git's exit status, a base the
+    checkout lacks gave an empty diff, and the gate printed "0 changed file(s)" and passed having
+    judged nothing (review 1109).
+    """
+    r = _git(*args, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError("git %s exited %d: %s" % (" ".join(args), r.returncode, (r.stderr or "").strip()[-300:]))
+    return r.stdout
+
+
 def _lang_name(path):
     """The name Lizard picks the language from: tools/panel-helper is Python."""
     return path + ".py" if path in PYTHON_NAMED else path
@@ -192,7 +205,7 @@ def _blob_size(rev, path, cwd=None):
 
 def _renamed_from(base, cwd=None):
     """Map each file the change renamed, head path to base path."""
-    out = _git("diff", "--name-status", "-M", "--diff-filter=R", base, "HEAD", cwd=cwd).stdout
+    out = _git_out("diff", "--name-status", "-M", "--diff-filter=R", base, "HEAD", cwd=cwd)
     return {f[2]: f[1] for f in (ln.split("\t") for ln in out.splitlines()) if len(f) == 3}
 
 
@@ -423,7 +436,7 @@ def _default_base():
 
 
 def changed_files(base, cwd=None):
-    out = _git("diff", "--name-only", "--diff-filter=AMR", base, "HEAD", cwd=cwd).stdout.split()
+    out = _git_out("diff", "--name-only", "--diff-filter=AMR", base, "HEAD", cwd=cwd).split()
     return [p for p in out if (p.endswith((".py", ".js")) or p in PYTHON_NAMED) and not codacy_ignores(p)]
 
 

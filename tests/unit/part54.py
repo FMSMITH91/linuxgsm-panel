@@ -453,13 +453,21 @@ def _games54(rows):
 
 _rows54 = ([{"shortname": "g%d" % i, "gamename": "Game %d" % i, "os": "ubuntu-24.04"} for i in range(130)]
            + [{"shortname": "n%d" % i, "gamename": "New %d" % i, "os": "ubuntu-26.04"} for i in range(5)]
-           + [{"shortname": "btl", "gamename": "BATTALION: Legacy", "os": "ubuntu-20.04"}])
-_lg54 = _games54(_rows54)
+           + [{"shortname": "capd", "gamename": "Capped Game", "os": "ubuntu-20.04"}])
+# LinuxGSM caps no game since v26.6.0: an invented one (capd) stands in, capped at 20.04.
+_caps54_saved = dict(_app54.lgsm_data._LGC_DISTRO_CAPS)
+try:
+    _app54.lgsm_data._LGC_DISTRO_CAPS.clear()
+    _app54.lgsm_data._LGC_DISTRO_CAPS["capd"] = {"ubuntu": "20.04", "debian": "11"}
+    _lg54 = _games54(_rows54)
+finally:
+    _app54.lgsm_data._LGC_DISTRO_CAPS.clear()
+    _app54.lgsm_data._LGC_DISTRO_CAPS.update(_caps54_saved)
 _capped54 = sorted(sn for sn, cap in _lg54.items()
                    if cap and _app54.game_os_unsupported(cap, "ubuntu-26.04"))
 check("game list: five games upstream moves to 26.04 first do not mark the other 130 as capped at "
-      "24.04 -- on a 26.04 host only btl (LinuxGSM's 20.04 cap) is refused",
-      _capped54 == ["btl"] and _lg54["g0"] == "" and _lg54["n0"] == "" and _lg54["btl"] == "ubuntu-20.04",
+      "24.04 -- on a 26.04 host only the game LinuxGSM caps at 20.04 is refused",
+      _capped54 == ["capd"] and _lg54["g0"] == "" and _lg54["n0"] == "" and _lg54["capd"] == "ubuntu-20.04",
       repr((_capped54[:5], len(_capped54))))
 
 # ── A01 lead: a blank socketio_cors_origins entry is no origin, not a refusal of every handshake ─

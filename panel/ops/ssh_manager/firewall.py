@@ -695,6 +695,10 @@ R14A_REASONS = {
                    "before removing it."),
     "web_viewer": ("This rule is the one letting your connection to the panel in (from {src}, port {port}/tcp) — "
                    "removing it would lock you out of the panel."),
+    "web_unknown": ("The panel couldn't tell which address you reach it from, so it can't tell whether this rule "
+                    "is the one letting your connection to the panel in — removing it could lock you out of the "
+                    "panel. Reach the panel in a way it can identify (straight in, or through a proxy it "
+                    "believes), then try again."),
 }
 
 
@@ -1030,10 +1034,34 @@ def _fwc_protect_paths(groups, paths):
             if g.get("is_ssh") or (paths.get("tailnet") and g.get("is_tailscale")):
                 _fwc_protect(g, "ssh_unread")
         return
+    _r39b_protect_unknown_web(groups, paths)
     for conn in paths["conns"]:
         if not ufweval.exempt(conn, paths["ts"]):
             for g in _fwc_sole_ways(groups, conn, paths["apps"]):
                 _fwc_protect_for(g, conn)
+
+
+def _r39b_protect_unknown_web(groups, paths):
+    """On the panel's host with this viewer's way in unknown, protect every rule that may admit its web ports.
+
+    An unbelieved proxy, a headerless one, a port not told apart: unknown is not safe here either. Only
+    the connections read were held, so with none read the reverse proxy's own allow (`443/tcp`) was an
+    ordinary delete (review 1109). `paths["web_ports"]` is set only there (_fwc_paths).
+    """
+    if not paths.get("web_ports") or paths["conns"]:
+        return
+    for g in groups:
+        if _r39b_may_admit_web(g, paths):
+            _fwc_protect(g, "web_unknown")
+
+
+def _r39b_may_admit_web(g, paths):
+    """Whether allow group `g` may let a TCP connection from anywhere in to one of paths["web_ports"]."""
+    from panel.ops.ssh_manager import ufweval
+    spec = ufweval.spec_of(g)
+    return spec["action"] in ("ALLOW", "LIMIT") and any(
+        ufweval.match(spec, ufweval.Conn(v, None, None, p, None, "web"), paths["apps"]) != ufweval.NO
+        for v in (4, 6) for p in paths["web_ports"])
 
 
 def _fwc_sole_ways(groups, conn, apps):
@@ -1704,11 +1732,24 @@ def _fwc_paths(server, ts):
     if _core.is_local_server(server):
         paths["addrs"] = ufweval.local_addrs()
         paths["conns"], paths["why"] = _fwc_web_conns(server, ts[0], paths["addrs"])
+        if paths["why"] is not None:
+            # The viewer's way in is not known: every port it may come in on (the delete guard holds them).
+            paths["web_ports"] = _r39b_web_ports(server)
     else:
         _fwc_ssh_conns(server, ts, paths)
     if ts[0] and any(c.iface and c.iface.startswith("tailscale") for c in paths["conns"]):
         paths["ts"]["netfilter_on"] = ufweval.ts_netfilter_on(server)
     return paths
+
+
+def _r39b_web_ports(server):
+    """The ports a viewer may reach the panel's own host's web interface on: the panel's, and a proxy's here.
+
+    80 and 443 always, whatever config.json says: a proxy that sends no forwarding header (a minimal nginx
+    `proxy_pass`, HAProxy without `option forwardfor`, an nginx `stream` proxy) is not one the panel was told of.
+    """
+    direct, proxy = _fwa_panel_ports(server)
+    return sorted(direct | proxy | {80, 443})
 
 
 def _fwc_ssh_conns(server, ts, paths):
@@ -2399,15 +2440,26 @@ def _r37g_session_refusal(server, groups, top, families, paths):
     away from an admin on `ssh -L` with advice (trust_proxy) that could not help (review 1107). Each
     session the block would cut refuses, named: the panel cannot tell the viewer's tunnel from another
     session (a scanner's unauthenticated one ends within sshd's LoginGraceTime). Unread refuses.
+
+    A proxy here that sends no forwarding header (a minimal nginx `proxy_pass`) looks the same as such a
+    viewer, and its admin comes in on the proxy's port, not sshd's: holding sshd's alone, a block of the
+    range holding their address went through and locked them out of the panel (review 1109). So every
+    established connection to a port the panel or a proxy here may serve it on is held as well.
     """
     from panel.ops.ssh_manager import ufweval
-    sessions = ufweval.inbound_to(_fwssh_served_ports(server))
+    ssh = set(_fwssh_served_ports(server))
+    sessions = ufweval.inbound_to(ssh | set(paths.get("web_ports") or _r39b_web_ports(server)))
     if sessions is None:
         return _R37G_VIEWER_LOCAL
     allow_default = _fwc_default_allows(server)
     for src, dst, port in sessions:
-        conn = ufweval.Conn(src.version, src, dst, port, ufweval.iface_of(paths.get("addrs"), dst), "ssh")
+        what = "ssh" if port in ssh else "web"
+        conn = ufweval.Conn(src.version, src, dst, port, ufweval.iface_of(paths.get("addrs"), dst), what)
         if conn.version in families and _fwc_cuts(groups, conn, top, allow_default, paths):
+            if what == "web":
+                return i18n.Sentence("Blocking that would cut off an open connection to this host (from {src} to "
+                                     "{dst}, port {port}/tcp, on {iface}); you reach the panel over this machine's "
+                                     "loopback, so it may be your way in through a proxy here.", **_fwc_shown(conn))
             return i18n.Sentence("Blocking that would cut off an open SSH connection to this host (from {src} to "
                                  "{dst}, port {port}/tcp, on {iface}); you reach the panel over this machine's "
                                  "loopback, so it may be your SSH tunnel.", **_fwc_shown(conn))

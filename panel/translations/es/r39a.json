@@ -1,0 +1,9 @@
+{
+  "{command}: the connection dropped while LinuxGSM's wipe ran; it may have wiped: check the server": "{command}: la conexión se cortó mientras se ejecutaba el borrado de LinuxGSM; puede que haya borrado: revisa el servidor",
+  "another action on this server is running": "hay otra acción en curso en este servidor",
+  "a scheduled wipe or a queued stop or restart of this server is running": "hay un borrado programado o una parada o reinicio en cola de este servidor en curso",
+  "a queued stop or restart of {name}": "una parada o reinicio en cola de {name}",
+  "A scheduled wipe of '{name}' is running — '{action}' was not run. Try again once it has finished.": "Hay un borrado programado de '{name}' en curso: no se ejecutó '{action}'. Inténtalo de nuevo cuando haya terminado.",
+  "A scheduled wipe of '{name}' is running. Try again once it has finished.": "Hay un borrado programado de '{name}' en curso. Inténtalo de nuevo cuando haya terminado.",
+  "A scheduled wipe or a queued stop or restart of {name} is running. Try again once it has finished.": "Hay un borrado programado o una parada o reinicio en cola de {name} en curso. Inténtalo de nuevo cuando haya terminado."
+}

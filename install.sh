@@ -86,14 +86,17 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 #     would break every privileged action rather than secure anything. Re-run this
 #     installer as root to get the narrow grant. It prints which one it wrote.
 #
-#     If you only manage REMOTE servers from this panel, delete
-#     /etc/sudoers.d/linuxgsm-panel — the panel keeps working and the grant goes
-#     away entirely.
+#     If you only manage REMOTE servers from this panel, run this installer once as
+#     root with PANEL_LOCAL_GRANT=0 — the panel keeps working and the grant goes away
+#     entirely. The choice is recorded root-owned (panel.conf's local_grant), so later
+#     updates keep it; PANEL_LOCAL_GRANT=1 puts the grant back. (Deleting the file by
+#     hand is read the same way: the next update records it and leaves it deleted.)
 # ─────────────────────────────────────────────────────────
 
 REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
 # Branch to track. The panel can switch branches from the UI by exporting PANEL_BRANCH
-# before invoking this script; unset (the normal path) keeps the default "main" unchanged.
+# before invoking this script; unset (the normal path) keeps the default "main" unchanged. A by-hand
+# update that names none, on a panel switched to another branch, stops first (_r39d_tracked_branch).
 # Restricted to a safe git-ref charset so it can't inject options/paths into git commands.
 #
 # That choice moves the panel's CODE. It does not, by itself, choose where root takes its OWN pieces
@@ -2637,6 +2640,44 @@ _r25a_tailscale_ssh_choice() {
     return 0
 }
 
+# ── The panel host's own root grant: the operator's choice, recorded root-owned ─────────────────
+# A panel that only manages REMOTE servers needs no sudo on its own host. The way to say so used to
+# be "delete /etc/sudoers.d/linuxgsm-panel", and the next update — the by-hand root update the same
+# advice prescribed — wrote it straight back, every time, with nothing but the routine "sudo grant:
+# narrow" line to show it. The choice is recorded in the root-owned panel.conf as
+# `local_grant=yes|no` instead, beside tailscale_ssh, and write_sudoers_grant and
+# write_terminal_sudo_grant both honour "no": the files are removed and never written.
+#
+# Prints "yes|no <why>", why being env|kept|deleted|default. `PANEL_LOCAL_GRANT=0 ./install.sh`
+# turns the grant off (=1 puts it back). Unset, the recorded choice is kept, so an update never
+# changes it. With none recorded: an UPDATE run as root on a host whose grant file is already gone
+# is "no" — the operator deleted it, as the earlier advice said to, and this records that so it
+# stays deleted; anything else is "yes", as before. A run the panel started (PANEL_SELF_UPDATE)
+# never takes the answer from the environment: the grant is the operator's to decide.
+#
+# The file is named literally here (not through a variable) so the check that runs this function
+# can point it at a throwaway directory exactly as it does write_sudoers_grant.
+_r39d_local_grant_choice() {
+    local _conf="$1" _prev="" _env="${PANEL_LOCAL_GRANT:-}"
+    [[ -z "${PANEL_SELF_UPDATE:-}" ]] || _env=""
+    case "${_env}" in
+        1|yes|true) echo "yes env"; return 0 ;;
+        0|no|false) echo "no env"; return 0 ;;
+    esac
+    if [[ -f "${_conf}" ]]; then
+        _prev="$(sed -n 's/^local_grant=//p' "${_conf}" 2>/dev/null | tail -n 1)" || _prev=""
+    fi
+    case "${_prev}" in
+        yes|no) echo "${_prev} kept"; return 0 ;;
+    esac
+    if [[ "${IS_UPDATE:-0}" -eq 1 ]] && [[ "${RUN_AS_ROOT:-0}" -eq 1 ]] \
+       && [[ ! -e /etc/sudoers.d/linuxgsm-panel ]]; then
+        echo "no deleted"; return 0
+    fi
+    echo "yes default"
+    return 0
+}
+
 # ── the panel's own port, recorded root-owned ────────────────────────────────────────────────────
 # The helper's `tailscale-serve` (Serve, and Funnel to the internet) publishes ONE port: the one
 # panel.conf records as `panel_port`. The panel's account cannot change that file, so a compromised
@@ -2735,6 +2776,15 @@ PYEOF
 
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
+    # The operator's choice on the host's own root grant, read FIRST: before the early returns below
+    # (write_terminal_sudo_grant runs whatever they decide) and before panel.conf is rewritten.
+    local _lg_why=""
+    read -r LOCAL_GRANT_CHOICE _lg_why <<< "$(_r39d_local_grant_choice "${HELPER_DIR}/panel.conf")" || true
+    [[ "${LOCAL_GRANT_CHOICE:-}" == "no" ]] || LOCAL_GRANT_CHOICE=yes
+    if [[ "${_lg_why}" == "deleted" ]]; then
+        info "/etc/sudoers.d/linuxgsm-panel was deleted, so this host keeps no root grant for the panel:"
+        info "  recorded local_grant=no (PANEL_LOCAL_GRANT=1 puts the grant back)."
+    fi
     if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then
         # Leave HELPER_OK / ROOT_TOOLS_OK as they are: write_sudoers_grant is skipped alongside
         # this, so the host keeps whatever grant it already had rather than being widened.
@@ -2816,9 +2866,9 @@ install_root_tools() {
     # Likewise read before the rewrite: an update keeps the recorded port unless it may take a new one.
     local _panel_port_rec=""
     _panel_port_rec="$(_r25j_panel_port_to_record "${PANEL_CONF}")" || _panel_port_rec=""
-    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\n' \
+    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\nlocal_grant=%s\n' \
         "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" "${TS_SSH_CHOICE}" \
-        "${_panel_port_rec}" \
+        "${_panel_port_rec}" "${LOCAL_GRANT_CHOICE}" \
         | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
         && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
         && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
@@ -3207,6 +3257,18 @@ sync_game_user_group() {
 write_terminal_sudo_grant() {
     [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
     _tsudo_f=/etc/sudoers.d/00-linuxgsm-panel-terminal
+    # No root grant on this host (local_grant=no) means none at all: this file goes too, and
+    # PANEL_TERMINAL_SUDO=1 cannot bring it back on its own.
+    if [[ "${LOCAL_GRANT_CHOICE:-yes}" == "no" ]]; then
+        if [[ -f "${_tsudo_f}" ]]; then
+            rm -f "${_tsudo_f}"
+            ok "Host-terminal sudo disabled (removed ${_tsudo_f}): local_grant=no"
+        fi
+        case "${PANEL_TERMINAL_SUDO:-}" in
+            1|yes|true) warn "PANEL_TERMINAL_SUDO=1 ignored: this host keeps no sudo grant for the panel (local_grant=no; PANEL_LOCAL_GRANT=1 changes that)." ;;
+        esac
+        return 0
+    fi
     case "${PANEL_TERMINAL_SUDO:-}" in
         1|yes|true)
             ;;
@@ -3267,6 +3329,19 @@ release_tailscale_operator() {
 
 write_sudoers_grant() {
     [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
+    # The operator chose no root grant on this host (PANEL_LOCAL_GRANT=0, recorded in panel.conf as
+    # local_grant=no; see _r39d_local_grant_choice): take the file away if it is there, never write
+    # it, and say so on every run, so a host with no grant never reads as one that merely kept it.
+    if [[ "${LOCAL_GRANT_CHOICE:-yes}" == "no" ]]; then
+        if [[ -e /etc/sudoers.d/linuxgsm-panel ]]; then
+            rm -f /etc/sudoers.d/linuxgsm-panel
+            ok "Removed /etc/sudoers.d/linuxgsm-panel (PANEL_LOCAL_GRANT=0)"
+        fi
+        info "sudo grant: none on this host (local_grant=no): the panel manages remote servers only, and"
+        info "  Update, backup restore and the database repair are run as root over SSH. To put the grant"
+        info "  back:  cd / && sudo PANEL_LOCAL_GRANT=1 bash ${HELPER_DIR}/install.sh"
+        return 0
+    fi
     if { [[ "${HELPER_OK}" -eq 1 ]] && [[ "${ROOT_TOOLS_OK}" -eq 1 ]]; } || root_tools_present; then
         sync_game_user_group
         # TWO lines, and the split is the whole point. Root is reachable only by running the
@@ -3355,6 +3430,32 @@ write_sudoers_grant() {
     fi
 }
 
+# ── A by-hand update of a panel that tracks another branch ──────────────────────────────────────
+# The panel's "Switch branch" passes PANEL_BRANCH to the run it starts and records the branch in
+# config.json as panel_branch. A by-hand run (the root update the banner and recover.sh prescribe)
+# names no branch, so it took main's signed tip while config.json went on naming the other one: the
+# panel then offered that branch's tip again (its next Update moved the code back) or, with that tip
+# unsigned, offered nothing at all, main's releases included.
+#
+# Root never takes the branch FROM config.json: that file is the panel's, and the branch decides
+# what root verifies its own pieces against. It only stops, before anything is fetched or changed,
+# and names both ways on: stay on that branch by naming it, or switch the panel back first. Prints
+# the branch config.json names when it is not TRUSTED_BRANCH and this run named none, else nothing.
+# A run the panel started always passes its own PANEL_BRANCH, so this is for by-hand runs only.
+_r39d_tracked_branch() {
+    [[ -z "${PANEL_SELF_UPDATE:-}" ]] || return 0
+    [[ -z "${PANEL_BRANCH:-}" ]] || return 0
+    [[ -f "${PANEL_DIR}/data/config.json" ]] || return 0
+    local _b=""
+    _b="$(_owner_read "${PANEL_DIR}/data/config.json" | python3 -I -c '
+import json, sys
+c = json.load(sys.stdin)
+b = c.get("panel_branch") if isinstance(c, dict) else None
+print(b.strip() if isinstance(b, str) else "")' 2>/dev/null)" || _b=""
+    [[ -n "${_b}" ]] && [[ "${_b}" != "${TRUSTED_BRANCH}" ]] || return 0
+    printf '%s' "${_b}"
+}
+
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
 if [[ -f "$(panel_file app.py)" ]] && [[ -f "${UNIT_FILE}" ]]; then
@@ -3367,6 +3468,29 @@ fi
 if [[ "${IS_UPDATE}" -eq 1 ]]; then
     FROM_VER="$(panel_version)"
     info "Existing install detected at ${PANEL_DIR} (version ${FROM_VER}). Updating…"
+
+    # Before anything is fetched or changed: a by-hand run on a panel switched to another branch
+    # (see _r39d_tracked_branch). The name comes from a panel-owned file, so it is printed as a
+    # command only when it is a ref this script would itself accept as PANEL_BRANCH.
+    _r39d_branch="$(_r39d_tracked_branch)" || _r39d_branch=""
+    if [[ -n "${_r39d_branch}" ]]; then
+        if printf '%s' "${_r39d_branch}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \
+           && [[ "${_r39d_branch#-}" = "${_r39d_branch}" ]] && [[ "${_r39d_branch##*..*}" = "${_r39d_branch}" ]]; then
+            if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
+                _r39d_stay="cd / && sudo PANEL_BRANCH=${_r39d_branch} bash ${HELPER_DIR}/install.sh"
+            else
+                _r39d_stay="PANEL_BRANCH=${_r39d_branch} bash ${PANEL_DIR}/install.sh"
+            fi
+        else
+            _r39d_branch="(a name this installer will not use)"
+            _r39d_stay="switch the panel to the branch you want first"
+        fi
+        die "This panel tracks the branch ${_r39d_branch} (its Switch branch setting), and this run names no
+     branch, so it would move the code to ${TRUSTED_BRANCH} while the panel goes on tracking ${_r39d_branch}.
+     To update that branch:  ${_r39d_stay}
+     To go back to ${TRUSTED_BRANCH}:    switch the panel to ${TRUSTED_BRANCH} with Switch branch first, then run this again.
+     Nothing was changed."
+    fi
 
     # Ensure Node.js + npm on the host regardless of whether there's an update to apply, so a
     # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort). gamedig
@@ -3893,8 +4017,8 @@ if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
 
     # Passwordless sudo so the panel can manage the local host (game-server users,
     # apt, ufw). This is UNRESTRICTED root for the service user — see the trust-model
-    # note at the top of this file for why it cannot currently be scoped, and delete
-    # /etc/sudoers.d/linuxgsm-panel if you only manage remotes.
+    # note at the top of this file for why it cannot currently be scoped, and run this installer
+    # with PANEL_LOCAL_GRANT=0 if you only manage remotes (write_sudoers_grant then writes none).
     write_sudoers_grant
     write_terminal_sudo_grant
 

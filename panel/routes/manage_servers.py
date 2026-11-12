@@ -707,10 +707,10 @@ def _os_cap_refusal(remote, game_type):
     # "not supported on Ubuntu 24.04.5" and leaves a failed row to clean up.
     #
     # The cap is LinuxGSM's own refusal in check_deps.sh (lgsm_data._LGC_DISTRO_CAPS), for the host's
-    # distro: btl and onset above Ubuntu 20.04 or Debian 11. It is NOT the serverlist's os column,
-    # which follows LinuxGSM's Docker image base: at v26.4.0 it left cod, cod2, coduo and mohaa on
-    # ubuntu-24.04 while the rest moved to 26.04, and reading it as a cap refused those four on
-    # every 26.04 host although LinuxGSM runs them there.
+    # distro (two games above Ubuntu 20.04 or Debian 11 up to v26.5.0; none since v26.6.0). It is NOT
+    # the serverlist's os column, which follows LinuxGSM's Docker image base: at v26.4.0 it left cod,
+    # cod2, coduo and mohaa on ubuntu-24.04 while the rest moved to 26.04, and reading it as a cap
+    # refused those four on every 26.04 host although LinuxGSM runs them there.
     #
     # Fails OPEN, like game_os_unsupported itself: an unreadable host OS, or a game with no
     # cap, is not evidence of a problem, and refusing an install that would have worked is the
@@ -782,8 +782,8 @@ _R15F_KNOWN_PORTS = {
     # Every other game whose _default.cfg sets `port=` to something other than 27015 (LinuxGSM
     # v26.4.0): these were offered 27015. Games that keep their port in the game's own config have
     # no `port=` there and stay on the fallback; `details` corrects them after the install.
-    "btl": 7777, "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871,
-    "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
+    "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871, "inss": 27102,
+    "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
     "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027, "tf": 5001, "ti": 7777,
     "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724,
     # Added by LinuxGSM v26.5.0: OpenRA Red Alert and Luanti read `port=` (their startparameters use

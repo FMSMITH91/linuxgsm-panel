@@ -430,7 +430,9 @@ def _v6_86():
         # Beside a public SSH rule: where public SSH is off, step 1 adds nothing public (review 1108).
         _p9_patch(_p9_core, "run_privileged", _ufw_listing86([_ALLOW_ROW83 % "22/tcp"] + list(rows), opened))
         del opened[:]
-        _added, refusal = _hosts86._open_ssh_port_rule(NS(id=-86, name="p86"), 2286, ["22"])
+        # The panel's own host: SSH is public over IPv4 only here, and on a remote the panel dials, a session
+        # this stand-in cannot read refuses that move (review 1109); the panel host adds the family's rule.
+        _added, refusal = _hosts86._open_ssh_port_rule(NS(id=-86, name="p86", is_local=True), 2286, ["22"])
         res[k] = (bool(refusal), list(opened))
     check("ssh port move: a (v6) DENY first for the new port refuses the move; an IPv4 allow with "
           "no v6 rule needs nothing opened; a v6-only allow still opens it for IPv4 (that family's rule "

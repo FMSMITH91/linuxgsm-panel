@@ -1363,7 +1363,7 @@ def _check_host_routes_refuse_delegated_panel_host():
               (_rsec_mod, "remote_fail2ban_unban", (True, "ok")),
               (_rsec_mod, "remote_security_log", "log"),
               (_pro_mod, "pro_detach", (True, "ok")),
-              (_cp22_mod, "_tailnet_ssh_state", (True, True, True)),
+              (_cp22_mod, "_r39b_off_refusal", None),
               (_cp22_mod, "remote_ufw_close_port_22", (True, "ok")))
     _saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _stubs]
     for _m, _n, _r in _stubs:
@@ -4553,6 +4553,8 @@ _AX_ACTION_FROM_CALLER = {
     "_r36c_reboot_refused",     # server_files' cron, mods and GMod content POSTs pass cron_add /
                                 # cron_update / cron_delete / cron_run_now / mods_<which> /
                                 # gmod_content / gmod_content_uninstall — refused during a reboot
+    "_r39a_wipe_refused",       # server_files' mods and cron Run now POSTs pass mods_<which> /
+                                # cron_run_now — refused while a scheduled wipe is being tried
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)
@@ -4610,7 +4612,8 @@ for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROO
 # checked against models.AUDIT_SERVER_ACTIONS by nothing but this file's comment. Each of the four
 # writes its row with server=gs; a name passed through a local is read from that local's
 # assignments in the calling function.
-_AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer", "_r36c_reboot_refused"}
+_AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer", "_r36c_reboot_refused",
+                      "_r39a_wipe_refused"}
 _ax_passed = []
 for _f in sorted(pathlib.Path(_ROOT, "panel").rglob("*.py")):
     _tree = ast.parse(_f.read_text(encoding="utf-8"))

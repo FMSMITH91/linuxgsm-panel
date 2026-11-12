@@ -46,7 +46,8 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _r20b_audit_on_raise, game_account_write_refusal)
+    _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running,
+    game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1083,7 +1084,8 @@ def _last_output_line(clean):
 
 def _run_mods_action(gs, which, mod_id):
     """Install or remove a mod, audit it, and say whether a restart is pending: the route's answer."""
-    refused = _r36c_reboot_refused(gs, "mods_%s" % which)   # not while the host is being rebooted
+    # Not while the host is being rebooted, nor while the server's scheduled wipe is tried.
+    refused = _r36c_reboot_refused(gs, "mods_%s" % which) or _r39a_wipe_refused(gs, "mods_%s" % which)
     if refused is not None:
         return refused
     with _r20b_audit_on_raise(f"mods_{which}", target=gs.name, server=gs):
@@ -1539,6 +1541,22 @@ def _r36c_reboot_refused(gs, action):
     return jsonify({"success": False, "message": i18n.tr(why)}), 409
 
 
+def _r39a_wipe_refused(gs, action):
+    """A 409 (audited) while gs's scheduled wipe is being tried (routes/wipe_schedule), else None.
+
+    Asked under the caller's own registration ("mods", "cron"), which the wipe waits on: a mods
+    install replacing the server's files, or a Run now of a `restart`/`update` line, in the middle
+    of LinuxGSM's wipe or the backup before it started the server while its files were going.
+    """
+    if not _r39a_wipe_running(gs.id):
+        return None
+    why = i18n.Sentence("A scheduled wipe of '{name}' is running. Try again once it has finished.",
+                        name=gs.name)
+    log_action(current_user, action, target=gs.name, detail="refused: %s" % why, success=False,
+               server=gs)
+    return jsonify({"success": False, "message": i18n.tr(why)}), 409
+
+
 def _read_refused(gs, action, detail=""):
     """_write_refused for a file-browser READ: a refusal response, else None.
 
@@ -1604,28 +1622,23 @@ def _console_window_cmd(log_path, want):
     server_detail.js). A plain `tail` read the file at its own moment, after or before a stat, and
     the two could disagree by whatever the game wrote in between. Read back no further than
     _CATCHUP_REACH, from the first newline in it on, so the first line is whole.
+
+    A log within that reach also gets its newline count on the `@` line (`@<inode> <size> <newlines>`,
+    of the same first <size> bytes): whether the window starts at the log's first line
+    (_read_console_window's `whole`). The page puts lines it keeps from an OLDER log directly above
+    this window, and says output is missing between them when it is only a tail of the new log.
     """
     reach = _CATCHUP_REACH
     return (f"L={log_path}; exec 3<\"$L\" 2>/dev/null || exit 1; "
             f"set -- $(stat -L -c '%i %s' /dev/fd/3 2>/dev/null); [ \"$#\" = 2 ] || exit 1; "
-            f"Y=$(($2 > {reach} ? $2 - {reach} : 0)); echo \"@$1 $2\"; printf B; "
+            f"Y=$(($2 > {reach} ? $2 - {reach} : 0)); if [ \"$Y\" -gt 0 ]; then echo \"@$1 $2\"; else "
+            f"echo \"@$1 $2 $(head -c \"$2\" /dev/fd/3 2>/dev/null | wc -l)\"; fi; printf B; "
             f"{{ if [ \"$Y\" -gt 0 ]; then tail -c +$Y /dev/fd/3 | head -c $(($2 - Y + 1)) | tail -n +2; "
             f"else head -c \"$2\" /dev/fd/3; fi; }} 2>/dev/null | tail -{want} 2>/dev/null; printf E")
 
 
-def _console_window_place(out):
-    """(the place `@<inode> <size>` names as [0, inode, size] or None, the rest of the reply)."""
-    if not (out or "").startswith("@"):
-        return None, out or ""
-    head, _nl, rest = out.partition("\n")
-    parts = head[1:].split()
-    if len(parts) != 2 or not all(p.isdecimal() for p in parts):
-        return None, ""
-    return [0, int(parts[0]), int(parts[1])], rest
-
-
 def _read_console_window(remote, gs, want, host_tz):
-    """The last `want` lines of the console log: (readable, rows, where in the log they end or None)."""
+    """The console log's last `want` lines: (readable, rows, where in the log they end or None, whole log?)."""
     # Whether the log was actually READ, kept separate from what it held. The route knew this
     # and threw it away: a host that did not answer, a `tail -2000` that timed out on a slow
     # link, a log that does not exist and a genuinely empty log all left here as 200 with the
@@ -1635,7 +1648,7 @@ def _read_console_window(remote, gs, want, host_tz):
     # opened. Same answer api_server_upload_check gives with `checked`, for the same reason.
     # `at` is bound before the try as well: the return reads it only when the read succeeded, but
     # CodeQL could not see that and reported the caller's three unpacked names as uninitialized.
-    readable, at = False, None
+    readable, at, whole = False, None, False
     try:
         log_path = gs.console_log
         # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
@@ -1654,10 +1667,10 @@ def _read_console_window(remote, gs, want, host_tz):
             timeout=15, selfname=gs.lgsm_name)
         # Where the window ends in the log: the place the page is caught up from. A reply without
         # one (no `@` line) is still a window, with no place: the page stitches it by its text.
-        at, out = _console_window_place(out)
-        framed = rc == 0 and out.startswith("B") and out.endswith("E")
-        readable = framed
+        at, out, newlines = _console_window_place(out)
+        readable = framed = rc == 0 and out.startswith("B") and out.endswith("E")
         body = out[1:-1] if framed else ""
+        whole = framed and _console_window_whole(newlines, body, want)
         if body.endswith("\n"):
             body = body[:-1]     # the file's own final newline, not an empty last line
         elif at is not None:
@@ -1668,8 +1681,8 @@ def _read_console_window(remote, gs, want, host_tz):
             body = body.rpartition("\n")[0]
         lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
     except Exception:
-        lines = []
-    return readable, lines, (at if readable else None)
+        lines, whole = [], False
+    return readable, lines, (at if readable else None), whole
 
 
 def _since_arg(raw):
@@ -2522,7 +2535,8 @@ def _register_cron_actions(app):
         # Registered while it starts, from before the reboot refusal (panel_state.r36j_route_job). The
         # job then runs detached on the host; from there a reboot's probe sees its LinuxGSM command.
         with r36j_route_job(gs.id, "cron"):
-            refused = _r36c_reboot_refused(gs, "cron_run_now") or _write_refused(gs, "cron_run_now")
+            refused = (_r36c_reboot_refused(gs, "cron_run_now") or _r39a_wipe_refused(gs, "cron_run_now")
+                       or _write_refused(gs, "cron_run_now"))
             if refused is not None:
                 return refused
             try:
@@ -2737,7 +2751,7 @@ def _register_console_routes(app):
         remote = gs.remote
         want = _console_lines_wanted()
         host_tz = _host_timezone_cached(remote, app)
-        readable, lines, at = _read_console_window(remote, gs, want, host_tz)
+        readable, lines, at, whole = _read_console_window(remote, gs, want, host_tz)
         # What the PANEL pushed into this console (a long action's markers and output) — its own
         # field, not spliced into `lines`. Two reasons: the browser de-duplicates `lines` by
         # matching the overlap between successive windows, and a block that is stable at the end
@@ -2753,7 +2767,10 @@ def _register_console_routes(app):
         # `now` is the panel's clock at the moment it read this window, for the browser to stamp
         # the lines that are NEW since its last poll — those it did watch arrive. Sent from the
         # server rather than taken from Date.now() so every console time shares one clock.
-        body = {"lines": lines, "now": time.time(),
+        # `whole`: whether the window starts at the log's first line. Lines the page keeps from an OLDER
+        # log (the server restarted) sit directly above it; when it is only the new log's tail, the page
+        # says output is missing between the two rather than run them together.
+        body = {"lines": lines, "now": time.time(), "whole": whole,
                 # False = the console was not read, so `lines` is not a measurement of what the
                 # log holds. A caller must not redraw a scrollback from it.
                 "readable": readable,

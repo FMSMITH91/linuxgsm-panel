@@ -70,7 +70,7 @@
           <option value="">Choose game…</option>
           {% for g in games %}
           {# data-legacy-os is LinuxGSM's own Ubuntu cap for the game (lgsm_data._LGC_DISTRO_CAPS: the
-             check_deps.sh refusal, btl and onset at 20.04). It is both the at-a-glance label and
+             check_deps.sh refusal; none since LinuxGSM v26.6.0). It is both the at-a-glance label and
              what the script compares against the selected host's slug from
              /api/remote/<id>/specs, because the decision is per HOST: a 20.04 remote under a 24.04
              panel runs those games perfectly well. The game's raw os column is not it — it

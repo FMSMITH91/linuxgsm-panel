@@ -656,9 +656,16 @@ function _consoleLineEl() {
 // can push the old log's last lines after the read began and before the host's read saw the new
 // one, and those were wiped with nothing to bring them back (the catch-up goes on in the new log).
 // A line of a log first seen during the read is a NEWER one, and is put back by the read's own
-// catch-up or _rebuildRestore, as it always was. A line with no known log — the server-rendered
-// seed, a read placed by its text — is replaced as before. A read that may replace the console
-// takes its number with `++_r37e_gen` and the log the page stands in as it starts.
+// catch-up or _rebuildRestore, as it always was. A line of the read's OWN log pushed during it, past
+// where its window ends, is not kept here: the priming read's catch-up from that end brings it while
+// the log is still there, and when the log was moved aside first (the read landed just before a
+// Restart's rotation) the catch-up cannot, so the priming read puts those pushes back itself, by
+// their place (_r39c_primeKeep); Load older puts them back by their text (_rebuildRestore). A line
+// with no known log — the server-rendered seed, a read placed by its text — is replaced as before.
+// Kept lines sit directly above the read's window, which may be only the TAIL of its log: unless the
+// read says it holds the whole log (`whole`), a notice between them says output is missing there
+// (_r39c_tailGap). A read that may replace the console takes its number with `++_r37e_gen` and the
+// log the page stands in as it starts.
 var _r37e_gen = 0;
 
 // The inode of the log a read or push's `at` ([chain, inode, offset]) places it in, or null.
@@ -702,6 +709,48 @@ function _r37e_keepOlderLog(nodes) {
   var inos = {};
   nodes.forEach(function (el) { consoleEl.appendChild(el); inos[el._r37e.ino] = true; if (el._r37e.line !== undefined) _consoleLines.push(el._r37e.line); });
   return inos;
+}
+
+// Between the lines kept from an older log and a read's window that may not start at the beginning of
+// its log (`whole` not said: a tail of 250 or 2000 lines of a new log that is longer): a notice that
+// output is missing there. Without it the old log's last line and a line from partway into the new
+// one read as neighbours. Untagged, so the next replacing read wipes it and says it again if it must.
+function _r39c_tailGap(kept, data) {
+  if (kept.length && data.whole !== true) _showReturnGap('Some output from the start of the current console log is not shown. The server keeps it in its console log files.');
+}
+
+// The priming window's own log, pushed while its read was out, past where the window ends: the lines
+// the game wrote after the host read the log. The wipe took them off the page. The catch-up the page
+// asks from the window's end brings them back while that log is still the console log; when LinuxGSM
+// moved it aside first (a Restart's rotation right after the read), the catch-up reads the new log
+// and answers `gap`, and they were gone without a word. So they are kept, by their place in the log
+// (inode and offset), and shown only on such an answer (_r39c_showPrimeKeep); `since` carries them.
+// The first push past the end can begin inside the window (the poller read part of it before the
+// host did): what of it the window ends with is not shown again, unless the push before it is known
+// to end exactly where the window does. Bound to the place the catch-up reads from: a page that has
+// moved on since (a poll's delta, Load older) drops it.
+var _r39c_primeKeep = null;
+
+function _r39c_notePrimeKeep(mark, at) {
+  _r39c_primeKeep = null;
+  if (!Array.isArray(at) || at.length !== 3) return;
+  var prev = null, pushes = [];
+  _rebuildPushes.forEach(function (p) {
+    if (_r37e_inoOf(p.at) !== at[1]) return;
+    if (p.n > mark && p.at[2] > at[2]) pushes.push(p);
+    else if (!pushes.length) prev = p;
+  });
+  if (!pushes.length) return;
+  var first = pushes[0].rows;
+  if (!(prev && prev.at[0] === pushes[0].at[0] && prev.at[2] === at[2])) first = _newConsoleRows(_consoleLines, first);
+  _r39c_primeKeep = {since: at, pushes: [{rows: first, ts: pushes[0].ts, at: pushes[0].at}].concat(pushes.slice(1))};
+}
+
+// The kept pushes, shown on the console as they came. `r.keep` is cleared, so the catch-up ending
+// does not hand them on (_endResync).
+function _r39c_showPrimeKeep(r) {
+  (r.keep || []).forEach(function (p) { _appendConsoleRows(p.rows, p.ts, p.at); });
+  r.keep = null;
 }
 
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
@@ -938,11 +987,14 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         _consoleLines = [];
         consoleEl.innerHTML = '';
         _r37e_keepOlderLog(kept);
+        _r39c_tailGap(kept, data);
         floor = _panelLinesWiped();
         // The priming window is history, so it gets NO arrival time — but a row that carries
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
         _appendConsoleRows(rows, undefined, undefined, _r37e_inoOf(data.at));
+        // Its own log's lines pushed during the read, past its end, wiped just now (_r39c_primeKeep).
+        _r39c_notePrimeKeep(mark, data.at);
         // A window that says where in the log it ends is caught up from there (_primeAt): what was
         // pushed before this answer lies in it or in the catch-up's answer. One that does not (a panel
         // older than this) has the pushes since its read put back by their text, as before.
@@ -1087,6 +1139,7 @@ function loadMoreConsole(btn) {
       _consoleLines = [];
       consoleEl.innerHTML = '';
       var keptInos = _r37e_keepOlderLog(kept);
+      _r39c_tailGap(kept, data);
       _appendConsoleRows(older, null, undefined, _r37e_inoOf(data.at));
       _rebuildRestore(mark, keptInos);
       // A deeper window of the log is a superset of the priming one, so this console is primed. Left
@@ -1243,6 +1296,9 @@ function _startResync(prime) {
   _shownOnReturn = {};
   _primeOwed = false;
   var r = _resync = {id: 0, held: [], since: _logAt, retry: null, panelUntil: Infinity, prime: !!prime};
+  // The priming read's pushes past its end, for a catch-up from that same place only (_r39c_primeKeep).
+  r.keep = _r39c_primeKeep && _r39c_primeKeep.since === _logAt ? _r39c_primeKeep.pushes : null;
+  _r39c_primeKeep = null;
   r.giveUp = setTimeout(function () { if (_resync === r) _resyncGiveUp(r); }, _RESYNC_MAX_MS);
   _resyncAsk(r);
 }
@@ -1263,6 +1319,9 @@ function _endResync() {
   if (!r) return;
   clearTimeout(r.retry);
   clearTimeout(r.giveUp);
+  // Not answered: the next catch-up from the same place still owes the priming read's pushes (unless
+  // a newer priming read has noted its own: _startResync ends this one just before taking those).
+  if (r.keep && !_r39c_primeKeep) _r39c_primeKeep = {since: r.since, pushes: r.keep};
   var held = r.held;
   r.held = [];
   held.forEach(function (d) { if (d.panel) _showPanelPush(d); });
@@ -1282,6 +1341,8 @@ function _resyncDone() {
 function _resyncGiveUp(r) {
   var stick = consoleAtBottom();
   if (!socket.connected) { _endResync(); return; }
+  // Nothing read from the window's end: the priming read's pushes past it are all there is of that.
+  _r39c_showPrimeKeep(r);
   if (_consoleLines.length && !r.prime) _showReturnGap();
   _resyncRelease(r, null);
   _resyncDone();
@@ -1378,6 +1439,9 @@ function _resyncAnswer(r, data) {
     if (r.prime) { _resyncGiveUp(r); return; }
     r.retry = setTimeout(function () { if (_resync === r) _resyncAsk(r); }, _RESYNC_RETRY_MS);
   } else {
+    // Out of reach of the window's end (the log was moved aside): the priming read's pushes past it
+    // go first. Read from it, the answer holds them itself.
+    if (data.gap) _r39c_showPrimeKeep(r); else r.keep = null;
     _resyncShowAway(_resyncRows(data.lines), data, r.prime);
     _resyncPanelLines(r, data.panel_lines);
     _resyncRelease(r, data.at);
@@ -1425,6 +1489,7 @@ function _resyncFetch(r) {
 function _resyncRead(r, data) {
   var stick = consoleAtBottom();
   if (data.readable !== false && !data.error && Array.isArray(data.lines) && Array.isArray(data.at)) {
+    if (data.gap) _r39c_showPrimeKeep(r); else r.keep = null;   // as _resyncAnswer
     _resyncShowAway(_resyncRows(data.lines), data);
   }
   _resyncPanelLines(r, data.panel_lines);
@@ -1569,14 +1634,15 @@ function _appendReturnRows(rows, now) {
 // says which, since "while this tab was in the background" is false of a tab that never left.
 var _gapFromDrop = false;
 
-function _showReturnGap() {
+// `text`: another notice of missing output in the same place (_r39c_tailGap's), English as these are.
+function _showReturnGap(text) {
   var div = document.createElement('div');
   div.className = 'console-line console-gap text-warning';
   // English, which the page's translator says in the viewer's language (and again on a live switch):
   // a line written already translated stayed in the language it was written in until a reload.
-  div.textContent = _gapFromDrop
+  div.textContent = text || (_gapFromDrop
     ? 'Some output from while the connection was down is not shown. The server keeps it in its console log files.'
-    : 'Some output from while this tab was in the background is not shown. The server keeps it in its console log files.';
+    : 'Some output from while this tab was in the background is not shown. The server keeps it in its console log files.');
   consoleEl.appendChild(div);
 }
 
@@ -1744,11 +1810,9 @@ function _hhmmIn(date, tz) {
 }
 
 function renderDailyRestart() {
-  var el = document.getElementById('dailyrestart-time');
-  var hint = document.getElementById('dailyrestart-hosthint');
+  var el = document.getElementById('dailyrestart-time'), hint = document.getElementById('dailyrestart-hosthint');
   if (!el) return;
-  var hostTime = el.dataset.hostTime || '05:00';
-  var hostTz = el.dataset.hostTz || '';
+  var hostTime = el.dataset.hostTime || '05:00', hostTz = el.dataset.hostTz || '';
   var mine = _wallTimeIn(hostTime, hostTz, _viewerTz());
   if ('value' in el && el.tagName === 'INPUT') { el.value = mine; } else { el.textContent = mine; }
   if (!hint) return;
@@ -1759,10 +1823,8 @@ function renderDailyRestart() {
 // different and more useful statement than showing the host's number as if it were yours.
 // Only the values are set here; the words are in the template so they can be translated.
 function _showDailyRestartHostTime(hint, hostTime, hostTz) {
-  var tEl = document.getElementById('drh-time');
-  var tzEl = document.getElementById('drh-tz');
-  var onEl = document.getElementById('drh-on');
-  var unkEl = document.getElementById('drh-on-unknown');
+  var tEl = document.getElementById('drh-time'), tzEl = document.getElementById('drh-tz');
+  var onEl = document.getElementById('drh-on'), unkEl = document.getElementById('drh-on-unknown');
   if (tEl) tEl.textContent = hostTime;
   if (tzEl) tzEl.textContent = hostTz ? '(' + hostTz + ')' : '';
   if (onEl) onEl.hidden = !hostTz;
@@ -2326,8 +2388,7 @@ pollWhenVisible(_consolePoll, 30000);
 // The LinuxGSM line: the server's release, and "v26.5.0 available" when LinuxGSM has a newer one.
 // An unread release leaves the dash, and an unread latest says nothing about being behind.
 function _showLgsmVersion(info) {
-  var el = document.getElementById('lgsm-version');
-  var behind = document.getElementById('lgsm-behind');
+  var el = document.getElementById('lgsm-version'), behind = document.getElementById('lgsm-behind');
   if (!el || !behind || !info) return;
   if (info.release) el.textContent = info.release;
   if (info.behind && info.latest) {

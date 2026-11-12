@@ -22,7 +22,7 @@ import subprocess as _sp120  # nosec B404 - bash over this part's own fixture ho
 import tempfile as _tf120
 from types import SimpleNamespace as NS
 
-from unit.part01 import check
+from unit.part01 import check, ufw_stored_answer
 from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_core, _p9_patch, _p9_restore_all
 from unit.part114 import _PUB_ADDR114, _TS_ADDR114
 from panel.ops.ssh_manager import files as _f120
@@ -81,7 +81,8 @@ class _Box120:
         elif verb == "ufw-delete-allow-proto-port":
             self.added = False
         self._tick(verb)
-        return self._answer(verb)
+        # ufw with IPv6 off: no (v6) row is listed (part01)
+        return ufw_stored_answer() if verb == "ufw-stored-rules" else self._answer(verb)
 
     def _answer(self, verb):
         if verb in ("sshd-backup-dropin", "sshd-socket-backup"):

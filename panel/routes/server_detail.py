@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (clock, terminal)
-from panel.core.panel_state import (_cron_restart_pending, _install_jobs, _install_lock)
+from panel.core.panel_state import (_cron_restart_pending, _install_jobs, _install_lock, r36j_route_job)
 from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
     CustomCommand, GameServer, GlobalBan, RemoteServer, User, claim_row, db, row_birth, row_label,
     still_held)
@@ -40,7 +40,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
-    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, game_account_write_refusal,
+    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, _r39a_wipe_running, game_account_write_refusal,
     lg265_refresh_commands, lg265_schedule_gained)
 
 
@@ -453,6 +453,46 @@ def _install_busy_reason(gs):
     return None
 
 
+# The actions that read a server and change nothing on it: the only ones run while its scheduled
+# wipe is being tried (_r39a_wipe_refusal). `monitor` is not one here: it starts a server it finds down.
+_R39A_WIPE_SAFE_ACTIONS = frozenset(("details", "check-update", "postdetails", "test-alert"))
+
+
+def _r39a_wipe_refusal(server_id, name, action):
+    """Why `action` is not run on a server whose scheduled wipe is being tried now, else None.
+
+    LinuxGSM's wipe stops the server, deletes its map (and blueprints) and starts it again, and the
+    backup before it stops and starts it too (routes/wipe_schedule): a Restart, Start, Update or
+    Backup in the middle started the server while its files were going, or archived them as they
+    went. Asked by the routes, the bulk bar and the chat bots here, and again by the background run
+    once it has registered (the wipe waits on that registration: wipe_schedule._r39a_other_work).
+    """
+    if action in _R39A_WIPE_SAFE_ACTIONS or not _r39a_wipe_running(server_id):
+        return None
+    return i18n.Sentence("A scheduled wipe of '{name}' is running — '{action}' was not run. Try again once "
+                         "it has finished.", name=name, action=action)
+
+
+def _r40_action_blocked(gs, remote, action):
+    """Why `action` is not run on `gs` at all right now (installing, a clean reboot, a wipe), else None.
+
+    The single routes, the bulk worker and the chat bots all come through _run_action, so all of
+    them are refused here. One whole sentence per install reason: the reason was spliced into a
+    shared one.
+    """
+    busy = _install_busy_reason(gs)
+    if busy == "still installing":
+        return i18n.Sentence("'{name}' is still installing — '{action}' was not run.",
+                             name=gs.name, action=action)
+    if busy:
+        return i18n.Sentence("'{name}' is not installed — '{action}' was not run.",
+                             name=gs.name, action=action)
+    from panel.services import host_reboot as _hr
+    if _hr.reboot_busy(remote.id):
+        return _hr.busy_message(remote.display_name)
+    return _r39a_wipe_refusal(gs.id, gs.name, action)
+
+
 def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_gate=None):
     """Execute a whitelisted action (permission already checked).
 
@@ -477,18 +517,10 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_
     # start, stop or update in the middle of the stop phase would be a second hand on the same
     # server (panel/services/host_reboot.py). After the reboot is sent, an operator's own Start or
     # Stop wins instead: the server leaves the plan, so the restore never acts behind their back.
-    busy = _install_busy_reason(gs)
-    if busy:
-        # The single routes, the bulk worker and the chat bots all come through here.
-        # One whole sentence per reason: the reason was spliced into a shared one.
-        if busy == "still installing":
-            return False, i18n.Sentence("'{name}' is still installing — '{action}' was not run.",
-                                        name=gs.name, action=action)
-        return False, i18n.Sentence("'{name}' is not installed — '{action}' was not run.",
-                                    name=gs.name, action=action)
+    blocked = _r40_action_blocked(gs, remote, action)
+    if blocked:
+        return False, blocked
     from panel.services import host_reboot as _hr
-    if _hr.reboot_busy(remote.id):
-        return False, _hr.busy_message(remote.display_name)
     if action in ("start", "stop", "restart") and gs.reboot_restore:
         _hr.exclude_row(gs, actor, action, origin=origin)
     # A power action that is already a no-op is refused — see _noop_power_refusal.
@@ -510,7 +542,11 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_
         # immediately and the status poll reflects the result, instead of hanging the button.
         _bg_power_action(app, gs, remote, action, actor, origin=origin, on_done=on_done)
         return True, i18n.Sentence("'{action}' issued — status updates in a few seconds.", action=action)
-    return _run_sync_action(app, gs, remote, action, actor, origin)
+    if action in _R39A_WIPE_SAFE_ACTIONS:
+        return _run_sync_action(app, gs, remote, action, actor, origin)
+    # `monitor` can start the server: registered for its run, as the background ones are.
+    with r36j_route_job(gs.id, "action"):
+        return _run_sync_action(app, gs, remote, action, actor, origin)
 
 
 def _bg_bulk_action(app, server_id, remote_id, action, actor_id, born=_NO_BIRTH):
@@ -780,20 +816,18 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 if not remote or not gs:
                     detail = "the server or its host is no longer configured"
                     return
-                out, rc = _lg264_run_power(remote, (server_id, short_name, selfname), action)
-                clean = terminal.strip_escapes(out or "")
-                ok, detail = (rc == 0), clean
-                # The outcome is audited under the server only while it is still that server, and
-                # its bookkeeping (the queued flags, the priority nudge) is done only then.
-                held = still_held(gs)
-                oc = _lgp.outcome_of(out, rc, action)
-                if oc is not None:
-                    # The button answered "issued" long before: the console says what LinuxGSM did.
-                    ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
+                with r36j_route_job(server_id, "action"):
+                    out, rc = _r39a_power_unless_wiping(app, remote, (server_id, short_name, selfname, name),
+                                                        action)
+                if out is None:
+                    detail = str(rc)        # refused: rc is the refusal (_r39a_power_unless_wiping)
+                    # The request wrote no row for a power action (its outcome is audited when it
+                    # finishes), so the refusal is the row: a wipe began between the click and here.
+                    log_action(actor, f"{action}_server", target=name, actor=origin, success=False,
+                               detail=detail[:300], server=gs)
                     return
-                log_action(actor, f"{action}_server", target=name, success=(rc == 0),
-                           detail=clean[-400:], actor=origin, server=gs if held else None)
-                detail = _lg265_ahl_said(app, gs, held, action, clean)
+                ok, detail = (rc == 0), terminal.strip_escapes(out or "")
+                ok, detail, held = _r40_power_outcome(app, gs, (out, rc), (action, actor, origin, name))
                 if held:
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
@@ -805,6 +839,46 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
             _fire_on_done(on_done, ok, detail, action, server_id)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def _r40_power_outcome(app, gs, result, ctx):
+    """A finished background start/stop/restart's (ok, detail, bookkeeping due), audited.
+
+    `result` is (out, rc); `ctx` is (action, actor, origin, server name). The outcome is audited
+    under the server only while it is still that server, and its bookkeeping (the queued flags,
+    the priority nudge, _after_power_action) is due only then. The caller runs that bookkeeping
+    itself, after it has this answer: the bookkeeping can raise after the action succeeded, and
+    the success must still reach on_done.
+    """
+    out, rc = result
+    action, actor, origin, name = ctx
+    clean = terminal.strip_escapes(out or "")
+    held = still_held(gs)
+    oc = _lgp.outcome_of(out, rc, action)
+    if oc is not None:
+        # The button answered "issued" long before: the console says what LinuxGSM did.
+        ok, detail = _lg264_said(oc, action, gs, held, (actor, origin, name), console=app)
+        return ok, detail, False
+    log_action(actor, f"{action}_server", target=name, success=(rc == 0),
+               detail=clean[-400:], actor=origin, server=gs if held else None)
+    return rc == 0, _lg265_ahl_said(app, gs, held, action, clean), held
+
+
+def _r39a_power_unless_wiping(app, remote, ident, action):
+    """_lg264_run_power under the caller's "action" registration: (out, rc), or (None, why) refused.
+
+    The wipe is asked about again here, after the registration, since the request's own answer
+    (_run_action) came before the thread started: a wipe that began in between saw nothing of this.
+    `ident` is (server id, account, script, server name).
+    """
+    server_id, short_name, selfname, name = ident
+    wiping = _r39a_wipe_refusal(server_id, name, action)
+    if wiping:
+        # The quiet window _run_action opened for it ends: nothing was stopped.
+        _mon_end_offline_window(server_id)
+        _console_push(app, server_id, f"[panel] {action}: {wiping}")
+        return None, str(wiping)
+    return _lg264_run_power(remote, (server_id, short_name, selfname), action)
 
 
 def _lg264_run_power(remote, ident, action):
@@ -923,7 +997,7 @@ def _bg_action(app, gs, remote, action, on_done=None):
     """
     # Plain values, read here on the request's thread (see _bg_power_action).
     server_id, remote_id, short_name, selfname = gs.id, remote.id, gs.short_name, gs.lgsm_name
-    born, autostart = row_birth(gs), bool(getattr(gs, "autostart", True))
+    born, autostart, name = row_birth(gs), bool(getattr(gs, "autostart", True)), gs.name
     _app = app
 
     def _run():
@@ -934,8 +1008,18 @@ def _bg_action(app, gs, remote, action, on_done=None):
                 if not remote:
                     detail = "its host is no longer configured"
                     return
-                out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
-                                         monitor=autostart)
+                with r36j_route_job(server_id, "action"):
+                    # Asked again under the registration (see _r39a_power_unless_wiping).
+                    wiping = _r39a_wipe_refusal(server_id, name, action)
+                    if wiping:
+                        _console_push(_app, server_id, f"[panel] {action}: {wiping}")
+                        detail = str(wiping)
+                        # The request audited "started"; this is how it ended: not run.
+                        log_action(None, f"{action}_complete", target=name, success=False,
+                                   detail=detail[:300], server=claim_row(GameServer, server_id, born))
+                        return
+                    out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
+                                             monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
                 oc = _lgp.outcome_of(out, rc, action)

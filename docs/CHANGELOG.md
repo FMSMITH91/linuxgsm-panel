@@ -294,6 +294,65 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Saving a scheduled wipe no longer cancels the wipe that is waiting.** Unticking "wait until the
+  server is empty" to force a wipe that was waiting for players now runs it on the next check.
+  Rescheduling or turning off a waiting wipe is recorded in the audit log.
+
+- **A dropped connection during a scheduled wipe no longer repeats the wipe.** If the link to a host
+  drops while LinuxGSM is wiping, the panel stops and alerts you to check the server. It no longer
+  runs the wipe again every 5 minutes.
+
+- **A wipe whose server needed a forced stop is no longer reported as failed.** When a Rust server
+  ignores the normal quit and LinuxGSM has to force it to stop, a wipe that completed is now
+  recorded as done.
+
+- **Clean reboots wait for LinuxGSM wipes and mod installs.** A wipe, mods install or removal,
+  FastDL build or similar command started outside the panel (cron or the terminal) now blocks a
+  reboot instead of being cut off. A cron wipe is no longer reported as a crash.
+
+- **Overdue-backup alerts are sent when LinuxGSM's alert settings were never filled in.** A LinuxGSM
+  alert channel switched on but left at its default address (for example `email@example.com`) no
+  longer stops the panel from sending its own alert.
+
+- **Nothing else runs on a server during its scheduled wipe.** Backups, queued restarts and stops,
+  the server page's actions, chat bot commands, mod installs and "Run now" wait or are refused while
+  a scheduled wipe runs. The wipe waits for any of them that is already running.
+
+- **SSH port move reads public SSH past LAN-address rules.** A firewall rule for one LAN or
+  Tailscale address listed above the public SSH rule no longer makes public SSH look off, which
+  refused the move.
+
+- **SSH port move stops when the panel's own connection can't be read.** On a host where SSH is
+  public over only one of IPv4/IPv6 and the panel could not read its own connection, the move now
+  stops instead of opening only one family and cutting the panel off.
+
+- **The console keeps the server's last lines across a restart's re-read.** When the console re-read
+  its log just before a restart started a new one, the game's final lines could vanish from the
+  page. They now stay, once, before the new log.
+
+- **The console says when the start of a new log is not shown.** After a restart, lines kept from
+  the previous log could sit directly above the end of the new one as if nothing were between them.
+  A notice now marks the missing part.
+
+- **Scheduled Tasks no longer fails on a malformed cron log line.** One odd line in the host's cron
+  journal could stop the Scheduled Tasks card from loading.
+
+- **A server's description can no longer change its online status.** A description containing words
+  like "status: stopped" could make a running server show as offline.
+
+- **The command palette finds sections and actions in Spanish and French.** Typing the words shown
+  on a translated page now finds them; the English words still work.
+
+- **Re-running the uninstaller after it stopped part-way finishes the job.** It no longer says there
+  is nothing to remove while the panel's account, sudo grants or system files are still on the host.
+
+- **Updating by hand no longer moves a panel on another branch back to main behind its back.** The
+  installer stops first and shows the command to update that branch, or tells you to switch the
+  panel back to main.
+
+- **Diagnostics no longer reports the event-loop watch as "never completed a pass" in its first
+  second.**
+
 - **The console no longer starts every line a quarter of the way across a phone screen.** The
   column for line times takes no space until a line with a time is on screen, and on phones it is
   narrower when it does.
@@ -307,8 +366,8 @@ compares git commits, not this file.
   rule lets SSH in", although an IPv4 SSH rule let the panel in.
 
 - **Blocking an address from the panel host works in more setups.** Blocks are no longer refused on
-  a host with IPv6 switched off, or from a browser reaching the panel through Tailscale Serve on the
-  host itself.
+  a host with IPv6 switched off, or from a browser reaching the panel through a reverse proxy on the
+  host itself with `trust_proxy` on.
 
 - **The console keeps old-log lines that arrive while it re-reads the log.** Lines that landed
   during a re-read after Clear, or during Load older, were wiped when the log rotated; a command
@@ -1121,19 +1180,41 @@ compares git commits, not this file.
   crafted reply. The panel's copy now uses the fixed version. Only Farming Simulator queries read
   XML.
 
+- **Moving SSH never opens it wider than before.** An SSH port move no longer opens the new port on
+  more addresses than SSH was open on. Where SSH is public on only one of the host's addresses, or
+  blocked on one, the move stops and names the rule to add for the new port first. With UFW handling
+  IPv6 but only an IPv4 SSH rule, the new port is opened over IPv4 only, and where UFW's settings
+  can't be read the move stops instead of guessing.
+
+- **Close port 22 checks the panel's Tailscale connection.** Close port 22 now refuses, as Disable
+  public SSH already did, when the panel reaches the host over Tailscale on a port Tailscale SSH
+  does not answer.
+
+- **Blocking and rule deletes behind a local proxy keep you connected.** On the panel's host,
+  blocking an address range is refused when it would cut an open connection to the panel's web
+  ports, so an admin behind a proxy that sends no client address is not locked out. When the panel
+  cannot tell how you reach it, the rules for its web ports can no longer be deleted from the
+  Firewall card.
+
+- **Dropping the panel host's sudo grant now sticks.** If you only manage remote servers, run the
+  installer once with `PANEL_LOCAL_GRANT=0`: it removes the panel's sudo grants on its own host and
+  records the choice, so later updates no longer put them back. If you had deleted the grant file by
+  hand, the next update leaves it deleted. `PANEL_LOCAL_GRANT=1` restores it.
+
 - **A proxy's address can no longer add a line to the panel's log.** The warning written when a
   forwarding header is not believed now replaces any line break in the address it names, so it
   cannot forge a log line.
 
 - **Moving SSH to a new port keeps it off the internet.** On a host whose SSH is reachable only over
-  Tailscale or one network interface, moving the SSH port opened the new port to everyone. The new
-  port now gets the same scope as the rule that lets the panel in, and a deny rule ahead of it
-  refuses the move.
+  Tailscale or one network interface, moving the SSH port opened the new port to everyone. Now the
+  move adds nothing public there: a rule letting the panel in from its own address range is copied
+  for the new port, an interface or Tailscale rule the panel can't copy stops the move and is named,
+  and on the panel's own host nothing is added. A deny rule ahead of the new port refuses the move.
 
 - **The panel host's auto-block spares signed-in admins.** A stale API token or a repeatedly
   throttled sign-in could build up enough fail2ban hits to have an admin's own address permanently
-  blocked, cutting off the panel and SSH. Addresses of signed-in accounts that can manage the panel
-  are now skipped, and when sessions cannot be read nothing new is blocked.
+  blocked, cutting off the panel and SSH. Addresses of signed-in superadmins are now skipped, and
+  when sessions cannot be read nothing new is blocked.
 
 - **Auto-block never blocks the panel itself.** The hourly auto-block could add a permanent deny for
   the address the panel connects to a remote host from, or for the panel host's own addresses, after

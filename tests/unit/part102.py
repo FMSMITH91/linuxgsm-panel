@@ -18,13 +18,13 @@ the checkout's data/.
 import base64 as _b64_102
 from types import SimpleNamespace as NS
 
-from unit.part01 import check
+from unit.part01 import check, ufw_stored_answer
 from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_core, _p9_drain, _p9_json,
                          _p9_ms, _p9_patch, _p9_restore_all, _p9_sf, _p9_state, _p9_threading)
 from panel.core import i18n as _i18n102
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.ops.ssh_manager import cron as _cron102, gmod as _gmod102, hosts as _hosts102
-from panel.routes import api as _api102, close_port22 as _cp102, remote_vps as _rv102
+from panel.routes import api as _api102, remote_vps as _rv102
 from panel.security import auth as _auth102
 
 _TRIP102_START = len(_P9_TRIPPED)
@@ -405,6 +405,8 @@ def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
         if verb == "listening-sockets":
             state["listed"] += 1
             return listening, "", 0
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return _UFW_HEAD102 + "".join("[%2d] %s\n" % (i + 1, r) for i, r in enumerate(ufw_rules)), "", 0
         if verb == "sshd-validate":
@@ -584,6 +586,8 @@ _SHOW102 = ("ActiveState=active\nListen=0.0.0.0:2222 (Stream)\nListen=[::]:2222 
 
 def _ssh_reads102(socket_show):
     def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, **k):
+        if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
+            return ufw_stored_answer()
         if verb == "ufw-status":
             return ("Status: active\n\nTo                         Action      From\n--                         "
                     "------      ----\n22/tcp                     LIMIT       Anywhere\n", "", 0)
@@ -746,7 +750,7 @@ def _public_off102(client, key_rid):
           all(v == (True, True, False) for v in kept.values()), repr(kept))
     _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: ("", "", 0))
     _p9_patch(_hosts102, "_r28b_resolve", lambda name: ["203.0.113.8"])
-    _p9_patch(_cp102, "_tailnet_ssh_state", lambda server: (True, True, True))
+    _p9_patch(_hosts102, "_tailnet_ssh_state", lambda server: (True, True, True))
     deleted = []
     _p9_patch(_hosts102, "_r15c_delete_port_22", lambda server, ports=None: deleted.append(server.id))
     d = _p9_json(client.post("/api/remote/%d/close-port-22" % key_rid))

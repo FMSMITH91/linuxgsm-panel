@@ -11,8 +11,8 @@ them from a VIEW_CONSOLE-only member. Held here:
 * the audit row is masked whoever ran it; the form route's flash (the session cookie) stays short.
 """
 from unit.part01 import check
-from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _P9_TRIPPED, _p9, _p9_audit, _p9_client,
-                         _p9_patch, _p9_patch_sm, _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _P9_TRIPPED, _p9, _p9_audit, _p9_arm,
+                         _p9_client, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.db.models import GameServer, User, db
 from panel.routes import server_detail as _sd145
 
@@ -55,6 +55,9 @@ check("details masking: output with no secrets in it comes back unchanged",
 
 # ── through the action path ───────────────────────────────────────────────────────────────────────
 try:
+    # Armed: the closing "nothing reached a real transport" check reads only what an armed tripwire
+    # records, and this part never armed it (review 1109 T11).
+    _p9_arm(who="part145")
     _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: (_DETAILS145, "", 0))
     _p9_patch(_sd145, "_after_power_action", lambda *a, **k: None)
     with _p9.app_context():
