@@ -1262,7 +1262,8 @@ check("csgo: the note is hidden until the config read says it applies",
 # ── 21. L10: every game whose LinuxGSM config sets another port gets it, not 27015 ───────────────
 # The `port=` of each one's _default.cfg at LinuxGSM v26.4.0 (config-default/config-lgsm/<s>server).
 # btl's 7777 left with the game: LinuxGSM v26.6.0 dropped it.
-_l10_ports140 = {"ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871, "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004,
+_l10_ports140 = {"ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871, "inss": 27102,
+                 "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004,
                  "qw": 27500, "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027,
                  "tf": 5001, "ti": 7777, "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724}
 _l10_got140 = {g: _ms140._desired_install_port(g, "27015") for g in _l10_ports140}

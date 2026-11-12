@@ -193,6 +193,8 @@ def _r40_pb_coverage():
             if mod not in left_out and not isinstance(getattr(_il.import_module(mod), "subprocess", None), _PbTrip):
                 missing.append(mod)
     return sorted(missing)
+
+
 _pb_inner_run = _so._run
 
 

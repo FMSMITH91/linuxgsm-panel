@@ -87,7 +87,7 @@ def _git(*args, cwd=None):
 
 
 def _git_out(*args, cwd=None):
-    """git's stdout, or RuntimeError when git failed: a diff that did not run lists no file.
+    """Return git's stdout, or raise RuntimeError when git failed: a diff that did not run lists no file.
 
     The changed-file and rename lists come from here. Read without git's exit status, a base the
     checkout lacks gave an empty diff, and the gate printed "0 changed file(s)" and passed having
