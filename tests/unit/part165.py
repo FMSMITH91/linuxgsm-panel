@@ -37,7 +37,7 @@ def _read165(name):
 
 
 _INS165 = _read165("install.sh")
-_UNI165 = _read165("uninstall.sh")
+_UNI165 = _read165(os.path.join("panel", "install", "uninstall.sh"))
 
 
 def _fn165(src, name):
