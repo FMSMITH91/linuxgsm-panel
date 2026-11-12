@@ -5,19 +5,37 @@ per interface in /proc/net/dev. The history sampler turns the summed counters in
 (monitoring._hch_net_rates). Kept apart from the read itself so the interface rule is plain code
 with nothing to stub.
 """
+import re
 import time
 
-# The ones whose bytes cross the wire once. `lo` is the host talking to itself. veth*, docker*, br-*
-# and virbr* carry container and VM traffic that the physical interface also carries on its way in
-# or out, so adding them counts it twice. tailscale* and wg* are tunnels: every byte on them is sent
-# again, wrapped, over the physical interface, so they are skipped for the same reason. What is
-# left is the physical (or virtual NIC) interfaces, ens3, eth0, enp0s3 and the like.
-SKIP_PREFIXES = ("veth", "docker", "br-", "virbr", "tailscale", "wg")
+# The ones whose bytes cross the wire once: the bottom of each interface stack, the one the bytes leave
+# the host on. /proc/net/dev lists every interface flat, with no word on which rides on which, so what
+# rides on another is told by the names the kernel and the usual tools give it. `lo` is the host talking
+# to itself. Skipped, because the interface below them carries the same bytes:
+#   * container and VM links and their bridges: veth*, docker*, br-*, virbr*, podman*, cni-*, lxdbr*,
+#     lxcbr*, and libvirt's and Proxmox's guest taps and firewall links (vnet*, tap*, fwbr*, fwpr*, fwln*);
+#   * bridges: br0 and the like (br*) and Proxmox's vmbr*. A NIC enslaved to one counts every frame on
+#     the wire, the host's and its guests'; a bridge with no NIC in it is routed out of one;
+#   * bond and team masters (bond*, team*): their counters are the sum of their member NICs';
+#   * VLAN, macvlan, macvtap and ipvlan links (vlan*, macvlan*, macvtap*, ipvlan*), which ride on a NIC,
+#     and ifb*, which mirrors one's traffic;
+#   * tunnels and VPNs: tailscale*, wg*, tun*, ppp*, zt* (ZeroTier) and the kernel's own tunnel devices
+#     (gre*, gretap*, erspan*, ip6tnl*, ip6gre*, ip_vti*, ip6_vti*, sit*, tunl*, vxlan*). Every byte on
+#     them is sent again, wrapped, over the interface below.
+# What is left is the physical (or virtual NIC) interfaces, ens3, eth0, enp0s3, eno1 and the like.
+SKIP_PREFIXES = ("veth", "docker", "br", "virbr", "vmbr", "podman", "cni-", "lxdbr", "lxcbr", "vnet", "tap",
+                 "fwbr", "fwpr", "fwln", "bond", "team", "macvlan", "macvtap", "ipvlan", "ifb", "tailscale",
+                 "wg", "tun", "ppp", "zt", "gre", "erspan", "ip6tnl", "ip6gre", "ip_vti", "ip6_vti", "sit",
+                 "vxlan", "vlan")
+
+# A VLAN sub-interface (eno1.100, bond0.20, eno1.100.5; vlan100 is in SKIP_PREFIXES): the interface it is
+# cut from counts the same frames. The names the kernel and udev give a NIC hold no dot.
+_VLAN_NAME = re.compile(r"\.\d+\Z")
 
 
 def counted(name):
-    """Whether interface `name` counts towards the host's traffic (see SKIP_PREFIXES)."""
-    return name != "lo" and not name.startswith(SKIP_PREFIXES)
+    """Whether interface `name` counts towards the host's traffic (see SKIP_PREFIXES and _VLAN_NAME)."""
+    return name != "lo" and not name.startswith(SKIP_PREFIXES) and not _VLAN_NAME.search(name)
 
 
 def netif_line(f, host, _acc=None):

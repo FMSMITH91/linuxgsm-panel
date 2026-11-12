@@ -4069,8 +4069,9 @@ def _open_ssh_port_rule(server, port, panel_way_in, served=None):
 
     An inactive firewall lists none of its rules in `status`, stored ones included, so its stored
     rules are read with `ufw show added` (_r26j_inactive_open). A firewall that cannot be read, or
-    an inactive one whose stored rules cannot be read either, is opened as it always was — but NOT
-    counted as added: a rule that may have been there before is not one to delete on the way out.
+    an inactive one whose stored rules cannot be read either, refuses the move, nothing changed: opened
+    blind, the allow went in from Anywhere where SSH may be tailnet-only. A host without ufw (the read
+    answers 127, as remote_ufw_status reads it) has nothing to open.
 
     On an active firewall the allow is public only where SSH already is: a public rule lets one of
     `served` (the ports sshd serves now) in. Where public SSH is off, the new port gets the scope of
@@ -4082,9 +4083,25 @@ def _open_ssh_port_rule(server, port, panel_way_in, served=None):
     with _core.ufw_lock(server):
         before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
         known = brc == 0 and firewall._ufw_is_active(before or "")
-        if brc == 0 and not known:
+        if brc == 127:
+            return False, None          # no ufw on this host: nothing to open
+        if brc != 0:
+            return False, _r41f_unread_status(port)
+        if not known:
             return _r26j_inactive_open(server, port)
         return _r38a_open_read(server, port, before, known, served or panel_way_in)
+
+
+def _r41f_unread_status(port):
+    """_open_ssh_port_rule's refusal when `ufw status` could not be read (a failed or timed-out read).
+
+    Opened blind, the allow went in from Anywhere on a host whose SSH may be tailnet-only, and stayed
+    after a failed move (not counted as added): SSH public on the new port, and nothing said.
+    """
+    return i18n.Sentence(
+        "Couldn't read the firewall (ufw status), so whether opening port {port}/tcp would make SSH reachable "
+        "from more places than it is now is not known. Check the host is reachable and try again. Nothing was "
+        "changed.", port=port)
 
 
 def _r38a_open_read(server, port, before, known, served):
@@ -4176,8 +4193,9 @@ def _r38h_public_fams(server, status_out, ports, port=None):
     # Allow: every port is public on every address, except where a rule denies it. A held DENY (SSH
     # refused on one address of the host) does not follow SSH to the new port on its own, so it is
     # kept and the move is refused naming it, as under a default deny; a held allow adds nothing here.
+    # So is a DENY there with no rule for everyone below it: the policy is what lets SSH in elsewhere.
     deny = held if held is not None and not _r38h_lets_in(held) else None
-    return listed, set(listed), deny, None
+    return listed, set(listed), deny or _r41f_policy_deny(status_out, ports, listed, port), None
 
 
 def _r39b_family_readings(status_out, ports):
@@ -4255,19 +4273,50 @@ def _r39b_port_way(status_out, port, v6):
     that address), or an allow there with no allow for everyone after it (SSH public on that address only).
     An allow there above an allow for everyone changes nothing: the address is public either way.
     """
+    decider, deny, allow = _r41f_port_walk(status_out, port, v6)
+    if decider is None:
+        return False, allow
+    lets_in = _r38h_lets_in(decider)
+    return lets_in, (deny if lets_in else allow)
+
+
+def _r41f_port_walk(status_out, port, v6):
+    """(the first rule naming no one address or None, the first reachable one-address DENY above it, the same allow).
+
+    TCP `port` in one family's public rules, in ufw's order. A rule for loopback is passed over, and a
+    one-address rule counts only for an address the internet reaches (_r39b_reachable).
+    """
     deny = allow = None
     for p in _ufw_public_rules(status_out, v6=v6):
         if _r22b_dest_loopback(p) or not _r21b_rule_matches(p, port, "tcp"):
             continue
-        lets_in = _r38h_lets_in(p)
         if not _r21b_dest_scoped(p):
-            return lets_in, (deny if lets_in else allow)
+            return p, deny, allow
         if _r39b_reachable(p):
-            if lets_in:
+            if _r38h_lets_in(p):
                 allow = allow or p
             else:
                 deny = deny or p
-    return False, allow
+    return None, deny, allow
+
+
+def _r41f_policy_deny(status_out, ports, listed, port):
+    """Under a default incoming allow: a DENY for one public address with no rule for everyone below it, or None.
+
+    SSH is public by the policy then on every address but that one. The DENY does not follow SSH to the new
+    port on its own, so the allow policy let the new port in on the one address where SSH was refused (the
+    OWNER RULE). None where a served port of that family is public on every address anyway, or where a DENY
+    for that address already covers `port` (_r39b_held_met).
+    """
+    ports = [int(p) for p in ports or () if str(p).isdecimal()]
+    for v in sorted(listed):
+        walks = [_r41f_port_walk(status_out, p, v == 6) for p in ports]
+        if any(d is None and (dec is None or _r38h_lets_in(dec)) for dec, d, _a in walks):
+            continue
+        deny = next((d for dec, d, _a in walks if dec is None and d is not None), None)
+        if deny is not None and not _r39b_held_met(status_out, deny, port):
+            return deny
+    return None
 
 
 def _r39b_reachable(rule):
@@ -4365,10 +4414,12 @@ def _r38a_scoped_open(server, before, port, served):
     now = _r38a_session_conn(server) if dials else None
     if now is not None:
         return _r38a_session_open(server, before, port, now, public_on, now.version in fams)
-    if public_on:
+    if public_on and not dials:
         return None
     if dials:
-        return False, _r39b_unread_refusal(fams, port)
+        # Public in every family, yet a DENY the public reading cannot see may meet the new port
+        # (_r38a_scoped_deny): only the panel's session says whether it would, and it was not read.
+        return False, _r39b_unread_refusal(fams, port, public_on)
     if fams:
         # Public in one family, no session of the panel's through sshd (its own host, Tailscale SSH): that
         # family's rule alone, as the public path did without reading the session (in both families then);
@@ -4400,12 +4451,19 @@ def _r40_public_refusal(listed, held, port):
     return None
 
 
-def _r39b_unread_refusal(fams, port):
+def _r39b_unread_refusal(fams, port, public_on=False):
     """Why _r38a_scoped_open refuses a move on a remote the panel reaches through sshd, its session unread.
 
     With SSH public in one family (`fams`), that family's rule alone went in, and a panel dialling the other
-    was cut off; with none, which rule the new port would need is not known.
+    was cut off; with none, which rule the new port would need is not known. Public in every family
+    (`public_on`), an interface-, source- or address-scoped DENY may meet the new port: the public path
+    added its allow below it, and the route pointed the panel at a port that drops its own connection.
     """
+    if public_on:
+        return i18n.Sentence(
+            "Couldn't read the panel's own SSH connection to this host, and a firewall rule for one interface, "
+            "source or address may refuse it on port {port}, so whether the panel could still reach SSH there "
+            "is not known. Nothing was changed.", port=port)
     if fams:
         return i18n.Sentence(
             "Couldn't read the panel's own SSH connection to this host, and SSH is public over IPv{family} only, "
@@ -4684,11 +4742,15 @@ def _r26j_inactive_open(server, port):
         operator to close the old port, while the rule shut the new one the moment UFW came on;
       * a stored allow or LIMIT for exactly `port`/tcp is the operator's: nothing is added or rewritten;
       * none stored: the allow goes in, and it is the panel's own, so the revert deletes it;
-      * stored rules that cannot be read (a host without the verb, a failed read): opened as
+      * stored rules that cannot be read (a failed read, a helper without the verb): refused, nothing
+        changed. Opened blind, the allow from Anywhere applied the moment UFW was enabled, on a host
+        whose stored SSH rule may be tailnet-only. An empty answer that reports success is opened as
         before, not counted as added.
     """
     out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
-    stored, blocking = _r26j_stored_reading(out if rc == 0 else "", port)
+    if rc != 0:
+        return False, _r41f_unread_stored(port)
+    stored, blocking = _r26j_stored_reading(out, port)
     if blocking:
         return False, _r26j_blocked(port, blocking)
     if stored:
@@ -4702,6 +4764,15 @@ def _r26j_inactive_open(server, port):
         if not _r26j_stored_reading(out if rc == 0 else "", port)[0]:
             return False, _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
     return added, None
+
+
+def _r41f_unread_stored(port):
+    """_r26j_inactive_open's refusal when UFW's stored rules (`ufw show added`) could not be read."""
+    return i18n.Sentence(
+        "UFW is inactive on this host and its stored rules (ufw show added) could not be read, so whether a "
+        "rule for port {port}/tcp would make SSH reachable from more places once UFW is enabled is not known. "
+        "Try again, or re-run install.sh on this host to update the panel's helper. Nothing was changed.",
+        port=port)
 
 
 def _r26j_stored_reading(out, port):
