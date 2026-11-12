@@ -1175,6 +1175,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **The player-query tool's XML parser is the fixed release.** gamedig, which the panel uses to
+  count players, came with a version of its XML parser that could be made to spend a long time on a
+  crafted reply. The panel's copy now uses the fixed version. Only Farming Simulator queries read
+  XML.
+
 - **Moving SSH never opens it wider than before.** An SSH port move no longer opens the new port on
   more addresses than SSH was open on. Where SSH is public on only one of the host's addresses, or
   blocked on one, the move stops and names the rule to add for the new port first. With UFW handling

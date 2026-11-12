@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+a494e8cf The player-query tool's XML parser is the fixed release.
 f411f0cd Network traffic and history charts on the host page.
 4cfd8ed1 Saving a scheduled wipe no longer cancels the wipe that is waiting.
 3e7877cd A dropped connection during a scheduled wipe no longer repeats the wipe.

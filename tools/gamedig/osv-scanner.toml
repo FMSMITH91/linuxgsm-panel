@@ -14,11 +14,8 @@
 # the entry back with that reachability reason and an ignoreUntil, and its two twins with it
 # (dependency-review.yml's allow-ghsas, .github/codacy-accepted-errors.json).
 
-[[IgnoredVulns]]
-id = "GHSA-474x-hrwr-fgx4"
-ignoreUntil = 2026-12-27
-reason = """gamedig 5.3.3 -> fast-xml-parser 5.8.0: quadratic CPU when scanning unterminated stop-node \
-tags, fixed in 5.12.0. Unreachable here: it needs the non-default stopNodes option, and gamedig's only \
-use (protocols/farmingsimulator.js) builds XMLParser({ ignoreAttributes: false }). gamedig pins \
-fast-xml-parser to exactly 5.8.0, so no bump of ours reaches 5.12.0. Remove this when a gamedig release \
-moves it; re-check by the date either way."""
+# GHSA-474x-hrwr-fgx4 (fast-xml-parser, quadratic CPU on unterminated stop-node tags) was exempted
+# here while gamedig 5.3.3 pinned fast-xml-parser to exactly 5.8.0. package.json now overrides it to
+# 5.12.0, the fixed release: no API change in between, and gamedig's only use (its Farming Simulator
+# query: XMLValidator.validate, then XMLParser({ ignoreAttributes: false })) parses a sample identically
+# under both. Drop the override once a gamedig release requires 5.12.0 or later itself.
