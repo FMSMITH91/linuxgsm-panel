@@ -279,15 +279,20 @@ def _pck_gate(gs, remote, action, actor, port_gate):
 
 
 def _pck_power_refusal(gs, remote, action, actor, port_gate):
-    """_noop_power_refusal, then the port check (_pck_gate). -> the refusal, or None.
+    """_noop_power_refusal, then the port check (_pck_gate). -> the refusal, or None."""
+    return _noop_power_refusal(gs, remote, action) or _pck_gate(gs, remote, action, actor, port_gate)
 
-    With neither, a Start or Restart goes ahead, so a port saved while the server ran is moved to
-    first (port_check.follow_pending): the start binds it, and the panel watches it from now on.
+
+def _pck_after_power(gs, remote, action, rc):
+    """After a Start or Restart that ran: move the stored port to one saved while the server ran.
+
+    Only once it exited 0 with no LinuxGSM outcome (the caller passes only those): the game has then
+    been started on the saved port. A Restart LinuxGSM postponed or refused, a wipe's refusal, or a
+    failed run leaves the old process on the old port, so the stored port stays and the saved one
+    keeps waiting (port_check.follow_pending).
     """
-    refusal = _noop_power_refusal(gs, remote, action) or _pck_gate(gs, remote, action, actor, port_gate)
-    if refusal is None and action in ("start", "restart") and gs.pending_port:
+    if rc == 0 and action in ("start", "restart") and gs.pending_port:
         _pck.follow_pending(gs, remote, _pck_rules())
-    return refusal
 
 
 def _pck_after_save(gs, settings):
@@ -511,8 +516,8 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None, port_
     synchronous branch never calls it, because there the return value already IS the
     outcome.
 
-    `port_gate`: see _pck_gate. A Start or Restart that goes ahead moves the stored port to one
-    saved on the Settings tab while the server ran (port_check.follow_pending).
+    `port_gate`: see _pck_gate. A Start or Restart that runs and exits 0 moves the stored port to
+    one saved on the Settings tab while the server ran (_pck_after_power, in the background worker).
     """
     # The host is being rebooted cleanly: its plan has decided who brings each server back, and a
     # start, stop or update in the middle of the stop phase would be a second hand on the same
@@ -831,6 +836,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 ok, detail = (rc == 0), terminal.strip_escapes(out or "")
                 ok, detail, held = _r40_power_outcome(app, gs, (out, rc), (action, actor, origin, name))
                 if held:
+                    _pck_after_power(gs, remote, action, rc)
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)

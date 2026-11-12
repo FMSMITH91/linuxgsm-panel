@@ -18,19 +18,20 @@ Held here (panel/services/port_check.py, game_ports.move_stored_port and the two
   force; the Settings tab shows the save's port note.
 
 HOW IT RUNS. No host is reached: the listening-port read, protected_host_ports, the cron rewrite, the
-firewall close and the config write are replaced, the background power action is a recorder, and
-part12's transport tripwire is armed.
+firewall close and the config write are replaced, the background power action is a recorder (run for
+real, its thread queued and drained, for the Start that moves to a pending port), and part12's
+transport tripwire is armed.
 """
 import os as _os175
 
 from unit.part01 import _root, check, eq
-from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
-                         _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_row,
-                         _p9_set)
+from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_audit, _p9_audit_count,
+                         _p9_client, _p9_delete_server, _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm,
+                         _p9_restore_all, _p9_row, _p9_set, _p9_threading)
 from unit.part75 import _run_js75
 from panel.db.models import GameServer as _GS175, db as _db175
 from panel.routes import _shared as _sh175, server_detail as _sd175, server_files as _sf175
-from panel.services import port_check as _pc175
+from panel.services import lgsm_players as _lgp175, port_check as _pc175
 
 # ── 1. the helpers ──────────────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,14 @@ eq("saved port: the Settings map's port as a number; blank, 0, past 65535, text,
 _r175 = {}
 _live175 = {"v": None, "calls": 0}
 _bg175, _crons175, _ufw175 = [], [], []
+_bg_real175 = {"fn": _sd175._bg_power_action, "on": False}
+
+
+def _bg_rec175(app, gs, remote, action, actor, **k):
+    """The background power action's recorder; while "on", the real one runs after it (thread queued)."""
+    _bg175.append((gs.id, action))
+    if _bg_real175["on"]:
+        _bg_real175["fn"](app, gs, remote, action, actor, **k)
 
 
 def _listening175(remote):
@@ -100,7 +109,7 @@ try:
     _p9_patch_sm("upgrade_managed_cron_tracking", lambda remote, user, lgsm, **k: _crons175.append((user, k)) or True)
     _p9_patch_sm("remote_ufw_close_game_port", lambda remote, port, user: _ufw175.append((port, user)) or (1, ""))
     _p9_patch(_sh175, "game_account_write_refusal", lambda *a, **k: None)
-    _p9_patch(_sd175, "_bg_power_action", lambda app, gs, remote, action, actor, **k: _bg175.append((gs.id, action)))
+    _p9_patch(_sd175, "_bg_power_action", _bg_rec175)
     _p9_patch(_sd175, "_live_run_state", lambda gs, remote: None)    # the no-op guard reads nothing
     _p9_patch(_sf175, "_write_refused", lambda *a, **k: None)
     _p9_patch(_sf175, "write_file", lambda *a, **k: (True, ""))
@@ -173,7 +182,15 @@ try:
     # ...and moves to when it goes ahead
     _live175["v"] = {22}
     del _crons175[:], _ufw175[:]
+    # (the port moves once the start has run and exited 0: the real worker, its LinuxGSM run stubbed)
+    _p9_patch(_sd175, "threading", _p9_threading(_P9Thread))
+    _p9_patch_sm("run_as_game_user", lambda *a, **k: ("Starting p175t: OK", "", 0))
+    _p9_patch_sm("set_game_priority", lambda *a, **k: None)
+    _p9_patch(_lgp175, "allowance_seconds", lambda *a, **k: 0)
+    _bg_real175["on"] = True
     _r175["pending_go"] = _act175(_A175, _t175, "start")
+    _p9_drain()
+    _bg_real175["on"] = False
     _r175["pending_go_row"] = (_p9_row(_t175).port, _p9_row(_t175).pending_port)
     _r175["pending_go_audit"] = _p9_audit("port_resync")
     _r175["pending_go_side"] = (list(_crons175), list(_ufw175))

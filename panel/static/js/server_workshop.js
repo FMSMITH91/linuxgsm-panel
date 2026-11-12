@@ -4,7 +4,9 @@
 // textContent only, since titles and Mod IDs come from elsewhere.
 (function () {
   var ID_RE = /^[0-9]{1,20}$/;
-  var MOD_RE = /^\\?[A-Za-z0-9_.\- ]{1,64}$/;
+  // workshop.py's _WSC_MOD_ID: anything but ; = a backslash past the first character, or a control or
+  // line-separator character.
+  var MOD_RE = /^\\?[^;=\\\u0000-\u001f\u007f-\u009f\u2028\u2029]{1,100}$/;
   var MAX = 200;
   var state = {kind: '', items: [], mods: [], titles: {}, found: [], busy: false, ready: false};
 
@@ -231,7 +233,7 @@
       return [t('A Workshop id is 1 to 20 digits, or a steamcommunity.com Workshop link that has one (…?id=123456789).'), 'text-danger'];
     }
     if (list === 'mods' && !MOD_RE.test(value)) {
-      return [t('A Mod ID is 1 to 64 letters, digits, spaces, dots, dashes or underscores (a leading backslash is kept), with no ; or =.'), 'text-danger'];
+      return [t('A Mod ID is 1 to 100 characters with no ; or =, line break or control character, and no blank at either end (a leading backslash is kept).'), 'text-danger'];
     }
     if (state[list].indexOf(value) >= 0) return [t('That is in the list already.'), 'text-warning'];
     if (state[list].length >= MAX) return [t('A list holds at most 200 entries.'), 'text-danger'];

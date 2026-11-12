@@ -330,6 +330,7 @@ def _arm43():
     _p9_patch(_disc43, "_bg_cache_commands", lambda *a, **k: None)
     _p9_patch(_notif43, "notify", lambda key, title, body="": _NOTIFIED43.append((key, body)))
     _p9_patch(_mon43, "_lgsm_maintenance_running", lambda remote, gs: False)
+    _p9_patch(_mon43, "_lgsm_stopped_on_purpose", lambda remote, gs: False)
     _p9_patch(_lgd43, "serverlist", lambda *a, **k: _ROWS43)
 
 

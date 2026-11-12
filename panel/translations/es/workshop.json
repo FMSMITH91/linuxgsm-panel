@@ -36,7 +36,7 @@
   "Not a Workshop id, so it is skipped and is dropped on save: {list}": "No es un id del Workshop, así que se omite y se elimina al guardar: {list}",
   "Not saved yet.": "Aún sin guardar.",
   "A Workshop id is 1 to 20 digits, or a steamcommunity.com Workshop link that has one (…?id=123456789).": "Un id del Workshop tiene de 1 a 20 dígitos, o es un enlace del Workshop de steamcommunity.com que lo lleva (…?id=123456789).",
-  "A Mod ID is 1 to 64 letters, digits, spaces, dots, dashes or underscores (a leading backslash is kept), with no ; or =.": "Un Mod ID tiene de 1 a 64 letras, dígitos, espacios, puntos, guiones o guiones bajos (se conserva una barra invertida inicial), sin ; ni =.",
+  "A Mod ID is 1 to 100 characters with no ; or =, line break or control character, and no blank at either end (a leading backslash is kept).": "Un Mod ID tiene de 1 a 100 caracteres, sin ; ni =, saltos de línea ni caracteres de control, y sin espacios en los extremos (se conserva una barra invertida inicial).",
   "That is in the list already.": "Ya está en la lista.",
   "A list holds at most 200 entries.": "Una lista admite como máximo 200 entradas.",
   "This game has no Steam Workshop list the panel can edit.": "Este juego no tiene ninguna lista del Steam Workshop que el panel pueda editar.",

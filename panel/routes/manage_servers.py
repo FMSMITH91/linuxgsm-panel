@@ -11,6 +11,7 @@ from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, c
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
 from panel.services import lgsm_players as _lgp
+from panel.services.port_check import held_ports
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
@@ -1904,14 +1905,15 @@ def sibling_port_blocks(rows, gs):
     """{port: name} for every port ANOTHER panel server among `rows` reserves.
 
     Its whole block (its game's span), because a stopped server still owns the ports it is
-    configured for.
+    configured for; and the same block from a port saved on its Settings tab while it ran
+    (pending_port), which its next start binds.
     """
     held = {}
     for e in rows:
-        if e.id == gs.id or not e.port:
+        if e.id == gs.id:
             continue
-        for k in range(_port_span(e.game_type)):
-            held.setdefault(e.port + k, e.name)
+        for p in sorted(held_ports(e, _port_span(e.game_type))):
+            held.setdefault(p, e.name)
     return held
 
 

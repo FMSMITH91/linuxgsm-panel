@@ -804,6 +804,45 @@ def _lgsm_maintenance_running(remote, gs):
         return False
 
 
+def _lgsm_lock_probe_cmd(gs):
+    """The shell line _lgsm_stopped_on_purpose runs for `gs`, or None for names it can't carry."""
+    user = (gs.short_name or "").strip()
+    selfname = (gs.lgsm_name or "").strip() if (gs.game_type or "").strip() else ""
+    if not user or not selfname or not game_idents_ok(user, selfname):
+        return None
+    return ('d=%s; r=unread; if [ -f "$d"/%s ] || [ -f "$d"/%s ]; then r=held; '
+            'elif [ -d "$d" ] && [ -x "$d" ]; then r=none; fi; echo "LGSM_LOCK_$r"'
+            % (shlex.quote("/home/%s/lgsm/lock" % user), shlex.quote(selfname + "-monitoring.lock"),
+               shlex.quote(selfname + ".lock")))
+
+
+def _lgsm_stopped_on_purpose(remote, gs):
+    """True when LinuxGSM's own `stop` took this server down: its monitoring lock is gone.
+
+    `lgsm/lock/<selfname>-monitoring.lock` is written by every `start` and `restart` (before the game
+    is up, so a failed start keeps it) and removed only by `stop` (LinuxGSM's command_start.sh and
+    command_stop.sh; LinuxGSM's own monitor restarts a server only while it is there). A crash leaves
+    it, so a server down with neither it nor the older `<selfname>.lock` was stopped on purpose: by a
+    Schedule tab task (a Stop with player warnings is `./<s> send ... ; sleep ... ; ./<s> stop`), a
+    cron line or a terminal. A panel Stop is already known by its window and never asks.
+
+    The answer counts only when the lock folder itself could be searched (as the row's sudo, else as
+    the panel's own account); anything else is False, so an unreadable home never hides a crash.
+    The printed words are built from a variable, so a command line echoed back cannot answer.
+    """
+    try:
+        cmd = _lgsm_lock_probe_cmd(gs)
+        if cmd is None:
+            return False
+        words = (run_command(remote, cmd, timeout=10)[0] or "").split()
+        if "LGSM_LOCK_held" not in words and "LGSM_LOCK_none" not in words:
+            words = (run_command(remote, cmd, timeout=10, sudo=False)[0] or "").split()
+        return "LGSM_LOCK_none" in words and "LGSM_LOCK_held" not in words
+    except Exception:
+        _log.debug("monitoring lock probe failed for %s", row_label(gs, "name"), exc_info=True)
+        return False
+
+
 _DIGIT_RUN_RE = re.compile(r"\d+")
 
 
@@ -1299,6 +1338,11 @@ def _mon_server_went_down(remote, gs, up, prev_up, muted):
         # alerts — otherwise suppressing "offline" would just produce "back online".
         return _IN_MAINTENANCE
     misses.pop(gs.id, None)          # declared: recorded False from here on
+    if _lgsm_stopped_on_purpose(remote, gs):
+        # LinuxGSM's own stop (a scheduled one, with or without player warnings): meant to stay
+        # down, as a panel Stop is. Recorded down, unannounced, and its return quiet.
+        _monitor_state["server_unannounced"][gs.id] = True
+        return up
     if not muted:
         notifications.notify("server_down", "Server offline",
                              "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
