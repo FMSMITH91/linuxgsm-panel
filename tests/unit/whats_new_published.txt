@@ -3,6 +3,20 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+23635957 SSH port moves never open SSH wider than it was.
+dea66419 Test checks that read what they name.
+5132cba1 SSH port move keeps the panel connected.
+72c299c9 Host network traffic counts each byte once.
+24709266 A Start, Stop, Restart or update that fails because the host can't be reached is in the audit log.
+b9de6069 "Back up game servers now" names servers a scheduled wipe was holding.
+b9da704c Switching back to main respects required update stops.
+41cb4caa The debug report explains a required update stop.
+2bc15ede An interrupted uninstall can be finished with the same command.
+591767aa Project Zomboid Mod IDs with brackets or quotes save.
+15150514 A port saved while a server ran moves only after a restart that happened.
+c6ee4640 A scheduled Stop no longer pages "Server offline".
+072e24b9 Game config form: long or unusual files and number-looking fields.
+f61fc4d4 Start anyway from the command palette, and translated chart legends.
 a494e8cf The player-query tool's XML parser is the fixed release.
 f411f0cd Network traffic and history charts on the host page.
 4cfd8ed1 Saving a scheduled wipe no longer cancels the wipe that is waiting.
