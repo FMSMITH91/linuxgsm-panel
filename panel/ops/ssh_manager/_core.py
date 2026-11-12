@@ -2949,6 +2949,10 @@ def host_live_metrics(server, force=False):
     out, _, _ = run_command(server, _host_sample_cmd(), timeout=20, sudo=False)
 
     host, acc = _parse_host_sample(out)
+    # When the byte counters were read, for the history sampler's rate (monitoring._hch_net_rates).
+    # Taken here rather than when the sample is stored, because a cached read can be up to
+    # _LIVE_METRICS_TTL old by then.
+    host["net_read_at"] = time.time() if host["net_rx_bytes"] is not None else None
     cpu_lines = acc["cpu"]
     total_delta = 0
     if len(cpu_lines) >= 2 and len(cpu_lines[0]) >= 7 and len(cpu_lines[1]) >= 7:
@@ -2982,6 +2986,10 @@ def _host_sample_cmd():
         ("ps -eo user:32=,etimes= --no-headers 2>/dev/null | awk '{gsub(/^ +| +$/,\"\",$1); "
          "if($2>m[$1]) m[$1]=$2} END{for(u in m) print \"GUP\", u, m[u]}'"),
         "ss -H -ltnu 2>/dev/null | awk '{n=split($5,a,\":\"); print \"PORT\", a[n]}' | sort -u",
+        # Every interface's received and sent byte counters (fields 1 and 9 after the name). The
+        # name is glued to the first counter once it is large ("eth0:123456"), so the ":" becomes
+        # a space before splitting. Filtered in _hch_netif, where the rule can be tested.
+        "awk 'NR>2{sub(/:/,\" \"); print \"NETIF\",$1,$2,$10}' /proc/net/dev 2>/dev/null",
     ]
     return " ; ".join(parts)
 
@@ -3040,10 +3048,31 @@ def _hs_port(f, _host, acc):
         acc["ports"].add(int(f[1]))
 
 
+# Which interfaces count towards the host's network traffic: the ones whose bytes cross the wire
+# once. `lo` is the host talking to itself. veth*, docker*, br-* and virbr* carry container and VM
+# traffic that the physical interface also carries on its way in or out, so adding them counts it
+# twice. tailscale* and wg* are tunnels: every byte on them is sent again, wrapped, over the
+# physical interface, so they are skipped for the same reason. What is left is the physical (or
+# virtual NIC) interfaces, ens3, eth0, enp0s3 and the like.
+_hch_net_skip_prefixes = ("veth", "docker", "br-", "virbr", "tailscale", "wg")
+
+
+def _hch_net_counted(name):
+    """Whether interface `name` counts towards the host's traffic (see _hch_net_skip_prefixes)."""
+    return name != "lo" and not name.startswith(_hch_net_skip_prefixes)
+
+
+def _hch_netif(f, host, _acc):
+    """Add one NETIF line's received/sent bytes to the host's totals, for a counted interface."""
+    if len(f) >= 4 and f[2].isdecimal() and f[3].isdecimal() and _hch_net_counted(f[1]):
+        host["net_rx_bytes"] = (host.get("net_rx_bytes") or 0) + int(f[2])
+        host["net_tx_bytes"] = (host.get("net_tx_bytes") or 0) + int(f[3])
+
+
 _HOST_SAMPLE_LINES = {
     "cpu": _hs_cpu, "GJA": _hs_jiffies, "GJB": _hs_jiffies, "MEM": _put_mem, "LOAD": _put_load,
     "DISK": _put_disk, "CORES": _hs_host_int, "UPTIME": _hs_host_int, "GAMERAM": _hs_gameram,
-    "GUP": _hs_gup, "PORT": _hs_port,
+    "GUP": _hs_gup, "PORT": _hs_port, "NETIF": _hch_netif,
 }
 
 
@@ -3062,7 +3091,8 @@ def _parse_host_sample(out):
     """(host figures, per-user tables) from host_live_metrics' output."""
     host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
             "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
-            "cores": 1, "uptime_secs": 0}
+            "cores": 1, "uptime_secs": 0, "net_rx_bytes": None, "net_tx_bytes": None,
+            "net_read_at": None}
     acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": set(), "cpu": []}
     _parse_tagged(out, _HOST_SAMPLE_LINES, host, acc)
     return host, acc
