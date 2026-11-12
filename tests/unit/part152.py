@@ -409,9 +409,9 @@ _tout_cmpd = _run_js75(_name_tiles_cmpd, (
     "  return {game, hidden: false, disabled: false, getAttribute: k => (k in a ? a[k] : null),\n"
     "    setAttribute: (k, v) => { a[k] = String(v); }, pressed: () => a['aria-pressed']}; }\n"
     "const tiles = [tile('rust', 'rust rustserver'), tile('gmod', \"garry's mod gmodserver\"),\n"
-    "  tile('btl', 'battalion: legacy btlserver')];\n"
+    "  tile('mohaa', 'medal of honor: allied assault mohaaserver')];\n"
     "const events = [], none = {hidden: true};\n"
-    "const sel = {value: '', options: [{value: 'rust', disabled: false}, {value: 'btl', disabled: true}],\n"
+    "const sel = {value: '', options: [{value: 'rust', disabled: false}, {value: 'mohaa', disabled: true}],\n"
     "  dispatchEvent: e => events.push([e.type, e.bubbles])};\n"
     "global.document = {querySelectorAll: () => tiles,\n"
     "  getElementById: id => ({'game-type-select': sel, 'game-search-none': none})[id] || null};\n"
@@ -419,23 +419,23 @@ _tout_cmpd = _run_js75(_name_tiles_cmpd, (
               for _f in ("filterGameTiles", "syncGameTiles", "pickGameTile"))
     + "const shown = () => tiles.filter(x => !x.hidden).map(x => x.game);\n"
     "filterGameTiles({value: 'GMODserv'}); const one = shown();\n"
-    "filterGameTiles({value: 'battalion legacy'}); const two = shown();\n"
+    "filterGameTiles({value: 'allied medal'}); const two = shown();\n"
     "filterGameTiles({value: 'zzz'}); const zero = [shown(), none.hidden];\n"
     "filterGameTiles({value: ''}); const all = [shown(), none.hidden];\n"
     "syncGameTiles(); const dis = tiles.map(x => x.disabled);\n"
-    "tiles[2].disabled = true; pickGameTile(tiles[2]); const afterBtl = [sel.value, events.length];\n"
+    "tiles[2].disabled = true; pickGameTile(tiles[2]); const afterOff = [sel.value, events.length];\n"
     "pickGameTile(tiles[0]);\n"
-    "console.log(JSON.stringify({one, two, zero, all, dis, afterBtl, val: sel.value, events,\n"
+    "console.log(JSON.stringify({one, two, zero, all, dis, afterOff, val: sel.value, events,\n"
     "  pressed: tiles.map(x => x.pressed())}));\n"))
 if _tout_cmpd is not None:
     check("install page: the search keeps the tiles whose name or script holds every word typed, and says "
           "when none does",
-          _tout_cmpd.get("one") == ["gmod"] and _tout_cmpd.get("two") == ["btl"]
-          and _tout_cmpd.get("zero") == [[], False] and _tout_cmpd.get("all") == [["rust", "gmod", "btl"], True],
+          _tout_cmpd.get("one") == ["gmod"] and _tout_cmpd.get("two") == ["mohaa"]
+          and _tout_cmpd.get("zero") == [[], False] and _tout_cmpd.get("all") == [["rust", "gmod", "mohaa"], True],
           repr(_tout_cmpd))
     check("install page: a tile mirrors the select (a game the host cannot install, or not offered, is "
           "disabled), and a click sets the select and fires its change; a disabled tile does nothing",
-          _tout_cmpd.get("dis") == [False, True, True] and _tout_cmpd.get("afterBtl") == ["", 0]
+          _tout_cmpd.get("dis") == [False, True, True] and _tout_cmpd.get("afterOff") == ["", 0]
           and _tout_cmpd.get("val") == "rust" and _tout_cmpd.get("events") == [["change", True]]
           and _tout_cmpd.get("pressed") == ["true", "false", "false"], repr(_tout_cmpd))
 # The icons wait for the page's load event, and then load only for the tiles the grid's own scroll

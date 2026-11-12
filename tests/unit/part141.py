@@ -378,9 +378,10 @@ from panel.db import models as _models141  # noqa: E402
 from panel.routes import manage_servers as _ms141  # noqa: E402
 _sn141 = set(_ln.strip() for _ln in _read141("tests", "unit", "lgsm_shortnames.txt").splitlines()
              if _ln.strip() and not _ln.startswith("#"))
-check("shortnames fixture: v26.5.0's serverlist, with its six new games",
-      {"bfe", "cswon", "fivem", "hlwon", "luanti", "orar"} <= _sn141 and len(_sn141) == 150
-      and "(tag v26.5.0)" in _read141("tests", "unit", "lgsm_shortnames.txt"), len(_sn141))
+check("shortnames fixture: v26.6.0's serverlist, with v26.5.0's six new games (v26.6.0 dropped btl and onset)",
+      {"bfe", "cswon", "fivem", "hlwon", "luanti", "orar"} <= _sn141 and len(_sn141) == 148
+      and not {"btl", "onset"} & _sn141
+      and "(tag v26.6.0)" in _read141("tests", "unit", "lgsm_shortnames.txt"), len(_sn141))
 check("install port: orar and luanti get their own default (their startparameters use ${port}), fivem and "
       "bfe the form's hint, the WON2 servers 27015",
       [_ms141._desired_install_port(g, "27015") for g in ("orar", "luanti", "fivem", "bfe", "hlwon", "cswon")]

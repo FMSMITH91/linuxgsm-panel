@@ -2155,9 +2155,9 @@ _LGC_PLAYER_PORT_EXACT = frozenset({"voice"})
 # Don't Starve Together's "Game: Master" is the port its shards talk to each other on, not one a
 # player reaches; its "Game: Server" is.
 _LGC_NOT_PLAYER_DESCS = frozenset({"game: master"})
-# Per game: an HTTP row that players download from — MTA's resources, Onset's packages and Just
-# Cause 3 Multiplayer's client packages. Elsewhere "HTTP" is a web admin or status page.
-_LGC_PLAYER_HTTP_GAMES = frozenset({"mta", "onset", "jc3"})
+# Per game: an HTTP row that players download from — MTA's resources and Just Cause 3 Multiplayer's
+# client packages. Elsewhere "HTTP" is a web admin or status page.
+_LGC_PLAYER_HTTP_GAMES = frozenset({"mta", "jc3"})
 # MTA's HTTP row is opened (players download resources from it unless httpdownloadurl points
 # elsewhere), but it is also the server that hosts MTA's web interface — the webadmin and
 # resourcebrowser resources, behind HTTP basic auth over plain HTTP. It stays open and the operator

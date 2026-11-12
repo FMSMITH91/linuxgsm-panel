@@ -6,17 +6,25 @@ r"""Part 178 of the unit suite: review 1109's integration fixes.
   IPv6 on, so the new port went public over IPv6 where SSH was not. It goes on where it adds nothing
   that could open IPv6: the new port already public over IPv4, or a default incoming allow policy.
   Driven through change_ssh_port on part159's stand-in and through the SSH port route on part12's app.
+* LinuxGSM v26.6.0 dropped btl and onset from serverlist.csv: the panel's cap table is empty and no
+  panel source names either game.
 
 HOW IT RUNS. part159's port-move stand-in and part163's stored-file patch on part12's patcher with its
 transport tripwire armed. Nothing reaches a host, sudo,
 ufw, a resolver or data/.
 """
+import os
+import re as _re178
+
 from unit.part01 import check
+from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_audit, _p9_client, _p9_core, _p9_json,
                          _p9_patch, _p9_restore_all)
 from unit.part159 import _Box159, _PUB_SESS159, _V4_ADD159, _move159
 from unit.part163 import _PROXY_ADD163, _PUB22_163, _STORED_TEXT163, _move163
 from panel.ops.ssh_manager import firewall as _fw178, hosts as _hosts178, ufweval as _ue178
+from panel.services import lgsm_data as _lgsm178
+from panel.ops.ssh_manager import game as _game178
 
 _TRIP178_START = len(_P9_TRIPPED)
 _UNREAD178 = "could not be read, so whether a rule for port 2022 would also open it over IPv6 is not known"
@@ -109,6 +117,23 @@ check("1109 finding 4 (route): POST /api/remote/<id>/ssh-port on that host answe
       _rt178[0] == 200 and _rt178[1].get("success") is False and _UNREAD178 in (_rt178[1].get("message") or "")
       and _rt178[2] == [] and _rt178[3].success is False and _rt178[3].detail == "22 -> 2022",
       repr((_rt178[0], _rt178[1], _rt178[2], getattr(_rt178[3], "detail", None))))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# LinuxGSM v26.6.0 dropped btl and onset
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_named178 = []
+for _d178, _dirs178, _files178 in os.walk(os.path.join(_root, "panel")):
+    _dirs178[:] = [d for d in _dirs178 if d not in ("vendor", "__pycache__")]
+    for _f178 in _files178:
+        if _f178.endswith((".py", ".js", ".html", ".json")):
+            with open(os.path.join(_d178, _f178), encoding="utf-8") as _fh178:
+                if _re178.search(r"\b(btl|onset|btlserver|onsetserver)\b", _fh178.read()):
+                    _named178.append(os.path.relpath(os.path.join(_d178, _f178), _root))
+check("1109 LinuxGSM v26.6.0: the panel's cap table is empty (LinuxGSM's check_deps.sh refuses no game since it "
+      "dropped btl and onset), Onset is no player-download HTTP game, and no panel source names either game",
+      _lgsm178._LGC_DISTRO_CAPS == {} and _lgsm178.lgc_distro_caps("btl") == ""
+      and "onset" not in _game178._LGC_PLAYER_HTTP_GAMES and _named178 == [],
+      repr((_lgsm178._LGC_DISTRO_CAPS, sorted(_game178._LGC_PLAYER_HTTP_GAMES), _named178)))
 
 check("part178: nothing reached a host, sudo, ufw, a resolver or data/ (the transport tripwire)",
       _P9_TRIPPED[_TRIP178_START:] == [], repr(_P9_TRIPPED[_TRIP178_START:][:4]))

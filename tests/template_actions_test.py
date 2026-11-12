@@ -570,7 +570,7 @@ else:
 # The install picker greys out the games LinuxGSM caps below the host's release, from the host
 # selector's change event. With ONE host the select is rendered already selected and never fires
 # one, so on the setup most panels have, nothing filtered anything: reported from the panel with
-# a screenshot of BATTALION listed and selectable after the feature shipped. Reproduced in a
+# a screenshot of a capped game listed and selectable after the feature shipped. Reproduced in a
 # browser — disabled:false on all four, empty note — and fixed by calling it at load too.
 #
 # From the AST, because "filterGamesForHost" appears in this file's own comments.

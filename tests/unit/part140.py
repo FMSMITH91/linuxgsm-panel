@@ -39,15 +39,30 @@ def _read140(*parts):
 
 
 # ── 1. the os column is not a cap; LinuxGSM's check_deps refusal is ─────────────────────────────
-# v26.4.0's serverlist: 138 games on ubuntu-26.04, cod/cod2/coduo/mohaa on ubuntu-24.04, btl and onset
-# on ubuntu-20.04. LinuxGSM (#5069) runs the four on 26.04; its check_deps.sh refuses btl and onset
-# above Ubuntu 20.04 / Debian 11, and nothing else.
+# v26.4.0's serverlist: 138 games on ubuntu-26.04, cod/cod2/coduo/mohaa on ubuntu-24.04, two on
+# ubuntu-20.04. LinuxGSM (#5069) runs the four on 26.04; up to v26.5.0 its check_deps.sh refused those
+# two above Ubuntu 20.04 / Debian 11, and nothing else. v26.6.0 dropped both games and refuses none, so
+# the panel's cap table is empty: two invented games (capd, capo) stand in for the mechanism.
+_CAPS140 = {sn: {"ubuntu": "20.04", "debian": "11"} for sn in ("capd", "capo")}
 _rows140 = ([{"shortname": "g%d" % i, "gameservername": "g%dserver" % i, "gamename": "Game %d" % i,
               "os": "ubuntu-26.04"} for i in range(138)]
             + [{"shortname": sn, "gameservername": sn + "server", "gamename": sn.upper(),
                 "os": "ubuntu-24.04"} for sn in ("cod", "cod2", "coduo", "mohaa")]
             + [{"shortname": sn, "gameservername": sn + "server", "gamename": sn.upper(),
-                "os": "ubuntu-20.04"} for sn in ("btl", "onset")])
+                "os": "ubuntu-20.04"} for sn in ("capd", "capo")])
+
+
+def _with_caps140(fn, caps=None):
+    """fn() with lgsm_data's cap table set to `caps` (the stand-in _CAPS140 by default), restored after."""
+    table = _app140.lgsm_data._LGC_DISTRO_CAPS
+    saved = dict(table)
+    table.clear()
+    table.update(_CAPS140 if caps is None else caps)
+    try:
+        return fn()
+    finally:
+        table.clear()
+        table.update(saved)
 
 
 def _flagged140(rows):
@@ -64,10 +79,14 @@ def _flagged140(rows):
         _app140._GAME_LIST_CACHE.update(saved)
 
 
-_fl140 = _flagged140(_rows140)
-check("os cap: on v26.4.0's serverlist only btl and onset carry a cap (20.04); cod, cod2, coduo and "
-      "mohaa, left on ubuntu-24.04 in the os column, carry none",
-      _fl140 == {"btl": "ubuntu-20.04", "onset": "ubuntu-20.04"}, repr(_fl140))
+_fl140 = _with_caps140(lambda: _flagged140(_rows140))
+check("os cap: only the games in LinuxGSM's cap table carry a cap (20.04); cod, cod2, coduo and mohaa, "
+      "left on ubuntu-24.04 in the os column, carry none",
+      _fl140 == {"capd": "ubuntu-20.04", "capo": "ubuntu-20.04"}, repr(_fl140))
+check("os cap: ...and the table is empty, as LinuxGSM v26.6.0's check_deps.sh refuses no game (it dropped "
+      "btl and onset, the two it refused): no game carries a cap",
+      _app140.lgsm_data._LGC_DISTRO_CAPS == {} and _flagged140(_rows140) == {},
+      repr(_app140.lgsm_data._LGC_DISTRO_CAPS))
 
 
 def _refusal140(game, host_os):
@@ -76,19 +95,19 @@ def _refusal140(game, host_os):
         _p9_arm(who="part140")
         _p9_patch_sm("host_os_slug", lambda r: host_os)
         with _p9.test_request_context("/", headers={"Accept": "application/json"}):
-            return _ms140._os_cap_refusal(object(), game) is not None
+            return _with_caps140(lambda: _ms140._os_cap_refusal(object(), game) is not None)
     finally:
         _p9_restore_all()
 
 
 _cap_cases140 = (
     ("cod", "ubuntu-26.04", False), ("mohaa", "ubuntu-26.04", False), ("coduo", "debian-13", False),
-    ("bf1942", "ubuntu-26.04", False), ("btl", "ubuntu-26.04", True), ("onset", "ubuntu-24.04", True),
-    ("btl", "ubuntu-20.04", False), ("btl", "debian-12", True), ("onset", "debian-11", False),
-    ("btl", None, False), ("gmod", "ubuntu-26.04", False))
+    ("bf1942", "ubuntu-26.04", False), ("capd", "ubuntu-26.04", True), ("capo", "ubuntu-24.04", True),
+    ("capd", "ubuntu-20.04", False), ("capd", "debian-12", True), ("capo", "debian-11", False),
+    ("capd", None, False), ("gmod", "ubuntu-26.04", False))
 _cap_got140 = [(g, h, _refusal140(g, h)) for g, h, _w in _cap_cases140]
 check("os cap: the install refuses exactly what LinuxGSM refuses — cod/mohaa/coduo/bf1942 install on "
-      "Ubuntu 26.04 and Debian 13, btl/onset are refused above Ubuntu 20.04 and Debian 11, an unreadable "
+      "Ubuntu 26.04 and Debian 13, a game capped at Ubuntu 20.04 and Debian 11 is refused above them, an unreadable "
       "host fails open",
       [w for _g, _h, w in _cap_cases140] == [got for _g, _h, got in _cap_got140], repr(_cap_got140))
 
@@ -1160,13 +1179,14 @@ try:
     _app140._GAME_LIST_CACHE.clear()
     _app140._GAME_LIST_CACHE["games"] = None
     _app140.lgsm_data.serverlist = lambda *a, **k: _rows140
-    _caps140 = {g["shortname"]: g["legacy_caps"] for g in _app140.load_game_list() if g["legacy_caps"]}
+    _caps140 = _with_caps140(lambda: {g["shortname"]: g["legacy_caps"] for g in _app140.load_game_list()
+                                      if g["legacy_caps"]})
 finally:
     _app140.lgsm_data.serverlist = _real_sl140
     _app140._GAME_LIST_CACHE.clear()
     _app140._GAME_LIST_CACHE.update(_saved_gl140)
 check("os cap: the picker's game list carries each capped game's cap on every distro LinuxGSM caps it on",
-      _caps140 == {"btl": "debian-11 ubuntu-20.04", "onset": "debian-11 ubuntu-20.04"}, repr(_caps140))
+      _caps140 == {"capd": "debian-11 ubuntu-20.04", "capo": "debian-11 ubuntu-20.04"}, repr(_caps140))
 check("os cap: ...and the install page puts it on the option for the script",
       'data-legacy-caps="{{ g.legacy_caps }}"' in _read140("panel", "templates", "install_server.html"))
 from unit.part75 import _cut_or75, _js75, _run_js75  # noqa: E402
@@ -1179,8 +1199,8 @@ _out_l8_140 = _run_js75(_name_l8_140, (
     "function mkOpt(value, os, caps, text){ const a = {'data-legacy-os': os, 'data-legacy-caps': caps};\n"
     "  return {value, textContent: text, disabled: false, getAttribute: k => (k in a ? a[k] : null),\n"
     "  hasAttribute: k => k in a, setAttribute: (k, v) => { a[k] = v; }, removeAttribute: k => { delete a[k]; }}; }\n"
-    "const btl = mkOpt('btl', 'ubuntu-20.04', 'debian-11 ubuntu-20.04', 'BATTALION: Legacy (ubuntu-20.04)');\n"
-    "const sel = {value: '', options: [btl]}, host = {value: '1'};\n"
+    "const capd = mkOpt('capd', 'ubuntu-20.04', 'debian-11 ubuntu-20.04', 'Capped Game (ubuntu-20.04)');\n"
+    "const sel = {value: '', options: [capd]}, host = {value: '1'};\n"
     "const slug = {'1': 'debian-12', '2': 'debian-11', '3': 'ubuntu-22.04', '4': 'ubuntu-20.04',\n"
     "              '5': 'arch-rolling', '6': 'debian'};\n"
     "global.fetch = (u) => Promise.resolve({ok: true,\n"
@@ -1192,18 +1212,19 @@ _out_l8_140 = _run_js75(_name_l8_140, (
         "_hostStillSelected", "filterGamesForHost", "syncGameTiles"))
     + "(async () => { const got = {};\n"
     "  for (const h of ['1', '2', '3', '4', '5', '6']) { host.value = h; filterGamesForHost(); await settle();\n"
-    "    got[slug[h]] = [btl.textContent, btl.disabled]; }\n"
+    "    got[slug[h]] = [capd.textContent, capd.disabled]; }\n"
     "  console.log(JSON.stringify(got)); })();\n"))
 if _out_l8_140 is not None:
-    check("install page: btl is greyed out on Debian 12 ('needs debian 11') and Ubuntu 22.04, selectable on "
+    check("install page: a game capped at Debian 11 / Ubuntu 20.04 is greyed out on Debian 12 ('needs debian 11') "
+          "and Ubuntu 22.04, selectable on "
           "Debian 11 and Ubuntu 20.04, and an unknown distro or a Debian with no version fails open",
           _out_l8_140 == {
-              "debian-12": ["BATTALION: Legacy (needs debian 11)", True],
-              "debian-11": ["BATTALION: Legacy (ubuntu-20.04)", False],
-              "ubuntu-22.04": ["BATTALION: Legacy (needs ubuntu 20.04)", True],
-              "ubuntu-20.04": ["BATTALION: Legacy (ubuntu-20.04)", False],
-              "arch-rolling": ["BATTALION: Legacy (ubuntu-20.04)", False],
-              "debian": ["BATTALION: Legacy (ubuntu-20.04)", False]}, repr(_out_l8_140))
+              "debian-12": ["Capped Game (needs debian 11)", True],
+              "debian-11": ["Capped Game (ubuntu-20.04)", False],
+              "ubuntu-22.04": ["Capped Game (needs ubuntu 20.04)", True],
+              "ubuntu-20.04": ["Capped Game (ubuntu-20.04)", False],
+              "arch-rolling": ["Capped Game (ubuntu-20.04)", False],
+              "debian": ["Capped Game (ubuntu-20.04)", False]}, repr(_out_l8_140))
 
 
 # ── 20. L9: the CS:GO note only where it applies ─────────────────────────────────────────────────
@@ -1240,12 +1261,12 @@ check("csgo: the note is hidden until the config read says it applies",
 
 # ── 21. L10: every game whose LinuxGSM config sets another port gets it, not 27015 ───────────────
 # The `port=` of each one's _default.cfg at LinuxGSM v26.4.0 (config-default/config-lgsm/<s>server).
-_l10_ports140 = {"btl": 7777, "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871,
-                 "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004,
+# btl's 7777 left with the game: LinuxGSM v26.6.0 dropped it.
+_l10_ports140 = {"ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871, "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004,
                  "qw": 27500, "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027,
                  "tf": 5001, "ti": 7777, "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724}
 _l10_got140 = {g: _ms140._desired_install_port(g, "27015") for g in _l10_ports140}
-check("default ports: the 26 games whose LinuxGSM config sets a port other than 27015 are offered it",
+check("default ports: the 25 games whose LinuxGSM config sets a port other than 27015 are offered it",
       _l10_got140 == _l10_ports140, repr({g: p for g, p in _l10_got140.items() if p != _l10_ports140[g]}))
 
 
@@ -1258,7 +1279,7 @@ check("mta: opening its HTTP port (22005) comes with a note that it also serves 
       and 22005 in _ports_got140.get("mta", []), repr(_mta_notes140))
 check("mta: ...no note when that port was not opened, or for another game",
       _smg140.lgc_admin_port_notes("mta", _mta_rows140, [22003]) == []
-      and _smg140.lgc_admin_port_notes("onset", [{"desc": "HTTP", "port": 8080}], [8080]) == [])
+      and _smg140.lgc_admin_port_notes("jc3", [{"desc": "HTTP", "port": 8080}], [8080]) == [])
 check("mta: 'Open all ports' and the install both say it",
       "lgc_admin_port_notes" in _calls_in140(_read140("panel", "routes", "remote_vps.py"), "_rv_sync_ports_run")
       and "lgc_admin_port_notes" in _calls_in140(_ms_src140, "_open_game_ports"))

@@ -374,14 +374,16 @@ finally:
 # ── a game LinuxGSM caps BELOW this host's release must be refused up front ───────────────
 # The picker marks these against the newest OS in the CATALOGUE — a stand-in, because the list
 # renders before a host is chosen. At install time the host IS chosen, so the comparison can
-# be the real one: LinuxGSM caps btl and onset at 20.04 and bf1942/bfv at 22.04, and on a
-# newer host those fail every time, minutes into the download, leaving a failed row behind.
-# Reported from the panel: Battalion 1944 offered and accepted on a 24.04 host.
+# be the real one: LinuxGSM capped two games at Ubuntu 20.04 up to v26.5.0 (none since v26.6.0),
+# and on a newer host those failed every time, minutes into the download, leaving a failed row
+# behind. Reported from the panel: a capped game offered and accepted on a 24.04 host.
 #
 # The catalogue is STUBBED, not read: this suite seeds a minimal serverlist.csv with no capped
 # game in it, so reading the real list would make every check below pass on an empty set. The
-# first version of this test did exactly that and reported it.
+# first version of this test did exactly that and reported it. LinuxGSM caps no game today, so the
+# cap table is stubbed too, with an invented game (capd) capped at 20.04.
 import panel.routes.manage_servers as _os_mod
+from panel.services import lgsm_data as _os_lgsm
 # The DEFINITION site, not the package: panel/ops/ssh_manager/__init__.py exposes these
 # through __getattr__ so there is one stub target, and a unit check enforces that — it caught
 # this exact line. See ssh-manager-stub-seam-scope.
@@ -392,7 +394,7 @@ _os_before = _appmod_ij._remote_listening_ports
 _os_real_list = _os_mod.load_game_list
 
 
-def _os_try(name, port, game="btl"):
+def _os_try(name, port, game="capd"):
     """POST an install and say whether a row was created.
 
     Under the seam for the same reason the content-capture POST is: an accepted install starts
@@ -413,11 +415,14 @@ def _os_try(name, port, game="btl"):
 
 
 _os_has = _os_mod.host_account_state
+_os_caps_saved = dict(_os_lgsm._LGC_DISTRO_CAPS)
 try:
+    _os_lgsm._LGC_DISTRO_CAPS.clear()
+    _os_lgsm._LGC_DISTRO_CAPS["capd"] = {"ubuntu": "20.04", "debian": "11"}
     _appmod_ij._remote_listening_ports = lambda r: {22}
     _os_mod.host_account_state = lambda r, n: "absent"
     _os_mod.load_game_list = lambda: [
-        {"shortname": "btl", "name": "BATTALION: Legacy", "os": "ubuntu-20.04",
+        {"shortname": "capd", "name": "Capped Game", "os": "ubuntu-20.04",
          "legacy_os": "ubuntu-20.04"},
         {"shortname": "csgo", "name": "CS:GO", "os": "ubuntu-24.04", "legacy_os": ""},
     ]
@@ -455,6 +460,8 @@ try:
           not _os_try("osnewcap", 28854),
           "the 20.04 cap is real whatever the host is, and a 26.04 box is further past it")
 finally:
+    _os_lgsm._LGC_DISTRO_CAPS.clear()
+    _os_lgsm._LGC_DISTRO_CAPS.update(_os_caps_saved)
     _os_mod.load_game_list = _os_real_list
     _os_mod.host_account_state = _os_has
     _os_sm.host_os_slug = _os_saved
