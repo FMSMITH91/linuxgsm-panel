@@ -182,6 +182,18 @@ _pp_side180 = {"run": ("", "", 0), "ufw": []}
 _POSTPONED180 = "[ INFO ] Restarting csgoserver: 2 players are on the server: restart postponed"
 
 
+def _pp_run180():
+    """The stand-in power command's answer; a callable is called (it acts during the run)."""
+    run = _pp_side180["run"]
+    return run() if callable(run) else run
+
+
+def _pp_resave180():
+    """A start during which the Settings tab saves another port (41870): the game bound 41860."""
+    _p9_set(_pp180, pending_port=41870)
+    return ("Starting csgoserver: OK", "", 0)
+
+
 def _pp_restart180(client, run, status="online", action="restart"):
     """Press Restart (or Start) with a port pending; the worker drained. -> (port, pending_port)."""
     _p9_set(_pp180, port=41850, pending_port=41860, status=status)
@@ -195,7 +207,7 @@ try:
     _p9_arm(who="part180")
     _n_trips180 = len(_P9_TRIPPED)
     _p9_patch(_sd180, "threading", _p9_threading(_P9Thread))
-    _p9_patch_sm("run_as_game_user", lambda *a, **k: _pp_side180["run"])
+    _p9_patch_sm("run_as_game_user", lambda *a, **k: _pp_run180())
     _p9_patch_sm("set_game_priority", lambda *a, **k: None)
     _p9_patch(_lgp180, "allowance_seconds", lambda *a, **k: 0)
     _p9_patch_sm("_remote_listening_ports", lambda remote: set())
@@ -209,6 +221,7 @@ try:
     _r180["pp_failed"] = _pp_restart180(_A180, ("Restarting csgoserver: FAIL", "", 1))
     _r180["pp_clean"] = _pp_restart180(_A180, ("Restarting csgoserver: OK", "", 0))
     _r180["pp_start"] = _pp_restart180(_A180, ("Starting csgoserver: OK", "", 0), status="offline", action="start")
+    _r180["pp_resaved"] = _pp_restart180(_A180, _pp_resave180, status="offline", action="start")
     _r180["pp_trips"] = _P9_TRIPPED[_n_trips180:]
 finally:
     _p9_restore_all()
@@ -216,6 +229,8 @@ eq("pending port r41w: a Restart LinuxGSM postponed or one that failed keeps the
    "waiting; a clean Restart, or a Start, moves to it",
    [_r180[k] for k in ("pp_postponed", "pp_failed", "pp_clean", "pp_start")],
    [(41850, 41860), (41850, 41860), (41860, None), (41860, None)])
+eq("pending port r42: a port saved DURING a start is not followed (the game bound the one saved before); it waits",
+   _r180["pp_resaved"], (41850, 41870))
 check("pending port r41w: ...and nothing reached a host", _r180["pp_trips"] == [], repr(_r180["pp_trips"]))
 
 _sib180 = NS(id=1, name="a", port=27015, pending_port=27030, game_type="csgo")

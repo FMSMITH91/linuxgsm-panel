@@ -283,15 +283,17 @@ def _pck_power_refusal(gs, remote, action, actor, port_gate):
     return _noop_power_refusal(gs, remote, action) or _pck_gate(gs, remote, action, actor, port_gate)
 
 
-def _pck_after_power(gs, remote, action, rc):
+def _pck_after_power(gs, remote, action, rc, bound):
     """After a Start or Restart that ran: move the stored port to one saved while the server ran.
 
     Only once it exited 0 with no LinuxGSM outcome (the caller passes only those): the game has then
     been started on the saved port. A Restart LinuxGSM postponed or refused, a wipe's refusal, or a
     failed run leaves the old process on the old port, so the stored port stays and the saved one
-    keeps waiting (port_check.follow_pending).
+    keeps waiting (port_check.follow_pending). `bound` is the port the start was issued on
+    (port_check.start_port, read before the run): a port saved DURING the run, which the game did not
+    bind, is not followed and waits for the next start.
     """
-    if rc == 0 and action in ("start", "restart") and gs.pending_port:
+    if rc == 0 and action in ("start", "restart") and gs.pending_port and _pck.start_port(gs) == bound:
         _pck.follow_pending(gs, remote, _pck_rules())
 
 
@@ -822,6 +824,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 if not remote or not gs:
                     detail = "the server or its host is no longer configured"
                     return
+                bound = _pck.start_port(gs)     # the port this start binds (_pck_after_power)
                 with r36j_route_job(server_id, "action"), \
                         _r41r_audit_raise(f"{action}_server", name, (actor, origin), (server_id, born)):
                     out, rc = _r39a_power_unless_wiping(app, remote, (server_id, short_name, selfname, name),
@@ -836,7 +839,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 ok, detail = (rc == 0), terminal.strip_escapes(out or "")
                 ok, detail, held = _r40_power_outcome(app, gs, (out, rc), (action, actor, origin, name))
                 if held:
-                    _pck_after_power(gs, remote, action, rc)
+                    _pck_after_power(gs, remote, action, rc, bound)
                     _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)

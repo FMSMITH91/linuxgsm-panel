@@ -332,7 +332,8 @@ compares git commits, not this file.
 
 - **A port saved while a server ran moves only after a restart that happened.** A restart LinuxGSM
   postponed for players, or one that failed, no longer leaves the panel watching a port the running
-  game does not use. A new install is also no longer given that saved port.
+  game does not use. A port saved while a start is under way waits for the next start. A new install
+  is also no longer given that saved port.
 
 - **A scheduled Stop no longer pages "Server offline".** A server stopped by LinuxGSM's own stop (a
   Schedule tab Stop with player warnings, a cron line) is recorded as stopped without an alert. A
