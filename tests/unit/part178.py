@@ -8,18 +8,24 @@ r"""Part 178 of the unit suite: review 1109's integration fixes.
   Driven through change_ssh_port on part159's stand-in and through the SSH port route on part12's app.
 * LinuxGSM v26.6.0 dropped btl and onset from serverlist.csv: the panel's cap table is empty and no
   panel source names either game.
+* The complexity gate stops when git's diff fails: a base the checkout lacks listed no changed file,
+  and the gate passed having judged nothing.
 
 HOW IT RUNS. part159's port-move stand-in and part163's stored-file patch on part12's patcher with its
-transport tripwire armed. Nothing reaches a host, sudo,
+transport tripwire armed; the gate on part28's throwaway repositories. Nothing reaches a host, sudo,
 ufw, a resolver or data/.
 """
 import os
 import re as _re178
+import shutil as _sh178
+import subprocess as _sp178  # nosec B404 - git on a throwaway repository, fixed argv
+import tempfile as _tf178
 
 from unit.part01 import check
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_audit, _p9_client, _p9_core, _p9_json,
                          _p9_patch, _p9_restore_all)
+from unit.part28 import _GIT28, _cx28
 from unit.part159 import _Box159, _PUB_SESS159, _V4_ADD159, _move159
 from unit.part163 import _PROXY_ADD163, _PUB22_163, _STORED_TEXT163, _move163
 from panel.ops.ssh_manager import firewall as _fw178, hosts as _hosts178, ufweval as _ue178
@@ -134,6 +140,37 @@ check("1109 LinuxGSM v26.6.0: the panel's cap table is empty (LinuxGSM's check_d
       _lgsm178._LGC_DISTRO_CAPS == {} and _lgsm178.lgc_distro_caps("btl") == ""
       and "onset" not in _game178._LGC_PLAYER_HTTP_GAMES and _named178 == [],
       repr((_lgsm178._LGC_DISTRO_CAPS, sorted(_game178._LGC_PLAYER_HTTP_GAMES), _named178)))
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The complexity gate stops when git's diff fails
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_cxd178 = _tf178.mkdtemp(prefix="lgsm-unit-p178-")      # part28's own directory is gone by now
+_sp178.run(["git", "init", "-q", "-b", "main", _cxd178], env=_GIT28, capture_output=True, check=True)  # nosec
+_cx28._test_commit(_cxd178, _GIT28, {"m.py": "X = 1\n"}, "base")
+_cxbase178 = _sp178.run(["git", "rev-parse", "HEAD"], cwd=_cxd178, env=_GIT28, capture_output=True,  # nosec
+                        text=True, check=True).stdout.strip()
+_cx28._test_commit(_cxd178, _GIT28, {"m.py": "X = 2\n", "n.py": "Y = 1\n"}, "head")
+
+
+def _gate178(fn, *a):
+    try:
+        return fn(*a, cwd=_cxd178)
+    except RuntimeError as e:
+        return "RuntimeError: " + str(e)[:80]
+
+
+_missing178 = "0123456789abcdef0123456789abcdef01234567"
+_bad178 = {"changed_files": _gate178(_cx28.changed_files, _missing178),
+           "_renamed_from": _gate178(_cx28._renamed_from, _missing178),
+           "run": _gate178(_cx28.run, _missing178)}
+check("1109 complexity gate: a base the checkout lacks stops the gate (git's diff failed) in the changed-file "
+      "list, the rename list and the run: read without git's exit status, it listed no file and the gate "
+      "passed having judged nothing",
+      all(isinstance(v, str) and v.startswith("RuntimeError: git diff") for v in _bad178.values()), repr(_bad178))
+check("1109 complexity gate: ...while a base it has lists the change's files (control)",
+      sorted(_gate178(_cx28.changed_files, _cxbase178)) == ["m.py", "n.py"],
+      repr(_gate178(_cx28.changed_files, _cxbase178)))
+_sh178.rmtree(_cxd178, ignore_errors=True)
 
 check("part178: nothing reached a host, sudo, ufw, a resolver or data/ (the transport tripwire)",
       _P9_TRIPPED[_TRIP178_START:] == [], repr(_P9_TRIPPED[_TRIP178_START:][:4]))

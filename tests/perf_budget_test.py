@@ -119,6 +119,8 @@ _PB_TRIPPED = []
 def _pb_hits(cmd):
     text = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
     first = text.split(None, 1)[0] if text.strip() else ""
+    if text.split()[1:] == ["--version"] and os.path.basename(first).startswith("sudo"):
+        return False    # the debug report's version read (debug_report/install.py): nothing runs as root
     return bool(_pb_re.search(r"(?:^|[\s;&|(/])sudo(?:\s|$)", text)
                 or os.path.basename(first) == "git")
 
@@ -153,9 +155,45 @@ class _PbTrip:
         return self._inner.check_output(cmd, *a, **k)
 
 
-for _pb_mod in (_so, _pb_backup, _pb_ts):
+# Every other panel module that starts a process through its own `subprocess` is watched too: the debug
+# report's `sudo -n` verbs, its systemd and `sudo --version` reads, the cron and file transfers, the
+# terminal. GET /api/panel/debug-report is in the sweep, and with only the three above wrapped the check
+# "started no sudo" stayed green whatever those ran (review 1109). _r40_pb_coverage holds the list to
+# every module that imports subprocess.
+from panel.ops.debug_report import network as _pb_dr_net, _src_systemd as _pb_dr_sysd  # noqa: E402
+from panel.ops.debug_report import install as _pb_dr_inst  # noqa: E402
+from panel.ops.ssh_manager import cron as _pb_cron, files as _pb_files  # noqa: E402
+from panel.ops import terminal_session as _pb_term  # noqa: E402
+_R40_PB_WATCHED = (_so, _pb_backup, _pb_ts, _pb_dr_net, _pb_dr_sysd, _pb_dr_inst, _pb_cron, _pb_files, _pb_term)
+for _pb_mod in _R40_PB_WATCHED:
     if getattr(_pb_mod, "subprocess", None) is not None:
         _pb_mod.subprocess = _PbTrip(_pb_mod.subprocess, _pb_mod.__name__)
+
+
+def _r40_pb_coverage():
+    """The panel modules that import subprocess at their top whose `subprocess` is not the tripwire.
+
+    Left out by design: ssh_manager/_core (watched through `_real_subprocess`, below) and the installer's
+    db_maintenance (it runs only the sqlite3 CLI, and host_local imports it under its own top-level name).
+    """
+    import importlib as _il
+    import re as _re
+    top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.join(top, "panel")
+    left_out = {"panel.ops.ssh_manager._core", "panel.install.db_maintenance"}
+    missing = []
+    for d, _dirs, names in os.walk(root):
+        for n in names:
+            path = os.path.join(d, n)
+            if not n.endswith(".py"):
+                continue
+            with open(path, encoding="utf-8") as fh:
+                if not _re.search(r"^import subprocess\b", fh.read(), _re.M):
+                    continue
+            mod = os.path.relpath(path, top)[:-3].replace(os.sep, ".")
+            if mod not in left_out and not isinstance(getattr(_il.import_module(mod), "subprocess", None), _PbTrip):
+                missing.append(mod)
+    return sorted(missing)
 _pb_inner_run = _so._run
 
 
@@ -365,6 +403,15 @@ def _check_the_sweep_ran(small, large):
     check("perf: the tripwire catches a sudo argv and a sudo shell run, and one through _core's local "
           "transport (its positive control)",
           len(_PB_TRIPPED) == _trip_before + 3, repr(_PB_TRIPPED[_trip_before:]))
+    _trip_before = len(_PB_TRIPPED)
+    _pb_dr_net.subprocess.Popen(["sudo", "-n", "true"]).wait()
+    _pb_cron.subprocess.Popen(["sudo", "-n", "true"]).wait()
+    _pb_files.subprocess.run(["sudo", "-n", "true"])
+    check("perf: ...and the tripwire is in front of every panel module that imports subprocess (the debug "
+          "report's sudo -n verbs, the cron and file transfers, the terminal: the check above covered three "
+          "modules only), caught by one sudo argv through the debug report, cron and files",
+          not _r40_pb_coverage() and len(_PB_TRIPPED) == _trip_before + 3,
+          repr((_r40_pb_coverage(), _PB_TRIPPED[_trip_before:])))
 
 
 # Host-bounded pages do not move at all. Allow a couple of queries of slack for pagination and
