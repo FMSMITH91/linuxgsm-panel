@@ -37,6 +37,7 @@ from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock, _json_int, _
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
 from panel.services import host_reboot as _hr
+from panel.services.monitoring import (host_has_history)
 from app import (_log, _os_update_born, _os_update_current, _os_update_note)
 from panel.routes.manage_servers import (withheld_game_ports)
 from panel.routes.remotes import (r36j_host_claim)
@@ -1384,7 +1385,8 @@ def _register_host_pages(app):
         # the Close button beside it acts on that one first, and config.json's is the next start's.
         return render_template("remote_manage.html", remote=remote, games=games,
                                status=status, config=cfg, funnel_facts=funnel_facts,
-                               panel_bound_port=ts._r13b_bound_port(cfg))
+                               panel_bound_port=ts._r13b_bound_port(cfg),
+                               hh_has_history=host_has_history(remote_id))
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required

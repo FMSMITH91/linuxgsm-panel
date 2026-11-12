@@ -2962,7 +2962,8 @@ try:
           _hlm10["host"] == {"cpu_percent": 50.0, "ram_used": 2000000000, "ram_total": 8000000000,
                              "ram_percent": 25.0, "disk_used": 25000, "disk_total": 100000,
                              "disk_percent": 25.0, "load": [0.5, 0.4, 0.3], "cores": 4,
-                             "uptime_secs": 3600}
+                             "uptime_secs": 3600, "net_rx_bytes": None, "net_tx_bytes": None,
+                             "net_read_at": None}
           and _hlm10["ports"] == {27015, 22},
           repr(_hlm10["host"]))
     check("core host metrics: every user's share comes from the same sample window",

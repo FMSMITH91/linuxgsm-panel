@@ -21,6 +21,7 @@ import paramiko
 from panel.core.config import decrypt_secret
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
 from panel.security import privileged as _priv
+from panel.ops import netdev as _netdev
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
 # Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. A
 # remote_server table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) hands
@@ -2982,6 +2983,10 @@ def _host_sample_cmd():
         ("ps -eo user:32=,etimes= --no-headers 2>/dev/null | awk '{gsub(/^ +| +$/,\"\",$1); "
          "if($2>m[$1]) m[$1]=$2} END{for(u in m) print \"GUP\", u, m[u]}'"),
         "ss -H -ltnu 2>/dev/null | awk '{n=split($5,a,\":\"); print \"PORT\", a[n]}' | sort -u",
+        # Every interface's received and sent byte counters (fields 1 and 9 after the name). The
+        # name is glued to the first counter once it is large ("eth0:123456"), so the ":" becomes
+        # a space before splitting. Filtered in panel/ops/netdev.py, where the rule can be tested.
+        "awk 'NR>2{sub(/:/,\" \"); print \"NETIF\",$1,$2,$10}' /proc/net/dev 2>/dev/null",
     ]
     return " ; ".join(parts)
 
@@ -3043,7 +3048,7 @@ def _hs_port(f, _host, acc):
 _HOST_SAMPLE_LINES = {
     "cpu": _hs_cpu, "GJA": _hs_jiffies, "GJB": _hs_jiffies, "MEM": _put_mem, "LOAD": _put_load,
     "DISK": _put_disk, "CORES": _hs_host_int, "UPTIME": _hs_host_int, "GAMERAM": _hs_gameram,
-    "GUP": _hs_gup, "PORT": _hs_port,
+    "GUP": _hs_gup, "PORT": _hs_port, "NETIF": _netdev.netif_line,
 }
 
 
@@ -3062,7 +3067,7 @@ def _parse_host_sample(out):
     """(host figures, per-user tables) from host_live_metrics' output."""
     host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
             "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
-            "cores": 1, "uptime_secs": 0}
+            "cores": 1, "uptime_secs": 0, "net_rx_bytes": None, "net_tx_bytes": None, "net_read_at": None}
     acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": set(), "cpu": []}
     _parse_tagged(out, _HOST_SAMPLE_LINES, host, acc)
     return host, acc

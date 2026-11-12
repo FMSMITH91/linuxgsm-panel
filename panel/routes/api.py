@@ -16,7 +16,7 @@ from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, _perm_for_action, _r17c_row_id,
+from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS, _perm_for_action, _r17c_row_id,
     get_game, get_remote, get_user_servers, has_permission, permission_required, server_access_required)
 
 # The only actions the command palette will offer. Deliberately the three you do without thinking
@@ -116,16 +116,44 @@ def _register_metrics(app):
             pv = [w.players for w in srows[i:i + sstep] if w.players is not None]
             server.append({"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_mb,
                            "players": max(pv) if pv else None})
-        host = []
-        if gs.remote_id:
-            hrows = (db.session.query(HostSample.ts, HostSample.cpu, HostSample.ram_pct,
-                                      HostSample.disk_pct)
-                     .filter(HostSample.remote_id == gs.remote_id, HostSample.ts >= since)
-                     .order_by(HostSample.ts.asc()).all())
-            hstep = max(1, len(hrows) // 240)
-            host = [{"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_pct, "disk": r.disk_pct}
-                    for r in hrows[::hstep]]
+        host = _hch_host_series(gs.remote_id, since) if gs.remote_id else []
         return jsonify({"server": server, "host": host, "range": rng})
+
+    @app.route("/api/remote/<int:remote_id>/history")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_history(remote_id):
+        """One host's CPU/RAM/disk/network series for the host page's History card (range=24h|7d).
+
+        The same access as the host page itself (MANAGE_REMOTES and get_remote), and the same
+        series and down-sampling the server page's host chart gets. Any other range is refused
+        rather than guessed, so a caller cannot mistake one window for another.
+        """
+        get_remote(remote_id)
+        rng = request.args.get("range") or "24h"
+        if rng not in _hch_ranges:
+            return jsonify({"error": "range must be 24h or 7d"}), 400
+        since = utcnow() - timedelta(hours=_hch_ranges[rng])
+        return jsonify({"host": _hch_host_series(remote_id, since), "range": rng})
+
+
+# The history windows, in hours.
+_hch_ranges = {"24h": 24, "7d": 168}
+
+
+def _hch_host_series(remote_id, since):
+    """Host `remote_id`'s samples since `since`, down-sampled to about 240 points, oldest first.
+
+    rx/tx are the network rates in kbit/s, None where the sample has no rate.
+    """
+    hrows = (db.session.query(HostSample.ts, HostSample.cpu, HostSample.ram_pct,
+                              HostSample.disk_pct, HostSample.net_rx_kbps, HostSample.net_tx_kbps)
+             .filter(HostSample.remote_id == remote_id, HostSample.ts >= since)
+             .order_by(HostSample.ts.asc()).all())
+    hstep = max(1, len(hrows) // 240)
+    return [{"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_pct, "disk": r.disk_pct,
+             "rx": r.net_rx_kbps, "tx": r.net_tx_kbps}
+            for r in hrows[::hstep]]
 
 
 def _register_palette(app):

@@ -656,7 +656,9 @@
       <div class="small text-secondary mb-1"><i class="bi bi-cpu"></i> Game CPU % · RAM (MB)</div>
       <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-server"></canvas></div>
       <div class="small text-secondary mb-1"><i class="bi bi-hdd"></i> Host CPU % · RAM % · Disk %</div>
-      <div style="position:relative;height:140px;"><canvas id="hist-host"></canvas></div>
+      <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-host"></canvas></div>
+      <div class="small text-secondary mb-1"><i class="bi bi-arrow-down-up"></i> Host network · received and sent</div>
+      <div style="position:relative;height:140px;"><canvas id="hist-net"></canvas></div>
     </div>
   </div>
 </div>
@@ -841,6 +843,7 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/chartjs/chart.umd.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/history_charts.js') }}"></script>
 {# Server-rendered values for server_detail.js and console_history.js. Kept inline (and BEFORE them,
    so their top-level code can read them) while the rest of the page script becomes cacheable files. #}
 <script nonce="{{ csp_nonce }}">
