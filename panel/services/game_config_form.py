@@ -60,11 +60,10 @@ UNSAFE = "This change could not be written safely. Use the raw editor."
 _GCF_EXT_FORMATS = {".properties": ("kv",), ".ini": ("kv",), ".xml": ("xml",), ".json": ("json",),
                     ".cfg": ("cfg", "kv"), ".txt": ("cfg", "kv"), ".conf": ("cfg", "kv")}
 _GCF_EOL = re.compile(r"\r\n|\r|\n")
-_GCF_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _GCF_JSON_NUMBER = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
 _GCF_BOOL_WORDS = {"true": "false", "false": "true"}
 # A 0/1 value is a switch only when its help says which is off and which is on ("0 = off, 1 = on",
-# "logfile - 0 = disabled, 1 = enabled", "(0/1)"). Without that, 0 and 1 are numbers: a player limit
+# "logfile - 0 = disabled, 1 = enabled", "(0/1)"). Without that, 0 and 1 are text: a player limit
 # of 1 is not a switch.
 _GCF_OFF = r"(?:off|disabled?|no|false)"
 _GCF_ON = r"(?:on|enabled?|yes|true)"
@@ -218,8 +217,8 @@ def _gcf_odd_backslashes(s):
 
 
 # Source / idTech console scripts
-_GCF_CFG = re.compile(r'[ \t]*(?:(?:set|seta|sets|setu|setb)[ \t]+)?([A-Za-z_][\w.\-+]*)[ \t]+'
-                      r'(?:"([^"]*)"|([^"\s;][^";]*?))[ \t]*(?://.*)?\Z')
+_GCF_CFG_SETS = ("set", "seta", "sets", "setu", "setb")
+_GCF_CFG_KEY_FIRST = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
 
 
 def _gcf_cfg_section(body):
@@ -243,14 +242,89 @@ def _gcf_cfg_section(body):
     return middle
 
 
-def _gcf_cfg_line(body):
-    """(key, value span in the line, style) when `body` sets one value, else None."""
-    m = _GCF_CFG.match(body)
-    if not m:
+def _gcf_blank_end(s, i):
+    """The first index at or after `i` that is not a space or a tab."""
+    n = len(s)
+    while i < n and s[i] in " \t":
+        i += 1
+    return i
+
+
+def _gcf_cfg_key_end(body, i):
+    """Where a key starting at `i` ends (a letter or _, then word characters . - +), or `i` if none."""
+    n = len(body)
+    if i >= n or body[i] not in _GCF_CFG_KEY_FIRST:
+        return i
+    j = i + 1
+    while j < n and (body[j].isalnum() or body[j] in "_.-+"):
+        j += 1
+    return j
+
+
+def _gcf_cfg_tail_ok(body, i):
+    """True when only blanks, then an optional // comment with no line feed, follow `i`."""
+    j = _gcf_blank_end(body, i)
+    return j == len(body) or (body.startswith("//", j) and "\n" not in body[j:])
+
+
+def _gcf_cfg_unquoted(body, v):
+    """The end of the unquoted value starting at `v`, or None.
+
+    The shortest value that only blanks and an optional // comment follow; it may not start with a
+    blank or ; and may not hold " or ;. The comment's // is the first one at or after v + 1 with no
+    line feed after it (or the end of the line); the value stops at the blanks before it.
+    """
+    n = len(body)
+    stop = n
+    for ch in ('"', ";"):
+        k = body.find(ch, v + 1)
+        stop = k if 0 <= k < stop else stop
+    j = body.find("//", max(v + 1, body.rfind("\n") + 1))
+    j = n if j < 0 else j
+    k = j
+    while k > v + 1 and body[k - 1] in " \t":
+        k -= 1
+    return k if k <= stop else None
+
+
+def _gcf_cfg_value(body, key_start):
+    """(key, value span, style) for a key starting at `key_start`, or None."""
+    key_end = _gcf_cfg_key_end(body, key_start)
+    if key_end == key_start:
         return None
-    if m.group(2) is not None:
-        return m.group(1), m.span(2), "q"
-    return m.group(1), m.span(3), "u"   # an unquoted value ends where a // comment starts
+    v = _gcf_blank_end(body, key_end)
+    if v == key_end or v == len(body):
+        return None
+    key, c = body[key_start:key_end], body[v]
+    if c == '"':
+        close = body.find('"', v + 1)
+        if close < 0 or not _gcf_cfg_tail_ok(body, close + 1):
+            return None
+        return key, (v + 1, close), "q"
+    if c == ";" or c.isspace():
+        return None
+    end = _gcf_cfg_unquoted(body, v)
+    return None if end is None else (key, (v, end), "u")   # an unquoted value ends where a // comment starts
+
+
+def _gcf_cfg_line(body):
+    """(key, value span in the line, style) when `body` sets one value, else None.
+
+    String operations, not a regex: the pattern this replaces backtracked super-linearly on a long
+    run of blanks inside an unquoted value, and the file is the game account's to write. A line is
+    blanks, an optional set/seta/sets/setu/setb and blanks, a key, blanks, then a "quoted" or an
+    unquoted value, then blanks and an optional // comment. A line whose set word is not followed by
+    a key and value is read again with the set word as its key.
+    """
+    i = _gcf_blank_end(body, 0)
+    for word in _GCF_CFG_SETS:
+        after = i + len(word)
+        if body.startswith(word, i) and after < len(body) and body[after] in " \t":
+            got = _gcf_cfg_value(body, _gcf_blank_end(body, after))
+            if got:
+                return got
+            break
+    return _gcf_cfg_value(body, i)
 
 
 def _gcf_parse_cfg(text):
@@ -277,7 +351,6 @@ def _gcf_parse_cfg(text):
 
 # 7 Days to Die XML
 _GCF_XML_BANNED = re.compile(r"<!DOCTYPE|<!ENTITY", re.I)
-_GCF_XML_COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 _GCF_XML_PROP = re.compile(r"""<property\s+name\s*=\s*(?:"([^"<&]*)"|'([^'<&]*)')\s+"""
                            r"""value\s*=\s*(?:"([^"<\r\n]*)"|'([^'<\r\n]*)')\s*/>""")
 _GCF_XML_ENTITY = re.compile(r"&(?:amp|lt|gt|quot|apos|#[0-9]{1,7}|#x[0-9A-Fa-f]{1,6});")
@@ -298,6 +371,26 @@ def _gcf_xml_value(raw):
     if "&" in raw and _GCF_XML_ENTITY.sub("", raw).count("&"):
         return None
     return html.unescape(raw) if "&" in raw else raw
+
+
+def _gcf_xml_comments(text):
+    """(start, end, collapsed text) of each <!-- ... --> comment, in order.
+
+    String operations, not a regex: `<!--(.*?)-->` rescanned to the end of the text from every
+    `<!--` that has no `-->` after it, and the file is the game account's to write. A comment's
+    `-->` is the first one after its `<!--` (so `<!-->` does not close it); once one has none,
+    no later one can.
+    """
+    out, pos = [], 0
+    while True:
+        start = text.find("<!--", pos)
+        if start < 0:
+            return out
+        close = text.find("-->", start + 4)
+        if close < 0:
+            return out
+        out.append((start, close + 3, _gcf_collapse(text[start + 4:close])))
+        pos = close + 3
 
 
 def _gcf_xml_before(text, comments, ci, last_end, pos, section):
@@ -342,7 +435,7 @@ def _gcf_parse_xml(text):
     """
     if _GCF_XML_BANNED.search(text):
         return None
-    comments = [(m.start(), m.end(), _gcf_collapse(m.group(1))) for m in _GCF_XML_COMMENT.finditer(text)]
+    comments = _gcf_xml_comments(text)
     out, section, ci, last_end = [], "", 0, 0
     for m in _GCF_XML_PROP.finditer(text):
         ci, section, above = _gcf_xml_before(text, comments, ci, last_end, m.start(), section)
@@ -537,7 +630,10 @@ def _gcf_pick(content):
 
 def detect(rel, content):
     """The format of the file at `rel` holding `content`: kv, cfg, xml or json, or None for the raw editor only."""
-    if not isinstance(content, str) or "\x00" in content:
+    # U+FFFD is what read_file's decode puts in place of bytes that are not UTF-8 (a Latin-1 or
+    # Windows-1252 file). A form save writes the whole text back as UTF-8, so every such byte
+    # elsewhere in the file would be replaced for good: that file gets the raw editor only.
+    if not isinstance(content, str) or "\x00" in content or "\ufffd" in content:
         return None
     choices = _GCF_EXT_FORMATS.get(_gcf_ext(rel)) or (None,)
     return choices[0] if len(choices) == 1 else _gcf_pick(content)
@@ -572,7 +668,9 @@ def _gcf_kind(fmt, f):
         return "bool", _gcf_spell(v, "true"), _gcf_spell(v, "false")
     if v in ("0", "1") and _GCF_TOGGLE_HELP.search(f["help"]):
         return "bool", "1", "0"
-    return ("number", None, None) if _GCF_NUMBER.fullmatch(v) else ("text", None, None)
+    # Only JSON says a value is a number. Elsewhere a value that is all digits now may be a seed, a
+    # name or a password the game takes letters for, so the form takes text and the game decides.
+    return "text", None, None
 
 
 def _gcf_classify(fmt, f):
@@ -627,11 +725,10 @@ def _gcf_check(fmt, ext, f, value):
 
 
 def _gcf_check_kind(fmt, f, value):
-    """A switch takes only its two spellings, a number field a number."""
+    """A switch takes only its two spellings, a JSON number a number (the only number kind)."""
     if f["kind"] == "bool" and value not in (f["on"], f["off"]):
         return i18n.Sentence(BAD_BOOL, key=f["key"], on=f["on"], off=f["off"])
-    number = _GCF_JSON_NUMBER if fmt == "json" else _GCF_NUMBER
-    if f["kind"] == "number" and not number.fullmatch(value):
+    if f["kind"] == "number" and (fmt != "json" or not _GCF_JSON_NUMBER.fullmatch(value)):
         return i18n.Sentence(BAD_NUMBER, key=f["key"])
     return None
 

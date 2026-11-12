@@ -41,9 +41,12 @@ MODS_GAMES = frozenset({"arma3", "dayz", "squad", "squad44", "ohd", "bt", "hw", 
 COLLECTION_GAMES = frozenset({"gmod", "csgo"})
 PZ_GAMES = frozenset({"pz"})
 _WSC_PZ_CONTENT = "serverfiles/steamapps/workshop/content/108600"
-# A Mod ID goes into the ini's Mods= line: no `;` (the separator), `=` or line break. A leading
-# backslash is kept: Build 42 ini files may write each Mod ID as \ModID.
-_WSC_MOD_ID = re.compile(r"\\?[A-Za-z0-9_.\- ]{1,64}")
+# A Mod ID goes into the ini's Mods= line, so only what breaks that line is refused: `;` (the
+# separator), `=`, and any control or line-separator character (a line break would start a key of its
+# own). Real Mod IDs hold brackets, parentheses, quotes and plus signs (Arsenal(26)GunFighter[MAIN MOD
+# 2.0]). A leading backslash is kept: Build 42 ini files may write each Mod ID as \ModID; a backslash
+# anywhere else is refused.
+_WSC_MOD_ID = re.compile(r"\\?[^;=\\\x00-\x1f\x7f-\x9f\u2028\u2029]{1,100}")
 _WSC_MOD_DIR = re.compile(r"[A-Za-z0-9_.\-+()' ]{1,100}")
 # How far the Mod ID search reaches: items looked at, mod folders per item, files read in all.
 _WSC_PZ_ITEMS = 30
@@ -54,8 +57,8 @@ _WSC_NO_FILE = "File not found"
 
 NOT_WORKSHOP = "This game has no Steam Workshop list the panel can edit."
 UNREAD = "Could not read the current config — nothing has been changed."
-BAD_MOD_ID = ("A Mod ID is 1 to 64 letters, digits, spaces, dots, dashes or underscores (a leading "
-              "backslash is kept), with no ; or =.")
+BAD_MOD_ID = ("A Mod ID is 1 to 100 characters with no ; or =, line break or control character, and no "
+              "blank at either end (a leading backslash is kept).")
 MOD_TOO_MANY = "A list holds at most 200 Mod IDs."
 PZ_NO_INI = ("Zomboid/Server/{name}.ini is not there yet. Project Zomboid writes it the first time the "
              "server starts; start it once, then add Workshop items here.")

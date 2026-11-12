@@ -8,11 +8,11 @@ Held here (panel/services/game_config_form.py, panel/routes/game_config_form.py 
   changed is the same text, and a save of changed values differs from the file ONLY in those values
   (comments, order, blank lines, CRLF line endings, spacing and quoting kept byte for byte).
 * What a field is: grouped by section, a comment above (or, in XML, beside) it as help, switches
-  spelled as the file spells them, numbers, text; secret keys by the rule in the module.
+  spelled as the file spells them, JSON numbers, text; secret keys by the rule in the module.
 * Every refusal: a file changed since the form was built (the hash), a field that is not there,
   line breaks and control characters, a quote in a cfg value, ; or // in an unquoted one, a space
   at either end of a key=value value, a trailing backslash in .properties, a switch given a third
-  value, a number field given text.
+  value, a JSON number field given text.
 * The routes on part12's app with every host call stubbed: the Settings tab's permission, the file
   browser's refusals, the write through the file editor's writer as the game account, the audit row
   naming the changed keys with a secret's values never in it, and the game-config read carrying the
@@ -236,9 +236,9 @@ eq("game config form: Source cfg - groups from the // .... Title .... // lines, 
     _src176["sv_lan"]["help"], _src176["sv_region"]["value"], "writeid" in _src176, _src176["sv_tags"]["value"]),
    (["Basic", "Security"], "hostname - Name of the server.", "LAN mode - can't connect from the internet.\n"
     "Default: sv_lan 0", "-1", False, ""))
-eq("game config form: 0/1 is a switch only when its help says which is off and which on; else a number",
+eq("game config form: 0/1 is a switch only when its help says which is off and which on; else text",
    [(_src176[k]["kind"], _src176[k]["on"], _src176[k]["off"]) for k in ("logfile", "sv_lan", "sv_region")],
-   [("bool", "1", "0"), ("number", None, None), ("number", None, None)])
+   [("bool", "1", "0"), ("text", None, None), ("text", None, None)])
 _props176 = _fields176("server.properties", sample_properties)
 eq("game config form: .properties - switches keep their case, a continued line is no field, \\: shown as "
    "written, and the line after a continuation is not read as a key",
@@ -246,7 +246,7 @@ eq("game config form: .properties - switches keep their case, a continued line i
     "long" in _props176, any(k.strip().startswith("two") for k in _props176),
     _props176["resource-pack"]["value"], _props176["max-players"]["kind"], _props176["level-seed"]["kind"]),
    ([("bool", "true", "false"), ("bool", "True", "False")], False, False,
-    "https\\://example.invalid/pack.zip", "number", "text"))
+    "https\\://example.invalid/pack.zip", "text", "text"))
 _ini176 = _fields176("pz.ini", sample_ini)
 eq("game config form: .ini - [sections] group the keys, # comments are help, a leading ! is a key "
    "(Unreal's operator), never a comment",
@@ -329,11 +329,10 @@ _refusals176 = [str(_apply176(rel, text, ch)[2]) for rel, text, ch in (
     ("s.properties", sample_properties, {"motd": "trail "}),
     ("s.properties", sample_properties, {"motd": "ends\\"}),
     ("s.properties", sample_properties, {"allow-flight": "yes"}),
-    ("s.properties", sample_properties, {"max-players": "lots"}),
     ("s.json", sample_json, {"max_players": "1e"}),
     ("s.json", sample_json, {"lan": "False"}))]
 eq("game config form: a quote in a cfg value, ; or // in an unquoted one, a space at either end of a "
-   "key=value value, a trailing backslash in .properties, a third value for a switch, text in a number field",
+   "key=value value, a trailing backslash in .properties, a third value for a switch, text in a JSON number",
    _refusals176,
    ["hostname: a value in this file cannot hold a double quote (\").",
     "exec: an unquoted value in this file cannot hold ; or // (they end the value).",
@@ -342,7 +341,7 @@ eq("game config form: a quote in a cfg value, ; or // in an unquoted one, a spac
     "motd: this file does not keep a space at the start or end of a value.",
     "motd: a value cannot end with a backslash in this file (it would join the next line).",
     "allow-flight is a switch: it takes true or false.",
-    "max-players takes a number.", "max_players takes a number.", "lan is a switch: it takes true or false."])
+    "max_players takes a number.", "lan is a switch: it takes true or false."])
 eq("game config form: ; and // are fine inside a quoted cfg value, and an ini value may end in a backslash",
    [_apply176("server.cfg", sample_source, {"hostname": "a;b//c"})[2],
     _apply176("pz.ini", sample_ini, {"Mods": "\\ModB42\\"})[2]], [None, None])
@@ -448,7 +447,7 @@ try:
     _r176["stale_audit"] = _p9_audit("edit_file")
     _r176["bad"] = [_A176.post(_u176, json=b).status_code for b in (
         {"path": _rel176, "hash": _h176, "changes": {_fid176["motd"]: "a\nrcon.password=x"}},
-        {"path": _rel176, "hash": _h176, "changes": {_fid176["max-players"]: "many"}},
+        {"path": _rel176, "hash": _h176, "changes": {_fid176["white-list"]: "maybe"}},
         {"path": _rel176, "hash": _h176, "changes": {"999": "x"}},
         {"path": _rel176, "hash": _h176, "changes": "motd=x"},
         {"path": 5, "hash": _h176, "changes": {}}, {"hash": _h176, "changes": {}}, [1, 2])]
@@ -515,8 +514,8 @@ check("game config form save: a file changed since the form was built is a 409 s
       _r176["stale"].status_code == 409 and _j176(_r176["stale"]).get("message") == _g176.CHANGED
       and _r176["stale_audit"].success is False and _g176.CHANGED in _r176["stale_audit"].detail,
       repr((_r176["stale"].status_code, _j176(_r176["stale"]), _r176["stale_audit"])))
-check("game config form save: a line break, text for a number, an unknown field, a non-map, a bad or missing "
-      "path, a non-object body and a missing file are refused and write nothing",
+check("game config form save: a line break, a third value for a switch, an unknown field, a non-map, a bad or "
+      "missing path, a non-object body and a missing file are refused and write nothing",
       _r176["bad"] == [400, 400, 400, 400, 400, 400, 400] and _r176["missing"].status_code == 409
       and _r176["after_bad"][0] == 0, repr((_r176["bad"], _r176["missing"].status_code, _r176["after_bad"])))
 check("game config form save: values equal to the file's are no change: nothing is written",

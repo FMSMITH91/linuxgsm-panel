@@ -59,7 +59,7 @@ eq("workshop: workshopmods splits as LinuxGSM's does (blanks, commas, semicolons
 eq("workshop: a Mod ID cannot hold ; = or a line break, nor start or end with a blank; a leading \\ is kept",
    [_wk173.check_mod_ids(v) for v in (
        ["Hydrocraft", "tsarslib", "\\ModB42", "Mod With Space", "a.b-c_d"], ["a;b"], ["a=b"], ["a\nb"],
-       [" a"], ["a "], [""], ["x" * 65], ["a", "a"], "a", [5], ["\\"], ["a\\b"])],
+       [" a"], ["a "], [""], ["x" * 101], ["a", "a"], "a", [5], ["\\"], ["a\\b"])],
    [(["Hydrocraft", "tsarslib", "\\ModB42", "Mod With Space", "a.b-c_d"], None)]
    + [(None, _wk173.BAD_MOD_ID)] * 7 + [(None, _ws173.DUPLICATE)] + [(None, _wk173.BAD_MOD_ID)] * 4)
 _ini173 = ("# Project Zomboid server settings\r\nPVP=true\r\n#WorkshopItems=999\r\nWorkshopItems=111;222\r\n"

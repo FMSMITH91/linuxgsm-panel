@@ -435,9 +435,9 @@ def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
     aux ports configured", and a new install could then take that stopped sibling's sourcetvport
     with nothing anywhere explaining the later "Port N was unavailable". Not a refusal: a sibling
     whose account is gone (an orphaned row) would then block every install on the host for good."""
+    from panel.services.port_check import held_ports   # its block, and a port saved while it ran
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
-        for k in range(_port_span(e.game_type)):
-            occupied.add(e.port + k)
+        occupied.update(held_ports(e, _port_span(e.game_type)))
         if e.short_name == skip_short_name or sm_game_engine(e.game_type) != "valve":
             continue
         try:
