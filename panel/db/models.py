@@ -1267,6 +1267,10 @@ class HostSample(db.Model):
     cpu = db.Column(db.Float, default=0.0)
     ram_pct = db.Column(db.Float, default=0.0)
     disk_pct = db.Column(db.Float, default=0.0)
+    # Network traffic in kilobits per second since the host's previous sample, received and sent.
+    # None where there is no rate (monitoring._hch_net_rates says when).
+    net_rx_kbps = db.Column(db.Float, nullable=True)
+    net_tx_kbps = db.Column(db.Float, nullable=True)
 
 
 class UserSession(db.Model):
@@ -1569,6 +1573,8 @@ _LIGHT_MIGRATIONS = {
     ("game_server", "pending_port"): "ALTER TABLE game_server ADD COLUMN pending_port INTEGER",
     # NULL on upgrade, then backfilled once by _backfill_audit_object_ids (see there).
     ("audit_log", "game_server_id"): "ALTER TABLE audit_log ADD COLUMN game_server_id INTEGER",
+    ("host_sample", "net_rx_kbps"): "ALTER TABLE host_sample ADD COLUMN net_rx_kbps FLOAT",
+    ("host_sample", "net_tx_kbps"): "ALTER TABLE host_sample ADD COLUMN net_tx_kbps FLOAT",
     ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",
     ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
     ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",

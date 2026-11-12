@@ -342,6 +342,17 @@
       "GET"
     ]
   },
+  "GET /api/remote/<int:remote_id>/history": {
+    "endpoint": "api_remote_history",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_history"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/remote/<int:remote_id>/live": {
     "endpoint": "api_remote_live",
     "guards": [

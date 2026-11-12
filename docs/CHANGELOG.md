@@ -14,6 +14,10 @@ compares git commits, not this file.
 
 ### Added
 
+- **Network traffic and history charts on the host page.** Each host's received and sent traffic
+  is recorded with its CPU, RAM and disk history, and the server page's History tab charts it. The
+  host page's Overview tab has a History card with CPU, RAM, disk and network over the last 24
+  hours or 7 days.
 - **A form for the game's own config file.** Files & Config's game config card has a Form view
   beside the raw editor, for key=value, .ini, Source and idTech cfg, 7 Days to Die XML and JSON
   files. Each setting is a field with the file's comments as help, passwords are hidden until shown,

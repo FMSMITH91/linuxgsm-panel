@@ -36,7 +36,7 @@ from panel.core.panel_state import (
 )
 from panel.ops.ssh_manager import (
     _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
-    is_local_server, lgsm_get_values, metrics_for_game,
+    is_local_server, lgsm_get_values, metrics_for_game, register_remote_cache,
     remote_fail2ban_attempt_counts,
     fwa_block_target, fwa_panel_source, remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip,
     run_command,
@@ -669,12 +669,58 @@ def _metric_sample_row(sid, now, m):
 
 
 def _host_sample_row(rid, now, m):
-    """The HostSample for one host: whole-VPS CPU%/RAM%/disk% from `m` (0 where a total is 0)."""
+    """The HostSample for one host: whole-VPS CPU%/RAM%/disk% from `m` (0 where a total is 0).
+
+    Plus the network rates since this host's previous sample (None where there is no rate).
+    """
     rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
+    rx, tx = _hch_net_rates(rid, m)
     return HostSample(remote_id=rid, ts=now,
                       cpu=round(m.get("cpu_percent") or 0, 1),
                       ram_pct=round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
-                      disk_pct=round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0)
+                      disk_pct=round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0,
+                      net_rx_kbps=rx, net_tx_kbps=tx)
+
+
+def host_has_history(remote_id):
+    """Whether host `remote_id` has any HostSample.
+
+    The host page draws its History card's chart area only then, and a one-line "No history yet"
+    otherwise, so neither state changes height on load.
+    """
+    return db.session.query(HostSample.id).filter(HostSample.remote_id == remote_id).first() is not None
+
+
+# Each host's last byte counters: remote id -> (read at, rx bytes, tx bytes). In memory only: a
+# rate needs two readings, and after a panel start the first sample simply has none. Registered,
+# so a deleted host's counters are not used for the next host given the same id.
+_hch_net_last = register_remote_cache({})
+
+# A gap longer than this is not one interval: the panel was stopped, or the host was unreachable
+# for a while, and an average over it would draw a flat line where nothing was measured.
+_hch_net_max_gap_secs = 600
+
+
+def _hch_net_rates(rid, m):
+    """(received, sent) in kilobits per second since host `rid`'s previous reading, or (None, None).
+
+    None when there is no previous reading (the first sample after a panel start), when the
+    previous one is more than _hch_net_max_gap_secs old, or when a counter went DOWN, which is a
+    reboot or an interface reset rather than negative traffic. This reading becomes the previous
+    one in every case where it has counters.
+    """
+    rx, tx, at = m.get("net_rx_bytes"), m.get("net_tx_bytes"), m.get("net_read_at")
+    if rx is None or tx is None or at is None:
+        return None, None
+    prev = _hch_net_last.get(rid)
+    _hch_net_last[rid] = (at, rx, tx)
+    if prev is None:
+        return None, None
+    secs = at - prev[0]
+    if secs <= 0 or secs > _hch_net_max_gap_secs or rx < prev[1] or tx < prev[2]:
+        return None, None
+    return (round((rx - prev[1]) * 8 / 1000.0 / secs, 1),
+            round((tx - prev[2]) * 8 / 1000.0 / secs, 1))
 
 
 _MONITOR_SECONDS = 60

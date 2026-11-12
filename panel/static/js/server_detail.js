@@ -2041,100 +2041,6 @@ function _pushStatsPoint(m) {
 
 var _histRange = '24h';
 
-// Chart text and grid in the page's colour scheme: the dark scheme's grey ticks are 2.9:1 on the
-// light scheme's white card. Read when a chart is built; _r37d_inkCharts repaints the built ones.
-function _cmpbInk(){
-  var de = document.documentElement;
-  var light = !!(de && de.getAttribute && de.getAttribute('data-bs-theme') === 'light');
-  return light ? {tick: '#4b5563', grid: 'rgba(0,0,0,.08)', legend: '#1f2937'}
-               : {tick: '#8b98a5', grid: 'rgba(255,255,255,.05)', legend: '#c9d1d9'};
-}
-
-var _histCharts = {};
-
-var _histTimes = {};
-
-// The 7-day x axis, in the scheme in force when a chart is built (it was taken once, at load).
-function _histX(){ return { ticks:{color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0}, grid:{display:false} }; }
-
-function _histXScale(id){
-  var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
-  var fmtD = function(t){ return t.toLocaleDateString([], {month:'short', day:'numeric'}); };
-  return { grid:{display:false},
-    afterFit: function(scale){
-      var prev = null;
-      scale.ticks.forEach(function(tk){
-        var t = (_histTimes[id] || [])[tk.value]; if(!t) return;
-        var d = fmtD(t);
-        tk.label = (d === prev) ? fmtT(t) : [fmtT(t), d];
-        prev = d;
-      });
-    },
-    ticks:{ color:_cmpbInk().tick, maxTicksLimit:6, maxRotation:0, autoSkip:true,
-      callback: function(value){ var t=(_histTimes[id]||[])[value]; return t ? [fmtT(t), fmtD(t)] : ''; } } };
-}
-
-function _histChart(id, labels, datasets, yScales, xScale){
-  var el = document.getElementById(id); if(!el || typeof Chart==='undefined') return;
-  var existing = _histCharts[id];
-  if(existing){
-    // Live refresh: update the data in place (no destroy/recreate) so the chart doesn't flash and
-    // keeps the tooltip/hover state. The dataset structure is stable per chart id.
-    existing.data.labels = labels;
-    datasets.forEach(function(ds, i){
-      if(existing.data.datasets[i]) existing.data.datasets[i].data = ds.data;
-      else existing.data.datasets[i] = ds;
-    });
-    existing.data.datasets.length = datasets.length;
-    existing.update('none');
-    return;
-  }
-  var scales = { x:(xScale||_histX()) }; for(var k in yScales){ scales[k]=yScales[k]; }
-  _histCharts[id] = new Chart(el.getContext('2d'), {
-    type:'line', data:{ labels:labels, datasets:datasets },
-    options:{ responsive:true, maintainAspectRatio:false, animation:false,
-      interaction:{intersect:false, mode:'index'}, scales:scales,
-      plugins:{ legend:{ labels:{color:_cmpbInk().legend, boxWidth:12, boxHeight:12} } } }
-  });
-}
-
-// A live change of colour scheme (Account "System" following the device, app_shell.js) flips
-// data-bs-theme without a reload. Each chart took its ink when it was built, and History refreshes
-// in place, so the old scheme's ticks stayed (2.9:1 grey on white, or dark grey on near-black) until
-// a reload. Repaint every built chart's ticks, grid lines and legend when the scheme changes.
-function _r37d_inkChart(chart){
-  if (!chart || !chart.options) return;
-  var ink = _cmpbInk(), sc = chart.options.scales || {};
-  Object.keys(sc).forEach(function(k){
-    var s = sc[k] || {};
-    if (s.ticks) s.ticks.color = ink.tick;
-    if (s.grid && s.grid.display !== false) s.grid.color = ink.grid;
-  });
-  var lg = chart.options.plugins && chart.options.plugins.legend;
-  if (lg && lg.labels) lg.labels.color = ink.legend;
-  chart.update('none');
-}
-function _r37d_inkCharts(){
-  _r37d_inkChart(statsChart);
-  Object.keys(_histCharts).forEach(function(id){ _r37d_inkChart(_histCharts[id]); });
-}
-var _r37d_inkWatch = typeof MutationObserver !== 'undefined' ? new MutationObserver(_r37d_inkCharts) : null;
-if (_r37d_inkWatch && document.documentElement) {
-  _r37d_inkWatch.observe(document.documentElement, {attributes: true, attributeFilter: ['data-bs-theme']});
-}
-
-function _histLbl(iso){
-  // Tooltip title (per point). Both ranges carry the date so a hovered point is never ambiguous
-  // about which day it is; the compact date-at-change lives on the x-axis ticks (_histXScale).
-  var d = new Date(iso);
-  return _histRange==='7d' ? d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit'})
-                           : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
-}
-
-function _ds(label, data, color, fill){
-  return { label:label, data:data, borderColor:color, backgroundColor:color+'22',
-           fill:!!fill, tension:.3, pointRadius:0, borderWidth:2, spanGaps:true };  // NOPMD
-}
 
 // A reply that is not a reading: none at all, or an error body (`error`, on every one since #435).
 function _r25c_histUnread(d){ return !d || !!d.error; }
@@ -2148,7 +2054,7 @@ window.loadHistory = function(){
       var empty = document.getElementById('hist-empty'), charts = document.getElementById('hist-charts');
       if(!s.length && !h.length){ if(empty)empty.style.display=''; if(charts)charts.style.display='none'; return; }
       if(empty)empty.style.display='none'; if(charts)charts.style.display='';
-      var sL = s.map(function(p){ return _histLbl(p.t); }), hL = h.map(function(p){ return _histLbl(p.t); });
+      var sL = s.map(function(p){ return _histLbl(p.t, _histRange); }), hL = h.map(function(p){ return _histLbl(p.t, _histRange); });
       // Parsed timestamps for the date-aware 24h axis; refreshed every load so in-place updates stay in sync.
       _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
       _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
@@ -2167,6 +2073,8 @@ window.loadHistory = function(){
         _ds('RAM %', h.map(function(p){return p.ram;}), '#3fb950', false),
         _ds('Disk %', h.map(function(p){return p.disk;}), '#d29922', false)
       ], pctY, _xs('hist-host'));
+      _histTimes['hist-net'] = _histTimes['hist-host'];
+      _hch_netChart('hist-net', hL, h, _xs('hist-net'));
     }).catch(function(){});
 };
 

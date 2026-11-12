@@ -986,6 +986,43 @@
 </div>
 {% endif %}
 
+{# History: this host's CPU, RAM, disk and network as recorded about once a minute (remote_history.js).
+   The route says whether the host has any samples, so the card is drawn in the state the reply will
+   confirm: the chart area when there are samples (it keeps its height while they load), one line of
+   "No history yet" when there are none. Nothing below moves when the reply arrives. #}
+<div class="card mb-3" data-mtab="overview" id="hh-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-graph-up"></i> History</span>
+    <div class="btn-group btn-group-sm" role="group" aria-label="History range">
+      <button type="button" class="btn btn-outline-secondary active" data-hh-range="24h">24h</button>
+      <button type="button" class="btn btn-outline-secondary" data-hh-range="7d">7d</button>
+    </div>
+  </div>
+  <div class="card-body hh-body">
+    <div id="hh-empty" class="text-secondary small text-center py-4"{% if hh_has_history %} style="display:none;"{% endif %}>
+      <i class="bi bi-hourglass-split"></i> No history yet. A sample is recorded every minute while this host has a game server installed.
+    </div>
+    <div id="hh-charts" class="row g-3"{% if not hh_has_history %} style="display:none;"{% endif %}>
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1"><i class="bi bi-cpu"></i> CPU %</div>
+        <div class="hh-plot"><canvas id="hh-cpu"></canvas></div>
+      </div>
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1"><i class="bi bi-memory"></i> RAM %</div>
+        <div class="hh-plot"><canvas id="hh-ram"></canvas></div>
+      </div>
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1"><i class="bi bi-hdd"></i> Disk %</div>
+        <div class="hh-plot"><canvas id="hh-disk"></canvas></div>
+      </div>
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1"><i class="bi bi-arrow-down-up"></i> Network · received and sent</div>
+        <div class="hh-plot"><canvas id="hh-net"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% if remote.games %}
 <div class="card" data-mtab="overview" id="host-servers-card">
   <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this host</div>
@@ -1058,6 +1095,9 @@ var REMOTE_NAME = {{ remote.name|tojson }};
    and later parts define functions the earlier ones call (always deferred and guarded). #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_host.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_backups.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/chartjs/chart.umd.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/history_charts.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_history.js') }}"></script>
 {# The Network tab's firewall cards (_firewall_panel.html) and the Security tab's Blocked IPs
    (_firewall_blocks.html), behind _host_ctl — spelled out, as the
    Ubuntu Pro line below does, because a {% set %} inside the content block is not seen here. #}
