@@ -182,16 +182,19 @@ _pp_side180 = {"run": ("", "", 0), "ufw": []}
 _POSTPONED180 = "[ INFO ] Restarting csgoserver: 2 players are on the server: restart postponed"
 
 
+_pp_during180 = []     # hooks the stand-in power command runs while it "runs"
+
+
 def _pp_run180():
-    """The stand-in power command's answer; a callable is called (it acts during the run)."""
-    run = _pp_side180["run"]
-    return run() if callable(run) else run
+    """The stand-in power command: runs any hook queued for during the run, then answers."""
+    for hook in _pp_during180:
+        hook()
+    return _pp_side180["run"]
 
 
 def _pp_resave180():
-    """A start during which the Settings tab saves another port (41870): the game bound 41860."""
+    """The Settings tab saves another port (41870) while the start runs: the game bound 41860."""
     _p9_set(_pp180, pending_port=41870)
-    return ("Starting csgoserver: OK", "", 0)
 
 
 def _pp_restart180(client, run, status="online", action="restart"):
@@ -221,7 +224,9 @@ try:
     _r180["pp_failed"] = _pp_restart180(_A180, ("Restarting csgoserver: FAIL", "", 1))
     _r180["pp_clean"] = _pp_restart180(_A180, ("Restarting csgoserver: OK", "", 0))
     _r180["pp_start"] = _pp_restart180(_A180, ("Starting csgoserver: OK", "", 0), status="offline", action="start")
-    _r180["pp_resaved"] = _pp_restart180(_A180, _pp_resave180, status="offline", action="start")
+    _pp_during180.append(_pp_resave180)
+    _r180["pp_resaved"] = _pp_restart180(_A180, ("Starting csgoserver: OK", "", 0), status="offline", action="start")
+    _pp_during180.clear()
     _r180["pp_trips"] = _P9_TRIPPED[_n_trips180:]
 finally:
     _p9_restore_all()
