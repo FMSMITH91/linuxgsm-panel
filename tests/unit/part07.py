@@ -809,9 +809,11 @@ for _gh_rel, _gh_src in _gh_modules:
 
 check("GHSA-hh39 gate: the scan read the panel's modules (not an empty walk)",
       _gh_files >= 50, "%d files" % _gh_files)
-check("GHSA-hh39 gate: ...and the root modules beside panel/ (app.py, manage.py, db_maintenance.py)",
-      {"app.py", "manage.py", "db_maintenance.py"} <= {_r for _r, _s in _gh_modules},
-      repr(sorted(_r for _r, _s in _gh_modules if "/" not in _r)))
+check("GHSA-hh39 gate: ...and the modules root runs (app.py, manage.py, db_maintenance.py), which the root "
+      "clean-up moved from beside panel/ into panel/install/",
+      {"panel/install/%s" % n for n in ("app.py", "manage.py", "db_maintenance.py")}
+      <= {_r.replace(os.sep, "/") for _r, _s in _gh_modules},
+      repr(sorted(_r for _r, _s in _gh_modules if "install" in _r)))
 check("GHSA-hh39 gate G1/G2/G3: every `sudo -u` is built by the checked builder, quoted, with the "
       "script name passed along",
       not _gh_problems, "; ".join(_gh_problems[:6]))
