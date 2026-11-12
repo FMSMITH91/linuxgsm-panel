@@ -782,7 +782,8 @@ _R15F_KNOWN_PORTS = {
     # Every other game whose _default.cfg sets `port=` to something other than 27015 (LinuxGSM
     # v26.4.0): these were offered 27015. Games that keep their port in the game's own config have
     # no `port=` there and stay on the fallback; `details` corrects them after the install.
-    "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871, "inss": 27102, "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
+    "ck": 1234, "cmw": 7777, "dayz": 2302, "dodr": 7777, "hcu": 7777, "hw": 12871, "inss": 27102,
+    "mohaa": 12203, "ohd": 7777, "pvr": 7777, "pw": 8211, "q4": 28004, "qw": 27500,
     "sbots": 7777, "scpsl": 7777, "sf": 7777, "sof2": 20100, "squad44": 10027, "tf": 5001, "ti": 7777,
     "tu": 7777, "ut": 7777, "ut3": 7777, "wf": 44400, "wurm": 3724,
     # Added by LinuxGSM v26.5.0: OpenRA Red Alert and Luanti read `port=` (their startparameters use

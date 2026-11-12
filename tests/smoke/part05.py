@@ -618,7 +618,7 @@ try:
     # 2c. ...and two runs of the SAME action, each on its own worker, as _bg_action runs them.
     # Ownership was decided by the action NAME, so the first validate to finish popped the
     # registration of the second, still running. Each worker now ends only its own entry.
-    import threading as _lat_thr
+    _lat_thr = _pa_th           # threading, imported above for the power-action checks
     _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
 
     def _lat_worker(began, go):

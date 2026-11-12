@@ -232,9 +232,8 @@ def ufw_stored_answer(ipv6="no"):
     whether ufw would write the new port's rule for IPv6 too, and refuses when they cannot be read
     (review 1109). IPV6=no keeps such a stand-in's move on the public path it always took.
     """
-    from panel.security import privileged as _priv01
     texts = ("IPV6=%s\n" % ipv6, "", "", "")
-    return "".join("==> %s <==\n%s" % (p, t) for p, t in zip(_priv01.FWA_STORED_PATHS, texts)), "", 0
+    return "".join("==> %s <==\n%s" % (p, t) for p, t in zip(_privmod.FWA_STORED_PATHS, texts)), "", 0
 
 
 # ── perf guard: importing `auth` must NOT compute the ~400ms bcrypt "dummy" hash.

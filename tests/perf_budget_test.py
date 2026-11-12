@@ -177,7 +177,6 @@ def _r40_pb_coverage():
     db_maintenance (it runs only the sqlite3 CLI, and host_local imports it under its own top-level name).
     """
     import importlib as _il
-    import re as _re
     top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     root = os.path.join(top, "panel")
     left_out = {"panel.ops.ssh_manager._core", "panel.install.db_maintenance"}
@@ -188,7 +187,7 @@ def _r40_pb_coverage():
             if not n.endswith(".py"):
                 continue
             with open(path, encoding="utf-8") as fh:
-                if not _re.search(r"^import subprocess\b", fh.read(), _re.M):
+                if not _pb_re.search(r"^import subprocess\b", fh.read(), _pb_re.M):
                     continue
             mod = os.path.relpath(path, top)[:-3].replace(os.sep, ".")
             if mod not in left_out and not isinstance(getattr(_il.import_module(mod), "subprocess", None), _PbTrip):

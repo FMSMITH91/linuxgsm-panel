@@ -81,7 +81,8 @@ class _Box120:
         elif verb == "ufw-delete-allow-proto-port":
             self.added = False
         self._tick(verb)
-        return self._answer(verb)
+        # ufw with IPv6 off: no (v6) row is listed (part01)
+        return ufw_stored_answer() if verb == "ufw-stored-rules" else self._answer(verb)
 
     def _answer(self, verb):
         if verb in ("sshd-backup-dropin", "sshd-socket-backup"):
@@ -92,8 +93,6 @@ class _Box120:
                 return "Status: inactive\n", "", 0
             return _HDR120 + "22/tcp                     LIMIT IN    Anywhere\n" + (
                 "2022/tcp                   ALLOW IN    Anywhere\n" if self.added else ""), "", 0
-        if verb == "ufw-stored-rules":       # ufw with IPv6 off: no (v6) row is listed (part01)
-            return ufw_stored_answer()
         if verb == "ufw-show-added":
             return ("Added user rules (see 'ufw status' for running firewall):\nufw limit 22/tcp\n"
                     + ("ufw allow 2022/tcp\n" if self.added else "")), "", 0
