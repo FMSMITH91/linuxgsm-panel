@@ -307,7 +307,7 @@ compares git commits, not this file.
   reboot instead of being cut off. A cron wipe is no longer reported as a crash.
 
 - **Overdue-backup alerts are sent when LinuxGSM's alert settings were never filled in.** A LinuxGSM
-  alert channel switched on but left at its default address (for example email@example.com) no
+  alert channel switched on but left at its default address (for example `email@example.com`) no
   longer stops the panel from sending its own alert.
 
 - **Nothing else runs on a server during its scheduled wipe.** Backups, queued restarts and stops,
