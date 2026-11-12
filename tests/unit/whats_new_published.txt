@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+a494e8cf The player-query tool's XML parser is the fixed release.
 f411f0cd Network traffic and history charts on the host page.
 6ed16c56 A form for the game's own config file.
 48585521 Start checks the port first.

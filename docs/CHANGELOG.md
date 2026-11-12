@@ -1116,6 +1116,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **The player-query tool's XML parser is the fixed release.** gamedig, which the panel uses to
+  count players, came with a version of its XML parser that could be made to spend a long time on a
+  crafted reply. The panel's copy now uses the fixed version. Only Farming Simulator queries read
+  XML.
+
 - **A proxy's address can no longer add a line to the panel's log.** The warning written when a
   forwarding header is not believed now replaces any line break in the address it names, so it
   cannot forge a log line.
