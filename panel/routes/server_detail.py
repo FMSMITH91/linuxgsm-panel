@@ -821,6 +821,10 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                                                         action)
                 if out is None:
                     detail = str(rc)        # refused: rc is the refusal (_r39a_power_unless_wiping)
+                    # The request wrote no row for a power action (its outcome is audited when it
+                    # finishes), so the refusal is the row: a wipe began between the click and here.
+                    log_action(actor, f"{action}_server", target=name, actor=origin, success=False,
+                               detail=detail[:300], server=gs)
                     return
                 ok, detail = (rc == 0), terminal.strip_escapes(out or "")
                 ok, detail, held = _r40_power_outcome(app, gs, (out, rc), (action, actor, origin, name))
@@ -1010,6 +1014,9 @@ def _bg_action(app, gs, remote, action, on_done=None):
                     if wiping:
                         _console_push(_app, server_id, f"[panel] {action}: {wiping}")
                         detail = str(wiping)
+                        # The request audited "started"; this is how it ended: not run.
+                        log_action(None, f"{action}_complete", target=name, success=False,
+                                   detail=detail[:300], server=claim_row(GameServer, server_id, born))
                         return
                     out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
                                              monitor=autostart)

@@ -4173,7 +4173,11 @@ def _r38h_public_fams(server, status_out, ports, port=None):
         # The policy is read only when the rules leave a family closed or hold a rule, as before (one more
         # host read). Allow: every port is public on every address already, the new one too.
         return listed, fams, held, met
-    return listed, set(listed), None, None
+    # Allow: every port is public on every address, except where a rule denies it. A held DENY (SSH
+    # refused on one address of the host) does not follow SSH to the new port on its own, so it is
+    # kept and the move is refused naming it, as under a default deny; a held allow adds nothing here.
+    deny = held if held is not None and not _r38h_lets_in(held) else None
+    return listed, set(listed), deny, None
 
 
 def _r39b_family_readings(status_out, ports):

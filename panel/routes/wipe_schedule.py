@@ -301,8 +301,11 @@ def _r39a_other_work(sid):
 
     A queued "stop/restart when empty" being run, a Start/Stop/Restart or long action from the
     server page, a chat bot or the bulk bar (registered "action" for its run, and the long ones
-    in the console's action chain), a mods install or removal, a Run now, a content install: all the
-    work the reboot census reads (host_reboot), less this wipe's own registration. Each of those
+    in the console's action chain), a mods install or removal, a Run now while it launches, a content
+    install: the panel's own registrations the reboot census reads (host_reboot), less this wipe's own.
+    A Run now is registered only while it starts its job, which then runs detached on the host, and a
+    job from the account's own crontab never registers here: unlike the reboot census, this does not
+    read the host's processes, so a wipe can still start beside those. Each of those
     registers before it asks whether a wipe runs (_shared._r39a_wipe_running), and this is asked
     after the wipe registers, so two that start together never both go ahead. Before, only a backup
     and a host reboot were waited for: a queued restart already running had LinuxGSM's wipe, or the

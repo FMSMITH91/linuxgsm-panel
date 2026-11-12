@@ -27,7 +27,7 @@ from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_audit, _p9
                          _p9_patch, _p9_restore_all)
 from unit.part28 import _GIT28, _cx28
 from unit.part159 import _Box159, _PUB_SESS159, _V4_ADD159, _move159
-from unit.part163 import _PROXY_ADD163, _PUB22_163, _STORED_TEXT163, _move163
+from unit.part163 import _BOTH163, _DENY_OTHER163, _PROXY_ADD163, _PUB22_163, _STORED_TEXT163, _move163
 from panel.ops.ssh_manager import firewall as _fw178, hosts as _hosts178, ufweval as _ue178
 from panel.services import lgsm_data as _lgsm178
 from panel.ops.ssh_manager import game as _game178
@@ -82,6 +82,13 @@ check("1109 finding 4: ...while with the files unread the move goes on where it 
       and _goes178["a default incoming allow policy"][0] is True
       and _goes178["a default incoming allow policy"][2] == _PROXY_ADD163,
       repr({k: (r[0], r[1][:200], r[2]) for k, r in _goes178.items()}))
+# Under a default incoming ALLOW, a DENY for one public address above the public rule still holds: SSH
+# was refused there, and the allow policy would let the new port in on that address the moment SSH moves.
+_deny_allow178 = _move_policy178([_DENY_OTHER163] + _BOTH163, True)
+check("1109 adversarial M1: under a default incoming allow, a DENY for one public address above the public "
+      "rule refuses the move naming it and adds nothing, as under a default deny",
+      _deny_allow178[0] is False and _deny_allow178[2] == [] and _DENY_OTHER163 in _deny_allow178[1],
+      repr((_deny_allow178[0], _deny_allow178[1][:300], _deny_allow178[2])))
 _read_ok178 = {"IPV6=yes": _move163([_PUB22_163], ipv6="yes"), "IPV6=no": _move163([_PUB22_163], ipv6="no"),
                "a (v6) row listed": _move163([_PUB22_163, "22/tcp (v6)  ALLOW IN  Anywhere (v6)"], ipv6=None)}
 check("1109 finding 4: ...and files that read decide as before: IPV6=yes gets IPv4's rule from anywhere alone, "
