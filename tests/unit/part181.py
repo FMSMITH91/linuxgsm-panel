@@ -27,7 +27,7 @@ import tempfile as _tf181
 from unit.part01 import _root, check
 from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _P9Thread, _p9_arm, _p9_audit, _p9_audit_count,
                          _p9_client, _p9_delete_server, _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm,
-                         _p9_restore_all, _p9_row, _p9_set, _p9_threading)
+                         _p9_restore_all, _p9_row, _p9_threading)
 from panel.core import runtime_stats as _rs181
 from panel.ops import system_ops as _so181
 from panel.ops.debug_report import updates as _up181
