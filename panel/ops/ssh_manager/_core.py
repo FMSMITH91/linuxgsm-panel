@@ -2120,9 +2120,12 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         # transport has from _POPEN_KW, and the same shutdown_write files.py:911 already sends —
         # and it is what the "deliberately no deadline" note above _drain_exec rests on.
         # A secret from run_privileged goes down the channel first; the EOF still follows.
-        if stdin_text is not None:
-            for piece in _stdin_pieces(_stdin_bytes(stdin_text)):
+        if isinstance(stdin_text, StdinChunks):
+            for piece in stdin_text:
                 stdin.write(piece)
+            stdin.flush()
+        elif stdin_text is not None:
+            stdin.write(stdin_text)
             stdin.flush()
         try:
             stdin.channel.shutdown_write()

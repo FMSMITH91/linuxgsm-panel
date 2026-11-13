@@ -977,8 +977,8 @@ finally:
 eq("recovery: a recorded restore that a run of this process still holds is left alone",
    _rec190["while_running"], (0, True))
 check("recovery: with no run holding it, the archive is put back under its own name and time",
-      len(_rec190["shell"]) == 1 and ("t0=%d" % _T0190) in _rec190["shell"][0]
-      and ".restore-source-$t0." in _rec190["shell"][0]
+      len(_rec190["shell"]) == 1 and '"$B"/*.restore-source-*' in _rec190["shell"][0]
+      and 'touch -m -d "@${t/_/.}"' in _rec190["shell"][0]
       and ('touch -m -d "@$t0"' in _rec190["shell"][0]), repr(_rec190["shell"]))
 check("recovery: ...recorded as interrupted (audit, alert, the card), naming the pre-restore archive, and forgotten",
       _rec190["audit"] == 1 and "interrupted" in _rec190["row"] and "p190-2026-11-13-000000.tar.zst" in _rec190["row"]
