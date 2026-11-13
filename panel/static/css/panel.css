@@ -2081,6 +2081,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 [data-fpm-ro] .fpm-edit,
 [data-fpm-nosu] .fpm-su,
 [data-fpm-nodl] .fpm-dl,
-[data-fpm-nodel] .fpm-del {
+[data-fpm-nodel] .fpm-del,
+[data-fpm-nors] .fpm-rs {
   display: none !important;
 }

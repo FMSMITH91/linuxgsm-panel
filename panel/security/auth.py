@@ -71,6 +71,7 @@ VIEW_FILES = "view_files"               # Browse, read and download a server's f
 EDIT_FILES = "edit_files"               # Upload, save, rename, create and delete them
 DOWNLOAD_BACKUP = "download_backup"     # Download a game server's backup archives
 DELETE_BACKUP = "delete_backup"         # Delete them
+RESTORE_BACKUP = "restore_backup"       # Restore the server from one (replaces its current files)
 MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
@@ -101,6 +102,8 @@ ALL_PERMISSIONS = {
     DOWNLOAD_BACKUP: "Download a game server's backup archives",
     DELETE_BACKUP: ("Delete a game server's backup archives — a deleted backup is gone for good "
                     "and cannot be restored"),
+    RESTORE_BACKUP: ("Restore a game server from a backup — replaces its current files; the most "
+                     "destructive backup action"),
     MANAGE_REMOTES: "Add/edit/delete remote VPS nodes",
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
@@ -1930,7 +1933,7 @@ def _fpm_can_edit():
 
 # Any one of these is a reason to open a server's Files & Config page: its Config and Files tabs
 # (VIEW_FILES), its Schedule, Alerts and Mods tabs (MANAGE_SERVERS) and its Backups tab.
-FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP)
+FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP, RESTORE_BACKUP)
 
 
 def files_access(user, perms=None):
@@ -1938,8 +1941,8 @@ def files_access(user, perms=None):
 
     `perms`: their get_user_permissions(), when the caller already holds it (no second read).
 
-    view/edit: the files; manage: the server settings tabs; dl/rm: a game backup's download and
-    delete; su: the superadmin-only backup controls (take one now, the schedule); bk: the Backups
+    view/edit: the files; manage: the server settings tabs; dl/rm/rs: a game backup's download,
+    delete and restore; su: the superadmin-only backup controls (take one now, the schedule); bk: the Backups
     tab at all; page: the page itself. Server access is the caller's question
     (server_access_required), as it is for every permission.
     """
@@ -1950,8 +1953,8 @@ def files_access(user, perms=None):
     def _has(p):
         return su or p in perms
     out = {"view": _has(VIEW_FILES), "edit": _has(EDIT_FILES), "manage": _has(MANAGE_SERVERS),
-           "dl": _has(DOWNLOAD_BACKUP), "rm": _has(DELETE_BACKUP), "su": su}
-    out["bk"] = out["su"] or out["dl"] or out["rm"]
+           "dl": _has(DOWNLOAD_BACKUP), "rm": _has(DELETE_BACKUP), "rs": _has(RESTORE_BACKUP), "su": su}
+    out["bk"] = out["su"] or out["dl"] or out["rm"] or out["rs"]
     out["page"] = any(_has(p) for p in FILES_PAGE_PERMS)
     return out
 

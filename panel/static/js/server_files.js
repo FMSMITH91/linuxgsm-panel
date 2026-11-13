@@ -2038,6 +2038,20 @@ function _bkRenderStatus(s){
   else if(s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }  // nosemgrep
   else st.textContent='';
 }
+// A restore from a backup (routes/game_restore): what step it is on, then how it ended.
+var _GRS_STEPS = {checking: 'Restore: checking the archive…', stopping: 'Restore: stopping the server…',
+                  backing_up: 'Restore: backing up the current state first…', restoring: 'Restore: replacing the files…'};
+function _grsRenderStatus(r){
+  var st=document.getElementById('bk-restore-status');
+  if(!st) return;
+  st.textContent='';
+  if(!r) return;
+  var icon=document.createElement('i'), text=document.createElement('span');
+  if(r.running){ st.className='small text-info'; icon.className='bi bi-arrow-repeat'; text.textContent=' '+tf(_GRS_STEPS[r.step]||'Restore: running…'); }
+  else if(r.ok===true){ st.className='small text-success'; icon.className='bi bi-check-circle'; text.textContent=' '+(r.msg||tf('Restored')); }
+  else { st.className='small text-danger'; icon.className='bi bi-x-circle'; text.textContent=' '+(r.msg||tf('Restore failed')); }
+  st.appendChild(icon); st.appendChild(text);
+}
 // Poll while a backup is running; stop once it finishes.
 function _bkPollWhileRunning(s){
   var running=s && s.running;
@@ -2046,6 +2060,7 @@ function _bkPollWhileRunning(s){
 }
 // Backup rows.
 function _bkRenderRows(d){
+  var restoring=!!(d.restore && d.restore.running);
   var rows=(d.backups||[]).map(function(b){
     var ip=b.in_progress;
     return '<tr>'
@@ -2055,7 +2070,9 @@ function _bkRenderRows(d){
       + '<td class="text-nowrap">'
       // .fpm-dl / .fpm-del: hidden without DOWNLOAD_BACKUP / DELETE_BACKUP (#backup-card, panel.css).
       +   (ip?'':('<a class="btn btn-sm btn-outline-secondary py-0 px-1 fpm-dl" href="'+MOUNT+'/backup/game/'+serverId+'/download?name='+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
-      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1 fpm-del" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button>'))
+      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1 fpm-del" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button>'
+      // .fpm-rs: hidden without RESTORE_BACKUP. Disabled while a restore of this server runs.
+      +          ' <button class="btn btn-sm btn-outline-warning py-0 px-1 fpm-rs" title="Restore" data-name="'+esc(b.name)+'"' + (restoring?' disabled':'') + _da('restoreBk', ['@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button>'))
       + '</td></tr>';
   });
   var tb=document.getElementById('bk-rows');
@@ -2101,8 +2118,9 @@ function renderBackups(d, settled, noSchedule){
   _bkRenderStatus(s);
   var nowBtn=document.getElementById('bk-now'); if(nowBtn) nowBtn.disabled=!!(s && s.running);
   _bkRenderRows(d);
-  // Poll while a backup is running; stop once it finishes.
-  _bkPollWhileRunning(s);
+  _grsRenderStatus(d.restore);
+  // Poll while a backup or a restore is running; stop once it finishes.
+  _bkPollWhileRunning({running: !!((s && s.running) || (d.restore && d.restore.running))});
 }
 
 function saveBkSchedule(){
@@ -2167,6 +2185,25 @@ function deleteBk(btn){
           window.toast(d.message || (d.success?'Deleted':'Delete failed'), d.success?'success':'danger');
           loadBackups();
         }).catch(function(){ window.toast('Delete failed','danger'); btn.disabled=false; });
+    }});
+}
+
+// Restore the server from one of its backups: the operator types the server's name to confirm.
+function restoreBk(btn){
+  var name = btn.getAttribute('data-name') || '';
+  confirmDialog({title:'Restore from backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
+    bodyText:tf('Restore {server} from this backup?\n\n{name}\n\nEvery file of the server is replaced with the copy in the archive: its world, configs and LinuxGSM files. The server is stopped first, and a fresh backup of its current state is taken before anything is replaced, so you can go back. A running server is started again afterwards.', {server: SERVER_NAME, name: name}),
+    requireText: SERVER_NAME, requireLabel: tf('Type the server name to confirm'),
+    onConfirm:function(){
+      btn.disabled=true;
+      fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/restore',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:name, confirm:SERVER_NAME})})
+        .then(r=>r.json()).then(function(d){
+          window.toast(d.message || (d.success?tf('Restore started'):tf('Restore failed')), d.success?'success':'danger');
+          loadBackups();
+          if(d.success && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
+          if(!d.success) btn.disabled=false;
+        }).catch(function(){ window.toast(tf('Restore failed'),'danger'); btn.disabled=false; });
     }});
 }
 

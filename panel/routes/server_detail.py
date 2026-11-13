@@ -42,7 +42,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
-    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, _r39a_wipe_running, game_account_write_refusal,
+    _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, _r39a_wipe_running, grs_restore_running,
+    game_account_write_refusal,
     lg265_refresh_commands, lg265_schedule_gained)
 
 
@@ -478,6 +479,9 @@ def _r39a_wipe_refusal(server_id, name, action):
     """
     if action in _R39A_WIPE_SAFE_ACTIONS or not _r39a_wipe_running(server_id):
         return None
+    if grs_restore_running(server_id):
+        return i18n.Sentence("'{name}' is being restored from a backup — '{action}' was not run. Try again "
+                             "once it has finished.", name=name, action=action)
     return i18n.Sentence("A scheduled wipe of '{name}' is running — '{action}' was not run. Try again once "
                          "it has finished.", name=name, action=action)
 

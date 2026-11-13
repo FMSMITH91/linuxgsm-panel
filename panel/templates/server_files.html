@@ -391,8 +391,9 @@
 {% if _uis_backups %}
 <!-- Backups (this server) — reuses the existing game-backup endpoints. The schedule and Back up now
      are superadmin-only (.fpm-su); a row's download needs DOWNLOAD_BACKUP (.fpm-dl), its delete
-     DELETE_BACKUP (.fpm-del). Nothing to back up when the game files never downloaded. -->
-<div class="card" id="backup-card" data-sfsub="backups" style="display:none;"{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}>
+     DELETE_BACKUP (.fpm-del), its restore RESTORE_BACKUP (.fpm-rs). Nothing to back up when the game
+     files never downloaded. -->
+<div class="card" id="backup-card" data-sfsub="backups" style="display:none;"{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}{% if not fpm.rs %} data-fpm-nors{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
     <span class="text-secondary" style="font-size:.66rem;">
@@ -434,6 +435,7 @@
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
         <button class="btn btn-primary btn-sm fpm-su" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
         <span id="bk-status" class="small"></span>
+        <span id="bk-restore-status" class="small"></span>
       </div>
       <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">

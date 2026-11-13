@@ -1,9 +1,9 @@
 {
   "{command}: the connection dropped while LinuxGSM's wipe ran; it may have wiped: check the server": "{command} : la connexion a été coupée pendant le wipe de LinuxGSM ; il a peut-être eu lieu : vérifiez le serveur",
   "another action on this server is running": "une autre action est en cours sur ce serveur",
-  "a scheduled wipe or a queued stop or restart of this server is running": "un wipe planifié ou un arrêt ou redémarrage en file d'attente de ce serveur est en cours",
   "a queued stop or restart of {name}": "un arrêt ou redémarrage en file d'attente de {name}",
   "A scheduled wipe of '{name}' is running — '{action}' was not run. Try again once it has finished.": "Un wipe planifié de « {name} » est en cours : « {action} » n'a pas été exécuté. Réessayez une fois qu'il est terminé.",
   "A scheduled wipe of '{name}' is running. Try again once it has finished.": "Un wipe planifié de « {name} » est en cours. Réessayez une fois qu'il est terminé.",
-  "A scheduled wipe or a queued stop or restart of {name} is running. Try again once it has finished.": "Un wipe planifié ou un arrêt ou redémarrage en file d'attente de {name} est en cours. Réessayez une fois qu'il est terminé."
+  "a scheduled wipe, a restore from a backup, or a queued stop or restart of this server is running": "un wipe planifié, une restauration depuis une sauvegarde ou un arrêt ou redémarrage en file d'attente de ce serveur est en cours",
+  "A scheduled wipe, a restore from a backup, or a queued stop or restart of {name} is running. Try again once it has finished.": "Un wipe planifié, une restauration depuis une sauvegarde ou un arrêt ou redémarrage en file d'attente de {name} est en cours. Réessayez une fois qu'il est terminé."
 }
