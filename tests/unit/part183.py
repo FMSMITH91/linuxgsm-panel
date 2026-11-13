@@ -103,36 +103,60 @@ def _exe183(path, body):
     _os183.chmod(path, 0o755)
 
 
+def _tree183(tmp, files, links, uid):
+    """The scratch home: `files`, `links` (@OUT = a folder outside it, holding keep.txt), the script's uid."""
+    home, outside = _os183.path.join(tmp, "home"), _os183.path.join(tmp, "outside")
+    for f in files:
+        _write183(_os183.path.join(home, f))
+    _write183(_os183.path.join(outside, "keep.txt"))
+    for link, target in links:
+        _os183.symlink(target.replace("@OUT", outside), _os183.path.join(home, link))
+    if uid is not None:
+        _write183(_os183.path.join(home, "lgsm", "data", "p183s.uid"), uid)
+    return home
+
+
+def _stubs183(tmp, home, up, realpath):
+    """tmux (a session when `up`), realpath (when asked, one answering another path) and the factorio binary."""
+    stubs = _os183.path.join(tmp, "stubs")
+    _exe183(_os183.path.join(stubs, "tmux"), 'echo "$*" >> "%s/tmux.args"\n%s' % (tmp, "echo p183s\n" if up else ""))
+    if realpath:
+        _exe183(_os183.path.join(stubs, "realpath"), "echo /elsewhere/x\n")
+    if _os183.path.isdir(_os183.path.join(home, "serverfiles")):
+        _exe183(_os183.path.join(home, "serverfiles", "bin", "x64", "factorio"),
+                'echo "$*" >> "%s/factorio.args"\nprintf new > "$2.zip"\n' % tmp)
+    return dict(_os183.environ, PATH=stubs + ":" + _os183.environ.get("PATH", "/usr/bin:/bin"))
+
+
+def _said183(tmp, name):
+    path = _os183.path.join(tmp, name)
+    if not _os183.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _left183(home):
+    left = sorted(_os183.path.relpath(_os183.path.join(r, f), home) for r, _d, fs in _os183.walk(home) for f in fs)
+    return [f for f in left if not f.startswith(("serverfiles/bin/", "lgsm/"))]
+
+
 def _host183(plan, files=(), links=(), up=False, uid=None, realpath=None, locked=None):
-    """Run the reset's script in a temp home; returns (files left, its stdout, rc, tmux args, factorio args)."""
+    """Run the reset's script in a temp home.
+
+    Returns (files left, stdout, rc, tmux args, factorio args, whether the outside folder's file is still there).
+    """
     tmp = _tmp183.mkdtemp(prefix="p183-")
-    home, stubs, outside = (_os183.path.join(tmp, n) for n in ("home", "stubs", "outside"))
+    home = _os183.path.join(tmp, "home")
     try:
-        for f in files:
-            _write183(_os183.path.join(home, f))
-        _write183(_os183.path.join(outside, "keep.txt"))
-        for link, target in links:
-            _os183.symlink(target.replace("@OUT", outside), _os183.path.join(home, link))
-        if uid is not None:
-            _write183(_os183.path.join(home, "lgsm", "data", "p183s.uid"), uid)
-        _exe183(_os183.path.join(stubs, "tmux"), 'echo "$*" >> "%s/tmux.args"\n%s' % (tmp, "echo p183s\n" if up else ""))
-        if realpath:
-            _exe183(_os183.path.join(stubs, "realpath"), "echo /elsewhere/x\n")
-        if _os183.path.isdir(_os183.path.join(home, "serverfiles")):
-            _exe183(_os183.path.join(home, "serverfiles", "bin", "x64", "factorio"),
-                    'echo "$*" >> "%s/factorio.args"\nprintf new > "$2.zip"\n' % tmp)
+        _tree183(tmp, files, links, uid)
+        env = _stubs183(tmp, home, up, realpath)
         if locked:
             _os183.chmod(_os183.path.join(home, locked), _stat183.S_IRUSR | _stat183.S_IXUSR)
         sh = _wwr183.script("p183u", "p183s", plan).replace("/home/p183u", home)
-        env = dict(_os183.environ, PATH=stubs + ":" + _os183.environ.get("PATH", "/usr/bin:/bin"))
         res = _sp183.run(["bash", "-c", sh], capture_output=True, text=True, timeout=60, env=env, check=False)  # nosec B603 B607
-        left = sorted(_os183.path.relpath(_os183.path.join(r, f), home)
-                      for r, _d, fs in _os183.walk(home) for f in fs)
-        left = [f for f in left if not f.startswith(("serverfiles/bin/", "lgsm/"))]
-        said = {n: open(_os183.path.join(tmp, n), encoding="utf-8").read() if _os183.path.exists(_os183.path.join(tmp, n))
-                else "" for n in ("tmux.args", "factorio.args")}
-        return left, res.stdout, res.returncode, said["tmux.args"], said["factorio.args"], \
-            _os183.path.exists(_os183.path.join(outside, "keep.txt"))
+        return (_left183(home), res.stdout, res.returncode, _said183(tmp, "tmux.args"), _said183(tmp, "factorio.args"),
+                _os183.path.exists(_os183.path.join(tmp, "outside", "keep.txt")))
     finally:
         if locked:
             _os183.chmod(_os183.path.join(home, locked), _stat183.S_IRWXU)
@@ -192,8 +216,8 @@ check("world reset host: Factorio's save1 and autosaves go, a new save1 is made 
       repr(_fctr183))
 _fold183 = _host183(_FCTR_OLD_PLAN183, ("serverfiles/save1.zip", "serverfiles/saves/_autosave1.zip"))
 check("world reset host: the older layout's serverfiles/save1.zip is replaced the same way",
-      _fold183[4].split()[1].endswith("/serverfiles/save1") and _fold183[0] == ["serverfiles/save1.zip",
-                                                                                  "serverfiles/saves/_autosave1.zip"]
+      _fold183[4].split()[1].endswith("/serverfiles/save1")
+      and _fold183[0] == ["serverfiles/save1.zip", "serverfiles/saves/_autosave1.zip"]
       and _wwr183.outcome(_fold183[1], _fold183[2], _FCTR_OLD_PLAN183)[0] == "done", repr(_fold183))
 _fsaves183 = _host183(_FCTR_PLAN183, ("serverfiles/player-data.json",), links=[("serverfiles/saves", "@OUT")])
 check("world reset host: a Factorio saves folder that is a symlink is refused: nothing deleted, nothing created",
@@ -310,8 +334,8 @@ def _sweep_case183(sid, **o):
         _p9_patch_sm("shell_as_game_user", _shell)
         _p9_patch_sm("player_count", _players)
         _p9_patch_sm("read_file", lambda *a, **k: o.get("props", (_PROPS183, None)))
-        _p9_patch_sm("lgsm_get_values", lambda *a, **k: o.get("values", dict(_EXE183, startparameters=_LATEST183,
-                                                                              extraparams="")))
+        _values = dict(_EXE183, startparameters=_LATEST183, extraparams="")
+        _p9_patch_sm("lgsm_get_values", lambda *a, **k: o.get("values", _values))
         try:
             _wr183.sweep(_p9, now=_NOW183)
         except Exception as exc:  # noqa: BLE001 - recorded, and named by the check that reads it

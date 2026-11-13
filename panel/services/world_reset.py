@@ -67,19 +67,18 @@ def world_name_problem(name):
     """
     if not isinstance(name, str) or not name:
         return i18n.Sentence("it is empty")
-    if name in (".", ".."):
-        return i18n.Sentence("it is '.' or '..'")
-    if len(name) > _WWR_NAME_MAX:
-        return i18n.Sentence("it is longer than {max} characters", max=_WWR_NAME_MAX)
-    if "/" in name or "\\" in name:
-        return i18n.Sentence("it contains a slash or backslash")
-    if any(ord(c) < 32 or ord(c) == 127 for c in name):
-        return i18n.Sentence("it contains a control character")
-    if name.startswith("-"):
-        return i18n.Sentence("it starts with '-'")
-    if name != name.strip():
-        return i18n.Sentence("it starts or ends with a blank")
-    return None
+    return next((why for bad, why in _WWR_NAME_RULES if bad(name)), None)
+
+
+# Each rule: (refuses, the sentence said). Asked in order, after the empty test.
+_WWR_NAME_RULES = (
+    (lambda n: n in (".", ".."), i18n.Sentence("it is '.' or '..'")),
+    (lambda n: len(n) > _WWR_NAME_MAX, i18n.Sentence("it is longer than {max} characters", max=_WWR_NAME_MAX)),
+    (lambda n: "/" in n or "\\" in n, i18n.Sentence("it contains a slash or backslash")),
+    (lambda n: any(ord(c) < 32 or ord(c) == 127 for c in n), i18n.Sentence("it contains a control character")),
+    (lambda n: n.startswith("-"), i18n.Sentence("it starts with '-'")),
+    (lambda n: n != n.strip(), i18n.Sentence("it starts or ends with a blank")),
+)
 
 
 def level_name(props):
@@ -117,21 +116,31 @@ def mc_plan(gs):
     return {"dir": "", "remove": [name, name + "_nether", name + "_the_end"], "globs": [], "create": None}, None
 
 
-def fctr_layout(values):
-    """Which save Factorio starts, from the instance's merged LinuxGSM values: (plan, None) or (None, why)."""
-    words = ("%s %s" % (values.get("startparameters") or "", values.get("extraparams") or "")).split()
+_WWR_FCTR_NO_SAVE = i18n.Sentence("the start parameters do not name one save the panel knows how to reset")
+
+
+def _wwr_fctr_start(values):
+    """The start option and the word after it, ("--start-server…", next) — or None unless there is exactly one."""
+    words = ("%s %s" % (values.get("startparameters") or "", values.get("extraparams") or "")).split() + [""]
     starts = [i for i, w in enumerate(words) if w.startswith("--start-server")]
     if len(starts) != 1 or words[starts[0]] not in _WWR_FCTR_START:
-        return None, i18n.Sentence("the start parameters do not name one save the panel knows how to reset")
+        return None
+    return words[starts[0]], words[starts[0] + 1]
+
+
+def fctr_layout(values):
+    """Which save Factorio starts, from the instance's merged LinuxGSM values: (plan, None) or (None, why)."""
+    start = _wwr_fctr_start(values)
+    if start is None:
+        return None, _WWR_FCTR_NO_SAVE
     if (values.get("executabledir") or "") not in _WWR_FCTR_EXEDIR or (values.get("executable") or "") not in _WWR_FCTR_EXE:
         return None, i18n.Sentence("the Factorio executable is not LinuxGSM's default, so the new save "
                                    "cannot be created the way LinuxGSM creates it")
-    i = starts[0]
-    if words[i] == "--start-server-load-latest":
+    if start[0] == "--start-server-load-latest":
         return {"dir": "saves", "remove": ["save1.zip"], "globs": ["_autosave*.zip"], "create": "save1"}, None
-    if words[i] == "--start-server" and words[i + 1:i + 2] and words[i + 1] in _WWR_FCTR_OLD_SAVE:
+    if start[0] == "--start-server" and start[1] in _WWR_FCTR_OLD_SAVE:
         return {"dir": "", "remove": ["save1.zip"], "globs": [], "create": "save1"}, None
-    return None, i18n.Sentence("the start parameters do not name one save the panel knows how to reset")
+    return None, _WWR_FCTR_NO_SAVE
 
 
 def fctr_plan(gs):
@@ -211,6 +220,15 @@ def script(user, selfname, plan):
     return "\n".join(lines) + "\n"
 
 
+# The script's refusals, each printed before anything is deleted.
+_WWR_REFUSALS = (
+    (_M_NOSF, i18n.Sentence("the serverfiles folder could not be found")),
+    (_M_RUNNING, i18n.Sentence("the server was still running after LinuxGSM's stop")),
+    (_M_LINK, i18n.Sentence("part of the world is a symbolic link or outside serverfiles; nothing was deleted")),
+    (_M_OUTSIDE, i18n.Sentence("part of the world is a symbolic link or outside serverfiles; nothing was deleted")),
+)
+
+
 def outcome(out, rc, plan):
     """How the script went: (state, sentence).
 
@@ -223,13 +241,9 @@ def outcome(out, rc, plan):
     text = terminal.strip_escapes(out or "")
     marks = set(re.findall(r"^__WWR_[A-Z]+__", text, re.M))
     gone = len(re.findall(r"^" + _M_GONE, text, re.M))
-    if _M_NOSF in marks:
-        return "refused", i18n.Sentence("the serverfiles folder could not be found")
-    if _M_RUNNING in marks:
-        return "refused", i18n.Sentence("the server was still running after LinuxGSM's stop")
-    if _M_LINK in marks or _M_OUTSIDE in marks:
-        return "refused", i18n.Sentence("part of the world is a symbolic link or outside serverfiles; "
-                                        "nothing was deleted")
+    refused = next((why for mark, why in _WWR_REFUSALS if mark in marks), None)
+    if refused is not None:
+        return "refused", refused
     if _M_RMFAIL in marks:
         return "failed", i18n.Sentence("a world file could not be deleted ({count} removed before it)", count=gone)
     if _M_DELETED not in marks:

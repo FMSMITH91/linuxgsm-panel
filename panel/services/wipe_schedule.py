@@ -34,6 +34,13 @@ def kinds_for(game_type):
     if game_type in LGSM_WIPE_GAMES:
         return tuple(WIPE_COMMANDS)
     return (world_reset.KIND,) if game_type in world_reset.GAMES else ()
+
+
+def kind_refusal(game_type):
+    """The card's refusal of a kind `game_type` does not take."""
+    return "kind must be reset." if game_type in world_reset.GAMES else "kind must be map or full."
+
+
 PRESETS = ("first-thursday", "weekly-thursday", "custom")
 # A due wipe the panel could not start within this long (it was not running at the time) is skipped,
 # not run late: a wipe days after the announced time is a surprise to everyone on the server.

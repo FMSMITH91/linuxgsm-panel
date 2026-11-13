@@ -111,7 +111,7 @@ def _cmpd_entry_from(body, gs):
     """(entry, None) for a valid request body, or (None, why)."""
     kind = _json_str(body, "kind")
     if kind not in wipe.kinds_for(gs.game_type):
-        return None, "kind must be reset." if gs.game_type in _wwr.GAMES else "kind must be map or full."
+        return None, wipe.kind_refusal(gs.game_type)
     preset = _json_str(body, "preset")
     spec, line = wipe.spec_for(preset, _json_str(body, "at"), _json_str(body, "cron"))
     if spec is None:
