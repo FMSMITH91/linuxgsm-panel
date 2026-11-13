@@ -321,7 +321,7 @@ def _wwr_run(app, gs, entry):
 
 
 def _wwr_backup(app, gs, entry, up):
-    """LinuxGSM's backup of the (now stopped) server. True when the delete may follow.
+    """Back up the (now stopped) server with LinuxGSM. True when the delete may follow.
 
     Through the panel's backup path (_cmpd_backup), forced: the players were counted before the
     stop. A failed backup deletes nothing and ends the reset; a skipped one (another backup running)
@@ -365,7 +365,7 @@ def _wwr_ready(gs, entry):
 
 
 def _wwr_stop(app, gs):
-    """LinuxGSM `stop`, the monitor's quiet window opened first. True when the delete may follow.
+    """Stop the server with LinuxGSM `stop`, the monitor's quiet window opened first. True when the delete may follow.
 
     Only for a server that was running. A refusal for players waits; a stop that failed is started
     again and ends the reset (nothing deleted); a connection that dropped under the stop is started
@@ -433,7 +433,7 @@ def _wwr_delete_and_start(app, gs, plan, up):
 
 
 def _wwr_start(gs):
-    """LinuxGSM `start` after a reset (or a stop that failed): (ok, sentence). Never raises.
+    """Start the server with LinuxGSM `start` after a reset (or a stop that failed): (ok, sentence). Never raises.
 
     A server that does not come back is the monitor's to page: the window opened before the stop is
     a restart's, which must come back.

@@ -129,7 +129,9 @@ def _write183(path, text="x"):
 
 def _exe183(path, body):
     _write183(path, "#!/bin/sh\n" + body)
-    _os183.chmod(path, 0o755)
+    # 0o700 is owner-only: a stand-in the suite runs itself, in its own temp dir.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    _os183.chmod(path, 0o700)  # nosec B103
 
 
 def _tree183(tmp, files, links, uid):
@@ -146,7 +148,7 @@ def _tree183(tmp, files, links, uid):
 
 
 def _stubs183(tmp, home, up, realpath):
-    """tmux (a session when `up`), realpath (when asked, one answering another path) and the factorio binary."""
+    """Stand-ins: tmux (a session when `up`), realpath (when asked, one answering another path) and the factorio binary."""
     stubs = _os183.path.join(tmp, "stubs")
     _exe183(_os183.path.join(stubs, "tmux"), 'echo "$*" >> "%s/tmux.args"\n%s' % (tmp, "echo p183s\n" if up else ""))
     if realpath:
@@ -217,7 +219,7 @@ def _host183(plan, files=(), links=(), up=False, uid=None, realpath=None, locked
 
 
 def _lock183(home, lock):
-    """LinuxGSM's lock files as a backup or update leaves them (an old backup lock is stale; a dead PID too)."""
+    """The lock files LinuxGSM's backup or update leaves (an old backup lock is stale; a dead PID too)."""
     if not lock:
         return
     path = _os183.path.join(home, "lgsm", "lock", "updating.lock" if lock.startswith("update") else "backup.lock")

@@ -102,7 +102,7 @@ def _wwr_continues(line):
 
 
 def _wwr_logical_lines(props):
-    """server.properties as java.util.Properties reads it: logical lines, comments and blanks dropped.
+    r"""server.properties as java.util.Properties reads it: logical lines, comments and blanks dropped.
 
     Lines end only at \\n, \\r or \\r\\n (not at the other characters str.splitlines() breaks on); a
     line ending in an odd number of backslashes goes on with the next line, its leading blanks dropped;
@@ -132,7 +132,7 @@ def _wwr_key_value(line):
 
 
 def _wwr_unescaped(key):
-    """A key with its properties escapes undone (\\uXXXX and \\<char>)."""
+    r"""A key with its properties escapes undone (\uXXXX and \<char>)."""
     return re.sub(r"\\(u[0-9a-fA-F]{4}|.)",
                   lambda m: chr(int(m.group(1)[1:], 16)) if len(m.group(1)) == 5 else m.group(1), key)
 
@@ -271,7 +271,7 @@ def _wwr_head(user, selfname):
 
 
 def _wwr_tmux_up(selfname):
-    """LinuxGSM's own running test (check_status.sh): a session named for the script on its socket."""
+    """The running test LinuxGSM itself uses (check_status.sh): a session named for the script on its socket."""
     return ('[ "$(TERM=screen tmux -L "$s" list-sessions -F "#{session_name}" 2>/dev/null | grep -Ecx %s)" != 0 ]'
             % _q("^" + selfname))
 

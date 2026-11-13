@@ -1,5 +1,7 @@
-"""Scheduled wipes: Rust's map / full wipe (LinuxGSM's `wipe` / `full-wipe`), and a world reset for the
-games in services/world_reset.py (Minecraft Java, Factorio), which LinuxGSM has no command for.
+"""Scheduled wipes for Rust, and world resets for Minecraft Java and Factorio.
+
+Rust uses LinuxGSM's map / full wipe (`wipe` / `full-wipe`). The games in services/world_reset.py
+(Minecraft Java, Factorio) get a world reset instead, which LinuxGSM has no command for.
 
 What LinuxGSM does (lgsm/modules/command_wipe.sh, core_getopt.sh, v26.5.0): only `rust` gets the
 two commands. `wipe` (map-wipe) deletes the server identity's *.map and *.sav* files and keeps
