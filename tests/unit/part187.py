@@ -104,7 +104,7 @@ _r42m_cabc = ["config file", "Config File", "CONFIG FILE", "conf\u0131g file", "
               "\t", "\n", "\r", "\xa0", "/", "/home/u/", "a", ".cfg", ".CFG", ".ini", ".conf", ".txt", "x.json",
               ".properties", ".xm", "l", "(FILE MISSING)"]
 _r42m_iabc = ["server", "Server", "internet", "INTERNET", " ", "\t", "\n", "\r", "ip:", "IP:", ":", "1", "27015",
-              "123456", "[2001:db8::1]", "0.0.0.0", "a", "\u0663\u0664", "Server IP:", "Internet IP:\t"]
+              "123456", "[2001:db8::1]", "0.0.0.0", "a", "\u0663\u0664", "Server IP:", "Internet IP:\t"]  # nosec B104 - sample text, not a bind
 _r42m_rng = _random187.Random(187)  # nosec B311 - a seeded fuzz corpus, not security
 _r42m_cfg_bad = [t for t in ("".join(_r42m_rng.choice(_r42m_cabc) for _ in range(_r42m_rng.randint(0, 14)))
                              for _ in range(30000))
