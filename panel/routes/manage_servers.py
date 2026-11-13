@@ -41,7 +41,7 @@ from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _pr
     _resolve_source_aux_ports, _sync_toggles_from_cron, game_os_unsupported, load_game_list,
     resolve_free_port)
 from panel.routes._shared import (INVALID_ACCOUNT_NAME, _looks_installed, _notify_servers_changed,
-    _record_game_clock, privileged_accounts)
+    _record_game_clock, grs_or_wipe_sentence, grs_restore_running, privileged_accounts)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -2576,6 +2576,10 @@ def _register_uninstall_and_edit(app):
         _busy = _r35b_reboot_refusal(gs)
         if _busy:
             return _index_reply(_busy, False, "warning", 409)
+        # ...nor while it is being restored from a backup (or a restore a panel restart cut off is not
+        # settled yet): the restore's switch-over or its undo would run on an account removed under it.
+        if grs_restore_running(server_id):
+            return _index_reply(i18n.tr(grs_or_wipe_sentence(server_id, name)), False, "warning", 409)
 
         # Held for the whole host-side sequence, and retry_install refuses while it is. The
         # _install_job_running test above ran ONCE, and everything after it yields on SSH for up

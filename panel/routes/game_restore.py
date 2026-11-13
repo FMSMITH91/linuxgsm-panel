@@ -37,10 +37,10 @@ from flask import jsonify
 from flask_login import current_user, login_required
 
 from panel.core import i18n, runtime_stats, terminal
-from panel.core.config import load_config, update_config
+from panel.core.config import config_value, load_config, update_config
 from panel.core.http import _json_body, _log_and_generic
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status, r36j_route_job, r36j_route_jobs,
-                                    register_server_state)
+                                    register_route_job_source, register_server_state)
 from panel.db.models import GameServer, claim_row, db, row_birth, still_held
 from panel.ops import backup as bk
 from panel.ops.ssh_manager import list_game_backups, shell_as_game_user
@@ -87,9 +87,23 @@ def _grs_held_clear(sid, t0):
 
 
 def _grs_held_for(sid):
-    """Server `sid`'s in-flight restore record, or None."""
-    entry = _grs_held_all(load_config()).get(str(sid))
+    """Server `sid`'s in-flight restore record, or None (one stat of config.json while it is unchanged)."""
+    entry = _grs_held_all({_GRS_HELD_KEY: config_value(_GRS_HELD_KEY)}).get(str(sid))
     return entry if isinstance(entry, dict) else None
+
+
+def held_kinds(sid):
+    """The restore kind while server `sid` has a restore record (r36j_route_jobs' source), else nothing.
+
+    The record is written before the restore stops the server and cleared only when it finishes, is
+    undone, or the recovery sweep settles it. So it holds the server across a panel restart, when no
+    run of this process has registered it yet: every busy check (a cron or Autostart write, the cron
+    listing's sync, a backup, Start/Stop/Update, a wipe, uninstall, a host reboot) and the card read it.
+    """
+    return (_shared.GRS_KIND,) if _grs_held_for(sid) is not None else ()
+
+
+register_route_job_source(held_kinds)
 
 
 # ── config.json["restores_held"][str(server id)]: a restore in flight, for the recovery sweep ──────
@@ -203,7 +217,10 @@ def status_for_view(sid):
     """The server's restore status for the Backups card, its message in the viewer's language."""
     st = _grs_status.get(sid)
     if not st:
-        return None
+        if _grs_held_for(sid) is None:
+            return None
+        # A restore this process has not run (a panel restart cut it off): held until the sweep settles it.
+        st = {"running": True, "step": "settling"}
     built = i18n.sentence_restored(st.get("msg_i18n")) if st.get("msg_i18n") is not None else None
     msg = i18n.tr(built) if isinstance(built, (i18n.Sentence, i18n.Sentences)) else st.get("msg", "")
     return {"running": bool(st.get("running")), "ok": st.get("ok"), "step": st.get("step", ""), "msg": msg}

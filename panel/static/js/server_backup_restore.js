@@ -4,7 +4,8 @@
 // window.backupUpload).
 // A restore from a backup (routes/game_restore): what step it is on, then how it ended.
 var _GRS_STEPS = {checking: 'Restore: checking the archive…', stopping: 'Restore: stopping the server…',
-                  backing_up: 'Restore: backing up the current state first…', restoring: 'Restore: replacing the files…'};
+                  backing_up: 'Restore: backing up the current state first…', restoring: 'Restore: replacing the files…',
+                  settling: 'Restore: finding out how an interrupted restore ended…'};
 function _grsRenderStatus(r){
   var st=document.getElementById('bk-restore-status');
   if(!st) return !!(r && r.running);

@@ -862,6 +862,10 @@ def _held_cfg190():
     return {"restores_held": _held190}
 
 
+def _held_value190(key, default=None):
+    return _held_cfg190().get(key, default)
+
+
 def _held_update190(mut):
     cfg = {"restores_held": dict(_held190)}
     mut(cfg)
@@ -876,6 +880,7 @@ def _run190(host, refusal=None):
         _p9_arm(who="part190")
         _p9_patch(_gr190, "load_config", _held_cfg190)
         _p9_patch(_gr190, "update_config", _held_update190)
+        _p9_patch(_gr190, "config_value", _held_value190)
         _p9_patch(_gr190, "_GRS_SETTLE_EVERY", 0)
         _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: refusal)
         _p9_patch(_gr190, "shell_as_game_user", host.shell)
@@ -1312,6 +1317,7 @@ try:
     _p9_arm(who="part190")
     _p9_patch(_gr190, "load_config", _held_cfg190)
     _p9_patch(_gr190, "update_config", _held_update190)
+    _p9_patch(_gr190, "config_value", _held_value190)
     _p9_patch(_gr190, "shell_as_game_user", lambda srv, user, sh, **k: (
         _rec190["shell"].append(sh) or ("__GRS_RECUNDONE__\n__GRS_UPREADY__\n", "", 0)))
     _p9_patch(_shr190, "_alert_backup", lambda app, gs, title, body: _rec190["alerts"].append(body))
@@ -1384,6 +1390,72 @@ eq("held: while a restore runs, a cron line and the Autostart switch are refused
    (409, 409, []))
 eq("restart: the panel's self-update is refused while a game server is being restored (nothing launched)",
    _rec190["update"], (409, []))
+
+# ── 8c. after a panel restart: the record alone (no run, no registration) holds the server ─────────
+_aft190 = {}
+
+
+def _aft_round190(cl):
+    """Every reader of "is this server being restored", through its route: one dict per round."""
+    del _synced190[:], _wrote190[:]
+    out = {"cron_add": cl.post("/api/server/%d/cron" % P9_GS, json={"schedule": "0 4 * * *", "command": "restart"}).status_code,
+           "autostart": cl.post("/api/server/%d/autostart" % P9_GS, json={"enabled": True}).status_code}
+    cl.get("/api/server/%d/cron" % P9_GS)
+    out["synced"] = len(_synced190)
+    out["card"] = ((cl.get("/api/panel/backup/game/%d/info" % P9_GS).get_json() or {}).get("restore") or {}).get("running")
+    out["uninstall"] = cl.post("/servers/%d/delete" % P9_GS, headers={"X-Requested-With": "XMLHttpRequest"}).status_code
+    out["backup_held"] = _shr190._r39a_backup_held(P9_GS)
+    out["start"] = _sd190._r39a_wipe_refusal(P9_GS, _gs_name190, "start") is not None
+    # Last: a restore that starts marks the server as being restored in this process.
+    out["restore"] = cl.post("/api/panel/backup/game/%d/restore" % P9_GS,
+                             json={"name": _LIST190[0]["name"], "confirm": _gs_name190}).status_code
+    _gr190._grs_status.pop(P9_GS, None)
+    out["wrote"] = sorted(set(_wrote190))
+    return out
+
+
+_synced190, _wrote190 = [], []
+try:
+    _p9_arm(who="part190")
+    from panel.routes import server_files as _sf190, panel_backup as _pb190, \
+        manage_servers as _ms190
+    _p9_patch(_gr190, "load_config", _held_cfg190)
+    _p9_patch(_gr190, "update_config", _held_update190)
+    _p9_patch(_gr190, "config_value", _held_value190)
+    _p9_patch(_gr190, "_grs_other_work", lambda gs: None)
+    _p9_patch(_gr190, "list_game_backups", lambda *a, **k: list(_LIST190))
+    _p9_patch(_gr190, "_grs_worker", lambda *a, **k: _wrote190.append("restore"))
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_sf190, "_sync_toggles_from_cron", lambda gs, jobs: _synced190.append(1))
+    _p9_patch(_sf190, "_read_refused", lambda *a, **k: None)
+    _p9_patch(_sf190, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_sf190, "add_cron_job", lambda *a, **k: (_wrote190.append("cron") or (True, "")))
+    _p9_patch(_sf190, "_r21b_sync_after_cron_write", lambda gs: None)
+    _p9_patch(_sd190, "set_autostart", lambda *a, **k: (_wrote190.append("autostart") or (True, "")))
+    _p9_patch(_pb190, "list_game_backups", lambda *a, **k: [])
+    _p9_patch(_pb190, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
+    _p9_patch(_ms190, "_r25b_uninstall_claimed", lambda *a, **k: (_wrote190.append("uninstall") or ("", 302)))
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
+    _gr190._grs_status.pop(P9_GS, None)
+    _held190.clear()
+    _held190[str(P9_GS)] = {"name": _LIST190[0]["name"], "t0": _T0190, "short_name": _short190, "remote_id": _rid190}
+    _cl = _p9_client(P9_ADMIN)
+    _aft190["held"] = (_aft_round190(_cl), _shr190.grs_restore_running(P9_GS))
+    _held190.clear()
+    _aft190["clear"] = (_aft_round190(_cl), _shr190.grs_restore_running(P9_GS))
+finally:
+    _p9_restore_all()
+    _gr190._grs_status.pop(P9_GS, None)
+    _held190.clear()
+
+eq("after a panel restart (only the restore's record left): cron add, Autostart, a second restore and uninstall "
+   "are refused (409), the listing does not set the switches, the card reads busy, backups and Start wait, and "
+   "nothing is written", _aft190.get("held"),
+   ({"cron_add": 409, "autostart": 409, "synced": 0, "card": True, "restore": 409, "uninstall": 409,
+     "backup_held": True, "start": True, "wrote": []}, True))
+eq("after a panel restart: once the record is cleared, every one of them goes through again", _aft190.get("clear"),
+   ({"cron_add": 200, "autostart": 200, "synced": 1, "card": None, "restore": 200, "uninstall": 302,
+     "backup_held": False, "start": False, "wrote": ["autostart", "cron", "restore", "uninstall"]}, False))
 
 # ── 8b. a command's stdin is written in slices, never whole (the panel's memory) ─────────────────
 from panel.ops.ssh_manager import _core as _core190

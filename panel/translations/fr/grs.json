@@ -44,6 +44,7 @@
   "Restore: stopping the server…": "Restauration : arrêt du serveur…",
   "Restore: backing up the current state first…": "Restauration : sauvegarde de l'état actuel d'abord…",
   "Restore: replacing the files…": "Restauration : remplacement des fichiers…",
+  "Restore: finding out how an interrupted restore ended…": "Restauration : vérification de la fin d’une restauration interrompue…",
   "Restore: running…": "Restauration : en cours…",
   "Restored": "Restauré",
   "Restore failed": "La restauration a échoué",
