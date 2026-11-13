@@ -7,6 +7,9 @@ Held here:
   marked when it only repeats the server's name, the select-all box labelled for the phone, and the
   "more" popover holding Console, Files, Tags and Uninstall but never Start, Restart or Stop, with a
   toggle that names it.
+* panel.css, the desktop table: from 768px the in-game name no longer sets the Server column's width,
+  Resources wraps and Join may wrap under the address; below 1400px the buttons wrap to a fixed
+  width (3 to a row, 4 from 1200px), at 1400px and up they keep one row.
 * panel.css: inside the mobile media query the column headers (all but the select-all cell) are
   hidden, each row is a wrapping flex card and the size container the narrow-row query reads, and
   the Actions cell is no longer pinned over the row; outside it the popover is reset to a plain
@@ -168,6 +171,22 @@ check("panel.css dashboard phone card: a row too narrow for every button hides t
       _rule192(_CQ192, ".table-responsive .dash-srv-table .dash-more:not(:popover-open)").get("display") == "none"
       and _rule192(_CQ192, ".table-responsive .dash-srv-table td.col-actions > .dash-more-btn").get("display")
       == "block", "")
+
+# The desktop table fits its card (1280x900: 1071 and 1151px tables in a 943px box before).
+_WIDE192, _MID192, _MID4_192 = "@media (width >= 768px)", "@media (768px <= width < 1400px)", "@media (1200px <= width < 1400px)"
+check("panel.css dashboard table on a desktop: from 768px the in-game name stops sizing the Server column, "
+      "Resources wraps and Join may drop under the address",
+      _rule192(_WIDE192, ".dash-srv-table .game-name").get("contain") == "inline-size"
+      and _rule192(_WIDE192, '.dash-srv-table td[id^="res-"]').get("white-space") == "normal !important"
+      and _rule192(_WIDE192, ".dash-srv-table .connect-cell").get("flex-wrap") == "wrap", "")
+_mid192, _mid4_192 = _rule192(_MID192, ".dash-srv-table td.col-actions"), _rule192(_MID4_192, ".dash-srv-table td.col-actions")
+check("panel.css dashboard table on a desktop: below 1400px the buttons wrap to a fixed width, 3 to a row, "
+      "4 from 1200px, with the spaces between them removed; at 1400px and up nothing changes them",
+      (_mid192.get("white-space"), _mid192.get("width"), _mid192.get("font-size"), _mid4_192.get("width"))
+      == ("normal !important", "calc(3 * (2.425rem + 4px) + .7rem)", "0", "calc(4 * (2.425rem + 4px) + .7rem)")
+      and not any(".dash-srv-table td.col-actions" in p and "1400" not in at
+                  for at, rules in _css192 if at.startswith("@media") and "768" in at and "<" not in at
+                  for p, _b in rules if isinstance(_b, str)), repr((_mid192, _mid4_192)))
 
 # ── 3. dashboard.js in node ─────────────────────────────────────────────────────────────────────
 with open(_os192.path.join(_root, "panel", "static", "js", "dashboard.js"), encoding="utf-8") as _fh192:

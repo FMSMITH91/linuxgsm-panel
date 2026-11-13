@@ -2364,3 +2364,55 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     line-height: calc(2.75rem - 2 * var(--bs-border-width));
   }
 }
+
+/* ── DASHBOARD SERVER TABLE ON A NARROW DESKTOP ──
+   From 768px the server table is a table again, and it has to fit its card: measured at 1280x900 the
+   two host tables were 1071 and 1151px in a 943px box (1024x768: 687px box), and every row's
+   Uninstall button sat past the card edge, reachable only by scrolling the table. What held it wide:
+   the in-game name's 22ch truncating line (its min-content set the Server column's floor), the
+   Resources cell's nowrap, the connect address and its Join button with no break between them, and
+   seven buttons on one line. So, from 768px: the in-game name stops sizing the column
+   (contain: inline-size; it still truncates to the width it gets), Resources wraps, and Join may drop
+   under the address. Below 1400px the cells lose a little side padding and the buttons wrap to a
+   fixed width, 4 to a row (4 + 3) from 1200px and 3 to a row below; at 1400px and up they stay on
+   one row as before. font-size: 0 on the cell removes the spaces between the inline buttons, so the
+   width fits an exact number of them (each keeps its own font size through .btn-sm). */
+@media (width >= 768px) {
+  .dash-srv-table .game-name {
+    contain: inline-size;
+  }
+
+  .dash-srv-table td[id^="res-"] {
+    white-space: normal !important;
+  }
+
+  .dash-srv-table .connect-cell {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: .25rem 0;
+    align-items: center;
+  }
+}
+
+@media (768px <= width < 1400px) {
+  .dash-srv-table > :not(caption) > tr > * {
+    padding-right: .35rem;
+    padding-left: .35rem;
+  }
+
+  .dash-srv-table td.col-actions {
+    width: calc(3 * (2.425rem + 4px) + .7rem);
+    font-size: 0;
+    white-space: normal !important;
+  }
+
+  .dash-srv-table td.col-actions .btn {
+    margin: 2px;
+  }
+}
+
+@media (1200px <= width < 1400px) {
+  .dash-srv-table td.col-actions {
+    width: calc(4 * (2.425rem + 4px) + .7rem);
+  }
+}
