@@ -14,7 +14,7 @@ from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_ga
 from panel.security.auth import (DELETE_BACKUP, DOWNLOAD_BACKUP, RESTORE_BACKUP, get_game, log_action, permission_required,
     server_access_required, superadmin_required)
 from panel.services import (notifications)
-from panel.routes import game_restore as _grs
+from panel.routes import backup_upload as _bup, game_restore as _grs
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count)
 import calendar
 import concurrent.futures
@@ -411,6 +411,7 @@ def register(app):
     _register_game_backup(app)
     _register_game_backup_files(app)
     _grs.register(app)
+    _bup.register(app)
     _register_game_backup_settings(app)
     _register_backup_overview(app)
     _register_panel_backups(app)

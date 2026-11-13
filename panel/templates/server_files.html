@@ -434,8 +434,13 @@
       </div>
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
         <button class="btn btn-primary btn-sm fpm-su" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
+        <button class="btn btn-outline-secondary btn-sm fpm-rs" id="bk-upload" data-action="uploadBk"><i class="bi bi-upload"></i> Upload a backup</button>
+        <input type="file" id="bk-upload-file" class="d-none" accept=".zst,.gz,.tgz,.tar" data-action="uploadBkPicked" data-on="change" data-args='["@self"]'>
         <span id="bk-status" class="small"></span>
         <span id="bk-restore-status" class="small"></span>
+      </div>
+      <div class="small text-secondary mb-2 fpm-rs" style="font-size:.7rem;">
+        Upload a LinuxGSM backup of this server (.tar.zst, .tar.gz or .tar, up to 32 GB). It is checked as a restore checks it, then listed here under a LinuxGSM backup's name.
       </div>
       <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">

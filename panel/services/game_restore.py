@@ -57,7 +57,15 @@ _GRS_BUSY_POLLS = 30
 _M = {k: "__GRS_%s__" % k for k in (
     "LOCKED", "NOARCHIVE", "NOHOME", "NOPY", "TARFAIL", "BAD", "FOREIGN", "LINKOUT", "SPACE",
     "HOLDFAIL", "READY", "UP", "DOWN", "NOUNDO", "RUNNING", "BUSY", "CLEARING", "RMFAIL", "XFAIL",
-    "RESTORED")}
+    "RESTORED", "NOPART", "UPOFFSET", "UPSIZE", "UPREADY", "UPFAIL", "UPFORMAT", "UPSTORED")}
+
+# A decompression bomb's bound: what the members declare may not pass RATIO times the archive's own
+# size plus RATIO_SLACK. Game data packs at a few to one (worlds and assets are mostly compressed
+# already); a hundred to one is past any real server, and the check stops reading at the first
+# header that passes it, so tar is never made to unpack the rest. The space check bounds the disk
+# on top of this.
+RATIO = 100
+RATIO_SLACK = 1024 * 1024 * 1024
 
 # The member check, run by python3 (a LinuxGSM dependency on every distro it supports) over
 # `tar -tv --quoting-style=c --numeric-owner`. Each line: type+mode, uid/gid, size, date, time,
@@ -65,7 +73,7 @@ _M = {k: "__GRS_%s__" % k for k in (
 # refused as unreadable. Names are compared as GNU tar quoted them (the C style escapes only
 # unprintable bytes, never "/" or "."), so no decoding is needed. Prints one verdict line.
 _GRS_VET_PY = r'''import re,sys
-bs=max(512,int(sys.argv[1]));me=sys.argv[2];keep=sys.argv[3:]
+bs=max(512,int(sys.argv[1]));me=sys.argv[2];cap=int(sys.argv[3])*%d+%d;keep=sys.argv[4:]
 R=re.compile(r'^(\S)\S*\s+\d+/\d+\s+(\d+)\s+\S+\s+\S+\s+"((?:[^"\\]|\\.)*)"(?:\s+(?:->|link to)\s+"((?:[^"\\]|\\.)*)")?$')
 def rel(n):
     for p in ("././","./"):
@@ -79,7 +87,7 @@ def rel(n):
     return None
 def kept(r):
     return any(r==k or r.startswith(k+"/") for k in keep)
-bad="";seen=set();size=0;n=0;script=False
+bad="";seen=set();size=0;n=0;script=False;tot=0
 for raw in sys.stdin.buffer:
     if bad:
         continue
@@ -87,6 +95,9 @@ for raw in sys.stdin.buffer:
     if not m:
         bad="parse";continue
     t,sz,name,link=m.group(1),int(m.group(2)),m.group(3),m.group(4)
+    tot+=sz
+    if tot>cap:
+        print("__GRS_BAD__ bomb");sys.exit(0)
     r=rel(name)
     if r is None:
         bad="name";continue
@@ -105,8 +116,8 @@ for raw in sys.stdin.buffer:
         size+=bs
 if not bad and not script:
     bad="script"
-print("__GRS_BAD__ "+bad if bad else "__GRS_LIST__ %d %d"%(size,n))
-'''
+print("__GRS_BAD__ "+bad if bad else "__GRS_LIST__ %%d %%d"%%(size,n))
+''' % (RATIO, RATIO_SLACK)
 
 
 def archive_problem(name):
@@ -189,6 +200,25 @@ def _grs_paths(name):
     return 'a="$B/%s"' % name, 'h="$B/%s%s$t0.%s"' % (stem, HOLD_INFIX, ext)
 
 
+def _grs_member_check(var, flag, selfname, on_refusal=""):
+    """Lines reading archive $<var> through its decompressor to its end, every member checked (_GRS_VET_PY).
+
+    Leaves `v` holding "__GRS_LIST__ <bytes unpacked> <members>" when it passed; else prints the
+    refusal (after running `on_refusal`) and exits 5. `flag` is GNU tar's decompressor flag ("" for
+    a plain tar, which tar reads as it is).
+    """
+    return [
+        "command -v python3 >/dev/null 2>&1 || { %s echo %s; exit 5; }" % (on_refusal, _M["NOPY"]),
+        'bs=$(stat -f -c %S -- "${' + var + '%/*}" 2>/dev/null); case "$bs" in ""|*[!0-9]*) bs=4096;; esac',
+        'asz=$(stat -c %s -- "$' + var + '" 2>/dev/null); case "$asz" in ""|*[!0-9]*) asz=0;; esac',
+        'v=$(tar %s -tv --quoting-style=c --numeric-owner -f "$%s" 2>/dev/null | python3 -I -c %s "$bs" %s "$asz" %s; '
+        'echo " rc=${PIPESTATUS[0]}:${PIPESTATUS[1]}")'
+        % (flag, var, _q(_GRS_VET_PY), _q(selfname), " ".join(KEEP)),
+        'case "$v" in *__GRS_BAD__*) %s echo "${v%%%% rc=*}"; exit 5;; esac' % on_refusal,
+        'case "$v" in *"__GRS_LIST__ "*" rc=0:0") ;; *) %s echo %s; exit 5;; esac' % (on_refusal, _M["TARFAIL"]),
+    ]
+
+
 def vet_script(user, selfname, name, undo_estimate):
     """The first command: every check before anything changes, then the archive held aside.
 
@@ -204,13 +234,7 @@ def vet_script(user, selfname, name, undo_estimate):
         a_line,
         'if [ ! -f "$a" ] || [ -L "$a" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         "if %s; then up=1; else up=0; fi" % _wwr._wwr_tmux_up(selfname),
-        "command -v python3 >/dev/null 2>&1 || { echo %s; exit 5; }" % _M["NOPY"],
-        'bs=$(stat -f -c %S -- "$HR" 2>/dev/null); case "$bs" in ""|*[!0-9]*) bs=4096;; esac',
-        'v=$(tar %s -tv --quoting-style=c --numeric-owner -f "$a" 2>/dev/null | python3 -I -c %s "$bs" %s %s; '
-        'echo " rc=${PIPESTATUS[0]}:${PIPESTATUS[1]}")'
-        % (_GRS_FLAGS[ext], _q(_GRS_VET_PY), _q(selfname), " ".join(KEEP)),
-        'case "$v" in *__GRS_BAD__*) echo "${v%% rc=*}"; exit 5;; esac',
-        'case "$v" in *"__GRS_LIST__ "*" rc=0:0") ;; *) echo %s; exit 5;; esac' % _M["TARFAIL"],
+    ] + _grs_member_check("a", _GRS_FLAGS[ext], selfname) + [
         'set -- ${v#*__GRS_LIST__ }; need=$(( $1 + %d ))' % MARGIN,
         'cd -- "$HR" || exit 3',
     ] + _grs_walks() + [
@@ -290,6 +314,8 @@ _GRS_BAD_WHY = {
     "link": "the archive holds a hard link to a file it does not restore",
     "script": "the archive does not hold the server's LinuxGSM script, so it is not a backup of this "
               "server's folder",
+    "bomb": "the archive says it unpacks to far more than any game server's backup does (more than a hundred "
+            "times its own size), so it is not read further",
 }
 _GRS_VET_REFUSALS = (
     ("LOCKED", "a LinuxGSM backup or update of this server is running"),
@@ -370,3 +396,114 @@ def restore_outcome(out, rc):
         if _M[key] in marks:
             return "refused", i18n.Sentence(why)
     return "unread", i18n.Sentence("the restore's result did not come back (exit {rc})", rc=rc)
+
+
+# ── uploading an archive into the backup dir ──────────────────────────────────────────────────────
+# In pieces of UPLOAD_CHUNK bytes, each its own request and its own command as the game account
+# (base64 on the command's stdin, decoded to a staged piece, then appended), into a part file whose
+# name holds no ".tar.": neither the panel's listing nor LinuxGSM's prune sees it. The last request
+# checks the whole file the way a restore does (_grs_member_check, the bomb bound included), turns a
+# plain tar into a .tar.gz, and gives it a LinuxGSM backup's name. A part file left by an upload that
+# never finished is removed by the next upload's first request once it is UPLOAD_STALE_MIN old.
+UPLOAD_CHUNK = 4 * 1024 * 1024
+UPLOAD_MAX = 32 * 1024 * 1024 * 1024
+UPLOAD_STALE_MIN = 120
+_GRS_UID = re.compile(r"[0-9a-f]{32}\Z")
+
+
+def _grs_part(user, uid):
+    """`B` and `p` (the part file) for upload `uid` (32 hex digits, checked)."""
+    if not _GRS_UID.match(uid or ""):
+        raise ValueError("bad upload id")
+    return "B=%s; p=\"$B/.panel-upload-%s.part\"" % (_q("/home/%s/lgsm/backup" % user), uid)
+
+
+def upload_start_script(user, uid, size):
+    """Make the empty part file, once the backup dir's filesystem has room for `size` bytes and the margin."""
+    return "\n".join([
+        _grs_part(user, uid),
+        'mkdir -p -- "$B" 2>/dev/null; [ -d "$B" ] || { echo %s; exit 6; }' % _M["UPFAIL"],
+        "find \"$B\" -maxdepth 1 -name '.panel-upload-*' -mmin +%d -delete 2>/dev/null" % UPLOAD_STALE_MIN,
+        'free=$(df -PB1 -- "$B" 2>/dev/null | awk \'NR==2{print $4}\')',
+        'case "$free" in ""|*[!0-9]*) echo "%s 0 0"; exit 5;; esac' % _M["SPACE"],
+        'if [ "$free" -lt %d ]; then echo "%s %d $free"; exit 5; fi'
+        % (int(size) + MARGIN, _M["SPACE"], int(size) + MARGIN),
+        'set -C; : > "$p" 2>/dev/null || { echo %s; exit 6; }' % _M["UPFAIL"],
+        "echo " + _M["UPREADY"],
+    ]) + "\n"
+
+
+def upload_chunk_script(user, uid, offset):
+    """Append the piece on stdin (base64) to the part file when it is exactly `offset` bytes long now.
+
+    stdin is always read to its end first (into a staged piece), so the panel's write never meets a
+    command that has already exited. Prints UPSIZE <bytes> after the append; UPOFFSET <bytes> when the
+    part file is another length (an earlier piece whose answer was lost: the page goes on from there).
+    """
+    return "\n".join([
+        _grs_part(user, uid), 'c="$p.piece"',
+        'base64 -d > "$c" 2>/dev/null || { rm -f -- "$c"; cat > /dev/null; echo %s; exit 6; }' % _M["UPFAIL"],
+        'if [ ! -f "$p" ] || [ -L "$p" ]; then rm -f -- "$c"; echo %s; exit 5; fi' % _M["NOPART"],
+        's=$(stat -c %s -- "$p")',
+        'if [ "$s" != %d ]; then rm -f -- "$c"; echo "%s $s"; exit 5; fi' % (int(offset), _M["UPOFFSET"]),
+        'cat -- "$c" >> "$p" || { rm -f -- "$c"; echo %s; exit 6; }' % _M["UPFAIL"],
+        'rm -f -- "$c"; echo "%s $(stat -c %%s -- "$p")"' % _M["UPSIZE"],
+    ]) + "\n"
+
+
+def upload_finish_script(user, selfname, uid, size, when):
+    """Check the whole uploaded file as a restore does, then store it under a LinuxGSM backup's name.
+
+    The format is read from the file's first bytes, never from what the browser called it: zstd,
+    gzip, or a plain tar (ustar at byte 257), which is compressed with gzip here. A refusal removes
+    the part file. The name is <selfname>-<date>.tar.<zst|gz>, the date `when` (epoch seconds) in
+    the host's time as LinuxGSM writes it, a second later while one is taken.
+    """
+    rm = 'rm -f -- "$p";'
+    names = ('for i in 0 1 2 3 4 5 6 7 8 9; do n=%s-$(date -d "@$((%d + i))" +%%Y-%%m-%%d-%%H%%M%%S).tar.$x; '
+             '[ -e "$B/$n" ] && continue; if mv -n -- "$p" "$B/$n" && [ ! -e "$p" ]; then echo "%s $n"; exit 0; fi; '
+             'done' % (_q(selfname), int(when), _M["UPSTORED"]))
+    return "\n".join(["set -o pipefail", "export LC_ALL=C", _grs_part(user, uid),
+        'if [ ! -f "$p" ] || [ -L "$p" ]; then echo %s; exit 5; fi' % _M["NOPART"],
+        's=$(stat -c %s -- "$p")',
+        'if [ "$s" != %d ]; then echo "%s $s"; exit 5; fi' % (int(size), _M["UPOFFSET"]),
+        "m=$(head -c 4 -- \"$p\" | od -An -tx1 | tr -d ' \\n')",
+        'case "$m" in 28b52ffd) f=--zstd; x=zst;; 1f8b*) f=--gzip; x=gz;; '
+        '*) if [ "$(dd if="$p" bs=1 skip=257 count=5 2>/dev/null)" = ustar ]; then f=; x=tar; '
+        'else %s echo %s; exit 5; fi;; esac' % (rm, _M["UPFORMAT"]),
+    ] + _grs_member_check("p", "$f", selfname, on_refusal=rm) + [
+        'if [ "$x" = tar ]; then gzip -1 -n -- "$p" 2>/dev/null || { rm -f -- "$p" "$p.gz"; echo %s; exit 6; }; '
+        'p="$p.gz"; x=gz; fi' % _M["UPFAIL"],
+        names, rm + " echo " + _M["UPFAIL"], "exit 6"]) + "\n"
+
+
+def upload_outcome(out):
+    """(state, value) of an upload command: ("ok", the number or name it printed), ("offset", host size),
+    or ("refused", sentence)."""
+    text = terminal.strip_escapes(out or "")
+    marks = _grs_marks(text)
+    for key in ("UPSTORED", "UPSIZE", "UPREADY"):
+        if _M[key] in marks:
+            return "ok", (marks[_M[key]].split() + [""])[1]
+    if _M["UPOFFSET"] in marks:
+        got = (marks[_M["UPOFFSET"]].split() + [""])[1]
+        return "offset", int(got) if got.isdigit() else 0
+    bad = marks.get(_M["BAD"])
+    if bad is not None:
+        return "refused", i18n.Sentence(_GRS_BAD_WHY.get((bad.split() + [""])[1], _GRS_BAD_WHY["parse"]))
+    if _M["SPACE"] in marks:
+        return "refused", _grs_space(marks[_M["SPACE"]])
+    for key, why in _GRS_UPLOAD_REFUSALS:
+        if _M[key] in marks:
+            return "refused", i18n.Sentence(why)
+    return "refused", i18n.Sentence("the host's answer did not come back")
+
+
+_GRS_UPLOAD_REFUSALS = (
+    ("UPFORMAT", "the file is not a tar archive compressed with zstd or gzip, nor a plain tar"),
+    ("TARFAIL", "the archive could not be read to its end (damaged, cut short, or its decompressor is "
+                "missing)"),
+    ("NOPY", "python3, which LinuxGSM itself depends on, is not installed on the host"),
+    ("NOPART", "the upload is no longer on the host (it was cancelled, or left too long)"),
+    ("UPFAIL", "the host could not write the upload into the backup folder"),
+)

@@ -352,6 +352,20 @@ function bkGameDisk(g){
   }
   return dkHtml;
 }
+// Upload a panel backup (window.backupUpload): checked as a restore checks it, then listed.
+function uploadPanelBackup(){ var f=document.getElementById('bk-upload-file'); if(f){ f.value=''; f.click(); } }
+function uploadPanelBackupPicked(el){
+  var file = el && el.files && el.files[0];
+  if(!file) return;
+  var btn=document.getElementById('bk-upload'); if(btn) btn.disabled=true;
+  window.backupUpload(file, MOUNT+'/api/panel/backup/upload', function(sent, total){
+    bkMsg(tf('Uploading {name}: {pct}%', {name: file.name, pct: total ? Math.floor(sent*100/total) : 100}), 'text-secondary');
+  }).then(function(d){
+    bkMsg((d.success?'✓ ':'✗ ')+(d.message||(d.success?tf('Uploaded'):tf('Upload failed'))), d.success?'text-success':'text-danger');
+    if(btn) btn.disabled=false; loadBackups();
+  }).catch(function(){ bkMsg('✗ '+tf('Upload failed'),'text-danger'); if(btn) btn.disabled=false; });
+}
+
 function createBackup(btn){
   if(btn){ btn.disabled=true; }
   bkMsg('Creating backup…','text-secondary');

@@ -964,3 +964,29 @@ window.UPro = (function(){
     }
   };
 })();
+
+// A backup archive uploaded in pieces (routes/backup_upload): start with its size, send each piece as
+// raw bytes at the offset the server holds (it answers where it is when a piece's answer was lost),
+// then finish. `base` is the start URL; pieces go to base+'/'+id and the end to base+'/'+id+'/finish'.
+// onProgress(sent, total). Resolves with the finish answer, or with the first refusal.
+window.backupUpload = function(file, base, onProgress){
+  var post = function(url, body, type){
+    return fetch(url, {method: 'POST', headers: {'Content-Type': type || 'application/json'}, body: body})
+      .then(function(r){ return r.json(); });
+  };
+  return post(base, JSON.stringify({size: file.size})).then(function(start){
+    if(!start || !start.success || !start.id) return start || {success: false};
+    var chunk = Number(start.chunk) || 4194304, at = 0, tries = 0;
+    var next = function(){
+      if(onProgress) onProgress(at, file.size);
+      if(at >= file.size) return post(base + '/' + start.id + '/finish', '{}');
+      return post(base + '/' + start.id + '?offset=' + at, file.slice(at, Math.min(at + chunk, file.size)),
+                  'application/octet-stream').then(function(d){
+        if(d && d.success){ at = Number(d.received); tries = 0; return next(); }
+        if(d && d.resume && tries < 3){ at = Number(d.received) || 0; tries++; return next(); }
+        return d || {success: false};
+      });
+    };
+    return next();
+  });
+};

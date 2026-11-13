@@ -2188,6 +2188,22 @@ function deleteBk(btn){
     }});
 }
 
+// Upload a backup of this server (window.backupUpload): it lands in the list, then restores like any other.
+function uploadBk(){ var f=document.getElementById('bk-upload-file'); if(f){ f.value=''; f.click(); } }
+function uploadBkPicked(el){
+  var file = el && el.files && el.files[0];
+  if(!file) return;
+  var btn=document.getElementById('bk-upload'), st=document.getElementById('bk-restore-status');
+  if(btn) btn.disabled=true;
+  var say=function(t, cls){ if(st){ st.className='small '+cls; st.textContent=t; } };
+  window.backupUpload(file, MOUNT+'/api/panel/backup/game/'+serverId+'/upload', function(sent, total){
+    say(tf('Uploading {name}: {pct}%', {name: file.name, pct: total ? Math.floor(sent*100/total) : 100}), 'text-info');
+  }).then(function(d){
+    say(d.message || (d.success ? tf('Uploaded') : tf('Upload failed')), d.success ? 'text-success' : 'text-danger');
+    if(btn) btn.disabled=false; loadBackups();
+  }).catch(function(){ say(tf('Upload failed'), 'text-danger'); if(btn) btn.disabled=false; });
+}
+
 // Restore the server from one of its backups: the operator types the server's name to confirm.
 function restoreBk(btn){
   var name = btn.getAttribute('data-name') || '';

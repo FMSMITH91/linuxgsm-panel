@@ -328,12 +328,17 @@
 <div class="card mb-3" id="backups" data-mtab="maintenance">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-archive"></i> Backups</span>
-    <button class="btn btn-sm btn-success" data-action="createBackup" data-args='["@self"]'><i class="bi bi-plus-circle"></i> Back up now</button>
+    <span class="d-flex gap-1 flex-wrap justify-content-end">
+      <button class="btn btn-sm btn-outline-secondary" id="bk-upload" data-action="uploadPanelBackup"><i class="bi bi-upload"></i> Upload</button>
+      <input type="file" id="bk-upload-file" class="d-none" accept=".gz,.enc" data-action="uploadPanelBackupPicked" data-on="change" data-args='["@self"]'>
+      <button class="btn btn-sm btn-success" data-action="createBackup" data-args='["@self"]'><i class="bi bi-plus-circle"></i> Back up now</button>
+    </span>
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
       Database, settings and encryption keys in one file.
       <strong class="text-warning">Contains secrets — keep any downloads safe.</strong>
+      Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">

@@ -713,6 +713,125 @@ def _archive_members_refusal(src):
     return ""
 
 
+# ── An archive uploaded from the browser ───────────────────────────────────────────────────────
+# Written in pieces to a part file in BACKUP_DIR (a dot-name no listing or prune matches), then, once
+# whole, checked as restore_backup checks one before it is listed: a plain archive's members
+# (_archive_members_refusal) and its database's rows (_restore_db_refusal), and an encrypted one's
+# header (_parse_enc_header; its contents need the passphrase, which restore asks for). Then it is
+# moved under a name this panel generates (_claim_archive_name, kind "upload"). Never a name or a
+# path from the browser.
+UPLOAD_MAX = 512 * 1024 * 1024        # an encrypted archive is decrypted whole in memory at restore
+UPLOAD_CHUNK = 4 * 1024 * 1024
+_UPLOAD_RATIO, _UPLOAD_SLACK = 100, 256 * 1024 * 1024      # a decompression bomb's bound
+_UPLOAD_PART = re.compile(r"[0-9a-f]{32}\Z")
+_UPLOAD_STALE = 2 * 3600
+
+
+def upload_part_path(uid):
+    """The part file of upload `uid` (32 hex digits), in BACKUP_DIR; ValueError for any other id."""
+    if not _UPLOAD_PART.match(uid or ""):
+        raise ValueError("bad upload id")
+    return BACKUP_DIR / (".upload-%s.part" % uid)
+
+
+def upload_begin(uid, size):
+    """Create upload `uid`'s empty part file (0600), once a stale one is gone. Returns a refusal or ""."""
+    _ensure_dir()
+    now = time.time()
+    for old in BACKUP_DIR.glob(".upload-*.part"):
+        try:
+            if now - old.stat().st_mtime > _UPLOAD_STALE:
+                old.unlink()
+        except OSError:
+            continue
+    if shutil.disk_usage(str(BACKUP_DIR)).free < int(size) + _UPLOAD_SLACK:
+        return "There is not enough free space for this upload."
+    try:
+        os.close(os.open(str(upload_part_path(uid)), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except OSError:
+        _log.exception("could not start a backup upload")
+        return "The upload could not be started."
+    return ""
+
+
+def upload_append(uid, offset, data):
+    """Append `data` to upload `uid` when its part file is exactly `offset` bytes. -> (ok, size now)."""
+    path = upload_part_path(uid)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False, -1
+    try:
+        size = os.fstat(fd).st_size
+        if size != int(offset):
+            return False, size
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        return True, os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+
+
+def upload_discard(uid):
+    """Remove upload `uid`'s part file, if it is there."""
+    try:
+        upload_part_path(uid).unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _upload_bomb_refusal(path):
+    """Why the plain archive at `path` declares more than a panel backup unpacks to, or ""."""
+    try:
+        with tarfile.open(str(path), "r:gz") as tar:
+            declared = 0
+            for member in tar:
+                declared += max(0, member.size)
+                if declared > os.path.getsize(path) * _UPLOAD_RATIO + _UPLOAD_SLACK:
+                    return "The archive says it unpacks to far more than a panel backup does, so it was not read further."
+    except Exception:
+        return "Could not read the backup archive."
+    return ""
+
+
+def upload_refusal(path):
+    """Why the uploaded file at `path` is not a panel backup restore would take, or "" with its kind.
+
+    -> (refusal, encrypted). The order is restore's: the members, then the database.
+    """
+    try:
+        with open(str(path), "rb") as f:
+            head = f.read(8192)
+    except OSError:
+        return "Could not read the backup archive.", False
+    if head.startswith(_ENC_MAGIC):
+        refusal, params, _token = _parse_enc_header(head)
+        return (refusal or "", True) if params is None else ("", True)
+    return (_upload_bomb_refusal(path) or _archive_members_refusal(path) or _restore_db_refusal(path)), False
+
+
+def upload_finish(uid, size):
+    """Check upload `uid` (all `size` bytes) and list it under a generated name. -> (ok, name or refusal)."""
+    path = upload_part_path(uid)
+    try:
+        if path.is_symlink() or path.stat().st_size != int(size):
+            upload_discard(uid)
+            return False, "The upload is incomplete."
+    except OSError:
+        return False, "The upload is no longer there."
+    refusal, encrypted = upload_refusal(path)
+    if refusal:
+        upload_discard(uid)
+        return False, refusal
+    name, dest = _claim_archive_name("upload", encrypted)
+    if dest is None:
+        upload_discard(uid)
+        return False, "Backup failed — see panel logs."
+    os.replace(str(path), str(dest))
+    return True, name
+
+
 # ── What a restored database may carry ────────────────────────────────────────────────────────
 # GHSA-hh39-76g3-wxcx. These are the columns the panel builds commands from: every @validates'd
 # shell identifier (models._validate_shell_ident) — a game server's Linux account and LinuxGSM
