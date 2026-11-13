@@ -75,6 +75,11 @@ _WWR_BUSY_POLLS = 30
 # server starts with those letters.
 _WWR_MC_WORLD_OPT = re.compile(r"-{1,2}[wu]", re.I)
 _WWR_MC_EXEDIR = ("", "${serverfiles}", "$serverfiles")
+# The start command is a string LinuxGSM hands tmux, which a shell runs: quoting, expansion, globbing
+# and command syntax could make words the panel does not see, so a start parameter holding one is refused.
+_WWR_SHELL_SYNTAX = frozenset("\"'`$\\;&|<>(){}*?[]")
+_WWR_SHELL_SAID = i18n.Sentence("the start parameters use shell quoting, expansion or syntax, which the panel "
+                                "does not read")
 
 
 class Unread(i18n.Sentence):
@@ -173,12 +178,15 @@ def mc_start_problem(values):
     """Why the instance's LinuxGSM values put the world somewhere server.properties does not say, else None.
 
     The jar runs in executabledir (LinuxGSM's default: serverfiles) and reads level-name from there,
-    unless the start parameters pass --world or --universe (_WWR_MC_WORLD_OPT).
+    unless the start parameters pass --world or --universe (_WWR_MC_WORLD_OPT). Shell quoting or
+    expansion there (_WWR_SHELL_SYNTAX) could spell one the word test does not see (`"--world" x`).
     """
     if (values.get("executabledir") or "") not in _WWR_MC_EXEDIR:
         return i18n.Sentence("the server does not run in serverfiles (executabledir is not LinuxGSM's default)")
-    words = ("%s %s" % (values.get("startparameters") or "", values.get("extraparams") or "")).split()
-    if any(_WWR_MC_WORLD_OPT.match(w) for w in words):
+    text = "%s %s" % (values.get("startparameters") or "", values.get("extraparams") or "")
+    if any(c in _WWR_SHELL_SYNTAX for c in text):
+        return _WWR_SHELL_SAID
+    if any(_WWR_MC_WORLD_OPT.match(w) for w in text.split()):
         return i18n.Sentence("the start parameters choose the world folder themselves (--world or --universe)")
     return None
 
@@ -249,9 +257,6 @@ _WWR_PMC_NOARG = "?v"
 # One-letter options whose letter starts a refused long name (port, commands settings): given exactly,
 # jopt-simple takes the option of that name, not an abbreviation.
 _WWR_PMC_EXACT_OK = ("p", "C")
-# The start command is a string LinuxGSM hands tmux, which a shell runs: quoting, expansion, globbing
-# and command syntax could make words the panel does not see, so a start parameter holding one is refused.
-_WWR_SHELL_SYNTAX = frozenset("\"'`$\\;&|<>(){}*?[]")
 
 
 def _wwr_pmc_word_moves(word):
@@ -279,7 +284,7 @@ def pmc_start_problem(values):
     text = "%s %s %s" % (" ".join((values.get("executable") or "").split()[1:]), values.get("startparameters") or "",
                          values.get("extraparams") or "")
     if any(c in _WWR_SHELL_SYNTAX for c in text):
-        return i18n.Sentence("the start parameters use shell quoting, expansion or syntax, which the panel does not read")
+        return _WWR_SHELL_SAID
     if any(_wwr_pmc_word_moves(w) for w in text.split()):
         return i18n.Sentence("the start parameters choose the world, its folder, or the files that name it "
                              "(--world, --universe, --world-container, --config, --bukkit-settings or --plugins)")
