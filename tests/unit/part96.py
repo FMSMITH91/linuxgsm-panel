@@ -333,7 +333,8 @@ def _bash96(script, env=None):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-_FNS96 = "".join(_fn96(_INSTALL96, n) for n in ("_r25j_panel_port_to_record", "_r25j_is_panel_port"))
+_FNS96 = "".join(_fn96(_INSTALL96, n) for n in ("_r25j_panel_port_to_record", "_r25j_is_panel_port",
+                                                       "_r42i_tree_owner"))
 _PDIR96 = _tf96.mkdtemp(dir=_TMP96)
 
 

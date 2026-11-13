@@ -139,7 +139,7 @@ check("install.sh: a fresh install on a host whose Tailscale is installed but no
 # 3. install.sh: an update's fetch marks the code as touched BEFORE it writes, so an abort mid-fetch
 #    restores the old version instead of restarting the panel on a half-written tree
 # ════════════════════════════════════════════════════════════════════════════════════════════
-_FETCH88 = _fn88(_INS88, "fetch_code")
+_FETCH88 = _fn88(_INS88, "_r42i_tree_owner") + _fn88(_INS88, "fetch_code")
 
 
 def _fetch_abort88(mode):

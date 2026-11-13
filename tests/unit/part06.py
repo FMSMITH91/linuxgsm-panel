@@ -3241,10 +3241,11 @@ try:
 
     # pip: as the OWNER on the update path, unchanged on the fresh one (where PANEL_DIR is still
     # root's and the requirements came from a clone of REPO_URL the operator asked for).
-    _su_deps = _su_between("install_deps() {", "\n}\n") + "\ninstall_deps\n"
+    _su_deps = (_su_between("_r42i_tree_owner() {", "\n}\n") + _su_between("install_deps() {", "\n}\n")
+                + "\ninstall_deps\n")
     _su_me = _sh_sub.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
     _su_shim = ("id() { echo 0; }\n"
-                "stat() { echo %s; }\n"
+                "stat() { echo 41ed 2 %s; }\n"   # a directory, and its owner
                 "sudo() { echo \"SUDO $*\"; }\n"
                 "python3() { echo \"python3 $*\"; }\n")
     _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
@@ -4489,7 +4490,7 @@ try:
     # `open(cfg + ".tmp", "w")`, os.replace and os.chmod on paths inside a panel-owned directory,
     # and all three follow a symlink, so root rewrote a file of the panel user's choosing. Run the
     # real function, as this user, against the two plants that used to work.
-    _cp_fn = _su_between("choose_and_record_port() {", "\nPYEOF\n}\n")
+    _cp_fn = _su_between("_r42i_tree_owner() {", "\n}\n") + _su_between("choose_and_record_port() {", "\nPYEOF\n}\n")
     _cp_sb = _tempfile.mkdtemp(prefix="portpick-")
     try:
         def _cp_run(plant, extra=""):
@@ -4520,11 +4521,11 @@ try:
         # As root it drops to whoever owns PANEL_DIR, so the kernel refuses what the script misses.
         _cp_sudo = ("id() { echo 0; }\n"
                     "sudo() { echo \"SUDO $*\" >&2; shift 2; \"$@\"; }\n")
-        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo lgsmpanel; }\n")
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo 41ed 2 lgsmpanel; }\n")
         check("install.sh: as root over a panel-owned PANEL_DIR, the port is written as its owner",
               "SUDO -u lgsmpanel python3 -" in _r.stderr and '"port": 471' in _cfg,
               repr(_r.stderr[-200:]))
-        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo root; }\n")
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo 41ed 2 root; }\n")
         check("install.sh: ...while a root-owned PANEL_DIR (the fresh install) stays root (control)",
               "SUDO" not in _r.stderr and '"port": 471' in _cfg, repr(_r.stderr[-200:]))
     finally:

@@ -383,7 +383,8 @@ def _install_record116():
     with open(os.path.join(_root, "install.sh"), encoding="utf-8") as fh:
         text = fh.read()
     fns = "".join(_sh_fn116(text, n) for n in ("_r25j_panel_port_to_record", "_r25j_is_panel_port",
-                                                "_r25j_port_held_by_other", "_r32a_owner_listens"))
+                                                "_r25j_port_held_by_other", "_r32a_owner_listens",
+                                                "_r42i_tree_owner"))
     conf = os.path.join(_TMP116, "panel.conf")
     lsock = _sock116.socket()
     lsock.bind((_LOOP116, 0))
