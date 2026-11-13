@@ -126,54 +126,104 @@ _R42M_SCRIPT = ("Script Details\n=====\nScript name:\tcsgoserver\nLinuxGSM versi
 _r42m_files_said = []
 
 
-def _r42m_game_config(name):
-    """lgsm_game_config over a `details` whose server name is `name`. -> (rel, seconds)."""
-    out = ("__LGSMP_REAL_HOME__=/home/r42mgame\n" + _R42M_HEAD % (name, "0.0.0.0:27015", "192.0.2.10:27015")
-           + _R42M_SCRIPT + "__LGSMP_DETAILS_DONE__")
-    del _r42m_files_said[:]
-    _p9_patch_sm("shell_as_game_user", lambda *a, **k: (out, "", 0))
+def _r42m_best(call, reps):
+    """The fastest of three timings of `reps` calls to `call`, in seconds."""
+    best = None
+    for _ in range(3):
+        t0 = _time187.monotonic()
+        for _ in range(reps):
+            call()
+        took = _time187.monotonic() - t0
+        best = took if best is None else min(best, took)
+    return best
+
+
+def _r42m_growth(make, n):
+    """How long make(size)() takes at size 4n against size n. -> (ratio, seconds per 4n call, answers).
+
+    Judged on growth, not on wall time, so a loaded machine cannot fail it: linear code gives about 4,
+    quadratic about 16. make(size) returns a callable with its input already built. The n calls are
+    repeated until one timing reaches 20 ms and the 4n ones get the same count, so the ratio is not
+    the clock's resolution; each is the fastest of three. The answers are those of n and 4n.
+    """
+    small, big = make(n), make(4 * n)
+    reps = 1
+    while _r42m_best(small, reps) < 0.02 and reps < 4096:
+        reps *= 2
+    t_small, t_big = _r42m_best(small, reps), _r42m_best(big, reps)
+    return t_big / max(t_small, 1e-9), t_big / reps, (small(), big())
+
+
+# Linear is ~4, quadratic ~16 (the replaced code measured 13.5-15 per 4x here); 8 lies between.
+# The 10 s per call is only a guard against a hang, not a speed bar.
+_R42M_GROWTH_MAX = 8.0
+_R42M_HANG_S = 10.0
+
+
+def _r42m_grows_linearly(got):
+    return got[0] < _R42M_GROWTH_MAX and got[1] < _R42M_HANG_S
+
+
+_r42m_out = {}
+
+
+def _r42m_details_out(name, ip_line="0.0.0.0:27015"):
+    """`details` output (invented values) whose server name is `name`, as lgsm_game_config's shell prints it."""
+    return ("__LGSMP_REAL_HOME__=/home/r42mgame\n" + _R42M_HEAD % (name, ip_line, ip_line) + _R42M_SCRIPT
+            + "__LGSMP_DETAILS_DONE__")
+
+
+def _r42m_stub_details():
+    """Point both details callers' game-account shells at _r42m_out["text"], and record what is read."""
+    _p9_patch_sm("shell_as_game_user", lambda *a, **k: (_r42m_out["text"], "", 0))
+    _p9_patch_sm("run_as_game_user", lambda *a, **k: (_r42m_out["text"], "", 0))
     _p9_patch_sm("read_file", lambda server, user, rel: (_r42m_files_said.append(rel) or "x", None))
-    try:
-        t0 = _time187.monotonic()
-        got = _files187.lgsm_game_config(_r42m_local, "r42mgame", "csgoserver")
-        took = _time187.monotonic() - t0
-    finally:
-        _p9_restore_all()
-    return got["rel"], list(_r42m_files_said), took
 
 
-def _r42m_ports(name, ip_line):
-    """detect_game_ports over a `details` with no port table. -> (game port, open ports, seconds)."""
-    out = _R42M_HEAD % (name, ip_line, ip_line) + _R42M_SCRIPT
-    _p9_patch_sm("run_as_game_user", lambda *a, **k: (out, "", 0))
-    try:
-        t0 = _time187.monotonic()
+def _r42m_game_config_call(name):
+    """A callable running lgsm_game_config over a `details` whose server name is `name` -> its rel."""
+    text = _r42m_details_out(name)
+
+    def call():
+        _r42m_out["text"] = text
+        return _files187.lgsm_game_config(_r42m_local, "r42mgame", "csgoserver")["rel"]
+    return call
+
+
+def _r42m_ports_call(name, ip_line):
+    """A callable running detect_game_ports over a `details` with no port table -> (game port, open ports)."""
+    text = _r42m_details_out(name, ip_line)
+
+    def call():
+        _r42m_out["text"] = text
         got = _game187.detect_game_ports(_r42m_local, "r42mgame", "csgoserver", "csgo")
-        took = _time187.monotonic() - t0
-    finally:
-        _p9_restore_all()
-    return got["game_port"], got["open_ports"], took
+        return got["game_port"], got["open_ports"]
+    return call
 
 
 # Measured on this machine: the replaced regexes took 0.8 s at 88 KB and 3.1 s at 176 KB of the label
 # repeated, growing with the square of the length; the string code takes milliseconds.
-_r42m_gc_plain = _r42m_game_config("My Server")
-_r42m_gc_slow = _r42m_game_config("config file " * 12000)
+_r42m_stub_details()
+try:
+    _r42m_gc_plain = (_r42m_game_config_call("My Server")(), list(_r42m_files_said))
+    _r42m_gc_grow = _r42m_growth(lambda k: _r42m_game_config_call("config file " * k), 3000)
+    _r42m_ip_plain = [_r42m_ports_call("My Server", "[2001:db8::1234]:27016")(),
+                      _r42m_ports_call("My Server", "0.0.0.0:0")()]
+    _r42m_ip_grow = _r42m_growth(lambda k: _r42m_ports_call("server ip:" * k, "0.0.0.0:27017"), 4000)
+finally:
+    _p9_restore_all()
 eq("details r42m: Files & Config finds the config file `details` names, relative to the home, and reads it",
-   _r42m_gc_plain[:2], ("serverfiles/csgo/cfg/csgoserver.cfg", ["serverfiles/csgo/cfg/csgoserver.cfg"]))
-check("details r42m: a server name of 'config file' repeated 12000 times (144 KB, no colon) is read in "
-      "linear time and the real Config file line still wins (well under 0.6 s)",
-      _r42m_gc_slow[0] == "serverfiles/csgo/cfg/csgoserver.cfg" and _r42m_gc_slow[2] < 0.6,
-      "%r %.2fs" % (_r42m_gc_slow[0], _r42m_gc_slow[2]))
+   _r42m_gc_plain, ("serverfiles/csgo/cfg/csgoserver.cfg", ["serverfiles/csgo/cfg/csgoserver.cfg"]))
+check("details r42m: a server name of 'config file' repeated (36 KB, then 144 KB, no colon) is read in time "
+      "that grows linearly with it (4x the name, under 8x the time), and the real Config file line still wins",
+      _r42m_grows_linearly(_r42m_gc_grow) and _r42m_gc_grow[2] == ("serverfiles/csgo/cfg/csgoserver.cfg",) * 2,
+      "x%.1f %.3fs %r" % _r42m_gc_grow)
 eq("details r42m: with no port table, the port ending the Server IP line is the game port (an IPv6 address's "
-   "own colons are not)", [_r42m_ports("My Server", "[2001:db8::1234]:27016")[:2],
-                           _r42m_ports("My Server", "0.0.0.0:0")[:2]],
-   [(27016, [27016]), (None, [])])
-_r42m_ip_slow = _r42m_ports("server ip:" * 20000, "0.0.0.0:27017")
-check("details r42m: a server name of 'server ip:' repeated 20000 times (200 KB) is read in linear time and "
-      "the real Server IP line's port still wins (well under 0.6 s)",
-      _r42m_ip_slow[0] == 27017 and _r42m_ip_slow[2] < 0.6, "%r %.2fs" % (_r42m_ip_slow[0], _r42m_ip_slow[2]))
-
+   "own colons are not)", _r42m_ip_plain, [(27016, [27016]), (None, [])])
+check("details r42m: a server name of 'server ip:' repeated (40 KB, then 160 KB) is read in time that grows "
+      "linearly with it (4x the name, under 8x the time), and the real Server IP line's port still wins",
+      _r42m_grows_linearly(_r42m_ip_grow) and _r42m_ip_grow[2] == ((27017, [27017]),) * 2,
+      "x%.1f %.3fs %r" % _r42m_ip_grow)
 
 # ── 3. the XML config form's comment walk ───────────────────────────────────────────────────────
 # The helpers the walk had before, kept as the reference its answers must match.
@@ -230,20 +280,27 @@ check("game config form r42m: 'only blanks before it on its line' answers as the
 # Measured on this machine: the old walk took 0.83 s at 80000 comment lines, 0.25 s at 60000 comments on
 # one line and 1.0 s at 30000 properties before one comment, each growing with the square.
 _R42M_P = '<property name="a" value="b"/>'
-_r42m_xcases = (("120000 comment lines then a property", "<!---->\n" * 120000 + _R42M_P + "\n", 1),
-                ("150000 comments on one line then a property", "<!---->" * 150000 + "\n" + _R42M_P + "\n", 1),
-                ("45000 properties then one comment",
-                 "".join('<property name="a%d" value="b"/>\n' % i for i in range(45000)) + "<!-- x -->\n", 45000))
-_r42m_xslow = []
-for _r42m_label, _r42m_text, _r42m_want in _r42m_xcases:
-    _r42m_t0 = _time187.monotonic()
-    _r42m_fields = _g187._gcf_parse_xml(_r42m_text)
-    _r42m_xslow.append((_r42m_label, len(_r42m_fields or ()) == _r42m_want, _time187.monotonic() - _r42m_t0))
-check("game config form r42m: an XML file with 120000 comment lines, 150000 comments on one line, or 45000 "
-      "properties before one comment is parsed in linear time (each well under 0.6 s)",
-      all(_ok and _took < 0.6 for _l, _ok, _took in _r42m_xslow),
-      repr([(_l, _ok, "%.2fs" % _took) for _l, _ok, _took in _r42m_xslow]))
 
+
+def _r42m_xml_call(text):
+    return lambda: len(_g187._gcf_parse_xml(text) or ())
+
+
+_r42m_xcases = (("comment lines then a property", 30000, lambda k: "<!---->\n" * k + _R42M_P + "\n", lambda k: 1),
+                ("comments on one line then a property", 40000,
+                 lambda k: "<!---->" * k + "\n" + _R42M_P + "\n", lambda k: 1),
+                ("properties then one comment", 12000,
+                 lambda k: "".join('<property name="a%d" value="b"/>\n' % i for i in range(k)) + "<!-- x -->\n",
+                 lambda k: k))
+_r42m_xslow = []
+for _r42m_label, _r42m_n, _r42m_make, _r42m_want in _r42m_xcases:
+    _r42m_got = _r42m_growth(lambda k, _mk=_r42m_make: _r42m_xml_call(_mk(k)), _r42m_n)
+    _r42m_xslow.append((_r42m_label, _r42m_got[2] == (_r42m_want(_r42m_n), _r42m_want(4 * _r42m_n)),
+                        _r42m_grows_linearly(_r42m_got), "x%.1f %.3fs" % _r42m_got[:2]))
+check("game config form r42m: an XML file of 30000/120000 comment lines, 40000/160000 comments on one line, or "
+      "12000/48000 properties before one comment is parsed in time that grows linearly with it (4x the file, "
+      "under 8x the time), with every field found", all(_ok and _lin for _l, _ok, _lin, _t in _r42m_xslow),
+      repr(_r42m_xslow))
 
 # ── 4. the debug report's manual full backup line ───────────────────────────────────────────────
 def _r42m_manual(ok, players, held):
