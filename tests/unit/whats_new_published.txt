@@ -5,6 +5,7 @@
 # listed here; delete a line only together with its entry.
 645d370f Restore a game server from one of its backups.
 8986fd9b Upload a backup to restore from it.
+1ddac173 dnspython 2.9.2 on Ubuntu 24.04 and 26.04 (GHSA-vvf4-9x63-8xvv).
 192fa5dd Scheduled world resets for Paper and Minecraft Bedrock.
 bbb0103c A Minecraft world reset reads LinuxGSM's start settings the way LinuxGSM does.
 26c8e01c Rate limiting no longer opens a port to the internet.
