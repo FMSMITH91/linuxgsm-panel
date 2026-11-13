@@ -82,3 +82,95 @@ eq("monitor r42m: on the panel's own host the lock probe runs as the game accoun
 check("monitor r42m: the panel-host lock probe never asks for root (no sudo bash -c wrapper)",
       all(not _s for _c, _s in _r42m_lock_calls), repr(_r42m_lock_calls))
 
+
+# ── 2. LinuxGSM details: the config file line and the Server IP port ────────────────────────────
+# The regexes the readers replaced, kept as the reference the string code must answer like.
+_r42m_old_cfg = _re187.compile(r"config file[^:\n]*:[ \t]*(/\S+\.(?:cfg|ini|properties|xml|json|txt|conf))(?!\S)",
+                               _re187.I)
+_r42m_old_ip = _re187.compile(r"(?:server|internet)\s+ip:[^\n]*:(\d{2,5})[ \t\r]*(?:\n|\Z)", _re187.I)
+
+
+def _r42m_old_cfg_path(t):
+    m = _r42m_old_cfg.search(t)
+    return m.group(1) if m else ""
+
+
+def _r42m_old_ip_port(t):
+    m = _r42m_old_ip.search(t)
+    return int(m.group(1)) if m else None
+
+
+_r42m_cabc = ["config file", "Config File", "CONFIG FILE", "conf\u0131g file", "config", " file", ":", ": ", " ",
+              "\t", "\n", "\r", "\xa0", "/", "/home/u/", "a", ".cfg", ".CFG", ".ini", ".conf", ".txt", "x.json",
+              ".properties", ".xm", "l", "(FILE MISSING)"]
+_r42m_iabc = ["server", "Server", "internet", "INTERNET", " ", "\t", "\n", "\r", "ip:", "IP:", ":", "1", "27015",
+              "123456", "[2001:db8::1]", "0.0.0.0", "a", "\u0663\u0664", "Server IP:", "Internet IP:\t"]
+_r42m_rng = _random187.Random(187)  # nosec B311 - a seeded fuzz corpus, not security
+_r42m_cfg_bad = [t for t in ("".join(_r42m_rng.choice(_r42m_cabc) for _ in range(_r42m_rng.randint(0, 14)))
+                             for _ in range(30000))
+                 if _r42m_old_cfg_path(t) != _files187._r42m_config_file_path(t)]
+_r42m_ip_bad = [t for t in ("".join(_r42m_rng.choice(_r42m_iabc) for _ in range(_r42m_rng.randint(0, 14)))
+                            for _ in range(30000))
+                if _r42m_old_ip_port(t) != _game187._r42m_ip_line_port(t)]
+check("details r42m: the config file reader answers as the regex it replaced on 30000 random texts (labels in "
+      "any case, colons, blanks, line breaks, paths and extensions)", not _r42m_cfg_bad, repr(_r42m_cfg_bad[:3]))
+check("details r42m: the Server IP / Internet IP port reader answers as the regex it replaced on 30000 random "
+      "texts (IPv6 addresses, ports too long, non-ASCII digits, labels split over a line break)",
+      not _r42m_ip_bad, repr(_r42m_ip_bad[:3]))
+
+# Invented values, laid out as LinuxGSM's info_messages.sh prints `details`.
+_R42M_HEAD = ("Summary\n=====\nServer name:\t%s\nServer description:\tA test server\n"
+              "Server IP:\t%s\nInternet IP:\t%s\nStatus:\tSTOPPED\n\n")
+_R42M_SCRIPT = ("Script Details\n=====\nScript name:\tcsgoserver\nLinuxGSM version:\tv26.4.0\n"
+                "Config file:\t/home/r42mgame/serverfiles/csgo/cfg/csgoserver.cfg\n\n")
+_r42m_files_said = []
+
+
+def _r42m_game_config(name):
+    """lgsm_game_config over a `details` whose server name is `name`. -> (rel, seconds)."""
+    out = ("__LGSMP_REAL_HOME__=/home/r42mgame\n" + _R42M_HEAD % (name, "0.0.0.0:27015", "192.0.2.10:27015")
+           + _R42M_SCRIPT + "__LGSMP_DETAILS_DONE__")
+    del _r42m_files_said[:]
+    _p9_patch_sm("shell_as_game_user", lambda *a, **k: (out, "", 0))
+    _p9_patch_sm("read_file", lambda server, user, rel: (_r42m_files_said.append(rel) or "x", None))
+    try:
+        t0 = _time187.monotonic()
+        got = _files187.lgsm_game_config(_r42m_local, "r42mgame", "csgoserver")
+        took = _time187.monotonic() - t0
+    finally:
+        _p9_restore_all()
+    return got["rel"], list(_r42m_files_said), took
+
+
+def _r42m_ports(name, ip_line):
+    """detect_game_ports over a `details` with no port table. -> (game port, open ports, seconds)."""
+    out = _R42M_HEAD % (name, ip_line, ip_line) + _R42M_SCRIPT
+    _p9_patch_sm("run_as_game_user", lambda *a, **k: (out, "", 0))
+    try:
+        t0 = _time187.monotonic()
+        got = _game187.detect_game_ports(_r42m_local, "r42mgame", "csgoserver", "csgo")
+        took = _time187.monotonic() - t0
+    finally:
+        _p9_restore_all()
+    return got["game_port"], got["open_ports"], took
+
+
+# Measured on this machine: the replaced regexes took 0.8 s at 88 KB and 3.1 s at 176 KB of the label
+# repeated, growing with the square of the length; the string code takes milliseconds.
+_r42m_gc_plain = _r42m_game_config("My Server")
+_r42m_gc_slow = _r42m_game_config("config file " * 12000)
+eq("details r42m: Files & Config finds the config file `details` names, relative to the home, and reads it",
+   _r42m_gc_plain[:2], ("serverfiles/csgo/cfg/csgoserver.cfg", ["serverfiles/csgo/cfg/csgoserver.cfg"]))
+check("details r42m: a server name of 'config file' repeated 12000 times (144 KB, no colon) is read in "
+      "linear time and the real Config file line still wins (well under 0.6 s)",
+      _r42m_gc_slow[0] == "serverfiles/csgo/cfg/csgoserver.cfg" and _r42m_gc_slow[2] < 0.6,
+      "%r %.2fs" % (_r42m_gc_slow[0], _r42m_gc_slow[2]))
+eq("details r42m: with no port table, the port ending the Server IP line is the game port (an IPv6 address's "
+   "own colons are not)", [_r42m_ports("My Server", "[2001:db8::1234]:27016")[:2],
+                           _r42m_ports("My Server", "0.0.0.0:0")[:2]],
+   [(27016, [27016]), (None, [])])
+_r42m_ip_slow = _r42m_ports("server ip:" * 20000, "0.0.0.0:27017")
+check("details r42m: a server name of 'server ip:' repeated 20000 times (200 KB) is read in linear time and "
+      "the real Server IP line's port still wins (well under 0.6 s)",
+      _r42m_ip_slow[0] == 27017 and _r42m_ip_slow[2] < 0.6, "%r %.2fs" % (_r42m_ip_slow[0], _r42m_ip_slow[2]))
+
