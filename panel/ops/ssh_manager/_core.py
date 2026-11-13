@@ -613,9 +613,8 @@ def _pump_capped(stream, buf, cap, flags, stop=None, sel=None):
 def _feed_stdin(p, stdin_bytes):
     """Write `stdin_bytes` (when there are any) to `p`'s stdin, then close it so `p` sees EOF."""
     try:
-        if stdin_bytes:
-            for piece in _stdin_pieces(stdin_bytes):
-                p.stdin.write(piece)
+        for piece in (_stdin_pieces(stdin_bytes) if stdin_bytes else ()):
+            p.stdin.write(piece)
     except (OSError, ValueError):
         pass            # the command exited without reading it all; its rc says what happened
     finally:
@@ -2083,12 +2082,9 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         # transport has from _POPEN_KW, and the same shutdown_write files.py:911 already sends —
         # and it is what the "deliberately no deadline" note above _drain_exec rests on.
         # A secret from run_privileged goes down the channel first; the EOF still follows.
-        if isinstance(stdin_text, StdinChunks):
-            for piece in stdin_text:
-                stdin.write(piece)
-            stdin.flush()
-        elif stdin_text is not None:
-            stdin.write(stdin_text)
+        for piece in (stdin_text if isinstance(stdin_text, StdinChunks) else () if stdin_text is None else (stdin_text,)):
+            stdin.write(piece)      # StdinChunks one chunk at a time; anything else whole, as it always was
+        if stdin_text is not None:
             stdin.flush()
         try:
             stdin.channel.shutdown_write()
