@@ -285,7 +285,7 @@ else:
         _os190.makedirs(_os190.path.dirname(fake))
         with open(fake, "w") as f:
             f.write("sleep 60\n")
-        return _sp190.Popen(["bash", fake, "monitor"], cwd="/")
+        return _sp190.Popen(["bash", fake, "monitor"], cwd="/", start_new_session=True)
 
     def _switch_seen190(sb, out, rc, rec, before):
         tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
@@ -314,8 +314,11 @@ else:
             return _switch_seen190(sb, out, rc, rec, before)
         finally:
             _grs190._GRS_LGSM_POLLS = saved
-            if sleeper is not None:
-                sleeper.kill()
+            if sleeper is not None:      # its group: the script and the sleep it is running
+                try:
+                    _os190.killpg(sleeper.pid, 9)
+                except OSError:
+                    pass
                 sleeper.wait()
             sb.gone()
 
