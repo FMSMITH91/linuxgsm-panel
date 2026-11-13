@@ -5,6 +5,7 @@ Held here:
   names the page looks up, so no lookup thread outlives the part's stubs.
 * Every DEFAULT_CONFIG key has a real read somewhere under panel/ (a `.get("key")` or a `["key"]`
   load), not just its name inside another name.
+* The stub gate (part06) reads tools/js_coverage/serve.py's stubs on panel modules.
 
 HOW IT RUNS. Each check reads what an earlier part recorded, or drives the panel's own code with every
 host call stubbed. Nothing reaches a host or data/.
@@ -15,6 +16,7 @@ import os as _os189
 
 from unit.part01 import check
 from unit.part05 import _root
+from unit.part06 import _r15d_stub_target, _stub_alias_of, _stub_files, _stub_trees
 from unit.part177 import _g177
 from panel.core import config as _cfgmod189
 
@@ -77,3 +79,16 @@ _r42t_cfg_ctl = _r42t_cfg_reads(
 check("config reader gate: a key inside another name, a comment, a bare string or a store is no read, "
       "and a [\"key\"] load and a .get(\"key\") are (control)",
       _r42t_cfg_ctl == {"debug_log": [], "port": ["ctl:5"], "ssh_timeout": ["ctl:6"]}, repr(_r42t_cfg_ctl))
+
+# ── 3. the stub gate reads the JS-coverage harness's stubs (tools/js_coverage/serve.py) ──────────
+_r42t_serve = _os189.path.join(_root, "tools", "js_coverage", "serve.py")
+_r42t_serve_stubs = sorted({t[:2] for t in (_r15d_stub_target(n, _stub_alias_of.get(_r42t_serve, {}))
+                                            for n in _ast189.walk(_stub_trees.get(_r42t_serve, _ast189.Module(
+                                                body=[], type_ignores=[])))) if t})
+check("stub gate: the JS-coverage harness's stubs on panel modules (tools/js_coverage/serve.py) are among "
+      "the stores it reads (control)",
+      _r42t_serve in _stub_files and {("panel.ops.system_ops", "_check_sudo"),
+                                      ("panel.ops.ssh_manager._core", "run_command"),
+                                      ("panel.ops.tailscale_integration", "_run_ts"),
+                                      ("panel.ops.terminal_session", "_login_shell")} <= set(_r42t_serve_stubs),
+      repr(_r42t_serve_stubs))
