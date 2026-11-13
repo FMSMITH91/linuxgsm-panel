@@ -70,15 +70,31 @@ _KEEP_PRUNE190 = [_a for _k in _grs190.KEEP for _a in ("-path", "./" + _k, "-pru
 class _Sb190:
     """A stand-in host: <root>/home/grsu laid out as LinuxGSM lays out an instance in the account's home."""
 
-    def __init__(self):
-        """Build the home, back it up with LinuxGSM's own tar command, then change it as play would."""
+    def __init__(self, layout="mc"):
+        """Build the home, back it up with LinuxGSM's own tar command, then change it as play would.
+
+        LinuxGSM's own ~/log/server link is ABSOLUTE and points into serverfiles: at serverfiles/logs for
+        Minecraft ("mc"), at serverfiles itself for Factorio ("fctr"), so `tar -h` stores those files
+        twice, the second name as a hard link. Two older archives sit in the backup dir beside it.
+        """
         self.root = _tmp190.mkdtemp(prefix="p190-")
         self.home = _os190.path.join(self.root, "home", _U190)
         self.bdir = _os190.path.join(self.home, "lgsm", "backup")
         h = self.home
         for d in ("lgsm/backup", "lgsm/lock", "lgsm/tmp", "lgsm/config-lgsm/grsu", "serverfiles/world/region",
-                  ".ssh", ".steam/steamcmd/linux64", ".steam/sdk64", "log/console", ".lgsm-cron"):
+                  ".ssh", ".steam/steamcmd/linux64", ".steam/sdk64", "log/console", ".lgsm-cron",
+                  "serverfiles/logs", "lgsm/node_modules/.bin"):
             _os190.makedirs(_os190.path.join(h, d))
+        self.put("serverfiles/logs/latest.log", "server log 1")
+        self.put("serverfiles/factorio", "binary")
+        self.put("lgsm/node_modules/gamedig.js", "js")
+        _os190.symlink(h + ("/serverfiles/logs" if layout == "mc" else "/serverfiles"), _os190.path.join(h, "log/server"))
+        _os190.symlink("../gamedig.js", _os190.path.join(h, "lgsm/node_modules/.bin/gamedig"))
+        self.older = {"grsu-2026-10-01-000000.tar.gz": 1759276800.25, "grsu-2026-10-02-000000.tar.gz": 1759363200.5}
+        for _n, _t in self.older.items():
+            with open(_os190.path.join(self.bdir, _n), "wb") as f:
+                f.write(b"older archive")
+            _os190.utime(_os190.path.join(self.bdir, _n), (_t, _t))
         self.put("grsu", "#!/bin/bash\necho lgsm\n")
         self.put("serverfiles/world/region/r.0.mca", "world v1")
         self.put("lgsm/config-lgsm/grsu/grsu.cfg", "cfg v1")
@@ -121,6 +137,9 @@ class _Sb190:
         res = {}
         for rel in filter(None, out.split(b"\0")):
             p = _os190.path.join(self.home, rel.decode())
+            if _os190.path.islink(p):
+                res[rel.decode()] = "link to " + _os190.readlink(p)
+                continue
             try:
                 with open(p, "rb") as f:
                     res[rel.decode()] = _hl190.sha256(f.read()).hexdigest()
@@ -157,11 +176,11 @@ class _Sb190:
 
 def _restore190(sb, ready, undo=_UNDO190, busy_polls=1):
     """Take the stand-in undo backup, then run restore_script: (output, restore_outcome)."""
-    held = [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f]
+    held = [_f for _f in sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)]
     if held and not _os190.path.exists(_os190.path.join(sb.bdir, undo)):
         _sh190.copyfile(_os190.path.join(sb.bdir, held[0]), _os190.path.join(sb.bdir, undo))
     out, rc = sb.run(_grs190.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], undo,
-                                            busy_polls=busy_polls))
+                                            busy_polls=busy_polls, members=ready["members"]))
     return out, _grs190.restore_outcome(out, rc)
 
 
@@ -207,6 +226,22 @@ else:
         _a = _os190.path.join(_sb.bdir, _NAME190)
         _r190["putback"] = (_os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
                             [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
+        _r190["older"] = {_n: _os190.stat(_os190.path.join(_sb.bdir, _n)).st_mtime
+                          for _n in _sb.older if _os190.path.isfile(_os190.path.join(_sb.bdir, _n))}
+        _r190["links"] = (_os190.readlink(_os190.path.join(_sb.home, "log/server")),
+                          _os190.readlink(_os190.path.join(_sb.home, "lgsm/node_modules/.bin/gamedig")))
+    finally:
+        _sb.gone()
+
+    # Factorio's layout: ~/log/server points at serverfiles itself, so every game file is in the archive twice.
+    _sb = _Sb190("fctr")
+    try:
+        _out, (_state, _ready) = _sb.vet()
+        _lgsm_prune190(_sb.bdir)
+        _res = _restore190(_sb, _ready) if _state == "ready" else (_out, ("not ready", ""))
+        _r190["fctr"] = (_res[1][0], _sb.tree() == _sb.before, sorted(set(_sb.tree()) ^ set(_sb.before)),
+                         _os190.readlink(_os190.path.join(_sb.home, "log/server")).endswith("/home/grsu/serverfiles"),
+                         sorted(_f for _f in _sb.backups() if _f in _sb.older))
     finally:
         _sb.gone()
 
@@ -257,6 +292,7 @@ else:
         "linkout": _outside190,
         "linkbackup": lambda sb: _os190.symlink(sb.bdir, _os190.path.join(sb.home, "serverfiles/bk")),
         "cut": _cut190,
+        "plaintext": lambda sb: _os190.replace(_os190.path.join(sb.home, "grsu"), sb.archive) or None,
         "locked": _lock190,
         "keeplink_ssh": _sshlink190,
         "keeplink_backup": _bklink190,
@@ -298,12 +334,18 @@ else:
         _r190["heartbeat"] = (_out.count("__GRS_ALIVE__") >= 2, _grs190.vet_outcome(_out)[0], _time190.time() - _t < 30)
         _rs = _grs190.restore_script(_U190, _U190, _NAME190, _grs190.vet_outcome(_out)[1]["t0"], 1, _UNDO190,
                                      busy_polls=1)
-        _rs = _rs.replace('-- "$a"; kill $hb 2>/dev/null\' EXIT\n', '-- "$a"; kill $hb 2>/dev/null\' EXIT\nsleep 2.5\n', 1)
+        _rs = _re190.sub(r"(\n[^\n]*' EXIT\n)", r"\1sleep 2.5\n", _rs, count=1)
         _out, _rc = _sb.run(_rs)
         _r190["heartbeat_restore"] = _out.count("__GRS_ALIVE__") >= 2
     finally:
         _grs190.HEARTBEAT = _saved_hb
         _sb.gone()
+
+    # The heartbeat ends with its script: nothing holds the output (and the panel) after the last line.
+    _t = _time190.time()
+    _sp190.run(["bash", "-c", "\n".join(_grs190._grs_heartbeat()) + "\nsleep 1\n"], capture_output=True,
+               timeout=120, cwd="/")
+    _r190["heartbeat_ends"] = _time190.time() - _t < _grs190.HEARTBEAT / 2
 
     # The checks' last line cannot reach a panel that has gone: the archive is put back, not left held.
     _sb = _Sb190()
@@ -329,17 +371,19 @@ else:
     finally:
         _sb.gone()
 
-    # The archive damaged after the checks: the clear has run, the extraction fails, and it says so.
+    # The archive damaged after the checks: the staging extraction fails, before anything is cleared.
     _sb = _Sb190()
     try:
         _out, (_state, _ready) = _sb.vet()
-        _held = [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f]
+        _tree_x = _sb.tree()
+        _held = [_f for _f in _sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)]
         _sh190.copyfile(_os190.path.join(_sb.bdir, _held[0]), _os190.path.join(_sb.bdir, _UNDO190))
         with open(_os190.path.join(_sb.bdir, _held[0]), "wb") as _f:
             _f.write(b"not a gzip stream")
         _out, _res = _restore190(_sb, _ready)
-        _r190["xfail"] = (_res[0], str(_res[1]).startswith("the extraction failed (tar exit 2): tar:"),
-                          _os190.path.isfile(_sb.archive))
+        _r190["xfail"] = (_res[0], str(_res[1]).startswith("the archive could not be unpacked into a staging folder"),
+                          _os190.path.isfile(_sb.archive), _sb.tree() == _tree_x,
+                          _os190.path.exists(_os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore-%d" % _ready["t0"])))
     finally:
         _sb.gone()
 
@@ -357,10 +401,12 @@ else:
 
 if "vet" in _r190:
     eq("restore commands: the checks pass on a LinuxGSM backup made by LinuxGSM's own tar command",
-       _r190["vet"][:2], ("ready", ["need", "t0", "up"]))
-    eq("restore commands: ...and hold the archive aside under a name with no '.tar.', freshly dated",
-       (_r190["held"], _r190["held_mtime"][0] > _T0190),
-       (["grsu-2026-11-01-120000.restore-source-%d.gz" % _T0190], True))
+       _r190["vet"][:2], ("ready", ["members", "need", "t0", "up"]))
+    eq("restore commands: ...and hold every archive in the backup dir aside under a name with no '.tar.', "
+       "freshly dated (the one restored, and the two older ones LinuxGSM's retention would prune)",
+       (len(_r190["held"]), all(_grs190.HOLD_INFIX in _f and ".tar." not in _f for _f in _r190["held"]),
+        "grsu-2026-11-01-120000.restore-source-%d_000000000.gz" % _T0190 in _r190["held"],
+        min(_r190["held_mtime"]) > _T0190), (3, True, True, True))
     eq("restore commands: LinuxGSM's own retention (by name past maxbackups, by age past maxbackupdays) "
        "cannot prune the held archive", _r190["after_prune"], _r190["held"])
     eq("restore commands: the restore runs to its end", (_r190.get("restore") or ("missing",))[0], "done")
@@ -371,6 +417,11 @@ if "vet" in _r190:
     check("restore commands: a symlinked folder is still a symlink", _r190["link"], "")
     eq("restore commands: the archive is back under its own name and time, nothing left held",
        _r190["putback"], (_T0190, []))
+    eq("restore commands: the operator's other archives are all there, under their names and exact times",
+       _r190["older"], {"grsu-2026-10-01-000000.tar.gz": 1759276800.25, "grsu-2026-10-02-000000.tar.gz": 1759363200.5})
+    check("restore commands: LinuxGSM's absolute ~/log/server link and a symlinked file are links again, with "
+          "their own text", _r190["links"][0].endswith("/home/grsu/serverfiles/logs") and _r190["links"][1] == "../gamedig.js",
+          repr(_r190["links"]))
     _bad190 = {
         "dotdot": "not under the server's folder", "absolute": "not under the server's folder",
         "outside": "not under the server's folder", "fifo": "device, pipe or symbolic link",
@@ -378,6 +429,7 @@ if "vet" in _r190:
         "hardlink": "hard link", "hardlink_kept": "hard link", "linkout": "symbolic link in the game account",
         "linkbackup": "symbolic link in the game account", "cut": "could not be read to its end",
         "locked": "LinuxGSM backup or update", "noscript": "does not hold the server's LinuxGSM script",
+        "plaintext": "could not be read to its end",
         "space": "not enough free space",
         "keeplink_ssh": "is a symbolic link, so the restore could not keep it apart",
         "keeplink_backup": "is a symbolic link, so the restore could not keep it apart",
@@ -385,6 +437,9 @@ if "vet" in _r190:
     eq("restore commands: each refusal says why and changes nothing (home, archive name, nothing held)",
        {_k: (_r190["ref_" + _k][0], _w in _r190["ref_" + _k][1], _r190["ref_" + _k][2]) for _k, _w in _bad190.items()},
        {_k: ("refused", True, True) for _k in _bad190})
+    eq("restore commands: Factorio's layout (~/log/server -> serverfiles, absolute) restores file for file, the link "
+       "kept, the older archives kept", _r190["fctr"],
+       ("done", True, [], True, ["grsu-2026-10-01-000000.tar.gz", "grsu-2026-10-02-000000.tar.gz"]))
     if "ref_inodes" in _r190:
         eq("restore commands: an archive with more files and folders than free inodes is refused, nothing changed",
            (_r190["ref_inodes"][0], "not enough free inodes" in _r190["ref_inodes"][1], _r190["ref_inodes"][2]),
@@ -392,12 +447,15 @@ if "vet" in _r190:
     eq("restore commands: the checks print a heartbeat while they run (a silence timeout never fires on them), "
        "still end READY, and leave nothing running", _r190["heartbeat"], (True, "ready", True))
     check("restore commands: the clear and extraction print a heartbeat too", _r190["heartbeat_restore"], "")
+    check("restore commands: a script with a heartbeat ends when it ends (no sleep left holding its output for up "
+          "to the heartbeat's interval)", _r190["heartbeat_ends"], "")
     eq("restore commands: when the checks' last line cannot be delivered, the archive is put back (not left "
        "held for a panel that never heard)", _r190["undelivered"], (True, []))
     eq("restore commands: a process of the account still in serverfiles refuses after the wait, nothing "
        "cleared, the archive put back", _r190["busy"][:1] + _r190["busy"][2:], ("refused", True, True))
-    eq("restore commands: an extraction that fails after the clear is a failure (not a refusal), and the "
-       "archive is put back", _r190["xfail"], ("failed", True, True))
+    eq("restore commands: an archive that does not unpack fully is caught in the staging folder, before anything "
+       "is cleared: refused, the home unchanged, the archive put back, the staging folder gone",
+       _r190["xfail"], ("refused", True, True, True, False))
     eq("restore commands: an archive an interrupted restore left held is put back by the next checks",
        _r190["leftover"][:3], ("refused", _T0190, []))
 
@@ -536,7 +594,7 @@ def _held_cfg190():
 
 
 def _held_update190(mut):
-    cfg = {"restores_held": _held190}
+    cfg = {"restores_held": dict(_held190)}
     mut(cfg)
     _held190.clear()
     _held190.update(cfg["restores_held"])
@@ -584,6 +642,7 @@ _w190["late_refused"] = _run190(_Host190(restore="__GRS_BUSY__"))
 _w190["players"] = _run190(_Host190(stop=("[ INFO ] Stopping grsu: 2 players are on the server: stop prevented\n", "", 0)))
 _w190["was_down"] = _run190(_Host190(vet="__GRS_READY__ 0 %d 5000 9000" % _T0190))
 _w190["rootcap"] = _run190(_Host190(), refusal=_i18n190.Sentence("p190 root-capable"))
+_w190["stage_fail"] = _run190(_Host190(restore="__GRS_STAGING__\n__GRS_STAGEFAIL__ 2 tar: Unexpected EOF in archive"))
 _held_mid190 = dict(_h.held_seen) if hasattr(_h, "held_seen") else {}
 
 eq("run: checks, stop, the undo backup, the restore, then start (it was running)",
@@ -618,15 +677,19 @@ check("run: the undo is the archive the backup path names, not a newer upload in
 check("run: while the archive is held, config.json names it (and none is left once the run ends)",
       (_held_mid190.get(str(P9_GS)) or {}).get("name") == _LIST190[0]["name"] and not _held190,
       repr((_held_mid190, _held190)))
-eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 8)
+eq("run: an archive that would not unpack into the staging folder restores nothing and starts the server again",
+   (_w190["stage_fail"][0], "Not restored: nothing was changed." in _w190["stage_fail"][3],
+    "could not be unpacked into a staging folder" in _w190["stage_fail"][3]),
+   (["vet", "stop", "backup", "restore", "start"], True, True))
+eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 9)
 
 # ── 5. while it runs, the server is held ────────────────────────────────────────────────────────
 with _job190(P9_GS, _shr190.GRS_KIND):
-    _held190 = (str(_sd190._r39a_wipe_refusal(P9_GS, "p190", "restart") or ""), _shr190._r39a_backup_held(P9_GS),
+    _hold190 = (str(_sd190._r39a_wipe_refusal(P9_GS, "p190", "restart") or ""), _shr190._r39a_backup_held(P9_GS),
                 _shr190._r39a_backup_held(P9_GS, wipe_ok=True))
 check("held: the server page's actions are refused in the restore's own words",
-      "is being restored from a backup" in _held190[0] and "'restart' was not run" in _held190[0], _held190[0])
-eq("held: a backup of the server waits, except the restore's own undo backup", _held190[1:], (True, False))
+      "is being restored from a backup" in _hold190[0] and "'restart' was not run" in _hold190[0], _hold190[0])
+eq("held: a backup of the server waits, except the restore's own undo backup", _hold190[1:], (True, False))
 
 # ── 6. uploading a game server's backup, through the app, onto a stand-in host ──────────────────
 def _tar190(members, compress="gz"):
@@ -660,6 +723,7 @@ _ubdir190 = _os190.path.join(_uhome190, "lgsm", "backup")
 
 
 _blank190 = []          # a finish whose answer is lost once: its command is not run, nothing comes back
+_chunks190 = []         # the largest stdin chunk each piece's command was handed
 
 
 def _fake_run190(server, cmd, timeout=30, sudo=None, stdin_text=None):
@@ -667,6 +731,10 @@ def _fake_run190(server, cmd, timeout=30, sudo=None, stdin_text=None):
     if _blank190 and "__GRS_UPSTORED__" in cmd:
         _blank190.pop()
         return "", "", -1
+    if stdin_text is not None and not isinstance(stdin_text, str):
+        _parts = [bytes(c) for c in stdin_text]
+        _chunks190.append(max(len(c) for c in _parts))
+        stdin_text = b"".join(_parts).decode("ascii")
     p = _sp190.run(["bash", "-c", cmd.replace("/home/" + _short190, _uhome190)], input=stdin_text,
                    capture_output=True, text=True, timeout=120, cwd="/")
     return p.stdout, p.stderr, p.returncode
@@ -758,6 +826,10 @@ try:
     _a = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _b = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _up190["resume"] = (_a.status_code, _b.status_code, (_b.get_json() or {}).get("received"))
+    # Finished before every byte arrived: refused, and its part file removed.
+    _fin = _CU190["rsedit"].post("%s/%s/finish" % (_base, _uid), json={}).get_json() or {}
+    _up190["early"] = (_fin.get("success"), [_f for _f in _os190.listdir(_ubdir190) if _uid in _f])
+    _uid = _CU190["rsedit"].post(_base, json={"size": 8192}).get_json()["id"]
     _up190["traversal_id"] = _CU190["rsedit"].post(_base + "/..%2F..%2Fetc%2Fpasswd?offset=0", data=b"x",
                                                content_type="application/octet-stream").status_code
     _up190["big_piece"] = _CU190["rsedit"].post("%s/%s?offset=4096" % (_base, _uid), data=b"x" * (_grs190.UPLOAD_CHUNK + 1),
@@ -798,6 +870,9 @@ if "ok" in _up190:
        {_k: (False, True, True) for _k in _uwhy190})
     eq("upload: a piece sent twice is not appended twice; the page is told how much the host holds",
        _up190["resume"], (200, 409, 4096))
+    eq("upload: finished before every byte arrived, it is refused and its part file removed", _up190["early"], (False, []))
+    check("upload: a piece goes to the host as base64 in chunks of at most 64 KB, never as one string",
+          _chunks190 and max(_chunks190) <= 65536, repr(_chunks190[:5]))
     eq("upload: an upload id that is a path, and a piece over 4 MB, are refused",
        (_up190["traversal_id"], _up190["big_piece"]), (404, 413))
 
@@ -902,7 +977,8 @@ finally:
 eq("recovery: a recorded restore that a run of this process still holds is left alone",
    _rec190["while_running"], (0, True))
 check("recovery: with no run holding it, the archive is put back under its own name and time",
-      len(_rec190["shell"]) == 1 and ("restore-source-%d" % _T0190) in _rec190["shell"][0]
+      len(_rec190["shell"]) == 1 and ("t0=%d" % _T0190) in _rec190["shell"][0]
+      and ".restore-source-$t0." in _rec190["shell"][0]
       and ('touch -m -d "@$t0"' in _rec190["shell"][0]), repr(_rec190["shell"]))
 check("recovery: ...recorded as interrupted (audit, alert, the card), naming the pre-restore archive, and forgotten",
       _rec190["audit"] == 1 and "interrupted" in _rec190["row"] and "p190-2026-11-13-000000.tar.zst" in _rec190["row"]
@@ -910,6 +986,16 @@ check("recovery: ...recorded as interrupted (audit, alert, the card), naming the
       repr(_rec190))
 eq("restart: the panel's self-update is refused while a game server is being restored (nothing launched)",
    _rec190["update"], (409, []))
+
+# ── 8b. a command's stdin is written in slices, never whole (the panel's memory) ─────────────────
+from panel.ops.ssh_manager import _core as _core190
+_big190 = bytes(range(256)) * 1000
+_sl190 = [bytes(_p) for _p in _core190._stdin_pieces(_big190)]
+_ch190 = _core190.StdinChunks([b"a" * 10, b"b" * 20])
+eq("stdin: bytes are written in slices of at most 64 KB that join to the whole; chunks are written as given",
+   (max(len(_p) for _p in _sl190) <= 65536, b"".join(_sl190) == _big190, len(_sl190) > 1,
+    [bytes(_p) for _p in _core190._stdin_pieces(_ch190)], _core190._stdin_bytes("é")),
+   (True, True, True, [b"a" * 10, b"b" * 20], "é".encode("utf-8")))
 
 # ── 9. the panel's Backups page offers Restore on each game backup; the card stacks on a phone ────────
 from unit.part47 import _SETTLE47 as _SET190, _cut47 as _cut190, _node47 as _node190

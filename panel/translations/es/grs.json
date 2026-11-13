@@ -88,5 +88,8 @@
   "The restore from {archive} was interrupted (the panel restarted); the archive is listed again under its own name, and the server may be stopped with its files partly replaced: check it.": "La restauración desde {archive} se interrumpió (el panel se reinició); el archivo vuelve a aparecer con su propio nombre, y puede que el servidor esté detenido con sus archivos reemplazados en parte: revísalo.",
   "A game server is being restored from a backup. The panel does not restart until it has finished; try again then.": "Se está restaurando un servidor de juego desde una copia de seguridad. El panel no se reinicia hasta que termine; inténtalo entonces.",
   "the backup, lock or tmp folder, ~/.ssh or the panel's cron folder (or a folder above one) is a symbolic link, so the restore could not keep it apart from what it clears": "la carpeta de copias, de bloqueos o tmp, ~/.ssh o la carpeta cron del panel (o una carpeta por encima) es un enlace simbólico, así que la restauración no podría mantenerla aparte de lo que borra",
-  "not enough free inodes: the archive holds {need} files and folders (with a margin), and {have} would be free for them": "no hay suficientes inodos libres: el archivo contiene {need} archivos y carpetas (con margen), y quedarían {have} libres para ellos"
+  "not enough free inodes: the archive holds {need} files and folders (with a margin), and {have} would be free for them": "no hay suficientes inodos libres: el archivo contiene {need} archivos y carpetas (con margen), y quedarían {have} libres para ellos",
+  "the archive could not be unpacked into a staging folder (tar exit {rc}): {last}": "no se pudo descomprimir el archivo en una carpeta provisional (tar salió con {rc}): {last}",
+  "the unpacked files could not all be moved into place": "no se pudieron mover a su sitio todos los archivos descomprimidos",
+  "a symbolic link could not be put back as it was": "no se pudo volver a poner un enlace simbólico tal como estaba"
 }

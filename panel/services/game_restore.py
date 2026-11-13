@@ -58,7 +58,7 @@ _M = {k: "__GRS_%s__" % k for k in (
     "LOCKED", "NOARCHIVE", "NOHOME", "NOPY", "TARFAIL", "BAD", "FOREIGN", "LINKOUT", "SPACE",
     "HOLDFAIL", "READY", "UP", "DOWN", "NOUNDO", "RUNNING", "BUSY", "CLEARING", "RMFAIL", "XFAIL",
     "RESTORED", "NOPART", "UPOFFSET", "UPSIZE", "UPREADY", "UPFAIL", "UPFORMAT", "UPSTORED", "KEEPLINK",
-    "INODES", "ALIVE")}
+    "INODES", "ALIVE", "STAGING", "STAGEFAIL", "MVFAIL", "LINKFAIL")}
 
 # A decompression bomb's bound: what the members declare may not pass RATIO times the archive's own
 # size plus RATIO_SLACK. Game data packs at a few to one (worlds and assets are mostly compressed
@@ -181,37 +181,33 @@ def _grs_home_lines(user):
 
 
 def _grs_walks():
-    """Lines (cwd the resolved home) refusing what the clear could not undo faithfully, then measuring space.
+    """Lines (cwd the resolved home) refusing what the restore could not put back faithfully, then measuring.
 
-    * an entry the clear would remove that the account does not own: it could not remove it;
-    * a symlinked folder whose target is not itself cleared and restored: outside the home, the
-      home itself or above it, or a KEEP path or above one. The clear keeps every symlinked folder
-      and the extraction writes through it (--keep-directory-symlink), so it must point at
-      something the restore rebuilds anyway; anything else would mix old and new files, or put
-      the archive's copy of it on another filesystem. The targets are kept in `lt` (restore_script
-      makes them again after the clear, so the link is not left dangling).
     * a KEEP path, or a folder above one, that is a symlink: the clear keeps a KEEP path by its name,
       so the folder a link points at would be cleared (every backup in it, the held archive and the
       undo included) and ~/.ssh's real folder would get the archive's old keys;
-    Then `tot` (the home's usage on its filesystem), `kb` (KEEP's share of it), `free`, `ino` (entries
-    the clear removes) and `itot`/`ifree` (the filesystem's inodes; 0 where it does not count them).
+    * an entry the clear would remove that the account does not own: it could not remove it;
+    * a symlinked folder whose target is not itself restored: outside the home, the home itself or
+      above it, or a KEEP path or above one.
+    Every symlink in what is cleared is recorded: `lp` (its path, relative), `lx` (its text, exactly as
+    readlink gives it: LinuxGSM's ~/log/server link is absolute) and `lr` (a folder's resolved target,
+    else ""). restore_script puts each back after the move (_grs_relink). Then `free` (bytes) and
+    `itot`/`ifree` (the filesystem's inodes; 0 where it does not count them).
     """
     return [
         'for kp in %s; do if [ -L "./$kp" ]; then echo %s; exit 5; fi; done' % (_GRS_KEEP_CHAIN, _M["KEEPLINK"]),
         "k=( \\( %s \\) -prune -o )" % _GRS_KEEP_FIND,
         'if [ -n "$(find . -mindepth 1 "${k[@]}" ! -user "$(id -u)" -print -quit 2>/dev/null)" ]; then '
         'echo %s; exit 5; fi' % _M["FOREIGN"],
-        'lt=(); while IFS= read -r -d "" l; do r=$(readlink -f -- "$l" 2>/dev/null) || r=; '
+        'lp=(); lx=(); lr=(); while IFS= read -r -d "" l && IFS= read -r -d "" x; do r=; '
+        'if [ -d "./$l" ]; then r=$(readlink -f -- "./$l" 2>/dev/null) || r=; '
         'case "$r" in "$HR"/*) ;; *) echo %s; exit 5;; esac; '
         'for kp in %s; do case "$r" in "$kp"|"$kp"/*) echo %s; exit 5;; esac; '
-        'case "$kp" in "$r"/*) echo %s; exit 5;; esac; done; lt+=("$r"); '
-        'done < <(find . -mindepth 1 "${k[@]}" -type l -xtype d -print0 2>/dev/null)'
+        'case "$kp" in "$r"/*) echo %s; exit 5;; esac; done; fi; lp+=("$l"); lx+=("$x"); lr+=("$r"); '
+        'done < <(find . -mindepth 1 "${k[@]}" -type l -printf "%%P\\0%%l\\0" 2>/dev/null)'
         % (_M["LINKOUT"], _GRS_KEEP_REAL, _M["LINKOUT"], _M["LINKOUT"]),
-        'tot=$(du -sxB1 . 2>/dev/null | cut -f1); kb=$(du -scxB1 -- %s 2>/dev/null | tail -n 1 | cut -f1)'
-        % _GRS_KEEP_REL,
         'free=$(df -PB1 -- "$HR" 2>/dev/null | awk \'NR==2{print $4}\')',
-        'case "$tot:$kb:$free" in *::*|:*|*:|*[!0-9:]*) echo "%s 0 0"; exit 5;; esac' % _M["SPACE"],
-        'ino=$(find . -mindepth 1 "${k[@]}" -print 2>/dev/null | wc -l)',
+        'case "$free" in ""|*[!0-9]*) echo "%s 0 0"; exit 5;; esac' % _M["SPACE"],
         'read -r itot ifree <<< "$(df -Pi -- "$HR" 2>/dev/null | awk \'NR==2{print $2, $4}\')"',
         'case "$itot:$ifree" in *[!0-9:]*|:*|*:) itot=0; ifree=0;; esac',
     ]
@@ -219,31 +215,49 @@ def _grs_walks():
 
 def _grs_inode_check(members):
     """The line refusing when the filesystem counts inodes and `members` (a shell word) would not fit."""
-    return ('if [ "$itot" -gt 0 ] && [ $(( ifree + ino )) -lt $(( %s + %d )) ]; then echo "%s $(( %s + %d )) '
-            '$(( ifree + ino ))"; exit 5; fi' % (members, INODE_MARGIN, _M["INODES"], members, INODE_MARGIN))
+    return ('if [ "$itot" -gt 0 ] && [ "$ifree" -lt $(( %s + %d )) ]; then echo "%s $(( %s + %d )) $ifree"; '
+            'exit 5; fi' % (members, INODE_MARGIN, _M["INODES"], members, INODE_MARGIN))
 
 
-def _grs_putback_leftovers():
-    """Put back, under its own name and time, any archive an interrupted restore left held aside."""
-    return ('for f in "$B"/*%s*; do [ -f "$f" ] || continue; b=${f##*/}; st=${b%%%s*}; '
-            'rs=${b##*%s}; t=${rs%%%%.*}; x=${rs#*.}; case "$t" in ""|*[!0-9]*) continue;; esac; '
-            'case "$x" in zst|gz) ;; *) continue;; esac; o="$B/$st.tar.$x"; [ -e "$o" ] && continue; '
-            'mv -n -- "$f" "$o" && touch -m -d "@$t" -- "$o"; done'
-            % (HOLD_INFIX, HOLD_INFIX, HOLD_INFIX))
+# Held aside while the pre-restore backup runs: EVERY archive in the backup dir, not only the one being
+# restored. LinuxGSM's own retention inside that backup (fn_backup_prune: past maxbackups, the oldest
+# `*.tar.*` by name; past maxbackupdays, any file by age) would otherwise delete the operator's oldest
+# archives. Held as <stem>.restore-source-<mtime>.<ext> (no ".tar.", so neither the panel's listing nor
+# LinuxGSM's count sees it), touched (so its age prune does not), the mtime kept in the name to the
+# nanosecond ("." written "_") and put back with it.
+def _grs_hold_all():
+    """Hold every archive in $B aside (see above). Names that would not round-trip are left alone."""
+    return ('for f in "$B"/*.tar.*; do [ -f "$f" ] && [ ! -L "$f" ] || continue; b=${f##*/}; st=${b%%.tar.*}; '
+            'x=${b##*.tar.}; case "$st" in ""|*.tar.*|*%s*) continue;; esac; case "$x" in ""|*[!A-Za-z0-9]*) continue;; esac; '
+            't=$(stat -c %%.9Y -- "$f" 2>/dev/null) || continue; t=${t/./_}; g="$B/$st%s$t.$x"; [ -e "$g" ] && continue; '
+            'mv -n -- "$f" "$g" && touch -m -- "$g"; done' % (HOLD_INFIX, HOLD_INFIX))
+
+
+def _grs_putback_leftovers(skip=""):
+    """Put back, under its own name and time, every archive held aside (but the one held as $<skip>)."""
+    guard = ('[ "$f" = "$%s" ] && continue; ' % skip) if skip else ""
+    return ('for f in "$B"/*%s*; do [ -f "$f" ] || continue; %sb=${f##*/}; st=${b%%%s*}; '
+            'rs=${b##*%s}; t=${rs%%%%.*}; x=${rs#*.}; case "$t" in ""|*[!0-9_]*) continue;; esac; '
+            'case "$x" in ""|*[!A-Za-z0-9]*) continue;; esac; o="$B/$st.tar.$x"; [ -e "$o" ] && continue; '
+            'mv -n -- "$f" "$o" && touch -m -d "@${t/_/.}" -- "$o"; done'
+            % (HOLD_INFIX, guard, HOLD_INFIX, HOLD_INFIX))
 
 
 def _grs_paths(name):
-    """`a` (the archive) and, once $t0 is set, `h` (where it is held). The name is plain text (_GRS_NAME)."""
+    """`a` (the archive) and `h` (where it is held, when it is: found by its stem, which is unique)."""
     stem, ext = _GRS_NAME.match(name).groups()
-    return 'a="$B/%s"' % name, 'h="$B/%s%s$t0.%s"' % (stem, HOLD_INFIX, ext)
+    return ('a="$B/%s"' % name,
+            'h=; for g in "$B/%s%s"*".%s"; do [ -f "$g" ] && h=$g; done' % (stem, HOLD_INFIX, ext))
 
 
 def _grs_member_check(var, flag, selfname, on_refusal=""):
     """Lines reading archive $<var> through its decompressor to its end, every member checked (_GRS_VET_PY).
 
     Leaves `v` holding "__GRS_LIST__ <bytes unpacked> <members>" when it passed; else prints the
-    refusal (after running `on_refusal`) and exits 5. `flag` is GNU tar's decompressor flag ("" for
-    a plain tar, which tar reads as it is).
+    refusal (after running `on_refusal`) and exits 5. A bomb is said first (the check stops reading,
+    so tar ends on a broken pipe); then a tar that did not read to its end (an unreadable or cut-short
+    archive is that, whatever the member check made of the lines it got); then the member check's own
+    verdict. `flag` is GNU tar's decompressor flag ("" for a plain tar, which tar reads as it is).
     """
     return [
         "command -v python3 >/dev/null 2>&1 || { %s echo %s; exit 5; }" % (on_refusal, _M["NOPY"]),
@@ -252,18 +266,21 @@ def _grs_member_check(var, flag, selfname, on_refusal=""):
         'v=$(tar %s -tv --quoting-style=c --numeric-owner -f "$%s" 2>/dev/null | python3 -I -c %s "$bs" %s "$asz" %s; '
         'echo " rc=${PIPESTATUS[0]}:${PIPESTATUS[1]}")'
         % (flag, var, _q(_GRS_VET_PY), _q(selfname), " ".join(KEEP)),
+        'case "$v" in *"__GRS_BAD__ bomb"*) %s echo "${v%%%% rc=*}"; exit 5;; esac' % on_refusal,
+        'case "$v" in *" rc=0:"*) ;; *) %s echo %s; exit 5;; esac' % (on_refusal, _M["TARFAIL"]),
         'case "$v" in *__GRS_BAD__*) %s echo "${v%%%% rc=*}"; exit 5;; esac' % on_refusal,
         'case "$v" in *"__GRS_LIST__ "*" rc=0:0") ;; *) %s echo %s; exit 5;; esac' % (on_refusal, _M["TARFAIL"]),
     ]
 
 
 def vet_script(user, selfname, name, undo_estimate):
-    """The first command: every check before anything changes, then the archive held aside.
+    """The first command: every check before anything changes, then every archive held aside.
 
-    Prints READY <up> <t0> <need> <have> when the restore may go on (<up> 1 when the server was
-    running, <t0> the archive's mtime it is put back with), else one refusal mark and nothing
-    changed. `undo_estimate`: bytes the pre-restore backup is expected to take, set aside by the
-    space check. `name` must have passed archive_problem.
+    Prints READY <up> <t0> <need> <have> <members> when the restore may go on (<up> 1 when the server
+    was running, <t0> the archive's mtime in seconds), else one refusal mark and nothing changed.
+    The space check: the archive is unpacked into a staging folder while everything is still in place
+    (restore_script), so the free space must hold it whole besides the pre-restore backup
+    (`undo_estimate` bytes). `name` must have passed archive_problem.
     """
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
@@ -276,73 +293,113 @@ def vet_script(user, selfname, name, undo_estimate):
         'set -- ${v#*__GRS_LIST__ }; need=$(( $1 + %d )); nmem=$2' % MARGIN,
         'cd -- "$HR" || exit 3',
     ] + _grs_walks() + [_grs_inode_check("nmem")] + [
-        'have=$(( free + tot - kb - %d ))' % int(undo_estimate),
+        'have=$(( free - %d ))' % int(undo_estimate),
         'if [ "$have" -lt "$need" ]; then echo "%s $need $have"; exit 5; fi' % _M["SPACE"],
         't0=$(stat -c %Y -- "$a") || { echo ' + _M["HOLDFAIL"] + '; exit 6; }',
+        _grs_hold_all(),
         h_line,
-        'if [ -e "$h" ] || ! mv -n -- "$a" "$h" || [ -e "$a" ] || [ ! -f "$h" ]; then echo %s; exit 6; fi'
-        % _M["HOLDFAIL"],
-        'touch -m -- "$h"',
-        # Said, or put back: a panel that gave up before this line never learns the archive was moved.
+        'if [ -z "$h" ] || [ -e "$a" ]; then %s; echo %s; exit 6; fi' % (_grs_putback_leftovers(), _M["HOLDFAIL"]),
+        # Said, or put back: a panel that gave up before this line never learns the archives were moved.
         'kill $hb 2>/dev/null',
-        'if ! echo "%s $up $t0 $need $have $nmem"; then mv -n -- "$h" "$a" && touch -m -d "@$t0" -- "$a"; exit 6; fi'
-        % _M["READY"],
+        'if ! echo "%s $up $t0 $need $have $nmem"; then %s; exit 6; fi' % (_M["READY"], _grs_putback_leftovers()),
     ]
     return "\n".join(lines) + "\n"
 
 
 def leftovers_script(user):
-    """Put back any archive held aside, when the restore cannot tell whether its checks held one."""
+    """Put back every archive held aside (a restore that ended before its last step, or was cut off)."""
     return "B=%s\n%s\ntrue\n" % (_q("/home/%s/lgsm/backup" % user), _grs_putback_leftovers())
 
 
 def putback_script(user, name, t0):
-    """Put the held archive back under its own name and time (a restore that stopped before its last step)."""
-    a_line, h_line = _grs_paths(name)
-    return "\n".join(["B=%s" % _q("/home/%s/lgsm/backup" % user), "t0=%d" % int(t0), a_line, h_line,
-                      '[ -f "$h" ] && [ ! -e "$a" ] && mv -n -- "$h" "$a" && touch -m -d "@$t0" -- "$a"',
-                      "true"]) + "\n"
+    """Put every held archive back under its own name and time. `name` and `t0` are kept for the callers."""
+    del name, t0
+    return leftovers_script(user)
+
+
+# The folders above a KEEP path that are not KEEP themselves (lgsm): the move merges into them.
+_GRS_KEEP_PARENTS = tuple(sorted({k.split("/")[0] for k in KEEP if "/" in k}))
+
+
+def _grs_move():
+    """Move every staged entry into the cleared home; into a KEEP path's parent (lgsm) entry by entry."""
+    parents = "|".join(_GRS_KEEP_PARENTS)
+    return ('for e in "$S"/* "$S"/.[!.]* "$S"/..?*; do [ -e "$e" ] || [ -L "$e" ] || continue; n=${e##*/}; '
+            'case "$n" in %s) mkdir -p -- "$HR/$n" || { echo %s; exit 7; }; '
+            'for f in "$e"/* "$e"/.[!.]* "$e"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; '
+            'mv -T -- "$f" "$HR/$n/${f##*/}" || { echo %s; exit 7; }; done;; '
+            '*) mv -T -- "$e" "$HR/$n" || { echo %s; exit 7; };; esac; done'
+            % (parents, _M["MVFAIL"], _M["MVFAIL"], _M["MVFAIL"]))
+
+
+def _grs_relink():
+    """Put every recorded symlink back exactly as it was (its own text), deepest first.
+
+    The archive holds what `tar -h` found through the link: a real folder (or file) at the link's path.
+    A folder's files are also stored under its target, as hard links when the target is in the home
+    (GNU tar stores a second name for an inode as a link to the first), so they are already there; a
+    file that is only under the link's path is moved to the target first. Then the real entry is
+    removed and the link made again.
+    """
+    return ('for ((i=${#lp[@]}-1; i>=0; i--)); do p="$HR/${lp[$i]}"; r=${lr[$i]}; '
+            'if [ -d "$p" ] && [ ! -L "$p" ] && [ -n "$r" ] && [ -d "$r" ]; then '
+            'while IFS= read -r -d "" e; do sp="$p/${e#./}"; tp="$r/${e#./}"; '
+            'if [ -d "$sp" ] && [ ! -L "$sp" ]; then mkdir -p -- "$tp"; '
+            'elif [ ! -e "$tp" ] && [ ! -L "$tp" ]; then mv -- "$sp" "$tp"; fi; '
+            'done < <(cd -- "$p" && find . -mindepth 1 -print0); fi; '
+            'if [ -e "$p" ] || [ -L "$p" ]; then rm -rf -- "$p" || { echo %s; exit 7; }; fi; '
+            'mkdir -p -- "${p%%/*}" && ln -s -- "${lx[$i]}" "$p" || { echo %s; exit 7; }; done'
+            % (_M["LINKFAIL"], _M["LINKFAIL"]))
 
 
 def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_POLLS, members=0):
-    """The last command: the checks again, then clear the home (but KEEP) and extract the archive into it.
+    """The last command: the checks again; unpack into a staging folder; only then clear and move it in.
 
-    Refused, nothing cleared: a LinuxGSM lock; the held archive or the undo backup `undo` missing; the
+    Refused, nothing changed: a LinuxGSM lock; the held archive or the undo backup `undo` missing; the
     server up (LinuxGSM's own test); a process of the account still in serverfiles after a bounded
-    wait; the walks (_grs_walks); less space than `need` now that the undo exists, or fewer inodes than
-    `members` (vet_script counted them) and the margin. Then CLEARING,
-    and from there a failure leaves the home part cleared: RMFAIL (something could not be removed),
-    XFAIL (the extraction failed). RESTORED when tar exited 0. The archive is put back under its
-    own name and time on every exit (the trap).
+    wait; the walks (_grs_walks); too little space for the staging copy (`need`) or too few inodes for
+    `members`. The other held archives are put back. Then STAGING: the archive is unpacked into
+    lgsm/tmp/panel-restore-<t0> (KEEP, on the home's filesystem since no KEEP path is a link); a tar
+    that does not exit 0, or fewer entries than the checks counted, refuses (STAGEFAIL), and still
+    nothing was changed. Then CLEARING (everything but KEEP), the move (a rename, entry by entry),
+    every recorded symlink put back as it was, and RESTORED. A failure after CLEARING (RMFAIL,
+    MVFAIL, LINKFAIL) leaves the home part cleared. The staging folder is removed and the archive put
+    back under its own name and time on every exit (the trap).
     """
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
     excludes = " ".join("--exclude=./%s --exclude=././%s" % (k, k) for k in KEEP)
     lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
-        "t0=%d" % int(t0), a_line, h_line,
-    ] + _grs_heartbeat('[ -f "$h" ] && [ ! -e "$a" ] && mv -n -- "$h" "$a" && touch -m -d "@$t0" -- "$a"; ') + [
-        'if [ ! -f "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
+        "t0=%d" % int(t0), a_line, h_line, 'S="$HR/lgsm/tmp/panel-restore-$t0"',
+    ] + _grs_heartbeat('rm -rf -- "$S"; %s; ' % _grs_putback_leftovers()) + [
+        'if [ -z "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         'if [ ! -s "$B"/%s ]; then echo %s; exit 5; fi' % (_q(undo), _M["NOUNDO"]),
         "if %s; then echo %s; exit 4; fi" % (_wwr._wwr_tmux_up(selfname), _M["RUNNING"]),
         'sf=$(cd -P -- "$HR/serverfiles" 2>/dev/null && pwd -P && printf x) && sf=${sf%?x} || sf="$HR"',
     ] + [ln.replace(_wwr._M_BUSY, _M["BUSY"]) for ln in _wwr._wwr_busy_wait(busy_polls)] + [
         'cd -- "$HR" || exit 3',
     ] + _grs_walks() + [_grs_inode_check(str(int(members)))] + [
-        'have=$(( free + tot - kb ))',
-        'if [ "$have" -lt %d ]; then echo "%s %d $have"; exit 5; fi' % (int(need), _M["SPACE"], int(need)),
+        'if [ "$free" -lt %d ]; then echo "%s %d $free"; exit 5; fi' % (int(need), _M["SPACE"], int(need)),
+        _grs_putback_leftovers(skip="h"),
+        "echo " + _M["STAGING"],
+        'rm -rf -- "$S"; mkdir -p -- "$S" || { echo "%s 1 the staging folder could not be made"; exit 5; }'
+        % _M["STAGEFAIL"],
+        'x=$(tar %s -xpf "$h" -C "$S" --anchored %s 2>&1); rc=$?' % (_GRS_FLAGS[ext], excludes),
+        'if [ "$rc" != 0 ]; then printf "%s %%s %%s\\n" "$rc" "$(printf "%%s" "$x" | tail -n 1)"; exit 5; fi'
+        % _M["STAGEFAIL"],
+        'cnt=$(find "$S" -mindepth 1 | wc -l)',
+        'if [ "$cnt" -lt $(( %d - 1 )) ]; then echo "%s 0 unpacked $cnt of %d entries"; exit 5; fi'
+        % (int(members), _M["STAGEFAIL"], int(members)),
         "echo " + _M["CLEARING"],
         'find . -mindepth 1 "${k[@]}" -type d ! -perm -u=wx -exec chmod u+wx -- {} + 2>/dev/null',
-        'find . -mindepth 1 "${k[@]}" ! -type d ! -xtype d -exec rm -f -- {} + 2>/dev/null',
+        'find . -mindepth 1 "${k[@]}" ! -type d -exec rm -f -- {} + 2>/dev/null',
         'find . -mindepth 1 -depth -type d -empty %s -delete 2>/dev/null'
         % " ".join("! -path ./%s ! -path './%s/*'" % (k, k) for k in KEEP),
-        # The targets of the symlinked folders kept, emptied above: made again, so no kept link dangles.
-        'for r in "${lt[@]}"; do mkdir -p -- "$r"; done',
-        'if [ -n "$(find . -mindepth 1 "${k[@]}" ! -type d ! -xtype d -print -quit 2>/dev/null)" ]; then '
+        'if [ -n "$(find . -mindepth 1 "${k[@]}" ! -type d -print -quit 2>/dev/null)" ]; then '
         'echo %s; exit 6; fi' % _M["RMFAIL"],
-        'x=$(tar %s -xpf "$h" -C "$HR" --keep-directory-symlink --no-overwrite-dir --anchored %s 2>&1); rc=$?'
-        % (_GRS_FLAGS[ext], excludes),
-        'if [ "$rc" = 0 ]; then echo %s; else printf "%s %%s %%s\\n" "$rc" "$(printf "%%s" "$x" | tail -n 1)"; '
-        'exit 7; fi' % (_M["RESTORED"], _M["XFAIL"]),
+        _grs_move(),
+        _grs_relink(),
+        "echo " + _M["RESTORED"],
     ]
     return "\n".join(lines) + "\n"
 
@@ -448,6 +505,11 @@ def restore_outcome(out, rc):
         return "done", i18n.Sentence("restored")
     if _M["CLEARING"] in marks:
         return "failed", _grs_late_failure(marks, rc)
+    if _M["STAGEFAIL"] in marks:
+        sf = (marks[_M["STAGEFAIL"]] or "").split(None, 2)
+        return "refused", i18n.Sentence("the archive could not be unpacked into a staging folder (tar exit {rc}): "
+                                        "{last}", rc=sf[1] if len(sf) > 1 else "?",
+                                        last=(sf[2] if len(sf) > 2 else "")[:200])
     why = _grs_refusal(marks, _GRS_LATE_REFUSALS)
     if why is not None:
         return "refused", why
@@ -455,9 +517,13 @@ def restore_outcome(out, rc):
 
 
 def _grs_late_failure(marks, rc):
-    """What went wrong once the clear had begun: a file that would not go, or the extraction."""
+    """What went wrong once the clear had begun: a file that would not go, the move, or a symlink."""
     if _M["RMFAIL"] in marks:
         return i18n.Sentence("a file in the home could not be removed, so the clear stopped part way")
+    if _M["MVFAIL"] in marks:
+        return i18n.Sentence("the unpacked files could not all be moved into place")
+    if _M["LINKFAIL"] in marks:
+        return i18n.Sentence("a symbolic link could not be put back as it was")
     xf = (marks.get(_M["XFAIL"]) or "").split(None, 2)
     return i18n.Sentence("the extraction failed (tar exit {rc}): {last}",
                          rc=xf[1] if len(xf) > 1 else rc, last=(xf[2] if len(xf) > 2 else "")[:200])
@@ -532,7 +598,7 @@ def upload_finish_script(user, selfname, uid, size, when):
         _grs_part(user, uid),
         'if [ ! -f "$p" ] || [ -L "$p" ]; then echo %s; exit 5; fi' % _M["NOPART"],
         's=$(stat -c %s -- "$p")',
-        'if [ "$s" != %d ]; then echo "%s $s"; exit 5; fi' % (int(size), _M["UPOFFSET"]),
+        'if [ "$s" != %d ]; then %s echo "%s $s"; exit 5; fi' % (int(size), rm, _M["UPOFFSET"]),
         "m=$(head -c 4 -- \"$p\" | od -An -tx1 | tr -d ' \\n')",
         'case "$m" in 28b52ffd) f=--zstd; x=zst;; 1f8b*) f=--gzip; x=gz;; '
         '*) if [ "$(dd if="$p" bs=1 skip=257 count=5 2>/dev/null)" = ustar ]; then f=; x=tar; '

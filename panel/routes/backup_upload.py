@@ -30,6 +30,7 @@ from panel.core.http import _json_body, _log_and_generic
 from panel.db.models import LOCAL_HOST_LABEL
 from panel.ops import backup as bk
 from panel.ops import ssh_manager as _sm
+from panel.ops.ssh_manager._core import StdinChunks
 from panel.routes import _shared
 from panel.security.auth import (EDIT_FILES, RESTORE_BACKUP, get_game, has_permission, log_action,
                                  permission_required, server_access_required, superadmin_required)
@@ -160,7 +161,7 @@ def _register_game(app):
         if offset is None:
             return data
         state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, uid, offset), _GAME_PIECE_TIMEOUT,
-                                   stdin=base64.b64encode(data).decode("ascii"))
+                                   stdin=_bup_b64_chunks(data))
         if state == "ok" and str(val).isdecimal():
             entry["got"] = int(val)
             return jsonify({"success": True, "received": entry["got"]})
@@ -214,6 +215,15 @@ def _register_game_cancel(app):
         _bup_drop(uid)
         state, _val = _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, uid), 60)
         return jsonify({"success": state == "ok"})
+
+
+_BUP_B64_STEP = 49152      # a multiple of 3, so each slice's base64 joins the next without padding
+
+
+def _bup_b64_chunks(data):
+    """A piece's bytes as base64, 64 KB at a time (the transport writes them as they come)."""
+    view = memoryview(data)
+    return StdinChunks(base64.b64encode(view[i:i + _BUP_B64_STEP]) for i in range(0, len(view), _BUP_B64_STEP))
 
 
 def _bup_game_run(gs, script, timeout, stdin=None):
