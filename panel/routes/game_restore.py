@@ -131,8 +131,10 @@ def _grs_recover_ticker(app):
     runtime_stats.loop_started("restore-recover", 60)
     time.sleep(60)
     while True:
+        t0 = time.time()
         try:
             _grs_recover_pass(app)
+            runtime_stats.beat("restore-recover", _GRS_RECOVER_EVERY, time.time() - t0)
         except Exception:
             runtime_stats.bump("loopfail", "restore-recover")
             app.logger.warning("restore recovery pass failed", exc_info=True)
@@ -214,15 +216,18 @@ def _grs_request_refusal(gs, body, name):
     return None if busy is None else _grs_refuse(gs, name, busy)
 
 
-def register(app):
-    """The restore route (called from panel_backup.register, beside the other game backup routes).
+def start_recovery(app):
+    """Start the recovery sweep's supervised thread (manage_servers.register calls this, beside the wipe sweep).
 
-    And the recovery sweep's supervised thread (app._make_supervisor: not started under the recovery
-    CLI's no-workers switch).
+    The same supervisor every ticker gets (app._make_supervisor: named, respawned, and not started
+    under the recovery CLI's no-workers switch).
     """
     from app import _make_supervisor   # lazily: app imports this module while it is still loading
     _make_supervisor(app)("restore-recover", lambda: _grs_recover_ticker(app))
 
+
+def register(app):
+    """The restore route (called from panel_backup.register, beside the other game backup routes)."""
     @app.route("/api/panel/backup/game/<int:server_id>/restore", methods=["POST"])
     @login_required
     @permission_required(RESTORE_BACKUP)

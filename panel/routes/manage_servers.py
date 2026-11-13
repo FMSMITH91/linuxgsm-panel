@@ -417,9 +417,11 @@ def register(app):
     _register_install(app)
     _register_uninstall_and_edit(app)
     # The install page's game tiles, and the Schedule tab's wipe card (Rust, and the Minecraft / Factorio world reset) with its sweep.
-    from panel.routes import game_icons as _cmpd_icons, wipe_schedule as _cmpd_wipe
+    from panel.routes import game_icons as _cmpd_icons, game_restore as _grs, wipe_schedule as _cmpd_wipe
     _cmpd_icons.register(app)
     _cmpd_wipe.register(app)
+    # The sweep that settles a restore a panel restart cut off (its route is registered with the backups).
+    _grs.start_recovery(app)
 
 
 def _register_pages(app):

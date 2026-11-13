@@ -82,6 +82,7 @@ jobs:
               'panel/db/__init__.py'
               'panel/__init__.py'
               'panel/core/__init__.py'
+              'panel/core/stdin_chunks.py'
               'tests/fuzz/**'
               '.github/workflows/cflite_pr.yml'
               '.clusterfuzzlite/**'
