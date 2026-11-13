@@ -297,7 +297,7 @@ check("world reset sweep (pmc): a Paper started with --world-container is not re
 _dupread191 = _reads191((_PROPS191, None))
 _dup191 = _sweep_case183(_pmc_sid191, read=_dupread191, cfg=[
     'startparameters="nogui"\nexecutabledir="${serverfiles}"\nexecutable="./paper.jar"\n'
-    'preexecutable="java -Xmx${javaram}M -jar"\n', "", "",
+    + 'preexecutable="java -Xmx${javaram}M -jar"\n', "", "",
     'startparameters="nogui --world-dir /srv/w"\nstartparameters="nogui"\n', ""])
 check("world reset sweep (pmc): an instance cfg with two startparameters lines (LinuxGSM starts with the first) "
       "is not reset, nothing read or stopped",
