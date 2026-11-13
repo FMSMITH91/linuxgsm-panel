@@ -1573,18 +1573,26 @@ FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rule
                     "/etc/ufw/user6.rules")
 
 
+# ufw handles IPv6 only where the kernel has it (ufw's backend.use_ipv6 tests this path exists). The
+# remote form ends with a line for it, so the panel learns it in the same read as IPV6=.
+FWA_KERNEL_V6_PATH = "/proc/sys/net/ipv6"
+
+
 def _fwa_ufw_stored_remote(a):
     """The remote form of ufw-stored-rules: each file after a "==> <path> <==" line, or exit 1.
 
     The helper's contract (do_fwa_ufw_stored): every file or none, so a listing that stopped
     part-way is never read as "no rules". Collected first and printed only once all were read.
-    The paths are this module's constants.
+    The paths are this module's constants. Last, after "==> /proc/sys/net/ipv6 <==", `yes` or `no`:
+    whether the kernel has IPv6 (firewall._fwa_cut_kernel_v6 reads it off before the files are split).
     """
     return ("nl='\n'; o=''; for f in %s; do c=$(cat -- \"$f\" && echo x) || "
             "{ echo \"ufw-stored-rules could not read $f\" >&2; exit 1; }; c=${c%%x}; "
             "case \"$c\" in ''|*\"$nl\") ;; *) c=\"$c$nl\" ;; esac; "
-            "o=\"$o==> $f <==$nl$c\"; done; printf '%%s' \"$o\""
-            % " ".join(shlex.quote(p) for p in FWA_STORED_PATHS))
+            "o=\"$o==> $f <==$nl$c\"; done; k=no; [ -e %s ] && k=yes; "
+            "printf '%%s==> %%s <==\\n%%s\\n' \"$o\" %s \"$k\""
+            % (" ".join(shlex.quote(p) for p in FWA_STORED_PATHS), shlex.quote(FWA_KERNEL_V6_PATH),
+               shlex.quote(FWA_KERNEL_V6_PATH)))
 
 
 # The exit status of a ufw-delete-num-if that found rule <n> changed and deleted nothing — the

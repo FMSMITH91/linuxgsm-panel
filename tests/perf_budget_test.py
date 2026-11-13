@@ -231,6 +231,11 @@ app.config.update(WTF_CSRF_ENABLED=False, SESSION_PROTECTION=None, SESSION_COOKI
 # target is seen by the route modules AND by ssh_manager's own internal call sites.
 for _name in ("run_command", "run_privileged", "run_as_game_user"):
     setattr(_sm_core, _name, lambda *a, **k: ("", "", 0))
+# The host's answer that each game account is a plain one: with run_command answering "" the
+# account check could not read it, so every file read (the logs, the Minecraft lists) was refused
+# with a 409 before the route's own queries ran, and the sweep measured the refusal.
+from panel.routes import _shared as _pb_shared  # noqa: E402
+_pb_shared._probe_accounts = lambda remote, users, local: {u: "ok" for u in users}
 # ...and the tripwire in front of _core's own local transport: _run_local and _exec_local_shell start
 # their process through _real_subprocess, and the file and content-cron writers reach them past the
 # three stubs above, so a page that did would have run sudo unseen (review 1016f lead).
@@ -281,6 +286,20 @@ def seed_servers(first, count):
                                       game_type="csgo", port=27015 + i,
                                       remote_id=remotes[i % len(remotes)].id, installed=True))
         db.session.commit()
+
+
+def seed_minecraft_server():
+    """One Java Minecraft server, the only kind the Minecraft lists page reads; its id.
+
+    Seeded once, before both sweeps, so it adds the same to every count in each.
+    """
+    with app.app_context():
+        remotes = RemoteServer.query.all()
+        gs = GameServer(name="mcperf", short_name="mcserver", game_type="mc", port=25565,
+                        remote_id=remotes[1 % len(remotes)].id, installed=True)
+        db.session.add(gs)
+        db.session.commit()
+        return gs.id
 
 
 GROUPS_SMALL = 3
@@ -354,10 +373,13 @@ def _seed_admin_and_hosts():
         return admin.id
 
 
-def _get_page_paths(admin_id):
-    """Every GET page in the url map, with a real row's id in place of each id placeholder."""
+def _get_page_paths(admin_id, mc_server):
+    """Every GET page in the url map, with a real row's id in place of each id placeholder.
+
+    The Minecraft lists page gets the Minecraft server: any other game is refused before a read.
+    """
     with app.app_context():
-        one_server = GameServer.query.first().id
+        one_server = GameServer.query.filter(GameServer.id != mc_server).first().id
         one_remote = RemoteServer.query.first().id
 
     subs = {"<int:server_id>": str(one_server), "<int:remote_id>": str(one_remote),
@@ -371,6 +393,8 @@ def _get_page_paths(admin_id):
             p = str(rule)
             if p.startswith("/static"):
                 continue
+            if "/mc-lists/" in p:
+                p = p.replace("<int:server_id>", str(mc_server))
             for k, v in subs.items():
                 p = p.replace(k, v)
             # <any(a, b):x> is a fixed list: its first option is a real page of that rule.
@@ -524,7 +548,8 @@ def _check_api_servers_scans_concurrently(client):
 try:
     admin_id = _seed_admin_and_hosts()
     seed_servers(0, SERVERS_SMALL)
-    paths = _get_page_paths(admin_id)
+    mc_server = seed_minecraft_server()
+    paths = _get_page_paths(admin_id, mc_server)
     check("perf: the sweep requests every GET page but the pinned few it cannot (a new page left out "
           "is named here)", set(_r41t_unswept) == _r41t_unswept_known,
           repr(sorted(set(_r41t_unswept) ^ _r41t_unswept_known)))
@@ -540,6 +565,12 @@ try:
     large = probe(c, paths, large_st)
     elapsed = time.perf_counter() - t0
 
+    _anypages = sorted(p for p in paths if p.endswith(("/mc-lists/ops", "/log/script")))
+    check("perf: ...and each <any(...)> page answered 200 in both sweeps (the Minecraft lists page read a "
+          "Minecraft server's list, not refused another game's)",
+          len(_anypages) == 2 and all(small_st.get(p) == 200 and large_st.get(p) == 200 for p in _anypages)
+          and "/api/server/%d/mc-lists/ops" % mc_server in _anypages,
+          repr([(p, small_st.get(p), large_st.get(p)) for p in _anypages]))
     _check_the_sweep_ran({p: n for p, n in small.items() if small_st.get(p) == 200},
                          {p: n for p, n in large.items() if large_st.get(p) == 200})
     grew = _pages_that_grew(small, large)

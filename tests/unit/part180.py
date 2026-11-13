@@ -234,8 +234,9 @@ eq("pending port r41w: a Restart LinuxGSM postponed or one that failed keeps the
    "waiting; a clean Restart, or a Start, moves to it",
    [_r180[k] for k in ("pp_postponed", "pp_failed", "pp_clean", "pp_start")],
    [(41850, 41860), (41850, 41860), (41860, None), (41860, None)])
-eq("pending port r42: a port saved DURING a start is not followed (the game bound the one saved before); it waits",
-   _r180["pp_resaved"], (41850, 41870))
+eq("pending port r42: a port saved DURING a start is not followed; the stored port moves to the one saved "
+   "before (the game bound it) and the later one waits",
+   _r180["pp_resaved"], (41860, 41870))
 check("pending port r41w: ...and nothing reached a host", _r180["pp_trips"] == [], repr(_r180["pp_trips"]))
 
 _sib180 = NS(id=1, name="a", port=27015, pending_port=27030, game_type="csgo")

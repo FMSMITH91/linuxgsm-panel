@@ -474,9 +474,45 @@ panel_version() {
     _version_file
 }
 
+# The account a root run works inside PANEL_DIR as: `root` only when the tree is root's in a way
+# the panel user cannot arrange, else the tree's owner. Every root step in the tree asks this
+# (_owner_read, choose_and_record_port, fetch_code's extract, install_deps, TREE_SUDO).
+#
+# It used to be `stat -c %U PANEL_DIR`, which reads the ENTRY, not the directory it leads to. The
+# entry sits in the panel user's home, so that user can put anything there, and with
+# fs.protected_hardlinks=0 that includes a hard link to a root-owned RELATIVE symlink
+# (`ln /usr/bin/python3 ~/linuxgsm-panel` after renaming its tree to `python3.12`): a symlink entry
+# owned by root that resolves into the panel's own tree. Every step then ran as root inside a tree
+# the panel controls — pip installing a panel-written requirements file, the rollback's rm and tar.
+# So:
+#   * a real directory (not a link) is judged by its owner: the panel user cannot make a root-owned
+#     one, only rename one root already left beside it, whose contents stay root's;
+#   * a link counts only when root made it and it has that one name (_r26a_link_trusted's rule),
+#     and its own target is beyond the panel user's reach (_r26a_fixed_target): then the target
+#     directory's owner — an operator who moved the install;
+#   * anything else — a link the panel user made or hard-linked, a file — is the panel user's, so
+#     the step runs as that account and the kernel refuses whatever it could not do itself.
+# Nothing there (a fresh install before its first mkdir) is root's, as before.
+_r42i_tree_owner() {
+    local st mode n u t
+    st="$(stat -c '%f %h %U' -- "${PANEL_DIR}" 2>/dev/null)" || { echo root; return 0; }
+    read -r mode n u <<< "${st}"
+    # A mode that is not hex (a stat that does not know %f) is judged as a link would be: unknown.
+    [[ "${mode}" =~ ^[0-9a-fA-F]+$ ]] || { echo "${PANEL_USER:-root}"; return 0; }
+    mode=$(( 16#${mode} & 0xF000 ))
+    if [[ "${mode}" -eq $(( 0x4000 )) ]]; then
+        echo "${u}"; return 0
+    fi
+    if [[ "${mode}" -eq $(( 0xA000 )) ]] && [[ "${u}" = "root" ]] && [[ "${n}" = "1" ]] \
+       && t="$(_r26a_fixed_target "${PANEL_DIR}")" && u="$(stat -c '%U' -- "${t}" 2>/dev/null)"; then
+        echo "${u}"; return 0
+    fi
+    echo "${PANEL_USER:-root}"
+}
+
 # Print at most 64 KiB of the file $1 inside PANEL_DIR, or nothing — read AS THE OWNER of
-# PANEL_DIR when this runs as root and that is someone else (the same rule, and the same
-# `stat -c %U`, as choose_and_record_port). The file is opened O_NOFOLLOW|O_NONBLOCK and must be a
+# PANEL_DIR when this runs as root and that is someone else (_r42i_tree_owner says who, as for
+# choose_and_record_port). The file is opened O_NOFOLLOW|O_NONBLOCK and must be a
 # regular file, so neither a link nor a FIFO in its place is read.
 #
 # Why each part. Every path under PANEL_DIR is the panel user's to rename, replace or link once
@@ -495,7 +531,7 @@ panel_version() {
 _owner_read() {
     local as_owner="" owner=""
     if [[ "$(id -u)" -eq 0 ]]; then
-        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        owner="$(_r42i_tree_owner)"
         [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner}"
     fi
     (cd / && ${as_owner} python3 -I - "$1" 2>/dev/null <<'OWNER_READ_PY') || true
@@ -605,7 +641,7 @@ setup_link_token() {
 choose_and_record_port() {
     local desired="${1:-5000}" as_owner="" owner=""
     if [[ "$(id -u)" -eq 0 ]]; then
-        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        owner="$(_r42i_tree_owner)"
         [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner}"
     fi
     ${as_owner} python3 -I - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
@@ -1355,7 +1391,7 @@ fetch_code() {
         local x_as=""
         if [[ "$(id -u)" -eq 0 ]]; then
             local x_owner
-            x_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+            x_owner="$(_r42i_tree_owner)"
             [[ "${x_owner}" != "root" ]] && x_as="sudo -u ${x_owner}"
         fi
         # Marked BEFORE the write, not after fetch_code returns: an extract that fails partway (the
@@ -1531,7 +1567,7 @@ install_deps() {
     local as_owner="" clear="" boot_txt req_txt
     boot_txt="$(panel_file requirements-bootstrap.txt)"; req_txt="$(panel_file requirements.txt)"
     if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]] \
-       && [[ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]]; then
+       && [[ "$(_r42i_tree_owner)" = "${PANEL_USER}" ]]; then
         as_owner="sudo -u ${PANEL_USER}"
     fi
     if _venv_stale; then
@@ -2700,7 +2736,11 @@ _r25j_panel_port_to_record() {
     _r25j_is_panel_port "${_prev}" || _prev=""
     _cfg="$(_r26a_cfg_port)" || _cfg=""
     _r25j_is_panel_port "${_cfg}" || _cfg=""
-    _owner_uid="$(stat -c '%u' "${PANEL_DIR}" 2>/dev/null)" || _owner_uid=""
+    # The tree's account by _r42i_tree_owner's rule: PANEL_DIR's own entry can be a root-owned link.
+    # Nothing there leaves it empty, as the stat it replaced did.
+    if [[ -e "${PANEL_DIR}" ]] || [[ -L "${PANEL_DIR}" ]]; then
+        _owner_uid="$(id -u "$(_r42i_tree_owner)" 2>/dev/null)" || _owner_uid=""
+    fi
     # A panel still RUNNING on the recorded port keeps it. config.json's port is the next start's:
     # after a port change whose restart could not be scheduled the panel put the record back on the
     # port it still serves, and a re-run that updates nothing (no restart) wrote config.json's over
@@ -3581,7 +3621,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     # install, or a tree the fresh path has not chowned yet): the step then runs as before.
     TREE_SUDO=""
     if [[ "$(id -u)" -eq 0 ]]; then
-        _tree_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        _tree_owner="$(_r42i_tree_owner)"
         [[ "${_tree_owner}" != "root" ]] && TREE_SUDO="sudo -u ${_tree_owner} env -C /"
     fi
     snapshot_service_unit

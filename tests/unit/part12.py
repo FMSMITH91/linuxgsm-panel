@@ -3692,7 +3692,7 @@ _pb_secret = os.path.join(_PB, "reads", "secret")
 with open(_pb_secret, "w") as _fh:
     _fh.write('{"port": 7777}\nroot:$6$hash:1\n')
 os.chmod(_pb_secret, 0o600)
-_pb_ver_sh = ("set -euo pipefail\n" + _pb_shfn("_owner_read") + _pb_shfn("panel_port")
+_pb_ver_sh = ("set -euo pipefail\n" + _pb_shfn("_r42i_tree_owner") + _pb_shfn("_owner_read") + _pb_shfn("panel_port")
               + _pb_shfn("_r26a_cfg_port")
               + _pb_shfn("_epoch_version") + _pb_shfn("_version_file"))
 _pb_cfg = os.path.join(_pb_rd, "data", "config.json")
@@ -3885,7 +3885,7 @@ check("install.sh: the snapshot, snapshot_ok and both rollbacks go through TREE_
 # root, reported them skipped. The real function is loaded; its UNIT_FILE is a sandbox path that
 # does not exist.
 _pb_ph = ("set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
-          + _pb_shfn("snapshot_service_unit"))
+          + _pb_shfn("snapshot_service_unit") + _pb_shfn("_r42i_tree_owner"))
 # The same death twice: #378's snapshot_service_unit, then an update-time scheme probe, each an
 # install.sh function called inside a lifted block that the preamble did not define. Both reached
 # only CI's ROOT pass, the one place these blocks run. So, without root: every install.sh function

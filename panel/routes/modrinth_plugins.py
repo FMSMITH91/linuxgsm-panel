@@ -29,7 +29,7 @@ from flask_login import current_user, login_required
 from panel.core import i18n
 from panel.core.http import _json_body, _json_str, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
-from panel.routes._shared import _r20b_audit_on_raise
+from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after
 from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
 from panel.services import modrinth as _mr
 
@@ -129,11 +129,11 @@ def _mdr_install(gs, project_id):
                                   overwrite=False, selfname=gs.lgsm_name)
     if not ok and msg == _sm.UPLOAD_EXISTS:
         return _mdr_refuse(gs, "install", detail + " (name taken)", EXISTS, 409)
-    _mdr_audit(gs, "install", detail, ok)
-    if not ok:
-        return jsonify({"success": False, "message": _sm.write_failure_reason(msg) or "Failed"})
-    return jsonify({"success": True, "name": plan["filename"],
-                    "message": i18n.tr(_MDR_INSTALLED, name=plan["filename"])})
+    reply = ({"success": True, "name": plan["filename"], "message": i18n.tr(_MDR_INSTALLED, name=plan["filename"])}
+             if ok else {"success": False, "message": _sm.write_failure_reason(msg) or "Failed"})
+    with _r42r_audit_after(reply):      # the plugin is on the server by now (_r42r_audit_after)
+        _mdr_audit(gs, "install", detail, ok)
+    return jsonify(reply)
 
 
 def change_target(action, name):
@@ -159,12 +159,14 @@ def _mdr_change(gs, action, name, new_name):
         else:
             ok, msg = _sm.rename_path(gs.remote, gs.short_name, rel, new_name, selfname=gs.lgsm_name)
     detail = name if new_name is None else "%s -> %s" % (name, new_name)
-    _mdr_audit(gs, action, detail, ok)
+    reply = {"success": True, "message": i18n.tr(_MDR_CHANGED)}
     if not ok:
         # delete_path can answer with the host's own output; only its fixed refusals are shown.
         said = _sm.delete_failure_reason(msg) if action == "remove" else msg
-        return jsonify({"success": False, "message": i18n.tr(said or "Failed")})
-    return jsonify({"success": True, "message": i18n.tr(_MDR_CHANGED)})
+        reply = {"success": False, "message": i18n.tr(said or "Failed")}
+    with _r42r_audit_after(reply):      # the file is renamed or gone by now (_r42r_audit_after)
+        _mdr_audit(gs, action, detail, ok)
+    return jsonify(reply)
 
 
 def _mdr_change_refused(gs, action, name, why):

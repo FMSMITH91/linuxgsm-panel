@@ -41,10 +41,11 @@ function _histChart(id, labels, datasets, yScales, xScale, tipLabel){
   var existing = _histCharts[id];
   if(existing){
     // Live refresh: update the data in place (no destroy/recreate) so the chart doesn't flash and
-    // keeps the tooltip/hover state. The dataset structure is stable per chart id.
+    // keeps the tooltip/hover state. The dataset structure is stable per chart id. The label too:
+    // the caller translates it on every refresh, so a language switch reaches the legend.
     existing.data.labels = labels;
     datasets.forEach(function(ds, i){
-      if(existing.data.datasets[i]) existing.data.datasets[i].data = ds.data;
+      if(existing.data.datasets[i]){ existing.data.datasets[i].data = ds.data; existing.data.datasets[i].label = ds.label; }
       else existing.data.datasets[i] = ds;
     });
     existing.data.datasets.length = datasets.length;
