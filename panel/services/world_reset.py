@@ -340,15 +340,11 @@ _WWR_MCB_RULES = (
 )
 
 
-def bedrock_level_name(props):
-    r"""`level-name` from Bedrock's server.properties text: (name, None), or (None, why).
+def _wwr_mcb_names(props):
+    r"""The names on the plain `level-name=` lines of Bedrock's server.properties: (names, None) or (None, why).
 
-    The file is key=value lines with `#` comments (Microsoft Learn, "Bedrock Dedicated Server
-    Properties"). Only what is certain is read: lines end at \n (a \r before it is dropped), a
-    comment starts the line, and the name is everything after `level-name=` at the start of a line.
-    Refused: a line naming level-name in any other form (blanks, case, no `=`), two lines that differ,
-    no line at all (the panel does not assume the server's default), and a name world_name_problem or
-    _WWR_MCB_RULES refuses.
+    Lines end at \n (a \r before it is dropped); a line starting with `#` is a comment. A line that
+    names level-name in any other form (blanks, case, no `=`) is refused rather than guessed about.
     """
     found = set()
     for line in props.split("\n"):
@@ -360,9 +356,24 @@ def bedrock_level_name(props):
         elif "level-name" in line.lower():
             return None, i18n.Sentence("a level-name line in server.properties is not in the plain form "
                                        "level-name=<name>")
-    if len(found) != 1:
-        return None, (i18n.Sentence("server.properties has no level-name line") if not found
-                      else i18n.Sentence("server.properties sets level-name more than once, to different names"))
+    return found, None
+
+
+def bedrock_level_name(props):
+    """`level-name` from Bedrock's server.properties text: (name, None), or (None, why).
+
+    The file is key=value lines with `#` comments (Microsoft Learn, "Bedrock Dedicated Server
+    Properties"). Only what is certain is read (_wwr_mcb_names): the name is everything after
+    `level-name=` at the start of a line. Refused: a level-name line in any other form, two lines
+    that differ, no line at all (the panel does not assume the server's default), and a name
+    world_name_problem or _WWR_MCB_RULES refuses.
+    """
+    found, why = _wwr_mcb_names(props)
+    if why is None and len(found) != 1:
+        why = (i18n.Sentence("server.properties has no level-name line") if not found
+               else i18n.Sentence("server.properties sets level-name more than once, to different names"))
+    if why is not None:
+        return None, why
     name = found.pop()
     why = world_name_problem(name) or next((w for bad, w in _WWR_MCB_RULES if bad(name)), None)
     if why is not None:

@@ -101,8 +101,9 @@ _MCB_FORMS191 = {"a leading blank": " level-name=x\n", "a blank before =": "leve
                  "another case": "Level-Name=x\n", "`:` for `=`": "level-name: x\n", "no `=`": "level-name\n",
                  "a byte-order mark": "﻿level-name=x\n"}
 for _why191, _text191 in _MCB_FORMS191.items():
-    check("world reset mcb: a level-name line with %s is refused, not read" % _why191,
-          _wwr191.bedrock_level_name("motd=x\n" + _text191)[0] is None, repr(_text191))
+    check("world reset mcb: a level-name line with %s is refused, not read, even beside a plain one" % _why191,
+          _wwr191.bedrock_level_name("motd=x\n" + _text191)[0] is None
+          and _wwr191.bedrock_level_name("level-name=plain\n" + _text191)[0] is None, repr(_text191))
 check("world reset mcb: no level-name line at all is refused (the server's default is not assumed)",
       _wwr191.bedrock_level_name("server-name=x\n#level-name=commented\n") == (None, "server.properties has no "
                                                                                "level-name line"), "")
