@@ -63,11 +63,33 @@ _GRS_VET_TIMEOUT = 4 * 3600         # reading a large archive through its decomp
 _GRS_RESTORE_TIMEOUT = 12 * 3600    # clearing and unpacking a large server
 _GRS_HELD_KEY = "restores_held"
 _GRS_RECOVER_EVERY = 600
+_GRS_SETTLE_EVERY = 60          # a lost restore result is asked about this often (settle_lost)
+
+
+_grs_recovering = {"n": 0}          # recovery passes settling a restore right now
 
 
 def restore_running():
-    """Whether any game server is being restored now (the panel must not restart under it)."""
-    return any((st or {}).get("running") for st in list(_grs_status.values()))
+    """Whether any game server is being restored, or a cut-off restore recovered, now (no panel restart under it)."""
+    return bool(_grs_recovering["n"]) or any((st or {}).get("running") for st in list(_grs_status.values()))
+
+
+def _grs_held_clear(sid, t0):
+    """Forget server `sid`'s in-flight restore, only when it is still the run started at `t0`. Never raises."""
+    def _mut(cfg):
+        allh = _grs_held_all(cfg)
+        if int((allh.get(str(sid)) or {}).get("t0") or 0) == int(t0):
+            allh.pop(str(sid), None)
+    try:
+        update_config(_mut)
+    except Exception:
+        _sm._log.warning("could not clear the restore record of server %s", sid, exc_info=True)
+
+
+def _grs_held_for(sid):
+    """Server `sid`'s in-flight restore record, or None."""
+    entry = _grs_held_all(load_config()).get(str(sid))
+    return entry if isinstance(entry, dict) else None
 
 
 # ── config.json["restores_held"][str(server id)]: a restore in flight, for the recovery sweep ──────
@@ -98,18 +120,32 @@ def _grs_recover_one(app, sid, entry):
         _grs_held_put(sid, None)        # the server is gone (or its id is another's now)
         return
     name, t0 = entry.get("name") or "", int(entry.get("t0") or 0)
-    out, _err, _rc = shell_as_game_user(gs.remote, gs.short_name, grs.recover_script(gs.short_name, t0),
-                                        timeout=_GRS_RESTORE_TIMEOUT, selfname=gs.lgsm_name)
-    got = grs.recover_outcome(out)
+    got = _grs_recover_run(gs, t0)
     if got is None:
-        return                          # the host did not answer: the next pass tries again
-    _grs_held_put(sid, None)
+        return                          # the host did not answer, or the restore still runs: next pass
+    _grs_held_clear(sid, t0)
     run = _GrsRun(app, gs, entry.get("actor"), name, [])
     run.undo = entry.get("undo") or None
     run.finish(got == "done", _GRS_RECOVERED.get(got if isinstance(got, str) else "failed", _GRS_RECOVERED["none"]),
                i18n.Sentence("Archive: {archive}.", archive=name),
                i18n.Sentence("The server's own files are in {path}.", path=got[1]) if isinstance(got, tuple) else "",
                run.undo_note(), i18n.Sentence("The server is stopped: start it if it should run."))
+
+
+def _grs_recover_run(gs, t0):
+    """Run the recovery script for the run started at `t0`: recover_outcome's answer (None: not now).
+
+    Counted in _grs_recovering while it runs, so the panel does not restart in the middle of an undo.
+    """
+    _grs_recovering["n"] += 1
+    try:
+        out, _err, _rc = shell_as_game_user(gs.remote, gs.short_name, grs.recover_script(gs.short_name, t0),
+                                            timeout=_GRS_RESTORE_TIMEOUT, selfname=gs.lgsm_name)
+        return grs.recover_outcome(out)
+    except Exception:
+        return None
+    finally:
+        _grs_recovering["n"] -= 1
 
 
 # What the recovery sweep found a restore cut off by a panel restart had done.
@@ -121,6 +157,15 @@ _GRS_RECOVERED = {
                           "changed."),
     "failed": i18n.Sentence("A restore was interrupted by a panel restart during its switch-over, and undoing it "
                             "failed."),
+}
+
+
+# What settle_lost found the restore whose answer was lost had done.
+_GRS_SETTLED = {
+    "done": i18n.Sentence("It had completed."),
+    "undone": i18n.Sentence("Its switch-over was undone: nothing was changed."),
+    "none": i18n.Sentence("It had not changed any file: nothing was changed."),
+    "failed": i18n.Sentence("Its switch-over failed and undoing it failed."),
 }
 
 
@@ -223,7 +268,7 @@ def _grs_request_refusal(gs, body, name):
     bad = grs.archive_problem(name)
     if bad is not None:
         return _grs_refuse(gs, name, bad, 400)
-    if (_grs_status.get(gs.id) or {}).get("running"):
+    if (_grs_status.get(gs.id) or {}).get("running") or _grs_held_for(gs.id) is not None:
         return _grs_refuse(gs, name, i18n.Sentence("This server is already being restored."))
     busy = _grs_other_work(gs)
     return None if busy is None else _grs_refuse(gs, name, busy)
@@ -296,6 +341,7 @@ class _GrsRun:
         """Hold the server row, who asked, the archive and the listing it was found in."""
         self.app, self.gs, self.actor_id, self.name, self.listing = app, gs, actor_id, name, listing
         self.up, self.t0, self.need, self.undo, self.done, self.members = False, 0, 0, None, False, 0
+        self.keep_record = False
 
     def undo_note(self):
         """The sentence that names the pre-restore archive to go back to, once there is one ("" before)."""
@@ -428,7 +474,7 @@ class _GrsRun:
         except Exception:
             state, said = "unread", i18n.Sentence("the connection dropped during the restore")
         if state == "unread":
-            self.put_back()     # the script's own trap puts it back on every exit it reached
+            return self.settle_lost(said)
         if state == "refused":
             return self.finish(False, _GRS_NOT, i18n.Sentence("It stopped before changing anything: {why}.", why=said),
                                self.start_again())
@@ -439,6 +485,28 @@ class _GrsRun:
                                i18n.Sentence("The server is left stopped.") if self.up else "")
         return self.finish(True, i18n.Sentence("Restored from {archive}.", archive=self.name), self.undo_note(),
                            self.start_again())
+
+    def settle_lost(self, said):
+        """The restore's answer was lost: keep the server held (this run's registration) until it is settled.
+
+        The command may still be running on the host. The recovery script answers nothing while it holds
+        its lock, then finishes or undoes the switch where it stopped. Asked every minute for as long as
+        a restore may take; still unsettled after that, the record stays for the recovery sweep.
+        """
+        _grs_set(self.gs.id, step="settling")
+        for _attempt in range(_GRS_RESTORE_TIMEOUT // _GRS_SETTLE_EVERY):
+            time.sleep(_GRS_SETTLE_EVERY)
+            got = _grs_recover_run(self.gs, self.t0)
+            if got is not None:
+                _grs_held_clear(self.gs.id, self.t0)
+                self.t0 = 0         # settled: finish() has no record left to clear
+                key = got if isinstance(got, str) else "failed"
+                return self.finish(got == "done", i18n.Sentence("The restore's answer was lost ({why}).", why=said),
+                                   _GRS_SETTLED.get(key, _GRS_SETTLED["none"]), self.undo_note(),
+                                   i18n.Sentence("The server is stopped: start it if it should run."))
+        self.keep_record = True
+        return self.finish(False, i18n.Sentence("The restore's answer was lost ({why}) and it could not be settled; "
+                                                "the recovery sweep goes on trying.", why=said), self.undo_note())
 
     def put_back(self):
         """Put the held archive back under its name and time (a restore that ended before its last step)."""
@@ -476,8 +544,8 @@ class _GrsRun:
             return
         self.done = True
         gs = self.gs
-        if self.t0:
-            _grs_held_put(gs.id, None)
+        if self.t0 and not self.keep_record:
+            _grs_held_clear(gs.id, self.t0)
         said = i18n.Sentences(*parts)
         english, record = str(said), i18n.sentence_record(said)
         if still_held(gs):

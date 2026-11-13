@@ -99,5 +99,11 @@
   "A restore was interrupted by a panel restart during its switch-over, and undoing it failed.": "Un reinicio del panel interrumpió una restauración durante su cambio, y deshacerlo falló.",
   "Archive: {archive}.": "Archivo: {archive}.",
   "The server's own files are in {path}.": "Los archivos propios del servidor están en {path}.",
-  "The server is stopped: start it if it should run.": "El servidor está detenido: inícialo si debe estar en marcha."
+  "The server is stopped: start it if it should run.": "El servidor está detenido: inícialo si debe estar en marcha.",
+  "The restore's answer was lost ({why}).": "La respuesta de la restauración se perdió ({why}).",
+  "It had completed.": "Había terminado.",
+  "Its switch-over was undone: nothing was changed.": "Su cambio se deshizo: no se cambió nada.",
+  "It had not changed any file: nothing was changed.": "No había cambiado ningún archivo: no se cambió nada.",
+  "Its switch-over failed and undoing it failed.": "Su cambio falló y deshacerlo falló.",
+  "The restore's answer was lost ({why}) and it could not be settled; the recovery sweep goes on trying.": "La respuesta de la restauración se perdió ({why}) y no se pudo resolver; la revisión de recuperación sigue intentándolo."
 }

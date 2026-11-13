@@ -42,7 +42,12 @@ from panel.ops import ssh_manager as _sm
 from panel.services import world_reset as _wwr
 
 # Relative to the home. Never cleared, never extracted.
-KEEP = ("lgsm/backup", "lgsm/lock", "lgsm/tmp", ".ssh", ".lgsm-cron", ".restart-pending")
+KEEP = ("lgsm/backup", "lgsm/lock", "lgsm/tmp", ".ssh", ".lgsm-cron", ".restart-pending", ".panel-restore")
+# The restore's own working folder (staging, the aside copy, its state, the saved crontab, its lock): in the
+# home, OUTSIDE lgsm/, so no LinuxGSM cleanup reaches it (an update that finds a new build ends with
+# fn_clear_tmp, `rm -rf "${tmpdir:?}/"*` on lgsm/tmp; core_exit and the update modules clear only lgsm/tmp
+# and lgsm/lock files: LinuxGSM master 2026-11). KEEP, so never cleared, extracted or moved; 0700.
+WORK_DIR = ".panel-restore"
 # The compressions LinuxGSM writes (fn_select_compression), and GNU tar's flag to read each.
 _GRS_FLAGS = {"zst": "--zstd", "gz": "--gzip"}
 # A LinuxGSM backup's name: <selfname>-<date>.tar.<ext>. A ".tar." inside the stem is refused: the
@@ -333,17 +338,18 @@ _GRS_LGSM_POLLS = 60
 
 
 def _grs_work_lock(busy):
-    """Hold lgsm/tmp/panel-restore.lock (flock, util-linux: a LinuxGSM dependency) for the command's life.
+    """Hold ~/.panel-restore/panel-restore.lock (flock, util-linux: a LinuxGSM dependency) for the command's life.
 
     The restore holds it while it runs; the recovery sweep takes it too, so it never undoes a switch a
     restore the panel lost sight of is still making. Taken: prints `busy` and exits.
     """
-    return 'mkdir -p -- "$T" && exec 9> "$T/panel-restore.lock" && flock -n 9 || { echo %s; exit 4; }' % busy
+    return ('if [ -L "$T" ]; then echo %s; exit 5; fi; mkdir -p -m 700 -- "$T" && exec 9> "$T/panel-restore.lock" '
+            '&& flock -n 9 || { echo %s; exit 4; }' % (_M["KEEPLINK"], busy))
 
 
 def _grs_work_paths():
-    """The restore's own paths under lgsm/tmp (KEEP), each named for the run by its $t0."""
-    return ('T="$HR/lgsm/tmp"; S="$T/panel-restore-$t0"; O="$T/panel-restore-old-$t0"; F="$T/panel-restore-failed-$t0"; '
+    """The restore's own paths under ~/.panel-restore (WORK_DIR, KEEP), each named for the run by its $t0."""
+    return ('T="$HR/' + WORK_DIR + '"; S="$T/panel-restore-$t0"; O="$T/panel-restore-old-$t0"; F="$T/panel-restore-failed-$t0"; '
             'st="$T/panel-restore-state-$t0"; nm="$T/panel-restore-names-$t0"; ct="$T/panel-restore-crontab-$t0"')
 
 
@@ -352,7 +358,7 @@ def _grs_switch_functions():
 
     entries DIR: the home-relative names a switch moves out of DIR (everything but KEEP; inside lgsm,
     entry by entry), NUL-separated. moveall SRC DST: each of them renamed from SRC into DST (the same
-    filesystem: lgsm/tmp is in the home and no KEEP path is a link), a folder made writable first, as
+    filesystem: WORK_DIR is in the home and no KEEP path is a link), a folder made writable first, as
     a rename into another folder must update its "..". undo: the switch reversed from wherever it
     stopped ($st names the step): what came from the staging folder (names in $nm) set aside into $F,
     the home's own content moved back from $O. LinuxGSM's own links were moved as links, so they come
@@ -370,10 +376,11 @@ def _grs_switch_functions():
         'if [ -d "$1/$r" ] && [ ! -L "$1/$r" ] && [ ! -w "$1/$r" ]; then chmod u+w -- "$1/$r"; fi; '
         'mv -T -- "$1/$r" "$2/$r" || return 1; done < <(entries "$1"); }',
         'undo() { local p; p=$(cat "$st" 2>/dev/null); [ -n "$p" ] || return 0; mkdir -p -- "$F" || return 1; '
-        'if [ "$p" != aside ] && [ -f "$nm" ]; then while IFS= read -r -d "" r; do '
+        'if { [ "$p" = in ] || [ "$p" = link ] || [ "$p" = done ]; } && [ -f "$nm" ]; then while IFS= read -r -d "" r; do '
         'if [ -e "$HR/$r" ] || [ -L "$HR/$r" ]; then case "$r" in */*) mkdir -p -- "$F/${r%/*}";; esac; '
         'mv -T -- "$HR/$r" "$F/$r" || return 1; fi; '
-        'done < "$nm"; fi; [ ! -d "$O" ] || moveall "$O" "$HR" || return 1; rm -rf -- "$F" "$O"; rm -f -- "$st" "$nm"; }',
+        'done < "$nm"; fi; echo back > "$st" || return 1; [ ! -d "$O" ] || moveall "$O" "$HR" || return 1; '
+        'rm -rf -- "$F" "$O"; rm -f -- "$st" "$nm" "$st.failed"; }',
     ]
 
 
@@ -388,7 +395,7 @@ def _grs_cron_lines():
     running (started before) is waited for; still running after the wait, the restore refuses.
     """
     return [
-        'if crontab -l > "$ct" 2>/dev/null; then printf "" | crontab - 2>/dev/null || { rm -f -- "$ct"; echo %s; exit 5; }; '
+        'cs=; if crontab -l > "$ct" 2>/dev/null; then cs=1; printf "" | crontab - 2>/dev/null || { rm -f -- "$ct"; echo %s; exit 5; }; '
         'else rm -f -- "$ct"; fi' % _M["CRONFAIL"],
         'lgsm_running() { local p a; for p in /proc/[0-9]*; do [ -O "$p" ] || continue; [ "${p#/proc/}" = "$$" ] && continue; '
         'a=$(tr "\\0" "\\n" < "$p/cmdline" 2>/dev/null | sed -n 2p); case "$a" in "$SELF"|*/"$SELF") return 0;; esac; done; return 1; }',
@@ -429,13 +436,16 @@ def _grs_switch():
     is (ROLLBACKFAIL $O). Done: the aside copy and the staging folder are removed.
     """
     return [
-        'entries "$S" > "$nm" || { echo "%s names"; exit 5; }' % _M["ROLLEDBACK"],
+        # Checked again after the waits: the staging folder whole, the saved crontab still there.
+        'if [ ! -d "$S" ] || [ "$(find "$S" -mindepth 1 | wc -l)" -lt "$want" ] || { [ -n "$cs" ] && [ ! -f "$ct" ]; }; then '
+        'echo "%s 0 the staging folder or the saved crontab changed during the waits"; exit 5; fi' % _M["STAGEFAIL"],
+        'entries "$S" > "$nm" && [ -s "$nm" ] || { echo "%s names"; exit 5; }' % _M["ROLLEDBACK"],
         "echo " + _M["SWITCHING"],
         'step=; if echo aside > "$st" && mkdir -p -- "$O" && step=aside && moveall "$HR" "$O" && echo in > "$st" '
         '&& step=in && moveall "$S" "$HR" && echo link > "$st" && step=link && relink && echo done > "$st"; then '
         'rm -rf -- "$O" "$S"; rm -f -- "$st" "$nm"; echo %s; '
         'elif undo; then echo "%s ${step:-aside}"; exit 5; '
-        'else echo "%s $O"; exit 7; fi' % (_M["RESTORED"], _M["ROLLEDBACK"], _M["ROLLBACKFAIL"]),
+        'else : > "$st.failed"; echo "%s $O"; exit 7; fi' % (_M["RESTORED"], _M["ROLLEDBACK"], _M["ROLLBACKFAIL"]),
     ]
 
 
@@ -446,7 +456,7 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
     server up (LinuxGSM's own test); a process of the account still in serverfiles after a bounded
     wait; the walks (_grs_walks); too little space for the staging copy (`need`) or too few inodes for
     `members`. The other held archives are put back. Then STAGING: the archive is unpacked into
-    lgsm/tmp/panel-restore-<t0>; a tar that does not exit 0, or fewer entries than the checks counted,
+    ~/.panel-restore/panel-restore-<t0>; a tar that does not exit 0, or fewer entries than the checks counted,
     refuses (STAGEFAIL). Then the account's crontab is set aside and a LinuxGSM command still running
     waited for (CRONFAIL, LGSMBUSY refuse). Then the switch (_grs_switch): RESTORED, or ROLLEDBACK
     (nothing changed), or ROLLBACKFAIL (the home's own content is in the aside folder it names). On
@@ -459,7 +469,8 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
     lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
         "t0=%d" % int(t0), "SELF=%s" % _q(selfname), a_line, h_line, _grs_work_paths(), _grs_work_lock(_M["LOCKED"]),
     ] + _grs_switch_functions() + [_grs_relink()] + _grs_heartbeat(
-        '[ -f "$st" ] && undo; %s; rm -rf -- "$S"; rm -f -- "$nm"; %s; ' % (_grs_put_cron(), _grs_putback_leftovers())) + [
+        '[ -f "$st" ] && [ ! -f "$st.failed" ] && undo; %s; [ -f "$st" ] || rm -rf -- "$S"; rm -f -- "$nm"; %s; '
+        % (_grs_put_cron(), _grs_putback_leftovers())) + [
         'if [ -z "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         'if [ ! -s "$B"/%s ]; then echo %s; exit 5; fi' % (_q(undo), _M["NOUNDO"]),
         "if %s; then echo %s; exit 4; fi" % (_wwr._wwr_tmux_up(selfname), _M["RUNNING"]),
@@ -476,7 +487,7 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
         'if [ "$rc" != 0 ]; then printf "%s %%s %%s\\n" "$rc" "$(printf "%%s" "$x" | tail -n 1)"; exit 5; fi'
         % _M["STAGEFAIL"],
         'cnt=$(find "$S" -mindepth 1 | wc -l)',
-        'if [ "$cnt" -lt $(( %d - 1 )) ]; then echo "%s 0 unpacked $cnt of %d entries"; exit 5; fi'
+        'want=$(( %d - 1 )); if [ "$cnt" -lt "$want" ]; then echo "%s 0 unpacked $cnt of %d entries"; exit 5; fi'
         % (int(members), _M["STAGEFAIL"], int(members)),
     ] + _grs_cron_lines() + _grs_switch()
     return "\n".join(lines) + "\n"

@@ -46,7 +46,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running, grs_or_wipe_sentence,
+    _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running, grs_or_wipe_sentence, grs_restore_running,
     game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
@@ -1138,7 +1138,8 @@ def _cron_listing(app, gs):
     # It REWRITES the crontab, so it asks what every cron write asks (_write_refused) — silently,
     # this being a GET: the account a legacy row names may be the host's sudo login.
     try:
-        if game_account_write_refusal(gs.remote, gs.short_name) is None:
+        # Not while a restore holds the crontab aside: the rewrite would land in the empty one.
+        if not grs_restore_running(gs.id) and game_account_write_refusal(gs.remote, gs.short_name) is None:
             _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
                                               game_type=gs.game_type, port=gs.port,
                                               query_type=gs.query_type)
@@ -1157,7 +1158,8 @@ def _cron_listing(app, gs):
             "being none.", host=gs.remote.display_name) if gs.remote else i18n.tr(
             "Couldn't read the scheduled tasks — the host didn't answer. This is not the same as "
             "there being none.")})
-    _sync_toggles_from_cron(gs, jobs)
+    if not grs_restore_running(gs.id):      # its crontab is set aside: never read the empty one as Off
+        _sync_toggles_from_cron(gs, jobs)
     return jsonify({"jobs": _sch.annotate(gs, jobs)})
 
 
@@ -1516,8 +1518,12 @@ def _write_refused(gs, action, detail=""):
 
     `detail`, the path asked for, goes in the row before the reason. It was taken and never
     written, so an account refusal (the security-relevant one) named no file.
+
+    Refused too while the server is being restored from a backup: the restore replaces the files and
+    sets the account's crontab aside for its switch-over, so a cron line written meanwhile would be lost.
     """
-    why = game_account_write_refusal(gs.remote, gs.short_name)
+    why = grs_or_wipe_sentence(gs.id, gs.name) if grs_restore_running(gs.id) else \
+        game_account_write_refusal(gs.remote, gs.short_name)
     if why is None:
         return None
     log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),

@@ -1694,6 +1694,9 @@ def _register_schedules(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
+        if grs_restore_running(server_id):     # its crontab is set aside for the restore's switch-over
+            return jsonify({"success": False, "message": i18n.tr(i18n.Sentence(
+                "'{name}' is being restored from a backup. Try again once it has finished.", name=gs.name))}), 409
         data = _json_body()
         # A JSON boolean or a 400: bool("false") is True, so a request to turn autostart off
         # turned it ON (and installed the monitor cron).

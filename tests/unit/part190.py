@@ -38,7 +38,7 @@ import time as _time190
 
 from unit.part01 import check, eq, skip
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
-                         _p9_patch, _p9_restore_all)
+                         _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.core import i18n as _i18n190
 from panel.core.panel_state import r36j_route_job as _job190
 from panel.routes import (_shared as _shr190, game_restore as _gr190, panel_backup as _pb190,
@@ -242,7 +242,8 @@ def _lgsm_cmd190(sb):
 
 
 def _switch_seen190(sb, out, rc, rec, before):
-    tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
+    wd = _os190.path.join(sb.home, _grs190.WORK_DIR)
+    tmp = sorted(_f for _f in (_os190.listdir(wd) if _os190.path.isdir(wd) else []) if _f != "panel-restore.lock")
     during = _os190.path.join(sb.root, "cron-during.txt")
     res = _grs190.restore_outcome(out, rc)
     return {"state": res[0], "said": str(res[1]), "home": sb.tree() == before[0], "cron": sb.cron() == before[1],
@@ -431,6 +432,17 @@ def _sandbox3_190():
     _r190["sw_kill_staging"] = _switch190(lambda rs, sb: rs.replace("cnt=$(find", "kill -9 $$\ncnt=$(find", 1),
                                           recover=True)
     _r190["sw_lgsm"] = _switch190(polls=1, lgsm=True)
+    # A LinuxGSM update that found a new build ends with fn_clear_tmp: everything under lgsm/tmp deleted, here
+    # during the wait for LinuxGSM. The restore keeps nothing there.
+    _r190["sw_cleartmp"] = _switch190(lambda rs, sb: rs.replace("lgsm_running() {", 'rm -rf "$HR/lgsm/tmp/"*; lgsm_running() {', 1))
+    # The staging folder changed during the waits (a file of it gone): refused, nothing changed.
+    _r190["sw_stagechanged"] = _switch190(lambda rs, sb: rs.replace(
+        "lgsm_running() {", 'rm -f "$S/%s"; lgsm_running() {' % _U190, 1))
+    # The switch fails after the staged tree is in; its undo is cut off (SIGKILL) once the originals are back:
+    # the recovery script must not take them for the staged ones a second time.
+    _r190["sw_undo_cut"] = _switch190(lambda rs, sb: rs.replace(_MOVEIN190, _MOVEIN190 + " && false", 1).replace(
+        '[ ! -d "$O" ] || moveall "$O" "$HR" || return 1; ', '[ ! -d "$O" ] || moveall "$O" "$HR" || return 1; kill -9 $$; ', 1),
+        recover=True)
 
 
 def _sandbox4_190():
@@ -441,12 +453,12 @@ def _sandbox4_190():
     _sb = _Sb190()
     try:
         _ready = _sb.vet()[1][1]
-        _os190.makedirs(_os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore-%d" % _ready["t0"]))
-        with open(_os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore.lock"), "w") as _lk:
+        _os190.makedirs(_os190.path.join(_sb.home, _grs190.WORK_DIR, "panel-restore-%d" % _ready["t0"]))
+        with open(_os190.path.join(_sb.home, _grs190.WORK_DIR, "panel-restore.lock"), "w") as _lk:
             _fcntl190.flock(_lk, _fcntl190.LOCK_EX)
             _rec = _sb.run(_grs190.recover_script(_U190, _ready["t0"]))[0]
         _r190["rec_busy"] = (_grs190.recover_outcome(_rec), _os190.path.isdir(
-            _os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore-%d" % _ready["t0"])),
+            _os190.path.join(_sb.home, _grs190.WORK_DIR, "panel-restore-%d" % _ready["t0"])),
             bool([_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f]))
     finally:
         _sb.gone()
@@ -576,7 +588,7 @@ def _sandbox11_190():
         _out, _res = _restore190(_sb, _ready)
         _r190["xfail"] = (_res[0], str(_res[1]).startswith("the archive could not be unpacked into a staging folder"),
                           _os190.path.isfile(_sb.archive), _sb.tree() == _tree_x,
-                          _os190.path.exists(_os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore-%d" % _ready["t0"])))
+                          _os190.path.exists(_os190.path.join(_sb.home, _grs190.WORK_DIR, "panel-restore-%d" % _ready["t0"])))
     finally:
         _sb.gone()
 
@@ -679,6 +691,15 @@ if "vet" in _r190:
        "switch after the wait, nothing changed, the crontab put back",
        (_r190["sw_lgsm"]["state"], "LinuxGSM command" in _r190["sw_lgsm"]["said"], _r190["sw_lgsm"]["home"],
         _r190["sw_lgsm"]["cron"]), ("refused", True, True, True))
+    eq("restore commands: everything under lgsm/tmp deleted during the wait (LinuxGSM's fn_clear_tmp) does not touch "
+       "the restore: it completes, crontab back, its work folder empty",
+       {_k: _r190["sw_cleartmp"][_k] for _k in ("state", "cron", "tmp")}, {"state": "done", "cron": True, "tmp": []})
+    eq("restore commands: a staging folder that changed during the waits refuses the switch, nothing changed",
+       (_r190["sw_stagechanged"]["state"], "changed during the waits" in _r190["sw_stagechanged"]["said"],
+        _r190["sw_stagechanged"]["home"], _r190["sw_stagechanged"]["cron"]), ("refused", True, True, True))
+    eq("restore commands: an undo cut off after the originals came back is finished by the recovery script without "
+       "touching them again: the home as it was",
+       {_k: _r190["sw_undo_cut"][_k] for _k in ("rec", "home", "tmp")}, {"rec": "undone", "home": True, "tmp": []})
     eq("restore commands: the recovery script leaves alone what a restore still holding its lock is doing",
        _r190["rec_busy"], (None, True, True))
     eq("restore commands: Factorio's layout (~/log/server -> serverfiles, absolute) restores file for file, the link "
@@ -812,6 +833,9 @@ class _Host190:
         if "__GRS_SWITCHING__" in sh:
             self.calls.append("restore")
             return self.restore_out, "", 0
+        if 'p=$(cat "$st"' in sh:
+            self.calls.append("recover")
+            return getattr(self, "recover", ""), "", 0
         self.calls.append("putback")
         return "", "", 0
 
@@ -856,6 +880,7 @@ def _run190(host, refusal=None):
         _p9_arm(who="part190")
         _p9_patch(_gr190, "load_config", _held_cfg190)
         _p9_patch(_gr190, "update_config", _held_update190)
+        _p9_patch(_gr190, "_GRS_SETTLE_EVERY", 0)
         _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: refusal)
         _p9_patch(_gr190, "shell_as_game_user", host.shell)
         _p9_patch(_gr190, "list_game_backups", host.listed)
@@ -891,6 +916,9 @@ _w190["late_refused"] = _run190(_Host190(restore="__GRS_BUSY__"))
 _w190["players"] = _run190(_Host190(stop=("[ INFO ] Stopping grsu: 2 players are on the server: stop prevented\n", "", 0)))
 _w190["was_down"] = _run190(_Host190(vet="__GRS_READY__ 0 %d 5000 9000" % _T0190))
 _w190["rootcap"] = _run190(_Host190(), refusal=_i18n190.Sentence("p190 root-capable"))
+_lost_h190 = _Host190(restore="")
+_lost_h190.recover = "__GRS_RECUNDONE__\n__GRS_UPREADY__"
+_w190["lost"] = _run190(_lost_h190)
 _w190["stage_fail"] = _run190(_Host190(restore="__GRS_STAGING__\n__GRS_STAGEFAIL__ 2 tar: Unexpected EOF in archive"))
 _held_mid190 = dict(_h.held_seen) if hasattr(_h, "held_seen") else {}
 
@@ -930,7 +958,11 @@ eq("run: an archive that would not unpack into the staging folder restores nothi
    (_w190["stage_fail"][0], "Not restored: nothing was changed." in _w190["stage_fail"][3],
     "could not be unpacked into a staging folder" in _w190["stage_fail"][3]),
    (["vet", "stop", "backup", "restore", "start"], True, True))
-eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 9)
+eq("run: a restore whose answer was lost keeps the server held and asks the recovery script until it settles: "
+   "no start, the outcome named, the record gone",
+   (_w190["lost"][0], "answer was lost" in _w190["lost"][3], "undone" in _w190["lost"][3], bool(_held190)),
+   (["vet", "stop", "backup", "restore", "recover"], True, True, False))
+eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 10)
 
 # ── 5. while it runs, the server is held ────────────────────────────────────────────────────────
 with _job190(P9_GS, _shr190.GRS_KIND):
@@ -1229,6 +1261,28 @@ try:
     _r = _p9_client(P9_ADMIN).post("/api/panel/update", json={})
     _rec190["update"] = (_r.status_code, list(_upd190))
     _gr190._grs_status.pop(P9_GS, None)
+    # A record of an unsettled restore of this server refuses a new one.
+    _held190[str(P9_GS)] = {"name": "x", "t0": 5, "short_name": _short190, "remote_id": _rid190}
+    _p9_patch(_gr190, "_grs_other_work", lambda gs: None)
+    _p9_patch(_gr190, "list_game_backups", lambda *a, **k: list(_LIST190))
+    _p9_patch(_gr190, "_grs_worker", lambda *a, **k: _rec190.setdefault("started", []).append(1))
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
+    _r = _p9_client(P9_ADMIN).post("/api/panel/backup/game/%d/restore" % P9_GS,
+                                   json={"name": _LIST190[0]["name"], "confirm": _gs_name190})
+    _rec190["unsettled"] = (_r.status_code, _rec190.get("started", []))
+    _held190.clear()
+    # While a restore is registered: cron writes and Autostart refused, the listing does not sync the toggles.
+    from panel.routes import server_files as _sf190
+    _synced190 = []
+    _p9_patch(_sf190, "_sync_toggles_from_cron", lambda gs, jobs: _synced190.append(1))
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
+    _p9_patch(_sf190, "_read_refused", lambda *a, **k: None)
+    with _job190(P9_GS, _shr190.GRS_KIND):
+        _cl = _p9_client(P9_ADMIN)
+        _rec190["cron_add"] = _cl.post("/api/server/%d/cron" % P9_GS, json={"schedule": "0 4 * * *", "command": "restart"}).status_code
+        _rec190["autostart"] = _cl.post("/api/server/%d/autostart" % P9_GS, json={"enabled": False}).status_code
+        _cl.get("/api/server/%d/cron" % P9_GS)
+    _rec190["synced"] = list(_synced190)
 finally:
     _p9_restore_all()
     _gr190._grs_status.pop(P9_GS, None)
@@ -1245,6 +1299,10 @@ check("recovery: ...recorded as interrupted (audit, alert, the card), naming the
       _rec190["audit"] == 1 and "interrupted" in _rec190["row"] and "p190-2026-11-13-000000.tar.zst" in _rec190["row"]
       and _rec190["alerts"] and "restore p190-2026-11-13-000000.tar.zst" in _rec190["status"] and not _rec190["left"],
       repr(_rec190))
+eq("route: a new restore is refused while an earlier one of the server is not settled", _rec190["unsettled"], (409, []))
+eq("held: while a restore runs, a cron line and the Autostart switch are refused (409), and reading the scheduled "
+   "tasks does not set the switches from the crontab set aside", (_rec190["cron_add"], _rec190["autostart"], _rec190["synced"]),
+   (409, 409, []))
 eq("restart: the panel's self-update is refused while a game server is being restored (nothing launched)",
    _rec190["update"], (409, []))
 
