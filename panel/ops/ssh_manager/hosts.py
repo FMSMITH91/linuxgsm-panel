@@ -3,6 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import contextvars
 import functools
 import ipaddress as _ipaddress
+import os
 import re
 import socket
 from panel.core import clock, i18n, terminal
@@ -506,6 +507,15 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     if proto not in ("tcp", "udp"):
         # `ufw limit` takes one rule; "both" would need two and they would report separately.
         return False, "Rate limiting needs a single protocol (tcp or udp)"
+    # One hold of the host's ufw lock across the read, the decision and the writes: a rule deleted in
+    # between (another admin's close, an SSH move's revert) left `ufw limit` nothing to rewrite, and
+    # it added a fresh rule from Anywhere for the port just closed.
+    with _core.ufw_lock(server):
+        return _r42f_limit_held(server, port, proto, limit)
+
+
+def _r42f_limit_held(server, port, proto, limit):
+    """remote_ufw_limit_port's body, under the host's ufw lock: (ok, message)."""
     spec = "%d/%s" % (port, proto)
     before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     before = (before or "") if brc == 0 else ""
@@ -592,10 +602,10 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
 def _r42f_limit_refusal(server, before, port, proto):
     """Why `ufw limit port/proto` must not run here, or None when it opens nothing new.
 
-    `ufw limit N/proto` ADDS a rule from Anywhere (both families on a host with IPv6 on) when no
-    `N/proto` allow is there to rewrite in place. On a closed port, or one open only to the tailnet,
-    one source or one interface, "rate limit SSH" opened it to the whole internet. So the limit
-    runs only where every family it writes already lets everyone in (_r42f_limit_opens_nothing).
+    `ufw limit N/proto` ADDS a rule from Anywhere (both families on a host where ufw handles IPv6)
+    when no `N/proto` allow is there to rewrite in place. On a closed port, or one open only to the
+    tailnet, one source or one interface, "rate limit SSH" opened it to the whole internet. So the
+    limit runs only where every family it writes already lets everyone in (_r42f_family_refusal).
     `before` is the `ufw status numbered` answer, None when it could not be read.
     """
     spec = "%d/%s" % (port, proto)
@@ -605,27 +615,57 @@ def _r42f_limit_refusal(server, before, port, proto):
     if not firewall._ufw_is_active(before):
         return i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read here to check "
                              "{spec} is open to everyone — nothing was changed.", spec=spec)
-    if _r42f_limit_opens_nothing(server, before, port, proto):
+    fams = (False, True) if _r38a_family_rules(before, 6) else (False,)
+    profile = _r42f_profile_first(before, port, proto, fams)
+    if profile is not None:
+        # `Nginx Full`, `Apache`: its ports are in a file on the host the panel does not read.
+        return i18n.Sentence("`{rule}` is an application profile the panel cannot read, so whether {spec} is "
+                             "already open to everyone is not known — no rate limit was added.",
+                             spec=spec, rule=profile["detail"])
+    return _r42f_family_refusal(server, before, port, proto, fams)
+
+
+def _r42f_profile_first(before, port, proto, fams):
+    """The first public rule for port/proto in one of `fams`, when it is an app profile the panel cannot read."""
+    for v6 in fams:
+        first = _ufw_first_public_rule(before, port, proto, unresolved=True, scoped=False, v6=v6)
+        if first is not None and first.get("unresolved"):
+            return first
+    return None
+
+
+def _r42f_family_refusal(server, before, port, proto, fams):
+    """_r42f_limit_refusal's answer from the listed families `fams` (IPv4, and IPv6 where it has a row).
+
+    A family lets everyone in when its first public rule for the port (one destination address left
+    out) is an ALLOW or LIMIT, or when no rule decides it and the default incoming policy is allow.
+    With no IPv6 row listed, ufw still writes the IPv6 half where it handles IPv6 (_r40_ufw_v6_state):
+    there the port is open over IPv6 only under a default incoming allow. A host read is added only
+    where the listed rules do not settle it.
+    """
+    spec = "%d/%s" % (port, proto)
+    ways = [_r42f_open_way(before, port, proto, v6) for v6 in fams]
+    if False in ways:
+        return _r42f_v6_refusal(spec, False)
+    # Every listed family open: with no IPv6 row, whether ufw would write the IPv6 half decides.
+    v6_on = _r40_ufw_v6_state(server) if None not in ways and len(fams) == 1 else False
+    if None not in ways and v6_on is False:
         return None
+    if firewall.remote_ufw_default_allows_in(server):
+        return None
+    return _r42f_v6_refusal(spec, v6_on)
+
+
+def _r42f_v6_refusal(spec, v6_on):
+    """The refusal for `spec`: IPv6 unread (`v6_on` None), open over IPv4 only (True), or not open (False)."""
+    if v6_on is None:
+        return i18n.Sentence("Could not read UFW's settings to tell whether a rate limit on {spec} would also open "
+                             "it over IPv6, so nothing was changed.", spec=spec)
+    if v6_on:
+        return i18n.Sentence("{spec} is open to everyone over IPv4 only, and a rate limit would open it to "
+                             "everyone over IPv6 too, so nothing was changed.", spec=spec)
     return i18n.Sentence("Limit only rate-limits a port already open to everyone, and {spec} is not, so "
                          "nothing was changed. Open it first, or allow one source instead.", spec=spec)
-
-
-def _r42f_limit_opens_nothing(server, before, port, proto):
-    """Whether every family `ufw limit port/proto` writes already lets everyone in to it.
-
-    A family does when its first public rule for the port (one destination address left out) is an
-    ALLOW or LIMIT, or when no rule decides it and the default incoming policy is allow. IPv6 counts
-    where its list has a row, or where ufw's stored settings say IPv6 is on (or cannot be read). A
-    host read is added only where the listed rules do not settle it.
-    """
-    listed6 = bool(_r38a_family_rules(before, 6))
-    ways = [_r42f_open_way(before, port, proto, v6) for v6 in ((False, True) if listed6 else (False,))]
-    if False in ways:
-        return False
-    if None not in ways and (listed6 or _r40_ufw_v6_state(server) is False):
-        return True
-    return firewall.remote_ufw_default_allows_in(server)
 
 
 def _r42f_open_way(status_out, port, proto, v6):
@@ -4299,13 +4339,27 @@ def _r39b_held_and_met(status_out, readings, port):
 
 
 def _r40_ufw_v6_state(server):
-    """Whether ufw's stored settings say it handles IPv6: True (IPV6=yes), False (IPV6=no), or None.
+    """Whether ufw handles IPv6 on `server`: True, False, or None when that is not known.
 
-    None when /etc/default/ufw could not be read or names neither: not known, so never a reason to add a
-    rule that may open IPv6.
+    As ufw decides it (backend.use_ipv6): IPV6=yes in its stored settings AND the kernel has IPv6
+    (/proc/sys/net/ipv6 exists). With IPv6 off in the kernel (`ipv6.disable=1`) and the default
+    IPV6=yes, ufw lists and writes no IPv6 rule at all; read from the setting alone, this answered
+    True and an IPv4-only host was judged as one whose rules would open IPv6. The kernel's answer
+    rides on the same ufw-stored-rules read (its last line); where an older panel-helper on the
+    panel's own host prints none, the panel's kernel is the host's. None when /etc/default/ufw could not be read
+    or names neither: never a reason to add a rule that may open IPv6.
     """
     stored = firewall._fwa_read_stored(server)
-    return None if stored is None else firewall._fwa_stored_values(stored)["ipv6"]
+    on = None if stored is None else firewall._fwa_stored_values(stored)["ipv6"]
+    kernel = {"yes": True, "no": False}.get((stored or {}).get(_priv.FWA_KERNEL_V6_PATH))
+    if on and kernel is None and _core.is_local_server(server):
+        kernel = _r42f_local_kernel_v6()
+    return False if on and kernel is False else on
+
+
+def _r42f_local_kernel_v6():
+    """Whether this machine's kernel has IPv6, as ufw tests it: /proc/sys/net/ipv6 exists."""
+    return os.path.exists("/proc/sys/net/ipv6")
 
 
 def _r39b_family_way(status_out, ports, v6):
@@ -5452,6 +5506,26 @@ def _r35j_discard_snapshot(server, discard_verb):
     return False
 
 
+def _r35b_done_fw(f2b, why, port):
+    """The move's "(done)" words when step 1 added a firewall rule, by fail2ban's state."""
+    if f2b == "updated":
+        return i18n.Sentence("firewall + fail2ban updated")
+    if f2b == "absent":
+        return i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port", why=why)
+    return i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
+                         "brute force on port {port}", why=why, port=port)
+
+
+def _r42f_done_no_fw(f2b, why, port):
+    """The move's "(done)" words when step 1 added no firewall rule, by fail2ban's state."""
+    if f2b == "updated":
+        return i18n.Sentence("fail2ban updated")
+    if f2b == "absent":
+        return i18n.Sentence("no firewall rule added; {why}, so nothing bans SSH brute force on any port", why=why)
+    return i18n.Sentence("no firewall rule added, and fail2ban was NOT updated: {why}, so it may not be banning "
+                         "SSH brute force on port {port}", why=why, port=port)
+
+
 def _r35j_snapshot_left_note(socket_mode, gone):
     """The success message's note when step 8 could not remove the snapshot; "" when it was removed."""
     if gone:
@@ -5462,17 +5536,15 @@ def _r35j_snapshot_left_note(socket_mode, gone):
                          path=path, bak=bak)
 
 
-def _r35b_moved_message(new_port, bind_addr, f2b, unchecked):
-    """change_ssh_port's success message, from fail2ban's (state, why) and the sshd-holds note."""
+def _r35b_moved_message(new_port, bind_addr, f2b, unchecked, fw_changed=True):
+    """change_ssh_port's success message, from fail2ban's (state, why) and the sshd-holds note.
+
+    `fw_changed`: whether step 1 added a firewall rule. Where it added none (a rule already lets the port
+    in, or public SSH is off and the note says no public rule was added), the lead sentence claimed
+    "firewall + fail2ban updated" about a firewall nothing touched.
+    """
     _f2b, _f2b_why = f2b
-    if _f2b == "updated":
-        _done = i18n.Sentence("firewall + fail2ban updated")
-    elif _f2b == "absent":
-        _done = i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port",
-                              why=_f2b_why)
-    else:
-        _done = i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
-                              "brute force on port {port}", why=_f2b_why, port=new_port)
+    _done = (_r35b_done_fw if fw_changed else _r42f_done_no_fw)(_f2b, _f2b_why, new_port)
     if bind_addr:
         # No fallback sentence here: ListenAddress is all-or-nothing (change_ssh_port's own docstring
         # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
@@ -5814,7 +5886,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    and drop the snapshot: best effort, after the commit.
     _f2b, _gone = _r35b_after_commit(server, ports, _discard_verb)
     return True, _r35b_moved_message(new_port, bind_addr, _f2b,
-                                     i18n.Sentences(_fw_note, _unchecked, _r35j_snapshot_left_note(socket_mode, _gone)))
+                                     i18n.Sentences(_fw_note, _unchecked, _r35j_snapshot_left_note(socket_mode, _gone)),
+                                     fw_changed=bool(_ufw_added))
 
 
 # The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`

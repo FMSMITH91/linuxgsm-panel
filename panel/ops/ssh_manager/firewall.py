@@ -1245,10 +1245,37 @@ _FWA_FILE_POLICY = {"accept": "allow", "reject": "reject"}
 _FWA_DEFAULT_LINE_RE = re.compile(r'^\w+="?\w+"?')
 
 
-def _fwa_split_stored(out):
-    """ufw-stored-rules' output as {path: text}, or None unless every file is there, in order."""
+def _fwa_cut_kernel_v6(out):
+    """(ufw-stored-rules' output without its trailing kernel line, whether the kernel has IPv6 or None).
+
+    The verb ends with `==> /proc/sys/net/ipv6 <==` and `yes` or `no` (privileged.FWA_KERNEL_V6_PATH);
+    a panel-helper installed before that prints no such line: None, not known.
+    """
     from panel.security import privileged as _priv
     text = out or ""
+    mark = "==> %s <==\n" % _priv.FWA_KERNEL_V6_PATH
+    at = text.rfind(mark)
+    kernel = {"yes\n": True, "no\n": False}.get(text[at + len(mark):]) if at >= 0 else None
+    return (text, None) if kernel is None else (text[:at], kernel)
+
+
+def _fwa_split_stored(out):
+    """ufw-stored-rules' output as {path: text}, or None unless every file is there, in order.
+
+    The kernel's IPv6 line, when printed, is kept under its own path as "yes" or "no" (hosts.
+    _r40_ufw_v6_state reads it); the files are split without it.
+    """
+    from panel.security import privileged as _priv
+    text, kernel = _fwa_cut_kernel_v6(out)
+    found = _fwa_split_files(text)
+    if found is not None and kernel is not None:
+        found[_priv.FWA_KERNEL_V6_PATH] = "yes" if kernel else "no"
+    return found
+
+
+def _fwa_split_files(text):
+    """_fwa_split_stored's files: {path: text}, or None unless every file is there, in order."""
+    from panel.security import privileged as _priv
     found, pos = {}, 0
     marks = ["==> %s <==\n" % p for p in _priv.FWA_STORED_PATHS]
     # Each mark exactly once: a file that itself held another's mark line would otherwise move where

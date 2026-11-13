@@ -6,7 +6,9 @@ Held here:
   open only to the tailnet, one source, one interface or one address of the host, "rate limit" opened
   it to the whole internet. It now runs only where every family it writes already lets everyone in;
   an unread or inactive firewall refuses, as lifting a limit does. Where the listing settles it, no
-  host read is added.
+  host read is added. IPv6 counts only where ufw handles it (IPV6=yes and the kernel has IPv6); a port
+  met first by an app profile the panel cannot read is refused naming it; the read, the decision and
+  the write run in one hold of the host's ufw lock.
 * An SSH port move on an INACTIVE ufw (_open_ssh_port_rule, and POST /api/remote/<id>/ssh-port): where
   no stored rule lets SSH in from anywhere (tailnet-only, one source), no public allow is stored for
   the new port (it went live the moment UFW was enabled), and the success message says so.
@@ -21,6 +23,7 @@ from unit.part01 import check, ufw_stored_answer
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_audit, _p9_client, _p9_core, _p9_host_row,
                          _p9_json, _p9_patch, _p9_restore_all, _p9_set_host)
 from unit.part159 import _Box159, _PUB_SESS159
+from panel.core import i18n as _i18n185
 from panel.ops.ssh_manager import firewall as _fw185, hosts as _hosts185, ufweval as _ue185
 
 _TRIP185_START = len(_P9_TRIPPED)
@@ -35,9 +38,9 @@ class _Ufw185:
     `limit` rewrites an `N/proto` ALLOW in place (both families), else appends the LIMIT, as ufw does.
     """
 
-    def __init__(self, rules, rc=0, active=True, default="deny", ipv6="no", stored_rc=0):
+    def __init__(self, rules, rc=0, active=True, default="deny", ipv6="no", stored_rc=0, kernel=None):
         self.rules, self.rc, self.active, self.default = list(rules), rc, active, default
-        self.ipv6, self.stored_rc, self.sent = ipv6, stored_rc, []
+        self.ipv6, self.stored_rc, self.sent, self.kernel = ipv6, stored_rc, [], kernel
 
     def priv(self, server, verb, args=(), **kw):
         self.sent.append(verb if verb != "ufw-status" or list(args) != ["verbose"] else "ufw-status verbose")
@@ -46,10 +49,17 @@ class _Ufw185:
         if verb == "ufw-status":
             return self._listing()
         if verb == "ufw-stored-rules":
-            return ufw_stored_answer(self.ipv6) if not self.stored_rc else ("", "permission denied", 1)
+            return self._stored()
         if verb == "ufw-limit-port":
             self._limit(args[0])
         return "", "", 0
+
+    def _stored(self):
+        """ufw-stored-rules: IPV6= as given, then (the remote form's) kernel line when `kernel` is set."""
+        if self.stored_rc:
+            return "", "permission denied", 1
+        out, err, rc = ufw_stored_answer(self.ipv6)
+        return out + ("==> /proc/sys/net/ipv6 <==\n%s\n" % self.kernel if self.kernel else ""), err, rc
 
     def _listing(self):
         if self.rc:
@@ -68,12 +78,13 @@ class _Ufw185:
             self.rules.append("%s  LIMIT IN  Anywhere" % spec)
 
 
-def _limit185(rules, port=22, **kw):
+def _limit185(rules, port=22, local=False, **kw):
     """remote_ufw_limit_port(port/tcp) on a stand-in with `rules` -> (ok, message, verbs sent)."""
     ufw = _Ufw185(rules, **kw)
     _p9_patch(_p9_core, "run_privileged", ufw.priv)
     try:
-        ok, msg = _hosts185.remote_ufw_limit_port(_NS185(id=-185, name="p185"), port, "tcp")
+        row = _NS185(id=-185, name="p185", is_local=local, auth_method="local" if local else "key")
+        ok, msg = _hosts185.remote_ufw_limit_port(row, port, "tcp")
     finally:
         _p9_restore_all()
         _p9_arm(who="part185")
@@ -88,13 +99,11 @@ def _r42f_limit_refused185():
         "one address of the host": _limit185(["203.0.113.5 22/tcp  ALLOW IN  Anywhere"]),
         "closed": _limit185([], port=27015),
         "IPv4 only, IPv6 listed": _limit185(["22/tcp  ALLOW IN  Anywhere", "80/tcp (v6)  ALLOW IN  Anywhere (v6)"]),
-        "IPv4 only, IPV6=yes": _limit185(["22/tcp  ALLOW IN  Anywhere"], ipv6="yes"),
-        "IPv4 only, settings unread": _limit185(["22/tcp  ALLOW IN  Anywhere"], stored_rc=1),
         "denied, default allow": _limit185(["22/tcp  DENY IN  Anywhere"] + _PUB185, default="allow"),
     }
     check("1112 A03 (limit): Limit on a port closed, or open only to the tailnet, one source, one interface or "
-          "one address of the host, or open to everyone over IPv4 alone where ufw would write the IPv6 half "
-          "too (or its IPv6 setting is unread), or denied first, refuses and runs no `ufw limit` (it added a "
+          "one address of the host, or open to everyone over IPv4 alone where IPv6 is listed, or denied first, "
+          "refuses and runs no `ufw limit` (it added a "
           "rule from Anywhere: the port opened to the internet, answered \"now rate limited\")",
           all(not ok and "already open to everyone" in msg and "ufw-limit-port" not in sent
               for ok, msg, sent in got.values()), repr(got))
@@ -121,6 +130,76 @@ def _r42f_limit_controls185():
           "read-back only)",
           got["public, both families"][2] == ["ufw-status", "ufw-limit-port", "ufw-status"],
           repr(got["public, both families"]))
+
+
+_V4_22_185 = ["22/tcp  ALLOW IN  Anywhere"]
+
+
+def _r42f2_kernel_v6185():
+    # ufw handles IPv6 only with IPV6=yes AND the kernel's /proc/sys/net/ipv6 (backend.use_ipv6): with IPv6
+    # off in the kernel it lists and writes no v6 rule, so a public IPv4 rule is public everywhere ufw acts.
+    _p9_patch(_hosts185, "_r42f_local_kernel_v6", lambda: False)
+    local_off = _limit185(_V4_22_185, ipv6="yes", local=True)
+    _p9_patch(_hosts185, "_r42f_local_kernel_v6", lambda: True)
+    local_on = _limit185(_V4_22_185, ipv6="yes", local=True)
+    got = {"remote, kernel IPv6 off": _limit185(_V4_22_185, ipv6="yes", kernel="no"),
+           "panel host, kernel IPv6 off": local_off}
+    check("1112 indep (limit, IPv6): a public IPv4-only 22/tcp on a host whose kernel has IPv6 off (IPV6=yes "
+          "stored) is limited: ufw writes no IPv6 rule there (it was refused, saying 22/tcp \"is not\" open to "
+          "everyone); read from the remote's ufw-stored-rules answer, or this machine's kernel on the panel host",
+          all(ok and "ufw-limit-port" in sent for ok, _m, sent in got.values()), repr(got))
+    on = {"remote, kernel IPv6 on": _limit185(_V4_22_185, ipv6="yes", kernel="yes"),
+          "panel host, kernel IPv6 on": local_on}
+    unread = _limit185(_V4_22_185, stored_rc=1)
+    check("1112 indep (limit, IPv6): ...where ufw does handle IPv6 the limit is refused naming IPv6 (it would "
+          "open the port over IPv6), and settings that cannot be read refuse as unread, not as \"is not open\"",
+          all(not ok and "over IPv4 only" in msg and "ufw-limit-port" not in sent for ok, msg, sent in on.values())
+          and not unread[0] and unread[1].startswith("Could not read UFW's settings")
+          and "ufw-limit-port" not in unread[2], repr((on, unread)))
+
+
+class _Held185:
+    """A stand-in for the host's ufw lock that records each hold in `events`, beside the verbs sent."""
+
+    def __init__(self, events):
+        self.events = events
+
+    def __call__(self, server):
+        return self
+
+    def __enter__(self):
+        self.events.append("hold")
+        return self
+
+    def __exit__(self, *exc):
+        self.events.append("release")
+        return False
+
+
+def _r42f2_lock185():
+    events = []
+    ufw = _Ufw185(_PUB185)
+    _p9_patch(_p9_core, "ufw_lock", _Held185(events))
+    _p9_patch(_p9_core, "run_privileged", lambda s, verb, args=(), **kw: events.append(verb) or ufw.priv(
+        s, verb, args, **kw))
+    try:
+        ok = _hosts185.remote_ufw_limit_port(_NS185(id=-185, name="p185"), 22, "tcp")[0]
+    finally:
+        _p9_restore_all()
+        _p9_arm(who="part185")
+    check("1112 indep (limit, lock): the read, the decision and `ufw limit` run in ONE hold of the host's ufw "
+          "lock (a rule closed between the read and the write left `ufw limit` to add a fresh public rule)",
+          ok and events == ["hold", "ufw-status", "ufw-limit-port", "ufw-status", "release"], repr((ok, events)))
+
+
+def _r42f2_profile185():
+    nginx = _limit185(["Nginx Full  ALLOW IN  Anywhere"], port=443)
+    ahead = _limit185(["443/tcp  ALLOW IN  Anywhere", "Nginx Full  ALLOW IN  Anywhere"], port=443)
+    check("1112 indep (limit, app profile): a port met first by an application profile the panel cannot read "
+          "is refused naming that profile (it said the port \"is not\" open to everyone: open it first); a "
+          "port's own ALLOW ahead of the profile is still limited (control)",
+          not nginx[0] and "`Nginx Full  ALLOW IN  Anywhere` is an application profile" in nginx[1]
+          and "ufw-limit-port" not in nginx[2] and ahead[0] and "ufw-limit-port" in ahead[2], repr((nginx, ahead)))
 
 
 def _r42f_limit_route185():
@@ -233,6 +312,14 @@ def _r42f_inactive_route185():
           off[0] == 200 and off[1].get("success") is True and off[2] == []
           and "none of its stored rules lets SSH in from anywhere" in off[1].get("message", "")
           and on[1].get("success") is True and on[2] != [], repr((off, on)))
+    es = _i18n185.translate("es", "fail2ban updated")
+    check("1112 vps 1c (route, inactive move): ...and its lead sentence claims no firewall update where none was "
+          "made (\"SSH now listens on port 2022 (firewall + fail2ban updated)\" over the note saying no rule was "
+          "added), in Spanish and French too; the move that added the allow still says so (control)",
+          off[1].get("message", "").startswith("SSH now listens on port 2022 (fail2ban updated).")
+          and on[1].get("message", "").startswith("SSH now listens on port 2022 (firewall + fail2ban updated).")
+          and es != "fail2ban updated" and _i18n185.translate("fr", "fail2ban updated") != "fail2ban updated",
+          repr((off[1].get("message"), on[1].get("message"), es)))
 
 
 try:
@@ -240,6 +327,9 @@ try:
     _r42f_limit_refused185()
     _r42f_limit_controls185()
     _r42f_limit_route185()
+    _r42f2_kernel_v6185()
+    _r42f2_lock185()
+    _r42f2_profile185()
     _r42f_inactive_move185()
     _r42f_inactive_route185()
 finally:
