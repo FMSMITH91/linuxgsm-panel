@@ -21,7 +21,7 @@ from flask_login import current_user, login_required
 from panel.core import i18n
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
-from panel.routes._shared import _r20b_audit_on_raise
+from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after
 from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
 from panel.services import game_config_form as _gcf
 
@@ -87,11 +87,11 @@ def _gcf_save(gs, rel, data):
                               server=gs):
         ok, msg = _sm.write_file(gs.remote, gs.short_name, rel, new, selfname=gs.lgsm_name)
     reason = _sm.write_failure_reason(msg)
-    _gcf_audit(gs, rel, detail, ok, reason)
-    if not ok:
-        return jsonify({"success": False, "message": i18n.tr(reason or "Failed")})
-    return jsonify({"success": True, "message": i18n.tr(_GCF_SAVED), "content": new,
-                    "form": _gcf.build(rel, new)})
+    reply = ({"success": True, "message": i18n.tr(_GCF_SAVED), "content": new, "form": _gcf.build(rel, new)}
+             if ok else {"success": False, "message": i18n.tr(reason or "Failed")})
+    with _r42r_audit_after(reply):      # the file is written by now (_r42r_audit_after)
+        _gcf_audit(gs, rel, detail, ok, reason)
+    return jsonify(reply)
 
 
 def _gcf_save_answer(gs):

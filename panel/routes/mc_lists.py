@@ -34,7 +34,7 @@ from flask_login import (current_user, login_required)
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.ops import ssh_manager as _sm
-from panel.routes._shared import (_console_send_failure, _r20b_audit_on_raise)
+from panel.routes._shared import (_console_send_failure, _r20b_audit_on_raise, _r42r_audit_after)
 from panel.security.auth import (SEND_COMMAND, _fpm_can_view, get_game, has_permission, log_action,
                                  server_access_required)
 
@@ -201,10 +201,11 @@ def _mcl_send(gs, line):
     with _r20b_audit_on_raise("mc_list_change", detail=line, target=gs.name, server=gs):
         _out, err, rc = _sm.send_console_command(gs.remote, gs.short_name, line, timeout=10,
                                                  selfname=gs.lgsm_name)
-    log_action(current_user, "mc_list_change", target=gs.name, detail=line, success=(rc == 0), server=gs)
-    if rc != 0:
-        return jsonify({"success": False, "message": _console_send_failure(rc, err)})
-    return jsonify({"success": True, "message": i18n.tr("Sent to the server: {command}", command=line)})
+    reply = ({"success": True, "message": i18n.tr("Sent to the server: {command}", command=line)} if rc == 0
+             else {"success": False, "message": _console_send_failure(rc, err)})
+    with _r42r_audit_after(reply):      # the server has the line by now (_r42r_audit_after)
+        log_action(current_user, "mc_list_change", target=gs.name, detail=line, success=(rc == 0), server=gs)
+    return jsonify(reply)
 
 
 def _mcl_refused(gs, line, why, status):
