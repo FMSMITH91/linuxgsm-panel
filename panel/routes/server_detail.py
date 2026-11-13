@@ -292,10 +292,29 @@ def _pck_after_power(gs, remote, action, rc, bound):
     failed run leaves the old process on the old port, so the stored port stays and the saved one
     keeps waiting (port_check.follow_pending). `bound` is the port the start was issued on
     (port_check.start_port, read before the run): a port saved DURING the run, which the game did not
-    bind, is not followed and waits for the next start.
+    bind, is not followed and waits for the next start. The stored port still moves to `bound` when
+    that is a port saved before the run, since the old stored port is the one the game left.
     """
-    if rc == 0 and action in ("start", "restart") and gs.pending_port and _pck.start_port(gs) == bound:
+    if rc != 0 or action not in ("start", "restart") or not gs.pending_port:
+        return
+    later = _pck.start_port(gs)
+    if later == bound:
         _pck.follow_pending(gs, remote, _pck_rules())
+    elif bound != gs.port:
+        _r42r_follow_bound(gs, remote, bound, later)
+
+
+def _r42r_follow_bound(gs, remote, bound, later):
+    """Store `bound`, the port the start was issued on, and keep `later`, saved during the run, pending.
+
+    follow_pending moves to whatever pending_port holds and clears it, so `bound` is put there for
+    the move; the later save then waits for the next start, as one saved while it runs does. A move
+    the re-read's rules refuse leaves the stored port as it was.
+    """
+    gs.pending_port = bound
+    _pck.follow_pending(gs, remote, _pck_rules())
+    gs.pending_port = None if later == gs.port else later
+    db.session.commit()
 
 
 def _pck_after_save(gs, settings):
