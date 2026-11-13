@@ -541,7 +541,7 @@ check("world reset sweep: a stop that exits non-zero deletes nothing, starts the
 _running183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_RUNNING__\n", "", 4))
 check("world reset sweep: a server the delete command finds still running is not reset; start is still run "
       "and the failure alerted",
-      _running183["cmds"][-1] == "start" and len(_running183["cmds"]) == 5
+      _running183["cmds"][-1:] == ["start"] and len(_running183["cmds"]) == 5
       and "still running" in (_last183(_running183).get("detail") or "")
       and _running183["alerts"] == ["Scheduled wipe did not run"], repr(_running183))
 
@@ -549,17 +549,17 @@ _unread183 = _sweep_case183(_mc_sid183, delete=lambda: ("", "timed out", -1))
 check("world reset sweep: a delete whose output did not come back is never recorded as done; the server is "
       "started and the operator told to check it",
       _last183(_unread183).get("ok") is False and "may have deleted the world" in (_last183(_unread183).get("detail") or "")
-      and _unread183["cmds"][-1] == "start", repr(_unread183))
+      and _unread183["cmds"][-1:] == ["start"], repr(_unread183))
 
 _drop183 = _sweep_case183(_mc_sid183, delete=_raise183(True), again=True)
 check("world reset sweep: a connection that drops after the delete was sent ends the reset (start still tried, "
       "alerted as 'may have been deleted'), and the next sweep does NOT run it again",
-      _drop183["cmds"][-1] == "start" and _last183(_drop183).get("ok") is False
+      _drop183["cmds"][-1:] == ["start"] and _last183(_drop183).get("ok") is False
       and "may have been deleted" in (_last183(_drop183).get("detail") or "") and _drop183["again"] == []
       and _drop183["alerts"] == ["Scheduled wipe did not run"], repr(_drop183))
 _unsent183 = _sweep_case183(_mc_sid183, delete=_raise183(False))
 check("world reset sweep: a delete never sent starts the server again and stays pending with its backup",
-      _unsent183["cmds"][-1] == "start" and _unsent183["entry"].get("pending_since")
+      _unsent183["cmds"][-1:] == ["start"] and _unsent183["entry"].get("pending_since")
       and _unsent183["entry"].get("backed_up") and _unsent183["alerts"] == [], repr(_unsent183))
 
 _players183 = _sweep_case183(_mc_sid183, players=3)
@@ -632,8 +632,8 @@ _busy183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_BUSY__\n", "", 4))
 _nothing183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_NOTHING__\n", "", 8))
 check("world reset sweep: a delete refused because serverfiles was still in use, or that found no world, is "
       "not a reset: the server is started again and the failure alerted",
-      _busy183["cmds"][-1] == "start" and _last183(_busy183).get("ok") is False
-      and _nothing183["cmds"][-1] == "start" and _last183(_nothing183).get("ok") is False
+      _busy183["cmds"][-1:] == ["start"] and _last183(_busy183).get("ok") is False
+      and _nothing183["cmds"][-1:] == ["start"] and _last183(_nothing183).get("ok") is False
       and "no world was found" in (_last183(_nothing183).get("detail") or "")
       and _nothing183["alerts"] == ["Scheduled wipe did not run"], repr((_busy183, _nothing183)))
 
