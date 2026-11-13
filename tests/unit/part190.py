@@ -394,7 +394,7 @@ else:
     def _staged190(damage):
         sb = _Sb190()
         try:
-            out, (state, ready) = sb.vet()
+            ready = sb.vet()[1][1]
             tree = sb.tree()
             held = [_f for _f in sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)][0]
             hp = _os190.path.join(sb.bdir, held)
@@ -403,7 +403,7 @@ else:
                 raw = _gz190.decompress(f.read())
             with open(hp, "wb") as f:
                 f.write(_gz190.compress(damage(raw)))
-            out, res = _restore190(sb, ready)
+            res = _restore190(sb, ready)[1]
             return res[0], str(res[1]), sb.tree() == tree
         finally:
             sb.gone()
@@ -598,7 +598,7 @@ class _Host190:
                  restore="__GRS_CLEARING__\n__GRS_RESTORED__"):
         """Answers per step; the undo backup appears in the listing when `backup` succeeds."""
         self.calls, self.vet_out, self.stop, self.ok, self.restore_out = [], vet, stop, backup, restore
-        self.keep, self.alerts = None, []
+        self.keep, self.alerts, self.made = None, [], None
         self.listing = list(_LIST190)
 
     def shell(self, server, user, sh, timeout=30, selfname=None):
@@ -615,7 +615,7 @@ class _Host190:
         self.calls.append(action)
         return self.stop if action == "stop" else ("", "", 0)
 
-    def marked(self, sid, server, user, selfname, keep, made=None, **k):
+    def marked(self, sid, server, user, selfname, keep, **k):
         self.calls.append("backup")
         self.keep = keep
         self.held_seen = dict(_held190)
@@ -623,8 +623,7 @@ class _Host190:
             # An upload finished while the backup ran: newer than the undo, and never taken for it.
             self.listing = [{"name": "p190-2026-11-14-000000.tar.zst", "size": 10, "created": 4},
                             {"name": "p190-2026-11-13-000000.tar.zst", "size": 3000, "created": 3}] + self.listing
-            if made is not None:
-                made.append("p190-2026-11-13-000000.tar.zst")
+            self.made = "p190-2026-11-13-000000.tar.zst"
             return True, "", False
         return False, "LinuxGSM backup failed", False
 
@@ -656,7 +655,7 @@ def _run190(host, refusal=None):
         _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: refusal)
         _p9_patch(_gr190, "shell_as_game_user", host.shell)
         _p9_patch(_gr190, "list_game_backups", host.listed)
-        _p9_patch(_gr190, "_sm", _NS(run_as_game_user=host.lgsm))
+        _p9_patch(_gr190, "_sm", _NS(run_as_game_user=host.lgsm, last_backup_made=lambda srv, user: host.made))
         _p9_patch(_gr190, "_lgp", _NS(allowance_seconds=lambda *a, **k: 0,
                                       outcome_of=_gr190._lgp.outcome_of))
         _p9_patch(_gr190, "bk", _NS(game_prune_keep=lambda sid: (2, True)))
@@ -1049,6 +1048,19 @@ eq("stdin: bytes are written in slices of at most 64 KB that join to the whole; 
    (max(len(_p) for _p in _sl190) <= 65536, b"".join(_sl190) == _big190, len(_sl190) > 1,
     [bytes(_p) for _p in _core190._stdin_pieces(_ch190)], _core190._stdin_bytes("é")),
    (True, True, True, [b"a" * 10, b"b" * 20], "é".encode("utf-8")))
+
+# ── 8c. the backup path names the archive it proved it wrote (a restore's undo is that name) ─────────
+from panel.ops.ssh_manager import game as _game190
+_mk190 = []
+try:
+    _p9_patch(_game190, "_bkverify_unconfirmed",
+              lambda server, user, selfname, before, out, named=None: (named.append("p190-x.tar.zst") if named is not None
+                                                                       else None) and None)
+    _p9_patch(_game190, "_bkprune_after_success", lambda *a, **k: None)
+    _ok190 = _game190._bkverify_success(None, "p190u", "p190u", None, "", 3, "", _mk190)
+finally:
+    _p9_restore_all()
+eq("backup path: a proven backup hands back the name of the archive it wrote", (_ok190[0], _mk190), (True, ["p190-x.tar.zst"]))
 
 # ── 9. the panel's Backups page offers Restore on each game backup; the card stacks on a phone ────────
 from unit.part47 import _SETTLE47 as _SET190, _cut47 as _cut190, _node47 as _node190

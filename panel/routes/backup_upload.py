@@ -30,7 +30,7 @@ from panel.core.http import _json_body, _log_and_generic
 from panel.db.models import LOCAL_HOST_LABEL
 from panel.ops import backup as bk
 from panel.ops import ssh_manager as _sm
-from panel.ops.ssh_manager._core import StdinChunks
+from panel.core.stdin_chunks import StdinChunks
 from panel.routes import _shared
 from panel.security.auth import (EDIT_FILES, RESTORE_BACKUP, get_game, has_permission, log_action,
                                  permission_required, server_access_required, superadmin_required)

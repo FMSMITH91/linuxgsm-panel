@@ -51,6 +51,9 @@ from panel.services import game_restore as grs, lgsm_players as _lgp
 from panel.services.monitoring import _end_offline_window, _mark_expected_offline
 
 _GRS_NOT = i18n.Sentence("Not restored: nothing was changed.")
+# host_reboot.panel_host_busy's answer while a restore runs (every route that restarts the panel asks it).
+RESTART_REFUSED = i18n.Sentence("A game server is being restored from a backup. The panel does not restart until "
+                                "it has finished; try again then.")
 # server id -> {"running", "ok", "msg", "msg_i18n", "step", "ts"}: what the Backups card shows.
 _grs_status = register_server_state({})
 _grs_claim_lock = threading.Lock()      # one restore per server: the test and the set are one step
@@ -96,8 +99,8 @@ def _grs_recover_one(app, sid, entry):
         return
     name, t0 = entry.get("name") or "", int(entry.get("t0") or 0)
     if grs.archive_problem(name) is None and t0:
-        out, err, rc = shell_as_game_user(gs.remote, gs.short_name, grs.putback_script(gs.short_name, name, t0),
-                                          timeout=60, selfname=gs.lgsm_name)
+        _out, _err, rc = shell_as_game_user(gs.remote, gs.short_name, grs.putback_script(gs.short_name, name, t0),
+                                            timeout=60, selfname=gs.lgsm_name)
         if rc != 0:
             return                      # the host did not answer: the next pass tries again
     _grs_held_put(sid, None)
@@ -363,16 +366,16 @@ class _GrsRun:
         gs = self.gs
         _grs_set(gs.id, step="backing_up")
         keep = max(len(self.listing) + 1, bk.game_prune_keep(gs.id)[0])
-        made = []
         try:
             ok, why, _skipped = _shared._marked_backup(
                 gs.id, gs.remote, gs.short_name, gs.lgsm_name, keep, game_type=gs.game_type, port=gs.port,
-                force=True, query_type=gs.query_type, held=lambda: still_held(gs), wipe_ok=True, made=made)
+                force=True, query_type=gs.query_type, held=lambda: still_held(gs), wipe_ok=True)
         except Exception as exc:        # a host that dropped: the server must still be started again
             ok, why, _skipped = False, i18n.Sentence("the connection failed ({error})", error=type(exc).__name__), False
         if still_held(gs):
             _game_backup_status[gs.id] = _shared._lg264_bk_status(ok, why, _skipped)
-        self.undo = self.new_archive(made[0]) if ok and made else None
+        made = _sm.last_backup_made(gs.remote, gs.short_name) if ok else None
+        self.undo = self.new_archive(made) if made else None
         if not self.undo:
             self.put_back()
             reason = (why or "") if not ok else i18n.Sentence("its archive is not in the backup folder")

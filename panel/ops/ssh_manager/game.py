@@ -2043,8 +2043,21 @@ def _bk_after_run(server, user, selfname, before, run, keep, headroom_note, made
                                      text_failed)), False
 
 
+# (server id, account) -> the archive the last run_game_backup proved it wrote (last_backup_made).
+_LAST_MADE = {}
+
+
+def last_backup_made(server, user):
+    """The name of the archive the last run_game_backup for `user` on `server` proved it wrote, or None.
+
+    A restore names its pre-restore archive by it, never by "the newest new name" (an upload
+    finished meanwhile would be that). Cleared when the next run starts.
+    """
+    return _LAST_MADE.get((getattr(server, "id", None), user))
+
+
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
-                    query_type=None, made=None):
+                    query_type=None):
     """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
 
     The backup archives serverfiles into ~/lgsm/backup/. Runs AS THE GAME USER, non-interactively
@@ -2060,10 +2073,10 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     can't query still back up on schedule (matching the daily-restart behaviour) —
     which is exactly why `query_type` has to be threaded in (see below).
 
-    `made`, a list, gets the name of the archive this run wrote once it is proven (a restore names its
-    pre-restore archive by it, never by "the newest new name", which an upload could be).
+    The name of the archive it proved it wrote is kept for last_backup_made.
     """
     selfname = selfname or user
+    _LAST_MADE.pop((getattr(server, "id", None), user), None)
     # Refused before the player query, the headroom prune and the listing, which would otherwise
     # each reach the host first: the backup itself is refused by shell_as_game_user anyway.
     if not _core.game_idents_ok(user, selfname):
@@ -2094,8 +2107,12 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, refusal, False
     # Taken last, just before the run: the headroom prune above may have removed archives.
     before = _bkpart_listing(server, user)
-    return _bk_after_run(server, user, selfname, before, _run_linuxgsm_backup(server, user, selfname),
-                         keep, headroom_note, made)
+    made = []
+    result = _bk_after_run(server, user, selfname, before, _run_linuxgsm_backup(server, user, selfname),
+                           keep, headroom_note, made)
+    if made:
+        _LAST_MADE[(getattr(server, "id", None), user)] = made[0]
+    return result
 
 
 # One row of the command table the instance script prints with no arguments:

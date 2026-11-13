@@ -19,6 +19,7 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
+from panel.core.stdin_chunks import StdinChunks, stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
 from panel.security import privileged as _priv
 from panel.ops import netdev as _netdev
@@ -607,44 +608,6 @@ def _pump_capped(stream, buf, cap, flags, stop=None, sel=None):
             _keep_capped(buf, chunk, cap, flags)
     except (OSError, ValueError):
         return          # the pipe was closed under us (a kill); what was read is kept
-
-
-class StdinChunks:
-    """A command's stdin given as chunks of bytes, written one after another (run_command's stdin_text).
-
-    For a large input (a backup upload's piece, base64'd as it goes): it is never held whole, and no
-    write is handed more than one chunk. Written whole, a 5.6 MB stdin left the panel's resident size
-    some 100 MB higher after a hundred pieces (measured on the local transport): every partial
-    write of the pipe copied what was left.
-    """
-
-    __slots__ = ("_chunks",)
-
-    def __init__(self, chunks):
-        """Keep the iterable of bytes chunks; it is read once, by the transport."""
-        self._chunks = chunks
-
-    def __iter__(self):
-        return iter(self._chunks)
-
-    def __bool__(self):
-        return True
-
-
-_STDIN_SLICE = 65536
-
-
-def _stdin_bytes(stdin_text):
-    """What the transports write: text as UTF-8, StdinChunks (and bytes) as they are, None for none."""
-    return stdin_text.encode("utf-8") if isinstance(stdin_text, str) else stdin_text
-
-
-def _stdin_pieces(stdin_bytes):
-    """The writes `stdin_bytes` is made of: its chunks, or bytes in slices no larger than _STDIN_SLICE."""
-    if isinstance(stdin_bytes, StdinChunks):
-        return stdin_bytes
-    view = memoryview(stdin_bytes)
-    return (view[i:i + _STDIN_SLICE] for i in range(0, len(view), _STDIN_SLICE))
 
 
 def _feed_stdin(p, stdin_bytes):

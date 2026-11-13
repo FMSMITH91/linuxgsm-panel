@@ -776,8 +776,7 @@ def panel_host_busy():
     """
     from panel.routes import game_restore as _grs
     if _grs.restore_running():
-        return i18n.Sentence("A game server is being restored from a backup. The panel does not restart until "
-                             "it has finished; try again then.")
+        return _grs.RESTART_REFUSED
     try:
         local = RemoteServer.query.filter_by(is_local=True).first()
     except Exception:  # noqa: BLE001 - a courtesy check never blocks on an unreadable row
