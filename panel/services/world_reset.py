@@ -183,8 +183,8 @@ def script(user, selfname, plan):
         "cd / || exit 3",
         'sf=$(cd -P -- %s 2>/dev/null && pwd -P && printf x) && sf=${sf%%?x} || sf=' % _q(home + "/serverfiles"),
         'case "$sf" in ""|/) echo %s; exit 3;; esac' % _M_NOSF,
-        's=; [ -f %s ] && s=%s-$(cat %s)' % (_q("%s/lgsm/data/%s.uid" % (home, selfname)), _q(selfname),
-                                            _q("%s/lgsm/data/%s.uid" % (home, selfname))),
+        's=; [ -f {uid} ] && s={sn}-$(cat {uid})'.format(uid=_q("%s/lgsm/data/%s.uid" % (home, selfname)),
+                                                         sn=_q(selfname)),
         'if [ "$(TERM=screen tmux -L "$s" list-sessions -F "#{session_name}" 2>/dev/null | grep -Ecx %s)" != 0 ]; '
         'then echo %s; exit 4; fi' % (_q("^" + selfname), _M_RUNNING),
         'd="$sf"',

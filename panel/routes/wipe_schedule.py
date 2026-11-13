@@ -190,7 +190,7 @@ def _register_routes(app):
     @permission_required(MANAGE_SERVERS)
     @server_access_required
     def api_server_wipe_schedule(server_id):
-        """Read or set this server's scheduled map / full wipe (Rust only)."""
+        """Read or set this server's scheduled wipe (Rust's map / full wipe, or a Minecraft / Factorio world reset)."""
         gs = get_game(server_id)
         if request.method == "GET":
             return jsonify(_cmpd_view(gs))
