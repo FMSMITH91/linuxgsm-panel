@@ -1934,7 +1934,7 @@ function initChart() {
   };
   statsChart = new Chart(ctx, {
     type: 'line',
-    data: { labels: [], datasets: [ mk('Game CPU %', '#3fb950'), mk('Server CPU %', '#58a6ff') ] },
+    data: { labels: [], datasets: [ mk(t('Game CPU %'), '#3fb950'), mk(t('Server CPU %'), '#58a6ff') ] },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { intersect: false, mode: 'index' },

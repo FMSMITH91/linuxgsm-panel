@@ -6,16 +6,23 @@ Held here:
 * A change that has reached the host (a Minecraft list line, a Workshop save, a plugin install or
   rename, a game config form save, the Project Zomboid admin password) whose audit row cannot be
   written answers what the host did, with audit_unwritten and the sentence saying so.
+* The charts' legends: the server page's live chart draws translated ones, a History refresh repaints
+  them in the language now chosen, and statsChart, read bare by history_charts.js, is declared.
 
 HOW IT RUNS. No host is reached: routes run on part12's app with its transport tripwire armed and
-every host call stubbed; the background power action's thread is queued and drained.
+every host call stubbed; the background power action's thread is queued and drained. Scripts run in
+node through part47's runner.
 """
+import json as _json188
+import os as _os188
+
 from sqlalchemy.exc import OperationalError as _OpErr188
 
-from unit.part01 import check, eq
+from unit.part01 import _root, check, eq, skip
 from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _P9Thread, _p9_arm, _p9_client, _p9_delete_server,
                          _p9_drain, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_row,
                          _p9_set, _p9_threading)
+from unit.part47 import _cut47, _node47
 from panel.routes import _shared as _sh188, server_detail as _sd188, server_files as _sf188
 from panel.routes import game_config_form as _gcfr188, mc_lists as _mcl188, modrinth_plugins as _mdr188
 from panel.routes import pz_admin as _pza188, workshop as _wsc188
@@ -157,3 +164,38 @@ check("audit after a change r42r: a console line the server refused, whose row c
       _r188["au_locked_failed"][0] == 200 and _r188["au_locked_failed"][1].get("success") is False
       and _r188["au_locked_failed"][1].get("audit_unwritten") is True and _r188["au_trips"] == [],
       repr((_r188["au_locked_failed"], _r188["au_trips"])))
+
+
+# ── 3. the charts' legends ──────────────────────────────────────────────────────────────────────
+def _js188(name):
+    with open(_os188.path.join(_root, "panel", "static", "js", name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+_SD188, _HC188 = _js188("server_detail.js"), _js188("history_charts.js")
+_leg188 = _node47(
+    "global.window = global;\n"
+    "global.document = {getElementById: () => ({getContext: () => ({})})};\n"
+    "global.Chart = function(ctx, cfg){ this.data = cfg.data; this.options = cfg.options; this.update = () => {}; };\n"
+    "global._cmpbInk = () => ({tick: '#000', grid: '#000', legend: '#000'});\n"
+    "let lang = {'Game CPU %': 'CPU del juego %', 'Server CPU %': 'CPU del servidor %', 'CPU %': 'CPU (es)'};\n"
+    "global.t = s => lang[s] || s;\n"
+    "var statsChart = null, _histCharts = {}, _histTimes = {};\n"
+    + _cut47(_SD188, "function initChart(") + "\n" + _cut47(_HC188, "function _histChart(") + "\n"
+    "initChart();\n"
+    "_histChart('h', [1], [{label: t('CPU %'), data: [1]}], {}, {});\n"
+    "lang = {};\n"
+    "_histChart('h', [1, 2], [{label: t('CPU %'), data: [1, 2]}], {}, {});\n"
+    "console.log(JSON.stringify({live: statsChart.data.datasets.map(d => d.label),\n"
+    "                            hist: _histCharts.h.data.datasets.map(d => [d.label, d.data])}));\n")
+if _leg188 is None:
+    skip("chart legends r42r: the live chart's legend is translated, and a History refresh repaints it",
+         "node is not installed here")
+else:
+    eq("chart legends r42r: the live chart's legend is translated, and a History refresh after a switch to "
+       "English repaints the legend in English with the new data",
+       _leg188, {"live": ["CPU del juego %", "CPU del servidor %"], "hist": [["CPU %", [1, 2]]]})
+_esl188 = _json188.loads(_js188(".eslintrc.json"))["globals"]
+eq("eslint r42r: statsChart, read bare by history_charts.js and defined by server_detail.js, is declared",
+   ("_r37d_inkChart(statsChart)" in _HC188, "var statsChart" in _SD188, _esl188.get("statsChart")),
+   (True, True, "writable"))
