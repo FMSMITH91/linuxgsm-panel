@@ -1277,6 +1277,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **dnspython 2.9.2 on Ubuntu 24.04 and 26.04 (GHSA-vvf4-9x63-8xvv).** A crafted record in DNS
+  zone-file text could make dnspython use unbounded memory; panels on Python 3.11 and newer now
+  install the fixed release. Ubuntu 22.04's Python 3.10 cannot run it, and the panel never parses
+  zone files there.
+
 - **Rate limiting no longer opens a port to the internet.** Limit on a port that was closed, or open
   only to the tailnet, one address or one interface, added a rule letting everyone in. It now
   refuses unless the port is already open to everyone, and says so.
