@@ -1759,10 +1759,6 @@ updateCronExplain();
 // Each section loads only for a viewer who may use it (SF_CAN, auth.files_access): asked anyway, a
 // section without its tab cost an SSH round trip per page load for a 403 nobody sees.
 if (SF_CAN.view) loadConfig();
-// Without EDIT_FILES the three editors are for reading: nothing typed into them could be saved.
-if (!SF_CAN.edit) ['editor', 'game-cfg', 'cfg-raw'].forEach(function(id){
-  var el = document.getElementById(id); if (el) el.readOnly = true;
-});
 // The page has no file browser for a failed install (nothing was downloaded to browse). Asked
 // anyway, the listing cost an SSH round trip per page load, and its answer had no list to fill.
 if (SF_CAN.view && document.getElementById('file-list')) browse('');

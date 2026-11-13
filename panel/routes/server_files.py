@@ -2751,6 +2751,47 @@ def _register_uploads(app):
             return jsonify({"existing": [], "checked": False})
 
 
+def _fpm_logts_off(gs):
+    """api_server_log_timestamps' POST: turn LinuxGSM's log stamping off, audited (the caller catches)."""
+    # OFF only. The page withdrew its "turn on" control once it was measured that
+    # LinuxGSM's stamping pipeline (`cat | gawk strftime >> consolelog`) block-buffers
+    # to the file and freezes the live console for as long as 4KB takes to accumulate
+    # — but this endpoint still accepted `enabled: true`, so anyone with the config
+    # permission could still freeze every viewer's console with one request. The
+    # reading side stays: a log someone stamped by hand is still parsed.
+    # Read as a JSON boolean: by truthiness, `{"enabled": "false"}` was answered with
+    # the turn-on refusal below, about a request to turn them off.
+    flag = _r12c_json_flag(_json_body(), "enabled", None)
+    if flag is None:
+        return jsonify({"error": "enabled must be true or false."}), 400
+    if flag:
+        return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
+                                 "live console, so the panel only turns them off."}), 400
+    want = "off"
+    # The instance cfg the settings form writes: the same refusal, said as `error`,
+    # which is what the page reads here. Its row keeps the reason whole, as every
+    # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
+    why = game_account_write_refusal(gs.remote, gs.short_name)
+    if why is not None:
+        log_action(current_user, "set_log_timestamps", target=gs.name,
+                   detail=_r14b_refused("", why), success=False, server=gs)
+        return jsonify({"error": i18n.tr(why)}), 409
+    ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
+                                {"logtimestamp": want})
+    if not ok:
+        # Audited as every other refused cfg write is: it wrote no row at all.
+        log_action(current_user, "set_log_timestamps", target=gs.name,
+                   detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
+                   success=False, server=gs)
+        # 200, not 502 (Cloudflare swaps an origin 502 for its own page): the page
+        # reads `error`, not the status.
+        return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")})
+    log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
+               server=gs)
+    return jsonify({"success": True, "enabled": want == "on",
+                    "needs_restart": True})
+
+
 def _register_console_routes(app):
     """The console's HTTP window onto the log, and LinuxGSM's own log timestamps."""
     @app.route("/api/console/<int:server_id>")
@@ -2819,43 +2860,7 @@ def _register_console_routes(app):
             return jsonify({"error": "Permission denied"}), 403
         try:
             if request.method == "POST":
-                # OFF only. The page withdrew its "turn on" control once it was measured that
-                # LinuxGSM's stamping pipeline (`cat | gawk strftime >> consolelog`) block-buffers
-                # to the file and freezes the live console for as long as 4KB takes to accumulate
-                # — but this endpoint still accepted `enabled: true`, so anyone with the config
-                # permission could still freeze every viewer's console with one request. The
-                # reading side stays: a log someone stamped by hand is still parsed.
-                # Read as a JSON boolean: by truthiness, `{"enabled": "false"}` was answered with
-                # the turn-on refusal below, about a request to turn them off.
-                flag = _r12c_json_flag(_json_body(), "enabled", None)
-                if flag is None:
-                    return jsonify({"error": "enabled must be true or false."}), 400
-                if flag:
-                    return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
-                                             "live console, so the panel only turns them off."}), 400
-                want = "off"
-                # The instance cfg the settings form writes: the same refusal, said as `error`,
-                # which is what the page reads here. Its row keeps the reason whole, as every
-                # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
-                why = game_account_write_refusal(gs.remote, gs.short_name)
-                if why is not None:
-                    log_action(current_user, "set_log_timestamps", target=gs.name,
-                               detail=_r14b_refused("", why), success=False, server=gs)
-                    return jsonify({"error": i18n.tr(why)}), 409
-                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
-                                            {"logtimestamp": want})
-                if not ok:
-                    # Audited as every other refused cfg write is: it wrote no row at all.
-                    log_action(current_user, "set_log_timestamps", target=gs.name,
-                               detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
-                               success=False, server=gs)
-                    # 200, not 502 (Cloudflare swaps an origin 502 for its own page): the page
-                    # reads `error`, not the status.
-                    return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")})
-                log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
-                           server=gs)
-                return jsonify({"success": True, "enabled": want == "on",
-                                "needs_restart": True})
+                return _fpm_logts_off(gs)
             vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["logtimestamp"])
             if vals is None:
                 # "enabled": False would be a claim about a config we could not read, and the

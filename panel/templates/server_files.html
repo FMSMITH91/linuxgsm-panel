@@ -268,7 +268,7 @@
           <span id="gcf-msg" class="small ms-2"></span>
         </div>
         <div id="gcf-raw-pane">
-          <textarea id="game-cfg" aria-labelledby="game-cfg-desc" class="form-control font-monospace gcf-raw" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+          <textarea id="game-cfg" aria-labelledby="game-cfg-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace gcf-raw" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
           <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
           <span id="game-msg" class="small ms-2"></span>
         </div>
@@ -278,7 +278,7 @@
     <!-- Raw instance cfg -->
     <div id="tab-raw" class="cfg-tab" style="display:none;">
       <p class="small text-secondary mb-1" id="cfg-raw-desc">Raw instance config <code>{{ server.lgsm_name }}.cfg</code>.</p>
-      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
       <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveRaw"><i class="bi bi-save"></i> Save raw config</button>
       <span id="cfg-raw-msg" class="small ms-2"></span>
     </div>
@@ -374,7 +374,7 @@
              trade — and it is what every code editor does. #}
           <div class="editor-wrap">
             <div id="editor-gutter" class="editor-gutter" aria-hidden="true"></div>
-            <textarea id="editor" aria-labelledby="editor-path" class="form-control font-monospace" rows="20" spellcheck="false"
+            <textarea id="editor" aria-labelledby="editor-path"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace" rows="20" spellcheck="false"
                       wrap="off" data-action="syncGutter" data-on="input"></textarea>
           </div>
         </div>
