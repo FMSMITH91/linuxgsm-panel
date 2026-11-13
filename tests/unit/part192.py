@@ -80,8 +80,10 @@ check("dashboard phone card: the status, players and connect cells and the map c
 
 
 def _more192(row, sid):
-    """The popover's markup in `row`: from its opening tag to its closing one (nothing inside it is
-    a span)."""
+    """The popover's markup in `row`, from its opening tag to its closing one.
+
+    Nothing inside the popover is a span, so the first closing span ends it.
+    """
     i = row.find('<span class="dash-more" id="dash-more-%d" popover>' % sid)
     j = row.find("</span>", i)
     return row[i:j] if i >= 0 and j > i else ""
@@ -132,8 +134,10 @@ with open(_os192.path.join(_root, "panel", "static", "css", "panel.css"), encodi
 
 
 def _rule192(at, selector):
-    """{prop: value} of every rule whose selector list holds `selector`, inside the at-rule `at`
-    (None: top level), a later rule's value over an earlier one's; {} when there is none."""
+    """Return {prop: value} of every rule whose selector list holds `selector` inside the at-rule `at`.
+
+    `at` None means the top level. A later rule's value wins over an earlier one's; {} when there is none.
+    """
     scopes = [b for p, b in _css192 if p == at] if at else [_css192]
     out = {}
     for scope in scopes:
