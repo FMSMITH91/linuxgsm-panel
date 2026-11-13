@@ -141,7 +141,7 @@ def _register_game(app):
             return data
         state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, uid, offset), _GAME_PIECE_TIMEOUT,
                                    stdin=base64.b64encode(data).decode("ascii"))
-        if state == "ok" and str(val).isdigit():
+        if state == "ok" and str(val).isdecimal():
             entry["got"] = int(val)
             return jsonify({"success": True, "received": entry["got"]})
         if state == "offset":

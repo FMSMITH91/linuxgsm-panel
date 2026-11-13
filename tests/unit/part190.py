@@ -29,6 +29,7 @@ import gzip as _gz190
 import hashlib as _hl190
 import io as _io190
 import os as _os190
+import re as _re190
 import shutil as _sh190
 import subprocess as _sp190
 import tarfile as _tf190
@@ -525,6 +526,189 @@ with _job190(P9_GS, _shr190.GRS_KIND):
 check("held: the server page's actions are refused in the restore's own words",
       "is being restored from a backup" in _held190[0] and "'restart' was not run" in _held190[0], _held190[0])
 eq("held: a backup of the server waits, except the restore's own undo backup", _held190[1:], (True, False))
+
+# ── 6. uploading a game server's backup, through the app, onto a stand-in host ──────────────────
+def _tar190(members, compress="gz"):
+    """A tar of `members` [(name, bytes)] ("./" names), compressed as asked ("gz", "plain")."""
+    buf = _io190.BytesIO()
+    with _tf190.open(fileobj=buf, mode="w", format=_tf190.GNU_FORMAT) as t:
+        for mname, data in members:
+            ti = _tf190.TarInfo(mname)
+            ti.size, ti.mode = len(data), 0o644
+            t.addfile(ti, _io190.BytesIO(data))
+    raw = buf.getvalue()
+    return _gz190.compress(raw) if compress == "gz" else raw
+
+
+def _bomb190(prefix="./", size=10 * 1024 ** 3):
+    """A gzip'd tar whose one header declares `size` bytes: its data is never there (a bomb's shape)."""
+    ti = _tf190.TarInfo(prefix + "huge")
+    ti.size = size
+    return _gz190.compress(ti.tobuf(format=_tf190.GNU_FORMAT) + b"\0" * 1024)
+
+
+_up190 = {}
+with _p9.app_context():
+    _gsrow190 = _pdb190.session.get(_PGS190, P9_GS)
+    _short190, _self190 = _gsrow190.short_name, _gsrow190.lgsm_name or _gsrow190.short_name
+_root190 = _tmp190.mkdtemp(prefix="p190-up-")
+_uhome190 = _os190.path.join(_root190, "home", _short190)
+_os190.makedirs(_uhome190)
+_ubdir190 = _os190.path.join(_uhome190, "lgsm", "backup")
+
+
+def _fake_run190(server, cmd, timeout=30, sudo=None, stdin_text=None):
+    """run_command for the upload routes: the panel-built script, run by bash on the stand-in home."""
+    p = _sp190.run(["bash", "-c", cmd.replace("/home/" + _short190, _uhome190)], input=stdin_text,
+                   capture_output=True, text=True, timeout=120, cwd="/")
+    return p.stdout, p.stderr, p.returncode
+
+
+def _upload190(client, data, chunk=None, start_extra=None):
+    """Start, send every piece, finish: [(status, json) per request]."""
+    base = "/api/panel/backup/game/%d/upload" % P9_GS
+    r = client.post(base, json=dict({"size": len(data)}, **(start_extra or {})))
+    out = [(r.status_code, r.get_json(silent=True) or {})]
+    uid = out[0][1].get("id")
+    if not uid:
+        return out
+    step = chunk or len(data)
+    for at in range(0, len(data), step):
+        r = client.post("%s/%s?offset=%d" % (base, uid, at), data=data[at:at + step],
+                        content_type="application/octet-stream")
+        out.append((r.status_code, r.get_json(silent=True) or {}))
+    r = client.post("%s/%s/finish" % (base, uid), json={})
+    out.append((r.status_code, r.get_json(silent=True) or {}))
+    return out
+
+
+try:
+    if _missing190:
+        raise RuntimeError("tools missing")
+    from types import SimpleNamespace as _NSU
+    from panel.routes import backup_upload as _bu190
+    from panel.ops import ssh_manager as _sm190
+    _p9_arm(who="part190")
+    _p9_patch(_bu190, "_sm", _NSU(game_user_cmd=lambda user, inner: inner, run_command=_fake_run190,
+                                  _fmt_size=_sm190._fmt_size))
+    _CU190 = {_k: _p9_client(_v) for _k, _v in _uids190.items()}
+    _good190 = _tar190([("././", b""), ("././" + _self190, b"#!/bin/bash\n"), ("././serverfiles/a", b"a" * 9000)])
+    _n_up190 = _p9_audit_count("game_backup_upload")
+    _res = _upload190(_CU190["rs"], _good190, chunk=4096, start_extra={"name": "../../../etc/cron.d/x.tar.gz"})
+    _up190["ok"] = ([_c for _c, _j in _res], _res[-1][1].get("name", ""), sorted(_os190.listdir(_ubdir190)))
+    _up190["ok_audit"] = _p9_audit_count("game_backup_upload") - _n_up190
+    _plain = _tar190([("./", b""), ("./" + _self190, b"#!/bin/bash\n")], compress="plain")
+    _up190["plain"] = _upload190(_CU190["rs"], _plain)[-1][1].get("name", "")
+    _up190["dlrm"] = _upload190(_CU190["dlrm"], _good190)[0][0]
+    _up190["oversize"] = _CU190["rs"].post("/api/panel/backup/game/%d/upload" % P9_GS,
+                                           json={"size": _grs190.UPLOAD_MAX + 1}).status_code
+    _before = sorted(_os190.listdir(_ubdir190))
+    for _k, _data in (("format", b"this is not an archive at all" * 50),
+                      ("bomb", _bomb190("././")),
+                      ("escape", _tar190([("././", b""), ("././" + _self190, b"x"), ("././../../evil", b"x")])),
+                      ("noscript", _tar190([("././", b""), ("././serverfiles/a", b"a")]))):
+        _r = _upload190(_CU190["rs"], _data)
+        _up190[_k] = (_r[-1][0], _r[-1][1].get("success"), _r[-1][1].get("message", ""),
+                      sorted(_os190.listdir(_ubdir190)) == _before)
+    # A piece sent twice (its answer lost): the second is not appended, and the page is told where to go on.
+    _base = "/api/panel/backup/game/%d/upload" % P9_GS
+    _uid = _CU190["rs"].post(_base, json={"size": 8192}).get_json()["id"]
+    _a = _CU190["rs"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
+    _b = _CU190["rs"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
+    _up190["resume"] = (_a.status_code, _b.status_code, (_b.get_json() or {}).get("received"))
+    _up190["traversal_id"] = _CU190["rs"].post(_base + "/..%2F..%2Fetc%2Fpasswd?offset=0", data=b"x",
+                                               content_type="application/octet-stream").status_code
+    _up190["big_piece"] = _CU190["rs"].post("%s/%s?offset=4096" % (_base, _uid), data=b"x" * (_grs190.UPLOAD_CHUNK + 1),
+                                            content_type="application/octet-stream").status_code
+except RuntimeError as _e:
+    skip("game backup upload: driven onto a stand-in host", str(_e))
+finally:
+    _p9_restore_all()
+    _sh190.rmtree(_root190, ignore_errors=True)
+    __import__("panel.routes.backup_upload", fromlist=["_uploads"])._uploads.clear()
+
+if "ok" in _up190:
+    _pat190 = r"%s-\d{4}-\d{2}-\d{2}-\d{6}\.tar\.gz\Z" % _self190
+    check("upload: RESTORE_BACKUP uploads in pieces; the archive is stored under a LinuxGSM backup's name "
+          "(the browser's name and path ignored), and nothing else is left in the backup dir",
+          set(_c for _c in _up190["ok"][0]) == {200} and _re190.match(_pat190, _up190["ok"][1])
+          and _up190["ok"][2] == [_up190["ok"][1]], repr(_up190["ok"]))
+    eq("upload: ...and it is audited", _up190["ok_audit"], 1)
+    check("upload: a plain tar is accepted and stored compressed (.tar.gz)",
+          bool(_re190.match(_pat190, _up190["plain"])), _up190["plain"])
+    eq("upload: download and delete without RESTORE_BACKUP cannot start one", _up190["dlrm"], 403)
+    eq("upload: a size over the cap is refused before the host", _up190["oversize"], 400)
+    _uwhy190 = {"format": "not a tar archive", "bomb": "far more than any game server",
+                "escape": "not under the server's folder", "noscript": "LinuxGSM script"}
+    eq("upload: not a tar, a decompression bomb's shape, a member escaping its folder, and an archive of "
+       "another server are refused with their reason, and nothing is listed",
+       {_k: (_up190[_k][1], _w in _up190[_k][2], _up190[_k][3]) for _k, _w in _uwhy190.items()},
+       {_k: (False, True, True) for _k in _uwhy190})
+    eq("upload: a piece sent twice is not appended twice; the page is told how much the host holds",
+       _up190["resume"], (200, 409, 4096))
+    eq("upload: an upload id that is a path, and a piece over 4 MB, are refused",
+       (_up190["traversal_id"], _up190["big_piece"]), (404, 413))
+
+
+# ── 7. uploading a panel backup (superadmin), into a throwaway backup dir ────────────────────────
+from panel.ops import backup as _bk190
+_pbdir190 = _tmp190.mkdtemp(prefix="p190-pb-")
+_pup190 = {}
+
+
+def _pupload190(client, data):
+    base = "/api/panel/backup/upload"
+    r = client.post(base, json={"size": len(data)})
+    j = r.get_json(silent=True) or {}
+    if not j.get("id"):
+        return r.status_code, j
+    client.post("%s/%s?offset=0" % (base, j["id"]), data=data, content_type="application/octet-stream")
+    r = client.post("%s/%s/finish" % (base, j["id"]), json={})
+    return r.status_code, r.get_json(silent=True) or {}
+
+
+try:
+    _p9_arm(who="part190")
+    _p9_patch(_bk190, "BACKUP_DIR", __import__("pathlib").Path(_pbdir190))
+    _CA190 = _p9_client(P9_ADMIN)
+    _CR190 = _p9_client(_uids190["rs"])
+    _cfg = b'{"backup": {}}'
+    _n_pb190 = _p9_audit_count("panel_backup_upload")
+    _pup190["plain"] = _pupload190(_CA190, _tar190([("config.json", _cfg)]))
+    _pup190["plain_audit"] = _p9_audit_count("panel_backup_upload") - _n_pb190
+    _enc_head = (b"LGSMBK1\n" + b'{"kdf": "scrypt", "salt": "c2FsdHNhbHQ=", "n": 32768, "r": 8, "p": 1}\n'
+                 + b"gAAAAABtokentokentoken")
+    _pup190["enc"] = _pupload190(_CA190, _enc_head)
+    _listed = sorted(_os190.listdir(_pbdir190))
+    for _k, _data in (("format", b"plain text, not a backup" * 20),
+                      ("enc_params", _enc_head.replace(b'"n": 32768', b'"n": 1048576')),
+                      ("bomb", _bomb190("")),
+                      ("escape", _tar190([("../config.json", _cfg)])),
+                      ("extra", _tar190([("config.json", _cfg), ("evil.sh", b"x")]))):
+        _pup190[_k] = _pupload190(_CA190, _data) + (sorted(_os190.listdir(_pbdir190)) == _listed,)
+    _pup190["not_su"] = _CR190.post("/api/panel/backup/upload", json={"size": 10}).status_code
+    _pup190["oversize"] = _CA190.post("/api/panel/backup/upload", json={"size": _bk190.UPLOAD_MAX + 1}).status_code
+    _pup190["traversal_id"] = _CA190.post("/api/panel/backup/upload/..%2F..%2Fpanel.db?offset=0", data=b"x",
+                                          content_type="application/octet-stream").status_code
+finally:
+    _p9_restore_all()
+    _sh190.rmtree(_pbdir190, ignore_errors=True)
+
+_pname190 = r"panel-backup-\d{8}-\d{6}-upload\.tar\.gz"
+check("panel upload: a superadmin's panel backup is checked and listed under a generated name",
+      _pup190["plain"][1].get("success") is True and bool(_re190.match(_pname190 + r"\Z", _pup190["plain"][1].get("name", ""))),
+      repr(_pup190["plain"]))
+eq("panel upload: ...audited", _pup190["plain_audit"], 1)
+check("panel upload: an encrypted one is taken on its header and listed as encrypted (.enc)",
+      bool(_re190.match(_pname190 + r"\.enc\Z", _pup190["enc"][1].get("name", ""))), repr(_pup190["enc"]))
+_pwhy190 = {"format": "Could not read the backup archive", "enc_params": "parameters this panel will not use", "bomb": "far more than a panel backup",
+            "escape": "invalid", "extra": "invalid"}
+eq("panel upload: not a backup, an encrypted header asking for costly parameters, a decompression bomb's shape, "
+   "a member escaping the archive and a member restore does not know are refused, nothing listed",
+   {_k: (_pup190[_k][1].get("success"), _w in _pup190[_k][1].get("message", ""), _pup190[_k][2])
+    for _k, _w in _pwhy190.items()}, {_k: (False, True, True) for _k in _pwhy190})
+eq("panel upload: not a superadmin, a size over the cap and an upload id that is a path are refused",
+   (_pup190["not_su"], _pup190["oversize"], _pup190["traversal_id"]), (403, 400, 404))
 
 with _p9.app_context():
     for _u in _PU190.query.filter(_PU190.username.like("p190_%")).all():

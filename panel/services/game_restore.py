@@ -351,9 +351,9 @@ def vet_outcome(out):
     ready = marks.get(_M["READY"])
     if ready is not None:
         parts = ready.split()
-        if len(parts) >= 3 and parts[1] in ("0", "1") and parts[2].isdigit():
+        if len(parts) >= 3 and parts[1] in ("0", "1") and parts[2].isdecimal():
             return "ready", {"up": parts[1] == "1", "t0": int(parts[2]),
-                             "need": int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0}
+                             "need": int(parts[3]) if len(parts) > 3 and parts[3].isdecimal() else 0}
     bad = marks.get(_M["BAD"])
     if bad is not None:
         code = (bad.split() + [""])[1]
@@ -463,7 +463,8 @@ def upload_finish_script(user, selfname, uid, size, when):
     names = ('for i in 0 1 2 3 4 5 6 7 8 9; do n=%s-$(date -d "@$((%d + i))" +%%Y-%%m-%%d-%%H%%M%%S).tar.$x; '
              '[ -e "$B/$n" ] && continue; if mv -n -- "$p" "$B/$n" && [ ! -e "$p" ]; then echo "%s $n"; exit 0; fi; '
              'done' % (_q(selfname), int(when), _M["UPSTORED"]))
-    return "\n".join(["set -o pipefail", "export LC_ALL=C", _grs_part(user, uid),
+    lines = [
+        "set -o pipefail", "export LC_ALL=C", _grs_part(user, uid),
         'if [ ! -f "$p" ] || [ -L "$p" ]; then echo %s; exit 5; fi' % _M["NOPART"],
         's=$(stat -c %s -- "$p")',
         'if [ "$s" != %d ]; then echo "%s $s"; exit 5; fi' % (int(size), _M["UPOFFSET"]),
@@ -474,7 +475,9 @@ def upload_finish_script(user, selfname, uid, size, when):
     ] + _grs_member_check("p", "$f", selfname, on_refusal=rm) + [
         'if [ "$x" = tar ]; then gzip -1 -n -- "$p" 2>/dev/null || { rm -f -- "$p" "$p.gz"; echo %s; exit 6; }; '
         'p="$p.gz"; x=gz; fi' % _M["UPFAIL"],
-        names, rm + " echo " + _M["UPFAIL"], "exit 6"]) + "\n"
+        names, rm + " echo " + _M["UPFAIL"], "exit 6",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def upload_outcome(out):
@@ -487,7 +490,7 @@ def upload_outcome(out):
             return "ok", (marks[_M[key]].split() + [""])[1]
     if _M["UPOFFSET"] in marks:
         got = (marks[_M["UPOFFSET"]].split() + [""])[1]
-        return "offset", int(got) if got.isdigit() else 0
+        return "offset", int(got) if got.isdecimal() else 0
     bad = marks.get(_M["BAD"])
     if bad is not None:
         return "refused", i18n.Sentence(_GRS_BAD_WHY.get((bad.split() + [""])[1], _GRS_BAD_WHY["parse"]))
