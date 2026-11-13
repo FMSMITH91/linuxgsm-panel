@@ -1277,6 +1277,7 @@ try:
     _p9_patch(_sf190, "_sync_toggles_from_cron", lambda gs, jobs: _synced190.append(1))
     _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
     _p9_patch(_sf190, "_read_refused", lambda *a, **k: None)
+    _p9_patch(_sf190, "game_account_write_refusal", lambda *a, **k: None)     # only the restore may refuse here
     with _job190(P9_GS, _shr190.GRS_KIND):
         _cl = _p9_client(P9_ADMIN)
         _rec190["cron_add"] = _cl.post("/api/server/%d/cron" % P9_GS, json={"schedule": "0 4 * * *", "command": "restart"}).status_code
