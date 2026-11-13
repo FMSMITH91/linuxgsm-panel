@@ -3,6 +3,18 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+26c8e01c Rate limiting no longer opens a port to the internet.
+59375a57 Moving SSH on a host whose firewall is off no longer stores a public rule.
+91878a16 The installer works as the panel's account inside the panel's files.
+34484fc5 A crafted server name can no longer stall the panel when Files & Config opens.
+c74771bf A game config XML file with very many comments no longer stalls the panel.
+facbc447 A scheduled Stop on the panel's own host no longer pages "went offline unexpectedly".
+e3baf561 The debug report counts servers held back from a manual full backup.
+d2db5194 A port saved during a restart is followed.
+6ee9eb90 A change that worked no longer reports "request failed".
+dcff0b71 Chart legends follow the panel's language.
+6318c695 Backup codes and port ranges can be typed on a phone.
+f611baab "Installing" and "Configuring" are translated.
 0cf7fd3f Scheduled world resets for Minecraft and Factorio.
 39dd1dda Separate permissions for a server's files and its backups.
 23635957 SSH port moves never open SSH wider than it was.
