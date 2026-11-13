@@ -2222,21 +2222,27 @@ try:
         check("monitor pass: a scheduled LinuxGSM update is neither 'offline' nor 'back online'",
               "server_down" not in _mt10 and "server_up" not in _mt_back10,
               repr((_mt10, _mt_back10)))
-        # A status write that cannot be committed is rolled back, not left half-applied.
+        # A status write that cannot be committed is rolled back, not left half-applied. The first
+        # shut sweep only counts a miss; the second confirms the down and writes gmod1 "offline",
+        # and that is the commit that fails: without the rollback the session keeps "offline".
+        _sweep10({"reachable": False}, dict(_UP10, ports={27017}))
         _cap_m10, _cap_moff10 = _cap10("panel.monitoring")
+        _r42t_rolled10 = []
         _mon10.db = NS(session=NS(query=_db10.session.query,
                                   commit=_raiser10(RuntimeError("database is locked")),
-                                  rollback=_db10.session.rollback))
+                                  rollback=lambda: (_r42t_rolled10.append(1), _db10.session.rollback())))
         try:
             _commit_r10 = _try10(_sweep10, {"reachable": False}, dict(_UP10, ports={27017}))
         finally:
             _cap_moff10()
             _mon_restore10("db")
+        _r42t_st10 = _db10.session.get(_GS10, _ids10["g1"]).status
         check("monitor pass: a commit that fails is rolled back and logged, and the sweep survives",
               not (isinstance(_commit_r10, tuple) and _commit_r10[:1] == ("RAISED",))
-              and _db10.session.get(_GS10, _ids10["g1"]).status == "online"
+              and _commit_r10 == ["server_down"] and _r42t_rolled10 == [1] and _r42t_st10 == "online"
               and any("persisting server status failed" in m for m in _cap_m10.msgs),
-              repr((_commit_r10, _cap_m10.msgs)))
+              repr((_commit_r10, _r42t_rolled10, _r42t_st10, _cap_m10.msgs)))
+        _sweep10({"reachable": False}, dict(_UP10))   # gmod1 back up, as the checks below expect
         _mon_restore10("_probe_host", "_lgsm_maintenance_running", "_lgsm_stopped_on_purpose")
 
         # ── _refresh_player_counts: one-shot empty, full on the transition, peak record ────────
