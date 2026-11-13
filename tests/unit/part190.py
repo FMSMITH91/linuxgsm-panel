@@ -1,0 +1,534 @@
+"""Part 190 of the unit suite: restoring a game server from one of its own LinuxGSM backups.
+
+Held here:
+* The permission: restore_backup is grantable, listed after the other two backup permissions on the
+  Groups page, says it is the most destructive one, in Spanish and French too.
+* The host commands, RUN for real by bash on a stand-in home (services/game_restore's own text with
+  /home/<account> pointed at a temp dir; tar, python3 and coreutils as on a host): a LinuxGSM backup
+  made with LinuxGSM's own tar command is restored file for file, the KEEP paths (backup, lock and
+  tmp dirs, ~/.ssh, the panel's cron folder) are left as they are, a symlinked folder stays a link,
+  and the archive comes back under its own name and time; held aside, LinuxGSM's own retention
+  prunes (by name and by age) cannot reach it; every refusal changes nothing (a member outside
+  the folder, a pipe, a symbolic link, a hard link to nothing vetted, no LinuxGSM script, a cut-short
+  archive, a symlinked folder outside the home or into the backup dir, too little space, a LinuxGSM
+  lock, a process still in serverfiles); an extraction that fails after the clear says so.
+* The route, through the app: RESTORE_BACKUP on its own starts it (typed name, the archive from the
+  server's own listing), the others do not; a wrong name, an archive not listed, a bad shape are
+  refused before any work starts.
+* The run (the route's background worker) with every host call stubbed: the order (checks, stop,
+  backup kept from pruning anything listed, the restore, start), and what a failure at each step
+  does (nothing restored, the archive put back, the server started again or left stopped, the undo
+  archive named), audited and alerted.
+* While it runs, the server is held: the server page's actions are refused in its own words, and
+  a backup of it waits.
+
+HOW IT RUNS. The scripts by bash in temp dirs (cleaned up whatever happens); the routes on part12's
+app with its transport tripwire armed and every host call stubbed. Nothing reaches a host or data/.
+"""
+import gzip as _gz190
+import hashlib as _hl190
+import io as _io190
+import os as _os190
+import shutil as _sh190
+import subprocess as _sp190
+import tarfile as _tf190
+import tempfile as _tmp190
+import time as _time190
+
+from unit.part01 import check, eq, skip
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
+                         _p9_patch, _p9_restore_all)
+from panel.core import i18n as _i18n190
+from panel.core.panel_state import r36j_route_job as _job190
+from panel.routes import (_shared as _shr190, game_restore as _gr190, panel_backup as _pb190,
+                          server_detail as _sd190)
+from panel.security import auth as _auth190
+from panel.services import game_restore as _grs190
+
+# ── 1. the permission ───────────────────────────────────────────────────────────────────────────
+_keys190 = list(_auth190.ALL_PERMISSIONS)
+eq("permission: restore_backup is grantable, listed right after download_backup and delete_backup",
+   _keys190[_keys190.index(_auth190.DELETE_BACKUP) + 1], _auth190.RESTORE_BACKUP)
+check("permission: its description says it replaces the server's files and is the most destructive",
+      "replaces its current files" in _auth190.ALL_PERMISSIONS[_auth190.RESTORE_BACKUP]
+      and "most destructive" in _auth190.ALL_PERMISSIONS[_auth190.RESTORE_BACKUP], "")
+eq("permission: its description reads in Spanish and French",
+   [_i18n190.translate(_l, _auth190.ALL_PERMISSIONS[_auth190.RESTORE_BACKUP]) ==
+    _auth190.ALL_PERMISSIONS[_auth190.RESTORE_BACKUP] for _l in ("es", "fr")], [False, False])
+
+# ── 2. the host commands, run by bash on a stand-in home ────────────────────────────────────────
+_U190 = "grsu"
+_NAME190 = "grsu-2026-11-01-120000.tar.gz"
+_UNDO190 = "grsu-2026-11-13-000000.tar.gz"
+_T0190 = 1761998400          # the archive's mtime: a year old, so LinuxGSM's age prune would take it
+_TOOLS190 = ("bash", "tar", "gzip", "python3", "find", "du", "df", "stat", "readlink", "touch", "mv")
+_missing190 = [_t for _t in _TOOLS190 if not _sh190.which(_t)]
+_KEEP_PRUNE190 = [_a for _k in _grs190.KEEP for _a in ("-path", "./" + _k, "-prune", "-o")]
+
+
+class _Sb190:
+    """A stand-in host: <root>/home/grsu laid out as LinuxGSM lays out an instance in the account's home."""
+
+    def __init__(self):
+        """Build the home, back it up with LinuxGSM's own tar command, then change it as play would."""
+        self.root = _tmp190.mkdtemp(prefix="p190-")
+        self.home = _os190.path.join(self.root, "home", _U190)
+        self.bdir = _os190.path.join(self.home, "lgsm", "backup")
+        h = self.home
+        for d in ("lgsm/backup", "lgsm/lock", "lgsm/tmp", "lgsm/config-lgsm/grsu", "serverfiles/world/region",
+                  ".ssh", ".steam/steamcmd/linux64", ".steam/sdk64", "log/console", ".lgsm-cron"):
+            _os190.makedirs(_os190.path.join(h, d))
+        self.put("grsu", "#!/bin/bash\necho lgsm\n")
+        self.put("serverfiles/world/region/r.0.mca", "world v1")
+        self.put("lgsm/config-lgsm/grsu/grsu.cfg", "cfg v1")
+        self.put(".ssh/authorized_keys", "key 1")
+        self.put(".steam/steamcmd/linux64/steamclient.so", "so")
+        self.put("log/console/c.log", "log 1")
+        self.put(".lgsm-cron/run", "wrapper 1")
+        _os190.symlink("steamcmd", _os190.path.join(h, ".steam/root"))            # a symlinked folder
+        _os190.symlink("../steamcmd/linux64/steamclient.so", _os190.path.join(h, ".steam/sdk64/steamclient.so"))
+        self.archive = _os190.path.join(self.bdir, _NAME190)
+        # LinuxGSM's own command (command_backup.sh, master 2026-11), gzip as fn_select_compression picks it.
+        _sp190.run(["tar", "--gzip", "-hcf", self.archive, "--exclude", "lgsm/backup", "--exclude",
+                    h + "/lgsm/lock", "--exclude", h + "/lgsm/tmp", "--exclude", "./lgsm/backup", "-C", h, "./."],
+                   check=True, capture_output=True, timeout=60)
+        _os190.utime(self.archive, (_T0190, _T0190))
+        self.before = self.tree()
+        # Play went on: the world changed, a new region file, the key rotated, the cron wrapper changed.
+        self.put("serverfiles/world/region/r.0.mca", "world v2")
+        self.put("serverfiles/world/region/r.1.mca", "new")
+        self.put(".ssh/authorized_keys", "key 2")
+        self.put(".lgsm-cron/run", "wrapper 2")
+
+    def put(self, rel, text):
+        """Write `text` to <home>/<rel>."""
+        with open(_os190.path.join(self.home, rel), "w") as f:
+            f.write(text)
+
+    def read(self, rel):
+        """<home>/<rel>'s text, or None."""
+        try:
+            with open(_os190.path.join(self.home, rel)) as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def tree(self):
+        """{path: sha256 of what it holds} for every file outside KEEP, read through symlinks."""
+        out = _sp190.run(["find", "."] + _KEEP_PRUNE190 + ["(", "-type", "f", "-o", "-type", "l", ")", "-print0"],
+                         cwd=self.home, capture_output=True, timeout=60).stdout
+        res = {}
+        for rel in filter(None, out.split(b"\0")):
+            p = _os190.path.join(self.home, rel.decode())
+            try:
+                with open(p, "rb") as f:
+                    res[rel.decode()] = _hl190.sha256(f.read()).hexdigest()
+            except OSError:
+                res[rel.decode()] = "unreadable"
+        return res
+
+    def run(self, script):
+        """Run a panel-built command, its /home/grsu moved into this sandbox: (output, exit status)."""
+        text = script.replace("/home/" + _U190, self.home)
+        p = _sp190.run(["bash", "-c", text], capture_output=True, text=True, timeout=180, cwd="/")
+        return p.stdout + p.stderr, p.returncode
+
+    def vet(self, name=_NAME190, undo_estimate=0):
+        """vet_script's output and vet_outcome's reading of it."""
+        out, _rc = self.run(_grs190.vet_script(_U190, _U190, name, undo_estimate))
+        return out, _grs190.vet_outcome(out)
+
+    def backups(self):
+        """The backup dir's entries."""
+        return sorted(_os190.listdir(self.bdir))
+
+    def gone(self):
+        """Remove the sandbox, whatever state the run left it in."""
+        for d, dirs, _files in _os190.walk(self.root):
+            for x in dirs:
+                try:
+                    _os190.chmod(_os190.path.join(d, x), 0o700)  # nosec B103
+                except OSError:
+                    pass
+        _sh190.rmtree(self.root, ignore_errors=True)
+
+
+def _restore190(sb, ready, undo=_UNDO190, busy_polls=1):
+    """Take the stand-in undo backup, then run restore_script: (output, restore_outcome)."""
+    held = [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f]
+    if held and not _os190.path.exists(_os190.path.join(sb.bdir, undo)):
+        _sh190.copyfile(_os190.path.join(sb.bdir, held[0]), _os190.path.join(sb.bdir, undo))
+    out, rc = sb.run(_grs190.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], undo,
+                                            busy_polls=busy_polls))
+    return out, _grs190.restore_outcome(out, rc)
+
+
+def _lgsm_prune190(bdir):
+    """LinuxGSM's two retention prunes (fn_backup_prune, master 2026-11), past any maxbackups and maxbackupdays."""
+    _sp190.run(["bash", "-c", 'find "$1"/ -type f -name "*.tar.*" -printf "%T@ %p\\n" | sort -rn | tail -100 | '
+                'cut -f2- -d" " | xargs -r rm; find "$1"/ -type f -mtime +0 -exec rm -f {} \\;', "_", bdir],
+               capture_output=True, timeout=60)
+
+
+def _crafted190(sb, members, name="grsu-2026-11-02-120000.tar.gz"):
+    """An archive in the backup dir holding `members` [(name, type, linkname)] beside the LinuxGSM script."""
+    buf = _io190.BytesIO()
+    with _tf190.open(fileobj=buf, mode="w", format=_tf190.GNU_FORMAT) as t:
+        for mname, mtype, link in [("././", _tf190.DIRTYPE, ""), ("././grsu", _tf190.REGTYPE, "")] + members:
+            ti = _tf190.TarInfo(mname)
+            ti.type, ti.linkname, ti.mode = mtype, link, 0o755
+            t.addfile(ti, _io190.BytesIO(b"") if mtype == _tf190.REGTYPE else None)
+    with open(_os190.path.join(sb.bdir, name), "wb") as f:
+        f.write(_gz190.compress(buf.getvalue()))
+    return name
+
+
+_r190 = {}
+if _missing190:
+    skip("restore commands: run on a stand-in home", "missing here: %s" % ", ".join(_missing190))
+else:
+    # The whole restore, as the run does it.
+    _sb = _Sb190()
+    try:
+        _out, (_state, _ready) = _sb.vet()
+        _r190["vet"] = (_state, sorted(_ready) if isinstance(_ready, dict) else str(_ready), _out[-300:])
+        _r190["held"] = _sb.backups()
+        _r190["held_mtime"] = [int(_os190.stat(_os190.path.join(_sb.bdir, _f)).st_mtime) for _f in _sb.backups()]
+        _lgsm_prune190(_sb.bdir)          # LinuxGSM's retention, as the undo backup runs it
+        _r190["after_prune"] = _sb.backups()
+        if _state == "ready":
+            _out, _res = _restore190(_sb, _ready)
+            _r190["restore"] = (_res[0], _out[-300:])
+        _r190["tree"] = (_sb.tree() == _sb.before, sorted(set(_sb.tree()) ^ set(_sb.before)))
+        _r190["keep"] = (_sb.read(".ssh/authorized_keys"), _sb.read(".lgsm-cron/run"))
+        _r190["link"] = _os190.path.islink(_os190.path.join(_sb.home, ".steam/root"))
+        _a = _os190.path.join(_sb.bdir, _NAME190)
+        _r190["putback"] = (_os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
+                            [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
+    finally:
+        _sb.gone()
+
+    # Each refusal: nothing changed (the home as it was, the archive under its own name, nothing held).
+    def _refused190(prep, name=None, undo_estimate=0):
+        sb = _Sb190()
+        try:
+            nm = prep(sb) or name or _NAME190
+            tree, listing = sb.tree(), sb.backups()
+            out, (state, why) = sb.vet(nm, undo_estimate)
+            return (state, str(why) if state != "ready" else "READY", sb.tree() == tree and sb.backups() == listing,
+                    out[-200:])
+        finally:
+            sb.gone()
+
+    def _outside190(sb):
+        _os190.makedirs(_os190.path.join(sb.root, "elsewhere"))
+        _os190.symlink(_os190.path.join(sb.root, "elsewhere"), _os190.path.join(sb.home, "serverfiles/maps"))
+
+    def _cut190(sb):
+        with open(sb.archive, "rb") as f:
+            data = f.read()
+        with open(sb.archive, "wb") as f:
+            f.write(data[:len(data) // 2])
+        _os190.utime(sb.archive, (_T0190, _T0190))
+
+    def _lock190(sb):
+        sb.put("lgsm/lock/backup.lock", str(int(_time190.time())))
+
+    _ref = {
+        "dotdot": lambda sb: _crafted190(sb, [("././../evil", _tf190.REGTYPE, "")]),
+        "absolute": lambda sb: _crafted190(sb, [("/etc/evil", _tf190.REGTYPE, "")]),
+        "outside": lambda sb: _crafted190(sb, [("home/other/x", _tf190.REGTYPE, "")]),
+        "fifo": lambda sb: _crafted190(sb, [("././serverfiles/p", _tf190.FIFOTYPE, "")]),
+        "symlink": lambda sb: _crafted190(sb, [("././serverfiles/l", _tf190.SYMTYPE, "/etc")]),
+        "device": lambda sb: _crafted190(sb, [("././serverfiles/d", _tf190.CHRTYPE, "")]),
+        "hardlink": lambda sb: _crafted190(sb, [("././serverfiles/h", _tf190.LNKTYPE, "././nothere")]),
+        "hardlink_kept": lambda sb: _crafted190(sb, [("././lgsm/tmp/x", _tf190.REGTYPE, ""),
+                                                     ("././serverfiles/h", _tf190.LNKTYPE, "././lgsm/tmp/x")]),
+        "linkout": _outside190,
+        "linkbackup": lambda sb: _os190.symlink(sb.bdir, _os190.path.join(sb.home, "serverfiles/bk")),
+        "cut": _cut190,
+        "locked": _lock190,
+    }
+    for _k, _prep in _ref.items():
+        _r190["ref_" + _k] = _refused190(_prep)
+
+    def _noscript190(sb):
+        buf = _io190.BytesIO()
+        with _tf190.open(fileobj=buf, mode="w") as t:
+            ti = _tf190.TarInfo("././serverfiles/x")
+            t.addfile(ti, _io190.BytesIO(b""))
+        with open(_os190.path.join(sb.bdir, "grsu-2026-11-03-120000.tar.gz"), "wb") as f:
+            f.write(_gz190.compress(buf.getvalue()))
+        return "grsu-2026-11-03-120000.tar.gz"
+    _r190["ref_noscript"] = _refused190(_noscript190)
+    _r190["ref_space"] = _refused190(lambda sb: None, undo_estimate=10 ** 18)
+
+    # A process of the account still in serverfiles: the restore waits, then refuses with nothing cleared.
+    _sb = _Sb190()
+    _sleeper = None
+    try:
+        _out, (_state, _ready) = _sb.vet()
+        _sleeper = _sp190.Popen(["sleep", "60"], cwd=_os190.path.join(_sb.home, "serverfiles"))
+        _tree = _sb.tree()
+        _out, _res = _restore190(_sb, _ready)
+        _r190["busy"] = (_res[0], str(_res[1]), _sb.tree() == _tree, _os190.path.isfile(_sb.archive))
+    finally:
+        if _sleeper is not None:
+            _sleeper.kill()
+            _sleeper.wait()
+        _sb.gone()
+
+    # The archive damaged after the checks: the clear has run, the extraction fails, and it says so.
+    _sb = _Sb190()
+    try:
+        _out, (_state, _ready) = _sb.vet()
+        _held = [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f]
+        _sh190.copyfile(_os190.path.join(_sb.bdir, _held[0]), _os190.path.join(_sb.bdir, _UNDO190))
+        with open(_os190.path.join(_sb.bdir, _held[0]), "wb") as _f:
+            _f.write(b"not a gzip stream")
+        _out, _res = _restore190(_sb, _ready)
+        _r190["xfail"] = (_res[0], str(_res[1]).startswith("the extraction failed (tar exit 2): tar:"),
+                          _os190.path.isfile(_sb.archive))
+    finally:
+        _sb.gone()
+
+    # An interrupted restore left the archive held: the next restore's checks put it back first.
+    _sb = _Sb190()
+    try:
+        _sb.vet(undo_estimate=0)
+        _held = sorted(_sb.backups())
+        _out, (_state, _why) = _sb.vet("grsu-2026-11-09-000000.tar.gz")     # any other archive: not there
+        _a = _sb.archive
+        _r190["leftover"] = (_state, _os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
+                             [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f], _held)
+    finally:
+        _sb.gone()
+
+if "vet" in _r190:
+    eq("restore commands: the checks pass on a LinuxGSM backup made by LinuxGSM's own tar command",
+       _r190["vet"][:2], ("ready", ["need", "t0", "up"]))
+    eq("restore commands: ...and hold the archive aside under a name with no '.tar.', freshly dated",
+       (_r190["held"], _r190["held_mtime"][0] > _T0190),
+       (["grsu-2026-11-01-120000.restore-source-%d.gz" % _T0190], True))
+    eq("restore commands: LinuxGSM's own retention (by name past maxbackups, by age past maxbackupdays) "
+       "cannot prune the held archive", _r190["after_prune"], _r190["held"])
+    eq("restore commands: the restore runs to its end", (_r190.get("restore") or ("missing",))[0], "done")
+    eq("restore commands: every file outside KEEP is what the archive held (a file added since is gone)",
+       _r190["tree"], (True, []))
+    eq("restore commands: ~/.ssh and the panel's cron folder are left as they are now",
+       _r190["keep"], ("key 2", "wrapper 2"))
+    check("restore commands: a symlinked folder is still a symlink", _r190["link"], "")
+    eq("restore commands: the archive is back under its own name and time, nothing left held",
+       _r190["putback"], (_T0190, []))
+    _bad190 = {
+        "dotdot": "not under the server's folder", "absolute": "not under the server's folder",
+        "outside": "not under the server's folder", "fifo": "device, pipe or symbolic link",
+        "symlink": "device, pipe or symbolic link", "device": "member list could not be read",
+        "hardlink": "hard link", "hardlink_kept": "hard link", "linkout": "symbolic link in the game account",
+        "linkbackup": "symbolic link in the game account", "cut": "could not be read to its end",
+        "locked": "LinuxGSM backup or update", "noscript": "does not hold the server's LinuxGSM script",
+        "space": "not enough free space",
+    }
+    eq("restore commands: each refusal says why and changes nothing (home, archive name, nothing held)",
+       {_k: (_r190["ref_" + _k][0], _w in _r190["ref_" + _k][1], _r190["ref_" + _k][2]) for _k, _w in _bad190.items()},
+       {_k: ("refused", True, True) for _k in _bad190})
+    eq("restore commands: a process of the account still in serverfiles refuses after the wait, nothing "
+       "cleared, the archive put back", _r190["busy"][:1] + _r190["busy"][2:], ("refused", True, True))
+    eq("restore commands: an extraction that fails after the clear is a failure (not a refusal), and the "
+       "archive is put back", _r190["xfail"], ("failed", True, True))
+    eq("restore commands: an archive an interrupted restore left held is put back by the next checks",
+       _r190["leftover"][:3], ("refused", _T0190, []))
+
+# ── 3. the route, through the app ───────────────────────────────────────────────────────────────
+_NO_LOGIN190 = "!"
+_uids190 = {}
+with _p9.app_context():
+    from panel.db.models import (GameServer as _PGS190, Group as _PG190, RemoteServer as _PRS190,
+                                 User as _PU190, db as _pdb190)
+    for _suffix, _perms in (("rs", [_auth190.RESTORE_BACKUP]),
+                            ("dlrm", [_auth190.DOWNLOAD_BACKUP, _auth190.DELETE_BACKUP])):
+        _g = _PG190(name="p190_" + _suffix, description="", is_default=False)
+        _g.set_permissions([_auth190.VIEW_SERVERS] + _perms)
+        _g.servers.append(_pdb190.session.get(_PRS190, P9_HOST))
+        _pdb190.session.add(_g)
+        _pdb190.session.flush()
+        _u = _PU190(username="p190_" + _suffix, password_hash=_NO_LOGIN190, display_name=_suffix,
+                    is_superadmin=False, is_active=True)
+        _u.groups.append(_g)
+        _pdb190.session.add(_u)
+        _pdb190.session.commit()
+        _uids190[_suffix] = _u.id
+    _gs_name190 = _pdb190.session.get(_PGS190, P9_GS).name
+
+_LIST190 = [{"name": "p190-2026-11-01-120000.tar.zst", "size": 1000, "created": 1},
+            {"name": "p190-2026-11-02-120000.tar.zst", "size": 2000, "created": 2}]
+_started190 = []
+_rt190 = {}
+try:
+    _p9_arm(who="part190")
+    _p9_patch(_gr190, "list_game_backups", lambda *a, **k: list(_LIST190))
+    _p9_patch(_gr190, "_grs_worker", lambda *a, **k: _started190.append(a[4]))
+    _p9_patch(_gr190, "_grs_other_work", lambda gs: None)
+    _p9_patch(_pb190, "list_game_backups", lambda *a, **k: list(_LIST190))
+    _p9_patch(_pb190, "backup_disk_info", lambda *a, **k: {"free": 1, "total": 2})
+    _url190 = "/api/panel/backup/game/%d/restore" % P9_GS
+    _C190 = {_k: _p9_client(_v) for _k, _v in _uids190.items()}
+    _C190["admin"] = _p9_client(P9_ADMIN)
+
+    def _post190(who, body):
+        del _started190[:]
+        _gr190._grs_status.pop(P9_GS, None)
+        r = _C190[who].post(_url190, json=body)
+        return r.status_code, list(_started190)
+
+    _ok190 = {"name": _LIST190[0]["name"], "confirm": _gs_name190}
+    _rt190["rs"] = _post190("rs", _ok190)
+    _rt190["dlrm"] = _post190("dlrm", _ok190)
+    _rt190["admin"] = _post190("admin", _ok190)
+    _rt190["wrong_name"] = _post190("rs", dict(_ok190, confirm=_gs_name190 + "x"))
+    _rt190["not_listed"] = _post190("rs", dict(_ok190, name="p190-2026-11-09-120000.tar.zst"))
+    _rt190["shape"] = _post190("rs", dict(_ok190, name="../../etc/passwd.tar.gz"))
+    _rt190["running"] = (_gr190._grs_status.update({P9_GS: {"running": True}}) or
+                         _C190["rs"].post(_url190, json=_ok190).status_code)
+    _gr190._grs_status.pop(P9_GS, None)
+    _rt190["info"] = _C190["rs"].get("/api/panel/backup/game/%d/info" % P9_GS).status_code
+    _rt190["take"] = _C190["rs"].post("/api/panel/backup/game/%d" % P9_GS, json={"force": False}).status_code
+    _rt190["page"] = _C190["rs"].get("/server/%d/files" % P9_GS).get_data(as_text=True)
+    _rt190["page_dl"] = _C190["dlrm"].get("/server/%d/files" % P9_GS).get_data(as_text=True)
+finally:
+    _p9_restore_all()
+    _gr190._grs_status.pop(P9_GS, None)
+
+eq("route: RESTORE_BACKUP on its own starts the restore of a listed archive (typed name matching)",
+   _rt190["rs"], (200, [_LIST190[0]["name"]]))
+eq("route: download and delete without RESTORE_BACKUP cannot (refused before any work)", _rt190["dlrm"], (403, []))
+eq("route: a superadmin can (control)", _rt190["admin"], (200, [_LIST190[0]["name"]]))
+eq("route: a typed name that is not the server's, an archive not in its listing, and a name of the wrong "
+   "shape are refused, nothing started",
+   [_rt190[_k] for _k in ("wrong_name", "not_listed", "shape")], [(400, []), (404, []), (400, [])])
+eq("route: a second restore while one runs is refused", _rt190["running"], 409)
+eq("route: RESTORE_BACKUP opens the backup listing; taking a backup stays superadmin-only",
+   (_rt190["info"], _rt190["take"]), (200, 403))
+check("page: a restore-only viewer sees the Backups tab with Restore, without download or delete",
+      'data-sfsub-btn="backups"' in _rt190["page"] and "data-fpm-nors" not in _rt190["page"]
+      and "data-fpm-nodl" in _rt190["page"] and "data-fpm-nodel" in _rt190["page"], "")
+check("page: without RESTORE_BACKUP the Restore buttons are hidden (data-fpm-nors)",
+      "data-fpm-nors" in _rt190["page_dl"], "")
+
+
+# ── 4. the run, every host call stubbed ─────────────────────────────────────────────────────────
+class _Host190:
+    """What the stubbed host answers, and every call the run made, in order."""
+
+    def __init__(self, vet="__GRS_READY__ 1 %d 5000 9000" % _T0190, stop=("", "", 0), backup=True,
+                 restore="__GRS_CLEARING__\n__GRS_RESTORED__"):
+        """Answers per step; the undo backup appears in the listing when `backup` succeeds."""
+        self.calls, self.vet_out, self.stop, self.ok, self.restore_out = [], vet, stop, backup, restore
+        self.keep, self.alerts = None, []
+        self.listing = list(_LIST190)
+
+    def shell(self, server, user, sh, timeout=30, selfname=None):
+        if "tar --zstd -tv" in sh:
+            self.calls.append("vet")
+            return self.vet_out, "", 0
+        if "__GRS_CLEARING__" in sh:
+            self.calls.append("restore")
+            return self.restore_out, "", 0
+        self.calls.append("putback")
+        return "", "", 0
+
+    def lgsm(self, server, user, action, **k):
+        self.calls.append(action)
+        return self.stop if action == "stop" else ("", "", 0)
+
+    def marked(self, sid, server, user, selfname, keep, **k):
+        self.calls.append("backup")
+        self.keep = keep
+        if self.ok:
+            self.listing = [{"name": "p190-2026-11-13-000000.tar.zst", "size": 3000, "created": 3}] + self.listing
+            return True, "", False
+        return False, "LinuxGSM backup failed", False
+
+    def listed(self, *a, **k):
+        return list(self.listing)
+
+
+def _run190(host):
+    """One _GrsRun through its steps against `host`: (calls, keep, ok, message, audit detail, alerts)."""
+    from types import SimpleNamespace as _NS
+    try:
+        _p9_arm(who="part190")
+        _p9_patch(_gr190, "shell_as_game_user", host.shell)
+        _p9_patch(_gr190, "list_game_backups", host.listed)
+        _p9_patch(_gr190, "_sm", _NS(run_as_game_user=host.lgsm))
+        _p9_patch(_gr190, "_lgp", _NS(allowance_seconds=lambda *a, **k: 0,
+                                      outcome_of=_gr190._lgp.outcome_of))
+        _p9_patch(_gr190, "bk", _NS(game_prune_keep=lambda sid: (2, True)))
+        _p9_patch(_gr190, "_grs_other_work", lambda gs: None)
+        _p9_patch(_gr190, "_mark_expected_offline", lambda *a, **k: None)
+        _p9_patch(_gr190, "_end_offline_window", lambda *a, **k: None)
+        _p9_patch(_shr190, "_marked_backup", host.marked)
+        _p9_patch(_shr190, "_alert_backup", lambda app, gs, title, body: host.alerts.append(title))
+        with _p9.app_context():
+            gs = _pdb190.session.get(_PGS190, P9_GS)
+            run = _gr190._GrsRun(_p9, gs, P9_ADMIN, _LIST190[0]["name"], list(_LIST190))
+            with _job190(P9_GS, _shr190.GRS_KIND):
+                run.go()
+            st = _gr190._grs_status.get(P9_GS) or {}
+            row = _p9_audit("game_backup_restore")
+            return host.calls, host.keep, st.get("ok"), st.get("msg", ""), row.detail, host.alerts
+    finally:
+        _p9_restore_all()
+        _gr190._grs_status.pop(P9_GS, None)
+
+
+_n_audit190 = _p9_audit_count("game_backup_restore")
+_h = _Host190()
+_w190 = {"ok": _run190(_h)}
+_w190["vet_refused"] = _run190(_Host190(vet="__GRS_BAD__ name"))
+_w190["backup_failed"] = _run190(_Host190(backup=False))
+_w190["late_fail"] = _run190(_Host190(restore="__GRS_CLEARING__\n__GRS_XFAIL__ 2 tar: unexpected EOF"))
+_w190["late_refused"] = _run190(_Host190(restore="__GRS_BUSY__"))
+_w190["players"] = _run190(_Host190(stop=("[ INFO ] Stopping grsu: 2 players are on the server: stop prevented\n", "", 0)))
+_w190["was_down"] = _run190(_Host190(vet="__GRS_READY__ 0 %d 5000 9000" % _T0190))
+
+eq("run: checks, stop, the undo backup, the restore, then start (it was running)",
+   _w190["ok"][0], ["vet", "stop", "backup", "restore", "start"])
+eq("run: the undo backup keeps every archive listed plus itself (nothing listed is pruned)", _w190["ok"][1], 3)
+check("run: success is recorded, naming the archive and the undo archive",
+      _w190["ok"][2] is True and "Restored from p190-2026-11-01-120000.tar.zst" in _w190["ok"][3]
+      and "restore p190-2026-11-13-000000.tar.zst" in _w190["ok"][3]
+      and "pre-restore backup: p190-2026-11-13-000000.tar.zst" in _w190["ok"][4], repr(_w190["ok"][2:5]))
+eq("run: refused by its checks, nothing else happens (no stop, no backup), and it is alerted",
+   (_w190["vet_refused"][0], _w190["vet_refused"][2], bool(_w190["vet_refused"][5])), (["vet"], False, True))
+eq("run: a failed undo backup restores nothing: the archive is put back and the server started again",
+   _w190["backup_failed"][0], ["vet", "stop", "backup", "putback", "start"])
+check("run: ...and says nothing was changed", "Not restored: nothing was changed." in _w190["backup_failed"][3],
+      _w190["backup_failed"][3])
+eq("run: an extraction that failed after the clear leaves the server stopped (no start)",
+   _w190["late_fail"][0], ["vet", "stop", "backup", "restore"])
+check("run: ...and names the pre-restore archive to go back to",
+      "partly replaced" in _w190["late_fail"][3] and "restore p190-2026-11-13-000000.tar.zst" in _w190["late_fail"][3]
+      and _w190["late_fail"][2] is False, _w190["late_fail"][3])
+eq("run: refused by the last command's checks (nothing cleared), the server is started again",
+   _w190["late_refused"][0], ["vet", "stop", "backup", "restore", "start"])
+eq("run: LinuxGSM refusing the stop for players restores nothing and puts the archive back (no start: it "
+   "kept running)", _w190["players"][0], ["vet", "stop", "putback"])
+eq("run: a server that was stopped is restored and left stopped", _w190["was_down"][0],
+   ["vet", "backup", "restore"])
+eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 7)
+
+# ── 5. while it runs, the server is held ────────────────────────────────────────────────────────
+with _job190(P9_GS, _shr190.GRS_KIND):
+    _held190 = (str(_sd190._r39a_wipe_refusal(P9_GS, "p190", "restart") or ""), _shr190._r39a_backup_held(P9_GS),
+                _shr190._r39a_backup_held(P9_GS, wipe_ok=True))
+check("held: the server page's actions are refused in the restore's own words",
+      "is being restored from a backup" in _held190[0] and "'restart' was not run" in _held190[0], _held190[0])
+eq("held: a backup of the server waits, except the restore's own undo backup", _held190[1:], (True, False))
+
+with _p9.app_context():
+    for _u in _PU190.query.filter(_PU190.username.like("p190_%")).all():
+        _pdb190.session.delete(_u)
+    for _g in _PG190.query.filter(_PG190.name.like("p190_%")).all():
+        _pdb190.session.delete(_g)
+    _pdb190.session.commit()

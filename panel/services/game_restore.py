@@ -131,6 +131,11 @@ _GRS_KEEP_REAL = " ".join('"$HR/%s"' % k for k in KEEP)
 _GRS_KEEP_REL = " ".join("./%s" % k for k in KEEP)
 
 
+def _grs_head(user, selfname):
+    """The world reset's opening lines (C locale, cd /, LinuxGSM's locks, $s), printing this module's lock mark."""
+    return [ln.replace(_wwr._M_LOCKED, _M["LOCKED"]) for ln in _wwr._wwr_head(user, selfname)]
+
+
 def _grs_home_lines(user):
     """$B (the backup dir) and the resolved home $HR, made the cwd; refuses when it does not resolve."""
     return [
@@ -194,7 +199,7 @@ def vet_script(user, selfname, name, undo_estimate):
     """
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
-    lines = ["set -o pipefail"] + _wwr._wwr_head(user, selfname) + _grs_home_lines(user) + [
+    lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
         _grs_putback_leftovers(),
         a_line,
         'if [ ! -f "$a" ] || [ -L "$a" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
@@ -247,7 +252,7 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
     excludes = " ".join("--exclude=./%s --exclude=././%s" % (k, k) for k in KEEP)
-    lines = ["set -o pipefail"] + _wwr._wwr_head(user, selfname) + _grs_home_lines(user) + [
+    lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
         "t0=%d" % int(t0), a_line, h_line,
         "trap '[ -f \"$h\" ] && [ ! -e \"$a\" ] && mv -n -- \"$h\" \"$a\" && touch -m -d \"@$t0\" -- \"$a\"' EXIT",
         'if [ ! -f "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
@@ -306,9 +311,8 @@ def _grs_marks(text):
 
 
 def _grs_space(line):
-    parts = (line or "").split()
-    nums = [int(p) for p in parts[1:3] if p.isdigit()]
-    if len(nums) == 2 and nums[0]:
+    nums = [int(p) for p in re.findall(r"-?\d+", (line or "").split(None, 1)[-1])][:2]
+    if len(nums) == 2 and nums[0] > 0:
         return i18n.Sentence("not enough free space: the restore needs about {need}, and {have} would be "
                              "free for it", need=_sm._fmt_size(nums[0]), have=_sm._fmt_size(max(0, nums[1])))
     return i18n.Sentence("the free space could not be measured")

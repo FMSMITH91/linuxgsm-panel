@@ -1713,7 +1713,25 @@ def _check_backup_permission_split():
     _r = _both.post("/api/panel/backup/game/%d/schedule" % accessible_id, json={"interval": "x"})
     check("download+delete holders still cannot change the backup schedule -> 403",
           _r.status_code == 403, "got %d" % _r.status_code)
+    # RESTORE_BACKUP: its own permission; the body probed carries a typed name that is not the
+    # server's, so past the permission the route answers 400 and starts nothing on either branch.
+    _rs = client_as(_fpm_user("_bkrs", [auth.RESTORE_BACKUP]))
+    _rsu = "/api/panel/backup/game/%d/restore" % accessible_id
+    _rsb = {"name": _name, "confirm": "rbac-not-the-server-name"}
+    for _who, _c in (("no backup permission", _none), ("DOWNLOAD_BACKUP + DELETE_BACKUP", _both)):
+        _r = _c.post(_rsu, json=_rsb)
+        check("%s: backup restore -> 403" % _who, _r.status_code == 403, "got %d" % _r.status_code)
+    _r = _rs.post(_rsu, json=_rsb)
+    check("RESTORE_BACKUP: the restore gets past the permission to its own checks (control, 400)",
+          _r.status_code == 400, "got %d" % _r.status_code)
+    check("RESTORE_BACKUP: the backup listing opens", _rs.get(_info).status_code == 200)
+    _r = _rs.post("/api/panel/backup/game/%d" % accessible_id, json={"force": "not-a-flag"})
+    check("RESTORE_BACKUP holders still cannot TAKE a backup (superadmin only) -> 403",
+          _r.status_code == 403, "got %d" % _r.status_code)
     if other_id:
+        _r = _rs.post("/api/panel/backup/game/%d/restore" % other_id, json=_rsb)
+        check("IDOR: backup restore on a non-granted server BLOCKED (for a RESTORE_BACKUP holder)",
+              _r.status_code == 403, "got %d" % _r.status_code)
         _r = _both.post("/api/panel/backup/game/%d/delete" % other_id, json={"name": _name})
         check("IDOR: backup delete on a non-granted server BLOCKED (for a DELETE_BACKUP holder)",
               _r.status_code == 403, "got %d" % _r.status_code)

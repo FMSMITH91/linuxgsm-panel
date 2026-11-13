@@ -40,6 +40,7 @@ from panel.services.monitoring import _end_offline_window, _mark_expected_offlin
 _GRS_NOT = i18n.Sentence("Not restored: nothing was changed.")
 # server id -> {"running", "ok", "msg", "msg_i18n", "step", "ts"}: what the Backups card shows.
 _grs_status = register_server_state({})
+_grs_claim_lock = threading.Lock()      # one restore per server: the test and the set are one step
 _GRS_VET_TIMEOUT = 900          # reading a large archive through its decompressor takes minutes
 _GRS_RESTORE_TIMEOUT = 3600     # clearing and unpacking a large server
 
@@ -56,6 +57,15 @@ def status_for_view(sid):
 
 def _grs_set(sid, **kw):
     _grs_status[sid] = dict(_grs_status.get(sid) or {}, ts=time.time(), **kw)
+
+
+def _grs_claim(sid):
+    """Mark server `sid` as being restored, unless it already is. True when this call marked it."""
+    with _grs_claim_lock:
+        if (_grs_status.get(sid) or {}).get("running"):
+            return False
+        _grs_set(sid, running=True, ok=None, step="checking", msg="", msg_i18n=None)
+        return True
 
 
 def _grs_other_work(gs):
@@ -121,7 +131,8 @@ def register(app):
                                                        "answer."), 200)
         if match is None:
             return jsonify({"success": False, "message": i18n.tr("Backup not found.")}), 404
-        _grs_set(gs.id, running=True, ok=None, step="checking", msg="", msg_i18n=None)
+        if not _grs_claim(gs.id):
+            return _grs_refuse(gs, name, i18n.Sentence("This server is already being restored."))
         try:
             threading.Thread(target=_grs_worker, daemon=True,
                              args=(app, gs.id, row_birth(gs), current_user.id, name, listing)).start()
@@ -146,6 +157,7 @@ def _grs_worker(app, sid, born, actor_id, name, listing):
                 run.go()
         except Exception:
             app.logger.warning("restore of %s failed", gs.name, exc_info=True)
+            run.put_back()
             run.finish(False, i18n.Sentence("The restore stopped on an error: check the server."), run.undo_note())
 
 
@@ -234,9 +246,12 @@ class _GrsRun:
         gs = self.gs
         _grs_set(gs.id, step="backing_up")
         keep = max(len(self.listing) + 1, bk.game_prune_keep(gs.id)[0])
-        ok, why, _skipped = _shared._marked_backup(
-            gs.id, gs.remote, gs.short_name, gs.lgsm_name, keep, game_type=gs.game_type, port=gs.port,
-            force=True, query_type=gs.query_type, held=lambda: still_held(gs), wipe_ok=True)
+        try:
+            ok, why, _skipped = _shared._marked_backup(
+                gs.id, gs.remote, gs.short_name, gs.lgsm_name, keep, game_type=gs.game_type, port=gs.port,
+                force=True, query_type=gs.query_type, held=lambda: still_held(gs), wipe_ok=True)
+        except Exception as exc:        # a host that dropped: the server must still be started again
+            ok, why, _skipped = False, i18n.Sentence("the connection failed ({error})", error=type(exc).__name__), False
         if still_held(gs):
             _game_backup_status[gs.id] = _shared._lg264_bk_status(ok, why, _skipped)
         self.undo = self.new_archive() if ok else None
