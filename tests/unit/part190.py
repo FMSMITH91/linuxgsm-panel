@@ -1417,8 +1417,7 @@ def _aft_round190(cl):
 _synced190, _wrote190 = [], []
 try:
     _p9_arm(who="part190")
-    from panel.routes import server_files as _sf190, panel_backup as _pb190, \
-        manage_servers as _ms190
+    from panel.routes import server_files as _sf190, manage_servers as _ms190
     _p9_patch(_gr190, "load_config", _held_cfg190)
     _p9_patch(_gr190, "update_config", _held_update190)
     _p9_patch(_gr190, "config_value", _held_value190)
