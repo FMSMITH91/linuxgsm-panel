@@ -25,6 +25,7 @@ fixed, never the wall clock. Nothing reaches a host or data/.
 """
 import os as _os191top
 import shutil as _shutil191
+import subprocess as _sp191  # nosec B404 - bash over lgsm_cfg_texts' own command, in a temp folder
 import tempfile as _tempfile191
 
 from unit.part01 import check, eq, skip
@@ -152,12 +153,10 @@ check("world reset cfg: comment lines naming the key, and LinuxGSM's own logdir 
 
 def _cfg_read191(tmp, files):
     """lgsm_cfg_texts against a scratch home: its own shell command run by bash, files as given."""
-    import os as _os191
-    import subprocess as _sp191  # nosec B404 - bash over the reader's own command, in a temp folder
-    d = _os191.path.join(tmp, "lgsm", "config-lgsm", "p191s")
-    _os191.makedirs(d, exist_ok=True)
+    d = _os191top.path.join(tmp, "lgsm", "config-lgsm", "p191s")
+    _os191top.makedirs(d, exist_ok=True)
     for name, data in files.items():
-        with open(_os191.path.join(d, name), "wb") as fh:
+        with open(_os191top.path.join(d, name), "wb") as fh:
             fh.write(data)
 
     def _shell(server, user, inner, **k):

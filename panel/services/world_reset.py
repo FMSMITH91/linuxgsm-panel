@@ -298,6 +298,12 @@ _WWR_JAVA_EXE = re.compile(r"(/[A-Za-z0-9._+-]+)*/java|java")
 _WWR_JAVARAM = re.compile(r"\$\{javaram\}|\$javaram(?![A-Za-z0-9_])")
 
 
+def _wwr_java_form(words):
+    """Whether preexecutable's words are java, JVM options each one word, then -jar last."""
+    return (len(words) >= 2 and bool(_WWR_JAVA_EXE.fullmatch(words[0])) and words[-1] == "-jar"
+            and all(w.startswith("-") and w != "-jar" and not w.startswith("-Duser.dir") for w in words[1:-1]))
+
+
 def java_pre_problem(pre, start_problem=None):
     """Why preexecutable (its value) is not plainly `java <JVM options> -jar`, else None.
 
@@ -306,9 +312,7 @@ def java_pre_problem(pre, start_problem=None):
     """
     text = _WWR_JAVARAM.sub("1024", pre)
     words = text.split()
-    form = (len(words) >= 2 and _WWR_JAVA_EXE.fullmatch(words[0]) and words[-1] == "-jar"
-            and all(w.startswith("-") and w != "-jar" and not w.startswith("-Duser.dir") for w in words[1:-1]))
-    if any(c in _WWR_SHELL_SYNTAX for c in text) or not form:
+    if any(c in _WWR_SHELL_SYNTAX for c in text) or not _wwr_java_form(words):
         return i18n.Sentence("the LinuxGSM preexecutable is not plainly java, its options, then -jar")
     if start_problem is not None and start_problem({"startparameters": " ".join(words[1:-1])}) is not None:
         return i18n.Sentence("the LinuxGSM preexecutable holds an option that could choose the world")
