@@ -1049,6 +1049,27 @@ eq("stdin: bytes are written in slices of at most 64 KB that join to the whole; 
     [bytes(_p) for _p in _core190._stdin_pieces(_ch190)], _core190._stdin_bytes("é")),
    (True, True, True, [b"a" * 10, b"b" * 20], "é".encode("utf-8")))
 
+
+
+class _Chan190:
+    def __init__(self):
+        self.log = []
+
+    def write(self, data):
+        self.log.append(bytes(data) if not isinstance(data, str) else data)
+
+    def flush(self):
+        self.log.append("flush")
+
+
+_cw190 = {}
+for _k, _v in (("chunks", _core190.StdinChunks([b"a" * 10, b"b" * 20])), ("text", "secret"), ("none", None)):
+    _c = _Chan190()
+    _core190.write_channel_stdin(_c, _v)
+    _cw190[_k] = _c.log
+eq("stdin (direct SSH): chunks are written one by one, a plain stdin whole as before, then flushed; none, nothing",
+   _cw190, {"chunks": [b"a" * 10, b"b" * 20, "flush"], "text": ["secret", "flush"], "none": []})
+
 # ── 8c. the backup path names the archive it proved it wrote (a restore's undo is that name) ─────────
 from panel.ops.ssh_manager import game as _game190
 _mk190 = []

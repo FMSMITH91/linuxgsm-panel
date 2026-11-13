@@ -19,7 +19,8 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
-from panel.core.stdin_chunks import StdinChunks, stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces
+from panel.core.stdin_chunks import (StdinChunks, stdin_bytes as _stdin_bytes,  # noqa: F401 - StdinChunks re-exported
+                                     stdin_pieces as _stdin_pieces, write_channel_stdin)
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
 from panel.security import privileged as _priv
 from panel.ops import netdev as _netdev
@@ -2082,10 +2083,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         # transport has from _POPEN_KW, and the same shutdown_write files.py:911 already sends —
         # and it is what the "deliberately no deadline" note above _drain_exec rests on.
         # A secret from run_privileged goes down the channel first; the EOF still follows.
-        for piece in (stdin_text if isinstance(stdin_text, StdinChunks) else () if stdin_text is None else (stdin_text,)):
-            stdin.write(piece)      # StdinChunks one chunk at a time; anything else whole, as it always was
-        if stdin_text is not None:
-            stdin.flush()
+        write_channel_stdin(stdin, stdin_text)
         try:
             stdin.channel.shutdown_write()
         except Exception:

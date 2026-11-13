@@ -42,3 +42,16 @@ def stdin_pieces(data):
         return data
     view = memoryview(data)
     return (view[i:i + STDIN_SLICE] for i in range(0, len(view), STDIN_SLICE))
+
+
+def write_channel_stdin(stdin, stdin_text):
+    """Write `stdin_text` to a paramiko exec channel's stdin file and flush it; nothing for None.
+
+    StdinChunks go one chunk at a time; anything else is written whole, as it always was (paramiko's
+    own file splits it into packets without copying).
+    """
+    if stdin_text is None:
+        return
+    for piece in (stdin_text if isinstance(stdin_text, StdinChunks) else (stdin_text,)):
+        stdin.write(piece)
+    stdin.flush()
