@@ -29,7 +29,7 @@ import subprocess as _sp183  # nosec B404 - bash over the script this part build
 import tempfile as _tmp183
 import time as _time183
 
-from unit.part01 import check, eq
+from unit.part01 import check, eq, skip
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
                          _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.core import panel_state as _ps183
@@ -213,7 +213,7 @@ def _host183(plan, files=(), links=(), up=False, uid=None, realpath=None, locked
         if holder is not None:
             holder.kill()
             holder.wait()
-        if locked:
+        if locked and _os183.path.isdir(_os183.path.join(home, locked)):
             _os183.chmod(_os183.path.join(home, locked), _stat183.S_IRWXU)
         _shutil183.rmtree(tmp, ignore_errors=True)
 
@@ -272,9 +272,15 @@ _nosf183 = _host183(_MC_PLAN183, ("other/x",))
 eq("world reset host: with no serverfiles folder nothing runs (refused)",
    _wwr183.outcome(_nosf183[1], _nosf183[2], _MC_PLAN183)[0], "refused")
 
-_rmfail183 = _host183(_MC_PLAN183, _MC_FILES183 + ("serverfiles/world/locked/data",), locked="serverfiles/world/locked")
-eq("world reset host: a world file that cannot be removed is a failure, not a reset",
-   _wwr183.outcome(_rmfail183[1], _rmfail183[2], _MC_PLAN183)[0], "failed")
+_RMFAIL_NAME183 = "world reset host: a world file that cannot be removed is a failure, not a reset"
+if _os183.geteuid() == 0:
+    # A read-only folder is how this makes rm fail, and root ignores folder permissions; the run as the
+    # CI runner (not root) holds this check.
+    skip(_RMFAIL_NAME183, "a read-only folder cannot stop root's rm; held by the non-root run")
+else:
+    _rmfail183 = _host183(_MC_PLAN183, _MC_FILES183 + ("serverfiles/world/locked/data",),
+                          locked="serverfiles/world/locked")
+    eq(_RMFAIL_NAME183, _wwr183.outcome(_rmfail183[1], _rmfail183[2], _MC_PLAN183)[0], "failed")
 
 _FCTR_FILES183 = ("serverfiles/saves/save1.zip", "serverfiles/saves/_autosave1.zip", "serverfiles/saves/_autosave2.zip",
                   "serverfiles/saves/kept-by-hand.zip", "serverfiles/player-data.json", "serverfiles/mods/m.zip",
