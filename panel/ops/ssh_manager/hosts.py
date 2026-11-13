@@ -595,11 +595,8 @@ def _r42f_limit_refusal(server, before, port, proto):
     `ufw limit N/proto` ADDS a rule from Anywhere (both families on a host with IPv6 on) when no
     `N/proto` allow is there to rewrite in place. On a closed port, or one open only to the tailnet,
     one source or one interface, "rate limit SSH" opened it to the whole internet. So the limit
-    runs only where every family it writes already lets everyone in: its first public rule for the
-    port (one destination address left out) is an ALLOW or LIMIT, or no rule decides it and the
-    default incoming policy is allow. IPv6 counts where its list has a row, or where ufw's stored
-    settings say IPv6 is on (or cannot be read). `before` is the `ufw status numbered` answer, None
-    when it could not be read. A host read is added only where the listed rules do not settle it.
+    runs only where every family it writes already lets everyone in (_r42f_limit_opens_nothing).
+    `before` is the `ufw status numbered` answer, None when it could not be read.
     """
     spec = "%d/%s" % (port, proto)
     if before is None:
@@ -608,14 +605,27 @@ def _r42f_limit_refusal(server, before, port, proto):
     if not firewall._ufw_is_active(before):
         return i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read here to check "
                              "{spec} is open to everyone — nothing was changed.", spec=spec)
-    listed6 = bool(_r38a_family_rules(before, 6))
-    ways = [_r42f_open_way(before, port, proto, v6) for v6 in ((False, True) if listed6 else (False,))]
-    if False not in ways and None not in ways and (listed6 or _r40_ufw_v6_state(server) is False):
-        return None
-    if False not in ways and firewall.remote_ufw_default_allows_in(server):
+    if _r42f_limit_opens_nothing(server, before, port, proto):
         return None
     return i18n.Sentence("Limit only rate-limits a port already open to everyone, and {spec} is not, so "
                          "nothing was changed. Open it first, or allow one source instead.", spec=spec)
+
+
+def _r42f_limit_opens_nothing(server, before, port, proto):
+    """Whether every family `ufw limit port/proto` writes already lets everyone in to it.
+
+    A family does when its first public rule for the port (one destination address left out) is an
+    ALLOW or LIMIT, or when no rule decides it and the default incoming policy is allow. IPv6 counts
+    where its list has a row, or where ufw's stored settings say IPv6 is on (or cannot be read). A
+    host read is added only where the listed rules do not settle it.
+    """
+    listed6 = bool(_r38a_family_rules(before, 6))
+    ways = [_r42f_open_way(before, port, proto, v6) for v6 in ((False, True) if listed6 else (False,))]
+    if False in ways:
+        return False
+    if None not in ways and (listed6 or _r40_ufw_v6_state(server) is False):
+        return True
+    return firewall.remote_ufw_default_allows_in(server)
 
 
 def _r42f_open_way(status_out, port, proto, v6):
@@ -4835,11 +4845,13 @@ def _r42f_stored_public_ssh(out, served):
     stored-rule patterns read: a rule for the tailnet, one source or one interface is never public.
     """
     lines = [line.strip() for line in (out or "").splitlines()]
-    for port in (int(p) for p in served or () if str(p).isdecimal()):
-        first = next((line for line in lines if _r42f_stored_meets(line, port)), None)
-        if first is not None and first.split()[1] in ("allow", "limit"):
-            return True
-    return False
+    return any(_r42f_stored_lets_in(lines, int(p)) for p in served or () if str(p).isdecimal())
+
+
+def _r42f_stored_lets_in(lines, port):
+    """Whether the first of the stored rule `lines` that TCP to `port` from anywhere meets allows or limits it."""
+    first = next((line for line in lines if _r42f_stored_meets(line, port)), None)
+    return first is not None and first.split()[1] in ("allow", "limit")
 
 
 def _r42f_stored_meets(line, port):
