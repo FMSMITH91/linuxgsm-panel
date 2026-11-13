@@ -872,6 +872,9 @@ try:
     _a = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _b = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _up190["resume"] = (_a.status_code, _b.status_code, (_b.get_json() or {}).get("received"))
+    # Finished before every byte arrived: refused, and its part file removed.
+    _fin = _CU190["rsedit"].post("%s/%s/finish" % (_base, _uid), json={}).get_json() or {}
+    _up190["early"] = (_fin.get("success"), [_f for _f in _os190.listdir(_ubdir190) if _uid in _f])
     # A piece larger than one 64 KB chunk of base64: still handed over in chunks.
     del _chunks190[:]
     _uidb = _CU190["rsedit"].post(_base, json={"size": 200000}).get_json()["id"]
@@ -879,9 +882,6 @@ try:
                           content_type="application/octet-stream")
     _CU190["rsedit"].post("%s/%s/cancel" % (_base, _uidb), json={})
     _up190["big_chunks"] = list(_chunks190)
-    # Finished before every byte arrived: refused, and its part file removed.
-    _fin = _CU190["rsedit"].post("%s/%s/finish" % (_base, _uid), json={}).get_json() or {}
-    _up190["early"] = (_fin.get("success"), [_f for _f in _os190.listdir(_ubdir190) if _uid in _f])
     _uid = _CU190["rsedit"].post(_base, json={"size": 8192}).get_json()["id"]
     _up190["traversal_id"] = _CU190["rsedit"].post(_base + "/..%2F..%2Fetc%2Fpasswd?offset=0", data=b"x",
                                                content_type="application/octet-stream").status_code
