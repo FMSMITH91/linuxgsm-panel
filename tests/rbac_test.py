@@ -4374,6 +4374,9 @@ _NO_AUDIT_OK = {
     "api_panel_backup_game_upload_piece",
     "api_panel_backup_upload_piece",
     "api_panel_backup_upload",       # makes an empty part file; the finish audits what became of it
+    # A cancelled upload removes its own part file, which nothing listed: no archive came or went.
+    "api_panel_backup_game_upload_cancel",
+    "api_panel_backup_upload_cancel",
     "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
     "api_remote_bootstrap_dismiss",  # dismisses a banner
     "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)

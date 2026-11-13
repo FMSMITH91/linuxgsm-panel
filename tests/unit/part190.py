@@ -236,6 +236,14 @@ else:
     def _lock190(sb):
         sb.put("lgsm/lock/backup.lock", str(int(_time190.time())))
 
+    def _sshlink190(sb):          # ~/.ssh a link to a folder the clear would otherwise empty
+        _os190.rename(_os190.path.join(sb.home, ".ssh"), _os190.path.join(sb.home, "dotssh"))
+        _os190.symlink("dotssh", _os190.path.join(sb.home, ".ssh"))
+
+    def _bklink190(sb):           # ~/lgsm/backup a link to ~/backups: every archive would be cleared
+        _os190.rename(sb.bdir, _os190.path.join(sb.home, "backups"))
+        _os190.symlink("../backups", sb.bdir)
+
     _ref = {
         "dotdot": lambda sb: _crafted190(sb, [("././../evil", _tf190.REGTYPE, "")]),
         "absolute": lambda sb: _crafted190(sb, [("/etc/evil", _tf190.REGTYPE, "")]),
@@ -250,6 +258,8 @@ else:
         "linkbackup": lambda sb: _os190.symlink(sb.bdir, _os190.path.join(sb.home, "serverfiles/bk")),
         "cut": _cut190,
         "locked": _lock190,
+        "keeplink_ssh": _sshlink190,
+        "keeplink_backup": _bklink190,
     }
     for _k, _prep in _ref.items():
         _r190["ref_" + _k] = _refused190(_prep)
@@ -264,6 +274,45 @@ else:
         return "grsu-2026-11-03-120000.tar.gz"
     _r190["ref_noscript"] = _refused190(_noscript190)
     _r190["ref_space"] = _refused190(lambda sb: None, undo_estimate=10 ** 18)
+
+    # More files and folders than free inodes (the margin raised past any filesystem): refused, nothing changed.
+    _saved_margin = _grs190.INODE_MARGIN
+    try:
+        _grs190.INODE_MARGIN = 10 ** 15
+        if _os190.statvfs(_tmp190.gettempdir()).f_files:
+            _r190["ref_inodes"] = _refused190(lambda sb: None)
+        else:
+            skip("restore commands: the inode bound", "this filesystem does not count inodes")
+    finally:
+        _grs190.INODE_MARGIN = _saved_margin
+
+    # A heartbeat while a long step runs (here a pause put after it starts), and none left behind.
+    _saved_hb = _grs190.HEARTBEAT
+    _sb = _Sb190()
+    try:
+        _grs190.HEARTBEAT = 1
+        _vs = _grs190.vet_script(_U190, _U190, _NAME190, 0)
+        _vs = _vs.replace("kill $hb 2>/dev/null' EXIT\n", "kill $hb 2>/dev/null' EXIT\nsleep 2.5\n", 1)
+        _t = _time190.time()
+        _out, _rc = _sb.run(_vs)
+        _r190["heartbeat"] = (_out.count("__GRS_ALIVE__") >= 2, _grs190.vet_outcome(_out)[0], _time190.time() - _t < 30)
+        _rs = _grs190.restore_script(_U190, _U190, _NAME190, _grs190.vet_outcome(_out)[1]["t0"], 1, _UNDO190,
+                                     busy_polls=1)
+        _rs = _rs.replace('-- "$a"; kill $hb 2>/dev/null\' EXIT\n', '-- "$a"; kill $hb 2>/dev/null\' EXIT\nsleep 2.5\n', 1)
+        _out, _rc = _sb.run(_rs)
+        _r190["heartbeat_restore"] = _out.count("__GRS_ALIVE__") >= 2
+    finally:
+        _grs190.HEARTBEAT = _saved_hb
+        _sb.gone()
+
+    # The checks' last line cannot reach a panel that has gone: the archive is put back, not left held.
+    _sb = _Sb190()
+    try:
+        _vs = _grs190.vet_script(_U190, _U190, _NAME190, 0).replace("/home/" + _U190, _sb.home)
+        _sp190.run(["bash", "-c", 'bash -c "$1" | true', "_", _vs], capture_output=True, timeout=180, cwd="/")
+        _r190["undelivered"] = (_os190.path.isfile(_sb.archive), [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
+    finally:
+        _sb.gone()
 
     # A process of the account still in serverfiles: the restore waits, then refuses with nothing cleared.
     _sb = _Sb190()
@@ -330,10 +379,21 @@ if "vet" in _r190:
         "linkbackup": "symbolic link in the game account", "cut": "could not be read to its end",
         "locked": "LinuxGSM backup or update", "noscript": "does not hold the server's LinuxGSM script",
         "space": "not enough free space",
+        "keeplink_ssh": "is a symbolic link, so the restore could not keep it apart",
+        "keeplink_backup": "is a symbolic link, so the restore could not keep it apart",
     }
     eq("restore commands: each refusal says why and changes nothing (home, archive name, nothing held)",
        {_k: (_r190["ref_" + _k][0], _w in _r190["ref_" + _k][1], _r190["ref_" + _k][2]) for _k, _w in _bad190.items()},
        {_k: ("refused", True, True) for _k in _bad190})
+    if "ref_inodes" in _r190:
+        eq("restore commands: an archive with more files and folders than free inodes is refused, nothing changed",
+           (_r190["ref_inodes"][0], "not enough free inodes" in _r190["ref_inodes"][1], _r190["ref_inodes"][2]),
+           ("refused", True, True))
+    eq("restore commands: the checks print a heartbeat while they run (a silence timeout never fires on them), "
+       "still end READY, and leave nothing running", _r190["heartbeat"], (True, "ready", True))
+    check("restore commands: the clear and extraction print a heartbeat too", _r190["heartbeat_restore"], "")
+    eq("restore commands: when the checks' last line cannot be delivered, the archive is put back (not left "
+       "held for a panel that never heard)", _r190["undelivered"], (True, []))
     eq("restore commands: a process of the account still in serverfiles refuses after the wait, nothing "
        "cleared, the archive put back", _r190["busy"][:1] + _r190["busy"][2:], ("refused", True, True))
     eq("restore commands: an extraction that fails after the clear is a failure (not a refusal), and the "
@@ -348,6 +408,7 @@ with _p9.app_context():
     from panel.db.models import (GameServer as _PGS190, Group as _PG190, RemoteServer as _PRS190,
                                  User as _PU190, db as _pdb190)
     for _suffix, _perms in (("rs", [_auth190.RESTORE_BACKUP]),
+                            ("rsedit", [_auth190.RESTORE_BACKUP, _auth190.EDIT_FILES]),
                             ("dlrm", [_auth190.DOWNLOAD_BACKUP, _auth190.DELETE_BACKUP])):
         _g = _PG190(name="p190_" + _suffix, description="", is_default=False)
         _g.set_permissions([_auth190.VIEW_SERVERS] + _perms)
@@ -371,6 +432,7 @@ try:
     _p9_patch(_gr190, "list_game_backups", lambda *a, **k: list(_LIST190))
     _p9_patch(_gr190, "_grs_worker", lambda *a, **k: _started190.append(a[4]))
     _p9_patch(_gr190, "_grs_other_work", lambda gs: None)
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_pb190, "list_game_backups", lambda *a, **k: list(_LIST190))
     _p9_patch(_pb190, "backup_disk_info", lambda *a, **k: {"free": 1, "total": 2})
     _url190 = "/api/panel/backup/game/%d/restore" % P9_GS
@@ -393,6 +455,10 @@ try:
     _rt190["running"] = (_gr190._grs_status.update({P9_GS: {"running": True}}) or
                          _C190["rs"].post(_url190, json=_ok190).status_code)
     _gr190._grs_status.pop(P9_GS, None)
+    # The account can become root on its host: refused before anything (the guard every write passes).
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: _i18n190.Sentence("p190 root-capable"))
+    _rt190["rootcap"] = _post190("rs", _ok190)
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
     _rt190["info"] = _C190["rs"].get("/api/panel/backup/game/%d/info" % P9_GS).status_code
     _rt190["take"] = _C190["rs"].post("/api/panel/backup/game/%d" % P9_GS, json={"force": False}).status_code
     _rt190["page"] = _C190["rs"].get("/server/%d/files" % P9_GS).get_data(as_text=True)
@@ -409,6 +475,8 @@ eq("route: a typed name that is not the server's, an archive not in its listing,
    "shape are refused, nothing started",
    [_rt190[_k] for _k in ("wrong_name", "not_listed", "shape")], [(400, []), (404, []), (400, [])])
 eq("route: a second restore while one runs is refused", _rt190["running"], 409)
+eq("route: an account that can become root on its host is refused before any work (game_account_write_refusal)",
+   _rt190["rootcap"], (409, []))
 eq("route: RESTORE_BACKUP opens the backup listing; taking a backup stays superadmin-only",
    (_rt190["info"], _rt190["take"]), (200, 403))
 check("page: a restore-only viewer sees the Backups tab with Restore, without download or delete",
@@ -443,11 +511,16 @@ class _Host190:
         self.calls.append(action)
         return self.stop if action == "stop" else ("", "", 0)
 
-    def marked(self, sid, server, user, selfname, keep, **k):
+    def marked(self, sid, server, user, selfname, keep, made=None, **k):
         self.calls.append("backup")
         self.keep = keep
+        self.held_seen = dict(_held190)
         if self.ok:
-            self.listing = [{"name": "p190-2026-11-13-000000.tar.zst", "size": 3000, "created": 3}] + self.listing
+            # An upload finished while the backup ran: newer than the undo, and never taken for it.
+            self.listing = [{"name": "p190-2026-11-14-000000.tar.zst", "size": 10, "created": 4},
+                            {"name": "p190-2026-11-13-000000.tar.zst", "size": 3000, "created": 3}] + self.listing
+            if made is not None:
+                made.append("p190-2026-11-13-000000.tar.zst")
             return True, "", False
         return False, "LinuxGSM backup failed", False
 
@@ -455,11 +528,28 @@ class _Host190:
         return list(self.listing)
 
 
-def _run190(host):
+_held190 = {}       # config.json["restores_held"], in memory for these checks
+
+
+def _held_cfg190():
+    return {"restores_held": _held190}
+
+
+def _held_update190(mut):
+    cfg = {"restores_held": _held190}
+    mut(cfg)
+    _held190.clear()
+    _held190.update(cfg["restores_held"])
+
+
+def _run190(host, refusal=None):
     """One _GrsRun through its steps against `host`: (calls, keep, ok, message, audit detail, alerts)."""
     from types import SimpleNamespace as _NS
     try:
         _p9_arm(who="part190")
+        _p9_patch(_gr190, "load_config", _held_cfg190)
+        _p9_patch(_gr190, "update_config", _held_update190)
+        _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: refusal)
         _p9_patch(_gr190, "shell_as_game_user", host.shell)
         _p9_patch(_gr190, "list_game_backups", host.listed)
         _p9_patch(_gr190, "_sm", _NS(run_as_game_user=host.lgsm))
@@ -493,6 +583,8 @@ _w190["late_fail"] = _run190(_Host190(restore="__GRS_CLEARING__\n__GRS_XFAIL__ 2
 _w190["late_refused"] = _run190(_Host190(restore="__GRS_BUSY__"))
 _w190["players"] = _run190(_Host190(stop=("[ INFO ] Stopping grsu: 2 players are on the server: stop prevented\n", "", 0)))
 _w190["was_down"] = _run190(_Host190(vet="__GRS_READY__ 0 %d 5000 9000" % _T0190))
+_w190["rootcap"] = _run190(_Host190(), refusal=_i18n190.Sentence("p190 root-capable"))
+_held_mid190 = dict(_h.held_seen) if hasattr(_h, "held_seen") else {}
 
 eq("run: checks, stop, the undo backup, the restore, then start (it was running)",
    _w190["ok"][0], ["vet", "stop", "backup", "restore", "start"])
@@ -516,9 +608,17 @@ eq("run: refused by the last command's checks (nothing cleared), the server is s
    _w190["late_refused"][0], ["vet", "stop", "backup", "restore", "start"])
 eq("run: LinuxGSM refusing the stop for players restores nothing and puts the archive back (no start: it "
    "kept running)", _w190["players"][0], ["vet", "stop", "putback"])
-eq("run: a server that was stopped is restored and left stopped", _w190["was_down"][0],
-   ["vet", "backup", "restore"])
-eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 7)
+eq("run: a server that reads as stopped still gets LinuxGSM's stop (it drops the monitoring lock LinuxGSM's monitor "
+   "restarts a crashed server by), is restored and left stopped", _w190["was_down"][0],
+   ["vet", "stop", "backup", "restore"])
+eq("run: an account that can become root is refused in the run too, before the checks reach the host",
+   (_w190["rootcap"][0], _w190["rootcap"][2]), ([], False))
+check("run: the undo is the archive the backup path names, not a newer upload in the listing",
+      "restore p190-2026-11-13-000000.tar.zst" in _w190["ok"][3] and "11-14" not in _w190["ok"][3], _w190["ok"][3])
+check("run: while the archive is held, config.json names it (and none is left once the run ends)",
+      (_held_mid190.get(str(P9_GS)) or {}).get("name") == _LIST190[0]["name"] and not _held190,
+      repr((_held_mid190, _held190)))
+eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 8)
 
 # ── 5. while it runs, the server is held ────────────────────────────────────────────────────────
 with _job190(P9_GS, _shr190.GRS_KIND):
@@ -552,14 +652,21 @@ _up190 = {}
 with _p9.app_context():
     _gsrow190 = _pdb190.session.get(_PGS190, P9_GS)
     _short190, _self190 = _gsrow190.short_name, _gsrow190.lgsm_name or _gsrow190.short_name
+    _rid190 = _gsrow190.remote_id
 _root190 = _tmp190.mkdtemp(prefix="p190-up-")
 _uhome190 = _os190.path.join(_root190, "home", _short190)
 _os190.makedirs(_uhome190)
 _ubdir190 = _os190.path.join(_uhome190, "lgsm", "backup")
 
 
+_blank190 = []          # a finish whose answer is lost once: its command is not run, nothing comes back
+
+
 def _fake_run190(server, cmd, timeout=30, sudo=None, stdin_text=None):
     """run_command for the upload routes: the panel-built script, run by bash on the stand-in home."""
+    if _blank190 and "__GRS_UPSTORED__" in cmd:
+        _blank190.pop()
+        return "", "", -1
     p = _sp190.run(["bash", "-c", cmd.replace("/home/" + _short190, _uhome190)], input=stdin_text,
                    capture_output=True, text=True, timeout=120, cwd="/")
     return p.stdout, p.stderr, p.returncode
@@ -592,34 +699,68 @@ try:
     _p9_arm(who="part190")
     _p9_patch(_bu190, "_sm", _NSU(game_user_cmd=lambda user, inner: inner, run_command=_fake_run190,
                                   _fmt_size=_sm190._fmt_size))
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
     _CU190 = {_k: _p9_client(_v) for _k, _v in _uids190.items()}
     _good190 = _tar190([("././", b""), ("././" + _self190, b"#!/bin/bash\n"), ("././serverfiles/a", b"a" * 9000)])
     _n_up190 = _p9_audit_count("game_backup_upload")
-    _res = _upload190(_CU190["rs"], _good190, chunk=4096, start_extra={"name": "../../../etc/cron.d/x.tar.gz"})
+    _res = _upload190(_CU190["rsedit"], _good190, chunk=4096, start_extra={"name": "../../../etc/cron.d/x.tar.gz"})
     _up190["ok"] = ([_c for _c, _j in _res], _res[-1][1].get("name", ""), sorted(_os190.listdir(_ubdir190)))
     _up190["ok_audit"] = _p9_audit_count("game_backup_upload") - _n_up190
     _plain = _tar190([("./", b""), ("./" + _self190, b"#!/bin/bash\n")], compress="plain")
-    _up190["plain"] = _upload190(_CU190["rs"], _plain)[-1][1].get("name", "")
+    _up190["plain"] = _upload190(_CU190["rsedit"], _plain)[-1][1].get("name", "")
     _up190["dlrm"] = _upload190(_CU190["dlrm"], _good190)[0][0]
-    _up190["oversize"] = _CU190["rs"].post("/api/panel/backup/game/%d/upload" % P9_GS,
+    _up190["rs_only"] = _upload190(_CU190["rs"], _good190)[0][0]
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: _i18n190.Sentence("p190 root-capable"))
+    _parts0 = sorted(_os190.listdir(_ubdir190))
+    _up190["rootcap"] = (_upload190(_CU190["rsedit"], _good190)[0][0], sorted(_os190.listdir(_ubdir190)) == _parts0)
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
+    # A plain tar when the disk has no room for its gzip copy (the margin raised for the finish only).
+    _before_gz = sorted(_os190.listdir(_ubdir190))
+    _saved_m = _grs190.MARGIN
+    _base0 = "/api/panel/backup/game/%d/upload" % P9_GS
+    _uid0 = _CU190["rsedit"].post(_base0, json={"size": len(_plain)}).get_json()["id"]
+    _CU190["rsedit"].post("%s/%s?offset=0" % (_base0, _uid0), data=_plain, content_type="application/octet-stream")
+    try:
+        _grs190.MARGIN = 10 ** 18
+        _fin = _CU190["rsedit"].post("%s/%s/finish" % (_base0, _uid0), json={}).get_json() or {}
+    finally:
+        _grs190.MARGIN = _saved_m
+    _up190["gz_space"] = (_fin.get("success"), "not enough free space" in _fin.get("message", ""),
+                          sorted(_os190.listdir(_ubdir190)) == _before_gz)
+    # A finish whose answer was lost keeps the upload: asked again, it is stored.
+    _blank190.append(1)
+    _r = _upload190(_CU190["rsedit"], _good190)
+    _again = _CU190["rsedit"].post("/api/panel/backup/game/%d/upload/%s/finish" % (P9_GS, _r[0][1]["id"]), json={})
+    _up190["retry"] = (_r[-1][1].get("retry"), (_again.get_json() or {}).get("success"))
+    # Cancelled: its part file is gone, and another upload may start at once.
+    _uid1 = _CU190["rsedit"].post(_base0, json={"size": 8192}).get_json()["id"]
+    _CU190["rsedit"].post("%s/%s?offset=0" % (_base0, _uid1), data=b"x" * 4096, content_type="application/octet-stream")
+    _parts = [_f for _f in _os190.listdir(_ubdir190) if _f.startswith(".panel-upload-")]
+    _cx = _CU190["rsedit"].post("%s/%s/cancel" % (_base0, _uid1), json={})
+    _again = _CU190["rsedit"].post(_base0, json={"size": 10})
+    _up190["cancel"] = (bool(_parts), _cx.status_code,
+                        [_f for _f in _os190.listdir(_ubdir190) if _f.startswith(".panel-upload-") and _uid1 in _f],
+                        _again.status_code)
+    _CU190["rsedit"].post("%s/%s/cancel" % (_base0, (_again.get_json() or {}).get("id", "x")), json={})
+    _up190["oversize"] = _CU190["rsedit"].post("/api/panel/backup/game/%d/upload" % P9_GS,
                                            json={"size": _grs190.UPLOAD_MAX + 1}).status_code
     _before = sorted(_os190.listdir(_ubdir190))
     for _k, _data in (("format", b"this is not an archive at all" * 50),
                       ("bomb", _bomb190("././")),
                       ("escape", _tar190([("././", b""), ("././" + _self190, b"x"), ("././../../evil", b"x")])),
                       ("noscript", _tar190([("././", b""), ("././serverfiles/a", b"a")]))):
-        _r = _upload190(_CU190["rs"], _data)
+        _r = _upload190(_CU190["rsedit"], _data)
         _up190[_k] = (_r[-1][0], _r[-1][1].get("success"), _r[-1][1].get("message", ""),
                       sorted(_os190.listdir(_ubdir190)) == _before)
     # A piece sent twice (its answer lost): the second is not appended, and the page is told where to go on.
     _base = "/api/panel/backup/game/%d/upload" % P9_GS
-    _uid = _CU190["rs"].post(_base, json={"size": 8192}).get_json()["id"]
-    _a = _CU190["rs"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
-    _b = _CU190["rs"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
+    _uid = _CU190["rsedit"].post(_base, json={"size": 8192}).get_json()["id"]
+    _a = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
+    _b = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _up190["resume"] = (_a.status_code, _b.status_code, (_b.get_json() or {}).get("received"))
-    _up190["traversal_id"] = _CU190["rs"].post(_base + "/..%2F..%2Fetc%2Fpasswd?offset=0", data=b"x",
+    _up190["traversal_id"] = _CU190["rsedit"].post(_base + "/..%2F..%2Fetc%2Fpasswd?offset=0", data=b"x",
                                                content_type="application/octet-stream").status_code
-    _up190["big_piece"] = _CU190["rs"].post("%s/%s?offset=4096" % (_base, _uid), data=b"x" * (_grs190.UPLOAD_CHUNK + 1),
+    _up190["big_piece"] = _CU190["rsedit"].post("%s/%s?offset=4096" % (_base, _uid), data=b"x" * (_grs190.UPLOAD_CHUNK + 1),
                                             content_type="application/octet-stream").status_code
 except RuntimeError as _e:
     skip("game backup upload: driven onto a stand-in host", str(_e))
@@ -638,6 +779,16 @@ if "ok" in _up190:
     check("upload: a plain tar is accepted and stored compressed (.tar.gz)",
           bool(_re190.match(_pat190, _up190["plain"])), _up190["plain"])
     eq("upload: download and delete without RESTORE_BACKUP cannot start one", _up190["dlrm"], 403)
+    eq("upload: RESTORE_BACKUP without EDIT_FILES cannot either (an uploaded archive is any file, the scripts the "
+       "server runs included)", _up190["rs_only"], 403)
+    eq("upload: an account that can become root on its host is refused before anything is written",
+       _up190["rootcap"], (409, True))
+    eq("upload: a plain tar is refused when there is no room for its gzip copy, and nothing is left behind",
+       _up190["gz_space"], (False, True, True))
+    eq("upload: a finish whose answer was lost says so (retry) and keeps the upload, which a second finish stores",
+       _up190["retry"], (True, True))
+    eq("upload: a cancelled upload's part file is removed and another upload may start at once",
+       _up190["cancel"], (True, 200, [], 200))
     eq("upload: a size over the cap is refused before the host", _up190["oversize"], 400)
     _uwhy190 = {"format": "not a tar archive", "bomb": "far more than any game server",
                 "escape": "not under the server's folder", "noscript": "LinuxGSM script"}
@@ -710,6 +861,87 @@ eq("panel upload: not a backup, an encrypted header asking for costly parameters
     for _k, _w in _pwhy190.items()}, {_k: (False, True, True) for _k in _pwhy190})
 eq("panel upload: not a superadmin, a size over the cap and an upload id that is a path are refused",
    (_pup190["not_su"], _pup190["oversize"], _pup190["traversal_id"]), (403, 400, 404))
+
+# ── 8. a restore a panel restart cut off; no panel restart under a running restore ─────────────────
+_rec190 = {"shell": [], "alerts": []}
+try:
+    _p9_arm(who="part190")
+    _p9_patch(_gr190, "load_config", _held_cfg190)
+    _p9_patch(_gr190, "update_config", _held_update190)
+    _p9_patch(_gr190, "shell_as_game_user", lambda srv, user, sh, **k: (_rec190["shell"].append(sh) or ("", "", 0)))
+    _p9_patch(_shr190, "_alert_backup", lambda app, gs, title, body: _rec190["alerts"].append(body))
+    _held190.clear()
+    _held190[str(P9_GS)] = {"name": _LIST190[0]["name"], "t0": _T0190, "undo": "p190-2026-11-13-000000.tar.zst",
+                            "actor": P9_ADMIN, "short_name": _short190, "remote_id": _rid190, "at": 1}
+    # A restore of that server still running in this process is left alone...
+    _gr190._grs_status[P9_GS] = {"running": True}
+    _gr190._grs_recover_pass(_p9)
+    _rec190["while_running"] = (len(_rec190["shell"]), bool(_held190))
+    # ...and with no run holding it, it is recovered.
+    _gr190._grs_status.pop(P9_GS, None)
+    _n_rec190 = _p9_audit_count("game_backup_restore")
+    _gr190._grs_recover_pass(_p9)
+    _rec190["audit"] = _p9_audit_count("game_backup_restore") - _n_rec190
+    _rec190["row"] = _p9_audit("game_backup_restore").detail
+    _rec190["status"] = (_gr190._grs_status.get(P9_GS) or {}).get("msg", "")
+    _rec190["left"] = dict(_held190)
+    # While a restore runs, the panel does not restart itself (the update route, and every route behind
+    # panel_host_busy: branch switch, repair, panel restore, binding change, the bots' update).
+    from panel.ops import system_ops as _so190
+    _upd190 = []
+    _p9_patch(_so190, "panel_self_update", lambda *a, **k: (_upd190.append(1) or (True, "ok")))
+    _gr190._grs_status[P9_GS] = {"running": True}
+    _r = _p9_client(P9_ADMIN).post("/api/panel/update", json={})
+    _rec190["update"] = (_r.status_code, list(_upd190))
+    _gr190._grs_status.pop(P9_GS, None)
+finally:
+    _p9_restore_all()
+    _gr190._grs_status.pop(P9_GS, None)
+    _held190.clear()
+
+eq("recovery: a recorded restore that a run of this process still holds is left alone",
+   _rec190["while_running"], (0, True))
+check("recovery: with no run holding it, the archive is put back under its own name and time",
+      len(_rec190["shell"]) == 1 and ("restore-source-%d" % _T0190) in _rec190["shell"][0]
+      and ('touch -m -d "@$t0"' in _rec190["shell"][0]), repr(_rec190["shell"]))
+check("recovery: ...recorded as interrupted (audit, alert, the card), naming the pre-restore archive, and forgotten",
+      _rec190["audit"] == 1 and "interrupted" in _rec190["row"] and "p190-2026-11-13-000000.tar.zst" in _rec190["row"]
+      and _rec190["alerts"] and "restore p190-2026-11-13-000000.tar.zst" in _rec190["status"] and not _rec190["left"],
+      repr(_rec190))
+eq("restart: the panel's self-update is refused while a game server is being restored (nothing launched)",
+   _rec190["update"], (409, []))
+
+# ── 9. the panel's Backups page offers Restore on each game backup; the card stacks on a phone ────────
+from unit.part47 import _SETTLE47 as _SET190, _cut47 as _cut190, _node47 as _node190
+with open(_os190.path.join(_os190.path.dirname(_auth190.__file__), "..", "static", "js", "remote_manage_backups.js"),
+          encoding="utf-8") as _f190:
+    _RMB190 = _f190.read()
+_ui190 = _node190(_SET190 + (
+    "global.window = global; global.MOUNT = ''; global.escapeHtml = s => String(s); global.bkFmtBytes = b => b + ' B';\n"
+    "global.bkAgo = () => ''; global._da = (f) => ' data-action=\"' + f + '\"'; global.tf = s => s;\n"
+    "global.bkMsg = () => {}; global.loadBackups = () => {}; let posted = [], need = null;\n"
+    "global.confirmDialog = o => { need = o.requireText; o.onConfirm(); };\n"
+    "global.fetch = (u, o) => { posted.push([u, JSON.parse(o.body)]); return Promise.resolve({json: () => ({success: true})}); };\n"
+    + _cut190(_RMB190, "function bkGameRows(") + "\n" + _cut190(_RMB190, "function restoreGameBackup(") + "\n"
+    "const html = bkGameRows({id: 7, name: 'My Server', backups: [{name: 'ms-2026-11-01-000000.tar.gz', size: 1, created: 0}]});\n"
+    "const at = {'data-name': 'ms-2026-11-01-000000.tar.gz', 'data-gid': '7', 'data-server': 'My Server'};\n"
+    "restoreGameBackup({getAttribute: k => at[k]});\n"
+    "(async () => { await settle(); console.log(JSON.stringify({button: html.includes('data-action=\"restoreGameBackup\"')\n"
+    "  && html.includes('data-server=\"My Server\"'), need, posted})); })();\n"))
+if _ui190 is None:
+    skip("panel Backups page: Restore on a game backup", "node is not installed here")
+else:
+    eq("panel Backups page: each game backup has a Restore that asks for the server's name and posts the "
+       "restore route with it", _ui190, {"button": True, "need": "My Server", "posted": [
+           ["/api/panel/backup/game/7/restore", {"name": "ms-2026-11-01-000000.tar.gz", "confirm": "My Server"}]]})
+with open(_os190.path.join(_os190.path.dirname(_auth190.__file__), "..", "static", "css", "panel.css"),
+          encoding="utf-8") as _f190:
+    _css190 = _f190.read()
+_mob190 = _css190[_css190.find("@media (max-width: 575.98px) {\n  #backup-card thead"):]
+check("Backups card on a phone: rows wrap (name on its own line, the buttons below it) with 40px buttons",
+      "#backup-card #bk-rows tr { display: flex; flex-wrap: wrap;" in _mob190
+      and "#backup-card #bk-rows td:first-child { flex: 0 0 100%; }" in _mob190
+      and "min-width: 40px; min-height: 40px;" in _mob190, "")
 
 with _p9.app_context():
     for _u in _PU190.query.filter(_PU190.username.like("p190_%")).all():

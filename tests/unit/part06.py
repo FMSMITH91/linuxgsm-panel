@@ -5801,8 +5801,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # panel/routes/backup_upload.py's uploads in pieces: a game server's backup (/api/panel/backup/game/<id>/
 # upload, its pieces and its finish, RESTORE_BACKUP per server) and the panel's own
 # (/api/panel/backup/upload, its pieces and its finish, superadmin).
-check("register_routes: every one of the 254 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 254,
+# 256, was 254: two genuinely new views, the cancel of a backup upload in pieces (panel/routes/
+# backup_upload.py): a game server's (/api/panel/backup/game/<id>/upload/<uid>/cancel, RESTORE_BACKUP
+# and EDIT_FILES per server) and the panel's (/api/panel/backup/upload/<uid>/cancel, superadmin).
+check("register_routes: every one of the 256 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 256,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
