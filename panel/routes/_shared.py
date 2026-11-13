@@ -2186,6 +2186,25 @@ def _r21b_audited(exc):
     return getattr(exc, "_r21b_audited", False) is True
 
 
+@contextlib.contextmanager
+def _r42r_audit_after(reply):
+    """Around the audit row written after a change has reached the host: a raise there is not the change failing.
+
+    A commit that raises (the database locked past its timeout) is rolled back and logged, and
+    `reply`, the route's JSON answer for what the host did, keeps saying it and gains the note the
+    console's sends give: audit_unwritten, and a sentence after its message. Without this a ban sent
+    or a file written answered "request failed", and was retried.
+    """
+    try:
+        yield
+    except Exception:
+        from panel.routes.server_detail import _R25B_AUDIT_UNWRITTEN
+        db.session.rollback()
+        _log.warning("could not write the audit row for a change the host has made", exc_info=True)
+        reply["audit_unwritten"] = True
+        reply["message"] = i18n.tr(i18n.Sentences(reply.get("message"), _R25B_AUDIT_UNWRITTEN))
+
+
 def _reauth_key(user):
     """The throttle's key for `user`: its id, or — for an object with none yet — the object."""
     uid = getattr(user, "id", None)

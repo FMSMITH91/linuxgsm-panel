@@ -384,7 +384,9 @@ _UFW_HEAD102 = ("Status: active\n\n     To                         Action      F
 
 
 def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
-    """Move sshd to `new_port`; stops at sshd -t. -> (opened, free-port checked, refusal or None).
+    """Move sshd to `new_port`; stops at sshd -t. -> (opened, free-port checked, None or step 1's refusal).
+
+    The third is None only when the move passed step 1 (its drop-in was written), else the message.
 
     An open adds its rule to `ufw_rules` (a later status read lists it) unless `opens` is False:
     ufw answered 0 and the rule is not there. The drop-in written is kept in _DROPIN102 and the ports
@@ -438,8 +440,10 @@ def _move102(socket_show, ufw_rules, new_port=22, stored=2222, **opt):
                                            is_local=opt.get("local", False), auth_method=opt.get("auth", "key")),
                                         new_port,
                                         opt.get("bind", ""))
-    refused = (str(msg) if "blocked by the firewall rule" in str(msg) or "did not show port" in str(msg)
-               else None)
+    # None only for a move that got past step 1: every such move writes its drop-in before the stand-in's
+    # `sshd -t` stops it. Matched against two refusal texts, a control expecting "no refusal" also passed
+    # when step 1 refused the move with any other one.
+    refused = None if _DROPIN102 else str(msg)
     return state["opened"], state["listed"] > 0, refused
 
 
@@ -543,7 +547,7 @@ def _ufw_reread102():
     ts = _move102(sock_both, [a2222], new_port=22, stored=22, auth="tailscale")
     check("ssh port: the port the panel's own key/password connection uses is not opened again; a "
           "Tailscale-SSH row's sshd port is decided by the rules (controls)",
-          keep[0] == [] and ts[0] == [22], repr((keep, ts)))
+          keep[0] == [] and keep[2] is None and ts[0] == [22] and ts[2] is None, repr((keep, ts)))
     _bind_only102()
 
 
@@ -574,7 +578,7 @@ def _bind_only102():
           "sshd does not serve (review 1108)",
           all(got[k][0] == [] and got[k][2] is None for k in ("ts sshd_config", "ts socket", "local sshd_config",
                                                               "local socket"))
-          and got["ts move onto 2222"][0] == [], repr(got))
+          and got["ts move onto 2222"][0] == [] and got["ts move onto 2222"][2] is None, repr(got))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

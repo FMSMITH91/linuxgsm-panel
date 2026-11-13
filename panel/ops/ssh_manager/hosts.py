@@ -3,6 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import contextvars
 import functools
 import ipaddress as _ipaddress
+import os
 import re
 import socket
 from panel.core import clock, i18n, terminal
@@ -506,31 +507,54 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     if proto not in ("tcp", "udp"):
         # `ufw limit` takes one rule; "both" would need two and they would report separately.
         return False, "Rate limiting needs a single protocol (tcp or udp)"
+    # One hold of the host's ufw lock across the read, the decision and the writes: a rule deleted in
+    # between (another admin's close, an SSH move's revert) left `ufw limit` nothing to rewrite, and
+    # it added a fresh rule from Anywhere for the port just closed.
+    with _core.ufw_lock(server):
+        return _r42f_limit_held(server, port, proto, limit)
+
+
+def _r42f_limit_held(server, port, proto, limit):
+    """remote_ufw_limit_port's body, under the host's ufw lock: (ok, message)."""
     spec = "%d/%s" % (port, proto)
     before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     before = (before or "") if brc == 0 else ""
     if not limit:
-        # "Remove the rate limit", not "close the port": the LIMIT rule is what lets N/proto in,
-        # and deleting it closed a port the operator only wanted un-throttled — including the
-        # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
-        # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
-        if brc != 0:
-            return False, i18n.Sentence("Could not read the firewall to find the rate limit on {spec}, so "
-                                        "nothing was changed.", spec=spec)
-        # An inactive ufw lists NO rules, stored ones included, so the test below found none and
-        # answered "has no rate limit to remove" about a host whose stored rules hold one.
-        if not firewall._ufw_is_active(before):
-            return False, i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read "
-                                        "here to find the rate limit on {spec} — nothing was changed.", spec=spec)
-        if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
-            return False, i18n.Sentence("{spec} has no rate limit to remove.", spec=spec)
-        out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
-        if rc == 0:
-            return True, i18n.Sentence("Rate limit removed from {spec} (it stays open)", spec=spec)
-        return False, err or out or "Unknown error"
+        return _r42f_unlimit(server, spec, before, brc)
+    refusal = _r42f_limit_refusal(server, before if brc == 0 else None, port, proto)
+    if refusal is not None:
+        return False, refusal
     out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
     if rc != 0:
         return False, err or out or "Unknown error"
+    other, split, unsplit = _r42f_split_bare(server, port, proto, before)
+    return _r42f_limit_read_back(server, port, proto, before, (other, split, unsplit))
+
+
+def _r42f_unlimit(server, spec, before, brc):
+    """Lift the rate limit on `spec` (remote_ufw_limit_port with limit=False), under the ufw lock."""
+    # "Remove the rate limit", not "close the port": the LIMIT rule is what lets N/proto in,
+    # and deleting it closed a port the operator only wanted un-throttled — including the
+    # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
+    # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
+    if brc != 0:
+        return False, i18n.Sentence("Could not read the firewall to find the rate limit on {spec}, so "
+                                    "nothing was changed.", spec=spec)
+    # An inactive ufw lists NO rules, stored ones included, so the test below found none and
+    # answered "has no rate limit to remove" about a host whose stored rules hold one.
+    if not firewall._ufw_is_active(before):
+        return False, i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read "
+                                    "here to find the rate limit on {spec} — nothing was changed.", spec=spec)
+    if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
+        return False, i18n.Sentence("{spec} has no rate limit to remove.", spec=spec)
+    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
+    if rc == 0:
+        return True, i18n.Sentence("Rate limit removed from {spec} (it stays open)", spec=spec)
+    return False, err or out or "Unknown error"
+
+
+def _r42f_split_bare(server, port, proto, before):
+    """Split a bare (both-protocol) allow for `port` after the limit: (the other protocol, split, why not)."""
     # A bare allow for this port covers BOTH protocols and matches ahead of the limit. Keep the
     # other protocol open under the same comment, THEN drop the bare rule (this protocol is
     # already covered by the limit above, so nothing is ever left unallowed).
@@ -555,6 +579,13 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
             _core.run_privileged(server, "ufw-delete-allow-port", [str(port)], timeout=15)
             split = True
             break
+    return other, split, unsplit
+
+
+def _r42f_limit_read_back(server, port, proto, before, splitting):
+    """remote_ufw_limit_port's answer once the limit ran, from the firewall read back."""
+    spec = "%d/%s" % (port, proto)
+    other, split, unsplit = splitting
     after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     # Unread is a failed call or an empty answer — NOT a missing English "Status:". ufw translates
     # that whole line (`État : actif`), so on a French or Spanish host a limit that fully applied,
@@ -584,6 +615,84 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         return False, i18n.Sentence("{spec} is now rate limited, but {port}/{proto} is no longer open — "
                                     "re-open it from the host's Network tab.", spec=spec, port=port, proto=other)
     return True, i18n.Sentence("{spec} is now rate limited (6 connections per 30s per address)", spec=spec)
+
+
+def _r42f_limit_refusal(server, before, port, proto):
+    """Why `ufw limit port/proto` must not run here, or None when it opens nothing new.
+
+    `ufw limit N/proto` ADDS a rule from Anywhere (both families on a host where ufw handles IPv6)
+    when no `N/proto` allow is there to rewrite in place. On a closed port, or one open only to the
+    tailnet, one source or one interface, "rate limit SSH" opened it to the whole internet. So the
+    limit runs only where every family it writes already lets everyone in (_r42f_family_refusal).
+    `before` is the `ufw status numbered` answer, None when it could not be read.
+    """
+    spec = "%d/%s" % (port, proto)
+    if before is None:
+        return i18n.Sentence("Could not read the firewall to check {spec} is open to everyone, so no rate "
+                             "limit was added.", spec=spec)
+    if not firewall._ufw_is_active(before):
+        return i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read here to check "
+                             "{spec} is open to everyone — nothing was changed.", spec=spec)
+    fams = (False, True) if _r38a_family_rules(before, 6) else (False,)
+    profile = _r42f_profile_first(before, port, proto, fams)
+    if profile is not None:
+        # `Nginx Full`, `Apache`: its ports are in a file on the host the panel does not read.
+        return i18n.Sentence("`{rule}` is an application profile the panel cannot read, so whether {spec} is "
+                             "already open to everyone is not known — no rate limit was added.",
+                             spec=spec, rule=profile["detail"])
+    return _r42f_family_refusal(server, before, port, proto, fams)
+
+
+def _r42f_profile_first(before, port, proto, fams):
+    """The first public rule for port/proto in one of `fams`, when it is an app profile the panel cannot read."""
+    for v6 in fams:
+        first = _ufw_first_public_rule(before, port, proto, unresolved=True, scoped=False, v6=v6)
+        if first is not None and first.get("unresolved"):
+            return first
+    return None
+
+
+def _r42f_family_refusal(server, before, port, proto, fams):
+    """_r42f_limit_refusal's answer from the listed families `fams` (IPv4, and IPv6 where it has a row).
+
+    A family lets everyone in when its first public rule for the port (one destination address left
+    out) is an ALLOW or LIMIT, or when no rule decides it and the default incoming policy is allow.
+    With no IPv6 row listed, ufw still writes the IPv6 half where it handles IPv6 (_r40_ufw_v6_state):
+    there the port is open over IPv6 only under a default incoming allow. A host read is added only
+    where the listed rules do not settle it.
+    """
+    spec = "%d/%s" % (port, proto)
+    ways = [_r42f_open_way(before, port, proto, v6) for v6 in fams]
+    if False in ways:
+        return _r42f_v6_refusal(spec, False)
+    # Every listed family open: with no IPv6 row, whether ufw would write the IPv6 half decides.
+    v6_on = _r40_ufw_v6_state(server) if None not in ways and len(fams) == 1 else False
+    if None not in ways and v6_on is False:
+        return None
+    if firewall.remote_ufw_default_allows_in(server):
+        return None
+    return _r42f_v6_refusal(spec, v6_on)
+
+
+def _r42f_v6_refusal(spec, v6_on):
+    """The refusal for `spec`: IPv6 unread (`v6_on` None), open over IPv4 only (True), or not open (False)."""
+    if v6_on is None:
+        return i18n.Sentence("Could not read UFW's settings to tell whether a rate limit on {spec} would also open "
+                             "it over IPv6, so nothing was changed.", spec=spec)
+    if v6_on:
+        return i18n.Sentence("{spec} is open to everyone over IPv4 only, and a rate limit would open it to "
+                             "everyone over IPv6 too, so nothing was changed.", spec=spec)
+    return i18n.Sentence("Limit only rate-limits a port already open to everyone, and {spec} is not, so "
+                         "nothing was changed. Open it first, or allow one source instead.", spec=spec)
+
+
+def _r42f_open_way(status_out, port, proto, v6):
+    """Whether one family's first public rule for port/proto lets everyone in: True, False or None.
+
+    None when no public rule matches, so the default incoming policy decides.
+    """
+    first = _ufw_first_public_rule(status_out, port, proto, scoped=False, v6=v6)
+    return None if first is None else first["action"] in ("ALLOW", "LIMIT")
 
 
 def _r22b_closed_by_split(before, after, port, proto):
@@ -4088,7 +4197,7 @@ def _open_ssh_port_rule(server, port, panel_way_in, served=None):
         if brc != 0:
             return False, _r41f_unread_status(port)
         if not known:
-            return _r26j_inactive_open(server, port)
+            return _r26j_inactive_open(server, port, served or panel_way_in)
         return _r38a_open_read(server, port, before, known, served or panel_way_in)
 
 
@@ -4248,13 +4357,27 @@ def _r39b_held_and_met(status_out, readings, port):
 
 
 def _r40_ufw_v6_state(server):
-    """Whether ufw's stored settings say it handles IPv6: True (IPV6=yes), False (IPV6=no), or None.
+    """Whether ufw handles IPv6 on `server`: True, False, or None when that is not known.
 
-    None when /etc/default/ufw could not be read or names neither: not known, so never a reason to add a
-    rule that may open IPv6.
+    As ufw decides it (backend.use_ipv6): IPV6=yes in its stored settings AND the kernel has IPv6
+    (/proc/sys/net/ipv6 exists). With IPv6 off in the kernel (`ipv6.disable=1`) and the default
+    IPV6=yes, ufw lists and writes no IPv6 rule at all; read from the setting alone, this answered
+    True and an IPv4-only host was judged as one whose rules would open IPv6. The kernel's answer
+    rides on the same ufw-stored-rules read (its last line); where an older panel-helper on the
+    panel's own host prints none, the panel's kernel is the host's. None when /etc/default/ufw could not be read
+    or names neither: never a reason to add a rule that may open IPv6.
     """
     stored = firewall._fwa_read_stored(server)
-    return None if stored is None else firewall._fwa_stored_values(stored)["ipv6"]
+    on = None if stored is None else firewall._fwa_stored_values(stored)["ipv6"]
+    kernel = {"yes": True, "no": False}.get((stored or {}).get(_priv.FWA_KERNEL_V6_PATH))
+    if on and kernel is None and _core.is_local_server(server):
+        kernel = _r42f_local_kernel_v6()
+    return False if on and kernel is False else on
+
+
+def _r42f_local_kernel_v6():
+    """Whether this machine's kernel has IPv6, as ufw tests it: /proc/sys/net/ipv6 exists."""
+    return os.path.exists("/proc/sys/net/ipv6")
 
 
 def _r39b_family_way(status_out, ports, v6):
@@ -4740,7 +4863,7 @@ _R26J_STORED_COVER_RE = re.compile(r"ufw (allow|deny|reject|limit)(?: in)?(?: lo
                                    r"([0-9][0-9,:]*)(?:/(tcp|udp))?(?: comment .*)?")
 
 
-def _r26j_inactive_open(server, port):
+def _r26j_inactive_open(server, port, served=()):
     """_open_ssh_port_rule's open on an inactive firewall: its (added, refusal). The caller holds ufw_lock.
 
     `ufw status` lists none of an inactive firewall's stored rules, so the open ran `ufw allow`
@@ -4755,6 +4878,10 @@ def _r26j_inactive_open(server, port):
         changed. Opened blind, the allow from Anywhere applied the moment UFW was enabled, on a host
         whose stored SSH rule may be tailnet-only. An empty answer that reports success is opened as
         before, not counted as added.
+      * no stored rule lets SSH in from anywhere on one of `served` (the ports sshd serves now): SSH is
+        kept to the tailnet, one source or one interface, so nothing is added and the success message
+        says so (_r42f_stored_public_off), as on an active firewall (_r38a_public_off). The allow from
+        Anywhere opened SSH to the internet on the new port the moment UFW was enabled.
     """
     out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
     if rc != 0:
@@ -4764,6 +4891,8 @@ def _r26j_inactive_open(server, port):
         return False, _r26j_blocked(port, blocking)
     if stored:
         return False, None
+    if stored is False and not _r42f_stored_public_ssh(out, served):
+        return _r42f_stored_public_off(port)
     ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
     added = bool(ok and stored is False)
     _r34b_note_added(port, added)
@@ -4773,6 +4902,45 @@ def _r26j_inactive_open(server, port):
         if not _r26j_stored_reading(out if rc == 0 else "", port)[0]:
             return False, _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
     return added, None
+
+
+# A stored rule for an app profile (`ufw allow OpenSSH`): ufw's short form names the profile, quoted when
+# it holds a space. Its action and the profile name.
+_R42F_STORED_APP_RE = re.compile(r"ufw (allow|deny|reject|limit)(?: in)?(?: log(?:-all)?)? "
+                                 r"('[^']+'|\S+)(?: comment .*)?")
+
+
+def _r42f_stored_public_ssh(out, served):
+    """Whether, in `ufw show added`'s `out`, the first stored rule TCP to one of `served` meets lets it in.
+
+    Only rules from anywhere, inbound, on no interface are in ufw's short form, which is all the
+    stored-rule patterns read: a rule for the tailnet, one source or one interface is never public.
+    """
+    lines = [line.strip() for line in (out or "").splitlines()]
+    return any(_r42f_stored_lets_in(lines, int(p)) for p in served or () if str(p).isdecimal())
+
+
+def _r42f_stored_lets_in(lines, port):
+    """Whether the first of the stored rule `lines` that TCP to `port` from anywhere meets allows or limits it."""
+    first = next((line for line in lines if _r42f_stored_meets(line, port)), None)
+    return first is not None and first.split()[1] in ("allow", "limit")
+
+
+def _r42f_stored_meets(line, port):
+    """Whether stored rule `line` is met by TCP to `port` from anywhere: a port rule, or the SSH profile on 22."""
+    if _r26j_stored_covers(line, port):
+        return True
+    m = _R42F_STORED_APP_RE.fullmatch(line)
+    return bool(m) and port == 22 and m.group(2).strip("'").lower() in firewall._SSH_APP_PROFILES
+
+
+def _r42f_stored_public_off(port):
+    """_r26j_inactive_open where no stored rule lets SSH in from anywhere: nothing added, and said."""
+    _r38a_note(i18n.Sentence(
+        "UFW is inactive, and none of its stored rules lets SSH in from anywhere, so no public rule was added for "
+        "port {port}. Check that a rule of yours lets you in on port {port} before enabling UFW or closing the "
+        "old port.", port=port))
+    return False, None
 
 
 def _r41f_unread_stored(port):
@@ -5356,6 +5524,26 @@ def _r35j_discard_snapshot(server, discard_verb):
     return False
 
 
+def _r35b_done_fw(f2b, why, port):
+    """The move's "(done)" words when step 1 added a firewall rule, by fail2ban's state."""
+    if f2b == "updated":
+        return i18n.Sentence("firewall + fail2ban updated")
+    if f2b == "absent":
+        return i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port", why=why)
+    return i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
+                         "brute force on port {port}", why=why, port=port)
+
+
+def _r42f_done_no_fw(f2b, why, port):
+    """The move's "(done)" words when step 1 added no firewall rule, by fail2ban's state."""
+    if f2b == "updated":
+        return i18n.Sentence("fail2ban updated")
+    if f2b == "absent":
+        return i18n.Sentence("no firewall rule added; {why}, so nothing bans SSH brute force on any port", why=why)
+    return i18n.Sentence("no firewall rule added, and fail2ban was NOT updated: {why}, so it may not be banning "
+                         "SSH brute force on port {port}", why=why, port=port)
+
+
 def _r35j_snapshot_left_note(socket_mode, gone):
     """The success message's note when step 8 could not remove the snapshot; "" when it was removed."""
     if gone:
@@ -5366,17 +5554,15 @@ def _r35j_snapshot_left_note(socket_mode, gone):
                          path=path, bak=bak)
 
 
-def _r35b_moved_message(new_port, bind_addr, f2b, unchecked):
-    """change_ssh_port's success message, from fail2ban's (state, why) and the sshd-holds note."""
+def _r35b_moved_message(new_port, bind_addr, f2b, unchecked, fw_changed=True):
+    """change_ssh_port's success message, from fail2ban's (state, why) and the sshd-holds note.
+
+    `fw_changed`: whether step 1 added a firewall rule. Where it added none (a rule already lets the port
+    in, or public SSH is off and the note says no public rule was added), the lead sentence claimed
+    "firewall + fail2ban updated" about a firewall nothing touched.
+    """
     _f2b, _f2b_why = f2b
-    if _f2b == "updated":
-        _done = i18n.Sentence("firewall + fail2ban updated")
-    elif _f2b == "absent":
-        _done = i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port",
-                              why=_f2b_why)
-    else:
-        _done = i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
-                              "brute force on port {port}", why=_f2b_why, port=new_port)
+    _done = (_r35b_done_fw if fw_changed else _r42f_done_no_fw)(_f2b, _f2b_why, new_port)
     if bind_addr:
         # No fallback sentence here: ListenAddress is all-or-nothing (change_ssh_port's own docstring
         # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
@@ -5718,7 +5904,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    and drop the snapshot: best effort, after the commit.
     _f2b, _gone = _r35b_after_commit(server, ports, _discard_verb)
     return True, _r35b_moved_message(new_port, bind_addr, _f2b,
-                                     i18n.Sentences(_fw_note, _unchecked, _r35j_snapshot_left_note(socket_mode, _gone)))
+                                     i18n.Sentences(_fw_note, _unchecked, _r35j_snapshot_left_note(socket_mode, _gone)),
+                                     fw_changed=bool(_ufw_added))
 
 
 # The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`

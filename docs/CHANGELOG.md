@@ -311,6 +311,32 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **A scheduled Stop on the panel's own host no longer pages "went offline unexpectedly".** The
+  monitor now reads LinuxGSM's monitoring lock as the game account there, so a stop LinuxGSM made is
+  recognised. A crash still pages.
+
+- **The debug report counts servers held back from a manual full backup.** Servers a scheduled wipe
+  or a queued stop or restart held are counted, so a run where every server was held no longer reads
+  "0 backed up, 0 failed, 0 skipped".
+
+- **A port saved during a restart is followed.** When a second game port was saved while a Start or
+  Restart ran, the panel kept watching the old port. It now watches the port the restart used, and
+  the newer port takes effect at the next restart.
+
+- **A change that worked no longer reports "request failed".** A Minecraft list change, a Workshop
+  save, a plugin install or change, a config form save or a new Project Zomboid admin password could
+  be reported as failed when only its audit log entry could not be written. The reply now says the
+  change was made and that the log entry is missing.
+
+- **Chart legends follow the panel's language.** The live CPU chart on a server's page is
+  translated, and History charts switch language at their next refresh.
+
+- **Backup codes and port ranges can be typed on a phone.** The account page's code fields and the
+  firewall's Block field no longer open a digits-only keypad.
+
+- **"Installing" and "Configuring" are translated.** A server's status while it installs now reads
+  in French and Spanish like its other states.
+
 - **SSH port move keeps the panel connected.** On a host where a firewall rule for one interface or
   source may block the new port and the panel's own connection could not be read, the move now stops
   instead of going ahead and losing the panel's access.
@@ -1240,6 +1266,26 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Rate limiting no longer opens a port to the internet.** Limit on a port that was closed, or open
+  only to the tailnet, one address or one interface, added a rule letting everyone in. It now
+  refuses unless the port is already open to everyone, and says so.
+
+- **Moving SSH on a host whose firewall is off no longer stores a public rule.** Where the
+  firewall's saved rules keep SSH to the tailnet or one address, the move adds no rule open to
+  everyone, which would have applied once the firewall was turned on.
+
+- **The installer works as the panel's account inside the panel's files.** An update chose which
+  account to work as from the panel folder's entry, which the panel's account could replace with a
+  link on hosts that allow such links, and some steps then ran as root. They now run as the panel's
+  account unless the folder is root's own.
+
+- **A crafted server name can no longer stall the panel when Files & Config opens.** The config file
+  line and the Server IP port are read from LinuxGSM's details output in linear time, however long a
+  line the game's config makes.
+
+- **A game config XML file with very many comments no longer stalls the panel.** The config form's
+  comment walk now reads the file once.
 
 - **SSH port moves never open SSH wider than it was.** Under a default-allow firewall, an SSH port
   move now stops when SSH is denied on one of the host's addresses, instead of letting the new port

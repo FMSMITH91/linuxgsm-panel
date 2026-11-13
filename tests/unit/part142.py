@@ -138,7 +138,8 @@ def _target142(head, ref="", extra_env=None, root=None, action=None):
                 "_rootgit() { git --git-dir=\"${ROOT_GIT}\" \"$@\"; }\n"
                 # _gitc runs git as the checkout's owner when it is root; here that is this account.
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n")
-    body = "".join(_inst_shfn(n) for n in _SH_NAMES142 + ("fetch_code", "_check_fresh_clone_signed"))
+    body = "".join(_inst_shfn(n) for n in _SH_NAMES142 + ("_r42i_tree_owner", "fetch_code",
+                                                          "_check_fresh_clone_signed"))
     tail = ("UNSIGNED_OVERRIDE=\"${PANEL_ALLOW_UNSIGNED_UPDATE:-}\"\n"
             "RELEASE_SIG_NS=linuxgsm-panel-release\nRELEASE_SIG_BRANCH=release-signatures\n"
             "RELEASE_SIG_REF=refs/linuxgsm-panel/release-signatures\nRELEASE_SIGNERS=release-signers\n"

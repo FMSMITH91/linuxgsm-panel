@@ -91,9 +91,10 @@ _UFW_HEAD83 = ("Status: active\n\n     To                         Action      Fr
 class _Ufw83:
     """`ufw status numbered` over a list of rule rows; `ufw limit` appends its LIMIT, as ufw does."""
 
-    def __init__(self, *rows):
+    def __init__(self, *rows, default_in=None):
         self.rows = list(rows)
         self.verbs = []
+        self.default_in = default_in
 
     def status(self):
         return _UFW_HEAD83 + "".join("[%2d] %s\n" % (i + 1, r) for i, r in enumerate(self.rows))
@@ -105,6 +106,8 @@ class _Ufw83:
         self.verbs.append(verb)
         if verb == "ufw-stored-rules":      # ufw with IPv6 off (part01)
             return ufw_stored_answer()
+        if verb == "ufw-status" and self.default_in and list(args) == ["verbose"]:
+            return "Status: active\nDefault: %s (incoming), allow (outgoing)\n" % self.default_in, "", 0
         if verb == "ufw-status":
             return self.status(), "", 0
         if verb == "ufw-limit-port":
@@ -115,7 +118,10 @@ class _Ufw83:
 
 
 def _limit83(port, *rows, proto="tcp"):
-    ufw = _Ufw83(*rows)
+    # Under a default incoming ALLOW: every port no rule decides is open to everyone already, so the
+    # limit runs over each row below and its read-back is what is tested (a limit that would open a
+    # port is refused first; part185 holds that).
+    ufw = _Ufw83(*rows, default_in="allow")
     _p9_patch(_p9_core, "run_privileged", ufw.run)
     ok, msg = _hosts83.remote_ufw_limit_port(NS(id=-83, name="p83"), port, proto)
     return ok, str(msg)
@@ -131,7 +137,6 @@ def _limit_shadowed83():
         "destination": (22, _ALLOW_ROW83 % "203.0.113.5 22/tcp"),
         "every port": (22, _ALLOW_ROW83 % "Anywhere"),
         "range": (27015, _ALLOW_ROW83 % "27000:27030/tcp"),
-        "DENY above": (22, "%-27sDENY IN     Anywhere" % "22/tcp"),
         # IPv6 is its own chain: a (v6) allow above the (v6) LIMIT leaves every IPv6 client
         # unthrottled (review 1015c; this was listed below as a harmless "v6 twin").
         "v6 profile above": (22, "%-27sALLOW IN    Anywhere (v6)" % "OpenSSH (v6)"),
@@ -139,10 +144,13 @@ def _limit_shadowed83():
     }
     got = {k: _limit83(port, row) for k, (port, row) in shadows.items()}
     check("ufw limit: a LIMIT appended below an ALLOW it never reaches — the OpenSSH profile, a "
-          "port list, a destination before the port, an every-port allow, a range, a DENY above it, or "
+          "port list, a destination before the port, an every-port allow, a range, or "
           "a (v6) allow above the (v6) LIMIT — is NOT reported rate limited; the answer names the rule matched first",
           all(not ok and "is still matched first by" in msg for ok, msg in got.values()),
           repr({k: v for k, v in got.items() if v[0] or "is still matched first by" not in v[1]}))
+    denied = _limit83(22, "%-27sDENY IN     Anywhere" % "22/tcp")
+    check("ufw limit: ...and a DENY first for the port is no way in to limit: refused, never reported rate "
+          "limited", not denied[0] and "already open to everyone" in denied[1], repr(denied))
     prof = _limit83(443, _ALLOW_ROW83 % "Nginx Full")
     check("ufw limit: ...and an app profile whose ports the panel cannot read is 'cannot confirm', "
           "never success", not prof[0] and "application profile" in prof[1], repr(prof))
@@ -173,7 +181,8 @@ def _limit_reached83():
           "for one v6 source, "
           "multicast, another port) still lets the limit count as reached",
           all(ok for ok, _m in got.values()), repr({k: v for k, v in got.items() if not v[0]}))
-    check("ufw limit: ...and a host with no rule for the port at all is limited (control)",
+    check("ufw limit: ...and a host with no rule for the port at all, under a default incoming allow, is "
+          "limited (control)",
           _limit83(22)[0] is True, repr(_limit83(22)))
 
 

@@ -10,7 +10,7 @@ from flask_login import (current_user, login_required)
 from panel.core import i18n
 from panel.core.http import (_log_and_generic)
 from panel.ops import ssh_manager as _sm
-from panel.routes._shared import (_r20b_audit_on_raise)
+from panel.routes._shared import (_r20b_audit_on_raise, _r42r_audit_after)
 from panel.security.auth import (_fpm_can_edit, get_game, log_action, server_access_required)
 
 
@@ -39,13 +39,15 @@ def register(app):
                 ok, msg = _sm.lgc_pz_set_admin_password(gs.remote, gs.short_name, gs.lgsm_name)
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
-        log_action(current_user, "edit_config", target=gs.name,
-                   detail=_sf._failed_detail("adminpassword set to a random value", ok,
-                                             _sm.write_failure_reason(msg)),
-                   success=ok, server=gs)
-        if not ok:
-            return jsonify({"success": False, "message": i18n.tr(msg or "Failed")})
-        return jsonify({"success": True, "message": i18n.tr(
-            "Set a random admin password: it is adminpassword below. Restart the server to apply it. "
-            "Project Zomboid uses it when it creates the admin account, on the server's first start; "
-            "if this server has started before, change the admin's password in game as well.")})
+        reply = {"success": False, "message": i18n.tr(msg or "Failed")}
+        if ok:
+            reply = {"success": True, "message": i18n.tr(
+                "Set a random admin password: it is adminpassword below. Restart the server to apply it. "
+                "Project Zomboid uses it when it creates the admin account, on the server's first start; "
+                "if this server has started before, change the admin's password in game as well.")}
+        with _r42r_audit_after(reply):      # the cfg is written by now (_r42r_audit_after)
+            log_action(current_user, "edit_config", target=gs.name,
+                       detail=_sf._failed_detail("adminpassword set to a random value", ok,
+                                                 _sm.write_failure_reason(msg)),
+                       success=ok, server=gs)
+        return jsonify(reply)

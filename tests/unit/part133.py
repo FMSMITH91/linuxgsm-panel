@@ -215,6 +215,10 @@ def _fold133(page):
 
 
 _F133 = {k: _fold133(k) for k in ("local", "remote")}
+# The warnings that must stay in view, by name, and the words each is found by.
+_R42T_WARN133 = {"lock-out": ("lock yourself out",), "ssh-port-move": ("Lockout-safe", "lockout-safe"),
+                 "inactive-firewall": ("While UFW is inactive",), "block": ("denies it on every port",),
+                 "funnel": ("Funnel is on",)}
 
 
 def _text_state133(page, needle):
@@ -247,13 +251,17 @@ for _pg133 in ("local", "remote"):
     check("network tab (%s host page): every field and result line of the two old cards is in Add a rule, in "
           "the switch's order" % _pg133, -1 not in _order133 and _order133 == sorted(_order133), repr(_order133))
     # What a setting is FOR folds; what an action RISKS does not.
-    _warn133 = [st for t, st in _F133[_pg133].texts
-                if "lock yourself out" in t or "you'd lock yourself out" in t or "Lockout-safe" in t
-                or "lockout-safe" in t or "Funnel is on" in t or "While UFW is inactive" in t
-                or "Blocking an IP denies it on every port" in t]
+    # Each named warning must be found (a rewording fails by name) and none folded. The Funnel note is
+    # drawn only while Funnel is on, so it is read when present but not required; the lock-out warning
+    # is drawn with the same condition that marks the Disable button data-lockdown, so it is required
+    # wherever that button is.
+    _warn133 = {w: [st for t, st in _F133[_pg133].texts if any(n in t for n in ns)]
+                for w, ns in _R42T_WARN133.items()}
+    _opt133 = {"funnel"} | (set() if 'data-lockdown="1"' in _html133 else {"lock-out"})
+    _miss133 = sorted(w for w in _R42T_WARN133 if w not in _opt133 and not _warn133[w])
     check("network/security tabs (%s host page): every lock-out warning, the SSH port move's safety note, the "
           "inactive-firewall note and what a block does stay in view (never folded into an explanation)" % _pg133,
-          bool(_warn133) and not any(st[0] for st in _warn133), repr(_warn133))
+          not _miss133 and not any(st[0] for sts in _warn133.values() for st in sts), repr((_miss133, _warn133)))
     _expl133 = ["keeps working regardless",
                 "Entries marked Auto are managed by the rolling auto-block",
                 "Because that count is cumulative", "Reachable only over Tailscale?"]

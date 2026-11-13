@@ -577,13 +577,40 @@ def _r21b_reported_config_rel(text, user):
     m = re.search("^" + re.escape(_R21B_REAL_HOME_MARK) + r"(/\S*?)/?$", text, re.M)
     if m:
         homes.append(m.group(1) + "/")
-    # Not only .cfg: Minecraft's is server.properties, Project Zomboid's an .ini, 7 Days to Die's an
-    # .xml and Factorio's a .json, and `details` names each of them on this same line.
-    m = re.search(r"config file[^:\n]*:[ \t]*(/\S+\.(?:cfg|ini|properties|xml|json|txt|conf))(?!\S)",
-                  text, re.I)
-    path = m.group(1) if m else ""
+    path = _r42m_config_file_path(text)
     home = next((h for h in homes if path.startswith(h)), None)
     return None if home is None else path[len(home):]
+
+
+_R42M_CONFIG_FILE_RE = re.compile(r"config file", re.I)
+_R42M_TOKEN_RE = re.compile(r"[ \t]*(\S+)")
+# Not only .cfg: Minecraft's is server.properties, Project Zomboid's an .ini, 7 Days to Die's an
+# .xml and Factorio's a .json, and `details` names each of them on this same line.
+_R42M_CONFIG_PATH_RE = re.compile(r"/\S+\.(?:cfg|ini|properties|xml|json|txt|conf)", re.I)
+
+
+def _r42m_config_file_path(text):
+    r"""The path on the first `config file ...: /path.ext` line of `details` output, or "".
+
+    What `re.search(r"config file[^:\n]*:[ \t]*(/\S+\.(?:cfg|...))(?!\S)", text, re.I)` found,
+    in time linear in the text. That search ran `[^:\n]*` to the end of the line at EVERY "config
+    file", and `details` prints the server's name (the game account's own config text) first, on
+    one line, unbounded: a name of "config file" repeated stalled the whole panel. Here each line is
+    read once: a "config file" is tried at the first colon after it on its line, and a later one
+    before that same colon would be tried there again, so the search resumes after the colon.
+    """
+    for line in (text or "").split("\n"):
+        pos = 0
+        while True:
+            m = _R42M_CONFIG_FILE_RE.search(line, pos)
+            colon = line.find(":", m.end()) if m else -1
+            if colon < 0:
+                break
+            tok = _R42M_TOKEN_RE.match(line, colon + 1)
+            if tok and _R42M_CONFIG_PATH_RE.fullmatch(tok.group(1)):
+                return tok.group(1)
+            pos = colon + 1
+    return ""
 
 
 def lgsm_game_config(server, user, selfname):

@@ -2933,6 +2933,8 @@ def do_ufw_delete_num_if(args, content):
 # Mirrors privileged.FWA_STORED_PATHS and its remote shell form.
 FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules",
                     "/etc/ufw/user6.rules")
+# ufw handles IPv6 only where the kernel has it; printed after the files. Mirrors privileged.FWA_KERNEL_V6_PATH.
+FWA_KERNEL_V6_PATH = "/proc/sys/net/ipv6"
 # Far above any real rules file (one rule is about 300 bytes); a file past it is not read at all.
 FWA_STORED_MAX = 4 * 1024 * 1024
 
@@ -2957,6 +2959,8 @@ def do_fwa_ufw_stored(args, content):
             return 1
         text = data.decode("utf-8", "replace")
         parts.append("==> %s <==\n%s%s" % (path, text, "" if text.endswith("\n") or not text else "\n"))
+    # Last, whether the kernel has IPv6: ufw handles IPv6 only where it does (backend.use_ipv6).
+    parts.append("==> %s <==\n%s\n" % (FWA_KERNEL_V6_PATH, "yes" if os.path.exists(FWA_KERNEL_V6_PATH) else "no"))
     sys.stdout.write("".join(parts))
     return 0
 
