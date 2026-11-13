@@ -867,7 +867,9 @@ try:
     _lr = _H.remote_ufw_limit_port(_p8_srv(), 27015, "tcp")
     check("ufw limit: a split that left the OTHER protocol closed is a failure naming it",
           _lr[0] is False and "27015/udp is no longer open" in _lr[1], repr(_lr))
-    _wire(verbs={"ufw-limit-port": ("", "ERROR: Could not update running firewall", 1)})
+    _wire(verbs={"ufw-limit-port": ("", "ERROR: Could not update running firewall", 1),
+                 "ufw-status": (_UFW_HDR + "[ 1] 22/tcp  ALLOW IN  Anywhere\n"
+                                "[ 2] 22/tcp (v6)  ALLOW IN  Anywhere (v6)\n", "", 0)})
     eq("ufw limit: a refused limit returns ufw's error", _H.remote_ufw_limit_port(_p8_srv(), 22),
        (False, "ERROR: Could not update running firewall"))
     # Lifting a limit.

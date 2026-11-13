@@ -528,6 +528,9 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         if rc == 0:
             return True, i18n.Sentence("Rate limit removed from {spec} (it stays open)", spec=spec)
         return False, err or out or "Unknown error"
+    refusal = _r42f_limit_refusal(server, before if brc == 0 else None, port, proto)
+    if refusal is not None:
+        return False, refusal
     out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
     if rc != 0:
         return False, err or out or "Unknown error"
@@ -584,6 +587,44 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         return False, i18n.Sentence("{spec} is now rate limited, but {port}/{proto} is no longer open — "
                                     "re-open it from the host's Network tab.", spec=spec, port=port, proto=other)
     return True, i18n.Sentence("{spec} is now rate limited (6 connections per 30s per address)", spec=spec)
+
+
+def _r42f_limit_refusal(server, before, port, proto):
+    """Why `ufw limit port/proto` must not run here, or None when it opens nothing new.
+
+    `ufw limit N/proto` ADDS a rule from Anywhere (both families on a host with IPv6 on) when no
+    `N/proto` allow is there to rewrite in place. On a closed port, or one open only to the tailnet,
+    one source or one interface, "rate limit SSH" opened it to the whole internet. So the limit
+    runs only where every family it writes already lets everyone in: its first public rule for the
+    port (one destination address left out) is an ALLOW or LIMIT, or no rule decides it and the
+    default incoming policy is allow. IPv6 counts where its list has a row, or where ufw's stored
+    settings say IPv6 is on (or cannot be read). `before` is the `ufw status numbered` answer, None
+    when it could not be read. A host read is added only where the listed rules do not settle it.
+    """
+    spec = "%d/%s" % (port, proto)
+    if before is None:
+        return i18n.Sentence("Could not read the firewall to check {spec} is open to everyone, so no rate "
+                             "limit was added.", spec=spec)
+    if not firewall._ufw_is_active(before):
+        return i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read here to check "
+                             "{spec} is open to everyone — nothing was changed.", spec=spec)
+    listed6 = bool(_r38a_family_rules(before, 6))
+    ways = [_r42f_open_way(before, port, proto, v6) for v6 in ((False, True) if listed6 else (False,))]
+    if False not in ways and None not in ways and (listed6 or _r40_ufw_v6_state(server) is False):
+        return None
+    if False not in ways and firewall.remote_ufw_default_allows_in(server):
+        return None
+    return i18n.Sentence("Limit only rate-limits a port already open to everyone, and {spec} is not, so "
+                         "nothing was changed. Open it first, or allow one source instead.", spec=spec)
+
+
+def _r42f_open_way(status_out, port, proto, v6):
+    """Whether one family's first public rule for port/proto lets everyone in: True, False or None.
+
+    None when no public rule matches, so the default incoming policy decides.
+    """
+    first = _ufw_first_public_rule(status_out, port, proto, scoped=False, v6=v6)
+    return None if first is None else first["action"] in ("ALLOW", "LIMIT")
 
 
 def _r22b_closed_by_split(before, after, port, proto):

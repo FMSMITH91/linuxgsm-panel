@@ -1,5 +1,6 @@
 """Part 2 of the unit suite. Imported for its side effects."""
 from unit.part01 import (NS, SO, _R20dOver, _privmod, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_game, _sm_gmod, _sm_hosts, can_access_remote, check, client_ip, config, eq, os)  # noqa: F401,E402
+from unit.part01 import ufw_stored_answer as _ufw_stored02  # noqa: E402
 
 
 # ── local-host injection defenses: system_ops runs commands on THIS machine (shell=True), so its
@@ -1858,6 +1859,8 @@ try:
         """Numbered listing, comments included; same in-place/append/exact-delete semantics."""
         def _rp(s, v, a=(), **k):
             a = list(a)
+            if v == "ufw-stored-rules":
+                return _ufw_stored02()          # IPv6 off: the limit writes the IPv4 rule alone
             if v == "ufw-status":
                 return ("Status: active\n\n     To                         Action      From\n"
                         "     --                         ------      ----\n"
@@ -1919,10 +1922,12 @@ try:
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
     check("ufw limit: a rule it cannot remove that still matches first is reported, not hidden",
           _ok is False and "28000:28100/tcp" in _msg, "ok=%r msg=%r" % (_ok, _msg))
-    _rules = []
+    # Its own allow first: rewritten in place. (A port with no rule is not limited at all: `ufw limit`
+    # would add a rule from Anywhere and open it; part185 holds that refusal.)
+    _rules = [("28016/tcp", "ALLOW", "")]
     _fake_ufw_n(_rules)
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
-    check("ufw limit: ...while a port with nothing ahead of it is limited (positive control)",
+    check("ufw limit: ...while a port whose own allow is met first is limited (positive control)",
           _ok is True and _rules == [("28016/tcp", "LIMIT", "")], "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
     # The bare rule goes only once the other protocol is re-opened on its own. The re-allow's exit
     # code was ignored: when it failed, 28016/udp — gameplay — was closed, and the answer was "now
@@ -1967,7 +1972,12 @@ try:
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
     check("ufw limit: a host whose ufw prints a translated Status line is read back, not 'unread'",
           _ok is True and _first_for(_rules, "28016", "tcp") == "LIMIT", "ok=%r msg=%r" % (_ok, _msg))
-    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _rules = [("28016/tcp", "ALLOW", "")]
+    _fake_ufw_n(_rules)
+    _reads02 = []
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "", 0) if v == "ufw-status" and _reads02.append(v) is None and len(_reads02) > 1
+                               else _i(s, v, a, **k))
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
     check("ufw limit: ...while an EMPTY read-back is still 'could not be read back' (positive control)",
           _ok is False and "read back" in _msg, "ok=%r msg=%r" % (_ok, _msg))
