@@ -723,15 +723,19 @@ def _archive_members_refusal(src):
 UPLOAD_MAX = 512 * 1024 * 1024        # an encrypted archive is decrypted whole in memory at restore
 UPLOAD_CHUNK = 4 * 1024 * 1024
 _UPLOAD_RATIO, _UPLOAD_SLACK = 100, 256 * 1024 * 1024      # a decompression bomb's bound
-_UPLOAD_PART = re.compile(r"[0-9a-f]{32}\Z")
+_UPLOAD_PART = re.compile(r"[0-9a-f]{32}")
 _UPLOAD_STALE = 2 * 3600
 
 
 def upload_part_path(uid):
     """The part file of upload `uid` (32 hex digits), in BACKUP_DIR; ValueError for any other id."""
-    if not _UPLOAD_PART.match(uid or ""):
+    if not isinstance(uid, str) or not _UPLOAD_PART.fullmatch(uid):
         raise ValueError("bad upload id")
-    return BACKUP_DIR / (".upload-%s.part" % uid)
+    base = os.path.realpath(str(BACKUP_DIR))
+    path = os.path.realpath(os.path.join(base, ".upload-%s.part" % uid))
+    if os.path.dirname(path) != base or not path.startswith(base + os.sep):
+        raise ValueError("bad upload id")
+    return _pathlib.Path(path)
 
 
 def upload_begin(uid, size):
@@ -777,8 +781,8 @@ def upload_discard(uid):
     """Remove upload `uid`'s part file, if it is there."""
     try:
         upload_part_path(uid).unlink()
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as e:
+        _log.debug("no upload part file to remove: %s", type(e).__name__)
 
 
 def _upload_bomb_refusal(path):

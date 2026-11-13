@@ -18,6 +18,7 @@ is listed. The panel's: superadmin only, written by the panel into its own backu
 as backup.restore_backup checks an archive (ops/backup.upload_finish).
 """
 import base64
+import re
 import secrets
 import threading
 import time
@@ -36,12 +37,14 @@ from panel.security.auth import (EDIT_FILES, RESTORE_BACKUP, get_game, has_permi
                                  permission_required, server_access_required, superadmin_required)
 from panel.services import game_restore as grs
 
-# upload id -> {"kind", "sid", "user", "size", "got", "ts"}. An upload untouched this long is forgotten.
+# upload id -> {"uid", "kind", "sid", "user", "size", "got", "ts"}. An upload untouched this long is forgotten.
+# Every command and file path takes the id from this record (made here by secrets), never the URL's.
 _uploads = {}
 _uploads_lock = threading.Lock()
 _UPLOAD_IDLE = 2 * 3600
 _GAME_PIECE_TIMEOUT = 300
 _GAME_FINISH_TIMEOUT = 4 * 3600     # a large archive read to its end (the command prints a heartbeat)
+_BUP_UID = re.compile(r"[0-9a-f]{32}")
 
 
 def _bup_new(kind, sid, size):
@@ -53,12 +56,15 @@ def _bup_new(kind, sid, size):
         if any(e["kind"] == kind and e["sid"] == sid for e in _uploads.values()):
             return None
         uid = secrets.token_hex(16)
-        _uploads[uid] = {"kind": kind, "sid": sid, "user": current_user.id, "size": size, "got": 0, "ts": now}
+        _uploads[uid] = {"uid": uid, "kind": kind, "sid": sid, "user": current_user.id, "size": size, "got": 0,
+                         "ts": now}
         return uid
 
 
 def _bup_get(uid, kind, sid):
     """The upload `uid` when it is this user's, of this kind, for this server; else None."""
+    if not isinstance(uid, str) or not _BUP_UID.fullmatch(uid):
+        return None
     with _uploads_lock:
         e = _uploads.get(uid)
         if e is None or e["kind"] != kind or e["sid"] != sid or e["user"] != current_user.id:
@@ -250,7 +256,7 @@ def _bup_game_piece(server_id, uid):
     refused = _bup_piece_refusal(entry, grs.UPLOAD_CHUNK)
     if refused is not None:
         return refused
-    state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, uid, _bup_offset()), _GAME_PIECE_TIMEOUT,
+    state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, entry["uid"], _bup_offset()), _GAME_PIECE_TIMEOUT,
                                stdin=_bup_b64_chunks(request.get_data(cache=True)))
     if state == "ok" and str(val).isdecimal():
         entry["got"] = int(val)
@@ -271,11 +277,11 @@ def _bup_game_finish(server_id, uid):
     entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
     if entry is None:
         return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-    state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name, uid,
+    state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name, entry["uid"],
                                                             entry["size"], time.time()), _GAME_FINISH_TIMEOUT)
     if state == "unread":
         return jsonify({"success": False, "retry": True, "message": i18n.tr(val)}), 200
-    _bup_drop(uid)
+    _bup_drop(entry["uid"])
     ok = state == "ok"
     detail = ("%s (%d bytes)" % (val, entry["size"])) if ok else ("refused: %s" % val)
     log_action(current_user, "game_backup_upload", target=gs.name, success=ok, server=gs, detail=detail[:500])
@@ -293,8 +299,8 @@ def _bup_game_cancel(server_id, uid):
     entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
     if entry is None:
         return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-    _bup_drop(uid)
-    state, _val = _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, uid), 60)
+    _bup_drop(entry["uid"])
+    state, _val = _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, entry["uid"]), 60)
     return jsonify({"success": state == "ok"})
 
 
@@ -321,22 +327,23 @@ def _bup_panel_piece(uid):
     refused = _bup_piece_refusal(entry, bk.UPLOAD_CHUNK)
     if refused is not None:
         return refused
-    ok, now = bk.upload_append(uid, _bup_offset(), request.get_data(cache=True))
+    ok, now = bk.upload_append(entry["uid"], _bup_offset(), request.get_data(cache=True))
     entry["got"] = max(now, 0)
     if ok:
         return jsonify({"success": True, "received": now})
     if now < 0:
-        _bup_drop(uid)
+        _bup_drop(entry["uid"])
         return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
     return jsonify({"success": False, "received": now, "resume": True}), 409
 
 
 def _bup_panel_cancel(uid):
     """Cancel a panel backup upload: its part file removed, the upload forgotten."""
-    if _bup_get(uid, "panel", 0) is None:
+    entry = _bup_get(uid, "panel", 0)
+    if entry is None:
         return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-    _bup_drop(uid)
-    bk.upload_discard(uid)
+    _bup_drop(entry["uid"])
+    bk.upload_discard(entry["uid"])
     return jsonify({"success": True})
 
 
@@ -345,11 +352,11 @@ def _bup_panel_finish(uid):
     entry = _bup_get(uid, "panel", 0)
     if entry is None:
         return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-    _bup_drop(uid)
+    _bup_drop(entry["uid"])
     try:
-        ok, res = bk.upload_finish(uid, entry["size"])
+        ok, res = bk.upload_finish(entry["uid"], entry["size"])
     except Exception:
-        bk.upload_discard(uid)
+        bk.upload_discard(entry["uid"])
         return jsonify({"success": False, "message": _log_and_generic("panel backup upload failed")}), 200
     log_action(current_user, "panel_backup_upload", target=LOCAL_HOST_LABEL, success=ok,
                detail=(("%s (%d bytes)" % (res, entry["size"])) if ok else "refused: %s" % res)[:500])

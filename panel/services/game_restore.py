@@ -146,7 +146,6 @@ def _q(s):
 # Every KEEP name is plain [A-Za-z0-9./-] text, so it needs no quoting beyond the double quotes.
 _GRS_KEEP_FIND = " -o ".join("-path ./%s" % k for k in KEEP)
 _GRS_KEEP_REAL = " ".join('"$HR/%s"' % k for k in KEEP)
-_GRS_KEEP_REL = " ".join("./%s" % k for k in KEEP)
 # Every KEEP path and every folder above one (lgsm for lgsm/backup): none may be a symlink (_grs_walks).
 _GRS_KEEP_CHAIN = " ".join(sorted({"/".join(k.split("/")[:i + 1]) for k in KEEP for i in range(k.count("/") + 1)}))
 # Inodes left over once the archive is unpacked, as MARGIN is for bytes.
@@ -367,21 +366,26 @@ def _grs_switch_functions():
     parents = "|".join(_GRS_KEEP_PARENTS)
     top = "|".join(_GRS_KEEP_TOP)
     sub = "|".join(_GRS_KEEP_SUB)
-    return [
+    entries_fn = (
         'entries() { local e f n; for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$e" ] || [ -L "$e" ] || continue; '
         'n=${e##*/}; case "$n" in %s) for f in "$e"/* "$e"/.[!.]* "$e"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; '
         'case "${f##*/}" in %s) continue;; esac; printf "%%s\\0" "$n/${f##*/}"; done;; %s) ;; '
-        '*) printf "%%s\\0" "$n";; esac; done; }' % (parents, sub, top),
+        '*) printf "%%s\\0" "$n";; esac; done; }' % (parents, sub, top)
+    )
+    moveall_fn = (
         'moveall() { local r; while IFS= read -r -d "" r; do case "$r" in */*) mkdir -p -- "$2/${r%/*}";; esac; '
         'if [ -d "$1/$r" ] && [ ! -L "$1/$r" ] && [ ! -w "$1/$r" ]; then chmod u+w -- "$1/$r"; fi; '
-        'mv -T -- "$1/$r" "$2/$r" || return 1; done < <(entries "$1"); }',
+        'mv -T -- "$1/$r" "$2/$r" || return 1; done < <(entries "$1"); }'
+    )
+    undo_fn = (
         'undo() { local p; p=$(cat "$st" 2>/dev/null); [ -n "$p" ] || return 0; mkdir -p -- "$F" || return 1; '
         'if { [ "$p" = in ] || [ "$p" = link ] || [ "$p" = done ]; } && [ -f "$nm" ]; then while IFS= read -r -d "" r; do '
         'if [ -e "$HR/$r" ] || [ -L "$HR/$r" ]; then case "$r" in */*) mkdir -p -- "$F/${r%/*}";; esac; '
         'mv -T -- "$HR/$r" "$F/$r" || return 1; fi; '
         'done < "$nm"; fi; echo back > "$st" || return 1; [ ! -d "$O" ] || moveall "$O" "$HR" || return 1; '
-        'rm -rf -- "$F" "$O"; rm -f -- "$st" "$nm" "$st.failed"; }',
-    ]
+        'rm -rf -- "$F" "$O"; rm -f -- "$st" "$nm" "$st.failed"; }'
+    )
+    return [entries_fn, moveall_fn, undo_fn]
 
 
 def _grs_cron_lines():
@@ -650,14 +654,14 @@ def _grs_late_failure(marks, rc):
 UPLOAD_CHUNK = 4 * 1024 * 1024
 UPLOAD_MAX = 32 * 1024 * 1024 * 1024
 UPLOAD_STALE_MIN = 120
-_GRS_UID = re.compile(r"[0-9a-f]{32}\Z")
+_GRS_UID = re.compile(r"[0-9a-f]{32}")
 
 
 def _grs_part(user, uid):
     """`B` and `p` (the part file) for upload `uid` (32 hex digits, checked)."""
-    if not _GRS_UID.match(uid or ""):
+    if not isinstance(uid, str) or not _GRS_UID.fullmatch(uid):
         raise ValueError("bad upload id")
-    return "B=%s; p=\"$B/.panel-upload-%s.part\"" % (_q("/home/%s/lgsm/backup" % user), uid)
+    return "B=%s; p=%s" % (_q("/home/%s/lgsm/backup" % user), '"$B"/' + _q(".panel-upload-%s.part" % uid))
 
 
 def upload_start_script(user, uid, size):

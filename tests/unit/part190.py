@@ -35,6 +35,7 @@ import subprocess as _sp190  # nosec B404 - runs the panel's own host commands o
 import tarfile as _tf190
 import tempfile as _tmp190
 import time as _time190
+from urllib.parse import quote as _urlq190
 
 from unit.part01 import check, eq, skip
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
@@ -195,7 +196,7 @@ class _Sb190:
                     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
                     _os190.chmod(_os190.path.join(d, x), 0o700)  # nosec B103
                 except OSError:
-                    pass
+                    continue    # a folder the run already removed: rmtree below skips it too
         _sh190.rmtree(self.root, ignore_errors=True)
 
 
@@ -211,9 +212,9 @@ def _restore190(sb, ready, undo=_UNDO190, busy_polls=1):
 
 def _lgsm_prune190(bdir):
     """Run the two retention prunes of LinuxGSM's fn_backup_prune (master 2026-11), past any limit."""
-    _sp190.run(["bash", "-c", 'find "$1"/ -type f -name "*.tar.*" -printf "%T@ %p\\n" | sort -rn | tail -100 | '  # nosec B603 B607
-                'cut -f2- -d" " | xargs -r rm; find "$1"/ -type f -mtime +0 -exec rm -f {} \\;', "_", bdir],
-               capture_output=True, timeout=60)
+    script = ('find "$1"/ -type f -name "*.tar.*" -printf "%T@ %p\\n" | sort -rn | tail -100 | '
+              'cut -f2- -d" " | xargs -r rm; find "$1"/ -type f -mtime +0 -exec rm -f {} \\;')
+    _sp190.run(["bash", "-c", script, "_", bdir], capture_output=True, timeout=60)  # nosec B603 B607
 
 
 def _crafted190(sb, members, name="grsu-2026-11-02-120000.tar.gz"):
@@ -274,7 +275,7 @@ def _switch190(edit=None, recover=False, polls=None, lgsm=False):
             try:
                 _os190.killpg(sleeper.pid, 9)
             except OSError:
-                pass
+                sleeper.poll()    # the group already exited: wait() below reaps it
             sleeper.wait()
         sb.gone()
 
@@ -560,7 +561,7 @@ def _sandbox10_190():
     # A process of the account still in serverfiles: the restore waits, then refuses with nothing cleared.
     _sb = _Sb190()
     try:
-        _out, (_state, _ready) = _sb.vet()
+        _ready = _sb.vet()[1][1]
         _sleeper = _sp190.Popen(["sleep", "60"], cwd=_os190.path.join(_sb.home, "serverfiles"))  # nosec B603 B607
         try:
             _tree = _sb.tree()
@@ -579,7 +580,7 @@ def _sandbox11_190():
     # The archive damaged after the checks: the staging extraction fails, before anything is cleared.
     _sb = _Sb190()
     try:
-        _out, (_state, _ready) = _sb.vet()
+        _ready = _sb.vet()[1][1]
         _tree_x = _sb.tree()
         _held = [_f for _f in _sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)]
         _sh190.copyfile(_os190.path.join(_sb.bdir, _held[0]), _os190.path.join(_sb.bdir, _UNDO190))
@@ -1228,6 +1229,86 @@ eq("panel upload: not a backup, an encrypted header asking for costly parameters
 eq("panel upload: not a superadmin, a size over the cap and an upload id that is a path are refused",
    (_pup190["not_su"], _pup190["oversize"], _pup190["traversal_id"]), (403, 400, 404))
 
+# ── 7b. a crafted upload id: refused before any file, path or command is made from it ─────────────
+_CRAFT190 = ("../x", "/etc/passwd", "z" * 32, "a" * 33, "A" * 32, "..", "")
+_craft190 = {}
+_cbdir190 = _tmp190.mkdtemp(prefix="p190-cu-")
+try:
+    _p9_arm(who="part190")
+    _cb = _os190.path.join(_cbdir190, "b")
+    _os190.makedirs(_os190.path.join(_cb, ".upload-.."))      # so "../../x" would name a real place
+    for _f, _body in (("victim.part", b"v"), ("../outside.part", b"o")):
+        with open(_os190.path.join(_cb, _f), "wb") as _fh:
+            _fh.write(_body)
+    _os190.symlink(_os190.path.join(_cbdir190, "outside.part"), _os190.path.join(_cb, ".upload-%s.part" % ("e" * 32)))
+    _p9_patch(_bk190, "BACKUP_DIR", __import__("pathlib").Path(_cb))
+
+    def _ctree190():
+        return sorted((_d, tuple(sorted(_fs)), tuple(sorted(_ds))) for _d, _ds, _fs in _os190.walk(_cbdir190))
+    _t0 = _ctree190()
+    _helper = {}
+    for _u in _CRAFT190 + ("../../victim", "../../../outside"):
+        _row = []
+        for _fn in (lambda u: _bk190.upload_part_path(u), lambda u: _bk190.upload_append(u, 0, b"x"),
+                    lambda u: _bk190.upload_finish(u, 1), lambda u: _grs190.upload_start_script("grsu", u, 10),
+                    lambda u: _grs190.upload_chunk_script("grsu", u, 0), lambda u: _grs190.upload_cancel_script("grsu", u)):
+            try:
+                _row.append(("made", str(_fn(_u))[:60]))
+            except ValueError:
+                _row.append("refused")
+        _bk190.upload_discard(_u)
+        _helper[_u] = _row
+    # A part file that is a symlink out of the backup dir: its id is well formed, the place is not.
+    _link = []
+    for _fn in (lambda: _bk190.upload_part_path("e" * 32), lambda: _bk190.upload_append("e" * 32, 0, b"x")):
+        try:
+            _link.append(("made", str(_fn())[:60]))
+        except ValueError:
+            _link.append("refused")
+    _bk190.upload_discard("e" * 32)
+    _craft190["helpers"] = (_helper, _link, _ctree190() == _t0)
+    # Through the routes, with a record planted under each crafted id (as if one were ever stored).
+    _seen = []
+    _p9_patch(_bu190, "_sm", _NSU(game_user_cmd=lambda user, inner: inner, _fmt_size=_sm190._fmt_size,
+                                  run_command=lambda *a, **k: (_seen.append(a) or ("", "", 0))))
+    _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
+    _ce, _ca = _p9_client(_uids190["rsedit"]), _p9_client(P9_ADMIN)
+    _routes = {}
+    for _u in _CRAFT190[:-1]:     # an empty id is no URL segment at all
+        _bu190._uploads[_u] = {"uid": _u, "kind": "game", "sid": P9_GS, "user": _uids190["rsedit"], "size": 10,
+                               "got": 0, "ts": _time190.time()}
+        _q = _urlq190(_u, safe="")
+        _game = "/api/panel/backup/game/%d/upload/%s" % (P9_GS, _q)
+        _codes = [_ce.post(_game + "?offset=0", data=b"x", content_type="application/octet-stream").status_code,
+                  _ce.post(_game + "/finish", json={}).status_code, _ce.post(_game + "/cancel", json={}).status_code]
+        _bu190._uploads[_u] = dict(_bu190._uploads[_u], kind="panel", sid=0, user=P9_ADMIN)
+        _panel = "/api/panel/backup/upload/%s" % _q
+        _codes += [_ca.post(_panel + "?offset=0", data=b"x", content_type="application/octet-stream").status_code,
+                   _ca.post(_panel + "/finish", json={}).status_code, _ca.post(_panel + "/cancel", json={}).status_code]
+        try:
+            _got = _bu190._bup_get(_u, "panel", 0)
+        except Exception as _e:   # past the id check, outside a request: the record lookup reached the user
+            _got = type(_e).__name__
+        _routes[_u] = (sorted(set(_codes)), _got)
+        _bu190._uploads.pop(_u, None)
+    _craft190["routes"] = (_routes, len(_seen), _ctree190() == _t0)
+except RuntimeError as _e:
+    skip("crafted upload ids", str(_e))
+finally:
+    _p9_restore_all()
+    _bu190._uploads.clear()
+    _sh190.rmtree(_cbdir190, ignore_errors=True)
+
+if "helpers" in _craft190:
+    eq("upload id: a crafted id (a path, absolute, not hex, too long, upper case, empty) gives no part path, no "
+       "append, no finish and no host command, and nothing in or beside the backup dir is touched",
+       _craft190["helpers"], ({_u: ["refused"] * 6 for _u in _CRAFT190 + ("../../victim", "../../../outside")},
+                              ["refused", "refused"], True))
+if "routes" in _craft190:
+    eq("upload id: crafted in the URL of a game or panel piece, finish or cancel (a record planted under it), "
+       "every request is refused, no command reaches the host and no file is touched",
+       _craft190["routes"], ({_u: ([404], None) for _u in _CRAFT190[:-1]}, 0, True))
+
 # ── 8. a restore a panel restart cut off; no panel restart under a running restore ─────────────────
 _rec190 = {"shell": [], "alerts": []}
 try:
@@ -1309,9 +1390,10 @@ eq("restart: the panel's self-update is refused while a game server is being res
 
 # ── 8b. a command's stdin is written in slices, never whole (the panel's memory) ─────────────────
 from panel.ops.ssh_manager import _core as _core190
+from panel.core.stdin_chunks import StdinChunks as _chunks190
 _big190 = bytes(range(256)) * 1000
 _sl190 = [bytes(_p) for _p in _core190._stdin_pieces(_big190)]
-_ch190 = _core190.StdinChunks([b"a" * 10, b"b" * 20])
+_ch190 = _chunks190([b"a" * 10, b"b" * 20])
 eq("stdin: bytes are written in slices of at most 64 KB that join to the whole; chunks are written as given",
    (max(len(_p) for _p in _sl190) <= 65536, b"".join(_sl190) == _big190, len(_sl190) > 1,
     [bytes(_p) for _p in _core190._stdin_pieces(_ch190)], _core190._stdin_bytes("é")),
@@ -1330,7 +1412,7 @@ class _Chan190:
 
 
 _cw190 = {}
-for _k, _v in (("chunks", _core190.StdinChunks([b"a" * 10, b"b" * 20])), ("text", "secret"), ("none", None)):
+for _k, _v in (("chunks", _chunks190([b"a" * 10, b"b" * 20])), ("text", "secret"), ("none", None)):
     _c = _Chan190()
     _core190.write_channel_stdin(_c, _v)
     _cw190[_k] = _c.log

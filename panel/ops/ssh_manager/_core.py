@@ -19,8 +19,7 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
-from panel.core.stdin_chunks import (StdinChunks, stdin_bytes as _stdin_bytes,  # noqa: F401 - StdinChunks re-exported
-                                     stdin_pieces as _stdin_pieces, write_channel_stdin)
+from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
 from panel.security import privileged as _priv
 from panel.ops import netdev as _netdev
