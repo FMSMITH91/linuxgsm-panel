@@ -27,7 +27,7 @@ from panel.ops import socket_hooks as _socket_hooks
 from panel.routes import server_detail as _sd
 from panel.routes import game_config_form as _gcf_routes
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
-    _fpm_can_edit, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
+    _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
 from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
@@ -1771,12 +1771,6 @@ def register(app, supervise):
     _register_console_viewers(socketio)
     _start_console_poller(app, socketio, supervise)
     return socketio
-
-
-def _fpm_can_open_files():
-    """For templates: may the signed-in viewer open a server's Files & Config page at all."""
-    return bool(getattr(current_user, "is_authenticated", False)
-                and files_access(current_user)["page"])
 
 
 def _register_files_page(app):

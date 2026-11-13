@@ -1955,6 +1955,12 @@ def files_access(user, perms=None):
     return out
 
 
+def _fpm_can_open_files():
+    """For templates (`can_open_files`): may the signed-in viewer open a server's Files & Config page."""
+    return bool(getattr(current_user, "is_authenticated", False)
+                and files_access(current_user)["page"])
+
+
 def _perm_for_action(action):
     """Which permission an action requires.
 
