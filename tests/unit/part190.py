@@ -416,7 +416,14 @@ else:
         return raw[:end] + ti.tobuf(format=_tf190.GNU_FORMAT) + b"z" * 100
 
     def _fewer190(raw):
-        return _tar190([("././", b""), ("././" + _U190, b"#!/bin/bash\n")], compress="plain")
+        buf = _io190.BytesIO()
+        with _tf190.open(fileobj=buf, mode="w", format=_tf190.GNU_FORMAT) as t:
+            for mname, data in (("././", None), ("././" + _U190, b"#!/bin/bash\n")):
+                ti = _tf190.TarInfo(mname)
+                ti.type = _tf190.DIRTYPE if data is None else _tf190.REGTYPE
+                ti.size, ti.mode = len(data or b""), 0o755
+                t.addfile(ti, _io190.BytesIO(data) if data else None)
+        return buf.getvalue()
     _r190["stage_rc"] = _staged190(_cut_last190)
     _r190["stage_count"] = _staged190(_fewer190)
 
