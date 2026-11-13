@@ -19,7 +19,8 @@ from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_fr
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIONS,
-    RESTART_SERVER, SEND_COMMAND, VIEW_CONSOLE, _can_manage_files, _perm_for_action,
+    RESTART_SERVER, SEND_COMMAND, VIEW_CONSOLE, VIEW_FILES, _fpm_can_view, _perm_for_action,
+    files_access,
     allowed_custom_commands,
     _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
@@ -141,14 +142,14 @@ _DTL_CMDLINE_HIDDEN = "%s (hidden: it can hold passwords and the Steam server to
 def _dtl_sees_secrets(actor):
     """Whether `actor` may read `details` unmasked: whoever can already open the server's configs.
 
-    Files & Config (MANAGE_SERVERS) shows the LinuxGSM configs those passwords are kept in. Anyone
-    with less — `details` needs only VIEW_CONSOLE — gets them masked. A caller that is not a panel
-    user (no is_superadmin) is masked too.
+    VIEW_FILES reads the LinuxGSM configs those passwords are kept in (Files & Config, the file
+    browser). Anyone with less — `details` needs only VIEW_CONSOLE — gets them masked. A caller that
+    is not a panel user (no is_superadmin) is masked too.
     """
     if getattr(actor, "is_superadmin", None) is None:
         return False
     try:
-        return bool(has_permission(actor, MANAGE_SERVERS))
+        return bool(has_permission(actor, VIEW_FILES))
     except Exception:
         return False
 
@@ -1128,11 +1129,12 @@ def _register_detail_page(app):
             # page offers this link on a failed row.
             if gs.status == "failed":
                 # Only send them there if they can actually get in. Files & Config bounces a user
-                # without MANAGE_SERVERS straight back here, and here is a route that bounces them
+                # with neither VIEW_FILES nor MANAGE_SERVERS on a failed install straight back here, and here is a route that bounces them
                 # there — two redirects that each look reasonable alone and together are an
                 # infinite loop the browser ends with ERR_TOO_MANY_REDIRECTS. Reproduced with a
                 # VIEW_CONSOLE-only user on a failed row: twelve hops and still going.
-                if _can_manage_files():
+                _fa = files_access(current_user)
+                if _fa["view"] or _fa["manage"]:
                     flash("That install failed, so there's no console yet — its LinuxGSM config is "
                           "on the Files & Config page if the failure asked you to change a "
                           "setting.", "warning")
@@ -1169,6 +1171,7 @@ def _register_detail_page(app):
 
         can_send_command = _can(SEND_COMMAND)
         can_autostart = _can(RESTART_SERVER)
+        fpm = files_access(current_user, user_perms)
 
         # Public address players connect to. For the LOCAL panel host, remote.host is
         # 127.0.0.1 (loopback SSH), so resolve/cache the real public IP instead. Do it in the
@@ -1197,11 +1200,16 @@ def _register_detail_page(app):
                                host_timezone=_host_timezone_cached(remote, app),
                                # The console log lives under the game user's home, so the file
                                # browser's download route already serves it — no second endpoint.
-                               # It needs MANAGE_SERVERS though, where the console itself only
+                               # It needs VIEW_FILES though, where the console itself only
                                # needs VIEW_CONSOLE, so the button is hidden for anyone who would
                                # just be bounced by it.
                                console_log_rel="log/console/%s-console.log" % gs.lgsm_name,
-                               can_download_log=_can_manage_files(),
+                               can_download_log=fpm["view"],
+                               # Saving in the Workshop and Plugins cards, and turning LinuxGSM's
+                               # log stamping off, write the server's files: EDIT_FILES.
+                               can_edit_files=fpm["edit"],
+                               # Files & Config opens for any of the permissions its tabs need.
+                               can_open_files=fpm["page"],
                                quick_commands=_cmpa_quick_commands(gs),
                                hist_scope=_r37g_hist_scope(gs),
                                cron_restart_pending=_cron_restart_pending.get(gs.id, False))
@@ -1999,14 +2007,14 @@ def _cmpa_register_logs(app):
         """The last lines of the server's LinuxGSM script log or of the game's own newest log.
 
         The same permission as the file browser and its download of the console log, which is where
-        these files could be read until now: MANAGE_SERVERS. And the same refusal for an account
+        these files could be read until now: VIEW_FILES. And the same refusal for an account
         that can become root, whose home the file browser does not read either. The path is the
         server's own, from its row; the request only picks which of the two.
         """
         from panel.routes.server_files import _read_refused
         gs = get_game(server_id)
-        if not _can_manage_files():
-            return jsonify({"error": i18n.tr("You don't have permission to manage server files.")}), 403
+        if not _fpm_can_view():
+            return jsonify({"error": i18n.tr("You don't have permission to view this server's files.")}), 403
         refused = _read_refused(gs, "read_file", _cmpa_log_rel(gs, kind))
         if refused is not None:
             return refused

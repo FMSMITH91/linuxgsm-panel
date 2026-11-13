@@ -189,6 +189,8 @@ _drop90 = "card.addEventListener('drop', function(ev){"
 _name90 = "file drop: an unreadable part of a dropped folder"
 _out90 = _node90(_name90, _SETTLE47 + (
     "global.window = global; let toasts = [], uploaded = null, curDir = 'here';\n"
+    # The page's own permissions (server_files.html): a drop uploads only with EDIT_FILES.
+    "global.SF_CAN = {view: true, edit: true};\n"
     "global.toast = (m, k) => toasts.push([m, k]);\n"
     "global.tfn = (n, one, many) => (n === 1 ? one : many).replace('{n}', n);\n"
     "global._uploadStatus = () => {}; global.uploadFiles = () => {};\n"

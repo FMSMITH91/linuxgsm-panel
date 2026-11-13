@@ -174,20 +174,23 @@
    nearly five on a desktop, and everything below the config editor was found by scrolling past it.
    Each section keeps its own #hash (server_files.js), so a reload or a shared link opens the same
    one, and every section's data still loads with the page, as it did when they were all on view.
-   Sections the page does not render for this server (no game files yet; Backups for a superadmin
-   only) have no tab either. #}
-{% set _uis_backups = current_user.is_superadmin and not install_failed %}
+   Sections the page does not render for this server (no game files yet), or this viewer may not use
+   (fpm: auth.files_access — VIEW_FILES for Config and Files, MANAGE_SERVERS for Schedule, Alerts
+   and Mods, a backup permission for Backups), have no tab either. Each route asks again. #}
+{% set _uis_backups = fpm.bk and not install_failed %}
 <ul class="nav nav-tabs mb-3 uis-subtabs" id="sfsub-nav" role="tablist" aria-label="Sections of this page">
-  <li class="nav-item" role="presentation"><button type="button" class="nav-link active" role="tab" data-sfsub-btn="config"><i class="bi bi-sliders"></i> Config</button></li>
-  {% if not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="files"><i class="bi bi-hdd"></i> Files</button></li>{% endif %}
+  {% if fpm.view %}<li class="nav-item" role="presentation"><button type="button" class="nav-link active" role="tab" data-sfsub-btn="config"><i class="bi bi-sliders"></i> Config</button></li>{% endif %}
+  {% if fpm.view and not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="files"><i class="bi bi-hdd"></i> Files</button></li>{% endif %}
   {% if _uis_backups %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="backups"><i class="bi bi-archive"></i> Backups</button></li>{% endif %}
-  <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="schedule"><i class="bi bi-clock-history"></i> Schedule</button></li>
-  <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="alerts"><i class="bi bi-bell"></i> Alerts</button></li>
-  {% if not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
+  {% if fpm.manage %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="schedule"><i class="bi bi-clock-history"></i> Schedule</button></li>
+  <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="alerts"><i class="bi bi-bell"></i> Alerts</button></li>{% endif %}
+  {% if fpm.manage and not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
 </ul>
 
 <!-- Config editor (tabbed) -->
-<div class="card mb-3" data-sfsub="config">
+{# Read-only without EDIT_FILES: [data-fpm-ro] hides every .fpm-edit control (panel.css). Hidden
+   from the first paint without VIEW_FILES, as the other sections are, so it never flashes. #}
+<div class="card mb-3" data-sfsub="config"{% if not fpm.view %} style="display:none;"{% endif %}{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header p-0">
     <ul class="nav nav-tabs card-header-tabs mx-2 mt-2 border-0" id="cfg-tabs">
       <li class="nav-item"><button class="nav-link active" data-tab="lgsm"><i class="bi bi-sliders"></i> LinuxGSM Settings</button></li>
@@ -206,7 +209,7 @@
       <div id="lgc-pz-admin" class="alert alert-warning py-2 px-3 mb-2 small" role="alert" style="display:none;">
         <i class="bi bi-shield-exclamation"></i>
         <span>This server's admin password is still LinuxGSM's default, CHANGE_ME, so anyone who knows LinuxGSM can log in as its admin.</span>
-        <button type="button" class="btn btn-sm btn-warning py-0 ms-1" id="lgc-pz-admin-btn" data-action="lgcPzAdminFix">Set a random admin password</button>
+        <button type="button" class="btn btn-sm btn-warning py-0 ms-1 fpm-edit" id="lgc-pz-admin-btn" data-action="lgcPzAdminFix">Set a random admin password</button>
         <span id="lgc-pz-admin-msg" class="d-block mt-1"></span>
       </div>
       {% endif %}
@@ -237,7 +240,7 @@
         </div>
         <div id="cmpc-filter-none" class="text-secondary small mb-2" style="display:none;">No setting matches.</div>
         <div id="cfg-groups"></div>
-        <div class="cmpc-savebar">
+        <div class="cmpc-savebar fpm-edit">
           <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-save"></i> Save settings</button>
           <span id="cfg-save-msg" class="small ms-2"></span>
         </div>
@@ -261,12 +264,12 @@
         <div id="gcf-form-pane" style="display:none;">
           <div id="gcf-note" class="small text-warning mb-1" style="display:none;"></div>
           <div id="gcf-form" class="gcf-scroll"></div>
-          <button class="btn btn-primary btn-sm mt-2" data-action="saveGameForm"><i class="bi bi-save"></i> Save changes</button>
+          <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveGameForm"><i class="bi bi-save"></i> Save changes</button>
           <span id="gcf-msg" class="small ms-2"></span>
         </div>
         <div id="gcf-raw-pane">
-          <textarea id="game-cfg" aria-labelledby="game-cfg-desc" class="form-control font-monospace gcf-raw" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
-          <button class="btn btn-primary btn-sm mt-2" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
+          <textarea id="game-cfg" aria-labelledby="game-cfg-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace gcf-raw" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+          <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
           <span id="game-msg" class="small ms-2"></span>
         </div>
       </div>
@@ -275,8 +278,8 @@
     <!-- Raw instance cfg -->
     <div id="tab-raw" class="cfg-tab" style="display:none;">
       <p class="small text-secondary mb-1" id="cfg-raw-desc">Raw instance config <code>{{ server.lgsm_name }}.cfg</code>.</p>
-      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
-      <button class="btn btn-primary btn-sm mt-2" data-action="saveRaw"><i class="bi bi-save"></i> Save raw config</button>
+      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+      <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveRaw"><i class="bi bi-save"></i> Save raw config</button>
       <span id="cfg-raw-msg" class="small ms-2"></span>
     </div>
   </div>
@@ -286,7 +289,7 @@
 {# No serverfiles directory to browse when the download never happened — the config tabs above are
    the whole point of the page in that state. #}
 {% if not install_failed %}
-<div class="card" id="file-browser" data-sfsub="files" style="display:none;">
+<div class="card" id="file-browser" data-sfsub="files" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-hdd"></i> File Browser</span>
     {# flex-wrap + the min-width rule above: see the comment on .fb-toolbar. The two buttons are
@@ -300,7 +303,7 @@
        768px the card is 463px wide, and one row left the path a 184px column. #}
     <div class="d-flex flex-wrap flex-lg-nowrap align-items-center column-gap-3 row-gap-2 fb-toolbar">
       <span id="breadcrumb" class="small text-secondary"></span>
-      <div class="d-flex flex-wrap flex-lg-shrink-0 align-items-center gap-3 fb-upload">
+      <div class="d-flex flex-wrap flex-lg-shrink-0 align-items-center gap-3 fb-upload fpm-edit">
         <button class="btn btn-sm btn-outline-secondary" data-action="_clickUpload">
           <i class="bi bi-upload"></i> Upload
         </button>
@@ -334,7 +337,7 @@
         <div id="upload-status" class="small mt-2"></div>
         <div class="text-secondary mt-1" style="font-size:.66rem;">
           <i class="bi bi-info-circle"></i>
-          Tip: drag files or folders anywhere onto this card to upload (subfolders included), or use the buttons above.
+          <span class="fpm-edit">Tip: drag files or folders anywhere onto this card to upload (subfolders included), or use the buttons above.</span>
           <i class="bi bi-shield-lock"></i>
           This marks files protected from deletion and renaming.
           <i class="bi bi-pencil"></i>
@@ -354,7 +357,7 @@
               <span id="file-save-msg" class="small"></span>
               <a class="btn btn-outline-secondary btn-sm" id="editor-download" href="#"
                  title="Download this file" aria-label="Download this file"><i class="bi bi-download"></i></a>
-              <button class="btn btn-primary btn-sm" data-action="saveFile"><i class="bi bi-save"></i> Save</button>
+              <button class="btn btn-primary btn-sm fpm-edit" data-action="saveFile"><i class="bi bi-save"></i> Save</button>
               <button class="btn btn-outline-secondary btn-sm" data-action="closeEditor" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>
           </div>
@@ -371,7 +374,7 @@
              trade — and it is what every code editor does. #}
           <div class="editor-wrap">
             <div id="editor-gutter" class="editor-gutter" aria-hidden="true"></div>
-            <textarea id="editor" aria-labelledby="editor-path" class="form-control font-monospace" rows="20" spellcheck="false"
+            <textarea id="editor" aria-labelledby="editor-path"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace" rows="20" spellcheck="false"
                       wrap="off" data-action="syncGutter" data-on="input"></textarea>
           </div>
         </div>
@@ -385,10 +388,11 @@
 </div>
 {% endif %}{# not install_failed — the file browser #}
 
-{% if current_user.is_superadmin and not install_failed %}
-<!-- Backups (this server) — reuses the existing game-backup endpoints; superadmin only.
-     Nothing to back up when the game files never downloaded. -->
-<div class="card" id="backup-card" data-sfsub="backups" style="display:none;">
+{% if _uis_backups %}
+<!-- Backups (this server) — reuses the existing game-backup endpoints. The schedule and Back up now
+     are superadmin-only (.fpm-su); a row's download needs DOWNLOAD_BACKUP (.fpm-dl), its delete
+     DELETE_BACKUP (.fpm-del). Nothing to back up when the game files never downloaded. -->
+<div class="card" id="backup-card" data-sfsub="backups" style="display:none;"{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
     <span class="text-secondary" style="font-size:.66rem;">
@@ -402,7 +406,7 @@
     <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
     <div id="bk-wrap" style="display:none;">
       <div class="row g-3 align-items-end mb-2">
-        <div class="col-6 col-md-4">
+        <div class="col-6 col-md-4 fpm-su">
           <label class="form-label mb-1" style="font-size:.7rem;" for="bk-interval">Automatic backup</label>
           <select id="bk-interval" class="form-select form-select-sm" data-action="saveBkSchedule" data-on="change">
             <option value="default">Use panel default</option>
@@ -414,7 +418,7 @@
             <option value="30">Every 30 days</option>
           </select>
         </div>
-        <div class="col-6 col-md-3">
+        <div class="col-6 col-md-3 fpm-su">
           <label class="form-label mb-1" style="font-size:.7rem;" for="bk-keep">Keep newest</label>
           <select id="bk-keep" class="form-select form-select-sm" data-action="saveBkSchedule" data-on="change">
             <option value="default">Use panel default</option>
@@ -428,7 +432,7 @@
         </div>
       </div>
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-        <button class="btn btn-primary btn-sm" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
+        <button class="btn btn-primary btn-sm fpm-su" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
         <span id="bk-status" class="small"></span>
       </div>
       <div class="table-responsive">
@@ -656,6 +660,8 @@
 <script nonce="{{ csp_nonce }}">
 var serverId = {{ server.id|int }};
 var SERVER_NAME = {{ server.name|tojson }};   // the shared control bar names the server in its confirms
+// What this viewer may do here (auth.files_access): which sections load, and which controls show.
+var SF_CAN = {{ fpm|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 {% if sch_verb %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_schedule_chains.js') }}"></script>{% endif %}

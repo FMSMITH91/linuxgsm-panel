@@ -3,7 +3,8 @@
 Which games: LinuxGSM's pmcserver (pmc, PaperMC) only. A vanilla server (mcserver) cannot load
 plugins, and the proxies (Velocity, Waterfall) load plugins of their own kind, not Paper's.
 
-PERMISSION: the file manager's (_can_manage_files). Installing a plugin puts code on the server,
+PERMISSION: the file manager's: VIEW_FILES to list and search, EDIT_FILES to install, enable,
+disable or remove (_fpm_can_view, _fpm_can_edit). Installing a plugin puts code on the server,
 exactly as uploading a jar through the file browser does, and every write here goes through the
 file browser's own helpers with its own refusals: _write_refused (a root-capable game account is
 never written as), then ssh_manager.upload_file / rename_path / delete_path as the game account.
@@ -29,7 +30,7 @@ from panel.core import i18n
 from panel.core.http import _json_body, _json_str, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import _r20b_audit_on_raise
-from panel.security.auth import _can_manage_files, get_game, log_action, server_access_required
+from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
 from panel.services import modrinth as _mr
 
 PLUGIN_GAMES = frozenset({"pmc"})
@@ -270,7 +271,7 @@ def register(app):
     def api_server_plugins(server_id):
         """The installed plugin jars and the server's Minecraft version (None when it cannot be told)."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         return _mdr_list_answer(gs)
 
@@ -280,7 +281,7 @@ def register(app):
     def api_server_plugins_search(server_id):
         """Modrinth's plugins for Paper, Spigot or Bukkit matching `q`, on version `mc` when given."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         return _mdr_search_answer(gs)
 
@@ -290,7 +291,7 @@ def register(app):
     def api_server_plugins_install(server_id):
         """Download one Modrinth plugin on the panel host, check its sha512, write it into plugins/."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"success": False, "message": "Permission denied"}), 403
         return _mdr_install_answer(gs)
 
@@ -300,6 +301,6 @@ def register(app):
     def api_server_plugins_change(server_id):
         """Enable, disable or remove one plugin jar in serverfiles/plugins/."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"success": False, "message": "Permission denied"}), 403
         return _mdr_change_answer(gs)

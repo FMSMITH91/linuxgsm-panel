@@ -1,0 +1,7 @@
+{
+  "View game server files — browse folders, and read and download files and configs, including the passwords they hold": "Voir les fichiers du serveur de jeu : parcourir les dossiers, lire et télécharger les fichiers et les configurations, y compris les mots de passe qu'ils contiennent",
+  "Change game server files — upload, edit, rename, create and delete files and folders, and save config forms (give View game server files with it)": "Modifier les fichiers du serveur de jeu : envoyer, modifier, renommer, créer et supprimer des fichiers et des dossiers, et enregistrer les formulaires de configuration (à donner avec Voir les fichiers du serveur de jeu)",
+  "Download a game server's backup archives": "Télécharger les sauvegardes d'un serveur de jeu",
+  "Delete a game server's backup archives — a deleted backup is gone for good and cannot be restored": "Supprimer les sauvegardes d'un serveur de jeu : une sauvegarde supprimée disparaît définitivement et ne peut pas être restaurée",
+  "You don't have permission to view this server's files.": "Vous n'avez pas la permission de voir les fichiers de ce serveur."
+}

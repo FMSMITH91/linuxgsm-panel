@@ -14,6 +14,12 @@ compares git commits, not this file.
 
 ### Added
 
+- **Separate permissions for a server's files and its backups.** Groups can be given View game
+  server files and Change game server files instead of the whole Manage servers permission, and a
+  game server's backups can be downloaded or deleted by groups given Download or Delete backup
+  archives. Groups that could manage servers keep the file permissions after the update, so nobody
+  gains or loses access. View game server files includes the passwords those files hold.
+
 - **Network traffic and history charts on the host page.** Each host's received and sent traffic
   is recorded with its CPU, RAM and disk history, and the server page's History tab charts it. The
   host page's Overview tab has a History card with CPU, RAM, disk and network over the last 24

@@ -356,7 +356,7 @@ def _migrate85(fail):
 
 _mg85 = {"ok": _migrate85(False), "fails": _migrate85(True)}
 check("data migration: the canonical-hosts rewrite runs and is counted (control)",
-      _mg85["ok"] == (2, "2001:db8::5"), repr(_mg85))
+      _mg85["ok"] == (3, "2001:db8::5"), repr(_mg85))   # 3: the file permissions' runs after it
 check("data migration: ...and when its write fails the count stays where it was, so the next "
       "start runs it again (the PRAGMA ran in autocommit before the ORM flushed anything)",
       _mg85["fails"] == (1, "[2001:db8::5]"), repr(_mg85))

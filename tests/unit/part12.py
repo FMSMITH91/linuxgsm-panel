@@ -1753,11 +1753,12 @@ try:
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # panel/routes/server_files.py
     # ════════════════════════════════════════════════════════════════════════════════════════════
-    # A file manager on host 1: MANAGE_SERVERS only — may edit files, may NOT change mods (that needs
-    # UPDATE_SERVER) and may NOT read the console (that needs VIEW_CONSOLE).
+    # A file manager on host 1: MANAGE_SERVERS with the two file permissions data migration 3 gives
+    # every such group — may edit files, may NOT change mods (that needs UPDATE_SERVER) and may NOT
+    # read the console (that needs VIEW_CONSOLE).
     with _p9.app_context():
         _fg = Group(name="p9_files", description="", is_default=False)
-        _fg.set_permissions([_p9_auth.MANAGE_SERVERS])
+        _fg.set_permissions([_p9_auth.MANAGE_SERVERS, _p9_auth.VIEW_FILES, _p9_auth.EDIT_FILES])
         _fg.servers.append(db.session.get(RemoteServer, P9_HOST))
         db.session.add(_fg)
         db.session.flush()

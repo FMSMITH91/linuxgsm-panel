@@ -1699,6 +1699,36 @@ def _r21b_canonical_remote_hosts():
             remote.host = canonical_host(host)
 
 
+# Data migration 3's grant: a group holding the permission on the left is given the ones on the
+# right. Literal names, not auth's constants: models must not import auth (auth imports models),
+# and a migration states what the permissions WERE called when it was written.
+_FPM_GRANTS = {"manage_servers": ("view_files", "edit_files")}
+
+
+def _fpm_grant_file_permissions():
+    """Data migration 3: the file permissions to every group that could reach the files before.
+
+    VIEW_FILES and EDIT_FILES split the file manager, the config editors and the plugin, Workshop
+    and list files out of MANAGE_SERVERS, which gated all of them. Every group holding
+    MANAGE_SERVERS gets both, so nobody gains or loses access on the upgrade. The game backups'
+    DOWNLOAD_BACKUP and DELETE_BACKUP are granted to no group: until they existed only a superadmin
+    (the flag, not a group permission) could download or delete one, and still can.
+
+    Only ADDS, so it is safe to repeat (see _DATA_MIGRATIONS); the one effect of a repeat is that
+    a MANAGE_SERVERS group an administrator took the file permissions from after the upgrade gets
+    them back, which happens only after db_maintenance's dump salvage of a damaged database.
+    Through the ORM, as the group form writes the column (a JSON list).
+    """
+    for group in Group.query.all():
+        try:
+            perms = group.get_permissions()
+        except (TypeError, ValueError):
+            continue    # an unreadable list is left for the Groups page to show, not rewritten
+        add = {new for old, news in _FPM_GRANTS.items() if old in perms for new in news}
+        if add - perms:
+            group.set_permissions(sorted(perms | add))
+
+
 # The data migrations, in order. PRAGMA user_version in the database file records how many have
 # run, so each runs ONCE per database, on the start that first finds it missing: a fresh database
 # (on its empty tables), an upgraded one, and a backup taken before it and restored later, which
@@ -1708,6 +1738,7 @@ def _r21b_canonical_remote_hosts():
 _DATA_MIGRATIONS = (
     (_autostart_off_for_unfinished_installs, "PRAGMA user_version = 1"),
     (_r21b_canonical_remote_hosts, "PRAGMA user_version = 2"),
+    (_fpm_grant_file_permissions, "PRAGMA user_version = 3"),
 )
 
 

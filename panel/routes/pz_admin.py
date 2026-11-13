@@ -11,7 +11,7 @@ from panel.core import i18n
 from panel.core.http import (_log_and_generic)
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import (_r20b_audit_on_raise)
-from panel.security.auth import (_can_manage_files, get_game, log_action, server_access_required)
+from panel.security.auth import (_fpm_can_edit, get_game, log_action, server_access_required)
 
 
 def register(app):
@@ -26,7 +26,7 @@ def register(app):
         """
         from panel.routes import server_files as _sf
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         if gs.game_type != "pz":
             return jsonify({"success": False,

@@ -18,7 +18,7 @@ Three kinds of game, by where the list lives:
 Reads and writes go through the helpers the Settings tab and the file editor use, as the game
 account: lgsm_get_values / lgsm_write_config for the instance cfg (which keep every other line and
 refuse a key that secrets-<selfname>.cfg shadows), read_file / write_file for the ini, changing only
-the two lines it is about. PERMISSION: the Settings tab's (_can_manage_files) for reading and saving,
+the two lines it is about. PERMISSION: the Settings tab's, VIEW_FILES to read and EDIT_FILES to save,
 plus the file browser's refusals of a root-capable account (_read_refused, _write_refused). Every
 save is audited with the ids before and after, against the server.
 
@@ -33,7 +33,7 @@ from panel.core import i18n
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import _r20b_audit_on_raise
-from panel.security.auth import _can_manage_files, get_game, log_action, server_access_required
+from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
 from panel.services import steam_workshop as _ws
 
 MODS_GAMES = frozenset({"arma3", "dayz", "squad", "squad44", "ohd", "bt", "hw", "col", "st", "l4d2", "sb",
@@ -415,7 +415,7 @@ def register(app):
     def api_server_workshop(server_id):
         """The server's Workshop list (GET), or a new one written into its config (POST)."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not (_fpm_can_edit() if request.method == "POST" else _fpm_can_view()):
             return jsonify({"success": False, "error": "Permission denied", "message": "Permission denied"}), 403
         return _wsc_read_answer(gs) if request.method == "GET" else _wsc_save_answer(gs)
 
@@ -425,7 +425,7 @@ def register(app):
     def api_server_workshop_titles(server_id):
         """Steam's titles for up to 200 Workshop ids, asked by the panel host."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         return _wsc_titles_answer(gs)
 
@@ -435,6 +435,6 @@ def register(app):
     def api_server_workshop_pz_mods(server_id):
         """The Mod IDs in a Project Zomboid server's downloaded Workshop items."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         return _wsc_pz_mods_answer(gs)

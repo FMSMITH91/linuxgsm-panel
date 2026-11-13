@@ -2074,3 +2074,13 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   justify-content: center;
   padding: 1rem;
 }
+
+/* Controls a viewer's permissions do not cover (auth.files_access): the container says which are
+   missing, each control says which it needs. Hidden, not removed, so the page's script finds every
+   element it looks up; the routes refuse the action whatever the page shows. */
+[data-fpm-ro] .fpm-edit,
+[data-fpm-nosu] .fpm-su,
+[data-fpm-nodl] .fpm-dl,
+[data-fpm-nodel] .fpm-del {
+  display: none !important;
+}
