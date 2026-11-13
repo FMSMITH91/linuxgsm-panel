@@ -46,7 +46,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running, grs_restore_running,
+    _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running, grs_or_wipe_sentence,
     game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
@@ -1550,10 +1550,7 @@ def _r39a_wipe_refused(gs, action):
     """
     if not _r39a_wipe_running(gs.id):
         return None
-    why = (i18n.Sentence("'{name}' is being restored from a backup. Try again once it has finished.",
-                         name=gs.name) if grs_restore_running(gs.id) else
-           i18n.Sentence("A scheduled wipe of '{name}' is running. Try again once it has finished.",
-                         name=gs.name))
+    why = grs_or_wipe_sentence(gs.id, gs.name)
     log_action(current_user, action, target=gs.name, detail="refused: %s" % why, success=False,
                server=gs)
     return jsonify({"success": False, "message": i18n.tr(why)}), 409

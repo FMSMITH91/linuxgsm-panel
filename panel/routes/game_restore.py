@@ -101,6 +101,22 @@ def _grs_refuse(gs, name, why, code=409):
     return jsonify({"success": False, "message": i18n.tr(why)}), code
 
 
+def _grs_request_refusal(gs, body, name):
+    """The route's answer when the request itself is refused (before the listing is read), else None."""
+    if not gs.installed or not gs.remote_id:
+        return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
+    if body.get("confirm") != gs.name:
+        return jsonify({"success": False, "message": i18n.tr(
+            "Type the server's name exactly to confirm the restore.")}), 400
+    bad = grs.archive_problem(name)
+    if bad is not None:
+        return _grs_refuse(gs, name, bad, 400)
+    if (_grs_status.get(gs.id) or {}).get("running"):
+        return _grs_refuse(gs, name, i18n.Sentence("This server is already being restored."))
+    busy = _grs_other_work(gs)
+    return None if busy is None else _grs_refuse(gs, name, busy)
+
+
 def register(app):
     """The restore route (called from panel_backup.register, beside the other game backup routes)."""
     @app.route("/api/panel/backup/game/<int:server_id>/restore", methods=["POST"])
@@ -112,19 +128,9 @@ def register(app):
         gs = get_game(server_id)
         body = _json_body()
         name = body.get("name") if isinstance(body.get("name"), str) else ""
-        if not gs.installed or not gs.remote_id:
-            return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
-        if body.get("confirm") != gs.name:
-            return jsonify({"success": False, "message": i18n.tr(
-                "Type the server's name exactly to confirm the restore.")}), 400
-        bad = grs.archive_problem(name)
-        if bad is not None:
-            return _grs_refuse(gs, name, bad, 400)
-        if (_grs_status.get(gs.id) or {}).get("running"):
-            return _grs_refuse(gs, name, i18n.Sentence("This server is already being restored."))
-        busy = _grs_other_work(gs)
-        if busy is not None:
-            return _grs_refuse(gs, name, busy)
+        refused = _grs_request_refusal(gs, body, name)
+        if refused is not None:
+            return refused
         listing, match = _grs_find(gs, name)
         if listing is None:
             return _grs_refuse(gs, name, i18n.Sentence("Couldn't read this server's backups — the host didn't "

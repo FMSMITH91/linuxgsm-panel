@@ -685,5 +685,6 @@ var SF_CAN = {{ fpm|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 {% if sch_verb %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_schedule_chains.js') }}"></script>{% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_backup_restore.js') }}"></script>
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}

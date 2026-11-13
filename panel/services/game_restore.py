@@ -344,25 +344,33 @@ def _grs_space(line):
     return i18n.Sentence("the free space could not be measured")
 
 
-def vet_outcome(out):
-    """(state, value): ("ready", {"up", "t0"}), ("refused", sentence) or ("unread", sentence)."""
-    text = terminal.strip_escapes(out or "")
-    marks = _grs_marks(text)
-    ready = marks.get(_M["READY"])
-    if ready is not None:
-        parts = ready.split()
-        if len(parts) >= 3 and parts[1] in ("0", "1") and parts[2].isdecimal():
-            return "ready", {"up": parts[1] == "1", "t0": int(parts[2]),
-                             "need": int(parts[3]) if len(parts) > 3 and parts[3].isdecimal() else 0}
+def _grs_refusal(marks, table):
+    """The refusal `marks` hold (a member check's verdict, the space check, or the first of `table`), else None."""
     bad = marks.get(_M["BAD"])
     if bad is not None:
-        code = (bad.split() + [""])[1]
-        return "refused", i18n.Sentence(_GRS_BAD_WHY.get(code, _GRS_BAD_WHY["parse"]))
+        return i18n.Sentence(_GRS_BAD_WHY.get((bad.split() + [""])[1], _GRS_BAD_WHY["parse"]))
     if _M["SPACE"] in marks:
-        return "refused", _grs_space(marks[_M["SPACE"]])
-    for key, why in _GRS_VET_REFUSALS:
-        if _M[key] in marks:
-            return "refused", i18n.Sentence(why)
+        return _grs_space(marks[_M["SPACE"]])
+    return next((i18n.Sentence(why) for key, why in table if _M[key] in marks), None)
+
+
+def _grs_ready(line):
+    """READY's values ({"up", "t0", "need"}), or None when the line is not whole."""
+    parts = (line or "").split() + ["0"]
+    if len(parts) < 4 or parts[1] not in ("0", "1") or not parts[2].isdecimal():
+        return None
+    return {"up": parts[1] == "1", "t0": int(parts[2]), "need": int(parts[3]) if parts[3].isdecimal() else 0}
+
+
+def vet_outcome(out):
+    """(state, value): ("ready", {"up", "t0", "need"}), ("refused", sentence) or ("unread", sentence)."""
+    marks = _grs_marks(terminal.strip_escapes(out or ""))
+    ready = _grs_ready(marks.get(_M["READY"]))
+    if ready is not None:
+        return "ready", ready
+    why = _grs_refusal(marks, _GRS_VET_REFUSALS)
+    if why is not None:
+        return "refused", why
     return "unread", i18n.Sentence("the checks' result did not come back")
 
 
@@ -380,22 +388,24 @@ def restore_outcome(out, rc):
     partly restored. "done": extracted. "unread": none of its marks came back (a timeout, a dropped
     connection): whether it cleared anything is not known.
     """
-    text = terminal.strip_escapes(out or "")
-    marks = _grs_marks(text)
+    marks = _grs_marks(terminal.strip_escapes(out or ""))
     if _M["RESTORED"] in marks:
         return "done", i18n.Sentence("restored")
     if _M["CLEARING"] in marks:
-        if _M["RMFAIL"] in marks:
-            return "failed", i18n.Sentence("a file in the home could not be removed, so the clear stopped part way")
-        xf = (marks.get(_M["XFAIL"]) or "").split(None, 2)
-        return "failed", i18n.Sentence("the extraction failed (tar exit {rc}): {last}",
-                                       rc=xf[1] if len(xf) > 1 else rc, last=(xf[2] if len(xf) > 2 else "")[:200])
-    if _M["SPACE"] in marks:
-        return "refused", _grs_space(marks[_M["SPACE"]])
-    for key, why in _GRS_LATE_REFUSALS:
-        if _M[key] in marks:
-            return "refused", i18n.Sentence(why)
+        return "failed", _grs_late_failure(marks, rc)
+    why = _grs_refusal(marks, _GRS_LATE_REFUSALS)
+    if why is not None:
+        return "refused", why
     return "unread", i18n.Sentence("the restore's result did not come back (exit {rc})", rc=rc)
+
+
+def _grs_late_failure(marks, rc):
+    """What went wrong once the clear had begun: a file that would not go, or the extraction."""
+    if _M["RMFAIL"] in marks:
+        return i18n.Sentence("a file in the home could not be removed, so the clear stopped part way")
+    xf = (marks.get(_M["XFAIL"]) or "").split(None, 2)
+    return i18n.Sentence("the extraction failed (tar exit {rc}): {last}",
+                         rc=xf[1] if len(xf) > 1 else rc, last=(xf[2] if len(xf) > 2 else "")[:200])
 
 
 # ── uploading an archive into the backup dir ──────────────────────────────────────────────────────
@@ -491,15 +501,8 @@ def upload_outcome(out):
     if _M["UPOFFSET"] in marks:
         got = (marks[_M["UPOFFSET"]].split() + [""])[1]
         return "offset", int(got) if got.isdecimal() else 0
-    bad = marks.get(_M["BAD"])
-    if bad is not None:
-        return "refused", i18n.Sentence(_GRS_BAD_WHY.get((bad.split() + [""])[1], _GRS_BAD_WHY["parse"]))
-    if _M["SPACE"] in marks:
-        return "refused", _grs_space(marks[_M["SPACE"]])
-    for key, why in _GRS_UPLOAD_REFUSALS:
-        if _M[key] in marks:
-            return "refused", i18n.Sentence(why)
-    return "refused", i18n.Sentence("the host's answer did not come back")
+    return "refused", (_grs_refusal(marks, _GRS_UPLOAD_REFUSALS)
+                       or i18n.Sentence("the host's answer did not come back"))
 
 
 _GRS_UPLOAD_REFUSALS = (

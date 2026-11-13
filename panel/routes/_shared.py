@@ -596,6 +596,13 @@ def grs_restore_running(sid):
     return GRS_KIND in r36j_route_jobs(sid)
 
 
+def grs_or_wipe_sentence(sid, name):
+    """Why a write is refused on server `sid` (shown as `name`) while its restore or its scheduled wipe runs."""
+    if grs_restore_running(sid):
+        return i18n.Sentence("'{name}' is being restored from a backup. Try again once it has finished.", name=name)
+    return i18n.Sentence("A scheduled wipe of '{name}' is running. Try again once it has finished.", name=name)
+
+
 def _r39a_backup_held(sid, wipe_ok=False):
     """Whether a backup of server `sid` must wait: its scheduled wipe or its queued stop/restart is running.
 
