@@ -361,9 +361,38 @@ def _gcf_collapse(s):
 
 
 def _gcf_own_line(text, pos):
-    """True when only blanks stand between the start of `pos`'s line and `pos`."""
-    line_start = max(text.rfind("\n", 0, pos), text.rfind("\r", 0, pos)) + 1
-    return not text[line_start:pos].strip()
+    """True when only blanks stand between the start of `pos`'s line and `pos`.
+
+    Walked back from `pos` and stopped at the first character that is not a blank, so the cost is
+    the blanks in front of `pos`. Searching back for the line's start read the whole line once per
+    comment, quadratic in a long line of comments (the file is the game account's to write).
+    """
+    j = pos
+    while j and text[j - 1] not in "\r\n" and text[j - 1].isspace():
+        j -= 1
+    return not j or text[j - 1] in "\r\n"
+
+
+def _gcf_blank_upto(text, start, stop, eols):
+    """True when text[start:stop] is only blanks with at most `eols` line breaks (CR LF is one).
+
+    Walked forward and stopped at the first character that settles it, never copied: the walk
+    after each comment and each property then reads only the blanks that follow it, so a parse
+    stays linear in the file however many comments it holds.
+    """
+    j = start
+    while j < stop:
+        c = text[j]
+        if c in "\r\n":
+            eols -= 1
+            if eols < 0:
+                return False
+            if c == "\r" and text.startswith("\n", j + 1) and j + 1 < stop:
+                j += 1
+        elif not c.isspace():
+            return False
+        j += 1
+    return True
 
 
 def _gcf_xml_value(raw):
@@ -401,17 +430,14 @@ def _gcf_xml_before(text, comments, ci, last_end, pos, section):
         ci += 1
         if s >= last_end and "<property" not in words and _gcf_own_line(text, s):
             section = words if len(words) <= _GCF_SECTION_MAX else section
-            gap = text[e:pos]
-            above = words if not gap.strip() and len(_GCF_EOL.findall(gap)) <= 1 else None
+            above = words if _gcf_blank_upto(text, e, pos, 1) else None
     return ci, section, above
 
 
 def _gcf_xml_trail(text, comments, ci, end):
     """(the comment starting on the same line after `end`, or None; the next comment index)."""
-    if ci < len(comments):
-        gap = text[end:comments[ci][0]]
-        if not gap.strip() and not _GCF_EOL.search(gap):
-            return comments[ci], ci + 1
+    if ci < len(comments) and _gcf_blank_upto(text, end, comments[ci][0], 0):
+        return comments[ci], ci + 1
     return None, ci
 
 

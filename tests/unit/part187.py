@@ -174,3 +174,73 @@ check("details r42m: a server name of 'server ip:' repeated 20000 times (200 KB)
       "the real Server IP line's port still wins (well under 0.6 s)",
       _r42m_ip_slow[0] == 27017 and _r42m_ip_slow[2] < 0.6, "%r %.2fs" % (_r42m_ip_slow[0], _r42m_ip_slow[2]))
 
+
+# ── 3. the XML config form's comment walk ───────────────────────────────────────────────────────
+# The helpers the walk had before, kept as the reference its answers must match.
+def _r42m_old_own_line(text, pos):
+    line_start = max(text.rfind("\n", 0, pos), text.rfind("\r", 0, pos)) + 1
+    return not text[line_start:pos].strip()
+
+
+def _r42m_old_before(text, comments, ci, last_end, pos, section):
+    above = None
+    while ci < len(comments) and comments[ci][0] < pos:
+        s, e, words = comments[ci]
+        ci += 1
+        if s >= last_end and "<property" not in words and _r42m_old_own_line(text, s):
+            section = words if len(words) <= _g187._GCF_SECTION_MAX else section
+            gap = text[e:pos]
+            above = words if not gap.strip() and len(_g187._GCF_EOL.findall(gap)) <= 1 else None
+    return ci, section, above
+
+
+def _r42m_old_trail(text, comments, ci, end):
+    if ci < len(comments):
+        gap = text[end:comments[ci][0]]
+        if not gap.strip() and not _g187._GCF_EOL.search(gap):
+            return comments[ci], ci + 1
+    return None, ci
+
+
+def _r42m_old_parse(text):
+    _p9_patch(_g187, "_gcf_xml_before", _r42m_old_before)
+    _p9_patch(_g187, "_gcf_xml_trail", _r42m_old_trail)
+    try:
+        return _g187._gcf_parse_xml(text)
+    finally:
+        _p9_restore_all()
+
+
+_r42m_xabc = ["<!--", "-->", "<!-- g -->", "<!-- help -->", '<property name="a" value="1"/>',
+              "<property name='b' value='2' />", "<property", "<!-- <property -->", " ", "\t", "\n", "\r", "\r\n",
+              "\x0b", "\xa0", "\u2028", "x"]
+_r42m_xtexts = ["".join(_r42m_rng.choice(_r42m_xabc) for _ in range(_r42m_rng.randint(0, 14))) for _ in range(12000)]
+_r42m_xold = [_r42m_old_parse(t) for t in _r42m_xtexts]
+_r42m_xml_bad = [t for t, o in zip(_r42m_xtexts, _r42m_xold) if o != _g187._gcf_parse_xml(t)]
+check("game config form r42m: the XML comment walk gives the fields (group, help, place) the old walk gave "
+      "on 12000 random texts (own-line and trailing comments, CR LF, Unicode blanks)",
+      not _r42m_xml_bad, repr(_r42m_xml_bad[:3]))
+_r42m_ol_abc = [" ", "\t", "\n", "\r", "\x0b", "\x85", "\u2028", "a", "<"]
+_r42m_ol_bad = [(t, i) for t in ("".join(_r42m_rng.choice(_r42m_ol_abc) for _ in range(_r42m_rng.randint(0, 9)))
+                                 for _ in range(4000)) for i in range(len(t) + 1)
+                if _r42m_old_own_line(t, i) != _g187._gcf_own_line(t, i)]
+check("game config form r42m: 'only blanks before it on its line' answers as the line-start search it "
+      "replaced, at every place of 4000 random texts", not _r42m_ol_bad, repr(_r42m_ol_bad[:3]))
+
+# Measured on this machine: the old walk took 0.83 s at 80000 comment lines, 0.25 s at 60000 comments on
+# one line and 1.0 s at 30000 properties before one comment, each growing with the square.
+_R42M_P = '<property name="a" value="b"/>'
+_r42m_xcases = (("120000 comment lines then a property", "<!---->\n" * 120000 + _R42M_P + "\n", 1),
+                ("150000 comments on one line then a property", "<!---->" * 150000 + "\n" + _R42M_P + "\n", 1),
+                ("45000 properties then one comment",
+                 "".join('<property name="a%d" value="b"/>\n' % i for i in range(45000)) + "<!-- x -->\n", 45000))
+_r42m_xslow = []
+for _r42m_label, _r42m_text, _r42m_want in _r42m_xcases:
+    _r42m_t0 = _time187.monotonic()
+    _r42m_fields = _g187._gcf_parse_xml(_r42m_text)
+    _r42m_xslow.append((_r42m_label, len(_r42m_fields or ()) == _r42m_want, _time187.monotonic() - _r42m_t0))
+check("game config form r42m: an XML file with 120000 comment lines, 150000 comments on one line, or 45000 "
+      "properties before one comment is parsed in linear time (each well under 0.6 s)",
+      all(_ok and _took < 0.6 for _l, _ok, _took in _r42m_xslow),
+      repr([(_l, _ok, "%.2fs" % _took) for _l, _ok, _took in _r42m_xslow]))
+
