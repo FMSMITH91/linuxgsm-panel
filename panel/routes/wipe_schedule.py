@@ -292,36 +292,58 @@ def _wwr_said(sentence):
 
 
 def _wwr_run(app, gs, entry):
-    """The panel's world reset, once the backup is taken: players, stop, delete (and create), start.
+    """The panel's world reset, once the backup is taken: state, players, stop, delete (and create), start.
 
     The plan (which files) is read before anything is stopped, so a config the panel cannot use
-    refuses with the server untouched. Players are the panel's to check here: with "wait until
-    empty" on, a server with players waits, its backup kept. LinuxGSM's own stoponlyifnoplayers
-    refusal of the stop keeps it waiting too.
+    refuses with the server untouched. Then whether the server is running (LinuxGSM's own tmux test,
+    and its update/backup locks): a server that was stopped is reset and left stopped, as LinuxGSM's
+    own wipe does (command_wipe.sh). Players are the panel's to check: with "wait until empty" on, a
+    running server with players, or whose players cannot be counted, waits, its backup kept.
+    LinuxGSM's own stoponlyifnoplayers refusal of the stop keeps it waiting too.
     """
     plan, why = _wwr.plan_for(gs)
     if plan is None and isinstance(why, _wwr.Unread):
         return _r37b_wait(gs.id, why)       # a read that failed is tried again, never guessed past
     if plan is None:
         return _cmpd_finish(app, gs, False, i18n.Sentence("not reset: {reason}", reason=why))
-    if entry.get("wait_empty", True):
-        players = _sm.player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
-        if players:
-            return _r37b_wait(gs.id, i18n.Sentence("{players} player(s) online", players=players))
-    if not _wwr_stop(app, gs):
+    up, wait = _wwr_ready(gs, entry)
+    if wait is not None:
+        return _r37b_wait(gs.id, wait)
+    if up and not _wwr_stop(app, gs):
         return None
-    _wwr_delete_and_start(app, gs, plan)
+    _wwr_delete_and_start(app, gs, plan, up)
     return None
+
+
+def _wwr_ready(gs, entry):
+    """(was it running, None) when the reset may go on, or (None, why it waits)."""
+    out, _err, _rc = _sm.shell_as_game_user(gs.remote, gs.short_name,
+                                            _wwr.status_script(gs.short_name, gs.lgsm_name or gs.short_name),
+                                            timeout=30, selfname=gs.lgsm_name)
+    state = _wwr.status_of(out)
+    if state is None:
+        return None, i18n.Sentence("whether the server is running could not be read")
+    if state == "locked":
+        return None, i18n.Sentence("a LinuxGSM backup or update of this server is running")
+    if state == "up" and entry.get("wait_empty", True):
+        players = _sm.player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
+        if players is None:
+            return None, i18n.Sentence("the players online could not be counted, and \"wait until empty\" waits "
+                                       "for a count")
+        if players:
+            return None, i18n.Sentence("{players} player(s) online", players=players)
+    return state == "up", None
 
 
 def _wwr_stop(app, gs):
     """LinuxGSM `stop`, the monitor's quiet window opened first. True when the delete may follow.
 
-    A refusal for players waits; a stop that failed is started again and ends the reset (nothing
-    deleted); a connection that dropped under the stop ends it as "may be down: check the server".
-    A stop never sent raises, the reset left pending for the next try. Whether the server really
-    stopped is asked again by the delete command itself (LinuxGSM's own tmux test), in the same
-    round trip.
+    Only for a server that was running. A refusal for players waits; a stop that failed is started
+    again and ends the reset (nothing deleted); a connection that dropped under the stop is started
+    again too (LinuxGSM's stop runs on and turns its monitor off, so nothing else would) and ends
+    the reset. A stop never sent raises, the reset left pending for the next try. Whether the server
+    really stopped is asked again by the delete command itself (LinuxGSM's tmux test, then a wait for
+    the account's processes to let go of serverfiles), in the same round trip.
     """
     extra = _lgp.allowance_seconds(gs.remote, gs.short_name, gs.lgsm_name, "stop")
     _mark_expected_offline(gs.id, "restart", extra)
@@ -333,8 +355,8 @@ def _wwr_stop(app, gs):
             _end_offline_window(gs.id)
             raise
         _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
-            "the connection dropped while LinuxGSM stopped the server; nothing was deleted, and it may "
-            "be down: check the server")))
+            "the connection dropped while LinuxGSM stopped the server; nothing was deleted. {start}",
+            start=_wwr_start(gs)[1])))
         return False
     text = (out or "") + "\n" + (err or "")
     oc = _lgp.outcome_of(text, rc, "stop")
@@ -344,15 +366,22 @@ def _wwr_stop(app, gs):
                                         players=oc.get("players", "?")))
         return False
     if rc != 0:
-        started = _wwr_start(gs)
         _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
-            "LinuxGSM's stop exited {rc}; nothing was deleted. {start}", rc=rc, start=started[1])))
+            "LinuxGSM's stop exited {rc}; nothing was deleted. {start}", rc=rc, start=_wwr_start(gs)[1])))
         return False
     return True
 
 
-def _wwr_delete_and_start(app, gs, plan):
-    """The delete (and create) as the game account, then LinuxGSM `start` whatever it did; settled.
+_WWR_LEFT_STOPPED = i18n.Sentence("The server was stopped before the reset and is left stopped.")
+
+
+def _wwr_restore(gs, up):
+    """Start the server again if the reset stopped it; the sentence that says what became of it."""
+    return _wwr_start(gs)[1] if up else _WWR_LEFT_STOPPED
+
+
+def _wwr_delete_and_start(app, gs, plan, up):
+    """The delete (and create) as the game account, then LinuxGSM `start` if it was running; settled.
 
     The delete is never retried: once sent, a dropped connection may have deleted the world, and the
     next try would delete the new one. Only a command never sent leaves the reset pending.
@@ -360,19 +389,17 @@ def _wwr_delete_and_start(app, gs, plan):
     try:
         out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name,
                                               _wwr.script(gs.short_name, gs.lgsm_name or gs.short_name, plan),
-                                              timeout=600, selfname=gs.lgsm_name)
+                                              timeout=720, selfname=gs.lgsm_name)
     except Exception as exc:
-        started = _wwr_start(gs)
+        restored = _wwr_restore(gs, up)
         if not getattr(exc, "command_started", False):
             raise
         return _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
             "the connection dropped while the world was being deleted; it may have been deleted: check the "
-            "server. {start}", start=started[1])))
+            "server. {start}", start=restored)))
     state, said = _wwr.outcome((out or "") + "\n" + (err or ""), rc, plan)
-    started = _wwr_start(gs)
-    if state == "done":
-        return _cmpd_finish(app, gs, True, _wwr_said(i18n.Sentences(said, started[1])))
-    return _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentences(said, started[1])))
+    restored = _wwr_restore(gs, up)
+    return _cmpd_finish(app, gs, state == "done", _wwr_said(i18n.Sentences(said, restored)))
 
 
 def _wwr_start(gs):
