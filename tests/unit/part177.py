@@ -35,6 +35,7 @@ from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, P9_HOST2, P9_LOCAL, P9_
 from unit.part75 import _run_js75
 from unit.part131 import _STATUS131
 from panel.ops import system_ops as _so177, tailscale_integration as _ts177
+from panel.routes import server_detail as _sd177
 from panel.core.clock import utcnow as _now177
 from panel.db import models as _m177
 from panel.db.models import Group as _Group177, User as _User177, db as _db177
@@ -269,6 +270,12 @@ try:
     _p9_patch(_ts177, "panel_funnel_facts", lambda cfg: {})
     _p9_patch(_core177, "run_privileged", lambda *a, **k: ("", "", 1))
     _p9_patch(_core177, "run_command", lambda *a, **k: ("", "", 1))
+    # The server page starts a public-IP and a timezone lookup for a host with neither stored (P9_HOST);
+    # unstubbed, those threads first run after the restore below and reach the fixture address.
+    _g177["resolvers"] = []
+    _p9_patch(_sd177, "_maybe_resolve_public_ip", lambda *a, **k: _g177["resolvers"].append("public_ip"))
+    _p9_patch(_sd177, "_host_timezone_cached",
+              lambda *a, **k: _g177["resolvers"].append("timezone") or "")
     with _p9.app_context():
         _clear177()
         _gs177 = _m177.GameServer.query.filter_by(remote_id=P9_HOST).first().id
