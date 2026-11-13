@@ -158,7 +158,10 @@ def _grs_heartbeat(extra_trap=""):
     """
     return [
         "trap '' PIPE",
-        "( while sleep %d; do echo %s || exit 0; done ) & hb=$!" % (HEARTBEAT, _M["ALIVE"]),
+        # Its sleep is a child it kills on TERM: a sleep left running would hold the output open (and
+        # the panel waiting) for up to HEARTBEAT seconds after the script has ended.
+        "( trap 'kill $z 2>/dev/null; exit 0' TERM; while :; do sleep %d & z=$!; wait $z; echo %s || exit 0; done ) "
+        "& hb=$!" % (HEARTBEAT, _M["ALIVE"]),
         "trap '%skill $hb 2>/dev/null' EXIT" % extra_trap,
     ]
 
