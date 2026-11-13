@@ -81,5 +81,7 @@
   "Upload a LinuxGSM backup of this server (.tar.zst, .tar.gz or .tar, up to 32 GB). It is checked as a restore checks it, then listed here under a LinuxGSM backup's name.": "Envoyez une sauvegarde LinuxGSM de ce serveur (.tar.zst, .tar.gz ou .tar, jusqu'à 32 Go). Elle est vérifiée comme une restauration la vérifie, puis listée ici sous un nom de sauvegarde LinuxGSM.",
   "Uploading {name}: {pct}%": "Envoi de {name} : {pct} %",
   "Upload failed": "L'envoi a échoué",
-  "Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.": "L'envoi accepte une sauvegarde faite par ce panneau (jusqu'à 512 Mo) ; elle est vérifiée comme une restauration la vérifie, et une sauvegarde chiffrée demande sa phrase secrète à la restauration."
+  "Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.": "L'envoi accepte une sauvegarde faite par ce panneau (jusqu'à 512 Mo) ; elle est vérifiée comme une restauration la vérifie, et une sauvegarde chiffrée demande sa phrase secrète à la restauration.",
+  "Backup archive to upload": "Sauvegarde à envoyer",
+  "Panel backup to upload": "Sauvegarde du panneau à envoyer"
 }

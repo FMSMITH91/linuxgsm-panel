@@ -4369,6 +4369,11 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
+    # One piece of a backup upload, appended to a part file nothing lists: the upload's outcome (the
+    # archive kept, or why not) is audited once, by its finish (game_backup_upload / panel_backup_upload).
+    "api_panel_backup_game_upload_piece",
+    "api_panel_backup_upload_piece",
+    "api_panel_backup_upload",       # makes an empty part file; the finish audits what became of it
     "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
     "api_remote_bootstrap_dismiss",  # dismisses a banner
     "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)

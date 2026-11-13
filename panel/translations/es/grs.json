@@ -81,5 +81,7 @@
   "Upload a LinuxGSM backup of this server (.tar.zst, .tar.gz or .tar, up to 32 GB). It is checked as a restore checks it, then listed here under a LinuxGSM backup's name.": "Sube una copia de seguridad de LinuxGSM de este servidor (.tar.zst, .tar.gz o .tar, hasta 32 GB). Se comprueba como lo hace una restauración y luego aparece aquí con un nombre de copia de LinuxGSM.",
   "Uploading {name}: {pct}%": "Subiendo {name}: {pct} %",
   "Upload failed": "La subida falló",
-  "Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.": "Subir acepta una copia de seguridad hecha por este panel (hasta 512 MB); se comprueba como lo hace una restauración, y una cifrada pide su frase de contraseña al restaurarla."
+  "Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.": "Subir acepta una copia de seguridad hecha por este panel (hasta 512 MB); se comprueba como lo hace una restauración, y una cifrada pide su frase de contraseña al restaurarla.",
+  "Backup archive to upload": "Copia de seguridad que subir",
+  "Panel backup to upload": "Copia de seguridad del panel que subir"
 }

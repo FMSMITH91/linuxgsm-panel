@@ -330,7 +330,7 @@
     <span><i class="bi bi-archive"></i> Backups</span>
     <span class="d-flex gap-1 flex-wrap justify-content-end">
       <button class="btn btn-sm btn-outline-secondary" id="bk-upload" data-action="uploadPanelBackup"><i class="bi bi-upload"></i> Upload</button>
-      <input type="file" id="bk-upload-file" class="d-none" accept=".gz,.enc" data-action="uploadPanelBackupPicked" data-on="change" data-args='["@self"]'>
+      <input type="file" id="bk-upload-file" class="d-none" aria-label="Panel backup to upload" accept=".gz,.enc" data-action="uploadPanelBackupPicked" data-on="change" data-args='["@self"]'>
       <button class="btn btn-sm btn-success" data-action="createBackup" data-args='["@self"]'><i class="bi bi-plus-circle"></i> Back up now</button>
     </span>
   </div>
