@@ -13,8 +13,8 @@ Held here:
   LinuxGSM's own tmux test, a world path or Factorio's saves folder is a symlink, or a path does not
   resolve to itself. A removal that fails is a failure; output that did not come back is "unread",
   never done.
-* The card's route: `reset` is the only kind for these games, map/full stays Rust's, Paper is not
-  offered; the page renders the game's own description and no map/full choice.
+* The card's route: `reset` is the only kind for these games, map/full stays Rust's, a game with no
+  resolver (Valheim) is not offered; the page renders the game's own description and no map/full choice.
 * The sweep, end to end with every host call stubbed: backup, players, stop, the delete (and
   create), start, in that order, under the wipe registration; and each way it stops short.
 
@@ -75,7 +75,8 @@ check("world reset name: a key written with escapes that Java reads as level-nam
       and _wwr183.level_name("level\\u002dname=elsewhere\n")[0] is None, "")
 
 # ── 1b. Minecraft: what moves the world away from level-name ────────────────────────────────────
-_MCV183 = {"startparameters": "nogui", "extraparams": "", "executabledir": "${serverfiles}"}
+_MCV183 = {"startparameters": "nogui", "extraparams": "", "executabledir": "${serverfiles}",
+           "preexecutable": "java -Xmx${javaram}M -jar"}
 check("world reset mc: LinuxGSM's default start (nogui, in serverfiles) is read from server.properties",
       _wwr183.mc_start_problem(_MCV183) is None and _wwr183.mc_start_problem({"startparameters": "nogui"}) is None, "")
 check("world reset mc: --world / --universe in the start parameters or extraparams, written in full, "
@@ -354,7 +355,7 @@ check("world reset host: names reach the shell quoted and are removed with `rm -
 _mc_sid183 = _p9_new_server(P9_HOST, "p183mc", "mc", 25565, name="p183-mc")
 _fctr_sid183 = _p9_new_server(P9_HOST, "p183fctr", "fctr", 34197, name="p183-fctr")
 _rust_sid183 = _p9_new_server(P9_HOST, "p183rust", "rust", 28015, name="p183-rust")
-_pmc_sid183 = _p9_new_server(P9_HOST, "p183pmc", "pmc", 25566, name="p183-pmc")
+_vh_sid183 = _p9_new_server(P9_HOST, "p183vh", "vh", 2456, name="p183-vh")
 _CRON183 = "0 3 * * *"
 _BODY183 = {"enabled": True, "kind": "reset", "preset": "custom", "cron": _CRON183, "tz": "UTC"}
 _r183 = {}
@@ -367,14 +368,14 @@ try:
     _r183["saved"] = dict(_ws183.get(_mc_sid183) or {})
     _r183["map_fctr"] = _A183.post(_u183 % _fctr_sid183, json=dict(_BODY183, kind="map"))
     _r183["reset_rust"] = _A183.post(_u183 % _rust_sid183, json=_BODY183)
-    _r183["pmc"] = _A183.post(_u183 % _pmc_sid183, json=_BODY183)
+    _r183["vh"] = _A183.post(_u183 % _vh_sid183, json=_BODY183)
     _p9_patch(_sd183, "_maybe_resolve_public_ip", lambda *a, **k: None)
     _p9_patch(_sd183, "_host_timezone_cached", lambda *a, **k: "")
     _p9_patch(_sf183, "_host_timezone_cached", lambda *a, **k: "")
     _p9_patch_sm("run_command", lambda *a, **k: ("", "", 1))
     _r183["pages"] = {g: _A183.get("/server/%d/files" % s).get_data(as_text=True)
                       for g, s in (("mc", _mc_sid183), ("fctr", _fctr_sid183), ("rust", _rust_sid183),
-                                   ("pmc", _pmc_sid183))}
+                                   ("vh", _vh_sid183))}
 finally:
     _p9_restore_all()
     _ws183.put(_mc_sid183, None)
@@ -384,18 +385,19 @@ check("world reset route: a Minecraft server's card is a reset card, and saving 
       and _r183["save"].status_code == 200 and _r183["saved"].get("kind") == "reset"
       and (_r183["save"].get_json() or {}).get("describe", "").startswith("World reset, cron '0 3 * * *'"),
       repr((_r183["get"], _r183["saved"])))
-check("world reset route: map/full is refused for Factorio, `reset` for Rust, and Paper is not offered at all",
+check("world reset route: map/full is refused for Factorio, `reset` for Rust, and a game with no resolver "
+      "(Valheim) is not offered at all",
       _r183["map_fctr"].status_code == 400 and _r183["map_fctr"].get_json()["message"] == "kind must be reset."
       and _r183["reset_rust"].status_code == 400
       and _r183["reset_rust"].get_json()["message"] == "kind must be map or full."
-      and _r183["pmc"].status_code == 400, repr([_r183[k].get_json() for k in ("map_fctr", "reset_rust", "pmc")]))
+      and _r183["vh"].status_code == 400, repr([_r183[k].get_json() for k in ("map_fctr", "reset_rust", "vh")]))
 _pg183 = _r183["pages"]
 check("world reset page: Minecraft and Factorio get their own description and a fixed `reset` kind, no map/full "
-      "choice; Rust keeps its select; Paper has no card",
+      "choice; Rust keeps its select; a game with no resolver (Valheim) has no card",
       'id="wipe-kind" value="reset"' in _pg183["mc"] and "ops, whitelist, bans and server.properties are kept"
       in _pg183["mc"] and '<option value="map">' not in _pg183["mc"]
       and 'id="wipe-kind" value="reset"' in _pg183["fctr"] and "deletes the map save and its autosaves" in _pg183["fctr"]
-      and '<option value="map">Map wipe</option>' in _pg183["rust"] and 'id="wipe-card"' not in _pg183["pmc"]
+      and '<option value="map">Map wipe</option>' in _pg183["rust"] and 'id="wipe-card"' not in _pg183["vh"]
       and 'id="wipe-card"' in _pg183["mc"], "")
 
 
@@ -411,7 +413,12 @@ class _Dropped183(Exception):
 
 
 def _sweep_case183(sid, **o):
-    """One (or two) sweeps of a pending reset of server `sid`, every host call stubbed. Returns what happened."""
+    """One (or two) sweeps of a pending reset of server `sid`, every host call stubbed. Returns what happened.
+
+    `o` sets each stub's answer: props (every read_file), or read (a function of the path read), values
+    (the LinuxGSM config, as one _default.cfg: _cfg_texts183), or cfg (the five config texts as given), status,
+    delete, stop, players, backup, wait_empty, backed_up, again.
+    """
     got = {"sid": sid, "cmds": [], "jobs": [], "alerts": [], "backups": [], "players_asked": 0}
     with _p9.app_context():
         from panel.db.models import GameServer, db
@@ -453,10 +460,10 @@ def _sweep_case183(sid, **o):
         _p9_patch_sm("run_as_game_user", _run)
         _p9_patch_sm("shell_as_game_user", _shell)
         _p9_patch_sm("player_count", _players)
-        _p9_patch_sm("read_file", lambda *a, **k: o.get("props", (_PROPS183, None)))
+        _p9_patch_sm("read_file", lambda *a, **k: o["read"](a[2]) if "read" in o else o.get("props", (_PROPS183, None)))
         _values = (dict(_EXE183, startparameters=_LATEST183, extraparams="") if sid == _fctr_sid183
                    else dict(_MCV183))
-        _p9_patch_sm("lgsm_get_values", lambda *a, **k: o.get("values", _values))
+        _p9_patch_sm("lgsm_cfg_texts", lambda *a, **k: o["cfg"] if "cfg" in o else _cfg_texts183(o.get("values", _values)))
         try:
             _wr183.sweep(_p9, now=_NOW183)
         except Exception as exc:  # noqa: BLE001 - recorded, and named by the check that reads it
@@ -474,6 +481,13 @@ def _sweep_case183(sid, **o):
         _p9_restore_all()
         _ws183.put(sid, None)
         _mon183._end_offline_window(sid)
+
+
+def _cfg_texts183(values):
+    """lgsm_cfg_texts' answer for `values`: one _default.cfg of plain key="value" lines; None stays None."""
+    if values is None:
+        return None
+    return ["".join('%s="%s"\n' % kv for kv in values.items()), "", "", "", ""]
 
 
 def _last183(got):
@@ -527,7 +541,7 @@ check("world reset sweep: a stop that exits non-zero deletes nothing, starts the
 _running183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_RUNNING__\n", "", 4))
 check("world reset sweep: a server the delete command finds still running is not reset; start is still run "
       "and the failure alerted",
-      _running183["cmds"][-1] == "start" and len(_running183["cmds"]) == 5
+      _running183["cmds"][-1:] == ["start"] and len(_running183["cmds"]) == 5
       and "still running" in (_last183(_running183).get("detail") or "")
       and _running183["alerts"] == ["Scheduled wipe did not run"], repr(_running183))
 
@@ -535,17 +549,17 @@ _unread183 = _sweep_case183(_mc_sid183, delete=lambda: ("", "timed out", -1))
 check("world reset sweep: a delete whose output did not come back is never recorded as done; the server is "
       "started and the operator told to check it",
       _last183(_unread183).get("ok") is False and "may have deleted the world" in (_last183(_unread183).get("detail") or "")
-      and _unread183["cmds"][-1] == "start", repr(_unread183))
+      and _unread183["cmds"][-1:] == ["start"], repr(_unread183))
 
 _drop183 = _sweep_case183(_mc_sid183, delete=_raise183(True), again=True)
 check("world reset sweep: a connection that drops after the delete was sent ends the reset (start still tried, "
       "alerted as 'may have been deleted'), and the next sweep does NOT run it again",
-      _drop183["cmds"][-1] == "start" and _last183(_drop183).get("ok") is False
+      _drop183["cmds"][-1:] == ["start"] and _last183(_drop183).get("ok") is False
       and "may have been deleted" in (_last183(_drop183).get("detail") or "") and _drop183["again"] == []
       and _drop183["alerts"] == ["Scheduled wipe did not run"], repr(_drop183))
 _unsent183 = _sweep_case183(_mc_sid183, delete=_raise183(False))
 check("world reset sweep: a delete never sent starts the server again and stays pending with its backup",
-      _unsent183["cmds"][-1] == "start" and _unsent183["entry"].get("pending_since")
+      _unsent183["cmds"][-1:] == ["start"] and _unsent183["entry"].get("pending_since")
       and _unsent183["entry"].get("backed_up") and _unsent183["alerts"] == [], repr(_unsent183))
 
 _players183 = _sweep_case183(_mc_sid183, players=3)
@@ -618,8 +632,8 @@ _busy183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_BUSY__\n", "", 4))
 _nothing183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_NOTHING__\n", "", 8))
 check("world reset sweep: a delete refused because serverfiles was still in use, or that found no world, is "
       "not a reset: the server is started again and the failure alerted",
-      _busy183["cmds"][-1] == "start" and _last183(_busy183).get("ok") is False
-      and _nothing183["cmds"][-1] == "start" and _last183(_nothing183).get("ok") is False
+      _busy183["cmds"][-1:] == ["start"] and _last183(_busy183).get("ok") is False
+      and _nothing183["cmds"][-1:] == ["start"] and _last183(_nothing183).get("ok") is False
       and "no world was found" in (_last183(_nothing183).get("detail") or "")
       and _nothing183["alerts"] == ["Scheduled wipe did not run"], repr((_busy183, _nothing183)))
 
@@ -650,7 +664,7 @@ check("world reset sweep: a skipped backup waits, the server started again; a st
       and _bkdown183["cmds"] == ["status", "backup"] and _last183(_bkdown183).get("ok") is False,
       repr((_bkskip183, _bkdown183)))
 
-for _sid183 in (_mc_sid183, _fctr_sid183, _rust_sid183, _pmc_sid183):
+for _sid183 in (_mc_sid183, _fctr_sid183, _rust_sid183, _vh_sid183):
     _p9_delete_server(_sid183)
 eq("world reset: nothing this part drove reached a real transport (part12's tripwire, armed)",
    _P9_TRIPPED[_trips183:], [])

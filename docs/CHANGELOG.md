@@ -14,6 +14,12 @@ compares git commits, not this file.
 
 ### Added
 
+- **Scheduled world resets for Paper and Minecraft Bedrock.** The world reset on the Schedule tab
+  now also works for Paper and Bedrock servers: the server is stopped and backed up, its world is
+  deleted and it makes a new one, while plugins, ops, the allowlist, permissions and server settings
+  are kept. The panel deletes only a folder that holds a real Minecraft world, and refuses settings
+  that would point the server at a different world folder.
+
 - **Scheduled world resets for Minecraft and Factorio.** The wipe card on the Schedule tab can reset
   a Minecraft Java or Factorio world on a schedule. The server is stopped, backed up with LinuxGSM,
   its world is deleted, Factorio gets a new map made the way LinuxGSM's install makes it, and the
@@ -310,6 +316,10 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **A Minecraft world reset reads LinuxGSM's start settings the way LinuxGSM does.** A reset refuses
+  start parameters that use shell quoting, a setting written twice, or other forms LinuxGSM would
+  read differently from the panel, so it can no longer delete a folder the server is not using.
 
 - **A scheduled Stop on the panel's own host no longer pages "went offline unexpectedly".** The
   monitor now reads LinuxGSM's monitoring lock as the game account there, so a stop LinuxGSM made is
