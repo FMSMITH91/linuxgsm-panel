@@ -522,6 +522,16 @@ def _r12b_manual_line(res):
     _manual_line(res)
 
 
+def _full_counts_text(m):
+    """The counts a _FULL_COUNTS_RE match read off a manual run's summary, as the report prints them."""
+    if not m:
+        return "outcome not recorded in counts"
+    counts = "%s backed up, %s failed, %s skipped" % (m.group(1), m.group(2) or 0, m.group(3) or 0)
+    if m.group(4):
+        counts += ", %s held by a scheduled wipe or a queued stop or restart" % m.group(4)
+    return counts
+
+
 def _manual_line(res):
     """The MANUAL "Back up game servers now" run, from COUNTS parsed off its summary's prefix.
 
@@ -538,10 +548,7 @@ def _manual_line(res):
         res.add(head + " never run")
         return
     m = _FULL_COUNTS_RE.match(str(s.get("summary") or ""))
-    counts = ("%s backed up, %s failed, %s skipped" % (m.group(1), m.group(2) or 0, m.group(3) or 0)
-              if m else "outcome not recorded in counts")
-    if m and m.group(4):
-        counts += ", %s held by a scheduled wipe or a queued stop or restart" % m.group(4)
+    counts = _full_counts_text(m)
     queued = " · some queued for when empty" if "will back up once empty" in str(s.get("summary")) \
         else ""
     res.add(head + " last run %s ago: %s%s" % (ago(time.time() - s["last"]), counts, queued))
