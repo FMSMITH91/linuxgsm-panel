@@ -75,7 +75,8 @@ check("world reset name: a key written with escapes that Java reads as level-nam
       and _wwr183.level_name("level\\u002dname=elsewhere\n")[0] is None, "")
 
 # ── 1b. Minecraft: what moves the world away from level-name ────────────────────────────────────
-_MCV183 = {"startparameters": "nogui", "extraparams": "", "executabledir": "${serverfiles}"}
+_MCV183 = {"startparameters": "nogui", "extraparams": "", "executabledir": "${serverfiles}",
+           "preexecutable": "java -Xmx${javaram}M -jar"}
 check("world reset mc: LinuxGSM's default start (nogui, in serverfiles) is read from server.properties",
       _wwr183.mc_start_problem(_MCV183) is None and _wwr183.mc_start_problem({"startparameters": "nogui"}) is None, "")
 check("world reset mc: --world / --universe in the start parameters or extraparams, written in full, "
@@ -415,7 +416,8 @@ def _sweep_case183(sid, **o):
     """One (or two) sweeps of a pending reset of server `sid`, every host call stubbed. Returns what happened.
 
     `o` sets each stub's answer: props (every read_file), or read (a function of the path read), values
-    (lgsm_get_values), status, delete, stop, players, backup, wait_empty, backed_up, again.
+    (the LinuxGSM config, as one _default.cfg: _cfg_texts183), or cfg (the five config texts as given), status,
+    delete, stop, players, backup, wait_empty, backed_up, again.
     """
     got = {"sid": sid, "cmds": [], "jobs": [], "alerts": [], "backups": [], "players_asked": 0}
     with _p9.app_context():
@@ -461,7 +463,7 @@ def _sweep_case183(sid, **o):
         _p9_patch_sm("read_file", lambda *a, **k: o["read"](a[2]) if "read" in o else o.get("props", (_PROPS183, None)))
         _values = (dict(_EXE183, startparameters=_LATEST183, extraparams="") if sid == _fctr_sid183
                    else dict(_MCV183))
-        _p9_patch_sm("lgsm_get_values", lambda *a, **k: o.get("values", _values))
+        _p9_patch_sm("lgsm_cfg_texts", lambda *a, **k: o["cfg"] if "cfg" in o else _cfg_texts183(o.get("values", _values)))
         try:
             _wr183.sweep(_p9, now=_NOW183)
         except Exception as exc:  # noqa: BLE001 - recorded, and named by the check that reads it
@@ -479,6 +481,13 @@ def _sweep_case183(sid, **o):
         _p9_restore_all()
         _ws183.put(sid, None)
         _mon183._end_offline_window(sid)
+
+
+def _cfg_texts183(values):
+    """lgsm_cfg_texts' answer for `values`: one _default.cfg of plain key="value" lines; None stays None."""
+    if values is None:
+        return None
+    return ["".join('%s="%s"\n' % kv for kv in values.items()), "", "", "", ""]
 
 
 def _last183(got):

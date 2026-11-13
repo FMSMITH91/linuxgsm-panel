@@ -23,11 +23,15 @@ HOW IT RUNS. part12's app with its transport tripwire armed and every host call 
 sweep helper); host commands run under local bash in a temp folder (part183's helper). Times are
 fixed, never the wall clock. Nothing reaches a host or data/.
 """
-from unit.part01 import check, eq
+import os as _os191top
+import shutil as _shutil191
+import tempfile as _tempfile191
+
+from unit.part01 import check, eq, skip
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_client, _p9_delete_server, _p9_new_server,
                          _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part183 import _host183, _is_delete183, _last183, _sweep_case183
-from panel.ops.ssh_manager import _core as _core191
+from panel.ops.ssh_manager import _core as _core191, files as _sm191
 from panel.routes import server_detail as _sd191, server_files as _sf191
 from panel.services import wipe_schedule as _ws191, world_reset as _wwr191
 
@@ -35,7 +39,7 @@ _trips191 = len(_P9_TRIPPED)
 
 # ── 1. Paper: what moves the world away from server.properties ──────────────────────────────────
 _PMCV191 = {"startparameters": "nogui", "extraparams": "", "executabledir": "${serverfiles}",
-            "executable": "./paper.jar"}
+            "executable": "./paper.jar", "preexecutable": "java -Xmx${javaram}M -jar"}
 
 
 def _pmc191(**kv):
@@ -43,9 +47,9 @@ def _pmc191(**kv):
 
 
 check("world reset pmc: LinuxGSM's default start (nogui, paper.jar, in serverfiles) and Paper's other options "
-      "(port, online mode, size, commands file, an exact -p / --C, bonusChest, server-name) are not refused",
+      "(port, online mode, size, an exact -p / -s / --p / --s, bonusChest, server-name) are not refused",
       all(_pmc191(startparameters=s) is None for s in (
-          "nogui", "nogui --port 25566", "-p 25566 -o false", "--nogui -s 20 -C commands.yml", "--p 25566 --C c.yml",
+          "nogui", "nogui --port 25566", "-p 25566 -o false", "--nogui -s 20 --size 20", "--p 25566 --s 20",
           "--bonusChest --server-name lobby", "-port 25566", "--forceUpgrade")) and _pmc191(executable="") is None, "")
 _PMC_MOVES191 = {
     "the world container (-W, --world-dir, --universe, --world-container, abbreviated)":
@@ -55,7 +59,15 @@ _PMC_MOVES191 = {
     "another server.properties (-c, --config)": ("-c other.properties", "--config o", "-cfoo", "--con o", "--c o"),
     "another bukkit.yml (-b, --bukkit-settings)": ("-b b.yml", "--bukkit-settings b.yml", "--bukk b", "--b b"),
     "another plugins folder (-P, --plugins)": ("-P world/plugins", "--plugins p", "-Pp", "--pl p", "--P p"),
-    "a one-letter option after a no-value one in a cluster (-vW)": ("-vW w", "-vw x"),
+    "a one-letter option after a no-value one in a cluster (-vW)": ("-vW w", "-vw x", "-vS s.yml"),
+    "an extra plugin jar or folder (--add-plugin, --add-plugin-dir, abbreviated)":
+        ("--add-plugin world/x.jar", "--add-extra-plugin-jar x", "--add-plugin-dir world/p", "--add-extra-plugin-dir p",
+         "--add p", "-add-plugin-dir p"),
+    "Paper's config folder or file (--paper-dir, --paper-settings, abbreviated)":
+        ("--paper-dir world/cfg", "--paper-settings-directory c", "--paper x.yml", "--paper-settings x", "--pa x"),
+    "spigot.yml or commands.yml elsewhere (-S, --spigot-settings, -C, --commands-settings)":
+        ("-S world/spigot.yml", "--spigot-settings s", "--sp s", "-Sx", "-C world/commands.yml", "--C c",
+         "--commands-settings c", "--comm c", "-Cx"),
 }
 for _why191, _words191 in _PMC_MOVES191.items():
     check("world reset pmc: a start parameter choosing %s is refused" % _why191,
@@ -63,6 +75,24 @@ for _why191, _words191 in _PMC_MOVES191.items():
           repr([w for w in _words191 if _pmc191(startparameters="nogui " + w) is None]))
 check("world reset pmc: the same options in extraparams, or after the jar in `executable`, are refused too",
       _pmc191(extraparams="--world x") is not None and _pmc191(executable="./paper.jar --universe w") is not None, "")
+_PRE_OK191 = ("java -Xmx${javaram}M -jar", "java -Xms2G -Xmx4G -XX:+UseG1GC -Dcom.mojang.eula.agree=true -jar",
+              "/usr/lib/jvm/java-21-openjdk-amd64/bin/java -Xmx$javaram -jar")
+_PRE_BAD191 = {"Paper options after -jar": "java -Xmx2G -jar ./paper.jar --world-dir /srv/w",
+               "a wrapper before java": "env -C /srv java -jar", "an @argfile": "java @jvm.args -jar",
+               "user.dir moved": "java -Duser.dir=/srv -jar", "a word that is not an option": "java -cp x.jar -jar",
+               "no -jar": "java -Xmx2G", "shell syntax": "java -Xmx${heap} -jar", "nothing at all": ""}
+check("world reset preexecutable: LinuxGSM's own (java -Xmx${javaram}M -jar), other JVM options and a full path "
+      "to java are not refused",
+      all(_wwr191.java_pre_problem(p, _wwr191.pmc_start_problem) is None for p in _PRE_OK191), "")
+for _why191, _pre191 in _PRE_BAD191.items():
+    check("world reset preexecutable: one with %s is refused" % _why191,
+          _wwr191.java_pre_problem(_pre191, _wwr191.pmc_start_problem) is not None, repr(_pre191))
+check("world reset preexecutable: a JVM option the game's option scan refuses is refused too (-Wx for Paper)",
+      _wwr191.java_pre_problem("java -Wx -jar", _wwr191.pmc_start_problem) is not None
+      and _wwr191.java_pre_problem("java -Wx -jar") is None, "")
+check("world reset mcb: a Bedrock preexecutable (LinuxGSM sets none) is refused",
+      _wwr191.mcb_start_problem({"executabledir": "${serverfiles}", "preexecutable": "env -C /srv"}) is not None
+      and _wwr191.mcb_start_problem({"executabledir": "${serverfiles}"}) is None, "")
 check("world reset pmc: a server that does not run in serverfiles (executabledir changed) is refused",
       _pmc191(executabledir="/srv/paper") is not None, "")
 _SHELL191 = ('"--world" x', "--wo''rld x", "$(printf -- --world) x", "${EXTRA}", "nogui; true", "-[w] x", "`w`",
@@ -75,6 +105,96 @@ check("world reset mc: ...and Minecraft Java's start parameters with shell quoti
       _wwr191.mc_start_problem({"startparameters": 'nogui "--world" x', "executabledir": "${serverfiles}"})
       is not None and _wwr191.mc_start_problem({"startparameters": "nogui", "extraparams": "--wo''rld x"}) is not None,
       "")
+
+# ── 1c. the LinuxGSM config, read as LinuxGSM reads it ──────────────────────────────────────────
+def _cfg191(default="", common="", inst="", secrets_inst=""):
+    return [default, common, "", inst, secrets_inst]
+
+
+_DEF191 = 'startparameters="nogui"\nexecutabledir="${serverfiles}"\npreexecutable="java -Xmx${javaram}M -jar"\n'
+_K191 = ["startparameters", "executabledir", "preexecutable", "extraparams"]
+eq("world reset cfg: plain lines are read with the last file in LinuxGSM's order winning (instance over "
+   "_default, secrets-instance over instance), a key nowhere is empty",
+   [_wwr191.cfg_values(_cfg191(_DEF191), _K191)[0],
+    _wwr191.cfg_values(_cfg191(_DEF191, inst='startparameters="nogui -p 25566"\n'), ["startparameters"])[0],
+    _wwr191.cfg_values(_cfg191(_DEF191, inst='startparameters="a"\n', secrets_inst='  startparameters="b"\n'),
+                       ["startparameters"])[0]],
+   [{"startparameters": "nogui", "executabledir": "${serverfiles}", "preexecutable": "java -Xmx${javaram}M -jar",
+     "extraparams": ""}, {"startparameters": "nogui -p 25566"}, {"startparameters": "b"}])
+_CFG_ODD191 = {
+    "two lines in one file (LinuxGSM starts with the first, a merge reads the last)":
+        'startparameters="nogui --world-dir /srv/w"\nstartparameters="nogui"\n',
+    "a tab-indented line (grep finds it, LinuxGSM's sed does not)": '\tstartparameters="nogui --world x"\n',
+    "blanks around `=` (bash and LinuxGSM ignore it)": 'startparameters = "nogui"\n',
+    "a comment after the value": 'startparameters="nogui" # moved\n',
+    "a CRLF line end": 'startparameters="nogui"\r\n',
+    "single quotes": "startparameters='nogui'\n",
+    "the key set inside a command": '[ -f x ] && startparameters="--world x"\n',
+    "a backslash in the value": 'startparameters="nogui \\"\n',
+}
+for _why191, _txt191 in _CFG_ODD191.items():
+    check("world reset cfg: startparameters with %s is refused" % _why191,
+          _wwr191.cfg_values(_cfg191(_DEF191, inst=_txt191), ["startparameters"])[0] is None, repr(_txt191))
+check("world reset cfg: executabledir and preexecutable are held to the same plain form",
+      _wwr191.cfg_values(_cfg191(_DEF191, inst='executabledir="/srv"\nexecutabledir="${serverfiles}"\n'),
+                         ["executabledir"])[0] is None
+      and _wwr191.cfg_values(_cfg191(_DEF191, common='\tpreexecutable="java -jar x.jar --world w -jar"\n'),
+                             ["preexecutable"])[0] is None, "")
+check("world reset cfg: a config file that sources another file or runs eval is refused (whatever it sets is not "
+      "in the files)",
+      all(_wwr191.cfg_values(_cfg191(_DEF191, inst=t), ["executabledir"])[0] is None
+          for t in ("source /home/x/more.cfg\n", ". ./more.cfg\n", "  eval \"$x\"\n")), "")
+check("world reset cfg: comment lines naming the key, and LinuxGSM's own logdir line, are not refused",
+      _wwr191.cfg_values(_cfg191(_DEF191 + '# startparameters="--world x"\n  #startparameters=1\n'
+                                 '[ -n "${LGSM_LOGDIR}" ] && logdir="${LGSM_LOGDIR}" || logdir="${rootdir}/log"\n'),
+                         _K191)[1] is None, "")
+
+
+def _cfg_read191(tmp, files):
+    """lgsm_cfg_texts against a scratch home: its own shell command run by bash, files as given."""
+    import os as _os191
+    import subprocess as _sp191  # nosec B404 - bash over the reader's own command, in a temp folder
+    d = _os191.path.join(tmp, "lgsm", "config-lgsm", "p191s")
+    _os191.makedirs(d, exist_ok=True)
+    for name, data in files.items():
+        with open(_os191.path.join(d, name), "wb") as fh:
+            fh.write(data)
+
+    def _shell(server, user, inner, **k):
+        r = _sp191.run(["bash", "-c", inner.replace("/home/p191u", tmp)], capture_output=True, text=True,  # nosec B603 B607
+                       timeout=30, check=False)
+        return r.stdout.strip(), r.stderr, r.returncode
+    try:
+        _p9_patch_sm("shell_as_game_user", _shell)
+        return _sm191.lgsm_cfg_texts(None, "p191u", "p191s")
+    finally:
+        _p9_restore_all()
+
+
+_tmp191 = _tempfile191.mkdtemp(prefix="p191-")
+try:
+    _cfgread191 = _cfg_read191(_tmp191, {"_default.cfg": b'startparameters="nogui"\r\n', "p191s.cfg": b"x=1\n"})
+finally:
+    _shutil191.rmtree(_tmp191, ignore_errors=True)
+eq("world reset cfg: lgsm_cfg_texts reads the five files in LinuxGSM's order in one command, byte for byte "
+   "(a CRLF kept), a missing file as empty",
+   _cfgread191, ['startparameters="nogui"\r\n', "", "", "x=1\n", ""])
+_UNREAD_NAME191 = "world reset cfg: a config file that is there but cannot be read makes the whole read None (unread)"
+if _os191top.geteuid() == 0:
+    skip(_UNREAD_NAME191, "root reads a mode-000 file; held by the non-root run")
+else:
+    _tmp191 = _tempfile191.mkdtemp(prefix="p191-")
+    try:
+        _secret191 = _os191top.path.join(_tmp191, "lgsm", "config-lgsm", "p191s", "secrets-p191s.cfg")
+        _cfg_read191(_tmp191, {"_default.cfg": b'startparameters="nogui"\n'})
+        with open(_secret191, "w", encoding="utf-8") as _fh191:
+            _fh191.write('startparameters="--world x"\n')
+        _os191top.chmod(_secret191, 0)
+        _unread191 = _cfg_read191(_tmp191, {})
+    finally:
+        _shutil191.rmtree(_tmp191, ignore_errors=True)
+    check(_UNREAD_NAME191, _unread191 is None, repr(_unread191))
+
 
 # ── 2. bukkit.yml ───────────────────────────────────────────────────────────────────────────────
 _BUKKIT191 = ("# The main configuration file for Bukkit.\nsettings:\n  allow-end: true\n  warn-on-overload: true\n"
@@ -167,6 +287,28 @@ check("world reset sweep (pmc): a Paper started with --world-container is not re
       _pworld191["cmds"] == [] and _pwread191.asked == [] and _last183(_pworld191).get("ok") is False
       and "--world-container" in (_last183(_pworld191).get("detail") or ""), repr(_pworld191))
 
+_dupread191 = _reads191((_PROPS191, None))
+_dup191 = _sweep_case183(_pmc_sid191, read=_dupread191, cfg=[
+    'startparameters="nogui"\nexecutabledir="${serverfiles}"\nexecutable="./paper.jar"\n'
+    'preexecutable="java -Xmx${javaram}M -jar"\n', "", "",
+    'startparameters="nogui --world-dir /srv/w"\nstartparameters="nogui"\n', ""])
+check("world reset sweep (pmc): an instance cfg with two startparameters lines (LinuxGSM starts with the first) "
+      "is not reset, nothing read or stopped",
+      _dup191["cmds"] == [] and _dupread191.asked == [] and _last183(_dup191).get("ok") is False
+      and "more than once" in (_last183(_dup191).get("detail") or ""), repr(_dup191))
+_pre191 = _sweep_case183(_pmc_sid191, read=_reads191((_PROPS191, None)),
+                         values=dict(_PMCV191, preexecutable="java -Xmx2G -jar ./paper.jar --world-dir /srv/w"))
+check("world reset sweep (pmc): a preexecutable passing Paper options after -jar is not reset, nothing stopped",
+      _pre191["cmds"] == [] and "preexecutable" in (_last183(_pre191).get("detail") or ""), repr(_pre191))
+_plug191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191), read=_reads191(("level-name=Plugins\n", None)))
+_logs191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191), read=_reads191(("level-name=logs\n", None)))
+check("world reset sweep (pmc): a level-name naming one of the server's own folders (plugins, logs, any case) is "
+      "not reset, nothing stopped",
+      all(g["cmds"] == [] and "server's own folders" in (_last183(g).get("detail") or "") for g in (_plug191, _logs191)),
+      repr((_plug191, _logs191)))
+check("world reset sweep (pmc): the delete command carries the level.dat test",
+      len(_pok191["cmds"]) > 3 and "__WWR_NOTWORLD__" in _pok191["cmds"][3], "")
+
 _mcbread191 = _reads191((_MCB_PROPS191, None))
 _mok191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_mcbread191)
 check("world reset sweep (mcb): state, stop, backup, the delete of worlds/'Bedrock level' (quoted, with the "
@@ -174,6 +316,7 @@ check("world reset sweep (mcb): state, stop, backup, the delete of worlds/'Bedro
       _mok191["cmds"][:3] == ["status", "stop", "backup"] and len(_mok191["cmds"]) == 5
       and _is_delete183(_mok191["cmds"][3]) and "set -- 'Bedrock level'" in _mok191["cmds"][3]
       and 'if [ -L "$sf/worlds" ]' in _mok191["cmds"][3] and 'd="$sf/worlds"' in _mok191["cmds"][3]
+      and "__WWR_NOTWORLD__" in _mok191["cmds"][3]
       and _mok191["cmds"][4] == "start" and _last183(_mok191).get("ok") is True
       and _mcbread191.asked == ["serverfiles/server.properties"], repr(_mok191))
 _mparams191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191, startparameters="-x"), read=_reads191((_MCB_PROPS191, None)))
@@ -196,7 +339,8 @@ check("world reset sweep (mcb): Bedrock's players are counted, and with 'wait un
       repr(_mplayers191))
 
 # ── 5. the host command against scratch trees ───────────────────────────────────────────────────
-_PMC_PLAN191 = {"dir": "", "remove": ["world", "world_nether", "world_the_end"], "globs": [], "create": None}
+_PMC_PLAN191 = {"dir": "", "remove": ["world", "world_nether", "world_the_end"], "globs": [], "create": None,
+                "world": True}
 _PMC_FILES191 = ("serverfiles/world/level.dat", "serverfiles/world/players/p.dat", "serverfiles/world/datapacks/d.zip",
                  "serverfiles/world/dimensions/minecraft/the_nether/region/r.0.0.mca",
                  "serverfiles/world/dimensions/minecraft/overworld/paper-world.yml",
@@ -212,14 +356,15 @@ eq("world reset host (pmc): Paper's world folder goes whole (players, datapacks,
      "serverfiles/ops.json", "serverfiles/paper.jar", "serverfiles/plugins/Essentials.jar",
      "serverfiles/plugins/Essentials/config.yml", "serverfiles/server.properties", "serverfiles/spigot.yml"],
     ("done", "world deleted (1 removed)")))
-_pmcold191 = _host183(_PMC_PLAN191, ("serverfiles/world/level.dat", "serverfiles/world_nether/DIM-1/r",
+_pmcold191 = _host183(_PMC_PLAN191, ("serverfiles/world/level.dat", "serverfiles/world_nether/level.dat",
+                                     "serverfiles/world_nether/DIM-1/r", "serverfiles/world_the_end/level.dat",
                                      "serverfiles/world_the_end/DIM1/r", "serverfiles/plugins/p.jar"))
 check("world reset host (pmc): an older Paper's world_nether and world_the_end beside the world go too",
       _pmcold191[0] == ["serverfiles/plugins/p.jar"]
       and _wwr191.outcome(_pmcold191[1], _pmcold191[2], _PMC_PLAN191) == ("done", "world deleted (3 removed)"),
       repr(_pmcold191[:3]))
 
-_MCB_PLAN191 = {"dir": "worlds", "remove": ["Bedrock level"], "globs": [], "create": None}
+_MCB_PLAN191 = {"dir": "worlds", "remove": ["Bedrock level"], "globs": [], "create": None, "world": True}
 _MCB_FILES191 = ("serverfiles/worlds/Bedrock level/level.dat", "serverfiles/worlds/Bedrock level/levelname.txt",
                  "serverfiles/worlds/Bedrock level/db/CURRENT", "serverfiles/worlds/Bedrock level/world_behavior_packs.json",
                  "serverfiles/worlds/Bedrock/level.dat", "serverfiles/worlds/Other world/level.dat",
@@ -242,6 +387,29 @@ _mcbnone191 = _host183(_MCB_PLAN191, ("serverfiles/worlds/Other world/level.dat"
 check("world reset host (mcb): no folder of that name in worlds/ is 'nothing found', the other world kept",
       "__WWR_NOTHING__" in _mcbnone191[1] and _mcbnone191[0] == ["serverfiles/worlds/Other world/level.dat"],
       repr(_mcbnone191[:3]))
+
+_NOTWORLD191 = {
+    "a world folder without level.dat": (_PMC_PLAN191, ("serverfiles/world/region/r.0.0.mca", "serverfiles/plugins/p.jar")),
+    "a _nether folder without level.dat": (_PMC_PLAN191, ("serverfiles/world/level.dat", "serverfiles/world_nether/x")),
+    "a file where the world folder should be": (dict(_PMC_PLAN191, remove=["ops.json"]), ("serverfiles/ops.json",)),
+    "a Bedrock world folder without level.dat": (_MCB_PLAN191, ("serverfiles/worlds/Bedrock level/db/CURRENT",)),
+}
+for _why191, (_plan191, _files191) in _NOTWORLD191.items():
+    _nw191 = _host183(_plan191, _files191)
+    check("world reset host: %s is refused as not a world, nothing deleted" % _why191,
+          "__WWR_NOTWORLD__" in _nw191[1] and "__WWR_GONE__" not in _nw191[1]
+          and sorted(_nw191[0]) == sorted(_files191)
+          and _wwr191.outcome(_nw191[1], _nw191[2], _plan191)[0] == "refused", repr(_nw191[:3]))
+_nomain191 = _host183(_PMC_PLAN191, ("serverfiles/world_nether/level.dat", "serverfiles/world_nether/DIM-1/r"))
+check("world reset host: with no world folder, a _nether beside it is not deleted on its own ('nothing found')",
+      "__WWR_NOTHING__" in _nomain191[1] and _nomain191[0] == ["serverfiles/world_nether/DIM-1/r",
+                                                               "serverfiles/world_nether/level.dat"],
+      repr(_nomain191[:3]))
+_FPLAN191 = _wwr191.fctr_layout({"startparameters": "--start-server-load-latest",
+                                  "executabledir": "${serverfiles}/bin/x64"})[0]
+_fnolevel191 = _host183(_FPLAN191, ("serverfiles/saves/save1.zip",))
+check("world reset host: Factorio's save files are not held to the level.dat test",
+      _wwr191.outcome(_fnolevel191[1], _fnolevel191[2], _FPLAN191)[0] == "done", repr(_fnolevel191[:3]))
 
 # ── 6. the card ─────────────────────────────────────────────────────────────────────────────────
 _BODY191 = {"enabled": True, "kind": "reset", "preset": "custom", "cron": "0 4 * * *", "tz": "UTC"}

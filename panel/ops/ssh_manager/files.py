@@ -652,6 +652,35 @@ def lgsm_game_config(server, user, selfname):
     return {"rel": rel, "content": content or "", "exists": err is None, "error": err}
 
 
+def lgsm_cfg_texts(server, user, selfname):
+    """The text of each of an instance's LinuxGSM config files, in one read: a list in _core.LGSM_CFG_ORDER.
+
+    For a reader that must see the files as LinuxGSM does, not merged by _parse_cfg (the world
+    reset: services/world_reset.cfg_values). A file that is not there is "". Returns None when any
+    file is there and could not be read, or the read did not come back: a file the panel could not
+    see may hold the very setting that matters, so no answer is made up for it.
+    """
+    if not _idents_ok(user, selfname):
+        return None
+    d = _lgsm_cfg_dir(user, selfname)
+    tags = ["W%d" % i for i in range(len(_core.LGSM_CFG_ORDER))]
+    inner = "".join(_lgsm_frame(d + "/" + f.format(inst=selfname), t) for f, t in zip(_core.LGSM_CFG_ORDER, tags))
+    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
+    texts = []
+    for t in tags:
+        body = out or ""
+        b, e = "__LGSMP_%s_B__" % t, "__LGSMP_%s_E__" % t
+        i, j = body.find(b), body.find(e)
+        if i == -1 or j < i:
+            return None
+        try:
+            import base64 as _b64
+            texts.append(_b64.b64decode(body[i + len(b):j].strip(), validate=True).decode("utf-8", "replace"))
+        except ValueError:
+            return None
+    return texts
+
+
 def lgsm_get_values(server, user, selfname, keys):
     """Return {key: value} for `keys` from the merged LinuxGSM config.
 

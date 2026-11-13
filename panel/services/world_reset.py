@@ -64,7 +64,7 @@ _WWR_FCTR_EXE = ("", "./factorio")
 _M_NOSF, _M_RUNNING, _M_LINK, _M_OUTSIDE = "__WWR_NOSF__", "__WWR_RUNNING__", "__WWR_LINK__", "__WWR_OUTSIDE__"
 _M_RMFAIL, _M_GONE, _M_CREATED, _M_CREATEFAIL = "__WWR_RMFAIL__", "__WWR_GONE__", "__WWR_CREATED__", "__WWR_CREATEFAIL__"
 _M_DELETED, _M_NOTHING, _M_BUSY, _M_LOCKED = "__WWR_DELETED__", "__WWR_NOTHING__", "__WWR_BUSY__", "__WWR_LOCKED__"
-_M_UP, _M_DOWN = "__WWR_UP__", "__WWR_DOWN__"
+_M_UP, _M_DOWN, _M_NOTWORLD = "__WWR_UP__", "__WWR_DOWN__", "__WWR_NOTWORLD__"
 # How long the delete waits, after LinuxGSM's stop, for the account's processes to let go of serverfiles:
 # polls of 2 seconds. Minecraft goes on saving after LinuxGSM's tmux kill (its shutdown hook joins the
 # server thread), and a Factorio still running holds its write-data lock.
@@ -208,12 +208,58 @@ def _wwr_props(gs):
     return content, None
 
 
-def _wwr_values(gs, keys):
-    """The instance's merged LinuxGSM values for `keys`: (values, None), or (None, Unread)."""
-    values = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, keys)
-    if values is None:
-        return None, Unread("the server's LinuxGSM config could not be read")
+# A config line that loads another file or evaluates text: what it sets cannot be read from the files.
+_WWR_CFG_CMD = re.compile(r"^[ \t]*(source|\.|eval)([ \t]|$)")
+
+
+def _wwr_cfg_key(texts, key):
+    r"""One setting from the instance's LinuxGSM config files (LGSM_CFG_ORDER): (value, None) or (None, why).
+
+    LinuxGSM sources the files in that order (the last assignment wins), and just before a start it
+    reads startparameters and preexecutable again (linuxgsm.sh fn_reload_startparameters): from the
+    LAST file in that order where grep finds `^[[:blank:]]*key=`, through
+    `eval key="$(sed -nr 's/^ *key=(.*)$/\1/p' file)"`, which takes the FIRST such line of the file
+    and skips a tab-indented one grep found. The panel's own merge (_parse_cfg) takes the last line
+    and reads other forms, so here every non-comment line naming the key must be LinuxGSM's plain
+    form, `key="value"` indented by spaces at most and nothing after it, and a file may hold it once.
+    Then the files' last value is what both the sourcing and the reload use.
+    """
+    plain = re.compile(r'^ *%s="([^"\\`]*)"$' % key)
+    word = re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % key)
+    found = ""
+    for text in texts:
+        vals = [plain.match(ln) for ln in text.split("\n") if word.search(ln) and not ln.lstrip(" \t").startswith("#")]
+        if not all(vals):
+            return None, i18n.Sentence("the LinuxGSM config sets {key} in a form the panel cannot read the way "
+                                       "LinuxGSM does (only key=\"value\" lines, indented by spaces at most)", key=key)
+        if len(vals) > 1:
+            return None, i18n.Sentence("a LinuxGSM config file sets {key} more than once", key=key)
+        found = vals[0].group(1) if vals else found
+    return found, None
+
+
+def cfg_values(texts, keys):
+    """`keys` from the instance's LinuxGSM config texts (lgsm_cfg_texts): ({key: value}, None) or (None, why)."""
+    if any(_WWR_CFG_CMD.match(ln) for text in texts for ln in text.split("\n")):
+        return None, i18n.Sentence("the LinuxGSM config loads another file or runs eval, which the panel does not "
+                                   "follow")
+    values = {}
+    for key in keys:
+        values[key], why = _wwr_cfg_key(texts, key)
+        if why is not None:
+            return None, why
     return values, None
+
+
+def _wwr_values(gs, keys):
+    """The instance's LinuxGSM values for `keys`, read as LinuxGSM reads them: (values, None), or (None, why).
+
+    One read of the five config files (lgsm_cfg_texts); a read that failed is an Unread.
+    """
+    texts = _sm.lgsm_cfg_texts(gs.remote, gs.short_name, gs.lgsm_name or gs.short_name)
+    if texts is None:
+        return None, Unread("the server's LinuxGSM config could not be read")
+    return cfg_values(texts, keys)
 
 
 def _wwr_java_plan(gs, start_problem, extra_check=None):
@@ -222,8 +268,8 @@ def _wwr_java_plan(gs, start_problem, extra_check=None):
     `start_problem` judges the instance's LinuxGSM values; `extra_check(gs)`, when given, is asked
     after server.properties was read and answers None or why the reset is refused.
     """
-    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir", "executable"])
-    why = why or start_problem(values)
+    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir", "executable", "preexecutable"])
+    why = why or java_pre_problem(values.get("preexecutable") or "", start_problem) or start_problem(values)
     if why is not None:
         return None, why
     content, why = _wwr_props(gs)
@@ -232,10 +278,41 @@ def _wwr_java_plan(gs, start_problem, extra_check=None):
     name, why = level_name(content)
     if name is None:
         return None, i18n.Sentence("level-name in server.properties is not used: {why}", why=why)
+    if name.lower() in _WWR_JAVA_SERVER_DIRS:
+        return None, i18n.Sentence("level-name in server.properties is not used: it names one of the server's own "
+                                   "folders ({name})", name=name)
     why = extra_check(gs) if extra_check else None
     if why is not None:
         return None, why
-    return {"dir": "", "remove": [name, name + "_nether", name + "_the_end"], "globs": [], "create": None}, None
+    return {"dir": "", "remove": [name, name + "_nether", name + "_the_end"], "globs": [], "create": None,
+            "world": True}, None
+
+
+# Folders a Java server (vanilla or Paper) keeps beside its world: a level-name naming one would delete it.
+_WWR_JAVA_SERVER_DIRS = frozenset(("plugins", "config", "logs", "libraries", "cache", "versions", "crash-reports",
+                                   "debug", "bundler", "worlds"))
+# LinuxGSM's preexecutable for mcserver and pmcserver is `java -Xmx${javaram}M -jar` (_default.cfg). Accepted:
+# java (or an absolute path to it), JVM options written as one word each, then -jar last, so no word of it
+# reaches the server. Not -Duser.dir (relative paths would resolve elsewhere) or an @argfile (more words).
+_WWR_JAVA_EXE = re.compile(r"(/[A-Za-z0-9._+-]+)*/java|java")
+_WWR_JAVARAM = re.compile(r"\$\{javaram\}|\$javaram(?![A-Za-z0-9_])")
+
+
+def java_pre_problem(pre, start_problem=None):
+    """Why preexecutable (its value) is not plainly `java <JVM options> -jar`, else None.
+
+    `start_problem` is the game's start-parameter judge (mc_start_problem, pmc_start_problem); its
+    option scan is run over the JVM options too.
+    """
+    text = _WWR_JAVARAM.sub("1024", pre)
+    words = text.split()
+    form = (len(words) >= 2 and _WWR_JAVA_EXE.fullmatch(words[0]) and words[-1] == "-jar"
+            and all(w.startswith("-") and w != "-jar" and not w.startswith("-Duser.dir") for w in words[1:-1]))
+    if any(c in _WWR_SHELL_SYNTAX for c in text) or not form:
+        return i18n.Sentence("the LinuxGSM preexecutable is not plainly java, its options, then -jar")
+    if start_problem is not None and start_problem({"startparameters": " ".join(words[1:-1])}) is not None:
+        return i18n.Sentence("the LinuxGSM preexecutable holds an option that could choose the world")
+    return None
 
 
 def mc_plan(gs):
@@ -245,18 +322,22 @@ def mc_plan(gs):
 
 # Paper's options that move the world, or the files that say where it is (CraftBukkit Main on PaperMC/Paper
 # main, 2026-11): W/world-dir/universe/world-container, w/world/level-name, c/config (server.properties),
-# b/bukkit-settings (bukkit.yml, which can hold world-container) and P/plugins (a plugins folder inside the
-# world would go with it). Paper's parser is jopt-simple with abbreviations on: a long option may be any
+# b/bukkit-settings (bukkit.yml, which can hold world-container), and every option that points Paper's own
+# files or folders somewhere else, which could be inside the world and go with it: P/plugins,
+# add-plugin/add-extra-plugin-jar, add-plugin-dir/add-extra-plugin-dir, paper-dir/paper-settings-directory,
+# paper/paper-settings, S/spigot-settings, C/commands-settings. Paper's parser is jopt-simple with abbreviations on: a long option may be any
 # unambiguous prefix, given with one dash or two, and its value after `=`; one-letter options cluster
 # (`-vW x`), the rest of the word being the value of the first one that takes one.
 _WWR_PMC_LONG = ("world-dir", "universe", "world-container", "world", "level-name", "config", "bukkit-settings",
-                 "plugins")
-_WWR_PMC_SHORT = "WwcbP"
+                 "plugins", "add-plugin", "add-extra-plugin-jar", "add-plugin-dir", "add-extra-plugin-dir",
+                 "paper-dir", "paper-settings-directory", "paper", "paper-settings", "spigot-settings",
+                 "commands-settings")
+_WWR_PMC_SHORT = "WwcbPSC"
 # One-letter options that take no value (help, version), so a cluster reads on past them.
 _WWR_PMC_NOARG = "?v"
-# One-letter options whose letter starts a refused long name (port, commands settings): given exactly,
+# One-letter options whose letter starts a refused long name (p: port, s: max players): given exactly,
 # jopt-simple takes the option of that name, not an abbreviation.
-_WWR_PMC_EXACT_OK = ("p", "C")
+_WWR_PMC_EXACT_OK = ("p", "s")
 
 
 def _wwr_pmc_word_moves(word):
@@ -386,18 +467,18 @@ def mcb_start_problem(values):
 
     bedrock_server reads server.properties and worlds/ in the folder it runs in (executabledir:
     LinuxGSM's default is serverfiles) and has no documented options; LinuxGSM passes none
-    (startparameters=""), so any start parameter is one the panel cannot judge.
+    (startparameters="") and no preexecutable, so any of them is one the panel cannot judge.
     """
     if (values.get("executabledir") or "") not in _WWR_MC_EXEDIR:
         return i18n.Sentence("the server does not run in serverfiles (executabledir is not LinuxGSM's default)")
-    if (values.get("startparameters") or "").strip() or (values.get("extraparams") or "").strip():
+    if any((values.get(k) or "").strip() for k in ("startparameters", "extraparams", "preexecutable")):
         return i18n.Sentence("the server has start parameters, and Bedrock documents none the panel could judge")
     return None
 
 
 def mcb_plan(gs):
     """The world of Bedrock server `gs`: (plan, None), or (None, why it is not reset)."""
-    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir"])
+    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir", "preexecutable"])
     why = why or mcb_start_problem(values)
     if why is not None:
         return None, why
@@ -407,7 +488,7 @@ def mcb_plan(gs):
     name, why = bedrock_level_name(content)
     if name is None:
         return None, why
-    return {"dir": "worlds", "remove": [name], "globs": [], "create": None}, None
+    return {"dir": "worlds", "remove": [name], "globs": [], "create": None, "world": True}, None
 
 
 _WWR_FCTR_NO_SAVE = i18n.Sentence("the start parameters do not name one save the panel knows how to reset")
@@ -439,10 +520,9 @@ def fctr_layout(values):
 
 def fctr_plan(gs):
     """The world of Factorio server `gs`: (plan, None), or (None, why it is not reset)."""
-    values = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name,
-                                 ["startparameters", "extraparams", "executabledir", "executable"])
-    if values is None:
-        return None, Unread("the server's LinuxGSM config could not be read")
+    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir", "executable"])
+    if why is not None:
+        return None, why
     if not (values.get("startparameters") or "").strip():
         return None, i18n.Sentence("the server's start parameters are empty")
     return fctr_layout(values)
@@ -535,6 +615,8 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
     5. the save folder (Factorio's saves/) is a symlink: refuses;
     6. each path is collected (the fixed names, and the glob's matches), and one that is a symlink,
        or does not resolve to exactly <folder>/<name>, refuses;
+    7. (a Minecraft world, plan["world"]) the world folder itself is not there ("nothing found"),
+       or a path there is not a folder holding level.dat (_wwr_world_test): refuses;
     then each is removed with `rm -rf --` and checked gone; none there at all is "nothing found"
     (no world was reset); and the new save is created.
     """
@@ -556,6 +638,7 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
         'for n in "$@"; do p="$d/$n"; if [ -L "$p" ]; then echo %s; exit 5; fi; [ -e "$p" ] || continue; '
         'r=$(realpath -e -- "$p" 2>/dev/null && printf x) && r=${r%%?x} || r=; '
         'if [ "$r" != "$d/$n" ]; then echo %s; exit 5; fi; done' % (_M_LINK, _M_OUTSIDE),
+    ] + (_wwr_world_test() if plan.get("world") else []) + [
         'g=0; for n in "$@"; do p="$d/$n"; [ -e "$p" ] || continue; rm -rf -- "$p"; '
         'if [ -e "$p" ] || [ -L "$p" ]; then echo %s; exit 6; fi; g=$((g+1)); echo %s; done' % (_M_RMFAIL, _M_GONE),
         'if [ "$g" = 0 ]; then echo %s; exit 8; fi' % _M_NOTHING,
@@ -571,6 +654,17 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
     return "\n".join(lines) + "\n"
 
 
+def _wwr_world_test():
+    """Script lines: the world folder ($1) must be there, and every path to delete a folder holding level.dat.
+
+    Every Minecraft world folder has one: Java's (and a Bukkit-style <name>_nether / _the_end) and
+    Bedrock's worlds/<name>. A path without it is not a world the panel will delete, whatever named it.
+    """
+    return ['[ -e "$d/$1" ] || { echo %s; exit 8; }' % _M_NOTHING,
+            'for n in "$@"; do p="$d/$n"; [ -e "$p" ] || continue; '
+            'if [ ! -d "$p" ] || [ ! -f "$p/level.dat" ]; then echo %s; exit 5; fi; done' % _M_NOTWORLD]
+
+
 # The script's refusals, each printed before anything is deleted.
 _WWR_REFUSALS = (
     (_M_NOSF, i18n.Sentence("the serverfiles folder could not be found")),
@@ -578,6 +672,8 @@ _WWR_REFUSALS = (
     (_M_LINK, i18n.Sentence("part of the world is a symbolic link or outside serverfiles; nothing was deleted")),
     (_M_OUTSIDE, i18n.Sentence("part of the world is a symbolic link or outside serverfiles; nothing was deleted")),
     (_M_LOCKED, i18n.Sentence("a LinuxGSM backup or update of this server is running; nothing was deleted")),
+    (_M_NOTWORLD, i18n.Sentence("a folder the reset would delete is not a Minecraft world (it holds no level.dat); "
+                                "nothing was deleted")),
     (_M_BUSY, i18n.Sentence("a process of the game account still had files open in serverfiles a minute after "
                             "the stop; nothing was deleted")),
 )
