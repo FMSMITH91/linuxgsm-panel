@@ -3628,11 +3628,15 @@ class _HeldBody(_hb_io.BytesIO):
         return super().readline(*a)
 
 
+# A tag write needs MANAGE_SERVERS, an upload EDIT_FILES (the upload checks post one).
+_HB_PERMS = [auth.VIEW_SERVERS, auth.MANAGE_SERVERS, auth.VIEW_FILES, auth.EDIT_FILES]
+
+
 def _hb_fixture():
-    """A MANAGE_SERVERS user on the granted host, with an API token: (user id, group id, token)."""
+    """A MANAGE_SERVERS + file-permission user on the granted host, with an API token: (user id, group id, token)."""
     with app.app_context():
         grp = Group(name=tag + "_hb", description="RBAC held body (auto)", is_default=False)
-        grp.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+        grp.set_permissions(_HB_PERMS)
         grp.servers.append(db.session.get(RemoteServer, granted_remote))
         db.session.add(grp)
         db.session.flush()
@@ -3744,7 +3748,7 @@ def _check_held_json_body_demoted(hb_uid, hb_gid, bearer):
           read and _hb_user(hb_uid)["sa"] is False
           and r.status_code == 403 and not _hb_tag_made(tag + "_hbsa"),
           "the stale is_superadmin still created a tag (read=%s, %d)" % (read, r.status_code))
-    _hb_perms(hb_gid, [auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+    _hb_perms(hb_gid, _HB_PERMS)
 
 
 def _check_held_body_meets_the_password_gate(hb_uid, bearer):
@@ -3786,7 +3790,7 @@ def _check_held_body_row_kept_alive(hb_uid, hb_gid, bearer):
           and r.status_code == 403 and not _hb_tag_made(tag + "_hbkept"),
           "the loaded rows were not expired, so the re-load reused the stale one (read=%s, kept=%d,"
           " %d)" % (read, len(_kept), r.status_code))
-    _hb_perms(hb_gid, [auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+    _hb_perms(hb_gid, _HB_PERMS)
 
 
 def _check_held_json_body_with_a_cookie(hb_uid):
