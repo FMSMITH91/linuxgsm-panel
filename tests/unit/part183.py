@@ -121,7 +121,9 @@ def _stubs183(tmp, home, up, realpath):
     stubs = _os183.path.join(tmp, "stubs")
     _exe183(_os183.path.join(stubs, "tmux"), 'echo "$*" >> "%s/tmux.args"\n%s' % (tmp, "echo p183s\n" if up else ""))
     if realpath:
-        _exe183(_os183.path.join(stubs, "realpath"), "echo /elsewhere/x\n")
+        # "elsewhere": every path resolves somewhere else; "same": every path resolves to itself (a host
+        # where realpath does not follow the link), so only the script's own symlink test stands.
+        _exe183(_os183.path.join(stubs, "realpath"), "echo /elsewhere/x\n" if realpath == "elsewhere" else 'echo "$3"\n')
     if _os183.path.isdir(_os183.path.join(home, "serverfiles")):
         _exe183(_os183.path.join(home, "serverfiles", "bin", "x64", "factorio"),
                 'echo "$*" >> "%s/factorio.args"\nprintf new > "$2.zip"\n' % tmp)
@@ -190,7 +192,13 @@ check("world reset host: a world folder that is a symlink is refused before anyt
       _wwr183.outcome(_link183[1], _link183[2], _MC_PLAN183)[0] == "refused" and _link183[5]
       and "serverfiles/world_nether/x" in _link183[0], repr(_link183[:3]))
 
-_elsewhere183 = _host183(_MC_PLAN183, _MC_FILES183, realpath=True)
+_samelink183 = _host183(_MC_PLAN183, [f for f in _MC_FILES183 if not f.startswith("serverfiles/world/")],
+                        links=[("serverfiles/world", "@OUT")], realpath="same")
+check("world reset host: ...refused by the symlink test itself, even where realpath would not catch it",
+      "__WWR_LINK__" in _samelink183[1] and _samelink183[5] and "serverfiles/world_nether/x" in _samelink183[0],
+      repr(_samelink183[:3]))
+
+_elsewhere183 = _host183(_MC_PLAN183, _MC_FILES183, realpath="elsewhere")
 check("world reset host: a world path that does not resolve to serverfiles/<name> is refused, nothing deleted",
       "__WWR_OUTSIDE__" in _elsewhere183[1] and "serverfiles/world/level.dat" in _elsewhere183[0]
       and "serverfiles/world_the_end/x" in _elsewhere183[0], repr(_elsewhere183[:3]))
@@ -383,7 +391,7 @@ check("world reset sweep (mc): the reset is recorded as done (audit, card's last
       and _last183(_ok183).get("ok") is True and not _ok183["entry"].get("pending_since")
       and _ok183["alerts"] == [] and _ok183["window"] == (True, False), repr(_ok183))
 
-_fok183 = _sweep_case183(_fctr_sid183)
+_fok183 = _sweep_case183(_fctr_sid183, delete=lambda: (_FCTR_GONE183, "", 0))
 check("world reset sweep (fctr): stop, the delete with its --create of saves/save1, start; done",
       len(_fok183["cmds"]) == 3 and _fok183["cmds"][0] == "stop" and _is_delete183(_fok183["cmds"][1])
       and '--create "$d/save1"' in _fok183["cmds"][1] and _fok183["cmds"][2] == "start"
@@ -439,11 +447,15 @@ check("world reset sweep: LinuxGSM's own players-online refusal of the stop keep
 _unreadprops183 = _sweep_case183(_mc_sid183, props=(None, "Could not read that file — the host did not answer."))
 _badname183 = _sweep_case183(_mc_sid183, props=("level-name=../home\n", None))
 _badcfg183 = _sweep_case183(_fctr_sid183, values=None)
+_emptyprops183 = _sweep_case183(_mc_sid183, props=("", None))
 check("world reset sweep: server.properties (or Factorio's config) that could not be read keeps the reset "
       "waiting with the server untouched, never guessing a name",
       _unreadprops183["cmds"] == [] and _unreadprops183["entry"].get("pending_since")
       and "could not be read" in (_unreadprops183["entry"].get("wait") or "")
       and _badcfg183["cmds"] == [] and _badcfg183["entry"].get("pending_since"), repr((_unreadprops183, _badcfg183)))
+check("world reset sweep: an empty server.properties (read, but nothing in it) is refused, never read as `world`",
+      _emptyprops183["cmds"] == [] and _last183(_emptyprops183).get("ok") is False
+      and "server.properties is empty" in (_last183(_emptyprops183).get("detail") or ""), repr(_emptyprops183))
 check("world reset sweep: a level-name the panel refuses ends the reset, alerted, with the server untouched",
       _badname183["cmds"] == [] and _last183(_badname183).get("ok") is False
       and "level-name in server.properties is not used" in (_last183(_badname183).get("detail") or "")
