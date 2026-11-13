@@ -98,8 +98,8 @@ def _grs_recover_one(app, sid, entry):
         _grs_held_put(sid, None)        # the server is gone (or its id is another's now)
         return
     name, t0 = entry.get("name") or "", int(entry.get("t0") or 0)
-    out, _err, rc = shell_as_game_user(gs.remote, gs.short_name, grs.recover_script(gs.short_name, t0),
-                                       timeout=_GRS_RESTORE_TIMEOUT, selfname=gs.lgsm_name)
+    out, _err, _rc = shell_as_game_user(gs.remote, gs.short_name, grs.recover_script(gs.short_name, t0),
+                                        timeout=_GRS_RESTORE_TIMEOUT, selfname=gs.lgsm_name)
     got = grs.recover_outcome(out)
     if got is None:
         return                          # the host did not answer: the next pass tries again

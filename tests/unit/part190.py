@@ -279,6 +279,23 @@ else:
     _ASIDE190 = '&& step=aside && moveall "$HR" "$O"'
     _MOVEIN190 = '&& step=in && moveall "$S" "$HR"'
 
+    def _lgsm_cmd190(sb):
+        """A LinuxGSM command of the account, as cron starts one: `bash /home/<acct>/<script> monitor`."""
+        fake = _os190.path.join(sb.root, "lgsm-copy", _U190)
+        _os190.makedirs(_os190.path.dirname(fake))
+        with open(fake, "w") as f:
+            f.write("sleep 60\n")
+        return _sp190.Popen(["bash", fake, "monitor"], cwd="/")
+
+    def _switch_seen190(sb, out, rc, rec, before):
+        tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
+        during = _os190.path.join(sb.root, "cron-during.txt")
+        res = _grs190.restore_outcome(out, rc)
+        return {"state": res[0], "said": str(res[1]), "home": sb.tree() == before[0], "cron": sb.cron() == before[1],
+                "tmp": tmp, "rec": _grs190.recover_outcome(rec) if rec is not None else None,
+                "held": [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f],
+                "during": open(during).read() if _os190.path.exists(during) else None}
+
     def _switch190(edit=None, recover=False, polls=None, lgsm=False):
         sb = _Sb190()
         saved = _grs190._GRS_LGSM_POLLS
@@ -288,25 +305,13 @@ else:
             with open(_os190.path.join(sb.bdir, _UNDO190), "wb") as f:
                 f.write(b"undo")
             _grs190._GRS_LGSM_POLLS = polls or saved
-            tree, cron = sb.tree(), sb.cron()
+            before = (sb.tree(), sb.cron())
             rs = _grs190.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], _UNDO190, busy_polls=1,
                                         members=ready["members"])
-            rs = edit(rs, sb) if edit else rs
-            if lgsm:      # a LinuxGSM command of the account, as cron starts one: `bash /home/<acct>/<script> monitor`
-                fake = _os190.path.join(sb.root, "lgsm-copy", _U190)
-                _os190.makedirs(_os190.path.dirname(fake))
-                with open(fake, "w") as f:
-                    f.write("sleep 60\n")
-                sleeper = _sp190.Popen(["bash", fake, "monitor"], cwd="/")
-            out, rc = sb.run(rs)
-            rec = sb.run(_grs190.recover_script(_U190, ready["t0"]))[0] if recover else ""
-            tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
-            return {"state": _grs190.restore_outcome(out, rc)[0], "said": str(_grs190.restore_outcome(out, rc)[1]),
-                    "home": sb.tree() == tree, "cron": sb.cron() == cron, "tmp": tmp,
-                    "rec": _grs190.recover_outcome(rec) if recover else None,
-                    "held": [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f],
-                    "during": open(_os190.path.join(sb.root, "cron-during.txt")).read()
-                    if _os190.path.exists(_os190.path.join(sb.root, "cron-during.txt")) else None}
+            sleeper = _lgsm_cmd190(sb) if lgsm else None
+            out, rc = sb.run(edit(rs, sb) if edit else rs)
+            rec = sb.run(_grs190.recover_script(_U190, ready["t0"]))[0] if recover else None
+            return _switch_seen190(sb, out, rc, rec, before)
         finally:
             _grs190._GRS_LGSM_POLLS = saved
             if sleeper is not None:
