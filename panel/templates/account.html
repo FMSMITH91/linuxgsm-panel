@@ -126,7 +126,7 @@
         {% if current_user.totp_enabled %}
         <div class="mb-3" style="max-width: 420px;">
           <label class="form-label small mb-1" for="account-totp_code">Authenticator code</label>
-          <input id="account-totp_code" type="text" name="totp_code" class="form-control form-control-sm" inputmode="numeric"
+          <input id="account-totp_code" type="text" name="totp_code" class="form-control form-control-sm"
                  autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" required>
           <div class="form-text">From your authenticator app — or one of your one-time backup codes.</div>
         </div>
@@ -149,7 +149,7 @@
           <span class="form-label small d-inline-block" id="tfa-off-label">Confirm your password and a current code to turn 2FA off</span>
           <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;" role="group" aria-labelledby="tfa-off-label">
             <input type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
-            <input type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
+            <input type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
             <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Disable 2FA</button>
           </div>
         </form>
@@ -240,7 +240,7 @@
         <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
           <input id="account-api_password" type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" required>
           {% if current_user.totp_enabled %}
-          <input id="account-api_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
+          <input id="account-api_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
           {% endif %}
           <button class="btn btn-primary btn-sm text-nowrap" type="submit">
             <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}

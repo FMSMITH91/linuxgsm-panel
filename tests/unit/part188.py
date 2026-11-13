@@ -8,6 +8,8 @@ Held here:
   written answers what the host did, with audit_unwritten and the sentence saying so.
 * The charts' legends: the server page's live chart draws translated ones, a History refresh repaints
   them in the language now chosen, and statsChart, read bare by history_charts.js, is declared.
+* No field that takes a backup code or a port range asks a phone for its digits-only keypad, and every
+  status word a server row can show (Installing, Configuring...) has a French and a Spanish entry.
 
 HOW IT RUNS. No host is reached: routes run on part12's app with its transport tripwire armed and
 every host call stubbed; the background power action's thread is queued and drained. Scripts run in
@@ -15,6 +17,7 @@ node through part47's runner.
 """
 import json as _json188
 import os as _os188
+import re as _re188
 
 from sqlalchemy.exc import OperationalError as _OpErr188
 
@@ -23,6 +26,7 @@ from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _P9Thread, _p9_arm, _p9
                          _p9_drain, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_row,
                          _p9_set, _p9_threading)
 from unit.part47 import _cut47, _node47
+from panel.core import i18n as _i18n188
 from panel.routes import _shared as _sh188, server_detail as _sd188, server_files as _sf188
 from panel.routes import game_config_form as _gcfr188, mc_lists as _mcl188, modrinth_plugins as _mdr188
 from panel.routes import pz_admin as _pza188, workshop as _wsc188
@@ -199,3 +203,29 @@ _esl188 = _json188.loads(_js188(".eslintrc.json"))["globals"]
 eq("eslint r42r: statsChart, read bare by history_charts.js and defined by server_detail.js, is declared",
    ("_r37d_inkChart(statsChart)" in _HC188, "var statsChart" in _SD188, _esl188.get("statsChart")),
    (True, True, "writable"))
+
+
+# ── 4. the templates: keypads and status words ──────────────────────────────────────────────────
+def _tpl188(name):
+    with open(_os188.path.join(_root, "panel", "templates", name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+_inputs188 = [(f, m.group(0)) for f in sorted(_os188.listdir(_os188.path.join(_root, "panel", "templates")))
+              if f.endswith(".html") for m in _re188.finditer(r"<input\b[^>]*>", _tpl188(f))]
+_mixed188 = [(f, tag) for f, tag in _inputs188 if _re188.search(r"backup code|range", tag, _re188.I)]
+check("templates r42r: no input that takes a backup code (letters, digits, a dash) or a port range (a colon) "
+      "sets inputmode=numeric, whose phone keypad cannot type them",
+      len(_mixed188) >= 4 and not [t for _f, t in _mixed188 if 'inputmode="numeric"' in t],
+      repr([(f, t[:120]) for f, t in _mixed188 if 'inputmode="numeric"' in t] or len(_mixed188)))
+_panel_py188 = [_os188.path.join(d, f) for d, _s, fs in _os188.walk(_os188.path.join(_root, "panel"))
+                for f in fs if f.endswith(".py")]
+_states188 = set()
+for _f188 in _panel_py188:
+    with open(_f188, encoding="utf-8") as _fh188:
+        _states188.update(_re188.findall(r'\.status\s*=\s*"([a-z]+)"', _fh188.read()))
+_untr188 = sorted((lang, w.title()) for w in _states188 | {"unknown"} for lang in ("fr", "es")
+                  if _i18n188.translate(lang, w.title()) == w.title())
+check("i18n r42r: every status a server row is set to, as its row shows it (Installing, Configuring, "
+      "Online, ...), has a French and a Spanish entry",
+      {"installing", "configuring", "online"} <= _states188 and not _untr188, repr((sorted(_states188), _untr188)))
