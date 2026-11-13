@@ -1435,6 +1435,7 @@ try:
     _p9_patch(_pb190, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
     _p9_patch(_ms190, "_r25b_uninstall_claimed", lambda *a, **k: (_wrote190.append("uninstall") or ("", 302)))
     _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: _wrote190.append("cron_upgrade"))
     _gr190._grs_status.pop(P9_GS, None)
     _held190.clear()
     _held190[str(P9_GS)] = {"name": _LIST190[0]["name"], "t0": _T0190, "short_name": _short190, "remote_id": _rid190}
@@ -1452,9 +1453,10 @@ eq("after a panel restart (only the restore's record left): cron add, Autostart,
    "nothing is written", _aft190.get("held"),
    ({"cron_add": 409, "autostart": 409, "synced": 0, "card": True, "restore": 409, "uninstall": 409,
      "backup_held": True, "start": True, "wrote": []}, True))
-eq("after a panel restart: once the record is cleared, every one of them goes through again", _aft190.get("clear"),
+eq("after a panel restart: once the record is cleared, every one of them goes through again (the listing's "
+   "managed-cron rewrite included)", _aft190.get("clear"),
    ({"cron_add": 200, "autostart": 200, "synced": 1, "card": None, "restore": 200, "uninstall": 302,
-     "backup_held": False, "start": False, "wrote": ["autostart", "cron", "restore", "uninstall"]}, False))
+     "backup_held": False, "start": False, "wrote": ["autostart", "cron", "cron_upgrade", "restore", "uninstall"]}, False))
 
 # ── 8b. a command's stdin is written in slices, never whole (the panel's memory) ─────────────────
 from panel.ops.ssh_manager import _core as _core190
