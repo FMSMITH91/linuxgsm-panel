@@ -1486,6 +1486,18 @@
       "POST"
     ]
   },
+  "POST /api/panel/backup/game/<int:server_id>/upload/<uid>/cancel": {
+    "endpoint": "api_panel_backup_game_upload_cancel",
+    "guards": [
+      "utils.py:decorated_view(restore_backup)[server_access]",
+      "auth.py:decorated_function(restore_backup)[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_panel_backup_game_upload_cancel"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/panel/backup/game/<int:server_id>/upload/<uid>/finish": {
     "endpoint": "api_panel_backup_game_upload_finish",
     "guards": [
@@ -1538,6 +1550,17 @@
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
       "view:api_panel_backup_upload_piece"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/panel/backup/upload/<uid>/cancel": {
+    "endpoint": "api_panel_backup_upload_cancel",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_upload_cancel"
     ],
     "methods": [
       "POST"
