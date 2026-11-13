@@ -27,6 +27,7 @@ import shutil as _shutil183
 import stat as _stat183
 import subprocess as _sp183  # nosec B404 - bash over the script this part builds, in a temp folder
 import tempfile as _tmp183
+import time as _time183
 
 from unit.part01 import check, eq
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
@@ -431,6 +432,9 @@ def _sweep_case183(sid, **o):
 
     def _bk(*a, **k):
         got["backups"].append(a[2])
+        got["cmds"].append("backup")
+        got["bk_at"] = _time183.time()
+        got["bk_force"] = k.get("force")
         return o.get("backup", (True, "Backed up", False))
     try:
         _p9_arm(who="part183")
@@ -451,6 +455,7 @@ def _sweep_case183(sid, **o):
             got["raised"] = repr(exc)
         got["entry"] = dict(_ws183.get(sid) or {})
         got["window"] = (_mon183._offline_expected(sid), _mon183._stop_expected(sid))
+        got["marked_at"] = _mon183._expected_offline.get(sid, 0)
         got["audit"] = _p9_audit("wipe_server")
         if o.get("again"):
             n = len(got["cmds"])
@@ -481,22 +486,27 @@ def _raise183(started):
 
 _ok183 = _sweep_case183(_mc_sid183, backed_up=0)
 _okc183 = _ok183["cmds"]
-check("world reset sweep (mc): backup, the state, players, then stop, the delete of survival/_nether/_the_end, "
-      "start, in that order, each under the wipe registration",
-      _ok183["backups"] == ["p183mc"] and _ok183["players_asked"] == 1 and len(_okc183) == 4
-      and _okc183[:2] == ["status", "stop"] and _is_delete183(_okc183[2])
-      and "set -- survival survival_nether survival_the_end" in _okc183[2] and _okc183[3] == "start"
-      and all("wipe" in j for j in _ok183["jobs"]), repr(_ok183))
+check("world reset sweep (mc): the state, players, stop, THEN the backup (of the stopped server, forced: the "
+      "players were counted), the delete of survival/_nether/_the_end, start, in that order, under the wipe "
+      "registration",
+      _ok183["backups"] == ["p183mc"] and _ok183["players_asked"] == 1 and len(_okc183) == 5
+      and _okc183[:3] == ["status", "stop", "backup"] and _is_delete183(_okc183[3])
+      and "set -- survival survival_nether survival_the_end" in _okc183[3] and _okc183[4] == "start"
+      and _ok183["bk_force"] is True and all("wipe" in j for j in _ok183["jobs"]), repr(_ok183))
+check("world reset sweep (mc): the monitor's quiet window starts again after the backup (a long backup does "
+      "not use it up before the delete and start)",
+      _ok183["marked_at"] >= _ok183.get("bk_at", float("inf")), repr((_ok183["marked_at"], _ok183.get("bk_at"))))
 check("world reset sweep (mc): the reset is recorded as done (audit, card's last result), no alert, and the "
       "monitor's window is a restart's (the server must come back), not a stop's",
       _ok183["audit"].success is True and "world reset: world deleted (2 removed)" in _ok183["audit"].detail
       and _last183(_ok183).get("ok") is True and not _ok183["entry"].get("pending_since")
-      and _ok183["alerts"] == [] and _ok183["window"] == (True, False), repr(_ok183))
+      and _ok183["alerts"] == [] and _ok183["window"] == (True, False)
+      and "(2 removed). The server was started again." in _ok183["audit"].detail, repr(_ok183))
 
 _fok183 = _sweep_case183(_fctr_sid183, delete=lambda: (_FCTR_GONE183, "", 0))
 check("world reset sweep (fctr): stop, the delete with its --create of saves/save1, start; done",
-      len(_fok183["cmds"]) == 4 and _fok183["cmds"][:2] == ["status", "stop"] and _is_delete183(_fok183["cmds"][2])
-      and '--create "$d/save1"' in _fok183["cmds"][2] and _fok183["cmds"][3] == "start"
+      len(_fok183["cmds"]) == 5 and _fok183["cmds"][:3] == ["status", "stop", "backup"]
+      and _is_delete183(_fok183["cmds"][3]) and '--create "$d/save1"' in _fok183["cmds"][3] and _fok183["cmds"][4] == "start"
       and _last183(_fok183).get("ok") is True, repr(_fok183))
 
 _stopfail183 = _sweep_case183(_mc_sid183, stop=lambda: ("[ FAIL ] Stopping mcserver", "", 1))
@@ -509,7 +519,7 @@ check("world reset sweep: a stop that exits non-zero deletes nothing, starts the
 _running183 = _sweep_case183(_mc_sid183, delete=lambda: ("__WWR_RUNNING__\n", "", 4))
 check("world reset sweep: a server the delete command finds still running is not reset; start is still run "
       "and the failure alerted",
-      _running183["cmds"][-1] == "start" and len(_running183["cmds"]) == 4
+      _running183["cmds"][-1] == "start" and len(_running183["cmds"]) == 5
       and "still running" in (_last183(_running183).get("detail") or "")
       and _running183["alerts"] == ["Scheduled wipe did not run"], repr(_running183))
 
@@ -566,7 +576,7 @@ check("world reset sweep: a level-name the panel refuses ends the reset, alerted
 _down183 = _sweep_case183(_mc_sid183, status=lambda: ("__WWR_DOWN__\n", "", 0))
 check("world reset sweep: a server that was stopped is reset and left stopped (no stop, no start, no quiet "
       "window, no player count), as LinuxGSM's own wipe does",
-      len(_down183["cmds"]) == 2 and _down183["cmds"][0] == "status" and _is_delete183(_down183["cmds"][1])
+      len(_down183["cmds"]) == 3 and _down183["cmds"][:2] == ["status", "backup"] and _is_delete183(_down183["cmds"][2])
       and _down183["players_asked"] == 0 and _last183(_down183).get("ok") is True
       and "left stopped" in (_last183(_down183).get("detail") or "") and _down183["window"] == (False, False),
       repr(_down183))
@@ -618,8 +628,19 @@ check("world reset sweep: a Minecraft server started with --world is not reset (
       and "--world or --universe" in (_last183(_world183).get("detail") or ""), repr(_world183))
 
 _bkfail183 = _sweep_case183(_mc_sid183, backed_up=0, backup=(False, "disk full", False))
-check("world reset sweep: a backup that failed resets nothing (nothing stopped or deleted)",
-      _bkfail183["cmds"] == [] and _last183(_bkfail183).get("ok") is False, repr(_bkfail183))
+check("world reset sweep: a backup that failed deletes nothing; the server it was stopped for is started again "
+      "and the failure alerted",
+      _bkfail183["cmds"] == ["status", "stop", "backup", "start"] and _last183(_bkfail183).get("ok") is False
+      and "the backup before it failed: disk full. The server was started again." in (_last183(_bkfail183).get("detail") or "")
+      and _bkfail183["alerts"] == ["Scheduled wipe did not run"], repr(_bkfail183))
+_bkskip183 = _sweep_case183(_mc_sid183, backup=(False, "another backup is running", True))
+_bkdown183 = _sweep_case183(_mc_sid183, backup=(False, "disk full", False), status=lambda: ("__WWR_DOWN__\n", "", 0))
+check("world reset sweep: a skipped backup waits, the server started again; a stopped server whose backup "
+      "failed is not started",
+      _bkskip183["cmds"] == ["status", "stop", "backup", "start"] and _bkskip183["entry"].get("pending_since")
+      and "another backup is running" in (_bkskip183["entry"].get("wait") or "")
+      and _bkdown183["cmds"] == ["status", "backup"] and _last183(_bkdown183).get("ok") is False,
+      repr((_bkskip183, _bkdown183)))
 
 for _sid183 in (_mc_sid183, _fctr_sid183, _rust_sid183, _pmc_sid183):
     _p9_delete_server(_sid183)

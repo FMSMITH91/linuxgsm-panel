@@ -52,6 +52,7 @@
   "level-name in server.properties is not used: {why}": "no se usa level-name de server.properties: {why}",
   "no world was found in serverfiles (looked for: {names}); nothing was deleted": "no se encontró ningún mundo en serverfiles (se buscó: {names}); no se eliminó nada",
   "not a 5-field cron schedule": "no es una programación cron de 5 campos",
+  "not reset: the backup before it failed: {reason}. {start}": "no reiniciado: la copia de seguridad previa falló: {reason}. {start}",
   "not reset: {reason}": "no reiniciado: {reason}",
   "part of the world is a symbolic link or outside serverfiles; nothing was deleted": "parte del mundo es un enlace simbólico o está fuera de serverfiles; no se eliminó nada",
   "server.properties could not be read: {error}": "no se pudo leer server.properties: {error}",
@@ -76,5 +77,6 @@
   "whether the server is running could not be read": "no se pudo saber si el servidor está en marcha",
   "world deleted ({count} removed)": "mundo eliminado ({count} eliminados)",
   "world reset: {result}": "reinicio de mundo: {result}",
-  "{players} player(s) online": "{players} jugador(es) conectado(s)"
+  "{players} player(s) online": "{players} jugador(es) conectado(s)",
+  "{result}. {start}": "{result}. {start}"
 }

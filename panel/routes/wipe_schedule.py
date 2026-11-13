@@ -242,12 +242,7 @@ def _cmpd_backup(gs, entry):
 
 
 def _cmpd_run_wipe(app, gs, entry):
-    """Run LinuxGSM's wipe command and settle the pending wipe by what its output says.
-
-    A world-reset game goes to the panel's own reset instead (_wwr_run).
-    """
-    if gs.game_type in _wwr.GAMES:
-        return _wwr_run(app, gs, entry)
+    """Run LinuxGSM's wipe command and settle the pending wipe by what its output says."""
     cmd = wipe.WIPE_COMMANDS.get(entry.get("kind"), "wipe")
     # Read before the try: a raise from its own config read is not the wipe's connection dropping.
     timeout = _lgp.timeout_for(gs.remote, gs.short_name, gs.lgsm_name, "stop", 900)
@@ -292,7 +287,13 @@ def _wwr_said(sentence):
 
 
 def _wwr_run(app, gs, entry):
-    """The panel's world reset, once the backup is taken: state, players, stop, delete (and create), start.
+    """The panel's world reset: plan, state, players, stop, backup, delete (and create), start.
+
+    The backup comes after the stop, not before as Rust's does: LinuxGSM's backup stops and starts a
+    running server itself (stoponbackup), and a stop sent seconds later met a Minecraft still booting,
+    whose graceful stop failed into LinuxGSM's tmux kill; and a backup taken before a long wait for an
+    empty server missed the play after it. A backup of a stopped server leaves it stopped (LinuxGSM
+    command_backup.sh starts only a server it stopped). Every try takes a new one.
 
     The plan (which files) is read before anything is stopped, so a config the panel cannot use
     refuses with the server untouched. Then whether the server is running (LinuxGSM's own tmux test,
@@ -311,8 +312,36 @@ def _wwr_run(app, gs, entry):
         return _r37b_wait(gs.id, wait)
     if up and not _wwr_stop(app, gs):
         return None
+    if not _wwr_backup(app, gs, entry, up):
+        return None
+    if up:
+        _mark_expected_offline(gs.id, "restart")   # the backup took its time: the window starts again here
     _wwr_delete_and_start(app, gs, plan, up)
     return None
+
+
+def _wwr_backup(app, gs, entry, up):
+    """LinuxGSM's backup of the (now stopped) server. True when the delete may follow.
+
+    Through the panel's backup path (_cmpd_backup), forced: the players were counted before the
+    stop. A failed backup deletes nothing and ends the reset; a skipped one (another backup running)
+    and a schedule turned off or changed meanwhile delete nothing either. In each case a server the
+    reset stopped is started again.
+    """
+    ok, why, skipped = _cmpd_backup(gs, dict(entry, wait_empty=False))
+    if not _r37b_still_due(app, gs, entry):
+        _wwr_restore(gs, up)
+        return False
+    if skipped:
+        _wwr_restore(gs, up)
+        _r37b_wait(gs.id, why)
+        return False
+    if not ok:
+        _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
+            "not reset: the backup before it failed: {reason}. {start}", reason=why, start=_wwr_restore(gs, up))))
+        return False
+    wipe.patch(gs.id, backed_up=int(time.time()))
+    return True
 
 
 def _wwr_ready(gs, entry):
@@ -399,7 +428,8 @@ def _wwr_delete_and_start(app, gs, plan, up):
             "server. {start}", start=restored)))
     state, said = _wwr.outcome((out or "") + "\n" + (err or ""), rc, plan)
     restored = _wwr_restore(gs, up)
-    return _cmpd_finish(app, gs, state == "done", _wwr_said(i18n.Sentences(said, restored)))
+    return _cmpd_finish(app, gs, state == "done", _wwr_said(i18n.Sentence("{result}. {start}", result=said,
+                                                                          start=restored)))
 
 
 def _wwr_start(gs):
@@ -439,7 +469,9 @@ def _cmpd_attempt(app, gs, entry, now):
         if _r39a_other_work(gs.id):
             _r37b_wait(gs.id, i18n.Sentence("another action on this server is running"))
             return None
-        if _cmpd_backup_first(app, gs, entry) and _r37b_still_due(app, gs, entry):
+        if gs.game_type in _wwr.GAMES:
+            _wwr_run(app, gs, entry)        # its own order: the backup is taken with the server stopped
+        elif _cmpd_backup_first(app, gs, entry) and _r37b_still_due(app, gs, entry):
             _cmpd_run_wipe(app, gs, entry)
     return None
 
