@@ -280,6 +280,11 @@ def _switch190(edit=None, recover=False, polls=None, lgsm=False):
         sb.gone()
 
 
+# Two steps of the switch-over, as restore_script writes them: the tests cut in right after each.
+_ASIDE190 = '&& step=aside && moveall "$HR" "$O"'
+_MOVEIN190 = '&& step=in && moveall "$S" "$HR"'
+
+
 def _npm190(rs, sb):
     return rs.replace(_ASIDE190, _ASIDE190 + ' && { mkdir -p "$HR/.npm"; echo cache > "$HR/.npm/_cacache"; '
                       'cp %s/crontab.txt %s/cron-during.txt; }' % (sb.root, sb.root), 1)
@@ -389,7 +394,6 @@ def _after1_190(sb):
 
 def _sandbox1_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _sb
     # The whole restore, as the run does it.
     _sb = _Sb190()
     try:
@@ -409,7 +413,6 @@ def _sandbox1_190():
 
 def _sandbox2_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _sb
     # Factorio's layout: ~/log/server points at serverfiles itself, so every game file is in the archive twice.
     _sb = _Sb190("fctr")
     try:
@@ -426,13 +429,9 @@ def _sandbox2_190():
 
 def _sandbox3_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _ASIDE190, _MOVEIN190
     # The switch-over, driven at its edges: a LinuxGSM command writing ~/.npm after the home was set aside
     # (it made the move fail on the real server), a SIGKILL part way (then the recovery script), a kill
     # while unpacking, a LinuxGSM command still running, and a recovery while a restore holds the lock.
-    _ASIDE190 = '&& step=aside && moveall "$HR" "$O"'
-    _MOVEIN190 = '&& step=in && moveall "$S" "$HR"'
-
     _r190["sw_npm"] = _switch190(_npm190)
     _r190["sw_kill"] = _switch190(lambda rs, sb: rs.replace(_MOVEIN190, _MOVEIN190 + " && kill -9 $$", 1), recover=True)
     _r190["sw_kill_staging"] = _switch190(lambda rs, sb: rs.replace("cnt=$(find", "kill -9 $$\ncnt=$(find", 1),
@@ -453,7 +452,6 @@ def _sandbox3_190():
 
 def _sandbox4_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _fcntl190, _sb
     # The recovery script while a restore holds lgsm/tmp/panel-restore.lock: it does nothing and says nothing.
     import fcntl as _fcntl190
     _sb = _Sb190()
@@ -472,7 +470,6 @@ def _sandbox4_190():
 
 def _sandbox5_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _k, _prep, _ref
     # Each refusal: nothing changed (the home as it was, the archive under its own name, nothing held).
     _ref = {
         "dotdot": lambda sb: _crafted190(sb, [("././../evil", _tf190.REGTYPE, "")]),
@@ -501,7 +498,6 @@ def _sandbox5_190():
 
 def _sandbox6_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _saved_margin
     # More files and folders than free inodes (the margin raised past any filesystem): refused, nothing changed.
     _saved_margin = _grs190.INODE_MARGIN
     try:
@@ -516,7 +512,6 @@ def _sandbox6_190():
 
 def _sandbox7_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _saved_hb, _sb
     # A heartbeat while a long step runs (here a pause put after it starts), and none left behind.
     _saved_hb = _grs190.HEARTBEAT
     _sb = _Sb190()
@@ -539,7 +534,6 @@ def _sandbox7_190():
 
 def _sandbox8_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _t
     # The heartbeat ends with its script: nothing holds the output (and the panel) after the last line.
     _t = _time190.time()
     _sp190.run(["bash", "-c", "\n".join(_grs190._grs_heartbeat()) + "\nsleep 1\n"], capture_output=True,  # nosec B603 B607
@@ -549,7 +543,6 @@ def _sandbox8_190():
 
 def _sandbox9_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _sb
     # The checks' last line cannot reach a panel that has gone: the archive is put back, not left held.
     _sb = _Sb190()
     try:
@@ -562,7 +555,6 @@ def _sandbox9_190():
 
 def _sandbox10_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _sb
     # A process of the account still in serverfiles: the restore waits, then refuses with nothing cleared.
     _sb = _Sb190()
     try:
@@ -581,7 +573,6 @@ def _sandbox10_190():
 
 def _sandbox11_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _sb
     # The archive damaged after the checks: the staging extraction fails, before anything is cleared.
     _sb = _Sb190()
     try:
@@ -609,7 +600,6 @@ def _sandbox12_190():
 
 def _sandbox13_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
-    global _sb
     # An interrupted restore left the archive held: the next restore's checks put it back first.
     _sb = _Sb190()
     try:

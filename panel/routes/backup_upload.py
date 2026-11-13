@@ -270,9 +270,9 @@ def _bup_game_piece(server_id, uid):
 def _bup_game_finish(server_id, uid):
     """Check the whole archive as a restore does and list it under a LinuxGSM backup's name.
 
-        A finish whose answer did not come back keeps the upload, so the page can ask again (the part
-        file is still there unless the check refused it).
-        """
+    A finish whose answer did not come back keeps the upload, so the page can ask again (the part
+    file is still there unless the check refused it).
+    """
     gs = get_game(server_id)
     entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
     if entry is None:
