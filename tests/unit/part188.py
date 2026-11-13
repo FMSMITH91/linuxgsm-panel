@@ -3,16 +3,23 @@
 Held here:
 * A port saved during a Start or Restart: the stored port moves to the port the start was issued on
   (saved before it), and the later save waits for the next start.
+* A change that has reached the host (a Minecraft list line, a Workshop save, a plugin install or
+  rename, a game config form save, the Project Zomboid admin password) whose audit row cannot be
+  written answers what the host did, with audit_unwritten and the sentence saying so.
 
 HOW IT RUNS. No host is reached: routes run on part12's app with its transport tripwire armed and
 every host call stubbed; the background power action's thread is queued and drained.
 """
-from unit.part01 import eq
+from sqlalchemy.exc import OperationalError as _OpErr188
+
+from unit.part01 import check, eq
 from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _P9Thread, _p9_arm, _p9_client, _p9_delete_server,
-                         _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_row, _p9_set,
-                         _p9_threading)
-from panel.routes import _shared as _sh188, server_detail as _sd188
-from panel.services import lgsm_players as _lgp188
+                         _p9_drain, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_row,
+                         _p9_set, _p9_threading)
+from panel.routes import _shared as _sh188, server_detail as _sd188, server_files as _sf188
+from panel.routes import game_config_form as _gcfr188, mc_lists as _mcl188, modrinth_plugins as _mdr188
+from panel.routes import pz_admin as _pza188, workshop as _wsc188
+from panel.services import game_config_form as _gcf188, lgsm_players as _lgp188, modrinth as _mr188
 
 _r188 = {}
 
@@ -66,3 +73,87 @@ eq("pending port r42r: a port saved during a Restart or a Start leaves the store
    "the run of the same port settles it; nothing reaches a host",
    ([_r188[k] for k in ("pp_restart", "pp_start", "pp_none_before", "pp_back_to_bound")], _r188["pp_trips"]),
    ([(43160, 43170), (43160, 43170), (43150, 43170), (43160, None)], []))
+
+# ── 2. a change the host has made, whose audit row cannot be written ────────────────────────────
+_AUDIT188 = "The audit log entry for this could not be written. The panel's log has the details."
+_props188 = "motd=p188\nmax-players=20\n"
+_sv188 = {k: _p9_new_server(P9_HOST, "p188" + k, k, port, name="p188-" + k, status="online")
+          for k, port in (("mc", 43250), ("pmc", 43260), ("arma3", 43270), ("pz", 43280))}
+_send_rc188 = {"rc": 0}
+
+
+def _locked188(*_a, **_k):
+    raise _OpErr188("INSERT INTO audit_log", {}, Exception("database is locked"))
+
+
+def _read188(_s, _u, rel, max_bytes=0):
+    """The stand-in file read: the Project Zomboid ini, server.properties, and nothing else."""
+    if rel.endswith(".ini"):
+        return "WorkshopItems=\nMods=\n", None
+    return (_props188, None) if rel.endswith("server.properties") else (None, "File not found")
+
+
+def _posts188(client):
+    """Every change route once, each to a server it serves. -> {name: (status, its JSON)}."""
+    url = "/api/server/%d/"
+    calls = {"mc_list": ("mc", "mc-lists/ops", {"action": "add", "value": "Steve"}),
+             "workshop_mods": ("arma3", "workshop", {"ids": ["123456789"]}),
+             "workshop_pz": ("pz", "workshop", {"items": ["123456789"], "mods": ["P188Mod"]}),
+             "plugin_install": ("pmc", "plugins/install", {"project_id": "AABBCC12"}),
+             "plugin_change": ("pmc", "plugins/change", {"action": "disable", "name": "Perm-1.0.jar"}),
+             "game_config": ("mc", "game-config/form", {"path": "serverfiles/server.properties",
+                                                        "changes": {"1": "8"},
+                                                        "hash": _gcf188.content_hash(_props188)}),
+             "pz_admin": ("pz", "pz-admin-password", {})}
+    out = {}
+    for name, (game, tail, body) in calls.items():
+        r = client.post(url % _sv188[game] + tail, json=body)
+        out[name] = (r.status_code, _p9_json(r))
+    return out
+
+
+try:
+    _p9_arm(who="part188")
+    _n_trips188 = len(_P9_TRIPPED)
+    _p9_patch_sm("send_console_command", lambda *a, **k: ("", "", _send_rc188["rc"]))
+    _p9_patch_sm("read_file", _read188)
+    _p9_patch_sm("write_file", lambda *a, **k: (True, ""))
+    _p9_patch_sm("lgsm_get_values", lambda *a, **k: {"workshopmods": ""})
+    _p9_patch_sm("lgsm_write_config", lambda *a, **k: (True, ""))
+    _p9_patch_sm("upload_file", lambda *a, **k: (True, "Uploaded"))
+    _p9_patch_sm("rename_path", lambda *a, **k: (True, ""))
+    _p9_patch_sm("lgc_pz_set_admin_password", lambda *a, **k: (True, ""))
+    _p9_patch(_sf188, "_write_refused", lambda *a, **k: None)
+    _p9_patch(_sf188, "_read_refused", lambda *a, **k: None)
+    _plan188 = {"title": "Perm", "version_number": "1.0", "version_id": "VVVVVV01",
+                "plan": {"filename": "Perm-1.0.jar"}}
+    _p9_patch(_mr188, "resolve", lambda *a, **k: (_plan188, None))
+    _p9_patch(_mr188, "download", lambda *a, **k: (b"jar", None))
+    _A188 = _p9_client(P9_ADMIN)
+    _r188["au_written"] = _posts188(_A188)
+    for _mod188 in (_mcl188, _wsc188, _mdr188, _gcfr188, _pza188):
+        _p9_patch(_mod188, "log_action", _locked188)
+    _r188["au_locked"] = _posts188(_A188)
+    _send_rc188["rc"] = 1
+    _r188["au_locked_failed"] = _posts188(_A188)["mc_list"]
+    _r188["au_trips"] = _P9_TRIPPED[_n_trips188:]
+finally:
+    _p9_restore_all()
+    for _sid188 in _sv188.values():
+        _p9_delete_server(_sid188)
+check("audit after a change r42r: with the audit row written, every change route answers success with no "
+      "audit_unwritten (control)",
+      all(st == 200 and j.get("success") is True and "audit_unwritten" not in j
+          for st, j in _r188["au_written"].values()), repr(_r188["au_written"]))
+check("audit after a change r42r: a Minecraft list line, a Workshop save (cfg and Project Zomboid ini), a "
+      "plugin install and rename, a game config form save and the Project Zomboid admin password whose "
+      "audit row cannot be written still answer success, with audit_unwritten and the sentence",
+      sorted(_r188["au_locked"]) == sorted(_r188["au_written"])
+      and all(st == 200 and j.get("success") is True and j.get("audit_unwritten") is True
+              and j.get("message", "").endswith(_AUDIT188) for st, j in _r188["au_locked"].values()),
+      repr(_r188["au_locked"]))
+check("audit after a change r42r: a console line the server refused, whose row cannot be written either, "
+      "says both; nothing reached a host",
+      _r188["au_locked_failed"][0] == 200 and _r188["au_locked_failed"][1].get("success") is False
+      and _r188["au_locked_failed"][1].get("audit_unwritten") is True and _r188["au_trips"] == [],
+      repr((_r188["au_locked_failed"], _r188["au_trips"])))

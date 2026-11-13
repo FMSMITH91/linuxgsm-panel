@@ -32,7 +32,7 @@ from flask_login import current_user, login_required
 from panel.core import i18n
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
-from panel.routes._shared import _r20b_audit_on_raise
+from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after
 from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
 from panel.services import steam_workshop as _ws
 
@@ -249,6 +249,16 @@ def _wsc_audit(gs, detail, success):
     log_action(current_user, "workshop_save", target=gs.name, detail=detail, success=success, server=gs)
 
 
+def _wsc_written(gs, detail, result, saved):
+    """Audit a save the host has answered (`result`: ok, msg) and answer it, with `saved` when it wrote."""
+    ok, msg = result
+    reply = (dict(saved, success=True, message=i18n.tr(_WSC_SAVED)) if ok
+             else {"success": False, "message": i18n.tr(_sm.write_failure_reason(msg) or "Failed")})
+    with _r42r_audit_after(reply):      # the file is written by now (_r42r_audit_after)
+        _wsc_audit(gs, detail, ok)
+    return jsonify(reply)
+
+
 def _wsc_refuse(gs, detail, why, status=400):
     """Audit a save refused before the server was written, and answer it."""
     _wsc_audit(gs, "%s (refused: %s)" % (detail, why), False)
@@ -281,10 +291,7 @@ def _wsc_save_cfg(gs, kind, data):
     detail = _wsc_change(key, _ws.split_ids(before)[0], ids)
     with _r20b_audit_on_raise("workshop_save", detail=detail, target=gs.name, server=gs):
         ok, msg = _sm.lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, {key: " ".join(ids)})
-    _wsc_audit(gs, detail, ok)
-    if not ok:
-        return jsonify({"success": False, "message": i18n.tr(_sm.write_failure_reason(msg) or "Failed")})
-    return jsonify({"success": True, "message": i18n.tr(_WSC_SAVED), "ids": ids})
+    return _wsc_written(gs, detail, (ok, msg), {"ids": ids})
 
 
 def _wsc_pz_lists(data):
@@ -311,10 +318,7 @@ def _wsc_save_pz(gs, data):
     new = ini_set(content, {"WorkshopItems": ";".join(items), "Mods": ";".join(mods)})
     with _r20b_audit_on_raise("workshop_save", detail=detail, target=gs.name, server=gs):
         ok, msg = _sm.write_file(gs.remote, gs.short_name, rel, new, selfname=gs.lgsm_name)
-    _wsc_audit(gs, detail, ok)
-    if not ok:
-        return jsonify({"success": False, "message": i18n.tr(_sm.write_failure_reason(msg) or "Failed")})
-    return jsonify({"success": True, "message": i18n.tr(_WSC_SAVED), "items": items, "mods": mods})
+    return _wsc_written(gs, detail, (ok, msg), {"items": items, "mods": mods})
 
 
 # ── route answers ───────────────────────────────────────────────────────────────────────────────
