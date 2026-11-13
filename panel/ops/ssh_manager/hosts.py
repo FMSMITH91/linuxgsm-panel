@@ -520,30 +520,41 @@ def _r42f_limit_held(server, port, proto, limit):
     before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     before = (before or "") if brc == 0 else ""
     if not limit:
-        # "Remove the rate limit", not "close the port": the LIMIT rule is what lets N/proto in,
-        # and deleting it closed a port the operator only wanted un-throttled — including the
-        # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
-        # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
-        if brc != 0:
-            return False, i18n.Sentence("Could not read the firewall to find the rate limit on {spec}, so "
-                                        "nothing was changed.", spec=spec)
-        # An inactive ufw lists NO rules, stored ones included, so the test below found none and
-        # answered "has no rate limit to remove" about a host whose stored rules hold one.
-        if not firewall._ufw_is_active(before):
-            return False, i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read "
-                                        "here to find the rate limit on {spec} — nothing was changed.", spec=spec)
-        if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
-            return False, i18n.Sentence("{spec} has no rate limit to remove.", spec=spec)
-        out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
-        if rc == 0:
-            return True, i18n.Sentence("Rate limit removed from {spec} (it stays open)", spec=spec)
-        return False, err or out or "Unknown error"
+        return _r42f_unlimit(server, spec, before, brc)
     refusal = _r42f_limit_refusal(server, before if brc == 0 else None, port, proto)
     if refusal is not None:
         return False, refusal
     out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
     if rc != 0:
         return False, err or out or "Unknown error"
+    other, split, unsplit = _r42f_split_bare(server, port, proto, before)
+    return _r42f_limit_read_back(server, port, proto, before, (other, split, unsplit))
+
+
+def _r42f_unlimit(server, spec, before, brc):
+    """Lift the rate limit on `spec` (remote_ufw_limit_port with limit=False), under the ufw lock."""
+    # "Remove the rate limit", not "close the port": the LIMIT rule is what lets N/proto in,
+    # and deleting it closed a port the operator only wanted un-throttled — including the
+    # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
+    # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
+    if brc != 0:
+        return False, i18n.Sentence("Could not read the firewall to find the rate limit on {spec}, so "
+                                    "nothing was changed.", spec=spec)
+    # An inactive ufw lists NO rules, stored ones included, so the test below found none and
+    # answered "has no rate limit to remove" about a host whose stored rules hold one.
+    if not firewall._ufw_is_active(before):
+        return False, i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read "
+                                    "here to find the rate limit on {spec} — nothing was changed.", spec=spec)
+    if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
+        return False, i18n.Sentence("{spec} has no rate limit to remove.", spec=spec)
+    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
+    if rc == 0:
+        return True, i18n.Sentence("Rate limit removed from {spec} (it stays open)", spec=spec)
+    return False, err or out or "Unknown error"
+
+
+def _r42f_split_bare(server, port, proto, before):
+    """Split a bare (both-protocol) allow for `port` after the limit: (the other protocol, split, why not)."""
     # A bare allow for this port covers BOTH protocols and matches ahead of the limit. Keep the
     # other protocol open under the same comment, THEN drop the bare rule (this protocol is
     # already covered by the limit above, so nothing is ever left unallowed).
@@ -568,6 +579,13 @@ def _r42f_limit_held(server, port, proto, limit):
             _core.run_privileged(server, "ufw-delete-allow-port", [str(port)], timeout=15)
             split = True
             break
+    return other, split, unsplit
+
+
+def _r42f_limit_read_back(server, port, proto, before, splitting):
+    """remote_ufw_limit_port's answer once the limit ran, from the firewall read back."""
+    spec = "%d/%s" % (port, proto)
+    other, split, unsplit = splitting
     after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     # Unread is a failed call or an empty answer — NOT a missing English "Status:". ufw translates
     # that whole line (`État : actif`), so on a French or Spanish host a limit that fully applied,
