@@ -14,6 +14,18 @@ compares git commits, not this file.
 
 ### Added
 
+- **Restore a game server from one of its backups.** Each backup in a server's Backups card has a
+  Restore button, behind a new restore_backup permission that no group has until it is given. You
+  type the server's name to confirm; the panel checks the archive and the free space, stops the
+  server, takes a fresh backup of its current state first, unpacks the backup beside the live files
+  and only then swaps it in, and starts the server again if it was running. Any failure before the
+  swap changes nothing, your other backups are kept, and the fresh backup can undo the restore.
+
+- **Upload a backup to restore from it.** A server's Backups card can upload a LinuxGSM backup
+  (.tar.zst, .tar.gz or .tar, up to 32 GB; it needs the restore and change-files permissions) and
+  the panel's own Backups page a panel backup (up to 512 MB, superadmins). Each is checked as a
+  restore checks it before it is listed, and an upload can be cancelled.
+
 - **Scheduled world resets for Paper and Minecraft Bedrock.** The world reset on the Schedule tab
   now also works for Paper and Bedrock servers: the server is stopped and backed up, its world is
   deleted and it makes a new one, while plugins, ops, the allowlist, permissions and server settings
