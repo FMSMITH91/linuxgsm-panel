@@ -1273,6 +1273,7 @@ try:
                                   run_command=lambda *a, **k: (_seen.append(a) or ("", "", 0))))
     _p9_patch(_shr190, "game_account_write_refusal", lambda *a, **k: None)
     _ce, _ca = _p9_client(_uids190["rsedit"]), _p9_client(P9_ADMIN)
+    _t0 = _ctree190()
     _routes = {}
     for _u in _CRAFT190[:-1]:     # an empty id is no URL segment at all
         _bu190._uploads[_u] = {"uid": _u, "kind": "game", "sid": P9_GS, "user": _uids190["rsedit"], "size": 10,
@@ -1281,7 +1282,8 @@ try:
         _game = "/api/panel/backup/game/%d/upload/%s" % (P9_GS, _q)
         _codes = [_ce.post(_game + "?offset=0", data=b"x", content_type="application/octet-stream").status_code,
                   _ce.post(_game + "/finish", json={}).status_code, _ce.post(_game + "/cancel", json={}).status_code]
-        _bu190._uploads[_u] = dict(_bu190._uploads[_u], kind="panel", sid=0, user=P9_ADMIN)
+        _bu190._uploads[_u] = {"uid": _u, "kind": "panel", "sid": 0, "user": P9_ADMIN, "size": 10, "got": 0,
+                               "ts": _time190.time()}
         _panel = "/api/panel/backup/upload/%s" % _q
         _codes += [_ca.post(_panel + "?offset=0", data=b"x", content_type="application/octet-stream").status_code,
                    _ca.post(_panel + "/finish", json={}).status_code, _ca.post(_panel + "/cancel", json={}).status_code]
