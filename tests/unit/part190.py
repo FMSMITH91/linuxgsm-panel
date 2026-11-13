@@ -371,6 +371,22 @@ def _fewer190(raw):
     return buf.getvalue()
 
 
+def _after1_190(sb):
+    """What the whole restore left: the home, the kept names, the links, the archives and the crontab."""
+    _r190["tree"] = (sb.tree() == sb.before, sorted(set(sb.tree()) ^ set(sb.before)))
+    _r190["keep"] = (sb.read(".ssh/authorized_keys"), sb.read(".lgsm-cron/run"))
+    _r190["link"] = _os190.path.islink(_os190.path.join(sb.home, ".steam/root"))
+    _a = _os190.path.join(sb.bdir, _NAME190)
+    _r190["putback"] = (_os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
+                        [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f])
+    _r190["cron_after"] = sb.cron()
+    _r190["older"] = {_n: _os190.stat(_os190.path.join(sb.bdir, _n)).st_mtime
+                      for _n in sb.older if _os190.path.isfile(_os190.path.join(sb.bdir, _n))}
+    _r190["links"] = tuple(_os190.readlink(_q) if _os190.path.islink(_q) else "not a link"
+                           for _q in (_os190.path.join(sb.home, "log/server"),
+                                      _os190.path.join(sb.home, "lgsm/node_modules/.bin/gamedig")))
+
+
 def _sandbox1_190():
     """One block of the stand-in-home checks (each its own function, to stay small)."""
     global _sb
@@ -386,18 +402,7 @@ def _sandbox1_190():
         if _state == "ready":
             _out, _res = _restore190(_sb, _ready)
             _r190["restore"] = (_res[0], _out[-300:])
-        _r190["tree"] = (_sb.tree() == _sb.before, sorted(set(_sb.tree()) ^ set(_sb.before)))
-        _r190["keep"] = (_sb.read(".ssh/authorized_keys"), _sb.read(".lgsm-cron/run"))
-        _r190["link"] = _os190.path.islink(_os190.path.join(_sb.home, ".steam/root"))
-        _a = _os190.path.join(_sb.bdir, _NAME190)
-        _r190["putback"] = (_os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
-                            [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
-        _r190["cron_after"] = _sb.cron()
-        _r190["older"] = {_n: _os190.stat(_os190.path.join(_sb.bdir, _n)).st_mtime
-                          for _n in _sb.older if _os190.path.isfile(_os190.path.join(_sb.bdir, _n))}
-        _r190["links"] = tuple(_os190.readlink(_q) if _os190.path.islink(_q) else "not a link"
-                               for _q in (_os190.path.join(_sb.home, "log/server"),
-                                          _os190.path.join(_sb.home, "lgsm/node_modules/.bin/gamedig")))
+        _after1_190(_sb)
     finally:
         _sb.gone()
 
@@ -1249,7 +1254,7 @@ try:
     _helper = {}
     for _u in _CRAFT190 + ("../../victim", "../../../outside"):
         _row = []
-        for _fn in (lambda u: _bk190.upload_part_path(u), lambda u: _bk190.upload_append(u, 0, b"x"),
+        for _fn in (_bk190.upload_part_path, lambda u: _bk190.upload_append(u, 0, b"x"),
                     lambda u: _bk190.upload_finish(u, 1), lambda u: _grs190.upload_start_script("grsu", u, 10),
                     lambda u: _grs190.upload_chunk_script("grsu", u, 0), lambda u: _grs190.upload_cancel_script("grsu", u)):
             try:
