@@ -27,6 +27,8 @@ from unit.part01 import check, eq
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_VIEWER, _p9, _p9_arm, _p9_audit_count, _p9_client,
                          _p9_patch, _p9_restore_all)
 from unit.part18 import _app18
+from unit.part47 import _SETTLE47, _cut47
+from unit.part95 import _SF95, _cut_or95, _drop95, _node95
 from panel.core import i18n as _i18n184
 from panel.db import models as _m184
 from panel.routes import panel_backup as _pb184, server_detail as _sd184, server_files as _sf184
@@ -192,13 +194,11 @@ try:
             "delete": _probe184(_who, "post", _url184 + "/delete-path", json={"path": "old.cfg"}),
         }
     for _who in ("view", "manage"):
-        _r184[_who]["upload"] = _probe184(_who, "post", _url184 + "/upload", data={"path": ""})[0]
-        _r184[_who]["config"] = _probe184(_who, "post", _url184 + "/config", json={"raw": "x"})[0]
-        _r184[_who]["gcf"] = _probe184(_who, "post", _url184 + "/game-config/form", json={})[0]
-        _r184[_who]["workshop"] = _probe184(_who, "post", _url184 + "/workshop", json={})[0]
-        _r184[_who]["plugins"] = _probe184(_who, "post", _url184 + "/plugins/change", json={})[0]
-        _r184[_who]["pz"] = _probe184(_who, "post", _url184 + "/pz-admin-password", json={})[0]
-        _r184[_who]["logts"] = _probe184(_who, "post", _url184 + "/log-timestamps", json={"enabled": False})[0]
+        _r184["writes_" + _who] = [_probe184(_who, "post", _url184 + _u, **_kw)[0] for _u, _kw in (
+            ("/upload", {"data": {"path": ""}}), ("/config", {"json": {"raw": "x"}}),
+            ("/game-config/form", {"json": {}}), ("/workshop", {"json": {}}),
+            ("/plugins/change", {"json": {}}), ("/pz-admin-password", {"json": {}}),
+            ("/log-timestamps", {"json": {"enabled": False}}))]
 
     _bk_dl184 = "/backup/game/%d/download?name=p184-a.tar.zst" % P9_GS
     _bk_rm184 = "/api/panel/backup/game/%d/delete" % P9_GS
@@ -251,8 +251,7 @@ eq("files: a superadmin reads, browses, saves and deletes (control)",
    [_v[0] for _v in _r184["admin"].values()], [200, 200, 200, 200])
 eq("files: without EDIT_FILES every other write is refused: upload, the LinuxGSM config, the game "
    "config form, the Workshop list, a plugin change, the PZ admin password, log stamping off",
-   [_r184[_w][_k] for _w in ("view", "manage")
-    for _k in ("upload", "config", "gcf", "workshop", "plugins", "pz", "logts")], [403] * 14)
+   _r184["writes_view"] + _r184["writes_manage"], [403] * 14)
 
 # Backups.
 eq("backups: DOWNLOAD_BACKUP downloads the archive, and its delete is refused before the host",
@@ -289,3 +288,27 @@ eq("page: who may open Files & Config (auth.files_access)",
 eq("secrets: LinuxGSM's output is unmasked for whoever can read the configs (VIEW_FILES), not for "
    "MANAGE_SERVERS alone",
    _sees184, {"view": True, "manage": False, "superadmin": True})
+
+# ── 4. a drop onto the file browser uploads only with EDIT_FILES ─────────────────────────────────
+_drop184 = _node95("file drop without EDIT_FILES", _SETTLE47 + (
+    "global.window = global; let uploaded = [], status = [], curDir = 'here';\n"
+    "global.toast = () => {}; global.tfn = (n, one, many) => (n === 1 ? one : many);\n"
+    "global._uploadStatus = (t) => status.push(t); global.uploadFiles = () => uploaded.push('files');\n"
+    "global.uploadEntries = (list, base) => { uploaded.push([list.length, base]); };\n"
+    "global.setTimeout = () => 0;\n"
+    "const file = (name) => ({isFile: true, name, file: (y) => y({name})});\n"
+    "const dir = (name, kids) => ({isDirectory: true, name, createReader: () => {\n"
+    "  let i = 0; return {readEntries: (y) => y(i++ ? [] : kids)}; }});\n"
+    + _cut_or95(_SF95, "function _walkEntry(") + "\n"
+    + _cut_or95(_SF95, "function _dropRoots(") + "\n"
+    "let handler = null; const card = {addEventListener: (k, f) => { if (k === 'drop') handler = f; }};\n"
+    + (_cut47(_SF95, _drop95) + ");" if _drop95 in _SF95 else "/* MISSING drop handler */") + "\n"
+    "const drop = async (edit) => { global.SF_CAN = {view: true, edit}; uploaded = []; status = [];\n"
+    "  handler({dataTransfer: {items: [{kind: 'file', webkitGetAsEntry: () => dir('addon', [file('a.txt')])}]}});\n"
+    "  await settle(); await settle(); return {uploaded, status: status.length}; };\n"
+    "(async () => { const out = {}; out.ro = await drop(false); out.rw = await drop(true);\n"
+    "  console.log(JSON.stringify(out)); })();\n"))
+if _drop184 is not None:        # None: no node here, and _node95 recorded the SKIP
+    eq("file drop: without EDIT_FILES a drop onto the file browser reads and uploads nothing; with it "
+       "the same drop uploads (control)",
+       (_drop184.get("ro"), _drop184.get("rw", {}).get("uploaded")), ({"uploaded": [], "status": 0}, [[1, "here"]]))
