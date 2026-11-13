@@ -553,8 +553,8 @@
   </div>
 </div>
 
-{# The scheduled wipe: LinuxGSM's wipe/full-wipe for Rust, the panel's world reset for Minecraft Java
-   and Factorio (one kind, no map/full choice). The panel runs it (panel/routes/wipe_schedule.py): a
+{# The scheduled wipe: LinuxGSM's wipe/full-wipe for Rust, the panel's world reset for Minecraft
+   (Java, Paper, Bedrock) and Factorio (one kind, no map/full choice). The panel runs it (panel/routes/wipe_schedule.py): a
    backup first, and no wipe if that backup failed. The form is rendered whole, and the script only
    fills its values, so nothing moves when it loads. #}
 {% if wipe_supported(server.game_type) %}
@@ -567,6 +567,10 @@
   <div class="card-body">
     {% if server.game_type == 'mc' %}
     <p class="small text-secondary mb-2">World reset: deletes the world (its overworld, nether and end folders) and starts a new one; ops, whitelist, bans and server.properties are kept. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped.</p>
+    {% elif server.game_type == 'pmc' %}
+    <p class="small text-secondary mb-2">World reset: deletes the world folder level-name names in server.properties (with its nether and end, its datapacks and its own Paper settings, and any world_nether and world_the_end folders beside it) and starts a new one; plugins, worlds a plugin created, Paper's config folder, ops, whitelist, bans and server.properties are kept. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped.</p>
+    {% elif server.game_type == 'mcb' %}
+    <p class="small text-secondary mb-2">World reset: deletes the world's folder in worlds/ (the one level-name names in server.properties, with the player data and packs stored inside it) and the server makes a new world when it starts; server.properties, permissions.json, allowlist.json, the shared behavior_packs and resource_packs folders and other worlds are kept. Packs the old world applied are not applied to the new one: add them to it again. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped.</p>
     {% elif server.game_type == 'fctr' %}
     <p class="small text-secondary mb-2">World reset: deletes the map save and its autosaves and creates a new map the way LinuxGSM's install does (Factorio's default map settings); server settings, mods and other saves are kept. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Factorio's players cannot be counted, so with “Wait until the server is empty” ticked the reset waits and gives up after 12 hours: leave it unticked.</p>
     {% else %}

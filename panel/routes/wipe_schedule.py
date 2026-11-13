@@ -1,6 +1,6 @@
 """Scheduled wipes: the schedule card's two routes, and the sweep that runs a due wipe.
 
-Rust's wipe is LinuxGSM's `wipe` / `full-wipe`. Minecraft Java and Factorio have no LinuxGSM wipe, so
+Rust's wipe is LinuxGSM's `wipe` / `full-wipe`. Minecraft (Java, Paper, Bedrock) and Factorio have no LinuxGSM wipe, so
 their "world reset" is the panel's own (_wwr_run, services/world_reset): the same schedule, backup,
 waits, audit and alert, with step 3 replaced by: players checked, LinuxGSM `stop`, one command as the
 game account that checks the server is down and deletes the world (Factorio: creates the new save),
@@ -280,7 +280,7 @@ def _cmpd_run_wipe(app, gs, entry):
                  i18n.Sentence("{command}: {result}", command=cmd, result=why))
 
 
-# ── the world reset (Minecraft Java, Factorio) ─────────────────────────────────────────────────
+# ── the world reset (Minecraft Java, Paper and Bedrock; Factorio) ──────────────────────────────
 def _wwr_said(sentence):
     """A world reset's outcome sentence, as the card and the audit row show it."""
     return i18n.Sentence("world reset: {result}", result=sentence)

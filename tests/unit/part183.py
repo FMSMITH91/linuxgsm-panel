@@ -13,8 +13,8 @@ Held here:
   LinuxGSM's own tmux test, a world path or Factorio's saves folder is a symlink, or a path does not
   resolve to itself. A removal that fails is a failure; output that did not come back is "unread",
   never done.
-* The card's route: `reset` is the only kind for these games, map/full stays Rust's, Paper is not
-  offered; the page renders the game's own description and no map/full choice.
+* The card's route: `reset` is the only kind for these games, map/full stays Rust's, a game with no
+  resolver (Valheim) is not offered; the page renders the game's own description and no map/full choice.
 * The sweep, end to end with every host call stubbed: backup, players, stop, the delete (and
   create), start, in that order, under the wipe registration; and each way it stops short.
 
@@ -354,7 +354,7 @@ check("world reset host: names reach the shell quoted and are removed with `rm -
 _mc_sid183 = _p9_new_server(P9_HOST, "p183mc", "mc", 25565, name="p183-mc")
 _fctr_sid183 = _p9_new_server(P9_HOST, "p183fctr", "fctr", 34197, name="p183-fctr")
 _rust_sid183 = _p9_new_server(P9_HOST, "p183rust", "rust", 28015, name="p183-rust")
-_pmc_sid183 = _p9_new_server(P9_HOST, "p183pmc", "pmc", 25566, name="p183-pmc")
+_vh_sid183 = _p9_new_server(P9_HOST, "p183vh", "vh", 2456, name="p183-vh")
 _CRON183 = "0 3 * * *"
 _BODY183 = {"enabled": True, "kind": "reset", "preset": "custom", "cron": _CRON183, "tz": "UTC"}
 _r183 = {}
@@ -367,14 +367,14 @@ try:
     _r183["saved"] = dict(_ws183.get(_mc_sid183) or {})
     _r183["map_fctr"] = _A183.post(_u183 % _fctr_sid183, json=dict(_BODY183, kind="map"))
     _r183["reset_rust"] = _A183.post(_u183 % _rust_sid183, json=_BODY183)
-    _r183["pmc"] = _A183.post(_u183 % _pmc_sid183, json=_BODY183)
+    _r183["vh"] = _A183.post(_u183 % _vh_sid183, json=_BODY183)
     _p9_patch(_sd183, "_maybe_resolve_public_ip", lambda *a, **k: None)
     _p9_patch(_sd183, "_host_timezone_cached", lambda *a, **k: "")
     _p9_patch(_sf183, "_host_timezone_cached", lambda *a, **k: "")
     _p9_patch_sm("run_command", lambda *a, **k: ("", "", 1))
     _r183["pages"] = {g: _A183.get("/server/%d/files" % s).get_data(as_text=True)
                       for g, s in (("mc", _mc_sid183), ("fctr", _fctr_sid183), ("rust", _rust_sid183),
-                                   ("pmc", _pmc_sid183))}
+                                   ("vh", _vh_sid183))}
 finally:
     _p9_restore_all()
     _ws183.put(_mc_sid183, None)
@@ -384,18 +384,19 @@ check("world reset route: a Minecraft server's card is a reset card, and saving 
       and _r183["save"].status_code == 200 and _r183["saved"].get("kind") == "reset"
       and (_r183["save"].get_json() or {}).get("describe", "").startswith("World reset, cron '0 3 * * *'"),
       repr((_r183["get"], _r183["saved"])))
-check("world reset route: map/full is refused for Factorio, `reset` for Rust, and Paper is not offered at all",
+check("world reset route: map/full is refused for Factorio, `reset` for Rust, and a game with no resolver "
+      "(Valheim) is not offered at all",
       _r183["map_fctr"].status_code == 400 and _r183["map_fctr"].get_json()["message"] == "kind must be reset."
       and _r183["reset_rust"].status_code == 400
       and _r183["reset_rust"].get_json()["message"] == "kind must be map or full."
-      and _r183["pmc"].status_code == 400, repr([_r183[k].get_json() for k in ("map_fctr", "reset_rust", "pmc")]))
+      and _r183["vh"].status_code == 400, repr([_r183[k].get_json() for k in ("map_fctr", "reset_rust", "vh")]))
 _pg183 = _r183["pages"]
 check("world reset page: Minecraft and Factorio get their own description and a fixed `reset` kind, no map/full "
-      "choice; Rust keeps its select; Paper has no card",
+      "choice; Rust keeps its select; a game with no resolver (Valheim) has no card",
       'id="wipe-kind" value="reset"' in _pg183["mc"] and "ops, whitelist, bans and server.properties are kept"
       in _pg183["mc"] and '<option value="map">' not in _pg183["mc"]
       and 'id="wipe-kind" value="reset"' in _pg183["fctr"] and "deletes the map save and its autosaves" in _pg183["fctr"]
-      and '<option value="map">Map wipe</option>' in _pg183["rust"] and 'id="wipe-card"' not in _pg183["pmc"]
+      and '<option value="map">Map wipe</option>' in _pg183["rust"] and 'id="wipe-card"' not in _pg183["vh"]
       and 'id="wipe-card"' in _pg183["mc"], "")
 
 
@@ -650,7 +651,7 @@ check("world reset sweep: a skipped backup waits, the server started again; a st
       and _bkdown183["cmds"] == ["status", "backup"] and _last183(_bkdown183).get("ok") is False,
       repr((_bkskip183, _bkdown183)))
 
-for _sid183 in (_mc_sid183, _fctr_sid183, _rust_sid183, _pmc_sid183):
+for _sid183 in (_mc_sid183, _fctr_sid183, _rust_sid183, _vh_sid183):
     _p9_delete_server(_sid183)
 eq("world reset: nothing this part drove reached a real transport (part12's tripwire, armed)",
    _P9_TRIPPED[_trips183:], [])

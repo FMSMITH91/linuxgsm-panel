@@ -1,4 +1,4 @@
-"""Scheduled world resets for games whose LinuxGSM script has no wipe command (Minecraft Java, Factorio).
+"""Scheduled world resets for games whose LinuxGSM script has no wipe command (Minecraft, Factorio).
 
 LinuxGSM gives `wipe` / `full-wipe` to Rust alone (core_getopt.sh, checked on master 2026-11). For
 the games here the panel does the reset itself, on the Wipe schedule card's schedule and after the
@@ -27,6 +27,21 @@ THE WORLD, per game (LinuxGSM master, 2026-11; Minecraft Wiki "Server.properties
   save plus the server's autosaves (_autosave<N>.zip); a new save1 is created the same way, so it is
   the newest one and the one loaded. Other saves an operator put there are kept. Anything else in
   the start parameters is refused: the panel cannot tell which save the server starts.
+* pmc (pmcserver, Paper): as mc (executabledir="${serverfiles}", server.properties there), with
+  Paper's own ways of moving the world refused (CraftBukkit Main and Paper's patch of the server's
+  Main, PaperMC/Paper main, 2026-11): the options -W/--world-dir/--universe/--world-container (the
+  folder level-name is relative to), -w/--world/--level-name (overrides level-name), -c/--config
+  (another properties file), -b/--bukkit-settings (another bukkit.yml), -P/--plugins (the plugins
+  folder, which a reset must not reach), and bukkit.yml's settings.world-container, which Paper
+  reads when no --universe is given. Current Paper keeps the nether and end inside the world folder
+  (world/dimensions/minecraft/...); older ones had world_nether / world_the_end beside it, removed
+  when present. plugins/ and config/ are kept.
+* mcb (mcbserver, Bedrock): the server runs in serverfiles and keeps its world in
+  worlds/<level-name> (Microsoft Learn, "Bedrock Dedicated Server Properties" and "Getting
+  Started"), creating a new one there on start when the folder is missing. Its server.properties is
+  key=value lines with `#` comments, not java.util.Properties, so only a plain `level-name=<name>`
+  line is read (bedrock_level_name). permissions.json, allowlist.json, server.properties and the
+  shared behavior_packs / resource_packs folders sit in serverfiles and are kept.
 """
 import re
 
@@ -173,15 +188,8 @@ def _wwr_firm_read_errors():
     return frozenset(_sm.files._READ_REFUSALS.values()) | {_WWR_NO_FILE, "Invalid path"}
 
 
-def mc_plan(gs):
-    """The world of Minecraft Java server `gs`: (plan, None), or (None, why it is not reset)."""
-    values = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name,
-                                 ["startparameters", "extraparams", "executabledir"])
-    if values is None:
-        return None, Unread("the server's LinuxGSM config could not be read")
-    why = mc_start_problem(values)
-    if why is not None:
-        return None, why
+def _wwr_props(gs):
+    """serverfiles/server.properties of `gs`: (text, None), or (None, why) — an Unread when the read failed."""
     content, err = _sm.read_file(gs.remote, gs.short_name, _WWR_PROPS)
     if err in _wwr_firm_read_errors():
         return None, i18n.Sentence("serverfiles/server.properties cannot be used: {error}", error=str(err))
@@ -189,10 +197,201 @@ def mc_plan(gs):
         return None, Unread("server.properties could not be read: {error}", error=str(err or "no answer"))
     if not content.strip():
         return None, i18n.Sentence("server.properties is empty, so the world's name is not known")
+    return content, None
+
+
+def _wwr_values(gs, keys):
+    """The instance's merged LinuxGSM values for `keys`: (values, None), or (None, Unread)."""
+    values = _sm.lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, keys)
+    if values is None:
+        return None, Unread("the server's LinuxGSM config could not be read")
+    return values, None
+
+
+def _wwr_java_plan(gs, start_problem, extra_check=None):
+    """The world of a Java edition server (mc, pmc): (plan, None), or (None, why it is not reset).
+
+    `start_problem` judges the instance's LinuxGSM values; `extra_check(gs)`, when given, is asked
+    after server.properties was read and answers None or why the reset is refused.
+    """
+    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir", "executable"])
+    why = why or start_problem(values)
+    if why is not None:
+        return None, why
+    content, why = _wwr_props(gs)
+    if content is None:
+        return None, why
     name, why = level_name(content)
     if name is None:
         return None, i18n.Sentence("level-name in server.properties is not used: {why}", why=why)
+    why = extra_check(gs) if extra_check else None
+    if why is not None:
+        return None, why
     return {"dir": "", "remove": [name, name + "_nether", name + "_the_end"], "globs": [], "create": None}, None
+
+
+def mc_plan(gs):
+    """The world of Minecraft Java server `gs`: (plan, None), or (None, why it is not reset)."""
+    return _wwr_java_plan(gs, mc_start_problem)
+
+
+# Paper's options that move the world, or the files that say where it is (CraftBukkit Main on PaperMC/Paper
+# main, 2026-11): W/world-dir/universe/world-container, w/world/level-name, c/config (server.properties),
+# b/bukkit-settings (bukkit.yml, which can hold world-container) and P/plugins (a plugins folder inside the
+# world would go with it). Paper's parser is jopt-simple with abbreviations on: a long option may be any
+# unambiguous prefix, given with one dash or two, and its value after `=`; one-letter options cluster
+# (`-vW x`), the rest of the word being the value of the first one that takes one.
+_WWR_PMC_LONG = ("world-dir", "universe", "world-container", "world", "level-name", "config", "bukkit-settings",
+                 "plugins")
+_WWR_PMC_SHORT = "WwcbP"
+# One-letter options that take no value (help, version), so a cluster reads on past them.
+_WWR_PMC_NOARG = "?v"
+# One-letter options whose letter starts a refused long name (port, commands settings): given exactly,
+# jopt-simple takes the option of that name, not an abbreviation.
+_WWR_PMC_EXACT_OK = ("p", "C")
+# The start command is a string LinuxGSM hands tmux, which a shell runs: quoting, expansion, globbing
+# and command syntax could make words the panel does not see, so a start parameter holding one is refused.
+_WWR_SHELL_SYNTAX = frozenset("\"'`$\\;&|<>(){}*?[]")
+
+
+def _wwr_pmc_word_moves(word):
+    """Whether one word of Paper's start parameters is, or may be read as, an option in _WWR_PMC_LONG."""
+    if not word.startswith("-") or word in ("-", "--"):
+        return False
+    body = word[2:] if word.startswith("--") else word[1:]
+    name = body.split("=", 1)[0]
+    if name in _WWR_PMC_EXACT_OK:
+        return False
+    if name and any(n.startswith(name.lower()) for n in _WWR_PMC_LONG):
+        return True
+    return not word.startswith("--") and body.lstrip(_WWR_PMC_NOARG)[:1] in tuple(_WWR_PMC_SHORT)
+
+
+def pmc_start_problem(values):
+    """Why the instance's LinuxGSM values may put a Paper world somewhere server.properties does not say, else None.
+
+    LinuxGSM starts `${preexecutable} ${executable} ${startparameters}` in executabledir
+    (command_start.sh); extraparams is added to startparameters. So the words after the jar in
+    `executable`, the start parameters and extraparams are Paper's arguments.
+    """
+    if (values.get("executabledir") or "") not in _WWR_MC_EXEDIR:
+        return i18n.Sentence("the server does not run in serverfiles (executabledir is not LinuxGSM's default)")
+    text = "%s %s %s" % (" ".join((values.get("executable") or "").split()[1:]), values.get("startparameters") or "",
+                         values.get("extraparams") or "")
+    if any(c in _WWR_SHELL_SYNTAX for c in text):
+        return i18n.Sentence("the start parameters use shell quoting, expansion or syntax, which the panel does not read")
+    if any(_wwr_pmc_word_moves(w) for w in text.split()):
+        return i18n.Sentence("the start parameters choose the world, its folder, or the files that name it "
+                             "(--world, --universe, --world-container, --config, --bukkit-settings or --plugins)")
+    return None
+
+
+_WWR_BUKKIT = "serverfiles/bukkit.yml"
+
+
+def bukkit_problem(text):
+    r"""Why bukkit.yml (its text) may move Paper's worlds out of serverfiles, else None.
+
+    Paper reads settings.world-container from it when no --universe is given (its patch of the
+    server's Main). The panel does not parse YAML: any mention of world-container outside a
+    whole-line comment is refused, and so is any backslash there, since a double-quoted YAML key can
+    spell the name with escapes (`"world\x2dcontainer"`).
+    """
+    body = "\n".join(ln for ln in re.split(r"\r\n|\r|\n", text) if not ln.lstrip(" \t").startswith("#"))
+    if "world-container" in body.lower():
+        return i18n.Sentence("bukkit.yml sets world-container, which moves the worlds out of serverfiles")
+    if "\\" in body:
+        return i18n.Sentence("bukkit.yml holds a backslash escape, so whether it sets world-container cannot be read")
+    return None
+
+
+def _wwr_bukkit_check(gs):
+    """bukkit.yml's answer for `gs`: None (no world-container; a missing file is Paper's default), or why."""
+    content, err = _sm.read_file(gs.remote, gs.short_name, _WWR_BUKKIT)
+    if err == _WWR_NO_FILE:
+        return None
+    if err in _wwr_firm_read_errors():
+        return i18n.Sentence("serverfiles/bukkit.yml cannot be used: {error}", error=str(err))
+    if err is not None or content is None:
+        return Unread("bukkit.yml could not be read: {error}", error=str(err or "no answer"))
+    return bukkit_problem(content)
+
+
+def pmc_plan(gs):
+    """The world of Paper server `gs`: (plan, None), or (None, why it is not reset)."""
+    return _wwr_java_plan(gs, pmc_start_problem, _wwr_bukkit_check)
+
+
+# Bedrock's own rule for level-name, from the comment its server.properties carries: "Any string without
+# semicolon symbol or symbols illegal for file name: /\n\r\t\f`?*\\<>|\":". `=` is added: the panel does
+# not know whether the server splits a line at its first `=` or its last.
+_WWR_MCB_BAD = frozenset(";/\\`?*<>|\":=")
+_WWR_MCB_KEY = "level-name="
+_WWR_MCB_RULES = (
+    (lambda n: not n.isascii(), i18n.Sentence("it is not plain ASCII")),
+    (lambda n: any(c in _WWR_MCB_BAD for c in n),
+     i18n.Sentence("it contains a character Bedrock does not allow in a world name")),
+    (lambda n: ".." in n, i18n.Sentence("it contains '..'")),
+)
+
+
+def bedrock_level_name(props):
+    r"""`level-name` from Bedrock's server.properties text: (name, None), or (None, why).
+
+    The file is key=value lines with `#` comments (Microsoft Learn, "Bedrock Dedicated Server
+    Properties"). Only what is certain is read: lines end at \n (a \r before it is dropped), a
+    comment starts the line, and the name is everything after `level-name=` at the start of a line.
+    Refused: a line naming level-name in any other form (blanks, case, no `=`), two lines that differ,
+    no line at all (the panel does not assume the server's default), and a name world_name_problem or
+    _WWR_MCB_RULES refuses.
+    """
+    found = set()
+    for line in props.split("\n"):
+        line = line[:-1] if line.endswith("\r") else line
+        if line.startswith("#") or not line.strip():
+            continue
+        if line.startswith(_WWR_MCB_KEY):
+            found.add(line[len(_WWR_MCB_KEY):])
+        elif "level-name" in line.lower():
+            return None, i18n.Sentence("a level-name line in server.properties is not in the plain form "
+                                       "level-name=<name>")
+    if len(found) != 1:
+        return None, (i18n.Sentence("server.properties has no level-name line") if not found
+                      else i18n.Sentence("server.properties sets level-name more than once, to different names"))
+    name = found.pop()
+    why = world_name_problem(name) or next((w for bad, w in _WWR_MCB_RULES if bad(name)), None)
+    if why is not None:
+        return None, i18n.Sentence("level-name in server.properties is not used: {why}", why=why)
+    return name, None
+
+
+def mcb_start_problem(values):
+    """Why the instance's LinuxGSM values may move a Bedrock world, else None.
+
+    bedrock_server reads server.properties and worlds/ in the folder it runs in (executabledir:
+    LinuxGSM's default is serverfiles) and has no documented options; LinuxGSM passes none
+    (startparameters=""), so any start parameter is one the panel cannot judge.
+    """
+    if (values.get("executabledir") or "") not in _WWR_MC_EXEDIR:
+        return i18n.Sentence("the server does not run in serverfiles (executabledir is not LinuxGSM's default)")
+    if (values.get("startparameters") or "").strip() or (values.get("extraparams") or "").strip():
+        return i18n.Sentence("the server has start parameters, and Bedrock documents none the panel could judge")
+    return None
+
+
+def mcb_plan(gs):
+    """The world of Bedrock server `gs`: (plan, None), or (None, why it is not reset)."""
+    values, why = _wwr_values(gs, ["startparameters", "extraparams", "executabledir"])
+    why = why or mcb_start_problem(values)
+    if why is not None:
+        return None, why
+    content, why = _wwr_props(gs)
+    if content is None:
+        return None, why
+    name, why = bedrock_level_name(content)
+    if name is None:
+        return None, why
+    return {"dir": "worlds", "remove": [name], "globs": [], "create": None}, None
 
 
 _WWR_FCTR_NO_SAVE = i18n.Sentence("the start parameters do not name one save the panel knows how to reset")
@@ -234,7 +433,7 @@ def fctr_plan(gs):
 
 
 # game type -> the resolver that finds its world. Only games with a real server to prove them on.
-RESOLVERS = {"mc": mc_plan, "fctr": fctr_plan}
+RESOLVERS = {"mc": mc_plan, "fctr": fctr_plan, "pmc": pmc_plan, "mcb": mcb_plan}
 GAMES = frozenset(RESOLVERS)
 
 
