@@ -228,8 +228,9 @@ else:
                             [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
         _r190["older"] = {_n: _os190.stat(_os190.path.join(_sb.bdir, _n)).st_mtime
                           for _n in _sb.older if _os190.path.isfile(_os190.path.join(_sb.bdir, _n))}
-        _r190["links"] = (_os190.readlink(_os190.path.join(_sb.home, "log/server")),
-                          _os190.readlink(_os190.path.join(_sb.home, "lgsm/node_modules/.bin/gamedig")))
+        _r190["links"] = tuple(_os190.readlink(_q) if _os190.path.islink(_q) else "not a link"
+                               for _q in (_os190.path.join(_sb.home, "log/server"),
+                                          _os190.path.join(_sb.home, "lgsm/node_modules/.bin/gamedig")))
     finally:
         _sb.gone()
 
@@ -240,6 +241,7 @@ else:
         _lgsm_prune190(_sb.bdir)
         _res = _restore190(_sb, _ready) if _state == "ready" else (_out, ("not ready", ""))
         _r190["fctr"] = (_res[1][0], _sb.tree() == _sb.before, sorted(set(_sb.tree()) ^ set(_sb.before)),
+                         _os190.path.islink(_os190.path.join(_sb.home, "log/server")) and
                          _os190.readlink(_os190.path.join(_sb.home, "log/server")).endswith("/home/grsu/serverfiles"),
                          sorted(_f for _f in _sb.backups() if _f in _sb.older))
     finally:
@@ -387,6 +389,37 @@ else:
     finally:
         _sb.gone()
 
+    # Damaged so that tar fails while every entry still appears (the last member cut short), and an
+    # archive that unpacks cleanly to far fewer entries than were counted: both refused at the staging.
+    def _staged190(damage):
+        sb = _Sb190()
+        try:
+            out, (state, ready) = sb.vet()
+            tree = sb.tree()
+            held = [_f for _f in sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)][0]
+            hp = _os190.path.join(sb.bdir, held)
+            _sh190.copyfile(hp, _os190.path.join(sb.bdir, _UNDO190))
+            with open(hp, "rb") as f:
+                raw = _gz190.decompress(f.read())
+            with open(hp, "wb") as f:
+                f.write(_gz190.compress(damage(raw)))
+            out, res = _restore190(sb, ready)
+            return res[0], str(res[1]), sb.tree() == tree
+        finally:
+            sb.gone()
+
+    def _cut_last190(raw):
+        end = len(raw.rstrip(b"\0"))
+        end += (-end) % 512
+        ti = _tf190.TarInfo("././zz-last")
+        ti.size = 4096
+        return raw[:end] + ti.tobuf(format=_tf190.GNU_FORMAT) + b"z" * 100
+
+    def _fewer190(raw):
+        return _tar190([("././", b""), ("././" + _U190, b"#!/bin/bash\n")], compress="plain")
+    _r190["stage_rc"] = _staged190(_cut_last190)
+    _r190["stage_count"] = _staged190(_fewer190)
+
     # An interrupted restore left the archive held: the next restore's checks put it back first.
     _sb = _Sb190()
     try:
@@ -456,6 +489,12 @@ if "vet" in _r190:
     eq("restore commands: an archive that does not unpack fully is caught in the staging folder, before anything "
        "is cleared: refused, the home unchanged, the archive put back, the staging folder gone",
        _r190["xfail"], ("refused", True, True, True, False))
+    eq("restore commands: a tar that fails although every entry appeared (the last member cut short) refuses at the "
+       "staging, the home unchanged", (_r190["stage_rc"][0], "(tar exit 2)" in _r190["stage_rc"][1], _r190["stage_rc"][2]),
+       ("refused", True, True))
+    eq("restore commands: an archive that unpacks to fewer entries than the checks counted refuses at the staging, "
+       "the home unchanged", (_r190["stage_count"][0], "unpacked 2 of" in _r190["stage_count"][1], _r190["stage_count"][2]),
+       ("refused", True, True))
     eq("restore commands: an archive an interrupted restore left held is put back by the next checks",
        _r190["leftover"][:3], ("refused", _T0190, []))
 
@@ -826,6 +865,13 @@ try:
     _a = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _b = _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uid), data=b"x" * 4096, content_type="application/octet-stream")
     _up190["resume"] = (_a.status_code, _b.status_code, (_b.get_json() or {}).get("received"))
+    # A piece larger than one 64 KB chunk of base64: still handed over in chunks.
+    del _chunks190[:]
+    _uidb = _CU190["rsedit"].post(_base, json={"size": 200000}).get_json()["id"]
+    _CU190["rsedit"].post("%s/%s?offset=0" % (_base, _uidb), data=_os190.urandom(200000),
+                          content_type="application/octet-stream")
+    _CU190["rsedit"].post("%s/%s/cancel" % (_base, _uidb), json={})
+    _up190["big_chunks"] = list(_chunks190)
     # Finished before every byte arrived: refused, and its part file removed.
     _fin = _CU190["rsedit"].post("%s/%s/finish" % (_base, _uid), json={}).get_json() or {}
     _up190["early"] = (_fin.get("success"), [_f for _f in _os190.listdir(_ubdir190) if _uid in _f])
@@ -871,8 +917,9 @@ if "ok" in _up190:
     eq("upload: a piece sent twice is not appended twice; the page is told how much the host holds",
        _up190["resume"], (200, 409, 4096))
     eq("upload: finished before every byte arrived, it is refused and its part file removed", _up190["early"], (False, []))
-    check("upload: a piece goes to the host as base64 in chunks of at most 64 KB, never as one string",
-          _chunks190 and max(_chunks190) <= 65536, repr(_chunks190[:5]))
+    check("upload: a piece goes to the host as base64 in chunks of at most 64 KB, never as one string (a 200 KB "
+          "piece included)", _up190["big_chunks"] and max(_up190["big_chunks"]) <= 65536 and max(_chunks190) <= 65536,
+          repr((_up190["big_chunks"], _chunks190[:5])))
     eq("upload: an upload id that is a path, and a piece over 4 MB, are refused",
        (_up190["traversal_id"], _up190["big_piece"]), (404, 413))
 
