@@ -4129,7 +4129,7 @@ def _open_ssh_port_rule(server, port, panel_way_in, served=None):
         if brc != 0:
             return False, _r41f_unread_status(port)
         if not known:
-            return _r26j_inactive_open(server, port)
+            return _r26j_inactive_open(server, port, served or panel_way_in)
         return _r38a_open_read(server, port, before, known, served or panel_way_in)
 
 
@@ -4781,7 +4781,7 @@ _R26J_STORED_COVER_RE = re.compile(r"ufw (allow|deny|reject|limit)(?: in)?(?: lo
                                    r"([0-9][0-9,:]*)(?:/(tcp|udp))?(?: comment .*)?")
 
 
-def _r26j_inactive_open(server, port):
+def _r26j_inactive_open(server, port, served=()):
     """_open_ssh_port_rule's open on an inactive firewall: its (added, refusal). The caller holds ufw_lock.
 
     `ufw status` lists none of an inactive firewall's stored rules, so the open ran `ufw allow`
@@ -4796,6 +4796,10 @@ def _r26j_inactive_open(server, port):
         changed. Opened blind, the allow from Anywhere applied the moment UFW was enabled, on a host
         whose stored SSH rule may be tailnet-only. An empty answer that reports success is opened as
         before, not counted as added.
+      * no stored rule lets SSH in from anywhere on one of `served` (the ports sshd serves now): SSH is
+        kept to the tailnet, one source or one interface, so nothing is added and the success message
+        says so (_r42f_stored_public_off), as on an active firewall (_r38a_public_off). The allow from
+        Anywhere opened SSH to the internet on the new port the moment UFW was enabled.
     """
     out, _err, rc = _core.run_privileged(server, "ufw-show-added", [], timeout=15)
     if rc != 0:
@@ -4805,6 +4809,8 @@ def _r26j_inactive_open(server, port):
         return False, _r26j_blocked(port, blocking)
     if stored:
         return False, None
+    if stored is False and not _r42f_stored_public_ssh(out, served):
+        return _r42f_stored_public_off(port)
     ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
     added = bool(ok and stored is False)
     _r34b_note_added(port, added)
@@ -4814,6 +4820,43 @@ def _r26j_inactive_open(server, port):
         if not _r26j_stored_reading(out if rc == 0 else "", port)[0]:
             return False, _r28j_not_opened(port, _r36b_close_confirmed(server, port, added))
     return added, None
+
+
+# A stored rule for an app profile (`ufw allow OpenSSH`): ufw's short form names the profile, quoted when
+# it holds a space. Its action and the profile name.
+_R42F_STORED_APP_RE = re.compile(r"ufw (allow|deny|reject|limit)(?: in)?(?: log(?:-all)?)? "
+                                 r"('[^']+'|\S+)(?: comment .*)?")
+
+
+def _r42f_stored_public_ssh(out, served):
+    """Whether, in `ufw show added`'s `out`, the first stored rule TCP to one of `served` meets lets it in.
+
+    Only rules from anywhere, inbound, on no interface are in ufw's short form, which is all the
+    stored-rule patterns read: a rule for the tailnet, one source or one interface is never public.
+    """
+    lines = [line.strip() for line in (out or "").splitlines()]
+    for port in (int(p) for p in served or () if str(p).isdecimal()):
+        first = next((line for line in lines if _r42f_stored_meets(line, port)), None)
+        if first is not None and first.split()[1] in ("allow", "limit"):
+            return True
+    return False
+
+
+def _r42f_stored_meets(line, port):
+    """Whether stored rule `line` is met by TCP to `port` from anywhere: a port rule, or the SSH profile on 22."""
+    if _r26j_stored_covers(line, port):
+        return True
+    m = _R42F_STORED_APP_RE.fullmatch(line)
+    return bool(m) and port == 22 and m.group(2).strip("'").lower() in firewall._SSH_APP_PROFILES
+
+
+def _r42f_stored_public_off(port):
+    """_r26j_inactive_open where no stored rule lets SSH in from anywhere: nothing added, and said."""
+    _r38a_note(i18n.Sentence(
+        "UFW is inactive, and none of its stored rules lets SSH in from anywhere, so no public rule was added for "
+        "port {port}. Check that a rule of yours lets you in on port {port} before enabling UFW or closing the "
+        "old port.", port=port))
+    return False, None
 
 
 def _r41f_unread_stored(port):

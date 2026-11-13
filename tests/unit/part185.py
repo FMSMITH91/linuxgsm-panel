@@ -1,4 +1,4 @@
-"""Part 185 of the unit suite: no port opened to the internet by a rate limit.
+"""Part 185 of the unit suite: no port opened to the internet by a rate limit or an inactive firewall's move.
 
 Held here:
 * Limit (remote_ufw_limit_port, and POST /api/remote/<id>/firewall/limit through the app): `ufw limit
@@ -7,17 +7,21 @@ Held here:
   it to the whole internet. It now runs only where every family it writes already lets everyone in;
   an unread or inactive firewall refuses, as lifting a limit does. Where the listing settles it, no
   host read is added.
+* An SSH port move on an INACTIVE ufw (_open_ssh_port_rule, and POST /api/remote/<id>/ssh-port): where
+  no stored rule lets SSH in from anywhere (tailnet-only, one source), no public allow is stored for
+  the new port (it went live the moment UFW was enabled), and the success message says so.
 
 HOW IT RUNS. On part12's app and stand-ins with its transport tripwire armed: run_privileged answers
 from a small stand-in ufw (its numbered list, `status verbose`'s default policy, its stored IPv6
-setting). Nothing reaches a host, sudo or the checkout's data/.
+setting and `show added`). Nothing reaches a host, sudo or the checkout's data/.
 """
 from types import SimpleNamespace as _NS185
 
 from unit.part01 import check, ufw_stored_answer
-from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_audit, _p9_client, _p9_core, _p9_json,
-                         _p9_patch, _p9_restore_all)
-from panel.ops.ssh_manager import hosts as _hosts185
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_audit, _p9_client, _p9_core, _p9_host_row,
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_set_host)
+from unit.part159 import _Box159, _PUB_SESS159
+from panel.ops.ssh_manager import firewall as _fw185, hosts as _hosts185, ufweval as _ue185
 
 _TRIP185_START = len(_P9_TRIPPED)
 _HDR185 = "Status: active\n\n     To                         Action      From\n     --                         ------      ----\n"
@@ -139,11 +143,105 @@ def _r42f_limit_route185():
           repr((off, on)))
 
 
+# ── an inactive firewall's SSH port move ───────────────────────────────────────────────────────────
+_ADDED185 = "Added user rules (see 'ufw status' for running firewall):\n"
+
+
+def _inactive185(stored):
+    """_open_ssh_port_rule(2022) on an inactive ufw storing `stored` -> ((added, refusal), the opens)."""
+    opened = []
+
+    def run(server, verb, args=(), **k):
+        if verb == "ufw-status":
+            return "Status: inactive\n", "", 0
+        if verb == "ufw-show-added":
+            return _ADDED185 + stored + ("ufw allow 2022/tcp comment 'SSH panel'\n" if opened else ""), "", 0
+        return ufw_stored_answer() if verb == "ufw-stored-rules" else ("", "", 0)
+    _p9_patch(_p9_core, "run_privileged", run)
+    _p9_patch(_hosts185, "remote_ufw_open_port", lambda s, p, proto, comment="": opened.append(p) or (True, ""))
+    _p9_patch(_hosts185, "remote_ufw_close_port", lambda *a, **k: (True, ""))
+    try:
+        return _hosts185._open_ssh_port_rule(_NS185(id=-18502, name="p185"), 2022, ["22"]), opened
+    finally:
+        _p9_restore_all()
+        _p9_arm(who="part185")
+
+
+def _r42f_inactive_move185():
+    off = {name: _inactive185(body) for name, body in (
+        ("tailnet only", "ufw allow in on tailscale0\n"),
+        ("one source", "ufw allow from 198.51.100.7 to any port 22 proto tcp\n"),
+        ("denied first", "ufw deny 22/tcp\nufw allow 22/tcp\nufw allow in on tailscale0\n"),
+        ("udp", "ufw allow 22/udp\n"), ("outbound", "ufw allow out 22/tcp\n"))}
+    check("1112 A03 (inactive move): on an inactive UFW whose stored rules let SSH in from anywhere on no port "
+          "sshd serves (tailnet-only, one source, denied first, UDP, outbound), the move stores no public allow "
+          "for the new port (it went live, SSH public, the moment UFW was enabled)",
+          all(v == ((False, None), []) for v in off.values()), repr(off))
+    on = {name: _inactive185(body) for name, body in (
+        ("limit", "ufw limit 22/tcp\n"), ("bare", "ufw allow 22\n"), ("range", "ufw allow 20:30/tcp\n"),
+        ("OpenSSH profile", "ufw allow OpenSSH\n"), ("commented", "ufw allow 22/tcp comment 'ssh'\n"))}
+    check("1112 A03 (inactive move): ...where a stored rule does let SSH in from anywhere (a LIMIT, a bare 22, a "
+          "range, the OpenSSH profile, a commented allow), the allow for the new port still goes in, counted as "
+          "the panel's own (controls)",
+          all(v == ((True, None), [2022]) for v in on.values()), repr(on))
+
+
+class _Inactive185(_Box159):
+    """part159's stand-in host that succeeds, its ufw inactive and storing `stored`."""
+
+    def __init__(self, stored, **kw):
+        super().__init__([], **kw)
+        self.stored = stored
+
+    def _answer(self, verb):
+        if verb == "ufw-status":
+            return "Status: inactive\n", "", 0
+        if verb == "ufw-show-added":
+            return _ADDED185 + self.stored + ("ufw allow 2022/tcp\n" if self.added else ""), "", 0
+        return super()._answer(verb)
+
+
+def _route_move185(stored):
+    """POST /api/remote/<P9_HOST>/ssh-port {port: 2022} on an inactive stand-in -> (status, json, allow verbs)."""
+    box = _Inactive185(stored)
+    port0 = _p9_host_row(P9_HOST).port
+    try:
+        _p9_arm(who="part185")
+        _p9_patch(_p9_core, "run_privileged", box.priv)
+        _p9_patch(_p9_core, "run_command", lambda *a, **k: ("", "", 1))
+        _p9_patch(_p9_core, "write_root_file", box.write)
+        _p9_patch(_hosts185, "_sshd_socket_activated", lambda s: False)
+        _p9_patch(_hosts185, "_restart_ssh_listener", box.restart)
+        _p9_patch(_hosts185, "_point_f2b_sshd_at", lambda server, ports: ("updated", ""))
+        _p9_patch(_hosts185, "_fwb_ssh_conn", lambda s: _PUB_SESS159)
+        _p9_patch(_hosts185, "_tailscale_conn_state", lambda s: (True, False))
+        _p9_patch(_ue185, "ts_netfilter_on", lambda s: False)
+        _p9_patch(_ue185, "app_profiles", lambda s: None)
+        _p9_patch(_fw185, "remote_ufw_default_allows_in", lambda server: False)
+        r = _p9_client(P9_ADMIN).post("/api/remote/%d/ssh-port" % P9_HOST, json={"port": 2022})
+        return r.status_code, _p9_json(r), [v for v, _a in box.allows if not v.startswith("ufw-delete")]
+    finally:
+        _p9_restore_all()
+        _p9_set_host(P9_HOST, port=port0)
+
+
+def _r42f_inactive_route185():
+    off, on = _route_move185("ufw allow in on tailscale0\n"), _route_move185("ufw limit 22/tcp\n")
+    check("1112 A03 (route, inactive move): POST /api/remote/<id>/ssh-port on an inactive UFW storing only a "
+          "tailnet rule moves SSH, sends no allow verb, and says no public rule was added; a stored public "
+          "LIMIT for 22 still has the new port's allow sent (control)",
+          off[0] == 200 and off[1].get("success") is True and off[2] == []
+          and "none of its stored rules lets SSH in from anywhere" in off[1].get("message", "")
+          and on[1].get("success") is True and on[2] != [], repr((off, on)))
+
+
 try:
     _p9_arm(who="part185")
     _r42f_limit_refused185()
     _r42f_limit_controls185()
     _r42f_limit_route185()
+    _r42f_inactive_move185()
+    _r42f_inactive_route185()
 finally:
     _p9_restore_all()
 

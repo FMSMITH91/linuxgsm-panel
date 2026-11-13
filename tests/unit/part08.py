@@ -715,9 +715,10 @@ check("change_ssh_port: on an inactive ufw whose stored rules cannot be read eit
       "opened but the revert does not delete a rule that may have been there", _rv_ufw == [
           ("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])], repr(_rv_ufw))
 _rv_r, _rv_ufw, _ = _rv_move(["22"], 2022, status="Status: inactive\n",
-                             added="Added user rules (see 'ufw status' for running firewall):\n(None)\n")
-check("change_ssh_port: ...one whose stored rules read as none gets the allow, and the revert "
-      "deletes it (the panel's own); part98 holds a stored rule for the port", _rv_ufw == [
+                             added="Added user rules (see 'ufw status' for running firewall):\nufw allow 22/tcp\n")
+check("change_ssh_port: ...one whose stored rules let SSH in from anywhere and hold none for the new port "
+      "gets the allow, and the revert deletes it (the panel's own); part98 holds a stored rule for the port, "
+      "part185 stored rules with public SSH off", _rv_ufw == [
           ("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"]),
           ("ufw-delete-allow-proto-port", ["tcp", "2022"])], repr(_rv_ufw))
 
