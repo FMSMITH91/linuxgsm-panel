@@ -816,6 +816,25 @@ def _lgsm_lock_probe_cmd(gs):
                shlex.quote(selfname + ".lock")))
 
 
+def _lgsm_lock_words(remote, gs, cmd):
+    """The words the lock probe `cmd` printed for `gs`: one shell, two on a remote that needs both.
+
+    On the panel's own host the line runs AS the game account. The panel's account cannot enter
+    that account's 0750 home and has no root to ask (run_command never escalates there), so as
+    itself the folder always read as unsearchable and every stop paged; `sudo -u <game account>`
+    is what the narrow grant allows. A game kept under the panel's own account runs it directly
+    (host_reboot._account_shell). On a remote the row's sudo is asked, then the login itself.
+    """
+    if is_local_server(remote):
+        from panel.services import host_reboot
+        return (host_reboot._account_shell(remote, gs.short_name.strip(), cmd, timeout=10,
+                                           selfname=gs.lgsm_name.strip())[0] or "").split()
+    words = (run_command(remote, cmd, timeout=10)[0] or "").split()
+    if "LGSM_LOCK_held" not in words and "LGSM_LOCK_none" not in words:
+        words = (run_command(remote, cmd, timeout=10, sudo=False)[0] or "").split()
+    return words
+
+
 def _lgsm_stopped_on_purpose(remote, gs):
     """True when LinuxGSM's own `stop` took this server down: its monitoring lock is gone.
 
@@ -826,17 +845,15 @@ def _lgsm_stopped_on_purpose(remote, gs):
     Schedule tab task (a Stop with player warnings is `./<s> send ... ; sleep ... ; ./<s> stop`), a
     cron line or a terminal. A panel Stop is already known by its window and never asks.
 
-    The answer counts only when the lock folder itself could be searched (as the row's sudo, else as
-    the panel's own account); anything else is False, so an unreadable home never hides a crash.
+    The answer counts only when the lock folder itself could be searched (see _lgsm_lock_words for
+    as whom); anything else is False, so an unreadable home never hides a crash.
     The printed words are built from a variable, so a command line echoed back cannot answer.
     """
     try:
         cmd = _lgsm_lock_probe_cmd(gs)
         if cmd is None:
             return False
-        words = (run_command(remote, cmd, timeout=10)[0] or "").split()
-        if "LGSM_LOCK_held" not in words and "LGSM_LOCK_none" not in words:
-            words = (run_command(remote, cmd, timeout=10, sudo=False)[0] or "").split()
+        words = _lgsm_lock_words(remote, gs, cmd)
         return "LGSM_LOCK_none" in words and "LGSM_LOCK_held" not in words
     except Exception:
         _log.debug("monitoring lock probe failed for %s", row_label(gs, "name"), exc_info=True)
