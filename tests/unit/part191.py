@@ -88,6 +88,13 @@ check("world reset preexecutable: LinuxGSM's own (java -Xmx${javaram}M -jar), ot
 for _why191, _pre191 in _PRE_BAD191.items():
     check("world reset preexecutable: one with %s is refused" % _why191,
           _wwr191.java_pre_problem(_pre191, _wwr191.pmc_start_problem) is not None, repr(_pre191))
+check("world reset preexecutable: shell syntax is refused by the preexecutable test itself, with no game scan "
+      "given (a JVM option ${heap}, a quoted -jar)",
+      _wwr191.java_pre_problem("java -Xmx${heap} -jar") is not None
+      and _wwr191.java_pre_problem("java -Xmx2G '-jar'") is not None, "")
+check("world reset preexecutable: LinuxGSM's ${javaram} (and $javaram) is the one expansion read, as a number",
+      _wwr191.java_pre_problem("java -Xmx${javaram}M -jar") is None and _wwr191.java_pre_problem("java -Xmx$javaram -jar")
+      is None and _wwr191.java_pre_problem("java -Xmx${javaramx} -jar") is not None, "")
 check("world reset preexecutable: a JVM option the game's option scan refuses is refused too (-Wx for Paper)",
       _wwr191.java_pre_problem("java -Wx -jar", _wwr191.pmc_start_problem) is not None
       and _wwr191.java_pre_problem("java -Wx -jar") is None, "")
