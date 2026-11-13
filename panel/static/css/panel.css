@@ -2085,8 +2085,8 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   display: none !important;
 }
 
-/* ── DASHBOARD SERVER LIST ON A PHONE ──
-   Below the mobile breakpoint each server in a host's table is a compact card instead of a table
+/* ── DASHBOARD SERVER LIST ON A PHONE OR TABLET ──
+   Below 992px each server in a host's table is a compact card instead of a table
    row. As a table it was 550-640px wide inside a 378px box at 412px: the Actions column, pinned on
    the right, covered Status and Players (Status read "S'" over a cut-off "O" of "Online"), seven
    33px buttons wrapped into two rows, and the table scrolled sideways. The card is laid out by the
@@ -2099,7 +2099,11 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
      line 3  every action in one row of 40px targets
    Vertical spacing is a top margin on the items below line 1, not row-gap: the empty items that
    end lines would otherwise add gaps of their own.
-   The column headers go (the select-all box stays, labelled). Nothing here applies at 768px and up.
+   The column headers go (the select-all box stays, labelled). Nothing here applies at 992px and up.
+   992, not the panel's 768 mobile breakpoint: from 768 to 991px the sidebar is open beside the
+   table, and the eight columns had about 470px; at 820px one host's Actions column got 68px and
+   stacked its seven buttons into a 288px-tall row. The card fits there as it does on a phone. The
+   d-lg-none spans (game label, player word, select-all label) are the card's, hidden from 992px.
 
    The "more" popover (dashboard.html) is the fallback for a row too narrow for every button: it is a
    real popover only inside the container query below. Everywhere else it is reset to a plain inline
@@ -2122,7 +2126,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   display: none;
 }
 
-@media (width <= 767.98px) {
+@media (width <= 991.98px) {
   .table-responsive .dash-srv-table,
   .table-responsive .dash-srv-table > thead,
   .table-responsive .dash-srv-table > tbody {
@@ -2137,8 +2141,9 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     display: flex;
   }
 
+  /* !important: from 768px the Type header carries Bootstrap's d-md-table-cell. */
   .table-responsive .dash-srv-table > thead > tr > th:not(.dash-th-check) {
-    display: none;
+    display: none !important;
   }
 
   .table-responsive .dash-srv-table > thead > tr > th.dash-th-check {
@@ -2213,6 +2218,11 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 
   .table-responsive .dash-srv-table > tbody > tr[data-server-id] > td.dash-col-name {
     display: contents;
+  }
+
+  /* The Type cell is d-md-table-cell (!important) from 768px; the card shows the game on line 1. */
+  .table-responsive .dash-srv-table > tbody > tr[data-server-id] > td.d-md-table-cell {
+    display: none !important;
   }
 
   .dash-srv-table .dash-srv-title {
@@ -2366,18 +2376,18 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 }
 
 /* ── DASHBOARD SERVER TABLE ON A NARROW DESKTOP ──
-   From 768px the server table is a table again, and it has to fit its card: measured at 1280x900 the
+   From 992px the server table is a table again, and it has to fit its card: measured at 1280x900 the
    two host tables were 1071 and 1151px in a 943px box (1024x768: 687px box), and every row's
    Uninstall button sat past the card edge, reachable only by scrolling the table. What held it wide:
    the in-game name's 22ch truncating line (its min-content set the Server column's floor), the
    Resources cell's nowrap, the connect address and its Join button with no break between them, and
-   seven buttons on one line. So, from 768px: the in-game name stops sizing the column
+   seven buttons on one line. So, from 992px (below it each server is a card): the in-game name stops sizing the column
    (contain: inline-size; it still truncates to the width it gets), Resources wraps, and Join may drop
    under the address. Below 1400px the cells lose a little side padding and the buttons wrap to a
    fixed width, 4 to a row (4 + 3) from 1200px and 3 to a row below; at 1400px and up they stay on
    one row as before. font-size: 0 on the cell removes the spaces between the inline buttons, so the
    width fits an exact number of them (each keeps its own font size through .btn-sm). */
-@media (width >= 768px) {
+@media (width >= 992px) {
   .dash-srv-table .game-name {
     contain: inline-size;
   }
@@ -2394,7 +2404,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   }
 }
 
-@media (768px <= width < 1400px) {
+@media (992px <= width < 1400px) {
   .dash-srv-table > :not(caption) > tr > * {
     padding-right: .35rem;
     padding-left: .35rem;

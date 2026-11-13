@@ -302,8 +302,8 @@
           <tr>
             {% if can_bulk %}<th class="dash-th-check" style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" id="srv-check-all-{{ remote.id }}" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host">
               {#- A phone shows no column headers (each server is a card there), so this box would sit
-                  alone with nothing saying what it ticks. d-md-none: never rendered on a wider screen. -#}
-              <label class="d-md-none dash-m-selall" for="srv-check-all-{{ remote.id }}">Select all on this host</label></th>{% endif %}
+                  alone with nothing saying what it ticks. d-lg-none: never rendered on a wider screen. -#}
+              <label class="d-lg-none dash-m-selall" for="srv-check-all-{{ remote.id }}">Select all on this host</label></th>{% endif %}
             <th class="dash-sort dash-col-name" data-sortkey="name" style="cursor:pointer;" data-action="sortDashCol" data-args='["name","@self"]' title="Sort this host's servers by name">Server<span class="dash-caret"></span></th>
             <th class="d-none d-md-table-cell dash-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
             <th class="dash-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
@@ -327,8 +327,8 @@
                  from "Online" to "En línea". #}
               {# The wrapper and the game label are for the phone card (panel.css), where the Type
                  column is hidden: line 1 is the name and the game. On a wider screen the wrapper is a
-                 plain inline span and the label is d-md-none, so the row is what it always was. #}
-              <span class="dash-srv-title"><strong data-no-i18n>{{ srv.name }}</strong><span class="d-md-none dash-m-game" data-no-i18n>{{ srv.game_display or srv.game_type }}</span></span>
+                 plain inline span and the label is d-lg-none, so the row is what it always was. #}
+              <span class="dash-srv-title"><strong data-no-i18n>{{ srv.name }}</strong><span class="d-lg-none dash-m-game" data-no-i18n>{{ srv.game_display or srv.game_type }}</span></span>
               {# The guard on the NAME only: on the outer span it kept the tooltip English for es/fr
                  viewers too (the walker returns at a guarded element before its attributes). #}
               <span class="game-name text-info d-block text-truncate"
@@ -361,9 +361,9 @@
             <td id="players-{{ srv.id }}" class="text-nowrap dash-td-players">
               {% set pc = player_counts.get(srv.id) %}
               {% set mx = player_max.get(srv.id) %}
-              {#- The word is for the phone card, which has no Players header over the number (d-md-none).
+              {#- The word is for the phone card, which has no Players header over the number (d-lg-none).
                   dashboard.js's _dashPlayersCell writes the same shape on every poll. #}
-              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %} <span class="d-md-none dash-m-unit">{{ 'player' if pc == 1 and not mx else 'players' }}</span>{% else %}<span class="text-secondary">—</span>{% endif %}
+              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %} <span class="d-lg-none dash-m-unit">{{ 'player' if pc == 1 and not mx else 'players' }}</span>{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
             <td id="res-{{ srv.id }}" class="d-none d-lg-table-cell text-nowrap text-secondary" style="font-size:.8rem;">—</td>
             <td class="dash-td-connect">

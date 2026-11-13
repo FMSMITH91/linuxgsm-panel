@@ -2,12 +2,12 @@
 
 Held here:
 * The page, through the app: each server row carries the phone card's hooks — the name and game
-  label together on line 1 (the label d-md-none, so a wider screen never draws it), the player count
-  with its word ("player" for one with no cap, "players" otherwise; d-md-none), the account name
+  label together on line 1 (the label d-lg-none, so a wider screen never draws it), the player count
+  with its word ("player" for one with no cap, "players" otherwise; d-lg-none), the account name
   marked when it only repeats the server's name, the select-all box labelled for the phone, and the
   "more" popover holding Console, Files, Tags and Uninstall but never Start, Restart or Stop, with a
   toggle that names it.
-* panel.css, the desktop table: from 768px the in-game name no longer sets the Server column's width,
+* panel.css, the desktop table: from 992px the in-game name no longer sets the Server column's width,
   Resources wraps and Join may wrap under the address; below 1400px the buttons wrap to a fixed
   width (3 to a row, 4 from 1200px), at 1400px and up they keep one row.
 * panel.css: inside the mobile media query the column headers (all but the select-all cell) are
@@ -61,14 +61,14 @@ def _row192(sid):
 
 
 _r1_192, _r2_192 = (_row192(_ids192[0]), _row192(_ids192[1])) if len(_ids192) == 2 else ("", "")
-check("dashboard phone card: line 1 is the name and the game label together, the label d-md-none so a "
+check("dashboard phone card: line 1 is the name and the game label together, the label d-lg-none so a "
       "wider screen never draws it",
-      '<span class="dash-srv-title"><strong data-no-i18n>dmbsame192</strong><span class="d-md-none dash-m-game" '
+      '<span class="dash-srv-title"><strong data-no-i18n>dmbsame192</strong><span class="d-lg-none dash-m-game" '
       'data-no-i18n>Minecraft Java Edition</span></span>' in _r1_192, _r1_192[:600])
 check("dashboard phone card: the player count carries its word, \"player\" for one player with no cap and "
-      "\"players\" for 3 / 20, d-md-none",
-      '1 <span class="d-md-none dash-m-unit">player</span>' in _r1_192
-      and '3 / 20 <span class="d-md-none dash-m-unit">players</span>' in _r2_192,
+      "\"players\" for 3 / 20, d-lg-none",
+      '1 <span class="d-lg-none dash-m-unit">player</span>' in _r1_192
+      and '3 / 20 <span class="d-lg-none dash-m-unit">players</span>' in _r2_192,
       repr((_re192.findall(r'<td id="players-\d+"[\s\S]*?</td>', _r1_192 + _r2_192))))
 check("dashboard phone card: the account name is marked to leave out only where it repeats the server's "
       "name",
@@ -99,7 +99,7 @@ check("dashboard phone card: the toggle names that popover and the server it is 
       "")
 check("dashboard phone card: the select-all box keeps a label on the phone, tied to it by id",
       'id="srv-check-all-%d"' % P9_LOCAL in _page192
-      and '<label class="d-md-none dash-m-selall" for="srv-check-all-%d">Select all on this host</label>'
+      and '<label class="d-lg-none dash-m-selall" for="srv-check-all-%d">Select all on this host</label>'
       % P9_LOCAL in _page192, "")
 
 
@@ -143,12 +143,13 @@ def _rule192(at, selector):
     return out
 
 
-_MOB192 = "@media (width <= 767.98px)"
+_MOB192 = "@media (width <= 991.98px)"
 _TR192 = ".table-responsive .dash-srv-table > tbody > tr[data-server-id]"
-check("panel.css dashboard phone card: inside the mobile media query the column headers are hidden, all "
-      "but the select-all cell",
+check("panel.css dashboard phone card: below 992px (phones and tablets) the column headers are hidden, all "
+      "but the select-all cell, and so is the Type cell Bootstrap shows from 768px",
+      _rule192(_MOB192, _TR192 + " > td.d-md-table-cell").get("display") == "none !important" and
       _rule192(_MOB192, ".table-responsive .dash-srv-table > thead > tr > th:not(.dash-th-check)").get("display")
-      == "none", "")
+      == "none !important", "")
 _trd192 = _rule192(_MOB192, _TR192)
 check("panel.css dashboard phone card: each row is a wrapping flex card, and the size container the "
       "narrow-row query reads",
@@ -173,8 +174,8 @@ check("panel.css dashboard phone card: a row too narrow for every button hides t
       == "block", "")
 
 # The desktop table fits its card (1280x900: 1071 and 1151px tables in a 943px box before).
-_WIDE192, _MID192, _MID4_192 = "@media (width >= 768px)", "@media (768px <= width < 1400px)", "@media (1200px <= width < 1400px)"
-check("panel.css dashboard table on a desktop: from 768px the in-game name stops sizing the Server column, "
+_WIDE192, _MID192, _MID4_192 = "@media (width >= 992px)", "@media (992px <= width < 1400px)", "@media (1200px <= width < 1400px)"
+check("panel.css dashboard table on a desktop: from 992px the in-game name stops sizing the Server column, "
       "Resources wraps and Join may drop under the address",
       _rule192(_WIDE192, ".dash-srv-table .game-name").get("contain") == "inline-size"
       and _rule192(_WIDE192, '.dash-srv-table td[id^="res-"]').get("white-space") == "normal !important"
@@ -185,7 +186,7 @@ check("panel.css dashboard table on a desktop: below 1400px the buttons wrap to 
       (_mid192.get("white-space"), _mid192.get("width"), _mid192.get("font-size"), _mid4_192.get("width"))
       == ("normal !important", "calc(3 * (2.425rem + 4px) + .7rem)", "0", "calc(4 * (2.425rem + 4px) + .7rem)")
       and not any(".dash-srv-table td.col-actions" in p and "1400" not in at
-                  for at, rules in _css192 if at.startswith("@media") and "768" in at and "<" not in at
+                  for at, rules in _css192 if at.startswith("@media") and "992" in at and "<" not in at
                   for p, _b in rules if isinstance(_b, str)), repr((_mid192, _mid4_192)))
 
 # ── 3. dashboard.js in node ─────────────────────────────────────────────────────────────────────
@@ -221,9 +222,9 @@ else:
     eq("dashboard.js dashboard phone card: _dashPlayersCell writes the template's shape — \"player\" for one "
        "player with no cap, \"players\" with a cap or more, no word for an unknown count",
        _js192.get("cells"),
-       ['<i class="bi bi-people-fill text-secondary"></i> 1 <span class="d-md-none dash-m-unit">player</span>',
-        '<i class="bi bi-people-fill text-secondary"></i> 3 / 20 <span class="d-md-none dash-m-unit">players</span>',
-        '<i class="bi bi-people-fill text-secondary"></i> 1 / 20 <span class="d-md-none dash-m-unit">players</span>',
+       ['<i class="bi bi-people-fill text-secondary"></i> 1 <span class="d-lg-none dash-m-unit">player</span>',
+        '<i class="bi bi-people-fill text-secondary"></i> 3 / 20 <span class="d-lg-none dash-m-unit">players</span>',
+        '<i class="bi bi-people-fill text-secondary"></i> 1 / 20 <span class="d-lg-none dash-m-unit">players</span>',
         '<span class="text-secondary">—</span>'])
     eq("dashboard.js dashboard phone card: a tap on an action in an open \"more\" popover closes it; a closed "
        "one, a tap that is not on an action, and a browser without popovers are left alone",

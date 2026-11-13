@@ -219,7 +219,7 @@ function _dashSyncServer(s) {
 }
 
 // The same shape dashboard.html renders: the count, " / max" when known, and the word the phone
-// card shows in place of the Players header (d-md-none, so a wider screen never draws it). The word
+// card shows in place of the Players header (d-lg-none, so a wider screen never draws it). The word
 // is English and a whole catalog key, so i18n.js's observer translates it as it lands, as it does
 // the status cell's. Singular only for one player with no cap: "1 / 20 players" reads as a share.
 function _dashPlayersCell(s) {
@@ -229,7 +229,7 @@ function _dashPlayersCell(s) {
     // by the names it reads, and the counts are numbers (typeof-checked), never markup.
     pcell.innerHTML = (typeof s.players === 'number')  // nosemgrep
       ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
-        + ' <span class="d-md-none dash-m-unit">'
+        + ' <span class="d-lg-none dash-m-unit">'
         + (s.players === 1 && !(typeof s.max_players === 'number' && s.max_players > 0) ? 'player' : 'players') + '</span>'
       : '<span class="text-secondary">—</span>';
   }
