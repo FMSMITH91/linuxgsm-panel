@@ -412,7 +412,11 @@ class _Dropped183(Exception):
 
 
 def _sweep_case183(sid, **o):
-    """One (or two) sweeps of a pending reset of server `sid`, every host call stubbed. Returns what happened."""
+    """One (or two) sweeps of a pending reset of server `sid`, every host call stubbed. Returns what happened.
+
+    `o` sets each stub's answer: props (every read_file), or read (a function of the path read), values
+    (lgsm_get_values), status, delete, stop, players, backup, wait_empty, backed_up, again.
+    """
     got = {"sid": sid, "cmds": [], "jobs": [], "alerts": [], "backups": [], "players_asked": 0}
     with _p9.app_context():
         from panel.db.models import GameServer, db
@@ -454,7 +458,7 @@ def _sweep_case183(sid, **o):
         _p9_patch_sm("run_as_game_user", _run)
         _p9_patch_sm("shell_as_game_user", _shell)
         _p9_patch_sm("player_count", _players)
-        _p9_patch_sm("read_file", lambda *a, **k: o.get("props", (_PROPS183, None)))
+        _p9_patch_sm("read_file", lambda *a, **k: o["read"](a[2]) if "read" in o else o.get("props", (_PROPS183, None)))
         _values = (dict(_EXE183, startparameters=_LATEST183, extraparams="") if sid == _fctr_sid183
                    else dict(_MCV183))
         _p9_patch_sm("lgsm_get_values", lambda *a, **k: o.get("values", _values))

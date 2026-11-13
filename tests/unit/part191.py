@@ -1,0 +1,283 @@
+"""Part 191 of the unit suite: the scheduled world reset for Paper (pmc) and Bedrock (mcb).
+
+Held here:
+* Paper's start parameters: every option of Paper's that moves the world or the files that name it
+  (-W/--world-dir/--universe/--world-container, -w/--world/--level-name, -c/--config,
+  -b/--bukkit-settings, -P/--plugins), written in full, abbreviated, with one dash, `=`, an attached
+  value or after a no-value option in a cluster, is refused; LinuxGSM's default and Paper's other
+  options are not; shell quoting or expansion is refused (Minecraft Java's too).
+* bukkit.yml: world-container anywhere outside a whole-line comment, or a backslash escape, refuses;
+  a missing bukkit.yml is Paper's default; a bukkit.yml that could not be read waits.
+* Bedrock's server.properties: only a plain `level-name=<name>` line is read (CRLF too); any other
+  form, two different lines, no line, and a name Bedrock forbids or the panel will not guess about
+  are refused.
+* The host command against scratch trees: Paper's world folder goes (current layout and the older
+  _nether/_the_end), plugins, config and a plugin's own world stay; Bedrock's worlds/<name> with a
+  blank in it goes, the other worlds and the server's own files stay; a worlds folder that is a
+  symlink is refused, nothing deleted.
+* The card and the sweep, through the app: both games get a reset card with their own text (the
+  player box ticked: both are counted by gamedig), and a due reset runs state, stop, backup, delete,
+  start, or stops short as each refusal says.
+
+HOW IT RUNS. part12's app with its transport tripwire armed and every host call stubbed (part183's
+sweep helper); host commands run under local bash in a temp folder (part183's helper). Times are
+fixed, never the wall clock. Nothing reaches a host or data/.
+"""
+from unit.part01 import check, eq
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_client, _p9_delete_server, _p9_new_server,
+                         _p9_patch, _p9_patch_sm, _p9_restore_all)
+from unit.part183 import _host183, _is_delete183, _last183, _sweep_case183
+from panel.ops.ssh_manager import _core as _core191
+from panel.routes import server_detail as _sd191, server_files as _sf191
+from panel.services import wipe_schedule as _ws191, world_reset as _wwr191
+
+_trips191 = len(_P9_TRIPPED)
+
+# ── 1. Paper: what moves the world away from server.properties ──────────────────────────────────
+_PMCV191 = {"startparameters": "nogui", "extraparams": "", "executabledir": "${serverfiles}",
+            "executable": "./paper.jar"}
+
+
+def _pmc191(**kv):
+    return _wwr191.pmc_start_problem(dict(_PMCV191, **kv))
+
+
+check("world reset pmc: LinuxGSM's default start (nogui, paper.jar, in serverfiles) and Paper's other options "
+      "(port, online mode, size, commands file, an exact -p / --C, bonusChest, server-name) are not refused",
+      all(_pmc191(startparameters=s) is None for s in (
+          "nogui", "nogui --port 25566", "-p 25566 -o false", "--nogui -s 20 -C commands.yml", "--p 25566 --C c.yml",
+          "--bonusChest --server-name lobby", "-port 25566", "--forceUpgrade")) and _pmc191(executable="") is None, "")
+_PMC_MOVES191 = {
+    "the world container (-W, --world-dir, --universe, --world-container, abbreviated)":
+        ("-W w", "--world-dir w", "--universe=w", "--uni w", "--world-container /srv", "-Ww"),
+    "the world name (-w, --world, --level-name, one dash, abbreviated)":
+        ("-w x", "--world x", "-world x", "--level-name x", "--level x", "-l x", "--wor=x", "-wfoo"),
+    "another server.properties (-c, --config)": ("-c other.properties", "--config o", "-cfoo", "--con o", "--c o"),
+    "another bukkit.yml (-b, --bukkit-settings)": ("-b b.yml", "--bukkit-settings b.yml", "--bukk b", "--b b"),
+    "another plugins folder (-P, --plugins)": ("-P world/plugins", "--plugins p", "-Pp", "--pl p", "--P p"),
+    "a one-letter option after a no-value one in a cluster (-vW)": ("-vW w", "-vw x"),
+}
+for _why191, _words191 in _PMC_MOVES191.items():
+    check("world reset pmc: a start parameter choosing %s is refused" % _why191,
+          all(_pmc191(startparameters="nogui " + w) is not None for w in _words191),
+          repr([w for w in _words191 if _pmc191(startparameters="nogui " + w) is None]))
+check("world reset pmc: the same options in extraparams, or after the jar in `executable`, are refused too",
+      _pmc191(extraparams="--world x") is not None and _pmc191(executable="./paper.jar --universe w") is not None, "")
+check("world reset pmc: a server that does not run in serverfiles (executabledir changed) is refused",
+      _pmc191(executabledir="/srv/paper") is not None, "")
+_SHELL191 = ('"--world" x', "--wo''rld x", "$(printf -- --world) x", "${EXTRA}", "nogui; true", "-[w] x", "`w`",
+             "--wo\\rld x", "nogui > log", "{a,b}")
+check("world reset pmc: shell quoting, expansion, globbing or command syntax in the start parameters is refused "
+      "(a shell could make a word the option test does not see)",
+      all(_pmc191(startparameters=s) is not None for s in _SHELL191),
+      repr([s for s in _SHELL191 if _pmc191(startparameters=s) is None]))
+check("world reset mc: ...and Minecraft Java's start parameters with shell quoting are refused the same way",
+      _wwr191.mc_start_problem({"startparameters": 'nogui "--world" x', "executabledir": "${serverfiles}"})
+      is not None and _wwr191.mc_start_problem({"startparameters": "nogui", "extraparams": "--wo''rld x"}) is not None,
+      "")
+
+# ── 2. bukkit.yml ───────────────────────────────────────────────────────────────────────────────
+_BUKKIT191 = ("# The main configuration file for Bukkit.\nsettings:\n  allow-end: true\n  warn-on-overload: true\n"
+              "  permissions-file: permissions.yml\n  shutdown-message: Server closed\n  # world-container: x\n"
+              "spawn-limits:\n  monsters: 70\n")
+check("world reset pmc: a bukkit.yml without world-container (one only in a whole-line comment) is not refused",
+      _wwr191.bukkit_problem(_BUKKIT191) is None and _wwr191.bukkit_problem(_BUKKIT191.replace("\n", "\r\n")) is None, "")
+check("world reset pmc: bukkit.yml setting world-container (block, flow style, quoted, any case) is refused",
+      all(_wwr191.bukkit_problem(_BUKKIT191 + t) is not None for t in (
+          "settings:\n  world-container: worlds\n", "settings: {world-container: w}\n", "'world-container': w\n",
+          "  World-Container: w\n", "settings:\n  world-container: w # moved\n")), "")
+check("world reset pmc: a backslash escape in bukkit.yml (which could spell world-container) is refused",
+      _wwr191.bukkit_problem(_BUKKIT191 + 'settings:\n  "world\\x2dcontainer": w\n') is not None, "")
+
+# ── 3. Bedrock's server.properties ──────────────────────────────────────────────────────────────
+_MCB_PROPS191 = ("server-name=Dedicated Server\n# Used as the server name\n# Allowed values: Any string without "
+                 "semicolon symbol.\n\ngamemode=survival\nlevel-name=Bedrock level\n# Allowed values: Any string "
+                 "without semicolon symbol or symbols illegal for file name.\nlevel-seed=\n")
+eq("world reset mcb: a plain level-name line is read as it is, a blank inside kept (LF and CRLF files)",
+   [_wwr191.bedrock_level_name(_MCB_PROPS191), _wwr191.bedrock_level_name(_MCB_PROPS191.replace("\n", "\r\n")),
+    _wwr191.bedrock_level_name("level-name=Survival 2\nlevel-name=Survival 2\n")],
+   [("Bedrock level", None), ("Bedrock level", None), ("Survival 2", None)])
+_MCB_FORMS191 = {"a leading blank": " level-name=x\n", "a blank before =": "level-name =x\n",
+                 "another case": "Level-Name=x\n", "`:` for `=`": "level-name: x\n", "no `=`": "level-name\n",
+                 "a byte-order mark": "﻿level-name=x\n"}
+for _why191, _text191 in _MCB_FORMS191.items():
+    check("world reset mcb: a level-name line with %s is refused, not read" % _why191,
+          _wwr191.bedrock_level_name("motd=x\n" + _text191)[0] is None, repr(_text191))
+check("world reset mcb: no level-name line at all is refused (the server's default is not assumed)",
+      _wwr191.bedrock_level_name("server-name=x\n#level-name=commented\n") == (None, "server.properties has no "
+                                                                               "level-name line"), "")
+check("world reset mcb: two level-name lines naming different worlds are refused",
+      _wwr191.bedrock_level_name("level-name=a\nlevel-name=b\n")[0] is None, "")
+_MCB_BAD191 = {"a semicolon": "a;b", "a colon": "a:b", "a star": "w*", "a question mark": "w?", "a pipe": "a|b",
+               "a double quote": 'a"b', "a backtick": "a`b", "angle brackets": "a<b>", "an equals sign": "a=b",
+               "'..' inside": "a..b", "a non-ASCII letter": "monde été", "a slash": "a/b", "a backslash": "a\\b",
+               "a tab": "a\tb", "a carriage return inside": "a\rb", "a leading dash": "-w", "a trailing blank": "w ",
+               "an empty name": "", "over 64 characters": "w" * 65, "'..'": ".."}
+for _why191, _name191 in _MCB_BAD191.items():
+    check("world reset mcb: a level-name with %s is refused" % _why191,
+          _wwr191.bedrock_level_name("level-name=%s\n" % _name191)[0] is None, repr(_name191))
+
+# ── 4. the resolvers, as the sweep asks them ────────────────────────────────────────────────────
+_MCBV191 = {"startparameters": "", "extraparams": "", "executabledir": "${serverfiles}"}
+_pmc_sid191 = _p9_new_server(P9_HOST, "p191pmc", "pmc", 25566, name="p191-pmc")
+_mcb_sid191 = _p9_new_server(P9_HOST, "p191mcb", "mcb", 19132, name="p191-mcb")
+
+
+def _reads191(props, bukkit=(None, "File not found")):
+    """A read_file stand-in: server.properties and bukkit.yml answer as given, and each path read is noted."""
+    asked = []
+
+    def _read(path):
+        asked.append(path)
+        return bukkit if path.endswith("bukkit.yml") else props
+    _read.asked = asked
+    return _read
+
+
+_PROPS191 = "motd=hi\nlevel-name=survival\n"
+_pmcread191 = _reads191((_PROPS191, None))
+_pok191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191), read=_pmcread191)
+check("world reset sweep (pmc): state, stop, backup, the delete of survival and the old layout's "
+      "survival_nether / survival_the_end, start; done, with server.properties and bukkit.yml read first",
+      _pok191["cmds"][:3] == ["status", "stop", "backup"] and len(_pok191["cmds"]) == 5
+      and _is_delete183(_pok191["cmds"][3]) and "set -- survival survival_nether survival_the_end" in _pok191["cmds"][3]
+      and _pok191["cmds"][4] == "start" and _last183(_pok191).get("ok") is True
+      and _pmcread191.asked == ["serverfiles/server.properties", "serverfiles/bukkit.yml"], repr(_pok191))
+_pcont191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191),
+                           read=_reads191((_PROPS191, None), ("settings:\n  world-container: /srv/worlds\n", None)))
+check("world reset sweep (pmc): a bukkit.yml with world-container ends the reset, alerted, the server untouched",
+      _pcont191["cmds"] == [] and _last183(_pcont191).get("ok") is False
+      and "world-container" in (_last183(_pcont191).get("detail") or "")
+      and _pcont191["alerts"] == ["Scheduled wipe did not run"], repr(_pcont191))
+_pbunread191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191),
+                              read=_reads191((_PROPS191, None), (None, "Could not read that file — no answer.")))
+_pbfirm191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191),
+                            read=_reads191((_PROPS191, None), (None, "Invalid path")))
+check("world reset sweep (pmc): a bukkit.yml that could not be read waits (server untouched); one the reader "
+      "refuses for good ends the reset",
+      _pbunread191["cmds"] == [] and _pbunread191["entry"].get("pending_since")
+      and "bukkit.yml could not be read" in (_pbunread191["entry"].get("wait") or "")
+      and _pbfirm191["cmds"] == [] and not _pbfirm191["entry"].get("pending_since")
+      and _last183(_pbfirm191).get("ok") is False, repr((_pbunread191, _pbfirm191)))
+_pwread191 = _reads191((_PROPS191, None))
+_pworld191 = _sweep_case183(_pmc_sid191, values=dict(_PMCV191, startparameters="nogui --world-container /srv"),
+                            read=_pwread191)
+check("world reset sweep (pmc): a Paper started with --world-container is not reset, nothing read or stopped",
+      _pworld191["cmds"] == [] and _pwread191.asked == [] and _last183(_pworld191).get("ok") is False
+      and "--world-container" in (_last183(_pworld191).get("detail") or ""), repr(_pworld191))
+
+_mcbread191 = _reads191((_MCB_PROPS191, None))
+_mok191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_mcbread191)
+check("world reset sweep (mcb): state, stop, backup, the delete of worlds/'Bedrock level' (quoted, with the "
+      "worlds folder's symlink test), start; done",
+      _mok191["cmds"][:3] == ["status", "stop", "backup"] and len(_mok191["cmds"]) == 5
+      and _is_delete183(_mok191["cmds"][3]) and "set -- 'Bedrock level'" in _mok191["cmds"][3]
+      and 'if [ -L "$sf/worlds" ]' in _mok191["cmds"][3] and 'd="$sf/worlds"' in _mok191["cmds"][3]
+      and _mok191["cmds"][4] == "start" and _last183(_mok191).get("ok") is True
+      and _mcbread191.asked == ["serverfiles/server.properties"], repr(_mok191))
+_mparams191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191, startparameters="-x"), read=_reads191((_MCB_PROPS191, None)))
+_mexedir191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191, executabledir="/opt/bedrock"),
+                             read=_reads191((_MCB_PROPS191, None)))
+_mnoname191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_reads191(("server-name=x\n", None)))
+check("world reset sweep (mcb): start parameters, a non-default executabledir, or no level-name line end the "
+      "reset, alerted, the server untouched",
+      all(g["cmds"] == [] and _last183(g).get("ok") is False and g["alerts"] == ["Scheduled wipe did not run"]
+          for g in (_mparams191, _mexedir191, _mnoname191)), repr((_mparams191, _mexedir191, _mnoname191)))
+_munread191 = _sweep_case183(_mcb_sid191, values=None, read=_reads191((_MCB_PROPS191, None)))
+check("world reset sweep (mcb): a LinuxGSM config that could not be read waits, nothing stopped",
+      _munread191["cmds"] == [] and _munread191["entry"].get("pending_since"), repr(_munread191))
+_mplayers191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_reads191((_MCB_PROPS191, None)), players=2)
+check("world reset sweep (mcb): Bedrock's players are counted, and with 'wait until empty' on, players online "
+      "keep it waiting with nothing stopped",
+      _mplayers191["cmds"] == ["status"] and _mplayers191["players_asked"] == 1
+      and "2 player(s) online" in (_mplayers191["entry"].get("wait") or "")
+      and _core191.GAMEDIG_TYPE.get("mcb") == "mbe" and _core191.GAMEDIG_TYPE.get("pmc") == "minecraft",
+      repr(_mplayers191))
+
+# ── 5. the host command against scratch trees ───────────────────────────────────────────────────
+_PMC_PLAN191 = {"dir": "", "remove": ["world", "world_nether", "world_the_end"], "globs": [], "create": None}
+_PMC_FILES191 = ("serverfiles/world/level.dat", "serverfiles/world/players/p.dat", "serverfiles/world/datapacks/d.zip",
+                 "serverfiles/world/dimensions/minecraft/the_nether/region/r.0.0.mca",
+                 "serverfiles/world/dimensions/minecraft/overworld/paper-world.yml",
+                 "serverfiles/plugins/Essentials.jar", "serverfiles/plugins/Essentials/config.yml",
+                 "serverfiles/config/paper-global.yml", "serverfiles/bukkit.yml", "serverfiles/spigot.yml",
+                 "serverfiles/lobby/level.dat", "serverfiles/ops.json", "serverfiles/server.properties",
+                 "serverfiles/paper.jar")
+_pmchost191 = _host183(_PMC_PLAN191, _PMC_FILES191)
+eq("world reset host (pmc): Paper's world folder goes whole (players, datapacks, dimensions, its own Paper "
+   "settings); plugins, config, bukkit.yml, a plugin's own world (lobby) and the server's files stay",
+   (_pmchost191[0], _wwr191.outcome(_pmchost191[1], _pmchost191[2], _PMC_PLAN191)),
+   (["serverfiles/bukkit.yml", "serverfiles/config/paper-global.yml", "serverfiles/lobby/level.dat",
+     "serverfiles/ops.json", "serverfiles/paper.jar", "serverfiles/plugins/Essentials.jar",
+     "serverfiles/plugins/Essentials/config.yml", "serverfiles/server.properties", "serverfiles/spigot.yml"],
+    ("done", "world deleted (1 removed)")))
+_pmcold191 = _host183(_PMC_PLAN191, ("serverfiles/world/level.dat", "serverfiles/world_nether/DIM-1/r",
+                                     "serverfiles/world_the_end/DIM1/r", "serverfiles/plugins/p.jar"))
+check("world reset host (pmc): an older Paper's world_nether and world_the_end beside the world go too",
+      _pmcold191[0] == ["serverfiles/plugins/p.jar"]
+      and _wwr191.outcome(_pmcold191[1], _pmcold191[2], _PMC_PLAN191) == ("done", "world deleted (3 removed)"),
+      repr(_pmcold191[:3]))
+
+_MCB_PLAN191 = {"dir": "worlds", "remove": ["Bedrock level"], "globs": [], "create": None}
+_MCB_FILES191 = ("serverfiles/worlds/Bedrock level/level.dat", "serverfiles/worlds/Bedrock level/levelname.txt",
+                 "serverfiles/worlds/Bedrock level/db/CURRENT", "serverfiles/worlds/Bedrock level/world_behavior_packs.json",
+                 "serverfiles/worlds/Bedrock/level.dat", "serverfiles/worlds/Other world/level.dat",
+                 "serverfiles/permissions.json", "serverfiles/allowlist.json", "serverfiles/server.properties",
+                 "serverfiles/behavior_packs/vanilla/manifest.json", "serverfiles/resource_packs/vanilla/manifest.json",
+                 "serverfiles/bedrock_server")
+_mcbhost191 = _host183(_MCB_PLAN191, _MCB_FILES191)
+eq("world reset host (mcb): worlds/'Bedrock level' goes whole; worlds/Bedrock, the other worlds, permissions, "
+   "allowlist, server.properties and the shared packs stay",
+   (_mcbhost191[0], _wwr191.outcome(_mcbhost191[1], _mcbhost191[2], _MCB_PLAN191)),
+   (["serverfiles/allowlist.json", "serverfiles/bedrock_server", "serverfiles/behavior_packs/vanilla/manifest.json",
+     "serverfiles/permissions.json", "serverfiles/resource_packs/vanilla/manifest.json", "serverfiles/server.properties",
+     "serverfiles/worlds/Bedrock/level.dat", "serverfiles/worlds/Other world/level.dat"],
+    ("done", "world deleted (1 removed)")))
+_mcblink191 = _host183(_MCB_PLAN191, ("serverfiles/server.properties",), links=[("serverfiles/worlds", "@OUT")])
+check("world reset host (mcb): a worlds folder that is a symlink is refused, nothing deleted there",
+      _wwr191.outcome(_mcblink191[1], _mcblink191[2], _MCB_PLAN191)[0] == "refused" and "__WWR_LINK__" in _mcblink191[1]
+      and _mcblink191[5], repr(_mcblink191[:3]))
+_mcbnone191 = _host183(_MCB_PLAN191, ("serverfiles/worlds/Other world/level.dat",))
+check("world reset host (mcb): no folder of that name in worlds/ is 'nothing found', the other world kept",
+      "__WWR_NOTHING__" in _mcbnone191[1] and _mcbnone191[0] == ["serverfiles/worlds/Other world/level.dat"],
+      repr(_mcbnone191[:3]))
+
+# ── 6. the card ─────────────────────────────────────────────────────────────────────────────────
+_BODY191 = {"enabled": True, "kind": "reset", "preset": "custom", "cron": "0 4 * * *", "tz": "UTC"}
+_r191 = {}
+try:
+    _p9_arm(who="part191")
+    _A191 = _p9_client(P9_ADMIN)
+    for _g191, _s191 in (("pmc", _pmc_sid191), ("mcb", _mcb_sid191)):
+        _r191["get_" + _g191] = _A191.get("/api/server/%d/wipe-schedule" % _s191).get_json()
+        _r191["save_" + _g191] = _A191.post("/api/server/%d/wipe-schedule" % _s191, json=_BODY191).status_code
+        _r191["kind_" + _g191] = (_ws191.get(_s191) or {}).get("kind")
+        _r191["map_" + _g191] = _A191.post("/api/server/%d/wipe-schedule" % _s191,
+                                           json=dict(_BODY191, kind="map")).status_code
+    _p9_patch(_sd191, "_maybe_resolve_public_ip", lambda *a, **k: None)
+    _p9_patch(_sd191, "_host_timezone_cached", lambda *a, **k: "")
+    _p9_patch(_sf191, "_host_timezone_cached", lambda *a, **k: "")
+    _p9_patch_sm("run_command", lambda *a, **k: ("", "", 1))
+    _r191["pages"] = {g: _A191.get("/server/%d/files" % s).get_data(as_text=True)
+                      for g, s in (("pmc", _pmc_sid191), ("mcb", _mcb_sid191))}
+finally:
+    _p9_restore_all()
+    _ws191.put(_pmc_sid191, None)
+    _ws191.put(_mcb_sid191, None)
+check("world reset route: Paper and Bedrock servers get a reset card; `reset` is saved, map/full refused",
+      all(_r191["get_" + g].get("reset") is True and _r191["get_" + g].get("supported") is True
+          and _r191["save_" + g] == 200 and _r191["kind_" + g] == "reset" and _r191["map_" + g] == 400
+          for g in ("pmc", "mcb")), repr(_r191))
+_pg191 = _r191.get("pages", {})
+check("world reset page: Paper's card says its world folder goes and plugins and Paper's config stay; "
+      "Bedrock's says worlds/ and the packs to add again; both a fixed `reset` kind and the player box ticked",
+      all('id="wipe-kind" value="reset"' in _pg191.get(g, "") and 'id="wipe-wait" checked' in _pg191.get(g, "")
+          for g in ("pmc", "mcb"))
+      and "plugins, worlds a plugin created, Paper" in _pg191.get("pmc", "")
+      and "s folder in worlds/ (the one level-name names" in _pg191.get("mcb", "")
+      and "Packs the old world applied are not applied to the new one" in _pg191.get("mcb", ""), "")
+
+for _sid191 in (_pmc_sid191, _mcb_sid191):
+    _p9_delete_server(_sid191)
+eq("world reset (pmc, mcb): nothing this part drove reached a real transport (part12's tripwire, armed)",
+   _P9_TRIPPED[_trips191:], [])
