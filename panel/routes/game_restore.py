@@ -98,17 +98,30 @@ def _grs_recover_one(app, sid, entry):
         _grs_held_put(sid, None)        # the server is gone (or its id is another's now)
         return
     name, t0 = entry.get("name") or "", int(entry.get("t0") or 0)
-    if grs.archive_problem(name) is None and t0:
-        _out, _err, rc = shell_as_game_user(gs.remote, gs.short_name, grs.putback_script(gs.short_name, name, t0),
-                                            timeout=60, selfname=gs.lgsm_name)
-        if rc != 0:
-            return                      # the host did not answer: the next pass tries again
+    out, _err, rc = shell_as_game_user(gs.remote, gs.short_name, grs.recover_script(gs.short_name, t0),
+                                       timeout=_GRS_RESTORE_TIMEOUT, selfname=gs.lgsm_name)
+    got = grs.recover_outcome(out)
+    if got is None:
+        return                          # the host did not answer: the next pass tries again
     _grs_held_put(sid, None)
     run = _GrsRun(app, gs, entry.get("actor"), name, [])
     run.undo = entry.get("undo") or None
-    run.finish(False, i18n.Sentence("The restore from {archive} was interrupted (the panel restarted); the "
-                                    "archive is listed again under its own name, and the server may be stopped "
-                                    "with its files partly replaced: check it.", archive=name), run.undo_note())
+    run.finish(got == "done", _GRS_RECOVERED.get(got if isinstance(got, str) else "failed", _GRS_RECOVERED["none"]),
+               i18n.Sentence("Archive: {archive}.", archive=name),
+               i18n.Sentence("The server's own files are in {path}.", path=got[1]) if isinstance(got, tuple) else "",
+               run.undo_note(), i18n.Sentence("The server is stopped: start it if it should run."))
+
+
+# What the recovery sweep found a restore cut off by a panel restart had done.
+_GRS_RECOVERED = {
+    "done": i18n.Sentence("A restore had completed when the panel restarted; its last steps were finished."),
+    "undone": i18n.Sentence("A restore was interrupted by a panel restart during its switch-over, which was undone: "
+                            "nothing was changed."),
+    "none": i18n.Sentence("A restore was interrupted by a panel restart before it changed any file: nothing was "
+                          "changed."),
+    "failed": i18n.Sentence("A restore was interrupted by a panel restart during its switch-over, and undoing it "
+                            "failed."),
+}
 
 
 def _grs_recover_pass(app):
@@ -417,7 +430,7 @@ class _GrsRun:
         if state == "unread":
             self.put_back()     # the script's own trap puts it back on every exit it reached
         if state == "refused":
-            return self.finish(False, _GRS_NOT, i18n.Sentence("Its checks refused: {why}.", why=said),
+            return self.finish(False, _GRS_NOT, i18n.Sentence("It stopped before changing anything: {why}.", why=said),
                                self.start_again())
         if state != "done":
             # Left stopped: its files are now neither what the archive holds nor what they were.

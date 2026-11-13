@@ -56,9 +56,10 @@ _GRS_BUSY_POLLS = 30
 
 _M = {k: "__GRS_%s__" % k for k in (
     "LOCKED", "NOARCHIVE", "NOHOME", "NOPY", "TARFAIL", "BAD", "FOREIGN", "LINKOUT", "SPACE",
-    "HOLDFAIL", "READY", "UP", "DOWN", "NOUNDO", "RUNNING", "BUSY", "CLEARING", "RMFAIL", "XFAIL",
+    "HOLDFAIL", "READY", "UP", "DOWN", "NOUNDO", "RUNNING", "BUSY",
     "RESTORED", "NOPART", "UPOFFSET", "UPSIZE", "UPREADY", "UPFAIL", "UPFORMAT", "UPSTORED", "KEEPLINK",
-    "INODES", "ALIVE", "STAGING", "STAGEFAIL", "MVFAIL", "LINKFAIL")}
+    "INODES", "ALIVE", "STAGING", "STAGEFAIL", "CRONFAIL", "LGSMBUSY", "SWITCHING",
+    "ROLLEDBACK", "ROLLBACKFAIL", "RECDONE", "RECUNDONE", "RECFAIL", "RECBUSY")}
 
 # A decompression bomb's bound: what the members declare may not pass RATIO times the archive's own
 # size plus RATIO_SLACK. Game data packs at a few to one (worlds and assets are mostly compressed
@@ -160,8 +161,12 @@ def _grs_heartbeat(extra_trap=""):
         "trap '' PIPE",
         # Its sleep is a child it kills on TERM: a sleep left running would hold the output open (and
         # the panel waiting) for up to HEARTBEAT seconds after the script has ended.
-        "( trap 'kill $z 2>/dev/null; exit 0' TERM; while :; do sleep %d & z=$!; wait $z; echo %s || exit 0; done ) "
-        "& hb=$!" % (HEARTBEAT, _M["ALIVE"]),
+        # It ends with the script too ($$ is the script's own pid in the subshell): one killed outright
+        # (SIGKILL runs no trap) must not leave it printing to the panel for ever. A killed script stays a
+        # zombie until its parent reaps it, which kill -0 still answers for, so its state is read.
+        "( trap 'kill $z 2>/dev/null; exit 0' TERM; up() { local a b c; read -r a b c _ < /proc/$$/stat 2>/dev/null "
+        "&& [ \"$c\" != Z ]; }; while up; do sleep %d & z=$!; wait $z; up && echo %s || exit 0; done ) & hb=$!"
+        % (HEARTBEAT, _M["ALIVE"]),
         "trap '%skill $hb 2>/dev/null' EXIT" % extra_trap,
     ]
 
@@ -227,18 +232,18 @@ def _grs_inode_check(members):
 # nanosecond ("." written "_") and put back with it.
 def _grs_hold_all():
     """Hold every archive in $B aside (see above). Names that would not round-trip are left alone."""
-    return ('for f in "$B"/*.tar.*; do [ -f "$f" ] && [ ! -L "$f" ] || continue; b=${f##*/}; st=${b%%.tar.*}; '
-            'x=${b##*.tar.}; case "$st" in ""|*.tar.*|*%s*) continue;; esac; case "$x" in ""|*[!A-Za-z0-9]*) continue;; esac; '
-            't=$(stat -c %%.9Y -- "$f" 2>/dev/null) || continue; t=${t/./_}; g="$B/$st%s$t.$x"; [ -e "$g" ] && continue; '
+    return ('for f in "$B"/*.tar.*; do [ -f "$f" ] && [ ! -L "$f" ] || continue; b=${f##*/}; sm=${b%%.tar.*}; '
+            'x=${b##*.tar.}; case "$sm" in ""|*.tar.*|*%s*) continue;; esac; case "$x" in ""|*[!A-Za-z0-9]*) continue;; esac; '
+            't=$(stat -c %%.9Y -- "$f" 2>/dev/null) || continue; t=${t/./_}; g="$B/$sm%s$t.$x"; [ -e "$g" ] && continue; '
             'mv -n -- "$f" "$g" && touch -m -- "$g"; done' % (HOLD_INFIX, HOLD_INFIX))
 
 
 def _grs_putback_leftovers(skip=""):
     """Put back, under its own name and time, every archive held aside (but the one held as $<skip>)."""
     guard = ('[ "$f" = "$%s" ] && continue; ' % skip) if skip else ""
-    return ('for f in "$B"/*%s*; do [ -f "$f" ] || continue; %sb=${f##*/}; st=${b%%%s*}; '
+    return ('for f in "$B"/*%s*; do [ -f "$f" ] || continue; %sb=${f##*/}; sm=${b%%%s*}; '
             'rs=${b##*%s}; t=${rs%%%%.*}; x=${rs#*.}; case "$t" in ""|*[!0-9_]*) continue;; esac; '
-            'case "$x" in ""|*[!A-Za-z0-9]*) continue;; esac; o="$B/$st.tar.$x"; [ -e "$o" ] && continue; '
+            'case "$x" in ""|*[!A-Za-z0-9]*) continue;; esac; o="$B/$sm.tar.$x"; [ -e "$o" ] && continue; '
             'mv -n -- "$f" "$o" && touch -m -d "@${t/_/.}" -- "$o"; done'
             % (HOLD_INFIX, guard, HOLD_INFIX, HOLD_INFIX))
 
@@ -317,61 +322,144 @@ def putback_script(user, name, t0):
     return leftovers_script(user)
 
 
-# The folders above a KEEP path that are not KEEP themselves (lgsm): the move merges into them.
+# The folders above a KEEP path that are not KEEP themselves (lgsm): the switch moves their entries one
+# by one; and the KEEP entries at the top of the home and inside such a folder, which it never moves.
 _GRS_KEEP_PARENTS = tuple(sorted({k.split("/")[0] for k in KEEP if "/" in k}))
+_GRS_KEEP_TOP = tuple(k for k in KEEP if "/" not in k)
+_GRS_KEEP_SUB = tuple(sorted({k.split("/", 1)[1] for k in KEEP if "/" in k}))
+# How long the switch waits for a LinuxGSM command of the account (one cron started before the crontab
+# was set aside) to end: polls of 2 seconds.
+_GRS_LGSM_POLLS = 60
 
 
-def _grs_move():
-    """Move every staged entry into the cleared home; into a KEEP path's parent (lgsm) entry by entry."""
+def _grs_work_lock(busy):
+    """Hold lgsm/tmp/panel-restore.lock (flock, util-linux: a LinuxGSM dependency) for the command's life.
+
+    The restore holds it while it runs; the recovery sweep takes it too, so it never undoes a switch a
+    restore the panel lost sight of is still making. Taken: prints `busy` and exits.
+    """
+    return 'mkdir -p -- "$T" && exec 9> "$T/panel-restore.lock" && flock -n 9 || { echo %s; exit 4; }' % busy
+
+
+def _grs_work_paths():
+    """The restore's own paths under lgsm/tmp (KEEP), each named for the run by its $t0."""
+    return ('T="$HR/lgsm/tmp"; S="$T/panel-restore-$t0"; O="$T/panel-restore-old-$t0"; F="$T/panel-restore-failed-$t0"; '
+            'st="$T/panel-restore-state-$t0"; nm="$T/panel-restore-names-$t0"; ct="$T/panel-restore-crontab-$t0"')
+
+
+def _grs_switch_functions():
+    """Shell functions for the switch-over and its undo.
+
+    entries DIR: the home-relative names a switch moves out of DIR (everything but KEEP; inside lgsm,
+    entry by entry), NUL-separated. moveall SRC DST: each of them renamed from SRC into DST (the same
+    filesystem: lgsm/tmp is in the home and no KEEP path is a link), a folder made writable first, as
+    a rename into another folder must update its "..". undo: the switch reversed from wherever it
+    stopped ($st names the step): what came from the staging folder (names in $nm) set aside into $F,
+    the home's own content moved back from $O. LinuxGSM's own links were moved as links, so they come
+    back as they were.
+    """
     parents = "|".join(_GRS_KEEP_PARENTS)
-    return ('for e in "$S"/* "$S"/.[!.]* "$S"/..?*; do [ -e "$e" ] || [ -L "$e" ] || continue; n=${e##*/}; '
-            'case "$n" in %s) mkdir -p -- "$HR/$n" || { echo %s; exit 7; }; '
-            'for f in "$e"/* "$e"/.[!.]* "$e"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; '
-            'mv -T -- "$f" "$HR/$n/${f##*/}" || { echo %s; exit 7; }; done;; '
-            '*) mv -T -- "$e" "$HR/$n" || { echo %s; exit 7; };; esac; done'
-            % (parents, _M["MVFAIL"], _M["MVFAIL"], _M["MVFAIL"]))
+    top = "|".join(_GRS_KEEP_TOP)
+    sub = "|".join(_GRS_KEEP_SUB)
+    return [
+        'entries() { local e f n; for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$e" ] || [ -L "$e" ] || continue; '
+        'n=${e##*/}; case "$n" in %s) for f in "$e"/* "$e"/.[!.]* "$e"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; '
+        'case "${f##*/}" in %s) continue;; esac; printf "%%s\\0" "$n/${f##*/}"; done;; %s) ;; '
+        '*) printf "%%s\\0" "$n";; esac; done; }' % (parents, sub, top),
+        'moveall() { local r; while IFS= read -r -d "" r; do case "$r" in */*) mkdir -p -- "$2/${r%/*}";; esac; '
+        'if [ -d "$1/$r" ] && [ ! -L "$1/$r" ] && [ ! -w "$1/$r" ]; then chmod u+w -- "$1/$r"; fi; '
+        'mv -T -- "$1/$r" "$2/$r" || return 1; done < <(entries "$1"); }',
+        'undo() { local p; p=$(cat "$st" 2>/dev/null); [ -n "$p" ] || return 0; mkdir -p -- "$F" || return 1; '
+        'if [ "$p" != aside ] && [ -f "$nm" ]; then while IFS= read -r -d "" r; do '
+        'if [ -e "$HR/$r" ] || [ -L "$HR/$r" ]; then case "$r" in */*) mkdir -p -- "$F/${r%/*}";; esac; '
+        'mv -T -- "$HR/$r" "$F/$r" || return 1; fi; '
+        'done < "$nm"; fi; [ ! -d "$O" ] || moveall "$O" "$HR" || return 1; rm -rf -- "$F" "$O"; rm -f -- "$st" "$nm"; }',
+    ]
+
+
+def _grs_cron_lines():
+    """The account's crontab set aside for the switch (and put back on every exit, the trap).
+
+    LinuxGSM has no lock its own monitor honours before it touches files: command_monitor.sh runs
+    check.sh first (check_gamedig.sh: `npm update` in lgsm, ~/.npm) and core_logs.sh, and only then
+    looks at backup.lock / update.lock (master 2026-11). The panel's monitor line runs it every 5
+    minutes whatever the server's state, so for the switch nothing of the account may run from cron:
+    the whole crontab is saved to $ct and replaced by an empty one, then a LinuxGSM command already
+    running (started before) is waited for; still running after the wait, the restore refuses.
+    """
+    return [
+        'if crontab -l > "$ct" 2>/dev/null; then printf "" | crontab - 2>/dev/null || { rm -f -- "$ct"; echo %s; exit 5; }; '
+        'else rm -f -- "$ct"; fi' % _M["CRONFAIL"],
+        'lgsm_running() { local p a; for p in /proc/[0-9]*; do [ -O "$p" ] || continue; [ "${p#/proc/}" = "$$" ] && continue; '
+        'a=$(tr "\\0" "\\n" < "$p/cmdline" 2>/dev/null | sed -n 2p); case "$a" in "$SELF"|*/"$SELF") return 0;; esac; done; return 1; }',
+        'i=0; while lgsm_running; do i=$((i+1)); if [ "$i" -ge %d ]; then echo %s; exit 5; fi; sleep 2; done'
+        % (_GRS_LGSM_POLLS, _M["LGSMBUSY"]),
+    ]
+
+
+def _grs_put_cron():
+    """Put the saved crontab back (and forget it); nothing when none was set aside."""
+    return 'if [ -f "$ct" ]; then crontab "$ct" 2>/dev/null && rm -f -- "$ct"; fi'
 
 
 def _grs_relink():
-    """Put every recorded symlink back exactly as it was (its own text), deepest first.
+    """A shell function `relink`: every recorded symlink put back exactly as it was (its own text), deepest first.
 
     The archive holds what `tar -h` found through the link: a real folder (or file) at the link's path.
     A folder's files are also stored under its target, as hard links when the target is in the home
     (GNU tar stores a second name for an inode as a link to the first), so they are already there; a
     file that is only under the link's path is moved to the target first. Then the real entry is
-    removed and the link made again.
+    removed and the link made again. Returns 1 on the first that fails.
     """
-    return ('for ((i=${#lp[@]}-1; i>=0; i--)); do p="$HR/${lp[$i]}"; r=${lr[$i]}; '
+    return ('relink() { local i p r e sp tp; for ((i=${#lp[@]}-1; i>=0; i--)); do p="$HR/${lp[$i]}"; r=${lr[$i]}; '
             'if [ -d "$p" ] && [ ! -L "$p" ] && [ -n "$r" ] && [ -d "$r" ]; then '
             'while IFS= read -r -d "" e; do sp="$p/${e#./}"; tp="$r/${e#./}"; '
             'if [ -d "$sp" ] && [ ! -L "$sp" ]; then mkdir -p -- "$tp"; '
             'elif [ ! -e "$tp" ] && [ ! -L "$tp" ]; then mv -- "$sp" "$tp"; fi; '
             'done < <(cd -- "$p" && find . -mindepth 1 -print0); fi; '
-            'if [ -e "$p" ] || [ -L "$p" ]; then rm -rf -- "$p" || { echo %s; exit 7; }; fi; '
-            'mkdir -p -- "${p%%/*}" && ln -s -- "${lx[$i]}" "$p" || { echo %s; exit 7; }; done'
-            % (_M["LINKFAIL"], _M["LINKFAIL"]))
+            'if [ -e "$p" ] || [ -L "$p" ]; then rm -rf -- "$p" || return 1; fi; '
+            'mkdir -p -- "${p%/*}" && ln -s -- "${lx[$i]}" "$p" || return 1; done; }')
+
+
+def _grs_switch():
+    """The switch-over: the home's content set aside, the staged tree moved in, the links made again.
+
+    Each step is noted in $st (aside, in, link, done) so the undo knows where it stopped. Any step that
+    fails is undone (ROLLEDBACK: nothing changed); an undo that fails says where the home's own content
+    is (ROLLBACKFAIL $O). Done: the aside copy and the staging folder are removed.
+    """
+    return [
+        'entries "$S" > "$nm" || { echo "%s names"; exit 5; }' % _M["ROLLEDBACK"],
+        "echo " + _M["SWITCHING"],
+        'step=; if echo aside > "$st" && mkdir -p -- "$O" && step=aside && moveall "$HR" "$O" && echo in > "$st" '
+        '&& step=in && moveall "$S" "$HR" && echo link > "$st" && step=link && relink && echo done > "$st"; then '
+        'rm -rf -- "$O" "$S"; rm -f -- "$st" "$nm"; echo %s; '
+        'elif undo; then echo "%s ${step:-aside}"; exit 5; '
+        'else echo "%s $O"; exit 7; fi' % (_M["RESTORED"], _M["ROLLEDBACK"], _M["ROLLBACKFAIL"]),
+    ]
 
 
 def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_POLLS, members=0):
-    """The last command: the checks again; unpack into a staging folder; only then clear and move it in.
+    """The last command: the checks again; unpack into a staging folder; then switch the home over, undoably.
 
     Refused, nothing changed: a LinuxGSM lock; the held archive or the undo backup `undo` missing; the
     server up (LinuxGSM's own test); a process of the account still in serverfiles after a bounded
     wait; the walks (_grs_walks); too little space for the staging copy (`need`) or too few inodes for
     `members`. The other held archives are put back. Then STAGING: the archive is unpacked into
-    lgsm/tmp/panel-restore-<t0> (KEEP, on the home's filesystem since no KEEP path is a link); a tar
-    that does not exit 0, or fewer entries than the checks counted, refuses (STAGEFAIL), and still
-    nothing was changed. Then CLEARING (everything but KEEP), the move (a rename, entry by entry),
-    every recorded symlink put back as it was, and RESTORED. A failure after CLEARING (RMFAIL,
-    MVFAIL, LINKFAIL) leaves the home part cleared. The staging folder is removed and the archive put
-    back under its own name and time on every exit (the trap).
+    lgsm/tmp/panel-restore-<t0>; a tar that does not exit 0, or fewer entries than the checks counted,
+    refuses (STAGEFAIL). Then the account's crontab is set aside and a LinuxGSM command still running
+    waited for (CRONFAIL, LGSMBUSY refuse). Then the switch (_grs_switch): RESTORED, or ROLLEDBACK
+    (nothing changed), or ROLLBACKFAIL (the home's own content is in the aside folder it names). On
+    every exit (the trap): a switch a signal cut short is undone, the crontab put back, the staging
+    folder removed and every held archive put back under its own name and time.
     """
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
     excludes = " ".join("--exclude=./%s --exclude=././%s" % (k, k) for k in KEEP)
     lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
-        "t0=%d" % int(t0), a_line, h_line, 'S="$HR/lgsm/tmp/panel-restore-$t0"',
-    ] + _grs_heartbeat('rm -rf -- "$S"; %s; ' % _grs_putback_leftovers()) + [
+        "t0=%d" % int(t0), "SELF=%s" % _q(selfname), a_line, h_line, _grs_work_paths(), _grs_work_lock(_M["LOCKED"]),
+    ] + _grs_switch_functions() + [_grs_relink()] + _grs_heartbeat(
+        '[ -f "$st" ] && undo; %s; rm -rf -- "$S"; rm -f -- "$nm"; %s; ' % (_grs_put_cron(), _grs_putback_leftovers())) + [
         'if [ -z "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         'if [ ! -s "$B"/%s ]; then echo %s; exit 5; fi' % (_q(undo), _M["NOUNDO"]),
         "if %s; then echo %s; exit 4; fi" % (_wwr._wwr_tmux_up(selfname), _M["RUNNING"]),
@@ -382,7 +470,7 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
         'if [ "$free" -lt %d ]; then echo "%s %d $free"; exit 5; fi' % (int(need), _M["SPACE"], int(need)),
         _grs_putback_leftovers(skip="h"),
         "echo " + _M["STAGING"],
-        'rm -rf -- "$S"; mkdir -p -- "$S" || { echo "%s 1 the staging folder could not be made"; exit 5; }'
+        'rm -rf -- "$S" "$O" "$F"; mkdir -p -- "$S" || { echo "%s 1 the staging folder could not be made"; exit 5; }'
         % _M["STAGEFAIL"],
         'x=$(tar %s -xpf "$h" -C "$S" --anchored %s 2>&1); rc=$?' % (_GRS_FLAGS[ext], excludes),
         'if [ "$rc" != 0 ]; then printf "%s %%s %%s\\n" "$rc" "$(printf "%%s" "$x" | tail -n 1)"; exit 5; fi'
@@ -390,18 +478,31 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
         'cnt=$(find "$S" -mindepth 1 | wc -l)',
         'if [ "$cnt" -lt $(( %d - 1 )) ]; then echo "%s 0 unpacked $cnt of %d entries"; exit 5; fi'
         % (int(members), _M["STAGEFAIL"], int(members)),
-        "echo " + _M["CLEARING"],
-        'find . -mindepth 1 "${k[@]}" -type d ! -perm -u=wx -exec chmod u+wx -- {} + 2>/dev/null',
-        'find . -mindepth 1 "${k[@]}" ! -type d -exec rm -f -- {} + 2>/dev/null',
-        'find . -mindepth 1 -depth -type d -empty %s -delete 2>/dev/null'
-        % " ".join("! -path ./%s ! -path './%s/*'" % (k, k) for k in KEEP),
-        'if [ -n "$(find . -mindepth 1 "${k[@]}" ! -type d -print -quit 2>/dev/null)" ]; then '
-        'echo %s; exit 6; fi' % _M["RMFAIL"],
-        _grs_move(),
-        _grs_relink(),
-        "echo " + _M["RESTORED"],
-    ]
+    ] + _grs_cron_lines() + _grs_switch()
     return "\n".join(lines) + "\n"
+
+
+def recover_script(user, t0):
+    """After a panel restart cut a restore off: undo a switch it left part way, then tidy up and put back.
+
+    Only the run's own paths (named for its `t0`, recorded in config.json): a switch noted as done
+    keeps the restored home and drops the aside copy; one noted at any other step is undone. Then
+    the staging and aside leftovers are removed, the crontab put back, and every held archive put
+    back under its own name and time. Prints RECDONE (the restore had completed), RECUNDONE (a switch
+    was undone), RECFAIL $O (the undo failed: the home's own content is there) or nothing (no switch
+    had begun).
+    """
+    return "\n".join(["export LC_ALL=C", "cd / || exit 3"] + _grs_home_lines(user) + [
+        "t0=%d" % int(t0), _grs_work_paths(), _grs_work_lock(_M["RECBUSY"]),
+    ] + _grs_switch_functions() + [
+        'p=$(cat "$st" 2>/dev/null)',
+        'if [ "$p" = done ]; then rm -rf -- "$O"; rm -f -- "$st" "$nm"; echo %s; '
+        'elif [ -n "$p" ]; then if undo; then echo %s; else echo "%s $O"; fi; fi' % (_M["RECDONE"], _M["RECUNDONE"], _M["RECFAIL"]),
+        'rm -rf -- "$S"; [ -f "$st" ] || rm -rf -- "$F"; rm -f -- "$nm"',
+        _grs_put_cron(),
+        _grs_putback_leftovers(),
+        "echo " + _M["UPREADY"],
+    ]) + "\n"
 
 
 # ── reading what the commands printed ─────────────────────────────────────────────────────────────
@@ -487,6 +588,8 @@ def vet_outcome(out):
 
 
 _GRS_LATE_REFUSALS = _GRS_VET_REFUSALS + (
+    ("CRONFAIL", "the game account's crontab could not be set aside for the switch-over"),
+    ("LGSMBUSY", "a LinuxGSM command of the game account was still running two minutes after its crontab was set aside"),
     ("NOUNDO", "the pre-restore backup is not in the backup folder"),
     ("RUNNING", "the server was still running after LinuxGSM's stop"),
     ("BUSY", "a process of the game account still had files open in serverfiles a minute after the stop"),
@@ -503,7 +606,9 @@ def restore_outcome(out, rc):
     marks = _grs_marks(terminal.strip_escapes(out or ""))
     if _M["RESTORED"] in marks:
         return "done", i18n.Sentence("restored")
-    if _M["CLEARING"] in marks:
+    if _M["ROLLEDBACK"] in marks:
+        return "refused", i18n.Sentence("the switch-over to the archive's files could not be completed, and it was undone")
+    if _M["SWITCHING"] in marks:
         return "failed", _grs_late_failure(marks, rc)
     if _M["STAGEFAIL"] in marks:
         sf = (marks[_M["STAGEFAIL"]] or "").split(None, 2)
@@ -517,16 +622,11 @@ def restore_outcome(out, rc):
 
 
 def _grs_late_failure(marks, rc):
-    """What went wrong once the clear had begun: a file that would not go, the move, or a symlink."""
-    if _M["RMFAIL"] in marks:
-        return i18n.Sentence("a file in the home could not be removed, so the clear stopped part way")
-    if _M["MVFAIL"] in marks:
-        return i18n.Sentence("the unpacked files could not all be moved into place")
-    if _M["LINKFAIL"] in marks:
-        return i18n.Sentence("a symbolic link could not be put back as it was")
-    xf = (marks.get(_M["XFAIL"]) or "").split(None, 2)
-    return i18n.Sentence("the extraction failed (tar exit {rc}): {last}",
-                         rc=xf[1] if len(xf) > 1 else rc, last=(xf[2] if len(xf) > 2 else "")[:200])
+    """What went wrong once the switch had begun and was not undone (or did not answer)."""
+    if _M["ROLLBACKFAIL"] in marks:
+        return i18n.Sentence("the switch-over failed and could not be undone; the server's own files are in {path}",
+                             path=(marks[_M["ROLLBACKFAIL"]].split(None, 1) + [""])[1])
+    return i18n.Sentence("the switch-over did not report how it ended (exit {rc})", rc=rc)
 
 
 # ── uploading an archive into the backup dir ──────────────────────────────────────────────────────
@@ -618,6 +718,16 @@ def upload_finish_script(user, selfname, uid, size, when):
 def upload_cancel_script(user, uid):
     """Remove an upload's part file (and a staged piece)."""
     return "\n".join([_grs_part(user, uid), 'rm -f -- "$p" "$p.piece" "$p.gz"', "echo " + _M["UPREADY"]]) + "\n"
+
+
+def recover_outcome(out):
+    """What recover_script did: "done", "undone", ("failed", the aside path), "none", or None when it did not answer."""
+    marks = _grs_marks(terminal.strip_escapes(out or ""))
+    if _M["UPREADY"] not in marks:
+        return None
+    if _M["RECFAIL"] in marks:
+        return ("failed", (marks[_M["RECFAIL"]].split(None, 1) + [""])[1])
+    return next((v for k, v in (("RECDONE", "done"), ("RECUNDONE", "undone")) if _M[k] in marks), "none")
 
 
 def upload_outcome(out):

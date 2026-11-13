@@ -61,7 +61,9 @@ eq("permission: its description reads in Spanish and French",
 _U190 = "grsu"
 _NAME190 = "grsu-2026-11-01-120000.tar.gz"
 _UNDO190 = "grsu-2026-11-13-000000.tar.gz"
-_T0190 = 1761998400          # the archive's mtime: a year old, so LinuxGSM's age prune would take it
+_T0190 = 1761998400
+# The game account's crontab, as the panel's Autostart writes it: LinuxGSM's monitor every 5 minutes.
+_CRON190 = "*/5 * * * * /home/grsu/grsu monitor > /dev/null 2>&1\n"          # the archive's mtime: a year old, so LinuxGSM's age prune would take it
 _TOOLS190 = ("bash", "tar", "gzip", "python3", "find", "du", "df", "stat", "readlink", "touch", "mv")
 _missing190 = [_t for _t in _TOOLS190 if not _sh190.which(_t)]
 _KEEP_PRUNE190 = [_a for _k in _grs190.KEEP for _a in ("-path", "./" + _k, "-prune", "-o")]
@@ -79,13 +81,23 @@ class _Sb190:
         """
         self.root = _tmp190.mkdtemp(prefix="p190-")
         self.home = _os190.path.join(self.root, "home", _U190)
+        self.fakebin = _os190.path.join(self.root, "fakebin")
+        _os190.makedirs(self.fakebin)
+        with open(_os190.path.join(self.fakebin, "crontab"), "w") as f:
+            f.write('#!/bin/bash\nf=%s/crontab.txt\ncase "$1" in -l) [ -f "$f" ] && cat "$f" || { echo "no crontab" >&2; exit 1; };; '
+                    '-) cat > "$f";; *) cat -- "$1" > "$f";; esac\n' % self.root)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        _os190.chmod(_os190.path.join(self.fakebin, "crontab"), 0o700)  # nosec B103
+        with open(_os190.path.join(self.root, "crontab.txt"), "w") as f:
+            f.write(_CRON190)
         self.bdir = _os190.path.join(self.home, "lgsm", "backup")
         h = self.home
         for d in ("lgsm/backup", "lgsm/lock", "lgsm/tmp", "lgsm/config-lgsm/grsu", "serverfiles/world/region",
                   ".ssh", ".steam/steamcmd/linux64", ".steam/sdk64", "log/console", ".lgsm-cron",
-                  "serverfiles/logs", "lgsm/node_modules/.bin"):
+                  "serverfiles/logs", "lgsm/node_modules/.bin", ".npm/_cacache"):
             _os190.makedirs(_os190.path.join(h, d))
         self.put("serverfiles/logs/latest.log", "server log 1")
+        self.put(".npm/_cacache/index", "npm cache 1")      # every LinuxGSM command's npm update writes here
         self.put("serverfiles/factorio", "binary")
         self.put("lgsm/node_modules/gamedig.js", "js")
         _os190.symlink(h + ("/serverfiles/logs" if layout == "mc" else "/serverfiles"), _os190.path.join(h, "log/server"))
@@ -148,10 +160,23 @@ class _Sb190:
         return res
 
     def run(self, script):
-        """Run a panel-built command, its /home/grsu moved into this sandbox: (output, exit status)."""
+        """Run a panel-built command, its /home/grsu moved into this sandbox: (output, exit status).
+
+        `crontab` is this sandbox's stand-in (first on PATH), never the machine's: it keeps the account's
+        crontab in <root>/crontab.txt and logs each call.
+        """
         text = script.replace("/home/" + _U190, self.home)
-        p = _sp190.run(["bash", "-c", text], capture_output=True, text=True, timeout=180, cwd="/")
+        env = dict(_os190.environ, PATH=self.fakebin + ":" + _os190.environ.get("PATH", "/usr/bin:/bin"))
+        p = _sp190.run(["bash", "-c", text], capture_output=True, text=True, timeout=180, cwd="/", env=env)
         return p.stdout + p.stderr, p.returncode
+
+    def cron(self):
+        """The stand-in crontab's text, or None when the account has none."""
+        try:
+            with open(_os190.path.join(self.root, "crontab.txt")) as f:
+                return f.read()
+        except OSError:
+            return None
 
     def vet(self, name=_NAME190, undo_estimate=0):
         """vet_script's output and vet_outcome's reading of it."""
@@ -226,6 +251,7 @@ else:
         _a = _os190.path.join(_sb.bdir, _NAME190)
         _r190["putback"] = (_os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
                             [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
+        _r190["cron_after"] = _sb.cron()
         _r190["older"] = {_n: _os190.stat(_os190.path.join(_sb.bdir, _n)).st_mtime
                           for _n in _sb.older if _os190.path.isfile(_os190.path.join(_sb.bdir, _n))}
         _r190["links"] = tuple(_os190.readlink(_q) if _os190.path.islink(_q) else "not a link"
@@ -244,6 +270,71 @@ else:
                          _os190.path.islink(_os190.path.join(_sb.home, "log/server")) and
                          _os190.readlink(_os190.path.join(_sb.home, "log/server")).endswith("/home/grsu/serverfiles"),
                          sorted(_f for _f in _sb.backups() if _f in _sb.older))
+    finally:
+        _sb.gone()
+
+    # The switch-over, driven at its edges: a LinuxGSM command writing ~/.npm after the home was set aside
+    # (it made the move fail on the real server), a SIGKILL part way (then the recovery script), a kill
+    # while unpacking, a LinuxGSM command still running, and a recovery while a restore holds the lock.
+    _ASIDE190 = '&& step=aside && moveall "$HR" "$O"'
+    _MOVEIN190 = '&& step=in && moveall "$S" "$HR"'
+
+    def _switch190(edit=None, recover=False, polls=None, lgsm=False):
+        sb = _Sb190()
+        saved = _grs190._GRS_LGSM_POLLS
+        sleeper = None
+        try:
+            ready = sb.vet()[1][1]
+            with open(_os190.path.join(sb.bdir, _UNDO190), "wb") as f:
+                f.write(b"undo")
+            _grs190._GRS_LGSM_POLLS = polls or saved
+            tree, cron = sb.tree(), sb.cron()
+            rs = _grs190.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], _UNDO190, busy_polls=1,
+                                        members=ready["members"])
+            rs = edit(rs, sb) if edit else rs
+            if lgsm:      # a LinuxGSM command of the account, as cron starts one: `bash /home/<acct>/<script> monitor`
+                fake = _os190.path.join(sb.root, "lgsm-copy", _U190)
+                _os190.makedirs(_os190.path.dirname(fake))
+                with open(fake, "w") as f:
+                    f.write("sleep 60\n")
+                sleeper = _sp190.Popen(["bash", fake, "monitor"], cwd="/")
+            out, rc = sb.run(rs)
+            rec = sb.run(_grs190.recover_script(_U190, ready["t0"]))[0] if recover else ""
+            tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
+            return {"state": _grs190.restore_outcome(out, rc)[0], "said": str(_grs190.restore_outcome(out, rc)[1]),
+                    "home": sb.tree() == tree, "cron": sb.cron() == cron, "tmp": tmp,
+                    "rec": _grs190.recover_outcome(rec) if recover else None,
+                    "held": [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f],
+                    "during": open(_os190.path.join(sb.root, "cron-during.txt")).read()
+                    if _os190.path.exists(_os190.path.join(sb.root, "cron-during.txt")) else None}
+        finally:
+            _grs190._GRS_LGSM_POLLS = saved
+            if sleeper is not None:
+                sleeper.kill()
+                sleeper.wait()
+            sb.gone()
+
+    def _npm190(rs, sb):
+        return rs.replace(_ASIDE190, _ASIDE190 + ' && { mkdir -p "$HR/.npm"; echo cache > "$HR/.npm/_cacache"; '
+                          'cp %s/crontab.txt %s/cron-during.txt; }' % (sb.root, sb.root), 1)
+
+    _r190["sw_npm"] = _switch190(_npm190)
+    _r190["sw_kill"] = _switch190(lambda rs, sb: rs.replace(_MOVEIN190, _MOVEIN190 + " && kill -9 $$", 1), recover=True)
+    _r190["sw_kill_staging"] = _switch190(lambda rs, sb: rs.replace("cnt=$(find", "kill -9 $$\ncnt=$(find", 1),
+                                          recover=True)
+    _r190["sw_lgsm"] = _switch190(polls=1, lgsm=True)
+    # The recovery script while a restore holds lgsm/tmp/panel-restore.lock: it does nothing and says nothing.
+    import fcntl as _fcntl190
+    _sb = _Sb190()
+    try:
+        _ready = _sb.vet()[1][1]
+        _os190.makedirs(_os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore-%d" % _ready["t0"]))
+        with open(_os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore.lock"), "w") as _lk:
+            _fcntl190.flock(_lk, _fcntl190.LOCK_EX)
+            _rec = _sb.run(_grs190.recover_script(_U190, _ready["t0"]))[0]
+        _r190["rec_busy"] = (_grs190.recover_outcome(_rec), _os190.path.isdir(
+            _os190.path.join(_sb.home, "lgsm", "tmp", "panel-restore-%d" % _ready["t0"])),
+            bool([_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f]))
     finally:
         _sb.gone()
 
@@ -477,6 +568,27 @@ if "vet" in _r190:
     eq("restore commands: each refusal says why and changes nothing (home, archive name, nothing held)",
        {_k: (_r190["ref_" + _k][0], _w in _r190["ref_" + _k][1], _r190["ref_" + _k][2]) for _k, _w in _bad190.items()},
        {_k: ("refused", True, True) for _k in _bad190})
+    eq("restore commands: the account's crontab is the same after the restore as before it",
+       _r190["cron_after"], _CRON190)
+    eq("restore commands: a LinuxGSM command writing ~/.npm after the home was set aside makes the move fail: the "
+       "switch is undone, nothing changed (home, links, crontab), nothing left in lgsm/tmp, every archive back",
+       {_k: _r190["sw_npm"][_k] for _k in ("state", "home", "cron", "tmp", "held")},
+       {"state": "refused", "home": True, "cron": True, "tmp": [], "held": []})
+    eq("restore commands: ...and for the switch the account's crontab was empty (nothing of LinuxGSM runs from cron)",
+       _r190["sw_npm"]["during"], "")
+    eq("restore commands: killed outright in the middle of the switch, the recovery script undoes it: the home as it "
+       "was, crontab put back, lgsm/tmp empty, every archive back",
+       {_k: _r190["sw_kill"][_k] for _k in ("rec", "home", "cron", "tmp", "held")},
+       {"rec": "undone", "home": True, "cron": True, "tmp": [], "held": []})
+    eq("restore commands: killed while unpacking, the recovery script removes the staging folder and puts the archives back",
+       {_k: _r190["sw_kill_staging"][_k] for _k in ("rec", "home", "tmp", "held")},
+       {"rec": "none", "home": True, "tmp": [], "held": []})
+    eq("restore commands: a LinuxGSM command of the account still running when the crontab is set aside refuses the "
+       "switch after the wait, nothing changed, the crontab put back",
+       (_r190["sw_lgsm"]["state"], "LinuxGSM command" in _r190["sw_lgsm"]["said"], _r190["sw_lgsm"]["home"],
+        _r190["sw_lgsm"]["cron"]), ("refused", True, True, True))
+    eq("restore commands: the recovery script leaves alone what a restore still holding its lock is doing",
+       _r190["rec_busy"], (None, True, True))
     eq("restore commands: Factorio's layout (~/log/server -> serverfiles, absolute) restores file for file, the link "
        "kept, the older archives kept", _r190["fctr"],
        ("done", True, [], True, ["grsu-2026-10-01-000000.tar.gz", "grsu-2026-10-02-000000.tar.gz"]))
@@ -595,7 +707,7 @@ class _Host190:
     """What the stubbed host answers, and every call the run made, in order."""
 
     def __init__(self, vet="__GRS_READY__ 1 %d 5000 9000" % _T0190, stop=("", "", 0), backup=True,
-                 restore="__GRS_CLEARING__\n__GRS_RESTORED__"):
+                 restore="__GRS_SWITCHING__\n__GRS_RESTORED__"):
         """Answers per step; the undo backup appears in the listing when `backup` succeeds."""
         self.calls, self.vet_out, self.stop, self.ok, self.restore_out = [], vet, stop, backup, restore
         self.keep, self.alerts, self.made = None, [], None
@@ -605,7 +717,7 @@ class _Host190:
         if "tar --zstd -tv" in sh:
             self.calls.append("vet")
             return self.vet_out, "", 0
-        if "__GRS_CLEARING__" in sh:
+        if "__GRS_SWITCHING__" in sh:
             self.calls.append("restore")
             return self.restore_out, "", 0
         self.calls.append("putback")
@@ -682,7 +794,7 @@ _h = _Host190()
 _w190 = {"ok": _run190(_h)}
 _w190["vet_refused"] = _run190(_Host190(vet="__GRS_BAD__ name"))
 _w190["backup_failed"] = _run190(_Host190(backup=False))
-_w190["late_fail"] = _run190(_Host190(restore="__GRS_CLEARING__\n__GRS_XFAIL__ 2 tar: unexpected EOF"))
+_w190["late_fail"] = _run190(_Host190(restore="__GRS_SWITCHING__\n__GRS_ROLLBACKFAIL__ /home/x/lgsm/tmp/panel-restore-old-1"))
 _w190["late_refused"] = _run190(_Host190(restore="__GRS_BUSY__"))
 _w190["players"] = _run190(_Host190(stop=("[ INFO ] Stopping grsu: 2 players are on the server: stop prevented\n", "", 0)))
 _w190["was_down"] = _run190(_Host190(vet="__GRS_READY__ 0 %d 5000 9000" % _T0190))
@@ -996,7 +1108,8 @@ try:
     _p9_arm(who="part190")
     _p9_patch(_gr190, "load_config", _held_cfg190)
     _p9_patch(_gr190, "update_config", _held_update190)
-    _p9_patch(_gr190, "shell_as_game_user", lambda srv, user, sh, **k: (_rec190["shell"].append(sh) or ("", "", 0)))
+    _p9_patch(_gr190, "shell_as_game_user", lambda srv, user, sh, **k: (
+        _rec190["shell"].append(sh) or ("__GRS_RECUNDONE__\n__GRS_UPREADY__\n", "", 0)))
     _p9_patch(_shr190, "_alert_backup", lambda app, gs, title, body: _rec190["alerts"].append(body))
     _held190.clear()
     _held190[str(P9_GS)] = {"name": _LIST190[0]["name"], "t0": _T0190, "undo": "p190-2026-11-13-000000.tar.zst",
@@ -1032,6 +1145,8 @@ eq("recovery: a recorded restore that a run of this process still holds is left 
 check("recovery: with no run holding it, the archive is put back under its own name and time",
       len(_rec190["shell"]) == 1 and '"$B"/*.restore-source-*' in _rec190["shell"][0]
       and 'touch -m -d "@${t/_/.}"' in _rec190["shell"][0], repr(_rec190["shell"]))
+check("recovery: ...it runs the recovery script for that run (the switch undone where it stopped)",
+      'p=$(cat "$st"' in _rec190["shell"][0] and ("t0=%d" % _T0190) in _rec190["shell"][0], "")
 check("recovery: ...recorded as interrupted (audit, alert, the card), naming the pre-restore archive, and forgotten",
       _rec190["audit"] == 1 and "interrupted" in _rec190["row"] and "p190-2026-11-13-000000.tar.zst" in _rec190["row"]
       and _rec190["alerts"] and "restore p190-2026-11-13-000000.tar.zst" in _rec190["status"] and not _rec190["left"],
