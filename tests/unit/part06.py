@@ -1944,7 +1944,9 @@ def _r16d_follow_copies(tree, alias):
 _stub_files = sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
                      + glob.glob(os.path.join(_root, "tests", "smoke", "*.py"))   # the smoke suite
                      + glob.glob(os.path.join(_root, "tests", "unit", "*.py"))    # and this one
-                     + glob.glob(os.path.join(_root, "tools", "*.py")))
+                     # every tool, the JS-coverage harness (tools/js_coverage/serve.py) among them
+                     + [_t for _t in glob.glob(os.path.join(_root, "tools", "**", "*.py"), recursive=True)
+                        if "node_modules" not in _t.split(os.sep)])
 _stub_trees = {}
 for _f in _stub_files:
     try:

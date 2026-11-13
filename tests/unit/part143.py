@@ -186,9 +186,19 @@ check("ci.yml: the \"Run all checks\" step has its own timeout, above the unit s
 # ── the end-of-run gate's reader (tests/unit/part15) sees a process that left the tree ────────
 # `sleep 600 &` from a shell that then exits is the init process's child: no list of this
 # process's descendants has it, yet it holds the suite's stdout, so `| tee` would wait on it.
-def _leaked143():
-    """What leftovers() saw of a `sleep 600 &` started behind a shell that exited, and after kill."""
-    _sp143.Popen(["bash", "-c", "exec 2>&1; sleep 600 &"]).wait()  # nosec B603 B607 - a fixed stand-in
+def _r42t_stand_in143(out_fd, pid_path):
+    """Start `sleep 600 &` behind a shell that exits, holding out_fd as its stdout; its pid, or 0."""
+    _sp143.Popen(["bash", "-c", 'exec 2>&1; sleep 600 & echo $! >"$1"', "_", pid_path],  # nosec B603 B607 - a fixed stand-in
+                 stdout=out_fd).wait()
+    try:
+        with open(pid_path) as fh:
+            return int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _r42t_find_kill143():
+    """(what leftovers() saw of the stand-in within 5 s, the holders of fd 1, what is left after kill)."""
     deadline, seen = time.monotonic() + 5, []
     while time.monotonic() < deadline and not seen:
         seen = [p for p in SD143.leftovers() if p[2] == "sleep 600"]
@@ -197,7 +207,31 @@ def _leaked143():
     held = [p[0] for p in SD143.holders(1)]
     SD143.kill(seen)
     time.sleep(0.2)
-    return seen, [p for p in SD143.leftovers() if p[2] == "sleep 600"], held
+    return seen, held, [p for p in SD143.leftovers() if p[2] == "sleep 600"]
+
+
+def _leaked143():
+    """What leftovers() saw of a `sleep 600 &` started behind a shell that exited, and after kill.
+
+    The suite's stdout is pointed at a file of the check's own for the probe, so the result does not
+    depend on where the suite's output goes (a terminal is never read as a holder), and the stand-in
+    is killed by its pid whatever was found.
+    """
+    tmp = _tf143.mkdtemp(prefix="r42t-leak143-")
+    sink = os.open(os.path.join(tmp, "out"), os.O_WRONLY | os.O_CREAT, 0o600)
+    sys.stdout.flush()
+    real_out, pids = os.dup(1), []
+    try:
+        os.dup2(sink, 1)
+        pids.append(_r42t_stand_in143(sink, os.path.join(tmp, "pid")))
+        seen, held, after = _r42t_find_kill143()
+    finally:
+        sys.stdout.flush()
+        os.dup2(real_out, 1)
+        os.close(real_out)
+        os.close(sink)
+        SD143.kill([(p,) for p in pids if p])
+    return seen, after, held
 
 
 _leak143 = _leaked143()
