@@ -98,12 +98,15 @@ ALL_PERMISSIONS = {
     VIEW_FILES: ("View game server files — browse folders, and read and download files and configs, "
                  "including the passwords they hold"),
     EDIT_FILES: ("Change game server files — upload, edit, rename, create and delete files and "
-                 "folders, and save config forms (give View game server files with it)"),
+                 "folders, and save config forms (give View game server files with it). With Restore a "
+                 "game server from a backup, also upload a backup to restore"),
     DOWNLOAD_BACKUP: "Download a game server's backup archives",
     DELETE_BACKUP: ("Delete a game server's backup archives — a deleted backup is gone for good "
                     "and cannot be restored"),
     RESTORE_BACKUP: ("Restore a game server from a backup — replaces its current files; the most "
-                     "destructive backup action"),
+                     "destructive backup action. Uploading a backup to restore also needs Change game "
+                     "server files: an uploaded archive can hold any file, including the scripts the "
+                     "server runs"),
     MANAGE_REMOTES: "Add/edit/delete remote VPS nodes",
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",

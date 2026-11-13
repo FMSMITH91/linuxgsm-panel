@@ -312,7 +312,8 @@ function bkGameRows(g){
       + '<td>'+bkFmtBytes(b.size)+'</td>'
       + '<td class="text-end text-nowrap">'
       + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
-      + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'"' + _da('deleteGameBackup', ['@self']) + ' title="Delete backup"><i class="bi bi-trash"></i></button>'
+      + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'"' + _da('deleteGameBackup', ['@self']) + ' title="Delete backup"><i class="bi bi-trash"></i></button> '
+      + '<button class="btn btn-sm btn-outline-warning py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'" data-server="'+escapeHtml(g.name||'')+'"' + _da('restoreGameBackup', ['@self']) + ' title="Restore"><i class="bi bi-arrow-counterclockwise"></i></button>'
       + '</td></tr>';
   }).join('');
 }
@@ -650,6 +651,22 @@ function setGameSchedule(id){
         bkMsg('✗ Save failed','text-danger');
       }
     }).catch(function(){ bkMsg('✗ Could not save schedule','text-danger'); });
+}
+// Restore a game server from one of its backups (routes/game_restore: its permission, server access and the
+// typed name are checked there); the run goes on in the background and the server's own card shows it.
+function restoreGameBackup(btn){
+  var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid'), server=btn.getAttribute('data-server')||'';
+  confirmDialog({title:'Restore from backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
+    bodyText:tf('Restore {server} from this backup?\n\n{name}\n\nEvery file of the server is replaced with the copy in the archive: its world, configs and LinuxGSM files. The server is stopped first, and a fresh backup of its current state is taken before anything is replaced, so you can go back. A running server is started again afterwards.', {server: server, name: name}),
+    requireText: server, requireLabel: tf('Type the server name to confirm'),
+    onConfirm:function(){
+      btn.disabled=true;
+      fetch(MOUNT+'/api/panel/backup/game/'+gid+'/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name, confirm:server})})
+        .then(r=>r.json()).then(function(d){
+          bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+          btn.disabled=false; loadBackups();
+        }).catch(function(){ bkMsg('✗ '+tf('Restore failed'),'text-danger'); btn.disabled=false; });
+    }});
 }
 function deleteGameBackup(btn){
   var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');

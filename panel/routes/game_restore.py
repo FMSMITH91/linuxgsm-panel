@@ -8,7 +8,10 @@ _shared._R39A_WIPE_KINDS), in order:
 
 1. the checks, one command as the game account (services/game_restore.vet_script): nothing has
    changed if one refuses;
-2. LinuxGSM `stop` when the server was running, the monitor's quiet window opened first;
+2. LinuxGSM `stop`, the monitor's quiet window opened first when it was running. Run when it reads as
+   down too: `stop` as the first command removes LinuxGSM's monitoring lock (command_stop.sh, master
+   2026-11), and with it there LinuxGSM's own monitor restarts a crashed server (command_monitor.sh
+   fn_monitor_check_session) in the middle of the clear or the extraction;
 3. a LinuxGSM backup of the stopped server through the panel's backup path, kept from pruning
    the archive being restored: the undo. If it fails nothing is restored and a server that was
    running is started again;
@@ -17,6 +20,15 @@ _shared._R39A_WIPE_KINDS), in order:
 
 Every outcome is audited (`game_backup_restore`: actor, server, archive, undo archive) and a failure
 alerts; the card shows the progress and the outcome (`/info`'s "restore").
+
+Before anything, the account must be a plain game account (_shared.game_account_write_refusal, the
+guard every other write as it passes): a restore writes the whole home.
+
+From the moment the archive is held aside until the run ends, config.json["restores_held"] names it
+(and, once taken, the undo). A run the panel's restart cut off leaves that entry behind; the recovery
+sweep (_grs_recover_pass, a minute after start, then every ten) puts the archive back under its own
+name and time and records the restore as interrupted (audit, alert, the card), naming the undo. While a
+restore runs, the panel does not restart itself (host_reboot.panel_host_busy).
 """
 import threading
 import time
@@ -24,7 +36,8 @@ import time
 from flask import jsonify
 from flask_login import current_user, login_required
 
-from panel.core import i18n, terminal
+from panel.core import i18n, runtime_stats, terminal
+from panel.core.config import load_config, update_config
 from panel.core.http import _json_body, _log_and_generic
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status, r36j_route_job, r36j_route_jobs,
                                     register_server_state)
@@ -41,8 +54,86 @@ _GRS_NOT = i18n.Sentence("Not restored: nothing was changed.")
 # server id -> {"running", "ok", "msg", "msg_i18n", "step", "ts"}: what the Backups card shows.
 _grs_status = register_server_state({})
 _grs_claim_lock = threading.Lock()      # one restore per server: the test and the set are one step
-_GRS_VET_TIMEOUT = 900          # reading a large archive through its decompressor takes minutes
-_GRS_RESTORE_TIMEOUT = 3600     # clearing and unpacking a large server
+# The longest a step is waited for. Both commands print a heartbeat (game_restore.HEARTBEAT), so a
+# transport that measures silence never gives up on a working command; these bound a hung one.
+_GRS_VET_TIMEOUT = 4 * 3600         # reading a large archive through its decompressor
+_GRS_RESTORE_TIMEOUT = 12 * 3600    # clearing and unpacking a large server
+_GRS_HELD_KEY = "restores_held"
+_GRS_RECOVER_EVERY = 600
+
+
+def restore_running():
+    """Whether any game server is being restored now (the panel must not restart under it)."""
+    return any((st or {}).get("running") for st in list(_grs_status.values()))
+
+
+# ── config.json["restores_held"][str(server id)]: a restore in flight, for the recovery sweep ──────
+def _grs_held_all(cfg):
+    got = cfg.get(_GRS_HELD_KEY)
+    return got if isinstance(got, dict) else {}
+
+
+def _grs_held_put(sid, entry):
+    """Store (or, with None, remove) server `sid`'s in-flight restore. Never raises."""
+    def _mut(cfg):
+        allh = _grs_held_all(cfg)
+        cfg[_GRS_HELD_KEY] = allh
+        if entry is None:
+            allh.pop(str(sid), None)
+        else:
+            allh[str(sid)] = entry
+    try:
+        update_config(_mut)
+    except Exception:
+        _sm._log.warning("could not record the restore of server %s", sid, exc_info=True)
+
+
+def _grs_recover_one(app, sid, entry):
+    """Settle one restore a panel restart cut off: the archive put back, the outcome recorded."""
+    gs = db.session.get(GameServer, sid)
+    if gs is None or gs.short_name != entry.get("short_name") or gs.remote_id != entry.get("remote_id"):
+        _grs_held_put(sid, None)        # the server is gone (or its id is another's now)
+        return
+    name, t0 = entry.get("name") or "", int(entry.get("t0") or 0)
+    if grs.archive_problem(name) is None and t0:
+        out, err, rc = shell_as_game_user(gs.remote, gs.short_name, grs.putback_script(gs.short_name, name, t0),
+                                          timeout=60, selfname=gs.lgsm_name)
+        if rc != 0:
+            return                      # the host did not answer: the next pass tries again
+    _grs_held_put(sid, None)
+    run = _GrsRun(app, gs, entry.get("actor"), name, [])
+    run.undo = entry.get("undo") or None
+    run.finish(False, i18n.Sentence("The restore from {archive} was interrupted (the panel restarted); the "
+                                    "archive is listed again under its own name, and the server may be stopped "
+                                    "with its files partly replaced: check it.", archive=name), run.undo_note())
+
+
+def _grs_recover_pass(app):
+    """Every recorded restore that no run of this process holds: recovered (each on its own)."""
+    with app.app_context():
+        for key, entry in list(_grs_held_all(load_config()).items()):
+            if not str(key).isdecimal() or not isinstance(entry, dict):
+                continue
+            sid = int(key)
+            if (_grs_status.get(sid) or {}).get("running"):
+                continue
+            try:
+                _grs_recover_one(app, sid, entry)
+            except Exception:
+                db.session.rollback()
+                app.logger.warning("recovering the restore of server %s failed", sid, exc_info=True)
+
+
+def _grs_recover_ticker(app):
+    runtime_stats.loop_started("restore-recover", 60)
+    time.sleep(60)
+    while True:
+        try:
+            _grs_recover_pass(app)
+        except Exception:
+            runtime_stats.bump("loopfail", "restore-recover")
+            app.logger.warning("restore recovery pass failed", exc_info=True)
+        time.sleep(_GRS_RECOVER_EVERY)
 
 
 def status_for_view(sid):
@@ -105,6 +196,9 @@ def _grs_request_refusal(gs, body, name):
     """The route's answer when the request itself is refused (before the listing is read), else None."""
     if not gs.installed or not gs.remote_id:
         return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
+    why = _shared.game_account_write_refusal(gs.remote, gs.short_name)
+    if why is not None:
+        return _grs_refuse(gs, name, why)
     if body.get("confirm") != gs.name:
         return jsonify({"success": False, "message": i18n.tr(
             "Type the server's name exactly to confirm the restore.")}), 400
@@ -118,7 +212,14 @@ def _grs_request_refusal(gs, body, name):
 
 
 def register(app):
-    """The restore route (called from panel_backup.register, beside the other game backup routes)."""
+    """The restore route (called from panel_backup.register, beside the other game backup routes).
+
+    And the recovery sweep's supervised thread (app._make_supervisor: not started under the recovery
+    CLI's no-workers switch).
+    """
+    from app import _make_supervisor   # lazily: app imports this module while it is still loading
+    _make_supervisor(app)("restore-recover", lambda: _grs_recover_ticker(app))
+
     @app.route("/api/panel/backup/game/<int:server_id>/restore", methods=["POST"])
     @login_required
     @permission_required(RESTORE_BACKUP)
@@ -173,7 +274,7 @@ class _GrsRun:
     def __init__(self, app, gs, actor_id, name, listing):
         """Hold the server row, who asked, the archive and the listing it was found in."""
         self.app, self.gs, self.actor_id, self.name, self.listing = app, gs, actor_id, name, listing
-        self.up, self.t0, self.need, self.undo, self.done = False, 0, 0, None, False
+        self.up, self.t0, self.need, self.undo, self.done, self.members = False, 0, 0, None, False, 0
 
     def undo_note(self):
         """The sentence that names the pre-restore archive to go back to, once there is one ("" before)."""
@@ -187,7 +288,7 @@ class _GrsRun:
 
     def go(self):
         """The steps in order; each returns False once it has recorded how the restore ended."""
-        why = _grs_other_work(self.gs)
+        why = _grs_other_work(self.gs) or _shared.game_account_write_refusal(self.gs.remote, self.gs.short_name)
         if why is not None:
             return self.finish(False, _GRS_NOT, why)
         if not _full_backup_lock.acquire(blocking=False):
@@ -200,6 +301,12 @@ class _GrsRun:
             self.restore()
         return None
 
+    def record(self):
+        """Note the restore in config.json while the archive is held (the recovery sweep's input)."""
+        gs = self.gs
+        _grs_held_put(gs.id, {"name": self.name, "t0": self.t0, "undo": self.undo or "", "actor": self.actor_id,
+                              "short_name": gs.short_name, "remote_id": gs.remote_id, "at": int(time.time())})
+
     def vet(self):
         """Step 1: the checks, and the archive held aside. True when the restore may go on."""
         gs = self.gs
@@ -211,17 +318,21 @@ class _GrsRun:
             self.shell(grs.leftovers_script(gs.short_name), 60)     # it may have held the archive aside
         if state != "ready":
             return self.finish(False, _GRS_NOT, i18n.Sentence("Its checks refused: {why}.", why=val))
-        self.up, self.t0, self.need = val["up"], val["t0"], val["need"]
+        self.up, self.t0, self.need, self.members = val["up"], val["t0"], val["need"], val["members"]
+        self.record()
         return True
 
     def stop(self):
-        """Step 2: LinuxGSM `stop` when it was running. True when the backup may follow."""
+        """Step 2: LinuxGSM `stop`, whether or not it was running. True when the backup may follow.
+
+        Run on a server that reads as down too: only `stop` removes LinuxGSM's monitoring lock, and
+        while it is there LinuxGSM's monitor restarts a crashed server in the middle of the restore.
+        """
         gs = self.gs
-        if not self.up:
-            return True
         _grs_set(gs.id, step="stopping")
-        extra = _lgp.allowance_seconds(gs.remote, gs.short_name, gs.lgsm_name, "stop")
-        _mark_expected_offline(gs.id, "restart", extra)
+        extra = _lgp.allowance_seconds(gs.remote, gs.short_name, gs.lgsm_name, "stop") if self.up else 0
+        if self.up:
+            _mark_expected_offline(gs.id, "restart", extra)
         try:
             out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, "stop", selfname=gs.lgsm_name,
                                                 timeout=180 + extra)
@@ -252,32 +363,35 @@ class _GrsRun:
         gs = self.gs
         _grs_set(gs.id, step="backing_up")
         keep = max(len(self.listing) + 1, bk.game_prune_keep(gs.id)[0])
+        made = []
         try:
             ok, why, _skipped = _shared._marked_backup(
                 gs.id, gs.remote, gs.short_name, gs.lgsm_name, keep, game_type=gs.game_type, port=gs.port,
-                force=True, query_type=gs.query_type, held=lambda: still_held(gs), wipe_ok=True)
+                force=True, query_type=gs.query_type, held=lambda: still_held(gs), wipe_ok=True, made=made)
         except Exception as exc:        # a host that dropped: the server must still be started again
             ok, why, _skipped = False, i18n.Sentence("the connection failed ({error})", error=type(exc).__name__), False
         if still_held(gs):
             _game_backup_status[gs.id] = _shared._lg264_bk_status(ok, why, _skipped)
-        self.undo = self.new_archive() if ok else None
+        self.undo = self.new_archive(made[0]) if ok and made else None
         if not self.undo:
             self.put_back()
             reason = (why or "") if not ok else i18n.Sentence("its archive is not in the backup folder")
             return self.finish(False, _GRS_NOT, i18n.Sentence("The backup of its current state failed: {reason}.",
                                                               reason=reason), self.start_again())
+        self.record()
         return True
 
-    def new_archive(self):
-        """The archive the undo backup made: in the listing now, not before, finished and not empty."""
-        before = {b.get("name") for b in self.listing}
+    def new_archive(self, made):
+        """`made` (the name the panel's backup path proved it wrote) when it is in the listing, finished and not empty.
+
+        Never "the newest name the listing did not have before": an upload finished meanwhile would be that.
+        """
         try:
             after = list_game_backups(self.gs.remote, self.gs.short_name) or []
         except Exception:
             return None
-        made = [b for b in after if b.get("name") not in before and b.get("size", 0) > 0
-                and not b.get("in_progress")]
-        return made[0]["name"] if made else None
+        return made if any(b.get("name") == made and b.get("size", 0) > 0 and not b.get("in_progress")
+                           for b in after) else None
 
     def restore(self):
         """Step 4 and 5: clear and extract, then start it if it was running."""
@@ -286,7 +400,7 @@ class _GrsRun:
         if self.up:
             _mark_expected_offline(gs.id, "restart")    # the backup took its time: the window starts again
         script = grs.restore_script(gs.short_name, gs.lgsm_name or gs.short_name, self.name, self.t0, self.need,
-                                    self.undo)
+                                    self.undo, members=self.members)
         try:
             out, rc = self.shell(script, _GRS_RESTORE_TIMEOUT)
             state, said = grs.restore_outcome(out, rc)
@@ -341,6 +455,8 @@ class _GrsRun:
             return False
         self.done = True
         gs = self.gs
+        if self.t0:
+            _grs_held_put(gs.id, None)
         said = i18n.Sentences(*parts)
         english, record = str(said), i18n.sentence_record(said)
         if still_held(gs):

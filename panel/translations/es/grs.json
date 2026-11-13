@@ -1,5 +1,4 @@
 {
-  "Restore a game server from a backup — replaces its current files; the most destructive backup action": "Restaurar un servidor de juego desde una copia de seguridad: reemplaza sus archivos actuales; la acción de copia de seguridad más destructiva",
   "Only a LinuxGSM backup named <script>-<date>.tar.zst or .tar.gz can be restored.": "Solo se puede restaurar una copia de seguridad de LinuxGSM llamada <script>-<fecha>.tar.zst o .tar.gz.",
   "the archive's member list could not be read": "no se pudo leer la lista de contenido del archivo",
   "a member of the archive is not under the server's folder (an absolute path, `..`, or game data kept outside the account's home)": "un elemento del archivo no está dentro de la carpeta del servidor (una ruta absoluta, `..` o datos del juego guardados fuera de la carpeta personal de la cuenta)",
@@ -83,5 +82,11 @@
   "Upload failed": "La subida falló",
   "Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.": "Subir acepta una copia de seguridad hecha por este panel (hasta 512 MB); se comprueba como lo hace una restauración, y una cifrada pide su frase de contraseña al restaurarla.",
   "Backup archive to upload": "Copia de seguridad que subir",
-  "Panel backup to upload": "Copia de seguridad del panel que subir"
+  "Panel backup to upload": "Copia de seguridad del panel que subir",
+  "Restore a game server from a backup — replaces its current files; the most destructive backup action. Uploading a backup to restore also needs Change game server files: an uploaded archive can hold any file, including the scripts the server runs": "Restaurar un servidor de juego desde una copia de seguridad: reemplaza sus archivos actuales; la acción de copia de seguridad más destructiva. Subir una copia de seguridad para restaurarla también requiere Cambiar los archivos del servidor de juego: un archivo subido puede contener cualquier archivo, incluidos los scripts que ejecuta el servidor",
+  "Uploading a backup also needs the permission to change the server's files.": "Subir una copia de seguridad también requiere el permiso para cambiar los archivos del servidor.",
+  "The restore from {archive} was interrupted (the panel restarted); the archive is listed again under its own name, and the server may be stopped with its files partly replaced: check it.": "La restauración desde {archive} se interrumpió (el panel se reinició); el archivo vuelve a aparecer con su propio nombre, y puede que el servidor esté detenido con sus archivos reemplazados en parte: revísalo.",
+  "A game server is being restored from a backup. The panel does not restart until it has finished; try again then.": "Se está restaurando un servidor de juego desde una copia de seguridad. El panel no se reinicia hasta que termine; inténtalo entonces.",
+  "the backup, lock or tmp folder, ~/.ssh or the panel's cron folder (or a folder above one) is a symbolic link, so the restore could not keep it apart from what it clears": "la carpeta de copias, de bloqueos o tmp, ~/.ssh o la carpeta cron del panel (o una carpeta por encima) es un enlace simbólico, así que la restauración no podría mantenerla aparte de lo que borra",
+  "not enough free inodes: the archive holds {need} files and folders (with a margin), and {have} would be free for them": "no hay suficientes inodos libres: el archivo contiene {need} archivos y carpetas (con margen), y quedarían {have} libres para ellos"
 }

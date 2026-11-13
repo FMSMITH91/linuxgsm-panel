@@ -979,13 +979,25 @@ window.backupUpload = function(file, base, onProgress){
     var chunk = Number(start.chunk) || 4194304, at = 0, tries = 0;
     var next = function(){
       if(onProgress) onProgress(at, file.size);
-      if(at >= file.size) return post(base + '/' + start.id + '/finish', '{}');
+      if(at >= file.size) return finish(0);
       return post(base + '/' + start.id + '?offset=' + at, file.slice(at, Math.min(at + chunk, file.size)),
                   'application/octet-stream').then(function(d){
         if(d && d.success){ at = Number(d.received); tries = 0; return next(); }
         if(d && d.resume && tries < 3){ at = Number(d.received) || 0; tries++; return next(); }
-        return d || {success: false};
+        return cancel(d);
       });
+    };
+    // A finish whose answer did not come back is asked again (the server kept the upload for it).
+    var finish = function(n){
+      return post(base + '/' + start.id + '/finish', '{}').then(function(d){
+        if(d && !d.success && d.retry && n < 3) return finish(n + 1);
+        return (d && (d.success || !d.retry)) ? d : cancel(d);
+      });
+    };
+    // Anything else that failed: the part file is removed and the upload released, then the refusal shown.
+    var cancel = function(d){
+      return post(base + '/' + start.id + '/cancel', '{}').then(function(){ return d || {success: false}; },
+                                                                function(){ return d || {success: false}; });
     };
     return next();
   });

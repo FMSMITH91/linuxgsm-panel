@@ -57,7 +57,8 @@ _GRS_BUSY_POLLS = 30
 _M = {k: "__GRS_%s__" % k for k in (
     "LOCKED", "NOARCHIVE", "NOHOME", "NOPY", "TARFAIL", "BAD", "FOREIGN", "LINKOUT", "SPACE",
     "HOLDFAIL", "READY", "UP", "DOWN", "NOUNDO", "RUNNING", "BUSY", "CLEARING", "RMFAIL", "XFAIL",
-    "RESTORED", "NOPART", "UPOFFSET", "UPSIZE", "UPREADY", "UPFAIL", "UPFORMAT", "UPSTORED")}
+    "RESTORED", "NOPART", "UPOFFSET", "UPSIZE", "UPREADY", "UPFAIL", "UPFORMAT", "UPSTORED", "KEEPLINK",
+    "INODES", "ALIVE")}
 
 # A decompression bomb's bound: what the members declare may not pass RATIO times the archive's own
 # size plus RATIO_SLACK. Game data packs at a few to one (worlds and assets are mostly compressed
@@ -140,6 +141,26 @@ def _q(s):
 _GRS_KEEP_FIND = " -o ".join("-path ./%s" % k for k in KEEP)
 _GRS_KEEP_REAL = " ".join('"$HR/%s"' % k for k in KEEP)
 _GRS_KEEP_REL = " ".join("./%s" % k for k in KEEP)
+# Every KEEP path and every folder above one (lgsm for lgsm/backup): none may be a symlink (_grs_walks).
+_GRS_KEEP_CHAIN = " ".join(sorted({"/".join(k.split("/")[:i + 1]) for k in KEEP for i in range(k.count("/") + 1)}))
+# Inodes left over once the archive is unpacked, as MARGIN is for bytes.
+INODE_MARGIN = 1000
+# A line every HEARTBEAT seconds while a long step runs (a read of the whole archive, the extraction), so a
+# transport that gives up after a silence (paramiko) does not give up on a command that is still working.
+HEARTBEAT = 20
+
+
+def _grs_heartbeat(extra_trap=""):
+    """Lines that start the heartbeat (`hb`) and stop it on every exit, after `extra_trap`.
+
+    SIGPIPE is ignored, so a write to a panel that has gone fails with an error the script can act
+    on (vet_script's last line) instead of killing it between two steps.
+    """
+    return [
+        "trap '' PIPE",
+        "( while sleep %d; do echo %s || exit 0; done ) & hb=$!" % (HEARTBEAT, _M["ALIVE"]),
+        "trap '%skill $hb 2>/dev/null' EXIT" % extra_trap,
+    ]
 
 
 def _grs_head(user, selfname):
@@ -166,9 +187,14 @@ def _grs_walks():
       something the restore rebuilds anyway; anything else would mix old and new files, or put
       the archive's copy of it on another filesystem. The targets are kept in `lt` (restore_script
       makes them again after the clear, so the link is not left dangling).
-    Then `tot` (the home's usage on its filesystem), `kb` (KEEP's share of it) and `free`.
+    * a KEEP path, or a folder above one, that is a symlink: the clear keeps a KEEP path by its name,
+      so the folder a link points at would be cleared (every backup in it, the held archive and the
+      undo included) and ~/.ssh's real folder would get the archive's old keys;
+    Then `tot` (the home's usage on its filesystem), `kb` (KEEP's share of it), `free`, `ino` (entries
+    the clear removes) and `itot`/`ifree` (the filesystem's inodes; 0 where it does not count them).
     """
     return [
+        'for kp in %s; do if [ -L "./$kp" ]; then echo %s; exit 5; fi; done' % (_GRS_KEEP_CHAIN, _M["KEEPLINK"]),
         "k=( \\( %s \\) -prune -o )" % _GRS_KEEP_FIND,
         'if [ -n "$(find . -mindepth 1 "${k[@]}" ! -user "$(id -u)" -print -quit 2>/dev/null)" ]; then '
         'echo %s; exit 5; fi' % _M["FOREIGN"],
@@ -182,7 +208,16 @@ def _grs_walks():
         % _GRS_KEEP_REL,
         'free=$(df -PB1 -- "$HR" 2>/dev/null | awk \'NR==2{print $4}\')',
         'case "$tot:$kb:$free" in *::*|:*|*:|*[!0-9:]*) echo "%s 0 0"; exit 5;; esac' % _M["SPACE"],
+        'ino=$(find . -mindepth 1 "${k[@]}" -print 2>/dev/null | wc -l)',
+        'read -r itot ifree <<< "$(df -Pi -- "$HR" 2>/dev/null | awk \'NR==2{print $2, $4}\')"',
+        'case "$itot:$ifree" in *[!0-9:]*|:*|*:) itot=0; ifree=0;; esac',
     ]
+
+
+def _grs_inode_check(members):
+    """The line refusing when the filesystem counts inodes and `members` (a shell word) would not fit."""
+    return ('if [ "$itot" -gt 0 ] && [ $(( ifree + ino )) -lt $(( %s + %d )) ]; then echo "%s $(( %s + %d )) '
+            '$(( ifree + ino ))"; exit 5; fi' % (members, INODE_MARGIN, _M["INODES"], members, INODE_MARGIN))
 
 
 def _grs_putback_leftovers():
@@ -229,15 +264,15 @@ def vet_script(user, selfname, name, undo_estimate):
     """
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
-    lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
+    lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_heartbeat() + _grs_home_lines(user) + [
         _grs_putback_leftovers(),
         a_line,
         'if [ ! -f "$a" ] || [ -L "$a" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         "if %s; then up=1; else up=0; fi" % _wwr._wwr_tmux_up(selfname),
     ] + _grs_member_check("a", _GRS_FLAGS[ext], selfname) + [
-        'set -- ${v#*__GRS_LIST__ }; need=$(( $1 + %d ))' % MARGIN,
+        'set -- ${v#*__GRS_LIST__ }; need=$(( $1 + %d )); nmem=$2' % MARGIN,
         'cd -- "$HR" || exit 3',
-    ] + _grs_walks() + [
+    ] + _grs_walks() + [_grs_inode_check("nmem")] + [
         'have=$(( free + tot - kb - %d ))' % int(undo_estimate),
         'if [ "$have" -lt "$need" ]; then echo "%s $need $have"; exit 5; fi' % _M["SPACE"],
         't0=$(stat -c %Y -- "$a") || { echo ' + _M["HOLDFAIL"] + '; exit 6; }',
@@ -245,7 +280,10 @@ def vet_script(user, selfname, name, undo_estimate):
         'if [ -e "$h" ] || ! mv -n -- "$a" "$h" || [ -e "$a" ] || [ ! -f "$h" ]; then echo %s; exit 6; fi'
         % _M["HOLDFAIL"],
         'touch -m -- "$h"',
-        'echo "%s $up $t0 $need $have"' % _M["READY"],
+        # Said, or put back: a panel that gave up before this line never learns the archive was moved.
+        'kill $hb 2>/dev/null',
+        'if ! echo "%s $up $t0 $need $have $nmem"; then mv -n -- "$h" "$a" && touch -m -d "@$t0" -- "$a"; exit 6; fi'
+        % _M["READY"],
     ]
     return "\n".join(lines) + "\n"
 
@@ -263,12 +301,13 @@ def putback_script(user, name, t0):
                       "true"]) + "\n"
 
 
-def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_POLLS):
+def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_POLLS, members=0):
     """The last command: the checks again, then clear the home (but KEEP) and extract the archive into it.
 
     Refused, nothing cleared: a LinuxGSM lock; the held archive or the undo backup `undo` missing; the
     server up (LinuxGSM's own test); a process of the account still in serverfiles after a bounded
-    wait; the walks (_grs_walks); less space than `need` now that the undo exists. Then CLEARING,
+    wait; the walks (_grs_walks); less space than `need` now that the undo exists, or fewer inodes than
+    `members` (vet_script counted them) and the margin. Then CLEARING,
     and from there a failure leaves the home part cleared: RMFAIL (something could not be removed),
     XFAIL (the extraction failed). RESTORED when tar exited 0. The archive is put back under its
     own name and time on every exit (the trap).
@@ -278,14 +317,14 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
     excludes = " ".join("--exclude=./%s --exclude=././%s" % (k, k) for k in KEEP)
     lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
         "t0=%d" % int(t0), a_line, h_line,
-        "trap '[ -f \"$h\" ] && [ ! -e \"$a\" ] && mv -n -- \"$h\" \"$a\" && touch -m -d \"@$t0\" -- \"$a\"' EXIT",
+    ] + _grs_heartbeat('[ -f "$h" ] && [ ! -e "$a" ] && mv -n -- "$h" "$a" && touch -m -d "@$t0" -- "$a"; ') + [
         'if [ ! -f "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         'if [ ! -s "$B"/%s ]; then echo %s; exit 5; fi' % (_q(undo), _M["NOUNDO"]),
         "if %s; then echo %s; exit 4; fi" % (_wwr._wwr_tmux_up(selfname), _M["RUNNING"]),
         'sf=$(cd -P -- "$HR/serverfiles" 2>/dev/null && pwd -P && printf x) && sf=${sf%?x} || sf="$HR"',
     ] + [ln.replace(_wwr._M_BUSY, _M["BUSY"]) for ln in _wwr._wwr_busy_wait(busy_polls)] + [
         'cd -- "$HR" || exit 3',
-    ] + _grs_walks() + [
+    ] + _grs_walks() + [_grs_inode_check(str(int(members)))] + [
         'have=$(( free + tot - kb ))',
         'if [ "$have" -lt %d ]; then echo "%s %d $have"; exit 5; fi' % (int(need), _M["SPACE"], int(need)),
         "echo " + _M["CLEARING"],
@@ -329,11 +368,20 @@ _GRS_VET_REFUSALS = (
                 "rebuild (outside the home, or a backup or lock folder), so it cannot be restored "
                 "faithfully"),
     ("HOLDFAIL", "the archive could not be set aside while the pre-restore backup runs"),
+    ("KEEPLINK", "the backup, lock or tmp folder, ~/.ssh or the panel's cron folder (or a folder above one) "
+                 "is a symbolic link, so the restore could not keep it apart from what it clears"),
 )
 
 
 def _grs_marks(text):
     return {m: ln for ln in text.splitlines() for m in re.findall(r"^__GRS_[A-Z]+__", ln)}
+
+
+def _grs_inodes(line):
+    nums = [int(p) for p in re.findall(r"-?\d+", (line or "").split(None, 1)[-1])][:2]
+    return i18n.Sentence("not enough free inodes: the archive holds {need} files and folders (with a margin), "
+                         "and {have} would be free for them", need=nums[0] if nums else "?",
+                         have=nums[1] if len(nums) > 1 else "?")
 
 
 def _grs_space(line):
@@ -351,15 +399,19 @@ def _grs_refusal(marks, table):
         return i18n.Sentence(_GRS_BAD_WHY.get((bad.split() + [""])[1], _GRS_BAD_WHY["parse"]))
     if _M["SPACE"] in marks:
         return _grs_space(marks[_M["SPACE"]])
+    if _M["INODES"] in marks:
+        return _grs_inodes(marks[_M["INODES"]])
     return next((i18n.Sentence(why) for key, why in table if _M[key] in marks), None)
 
 
 def _grs_ready(line):
-    """READY's values ({"up", "t0", "need"}), or None when the line is not whole."""
-    parts = (line or "").split() + ["0"]
-    if len(parts) < 4 or parts[1] not in ("0", "1") or not parts[2].isdecimal():
+    """READY's values ({"up", "t0", "need", "members"}), or None when the line is not whole."""
+    got = (line or "").split()
+    parts = got + ["0"] * 6
+    if len(got) < 3 or parts[1] not in ("0", "1") or not parts[2].isdecimal():
         return None
-    return {"up": parts[1] == "1", "t0": int(parts[2]), "need": int(parts[3]) if parts[3].isdecimal() else 0}
+    num = [int(p) if p.isdecimal() else 0 for p in (parts[3], parts[5])]
+    return {"up": parts[1] == "1", "t0": int(parts[2]), "need": num[0], "members": num[1]}
 
 
 def vet_outcome(out):
@@ -473,8 +525,8 @@ def upload_finish_script(user, selfname, uid, size, when):
     names = ('for i in 0 1 2 3 4 5 6 7 8 9; do n=%s-$(date -d "@$((%d + i))" +%%Y-%%m-%%d-%%H%%M%%S).tar.$x; '
              '[ -e "$B/$n" ] && continue; if mv -n -- "$p" "$B/$n" && [ ! -e "$p" ]; then echo "%s $n"; exit 0; fi; '
              'done' % (_q(selfname), int(when), _M["UPSTORED"]))
-    lines = [
-        "set -o pipefail", "export LC_ALL=C", _grs_part(user, uid),
+    lines = ["set -o pipefail", "export LC_ALL=C"] + _grs_heartbeat() + [
+        _grs_part(user, uid),
         'if [ ! -f "$p" ] || [ -L "$p" ]; then echo %s; exit 5; fi' % _M["NOPART"],
         's=$(stat -c %s -- "$p")',
         'if [ "$s" != %d ]; then echo "%s $s"; exit 5; fi' % (int(size), _M["UPOFFSET"]),
@@ -483,6 +535,10 @@ def upload_finish_script(user, selfname, uid, size, when):
         '*) if [ "$(dd if="$p" bs=1 skip=257 count=5 2>/dev/null)" = ustar ]; then f=; x=tar; '
         'else %s echo %s; exit 5; fi;; esac' % (rm, _M["UPFORMAT"]),
     ] + _grs_member_check("p", "$f", selfname, on_refusal=rm) + [
+        # gzip writes its copy beside the tar: room for a second copy first, or the game's own disk runs out.
+        'if [ "$x" = tar ]; then free=$(df -PB1 -- "$B" 2>/dev/null | awk \'NR==2{print $4}\'); '
+        'case "$free" in ""|*[!0-9]*) free=0;; esac; if [ "$free" -lt $(( s + %d )) ]; then %s '
+        'echo "%s $(( s + %d )) $free"; exit 5; fi; fi' % (MARGIN, rm, _M["SPACE"], MARGIN),
         'if [ "$x" = tar ]; then gzip -1 -n -- "$p" 2>/dev/null || { rm -f -- "$p" "$p.gz"; echo %s; exit 6; }; '
         'p="$p.gz"; x=gz; fi' % _M["UPFAIL"],
         names, rm + " echo " + _M["UPFAIL"], "exit 6",
@@ -490,9 +546,17 @@ def upload_finish_script(user, selfname, uid, size, when):
     return "\n".join(lines) + "\n"
 
 
+def upload_cancel_script(user, uid):
+    """Remove an upload's part file (and a staged piece)."""
+    return "\n".join([_grs_part(user, uid), 'rm -f -- "$p" "$p.piece" "$p.gz"', "echo " + _M["UPREADY"]]) + "\n"
+
+
 def upload_outcome(out):
-    """(state, value) of an upload command: ("ok", the number or name it printed), ("offset", host size),
-    or ("refused", sentence)."""
+    """(state, value) of an upload command.
+
+    ("ok", the number or name it printed), ("offset", host size), ("refused", sentence) for a refusal
+    the command printed, or ("unread", sentence) when none of its lines came back (worth a retry).
+    """
     text = terminal.strip_escapes(out or "")
     marks = _grs_marks(text)
     for key in ("UPSTORED", "UPSIZE", "UPREADY"):
@@ -501,8 +565,10 @@ def upload_outcome(out):
     if _M["UPOFFSET"] in marks:
         got = (marks[_M["UPOFFSET"]].split() + [""])[1]
         return "offset", int(got) if got.isdecimal() else 0
-    return "refused", (_grs_refusal(marks, _GRS_UPLOAD_REFUSALS)
-                       or i18n.Sentence("the host's answer did not come back"))
+    why = _grs_refusal(marks, _GRS_UPLOAD_REFUSALS)
+    if why is None:
+        return "unread", i18n.Sentence("the host's answer did not come back")
+    return "refused", why
 
 
 _GRS_UPLOAD_REFUSALS = (

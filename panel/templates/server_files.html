@@ -434,14 +434,18 @@
       </div>
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
         <button class="btn btn-primary btn-sm fpm-su" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
-        <button class="btn btn-outline-secondary btn-sm fpm-rs" id="bk-upload" data-action="uploadBk"><i class="bi bi-upload"></i> Upload a backup</button>
+        {% if fpm.rs and fpm.edit %}{# an uploaded archive is any file the uploader chose: RESTORE_BACKUP and EDIT_FILES #}
+        <button class="btn btn-outline-secondary btn-sm" id="bk-upload" data-action="uploadBk"><i class="bi bi-upload"></i> Upload a backup</button>
         <input type="file" id="bk-upload-file" class="d-none" aria-label="Backup archive to upload" accept=".zst,.gz,.tgz,.tar" data-action="uploadBkPicked" data-on="change" data-args='["@self"]'>
+        {% endif %}
         <span id="bk-status" class="small"></span>
         <span id="bk-restore-status" class="small"></span>
       </div>
-      <div class="small text-secondary mb-2 fpm-rs" style="font-size:.7rem;">
+      {% if fpm.rs and fpm.edit %}
+      <div class="small text-secondary mb-2" style="font-size:.7rem;">
         Upload a LinuxGSM backup of this server (.tar.zst, .tar.gz or .tar, up to 32 GB). It is checked as a restore checks it, then listed here under a LinuxGSM backup's name.
       </div>
+      {% endif %}
       <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">
           <thead><tr><th>Backup</th><th style="width:1%;white-space:nowrap;">Size</th><th style="width:1%;white-space:nowrap;">When</th><th style="width:1%;"></th></tr></thead>

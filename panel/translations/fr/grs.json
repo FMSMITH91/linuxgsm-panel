@@ -1,5 +1,4 @@
 {
-  "Restore a game server from a backup — replaces its current files; the most destructive backup action": "Restaurer un serveur de jeu depuis une sauvegarde : remplace ses fichiers actuels ; l'action de sauvegarde la plus destructrice",
   "Only a LinuxGSM backup named <script>-<date>.tar.zst or .tar.gz can be restored.": "Seule une sauvegarde LinuxGSM nommée <script>-<date>.tar.zst ou .tar.gz peut être restaurée.",
   "the archive's member list could not be read": "la liste du contenu de l'archive n'a pas pu être lue",
   "a member of the archive is not under the server's folder (an absolute path, `..`, or game data kept outside the account's home)": "un élément de l'archive n'est pas dans le dossier du serveur (un chemin absolu, `..` ou des données du jeu gardées hors du dossier personnel du compte)",
@@ -83,5 +82,11 @@
   "Upload failed": "L'envoi a échoué",
   "Upload takes a backup this panel made (up to 512 MB); it is checked as a restore checks it, and an encrypted one asks for its passphrase when you restore it.": "L'envoi accepte une sauvegarde faite par ce panneau (jusqu'à 512 Mo) ; elle est vérifiée comme une restauration la vérifie, et une sauvegarde chiffrée demande sa phrase secrète à la restauration.",
   "Backup archive to upload": "Sauvegarde à envoyer",
-  "Panel backup to upload": "Sauvegarde du panneau à envoyer"
+  "Panel backup to upload": "Sauvegarde du panneau à envoyer",
+  "Restore a game server from a backup — replaces its current files; the most destructive backup action. Uploading a backup to restore also needs Change game server files: an uploaded archive can hold any file, including the scripts the server runs": "Restaurer un serveur de jeu depuis une sauvegarde : remplace ses fichiers actuels ; l'action de sauvegarde la plus destructrice. Envoyer une sauvegarde à restaurer demande aussi Modifier les fichiers du serveur de jeu : une archive envoyée peut contenir n'importe quel fichier, y compris les scripts que le serveur exécute",
+  "Uploading a backup also needs the permission to change the server's files.": "Envoyer une sauvegarde demande aussi le droit de modifier les fichiers du serveur.",
+  "The restore from {archive} was interrupted (the panel restarted); the archive is listed again under its own name, and the server may be stopped with its files partly replaced: check it.": "La restauration depuis {archive} a été interrompue (le panneau a redémarré) ; l'archive est de nouveau listée sous son propre nom, et le serveur est peut-être arrêté avec ses fichiers remplacés en partie : vérifiez-le.",
+  "A game server is being restored from a backup. The panel does not restart until it has finished; try again then.": "Un serveur de jeu est en cours de restauration depuis une sauvegarde. Le panneau ne redémarre pas avant la fin ; réessayez alors.",
+  "the backup, lock or tmp folder, ~/.ssh or the panel's cron folder (or a folder above one) is a symbolic link, so the restore could not keep it apart from what it clears": "le dossier des sauvegardes, des verrous ou tmp, ~/.ssh ou le dossier cron du panneau (ou un dossier au-dessus) est un lien symbolique : la restauration ne pourrait pas le tenir à l'écart de ce qu'elle efface",
+  "not enough free inodes: the archive holds {need} files and folders (with a margin), and {have} would be free for them": "pas assez d'inodes libres : l'archive contient {need} fichiers et dossiers (avec une marge), et {have} seraient libres pour eux"
 }

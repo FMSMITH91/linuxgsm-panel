@@ -9,7 +9,9 @@ each piece (at the offset the stored part file has reached, so a piece whose ans
 not appended twice), and finish (the whole file checked as a restore checks it, then listed under
 a name the panel makes).
 
-A game server's: RESTORE_BACKUP on that server (server_access_required). Written as the game account
+A game server's: RESTORE_BACKUP and EDIT_FILES on that server (server_access_required), and a plain game
+account (_shared.game_account_write_refusal): an uploaded archive is any content the uploader chose, and
+restoring it writes the LinuxGSM script and config that run as the game account. Written as the game account
 into its own LinuxGSM backup dir (services/game_restore's upload commands, the transport every
 other game-account command takes), and checked by the same member check a restore runs before it
 is listed. The panel's: superadmin only, written by the panel into its own backup dir and checked
@@ -28,8 +30,9 @@ from panel.core.http import _json_body, _log_and_generic
 from panel.db.models import LOCAL_HOST_LABEL
 from panel.ops import backup as bk
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (RESTORE_BACKUP, get_game, log_action, permission_required,
-                                 server_access_required, superadmin_required)
+from panel.routes import _shared
+from panel.security.auth import (EDIT_FILES, RESTORE_BACKUP, get_game, has_permission, log_action,
+                                 permission_required, server_access_required, superadmin_required)
 from panel.services import game_restore as grs
 
 # upload id -> {"kind", "sid", "user", "size", "got", "ts"}. An upload untouched this long is forgotten.
@@ -37,7 +40,7 @@ _uploads = {}
 _uploads_lock = threading.Lock()
 _UPLOAD_IDLE = 2 * 3600
 _GAME_PIECE_TIMEOUT = 300
-_GAME_FINISH_TIMEOUT = 1800     # a large archive is read to its end through its decompressor
+_GAME_FINISH_TIMEOUT = 4 * 3600     # a large archive read to its end (the command prints a heartbeat)
 
 
 def _bup_new(kind, sid, size):
@@ -95,9 +98,18 @@ def _bup_too_big(limit):
         "Give the archive's size: a whole number of bytes, at most {limit}.", limit=_sm._fmt_size(limit))}), 400
 
 
+def _bup_no_edit():
+    """The 403 for a game upload without EDIT_FILES (RESTORE_BACKUP is the route's decorator), else None."""
+    if current_user.is_superadmin or has_permission(current_user, EDIT_FILES):
+        return None
+    return jsonify({"success": False, "message": i18n.tr(
+        "Uploading a backup also needs the permission to change the server's files.")}), 403
+
+
 def register(app):
-    """The upload routes: three for a game server's backup, three for the panel's."""
+    """The upload routes: four for a game server's backup, four for the panel's (start, piece, finish, cancel)."""
     _register_game(app)
+    _register_game_cancel(app)
     _register_panel(app)
 
 
@@ -110,8 +122,16 @@ def _register_game(app):
     def api_panel_backup_game_upload(server_id):
         """Start an upload: check the size against the cap and the host's free space, make the part file."""
         gs = get_game(server_id)
+        refused = _bup_no_edit()
+        if refused is not None:
+            return refused
         if not gs.installed or not gs.remote_id:
             return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
+        why = _shared.game_account_write_refusal(gs.remote, gs.short_name)
+        if why is not None:
+            log_action(current_user, "game_backup_upload", target=gs.name, success=False, server=gs,
+                       detail="refused: %s" % why)
+            return jsonify({"success": False, "message": i18n.tr(why)}), 409
         size = _bup_size(grs.UPLOAD_MAX)
         if size is None:
             return _bup_too_big(grs.UPLOAD_MAX)
@@ -133,7 +153,7 @@ def _register_game(app):
     def api_panel_backup_game_upload_piece(server_id, uid):
         """Append one piece at its offset; answers how much the host holds now."""
         gs = get_game(server_id)
-        entry = _bup_get(uid, "game", gs.id)
+        entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
         if entry is None:
             return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
         offset, data = _bup_piece(entry, grs.UPLOAD_CHUNK)
@@ -154,14 +174,20 @@ def _register_game(app):
     @permission_required(RESTORE_BACKUP)
     @server_access_required
     def api_panel_backup_game_upload_finish(server_id, uid):
-        """Check the whole archive as a restore does and list it under a LinuxGSM backup's name."""
+        """Check the whole archive as a restore does and list it under a LinuxGSM backup's name.
+
+        A finish whose answer did not come back keeps the upload, so the page can ask again (the part
+        file is still there unless the check refused it).
+        """
         gs = get_game(server_id)
-        entry = _bup_get(uid, "game", gs.id)
+        entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
         if entry is None:
             return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        _bup_drop(uid)
         state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name, uid,
                                                                 entry["size"], time.time()), _GAME_FINISH_TIMEOUT)
+        if state == "unread":
+            return jsonify({"success": False, "retry": True, "message": i18n.tr(val)}), 200
+        _bup_drop(uid)
         ok = state == "ok"
         detail = ("%s (%d bytes)" % (val, entry["size"])) if ok else ("refused: %s" % val)
         log_action(current_user, "game_backup_upload", target=gs.name, success=ok, server=gs, detail=detail[:500])
@@ -173,6 +199,23 @@ def _register_game(app):
             "Uploaded as {name}. Restore it from the list.", name=val)})
 
 
+def _register_game_cancel(app):
+    """A game server's upload, cancelled: its part file removed and the upload forgotten."""
+    @app.route("/api/panel/backup/game/<int:server_id>/upload/<uid>/cancel", methods=["POST"])
+    @login_required
+    @permission_required(RESTORE_BACKUP)
+    @server_access_required
+    def api_panel_backup_game_upload_cancel(server_id, uid):
+        """Cancel an upload: its part file (and a staged piece) removed, the upload forgotten."""
+        gs = get_game(server_id)
+        entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
+        if entry is None:
+            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+        _bup_drop(uid)
+        state, _val = _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, uid), 60)
+        return jsonify({"success": state == "ok"})
+
+
 def _bup_game_run(gs, script, timeout, stdin=None):
     """One upload command as the game account: (state, value) as services/game_restore.upload_outcome reads it."""
     try:
@@ -181,7 +224,7 @@ def _bup_game_run(gs, script, timeout, stdin=None):
                                         **({"stdin_text": stdin} if stdin is not None else {}))
     except Exception:
         _log_and_generic("game backup upload command failed")
-        return "refused", i18n.Sentence("the host could not be reached")
+        return "unread", i18n.Sentence("the host could not be reached")
     return grs.upload_outcome((out or "") + "\n" + (err or ""))
 
 
@@ -223,6 +266,17 @@ def _register_panel(app):
             _bup_drop(uid)
             return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
         return jsonify({"success": False, "received": now, "resume": True}), 409
+
+    @app.route("/api/panel/backup/upload/<uid>/cancel", methods=["POST"])
+    @login_required
+    @superadmin_required
+    def api_panel_backup_upload_cancel(uid):
+        """Cancel a panel backup upload: its part file removed, the upload forgotten."""
+        if _bup_get(uid, "panel", 0) is None:
+            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+        _bup_drop(uid)
+        bk.upload_discard(uid)
+        return jsonify({"success": True})
 
     @app.route("/api/panel/backup/upload/<uid>/finish", methods=["POST"])
     @login_required
