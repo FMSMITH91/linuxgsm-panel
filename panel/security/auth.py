@@ -94,7 +94,8 @@ ALL_PERMISSIONS = {
     INSTALL_SERVER: "Install new game servers",
     UNINSTALL_SERVER: "Uninstall game servers",
     MANAGE_SERVERS: "Add/remove game server instances",
-    VIEW_FILES: "View game server files — browse folders, and read and download files and configs",
+    VIEW_FILES: ("View game server files — browse folders, and read and download files and configs, "
+                 "including the passwords they hold"),
     EDIT_FILES: ("Change game server files — upload, edit, rename, create and delete files and "
                  "folders, and save config forms (give View game server files with it)"),
     DOWNLOAD_BACKUP: "Download a game server's backup archives",
