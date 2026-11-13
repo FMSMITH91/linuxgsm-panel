@@ -244,13 +244,23 @@ def outcome(out, rc, plan):
     refused = next((why for mark, why in _WWR_REFUSALS if mark in marks), None)
     if refused is not None:
         return "refused", refused
+    return _wwr_past_checks(text, marks, gone, rc, plan)
+
+
+def _wwr_past_checks(text, marks, gone, rc, plan):
+    """outcome() for a run that refused nothing: failed, unread or done."""
     if _M_RMFAIL in marks:
         return "failed", i18n.Sentence("a world file could not be deleted ({count} removed before it)", count=gone)
     if _M_DELETED not in marks:
         return "unread", i18n.Sentence("the delete's result did not come back (exit {rc}); it may have deleted "
                                        "the world: check the server", rc=rc)
     if plan["create"] and _M_CREATED not in marks:
-        last = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("__WWR_")]
         return "failed", i18n.Sentence("the world was deleted, but the new save was not created: {last}",
-                                       last=(last[-1] if last else "no output")[:200])
+                                       last=_wwr_last_line(text))
     return "done", i18n.Sentence("world deleted ({count} removed)", count=gone)
+
+
+def _wwr_last_line(text):
+    """The host's last line of its own (not one of the script's marks), for a failure's sentence."""
+    last = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("__WWR_")]
+    return (last[-1] if last else "no output")[:200]
