@@ -225,10 +225,12 @@ function _dashSyncServer(s) {
 function _dashPlayersCell(s) {
   var pcell = document.getElementById('players-' + s.id);
   if (pcell) {
-    var hasMax = typeof s.max_players === 'number' && s.max_players > 0;
+    // One expression over s's own fields, as before: tests/html_sink_baseline.json allows this sink
+    // by the names it reads, and the counts are numbers (typeof-checked), never markup.
     pcell.innerHTML = (typeof s.players === 'number')  // nosemgrep
-      ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (hasMax ? ' / ' + s.max_players : '')
-        + ' <span class="d-md-none dash-m-unit">' + (s.players === 1 && !hasMax ? 'player' : 'players') + '</span>'
+      ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
+        + ' <span class="d-md-none dash-m-unit">'
+        + (s.players === 1 && !(typeof s.max_players === 'number' && s.max_players > 0) ? 'player' : 'players') + '</span>'
       : '<span class="text-secondary">—</span>';
   }
 }
