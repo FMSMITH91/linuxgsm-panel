@@ -623,7 +623,7 @@ check("pages: a game's display name is shown inside data-no-i18n wherever it is 
       not _open75 and "Sign in to manage your game servers{% endif %}" in _tpl75["login.html"], repr(_open75))
 check("file page: the listing is asked for only when the page has a file browser (a failed install has "
       "none, and every load spent an SSH round trip on it)",
-      "if (document.getElementById('file-list')) browse('');" in _SF75
+      "if (SF_CAN.view && document.getElementById('file-list')) browse('');" in _SF75
       and "\nbrowse('');" not in _SF75, "top-level browse('') is not gated")
 
 
