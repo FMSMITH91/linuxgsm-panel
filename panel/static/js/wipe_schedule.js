@@ -1,5 +1,6 @@
 // The Schedule tab's scheduled wipe card (server_files.html #wipe-card): Rust's map/full wipe, and the
-// world reset of Minecraft Java and Factorio (#wipe-kind is then a hidden input holding "reset").
+// world reset of Minecraft (Java, Paper, Bedrock) and Factorio (#wipe-kind is then a hidden input holding
+// "reset").
 // The server runs the wipe (panel/routes/wipe_schedule.py): a backup first, no wipe if it failed.
 // Times are entered in the viewer's own zone, which is sent with the schedule and kept with it.
 (function () {
