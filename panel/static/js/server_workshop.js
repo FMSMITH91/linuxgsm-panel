@@ -43,7 +43,8 @@
   function iconButton(icon, label, action, args, disabled) {
     var b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn btn-sm btn-outline-secondary py-0 px-1';
+    // fpm-edit: each row button changes the list, so it hides without EDIT_FILES (#wsc-card[data-fpm-ro]).
+    b.className = 'btn btn-sm btn-outline-secondary py-0 px-1 fpm-edit';
     b.setAttribute('aria-label', label);
     b.title = label;
     b.disabled = !!disabled;
@@ -111,7 +112,7 @@
     shown.forEach(function (f) {
       var b = document.createElement('button');
       b.type = 'button';
-      b.className = 'btn btn-sm btn-outline-success py-0';
+      b.className = 'btn btn-sm btn-outline-success py-0 fpm-edit';
       b.textContent = '+ ' + f.id;
       b.title = f.name || f.id;
       b.setAttribute('data-action', 'wscAddFound');

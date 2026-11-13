@@ -63,6 +63,14 @@ UPDATE_SERVER = "update_server"
 INSTALL_SERVER = "install_server"
 UNINSTALL_SERVER = "uninstall_server"
 MANAGE_SERVERS = "manage_servers"       # Add/remove game servers
+# A server's files and its backups, each grantable on its own. Until these existed every one of
+# them hung off MANAGE_SERVERS (files) or the superadmin flag (a game server's backups); data
+# migration 3 (models._fpm_grant_file_permissions) gave every group holding MANAGE_SERVERS the two
+# file permissions, so nobody gained or lost access on the upgrade.
+VIEW_FILES = "view_files"               # Browse, read and download a server's files and configs
+EDIT_FILES = "edit_files"               # Upload, save, rename, create and delete them
+DOWNLOAD_BACKUP = "download_backup"     # Download a game server's backup archives
+DELETE_BACKUP = "delete_backup"         # Delete them
 MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
@@ -86,6 +94,12 @@ ALL_PERMISSIONS = {
     INSTALL_SERVER: "Install new game servers",
     UNINSTALL_SERVER: "Uninstall game servers",
     MANAGE_SERVERS: "Add/remove game server instances",
+    VIEW_FILES: "View game server files — browse folders, and read and download files and configs",
+    EDIT_FILES: ("Change game server files — upload, edit, rename, create and delete files and "
+                 "folders, and save config forms (give View game server files with it)"),
+    DOWNLOAD_BACKUP: "Download a game server's backup archives",
+    DELETE_BACKUP: ("Delete a game server's backup archives — a deleted backup is gone for good "
+                    "and cannot be restored"),
     MANAGE_REMOTES: "Add/edit/delete remote VPS nodes",
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
@@ -1895,7 +1909,50 @@ def _can_edit_tags():
 
 
 def _can_manage_files():
+    """MANAGE_SERVERS: the Files & Config page's server settings (schedule, alerts, mods, content).
+
+    Not the files themselves any more: those are VIEW_FILES and EDIT_FILES (_fpm_can_view,
+    _fpm_can_edit).
+    """
     return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
+
+
+def _fpm_can_view():
+    """VIEW_FILES: browse, read and download a server's files and configs."""
+    return current_user.is_superadmin or has_permission(current_user, VIEW_FILES)
+
+
+def _fpm_can_edit():
+    """EDIT_FILES: write a server's files — save, upload, rename, create, delete, config forms."""
+    return current_user.is_superadmin or has_permission(current_user, EDIT_FILES)
+
+
+# Any one of these is a reason to open a server's Files & Config page: its Config and Files tabs
+# (VIEW_FILES), its Schedule, Alerts and Mods tabs (MANAGE_SERVERS) and its Backups tab.
+FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP)
+
+
+def files_access(user, perms=None):
+    """What `user` may do on a server's Files & Config page, from ONE read of their permissions.
+
+    `perms`: their get_user_permissions(), when the caller already holds it (no second read).
+
+    view/edit: the files; manage: the server settings tabs; dl/rm: a game backup's download and
+    delete; su: the superadmin-only backup controls (take one now, the schedule); bk: the Backups
+    tab at all; page: the page itself. Server access is the caller's question
+    (server_access_required), as it is for every permission.
+    """
+    su = bool(getattr(user, "is_superadmin", False))
+    if perms is None:
+        perms = set() if su else get_user_permissions(user)
+
+    def _has(p):
+        return su or p in perms
+    out = {"view": _has(VIEW_FILES), "edit": _has(EDIT_FILES), "manage": _has(MANAGE_SERVERS),
+           "dl": _has(DOWNLOAD_BACKUP), "rm": _has(DELETE_BACKUP), "su": su}
+    out["bk"] = out["su"] or out["dl"] or out["rm"]
+    out["page"] = any(_has(p) for p in FILES_PAGE_PERMS)
+    return out
 
 
 def _perm_for_action(action):

@@ -10,7 +10,7 @@ The fields come from panel/services/game_config_form.py. Routes:
   values written, every other byte kept.
 
 The same permission, refusals and writer as the raw editor's /file route: the Settings tab's
-permission (_can_manage_files), the file browser's refusals of a root-capable account
+permissions (VIEW_FILES to read, EDIT_FILES to save), the file browser's refusals of a root-capable account
 (_read_refused, _write_refused), read_file/write_file as the game account. The path comes from the
 page exactly as the raw editor's does, and write_file applies the same path rules to both. Each save
 is audited as the raw editor's is (edit_file), naming the changed keys; a secret key's values never
@@ -22,7 +22,7 @@ from panel.core import i18n
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import _r20b_audit_on_raise
-from panel.security.auth import _can_manage_files, get_game, log_action, server_access_required
+from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
 from panel.services import game_config_form as _gcf
 
 _GCF_SAVED = "Saved. Restart the server to apply."
@@ -139,7 +139,7 @@ def register(app):
     def api_server_game_config(server_id):
         """The game's own server config file (detected via LinuxGSM details)."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         return _gcf_game_config_answer(gs)
 
@@ -149,6 +149,6 @@ def register(app):
     def api_server_game_config_form(server_id):
         """The game config file's form (GET), or its changed values written (POST)."""
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not (_fpm_can_edit() if request.method == "POST" else _fpm_can_view()):
             return jsonify({"success": False, "error": "Permission denied", "message": "Permission denied"}), 403
         return _gcf_read_answer(gs) if request.method == "GET" else _gcf_save_answer(gs)

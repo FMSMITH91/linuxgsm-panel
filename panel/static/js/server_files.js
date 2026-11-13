@@ -2,7 +2,8 @@
 // One section on view at a time, the others display:none from the first paint (server_files.html),
 // so the page is as tall as the section being read instead of all six stacked. The section rides
 // on the URL's #hash, as the server page's tabs do, so a reload or a shared link lands on it; a
-// hash naming a section this page does not have (Backups for a non-superadmin) opens Config.
+// hash naming a section this page does not have (one this viewer has no permission for) opens the
+// first section it does have: Config, or for a viewer without VIEW_FILES the next one along.
 // Only display changes: every section's data still loads with the page, as before.
 function _uis_sfSections(){
   return Array.prototype.map.call(document.querySelectorAll('[data-sfsub-btn]'), function(b){
@@ -11,7 +12,7 @@ function _uis_sfSections(){
 }
 function _uis_sfShow(name, keepHash){
   var have = _uis_sfSections();
-  if (have.indexOf(name) < 0) name = 'config';
+  if (have.indexOf(name) < 0) name = have[0] || 'config';
   document.querySelectorAll('[data-sfsub]').forEach(function(el){
     el.style.display = el.getAttribute('data-sfsub') === name ? '' : 'none';
   });
@@ -576,12 +577,13 @@ function mkRow(opts){
     // Rename sits between Download and Delete, on every row the panel would let you delete: the
     // same rule protects a path from both, because renaming lgsm/ away breaks the server exactly as
     // deleting it does. One control at every width — the row has no separate phone layout.
-    var rn=document.createElement('button'); rn.type='button'; rn.className='btn btn-sm btn-link p-0 text-secondary';
+    // .fpm-edit: hidden without EDIT_FILES (the card's [data-fpm-ro], panel.css); the routes refuse anyway.
+    var rn=document.createElement('button'); rn.type='button'; rn.className='btn btn-sm btn-link p-0 text-secondary fpm-edit';
     rn.title='Rename'; rn.setAttribute('aria-label', _rowLabel('Rename', opts.name));
     rn.dataset.action='rename';
     rn.appendChild(_icon('bi-pencil'));
     right.appendChild(rn);
-    var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.setAttribute('aria-label', _rowLabel('Delete', opts.name)); b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
+    var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0 fpm-edit'; b.title='Delete'; b.setAttribute('aria-label', _rowLabel('Delete', opts.name)); b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
   }
   row.appendChild(left); row.appendChild(right);
   return row;
@@ -1432,7 +1434,7 @@ if (_crumb) _crumb.addEventListener('click', function(ev){
   });
 
   ['dragenter','dragover'].forEach(function(t){
-    card.addEventListener(t, function(ev){ ev.preventDefault(); ev.stopPropagation(); card.classList.add('dragging'); });
+    card.addEventListener(t, function(ev){ ev.preventDefault(); ev.stopPropagation(); if(SF_CAN.edit) card.classList.add('dragging'); });
   });
   ['dragleave','drop'].forEach(function(t){
     card.addEventListener(t, function(ev){
@@ -1442,7 +1444,7 @@ if (_crumb) _crumb.addEventListener('click', function(ev){
   });
 
   card.addEventListener('drop', function(ev){
-    var dt=ev.dataTransfer; if(!dt) return;
+    var dt=ev.dataTransfer; if(!dt || !SF_CAN.edit) return;   // no EDIT_FILES: nothing to upload with
     var roots=_dropRoots(dt);          // synchronous: the items list is emptied after this tick
     var base=curDir;                   // the folder it was dropped INTO, before a long tree walk
     if(roots.length){
@@ -1754,11 +1756,17 @@ if (_el_cron_presets) _el_cron_presets.addEventListener('click', function(ev){
 });
 updateCronExplain();
 
-loadConfig();
+// Each section loads only for a viewer who may use it (SF_CAN, auth.files_access): asked anyway, a
+// section without its tab cost an SSH round trip per page load for a 403 nobody sees.
+if (SF_CAN.view) loadConfig();
+// Without EDIT_FILES the three editors are for reading: nothing typed into them could be saved.
+if (!SF_CAN.edit) ['editor', 'game-cfg', 'cfg-raw'].forEach(function(id){
+  var el = document.getElementById(id); if (el) el.readOnly = true;
+});
 // The page has no file browser for a failed install (nothing was downloaded to browse). Asked
 // anyway, the listing cost an SSH round trip per page load, and its answer had no list to fill.
-if (document.getElementById('file-list')) browse('');
-loadCron();
+if (SF_CAN.view && document.getElementById('file-list')) browse('');
+if (SF_CAN.manage) loadCron();
 
 // ── Alerts & notifications ──
 function alertsMsg(t,cls){ var m=document.getElementById('alerts-msg'); if(m){ m.textContent=t||''; m.className='small ms-2 '+(cls||'text-secondary'); } }
@@ -1840,7 +1848,7 @@ function testAlert(btn){
     .then(r=>r.json()).then(function(d){ alertsMsg((d.success?'✓ ':'✗ ')+(d.message||'Sent — check your alert channels.'), d.success?'text-success':'text-danger'); if(btn) btn.disabled=false; })
     .catch(function(){ alertsMsg('✗ Could not send','text-danger'); if(btn) btn.disabled=false; });
 }
-loadAlerts();
+if (SF_CAN.manage) loadAlerts();
 
 // ── Mods & addons ──
 function modsMsg(t,cls){ var m=document.getElementById('mods-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
@@ -1941,7 +1949,7 @@ function modRestartNow(btn){
         .catch(function(){ modsMsg('✗ Restart failed — connection error','text-danger'); });
     }});
 }
-void loadMods(true);   // resolves either way; a failure is drawn in the card
+if (SF_CAN.manage) void loadMods(true);   // resolves either way; a failure is drawn in the card
 
 // ── Backups (this server) — superadmin card; reuses the game-backup endpoints ──
 function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD
@@ -2029,7 +2037,7 @@ function _bkRenderStatus(s){
   if(!st) return;
   if(!s){ st.textContent=''; return; }
   if(s.running){ st.className='small text-info'; st.innerHTML='<i class="bi bi-arrow-repeat"></i> Backing up…'; }
-  else if(s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }  // nosemgrep
+  else if(s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1 fpm-su"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }  // nosemgrep
   else if(s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }  // nosemgrep
   else if(s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }  // nosemgrep
   else st.textContent='';
@@ -2049,8 +2057,9 @@ function _bkRenderRows(d){
       + '<td class="text-nowrap">'+bkFmt(b.size)+'</td>'
       + '<td class="text-nowrap" style="font-size:.72rem;">'+esc(bkWhen(b.created))+'</td>'
       + '<td class="text-nowrap">'
-      +   (ip?'':('<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+serverId+'/download?name='+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
-      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button>'))
+      // .fpm-dl / .fpm-del: hidden without DOWNLOAD_BACKUP / DELETE_BACKUP (#backup-card, panel.css).
+      +   (ip?'':('<a class="btn btn-sm btn-outline-secondary py-0 px-1 fpm-dl" href="'+MOUNT+'/backup/game/'+serverId+'/download?name='+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
+      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1 fpm-del" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button>'))
       + '</td></tr>';
   });
   var tb=document.getElementById('bk-rows');

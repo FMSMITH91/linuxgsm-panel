@@ -4,7 +4,7 @@ Four lists the server keeps beside its jar, in LinuxGSM's serverfiles directory:
 whitelist.json, banned-players.json and banned-ips.json, plus `white-list` in server.properties.
 
 READ through the file manager's reader (ssh_manager.files.read_file), with its permission
-(_can_manage_files) and its refusal of a root-capable game account (_read_refused). A file that is
+(VIEW_FILES, _fpm_can_view) and its refusal of a root-capable game account (_read_refused). A file that is
 not there is an empty list: the server writes each one the first time it has something to keep. A
 read that failed is "could not be read", never empty (read_file's error, or a body that is not a
 JSON list).
@@ -35,7 +35,7 @@ from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import (_console_send_failure, _r20b_audit_on_raise)
-from panel.security.auth import (SEND_COMMAND, _can_manage_files, get_game, has_permission, log_action,
+from panel.security.auth import (SEND_COMMAND, _fpm_can_view, get_game, has_permission, log_action,
                                  server_access_required)
 
 MCL_GAMES = frozenset({"mc", "pmc"})
@@ -252,7 +252,7 @@ def register(app):
         """One of a Minecraft server's four lists, read from its file, with whether it can be changed."""
         from panel.routes import server_files as _sf
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         if not mcl_supported(gs.game_type):
             return jsonify({"success": False, "error": i18n.tr(_MCL_NOT_JAVA)}), 400

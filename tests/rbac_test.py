@@ -4108,7 +4108,7 @@ def _mut_scanned():
 
 _GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
                 "can_moderate_action", "can_run_custom_command", "_can_manage_files",
-                "_can_edit_tags", "_required_perms")
+                "_can_edit_tags", "_required_perms", "_fpm_can_edit")
 
 
 def _r21d_reads_caller_superadmin(tree):

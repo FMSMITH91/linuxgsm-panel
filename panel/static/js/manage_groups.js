@@ -6,7 +6,7 @@
     moderator: ["view_servers","view_console","kick_player","ban_player","say_server"],
     admin: ["view_servers","view_console","send_command","moderate_server","kick_player","ban_player",
             "say_server","restart_server","start_server","stop_server","update_server",
-            "install_server","uninstall_server","manage_servers","view_logs"],
+            "install_server","uninstall_server","manage_servers","view_files","edit_files","view_logs"],
     none: []
   };
   document.addEventListener('click', function(e){

@@ -375,7 +375,7 @@
                  view, so dropping the page without carrying this would have removed the one-click
                  path to editing a config.
 
-                 can_files, because server_files requires MANAGE_SERVERS: unconditional, every
+                 can_files, because server_files needs one of its tabs' permissions: unconditional, every
                  viewer got a button that round-tripped to "You don't have permission to manage
                  server files." The tag button beside it was already gated this way. #}
               {% if can_files %}

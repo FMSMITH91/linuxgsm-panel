@@ -7,7 +7,7 @@ from flask_login import (current_user, login_required)
 from panel.db.models import (RemoteServer, db)
 from panel.db.prefs import (_apply_user_order, _apply_user_server_order, _effective_prefs)
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER, START_SERVER,
-    STOP_SERVER, UNINSTALL_SERVER, get_user_permissions, get_user_servers, has_permission)
+    STOP_SERVER, UNINSTALL_SERVER, files_access, get_user_permissions, get_user_servers, has_permission)
 from panel.services.monitoring import (_cached_player_count)
 from sqlalchemy import (text)
 from app import (_cached_player_max, _cached_player_name, is_setup_complete)
@@ -78,10 +78,11 @@ def _row_controls(uperms):
     can_stop = _sa or STOP_SERVER in uperms
     can_restart = _sa or RESTART_SERVER in uperms
     can_control = can_start or can_stop or can_restart
-    # Files & Config goes to server_files, which requires MANAGE_SERVERS — the button and the
-    # tab were rendered for anyone who could SEE the server, so every viewer got a control on
-    # every row that round-tripped to a red "You don't have permission to manage server files."
-    can_files = _sa or MANAGE_SERVERS in uperms
+    # Files & Config goes to server_files, which opens for any permission one of its tabs needs
+    # (auth.FILES_PAGE_PERMS) — the button and the tab were rendered for anyone who could SEE the
+    # server, so every viewer got a control on every row that round-tripped to a red "You don't
+    # have permission to manage server files."
+    can_files = files_access(current_user, uperms)["page"]
     return {"can_control": can_control, "can_start": can_start, "can_stop": can_stop,
             "can_restart": can_restart, "can_files": can_files}
 

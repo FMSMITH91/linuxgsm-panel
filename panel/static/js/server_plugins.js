@@ -27,7 +27,8 @@
   function button(label, cls, action, args) {
     var b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn btn-sm py-0 ' + cls;
+    // fpm-edit: every button here writes a jar, so it hides without EDIT_FILES (#mdr-card[data-fpm-ro]).
+    b.className = 'btn btn-sm py-0 fpm-edit ' + cls;
     b.textContent = label;
     b.setAttribute('data-action', action);
     b.setAttribute('data-args', JSON.stringify(args));
