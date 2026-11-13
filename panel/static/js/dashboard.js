@@ -218,14 +218,33 @@ function _dashSyncServer(s) {
   if (row) _dashSyncRow(row, s);
 }
 
+// The same shape dashboard.html renders: the count, " / max" when known, and the word the phone
+// card shows in place of the Players header (d-lg-none, so a wider screen never draws it). The word
+// is English and a whole catalog key, so i18n.js's observer translates it as it lands, as it does
+// the status cell's. Singular only for one player with no cap: "1 / 20 players" reads as a share.
 function _dashPlayersCell(s) {
   var pcell = document.getElementById('players-' + s.id);
   if (pcell) {
+    // One expression over s's own fields, as before: tests/html_sink_baseline.json allows this sink
+    // by the names it reads, and the counts are numbers (typeof-checked), never markup.
     pcell.innerHTML = (typeof s.players === 'number')  // nosemgrep
       ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
+        + ' <span class="d-lg-none dash-m-unit">'
+        + (s.players === 1 && !(typeof s.max_players === 'number' && s.max_players > 0) ? 'player' : 'players') + '</span>'
       : '<span class="text-secondary">—</span>';
   }
 }
+
+// A tap on an action inside a server's "more" menu (the popover a narrow phone row folds its
+// secondary buttons into) closes the menu. A popover sits in the top layer, above every z-index, so
+// left open it would cover the confirm dialog Uninstall opens and the tag picker. A link navigates
+// away regardless. Guarded: a browser without popovers has no hidePopover, and shows them inline.
+function _dmbCloseMoreMenu(e) {
+  var hit = e.target && e.target.closest ? e.target.closest('a, button') : null;
+  var menu = hit ? hit.closest('.dash-more') : null;
+  if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
+}
+document.addEventListener('click', _dmbCloseMoreMenu);
 
 // Repaints the status cell when the status changed, and returns the cell (null when the row has
 // none) - the row's other updates find their row through it.

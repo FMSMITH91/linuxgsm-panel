@@ -222,6 +222,11 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The dashboard's server list fits a phone or tablet.** Below 992px each server is a compact card:
+  name, game and status, then the player count, map and connect address, then every action in one
+  row of large buttons, with nothing to scroll sideways. On a very narrow screen, Console, Files,
+  Tags and Uninstall move into a "more" menu.
+
 - **Test checks that read what they name.** Several suite checks could pass without exercising the
   code they describe. They now read it, and each one was shown to fail when that code is broken. The
   JS coverage job also runs for a change to the runner it serves the panel under.
@@ -328,6 +333,10 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **The dashboard's server table fits the card on smaller desktop screens.** From 992 to 1399 pixels
+  wide the table no longer scrolls sideways and every row's buttons stay inside the card: they wrap
+  onto two or three rows when there is not room for one.
 
 - **A Minecraft world reset reads LinuxGSM's start settings the way LinuxGSM does.** A reset refuses
   start parameters that use shell quoting, a setting written twice, or other forms LinuxGSM would
