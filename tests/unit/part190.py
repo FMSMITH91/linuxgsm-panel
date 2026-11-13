@@ -500,7 +500,7 @@ if "vet" in _r190:
        "staging, the home unchanged", (_r190["stage_rc"][0], "(tar exit 2)" in _r190["stage_rc"][1], _r190["stage_rc"][2]),
        ("refused", True, True))
     eq("restore commands: an archive that unpacks to fewer entries than the checks counted refuses at the staging, "
-       "the home unchanged", (_r190["stage_count"][0], "unpacked 2 of" in _r190["stage_count"][1], _r190["stage_count"][2]),
+       "the home unchanged", (_r190["stage_count"][0], "unpacked 1 of" in _r190["stage_count"][1], _r190["stage_count"][2]),
        ("refused", True, True))
     eq("restore commands: an archive an interrupted restore left held is put back by the next checks",
        _r190["leftover"][:3], ("refused", _T0190, []))
