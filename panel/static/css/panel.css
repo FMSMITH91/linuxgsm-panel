@@ -2093,12 +2093,12 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
    row itself (flex, wrapping), so the cells keep the ids the pollers write to and the rows stay the
    elements sorting, filtering and reordering move:
      line 1  checkbox, name, game, status
-             (the in-game name, the account name when it is not the server's name, and the tags
-             follow, each on its own line, only when there is one)
+             then, only when there is one: the in-game name; the account name (when it is not the
+             server's name) and the tags, sharing a line
      line 2  "N players", map, connect address (the address wraps when it does not fit)
      line 3  every action in one row of 40px targets
-   Vertical spacing is a top margin on the items below line 1, not row-gap: the empty item that
-   ends line 1 would otherwise add a gap of its own.
+   Vertical spacing is a top margin on the items below line 1, not row-gap: the empty items that
+   end lines would otherwise add gaps of their own.
    The column headers go (the select-all box stays, labelled). Nothing here applies at 768px and up.
 
    The "more" popover (dashboard.html) is the fallback for a row too narrow for every button: it is a
@@ -2164,17 +2164,24 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     flex-wrap: wrap;
     align-items: center;
     gap: 0 .5rem;
-    padding: .55rem .5rem;
+    padding: .5rem;
     background-color: var(--bs-table-bg);
     border-bottom: var(--bs-border-width) solid var(--bs-table-border-color);
   }
 
-  /* Ends line 1 after the status: the title shrinks to fit (flex-basis 0), so without this the
-     player count would join line 1 whenever the row has no in-game name, account line or tags. */
+  /* Two empty full-width items end lines. ::before (order 2, so first among the 2s) ends line 1
+     after the status: the title shrinks to fit (flex-basis 0), so without it whatever comes next
+     would join line 1. ::after (order 4) ends the account-and-tags line before the player count.
+     With nothing between them they are two empty lines of no height. */
+  .table-responsive .dash-srv-table > tbody > tr[data-server-id]::before,
   .table-responsive .dash-srv-table > tbody > tr[data-server-id]::after {
     flex-basis: 100%;
     order: 2;
     content: "";
+  }
+
+  .table-responsive .dash-srv-table > tbody > tr[data-server-id]::after {
+    order: 4;
   }
 
   .dash-srv-table .game-name,
@@ -2184,7 +2191,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   .dash-srv-table .dash-map,
   .dash-srv-table .dash-td-connect,
   .table-responsive .dash-srv-table > tbody > tr[data-server-id] > td.col-actions {
-    margin-top: .3rem;
+    margin-top: .25rem;
   }
 
   .table-responsive .dash-srv-table > tbody > tr:last-child {
@@ -2233,11 +2240,19 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   }
 
   /* !important: these carry Bootstrap's d-block, and the in-game name an inline max-width. */
-  .dash-srv-table .game-name,
-  .dash-srv-table .dash-short {
+  .dash-srv-table .game-name {
     flex: 0 0 100%;
     order: 2;
     max-width: 100% !important;
+  }
+
+  .dash-srv-table .dash-short {
+    flex: 0 1 auto;
+    order: 3;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .dash-srv-table .game-name:has(> span:empty),
@@ -2247,8 +2262,9 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   }
 
   .dash-srv-table .srv-tags {
-    flex: 0 0 100%;
-    order: 2;
+    flex: 0 1 auto;
+    order: 3;
+    min-width: 0;
   }
 
   .dash-srv-table .dash-td-status {
@@ -2257,12 +2273,12 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   }
 
   .dash-srv-table .dash-td-players {
-    order: 3;
+    order: 5;
   }
 
   .dash-srv-table .dash-map {
     flex: 1 1 0;
-    order: 4;
+    order: 6;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
@@ -2270,7 +2286,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   }
 
   .dash-srv-table .dash-td-connect {
-    order: 5;
+    order: 7;
     margin-left: auto;
   }
 
@@ -2278,7 +2294,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     position: static;
     display: flex;
     flex: 1 0 100%;
-    order: 6;
+    order: 8;
     gap: .25rem;
     width: auto;
     min-width: 0;
