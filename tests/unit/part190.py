@@ -148,6 +148,7 @@ class _Sb190:
         for d, dirs, _files in _os190.walk(self.root):
             for x in dirs:
                 try:
+                    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
                     _os190.chmod(_os190.path.join(d, x), 0o700)  # nosec B103
                 except OSError:
                     pass
@@ -266,17 +267,17 @@ else:
 
     # A process of the account still in serverfiles: the restore waits, then refuses with nothing cleared.
     _sb = _Sb190()
-    _sleeper = None
     try:
         _out, (_state, _ready) = _sb.vet()
         _sleeper = _sp190.Popen(["sleep", "60"], cwd=_os190.path.join(_sb.home, "serverfiles"))
-        _tree = _sb.tree()
-        _out, _res = _restore190(_sb, _ready)
-        _r190["busy"] = (_res[0], str(_res[1]), _sb.tree() == _tree, _os190.path.isfile(_sb.archive))
-    finally:
-        if _sleeper is not None:
+        try:
+            _tree = _sb.tree()
+            _out, _res = _restore190(_sb, _ready)
+            _r190["busy"] = (_res[0], str(_res[1]), _sb.tree() == _tree, _os190.path.isfile(_sb.archive))
+        finally:
             _sleeper.kill()
             _sleeper.wait()
+    finally:
         _sb.gone()
 
     # The archive damaged after the checks: the clear has run, the extraction fails, and it says so.
@@ -298,9 +299,9 @@ else:
     try:
         _sb.vet(undo_estimate=0)
         _held = sorted(_sb.backups())
-        _out, (_state, _why) = _sb.vet("grsu-2026-11-09-000000.tar.gz")     # any other archive: not there
+        _lv = _sb.vet("grsu-2026-11-09-000000.tar.gz")[1]     # any other archive: not there
         _a = _sb.archive
-        _r190["leftover"] = (_state, _os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
+        _r190["leftover"] = (_lv[0], _os190.path.isfile(_a) and int(_os190.stat(_a).st_mtime),
                              [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f], _held)
     finally:
         _sb.gone()
