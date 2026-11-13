@@ -564,7 +564,7 @@
     {% if server.game_type == 'mc' %}
     <p class="small text-secondary mb-2">World reset: deletes the world (its overworld, nether and end folders) and starts a new one; ops, whitelist, bans and server.properties are kept. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails.</p>
     {% elif server.game_type == 'fctr' %}
-    <p class="small text-secondary mb-2">World reset: deletes the map save and its autosaves and creates a new map the way LinuxGSM's install does (Factorio's default map settings); server settings, mods and other saves are kept. The panel takes a LinuxGSM backup first and does not reset if that backup fails.</p>
+    <p class="small text-secondary mb-2">World reset: deletes the map save and its autosaves and creates a new map the way LinuxGSM's install does (Factorio's default map settings); server settings, mods and other saves are kept. The panel takes a LinuxGSM backup first and does not reset if that backup fails. Factorio's players cannot be counted, so “Wait until the server is empty” cannot hold it back.</p>
     {% else %}
     <p class="small text-secondary mb-2">A map wipe deletes the map and saves and keeps blueprints. A full wipe also deletes blueprints and player data (not Rust+ pairing). The panel takes a LinuxGSM backup first and does not wipe if that backup fails.</p>
     {% endif %}
