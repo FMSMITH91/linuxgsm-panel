@@ -244,3 +244,31 @@ check("game config form r42m: an XML file with 120000 comment lines, 150000 comm
       all(_ok and _took < 0.6 for _l, _ok, _took in _r42m_xslow),
       repr([(_l, _ok, "%.2fs" % _took) for _l, _ok, _took in _r42m_xslow]))
 
+
+# ── 4. the debug report's manual full backup line ───────────────────────────────────────────────
+def _r42m_manual(ok, players, held):
+    """The report's manual-backup line for a run with these outcomes, from _FullBackupTally's summary."""
+    tally = _pb187._FullBackupTally()
+    tally.ok_n, tally.skip_n, tally.held = ok, players, list(held)
+    conf = {"full_backup_last": 1000, "full_backup_summary": tally.summary()}
+    _p9_patch(_bk187, "load_config", lambda *a, **k: conf)
+    try:
+        res = _base187.Result()
+        _data187._r12b_manual_line(res)
+    finally:
+        _p9_restore_all()
+    return "\n".join(res.lines).split(": ", 1)[-1]
+
+
+_r42m_m_held = _r42m_manual(0, 0, ["r42m-alpha"])
+_r42m_m_mixed = _r42m_manual(2, 1, ["r42m-alpha", "r42m-beta"])
+_r42m_m_none = _r42m_manual(3, 0, [])
+check("debug report r42m: a manual full backup whose one server was held by its scheduled wipe says 1 held, "
+      "not '0 backed up, 0 failed, 0 skipped' alone, and names no server",
+      "0 backed up, 0 failed, 0 skipped, 1 held by a scheduled wipe or a queued stop or restart" in _r42m_m_held
+      and "r42m-alpha" not in _r42m_m_held, _r42m_m_held)
+check("debug report r42m: held servers are counted beside the players-online skips; a run with none held "
+      "reads as before",
+      "2 backed up, 0 failed, 1 skipped, 2 held by" in _r42m_m_mixed and "r42m-beta" not in _r42m_m_mixed
+      and "3 backed up, 0 failed, 0 skipped" in _r42m_m_none and "held" not in _r42m_m_none,
+      repr((_r42m_m_mixed, _r42m_m_none)))

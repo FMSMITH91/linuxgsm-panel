@@ -493,8 +493,10 @@ def _kinds_text(arch):
     return ", ".join("%d %s" % (n, k) for k, n in sorted(kinds.items())) or "none"
 
 
+# The prefix _FullBackupTally.summary writes (panel/routes/panel_backup.py), the held clause too.
 _FULL_COUNTS_RE = re.compile(r"^(\d+) server\(s\) backed up(?:, (\d+) failed)?"
-                             r"(?:, (\d+) skipped \(players online\))?")
+                             r"(?:, (\d+) skipped \(players online\))?"
+                             r"(?:, (\d+) skipped \(a scheduled wipe or a queued stop or restart)?")
 # The installed servers the scheduled sweep backs up (installed, with a host), and what the
 # unattended runs recorded. Static SQL; ids and game types only, never a name.
 _SCHED_SERVERS_SQL = ("SELECT id, game_type FROM game_server WHERE installed = 1 AND remote_id IS "
@@ -538,6 +540,8 @@ def _manual_line(res):
     m = _FULL_COUNTS_RE.match(str(s.get("summary") or ""))
     counts = ("%s backed up, %s failed, %s skipped" % (m.group(1), m.group(2) or 0, m.group(3) or 0)
               if m else "outcome not recorded in counts")
+    if m and m.group(4):
+        counts += ", %s held by a scheduled wipe or a queued stop or restart" % m.group(4)
     queued = " · some queued for when empty" if "will back up once empty" in str(s.get("summary")) \
         else ""
     res.add(head + " last run %s ago: %s%s" % (ago(time.time() - s["last"]), counts, queued))
