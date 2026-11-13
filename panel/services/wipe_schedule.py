@@ -32,10 +32,10 @@ WIPE_COMMANDS = {"map": "wipe", "full": "full-wipe"}
 
 
 def kinds_for(game_type):
-    """The kinds a schedule may hold for `game_type`: map/full for Rust, the one reset for the others."""
+    """The kinds a schedule may hold for `game_type` (a frozenset): map/full for Rust, the reset for the others."""
     if game_type in LGSM_WIPE_GAMES:
-        return tuple(WIPE_COMMANDS)
-    return (world_reset.KIND,) if game_type in world_reset.GAMES else ()
+        return frozenset(WIPE_COMMANDS)
+    return frozenset((world_reset.KIND,)) if game_type in world_reset.GAMES else frozenset()
 
 
 def kind_refusal(game_type):
