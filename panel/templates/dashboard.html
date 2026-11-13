@@ -300,7 +300,10 @@
       <table class="table table-hover mb-0 dash-srv-table">
         <thead>
           <tr>
-            {% if can_bulk %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
+            {% if can_bulk %}<th class="dash-th-check" style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" id="srv-check-all-{{ remote.id }}" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host">
+              {#- A phone shows no column headers (each server is a card there), so this box would sit
+                  alone with nothing saying what it ticks. d-md-none: never rendered on a wider screen. -#}
+              <label class="d-md-none dash-m-selall" for="srv-check-all-{{ remote.id }}">Select all on this host</label></th>{% endif %}
             <th class="dash-sort dash-col-name" data-sortkey="name" style="cursor:pointer;" data-action="sortDashCol" data-args='["name","@self"]' title="Sort this host's servers by name">Server<span class="dash-caret"></span></th>
             <th class="d-none d-md-table-cell dash-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
             <th class="dash-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
@@ -313,7 +316,7 @@
         <tbody>
           {% for srv in remote_servers %}
           <tr data-server-id="{{ srv.id }}" data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
-            {% if can_bulk %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="{{ t('Select %s')|format(srv.name) }}"></td>{% endif %}
+            {% if can_bulk %}<td class="dash-td-check"><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="{{ t('Select %s')|format(srv.name) }}"></td>{% endif %}
             <td class="dash-col-name">
               {# data-no-i18n on all three, for the same reason the tag chips below already carry it:
                  these are USER-AUTHORED names, and the walker translates any text node whose exact
@@ -322,12 +325,16 @@
                  real i18n.js with LANG='es': a server called "Console" rendered as "Consola", and
                  the in-game name dashboard.js writes into #game-name-<id> with textContent went
                  from "Online" to "En línea". #}
-              <strong data-no-i18n>{{ srv.name }}</strong>
+              {# The wrapper and the game label are for the phone card (panel.css), where the Type
+                 column is hidden: line 1 is the name and the game. On a wider screen the wrapper is a
+                 plain inline span and the label is d-md-none, so the row is what it always was. #}
+              <span class="dash-srv-title"><strong data-no-i18n>{{ srv.name }}</strong><span class="d-md-none dash-m-game" data-no-i18n>{{ srv.game_display or srv.game_type }}</span></span>
               {# The guard on the NAME only: on the outer span it kept the tooltip English for es/fr
                  viewers too (the walker returns at a guarded element before its attributes). #}
               <span class="game-name text-info d-block text-truncate"
                     style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)"><span id="game-name-{{ srv.id }}" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span></span>
-              <span class="text-secondary d-block" style="font-size: .75rem;" data-no-i18n>{{ srv.short_name }}</span>
+              {# dash-short-dup: the phone card leaves out an account name that only repeats the name above it. #}
+              <span class="text-secondary d-block dash-short{% if srv.short_name == srv.name %} dash-short-dup{% endif %}" style="font-size: .75rem;" data-no-i18n>{{ srv.short_name }}</span>
               {# data-no-i18n: tag names are user-authored, and the translation walker would happily
                  "translate" one that collides with a catalog key ("Online", "Status", …). The colour
                  is stored only after passing _valid_hex_color, so it is safe in a style attribute.
@@ -344,20 +351,22 @@
                       {% if not tag.notify %}title="{{ t('Alerts are muted for this tag') }}" data-i18n-title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
                 {% endfor %}
               </span>
-              <span class="text-secondary d-none" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
+              <span class="text-secondary d-none dash-map" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
             </td>
             <td class="d-none d-md-table-cell" data-no-i18n>{{ srv.game_display or srv.game_type }}</td>
-            <td id="status-{{ srv.id }}" data-status="{{ srv.status }}">
+            <td id="status-{{ srv.id }}" class="dash-td-status" data-status="{{ srv.status }}">
               <span class="status-dot status-{{ srv.status if srv.status in ['online','offline'] else 'unknown' }}"></span>
               {{ srv.status|title }}
             </td>
-            <td id="players-{{ srv.id }}" class="text-nowrap">
+            <td id="players-{{ srv.id }}" class="text-nowrap dash-td-players">
               {% set pc = player_counts.get(srv.id) %}
               {% set mx = player_max.get(srv.id) %}
-              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %}{% else %}<span class="text-secondary">—</span>{% endif %}
+              {#- The word is for the phone card, which has no Players header over the number (d-md-none).
+                  dashboard.js's _dashPlayersCell writes the same shape on every poll. #}
+              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %} <span class="d-md-none dash-m-unit">{{ 'player' if pc == 1 and not mx else 'players' }}</span>{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
             <td id="res-{{ srv.id }}" class="d-none d-lg-table-cell text-nowrap text-secondary" style="font-size:.8rem;">—</td>
-            <td>
+            <td class="dash-td-connect">
               <span class="connect-cell" id="connect-{{ srv.id }}" data-addr="">
                 <code class="text-info" style="font-size:.78rem;">:{{ srv.port }}</code>
               </span>
@@ -367,6 +376,13 @@
               {% if can_start %}<button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="{{ t('Start %s')|format(srv.name) }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>{% endif %}
               {% if can_restart %}<button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="{{ t('Restart %s')|format(srv.name) }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>{% endif %}
               {% if can_stop %}<button class="btn btn-outline-danger btn-sm srv-ctl" title="Stop" aria-label="{{ t('Stop %s')|format(srv.name) }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>{% endif %}
+              {# A phone row too narrow for every button at a 40px touch target (panel.css, the dmbrow
+                 container query) shows Start/Restart/Stop and this one; the rest open from it as a
+                 popover. Everywhere else the button is hidden and the popover is styled as a plain
+                 inline span, so the buttons sit in the row exactly as before. #}
+              <button type="button" class="btn btn-outline-secondary btn-sm dash-more-btn" popovertarget="dash-more-{{ srv.id }}"
+                      title="More actions" aria-label="{{ t('More actions for %s')|format(srv.name) }}"><i class="bi bi-three-dots"></i></button>
+              <span class="dash-more" id="dash-more-{{ srv.id }}" popover>
               <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="{{ t('Console & stats for %s')|format(srv.name) }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-terminal-fill"></i>
               </a>
@@ -415,6 +431,7 @@
                         aria-label="{{ t('Uninstall %s')|format(srv.name) }}"><i class="bi bi-trash"></i></button>
               </form>
               {% endif %}
+              </span>
               {# Same buttons-not-drag reasoning as the host cards, and doubly so here: these rows sit
                  inside a horizontally scrolling .table-responsive wrapper. #}
               <span class="btn-group btn-group-sm srv-move ms-1" role="group" aria-label="{{ t('Reorder %s')|format(srv.name) }}">
