@@ -1,4 +1,10 @@
-"""Scheduled Rust wipes: the schedule card's two routes, and the sweep that runs a due wipe.
+"""Scheduled wipes: the schedule card's two routes, and the sweep that runs a due wipe.
+
+Rust's wipe is LinuxGSM's `wipe` / `full-wipe`. Minecraft Java and Factorio have no LinuxGSM wipe, so
+their "world reset" is the panel's own (_wwr_run, services/world_reset): the same schedule, backup,
+waits, audit and alert, with step 3 replaced by: players checked, LinuxGSM `stop`, one command as the
+game account that checks the server is down and deletes the world (Factorio: creates the new save),
+and LinuxGSM `start`.
 
 The schedule lives in config.json (panel/services/wipe_schedule.py). The sweep runs every minute on
 its own supervised thread. A due wipe, in order:
@@ -22,7 +28,7 @@ import time
 from flask import jsonify, request
 from flask_login import current_user, login_required
 
-from panel.core import clock, i18n, runtime_stats
+from panel.core import clock, i18n, runtime_stats, terminal
 from panel.core.http import _json_body, _json_str, _log_and_generic, _r12c_json_flag
 from panel.core.panel_state import _full_backup_lock, _game_backup_status, r36j_route_job, r36j_route_jobs
 from panel.db.models import GameServer, db, still_held
@@ -31,7 +37,7 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, get_game, log_action, permission_required,
                                  server_access_required)
 from panel.services import lgsm_players as _lgp
-from panel.services import wipe_schedule as wipe
+from panel.services import wipe_schedule as wipe, world_reset as _wwr
 from panel.services.monitoring import _end_offline_window, _mark_expected_offline
 from panel.routes import _shared
 
@@ -44,7 +50,8 @@ def _cmpd_view(gs):
     entry = wipe.get(gs.id)
     if entry is not None and not wipe.same_server(entry, gs):
         entry = None
-    out = {"success": True, "supported": gs.game_type in wipe.WIPE_GAMES, "enabled": entry is not None}
+    out = {"success": True, "supported": gs.game_type in wipe.WIPE_GAMES, "enabled": entry is not None,
+           "reset": gs.game_type in _wwr.GAMES}
     if entry is None:
         return out
     state, nxt = wipe.due(entry)
@@ -103,8 +110,8 @@ def _cmpd_refuse(message, code=400):
 def _cmpd_entry_from(body, gs):
     """(entry, None) for a valid request body, or (None, why)."""
     kind = _json_str(body, "kind")
-    if kind not in wipe.WIPE_COMMANDS:
-        return None, "kind must be map or full."
+    if kind not in wipe.kinds_for(gs.game_type):
+        return None, "kind must be reset." if gs.game_type in _wwr.GAMES else "kind must be map or full."
     preset = _json_str(body, "preset")
     spec, line = wipe.spec_for(preset, _json_str(body, "at"), _json_str(body, "cron"))
     if spec is None:
@@ -235,7 +242,12 @@ def _cmpd_backup(gs, entry):
 
 
 def _cmpd_run_wipe(app, gs, entry):
-    """Run LinuxGSM's wipe command and settle the pending wipe by what its output says."""
+    """Run LinuxGSM's wipe command and settle the pending wipe by what its output says.
+
+    A world-reset game goes to the panel's own reset instead (_wwr_run).
+    """
+    if gs.game_type in _wwr.GAMES:
+        return _wwr_run(app, gs, entry)
     cmd = wipe.WIPE_COMMANDS.get(entry.get("kind"), "wipe")
     # Read before the try: a raise from its own config read is not the wipe's connection dropping.
     timeout = _lgp.timeout_for(gs.remote, gs.short_name, gs.lgsm_name, "stop", 900)
@@ -271,6 +283,115 @@ def _cmpd_run_wipe(app, gs, entry):
         _end_offline_window(gs.id)
     _cmpd_finish(app, gs, verdict in ("wiped", "nothing"),
                  i18n.Sentence("{command}: {result}", command=cmd, result=why))
+
+
+# ── the world reset (Minecraft Java, Factorio) ─────────────────────────────────────────────────
+def _wwr_said(sentence):
+    """A world reset's outcome sentence, as the card and the audit row show it."""
+    return i18n.Sentence("world reset: {result}", result=sentence)
+
+
+def _wwr_run(app, gs, entry):
+    """The panel's world reset, once the backup is taken: players, stop, delete (and create), start.
+
+    The plan (which files) is read before anything is stopped, so a config the panel cannot use
+    refuses with the server untouched. Players are the panel's to check here: with "wait until
+    empty" on, a server with players waits, its backup kept. LinuxGSM's own stoponlyifnoplayers
+    refusal of the stop keeps it waiting too.
+    """
+    plan, why = _wwr.plan_for(gs)
+    if plan is None and isinstance(why, _wwr.Unread):
+        return _r37b_wait(gs.id, why)       # a read that failed is tried again, never guessed past
+    if plan is None:
+        return _cmpd_finish(app, gs, False, i18n.Sentence("not reset: {reason}", reason=why))
+    if entry.get("wait_empty", True):
+        players = _sm.player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
+        if players:
+            return _r37b_wait(gs.id, i18n.Sentence("{players} player(s) online", players=players))
+    if not _wwr_stop(app, gs):
+        return None
+    _wwr_delete_and_start(app, gs, plan)
+    return None
+
+
+def _wwr_stop(app, gs):
+    """LinuxGSM `stop`, the monitor's quiet window opened first. True when the delete may follow.
+
+    A refusal for players waits; a stop that failed is started again and ends the reset (nothing
+    deleted); a connection that dropped under the stop ends it as "may be down: check the server".
+    A stop never sent raises, the reset left pending for the next try. Whether the server really
+    stopped is asked again by the delete command itself (LinuxGSM's own tmux test), in the same
+    round trip.
+    """
+    extra = _lgp.allowance_seconds(gs.remote, gs.short_name, gs.lgsm_name, "stop")
+    _mark_expected_offline(gs.id, "restart", extra)
+    try:
+        out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, "stop", selfname=gs.lgsm_name,
+                                            timeout=180 + extra)
+    except Exception as exc:
+        if not getattr(exc, "command_started", False):
+            _end_offline_window(gs.id)
+            raise
+        _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
+            "the connection dropped while LinuxGSM stopped the server; nothing was deleted, and it may "
+            "be down: check the server")))
+        return False
+    text = (out or "") + "\n" + (err or "")
+    oc = _lgp.outcome_of(text, rc, "stop")
+    if oc is not None:
+        _end_offline_window(gs.id)
+        _r37b_wait(gs.id, i18n.Sentence("LinuxGSM did not stop the server: {players} player(s) online",
+                                        players=oc.get("players", "?")))
+        return False
+    if rc != 0:
+        started = _wwr_start(gs)
+        _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
+            "LinuxGSM's stop exited {rc}; nothing was deleted. {start}", rc=rc, start=started[1])))
+        return False
+    return True
+
+
+def _wwr_delete_and_start(app, gs, plan):
+    """The delete (and create) as the game account, then LinuxGSM `start` whatever it did; settled.
+
+    The delete is never retried: once sent, a dropped connection may have deleted the world, and the
+    next try would delete the new one. Only a command never sent leaves the reset pending.
+    """
+    try:
+        out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name,
+                                              _wwr.script(gs.short_name, gs.lgsm_name or gs.short_name, plan),
+                                              timeout=600, selfname=gs.lgsm_name)
+    except Exception as exc:
+        started = _wwr_start(gs)
+        if not getattr(exc, "command_started", False):
+            raise
+        return _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentence(
+            "the connection dropped while the world was being deleted; it may have been deleted: check the "
+            "server. {start}", start=started[1])))
+    state, said = _wwr.outcome((out or "") + "\n" + (err or ""), rc, plan)
+    started = _wwr_start(gs)
+    if state == "done":
+        return _cmpd_finish(app, gs, True, _wwr_said(i18n.Sentences(said, started[1])))
+    return _cmpd_finish(app, gs, False, _wwr_said(i18n.Sentences(said, started[1])))
+
+
+def _wwr_start(gs):
+    """LinuxGSM `start` after a reset (or a stop that failed): (ok, sentence). Never raises.
+
+    A server that does not come back is the monitor's to page: the window opened before the stop is
+    a restart's, which must come back.
+    """
+    try:
+        out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, "start", selfname=gs.lgsm_name,
+                                            timeout=180)
+    except Exception:
+        return False, i18n.Sentence("The connection dropped while LinuxGSM started the server: check it.")
+    if rc == 0:
+        return True, i18n.Sentence("The server was started again.")
+    last = [ln.strip() for ln in terminal.strip_escapes((out or "") + "\n" + (err or "")).splitlines()
+            if ln.strip()]
+    return False, i18n.Sentence("LinuxGSM's start exited {rc}: {last}", rc=rc,
+                                last=(last[-1] if last else "no output")[:200])
 
 
 def _cmpd_attempt(app, gs, entry, now):
@@ -424,4 +545,5 @@ def register(app):
     from app import _make_supervisor   # lazily: app imports this module while it is still loading
     _register_routes(app)
     app.jinja_env.globals["wipe_supported"] = lambda game_type: game_type in wipe.WIPE_GAMES
+    app.jinja_env.globals["wipe_reset_game"] = lambda game_type: game_type in _wwr.GAMES
     _make_supervisor(app)("wipe-schedule", lambda: _cmpd_ticker(app))
