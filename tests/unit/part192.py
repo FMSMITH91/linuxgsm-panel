@@ -77,17 +77,18 @@ check("dashboard phone card: the status, players and connect cells and the map c
 
 
 def _more192(row, sid):
-    """The popover's markup in `row`: from its opening tag to the reorder group after it."""
+    """The popover's markup in `row`: from its opening tag to its closing one (nothing inside it is
+    a span)."""
     i = row.find('<span class="dash-more" id="dash-more-%d" popover>' % sid)
-    j = row.find('<span class="btn-group btn-group-sm srv-move', i)
+    j = row.find("</span>", i)
     return row[i:j] if i >= 0 and j > i else ""
 
 
 _m2_192 = _more192(_r2_192, _ids192[1]) if len(_ids192) == 2 else ""
 check("dashboard phone card: the \"more\" popover holds Console, Files, Tags and Uninstall, and never "
-      "Start, Restart or Stop",
+      "Start, Restart or Stop, nor the reorder buttons Customise shows",
       all(k in _m2_192 for k in ("srv-console", "srv-files", 'data-action="editServerTags"', "uninstall-trigger"))
-      and "srv-ctl" not in _m2_192, _m2_192[:400])
+      and "srv-ctl" not in _m2_192 and "srv-move" not in _m2_192 and "sort-handle" not in _m2_192, _m2_192[:400])
 check("dashboard phone card: the toggle names that popover and the server it is for",
       bool(_ids192) and _re192.search(r'<button type="button" class="btn btn-outline-secondary btn-sm dash-more-btn" '
                                       r'popovertarget="dash-more-%d"\s+title="More actions" '
