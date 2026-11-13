@@ -1544,7 +1544,8 @@ def _check_vps_prep_allows_a_remote_host():
         # The same request on the accessible server is the control that the 400 is reachable.
         with app.app_context():
             _ig = Group(name=tag + "_idor", description="RBAC IDOR (auto)", is_default=False)
-            _ig.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER, auth.MANAGE_SERVERS])
+            _ig.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER, auth.MANAGE_SERVERS,
+                                 auth.VIEW_FILES, auth.EDIT_FILES])
             _ig.servers.append(db.session.get(RemoteServer, granted_remote))
             db.session.add(_ig)
             db.session.flush()
@@ -1570,7 +1571,7 @@ def _check_vps_prep_allows_a_remote_host():
 
 
 def _check_rename_idor():
-    """Rename, probed like the action and tags above, as the MANAGE_SERVERS holder `_ci`.
+    """Rename, probed like the action and tags above, as the EDIT_FILES holder `_ci`.
 
     A name with a slash is refused (400) before the host is asked anything, so the probe renames
     nothing on either branch: a refused server is a 403, a server that got past access a 400.
@@ -1579,7 +1580,7 @@ def _check_rename_idor():
         return
     _irn = _ci.post("/api/server/%d/rename-path" % other_id,
                     json={"path": "server.cfg", "new_name": "a/b"})
-    check("IDOR: renaming a file on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)",
+    check("IDOR: renaming a file on a non-granted server BLOCKED (for an EDIT_FILES holder)",
           _irn.status_code == 403, "got %d" % _irn.status_code)
     _irn = _ci.post("/api/server/%d/rename-path" % accessible_id,
                     json={"path": "server.cfg", "new_name": "a/b"})
@@ -1588,7 +1589,7 @@ def _check_rename_idor():
 
 
 def _check_create_idor():
-    """New file / New folder, probed as rename is, as the MANAGE_SERVERS holder `_ci`.
+    """New file / New folder, probed as rename is, as the EDIT_FILES holder `_ci`.
 
     A name with a slash is refused (400) before the host is asked anything, so the probe makes
     nothing on either branch: a refused server is a 403, a server that got past access a 400.
@@ -1598,12 +1599,128 @@ def _check_create_idor():
     for kind in ("file", "folder"):
         _icr = _ci.post("/api/server/%d/create-path" % other_id,
                         json={"dir": "", "name": "a/b", "kind": kind})
-        check("IDOR: creating a %s on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)"
+        check("IDOR: creating a %s on a non-granted server BLOCKED (for an EDIT_FILES holder)"
               % kind, _icr.status_code == 403, "got %d" % _icr.status_code)
         _icr = _ci.post("/api/server/%d/create-path" % accessible_id,
                         json={"dir": "", "name": "a/b", "kind": kind})
         check("IDOR: ...while the same %s create on the granted server gets past access (control)"
               % kind, _icr.status_code == 400, "got %d" % _icr.status_code)
+
+
+def _fpm_user(suffix, perms):
+    """A user named from `tag` (the final cleanup removes it) holding `perms` on the granted host only."""
+    with app.app_context():
+        _g = Group(name=tag + suffix, description="RBAC files/backups split (auto)", is_default=False)
+        _g.set_permissions([auth.VIEW_SERVERS] + list(perms))
+        _g.servers.append(db.session.get(RemoteServer, granted_remote))
+        db.session.add(_g)
+        db.session.flush()
+        _u = User(username=tag + suffix, password_hash=auth.hash_password(secrets.token_hex(16)),
+                  display_name=tag + suffix, is_superadmin=False, is_active=True)
+        _u.groups.append(_g)
+        db.session.add(_u)
+        db.session.commit()
+        return _u.id
+
+
+def _check_file_permission_split():
+    """VIEW_FILES reads and EDIT_FILES writes; MANAGE_SERVERS alone no longer reaches the files.
+
+    Every write probed carries a payload refused (400) before the host is asked anything, so it
+    writes nothing on either branch: refused by the permission is a 403, past it a 400 — which an
+    EDIT_FILES holder gets for the same request, the control that the 400 is reachable.
+    """
+    _fv = client_as(_fpm_user("_fview", [auth.VIEW_FILES]))
+    _fe = client_as(_fpm_user("_fedit", [auth.VIEW_FILES, auth.EDIT_FILES]))
+    _fm = client_as(_fpm_user("_fmanage", [auth.MANAGE_SERVERS]))
+    _base = "/api/server/%d" % accessible_id
+    _writes = (("rename", "/rename-path", {"path": "server.cfg", "new_name": "a/b"}),
+               ("create", "/create-path", {"dir": "", "name": "a/b", "kind": "file"}),
+               ("save", "/file", {"path": "server.cfg", "content": 5}),
+               ("upload-check", "/upload-check", {"path": "", "names": "not-a-list"}))
+    for _what, _url, _body in _writes:
+        _r = _fv.post(_base + _url, json=_body)
+        check("VIEW_FILES without EDIT_FILES: %s -> 403" % _what, _r.status_code == 403,
+              "got %d" % _r.status_code)
+        _r = _fe.post(_base + _url, json=_body)
+        check("EDIT_FILES: ...the same %s gets past the permission (control, 400)" % _what,
+              _r.status_code == 400, "got %d" % _r.status_code)
+    _r = _fv.post(_base + "/upload", data={"path": ""})          # no file: 400 past the permission
+    check("VIEW_FILES without EDIT_FILES: upload -> 403", _r.status_code == 403, "got %d" % _r.status_code)
+    _r = _fe.post(_base + "/upload", data={"path": ""})
+    check("EDIT_FILES: ...the same upload gets past the permission (control, 400)",
+          _r.status_code == 400, "got %d" % _r.status_code)
+    _pg = _fv.get("/server/%d/files" % accessible_id)
+    _html = _pg.get_data(as_text=True)
+    check("VIEW_FILES alone opens Files & Config, with Config and Files and without Schedule",
+          _pg.status_code == 200 and 'data-sfsub-btn="files"' in _html
+          and 'data-sfsub-btn="schedule"' not in _html, "got %d" % _pg.status_code)
+    check("VIEW_FILES without EDIT_FILES: the file browser is drawn read-only (its write controls hidden)",
+          'id="file-browser" data-sfsub="files" style="display:none;" data-fpm-ro' in _html, "")
+    _r = _fm.get(_base + "/file?path=server.cfg")
+    check("MANAGE_SERVERS without VIEW_FILES: read file -> 403", _r.status_code == 403,
+          "got %d" % _r.status_code)
+    _r = _fm.get(_base + "/browse?path=")
+    check("MANAGE_SERVERS without VIEW_FILES: browse -> 403", _r.status_code == 403, "got %d" % _r.status_code)
+    _r = _fm.post(_base + "/rename-path", json={"path": "server.cfg", "new_name": "a/b"})
+    check("MANAGE_SERVERS without EDIT_FILES: rename -> 403", _r.status_code == 403, "got %d" % _r.status_code)
+    _pg = _fm.get("/server/%d/files" % accessible_id)
+    _html = _pg.get_data(as_text=True)
+    check("MANAGE_SERVERS alone opens Files & Config on Schedule, without the Config and Files tabs",
+          _pg.status_code == 200 and 'data-sfsub-btn="schedule"' in _html
+          and 'data-sfsub-btn="files"' not in _html and 'data-sfsub-btn="config"' not in _html,
+          "got %d" % _pg.status_code)
+
+
+def _check_backup_permission_split():
+    """DOWNLOAD_BACKUP and DELETE_BACKUP each open their own action, per server; the rest stays superadmin.
+
+    The archive name probed is not in any listing, so nothing is downloaded or deleted on either
+    branch: past the permission the route reads the listing and answers 404 (no such backup) or
+    503/200 "could not read" — never the permission's refusal.
+    """
+    _dl = client_as(_fpm_user("_bkdl", [auth.DOWNLOAD_BACKUP]))
+    _rm = client_as(_fpm_user("_bkrm", [auth.DELETE_BACKUP]))
+    _none = client_as(_fpm_user("_bknone", [auth.VIEW_FILES, auth.EDIT_FILES, auth.MANAGE_SERVERS]))
+    _name = "rbac-no-such-backup.tar.zst"
+    _dlu = "/backup/game/%d/download?name=%s" % (accessible_id, _name)
+    _rmu = "/api/panel/backup/game/%d/delete" % accessible_id
+    _info = "/api/panel/backup/game/%d/info" % accessible_id
+    for _who, _c in (("no backup permission", _none), ("DELETE_BACKUP only", _rm)):
+        _r = _c.get(_dlu)
+        check("%s: backup download refused (sent home, no file)" % _who,
+              _r.status_code in (301, 302, 303) and "Content-Disposition" not in _r.headers
+              and _r.headers.get("Location", "").rstrip("/") in ("", "http://localhost"),
+              "got %d %s" % (_r.status_code, _r.headers.get("Location")))
+    _r = _dl.get(_dlu)
+    check("DOWNLOAD_BACKUP: the download gets past the permission to the listing (control)",
+          _r.status_code in (404, 503), "got %d" % _r.status_code)
+    for _who, _c in (("no backup permission", _none), ("DOWNLOAD_BACKUP only", _dl)):
+        _r = _c.post(_rmu, json={"name": _name})
+        check("%s: backup delete -> 403" % _who, _r.status_code == 403, "got %d" % _r.status_code)
+    _r = _rm.post(_rmu, json={"name": _name})
+    check("DELETE_BACKUP: the delete gets past the permission to the listing (control)",
+          _r.status_code in (200, 404) and (_r.get_json(silent=True) or {}).get("success") is False,
+          "got %d" % _r.status_code)
+    check("no backup permission: the backup listing -> 403",
+          _none.get(_info).status_code == 403)
+    check("DOWNLOAD_BACKUP or DELETE_BACKUP: the backup listing opens",
+          _dl.get(_info).status_code == 200 and _rm.get(_info).status_code == 200)
+    _both = client_as(_fpm_user("_bkboth", [auth.DOWNLOAD_BACKUP, auth.DELETE_BACKUP]))
+    _r = _both.post("/api/panel/backup/game/%d" % accessible_id, json={"force": "not-a-flag"})
+    check("download+delete holders still cannot TAKE a backup (superadmin only) -> 403",
+          _r.status_code == 403, "got %d" % _r.status_code)
+    _r = _both.post("/api/panel/backup/game/%d/schedule" % accessible_id, json={"interval": "x"})
+    check("download+delete holders still cannot change the backup schedule -> 403",
+          _r.status_code == 403, "got %d" % _r.status_code)
+    if other_id:
+        _r = _both.post("/api/panel/backup/game/%d/delete" % other_id, json={"name": _name})
+        check("IDOR: backup delete on a non-granted server BLOCKED (for a DELETE_BACKUP holder)",
+              _r.status_code == 403, "got %d" % _r.status_code)
+        _r = _both.get("/backup/game/%d/download?name=%s" % (other_id, _name))
+        check("IDOR: backup download on a non-granted server BLOCKED (for a DOWNLOAD_BACKUP holder)",
+              _r.status_code in (301, 302, 303, 403) and "Content-Disposition" not in _r.headers,
+              "got %d" % _r.status_code)
 
 
 def _check_limited_user_server_actions():
@@ -1613,17 +1730,17 @@ def _check_limited_user_server_actions():
           c.post("/api/server/%d/action" % accessible_id, json={"action": "start"}).status_code == 403)
     check("send command without SEND_COMMAND -> 403",
           c.post("/api/command/%d" % accessible_id, json={"command": "status"}).status_code == 403)
-    check("read file without MANAGE_SERVERS -> 403",
+    check("read file without VIEW_FILES -> 403",
           c.get("/api/server/%d/file?path=.bashrc" % accessible_id).status_code == 403)
     # A VALID rename, so the 403 can only be the permission: with the file-manager check gone it
     # would go on to the account gate and the host, and answer something else.
-    check("rename file without MANAGE_SERVERS -> 403",
+    check("rename file without EDIT_FILES -> 403",
           c.post("/api/server/%d/rename-path" % accessible_id,
                  json={"path": "server.cfg", "new_name": "renamed.cfg"}).status_code == 403)
     # A VALID create too, for the same reason: without the permission check it would go on to
     # the account gate and the host, and answer something else.
     for _kind in ("file", "folder"):
-        check("create %s without MANAGE_SERVERS -> 403" % _kind,
+        check("create %s without EDIT_FILES -> 403" % _kind,
               c.post("/api/server/%d/create-path" % accessible_id,
                      json={"dir": "", "name": "new-" + _kind, "kind": _kind}).status_code == 403)
     # The download is the one file-browser route that hands bytes OUT, and it is a plain link
@@ -1637,7 +1754,7 @@ def _check_limited_user_server_actions():
     # WHERE it sends you does separate them. A permission refusal goes back to the server page,
     # exactly as /server/<id>/files itself does; every in-route failure goes back to /files.
     _dl = c.get("/server/%d/download?path=.bashrc" % accessible_id)
-    check("download file without MANAGE_SERVERS -> refused, and no file is sent",
+    check("download file without VIEW_FILES -> refused, and no file is sent",
           _dl.status_code in (301, 302, 303) and "Content-Disposition" not in _dl.headers,
           "got %d %s" % (_dl.status_code, dict(_dl.headers)))
     check("download denial is the PERMISSION refusal, not an incidental failure",
@@ -3912,6 +4029,8 @@ try:
     _check_vps_prep_allows_a_remote_host()
     _check_rename_idor()
     _check_create_idor()
+    _check_file_permission_split()
+    _check_backup_permission_split()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
     _check_denials_and_limited_pages()

@@ -195,7 +195,9 @@ check.
 | `use_terminal` | Open a shell on a host, as the account the panel uses there, which on most installs can become root: grant it only to people you would give that account |
 | `moderate_server` | Umbrella for `kick_player` + `ban_player` + `say_server` (also grantable individually) |
 | `start_server` / `stop_server` / `restart_server` / `update_server` | Power & update controls |
-| `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers |
+| `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers; `manage_servers` also covers a server's schedule, alerts and mods |
+| `view_files` / `edit_files` | Browse, read and download a server's files and configs / upload, edit, rename, create and delete them and save its config forms (give `view_files` with it) |
+| `download_backup` / `delete_backup` | Download / delete a game server's backup archives (a deleted backup is gone for good). Taking a backup, its schedule and the panel's own backups stay with superadmins |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
 
 ## Production deployment
