@@ -24,3 +24,15 @@ written. Remove this entry when dnspython ships a fix for 3.10 or the panel drop
 Re-checked 2026-11-07 and renewed to 2026-12-27: the newest release, 2.9.2 (2026-11-03), still
 requires Python 3.11; dnspython's 2.8 branch has had no release after 2.8.0 and no backport of the
 fix, and the advisory (updated 2026-10-27) still lists 2.9.0 as the first fixed version."""
+
+[[IgnoredVulns]]
+id = "GHSA-vvf4-9x63-8xvv"
+ignoreUntil = 2026-12-27
+reason = """dnspython 2.8.0 (published 2026-11-13): a crafted WKS record in zone-file TEXT makes
+dns.rdata.from_text allocate without bound. The fix, 2.9.2, requires Python 3.11, so it cannot install
+on Python 3.10 (Ubuntu 22.04); requirements.txt pins 2.9.2 for Python 3.11 and newer and keeps 2.8.0
+only behind `python_version < "3.11"`, and pip-audit audits the 3.11+ pin with no exemption. Not
+reachable on a 22.04 host: the panel never imports dnspython and never parses zone files; eventlet's
+greendns, its only user, decodes DNS replies in wire format, which never calls the WKS text parser.
+Remove this entry with GHSA-45c3-73f7-pv4m above, when dnspython ships a fix for 3.10 or the panel
+drops 3.10."""

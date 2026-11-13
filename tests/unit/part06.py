@@ -3967,25 +3967,26 @@ try:
                             "e has 0 pins that apply on Python 3.10"]
           and _rq_split_gaps([("d", "1", _rq_m310), ("d", "2", _rq_m311)]) == [], repr(_rq_split_bad))
     # CVE-2026-114605 (GHSA-45c3-73f7-pv4m): dnspython before 2.9.0 spends unbounded CPU on a
+    # (and GHSA-vvf4-9x63-8xvv, fixed in 2.9.2: WKS zone-file text)
     # crafted DNS reply, and eventlet's greendns parses every reply the panel's lookups get. 2.9.0
     # requires 3.11, so the split is made by hand after pip-compile (requirements.txt's header),
     # and a recompile on 3.10, Dependabot's included, writes one unmarked 2.8.0 back. Every Python
     # that CAN run the fix must get it; 3.10 alone keeps 2.8.0 (osv-scanner.toml, dated).
     def _rq_dns_gaps(entries):
-        return ["dnspython==%s applies on Python %s, which can run the fixed 2.9.0" % (e[1], v[:-2])
+        return ["dnspython==%s applies on Python %s, which can run the fixed 2.9.2" % (e[1], v[:-2])
                 for e in entries if not isinstance(e, str) and e[0] == "dnspython"
-                and not _RqSpec(">=2.9.0").contains(e[1])
+                and not _RqSpec(">=2.9.2").contains(e[1])
                 for v in _rq_where(e[2]) if v != "3.10.0"]
 
     _rq_dns_bad = _rq_dns_gaps(_rq_entries(_rq_txt))
-    check("requirements.txt: dnspython is 2.9.0 or later on every Python but 3.10 (CVE-2026-114605); "
+    check("requirements.txt: dnspython is 2.9.2 or later on every Python but 3.10 (CVE-2026-114605, GHSA-vvf4); "
           "after a recompile, re-apply the split its header describes",
           not _rq_dns_bad and any(not isinstance(e, str) and e[0] == "dnspython"
                                   for e in _rq_entries(_rq_txt)), repr(_rq_dns_bad))
     check("requirements.txt: ...and what a 3.10 recompile writes back, one unmarked 2.8.0, is named "
           "(control)",
           _rq_dns_gaps([("dnspython", "2.8.0", None)])
-          == ["dnspython==2.8.0 applies on Python %s, which can run the fixed 2.9.0" % v[:-2]
+          == ["dnspython==2.8.0 applies on Python %s, which can run the fixed 2.9.2" % v[:-2]
               for v in _RQ_PYTHONS[1:]])
     # Dependabot must resolve as the OLDEST supported Python, or it proposes releases 22.04 cannot
     # install (it proposed bidict 0.24, Requires-Python >= 3.11). requirements.txt is pip-compile's

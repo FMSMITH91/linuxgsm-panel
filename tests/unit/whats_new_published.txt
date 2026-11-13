@@ -5,6 +5,7 @@
 # listed here; delete a line only together with its entry.
 412ef958 The dashboard's server list fits a phone or tablet.
 b7eaef5e The dashboard's server table fits the card on smaller desktop screens.
+1ddac173 dnspython 2.9.2 on Ubuntu 24.04 and 26.04 (GHSA-vvf4-9x63-8xvv).
 192fa5dd Scheduled world resets for Paper and Minecraft Bedrock.
 bbb0103c A Minecraft world reset reads LinuxGSM's start settings the way LinuxGSM does.
 26c8e01c Rate limiting no longer opens a port to the internet.
