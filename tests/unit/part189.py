@@ -29,6 +29,17 @@ check("host traffic part: the server page it renders asks the stubbed public-IP 
 
 
 # ── 2. every DEFAULT_CONFIG key has a reader: a real read, not a substring ───────────────────────
+def _r42t_read_key(n):
+    """The literal key node `n` reads (`x["key"]` loaded, or `.get("key", …)`), else None."""
+    if isinstance(n, _ast189.Subscript) and isinstance(n.ctx, _ast189.Load):
+        key = getattr(n.slice, "value", None) if isinstance(n.slice, _ast189.Constant) else None
+    elif isinstance(n, _ast189.Call) and getattr(n.func, "attr", "") == "get" and n.args:
+        key = getattr(n.args[0], "value", None) if isinstance(n.args[0], _ast189.Constant) else None
+    else:
+        key = None
+    return key if isinstance(key, str) else None
+
+
 def _r42t_cfg_reads(sources, keys):
     """{key: ["file:line", …]} of each `.get("key", …)` call and each `x["key"]` load in `sources`.
 
@@ -38,14 +49,8 @@ def _r42t_cfg_reads(sources, keys):
     found = {k: [] for k in keys}
     for name, text in sources.items():
         for n in _ast189.walk(_ast189.parse(text)):
-            key = None
-            if isinstance(n, _ast189.Subscript) and isinstance(n.ctx, _ast189.Load) \
-                    and isinstance(n.slice, _ast189.Constant):
-                key = n.slice.value
-            elif isinstance(n, _ast189.Call) and getattr(n.func, "attr", "") == "get" and n.args \
-                    and isinstance(n.args[0], _ast189.Constant):
-                key = n.args[0].value
-            if isinstance(key, str) and key in found:
+            key = _r42t_read_key(n)
+            if key in found:
                 found[key].append("%s:%d" % (name, n.lineno))
     return found
 

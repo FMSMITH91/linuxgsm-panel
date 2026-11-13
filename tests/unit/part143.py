@@ -197,6 +197,19 @@ def _r42t_stand_in143(out_fd, pid_path):
         return 0
 
 
+def _r42t_find_kill143():
+    """(what leftovers() saw of the stand-in within 5 s, the holders of fd 1, what is left after kill)."""
+    deadline, seen = time.monotonic() + 5, []
+    while time.monotonic() < deadline and not seen:
+        seen = [p for p in SD143.leftovers() if p[2] == "sleep 600"]
+        if not seen:
+            time.sleep(0.05)
+    held = [p[0] for p in SD143.holders(1)]
+    SD143.kill(seen)
+    time.sleep(0.2)
+    return seen, held, [p for p in SD143.leftovers() if p[2] == "sleep 600"]
+
+
 def _leaked143():
     """What leftovers() saw of a `sleep 600 &` started behind a shell that exited, and after kill.
 
@@ -207,26 +220,17 @@ def _leaked143():
     tmp = _tf143.mkdtemp(prefix="r42t-leak143-")
     sink = os.open(os.path.join(tmp, "out"), os.O_WRONLY | os.O_CREAT, 0o600)
     sys.stdout.flush()
-    real_out, pid, seen, held, after = os.dup(1), 0, [], [], []
+    real_out, pids = os.dup(1), []
     try:
         os.dup2(sink, 1)
-        pid = _r42t_stand_in143(sink, os.path.join(tmp, "pid"))
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not seen:
-            seen = [p for p in SD143.leftovers() if p[2] == "sleep 600"]
-            if not seen:
-                time.sleep(0.05)
-        held = [p[0] for p in SD143.holders(1)]
-        SD143.kill(seen)
-        time.sleep(0.2)
-        after = [p for p in SD143.leftovers() if p[2] == "sleep 600"]
+        pids.append(_r42t_stand_in143(sink, os.path.join(tmp, "pid")))
+        seen, held, after = _r42t_find_kill143()
     finally:
         sys.stdout.flush()
         os.dup2(real_out, 1)
         os.close(real_out)
         os.close(sink)
-        if pid:
-            SD143.kill([(pid,)])
+        SD143.kill([(p,) for p in pids if p])
     return seen, after, held
 
 
