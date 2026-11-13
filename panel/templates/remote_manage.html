@@ -1031,6 +1031,8 @@
     <table class="table table-hover mb-0 align-middle table-pin-actions pin-wrap">
       <thead><tr><th>Name</th><th>Type</th><th>Connect</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
+        {# Once, not per row: whether this viewer may open Files & Config (auth.files_access). #}
+        {% set _fpm_files = can_open_files() %}
         {% for gs in remote.games %}
         <tr>
           <td><strong data-no-i18n>{{ gs.name }}</strong></td>
@@ -1062,7 +1064,7 @@
             {# Gated as the dashboard gates them (can_files / can_uninstall): this page needs only
                MANAGE_REMOTES, and a host operator without these rights was walked through the
                typed-name uninstall confirm to be refused at the end of it. #}
-            {% if current_user.is_superadmin or has_permission('manage_servers') %}
+            {% if _fpm_files %}
             <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config &amp; browse/upload files"><i class="bi bi-folder2-open"></i> Files &amp; Config</a>
             {% endif %}
             {% if current_user.is_superadmin or has_permission('uninstall_server') %}

@@ -1622,9 +1622,10 @@ def _data_migration18():
           "server's On", err is None and got == {10: 0, 11: 1, 12: 0}, repr((err, got)))
     check("data migration: ...committed before the rebuild and the index build, which take the "
           "write lock on connections of their own (nothing locked, game_server rebuilt), and "
-          "counted: user_version 2 (data migration 2, the canonical hosts, runs on the same start)",
+          "counted: user_version 3 (data migrations 2 and 3, the canonical hosts and the file "
+          "permissions, run on the same start)",
           err is None and not _plain18(path, "game_server")
-          and _one18(path, "PRAGMA user_version") == [(2,)],
+          and _one18(path, "PRAGMA user_version") == [(3,)],
           repr((err, _plain18(path, "game_server"), _one18(path, "PRAGMA user_version"))))
     # A retry of that install, on this version, wrote the monitor line and recorded On: evidence.
     _write18(path, "UPDATE game_server SET autostart = 1 WHERE id = 10")

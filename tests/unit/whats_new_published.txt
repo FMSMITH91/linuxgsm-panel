@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+39dd1dda Separate permissions for a server's files and its backups.
 23635957 SSH port moves never open SSH wider than it was.
 dea66419 Test checks that read what they name.
 5132cba1 SSH port move keeps the panel connected.

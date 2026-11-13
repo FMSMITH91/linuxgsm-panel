@@ -27,7 +27,7 @@ from panel.ops import socket_hooks as _socket_hooks
 from panel.routes import server_detail as _sd
 from panel.routes import game_config_form as _gcf_routes
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
-    _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
+    _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
 from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
@@ -1774,7 +1774,9 @@ def register(app, supervise):
 
 
 def _register_files_page(app):
-    """The Files & Config page itself."""
+    """The Files & Config page itself, and the template's `can_open_files`."""
+    app.jinja_env.globals["can_open_files"] = _fpm_can_open_files
+
     @app.route("/server/<int:server_id>/files")
     @login_required
     @server_access_required
@@ -1798,7 +1800,10 @@ def _register_files_page(app):
             # with access to this server but neither permission got a red "You do not have
             # permission to do that." beside the notice, on the way to the same page.
             return redirect(url_for("index"))
-        if not _can_manage_files():
+        fpm = files_access(current_user)
+        # A failed install has no Files or Backups tab (nothing was downloaded), so a backup
+        # permission alone would open an empty page there.
+        if not (fpm["view"] or fpm["manage"] if failed else fpm["page"]):
             flash("You don't have permission to manage server files.", "danger")
             # The console is the right place to land — but only when there IS one. For a failed
             # install server_detail redirects back HERE, and the pair loops until the browser
@@ -1810,6 +1815,9 @@ def _register_files_page(app):
         actions, maintenance, _all_cmds, _sup = _server_action_buttons(app, gs)
         return render_template("server_files.html", server=gs, remote=gs.remote,
                                actions=actions, maintenance=maintenance,
+                               # Which tabs and controls this viewer gets (auth.files_access);
+                               # every route behind them asks its own permission again.
+                               fpm=fpm,
                                # The game files never landed, so the browser has nothing to show
                                # and the page says why instead of rendering an empty tree.
                                install_failed=failed,
@@ -1867,7 +1875,7 @@ def _register_config_editor(app):
     @server_access_required
     def api_server_config(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not (_fpm_can_edit() if request.method == "POST" else _fpm_can_view()):
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
             return _sf_config_read(gs)
@@ -1967,7 +1975,7 @@ def _register_file_editor(app):
     @server_access_required
     def api_server_browse(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_view():
             return jsonify({"error": "Permission denied"}), 403
         refused = _read_refused(gs, "browse_files", request.args.get("path", ""))
         if refused is not None:
@@ -1987,7 +1995,7 @@ def _register_file_editor(app):
     @server_access_required
     def api_server_file(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not (_fpm_can_edit() if request.method == "POST" else _fpm_can_view()):
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
             return _file_editor_read(gs)
@@ -2029,7 +2037,7 @@ def _register_file_removal(app):
     @server_access_required
     def api_server_delete_path(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         rel = _json_body().get("path", "")
         refused = _write_refused(gs, "delete_file", rel)
@@ -2184,7 +2192,7 @@ def _register_file_rename(app):
         is audited as rename_file, refusals included.
         """
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         body = _json_body()
         rel, new_name = body.get("path"), body.get("new_name")
@@ -2252,7 +2260,7 @@ def _register_file_create(app):
         is audited as create_file or create_folder, refusals included.
         """
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         body = _json_body()
         rel, name, kind = body.get("dir"), body.get("name"), body.get("kind")
@@ -2276,8 +2284,8 @@ def _register_file_create(app):
 
 def _download_refusal(gs, server_id):
     """server_file_download's permission and game-account gates: a flash and redirect, else None."""
-    if not _can_manage_files():
-        flash("You don't have permission to manage server files.", "danger")
+    if not _fpm_can_view():
+        flash("You don't have permission to view this server's files.", "danger")
         return redirect(url_for("server_detail", server_id=server_id))
     why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
     if why is None:
@@ -2681,7 +2689,7 @@ def _register_uploads(app):
     @server_access_required
     def api_server_upload(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         reldir = request.form.get("path", "")
         f = request.files.get("file")
@@ -2714,7 +2722,7 @@ def _register_uploads(app):
         still refused rather than clobbered.
         """
         gs = get_game(server_id)
-        if not _can_manage_files():
+        if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         body = _json_body()
         names = body.get("names")
@@ -2735,6 +2743,47 @@ def _register_uploads(app):
             # upload route's own refusal stays the backstop either way.
             _log.debug("upload-check: could not list the target directory", exc_info=True)
             return jsonify({"existing": [], "checked": False})
+
+
+def _fpm_logts_off(gs):
+    """api_server_log_timestamps' POST: turn LinuxGSM's log stamping off, audited (the caller catches)."""
+    # OFF only. The page withdrew its "turn on" control once it was measured that
+    # LinuxGSM's stamping pipeline (`cat | gawk strftime >> consolelog`) block-buffers
+    # to the file and freezes the live console for as long as 4KB takes to accumulate
+    # — but this endpoint still accepted `enabled: true`, so anyone with the config
+    # permission could still freeze every viewer's console with one request. The
+    # reading side stays: a log someone stamped by hand is still parsed.
+    # Read as a JSON boolean: by truthiness, `{"enabled": "false"}` was answered with
+    # the turn-on refusal below, about a request to turn them off.
+    flag = _r12c_json_flag(_json_body(), "enabled", None)
+    if flag is None:
+        return jsonify({"error": "enabled must be true or false."}), 400
+    if flag:
+        return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
+                                 "live console, so the panel only turns them off."}), 400
+    want = "off"
+    # The instance cfg the settings form writes: the same refusal, said as `error`,
+    # which is what the page reads here. Its row keeps the reason whole, as every
+    # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
+    why = game_account_write_refusal(gs.remote, gs.short_name)
+    if why is not None:
+        log_action(current_user, "set_log_timestamps", target=gs.name,
+                   detail=_r14b_refused("", why), success=False, server=gs)
+        return jsonify({"error": i18n.tr(why)}), 409
+    ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
+                                {"logtimestamp": want})
+    if not ok:
+        # Audited as every other refused cfg write is: it wrote no row at all.
+        log_action(current_user, "set_log_timestamps", target=gs.name,
+                   detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
+                   success=False, server=gs)
+        # 200, not 502 (Cloudflare swaps an origin 502 for its own page): the page
+        # reads `error`, not the status.
+        return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")})
+    log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
+               server=gs)
+    return jsonify({"success": True, "enabled": want == "on",
+                    "needs_restart": True})
 
 
 def _register_console_routes(app):
@@ -2800,47 +2849,12 @@ def _register_console_routes(app):
         wired up in command_start.sh. Both facts are reported rather than assumed away.
         """
         gs = get_game(server_id)
-        if not _can_manage_files():
+        # Reading it is reading the instance cfg (VIEW_FILES); turning it off writes it (EDIT_FILES).
+        if not (_fpm_can_edit() if request.method == "POST" else _fpm_can_view()):
             return jsonify({"error": "Permission denied"}), 403
         try:
             if request.method == "POST":
-                # OFF only. The page withdrew its "turn on" control once it was measured that
-                # LinuxGSM's stamping pipeline (`cat | gawk strftime >> consolelog`) block-buffers
-                # to the file and freezes the live console for as long as 4KB takes to accumulate
-                # — but this endpoint still accepted `enabled: true`, so anyone with the config
-                # permission could still freeze every viewer's console with one request. The
-                # reading side stays: a log someone stamped by hand is still parsed.
-                # Read as a JSON boolean: by truthiness, `{"enabled": "false"}` was answered with
-                # the turn-on refusal below, about a request to turn them off.
-                flag = _r12c_json_flag(_json_body(), "enabled", None)
-                if flag is None:
-                    return jsonify({"error": "enabled must be true or false."}), 400
-                if flag:
-                    return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
-                                             "live console, so the panel only turns them off."}), 400
-                want = "off"
-                # The instance cfg the settings form writes: the same refusal, said as `error`,
-                # which is what the page reads here. Its row keeps the reason whole, as every
-                # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
-                why = game_account_write_refusal(gs.remote, gs.short_name)
-                if why is not None:
-                    log_action(current_user, "set_log_timestamps", target=gs.name,
-                               detail=_r14b_refused("", why), success=False, server=gs)
-                    return jsonify({"error": i18n.tr(why)}), 409
-                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
-                                            {"logtimestamp": want})
-                if not ok:
-                    # Audited as every other refused cfg write is: it wrote no row at all.
-                    log_action(current_user, "set_log_timestamps", target=gs.name,
-                               detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
-                               success=False, server=gs)
-                    # 200, not 502 (Cloudflare swaps an origin 502 for its own page): the page
-                    # reads `error`, not the status.
-                    return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")})
-                log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
-                           server=gs)
-                return jsonify({"success": True, "enabled": want == "on",
-                                "needs_restart": True})
+                return _fpm_logts_off(gs)
             vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["logtimestamp"])
             if vals is None:
                 # "enabled": False would be a claim about a config we could not read, and the

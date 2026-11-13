@@ -60,6 +60,8 @@ _drop95 = "card.addEventListener('drop', function(ev){"
 _name95 = "file drop: nothing in a dropped folder could be read"
 _out95 = _node95(_name95, _SETTLE47 + (
     "global.window = global; let toasts = [], status = [], uploaded = [], curDir = 'here';\n"
+    # The page's own permissions (server_files.html): a drop uploads only with EDIT_FILES.
+    "global.SF_CAN = {view: true, edit: true};\n"
     "global.toast = (m, k) => toasts.push([m, k]);\n"
     "global.tfn = (n, one, many) => (n === 1 ? one : many).replace('{n}', n);\n"
     "global._uploadStatus = (t, c) => status.push([t, c || '']); global.uploadFiles = () => {};\n"

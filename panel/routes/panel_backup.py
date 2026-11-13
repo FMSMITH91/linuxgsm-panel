@@ -11,7 +11,8 @@ from panel.db.models import (_NO_BIRTH, AuditLog, GameServer, LOCAL_HOST_LABEL, 
 from panel.ops import (backup as bk, system_ops as so)
 from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_game_backups,
     run_game_backup, stream_game_backup)
-from panel.security.auth import (get_game, log_action, superadmin_required)
+from panel.security.auth import (DELETE_BACKUP, DOWNLOAD_BACKUP, get_game, log_action, permission_required,
+    server_access_required, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count)
 import calendar
@@ -624,9 +625,12 @@ def _register_game_backup_files(app):
     _BK_UNREADABLE = ("Couldn't read this server's backups — the host didn't answer. "
                       "This is not the same as there being none.")
 
+    # DELETE_BACKUP and DOWNLOAD_BACKUP, each grantable on its own, on a server the user has access
+    # to. Until they existed both were superadmin-only, which a superadmin still passes.
     @app.route("/api/panel/backup/game/<int:server_id>/delete", methods=["POST"])
     @login_required
-    @superadmin_required
+    @permission_required(DELETE_BACKUP)
+    @server_access_required
     def api_panel_backup_game_delete(server_id):
         """Delete one game-server backup archive."""
         gs = get_game(server_id)
@@ -655,7 +659,8 @@ def _register_game_backup_files(app):
 
     @app.route("/backup/game/<int:server_id>/download")
     @login_required
-    @superadmin_required
+    @permission_required(DOWNLOAD_BACKUP)
+    @server_access_required
     def panel_backup_game_download(server_id):
         """Stream a game-server backup archive to the browser.
 
@@ -737,9 +742,12 @@ def _register_game_backup_settings(app):
                    server=gs)
         return jsonify({"success": True, "schedule": sched})
 
+    # The listing the Backups tab's download and delete buttons sit in: either permission reads it.
+    # Taking a backup and changing the schedule (the routes above) stay superadmin-only.
     @app.route("/api/panel/backup/game/<int:server_id>/info")
     @login_required
-    @superadmin_required
+    @permission_required(DOWNLOAD_BACKUP, DELETE_BACKUP)
+    @server_access_required
     def api_panel_backup_game_info(server_id):
         """One server's backup picture for its Files & Config tab.
 

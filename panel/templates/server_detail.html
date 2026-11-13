@@ -92,10 +92,10 @@
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="console"><i class="bi bi-terminal-fill"></i> Console</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="history"><i class="bi bi-graph-up"></i> History</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="details"><i class="bi bi-info-circle"></i> Details</button></li>
-  {# can_download_log is _can_manage_files() — the same permission server_files itself requires.
+  {# can_open_files: any permission one of Files & Config's tabs needs (auth.files_access).
      Unconditional, this tab was a permanent invitation for every viewer to round-trip to a red
      "You don't have permission to manage server files." #}
-  {% if can_download_log %}<li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>{% endif %}
+  {% if can_open_files %}<li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>{% endif %}
   {# Same as the dashboard: the rearranging controls stay hidden until asked for. #}
   <li class="nav-item ms-auto"><button type="button" class="nav-link" data-action="toggleLayoutEdit"
       aria-pressed="false" title="Show the controls for rearranging this tab"><i class="bi bi-grid-1x2"></i>
@@ -223,7 +223,7 @@
       <div class="px-3 pt-2 text-warning cmpa-console-only" style="font-size:.7rem;" id="console-ts-off" hidden>
         <i class="bi bi-exclamation-triangle"></i>
         <span>LinuxGSM is stamping this log, which delays live console output until 4KB has built up.</span>
-        {% if can_download_log %}
+        {% if can_edit_files %}{# it writes the instance cfg: EDIT_FILES #}
         <button type="button" class="btn btn-link p-0 align-baseline" style="font-size:.7rem;"
                 data-action="disableLogTimestamps" data-args='["@self"]'>
           <span>Turn it off</span>
@@ -451,11 +451,12 @@
 {% if plugins_supported(server.game_type) and can_download_log %}
 {# A PaperMC server's plugins (panel/routes/modrinth_plugins.py): search Modrinth, install a build the
    panel host downloaded and checked, and enable, disable or remove the jars in serverfiles/plugins/.
-   Everything here needs the file manager's permission (can_download_log): a plugin is code put on
-   the server, as an uploaded jar is. Both boxes have a fixed height, so rows arriving after the
+   Everything here needs the file manager's permissions — VIEW_FILES to list and search
+   (can_download_log), EDIT_FILES to change (can_edit_files; without it [data-fpm-ro] hides every
+   .fpm-edit button): a plugin is code put on the server, as an uploaded jar is. Both boxes have a fixed height, so rows arriving after the
    first paint move nothing below the card. #}
 {% macro panel_plugins() %}
-<div class="card mb-3 panel-movable" data-panel="plugins" data-mtab="console" id="mdr-card">
+<div class="card mb-3 panel-movable" data-panel="plugins" data-mtab="console" id="mdr-card"{% if not can_edit_files %} data-fpm-ro{% endif %}>
   <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
     <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
           title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
@@ -499,13 +500,13 @@
 {% if _wsc_kind %}
 {# A server's Steam Workshop list (panel/routes/workshop.py): LinuxGSM's workshopmods (an ordered list of
    item or collection ids), its wscollectionid (one collection, gmod and csgo), or Project Zomboid's
-   WorkshopItems= and Mods= in its own ini. Reading and saving need the Settings tab's permission
-   (can_download_log); Download now is the maintenance menu's workshop-update, shown only to whom that
+   WorkshopItems= and Mods= in its own ini. Reading needs VIEW_FILES (can_download_log), saving
+   EDIT_FILES (can_edit_files; without it [data-fpm-ro] hides every .fpm-edit control); Download now is the maintenance menu's workshop-update, shown only to whom that
    menu offers it. Every box has a fixed height, so rows arriving after the first paint move nothing
    below the card. Titles come from Steam through the panel and are drawn as text. #}
 {% set _wsc_dl = maintenance|selectattr('cmd', 'equalto', 'workshop-update')|list %}
 {% macro panel_workshop() %}
-<div class="card mb-3 panel-movable" data-panel="workshop" data-mtab="console" id="wsc-card" data-kind="{{ _wsc_kind }}">
+<div class="card mb-3 panel-movable" data-panel="workshop" data-mtab="console" id="wsc-card" data-kind="{{ _wsc_kind }}"{% if not can_edit_files %} data-fpm-ro{% endif %}>
   <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
     <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
           title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
@@ -519,7 +520,7 @@
   <div class="card-header"><i class="bi bi-collection"></i> Steam Workshop</div>
   <div class="card-body">
     {% if _wsc_kind == 'collection' %}
-    <form id="wsc-coll-form" class="d-flex flex-wrap gap-2 mb-1" data-action="wscSaveCollection"
+    <form id="wsc-coll-form" class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="wscSaveCollection"
           data-args='["@event"]' data-on="submit">
       <input type="text" id="wsc-coll" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
              maxlength="300" autocomplete="off" spellcheck="false" placeholder="Collection id or Workshop link"
@@ -536,7 +537,7 @@
       <div class="text-secondary p-2" id="wsc-items-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
       <ul class="list-unstyled mb-0" id="wsc-items" data-no-i18n></ul>
     </div>
-    <form class="d-flex flex-wrap gap-2 mb-2" data-action="wscAdd" data-args='["items","@event"]' data-on="submit">
+    <form class="d-flex flex-wrap gap-2 mb-2 fpm-edit" data-action="wscAdd" data-args='["items","@event"]' data-on="submit">
       <input type="text" id="wsc-items-add" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
              maxlength="300" autocomplete="off" spellcheck="false" placeholder="Workshop id or link"
              aria-label="Add a Workshop id or link">
@@ -549,7 +550,7 @@
       <div class="text-secondary p-2" id="wsc-mods-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
       <ul class="list-unstyled mb-0" id="wsc-mods" data-no-i18n></ul>
     </div>
-    <form class="d-flex flex-wrap gap-2 mb-1" data-action="wscAdd" data-args='["mods","@event"]' data-on="submit">
+    <form class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="wscAdd" data-args='["mods","@event"]' data-on="submit">
       <input type="text" id="wsc-mods-add" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
              maxlength="101" autocomplete="off" spellcheck="false" placeholder="Mod ID"
              aria-label="Add a Mod ID">
@@ -561,7 +562,7 @@
          aria-live="polite" data-no-i18n></div>
     {% endif %}
     <div class="d-flex flex-wrap gap-2 align-items-center">
-      <button type="button" class="btn btn-sm btn-primary" data-action="wscSave"><i class="bi bi-save"></i>
+      <button type="button" class="btn btn-sm btn-primary fpm-edit" data-action="wscSave"><i class="bi bi-save"></i>
         <span>Save Workshop list</span></button>
       {% if _wsc_kind == 'mods' and _wsc_dl %}
       <button type="button" class="btn btn-sm btn-outline-secondary"

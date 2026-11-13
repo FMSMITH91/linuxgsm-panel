@@ -147,8 +147,9 @@
   "GET /api/panel/backup/game/<int:server_id>/info": {
     "endpoint": "api_panel_backup_game_info",
     "guards": [
-      "utils.py:decorated_view(super_admin)",
-      "auth.py:decorated_function(super_admin)",
+      "utils.py:decorated_view(delete_backup,download_backup)[server_access]",
+      "auth.py:decorated_function(delete_backup,download_backup)[server_access]",
+      "auth.py:decorated_function[server_access]",
       "view:api_panel_backup_game_info"
     ],
     "methods": [
@@ -781,8 +782,9 @@
   "GET /backup/game/<int:server_id>/download": {
     "endpoint": "panel_backup_game_download",
     "guards": [
-      "utils.py:decorated_view(super_admin)",
-      "auth.py:decorated_function(super_admin)",
+      "utils.py:decorated_view(download_backup)[server_access]",
+      "auth.py:decorated_function(download_backup)[server_access]",
+      "auth.py:decorated_function[server_access]",
       "view:panel_backup_game_download"
     ],
     "methods": [
@@ -1428,8 +1430,9 @@
   "POST /api/panel/backup/game/<int:server_id>/delete": {
     "endpoint": "api_panel_backup_game_delete",
     "guards": [
-      "utils.py:decorated_view(super_admin)",
-      "auth.py:decorated_function(super_admin)",
+      "utils.py:decorated_view(delete_backup)[server_access]",
+      "auth.py:decorated_function(delete_backup)[server_access]",
+      "auth.py:decorated_function[server_access]",
       "view:api_panel_backup_game_delete"
     ],
     "methods": [

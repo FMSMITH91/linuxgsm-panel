@@ -5728,6 +5728,8 @@ function load(root, respond, catalog){
     Map, Proxy, Headers, encodeURIComponent, decodeURIComponent, parseInt, parseFloat, isNaN, Symbol,
     MOUNT: '', serverId: 7, SERVER_NAME: 'srv', document: doc, fetched, toasts, CSRF: 't',
     SIGNED_IN: true, CSS: {escape: s => String(s)},
+    // What server_files.html renders for a superadmin (auth.files_access): every section, every control.
+    SF_CAN: {view: true, edit: true, manage: true, dl: true, rm: true, su: true, bk: true, page: true},
     escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => '&#' + ch.charCodeAt(0) + ';'),
     navigator: {clipboard: {writeText: () => Promise.resolve()}},
     location: {href: 'http://x/server/7/files', pathname: '/server/7/files', search: '', hash: ''},
