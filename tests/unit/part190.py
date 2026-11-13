@@ -31,7 +31,7 @@ import io as _io190
 import os as _os190
 import re as _re190
 import shutil as _sh190
-import subprocess as _sp190
+import subprocess as _sp190  # nosec B404 - runs the panel's own host commands on stand-in homes
 import tarfile as _tf190
 import tempfile as _tmp190
 import time as _time190
@@ -118,7 +118,7 @@ class _Sb190:
         _os190.symlink("../steamcmd/linux64/steamclient.so", _os190.path.join(h, ".steam/sdk64/steamclient.so"))
         self.archive = _os190.path.join(self.bdir, _NAME190)
         # LinuxGSM's own command (command_backup.sh, master 2026-11), gzip as fn_select_compression picks it.
-        _sp190.run(["tar", "--gzip", "-hcf", self.archive, "--exclude", "lgsm/backup", "--exclude",
+        _sp190.run(["tar", "--gzip", "-hcf", self.archive, "--exclude", "lgsm/backup", "--exclude",  # nosec B603 B607
                     h + "/lgsm/lock", "--exclude", h + "/lgsm/tmp", "--exclude", "./lgsm/backup", "-C", h, "./."],
                    check=True, capture_output=True, timeout=60)
         _os190.utime(self.archive, (_T0190, _T0190))
@@ -144,7 +144,7 @@ class _Sb190:
 
     def tree(self):
         """{path: sha256 of what it holds} for every file outside KEEP, read through symlinks."""
-        out = _sp190.run(["find", "."] + _KEEP_PRUNE190 + ["(", "-type", "f", "-o", "-type", "l", ")", "-print0"],
+        out = _sp190.run(["find", "."] + _KEEP_PRUNE190 + ["(", "-type", "f", "-o", "-type", "l", ")", "-print0"],  # nosec B603 B607
                          cwd=self.home, capture_output=True, timeout=60).stdout
         res = {}
         for rel in filter(None, out.split(b"\0")):
@@ -167,7 +167,7 @@ class _Sb190:
         """
         text = script.replace("/home/" + _U190, self.home)
         env = dict(_os190.environ, PATH=self.fakebin + ":" + _os190.environ.get("PATH", "/usr/bin:/bin"))
-        p = _sp190.run(["bash", "-c", text], capture_output=True, text=True, timeout=180, cwd="/", env=env)
+        p = _sp190.run(["bash", "-c", text], capture_output=True, text=True, timeout=180, cwd="/", env=env)  # nosec B603 B607
         return p.stdout + p.stderr, p.returncode
 
     def cron(self):
@@ -210,8 +210,8 @@ def _restore190(sb, ready, undo=_UNDO190, busy_polls=1):
 
 
 def _lgsm_prune190(bdir):
-    """LinuxGSM's two retention prunes (fn_backup_prune, master 2026-11), past any maxbackups and maxbackupdays."""
-    _sp190.run(["bash", "-c", 'find "$1"/ -type f -name "*.tar.*" -printf "%T@ %p\\n" | sort -rn | tail -100 | '
+    """Run the two retention prunes of LinuxGSM's fn_backup_prune (master 2026-11), past any limit."""
+    _sp190.run(["bash", "-c", 'find "$1"/ -type f -name "*.tar.*" -printf "%T@ %p\\n" | sort -rn | tail -100 | '  # nosec B603 B607
                 'cut -f2- -d" " | xargs -r rm; find "$1"/ -type f -mtime +0 -exec rm -f {} \\;', "_", bdir],
                capture_output=True, timeout=60)
 
@@ -230,9 +230,148 @@ def _crafted190(sb, members, name="grsu-2026-11-02-120000.tar.gz"):
 
 
 _r190 = {}
-if _missing190:
-    skip("restore commands: run on a stand-in home", "missing here: %s" % ", ".join(_missing190))
-else:
+
+
+def _lgsm_cmd190(sb):
+    """A LinuxGSM command of the account, as cron starts one: `bash /home/<acct>/<script> monitor`."""
+    fake = _os190.path.join(sb.root, "lgsm-copy", _U190)
+    _os190.makedirs(_os190.path.dirname(fake))
+    with open(fake, "w") as f:
+        f.write("sleep 60\n")
+    return _sp190.Popen(["bash", fake, "monitor"], cwd="/", start_new_session=True)  # nosec B603 B607
+
+
+def _switch_seen190(sb, out, rc, rec, before):
+    tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
+    during = _os190.path.join(sb.root, "cron-during.txt")
+    res = _grs190.restore_outcome(out, rc)
+    return {"state": res[0], "said": str(res[1]), "home": sb.tree() == before[0], "cron": sb.cron() == before[1],
+            "tmp": tmp, "rec": _grs190.recover_outcome(rec) if rec is not None else None,
+            "held": [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f],
+            "during": open(during).read() if _os190.path.exists(during) else None}
+
+
+def _switch190(edit=None, recover=False, polls=None, lgsm=False):
+    sb = _Sb190()
+    saved = _grs190._GRS_LGSM_POLLS
+    sleeper = None
+    try:
+        ready = sb.vet()[1][1]
+        with open(_os190.path.join(sb.bdir, _UNDO190), "wb") as f:
+            f.write(b"undo")
+        _grs190._GRS_LGSM_POLLS = polls or saved
+        before = (sb.tree(), sb.cron())
+        rs = _grs190.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], _UNDO190, busy_polls=1,
+                                    members=ready["members"])
+        sleeper = _lgsm_cmd190(sb) if lgsm else None
+        out, rc = sb.run(edit(rs, sb) if edit else rs)
+        rec = sb.run(_grs190.recover_script(_U190, ready["t0"]))[0] if recover else None
+        return _switch_seen190(sb, out, rc, rec, before)
+    finally:
+        _grs190._GRS_LGSM_POLLS = saved
+        if sleeper is not None:      # its group: the script and the sleep it is running
+            try:
+                _os190.killpg(sleeper.pid, 9)
+            except OSError:
+                pass
+            sleeper.wait()
+        sb.gone()
+
+
+def _npm190(rs, sb):
+    return rs.replace(_ASIDE190, _ASIDE190 + ' && { mkdir -p "$HR/.npm"; echo cache > "$HR/.npm/_cacache"; '
+                      'cp %s/crontab.txt %s/cron-during.txt; }' % (sb.root, sb.root), 1)
+
+
+def _refused190(prep, name=None, undo_estimate=0):
+    sb = _Sb190()
+    try:
+        nm = prep(sb) or name or _NAME190
+        tree, listing = sb.tree(), sb.backups()
+        out, (state, why) = sb.vet(nm, undo_estimate)
+        return (state, str(why) if state != "ready" else "READY", sb.tree() == tree and sb.backups() == listing,
+                out[-200:])
+    finally:
+        sb.gone()
+
+
+def _outside190(sb):
+    _os190.makedirs(_os190.path.join(sb.root, "elsewhere"))
+    _os190.symlink(_os190.path.join(sb.root, "elsewhere"), _os190.path.join(sb.home, "serverfiles/maps"))
+
+
+def _cut190(sb):
+    with open(sb.archive, "rb") as f:
+        data = f.read()
+    with open(sb.archive, "wb") as f:
+        f.write(data[:len(data) // 2])
+    _os190.utime(sb.archive, (_T0190, _T0190))
+
+
+def _lock190(sb):
+    sb.put("lgsm/lock/backup.lock", str(int(_time190.time())))
+
+
+def _sshlink190(sb):          # ~/.ssh a link to a folder the clear would otherwise empty
+    _os190.rename(_os190.path.join(sb.home, ".ssh"), _os190.path.join(sb.home, "dotssh"))
+    _os190.symlink("dotssh", _os190.path.join(sb.home, ".ssh"))
+
+
+def _bklink190(sb):           # ~/lgsm/backup a link to ~/backups: every archive would be cleared
+    _os190.rename(sb.bdir, _os190.path.join(sb.home, "backups"))
+    _os190.symlink("../backups", sb.bdir)
+
+
+def _noscript190(sb):
+    buf = _io190.BytesIO()
+    with _tf190.open(fileobj=buf, mode="w") as t:
+        ti = _tf190.TarInfo("././serverfiles/x")
+        t.addfile(ti, _io190.BytesIO(b""))
+    with open(_os190.path.join(sb.bdir, "grsu-2026-11-03-120000.tar.gz"), "wb") as f:
+        f.write(_gz190.compress(buf.getvalue()))
+    return "grsu-2026-11-03-120000.tar.gz"
+
+
+def _staged190(damage):
+    sb = _Sb190()
+    try:
+        ready = sb.vet()[1][1]
+        tree = sb.tree()
+        held = [_f for _f in sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)][0]
+        hp = _os190.path.join(sb.bdir, held)
+        _sh190.copyfile(hp, _os190.path.join(sb.bdir, _UNDO190))
+        with open(hp, "rb") as f:
+            raw = _gz190.decompress(f.read())
+        with open(hp, "wb") as f:
+            f.write(_gz190.compress(damage(raw)))
+        res = _restore190(sb, ready)[1]
+        return res[0], str(res[1]), sb.tree() == tree
+    finally:
+        sb.gone()
+
+
+def _cut_last190(raw):
+    end = len(raw.rstrip(b"\0"))
+    end += (-end) % 512
+    ti = _tf190.TarInfo("././zz-last")
+    ti.size = 4096
+    return raw[:end] + ti.tobuf(format=_tf190.GNU_FORMAT) + b"z" * 100
+
+
+def _fewer190(raw):
+    buf = _io190.BytesIO()
+    with _tf190.open(fileobj=buf, mode="w", format=_tf190.GNU_FORMAT) as t:
+        for mname, data in (("././", None), ("././" + _U190, b"#!/bin/bash\n")):
+            ti = _tf190.TarInfo(mname)
+            ti.type = _tf190.DIRTYPE if data is None else _tf190.REGTYPE
+            ti.size, ti.mode = len(data or b""), 0o755
+            t.addfile(ti, _io190.BytesIO(data) if data else None)
+    return buf.getvalue()
+
+
+def _sandbox1_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _sb
     # The whole restore, as the run does it.
     _sb = _Sb190()
     try:
@@ -260,6 +399,10 @@ else:
     finally:
         _sb.gone()
 
+
+def _sandbox2_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _sb
     # Factorio's layout: ~/log/server points at serverfiles itself, so every game file is in the archive twice.
     _sb = _Sb190("fctr")
     try:
@@ -273,64 +416,26 @@ else:
     finally:
         _sb.gone()
 
+
+def _sandbox3_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _ASIDE190, _MOVEIN190
     # The switch-over, driven at its edges: a LinuxGSM command writing ~/.npm after the home was set aside
     # (it made the move fail on the real server), a SIGKILL part way (then the recovery script), a kill
     # while unpacking, a LinuxGSM command still running, and a recovery while a restore holds the lock.
     _ASIDE190 = '&& step=aside && moveall "$HR" "$O"'
     _MOVEIN190 = '&& step=in && moveall "$S" "$HR"'
 
-    def _lgsm_cmd190(sb):
-        """A LinuxGSM command of the account, as cron starts one: `bash /home/<acct>/<script> monitor`."""
-        fake = _os190.path.join(sb.root, "lgsm-copy", _U190)
-        _os190.makedirs(_os190.path.dirname(fake))
-        with open(fake, "w") as f:
-            f.write("sleep 60\n")
-        return _sp190.Popen(["bash", fake, "monitor"], cwd="/", start_new_session=True)
-
-    def _switch_seen190(sb, out, rc, rec, before):
-        tmp = sorted(_f for _f in _os190.listdir(_os190.path.join(sb.home, "lgsm", "tmp")) if _f != "panel-restore.lock")
-        during = _os190.path.join(sb.root, "cron-during.txt")
-        res = _grs190.restore_outcome(out, rc)
-        return {"state": res[0], "said": str(res[1]), "home": sb.tree() == before[0], "cron": sb.cron() == before[1],
-                "tmp": tmp, "rec": _grs190.recover_outcome(rec) if rec is not None else None,
-                "held": [_f for _f in sb.backups() if _grs190.HOLD_INFIX in _f],
-                "during": open(during).read() if _os190.path.exists(during) else None}
-
-    def _switch190(edit=None, recover=False, polls=None, lgsm=False):
-        sb = _Sb190()
-        saved = _grs190._GRS_LGSM_POLLS
-        sleeper = None
-        try:
-            ready = sb.vet()[1][1]
-            with open(_os190.path.join(sb.bdir, _UNDO190), "wb") as f:
-                f.write(b"undo")
-            _grs190._GRS_LGSM_POLLS = polls or saved
-            before = (sb.tree(), sb.cron())
-            rs = _grs190.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], _UNDO190, busy_polls=1,
-                                        members=ready["members"])
-            sleeper = _lgsm_cmd190(sb) if lgsm else None
-            out, rc = sb.run(edit(rs, sb) if edit else rs)
-            rec = sb.run(_grs190.recover_script(_U190, ready["t0"]))[0] if recover else None
-            return _switch_seen190(sb, out, rc, rec, before)
-        finally:
-            _grs190._GRS_LGSM_POLLS = saved
-            if sleeper is not None:      # its group: the script and the sleep it is running
-                try:
-                    _os190.killpg(sleeper.pid, 9)
-                except OSError:
-                    pass
-                sleeper.wait()
-            sb.gone()
-
-    def _npm190(rs, sb):
-        return rs.replace(_ASIDE190, _ASIDE190 + ' && { mkdir -p "$HR/.npm"; echo cache > "$HR/.npm/_cacache"; '
-                          'cp %s/crontab.txt %s/cron-during.txt; }' % (sb.root, sb.root), 1)
-
     _r190["sw_npm"] = _switch190(_npm190)
     _r190["sw_kill"] = _switch190(lambda rs, sb: rs.replace(_MOVEIN190, _MOVEIN190 + " && kill -9 $$", 1), recover=True)
     _r190["sw_kill_staging"] = _switch190(lambda rs, sb: rs.replace("cnt=$(find", "kill -9 $$\ncnt=$(find", 1),
                                           recover=True)
     _r190["sw_lgsm"] = _switch190(polls=1, lgsm=True)
+
+
+def _sandbox4_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _fcntl190, _sb
     # The recovery script while a restore holds lgsm/tmp/panel-restore.lock: it does nothing and says nothing.
     import fcntl as _fcntl190
     _sb = _Sb190()
@@ -346,40 +451,11 @@ else:
     finally:
         _sb.gone()
 
+
+def _sandbox5_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _k, _prep, _ref
     # Each refusal: nothing changed (the home as it was, the archive under its own name, nothing held).
-    def _refused190(prep, name=None, undo_estimate=0):
-        sb = _Sb190()
-        try:
-            nm = prep(sb) or name or _NAME190
-            tree, listing = sb.tree(), sb.backups()
-            out, (state, why) = sb.vet(nm, undo_estimate)
-            return (state, str(why) if state != "ready" else "READY", sb.tree() == tree and sb.backups() == listing,
-                    out[-200:])
-        finally:
-            sb.gone()
-
-    def _outside190(sb):
-        _os190.makedirs(_os190.path.join(sb.root, "elsewhere"))
-        _os190.symlink(_os190.path.join(sb.root, "elsewhere"), _os190.path.join(sb.home, "serverfiles/maps"))
-
-    def _cut190(sb):
-        with open(sb.archive, "rb") as f:
-            data = f.read()
-        with open(sb.archive, "wb") as f:
-            f.write(data[:len(data) // 2])
-        _os190.utime(sb.archive, (_T0190, _T0190))
-
-    def _lock190(sb):
-        sb.put("lgsm/lock/backup.lock", str(int(_time190.time())))
-
-    def _sshlink190(sb):          # ~/.ssh a link to a folder the clear would otherwise empty
-        _os190.rename(_os190.path.join(sb.home, ".ssh"), _os190.path.join(sb.home, "dotssh"))
-        _os190.symlink("dotssh", _os190.path.join(sb.home, ".ssh"))
-
-    def _bklink190(sb):           # ~/lgsm/backup a link to ~/backups: every archive would be cleared
-        _os190.rename(sb.bdir, _os190.path.join(sb.home, "backups"))
-        _os190.symlink("../backups", sb.bdir)
-
     _ref = {
         "dotdot": lambda sb: _crafted190(sb, [("././../evil", _tf190.REGTYPE, "")]),
         "absolute": lambda sb: _crafted190(sb, [("/etc/evil", _tf190.REGTYPE, "")]),
@@ -401,17 +477,13 @@ else:
     for _k, _prep in _ref.items():
         _r190["ref_" + _k] = _refused190(_prep)
 
-    def _noscript190(sb):
-        buf = _io190.BytesIO()
-        with _tf190.open(fileobj=buf, mode="w") as t:
-            ti = _tf190.TarInfo("././serverfiles/x")
-            t.addfile(ti, _io190.BytesIO(b""))
-        with open(_os190.path.join(sb.bdir, "grsu-2026-11-03-120000.tar.gz"), "wb") as f:
-            f.write(_gz190.compress(buf.getvalue()))
-        return "grsu-2026-11-03-120000.tar.gz"
     _r190["ref_noscript"] = _refused190(_noscript190)
     _r190["ref_space"] = _refused190(lambda sb: None, undo_estimate=10 ** 18)
 
+
+def _sandbox6_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _saved_margin
     # More files and folders than free inodes (the margin raised past any filesystem): refused, nothing changed.
     _saved_margin = _grs190.INODE_MARGIN
     try:
@@ -423,6 +495,10 @@ else:
     finally:
         _grs190.INODE_MARGIN = _saved_margin
 
+
+def _sandbox7_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _saved_hb, _sb
     # A heartbeat while a long step runs (here a pause put after it starts), and none left behind.
     _saved_hb = _grs190.HEARTBEAT
     _sb = _Sb190()
@@ -442,26 +518,38 @@ else:
         _grs190.HEARTBEAT = _saved_hb
         _sb.gone()
 
+
+def _sandbox8_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _t
     # The heartbeat ends with its script: nothing holds the output (and the panel) after the last line.
     _t = _time190.time()
-    _sp190.run(["bash", "-c", "\n".join(_grs190._grs_heartbeat()) + "\nsleep 1\n"], capture_output=True,
+    _sp190.run(["bash", "-c", "\n".join(_grs190._grs_heartbeat()) + "\nsleep 1\n"], capture_output=True,  # nosec B603 B607
                timeout=120, cwd="/")
     _r190["heartbeat_ends"] = _time190.time() - _t < _grs190.HEARTBEAT / 2
 
+
+def _sandbox9_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _sb
     # The checks' last line cannot reach a panel that has gone: the archive is put back, not left held.
     _sb = _Sb190()
     try:
         _vs = _grs190.vet_script(_U190, _U190, _NAME190, 0).replace("/home/" + _U190, _sb.home)
-        _sp190.run(["bash", "-c", 'bash -c "$1" | true', "_", _vs], capture_output=True, timeout=180, cwd="/")
+        _sp190.run(["bash", "-c", 'bash -c "$1" | true', "_", _vs], capture_output=True, timeout=180, cwd="/")  # nosec B603 B607
         _r190["undelivered"] = (_os190.path.isfile(_sb.archive), [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f])
     finally:
         _sb.gone()
 
+
+def _sandbox10_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _sb
     # A process of the account still in serverfiles: the restore waits, then refuses with nothing cleared.
     _sb = _Sb190()
     try:
         _out, (_state, _ready) = _sb.vet()
-        _sleeper = _sp190.Popen(["sleep", "60"], cwd=_os190.path.join(_sb.home, "serverfiles"))
+        _sleeper = _sp190.Popen(["sleep", "60"], cwd=_os190.path.join(_sb.home, "serverfiles"))  # nosec B603 B607
         try:
             _tree = _sb.tree()
             _out, _res = _restore190(_sb, _ready)
@@ -472,6 +560,10 @@ else:
     finally:
         _sb.gone()
 
+
+def _sandbox11_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _sb
     # The archive damaged after the checks: the staging extraction fails, before anything is cleared.
     _sb = _Sb190()
     try:
@@ -488,44 +580,18 @@ else:
     finally:
         _sb.gone()
 
+
+def _sandbox12_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
     # Damaged so that tar fails while every entry still appears (the last member cut short), and an
     # archive that unpacks cleanly to far fewer entries than were counted: both refused at the staging.
-    def _staged190(damage):
-        sb = _Sb190()
-        try:
-            ready = sb.vet()[1][1]
-            tree = sb.tree()
-            held = [_f for _f in sb.backups() if _f.startswith(_NAME190.split(".tar.")[0] + _grs190.HOLD_INFIX)][0]
-            hp = _os190.path.join(sb.bdir, held)
-            _sh190.copyfile(hp, _os190.path.join(sb.bdir, _UNDO190))
-            with open(hp, "rb") as f:
-                raw = _gz190.decompress(f.read())
-            with open(hp, "wb") as f:
-                f.write(_gz190.compress(damage(raw)))
-            res = _restore190(sb, ready)[1]
-            return res[0], str(res[1]), sb.tree() == tree
-        finally:
-            sb.gone()
-
-    def _cut_last190(raw):
-        end = len(raw.rstrip(b"\0"))
-        end += (-end) % 512
-        ti = _tf190.TarInfo("././zz-last")
-        ti.size = 4096
-        return raw[:end] + ti.tobuf(format=_tf190.GNU_FORMAT) + b"z" * 100
-
-    def _fewer190(raw):
-        buf = _io190.BytesIO()
-        with _tf190.open(fileobj=buf, mode="w", format=_tf190.GNU_FORMAT) as t:
-            for mname, data in (("././", None), ("././" + _U190, b"#!/bin/bash\n")):
-                ti = _tf190.TarInfo(mname)
-                ti.type = _tf190.DIRTYPE if data is None else _tf190.REGTYPE
-                ti.size, ti.mode = len(data or b""), 0o755
-                t.addfile(ti, _io190.BytesIO(data) if data else None)
-        return buf.getvalue()
     _r190["stage_rc"] = _staged190(_cut_last190)
     _r190["stage_count"] = _staged190(_fewer190)
 
+
+def _sandbox13_190():
+    """One block of the stand-in-home checks (each its own function, to stay small)."""
+    global _sb
     # An interrupted restore left the archive held: the next restore's checks put it back first.
     _sb = _Sb190()
     try:
@@ -537,6 +603,24 @@ else:
                              [_f for _f in _sb.backups() if _grs190.HOLD_INFIX in _f], _held)
     finally:
         _sb.gone()
+
+
+if _missing190:
+    skip("restore commands: run on a stand-in home", "missing here: %s" % ", ".join(_missing190))
+else:
+    _sandbox1_190()
+    _sandbox2_190()
+    _sandbox3_190()
+    _sandbox4_190()
+    _sandbox5_190()
+    _sandbox6_190()
+    _sandbox7_190()
+    _sandbox8_190()
+    _sandbox9_190()
+    _sandbox10_190()
+    _sandbox11_190()
+    _sandbox12_190()
+    _sandbox13_190()
 
 if "vet" in _r190:
     eq("restore commands: the checks pass on a LinuxGSM backup made by LinuxGSM's own tar command",
@@ -857,6 +941,8 @@ check("held: the server page's actions are refused in the restore's own words",
 eq("held: a backup of the server waits, except the restore's own undo backup", _hold190[1:], (True, False))
 
 # ── 6. uploading a game server's backup, through the app, onto a stand-in host ──────────────────
+
+
 def _tar190(members, compress="gz"):
     """A tar of `members` [(name, bytes)] ("./" names), compressed as asked ("gz", "plain")."""
     buf = _io190.BytesIO()
@@ -900,7 +986,7 @@ def _fake_run190(server, cmd, timeout=30, sudo=None, stdin_text=None):
         _parts = [bytes(c) for c in stdin_text]
         _chunks190.append(max(len(c) for c in _parts))
         stdin_text = b"".join(_parts).decode("ascii")
-    p = _sp190.run(["bash", "-c", cmd.replace("/home/" + _short190, _uhome190)], input=stdin_text,
+    p = _sp190.run(["bash", "-c", cmd.replace("/home/" + _short190, _uhome190)], input=stdin_text,  # nosec B603 B607
                    capture_output=True, text=True, timeout=120, cwd="/")
     return p.stdout, p.stderr, p.returncode
 
@@ -1173,7 +1259,6 @@ eq("stdin: bytes are written in slices of at most 64 KB that join to the whole; 
    (True, True, True, [b"a" * 10, b"b" * 20], "é".encode("utf-8")))
 
 
-
 class _Chan190:
     def __init__(self):
         self.log = []
@@ -1207,7 +1292,7 @@ finally:
 eq("backup path: a proven backup hands back the name of the archive it wrote", (_ok190[0], _mk190), (True, ["p190-x.tar.zst"]))
 
 # ── 9. the panel's Backups page offers Restore on each game backup; the card stacks on a phone ────────
-from unit.part47 import _SETTLE47 as _SET190, _cut47 as _cut190, _node47 as _node190
+from unit.part47 import _SETTLE47 as _SET190, _cut47 as _cutjs190, _node47 as _node190
 with open(_os190.path.join(_os190.path.dirname(_auth190.__file__), "..", "static", "js", "remote_manage_backups.js"),
           encoding="utf-8") as _f190:
     _RMB190 = _f190.read()
@@ -1217,7 +1302,7 @@ _ui190 = _node190(_SET190 + (
     "global.bkMsg = () => {}; global.loadBackups = () => {}; let posted = [], need = null;\n"
     "global.confirmDialog = o => { need = o.requireText; o.onConfirm(); };\n"
     "global.fetch = (u, o) => { posted.push([u, JSON.parse(o.body)]); return Promise.resolve({json: () => ({success: true})}); };\n"
-    + _cut190(_RMB190, "function bkGameRows(") + "\n" + _cut190(_RMB190, "function restoreGameBackup(") + "\n"
+    + _cutjs190(_RMB190, "function bkGameRows(") + "\n" + _cutjs190(_RMB190, "function restoreGameBackup(") + "\n"
     "const html = bkGameRows({id: 7, name: 'My Server', backups: [{name: 'ms-2026-11-01-000000.tar.gz', size: 1, created: 0}]});\n"
     "const at = {'data-name': 'ms-2026-11-01-000000.tar.gz', 'data-gid': '7', 'data-server': 'My Server'};\n"
     "restoreGameBackup({getAttribute: k => at[k]});\n"
@@ -1232,11 +1317,12 @@ else:
 with open(_os190.path.join(_os190.path.dirname(_auth190.__file__), "..", "static", "css", "panel.css"),
           encoding="utf-8") as _f190:
     _css190 = _f190.read()
-_mob190 = _css190[_css190.find("@media (max-width: 575.98px) {\n  #backup-card thead"):]
+_mob190 = _css190[_css190.find("@media (width <= 575.98px) {\n  #backup-card thead"):]
+_mob190 = _mob190[:_mob190.find("\n}\n")]
 check("Backups card on a phone: rows wrap (name on its own line, the buttons below it) with 40px buttons",
-      "#backup-card #bk-rows tr { display: flex; flex-wrap: wrap;" in _mob190
-      and "#backup-card #bk-rows td:first-child { flex: 0 0 100%; }" in _mob190
-      and "min-width: 40px; min-height: 40px;" in _mob190, "")
+      "#backup-card #bk-rows tr {\n    display: flex;\n    flex-wrap: wrap;" in _mob190
+      and "#backup-card #bk-rows td:first-child {\n    flex: 0 0 100%;" in _mob190
+      and "min-width: 40px;\n    min-height: 40px;" in _mob190, "")
 
 with _p9.app_context():
     for _u in _PU190.query.filter(_PU190.username.like("p190_%")).all():

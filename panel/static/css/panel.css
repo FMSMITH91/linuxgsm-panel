@@ -2089,13 +2089,40 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 /* A game server's Backups card on a phone: each backup is a block, its name on a line of its own and
    size, date and the Download / Delete / Restore buttons wrapping below, so no button sits behind a
    sideways scroll; the buttons are 40px touch targets. */
-@media (max-width: 575.98px) {
-  #backup-card thead { display: none; }
-  #backup-card #bk-rows tr { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem;
-    padding: .35rem 0; border-bottom: 1px solid var(--bs-border-color); }
-  #backup-card #bk-rows td { display: block; border: 0; padding: 0 .25rem; }
-  #backup-card #bk-rows td:first-child { flex: 0 0 100%; }
-  #backup-card #bk-rows td:last-child { margin-left: auto; white-space: nowrap; }
-  #backup-card #bk-rows td .btn { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center;
-    justify-content: center; }
+@media (width <= 575.98px) {
+  #backup-card thead {
+    display: none;
+  }
+
+  #backup-card #bk-rows tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .25rem .5rem;
+    padding: .35rem 0;
+    border-bottom: 1px solid var(--bs-border-color);
+  }
+
+  #backup-card #bk-rows td {
+    display: block;
+    border: 0;
+    padding: 0 .25rem;
+  }
+
+  #backup-card #bk-rows td:first-child {
+    flex: 0 0 100%;
+  }
+
+  #backup-card #bk-rows td:last-child {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  #backup-card #bk-rows td .btn {
+    min-width: 40px;
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
 }

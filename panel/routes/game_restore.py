@@ -450,7 +450,7 @@ class _GrsRun:
             self.app.logger.warning("could not put back the held archive %s", self.name, exc_info=True)
 
     def start_again(self):
-        """LinuxGSM `start` when the restore stopped the server; the sentence that says what became of it ("" else)."""
+        """Start the server with LinuxGSM when the restore stopped it; the sentence that says what became of it ("" else)."""
         if not self.up:
             return ""
         gs = self.gs
@@ -469,11 +469,11 @@ class _GrsRun:
     def finish(self, ok, *parts):
         """Record the outcome once: the card's status, the audit row, and an alert when it failed.
 
-        `parts`: whole sentences said one after another (an empty one is left out). Returns False, so
-        a step can end with `return self.finish(...)`.
+        `parts`: whole sentences said one after another (an empty one is left out). Returns nothing, so
+        a step can end with `return self.finish(...)` (falsy).
         """
         if self.done:
-            return False
+            return
         self.done = True
         gs = self.gs
         if self.t0:
@@ -494,4 +494,3 @@ class _GrsRun:
             self.app.logger.warning("could not audit the restore of %s", gs.name, exc_info=True)
         if not ok:
             _shared._alert_backup(self.app, gs, "Restore from a backup did not complete", "%s: %s" % (gs.name, detail))
-        return False

@@ -566,7 +566,7 @@ def _grs_refusal(marks, table):
 
 
 def _grs_ready(line):
-    """READY's values ({"up", "t0", "need", "members"}), or None when the line is not whole."""
+    """The values the READY line carries ({"up", "t0", "need", "members"}), or None when it is not whole."""
     got = (line or "").split()
     parts = got + ["0"] * 6
     if len(got) < 3 or parts[1] not in ("0", "1") or not parts[2].isdecimal():

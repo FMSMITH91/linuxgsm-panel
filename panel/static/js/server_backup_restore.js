@@ -47,7 +47,8 @@ function restoreBk(btn){
         .then(r=>r.json()).then(function(d){
           window.toast(d.message || (d.success?tf('Restore started'):tf('Restore failed')), d.success?'success':'danger');
           loadBackups();
-          if(d.success && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
+          // window._bkPoll: the poll server_files.js keeps (a page-wide var there).
+          if(d.success && !window._bkPoll) window._bkPoll=setInterval(loadBackups, 4000);
           if(!d.success) btn.disabled=false;
         }).catch(function(){ window.toast(tf('Restore failed'),'danger'); btn.disabled=false; });
     }});

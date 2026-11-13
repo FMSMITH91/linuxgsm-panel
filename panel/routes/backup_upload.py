@@ -80,18 +80,23 @@ def _bup_size(limit):
     return size
 
 
-def _bup_piece(entry, chunk):
-    """(offset, bytes) of a piece request that fits its upload, or (None, refusal response)."""
+def _bup_offset():
+    """The piece request's ?offset= as a whole number, or -1."""
     try:
-        offset = int(request.args.get("offset", ""))
+        return int(request.args.get("offset", ""))
     except ValueError:
-        offset = -1
-    data = request.get_data(cache=True)
-    if not data or len(data) > chunk:
-        return None, (jsonify({"success": False, "message": i18n.tr("Each piece must be 1 byte to 4 MB.")}), 413)
-    if offset < 0 or offset + len(data) > entry["size"]:
-        return None, (jsonify({"success": False, "message": i18n.tr("That piece does not fit the upload.")}), 400)
-    return offset, data
+        return -1
+
+
+def _bup_piece_refusal(entry, chunk):
+    """The refusal for a piece request that does not fit its upload (a response), or None."""
+    size = len(request.get_data(cache=True))
+    if not size or size > chunk:
+        return jsonify({"success": False, "message": i18n.tr("Each piece must be 1 byte to 4 MB.")}), 413
+    offset = _bup_offset()
+    if offset < 0 or offset + size > entry["size"]:
+        return jsonify({"success": False, "message": i18n.tr("That piece does not fit the upload.")}), 400
+    return None
 
 
 def _bup_too_big(limit):
@@ -122,30 +127,7 @@ def _register_game(app):
     @server_access_required
     def api_panel_backup_game_upload(server_id):
         """Start an upload: check the size against the cap and the host's free space, make the part file."""
-        gs = get_game(server_id)
-        refused = _bup_no_edit()
-        if refused is not None:
-            return refused
-        if not gs.installed or not gs.remote_id:
-            return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
-        why = _shared.game_account_write_refusal(gs.remote, gs.short_name)
-        if why is not None:
-            log_action(current_user, "game_backup_upload", target=gs.name, success=False, server=gs,
-                       detail="refused: %s" % why)
-            return jsonify({"success": False, "message": i18n.tr(why)}), 409
-        size = _bup_size(grs.UPLOAD_MAX)
-        if size is None:
-            return _bup_too_big(grs.UPLOAD_MAX)
-        uid = _bup_new("game", gs.id, size)
-        if uid is None:
-            return jsonify({"success": False, "message": i18n.tr("An upload to this server is already running.")}), 409
-        state, val = _bup_game_run(gs, grs.upload_start_script(gs.short_name, uid, size), 60)
-        if state != "ok":
-            _bup_drop(uid)
-            log_action(current_user, "game_backup_upload", target=gs.name, success=False, server=gs,
-                       detail="refused: %s" % val)
-            return jsonify({"success": False, "message": i18n.tr(val)}), 200
-        return jsonify({"success": True, "id": uid, "chunk": grs.UPLOAD_CHUNK})
+        return _bup_game_start(server_id)
 
     @app.route("/api/panel/backup/game/<int:server_id>/upload/<uid>", methods=["POST"])
     @login_required
@@ -153,22 +135,7 @@ def _register_game(app):
     @server_access_required
     def api_panel_backup_game_upload_piece(server_id, uid):
         """Append one piece at its offset; answers how much the host holds now."""
-        gs = get_game(server_id)
-        entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
-        if entry is None:
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        offset, data = _bup_piece(entry, grs.UPLOAD_CHUNK)
-        if offset is None:
-            return data
-        state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, uid, offset), _GAME_PIECE_TIMEOUT,
-                                   stdin=_bup_b64_chunks(data))
-        if state == "ok" and str(val).isdecimal():
-            entry["got"] = int(val)
-            return jsonify({"success": True, "received": entry["got"]})
-        if state == "offset":
-            entry["got"] = val
-            return jsonify({"success": False, "received": val, "resume": True}), 409
-        return jsonify({"success": False, "message": i18n.tr(val)}), 200
+        return _bup_game_piece(server_id, uid)
 
     @app.route("/api/panel/backup/game/<int:server_id>/upload/<uid>/finish", methods=["POST"])
     @login_required
@@ -180,24 +147,7 @@ def _register_game(app):
         A finish whose answer did not come back keeps the upload, so the page can ask again (the part
         file is still there unless the check refused it).
         """
-        gs = get_game(server_id)
-        entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
-        if entry is None:
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name, uid,
-                                                                entry["size"], time.time()), _GAME_FINISH_TIMEOUT)
-        if state == "unread":
-            return jsonify({"success": False, "retry": True, "message": i18n.tr(val)}), 200
-        _bup_drop(uid)
-        ok = state == "ok"
-        detail = ("%s (%d bytes)" % (val, entry["size"])) if ok else ("refused: %s" % val)
-        log_action(current_user, "game_backup_upload", target=gs.name, success=ok, server=gs, detail=detail[:500])
-        if not ok:
-            return jsonify({"success": False, "message": i18n.tr(
-                "The upload was not kept: {why}.", why=val if state == "refused" else i18n.Sentence(
-                    "it is not all on the host"))}), 200
-        return jsonify({"success": True, "name": val, "message": i18n.tr(
-            "Uploaded as {name}. Restore it from the list.", name=val)})
+        return _bup_game_finish(server_id, uid)
 
 
 def _register_game_cancel(app):
@@ -208,13 +158,7 @@ def _register_game_cancel(app):
     @server_access_required
     def api_panel_backup_game_upload_cancel(server_id, uid):
         """Cancel an upload: its part file (and a staged piece) removed, the upload forgotten."""
-        gs = get_game(server_id)
-        entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
-        if entry is None:
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        _bup_drop(uid)
-        state, _val = _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, uid), 60)
-        return jsonify({"success": state == "ok"})
+        return _bup_game_cancel(server_id, uid)
 
 
 _BUP_B64_STEP = 49152      # a multiple of 3, so each slice's base64 joins the next without padding
@@ -245,66 +189,171 @@ def _register_panel(app):
     @superadmin_required
     def api_panel_backup_upload():
         """Start an upload of a panel backup: the size checked, the part file made."""
-        size = _bup_size(bk.UPLOAD_MAX)
-        if size is None:
-            return _bup_too_big(bk.UPLOAD_MAX)
-        uid = _bup_new("panel", 0, size)
-        if uid is None:
-            return jsonify({"success": False, "message": i18n.tr("A panel backup upload is already running.")}), 409
-        refusal = bk.upload_begin(uid, size)
-        if refusal:
-            _bup_drop(uid)
-            return jsonify({"success": False, "message": i18n.tr(refusal)}), 200
-        return jsonify({"success": True, "id": uid, "chunk": bk.UPLOAD_CHUNK})
+        return _bup_panel_start()
 
     @app.route("/api/panel/backup/upload/<uid>", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_backup_upload_piece(uid):
         """Append one piece at its offset."""
-        entry = _bup_get(uid, "panel", 0)
-        if entry is None:
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        offset, data = _bup_piece(entry, bk.UPLOAD_CHUNK)
-        if offset is None:
-            return data
-        ok, now = bk.upload_append(uid, offset, data)
-        entry["got"] = max(now, 0)
-        if ok:
-            return jsonify({"success": True, "received": now})
-        if now < 0:
-            _bup_drop(uid)
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        return jsonify({"success": False, "received": now, "resume": True}), 409
+        return _bup_panel_piece(uid)
 
     @app.route("/api/panel/backup/upload/<uid>/cancel", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_backup_upload_cancel(uid):
         """Cancel a panel backup upload: its part file removed, the upload forgotten."""
-        if _bup_get(uid, "panel", 0) is None:
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-        _bup_drop(uid)
-        bk.upload_discard(uid)
-        return jsonify({"success": True})
+        return _bup_panel_cancel(uid)
 
     @app.route("/api/panel/backup/upload/<uid>/finish", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_backup_upload_finish(uid):
         """Check the archive as a restore would and list it under a generated name."""
-        entry = _bup_get(uid, "panel", 0)
-        if entry is None:
-            return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+        return _bup_panel_finish(uid)
+
+
+def _bup_game_start(server_id):
+    """Start an upload: check the size against the cap and the host's free space, make the part file."""
+    gs = get_game(server_id)
+    refused = _bup_no_edit()
+    if refused is not None:
+        return refused
+    if not gs.installed or not gs.remote_id:
+        return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
+    why = _shared.game_account_write_refusal(gs.remote, gs.short_name)
+    if why is not None:
+        log_action(current_user, "game_backup_upload", target=gs.name, success=False, server=gs,
+                   detail="refused: %s" % why)
+        return jsonify({"success": False, "message": i18n.tr(why)}), 409
+    size = _bup_size(grs.UPLOAD_MAX)
+    if size is None:
+        return _bup_too_big(grs.UPLOAD_MAX)
+    uid = _bup_new("game", gs.id, size)
+    if uid is None:
+        return jsonify({"success": False, "message": i18n.tr("An upload to this server is already running.")}), 409
+    state, val = _bup_game_run(gs, grs.upload_start_script(gs.short_name, uid, size), 60)
+    if state != "ok":
         _bup_drop(uid)
-        try:
-            ok, res = bk.upload_finish(uid, entry["size"])
-        except Exception:
-            bk.upload_discard(uid)
-            return jsonify({"success": False, "message": _log_and_generic("panel backup upload failed")}), 200
-        log_action(current_user, "panel_backup_upload", target=LOCAL_HOST_LABEL, success=ok,
-                   detail=(("%s (%d bytes)" % (res, entry["size"])) if ok else "refused: %s" % res)[:500])
-        if not ok:
-            why = res if isinstance(res, i18n.Sentence) else i18n.Sentence(res)
-            return jsonify({"success": False, "message": i18n.tr("The upload was not kept: {why}", why=why)}), 200
-        return jsonify({"success": True, "name": res, "message": i18n.tr("Uploaded as {name}.", name=res)})
+        log_action(current_user, "game_backup_upload", target=gs.name, success=False, server=gs,
+                   detail="refused: %s" % val)
+        return jsonify({"success": False, "message": i18n.tr(val)}), 200
+    return jsonify({"success": True, "id": uid, "chunk": grs.UPLOAD_CHUNK})
+
+
+def _bup_game_piece(server_id, uid):
+    """Append one piece at its offset; answers how much the host holds now."""
+    gs = get_game(server_id)
+    entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
+    if entry is None:
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    refused = _bup_piece_refusal(entry, grs.UPLOAD_CHUNK)
+    if refused is not None:
+        return refused
+    state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, uid, _bup_offset()), _GAME_PIECE_TIMEOUT,
+                               stdin=_bup_b64_chunks(request.get_data(cache=True)))
+    if state == "ok" and str(val).isdecimal():
+        entry["got"] = int(val)
+        return jsonify({"success": True, "received": entry["got"]})
+    if state == "offset":
+        entry["got"] = val
+        return jsonify({"success": False, "received": val, "resume": True}), 409
+    return jsonify({"success": False, "message": i18n.tr(val)}), 200
+
+
+def _bup_game_finish(server_id, uid):
+    """Check the whole archive as a restore does and list it under a LinuxGSM backup's name.
+
+        A finish whose answer did not come back keeps the upload, so the page can ask again (the part
+        file is still there unless the check refused it).
+        """
+    gs = get_game(server_id)
+    entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
+    if entry is None:
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name, uid,
+                                                            entry["size"], time.time()), _GAME_FINISH_TIMEOUT)
+    if state == "unread":
+        return jsonify({"success": False, "retry": True, "message": i18n.tr(val)}), 200
+    _bup_drop(uid)
+    ok = state == "ok"
+    detail = ("%s (%d bytes)" % (val, entry["size"])) if ok else ("refused: %s" % val)
+    log_action(current_user, "game_backup_upload", target=gs.name, success=ok, server=gs, detail=detail[:500])
+    if not ok:
+        return jsonify({"success": False, "message": i18n.tr(
+            "The upload was not kept: {why}.", why=val if state == "refused" else i18n.Sentence(
+                "it is not all on the host"))}), 200
+    return jsonify({"success": True, "name": val, "message": i18n.tr(
+        "Uploaded as {name}. Restore it from the list.", name=val)})
+
+
+def _bup_game_cancel(server_id, uid):
+    """Cancel an upload: its part file (and a staged piece) removed, the upload forgotten."""
+    gs = get_game(server_id)
+    entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
+    if entry is None:
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    _bup_drop(uid)
+    state, _val = _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, uid), 60)
+    return jsonify({"success": state == "ok"})
+
+
+def _bup_panel_start():
+    """Start an upload of a panel backup: the size checked, the part file made."""
+    size = _bup_size(bk.UPLOAD_MAX)
+    if size is None:
+        return _bup_too_big(bk.UPLOAD_MAX)
+    uid = _bup_new("panel", 0, size)
+    if uid is None:
+        return jsonify({"success": False, "message": i18n.tr("A panel backup upload is already running.")}), 409
+    refusal = bk.upload_begin(uid, size)
+    if refusal:
+        _bup_drop(uid)
+        return jsonify({"success": False, "message": i18n.tr(refusal)}), 200
+    return jsonify({"success": True, "id": uid, "chunk": bk.UPLOAD_CHUNK})
+
+
+def _bup_panel_piece(uid):
+    """Append one piece at its offset."""
+    entry = _bup_get(uid, "panel", 0)
+    if entry is None:
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    refused = _bup_piece_refusal(entry, bk.UPLOAD_CHUNK)
+    if refused is not None:
+        return refused
+    ok, now = bk.upload_append(uid, _bup_offset(), request.get_data(cache=True))
+    entry["got"] = max(now, 0)
+    if ok:
+        return jsonify({"success": True, "received": now})
+    if now < 0:
+        _bup_drop(uid)
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    return jsonify({"success": False, "received": now, "resume": True}), 409
+
+
+def _bup_panel_cancel(uid):
+    """Cancel a panel backup upload: its part file removed, the upload forgotten."""
+    if _bup_get(uid, "panel", 0) is None:
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    _bup_drop(uid)
+    bk.upload_discard(uid)
+    return jsonify({"success": True})
+
+
+def _bup_panel_finish(uid):
+    """Check the archive as a restore would and list it under a generated name."""
+    entry = _bup_get(uid, "panel", 0)
+    if entry is None:
+        return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
+    _bup_drop(uid)
+    try:
+        ok, res = bk.upload_finish(uid, entry["size"])
+    except Exception:
+        bk.upload_discard(uid)
+        return jsonify({"success": False, "message": _log_and_generic("panel backup upload failed")}), 200
+    log_action(current_user, "panel_backup_upload", target=LOCAL_HOST_LABEL, success=ok,
+               detail=(("%s (%d bytes)" % (res, entry["size"])) if ok else "refused: %s" % res)[:500])
+    if not ok:
+        why = res if isinstance(res, i18n.Sentence) else i18n.Sentence(res)
+        return jsonify({"success": False, "message": i18n.tr("The upload was not kept: {why}", why=why)}), 200
+    return jsonify({"success": True, "name": res, "message": i18n.tr("Uploaded as {name}.", name=res)})
