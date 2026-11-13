@@ -1,4 +1,5 @@
-// The Schedule tab's scheduled wipe card (server_files.html #wipe-card, Rust only).
+// The Schedule tab's scheduled wipe card (server_files.html #wipe-card): Rust's map/full wipe, and the
+// world reset of Minecraft Java and Factorio (#wipe-kind is then a hidden input holding "reset").
 // The server runs the wipe (panel/routes/wipe_schedule.py): a backup first, no wipe if it failed.
 // Times are entered in the viewer's own zone, which is sent with the schedule and kept with it.
 (function () {
@@ -16,7 +17,8 @@
 
   // The form takes the stored schedule back, so Save re-saves what is there.
   function showForm(d) {
-    el('wipe-kind').value = d.kind || 'map';
+    var kind = el('wipe-kind');
+    if (kind.tagName === 'SELECT') kind.value = d.kind || 'map';   // a world reset has one kind, fixed
     el('wipe-preset').value = d.preset || 'first-thursday';
     if (d.at) el('wipe-at').value = d.at;
     el('wipe-cron').value = d.preset === 'custom' ? (d.cron || '') : '';
@@ -73,16 +75,19 @@
   // Saving a schedule is the destructive choice, so it is confirmed, naming what will be deleted.
   window.saveWipeSchedule = function (ev) {
     ev.preventDefault();
-    var full = el('wipe-kind').value === 'full';
-    var body = {enabled: true, kind: el('wipe-kind').value, preset: el('wipe-preset').value,
+    var kind = el('wipe-kind').value;
+    var body = {enabled: true, kind: kind, preset: el('wipe-preset').value,
                 at: el('wipe-at').value, cron: el('wipe-cron').value, tz: viewerTz(),
                 wait_empty: el('wipe-wait').checked};
+    var said = {
+      full: [t('Schedule a full wipe?'), t('On every scheduled run the map, saves, blueprints and player data are deleted. A backup is taken first; if it fails, nothing is wiped.')],
+      map: [t('Schedule a map wipe?'), t('On every scheduled run the map and saves are deleted; blueprints are kept. A backup is taken first; if it fails, nothing is wiped.')],
+      reset: [t('Schedule a world reset?'), t('On every scheduled run the world is deleted and a new one is created. A backup is taken first; if it fails, nothing is deleted.')]
+    }[kind] || [];
     window.confirmDialog({
-      title: full ? t('Schedule a full wipe?') : t('Schedule a map wipe?'),
+      title: said[0],
       icon: 'exclamation-triangle-fill', confirmClass: 'btn-danger', confirmLabel: t('Schedule wipe'),
-      bodyText: full
-        ? t('On every scheduled run the map, saves, blueprints and player data are deleted. A backup is taken first; if it fails, nothing is wiped.')
-        : t('On every scheduled run the map and saves are deleted; blueprints are kept. A backup is taken first; if it fails, nothing is wiped.'),
+      bodyText: said[1],
       onConfirm: function () { void post(body); }   // post ends in its own .catch
     });
     return false;

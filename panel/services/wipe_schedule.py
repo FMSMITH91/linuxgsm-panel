@@ -1,4 +1,7 @@
-"""Scheduled map / full wipes for games whose LinuxGSM script has `wipe` and `full-wipe` (Rust).
+"""Scheduled wipes for Rust, and world resets for Minecraft Java and Factorio.
+
+Rust uses LinuxGSM's map / full wipe (`wipe` / `full-wipe`). The games in services/world_reset.py
+(Minecraft Java, Factorio) get a world reset instead, which LinuxGSM has no command for.
 
 What LinuxGSM does (lgsm/modules/command_wipe.sh, core_getopt.sh, v26.5.0): only `rust` gets the
 two commands. `wipe` (map-wipe) deletes the server identity's *.map and *.sav* files and keeps
@@ -18,12 +21,28 @@ import zoneinfo
 
 from panel.core import i18n, terminal
 from panel.core.config import load_config, update_config
-from panel.services import lgsm_players as _lgp
+from panel.services import lgsm_players as _lgp, world_reset
 
 # Games whose LinuxGSM script offers wipe/full-wipe (core_getopt.sh: `[ "${shortname}" == "rust" ]`).
-WIPE_GAMES = frozenset(("rust",))
+LGSM_WIPE_GAMES = frozenset(("rust",))
+# Every game the schedule card is offered for: LinuxGSM's wipe, or the panel's world reset.
+WIPE_GAMES = LGSM_WIPE_GAMES | world_reset.GAMES
 # The panel's kind -> LinuxGSM's command.
 WIPE_COMMANDS = {"map": "wipe", "full": "full-wipe"}
+
+
+def kinds_for(game_type):
+    """The kinds a schedule may hold for `game_type` (a frozenset): map/full for Rust, the reset for the others."""
+    if game_type in LGSM_WIPE_GAMES:
+        return frozenset(WIPE_COMMANDS)
+    return frozenset((world_reset.KIND,)) if game_type in world_reset.GAMES else frozenset()
+
+
+def kind_refusal(game_type):
+    """The card's refusal of a kind `game_type` does not take."""
+    return "kind must be reset." if game_type in world_reset.GAMES else "kind must be map or full."
+
+
 PRESETS = ("first-thursday", "weekly-thursday", "custom")
 # A due wipe the panel could not start within this long (it was not running at the time) is skipped,
 # not run late: a wipe days after the announced time is a surprise to everyone on the server.
@@ -146,7 +165,7 @@ def next_after(spec, after, tz_name):
 
 def describe(entry):
     """A short English line for the page and the audit row: kind, schedule, zone."""
-    what = "Full wipe" if entry.get("kind") == "full" else "Map wipe"
+    what = {"full": "Full wipe", world_reset.KIND: "World reset"}.get(entry.get("kind"), "Map wipe")
     return "%s, cron '%s'%s (%s)" % (what, entry.get("cron", ""),
                                      " (first Thursday)" if entry.get("preset") == "first-thursday" else "",
                                      entry.get("tz") or "UTC")

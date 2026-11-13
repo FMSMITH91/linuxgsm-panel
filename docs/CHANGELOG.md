@@ -14,6 +14,13 @@ compares git commits, not this file.
 
 ### Added
 
+- **Scheduled world resets for Minecraft and Factorio.** The wipe card on the Schedule tab can reset
+  a Minecraft Java or Factorio world on a schedule. The server is stopped, backed up with LinuxGSM,
+  its world is deleted, Factorio gets a new map made the way LinuxGSM's install makes it, and the
+  server is started again. Ops, the whitelist, bans, mods and server settings are kept. A server
+  that was stopped stays stopped, and the panel refuses rather than delete a world it cannot
+  identify.
+
 - **Separate permissions for a server's files and its backups.** Groups can be given View game
   server files and Change game server files instead of the whole Manage servers permission, and a
   game server's backups can be downloaded or deleted by groups given Download or Delete backup

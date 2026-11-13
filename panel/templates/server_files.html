@@ -553,18 +553,29 @@
   </div>
 </div>
 
-{# The scheduled wipe, for the games whose LinuxGSM script has wipe/full-wipe (Rust). The panel runs
-   it (panel/routes/wipe_schedule.py): a backup first, and no wipe if that backup failed. The form
-   is rendered whole, and the script only fills its values, so nothing moves when it loads. #}
+{# The scheduled wipe: LinuxGSM's wipe/full-wipe for Rust, the panel's world reset for Minecraft Java
+   and Factorio (one kind, no map/full choice). The panel runs it (panel/routes/wipe_schedule.py): a
+   backup first, and no wipe if that backup failed. The form is rendered whole, and the script only
+   fills its values, so nothing moves when it loads. #}
 {% if wipe_supported(server.game_type) %}
+{% set wipe_reset = wipe_reset_game(server.game_type) %}
 <div class="card mt-3" id="wipe-card" data-sfsub="schedule" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <span><i class="bi bi-eraser-fill"></i> Scheduled wipe <span class="badge bg-danger">Destructive</span></span>
+    <span><i class="bi bi-eraser-fill"></i> {% if wipe_reset %}Scheduled world reset{% else %}Scheduled wipe{% endif %} <span class="badge bg-danger">Destructive</span></span>
     <span class="text-secondary" style="font-size:.66rem;" id="wipe-state">Off</span>
   </div>
   <div class="card-body">
+    {% if server.game_type == 'mc' %}
+    <p class="small text-secondary mb-2">World reset: deletes the world (its overworld, nether and end folders) and starts a new one; ops, whitelist, bans and server.properties are kept. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped.</p>
+    {% elif server.game_type == 'fctr' %}
+    <p class="small text-secondary mb-2">World reset: deletes the map save and its autosaves and creates a new map the way LinuxGSM's install does (Factorio's default map settings); server settings, mods and other saves are kept. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Factorio's players cannot be counted, so with “Wait until the server is empty” ticked the reset waits and gives up after 12 hours: leave it unticked.</p>
+    {% else %}
     <p class="small text-secondary mb-2">A map wipe deletes the map and saves and keeps blueprints. A full wipe also deletes blueprints and player data (not Rust+ pairing). The panel takes a LinuxGSM backup first and does not wipe if that backup fails.</p>
+    {% endif %}
     <form id="wipe-form" class="row g-2 align-items-end" data-action="saveWipeSchedule" data-args='["@event"]' data-on="submit">
+      {% if wipe_reset %}
+      <input type="hidden" id="wipe-kind" value="reset">
+      {% else %}
       <div class="col-6 col-md-2">
         <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-kind">Wipe</label>
         <select id="wipe-kind" class="form-select form-select-sm">
@@ -572,6 +583,7 @@
           <option value="full">Full wipe</option>
         </select>
       </div>
+      {% endif %}
       <div class="col-6 col-md-3">
         <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-preset">When</label>
         <select id="wipe-preset" class="form-select form-select-sm" data-action="wipePresetChanged" data-on="change">
@@ -594,7 +606,7 @@
       </div>
       <div class="col-12">
         <div class="form-check mb-0">
-          <input class="form-check-input" type="checkbox" id="wipe-wait" checked>
+          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type != 'fctr' %} checked{% endif %}>
           <label class="form-check-label small" for="wipe-wait">Wait until the server is empty (up to 12 hours)</label>
         </div>
       </div>
