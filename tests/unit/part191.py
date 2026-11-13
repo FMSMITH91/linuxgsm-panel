@@ -79,7 +79,7 @@ check("world reset pmc: the same options in extraparams, or after the jar in `ex
 _PRE_OK191 = ("java -Xmx${javaram}M -jar", "java -Xms2G -Xmx4G -XX:+UseG1GC -Dcom.mojang.eula.agree=true -jar",
               "/usr/lib/jvm/java-21-openjdk-amd64/bin/java -Xmx$javaram -jar")
 _PRE_BAD191 = {"Paper options after -jar": "java -Xmx2G -jar ./paper.jar --world-dir /srv/w",
-               "a wrapper before java": "env -C /srv java -jar", "an @argfile": "java @jvm.args -jar",
+               "a wrapper before java": "env -C /srv java -jar", "another program": "python3 -jar", "an @argfile": "java @jvm.args -jar",
                "user.dir moved": "java -Duser.dir=/srv -jar", "a word that is not an option": "java -cp x.jar -jar",
                "no -jar": "java -Xmx2G", "shell syntax": "java -Xmx${heap} -jar", "nothing at all": ""}
 check("world reset preexecutable: LinuxGSM's own (java -Xmx${javaram}M -jar), other JVM options and a full path "
