@@ -469,10 +469,16 @@ def _cmpd_attempt(app, gs, entry, now):
         if _r39a_other_work(gs.id):
             _r37b_wait(gs.id, i18n.Sentence("another action on this server is running"))
             return None
-        if gs.game_type in _wwr.GAMES:
-            _wwr_run(app, gs, entry)        # its own order: the backup is taken with the server stopped
-        elif _cmpd_backup_first(app, gs, entry) and _r37b_still_due(app, gs, entry):
-            _cmpd_run_wipe(app, gs, entry)
+        _cmpd_try(app, gs, entry)
+    return None
+
+
+def _cmpd_try(app, gs, entry):
+    """The wipe itself, once nothing holds it: a world reset's own order, or Rust's backup then wipe."""
+    if gs.game_type in _wwr.GAMES:
+        return _wwr_run(app, gs, entry)     # its own order: the backup is taken with the server stopped
+    if _cmpd_backup_first(app, gs, entry) and _r37b_still_due(app, gs, entry):
+        _cmpd_run_wipe(app, gs, entry)
     return None
 
 
