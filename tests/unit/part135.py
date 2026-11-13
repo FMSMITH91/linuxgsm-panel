@@ -218,8 +218,10 @@ for _sh in _SHELLS135:
     if _rs_miss135[0] == 0 or _rs_miss135[1]:
         _store_bad135.append((_sh, "a file missing", _rs_miss135))
 check("ufw-stored-rules: the helper prints each file after its marker, a missing newline added, backslashes and "
-      "% kept as written; one missing file is exit 1 and NOTHING on stdout",
-      _hs_ok135[0] == 0 and [ln for ln in _hs_ok135[1].splitlines() if ln.startswith("==> ")] == _marks135
+      "% kept as written, then the kernel's IPv6 line (yes or no); one missing file is exit 1 and NOTHING on stdout",
+      _hs_ok135[0] == 0 and [ln for ln in _hs_ok135[1].splitlines() if ln.startswith("==> ")]
+      == _marks135 + ["==> /proc/sys/net/ipv6 <=="]
+      and _hs_ok135[1].endswith(("<==\nyes\n", "<==\nno\n"))
       and "# a \\n backslash and a %s\n" in _hs_ok135[1] and "LOGLEVEL=low\n==> " in _hs_ok135[1]
       and _hs_miss135 == (1, ""), repr((_hs_ok135, _hs_miss135)))
 check("ufw-stored-rules (remote form, %s): prints exactly what the helper prints, and nothing with a file missing"

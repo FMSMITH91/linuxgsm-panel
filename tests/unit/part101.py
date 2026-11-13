@@ -246,7 +246,7 @@ check("install.sh: ...and a per-user run still trusts the running account's own 
 # config.json as {} and replaced it with {"port": N}: setup_complete, the Tailscale keys and every
 # other setting gone, where the panel itself keeps the file for a one-character fix. A valid
 # non-object died in a traceback.
-_pick101 = _fn101(_INS101, "choose_and_record_port")
+_pick101 = _fn101(_INS101, "_r42i_tree_owner") + _fn101(_INS101, "choose_and_record_port")
 
 
 def _pick_run101(content):

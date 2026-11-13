@@ -971,7 +971,8 @@ def _p32_install_readers():
     os.makedirs(os.path.join(pdir, "data"), exist_ok=True)
     with open(os.path.join(pdir, "data", "config.json"), "w", encoding="utf-8") as fh:
         json.dump({"port": 5000, "tailscale_mount": "/lgsm"}, fh)
-    readers = "".join(_sh_fn(_INS32, n) for n in ("_owner_read", "panel_port", "_r26a_cfg_port", "panel_serve_url"))
+    readers = "".join(_sh_fn(_INS32, n) for n in ("_r42i_tree_owner", "_owner_read", "panel_port", "_r26a_cfg_port",
+                                                        "panel_serve_url"))
     script = "set -euo pipefail\nPANEL_DIR=%s\n%s\npanel_serve_url\n" % (pdir, readers)
     _seed({"443": {"/": _OTHER, "/lgsm": _PS}})
     u1 = _bash(script).stdout.strip()

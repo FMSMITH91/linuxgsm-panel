@@ -349,14 +349,9 @@ check("f2b: _valid_ip still answers a bool", _sm_hosts._valid_ip("10.0.0.1") is 
 # hardcoded 15 and 12), and an autoblock threshold that defaulted to 20 when read and 100 when
 # saved — so saving Settings once made the panel five times more permissive than documented.
 from panel.core import config as _cfgmod
-# route_helpers reads tailscale_auto_setup; it was missing here, and the key "had a reader" only
-# because system_ops' debug-report whitelist named it, until the whitelist moved out of it.
-_CFG_READERS = "".join(_modsrc(m) for m in
-                       ("app", "ssh_manager", "system_ops", "panel/services/notifications.py", "backup",
-                        "panel/routes/route_helpers.py"))
-check("config: every DEFAULT_CONFIG key has a reader",
-      all(k in _CFG_READERS for k in _cfgmod.DEFAULT_CONFIG),
-      str([k for k in _cfgmod.DEFAULT_CONFIG if k not in _CFG_READERS]))
+# "Every DEFAULT_CONFIG key has a reader" is in part189: it finds a real read of each key (a
+# `.get("key")` or a `x["key"]` load) anywhere under panel/, where a substring of six files passed
+# for a key whose only reader had gone (debug_log inside the name _attach_debug_logging).
 # Prove the helper READS the knob, rather than that it happens to return the default. The old
 # form compared against DEFAULT_CONFIG, which only holds while no config on disk overrides it —
 # and tests/smoke_test.py now writes ssh_timeout=1 (see the note there), so the assertion

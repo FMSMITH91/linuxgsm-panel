@@ -2282,10 +2282,8 @@ def detect_game_ports(server, user, selfname=None, game_type=None):
     # could join a new Satisfactory server.
     open_ports = sorted({p["port"] for p in ports if _lgc_player_port(p["desc"], game_type)})
     if game_port is None:
-        # The port that ENDS the line: the first `:digits` in `Internet IP: [2001:db8::1234]:27015`
-        # is part of the IPv6 address, and was read as game port 1234.
-        m = re.search(r"(?:server|internet)\s+ip:[^\n]*:(\d{2,5})[ \t\r]*(?:\n|\Z)", text, re.I)
-        game_port = int(m.group(1)) if m else (open_ports[0] if open_ports else None)
+        found = _r42m_ip_line_port(text)
+        game_port = found if found is not None else (open_ports[0] if open_ports else None)
     # Always ensure the game port itself is opened, even if the details table used an
     # unexpected description for it.
     if game_port and game_port not in open_ports:
@@ -2294,6 +2292,36 @@ def detect_game_ports(server, user, selfname=None, game_type=None):
                               re.I))
     return {"game_port": game_port, "open_ports": open_ports, "ports": ports,
             "answered": answered, "started": _details_started(text)}
+
+
+_R42M_IP_LABEL_RE = re.compile(r"(?:server|internet)\s+ip:", re.I)
+_R42M_PORT_TAIL_RE = re.compile(r"(\d{2,5})[ \t\r]*")
+
+
+def _r42m_ip_line_port(text):
+    r"""The port ending the first `Server IP:` / `Internet IP:` line of `details` that has one, or None.
+
+    The port that ENDS the line: the first `:digits` in `Internet IP: [2001:db8::1234]:27015` is
+    part of the IPv6 address, and was read as game port 1234. What
+    `re.search(r"(?:server|internet)\s+ip:[^\n]*:(\d{2,5})[ \t\r]*(?:\n|\Z)", text, re.I)` found,
+    in time linear in the text: that search ran `[^\n]*` to the end of the line at every label, and
+    `details` prints the server's name (the game account's config text) first, on one line. Only
+    the line's last colon can be the port's, so every label ending on one line gets the same
+    answer, and the line is read once.
+    """
+    text = text or ""
+    failed_eol = -1
+    for m in _R42M_IP_LABEL_RE.finditer(text):
+        if m.end() <= failed_eol:
+            continue
+        eol = text.find("\n", m.end())
+        eol = len(text) if eol < 0 else eol
+        colon = text.rfind(":", m.end(), eol)
+        tail = _R42M_PORT_TAIL_RE.fullmatch(text, colon + 1, eol) if colon >= 0 else None
+        if tail:
+            return int(tail.group(1))
+        failed_eol = eol
+    return None
 
 
 def _details_started(text):

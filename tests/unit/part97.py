@@ -371,7 +371,7 @@ check("firewall: the guard protects the rule for the port the boot bound, from l
       all(v[1] == _boot97[k] and v[2] == _boot97[k] for k, v in _ld97.items()), repr(_ld97))
 
 # install.sh's reader: the same rule, and nothing when config.json could not be read.
-_RD97 = _fn97(_INS97, "_owner_read") + _fn97(_INS97, "_r26a_cfg_port") + _fn97(_INS97, "panel_port")
+_RD97 = _fn97(_INS97, "_r42i_tree_owner") + _fn97(_INS97, "_owner_read") + _fn97(_INS97, "_r26a_cfg_port") + _fn97(_INS97, "panel_port")
 
 
 def _r26a_install_port(text, fn="panel_port", extra=""):
@@ -398,7 +398,8 @@ check("install.sh: a config.json that cannot be read gives no port to record (it
       "recorded over the real port), while panel_port still says 5000 and an absent one is 5000",
       _unread97 == {"unparseable": "", "not an object": "", "absent": "5000",
                     "unparseable, panel_port": "5000"}, repr(_unread97))
-_REC97 = "".join(_fn97(_INS97, n) for n in ("_r25j_panel_port_to_record", "_r25j_is_panel_port"))
+_REC97 = "".join(_fn97(_INS97, n) for n in ("_r25j_panel_port_to_record", "_r25j_is_panel_port",
+                                               "_r42i_tree_owner"))
 _rc97 = _tf97.mkdtemp(dir=_TMP97)
 with open(os.path.join(_rc97, "panel.conf"), "w", encoding="utf-8") as _fh97:
     _fh97.write("panel_port=8443\n")
@@ -419,7 +420,7 @@ try:
         pass                                # held by something else already: busy either way
     _cp97 = _tf97.mkdtemp(dir=_TMP97)
     _top97 = _sp97.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%schoose_and_record_port 65535\n"
-                        % (_cp97, _fn97(_INS97, "choose_and_record_port"))],
+                        % (_cp97, _fn97(_INS97, "_r42i_tree_owner") + _fn97(_INS97, "choose_and_record_port"))],
                        capture_output=True, text=True, timeout=60)  # nosec B603 B607
 finally:
     _hold97.close()

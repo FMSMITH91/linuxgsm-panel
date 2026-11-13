@@ -622,20 +622,21 @@ def _r26j_inactive_refused98():
 
 
 def _r26j_inactive_opened98():
-    opened = {name: _inactive_open98(_ADDED98 + body) for name, body in (
-        ("none", "(None)\n"), ("other port", "ufw limit 22/tcp\nufw allow 22222/tcp\n"),
+    # Each with public SSH stored (`ufw limit 22/tcp`): where it is off, nothing public goes in (part185).
+    opened = {name: _inactive_open98(_ADDED98 + "ufw limit 22/tcp\n" + body) for name, body in (
+        ("none", ""), ("other port", "ufw allow 22222/tcp\n"),
         ("both protocols", "ufw allow 2222\n"), ("outbound", "ufw allow out 2222/tcp\n"),
         ("one source", "ufw allow from 10.0.0.0/8 to any port 2222 proto tcp\n"),
         ("udp deny", "ufw deny 2222/udp\n"), ("outbound deny", "ufw deny out 2222/tcp\n"),
         ("deny one source", "ufw deny from 10.0.0.0/8 to any port 2222 proto tcp\n"),
         ("deny a range around it", "ufw reject 2223:2300/tcp\nufw deny 2000:2221/tcp\n"))}
-    check("ssh port move on a host whose UFW is inactive: ...with no stored rule `ufw allow` would "
-          "rewrite or a TCP connection would be refused by (none, other ports, a bare both-protocol "
+    check("ssh port move on a host whose UFW is inactive: ...with public SSH stored and no stored rule "
+          "`ufw allow` would rewrite or a TCP connection would be refused by (none, other ports, a bare both-protocol "
           "allow, an outbound rule, a source-scoped one, a UDP deny, a range beside it) the allow goes "
           "in and is the panel's own (counted as added, so a revert deletes it)",
           all(v == ((True, None), [(2222, "tcp")], ["ufw-show-added"] * 2) for v in opened.values()),
           repr(opened))
-    lost = _inactive_open98(_ADDED98 + "(None)\n", lands=False)
+    lost = _inactive_open98(_ADDED98 + "ufw limit 22/tcp\n", lands=False)
     check("ssh port move on a host whose UFW is inactive: ...an allow `ufw show added` does not list "
           "afterwards refuses the move (it went on, and the stored rules shut the port the moment UFW "
           "came on); review 1016e integration",

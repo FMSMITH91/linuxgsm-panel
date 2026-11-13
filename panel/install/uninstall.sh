@@ -149,10 +149,19 @@ PANEL_PORT=""; TS_DONE=0; TS_MOUNT=""; TS_CONF_UNREAD=0
 # port- and mount-shaped contents then drove what this script removed), and blocking forever on a
 # FIFO, which hung the uninstall before it had stopped anything. Read ONCE, into a variable, so the
 # three questions below are asked of the same bytes.
+#
+# The owner is that of the directory PANEL_DIR is, not of its entry: a link there (even a root-owned
+# one, which the panel user can hard-link into its home with fs.protected_hardlinks=0) is read as
+# the panel user, as install.sh's _r42i_tree_owner does. A read needs no more than that account.
 _conf_read() {
-    local as_owner="" owner=""
+    local as_owner="" owner="" st="" mode=""
     if [[ "$(id -u)" -eq 0 ]]; then
-        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        owner=root
+        if st="$(stat -c '%f %U' -- "${PANEL_DIR}" 2>/dev/null)"; then
+            read -r mode owner <<< "${st}"
+            [[ "${mode}" =~ ^[0-9a-fA-F]+$ ]] && [[ $(( 16#${mode} & 0xF000 )) -eq $(( 0x4000 )) ]] \
+                || owner="${PANEL_USER:-root}"
+        fi
         [[ "${owner}" != "root" ]] && id "${owner}" >/dev/null 2>&1 && as_owner="sudo -u ${owner}"
     fi
     (cd / && ${as_owner} python3 -I - "$1" 2>/dev/null <<'CONF_READ_PY') || true

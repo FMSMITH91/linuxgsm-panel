@@ -109,6 +109,7 @@
     "showPanel": "writable",
     "socket": "writable",
     "sortDashCol": "writable",
+    "statsChart": "writable",
     "t": "writable",
     "tf": "writable",
     "tfHtml": "writable",
