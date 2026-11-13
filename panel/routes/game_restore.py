@@ -494,7 +494,7 @@ class _GrsRun:
         a restore may take; still unsettled after that, the record stays for the recovery sweep.
         """
         _grs_set(self.gs.id, step="settling")
-        for _attempt in range(_GRS_RESTORE_TIMEOUT // _GRS_SETTLE_EVERY):
+        for _attempt in range(_GRS_RESTORE_TIMEOUT // max(_GRS_SETTLE_EVERY, 1)):
             time.sleep(_GRS_SETTLE_EVERY)
             got = _grs_recover_run(self.gs, self.t0)
             if got is not None:
