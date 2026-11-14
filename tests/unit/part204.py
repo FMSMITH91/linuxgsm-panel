@@ -28,7 +28,7 @@ from unit.part01 import check, eq
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_NO_AUDIT, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
                          _p9_delete_server, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
-from unit.part99 import _SF99, _js99
+from unit.part99 import _js99, _read99
 from panel.db.models import Group as _G204, RemoteServer as _RS204, User as _U204, db as _db204
 from panel.routes import server_files as _sf204
 from panel.security import auth as _auth204
@@ -276,8 +276,10 @@ eq("cod mods: nothing reached a real transport", _P9_TRIPPED[_trips204:], [])
 # ── 4. the card's drawing, in node ──────────────────────────────────────────────────────────────
 _out204 = _js99("cod mods card", (
     "var serverId = 1; function _tr(s){ return s; } function esc(s){ return escapeHtml(s); }\n"
-    "document.querySelectorAll = () => [];\n"), ("function codModsMsg(", "function _codModRow(",
-                                                 "function _codModsDraw(", "function loadCodMods("), (
+    "document.querySelectorAll = () => []; var _codModsUpload = '';\n"), ("function codModsMsg(", "function _codModRow(",
+                                                 "function _codModsRows(", "function _codModsWhere(",
+                                                 "function _codModsUploadHint(", "function _codModsDraw(",
+                                                 "function loadCodMods("), (
     "  const out = {};\n"
     "  for (const [k, d] of [['top', {mods: [{value: 'awe', name: 'awe'}], active: 'gone', where: '',\n"
     "                                upload_dir: 'serverfiles', mods_dir: false}],\n"
@@ -287,7 +289,7 @@ _out204 = _js99("cod mods card", (
     "    out[k] = {drew, list: document.getElementById('codmods-list').innerHTML,\n"
     "              where: document.getElementById('codmods-where').style.display,\n"
     "              up: document.getElementById('codmods-upload').textContent, dir: _codModsUpload}; }\n"
-    "  console.log(JSON.stringify(out));\n"), _SF99)
+    "  console.log(JSON.stringify(out));\n"), _read99("panel", "static", "js", "server_cod_mods.js"))
 if _out204 is not None:
     _top204, _sub204 = _out204.get("top", {}), _out204.get("sub", {})
     check("cod mods card: None and each folder get a row, the active one missing from disk is marked as not "

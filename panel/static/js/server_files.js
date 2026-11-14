@@ -1947,67 +1947,6 @@ function modRestartNow(btn){
 }
 if (SF_CAN.manage) void loadMods(true);   // resolves either way; a failure is drawn in the card
 
-// ── Call of Duty mods (services/cod_mods.py) ──
-// The server loads the mod folder its startparameters' fs_game names. One row per folder found, plus
-// "None"; the active one is marked, the others get Use (.fpm-edit: hidden without EDIT_FILES).
-var _codModsUpload = '';   // the folder a mod is uploaded into, from the last listing
-function codModsMsg(t,cls){ var m=document.getElementById('codmods-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
-function _codModRow(label, value, active, missing){
-  var right = active
-    ? '<span class="btn btn-sm btn-success disabled" aria-disabled="true">'+esc(_tr('Active'))+'</span>'   // a button's height, so a switch moves no row
-    : '<button class="btn btn-sm btn-outline-primary fpm-edit"' + _da('codModUse', [value, '@self']) + '>'+esc(_tr('Use'))+'</button>';
-  var note = missing ? ' <span class="text-warning">'+esc(_tr('(folder not found)'))+'</span>' : '';
-  return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1 gap-2">'
-    + '<span class="small text-break" data-no-i18n>'+label+note+'</span>'+right+'</div>';
-}
-function _codModsDraw(d){
-  var mods=d.mods||[], active=d.active||'', listed=false, rows=[];
-  rows.push(_codModRow(esc(_tr('None (the base game)')), '', !active, false));
-  mods.forEach(function(m){
-    if(m.value===active) listed=true;
-    rows.push(_codModRow(esc(m.value), m.value, m.value===active, false));
-  });
-  if(active && !listed) rows.push(_codModRow(esc(active), active, true, true));
-  document.getElementById('codmods-list').innerHTML = rows.join('');  // nosemgrep - every value esc()'d above
-  var where=document.getElementById('codmods-where');
-  where.textContent = d.where==='extraparams' ? _tr('fs_game is set in extraparams, so the panel does not change it here. Change it in the LinuxGSM config.')
-    : d.where==='secrets' ? _tr('startparameters is set in the secrets file, so the panel does not change it here. Change it there.') : '';
-  where.style.display = d.where ? '' : 'none';
-  if(d.where) document.querySelectorAll('#codmods-list .fpm-edit').forEach(function(b){ b.remove(); });
-  _codModsUpload = (d.upload_dir==='serverfiles/mods' && !d.mods_dir) ? 'serverfiles' : (d.upload_dir||'serverfiles');
-  document.getElementById('codmods-upload').textContent =
-    d.upload_dir==='serverfiles/mods'
-      ? (d.mods_dir ? tf('To add a mod, upload its folder into {dir}.', {dir: d.upload_dir})
-                    : _tr("To add a mod, make a folder named mods in serverfiles and upload the mod's folder into it."))
-      : tf('To add a mod, upload its folder (with its .pk3 files) into {dir}.', {dir: d.upload_dir});
-}
-function loadCodMods(force){
-  var load=document.getElementById('codmods-loading'), body=document.getElementById('codmods-body');
-  if(!load || !body) return Promise.resolve(false);   // not a Call of Duty server: no card
-  if(force){ load.style.display=''; load.textContent=_tr('Loading mods…'); body.style.display='none'; codModsMsg(''); }
-  return fetch(MOUNT+'/api/server/'+serverId+'/cod-mods').then(r=>r.json()).then(function(d){
-    if(!d || d.error){ load.style.display=''; load.textContent=(d && d.error) || _tr('Could not load mods.'); load.className='small text-danger'; return false; }
-    load.style.display='none'; _codModsDraw(d); body.style.display=''; return true;
-  }).catch(function(){ load.style.display=''; load.textContent=_tr('Could not load mods.'); load.className='small text-danger'; return false; });
-}
-function codModUse(value, btn){
-  if(btn) btn.disabled=true;
-  codModsMsg(_tr('Saving…'), 'text-secondary');
-  fetch(MOUNT+'/api/server/'+serverId+'/cod-mods',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mod:value})})
-    .then(r=>r.json()).then(function(d){
-      codModsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-      if(!d.success && btn) btn.disabled=false;
-      if(d.success){ loadCodMods(false).catch(function(){ /* loadCodMods never rejects */ }); }
-    })
-    .catch(function(){ codModsMsg('✗ '+_tr('Could not save — connection error'),'text-danger'); if(btn) btn.disabled=false; });
-}
-function codModsOpenFolder(btn){
-  if(btn) btn.blur();
-  _uis_sfShow('files');
-  browse(_codModsUpload || 'serverfiles');
-}
-if (SF_CAN.manage) void loadCodMods(true);
-
 // ── Backups (this server) — superadmin card; reuses the game-backup endpoints ──
 function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD
 function bkWhen(sec){ try { return new Date(sec*1000).toLocaleString(); } catch(e){ return ''; } }

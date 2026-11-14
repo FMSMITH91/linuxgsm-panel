@@ -140,16 +140,24 @@ def _parse_listing(out):
     i, j = body.find(_LIST_B), body.find(_LIST_E)
     if i == -1 or j < i:
         return None
-    mods, seen, has_dir = [], set(), False
-    for line in body[i + len(_LIST_B):j].splitlines():
-        kind, _, name = line.strip().partition(" ")
-        has_dir = has_dir or kind == "D"
-        value = "mods/" + name if kind == "M" else name
-        if kind in ("M", "T") and _NAME_RE.match(name) and value not in seen \
-                and (kind == "M" or name.lower() not in _NOT_A_MOD):
-            seen.add(value)
-            mods.append({"value": value, "name": name})
-    return sorted(mods, key=lambda m: m["value"].lower()), has_dir
+    lines = body[i + len(_LIST_B):j].splitlines()
+    mods = {}
+    for line in lines:
+        mod = _listed_mod(line)
+        if mod is not None:
+            mods.setdefault(mod["value"], mod)
+    has_dir = any(line.strip() == "D" for line in lines)
+    return sorted(mods.values(), key=lambda m: m["value"].lower()), has_dir
+
+
+def _listed_mod(line):
+    """One list_sh line as {"value", "name"}, or None for anything that is not a mod folder."""
+    kind, _, name = line.strip().partition(" ")
+    if kind not in ("M", "T") or not _NAME_RE.match(name):
+        return None
+    if kind == "T" and name.lower() in _NOT_A_MOD:
+        return None
+    return {"value": "mods/" + name if kind == "M" else name, "name": name}
 
 
 def _merged(texts):
@@ -229,13 +237,31 @@ def with_fs_game(rhs, value):
     return body
 
 
-def new_instance_text(texts, value):
-    """(the instance cfg's new text, None) or (None, why not)."""
+def _inherited_rhs(texts):
+    """The start line _default.cfg, common.cfg and secrets-common.cfg give (the last one that sets it), or None."""
     inherited = None
     for t in texts[:3]:
         r = _raw_rhs(t)
         inherited = r if r is not None else inherited
-    inst = texts[3]
+    return inherited
+
+
+def _with_line(inst, new):
+    """The instance cfg's text with every startparameters line set to `new`, or `new` appended."""
+    lines, found = inst.split("\n"), False
+    for n, ln in enumerate(lines):
+        m = _SP_LINE.match(ln)
+        if m:
+            lines[n], found = ln[:m.start(1)] + new, True
+    if found:
+        return "\n".join(lines)
+    sep = "" if not inst or inst.endswith("\n") else "\n"
+    return inst + sep + "startparameters=" + new + "\n"
+
+
+def new_instance_text(texts, value):
+    """(the instance cfg's new text, None) or (None, why not)."""
+    inherited, inst = _inherited_rhs(texts), texts[3]
     own = _raw_rhs(inst)
     new = with_fs_game(own if own is not None else inherited, value)
     if new is None or _UNDECODABLE in inst:
@@ -243,15 +269,7 @@ def new_instance_text(texts, value):
     if inherited is not None and new == inherited.strip():
         # The line now says what the files LinuxGSM reads first already say: take it out.
         return "\n".join(ln for ln in inst.split("\n") if not _SP_LINE.match(ln)), None
-    if own is not None:
-        lines = inst.split("\n")
-        for n, ln in enumerate(lines):
-            m = _SP_LINE.match(ln)
-            if m:
-                lines[n] = ln[:m.start(1)] + new
-        return "\n".join(lines), None
-    sep = "" if not inst or inst.endswith("\n") else "\n"
-    return inst + sep + "startparameters=" + new + "\n", None
+    return _with_line(inst, new), None
 
 
 def switch(server, user, selfname, game_type, value):
