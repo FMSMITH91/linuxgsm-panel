@@ -382,9 +382,10 @@ def _gh_check_builders():
           not leaks, "; ".join(leaks[:4]))
     check("GHSA-hh39 builders: UnsafeGameAccount is a ValueError, so an existing `except ValueError` "
           "already treats it as bad input", issubclass(_sm_core.UnsafeGameAccount, ValueError))
-    check("GHSA-hh39 builders: a plain name gives exactly the old hand-built text",
+    check("GHSA-hh39 builders: a plain name gives exactly the old hand-built text, its shell body "
+          "starting in /",
           _sm_core.game_user_cmd("gm2", "cd /home/gm2 && ./gmodserver details")
-          == "sudo -u gm2 bash -c 'cd /home/gm2 && ./gmodserver details'"
+          == "sudo -u gm2 bash -c 'cd / || exit; cd /home/gm2 && ./gmodserver details'"
           and _sm_core.game_user_exec_cmd("gm2", ["rm", "-f", "--", "/home/gm2/lgsm/backup/a.tar.gz"])
           == "sudo -u gm2 rm -f -- /home/gm2/lgsm/backup/a.tar.gz",
           repr((_sm_core.game_user_cmd("gm2", "x y"), _sm_core.game_user_exec_cmd("gm2", ["a b"]))))
