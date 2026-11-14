@@ -2405,13 +2405,22 @@ function _showLgsmVersion(info, notes) {
   }
 }
 
-function loadGameVersion() {
+// The panel reads LinuxGSM's latest release and its notes in the background, started by the first
+// ask after it starts: that first answer has neither yet. Asked once more a few seconds later, the
+// "available" note and its notes are there before anyone opens them.
+function _lgsmUnread(d) {
+  var l = d && d.lgsm;
+  return !!(l && l.release && (!l.latest || (l.behind && !(d.lgsm_notes || []).length)));
+}
+
+function loadGameVersion(again) {
   var el = document.getElementById('game-version');
   if (!el) return;
   fetch(MOUNT + '/api/server/' + serverId + '/version', {cache: 'no-store'})
     .then(function(r){ return r.json(); })
     .then(function(d){
       _showLgsmVersion(d && d.lgsm, d && d.lgsm_notes);
+      if (!again && _lgsmUnread(d)) setTimeout(function(){ loadGameVersion(true); }, 5000);
       if (!d || !d.label) return;          // nothing known — leave the placeholder as it is
       el.textContent = d.label;
       if (d.detail) el.title = d.detail;   // where the number came from (build, appid, date)
