@@ -99,7 +99,7 @@ def _listed204(game, prep=None):
 
 
 def _sf_out204(tmp, home):
-    """serverfiles moved out of the home and linked back in."""
+    """Move serverfiles out of the home and link it back in."""
     _shutil204.move(_os204.path.join(home, "serverfiles"), _os204.path.join(tmp, "sf-out"))
     _os204.symlink(_os204.path.join(tmp, "sf-out"), _os204.path.join(home, "serverfiles"))
 

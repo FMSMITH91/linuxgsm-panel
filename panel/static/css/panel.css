@@ -576,6 +576,7 @@
         justify-content: center;
       }
       .form-select-sm, .form-control-sm { min-height: 24px; }
+
       /* The server page's LinuxGSM line: its "available" note is a .btn-sm, 24px here, filled in
          after the first paint. The line is that tall from the start, so the note moves nothing. */
       .lgsm-line { min-height: 24px; }

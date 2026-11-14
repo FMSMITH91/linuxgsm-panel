@@ -76,10 +76,10 @@ _LIST_B, _LIST_E = "__CODM_LIST_B__", "__CODM_LIST_E__"
 
 # `+set fs_game <value>` as the server receives it (a parsed, merged value) and as a cfg file spells
 # it (raw text, where the value may be "quoted" or \"escaped\" inside the line's double quotes).
-_TOKEN = r'(?:\\?"[^"\s]*\\?"|[^\s"]+)'
-_FSG_RE = re.compile(r"\+set\s+fs_game\s+(" + _TOKEN + ")")
-_FSG_RAW_MID = re.compile(r"\+set[ \t]+fs_game[ \t]+" + _TOKEN + r"[ \t]+")
-_FSG_RAW_END = re.compile(r"[ \t]*\+set[ \t]+fs_game[ \t]+" + _TOKEN)
+_FSG_VALUE = r'(?:\\?"[^"\s]*\\?"|[^\s"]+)'
+_FSG_RE = re.compile(r"\+set\s+fs_game\s+(" + _FSG_VALUE + ")")
+_FSG_RAW_MID = re.compile(r"\+set[ \t]+fs_game[ \t]+" + _FSG_VALUE + r"[ \t]+")
+_FSG_RAW_END = re.compile(r"[ \t]*\+set[ \t]+fs_game[ \t]+" + _FSG_VALUE)
 _SP_LINE = re.compile(r"^\s*startparameters\s*=(.*)\Z")
 
 # Why a switch was not made. Whole sentences, translated by the route.

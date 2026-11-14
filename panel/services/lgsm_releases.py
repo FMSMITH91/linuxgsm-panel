@@ -112,7 +112,7 @@ def _release(item):
 
 
 def parse(answer):
-    """GitHub's releases answer (decoded JSON) as releases, newest first; None when it is not that shape."""
+    """Turn the decoded GitHub releases answer into releases, newest first; None when it is not that shape."""
     if not isinstance(answer, list):
         return None
     found = [r for r in (_release(i) for i in answer) if r]
