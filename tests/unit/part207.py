@@ -343,7 +343,7 @@ def _p207_dump_listed_once():
 
 
 def _p207_dump_presence(_dd):
-    """Check db-sizes' dump lines and db-import's rc 4 with no dump, on both paths (`_dd`: ~/panel-db-dumps)."""
+    """Check db-sizes' dump lines on both paths, then db-import with no dump (`_dd`: ~/panel-db-dumps)."""
     # db-sizes says which databases have a dump in the files (a link is none); db-import with no dump
     # answers rc 4 (the "no dump" sentence), whether the file or the whole directory is missing.
     with _gz207.open(_os207.path.join(_dd, "gs12_x.sql.gz"), "wb") as _fh:
@@ -364,6 +364,11 @@ def _p207_dump_presence(_dd):
            (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]), (0, []))
     _os207.unlink(_dd)
     _sh207.rmtree(_dd + ".real", ignore_errors=True)
+    _p207_no_dump_import(_dd)
+
+
+def _p207_no_dump_import(_dd):
+    """Check db-import with no dump (its directory, then its file missing): rc 4 on both paths."""
     for _what in ("directory", "file"):
         for _side, _run in (("helper", _h), ("remote", _r)):
             _reset()
