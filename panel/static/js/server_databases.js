@@ -231,10 +231,11 @@ var DB_STATE = {
     }
   }
 
-  window.dbLoad = function (force) {
+  // `probe`: the Refresh button's, which has the panel look at the host's database server again.
+  window.dbLoad = function (force, probe) {
     if (!el('db-card') || (st.loaded && !force)) return Promise.resolve(false);
     st.loaded = true;
-    return fetch(api(), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (d) {
+    return fetch(api(probe ? '?refresh=1' : ''), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (d) {
       if (!d || d.error || !d.can) { show('db-loading', false); say((d && d.error) || T('Could not load databases.'), 'text-danger'); return false; }
       draw(d);
       return true;

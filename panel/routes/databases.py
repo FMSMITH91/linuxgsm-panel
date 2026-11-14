@@ -154,7 +154,11 @@ def _probe(remote, force=False):
         return hit[1]
     p = _svc().probe(remote)
     p = p if isinstance(p, dict) else {"state": "unreadable"}
-    _PROBES[remote.id] = (time.monotonic(), p)
+    # A host that did not answer is asked again next time, not reported down for ten minutes.
+    if p.get("state") == "unreadable":
+        _PROBES.pop(remote.id, None)
+    else:
+        _PROBES[remote.id] = (time.monotonic(), p)
     return p
 
 
@@ -178,22 +182,35 @@ def _recheck(remote, hd):
     return state or "unreadable"
 
 
+def _probe_again(hd, may_probe):
+    """Whether a host with a row is probed now: on Refresh, or once the row is 10 minutes old."""
+    return may_probe == "force" or (bool(may_probe) and not _fresh(hd.checked_at, _PROBE_FRESH))
+
+
+def _probe_mode(manage):
+    """How far the list looks at the host: only what is stored (a viewer), when stale, or now (Refresh)."""
+    if not manage:
+        return False
+    return "force" if request.args.get("refresh") else True
+
+
 def host_state(remote, may_probe):
     """(state, HostDatabaseServer row or None, probe dict) for `remote`.
 
     A host with a row was found ready before: it is probed again once its row is 10 minutes old.
     A host without one is probed (cached 10 minutes); found ready, it gets its row (an existing
-    server, used as it is). `may_probe` False reads only what is stored.
+    server, used as it is). `may_probe` False reads only what is stored; "force" (the tab's Refresh)
+    probes now whatever is stored.
     """
     hd = _host_row(remote.id)
     if _SETUP.get(remote.id, {}).get("running"):
         return "setting_up", hd, {}
     if hd is not None:
-        return ("ready" if _fresh(hd.checked_at, _PROBE_FRESH) or not may_probe else _recheck(remote, hd)), hd, {}
+        return (_recheck(remote, hd) if _probe_again(hd, may_probe) else "ready"), hd, {}
     if not may_probe:
         hit = _PROBES.get(remote.id)
         return ((hit[1].get("state") or "unreadable") if hit else "unknown"), None, {}
-    p = _probe(remote)
+    p = _probe(remote, force=may_probe == "force")
     if p.get("state") == "ready":
         hd = _new_host_row(remote, p, installed_by_panel=False, auth_mode="socket")
         db.session.commit()
@@ -255,7 +272,7 @@ def _row_json(gs, hd, r):
 def _list_answer(gs):
     """GET: the host's state and this server's databases (never a password)."""
     manage = _can_manage()
-    state, hd, p = host_state(gs.remote, may_probe=manage)
+    state, hd, p = host_state(gs.remote, may_probe=_probe_mode(manage))
     rows = _server_rows(gs.id)
     _refresh_sizes(gs.remote, hd, rows)
     taken = [r.name.split("_", 1)[1] for r in rows if "_" in r.name]

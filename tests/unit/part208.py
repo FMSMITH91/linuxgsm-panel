@@ -28,7 +28,8 @@ from types import SimpleNamespace as _NS208
 
 from unit.part01 import check, eq
 from unit.part99 import _js99, _read99
-from unit.part12 import (P9_ADMIN, P9_HOST, P9_HOST2, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_exists, _p9_json,
+from unit.part12 import (P9_ADMIN, P9_HOST, P9_HOST2, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_delete_server,
+                         _p9_exists, _p9_json,
                          _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.core import config as _cfg208
 from panel.db import models as _m208
@@ -281,6 +282,13 @@ try:
     _A208, _M208, _V208 = _p9_client(P9_ADMIN), _p9_client(_MGR208[0]), _p9_client(_VIEW208[0])
     _api208 = "/api/server/%d/databases" % _SID208
 
+    # ── 4a. a host that did not answer is asked again on the next look, not taken as down ────────
+    _FARSID208 = _p9_new_server(P9_HOST2, "p208w", "pmc", 25568, name="p208 far")
+    _S208.reset(probe={"state": "unreadable"})
+    _R208["unread"] = [_p9_json(_A208.get("/api/server/%d/databases" % _FARSID208)).get("state") for _ in (1, 2)]
+    _R208["unread_probes"] = [c[0] for c in _S208.calls]
+    _p9_delete_server(_FARSID208)
+
     # ── 4. a host with no database server: nothing can be added; setting it up ───────────────────
     _S208.reset(probe={"state": "none"})
     _R208["none_get"] = _p9_json(_M208.get(_api208))
@@ -336,6 +344,11 @@ try:
     _S208.reset()
     _M208.get(_api208)
     _R208["list_again_calls"] = list(_S208.calls)
+    _S208.reset()
+    _M208.get(_api208 + "?refresh=1")
+    _R208["refresh_calls"] = [c[0] for c in _S208.calls]
+    _V208.get(_api208 + "?refresh=1")
+    _R208["refresh_viewer_calls"] = [c[0] for c in _S208.calls]
     _r208 = _V208.get(_api208)
     _R208["list_viewer"] = (_r208.status_code, _p9_json(_r208).get("can"), _r208.get_data(as_text=True))
     _R208["list_far"] = _p9_client(_FAR208[0]).get(_api208).status_code
@@ -512,6 +525,11 @@ check("databases list: sizes are asked once for all databases, then not again in
       "is not probed again",
       [c[0] for c in _R208.get("list_calls", [])] == ["sizes"] and not _R208.get("list_again_calls"),
       repr((_R208.get("list_calls"), _R208.get("list_again_calls"))))
+check("databases list: Refresh probes the host again now (a manager's; a viewer's reads what is stored), and a "
+      "host that did not answer is asked again on the next look, not cached as down",
+      _R208.get("refresh_calls") == ["probe"] and _R208.get("refresh_viewer_calls") == ["probe"]
+      and _R208.get("unread") == ["unreadable", "unreadable"] and _R208.get("unread_probes") == ["probe", "probe"],
+      repr((_R208.get("refresh_calls"), _R208.get("refresh_viewer_calls"), _R208.get("unread"), _R208.get("unread_probes"))))
 check("databases list: the view permission sees the list without the controls; a grant on another host does not",
       _R208.get("list_viewer", (0, {}))[:2] == (200, {"manage": False, "setup": False, "su": False})
       and _R208.get("list_far") in (403, 404), repr((_R208.get("list_viewer", (0,))[:2], _R208.get("list_far"))))
