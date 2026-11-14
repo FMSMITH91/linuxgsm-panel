@@ -219,6 +219,45 @@ _ANY208, _NONE208 = "x", ""
 
 _SID208 = _OTHER208 = None
 _MINE208 = []
+def _login_facts208():
+    """8d (called from the run below): a login-only MySQL; what the stored login reads fills in what the
+    socket probe can't."""
+    def _facts208():
+        with _p9.app_context():
+            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
+            return None if h is None else (h.auth_mode, h.version, h.native_ok, _js208.loads(h.warnings or "[]"))
+
+    def _blank208():
+        with _p9.app_context():
+            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
+            h.flavor, h.version, h.native_ok, h.warnings = "mysql", "", False, '["old_logins_only"]'
+            h.checked_at = _dt208.datetime(2000, 1, 1)
+            _db208.session.commit()
+
+    _sock_only208 = {"state": "needs_login", "socket_root": "denied", "flavor": "mysql", "version": "", "port": 3306,
+                     "native_ok": False, "warnings": ["old_logins_only"], "listeners": ["127.0.0.1:3306"]}
+    _read208 = {"version": "8.0.46-0ubuntu0.24.04.1", "version_comment": "(Ubuntu)", "port": "3306",
+                "native": "ACTIVE"}
+    _blank208()
+    _dbr._PROBES.clear()
+    _S208.reset(probe=_sock_only208, admin="ok", admin_vars=_read208)
+    _r208 = _A208.post(_clear208, json={"user": "rootadmin", "password": _ANY208})
+    _R208["login_save"] = (_r208.status_code, _facts208())
+    _blank208()
+    _S208.reset(probe=_sock_only208, admin="ok", admin_vars=_read208)
+    _M208.get(_api208 + "?refresh=1")
+    _R208["login_recheck"] = (_facts208(), [c[:3] for c in _S208.calls if c[0] == "admin"])
+    _blank208()
+    _S208.reset(probe=_sock_only208, admin="denied", admin_vars=_read208)
+    _M208.get(_api208 + "?refresh=1")
+    _R208["login_recheck_denied"] = _facts208()
+    # Back to the socket, as the sections below expect.
+    _S208.reset(probe={"state": "ready", "flavor": "mariadb", "version": "10.11.14-MariaDB", "port": 3306,
+                       "native_ok": True, "warnings": [], "socket_root": "ok"})
+    _A208.post(_clear208, json={"clear": True})
+    _dbr._PROBES.clear()
+
+
 _LOG208 = _Logs208()
 _lg208.getLogger().addHandler(_LOG208)
 try:
@@ -377,41 +416,7 @@ try:
                          [c[0] for c in _S208.calls])
     _R208["clear_again"] = _A208.post(_clear208, json={"clear": True}).status_code
 
-    # ── 8d. a login-only MySQL: what the stored login reads fills in what the socket probe can't ────
-    def _facts208():
-        with _p9.app_context():
-            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
-            return None if h is None else (h.auth_mode, h.version, h.native_ok, _js208.loads(h.warnings or "[]"))
-
-    def _blank208():
-        with _p9.app_context():
-            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
-            h.flavor, h.version, h.native_ok, h.warnings = "mysql", "", False, '["old_logins_only"]'
-            h.checked_at = _dt208.datetime(2000, 1, 1)
-            _db208.session.commit()
-
-    _sock_only208 = {"state": "needs_login", "socket_root": "denied", "flavor": "mysql", "version": "", "port": 3306,
-                     "native_ok": False, "warnings": ["old_logins_only"], "listeners": ["127.0.0.1:3306"]}
-    _read208 = {"version": "8.0.46-0ubuntu0.24.04.1", "version_comment": "(Ubuntu)", "port": "3306",
-                "native": "ACTIVE"}
-    _blank208()
-    _dbr._PROBES.clear()
-    _S208.reset(probe=_sock_only208, admin="ok", admin_vars=_read208)
-    _r208 = _A208.post(_clear208, json={"user": "rootadmin", "password": "Zlogin208pw-real"})
-    _R208["login_save"] = (_r208.status_code, _facts208())
-    _blank208()
-    _S208.reset(probe=_sock_only208, admin="ok", admin_vars=_read208)
-    _M208.get(_api208 + "?refresh=1")
-    _R208["login_recheck"] = (_facts208(), [c[:3] for c in _S208.calls if c[0] == "admin"])
-    _blank208()
-    _S208.reset(probe=_sock_only208, admin="denied", admin_vars=_read208)
-    _M208.get(_api208 + "?refresh=1")
-    _R208["login_recheck_denied"] = _facts208()
-    # Back to the socket, as the sections below expect.
-    _S208.reset(probe={"state": "ready", "flavor": "mariadb", "version": "10.11.14-MariaDB", "port": 3306,
-                       "native_ok": True, "warnings": [], "socket_root": "ok"})
-    _A208.post(_clear208, json={"clear": True})
-    _dbr._PROBES.clear()
+    _login_facts208()
 
     # ── 9. the backup hook, through _marked_backup ────────────────────────────────────────────────
     def _backup208(sid, short):
