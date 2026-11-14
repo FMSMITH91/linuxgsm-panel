@@ -1286,6 +1286,10 @@ compares git commits, not this file.
 
 ### Security
 
+- **dnspython is no longer installed.** The panel now looks up host names with the operating system's own
+  resolver on a worker thread, so dnspython and its advisories (GHSA-vvf4-9x63-8xvv) no longer apply on
+  any supported Ubuntu, 22.04 included. An update removes it from the panel's environment.
+
 - **Semgrep's CI install no longer carries a vulnerable OpenTelemetry.** The code scanner CI runs pinned opentelemetry-api 1.37.0
   (GHSA-mf5v-w3w3-f6cg, GHSA-xcq7-p3pf-p88h). The OpenTelemetry packages are now pinned apart at the
   fixed 1.45.2, hash-checked, and the scan finds exactly what it found before. Panels never install
