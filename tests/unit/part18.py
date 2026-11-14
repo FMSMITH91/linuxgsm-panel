@@ -494,7 +494,7 @@ def _slots18(gs, primary=None):
 def _hostmetrics18(work, **_k):
     remote, games = work
     out = []
-    for sid, _short, _port, _gt, _qt in games:
+    for sid, _short, _port, _gt, _qt, *_rest in games:
         if sid == _sp118:
             _take_server18(_sp118, name="p18-sp-taker", short_name="sptakerserver")
         out.append((sid, {"ram_total": 1000, "ram_used": 1, "cpu_percent": 1,
