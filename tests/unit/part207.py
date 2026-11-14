@@ -637,8 +637,9 @@ try:
     _ANSWERS["db-probe"] = (_PROBES["mysql 8.0"][0].replace("port=3306", "port=3307"), "", 0)
     eq("databases: the probe reads the server's port", _dbs207.probe(object())["port"], 3307)
 
+    _nologin207 = str()     # no admin login on a socket host (a name, not a literal: Bandit B106)
     _hd_sock = _ty207.SimpleNamespace(flavor="mariadb", native_ok=True, auth_mode="socket", port=3306,
-                                      admin_user="", admin_secret="")
+                                      admin_user=_nologin207, admin_secret=_nologin207)
     from panel.core.config import encrypt_secret as _enc207
     _hd_login = _ty207.SimpleNamespace(flavor="mysql", native_ok=False, auth_mode="login", port=3307,
                                        admin_user="rootadmin", admin_secret=_enc207(_APW))
@@ -832,3 +833,31 @@ check("permission: no group is given it by default (the seeded Everyone group ho
 _sh207.rmtree(_T, ignore_errors=True)
 check("part207: nothing reached a host (the transport tripwire is untouched)",
       len(_P9_TRIPPED) == _trips207, repr(_P9_TRIPPED[_trips207:][:4]))
+
+
+# Every SQL builder checks the names and passwords it writes into statement text itself (a database
+# name cannot be a bound parameter): a value outside DB_NAME_RE / DB_PW_RE is refused there, in the
+# helper and in its privileged.py twin alike, whoever the caller is.
+def _sql_refusals207(mod, err):
+    good_n, good_pw = "gs12_lp", "Abcdefghijklmnopqrstuvwx1"
+    bad = []
+    for label, fn in (
+            ("create name", lambda: mod.db_sql_create("mariadb", "gs12_x';DROP DATABASE mysql;--", "native", 5, good_pw)),
+            ("create pw", lambda: mod.db_sql_create("mariadb", good_n, "native", 5, "Abcdefghijklmnopqrstuvw'x")),
+            ("password", lambda: mod.db_sql_password("mysql", good_n, "sha2", "short")),
+            ("exists", lambda: mod.db_sql_exists("x' OR '1'='1")), ("drop", lambda: mod.db_sql_drop("mysql")),
+            ("tables", lambda: mod.db_sql_tables("gs1_a`b")), ("sizes", lambda: mod.db_sql_sizes([good_n, "a'b"])),
+            ("grant", lambda: mod.db_grant_target("gs1_A")), ("harden", lambda: mod.db_sql_harden("x' --"))):
+        try:
+            fn()
+            bad.append(label)
+        except err:
+            pass
+    ok = (good_n in mod.db_sql_create("mariadb", good_n, "native", 5, good_pw)
+          and "'gs12_lp'" in mod.db_sql_sizes([good_n]) and good_pw in mod.db_sql_harden(good_pw))
+    return bad, ok
+
+
+eq("databases: every SQL builder refuses a name or password outside the panel's forms (quotes, backticks, a "
+   "system schema, upper case), in privileged.py and in the helper, and still builds the panel's own",
+   (_sql_refusals207(_priv207, _priv207.VerbError), _sql_refusals207(_helper, ValueError)), (([], True), ([], True)))
