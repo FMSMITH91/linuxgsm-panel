@@ -625,11 +625,8 @@ def _row_route(server_id, db_id):
 
 
 def _list_or_add(server_id):
-    """GET: the server's databases and the host's database server; POST: a new database."""
+    """GET: the server's databases and the host's database server; POST: a new database (permission checked by the route)."""
     gs = get_game(server_id)
-    need = VIEW_SERVERS if request.method == "GET" else MANAGE_DATABASES
-    if not (has_permission(current_user, need) or has_permission(current_user, MANAGE_DATABASES)):
-        return _say(403, _DENIED)
     try:
         if request.method == "GET":
             return _names_answer(gs) if request.args.get("names") else _list_answer(gs)
@@ -639,9 +636,7 @@ def _list_or_add(server_id):
 
 
 def _row_action(server_id, db_id, answer, what):
-    """One change to one of the server's databases: MANAGE_DATABASES, its own row, then `answer(gs, row)`."""
-    if not has_permission(current_user, MANAGE_DATABASES):
-        return _say(403, _DENIED)
+    """One change to one of the server's own databases (the route has checked MANAGE_DATABASES): `answer(gs, row)`."""
     gs, r = _row_route(server_id, db_id)
     if r is None:
         return _say(404, _NO_SUCH)
@@ -657,6 +652,9 @@ def _server_routes(app):
     @server_access_required
     def api_server_databases(server_id):
         """Return the server's databases and the host's database server (GET), or add one (POST)."""
+        need = VIEW_SERVERS if request.method == "GET" else MANAGE_DATABASES
+        if not (has_permission(current_user, need) or has_permission(current_user, MANAGE_DATABASES)):
+            return _say(403, _DENIED)
         return _list_or_add(server_id)
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/reveal", methods=["POST"])
@@ -664,6 +662,8 @@ def _server_routes(app):
     @server_access_required
     def api_server_database_reveal(server_id, db_id):
         """The database's password, for the viewer's screen or clipboard (audited, not stored)."""
+        if not has_permission(current_user, MANAGE_DATABASES):
+            return _say(403, _DENIED)
         return _row_action(server_id, db_id, _reveal_answer, "reveal")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/reset-password", methods=["POST"])
@@ -671,6 +671,8 @@ def _server_routes(app):
     @server_access_required
     def api_server_database_reset(server_id, db_id):
         """A new password for the database's user."""
+        if not has_permission(current_user, MANAGE_DATABASES):
+            return _say(403, _DENIED)
         return _row_action(server_id, db_id, _reset_answer, "password reset")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/delete", methods=["POST"])
@@ -678,6 +680,8 @@ def _server_routes(app):
     @server_access_required
     def api_server_database_delete(server_id, db_id):
         """Delete the database and its user, a dump kept on the host first."""
+        if not has_permission(current_user, MANAGE_DATABASES):
+            return _say(403, _DENIED)
         return _row_action(server_id, db_id, _delete_answer, "delete")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/restore", methods=["POST"])
@@ -685,6 +689,8 @@ def _server_routes(app):
     @server_access_required
     def api_server_database_restore(server_id, db_id):
         """Load the database from the dump in the server's files (panel-db-dumps/<name>.sql.gz)."""
+        if not has_permission(current_user, MANAGE_DATABASES):
+            return _say(403, _DENIED)
         return _row_action(server_id, db_id, _restore_answer, "restore")
 
 
