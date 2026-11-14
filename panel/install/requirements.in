@@ -1,6 +1,8 @@
 # Runtime dependencies: the packages the panel imports directly. EDIT THIS FILE, then regenerate
 # requirements.txt from it (run in python:3.10-slim):
 #   pip-compile --generate-hashes --no-annotate --strip-extras --unsafe-package=dnspython \
+#     --unsafe-package=h11 --unsafe-package=invoke --unsafe-package=pycparser \
+#     --unsafe-package=simple-websocket --unsafe-package=wsproto \
 #     --output-file=requirements.txt requirements.in
 #
 # requirements.txt is pip-compile's lockfile: the WHOLE resolved set, every package these pull in,
@@ -27,17 +29,31 @@
 # markers here: a 3.10 compile drops a requirement whose marker is false on 3.10, so a package
 # needed only on a newer Python must be listed bare (tests/unit refuses a marker in this file).
 #
-# dnspython is left out (--unsafe-package; Dependabot reads the flag back from the header and keeps
-# it). eventlet declares it for eventlet.support.greendns, its DNS resolver written in Python, and it
-# is the only package here that does. The panel turns greendns off instead (EVENTLET_NO_GREENDNS=yes,
-# set before eventlet is imported: panel/install/app.py and panel/__init__.py) and resolves names
-# with the operating system's own resolver on a worker thread (panel/core/green_dns.py). That keeps
-# one dependency, and its advisories, off every host: dnspython's fixes now need Python 3.11, which
-# Ubuntu 22.04 does not have. Without --allow-unsafe on purpose: with it, pip-compile pins the
-# unsafe package anyway. Because eventlet's metadata still names dnspython, every install of this
-# file passes --no-deps (the file is the whole closure apart from that one) and then runs pip check,
-# which may report only "eventlet ... requires dnspython, which is not installed." (install.sh
-# _pip_check_deps; CI runs the same function). tests/unit (part06, part193) holds all of this.
+# Six packages are left out (--unsafe-package; Dependabot reads each flag back from the header and
+# keeps it): a package that is not installed cannot be vulnerable. Each is declared by another
+# package's metadata for a feature the panel never uses, so nothing the panel runs imports it:
+#  * dnspython: eventlet declares it for eventlet.support.greendns, its DNS resolver written in
+#    Python. The panel turns greendns off (EVENTLET_NO_GREENDNS=yes, set before eventlet is
+#    imported: panel/install/app.py and panel/__init__.py) and resolves names with the operating
+#    system's own resolver on a worker thread (panel/core/green_dns.py). dnspython's fixes need
+#    Python 3.11, which Ubuntu 22.04 does not have.
+#  * invoke: paramiko declares it for one thing, an ssh_config `Match exec` line, and imports it
+#    inside a try (paramiko/config.py), using it only when SSHConfig.lookup meets such a line. The
+#    panel never reads an ssh_config: it gives paramiko the host, port, user and key itself.
+#  * simple-websocket, and wsproto and h11 under it: python-engineio declares it for its threading
+#    and gevent modes (engineio/async_drivers/_websocket_wsgi.py). The panel runs eventlet mode
+#    (SocketIO(..., async_mode="eventlet"), panel/routes/server_files.py), whose WebSocket is
+#    eventlet's own (engineio/async_drivers/eventlet.py imports eventlet.websocket).
+#  * pycparser: cffi declares it for building bindings from C source (cffi.FFI().cdef). The panel's
+#    cffi users, cryptography and PyNaCl, ship prebuilt bindings that load _cffi_backend only.
+# Without --allow-unsafe on purpose: with it, pip-compile pins the unsafe packages anyway. Because
+# other metadata still names them, every install of this file passes --no-deps (the file is the
+# whole closure apart from these) and then runs pip check, which may report only these four:
+# "eventlet ... requires dnspython", "paramiko ... requires invoke", "python-engineio ... requires
+# simple-websocket" and "cffi ... requires pycparser", each "..., which is not installed." (install.sh
+# _pip_check_deps; CI runs the same function, then fails if any of the six is installed). install.sh
+# uninstalls the six from a venv an earlier version filled. tests/unit (part06, part193, part196)
+# holds all of this.
 flask
 flask-socketio
 flask-login

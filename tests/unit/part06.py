@@ -3975,13 +3975,15 @@ try:
                             "e has 0 pins that apply on Python 3.10"]
           and _rq_split_gaps([("d", "1", _rq_m310), ("d", "2", _rq_m311)]) == [], repr(_rq_split_bad))
     # dnspython is not installed at all (CVE-2026-114605, GHSA-vvf4-9x63-8xvv: its fixes need Python
-    # 3.11, which Ubuntu 22.04 lacks). eventlet declares it for greendns, which the panel turns off
-    # (panel/core/green_dns.py); pip-compile leaves it out by name, and Dependabot keeps that flag
-    # because it reads --unsafe-package back from this header. --allow-unsafe would pin it anyway.
-    _rq_dns_pins = [e for e in _rq_entries(_rq_txt) if not isinstance(e, str) and e[0] == "dnspython"]
-    check("requirements.txt: no dnspython, left out by name (--unsafe-package=dnspython in the "
-          "header, no --allow-unsafe)",
-          not _rq_dns_pins and _rq_unsafe(_rq_txt) == {"dnspython"}
+    # 3.11, which Ubuntu 22.04 lacks), nor five more that other metadata declares for a feature the
+    # panel never uses (requirements.in says which, for each). pip-compile leaves them out by name,
+    # and Dependabot keeps those flags because it reads --unsafe-package back from this header.
+    # --allow-unsafe would pin them anyway.
+    _rq_left = {"dnspython", "h11", "invoke", "pycparser", "simple-websocket", "wsproto"}
+    _rq_dns_pins = [e for e in _rq_entries(_rq_txt) if not isinstance(e, str) and e[0] in _rq_left]
+    check("requirements.txt: no dnspython, h11, invoke, pycparser, simple-websocket or wsproto, each "
+          "left out by name (--unsafe-package in the header, no --allow-unsafe)",
+          not _rq_dns_pins and _rq_unsafe(_rq_txt) == _rq_left
           and "--allow-unsafe" not in "".join(_l for _l in _rq_txt.splitlines() if _l.startswith("#    pip-compile ")),
           repr((_rq_dns_pins, sorted(_rq_unsafe(_rq_txt)))))
     check("requirements.txt: ...and the closure check names eventlet's dnspython when the header "

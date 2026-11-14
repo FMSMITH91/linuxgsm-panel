@@ -254,7 +254,7 @@ Run `--help` for the full list. On an older install without the command, update 
 ```bash
 git clone https://github.com/FMSMITH91/linuxgsm-panel.git && cd linuxgsm-panel
 python3 -m venv venv && source venv/bin/activate
-pip install --no-deps -r panel/install/requirements.txt   # the whole closure; --no-deps keeps out dnspython, which the panel does not use
+pip install --no-deps -r panel/install/requirements.txt   # the whole closure; --no-deps keeps out what other packages declare and the panel does not use
 python panel/install/app.py
 
 # The test tools CI installs beside them
