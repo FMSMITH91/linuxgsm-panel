@@ -1,4 +1,4 @@
-"""Scheduled world resets for games whose LinuxGSM script has no wipe command (Minecraft, Factorio).
+"""Scheduled world resets for games whose LinuxGSM script has no wipe command (Minecraft, Factorio, more).
 
 LinuxGSM gives `wipe` / `full-wipe` to Rust alone (core_getopt.sh, checked on master 2026-11). For
 the games here the panel does the reset itself, on the Wipe schedule card's schedule and after the
@@ -42,8 +42,13 @@ THE WORLD, per game (LinuxGSM master, 2026-11; Minecraft Wiki "Server.properties
   key=value lines with `#` comments, not java.util.Properties, so only a plain `level-name=<name>`
   line is read (bedrock_level_name). permissions.json, allowlist.json, server.properties and the
   shared behavior_packs / resource_packs folders sit in serverfiles and are kept.
+* vh (vhserver, Valheim) and pz (pzserver, Project Zomboid) keep the world outside serverfiles, in a
+  folder the start parameters name (start_words reads them as LinuxGSM's start runs them): Valheim's
+  <-savedir>/worlds_local/<-world>/ (vh_layout), Project Zomboid's ~/Zomboid/Saves/Multiplayer/
+  <-servername>/ (pz_layout). The plan's "base" is that folder, relative to the account's home.
 """
 import re
+import shlex
 
 from panel.core import i18n, terminal
 from panel.ops import ssh_manager as _sm
@@ -210,6 +215,23 @@ def _wwr_props(gs):
 
 # A config line that loads another file or evaluates text: what it sets cannot be read from the files.
 _WWR_CFG_CMD = re.compile(r"^[ \t]*(source|\.|eval)([ \t]|$)")
+# The keys linuxgsm.sh fn_reload_startparameters reads again with sed, which keeps a trailing comment.
+_WWR_RELOADED = ("startparameters", "preexecutable")
+# Another key's plain line: `other="value"`, a trailing comment allowed (bash drops it when sourcing).
+_WWR_OTHER_LINE = re.compile(r'^ *([A-Za-z_][A-Za-z0-9_]*)="([^"\\`]*)"(?:[ \t]+#.*)?$')
+
+
+def _wwr_names_only(line, key):
+    """Whether `line` is another key's plain line in which `key` is only named or expanded, never set.
+
+    Inside double quotes bash sets a variable only through `${key:=…}` / `${key=…}` or arithmetic
+    (`$((key=1))`); a command substitution runs in a subshell and sets nothing here.
+    """
+    m = _WWR_OTHER_LINE.match(line)
+    if m is None or m.group(1) == key:
+        return False
+    value = m.group(2)
+    return not re.search(r"\$\{%s:?=" % key, value) and "$((" not in value
 
 
 def _wwr_cfg_key(texts, key):
@@ -223,12 +245,20 @@ def _wwr_cfg_key(texts, key):
     and reads other forms, so here every non-comment line naming the key must be LinuxGSM's plain
     form, `key="value"` indented by spaces at most and nothing after it, and a file may hold it once.
     Then the files' last value is what both the sourcing and the reload use.
+
+    Two forms are not counted as setting the key, since bash cannot set it through them: another
+    key's plain line (`other="..."`, no backslash or backtick) whose value only names the key or
+    expands it (`-port ${port}`), but not `${key:=…}`, `${key=…}` or arithmetic there; and, for a key
+    the reload does not re-read, a `# comment` after the closing quote (LinuxGSM's own
+    `serverpassword="" # Minimum password length is 5.`).
     """
-    plain = re.compile(r'^ *%s="([^"\\`]*)"$' % key)
+    tail = "" if key in _WWR_RELOADED else r"(?:[ \t]+#.*)?"
+    plain = re.compile(r'^ *%s="([^"\\`]*)"%s$' % (key, tail))
     word = re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % key)
     found = ""
     for text in texts:
-        vals = [plain.match(ln) for ln in text.split("\n") if word.search(ln) and not ln.lstrip(" \t").startswith("#")]
+        vals = [plain.match(ln) for ln in text.split("\n") if word.search(ln) and not ln.lstrip(" \t").startswith("#")
+                and not _wwr_names_only(ln, key)]
         if not all(vals):
             return None, i18n.Sentence("the LinuxGSM config sets {key} in a form the panel cannot read the way "
                                        "LinuxGSM does (only key=\"value\" lines, indented by spaces at most)", key=key)
@@ -532,8 +562,236 @@ def fctr_plan(gs):
     return fctr_layout(values)
 
 
+# ── Valheim and Project Zomboid: the world is named by the start parameters ─────────────────────
+_WWR_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+# The expansions read: ${name}, $name, and ${name:+word} whose word holds plain text and ${name} only.
+_WWR_EXPANSION = re.compile(r"\$\{(%s):\+((?:[^${}]|\$\{%s\})*)\}|\$\{(%s)\}|\$(%s)" % ((_WWR_NAME,) * 4))
+_WWR_SIMPLE_REF = re.compile(r"\$\{(%s)\}" % _WWR_NAME)
+_WWR_ODD_EXPANSION = i18n.Sentence("the start parameters use a shell expansion the panel does not read")
+
+
+def _wwr_refs(text):
+    """The variable names `text` expands, or None when it holds a `$` in any other form."""
+    if "$" in _WWR_EXPANSION.sub("", text):
+        return None
+    names = set()
+    for m in _WWR_EXPANSION.finditer(text):
+        names.add(m.group(1) or m.group(3) or m.group(4))
+        names.update(_WWR_SIMPLE_REF.findall(m.group(2) or ""))
+    return names
+
+
+def _wwr_expand(text, env):
+    """`text` with its expansions put in from `env` (unset is empty), each replaced once, never re-read."""
+    def one(m):
+        if m.group(1):
+            return _WWR_SIMPLE_REF.sub(lambda r: env.get(r.group(1), ""), m.group(2)) if env.get(m.group(1)) else ""
+        return env.get(m.group(3) or m.group(4), "")
+    return _WWR_EXPANSION.sub(one, text)
+
+
+def _wwr_env(texts, names, base):
+    """The values of `names` from the config texts, each expanded at source time: (env, None) or (None, why).
+
+    A value may expand only the variables LinuxGSM sets before the config is sourced (`base`):
+    which value another setting held at that moment depends on the file order, so it is refused.
+    """
+    values, why = cfg_values(texts, sorted(n for n in names if n not in base))
+    if why is not None:
+        return None, why
+    env = dict(base)
+    for key, value in values.items():
+        refs = _wwr_refs(value)
+        if refs is None or not refs <= set(base):
+            return None, i18n.Sentence("the LinuxGSM setting {key} expands another setting, which the panel does not "
+                                       "follow", key=key)
+        env[key] = _wwr_expand(value, base)
+    return env, None
+
+
+def start_words(texts, user, selfname):
+    """The words the server is started with, as LinuxGSM's start shell splits them: (words, None) or (None, why).
+
+    LinuxGSM re-reads startparameters just before a start (fn_reload_startparameters: an eval of the
+    line, so every setting it expands has its final value), adds extraparams, and hands
+    "${preexecutable} ${executable} ${startparameters}" to tmux as one string a shell runs
+    (command_start.sh). Read here: ${name}, $name and ${name:+word}; then, with the values put in,
+    plain words and single quotes only (no other quoting, expansion, `#` or command syntax).
+    """
+    home = "/home/%s" % user
+    # What a start parameter may name without a config line: linuxgsm.sh sets these before it sources
+    # the config (HOME is the account's own).
+    base = {"selfname": selfname, "HOME": home, "rootdir": home, "serverfiles": home + "/serverfiles"}
+    values, why = cfg_values(texts, ["startparameters", "extraparams"])
+    if why is not None:
+        return None, why
+    raw = "%s %s" % (values["startparameters"], values["extraparams"])
+    names = _wwr_refs(raw)
+    if names is None:
+        return None, _WWR_ODD_EXPANSION
+    env, why = _wwr_env(texts, names, base)
+    if why is not None:
+        return None, why
+    return _wwr_split(_wwr_expand(raw, env))
+
+
+def _wwr_split(text):
+    """The shell's words of `text` (single quotes only): (words, None) or (None, why)."""
+    unquoted = re.sub(r"'[^']*'", "", text)
+    if (any(c in _WWR_SHELL_SYNTAX and c != "'" for c in text) or "#" in unquoted or "~" in unquoted
+            or not all(c == " " or c.isprintable() for c in text)):
+        return None, _WWR_SHELL_SAID
+    try:
+        return shlex.split(text), None
+    except ValueError:
+        return None, _WWR_SHELL_SAID
+
+
+def _wwr_odd_spelling(words, name):
+    """Whether `words` hold option `name` spelled another way (another case, `--`)."""
+    bare = name.lstrip("-")
+    return any(w.startswith("-") and w != name and w.lower().lstrip("-") == bare for w in words)
+
+
+def _wwr_option(words, name):
+    """The value after the one `name` option in `words`: (value, None) or (None, why).
+
+    Exactly one, written exactly `name`: another spelling (case, `--`) or a second one is refused,
+    since which one the game reads is not known.
+    """
+    at = [i for i, w in enumerate(words) if w == name]
+    if _wwr_odd_spelling(words, name) or len(at) != 1 or at[0] + 1 >= len(words) or words[at[0] + 1].startswith("-"):
+        return None, i18n.Sentence("the start parameters do not pass {option} exactly once, with a value",
+                                   option=name)
+    return words[at[0] + 1], None
+
+
+def _wwr_exe_problem(values, executable):
+    """Why the instance does not start the game's own binary from serverfiles, the way LinuxGSM does, else None."""
+    if ((values.get("executabledir") or "") not in _WWR_MC_EXEDIR or (values.get("executable") or "") != executable
+            or (values.get("preexecutable") or "").strip()):
+        return i18n.Sentence("the server is not started the way LinuxGSM starts it (executabledir, executable or "
+                             "preexecutable changed)")
+    return None
+
+
+def _wwr_start_of(gs, executable):
+    """The words `gs` is started with, after its executable is checked: (words, None) or (None, why)."""
+    texts = _sm.lgsm_cfg_texts(gs.remote, gs.short_name, gs.lgsm_name or gs.short_name)
+    if texts is None:
+        return None, Unread("the server's LinuxGSM config could not be read")
+    values, why = cfg_values(texts, ["executabledir", "executable", "preexecutable"])
+    why = why or _wwr_exe_problem(values, executable)
+    if why is not None:
+        return None, why
+    return start_words(texts, gs.short_name, gs.lgsm_name or gs.short_name)
+
+
+def _wwr_named(name, what):
+    """`name` read from the start parameters as a world or save name: None, or why it is not used."""
+    why = world_name_problem(name)
+    return i18n.Sentence("the {what} in the start parameters is not used: {why}", what=what, why=why) if why else None
+
+
+def vh_savedir(savedir, user):
+    """Valheim's -savedir as a path relative to the account's home: (relative path, None) or (None, why).
+
+    Only a plain absolute path inside /home/<user> (no `.`/`..` part, no doubled or trailing slash).
+    """
+    home = "/home/%s/" % user
+    rel = savedir[len(home):] if savedir.startswith(home) else ""
+    parts = rel.split("/")
+    if not rel or any(p in ("", ".", "..") or world_name_problem(p) for p in parts):
+        return None, i18n.Sentence("-savedir is not a plain folder inside the game account's home")
+    return rel, None
+
+
+def vh_layout(words, user):
+    """Which world Valheim starts, from its start words: (plan, None) or (None, why).
+
+    The server keeps its world in <-savedir>/worlds_local/<-world>/ (Valheim 1.0's save format: a
+    folder of _main.<N>.fwl2/.db2/.chunks/.ok and *.chunk files). A world last saved before 1.0 is a
+    <world>.fwl / <world>.db pair (with .old copies) beside it, which the server converts when it finds
+    no folder: those go too, or the old world would come back. The lists (adminlist.txt,
+    permittedlist.txt, bannedlist.txt), other worlds and the backups the server keeps are not touched.
+    """
+    world, why = _wwr_option(words, "-world")
+    savedir, why2 = _wwr_option(words, "-savedir")
+    why = why or why2 or _wwr_named(world, "-world")
+    if why is not None:
+        return None, why
+    rel, why = vh_savedir(savedir, user)
+    if why is not None:
+        return None, why
+    loose = [world + ext for ext in (".fwl", ".db", ".fwl.old", ".db.old")]
+    return {"dir": "", "base": rel + "/worlds_local", "remove": [world] + loose, "loose": loose, "globs": [],
+            "create": None, "world": "_main.*.fwl2"}, None
+
+
+def vh_plan(gs):
+    """The world of Valheim server `gs`: (plan, None), or (None, why it is not reset)."""
+    words, why = _wwr_start_of(gs, "./valheim_server.x86_64")
+    if why is not None:
+        return None, why
+    return vh_layout(words, gs.short_name)
+
+
+# Where Project Zomboid keeps its folders: ~/Zomboid unless -cachedir (or the Java property
+# deployment.user.cachedir, or user.home) moves it (PZ Wiki "Startup parameters", 42.20.4).
+_WWR_PZ_MOVES = ("cachedir", "user.home")
+_WWR_PZ_JSON = "serverfiles/ProjectZomboid64.json"
+
+
+def pz_layout(words):
+    """Which save Project Zomboid starts, from its start words: (plan, None) or (None, why).
+
+    `-servername <name>` names the save (PZ Wiki "Startup parameters"): its world is the folder
+    ~/Zomboid/Saves/Multiplayer/<name> (PZ Wiki "Dedicated server"), which also holds the characters
+    (players.db) and vehicles. The accounts and whitelist (~/Zomboid/db/<name>.db), the settings
+    (~/Zomboid/Server/<name>.ini, _SandboxVars.lua, _spawnregions.lua, _spawnpoints.lua), mods and the
+    server's own backups (~/Zomboid/backups) are not touched.
+    """
+    if any(m in w.lower() for w in words for m in _WWR_PZ_MOVES):
+        return None, i18n.Sentence("the start parameters move Project Zomboid's folder (cachedir or user.home)")
+    name, why = _wwr_option(words, "-servername")
+    why = why or _wwr_named(name, "-servername")
+    if why is not None:
+        return None, why
+    return {"dir": "", "base": "Zomboid/Saves/Multiplayer", "remove": [name], "globs": [], "create": None,
+            "world": "map_t.bin"}, None
+
+
+def pz_json_problem(text):
+    r"""Why ProjectZomboid64.json (its text) may move the game's folder, else None.
+
+    start-server.sh starts the game with the Java options in this file, and deployment.user.cachedir
+    or user.home there would move ~/Zomboid. The panel does not parse JSON: either name anywhere is
+    refused, and so is a \u escape, which could spell one.
+    """
+    low = text.lower()
+    if any(m in low for m in _WWR_PZ_MOVES) or "\\u" in low:
+        return i18n.Sentence("ProjectZomboid64.json sets cachedir or user.home (or holds a \\u escape), which moves "
+                             "Project Zomboid's folder")
+    return None
+
+
+def pz_plan(gs):
+    """The world of Project Zomboid server `gs`: (plan, None), or (None, why it is not reset)."""
+    words, why = _wwr_start_of(gs, "./start-server.sh")
+    plan, why = (None, why) if why is not None else pz_layout(words)
+    if plan is None:
+        return None, why
+    content, err = _sm.read_file(gs.remote, gs.short_name, _WWR_PZ_JSON)
+    if err in _wwr_firm_read_errors():
+        return None, i18n.Sentence("serverfiles/ProjectZomboid64.json cannot be used: {error}", error=str(err))
+    if err is not None or content is None:
+        return None, Unread("ProjectZomboid64.json could not be read: {error}", error=str(err or "no answer"))
+    why = pz_json_problem(content)
+    return (None, why) if why else (plan, None)
+
+
 # game type -> the resolver that finds its world. Only games with a real server to prove them on.
-RESOLVERS = {"mc": mc_plan, "fctr": fctr_plan, "pmc": pmc_plan, "mcb": mcb_plan}
+RESOLVERS = {"mc": mc_plan, "fctr": fctr_plan, "pmc": pmc_plan, "mcb": mcb_plan, "vh": vh_plan, "pz": pz_plan}
 GAMES = frozenset(RESOLVERS)
 
 
@@ -591,15 +849,20 @@ def status_of(out):
 
 
 def _wwr_busy_wait(polls):
-    """Wait (up to `polls` x 2 s) until no process of the account has its cwd or an open file in serverfiles.
+    """Wait (up to `polls` x 2 s) until no process of the account has its cwd or an open file in serverfiles ($sf).
+
+    Or in the world's own folder ($wwrb, when it is outside serverfiles: Valheim, Project Zomboid). A
+    caller that sets no $wwrb (the backup restore) watches serverfiles alone.
 
     /proc/<pid> belongs to the process's user, so `[ -O ]` keeps the account's own; the script itself
     (cwd /) is skipped. Still busy at the end: refused, nothing deleted.
     """
     return [
         'busy() { for p in /proc/[0-9]*; do [ -O "$p" ] || continue; [ "${p#/proc/}" = "$$" ] && continue; '
-        'c=$(readlink "$p/cwd" 2>/dev/null) || continue; case "$c" in "$sf"|"$sf"/*) return 0;; esac; '
-        'for f in "$p"/fd/*; do t=$(readlink "$f" 2>/dev/null) || continue; case "$t" in "$sf"/*) return 0;; esac; '
+        'c=$(readlink "$p/cwd" 2>/dev/null) || continue; '
+        'case "$c" in "$sf"|"$sf"/*|"${wwrb:-$sf}"|"${wwrb:-$sf}"/*) return 0;; esac; '
+        'for f in "$p"/fd/*; do t=$(readlink "$f" 2>/dev/null) || continue; case "$t" in "$sf"/*|"${wwrb:-$sf}"/*) return 0;; '
+        'esac; '
         'done; done; return 1; }',
         'i=0; while busy; do i=$((i+1)); if [ "$i" -ge %d ]; then echo %s; exit 4; fi; sleep 2; done'
         % (int(polls), _M_BUSY),
@@ -633,7 +896,9 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
         'sf=$(cd -P -- %s 2>/dev/null && pwd -P && printf x) && sf=${sf%%?x} || sf=' % _q(home + "/serverfiles"),
         'case "$sf" in ""|/) echo %s; exit 3;; esac' % _M_NOSF,
         "if %s; then echo %s; exit 4; fi" % (_wwr_tmux_up(selfname), _M_RUNNING),
-    ] + _wwr_busy_wait(busy_polls) + ['d="$sf"']
+    ] + (_wwr_base(home, plan["base"]) if plan.get("base") else []) + _wwr_busy_wait(busy_polls)
+    if not plan.get("base"):
+        lines.append('d="$sf"')
     if sub:
         lines += ['if [ -L "$sf/%s" ]; then echo %s; exit 5; fi' % (sub, _M_LINK), 'd="$sf/%s"' % sub]
     lines += [
@@ -642,7 +907,7 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
         'for n in "$@"; do p="$d/$n"; if [ -L "$p" ]; then echo %s; exit 5; fi; [ -e "$p" ] || continue; '
         'r=$(realpath -e -- "$p" 2>/dev/null && printf x) && r=${r%%?x} || r=; '
         'if [ "$r" != "$d/$n" ]; then echo %s; exit 5; fi; done' % (_M_LINK, _M_OUTSIDE),
-    ] + (_wwr_world_test() if plan.get("world") else []) + [
+    ] + (_wwr_world_test(plan) if plan.get("world") else []) + [
         'g=0; for n in "$@"; do p="$d/$n"; [ -e "$p" ] || continue; rm -rf -- "$p"; '
         'if [ -e "$p" ] || [ -L "$p" ]; then echo %s; exit 6; fi; g=$((g+1)); echo %s; done' % (_M_RMFAIL, _M_GONE),
         'if [ "$g" = 0 ]; then echo %s; exit 8; fi' % _M_NOTHING,
@@ -658,15 +923,40 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
     return "\n".join(lines) + "\n"
 
 
-def _wwr_world_test():
-    """Script lines: the world folder ($1) must be there, and every path to delete a folder holding level.dat.
+def _wwr_world_test(plan):
+    """Script lines: the world folder ($1) must be there, and every path to delete must look like the world's.
 
-    Every Minecraft world folder has one: Java's (and a Bukkit-style <name>_nether / _the_end) and
-    Bedrock's worlds/<name>. A path without it is not a world the panel will delete, whatever named it.
+    A folder must hold a file matching the plan's marker (plan["world"]; True is Minecraft's level.dat):
+    every Minecraft world folder has a level.dat (Java's, a Bukkit-style <name>_nether / _the_end,
+    Bedrock's worlds/<name>), a Valheim 1.0 world folder its _main.<N>.fwl2, a Project Zomboid save its
+    map_t.bin. A name in plan["loose"] (Valheim's pre-1.0 files) must be a plain file. A path that
+    is neither is not a world the panel will delete, whatever named it.
     """
+    marker = "level.dat" if plan["world"] is True else plan["world"]
+    if not re.fullmatch(r"[A-Za-z0-9_.*-]+", marker):
+        raise ValueError("world marker %r" % marker)
+    loose = "|".join(_q(n) for n in plan.get("loose") or ()) or "''"
     return ['[ -e "$d/$1" ] || { echo %s; exit 8; }' % _M_NOTHING,
-            'for n in "$@"; do p="$d/$n"; [ -e "$p" ] || continue; '
-            'if [ ! -d "$p" ] || [ ! -f "$p/level.dat" ]; then echo %s; exit 5; fi; done' % _M_NOTWORLD]
+            'for n in "$@"; do p="$d/$n"; [ -e "$p" ] || continue; case "$n" in %s) [ -f "$p" ] || '
+            '{ echo %s; exit 5; }; continue;; esac; m=; [ -d "$p" ] && for f in "$p"/%s; do [ -f "$f" ] && m=1; done; '
+            '[ -n "$m" ] || { echo %s; exit 5; }; done' % (loose, _M_NOTWORLD, marker, _M_NOTWORLD)]
+
+
+def _wwr_base(home, base):
+    """Script lines: the world's folder under the account's home (`base`), resolved, as $d and $wwrb.
+
+    Missing is "nothing found"; resolving anywhere but <home, resolved>/<base> (a symlink on the
+    way) refuses. $wwrb is the folder the busy wait watches beside serverfiles.
+    """
+    return [
+        'h=$(cd -P -- %s 2>/dev/null && pwd -P && printf x) && h=${h%%?x} || h=' % _q(home),
+        'd=$(cd -P -- %s 2>/dev/null && pwd -P && printf x) && d=${d%%?x} || d=' % _q(home + "/" + base),
+        'case "$h" in ""|/) echo %s; exit 3;; esac' % _M_NOSF,
+        'if [ -z "$d" ]; then if [ -L %s ]; then echo %s; exit 5; fi; echo %s; exit 8; fi'
+        % (_q(home + "/" + base), _M_LINK, _M_NOTHING),
+        'if [ "$d" != "$h"/%s ]; then echo %s; exit 5; fi' % (_q(base), _M_LINK),
+        'wwrb="$d"',
+    ]
 
 
 # The script's refusals, each printed before anything is deleted.
@@ -683,6 +973,20 @@ _WWR_REFUSALS = (
 )
 
 
+# The same refusals worded for a world kept outside serverfiles (Valheim, Project Zomboid).
+_WWR_OUT_OF_SF = {
+    _M_LINK: i18n.Sentence("part of the world is a symbolic link or outside its folder; nothing was deleted"),
+    _M_OUTSIDE: i18n.Sentence("part of the world is a symbolic link or outside its folder; nothing was deleted"),
+    _M_NOTWORLD: i18n.Sentence("a path the reset would delete does not look like this game's world save; nothing "
+                               "was deleted"),
+}
+
+
+def _wwr_refusal(mark, why, plan):
+    """The refusal sentence for `mark`: the game's own wording when its world is not in serverfiles."""
+    return _WWR_OUT_OF_SF.get(mark, why) if plan.get("base") else why
+
+
 def outcome(out, rc, plan):
     """How the script went: (state, sentence).
 
@@ -695,9 +999,12 @@ def outcome(out, rc, plan):
     text = terminal.strip_escapes(out or "")
     marks = set(re.findall(r"^__WWR_[A-Z]+__", text, re.M))
     gone = len(re.findall(r"^" + _M_GONE, text, re.M))
-    refused = next((why for mark, why in _WWR_REFUSALS if mark in marks), None)
+    refused = next((_wwr_refusal(mark, why, plan) for mark, why in _WWR_REFUSALS if mark in marks), None)
     if refused is not None:
         return "refused", refused
+    if _M_NOTHING in marks and plan.get("base"):
+        return "refused", i18n.Sentence("no world was found in ~/{folder} (looked for: {names}); nothing was deleted",
+                                        folder=plan["base"], names=plan["remove"][0])
     if _M_NOTHING in marks:
         return "refused", i18n.Sentence("no world was found in serverfiles (looked for: {names}); nothing was "
                                         "deleted", names=", ".join(plan["remove"] + plan["globs"]))

@@ -566,7 +566,7 @@
 </div>
 
 {# The scheduled wipe: LinuxGSM's wipe/full-wipe for Rust, the panel's world reset for Minecraft
-   (Java, Paper, Bedrock) and Factorio (one kind, no map/full choice). The panel runs it (panel/routes/wipe_schedule.py): a
+   (Java, Paper, Bedrock), Factorio, Valheim and Project Zomboid (one kind, no map/full choice). The panel runs it (panel/routes/wipe_schedule.py): a
    backup first, and no wipe if that backup failed. The form is rendered whole, and the script only
    fills its values, so nothing moves when it loads. #}
 {% if wipe_supported(server.game_type) %}
@@ -585,6 +585,10 @@
     <p class="small text-secondary mb-2">World reset: deletes the world's folder in worlds/ (the one level-name names in server.properties, with the player data and packs stored inside it) and the server makes a new world when it starts; server.properties, permissions.json, allowlist.json, the shared behavior_packs and resource_packs folders and other worlds are kept. Packs the old world applied are not applied to the new one: add them to it again. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Players are counted from the joins and leaves in the server's console log, so “Wait until the server is empty” needs LinuxGSM's console logging on (its default): without it the reset waits and gives up after 12 hours.</p>
     {% elif server.game_type == 'fctr' %}
     <p class="small text-secondary mb-2">World reset: deletes the map save and its autosaves and creates a new map the way LinuxGSM's install does (Factorio's default map settings); server settings, mods and other saves are kept. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Factorio's players cannot be counted, so with “Wait until the server is empty” ticked the reset waits and gives up after 12 hours: leave it unticked.</p>
+    {% elif server.game_type == 'vh' %}
+    <p class="small text-secondary mb-2">World reset: deletes the world's folder in worlds_local (the one -world names, under -savedir) and any pre-1.0 .fwl and .db files of that world, and the server makes a new world with a new random seed when it starts (a Valheim server has no seed setting); the admin, permitted and banned lists, other worlds and the server's own world backups are kept, and players keep their characters (Valheim stores them on the players' computers). The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. A Valheim server started with -crossplay (LinuxGSM's default) can't be asked for its player count, so with “Wait until the server is empty” ticked the reset waits and gives up after 12 hours: leave it unticked, or remove -crossplay from startparameters.</p>
+    {% elif server.game_type == 'pz' %}
+    <p class="small text-secondary mb-2">World reset: deletes the save folder in Zomboid/Saves/Multiplayer that -servername names (the map, characters, vehicles and zombies), and the server makes a new world when it starts; player accounts and the whitelist (Zomboid/db), the server settings (its .ini and its sandbox, spawn region and spawn point files), mods and the server's own backups are kept. The new world is generated from Seed in the server's .ini, which is kept: change Seed there for a different one. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped.</p>
     {% else %}
     <p class="small text-secondary mb-2">A map wipe deletes the map and saves and keeps blueprints. A full wipe also deletes blueprints and player data (not Rust+ pairing). The panel takes a LinuxGSM backup first and does not wipe if that backup fails.</p>
     {% endif %}
@@ -622,7 +626,7 @@
       </div>
       <div class="col-12">
         <div class="form-check mb-0">
-          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type not in ('fctr', 'mcb') %} checked{% endif %}>
+          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type not in ('fctr', 'mcb', 'vh') %} checked{% endif %}>
           <label class="form-check-label small" for="wipe-wait">Wait until the server is empty (up to 12 hours)</label>
         </div>
       </div>
