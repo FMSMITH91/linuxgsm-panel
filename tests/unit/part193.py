@@ -73,19 +73,18 @@ def _first_eventlet_unguarded(text):
     return None
 
 
+_ENTRY_RX193 = _re193.compile(r"^(?:tools/|panel/install/|tests/fuzz/fuzz_|tests/[^/]+_test\.py$)")
+
+
 def _entry_point193(rel, text):
     """True for a file that starts a process: a script, a harness, a fuzz target, a tool."""
-    if rel.startswith("panel/") and not rel.startswith("panel/install/"):
-        return False
-    # The suites' parts run inside their harness (tests/*_test.py, checked here), which imports the
+    # The panel package's modules are imported, never run, and panel/__init__ covers them. The
+    # suites' parts run inside their harness (tests/*_test.py, checked here), which imports the
     # panel package before it loads any of them.
-    if rel.startswith(("tests/unit/", "tests/smoke/")):
+    if rel.startswith(("tests/unit/", "tests/smoke/")) or (rel.startswith("panel/") and not rel.startswith("panel/install/")):
         return False
-    base = _os193.path.basename(rel)
-    return (text.startswith("#!") or "__name__ == \"__main__\"" in text or "__name__ == '__main__'" in text
-            or (rel.startswith("tests/fuzz/") and base.startswith("fuzz_")) or rel.startswith("tools/")
-            or (rel.startswith("tests/") and base.endswith("_test.py") and rel.count("/") == 1)
-            or rel.startswith("panel/install/"))
+    return bool(text.startswith("#!") or _re193.search(r"__name__ == [\"']__main__[\"']", text)
+                or _ENTRY_RX193.match(rel))
 
 
 _SKIP_DIRS193 = {".git", ".claude", "node_modules", "venv", ".venv", "data", "__pycache__"}
