@@ -1149,6 +1149,9 @@ def register(app):
     # A server's Steam Workshop list: items, a collection, or Project Zomboid's ini (app.py is at its size limit).
     from panel.routes import workshop as _wsc_routes
     _wsc_routes.register(app)
+    # A Call of Duty server's mod folder, and which Mods card a game gets (app.py is at its size limit).
+    from panel.routes import cod_mods as _codm_routes
+    _codm_routes.register(app)
     # Published on `app` because the module-level Telegram and Discord command bots drive a
     # start/stop/restart through this exact function, rather than a copy of its logic. It used to
     # be assigned at the end of register_routes(); now the module that owns it does the publishing,
