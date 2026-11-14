@@ -4,7 +4,10 @@ function _esc(s){ return window.escapeHtml(s); }
 
 // Maintenance/info actions (details, postdetails, monitor, …) return text you want to READ —
 // show it in a dismissible panel, not a toast that disappears before you see it.
+// update-lgsm's reply carries the LinuxGSM line's new state and what's new (lgsm_update.js, on the
+// server page); Files & Config, which does not load that file, shows the sentence as before.
 function _reportActionResult(action, d, showOutput) {
+  if (d.lgsm && typeof window.lgsmUpdateResult === 'function') { window.lgsmUpdateResult(d); return; }
   if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
   else toast(d.message || tf('{action} done', {action: action}), d.success ? 'success' : 'danger');
 }

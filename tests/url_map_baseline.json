@@ -1081,6 +1081,18 @@
       "POST"
     ]
   },
+  "GET,POST /api/server/<int:server_id>/cod-mods": {
+    "endpoint": "api_server_cod_mods",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_cod_mods"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /api/server/<int:server_id>/config": {
     "endpoint": "api_server_config",
     "guards": [

@@ -77,6 +77,11 @@ _ARG_RE = re.compile(
     r"(?P<value>\"[^\"\n]{0,256}\"|'[^'\n]{0,256}'|[^\s\"'?&;,\x1b]{1,256})",
     re.IGNORECASE)
 
+# Words that follow a flag in prose rather than as its value ("set via -adminpassword option").
+# A real secret spelled like one of these is still masked by its value from the config.
+_PROSE_AFTER_FLAG = frozenset(("option", "options", "argument", "parameter", "flag", "switch", "setting", "value",
+                               "is", "was", "to", "for", "and", "or", "changed", "set", "given", "used", "from"))
+
 # server id -> (monotonic time it is good until, frozenset of values). Registered, so a deleted
 # server's values are dropped rather than applied to whichever server takes its id.
 _values = register_server_state({})
@@ -138,13 +143,19 @@ def forget(server_id):
 
 def _arg_mask(m):
     """_ARG_RE's replacement: the flag or key kept, its value masked (not a switch or a next flag)."""
+    return m.group(0) if _kept_as_written(m) else m.group("key") + m.group("sep") + MASK
+
+
+def _kept_as_written(m):
+    """Whether _ARG_RE's match is not a secret after all: a switch, prose about the flag, or the next flag."""
     value = m.group("value")
-    bare = value.strip("\"'").strip()
-    if bare.lower() in _NOT_SECRET or bare.lower() == "not":
-        return m.group(0)
-    if m.group("flag") and "=" not in m.group("sep") and ":" not in m.group("sep") and value[0] in "-+":
-        return m.group(0)       # `-password -port 27015`: an empty password, and the next flag
-    return m.group("key") + m.group("sep") + MASK
+    bare = value.strip("\"'").strip().lower()
+    if bare in _NOT_SECRET or bare == "not":
+        return True
+    spaced_flag = bool(m.group("flag")) and "=" not in m.group("sep") and ":" not in m.group("sep")
+    # "changed via -adminpassword option" is prose about the flag; `-password -port 27015` is an
+    # empty password followed by the next flag.
+    return spaced_flag and (bare in _PROSE_AFTER_FLAG or value[0] in "-+")
 
 
 def mask_text(text, values=()):

@@ -14,6 +14,14 @@ compares git commits, not this file.
 
 ### Added
 
+- **"Update LinuxGSM" from the version line.** When a newer LinuxGSM release is out, the server
+  page's "available" note opens that release's notes and an Update LinuxGSM button for anyone
+  allowed to run update-lgsm.
+
+- **Call of Duty servers can switch their mod.** The Mods tab of a Call of Duty, United Offensive,
+  CoD2, CoD4 or World at War server lists the mod folders on the server, shows which one it starts
+  with, and switches it (or back to none) with a note that a restart applies it.
+
 - **Restore a game server from one of its backups.** Each backup in a server's Backups card has a
   Restore button, behind a new restore_backup permission that no group has until it is given. You
   type the server's name to confirm; the panel checks the archive and the free space, stops the
@@ -336,6 +344,23 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **The server page shows the new LinuxGSM release right after update-lgsm.** The version line kept
+  the old release until the page was reloaded; it now changes as soon as the update finishes, on
+  every open page of that server.
+
+- **update-lgsm says what it did.** It said only "'update-lgsm' succeeded"; it now says which release
+  LinuxGSM moved from and to, that it was already up to date, or LinuxGSM's own reason for failing,
+  followed by what's new in the releases it installed.
+
+- **The Mods tab only appears for games with mods the panel can manage.** LinuxGSM's mod installer
+  exists only for Source-engine games and a few others; every other game showed an installer that
+  could do nothing. Those games no longer have a Mods tab.
+
+- **Minecraft Bedrock: the player count comes from the server itself.** The panel asks the server
+  over LAN discovery on its own host, and reads the console log only when the server does not
+  answer. A status poll no longer starts a sudo session and eleven programs for every Bedrock
+  server.
 
 - **Scheduled Tasks' last-run times are no longer an hour behind.** The panel found cron's log lines by the name of the running process, which
   for a sixth of them had already changed to the shell, so a job could show its run before last. It now
