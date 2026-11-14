@@ -36,7 +36,7 @@ from panel.core.panel_state import (
 )
 from panel.ops.ssh_manager import (
     _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
-    is_local_server, lgsm_get_values, metrics_for_game, register_remote_cache,
+    is_bedrock, is_local_server, lgsm_get_values, metrics_for_game, register_remote_cache,
     remote_fail2ban_attempt_counts,
     fwa_block_target, fwa_panel_source, remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip,
     run_command,
@@ -320,9 +320,14 @@ def _admin_account(user):
 
 
 def _batchable(gs):
-    """Whether one server can join its host's batched gamedig query this pass."""
+    """Whether one server can join its host's batched gamedig query this pass.
+
+    Not Minecraft Bedrock: it is counted from its own console log, as its own account
+    (player_slots), and a NetherNet server answers no gamedig query to batch.
+    """
     return (gs.status != "offline" and gs.remote is not None
             and game_idents_ok(gs.short_name) and bool(gs.port)
+            and not is_bedrock(gs.game_type)
             and bool(_gamedig_type(gs.game_type, gs.query_type)))
 
 

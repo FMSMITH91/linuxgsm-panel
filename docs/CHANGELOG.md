@@ -337,6 +337,16 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Minecraft Bedrock servers show how many players are on.** Current Bedrock servers answer no player
+  query the panel had, so their players read unknown on the dashboard, in the bots and to every
+  "wait until empty". The panel now counts the joins and leaves in the server's console log, without
+  typing anything into the console.
+
+- **Bedrock's hourly restart when empty works again.** It never restarted, because the player count it
+  waited for could not be read; it now waits for the count from the console log. The world reset card can
+  wait for an empty Bedrock server too when the box is ticked; it starts unticked until a real join has
+  been counted on a test server.
+
 - **The file browser no longer calls readable folders unreadable.** Commands run as a game server's account now start in `/`, so `find`
   no longer ends with an error when it cannot return to the panel's own folder. The same error made the
   upload check say it could not look for files that already exist.

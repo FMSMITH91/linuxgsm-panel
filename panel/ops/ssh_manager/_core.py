@@ -3753,8 +3753,10 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
     #   daily <hour>:<minute>: set the "pending" flag
     #   hourly :10           : if flag set and server empty (gamedig), restart + clear flag
-    check_cmd = daily_restart_check_cmd(user, selfname, gdtype,
-                                        _gamedig_host(server) if (gdtype and port) else None, port)
+    # The game type picks Minecraft Bedrock's console-log count (bedrock.bedrock_restart_check). Its
+    # address is still looked up (cached): a Bedrock line too long for cron keeps the gamedig query.
+    check_cmd = daily_restart_check_cmd(user, selfname, gdtype, _gamedig_host(server) if (gdtype and port) else None,
+                                        port, game_type)
     touch_line = f"{minute} {hour} * * * {cron._record_managed_cmd(user, f'touch {flag}')}"
     check_line = f"10 * * * * {check_cmd}"
     # Both lines contain the flag path — strip by that to remove/rebuild idempotently.
@@ -3797,7 +3799,7 @@ def _r20b_query_port(port):
         return None
 
 
-def daily_restart_check_cmd(user, selfname, gdtype, host, port):
+def daily_restart_check_cmd(user, selfname, gdtype, host, port, game_type=None):
     """The hourly restart-when-empty check's COMMAND (no schedule).
 
     Exactly as set_daily_restart writes it for a server whose gamedig type is `gdtype`, queried at
@@ -3805,8 +3807,12 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
 
     The one place that line is spelled. set_daily_restart writes it, and
     cron.upgrade_managed_cron_tracking rewrites every older shape of it to this — so a line healed in
-    place and one written by toggling the setting cannot drift apart.
+    place and one written by toggling the setting cannot drift apart. `game_type` "mcb" (Minecraft
+    Bedrock) counts its console log instead, where that line fits cron (bedrock.py).
     """
+    from panel.ops.ssh_manager import bedrock as _bedrock   # at call time: it imports this module
+    if (line := _bedrock.bedrock_restart_check(game_type, user, selfname)):
+        return line
     flag = f"/home/{user}/.restart-pending"
     # The player test is "did we COUNT zero", not "did we fail to count". gamedig writes its
     # failure to stdout as a JSON object ({"error":"Failed all 1 attempts"}), so `.players` is null
