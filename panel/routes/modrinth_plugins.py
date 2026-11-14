@@ -14,8 +14,9 @@ INSTALL: the panel host asks Modrinth for the newest release of the project for 
 Bukkit on the server's Minecraft version, downloads its primary file from Modrinth's CDN and checks
 its sha512 against the API's (panel/services/modrinth.py); only then is the .jar written into
 serverfiles/plugins/, never over a file already there. The Minecraft version is read from the
-server's own serverfiles/version_history.json (Paper writes it); when it cannot be told, the
-search covers every version and the card marks the results as unverified for this server.
+server's own serverfiles/version_history.json (Paper writes it), else from the version.json inside
+its paper.jar; when it cannot be told, the search covers every version and the card marks the
+results as unverified for this server.
 
 INSTALLED: the .jar files in serverfiles/plugins/, from the file browser's listing. Disable renames
 X.jar to X.jar.disabled (Paper loads only .jar files), Enable renames it back, Remove deletes it.
@@ -31,7 +32,7 @@ from panel.core.http import _json_body, _json_str, _log_and_generic, _unreachabl
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after
 from panel.security.auth import _fpm_can_edit, _fpm_can_view, get_game, log_action, server_access_required
-from panel.services import modrinth as _mr
+from panel.services import mc_packs as _mp, modrinth as _mr
 
 PLUGIN_GAMES = frozenset({"pmc"})
 _MDR_DIR = "serverfiles/plugins"
@@ -58,9 +59,14 @@ def plugins_supported(game_type):
 
 
 def mc_version(gs):
-    """The server's Minecraft version from Paper's version_history.json, or None when it cannot be told."""
+    """The server's Minecraft version, or None when it cannot be told.
+
+    From Paper's version_history.json, else from the version.json inside paper.jar, as the datapack
+    card reads it (mc_packs.java_mc_version): a Paper build that writes no version_history.json
+    showed "version unknown" here while that card knew the version.
+    """
     content, err = _sm.read_file(gs.remote, gs.short_name, _MDR_VERSION_FILE)
-    return None if err else _mr.paper_mc_version(content)
+    return (None if err else _mr.paper_mc_version(content)) or _mp.paper_jar_version(gs.remote, gs.short_name)
 
 
 def _mdr_entry(e):
