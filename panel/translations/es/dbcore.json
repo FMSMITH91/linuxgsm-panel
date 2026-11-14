@@ -20,5 +20,9 @@
   "MariaDB was installed and set up, listening on this machine only.": "Se instaló y configuró MariaDB, escuchando solo en esta máquina.",
   "MariaDB could not be installed: apt did not finish.": "No se pudo instalar MariaDB: apt no terminó.",
   "MariaDB is installed, but it already holds databases the panel did not make, so the panel left its settings alone.": "MariaDB está instalado, pero ya contiene bases de datos que el panel no creó, así que el panel no tocó su configuración.",
-  "MariaDB was installed, but setting it up did not finish.": "Se instaló MariaDB, pero su configuración no terminó."
+  "MariaDB was installed, but setting it up did not finish.": "Se instaló MariaDB, pero su configuración no terminó.",
+  "The database server refused the panel's stored admin login. A super admin can replace or clear it on the Databases tab.": "El servidor de bases de datos rechazó el inicio de sesión de administrador guardado del panel. Un superadministrador puede reemplazarlo o borrarlo en la pestaña Bases de datos.",
+  "There is no stored admin login for this host's database server.": "No hay ningún inicio de sesión de administrador guardado para el servidor de bases de datos de este host.",
+  "The panel can't sign in as root over the socket on this host, so the stored login was kept. Enter a new one to replace it.": "El panel no puede iniciar sesión como root por el socket en este host, así que se conservó el inicio de sesión guardado. Introduce uno nuevo para reemplazarlo.",
+  "Cleared. The panel signs in as root over the socket again.": "Borrado. El panel vuelve a iniciar sesión como root por el socket."
 }

@@ -76,5 +76,11 @@
   "Database {name} was not deleted ({why}); it is listed on the host's page.": "La base de données {name} n'a pas été supprimée ({why}) ; elle figure sur la page de l'hôte.",
   "no database server": "aucun serveur de bases de données",
   "Show the settings": "Afficher les paramètres",
-  "Hide the settings": "Masquer les paramètres"
+  "Hide the settings": "Masquer les paramètres",
+  "Enter an admin login to replace the stored one, or clear it to have the panel sign in as root over the socket again.": "Saisissez un identifiant administrateur pour remplacer celui enregistré, ou effacez-le pour que le panel se connecte de nouveau en root par le socket.",
+  "Clear the stored login": "Effacer l'identifiant enregistré",
+  "The panel signs in with a stored admin login.": "Le panel se connecte avec un identifiant administrateur enregistré.",
+  "The database server refused the panel's stored admin login.": "Le serveur de bases de données a refusé l'identifiant administrateur enregistré du panel.",
+  "A super admin can replace or clear it on this tab.": "Un super administrateur peut le remplacer ou l'effacer dans cet onglet.",
+  "Change the admin login": "Changer l'identifiant administrateur"
 }

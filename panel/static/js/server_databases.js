@@ -19,7 +19,7 @@ var DB_STATE = {
 
 (function () {
   'use strict';
-  var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null};
+  var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false};
 
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
@@ -67,6 +67,8 @@ var DB_STATE = {
   function dbSize(b) {
     var GIB = 1024 * 1024 * 1024;   // bytes in one GiB
     if (typeof b !== 'number') return '';
+    if (b <= 0) return '0 B';
+    if (b < 1024) return '< 1 KB';
     if (b < 1048576) return '≈ ' + Math.max(1, Math.round(b / 1024)) + ' KB';
     if (b < GIB) return '≈ ' + Math.round(b / 1048576) + ' MB';
     return '≈ ' + (b / GIB).toFixed(1) + ' GB';
@@ -92,17 +94,37 @@ var DB_STATE = {
     var text = TF('{server} on this host.', {server: name + (ver ? ' ' + ver[1] : '')});
     var bad = (h.warnings || []).filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
     if (!bad.length) text += ' ' + T('Only reachable from this machine.');
-    return {text: [text].concat(bad).join(' '), warn: bad.length > 0};
+    return {text: [text].concat(bad).join(' ') + loginLine(h, d.can.su), warn: bad.length > 0 || !!h.login_refused};
   }
 
-  // A superadmin's "Show the panel's admin login", after the host line.
-  function adminLink(h) {
+  // A server the panel signs in to with a stored admin login: say so, and say plainly when the
+  // server refused it (every change fails until a super admin replaces or clears it).
+  function loginLine(h, su) {
+    if (!h.login) return '';
+    if (!h.login_refused) return ' ' + T('The panel signs in with a stored admin login.');
+    return ' ' + T('The database server refused the panel\'s stored admin login.')
+      + (su ? '' : ' ' + T('A super admin can replace or clear it on this tab.'));
+  }
+
+  // A superadmin's link after the host line: "Show the panel's admin login" (dbAdminReveal), or
+  // "Change the admin login" (dbLoginShow).
+  function hostLink(h, text, action) {
     h.appendChild(document.createTextNode(' '));
-    var b = node('button', 'btn btn-link btn-sm p-0 align-baseline', T('Show the panel\'s admin login'));
+    var b = node('button', 'btn btn-link btn-sm p-0 align-baseline', text);
     b.type = 'button';
-    b.setAttribute('data-action', 'dbAdminReveal');
+    b.setAttribute('data-action', action);
     b.setAttribute('data-args', JSON.stringify(['@self']));
     h.appendChild(b);
+  }
+
+  // The admin login form: a server the panel can't sign in to yet, or a superadmin replacing or
+  // clearing the stored login (opened by its link, or by itself once the server refused it).
+  function drawLogin(d) {
+    var login = !!(d.host && d.host.login);
+    show('db-login', d.can.su && (d.state === 'needs_login' || (login && (d.host.login_refused || st.loginOpen))));
+    show('db-login-new', !login);
+    show('db-login-old', login);
+    show('db-login-clear', login);
   }
 
   function drawHost(d) {
@@ -110,11 +132,12 @@ var DB_STATE = {
     h.textContent = line.text + (d.setup_error ? (line.text ? ' ' : '') + d.setup_error : '');
     h.className = 'small mb-2 text-break ' + (line.warn || d.setup_error ? 'text-warning' : 'text-secondary');
     show('db-host', !!h.textContent);
-    if (d.can.su && d.host && d.host.installed_by_panel) adminLink(h);
+    if (d.can.su && d.host && d.host.installed_by_panel) hostLink(h, T('Show the panel\'s admin login'), 'dbAdminReveal');
+    if (d.can.su && d.host && d.host.login) hostLink(h, T('Change the admin login'), 'dbLoginShow');
     show('db-setup', d.state === 'none');
     show('db-setup-can', d.can.setup);
     show('db-setup-ask', !d.can.setup);
-    show('db-login', d.state === 'needs_login' && d.can.su);
+    drawLogin(d);
   }
 
   function drawAdd(d) {
@@ -141,10 +164,11 @@ var DB_STATE = {
     return r;
   }
 
-  function snippetText(db) {
+  // The chosen snippet, with `pw` (else the shown password, else the mask) where the password goes.
+  function snippetText(db, pw) {
     var kind = st.kind[db.id] || (db.snippets[0] && db.snippets[0].kind);
     var s = db.snippets.filter(function (x) { return x.kind === kind; })[0] || db.snippets[0];
-    var pw = st.pw[db.id];
+    pw = pw || st.pw[db.id];
     return s ? (pw ? s.text.split(st.d.pw_mark).join(pw) : s.text) : '';
   }
 
@@ -203,7 +227,8 @@ var DB_STATE = {
     card.appendChild(snippetBlock(db));
     var foot = node('div', 'd-flex flex-wrap gap-1 mt-2 align-items-center');
     foot.appendChild(textButton(T('Reset password'), 'bi-key', 'dbReset', [db.id]));
-    foot.appendChild(textButton(T('Restore'), 'bi-arrow-counterclockwise', 'dbRestore', [db.id]));
+    // Restore reads the dump in the server's files: offered only while the host says there is one.
+    if (db.dumped_at) foot.appendChild(textButton(T('Restore'), 'bi-arrow-counterclockwise', 'dbRestore', [db.id]));
     foot.appendChild(textButton(T('Delete'), 'bi-trash', 'dbDelete', [db.id], 'btn-outline-danger'));
     if (db.dumped_at) foot.appendChild(node('span', 'small text-secondary', TF('Last dump: {when}', {when: new Date(db.dumped_at).toLocaleString()})));
     card.appendChild(foot);
@@ -218,6 +243,8 @@ var DB_STATE = {
   }
 
   function draw(d) {
+    // Setup has ended: its "Setting up…" line is no longer true (the host line says how it went).
+    if (st.d && st.d.state === 'setting_up' && d.state !== 'setting_up') say('');
     st.d = d;
     show('db-loading', false);
     drawHost(d);
@@ -279,7 +306,23 @@ var DB_STATE = {
     var pw = el('db-login-pw');
     postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login',
              {user: el('db-login-user').value, password: pw.value})
-      .then(function (r) { pw.value = ''; return after(r, true); }).catch(failed);
+      .then(function (r) { pw.value = ''; if (r.ok) st.loginOpen = false; return after(r, true); }).catch(failed);
+  };
+
+  window.dbLoginShow = function () {
+    st.loginOpen = !st.loginOpen;
+    if (st.d) drawLogin(st.d);
+  };
+
+  // Drop the stored admin login: the panel signs in as root over the socket again, when the server
+  // lets it (the route keeps the login otherwise, and says so).
+  window.dbLoginClear = function (btn) {
+    if (st.busy || !st.d) return;
+    st.busy = true;
+    if (btn) btn.disabled = true;
+    postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login', {clear: true})
+      .then(function (r) { if (btn) btn.disabled = false; if (r.ok) st.loginOpen = false; return after(r, true); })
+      .catch(failed);
   };
 
   // The password, fetched from the panel (audited) unless this page already has it.
@@ -312,13 +355,13 @@ var DB_STATE = {
     if (db && db[field] != null) window.copyText(String(db[field]), T('Copied'));
   };
 
-
+  // The snippet with the real password goes to the clipboard only: the page keeps showing the mask
+  // (the password is fetched for this copy, audited, and not kept) until Show the password is used.
   window.dbCopySnippet = function (id) {
     var db = row(id);
     if (!db) return Promise.resolve(false);
-    var text = function () { return snippetText(db); };
-    if (st.pw[id] || !st.d.can.manage) return Promise.resolve(window.copyText(text(), T('Copied')));
-    return copyLater(password(id).then(function (pw) { st.pw[id] = pw; redraw(id); return text(); }), T('Copied'));
+    if (st.pw[id] || !st.d.can.manage) return Promise.resolve(window.copyText(snippetText(db), T('Copied')));
+    return copyLater(password(id).then(function (pw) { return snippetText(db, pw); }), T('Copied'));
   };
 
   function redraw(id) {
@@ -348,7 +391,9 @@ var DB_STATE = {
     say(busyText);
     return postJson(api('/' + id + '/' + tail), body).then(function (r) {
       if (tail !== 'restore') delete st.pw[id];
-      return after(r, true);
+      var done = after(r, true);
+      // No dump on the host after all: the row is drawn again without Restore, the answer kept.
+      return r.d.no_dump ? window.dbLoad(true).then(function () { return false; }) : done;
     }).catch(failed);
   }
 

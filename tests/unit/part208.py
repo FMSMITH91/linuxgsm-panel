@@ -137,9 +137,10 @@ def _stub_module208():
         _S208.calls.append(("password", name, pw))
         return _S208.ans["ok"]
 
-    def sizes(remote, hostdb, names):
-        _S208.calls.append(("sizes", list(names)))
-        return {n: 12 * 1048576 for n in names}
+    def sizes(remote, hostdb, account, names):
+        _S208.calls.append(("sizes", account, list(names)))
+        return {"sizes": {n: 12 * 1048576 for n in names},
+                "dumps": {n: _S208.ans["dumps"][n] for n in names if n in _S208.ans.get("dumps", {})}}
 
     def dump(remote, hostdb, dest, account, names):
         _S208.calls.append(("dump", dest, account, list(names)))
@@ -330,6 +331,51 @@ try:
     _R208["restore"] = (_M208.post(_row_api208 + "/restore", json={"confirm": _DB208.name}).status_code,
                         [c for c in _S208.calls if c[0] == "restore"])
 
+    # ── 8b. which databases have a dump: read with the sizes; a restore with none is its own answer ──
+    def _stale208():
+        with _p9.app_context():
+            _g = _db208.session.get(_GD208, _DB208.id)
+            if _g is not None:
+                _g.size_at = None
+                _db208.session.commit()
+
+    _stale208()
+    _S208.reset(dumps={_DB208.name: 1700000000})
+    _R208["list_dump"] = ([d.get("dumped_at") for d in _p9_json(_M208.get(_api208)).get("databases", [])],
+                          [c[:2] for c in _S208.calls if c[0] == "sizes"])
+    _S208.reset(ok=(None, "There is no dump"))
+    _r208 = _M208.post(_row_api208 + "/restore", json={"confirm": _DB208.name})
+    _R208["restore_nodump"] = (_r208.status_code, _p9_json(_r208).get("no_dump"),
+                               [r.dumped for r in _rows208(id=_DB208.id)])
+    _R208["restore_nodump_audit"] = _audits208("db_restore")[-1:]
+    _stale208()
+    _S208.reset()
+    _R208["list_nodump"] = [d.get("dumped_at") for d in _p9_json(_M208.get(_api208)).get("databases", [])]
+
+    # ── 8c. a stored admin login the server refuses: said in the list; a superadmin clears it ─────
+    def _login208(mode):
+        with _p9.app_context():
+            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
+            if h is not None and mode == "login":
+                h.auth_mode, h.admin_user, h.admin_secret = "login", "rootadmin", _cfg208.encrypt_secret("Zlogin208pw")
+                _db208.session.commit()
+            return None if h is None else (h.auth_mode, h.admin_user, bool(h.admin_secret))
+
+    _login208("login")
+    _dbs208.LOGIN_REFUSED[P9_HOST] = True
+    _R208["login_list"] = (_p9_json(_M208.get(_api208)).get("host") or {})
+    _clear208 = "/api/remote/%d/databases/admin-login" % P9_HOST
+    _R208["clear_mgr"] = _M208.post(_clear208, json={"clear": True}).status_code
+    _S208.reset(probe={"state": "needs_login", "socket_root": "denied"})
+    _r208 = _A208.post(_clear208, json={"clear": True})
+    _R208["clear_denied"] = (_r208.status_code, _login208(""), P9_HOST in _dbs208.LOGIN_REFUSED)
+    _S208.reset(probe={"state": "ready", "flavor": "mariadb", "version": "10.11.14-MariaDB", "port": 3306,
+                       "native_ok": True, "warnings": [], "socket_root": "ok"})
+    _r208 = _A208.post(_clear208, json={"clear": True})
+    _R208["clear_ok"] = (_r208.status_code, _login208(""), P9_HOST in _dbs208.LOGIN_REFUSED,
+                         [c[0] for c in _S208.calls])
+    _R208["clear_again"] = _A208.post(_clear208, json={"clear": True}).status_code
+
     # ── 9. the backup hook, through _marked_backup ────────────────────────────────────────────────
     def _backup208(sid, short):
         order = []
@@ -353,6 +399,43 @@ try:
     _S208.reset()
     _R208["bk_root"] = _backup208(_SID208, "p208u")
     _p9_patch(_dbr, "game_account_write_refusal", lambda remote, user, **k: None)
+
+    # ── 9b. "Back up now" and LinuxGSM's own backup (the Backup action, a bot's /backup) dump first ──
+    from panel.routes import panel_backup as _pb208, server_detail as _sd208
+
+    def _now208(dump_ans):
+        order = []
+
+        def runner(*a, **k):
+            order.append("runner:%s" % ",".join(c[0] for c in _S208.calls))
+            return True, "", False
+        _S208.reset(dump=dump_ans)
+        _p9_patch(_pb208, "run_game_backup", runner)
+        _p9_patch(_pb208, "_record_game_clock", lambda *a, **k: None)
+        with _p9.app_context():
+            st = _pb208._back_up_one_now(_p9, _SID208, "p208 paper", (3, True), _m208._NO_BIRTH)
+        return order, [c[1:] for c in _S208.calls if c[0] == "dump"], st.get("ok"), str(st.get("msg"))
+
+    _R208["now"] = _now208((True, ""))
+    _R208["now_fail"] = _now208((False, "mariadb-dump failed"))
+
+    def _lgsm208(action):
+        order, pushed = [], []
+
+        def teed(app, remote, server_id, short_name, act, selfname, monitor=True):
+            order.append("%s:%s" % (act, ",".join(c[0] for c in _S208.calls)))
+            return "", "", 0
+        _S208.reset(dump=(False, "mariadb-dump failed"))
+        _p9_patch(_sd208, "_run_teed", teed)
+        _p9_patch(_sd208, "_console_push", lambda app, sid, text: pushed.append(text))
+        _p9_patch(_sd208, "threading", _NS208(Thread=lambda target, daemon: _NS208(start=target)))
+        with _p9.app_context():
+            gs = _db208.session.get(_m208.GameServer, _SID208)
+            _sd208._bg_action(_p9, gs, gs.remote, action)
+        return order, [c[1:] for c in _S208.calls if c[0] == "dump"], pushed
+
+    _R208["lgsm_backup"] = _lgsm208("backup")
+    _R208["lgsm_update"] = _lgsm208("update")
 
     # ── 10. delete: confirmed by name ─────────────────────────────────────────────────────────────
     _S208.reset()
@@ -400,6 +483,7 @@ finally:
     _lg208.getLogger().removeHandler(_LOG208)
     _dbr._PROBES.clear()
     _dbr._SETUP.clear()
+    _dbs208.LOGIN_REFUSED.pop(P9_HOST, None)
     for _sid208 in (_SID208, _OTHER208):
         _sh208._game_backup_status.pop(_sid208, None)
     with _p9.app_context():
@@ -503,6 +587,28 @@ check("databases restore: confirmed, the dump is loaded as the game account with
       and [c[1:3] for c in _R208["restore"][1]] == [("p208u", "gs%s_luckperms" % _SID208)]
       and _R208["restore"][1][0][3] == _rs208[2][0][2] if _rs208[2] else False, repr(_R208.get("restore")))
 
+check("databases list: the sizes call (with the game account) says which databases have a dump in the files, "
+      "and when it was written; one with no dump there has none",
+      _R208.get("list_dump") == (["2023-11-14T22:13:20+00:00"], [("sizes", "p208u")])
+      and _R208.get("list_nodump") == [None], repr((_R208.get("list_dump"), _R208.get("list_nodump"))))
+check("databases restore: with no dump in the files a 409 that says so (no_dump), the row no longer offers Restore, "
+      "and the audit row says it was not restored",
+      _R208.get("restore_nodump") == (409, True, [None]) and [(a[0], a[2]) for a in _R208.get("restore_nodump_audit", [])]
+      == [("db_restore", False)] and "not restored" in _R208["restore_nodump_audit"][0][1],
+      repr((_R208.get("restore_nodump"), _R208.get("restore_nodump_audit"))))
+
+_ll208 = _R208.get("login_list", {})
+check("databases list: a host whose stored admin login the server refused says so (login, login_refused)",
+      _ll208.get("login") is True and _ll208.get("login_refused") is True, repr(_ll208))
+check("databases admin: clearing the stored login is superadmin only (403), and is refused (409, login kept) while "
+      "root can't sign in over the socket",
+      _R208.get("clear_mgr") == 403 and _R208.get("clear_denied") == (409, ("login", "rootadmin", True), True),
+      repr((_R208.get("clear_mgr"), _R208.get("clear_denied"))))
+check("databases admin: once root signs in over the socket, clearing drops the login (probed now) and the refusal, "
+      "and there is then nothing to clear",
+      _R208.get("clear_ok") == (200, ("socket", "", False), False, ["probe"]) and _R208.get("clear_again") == 409,
+      repr((_R208.get("clear_ok"), _R208.get("clear_again"))))
+
 # ── checks: the backup hook ─────────────────────────────────────────────────────────────────────
 _bk208 = _R208.get("bk", ([], [], None))
 check("backup: a server with databases has them dumped into its files in ONE call before LinuxGSM's backup runs",
@@ -518,6 +624,22 @@ check("backup: a dump that fails still runs the backup, and its outcome says the
 _bkr208 = _R208.get("bk_root", ([], [1], (None, "", None)))
 check("backup: a root-capable game account gets no dump (it is written as that account), and the outcome says why",
       _bkr208[0] == ["runner:"] and not _bkr208[1] and "p208u can become root" in str(_bkr208[2][1]), repr(_bkr208))
+
+_nw208 = _R208.get("now", ([], [], None, ""))
+check("Back up now: the server's databases are dumped into its files in ONE call before LinuxGSM's backup runs",
+      _nw208[0] == ["runner:dump"] and _nw208[1] == [("game", "p208u", ["gs%s_luckperms" % _SID208])]
+      and _nw208[2] is True, repr(_nw208))
+_nwf208 = _R208.get("now_fail", ([], [], None, ""))
+check("Back up now: a dump that fails still runs the backup, and the card's outcome says the databases were not "
+      "included", _nwf208[0] == ["runner:dump"] and _nwf208[2] is True
+      and "Databases were not included: mariadb-dump failed" in _nwf208[3], repr(_nwf208))
+_lb208 = _R208.get("lgsm_backup", ([], [], []))
+check("Backup action (and a bot's /backup): the databases are dumped in ONE call before LinuxGSM's backup runs, "
+      "and a failed dump is said in the console without stopping it",
+      _lb208[0] == ["backup:dump"] and _lb208[1] == [("game", "p208u", ["gs%s_luckperms" % _SID208])]
+      and any("Databases were not included" in t for t in _lb208[2]), repr(_lb208))
+check("other LinuxGSM actions dump nothing", _R208.get("lgsm_update", ([1], [1], []))[:2] == (["update:"], []),
+      repr(_R208.get("lgsm_update")))
 
 # ── checks: delete, uninstall, removal, a deleted host ─────────────────────────────────────────
 check("databases delete: a wrong confirmation is a 400 and drops nothing",
@@ -688,3 +810,79 @@ if _out208 is not None:
     check("databases script: Delete posts the typed name; a host with no server shows the setup card, not Add",
           _out208.get("delSent") == ["/api/server/7/databases/4/delete", {"confirm": "gs7_lp"}]
           and _out208.get("setupShown") == "" and _out208.get("addShown") == "none", repr(_out208)[:900])
+
+
+# ── 16. the tab's script: the password stays masked on screen unless Show the password is used ──
+def _fresh208(body, **over):
+    """The tab's script in node: a fresh page (nothing revealed) loaded from _LIST208 with `over`, then `body`."""
+    return _js99("databases tab script (fresh page)", (
+        "global.serverId = 7; global.location = {hash: ''}; global.addEventListener = () => {};\n"
+        "document.addEventListener = () => {}; global.confirmDialog = o => o.onConfirm();\n"
+        "let copied = []; global.copyText = (s) => copied.push(s);\n"
+        "E87.prototype.replaceChild = function (n, o) { const i = this.children.indexOf(o); if (i >= 0) this.children[i] = n; return o; };\n"
+        + _JS208 + "\n"), (), (
+        "  const out = {}, txt = id => document.getElementById(id).textContent;\n"
+        "  const walk = (e, f) => { f(e); (e.children || []).forEach(c => walk(c, f)); };\n"
+        "  const find = (id, tag) => { const r = []; walk(document.getElementById(id), e => { if (e.tagName === tag) r.push(e); }); return r; };\n"
+        "  const acts = id => { const r = []; walk(document.getElementById(id), e => { if (e.attrs && e.attrs['data-action']) r.push(e.attrs['data-action']); }); return r; };\n"
+        "  reply(" + _js208.dumps(dict(_LIST208, **over)) + "); out.loaded = await dbLoad(true);\n"
+        + body + "  console.log(JSON.stringify(out));\n"), "")
+
+
+_BODY208 = (
+    "  reply({success: true, password: 'REALPW'}); sent = []; await dbCopySnippet(4); await settle();\n"
+    "  out.copySent = sent.map(s => s[0]); out.copied = copied.slice();\n"
+    "  out.shown = txt('db-list').includes('REALPW'); out.pre = find('db-list', 'pre').map(p => p.textContent);\n"
+    "  reply({success: true, password: 'REALPW'}); sent = []; await dbCopySnippet(4); await settle();\n"
+    "  out.copySent2 = sent.length; out.copied2 = copied.slice(1);\n")
+_cp208 = _fresh208(_BODY208)
+if _cp208 is not None:
+    check("databases script: Copy settings on a fresh page puts the snippet with the real password on the clipboard "
+          "and leaves the Password field and the snippet masked on screen",
+          _cp208.get("copySent") == ["/api/server/7/databases/4/reveal"] and _cp208.get("copied") == ["pw: REALPW\n"]
+          and _cp208.get("shown") is False and _cp208.get("pre") == ["pw: MASK\n"], repr(_cp208)[:900])
+    check("databases script: the password a copy fetched is not kept: the next copy asks again (each one audited)",
+          _cp208.get("copySent2") == 1 and _cp208.get("copied2") == ["pw: REALPW\n"], repr(_cp208)[:900])
+_DUMPED208 = dict(_LIST208["databases"][0], dumped_at="2026-11-14T20:00:00+00:00")
+_rs208b = [_fresh208("  out.acts = acts('db-list');\n", **over) for over in ({}, {"databases": [_DUMPED208]})]
+if None not in _rs208b:
+    check("databases script: Restore is offered only for a database the host says has a dump in the server's files",
+          "dbRestore" not in _rs208b[0].get("acts", ["dbRestore"]) and "dbDelete" in _rs208b[0].get("acts", [])
+          and "dbRestore" in _rs208b[1].get("acts", []), repr(_rs208b))
+
+
+# ── 17. the tab's script: a refused stored login, the sizes, the end of a setup ─────────────────
+_LOGINHOST208 = dict(_LIST208["host"], login=True, login_refused=True)
+_lg208s = [_fresh208(
+    "  out.form = document.getElementById('db-login').style.display; out.host = txt('db-host');\n"
+    "  out.parts = ['db-login-new', 'db-login-old', 'db-login-clear'].map(i => document.getElementById(i).style.display);\n"
+    "  sent = []; reply({success: true, message: 'Cleared.'}); dbLoginClear(null); await settle(); out.clear = sent[0];\n",
+    host=_LOGINHOST208, can=dict(_LIST208["can"], su=su)) for su in (True, False)]
+_lg208o = _fresh208(
+    "  out.closed = document.getElementById('db-login').style.display; out.acts = acts('db-host');\n"
+    "  dbLoginShow(); out.opened = document.getElementById('db-login').style.display;\n",
+    host=dict(_LIST208["host"], login=True, login_refused=False), can=dict(_LIST208["can"], su=True))
+if None not in _lg208s and _lg208o is not None:
+    check("databases script: a refused stored login opens the login form for a superadmin (replace, or clear "
+          "through admin-login {clear: true}) and says plainly that the server refused it",
+          _lg208s[0].get("form") == "" and _lg208s[0].get("parts") == ["none", "", ""]
+          and "refused the panel's stored admin login" in _lg208s[0].get("host", "")
+          and _lg208s[0].get("clear") == ["/api/remote/3/databases/admin-login", {"clear": True}], repr(_lg208s[0]))
+    check("databases script: anyone else is told a super admin can replace or clear it, with no form",
+          _lg208s[1].get("form") == "none" and "A super admin can replace or clear it" in _lg208s[1].get("host", ""),
+          repr(_lg208s[1]))
+    check("databases script: a working stored login keeps the form folded behind Change the admin login",
+          _lg208o.get("closed") == "none" and "dbLoginShow" in _lg208o.get("acts", []) and _lg208o.get("opened") == "",
+          repr(_lg208o))
+_sz208 = _fresh208(
+    "  out.sizes = find('db-list', 'span').map(e => e.textContent).filter(t => /B$/.test(t));\n"
+    "  global.setInterval = () => 1; global.clearInterval = () => {};\n"
+    "  document.getElementById('db-msg').textContent = 'Setting up';\n"
+    "  reply(Object.assign({}, " + _js208.dumps(_LIST208) + ", {state: 'setting_up'})); await dbLoad(true);\n"
+    "  out.during = txt('db-msg'); reply(" + _js208.dumps(_LIST208) + "); await dbLoad(true); out.after = txt('db-msg');\n",
+    databases=[dict(_LIST208["databases"][0], id=4 + i, size=sz) for i, sz in enumerate((0, 500, 3 * 1048576))])
+if _sz208 is not None:
+    check("databases script: an empty database reads 0 B and a small one < 1 KB (not ≈ 1 KB)",
+          _sz208.get("sizes") == ["0 B", "< 1 KB", "≈ 3 MB"], repr(_sz208.get("sizes")))
+    check("databases script: the setting-up line goes once the host is set up",
+          _sz208.get("during") == "Setting up" and _sz208.get("after") == "", repr(_sz208))

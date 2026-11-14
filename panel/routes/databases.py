@@ -200,8 +200,10 @@ def host_state(remote, may_probe):
 def _host_info(hd):
     if hd is None:
         return None
+    login = hd.auth_mode == "login"
     return {"flavor": hd.flavor, "version": hd.version or "", "port": hd.port or 3306,
-            "installed_by_panel": bool(hd.installed_by_panel), "login": hd.auth_mode == "login",
+            "installed_by_panel": bool(hd.installed_by_panel), "login": login,
+            "login_refused": login and bool(_dbs.LOGIN_REFUSED.get(hd.remote_id)),
             "warnings": _warnings(hd)}
 
 
@@ -215,21 +217,34 @@ def _fresh(when, seconds):
     return bool(when) and (_now() - when).total_seconds() < seconds
 
 
-def _refresh_sizes(remote, hd, rows):
-    """Ask the host for the sizes of `rows` when any is older than a minute (one call for all)."""
+def _refresh_sizes(gs, hd, rows):
+    """Ask the host for the sizes of `rows` when any is older than a minute (one call for all).
+
+    The same call says which of them have a dump in the server's files, and when it was written:
+    that is `dumped_at`, so the tab offers Restore only for a database there is a dump of.
+    """
     now = _now()
     if hd is None or all(_fresh(r.size_at, _SIZE_FRESH) for r in rows):
         return
     try:
-        got = _dbs.sizes(remote, hd, [r.name for r in rows])
+        got = _dbs.sizes(gs.remote, hd, gs.short_name, [r.name for r in rows])
     except Exception:
         got = None
     if not isinstance(got, dict):
         return
+    sizes, dumps = got.get("sizes") or {}, got.get("dumps") or {}
     for r in rows:
-        if isinstance(got.get(r.name), int):
-            r.size_bytes, r.size_at = got[r.name], now
+        if isinstance(sizes.get(r.name), int):
+            r.size_bytes, r.size_at = sizes[r.name], now
+            r.dumped_at = _from_unix(dumps.get(r.name))
     db.session.commit()
+
+
+def _from_unix(t):
+    """A Unix time as a naive UTC datetime, or None."""
+    if isinstance(t, bool) or not isinstance(t, int) or t < 0:
+        return None
+    return datetime.fromtimestamp(t, timezone.utc).replace(tzinfo=None)
 
 
 def _iso(dt):
@@ -251,7 +266,7 @@ def _list_answer(gs):
     manage = _can_manage()
     state, hd, p = host_state(gs.remote, may_probe=_probe_mode(manage))
     rows = _server_rows(gs.id)
-    _refresh_sizes(gs.remote, hd, rows)
+    _refresh_sizes(gs, hd, rows)
     taken = [r.name.split("_", 1)[1] for r in rows if "_" in r.name]
     setup = _SETUP.get(gs.remote_id) or {}
     return jsonify({
@@ -342,9 +357,15 @@ def _reset_answer(gs, r):
     reply = {"success": bool(ok), "message": i18n.tr(
         said or ("New password set. Update it in the game's config, then restart the server." if ok else "Failed"))}
     with _r42r_audit_after(reply):
-        log_action(current_user, "db_password", target=gs.name, detail="new password for database %s" % r.name,
-                   success=bool(ok), server=gs)
+        log_action(current_user, "db_password", target=gs.name, detail=_done_or_not(
+            ok, "new password for database %s" % r.name, "database %s password not changed" % r.name, said),
+            success=bool(ok), server=gs)
     return jsonify(reply), 200 if ok else 502
+
+
+def _done_or_not(ok, done, not_done, said):
+    """An audit row's detail: what was done, or what was not and why (never the success wording)."""
+    return done if ok else "%s: %s" % (not_done, said or "failed")
 
 
 def _confirmed(r):
@@ -367,8 +388,8 @@ def _delete_answer(gs, r):
     reply = {"success": bool(ok), "message": i18n.tr(
         said or ("Database deleted. A copy is kept on the host for 30 days." if ok else "Failed"))}
     with _r42r_audit_after(reply):
-        log_action(current_user, "db_delete", target=gs.name, detail="deleted database %s" % name,
-                   success=bool(ok), server=gs)
+        log_action(current_user, "db_delete", target=gs.name, detail=_done_or_not(
+            ok, "deleted database %s" % name, "database %s not deleted" % name, said), success=bool(ok), server=gs)
     return jsonify(reply), 200 if ok else 502
 
 
@@ -387,11 +408,18 @@ def _restore_answer(gs, r):
         return _say(409, refused)
     with _r20b_audit_on_raise("db_restore", target=gs.name, detail=r.name, server=gs):
         ok, said = _dbs.restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
+    if ok is None:
+        # No dump of it in the server's files: nothing was touched, and the tab stops offering it.
+        r.dumped_at = None
+        db.session.commit()
     reply = {"success": bool(ok), "message": i18n.tr(said or ("Database restored." if ok else "Failed"))}
+    if ok is None:
+        reply["no_dump"] = True
     with _r42r_audit_after(reply):
-        log_action(current_user, "db_restore", target=gs.name, detail="restored database %s from its dump" % r.name,
-                   success=bool(ok), server=gs)
-    return jsonify(reply), 200 if ok else 502
+        log_action(current_user, "db_restore", target=gs.name, detail=_done_or_not(
+            ok, "restored database %s from its dump" % r.name, "database %s not restored" % r.name, said),
+            success=bool(ok), server=gs)
+    return jsonify(reply), 200 if ok else (409 if ok is None else 502)
 
 
 # ── setting up a host ───────────────────────────────────────────────────────────────────────────
@@ -453,9 +481,36 @@ def _setup_answer(app, remote):
                     "message": i18n.tr("Setting up databases on this host. This takes a minute or two.")}), 202
 
 
+def _admin_clear_answer(remote):
+    """POST {"clear": true}: drop the stored admin login, once root signs in over the socket again."""
+    hd = _host_row(remote.id)
+    if hd is None or hd.auth_mode != "login":
+        return _say(409, "There is no stored admin login for this host's database server.")
+    p = _probe(remote, force=True)
+    if p.get("state") == "unreadable":
+        return _say(502, _UNREAD)
+    if p.get("socket_root") != "ok":
+        log_action(current_user, "db_admin_login", target=remote.name, success=False, remote=remote,
+                   detail="stored login kept: root can't sign in over the socket")
+        return _say(409, "The panel can't sign in as root over the socket on this host, so the stored login was "
+                         "kept. Enter a new one to replace it.")
+    hd.auth_mode, hd.admin_user, hd.admin_secret = "socket", "", ""
+    if p.get("state") == "ready":
+        _store_probe(hd, p)
+    db.session.commit()
+    _dbs.LOGIN_REFUSED.pop(remote.id, None)
+    log_action(current_user, "db_admin_login", target=remote.name, detail="stored login cleared", remote=remote)
+    return jsonify({"success": True, "message": i18n.tr("Cleared. The panel signs in as root over the socket again.")})
+
+
 def _admin_login_answer(remote):
-    """POST {"user", "password"}: an existing server's admin login, stored only once it is shown to work."""
+    """POST {"user", "password"}: an existing server's admin login, stored only once it is shown to work.
+
+    {"clear": true} instead drops a stored login (_admin_clear_answer).
+    """
     data = _json_body()
+    if data.get("clear") is True:
+        return _admin_clear_answer(remote)
     user, secret = _json_str(data, "user"), data.get("password") if isinstance(data.get("password"), str) else ""
     if not _ADMIN_USER_RE.match(user) or not _ADMIN_PW_RE.match(secret):
         return _say(400, "Enter the database server's admin user and password.")
@@ -468,6 +523,7 @@ def _admin_login_answer(remote):
         hd.auth_mode, hd.port, hd.admin_user, hd.admin_secret = "login", port, user, encrypt_secret(secret)
         hd.checked_at = _now()
         db.session.commit()
+        _dbs.LOGIN_REFUSED.pop(remote.id, None)
     said = {"ok": "Saved. The panel signs in to this database server with that login.",
             "denied": "The database server refused that user and password.",
             "lacks_grants": "That login works but can't create users and grant them rights (it needs CREATE "
@@ -509,8 +565,8 @@ def _orphan_delete_answer(remote, db_id):
     if ok:
         db.session.delete(r)
         db.session.commit()
-    log_action(current_user, "db_delete", target=remote.name, detail="deleted database %s" % name,
-               success=bool(ok), remote=remote)
+    log_action(current_user, "db_delete", target=remote.name, detail=_done_or_not(
+        ok, "deleted database %s" % name, "database %s not deleted" % name, said), success=bool(ok), remote=remote)
     return jsonify({"success": bool(ok), "message": i18n.tr(
         said or ("Database deleted. A copy is kept on the host for 30 days." if ok else "Failed"))}), \
         200 if ok else 502
@@ -608,6 +664,7 @@ def forget_remote(remote_id):
     GameDatabase.query.filter_by(remote_id=remote_id).delete()
     HostDatabaseServer.query.filter_by(remote_id=remote_id).delete()
     _PROBES.pop(remote_id, None)
+    _dbs.LOGIN_REFUSED.pop(remote_id, None)
 
 
 # ── routes ──────────────────────────────────────────────────────────────────────────────────────
@@ -707,7 +764,7 @@ def _remote_routes(app):
     @login_required
     @superadmin_required
     def api_remote_databases_admin_login(remote_id):
-        """An existing database server's admin login, checked and then stored encrypted."""
+        """An existing database server's admin login, checked and then stored encrypted (or cleared)."""
         remote = get_remote(remote_id)
         try:
             return _admin_login_answer(remote)

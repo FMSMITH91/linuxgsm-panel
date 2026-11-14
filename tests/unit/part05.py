@@ -1643,7 +1643,7 @@ _VERB_SAMPLES = {
     "db-harden": ["mariadb"],
     "db-create": ["mariadb", "socket", "gs12_luckperms", "native", "30"],
     "db-password": ["mysql", "tcp3306", "gs12_luckperms", "sha2"],
-    "db-sizes": ["mariadb", "socket", "gs12_luckperms", "gs12_data"],
+    "db-sizes": ["mariadb", "socket", "gmodserver", "gs12_luckperms", "gs12_data"],
     "db-dump": ["mariadb", "socket", "game", "gmodserver", "gs12_luckperms"],
     "db-import": ["mariadb", "3306", "gmodserver", "gs12_luckperms"],
     "db-drop": ["mysql", "socket", "gs12_luckperms"],

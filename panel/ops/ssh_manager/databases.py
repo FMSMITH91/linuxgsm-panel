@@ -59,6 +59,14 @@ S_INSTALL_FAILED = "MariaDB could not be installed: apt did not finish."
 S_FOREIGN = ("MariaDB is installed, but it already holds databases the panel did not make, so the panel "
              "left its settings alone.")
 S_HARDEN_FAILED = "MariaDB was installed, but setting it up did not finish."
+S_LOGIN_REFUSED = ("The database server refused the panel's stored admin login. A super admin can replace or "
+                   "clear it on the Databases tab.")
+
+# The client's and the dump tool's words for a sign-in the server refused (1045: wrong user or
+# password; 1698: a plugin login such as unix_socket refused).
+_DENIED_MARKS = _priv.DB_DENIED_ERRORS + ("Got error: 1045", "Got error: 1698")
+# Remote id -> True while the stored admin login of that host's server is refused (the tab says so).
+LOGIN_REFUSED = {}
 
 
 def db_lock(remote):
@@ -130,6 +138,24 @@ def _verb(remote, verb, args, secrets=None):
     except _priv.VerbError:
         return 2, ""
     return rc, _priv.db_scrub("\n".join(x for x in (out, err) if x), _priv._db_secret_values(secrets))
+
+
+def _admin_verb(remote, hostdb, verb, args, pw=None):
+    """Run a verb signed in as the server's administrator: (rc, output, stored login refused).
+
+    Only a host in login mode can have its login refused; what each call finds is kept in
+    LOGIN_REFUSED for the tab, until a call signs in again or the login is replaced or cleared.
+    """
+    rc, out = _verb(remote, verb, args, _secrets_for(hostdb, pw))
+    if hostdb.auth_mode != "login" or rc == 2:
+        return rc, out, False
+    refused = rc != 0 and any(m in out for m in _DENIED_MARKS)
+    key = getattr(remote, "id", None)
+    if refused:
+        LOGIN_REFUSED[key] = True
+    elif rc == 0:
+        LOGIN_REFUSED.pop(key, None)
+    return rc, out, refused
 
 
 def _version_tuple(text):
@@ -308,7 +334,9 @@ def create(remote, hostdb, name, pw, maxconn):
     """Make database `name` and its two accounts with password `pw`: (ok, sentence)."""
     args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb), str(int(maxconn))]
     with db_lock(remote):
-        rc, _out = _verb(remote, "db-create", args, _secrets_for(hostdb, pw))
+        rc, _out, refused = _admin_verb(remote, hostdb, "db-create", args, pw)
+    if refused:
+        return False, S_LOGIN_REFUSED
     if rc == 3:
         return False, i18n.Sentence(S_EXISTS, name=name)
     return _sentence(rc, S_CREATED, S_CREATE_FAILED, name=name)
@@ -318,24 +346,37 @@ def set_password(remote, hostdb, name, pw):
     """Give both of `name`'s accounts password `pw`: (ok, sentence)."""
     args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb)]
     with db_lock(remote):
-        rc, _out = _verb(remote, "db-password", args, _secrets_for(hostdb, pw))
+        rc, _out, refused = _admin_verb(remote, hostdb, "db-password", args, pw)
+    if refused:
+        return False, S_LOGIN_REFUSED
     return _sentence(rc, S_PW_CHANGED, S_PW_FAILED, name=name)
 
 
-def sizes(remote, hostdb, names):
-    """{name: bytes} for `names` in ONE call (0 for a database with no tables); None if unreadable."""
+def sizes(remote, hostdb, account, names):
+    """What the list shows of `names`, in ONE call; None if unreadable.
+
+    {"sizes": {name: bytes} (0 for a database with no tables), "dumps": {name: the Unix time of
+    the dump in `account`'s ~/panel-db-dumps}} (a name with no dump there is not in "dumps").
+    `account` "-" reads no dumps.
+    """
     names = list(names)
     if not names:
-        return {}
-    rc, out = _verb(remote, "db-sizes", [hostdb.flavor, _auth(hostdb)] + names, _secrets_for(hostdb))
+        return {"sizes": {}, "dumps": {}}
+    rc, out, _refused = _admin_verb(remote, hostdb, "db-sizes",
+                                    [hostdb.flavor, _auth(hostdb), account or "-"] + names)
     if rc != 0:
         return None
-    got = {n: 0 for n in names}
+    got, dumps = {n: 0 for n in names}, {}
     for line in out.splitlines():
-        name, _t, size = line.partition("\t")
-        if name in got and size.strip().isdecimal():
-            got[name] = int(size.strip())
-    return got
+        name, _t, val = line.partition("\t")
+        val = val.strip()
+        if not val.isdecimal():
+            continue
+        if name in got:
+            got[name] = int(val)
+        elif name.startswith("dump=") and name[5:] in got:
+            dumps[name[5:]] = int(val)
+    return {"sizes": got, "dumps": dumps}
 
 
 def _account_refusal(remote, account):
@@ -357,8 +398,10 @@ def dump(remote, hostdb, dest, account, names):
     why = _account_refusal(remote, account) if dest == "game" and names else None
     if why:
         return False, why
-    rc, out = (_verb(remote, "db-dump", [hostdb.flavor, _auth(hostdb), dest, account or "-"] + names,
-                    _secrets_for(hostdb)) if names else (0, ""))
+    rc, out, refused = (_admin_verb(remote, hostdb, "db-dump", [hostdb.flavor, _auth(hostdb), dest, account or "-"]
+                                    + names) if names else (0, "", False))
+    if refused:
+        return False, S_LOGIN_REFUSED
     return _dump_answer(rc, out, dest, names)
 
 
@@ -376,7 +419,8 @@ def restore(remote, hostdb, account, name, pw):
     """Import ~/panel-db-dumps/<name>.sql.gz into `name`. -> (ok, sentence).
 
     Run as `account` and signed in as the database's own account (password `pw`). Asks the
-    root-capable-account guard first.
+    root-capable-account guard first. `ok` is None when there is no dump to restore (nothing was
+    touched).
     """
     why = _account_refusal(remote, account)
     if why:
@@ -384,7 +428,7 @@ def restore(remote, hostdb, account, name, pw):
     rc, _out = _verb(remote, "db-import", [hostdb.flavor, str(int(hostdb.port or 3306)), account, name],
                     {"pw": pw})
     if rc == 4:
-        return False, i18n.Sentence(S_NO_DUMP, name=name)
+        return None, i18n.Sentence(S_NO_DUMP, name=name)
     return _sentence(rc, S_RESTORED, S_RESTORE_FAILED, name=name)
 
 
@@ -396,7 +440,9 @@ def drop(remote, hostdb, account, name):
     """
     del account
     with db_lock(remote):
-        rc, _out = _verb(remote, "db-drop", [hostdb.flavor, _auth(hostdb), name], _secrets_for(hostdb))
+        rc, _out, refused = _admin_verb(remote, hostdb, "db-drop", [hostdb.flavor, _auth(hostdb), name])
+    if refused:
+        return False, S_LOGIN_REFUSED
     if rc == 3:
         return False, i18n.Sentence(S_NOT_EMPTY, name=name)
     return _sentence(rc, S_DROPPED, S_DROP_FAILED, name=name)

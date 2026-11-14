@@ -2430,9 +2430,20 @@ def _db_password_remote(a):
     return _db_prelude(a[0], a[1]) + "cl && echo changed"
 
 
+def _db_dump_times_sh(account, names):
+    """Shell printing dump=<name><TAB><mtime> for each of `names` with a dump in the account's files."""
+    if account == "-":
+        return ""
+    d = shlex.quote(home_of(account) + "/" + DB_DUMP_DIR)
+    return ("d=%s; if [ -d \"$d\" ] && [ ! -L \"$d\" ]; then for n in %s; do z=\"$d/$n.sql.gz\"; "
+            "if [ -f \"$z\" ] && [ ! -L \"$z\" ]; then printf 'dump=%%s\\t%%s\\n' \"$n\" \"$(stat -c %%Y -- \"$z\")\"; fi; "
+            "done; fi; " % (d, " ".join(names)))
+
+
 def _db_sizes_remote(a):
-    """db-sizes: flavor auth name..."""
-    return _db_prelude(a[0], a[1]) + "cl -e %s </dev/null" % shlex.quote(db_sql_sizes(a[2:]))
+    """db-sizes: flavor auth account name... The sizes, then which databases have a dump in the files."""
+    return (_db_prelude(a[0], a[1]) + "cl -e %s </dev/null || exit $?; " % shlex.quote(db_sql_sizes(a[3:]))
+            + _db_dump_times_sh(a[2], a[3:]) + "exit 0")
 
 
 def _db_admin_check_remote(a):
@@ -2509,7 +2520,7 @@ _ARGV.update({
                   lambda a: [], None),
     "db-password": ([_choice(*DB_FLAVORS), _db_auth, _db_name, _choice("native", "sha2")],
                     lambda a: [], None),
-    "db-sizes": ([_choice(*DB_FLAVORS), _db_auth, Rest(_db_name, maximum=64)], lambda a: [], None),
+    "db-sizes": ([_choice(*DB_FLAVORS), _db_auth, _db_account, Rest(_db_name, maximum=64)], lambda a: [], None),
     "db-dump": ([_choice(*DB_FLAVORS), _db_auth, _choice("game", "archive"), _db_account,
                  Rest(_db_name, maximum=64)], lambda a: [], None),
     "db-import": ([_choice(*DB_FLAVORS), _port, _managed_user, _db_name], lambda a: [], None),

@@ -165,7 +165,7 @@ _VERB_ARGS = {
     "db-harden": (["mariadb"], {"pw": _PW}),
     "db-create": (["mysql", "tcp3306", "gs12_lp", "sha2", "30"], {"admin": _ADMIN, "pw": _PW}),
     "db-password": (["mariadb", "tcp3307", "gs12_lp", "native"], {"admin": _ADMIN, "pw": _PW}),
-    "db-sizes": (["mariadb", "tcp3306", "gs12_lp", "gs12_x"], {"admin": _ADMIN}),
+    "db-sizes": (["mariadb", "tcp3306", _ACCT, "gs12_lp", "gs12_x"], {"admin": _ADMIN}),
     "db-dump": (["mariadb", "tcp3306", "game", _ACCT, "gs12_lp"], {"admin": _ADMIN}),
     "db-import": (["mariadb", "3306", _ACCT, "gs12_lp"], {"pw": _PW}),
     "db-drop": (["mysql", "tcp3306", "gs12_lp"], {"admin": _ADMIN}),
@@ -187,8 +187,8 @@ for _v, (_a, _s) in _VERB_ARGS.items():
 eq("db secrets: no password or admin login is on the helper's argv or in any remote command line", _on_argv, [])
 eq("db secrets: ...they are on stdin instead, on both paths (positive control)", _off_stdin, [])
 eq("db secrets: a verb with nothing secret still sends a document that ends (no stdin left open)",
-   (_priv207.helper_stdin("db-sizes", ["mariadb", "socket", "gs1_a"], {}),
-    _priv207.remote_stdin("db-sizes", ["mariadb", "socket", "gs1_a"], {})), ("end\n", ""))
+   (_priv207.helper_stdin("db-sizes", ["mariadb", "socket", "-", "gs1_a"], {}),
+    _priv207.remote_stdin("db-sizes", ["mariadb", "socket", "-", "gs1_a"], {})), ("end\n", ""))
 eq("db verbs: none is local-only (a game server on a remote needs databases too)",
    sorted(_priv207.DB_VERBS & _priv207.LOCAL_ONLY_VERBS), [])
 eq("db verbs: the helper treats the probe, sizes and admin check as reads, and nothing else",
@@ -470,6 +470,22 @@ try:
     _res = _h("db-dump", *_VERB_ARGS["db-dump"])
     check("db-dump game (helper): a dump that failed leaves no file and no .tmp behind",
           _res[0] == 1 and (not _os207.path.isdir(_dd) or _os207.listdir(_dd) == []), repr(_res))
+    # Through a real (buffered) file, as the helper's stdout is: a forked writer must not write out
+    # the lines the parent had buffered before the fork a second time.
+    _reset(dump_fail="1")
+    _outf = _os207.path.join(_T, "stdout.txt")
+    _saved = (_sys207.stdin, _sys207.stdout, _sys207.stderr)
+    _sys207.stdin = _io207.StringIO(_priv207.helper_stdin("db-dump", ["mariadb", "socket", "game", _ACCT,
+                                                                        "gs12_lp", "gs12_x"], {}))
+    _sys207.stdout, _sys207.stderr = open(_outf, "w", encoding="utf-8"), _io207.StringIO()
+    try:
+        _rcf = _helper.main(["panel-helper", "db-dump", "mariadb", "socket", "game", _ACCT, "gs12_lp", "gs12_x"])
+    finally:
+        _sys207.stdout.close()
+        _sys207.stdin, _sys207.stdout, _sys207.stderr = _saved
+    eq("db-dump game (helper): each failed database is listed once (the forked writers print nothing twice)",
+       (_rcf, [x for x in open(_outf, encoding="utf-8").read().splitlines() if x.startswith(("failed=", "dumped="))]),
+       (1, ["failed=gs12_lp", "failed=gs12_x"]))
     _sh207.rmtree(_dd, ignore_errors=True)
     _os207.symlink(_os207.path.join(_T, "elsewhere"), _dd)
     _reset()
@@ -517,6 +533,34 @@ try:
         _res = _run("db-import", *_VERB_ARGS["db-import"])
         check("db-import (%s): a dump that is a link is refused, nothing fed to the client" % _side,
               _res[0] != 0 and not [s for s in _sqls() if s], repr((_res, _sqls())))
+
+    # db-sizes says which databases have a dump in the files (a link is none); db-import with no dump
+    # answers rc 4 (the "no dump" sentence), whether the file or the whole directory is missing.
+    with _gz207.open(_os207.path.join(_dd, "gs12_x.sql.gz"), "wb") as _fh:
+        _fh.write(b"SELECT 1;\n")
+    _os207.utime(_os207.path.join(_dd, "gs12_x.sql.gz"), (1700000000, 1700000000))
+    for _side, _run in (("helper", _h), ("remote", _r)):
+        _reset(sizes="gs12_lp\t1\n")
+        _res = _run("db-sizes", *_VERB_ARGS["db-sizes"])
+        eq("db-sizes (%s): a dump=<name><TAB><mtime> line for each database with a dump in the server's files, none "
+           "for a link" % _side, (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]),
+           (0, ["dump=gs12_x\t1700000000"]))
+    _os207.rename(_dd, _dd + ".real")
+    _os207.symlink(_dd + ".real", _dd)
+    for _side, _run in (("helper", _h), ("remote", _r)):
+        _reset(sizes="gs12_lp\t1\n")
+        _res = _run("db-sizes", *_VERB_ARGS["db-sizes"])
+        eq("db-sizes (%s): a ~/panel-db-dumps that is a link is not read" % _side,
+           (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]), (0, []))
+    _os207.unlink(_dd)
+    _sh207.rmtree(_dd + ".real", ignore_errors=True)
+    for _what in ("directory", "file"):
+        for _side, _run in (("helper", _h), ("remote", _r)):
+            _reset()
+            _res = _run("db-import", *_VERB_ARGS["db-import"])
+            eq("db-import (%s): no dump (its %s missing) answers rc 4 and feeds the client nothing" % (_side, _what),
+               (_res[0], [s for s in _sqls() if s]), (4, []))
+        _os207.makedirs(_dd, exist_ok=True)
 
     # db-probe: the helper and the remote rendering say the same thing about the same host.
     _PROBE_FILES = {"dpkg": "mariadb-server\tii \t1:10.11.14-0ubuntu0.24.04.1\nmysql-server\tun \t\n",
@@ -676,12 +720,40 @@ try:
     eq("databases: a drop with no copy of a database holding tables says so",
        str(_dbs207.drop(object(), _hd_sock, _ACCT, "gs12_lp")[1]), _dbs207.S_NOT_EMPTY.format(name="gs12_lp"))
     _CALLS.clear()
-    _ANSWERS["db-sizes"] = ("gs12_lp\t49152\n", "", 0)
-    eq("databases: sizes makes ONE call for every name; a name with no tables is 0",
-       (_dbs207.sizes(object(), _hd_sock, ["gs12_lp", "gs12_x"]), len(_CALLS)), ({"gs12_lp": 49152, "gs12_x": 0}, 1))
+    _ANSWERS["db-sizes"] = ("gs12_lp\t49152\ndump=gs12_x\t1700000000\ndump=gs99_no\t5\ndump=gs12_lp\tx\n", "", 0)
+    eq("databases: sizes makes ONE call for every name, with the game account; a name with no tables is 0, and "
+       "the dumps in the server's files are read from the same answer",
+       (_dbs207.sizes(object(), _hd_sock, _ACCT, ["gs12_lp", "gs12_x"]), _CALLS[-1][1], len(_CALLS)),
+       ({"sizes": {"gs12_lp": 49152, "gs12_x": 0}, "dumps": {"gs12_x": 1700000000}},
+        ["mariadb", "socket", _ACCT, "gs12_lp", "gs12_x"], 1))
     _ANSWERS["db-sizes"] = ("", "", 1)
-    eq("databases: sizes is None when unreadable, and {} with nothing asked (no call)",
-       (_dbs207.sizes(object(), _hd_sock, ["gs12_lp"]), _dbs207.sizes(object(), _hd_sock, []), len(_CALLS)), (None, {}, 2))
+    eq("databases: sizes is None when unreadable, and empty with nothing asked (no call)",
+       (_dbs207.sizes(object(), _hd_sock, _ACCT, ["gs12_lp"]), _dbs207.sizes(object(), _hd_sock, _ACCT, []), len(_CALLS)),
+       (None, {"sizes": {}, "dumps": {}}, 2))
+    # A stored admin login the server refuses is said plainly, on every call that signs in with it.
+    _r207 = _ty207.SimpleNamespace(id=207)
+    _dbs207.LOGIN_REFUSED.clear()
+    _ANSWERS["db-create"] = ("ERROR 1045 (28000): Access denied for user 'rootadmin'@'localhost'", "", 1)
+    _lr = [_dbs207.create(_r207, _hd_login, "gs12_lp", _PW, 30), dict(_dbs207.LOGIN_REFUSED)]
+    _ANSWERS["db-dump"] = ("mariadb-dump: Got error: 1045: \"Access denied for user 'rootadmin'\" when trying to connect\n"
+                           "failed=gs12_lp\n", "", 1)
+    _shared_g207 = _dbs207._account_refusal
+    _dbs207._account_refusal = lambda remote, account: None
+    try:
+        _lr.append(_dbs207.dump(_r207, _hd_login, "game", _ACCT, ["gs12_lp"]))
+    finally:
+        _dbs207._account_refusal = _shared_g207
+    _ANSWERS["db-drop"] = ("dropped", "", 0)
+    _dbs207.drop(_r207, _hd_login, _ACCT, "gs12_lp")
+    _lr.append(dict(_dbs207.LOGIN_REFUSED))
+    _ANSWERS["db-create"] = ("ERROR 1045 (28000): Access denied for user 'root'@'localhost'", "", 1)
+    _lr.append(str(_dbs207.create(_ty207.SimpleNamespace(id=208), _hd_sock, "gs12_lp", _PW, 30)[1]))
+    _lr.append(dict(_dbs207.LOGIN_REFUSED))
+    eq("databases: a stored admin login the server refuses (the client's 1045 or the dump tool's) is said plainly "
+       "and remembered for the tab; a call that signs in clears it; a socket host is never 'login refused'",
+       [str(_lr[0][1]), _lr[1], str(_lr[2][1]), _lr[3], _lr[4], _lr[5]],
+       [_dbs207.S_LOGIN_REFUSED, {207: True}, _dbs207.S_LOGIN_REFUSED, {}, _dbs207.S_CREATE_FAILED.format(name="gs12_lp"),
+        {}])
     _verdicts = []
     for _ans in (("ok", "", 0), ("denied", "", 0), ("lacks_grants", "", 0), ("unreadable", "", 1), ("", "", 0)):
         _ANSWERS["db-admin-check"] = _ans
@@ -721,6 +793,9 @@ try:
         eq("databases: restore imports as the account over the server's port with only the database's password",
            (_CALLS[0][:3], str(_ri[1])), (("db-import", ["mysql", "3307", _ACCT, "gs12_lp"], {"pw": _PW}),
                                           _dbs207.S_NO_DUMP.format(name="gs12_lp")))
+        _ANSWERS["db-import"] = ("ERROR 1064 near line 3", "", 1)
+        eq("databases: restore answers None (nothing touched) only when there is no dump; a failed import is False",
+           [_ri[0], _dbs207.restore(object(), _hd_login, _ACCT, "gs12_lp", _PW)[0]], [None, False])
     finally:
         _shared207.game_account_write_refusal = _guard_saved
 

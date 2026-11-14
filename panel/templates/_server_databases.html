@@ -18,13 +18,15 @@
       <p id="db-setup-ask" class="small text-secondary mb-0" style="display:none;">Ask an administrator to set up databases on this host.</p>
     </div>
     <form id="db-login" class="border rounded p-2 mb-2" style="display:none;" data-action="dbLogin" data-args='["@event"]' data-on="submit">
-      <p class="small mb-2">A database server is already running here, but the panel can't sign in to it yet. Enter an admin login that can create users and grant them rights. The panel keeps it encrypted.</p>
+      <p id="db-login-new" class="small mb-2">A database server is already running here, but the panel can't sign in to it yet. Enter an admin login that can create users and grant them rights. The panel keeps it encrypted.</p>
+      <p id="db-login-old" class="small mb-2" style="display:none;">Enter an admin login to replace the stored one, or clear it to have the panel sign in as root over the socket again.</p>
       <div class="d-flex flex-wrap gap-2">
         <label for="db-login-user" class="visually-hidden">Admin user</label>
         <input type="text" id="db-login-user" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
         <label for="db-login-pw" class="visually-hidden">Admin password</label>
         <input type="password" id="db-login-pw" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
         <button type="submit" class="btn btn-sm btn-primary">Save</button>
+        <button type="button" id="db-login-clear" class="btn btn-sm btn-outline-secondary" style="display:none;" data-action="dbLoginClear" data-args='["@self"]'>Clear the stored login</button>
       </div>
     </form>
     <form id="db-add" class="mb-2 fpm-edit" style="display:none;" data-action="dbAdd" data-args='["@event"]' data-on="submit">
