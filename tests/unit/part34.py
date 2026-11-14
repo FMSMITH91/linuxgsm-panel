@@ -480,8 +480,13 @@ def _section_map_cache34():
           hit[0] - _time34.time() > 60, repr(hit))
     _cron34._game_map_cache.clear()
     failed = _cron34.player_slots(NS(id=3403), "mcsrv34", "mc", 25565)
-    check("B map: a failed query stays (None, None, None) and caches no map",
-          all((failed == (None, None, None), not _cron34._game_map_cache)), repr(failed))
+    # A failed query records the failure (an empty map, kept _GAME_MAP_FAIL_TTL) so the dashboard's
+    # lookup does not run its own failing query; it never stores a map name it did not read.
+    _fail34 = _cron34._game_map_cache.get((3403, 25565), (0, None))
+    check("B map: a failed query stays (None, None, None) and caches no map name, only the failure "
+          "(an empty map kept for the failure window)",
+          all((failed == (None, None, None), list(_cron34._game_map_cache) == [(3403, 25565)], _fail34[1] == "",
+               _fail34[0] - _time34.time() > _cron34._GAME_MAP_FAIL_TTL - 30)), repr((failed, _fail34)))
     _section_map_dedupe34()
     _section_map_race34()
 
