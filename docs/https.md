@@ -80,3 +80,27 @@ bind it stays on and Serve reaches it with `https+insecure://`.
 
 **Caveat:** browsers warn that the cert isn't from a trusted CA, and it protects against passive
 eavesdropping but not a determined man-in-the-middle. For serious public use prefer options 1–3.
+
+## Bans and blocks behind a proxy or tunnel
+
+**Block IP** and the auto-block deny an address on every port of the panel's host. A panel-login
+ban (fail2ban) does too whenever the panel sits behind a proxy, a tunnel or Tailscale; when visitors
+connect straight to the panel it covers the panel's port. Whether the firewall sees a visitor
+depends on how they reach the panel:
+
+- **Directly, or through Caddy/nginx on this host:** the visitor connects to this host, so the
+  firewall drops them, at the proxy's 443 too.
+- **Through a Cloudflare Tunnel, Tailscale Funnel or a proxy on another machine:** the visitor
+  never connects to this host (`cloudflared` makes an outbound connection to Cloudflare and hands
+  each request to `127.0.0.1:5000`), so the firewall never sees their panel requests. The panel
+  refuses them itself: a request whose last `X-Forwarded-For` address is banned or blocked gets
+  `403 Forbidden`, and that address's open console and terminal connections are closed. This
+  covers the panel only: another site served through the same tunnel is not protected by a ban here.
+- **Tailscale Serve:** the visitors are your own tailnet devices, which are never banned or blocked.
+
+The login throttle applies in every case: 8 failed attempts in 5 minutes per address (an IPv6
+client counts by its /64). Behind Caddy, nginx or a Cloudflare Tunnel it tells visitors apart only
+when `trust_proxy` is on and the proxy is one it trusts (`trusted_proxies`, and on loopback root,
+the panel's account or a `trusted_proxy_users` account). Otherwise every login counts as the
+proxy's own address, so the throttle counts every visitor together and a ban cannot name the one
+guessing.
