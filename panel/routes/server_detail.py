@@ -28,6 +28,7 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window
                                        _mark_expected_offline)
 from panel.services import lgsm_players as _lgp
 from panel.services import port_check as _pck
+from panel.routes import _lgsm_update as _lgu
 import concurrent.futures
 import contextlib
 import functools
@@ -368,17 +369,27 @@ def _after_power_action(app, gs, remote, short_name, action, rc):
             app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
 
 
+_BARE_STATUS = frozenset(("fail", "failed", "error"))
+
+
 def _action_failure_reason(clean):
-    """The most relevant LinuxGSM line of a failed action's output: the last error-ish one, else the last."""
-    reason = ""
+    """The most relevant LinuxGSM line of a failed action's output: the last error-ish one, else the last.
+
+    A line that is only LinuxGSM's status word ("... FAIL", printed after the step's own line has
+    been overwritten) says nothing about why: the error-ish line before it is taken instead, and
+    the bare one only when there is no other.
+    """
+    bare = ""
     for line in reversed(clean.splitlines()):
         low = line.lower()
         if any(k in low for k in ("fail", "unable", "error", "missing", "not found", "no such")):
-            reason = line.strip()
-            break
-    if not reason and clean.splitlines():
-        reason = clean.splitlines()[-1].strip()
-    return reason
+            if set(re.findall(r"[a-z]+", low)) <= _BARE_STATUS:
+                bare = bare or line.strip()
+                continue
+            return line.strip()
+    if bare:
+        return bare
+    return clean.splitlines()[-1].strip() if clean.splitlines() else ""
 
 
 def _run_sync_action(app, gs, remote, action, actor, origin):
@@ -387,6 +398,9 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     # Read before the SSH, which can take a minute: the row can be deleted and its id taken by
     # then, and a read after a commit would be of that row (models.RowReplaced refuses it).
     name, short_name = gs.name, gs.short_name
+    # update-lgsm never prints the release it moved to: read it before and after (_lgsm_update).
+    who = (remote, short_name, gs.lgsm_name, gs.id)
+    before = _lgu.script_release(*who[:3]) if action == _lgu.ACTION else None
     with _r20b_audit_on_raise(f"{action}_server", who=actor, actor=origin, target=name, server=gs):
         out, err, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout,
                                             selfname=gs.lgsm_name)
@@ -395,8 +409,8 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     log_action(actor, f"{action}_server", target=name, success=(rc == 0), detail=audit_detail[-400:],
                actor=origin, server=gs)
     _after_power_action(app, gs, remote, short_name, action, rc)
-    if action == "update-lgsm" and rc == 0:
-        _lg265_after_update_lgsm(gs)
+    if action == _lgu.ACTION:
+        return _lg265_after_update_lgsm(app, gs, who, (name, before, rc, clean))
     if action in READONLY_ACTIONS:
         return True, f"{action}: {shown[:_DTL_REPLY_MAX] or 'no output'}"
     ok, msg = _run_sync_outcome(action, name, rc, clean)
@@ -448,8 +462,26 @@ def _lg265_ahl_said(app, gs, held, action, clean):
     return "\n".join((str(note), clean))
 
 
-def _lg265_after_update_lgsm(gs):
-    """After update-lgsm: the release it moved to may offer more commands (lg265_refresh_commands)."""
+def _lg265_after_update_lgsm(app, gs, who, run):
+    """After update-lgsm: what it did in plain words, and the command list it may have grown. -> (ok, msg).
+
+    `who` is (remote, account, selfname, server id), read before the run; `run` is (name, the
+    release read before it, rc, cleaned output). The release is read once more (_lgsm_update), the
+    outcome is said in the server's console too, so every page open on it re-reads its LinuxGSM line
+    (a panel marker ends an action there), and the release it moved to may offer more commands
+    (lg265_refresh_commands).
+    """
+    name, before, rc, clean = run
+    after = _lgu.script_release(*who[:3])
+    ok, msg = _lgu.outcome(name, before, after, rc, _action_failure_reason(clean)[:280] if rc else "")
+    _console_push(app, who[3], f"[panel] update-lgsm: {msg}")
+    if rc == 0:
+        _lg265_refresh_after_update(gs)
+    return ok, msg
+
+
+def _lg265_refresh_after_update(gs):
+    """Re-read the command list a newer LinuxGSM release may have grown; a failure only logs."""
     try:
         lg265_refresh_commands(gs)
     except Exception:
@@ -1131,6 +1163,9 @@ def register(app):
     # A server's Steam Workshop list: items, a collection, or Project Zomboid's ini (app.py is at its size limit).
     from panel.routes import workshop as _wsc_routes
     _wsc_routes.register(app)
+    # A Call of Duty server's mod folder, and which Mods card a game gets (app.py is at its size limit).
+    from panel.routes import cod_mods as _codm_routes
+    _codm_routes.register(app)
     # Published on `app` because the module-level Telegram and Discord command bots drive a
     # start/stop/restart through this exact function, rather than a copy of its logic. It used to
     # be assigned at the end of register_routes(); now the module that owns it does the publishing,
@@ -1311,6 +1346,8 @@ def _pck_reply(app, gs, action, force):
     body = {"success": ok, "message": _r15e_said(msg)}
     if isinstance(msg, _pck.PortBusy):
         body["port_in_use"] = True   # the page offers "Start anyway" (force) for this one
+    if isinstance(msg, _lgu.LgsmUpdated):
+        body["lgsm"] = msg.lgsm      # the page's LinuxGSM line, and what's new in the releases it moved
     return body
 
 

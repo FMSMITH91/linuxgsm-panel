@@ -184,7 +184,8 @@
   {% if _uis_backups %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="backups"><i class="bi bi-archive"></i> Backups</button></li>{% endif %}
   {% if fpm.manage %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="schedule"><i class="bi bi-clock-history"></i> Schedule</button></li>
   <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="alerts"><i class="bi bi-bell"></i> Alerts</button></li>{% endif %}
-  {% if fpm.manage and not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
+  {# A Mods tab only for a game with mods the panel can manage: LinuxGSM's installer, or CoD's fs_game (services/cod_mods). #}
+  {% if fpm.manage and not install_failed and mods_kind(server.game_type) %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
 </ul>
 
 <!-- Config editor (tabbed) -->
@@ -659,7 +660,7 @@
 </div>
 
 {# Mods install INTO serverfiles, so there is nowhere to put one until the game files download. #}
-{% if not install_failed %}
+{% if not install_failed and mods_kind(server.game_type) == "lgsm" %}
 <!-- Mods / addons -->
 <div class="card" id="mods-card" data-sfsub="mods" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -684,6 +685,32 @@
 </div>
 {% endif %}{# not install_failed — mods #}
 
+{# Call of Duty: no LinuxGSM installer; the server loads the mod folder its fs_game names (services/cod_mods). #}
+{% if not install_failed and mods_kind(server.game_type) == "cod" %}
+<div class="card" id="codmods-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-puzzle"></i> Mods</span>
+    <button class="btn btn-sm btn-outline-secondary" data-action="loadCodMods" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      Pick the mod folder this server starts with. The change applies the next time the server starts.
+      Players download the mod's files from the server when its game config allows downloads.
+    </p>
+    <div id="codmods-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading mods…</div>
+    <div id="codmods-body" style="display:none;">
+      <div id="codmods-list" class="d-flex flex-column gap-1 mb-2"></div>
+      <div id="codmods-where" class="small text-warning mb-2" style="display:none;"></div>
+      <div class="d-flex align-items-center flex-wrap gap-2">
+        <span id="codmods-upload" class="small text-secondary"></span>
+        {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="codModsOpenFolder" data-args='["@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
+      </div>
+    </div>
+    <span id="codmods-msg" class="small"></span>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
 {% block scripts %}
 {# Server-rendered values for server_files.js. Kept inline (and BEFORE it, so its top-level code can
@@ -698,5 +725,6 @@ var SF_CAN = {{ fpm|tojson }};
 {% if sch_verb %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_schedule_chains.js') }}"></script>{% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_backup_restore.js') }}"></script>
+{% if mods_kind(server.game_type) == "cod" and not install_failed %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_cod_mods.js') }}"></script>{% endif %}
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}

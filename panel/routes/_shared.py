@@ -35,6 +35,7 @@ from panel.security import banlist as _banlist
 from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
     VIEW_CONSOLE, get_user_permissions, log_action)
 from panel.services import (notifications)
+from panel.services import console_secrets as _console_secrets
 from panel.services import lgsm_players as _lgp
 import threading
 import time
@@ -1714,6 +1715,9 @@ def _console_push(app, server_id, text, ts=None):
     if not text:
         return
     ts = float(ts if ts is not None else time.time())
+    # Masked as the game's own console text is (services/console_secrets), from the values already
+    # cached for this server: a long action's output can echo a start line or a SteamCMD login.
+    text = _console_secrets.mask(server_id, text)
     try:
         _backlog_append(server_id, text, ts)
     except Exception:

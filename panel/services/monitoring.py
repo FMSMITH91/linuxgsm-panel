@@ -322,8 +322,8 @@ def _admin_account(user):
 def _batchable(gs):
     """Whether one server can join its host's batched gamedig query this pass.
 
-    Not Minecraft Bedrock: it is counted from its own console log, as its own account
-    (player_slots), and a NetherNet server answers no gamedig query to batch.
+    Not Minecraft Bedrock: it is asked on its own host (LAN discovery, then its console log as its
+    account: player_slots), and a NetherNet server answers no gamedig query to batch.
     """
     return (gs.status != "offline" and gs.remote is not None
             and game_idents_ok(gs.short_name) and bool(gs.port)

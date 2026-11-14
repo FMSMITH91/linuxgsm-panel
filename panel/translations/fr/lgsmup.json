@@ -1,0 +1,15 @@
+{
+  "update-lgsm finished on '{name}', but the panel could not read which LinuxGSM release it is on now.": "update-lgsm s'est terminé sur « {name} », mais le panneau n'a pas pu lire la version de LinuxGSM qu'il utilise maintenant.",
+  "LinuxGSM on '{name}' updated from {old} to {new}.": "LinuxGSM sur « {name} » est passé de {old} à {new}.",
+  "LinuxGSM on '{name}' is still on {version}: {latest} was not installed.": "LinuxGSM sur « {name} » est toujours en {version} : {latest} n'a pas été installée.",
+  "LinuxGSM on '{name}' is already up to date ({version}).": "LinuxGSM sur « {name} » est déjà à jour ({version}).",
+  "LinuxGSM could not be updated on '{name}': {reason}": "LinuxGSM n'a pas pu être mis à jour sur « {name} » : {reason}",
+  "LinuxGSM could not be updated on '{name}': update-lgsm exited with code {rc} and printed nothing.": "LinuxGSM n'a pas pu être mis à jour sur « {name} » : update-lgsm s'est arrêté avec le code {rc} sans rien afficher.",
+  "See what's new in LinuxGSM and update it.": "Voir les nouveautés de LinuxGSM et le mettre à jour.",
+  "More in the full release notes": "La suite dans les notes de version complètes",
+  "The release notes could not be read yet.": "Les notes de version n'ont pas encore pu être lues.",
+  "All LinuxGSM release notes on GitHub": "Toutes les notes de version de LinuxGSM sur GitHub",
+  "This server is on {release}. LinuxGSM {latest} is available.": "Ce serveur est en {release}. LinuxGSM {latest} est disponible.",
+  "Update LinuxGSM": "Mettre à jour LinuxGSM",
+  "LinuxGSM update available": "Mise à jour de LinuxGSM disponible"
+}

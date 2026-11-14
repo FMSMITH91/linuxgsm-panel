@@ -2387,13 +2387,18 @@ pollWhenVisible(_consolePoll, 30000);
 // so filling it in cannot shift the layout; an unreachable host simply leaves the dash.
 // The LinuxGSM line: the server's release, and "v26.5.0 available" when LinuxGSM has a newer one.
 // An unread release leaves the dash, and an unread latest says nothing about being behind.
-function _showLgsmVersion(info) {
+// The note is a button (lgsm_update.js): what's new in the releases between, and "Update LinuxGSM".
+// `notes` are those releases' notes, kept for that dialog; an update's reply passes none, and the
+// re-read its console marker starts brings them.
+function _showLgsmVersion(info, notes) {
   var el = document.getElementById('lgsm-version'), behind = document.getElementById('lgsm-behind');
-  if (!el || !behind || !info) return;
+  var btn = document.getElementById('lgsm-behind-btn');
+  if (!el || !behind || !btn || !info) return;
   if (info.release) el.textContent = info.release;
+  window._lgsmState = {info: info, notes: notes || []};
   if (info.behind && info.latest) {
-    behind.textContent = '\u00b7 ' + tf('{latest} available', {latest: info.latest});
-    behind.title = t('Run update-lgsm from the Maintenance menu to update this server\'s LinuxGSM.');
+    btn.textContent = tf('{latest} available', {latest: info.latest});
+    btn.title = t('See what\'s new in LinuxGSM and update it.');
     behind.classList.remove('d-none');
   } else {
     behind.classList.add('d-none');
@@ -2406,7 +2411,7 @@ function loadGameVersion() {
   fetch(MOUNT + '/api/server/' + serverId + '/version', {cache: 'no-store'})
     .then(function(r){ return r.json(); })
     .then(function(d){
-      _showLgsmVersion(d && d.lgsm);
+      _showLgsmVersion(d && d.lgsm, d && d.lgsm_notes);
       if (!d || !d.label) return;          // nothing known — leave the placeholder as it is
       el.textContent = d.label;
       if (d.detail) el.title = d.detail;   // where the number came from (build, appid, date)

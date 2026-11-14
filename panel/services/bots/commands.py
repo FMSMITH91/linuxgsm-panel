@@ -12,6 +12,7 @@ from panel.ops import system_ops as so
 from panel.ops.ssh_manager import (player_list)
 from panel.security.auth import (log_action)
 from panel.services import (notifications)
+from panel.services import console_secrets as _console_secrets
 import collections
 import logging
 import queue
@@ -178,7 +179,10 @@ def _console_text(app, arg, lines=20, fence=None):
             return "%s — the server isn't running, so there's no console to read." % gs.name
         if rc != 0:
             return "%s — couldn't read the console (the host didn't answer)." % gs.name
-        return _console_tail_reply(gs.name, out, lines, fence)
+        # The game's secrets masked, as on the web page's console (services/console_secrets): a
+        # chat is read by everyone in it. On the text as shown, its escapes gone.
+        shown = _console_secrets.mask_for(gs, terminal.strip_escapes(out or ""))
+        return _console_tail_reply(gs.name, shown, lines, fence)
 
 
 def _console_tail_reply(name, out, lines, fence):

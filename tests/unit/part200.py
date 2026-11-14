@@ -116,16 +116,16 @@ _PROPS200 = "max-players=10\r\nserver-name=My   Bedrock\nlevel-name=Bedrock leve
 
 
 def _slots200(reply, user="p200mcb"):
-    """What bedrock_slots answers, and [(user, sh, selfname)] sent, with the account's shell answering `reply`."""
+    """What bedrock_slots answers, and [(command, sudo)] sent, the server's query unanswered and the log read `reply`."""
     sent = []
 
-    def _shell(server, u, sh, **k):
-        sent.append((u, sh, k.get("selfname")))
+    def _run(server, cmd, **k):
+        sent.append((cmd, k.get("sudo")))
         if isinstance(reply, Exception):
             raise reply
         return reply, "", 0
     try:
-        _p9_patch_sm("shell_as_game_user", _shell)
+        _p9_patch_sm("run_command", _run)
         return _bd200.bedrock_slots(None, user), sent
     finally:
         _p9_restore_all()
@@ -134,10 +134,12 @@ def _slots200(reply, user="p200mcb"):
 _ok200, _ok_sent200 = _slots200("mcbp:OK 3\n" + _PROPS200)
 eq("bedrock slots: a counted log, with server.properties' capacity, name (blanks collapsed) and level",
    _ok200, ("ok", 3, 10, "My Bedrock", "Bedrock level"))
-check("bedrock slots: ...from ONE command, as the account, in its home, naming the script",
-      len(_ok_sent200) == 1 and _ok_sent200[0][0] == "p200mcb" and _ok_sent200[0][2] == "mcbserver"
-      and _ok_sent200[0][1].startswith("cd /home/p200mcb || exit 3; ")
-      and _bd200.bedrock_count_sh("mcbserver") in _ok_sent200[0][1], repr(_ok_sent200))
+check("bedrock slots: ...from ONE command: the server's query, then the log read as the account, in its home",
+      _ok_sent200 == [(_bd200.bedrock_query_sh("p200mcb") + "||" + _core200.game_user_cmd(
+          "p200mcb", _bd200.bedrock_read_sh("p200mcb", "mcbserver"), selfname="mcbserver"), False)]
+      and _bd200.bedrock_read_sh("p200mcb", "mcbserver").startswith("cd /home/p200mcb || exit 3; ")
+      and _bd200.bedrock_count_sh("mcbserver") in _bd200.bedrock_read_sh("p200mcb", "mcbserver"),
+      repr(_ok_sent200)[:300])
 eq("bedrock slots: no session is down; no start line or an unreadable join is unread",
    [_slots200(r)[0][0] for r in ("mcbp:D\n", "mcbp:N\n" + _PROPS200, "mcbp:B\n")], ["down", "unread", "unread"])
 eq("bedrock slots: no tally line, two of them, a malformed one, or a transport error is failed (unknown)",
@@ -163,6 +165,7 @@ def _pc200(reply, game_type="mcb", gamedig='{"c":4,"ok":true}', fn="player_count
         return (gamedig if "gamedig --type" in sh else ""), "", 0
     try:
         _p9_patch_sm("shell_as_game_user", _shell)
+        _p9_patch_sm("run_command", lambda server, cmd, **k: _shell(server, None, cmd))
         _p9_patch_sm("_gamedig_host", lambda server: "192.0.2.20")
         srv = type("Srv", (), {"id": 920001})()
         return getattr(_cron200, fn)(srv, "p200mcb", game_type, 19132, None), sent
@@ -195,7 +198,7 @@ check("player slots (mcb): count, capacity and name from one read, and the level
       _ps_ok200[0] == (3, 10, "My Bedrock") and len(_ps_ok200[1]) == 1 and _map200 == "Bedrock level",
       repr((_ps_ok200, _map200)))
 eq("player slots (mcb): no session is (None, None, None) without a gamedig query",
-   _pc200("mcbp:D\n", fn="player_slots"), ((None, None, None), [_bd200.bedrock_read_sh("p200mcb", "mcbserver")]))
+   _pc200("mcbp:D\n", fn="player_slots"), ((None, None, None), [_bd200.bedrock_slots_cmd("p200mcb", "mcbserver")]))
 
 # ── 4. the status poll and /api/servers ─────────────────────────────────────────────────────────
 _mcb_sid200 = _p9_new_server(P9_HOST, "p200mcb", "mcb", 19132, name="p200-mcb", status="online")
@@ -219,6 +222,7 @@ def _poll_batch200(remote, acct, targets):
 try:
     _p9_arm(who="part200")
     _p9_patch_sm("shell_as_game_user", _poll_shell200)
+    _p9_patch_sm("run_command", lambda server, cmd, **k: _poll_shell200(server, None, cmd))
     _p9_patch_sm("_gamedig_host", lambda server: "192.0.2.20")
     _p9_patch(_mon200, "sm_player_slots_batch", _poll_batch200)
     _p9_patch(_mon200, "_batch_account", lambda remote, rows: "p200gm1")
@@ -284,6 +288,7 @@ def _sweep200(reply, wait_empty=True):
         _p9_patch(_lgp200, "allowance_seconds", lambda *a, **k: 0)
         _p9_patch_sm("run_as_game_user", _run)
         _p9_patch_sm("shell_as_game_user", _shell)
+        _p9_patch_sm("run_command", lambda server, cmd, **k: _shell(server, None, cmd))
         _p9_patch_sm("_gamedig_host", lambda server: "192.0.2.20")
         _p9_patch_sm("read_file", lambda *a, **k: ("level-name=Bedrock level\n", None))
         _p9_patch_sm("lgsm_cfg_texts", lambda *a, **k: _cfg_texts183(_MCBV200))

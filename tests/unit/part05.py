@@ -4754,7 +4754,7 @@ _REMOTE_EXPECTED = {
     ("log-tail", ("auth", "200")): "tail -n 200 /var/log/auth.log 2>&1",
     ("os-update-log", ()): "tail -c 20000 /run/panel-os-update.log 2>&1",
     ("journal-cron", ()):
-        "journalctl _COMM=cron --since '-14 days' -o short-unix --no-pager 2>&1",
+        "journalctl SYSLOG_IDENTIFIER=CRON _UID=0 --since '-14 days' -o short-unix --no-pager 2>&1",
     ("content-game-remove", ("gmodcontent", "cstrike", "cssserver")):
         "runuser -u gmodcontent -- rm -rf /home/gmodcontent/serverfiles/cstrike"
         " ; runuser -u gmodcontent -- rm -rf /home/gmodcontent/cssserver"

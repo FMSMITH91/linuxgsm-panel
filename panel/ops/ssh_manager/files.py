@@ -652,22 +652,41 @@ def lgsm_game_config(server, user, selfname):
     return {"rel": rel, "content": content or "", "exists": err is None, "error": err}
 
 
-def lgsm_cfg_texts(server, user, selfname):
+def lgsm_cfg_texts(server, user, selfname, read_only=False):
     """The text of each of an instance's LinuxGSM config files, in one read: a list in _core.LGSM_CFG_ORDER.
 
     For a reader that must see the files as LinuxGSM does, not merged by _parse_cfg (the world
     reset: services/world_reset.cfg_values). A file that is not there is "". Returns None when any
     file is there and could not be read, or the read did not come back: a file the panel could not
     see may hold the very setting that matters, so no answer is made up for it.
+
+    `read_only`: through read_as_game_user, the read-only path the console's own reads take (the
+    console's secret masking, services/console_secrets), with a shorter timeout.
     """
     if not _idents_ok(user, selfname):
         return None
+    inner = lgsm_cfg_texts_sh(user, selfname)
+    if read_only:
+        out, _, _ = _core.read_as_game_user(server, user, inner, timeout=10, selfname=selfname)
+    else:
+        out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
+    return lgsm_cfg_texts_from(out)
+
+
+def lgsm_cfg_texts_sh(user, selfname):
+    """The shell lgsm_cfg_texts runs: each config file framed, in _core.LGSM_CFG_ORDER.
+
+    For a caller that reads more in the same command (services/cod_mods lists the mod folders with it).
+    """
     d = _lgsm_cfg_dir(user, selfname)
-    tags = ["W%d" % i for i in range(len(_core.LGSM_CFG_ORDER))]
-    inner = "".join(_lgsm_frame(d + "/" + f.format(inst=selfname), t) for f, t in zip(_core.LGSM_CFG_ORDER, tags))
-    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
+    return "".join(_lgsm_frame(d + "/" + f.format(inst=selfname), "W%d" % i)
+                   for i, f in enumerate(_core.LGSM_CFG_ORDER))
+
+
+def lgsm_cfg_texts_from(out):
+    """The config texts lgsm_cfg_texts_sh printed into `out`, or None (see lgsm_cfg_texts)."""
     texts = []
-    for t in tags:
+    for t in ("W%d" % i for i in range(len(_core.LGSM_CFG_ORDER))):
         body = out or ""
         b, e = "__LGSMP_%s_B__" % t, "__LGSMP_%s_E__" % t
         i, j = body.find(b), body.find(e)

@@ -27,11 +27,16 @@
       <span id="game-version" data-no-i18n>&mdash;</span>
     </div>
     {# Which LinuxGSM release this server's script is on, from the same fetch, and a note when a
-       newer one is out. Its own line from the first paint, for the reason above. #}
-    <div class="text-secondary small">
+       newer one is out. Its own line from the first paint, for the reason above. The note is a
+       button: it opens what's new in the releases between, with "Update LinuxGSM" for a viewer who
+       may run update-lgsm here (the Maintenance menu's own rule: the item is listed for them). #}
+    {% set _can_update_lgsm = maintenance and ('update-lgsm' in (maintenance|map(attribute='cmd')|list)) %}
+    <div class="text-secondary small lgsm-line">
       <i class="bi bi-box-seam"></i> <span data-no-i18n>LinuxGSM</span>
       <span id="lgsm-version" data-no-i18n>&mdash;</span>
-      <span id="lgsm-behind" class="text-warning d-none"></span>
+      <span id="lgsm-behind" class="text-warning d-none" data-can-update="{{ '1' if _can_update_lgsm else '0' }}"><span aria-hidden="true">&middot;</span>
+        <button type="button" id="lgsm-behind-btn" class="btn btn-link btn-sm p-0 border-0 align-baseline text-warning"
+                data-action="showLgsmUpdate" data-args='["@self"]'></button></span>
     </div>
   </div>
   <div class="d-flex align-items-center gap-2">
@@ -861,6 +866,7 @@ var SERVER_NAME = {{ server.name|tojson }};
 var _CMPA_HIST_SCOPE = {{ hist_scope|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/lgsm_update.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/console_history.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_detail.js') }}"></script>
 {% if mc_lists_supported(server.game_type) and can_download_log %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_mclists.js') }}"></script>{% endif %}
