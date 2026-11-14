@@ -29,7 +29,7 @@ def _doc199(rel):
 
 
 def _slug199(heading):
-    """GitHub's anchor for a markdown heading: lower case, punctuation dropped, spaces to hyphens."""
+    """The anchor GitHub gives a markdown heading: lower case, punctuation dropped, spaces to hyphens."""
     return _re199.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
 
 
