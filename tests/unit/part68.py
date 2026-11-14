@@ -66,7 +66,7 @@ _USER68 = "r16b68"
 _mine68 = {"hosts": [], "servers": [], "users": []}
 _CT68 = os.path.realpath(_tf68.mkdtemp(prefix="lgsm-unit-p68-ct-"))
 # A game the built-in map has no gamedig type for, and the override an operator sets for it.
-_GAME68, _QT68 = "pz", "projectzomboid"
+_GAME68, _QT68 = "sb", "starbound"
 
 
 def _arm68():

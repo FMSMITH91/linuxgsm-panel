@@ -9431,6 +9431,8 @@ _ANCHOR_LINE_PARSERS = {
     "_DTL_SECRET_LINE",
     # One line of master's linuxgsm.sh (re.M), `version="v26.5.0"`: the release update-lgsm installs.
     "_LATEST_VERSION_RE",
+    # One line of a LinuxGSM config (split at \n), another key's plain `key="value"` line.
+    "_WWR_OTHER_LINE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.
