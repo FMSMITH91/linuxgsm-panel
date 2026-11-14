@@ -39,6 +39,8 @@ from panel.routes import api as _api209, modrinth_plugins as _mdr209, server_fil
 from panel.services import monitoring as _mon209
 
 _TMP209 = _tf209.mkdtemp(prefix="lgsm-unit-p209-")
+# The real reader, before part12's tripwire (which replaces it) is armed for this part's checks.
+_REAL_TS_INFO209 = _tsi209.get_tailscale_info
 _HAVE209 = bool(_shutil209.which("node") and _shutil209.which("jq"))
 # The stand-in shell's PATH after the rig's bin/: where node and jq are, then /usr/bin and /bin.
 _TOOLS209 = os.pathsep.join(sorted({os.path.dirname(p) for p in (_shutil209.which("node"), _shutil209.which("jq"))
@@ -258,6 +260,7 @@ def _tailscale209():
     _p9_patch(_tsi209, "_run_ts", lambda args, timeout=5:
               (calls.append(list(args)), ("1.%d.0" % len(binary["id"]) if args == ["version"] else "", "", 1))[1])
     _p9_patch(_tsi209, "_binary_id", lambda: binary["id"])
+    _p9_patch(_tsi209, "get_tailscale_info", _REAL_TS_INFO209)
     for name in ("_read_serve_status", "_detect_magic_dns"):
         _p9_patch(_tsi209, name, lambda info: None)
     saved = dict(_tsi209._cache)

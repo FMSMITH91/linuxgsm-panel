@@ -514,17 +514,18 @@ finally:
     _sm_files.lgsm_get_values, _sm_core.run_command = _orig_lgv2, _orig_rc3
 
 # game_map: a separate cached gamedig read for the current map, kept out of the player-count path.
+# Its jq prints "=" and the map when gamedig answered (cron._MAP_JQ), nothing when it did not.
 _orig_rc5 = _sm_core.run_command
 try:
-    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("de_dust2\n", "", 0)
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("=de_dust2\n", "", 0)
     check("game-map: parses the map name from gamedig", _sm_cron.game_map(object(), "u", "css", 27015) == "de_dust2")
-    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("null\n", "", 0)
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("=null\n", "", 0)
     check("game-map: 'null'/empty gamedig output -> ''", _sm_cron.game_map(object(), "u", "css", 27015) == "")
-    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("<b>gm_x\n", "", 0)
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("=<b>gm_x\n", "", 0)
     check("game-map: strips angle brackets from game-supplied text",
           "<" not in _sm_cron.game_map(object(), "u", "css", 27015) and ">" not in _sm_cron.game_map(object(), "u", "css", 27015))
     check("game-map: no gamedig type/port -> '' (no query)", _sm_cron.game_map(object(), "u", "css", None) == "")
-    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("a banner line\nde_nuke\n", "", 0)
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("a banner line\n=de_nuke\n", "", 0)
     check("game-map: the map is the LAST line of output, where jq prints it",
           _sm_cron.game_map(object(), "u", "css", 27015) == "de_nuke")
     # The gamedig player reader had only stubbed callers. The jq reply ({p: rows, c: head count})
