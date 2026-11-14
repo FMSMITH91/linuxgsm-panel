@@ -337,6 +337,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Scheduled Tasks opens quickly and shows when each task last ran again.** On a host with several game servers, the panel read every
+  account's cron history for two weeks to show one server's tasks, ran past its size limit and showed no
+  last-run times. It now reads only that server's newest runs.
+
 - **The dashboard's server table fits the card on smaller desktop screens.** From 992 to 1399 pixels
   wide the table no longer scrolls sideways and every row's buttons stay inside the card: they wrap
   onto two or three rows when there is not room for one.
