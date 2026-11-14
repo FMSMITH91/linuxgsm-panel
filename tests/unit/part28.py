@@ -377,27 +377,31 @@ check("complexity job: Prospector pinned at Codacy's version with hashes, pylint
 # ══ SonarCloud: main's open issues are judged, with a positive control (SQ1) ═════════════════════
 _sq28 = _load28(".github/scripts/sonar_new_issues.py", "sonar_gate_p28")
 _SHA28 = "a" * 40
-# The known issue's key comes from the script's own KNOWN_OPEN (pinned to its literal below):
+# The Accepted issue's key comes from the script's own KNOWN_ACCEPTED (pinned to its literal below):
 # written here as a '"key": "<20 characters>"' pair, Gitleaks' generic-api-key rule reads a secret.
-_sq28_known = {"key": next(iter(_sq28.KNOWN_OPEN)), "component": "P:.clusterfuzzlite/Dockerfile",
-               "line": 10, "severity": "MINOR", "rule": "docker:S6471", "message": "root"}
+_sq28_known = {"key": next(iter(_sq28.KNOWN_ACCEPTED), "none"), "component": "P:.clusterfuzzlite/Dockerfile",
+               "line": 10, "severity": "MINOR", "rule": "docker:S6471", "message": "root",
+               "issueStatus": "ACCEPTED"}
 _SQ28_KNOWN = [_sq28_known]
 _sq28_new = {"key": "NEW1", "component": "P:panel/x.py", "line": 3, "severity": "MAJOR",
              "rule": "python:S1481", "message": "Remove the unused local variable"}
 
 
-def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0):
+def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0, accepted=None):
     """run_branch with SonarCloud stubbed: (problems, judged, the calls made, sleeps).
 
-    `fail_issues`: how many issues/search reads answer a 502 first.
+    `issues` is main's open list and `accepted` its Accepted list (default: the known Accepted
+    issue). `fail_issues`: how many issues/search reads answer a 502 first.
     """
+    accepted = _SQ28_KNOWN if accepted is None else accepted
     calls, sleeps, polls, fails = [], [], [], [fail_issues]
 
     def _get(path, **params):
         calls.append((path, params))
         if path == "project_branches/list":
+            # Accepted issues are resolved, so the branch's counts no longer hold the Accepted one.
             return {"branches": [{"name": "main", "isMain": True, "commit": {"sha": _SHA28},
-                                  "status": {"vulnerabilities": 1}}]}
+                                  "status": {"vulnerabilities": 0}}]}
         if path == "project_analyses/search":
             polls.append(1)
             revs = [{"revision": "b" * 40}] + ([{"revision": _SHA28}]
@@ -406,6 +410,8 @@ def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0)
         if fails[0]:
             fails[0] -= 1
             raise OSError("HTTP Error 502: Bad Gateway")
+        if params.get("issueStatuses") == "ACCEPTED":
+            return {"issues": accepted if params.get("p") == 1 else [], "paging": {"total": len(accepted)}}
         return {"issues": issues if params.get("p") == 1 else [],
                 "paging": {"total": len(issues) if total is None else total}}
     saved = (_sq28._get, _sq28.time)
@@ -417,36 +423,45 @@ def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0)
     return problems, judged, calls, sleeps
 
 
-_sq1_ok = _sq28_drive(list(_SQ28_KNOWN), analysed_after=2)
-check("sonar main gate: waits until SonarCloud lists an analysis of this commit, then passes main "
-      "holding only the known issue",
+_sq1_ok = _sq28_drive([], analysed_after=2)
+check("sonar main gate: waits until SonarCloud lists an analysis of this commit, reads main's open "
+      "issues and its Accepted ones, then passes main with none open and the known one Accepted",
       _sq1_ok[0] == [] and _sq1_ok[1] == _SHA28 and len(_sq1_ok[3]) == 2
       and ("issues/search", {"componentKeys": "FMSMITH91_linuxgsm-panel", "branch": "main",
-                             "resolved": "false", "ps": 500, "p": 1}) in _sq1_ok[2],
+                             "resolved": "false", "ps": 500, "p": 1}) in _sq1_ok[2]
+      and ("issues/search", {"componentKeys": "FMSMITH91_linuxgsm-panel", "branch": "main",
+                             "issueStatuses": "ACCEPTED", "ps": 500, "p": 1}) in _sq1_ok[2],
       repr(_sq1_ok))
 # A transient error on the ISSUE read, after the analysis was found: retried like the waits are,
 # not a traceback (a red main check holding every panel's update until the next run).
 _sq28_out502 = _io28.StringIO()
 with _ctx28.redirect_stdout(_sq28_out502):
     try:
-        _sq1_502 = _sq28_drive(list(_SQ28_KNOWN), fail_issues=2)
+        _sq1_502 = _sq28_drive([], fail_issues=2)
     except OSError as _e28:
         _sq1_502 = ("raised", repr(_e28))
 check("sonar main gate: a 502 on the issue read is retried, then main is judged as usual",
       _sq1_502[0] == [] and _sq1_502[1] == _SHA28 and len(_sq1_502[3]) == 2, repr(_sq1_502))
-_sq1_new = _sq28_drive(_SQ28_KNOWN + [_sq28_new])
+_sq1_new = _sq28_drive([_sq28_new])
 check("sonar main gate: ...an open issue that is not known fails, named with its file, line, rule "
       "and key",
       _sq1_new[0] == ["panel/x.py:3 MAJOR python:S1481: Remove the unused local variable [NEW1]"],
       repr(_sq1_new[0]))
-_sq1_empty = _sq28_drive([])
-check("sonar main gate: ...the known issue missing fails (an empty read is not a clean main)",
-      any("AaDejKLMfWz637hiAQny" in _p and "not in SonarCloud's list" in _p for _p in _sq1_empty[0]),
+_sq1_empty = _sq28_drive([], accepted=[])
+check("sonar main gate: ...the Accepted issue missing from main's Accepted list fails, named (an "
+      "empty read is not a clean main, even with nothing open)",
+      len(_sq1_empty[0]) == 1 and "AaDejKLMfWz637hiAQny" in _sq1_empty[0][0]
+      and "not in SonarCloud's list of the branch's Accepted issues" in _sq1_empty[0][0],
       repr(_sq1_empty[0]))
-_sq1_short = _sq28_drive(list(_SQ28_KNOWN), total=5)
+_sq1_reopened = _sq28_drive(list(_SQ28_KNOWN), accepted=[])
+check("sonar main gate: ...an Accepted issue that is open again fails twice: open and not known, and "
+      "missing from the Accepted list",
+      len(_sq1_reopened[0]) == 2 and all("AaDejKLMfWz637hiAQny" in _p for _p in _sq1_reopened[0]),
+      repr(_sq1_reopened[0]))
+_sq1_short = _sq28_drive([], total=5)
 check("sonar main gate: ...a list shorter than SonarCloud's own total fails",
       any("counts 5 open issue(s)" in _p for _p in _sq1_short[0]), repr(_sq1_short[0]))
-_sq1_sched = _sq28_drive(list(_SQ28_KNOWN), sha=None)
+_sq1_sched = _sq28_drive([], sha=None)
 check("sonar main gate: ...with no commit given (the schedule) it judges the analysed commit at once",
       _sq1_sched[0] == [] and _sq1_sched[1] == _SHA28 and _sq1_sched[3] == []
       and not any(_c[0] == "project_analyses/search" for _c in _sq1_sched[2]), repr(_sq1_sched))
@@ -455,10 +470,12 @@ with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
                  _sq28.main(["x", "--branch", "main", "--sha", "nope"]),
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
-check("sonar main gate: ...the known issue is the declined docker:S6471, the self-test "
-      "passes, and a malformed branch or commit is refused",
-      set(_sq28.KNOWN_OPEN) == {"AaDejKLMfWz637hiAQny"}
-      and "S6471" in _sq28.KNOWN_OPEN["AaDejKLMfWz637hiAQny"] and _sq28_rcs == (0, 2, 2)
+check("sonar main gate: ...no issue is known open, the one Accepted is docker:S6471 with its measured "
+      "reason, the self-test passes, and a malformed branch or commit is refused",
+      _sq28.KNOWN_OPEN == {} and set(_sq28.KNOWN_ACCEPTED) == {"AaDejKLMfWz637hiAQny"}
+      and "S6471" in _sq28.KNOWN_ACCEPTED["AaDejKLMfWz637hiAQny"]
+      and "libFuzzingEngine.a': Permission denied" in _sq28.KNOWN_ACCEPTED["AaDejKLMfWz637hiAQny"]
+      and _sq28_rcs == (0, 2, 2)
       and "self-test: " in _sq28_out.getvalue() and "SELF-TEST FAIL" not in _sq28_out.getvalue(),
       repr((_sq28_rcs, _sq28_out.getvalue()[-300:])))
 _smw28 = _read28(".github/workflows/sonar-main-issues.yml")
