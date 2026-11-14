@@ -55,7 +55,5 @@ jobs:
           # that entry's date passes, the dependency audit fails, and the advisory is looked at
           # again: both entries renewed or removed. (GHSA-ch52-4w7c-c8xp, http-cache-semantics, was
           # removed from both when #417 moved gamedig's lock past the advisory's range.)
-          # GHSA-45c3-73f7-pv4m: dnspython 2.8.0, kept for Python 3.10 only (the fix needs 3.11);
-          # panel/install/osv-scanner.toml holds its triage and date. Listed once the lockfile moved
-          # into panel/install/, which made every pin in it read as newly added.
-          allow-ghsas: GHSA-45c3-73f7-pv4m
+          # (GHSA-45c3-73f7-pv4m, dnspython 2.8.0, was removed from both when dnspython left
+          # requirements.txt.) None is allowed today.

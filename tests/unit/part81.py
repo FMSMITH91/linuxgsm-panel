@@ -405,6 +405,9 @@ try:
 finally:
     _p9_restore_all()
 _RMH81 = _read81("panel", "static", "js", "remote_manage_host.js")
+# renderUpdate and the helpers it hands each state to.
+_upd_fns81 = "\n".join([_line81(_RMH81, "var _r20cRepoUrl"), _line81(_RMH81, "var _r20cChangeLine")] + [
+    _cut_or81(_RMH81, "function %s(" % _f) for _f in ("renderUpdate", "renderUpdateOffer", "puChangeItem", "renderUpToDate")])
 _upd_prog81 = (
     "global.window = global; global.MOUNT = ''; global.escapeHtml = s => String(s); global.t = s => s;\n"
     "global.tfHtml = (k, v) => k.replace(/\\{(\\w+)\\}/g, (m, n) => (v[n] && v[n].html) || v[n]);\n"
@@ -431,7 +434,7 @@ _upd_prog81 = (
     "  console.log(JSON.stringify({failedRoute, shaOnly, failedFirst, failedAfterOffer}));\n"
     "})();\n") % (_line81(_RMH81, "var _r20cNoteCats") + "\n" + _line81(_RMH81, "var _r20cHexSha"),
         _cut_or81(_RMH81, "function renderReleaseNotes("),
-                  _line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("),
+                  _line81(_RMH81, "var _r20cUpdateShown"), _upd_fns81,
                   _cut_or81(_RMH81, "function checkPanelUpdate("), _json81.dumps(_upd81))
 _card81 = _node81("remote_manage_host.js: the update card when the check fails", _upd_prog81)
 # The route's own answer is Python's to check, with or without node (review 1015a: it sat inside the
@@ -499,7 +502,7 @@ _notes_prog81 = (
     "console.log(JSON.stringify(out));\n") % (
         _line81(_RMH81, "var _r20cNoteCats") + "\n" + _line81(_RMH81, "var _r20cHexSha"),
         _cut_or81(_RMH81, "function renderReleaseNotes("),
-        _line81(_RMH81, "var _r20cUpdateShown"), _cut_or81(_RMH81, "function renderUpdate("))
+        _line81(_RMH81, "var _r20cUpdateShown"), _upd_fns81)
 _notes81 = _node81("remote_manage_host.js: the update card's changelog entries", _notes_prog81)
 if _notes81 is not None:
     _wn81 = _notes81.get("withNotes") or {}

@@ -3,10 +3,10 @@
 
 pip-audit (--disable-pip) evaluates each pin's marker on the Python it runs on and leaves out a pin
 whose marker is false, so the dependency audit (security-code.yml) cannot count every `name==`
-line as one pip-audit must have read. requirements.txt pins dnspython 2.8.0 behind
-`python_version < "3.11"` and 2.9.0 behind `python_version >= "3.11"`: on the audit's Python 3.11
-the 2.8.0 pin is not pip-audit's to read, and osv-scanner, which reads every pin whatever its
-marker, audits it. The step subtracts what this prints from its count and names each one.
+line as one pip-audit must have read. A pin behind `python_version < "3.11"` (requirements.txt
+split dnspython that way until dnspython left it) is not pip-audit's to read on the audit's Python
+3.11, and osv-scanner, which reads every pin whatever its marker, audits it. The step subtracts what
+this prints from its count and names each one. Neither lockfile carries a marker today.
 
 Usage:
     pins_not_here.py FILE

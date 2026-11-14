@@ -3,6 +3,8 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+ddcfb81c dnspython is no longer installed.
+14c5aeae Semgrep's CI install no longer carries a vulnerable OpenTelemetry.
 645d370f Restore a game server from one of its backups.
 8986fd9b Upload a backup to restore from it.
 412ef958 The dashboard's server list fits a phone or tablet.

@@ -4,29 +4,7 @@
 # Every entry is a reviewed advisory that cannot be fixed by a bump, and every one EXPIRES: on its
 # ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
 # entry to a reason and a date. The model and its history: tools/gamedig/osv-scanner.toml.
-
-[[IgnoredVulns]]
-id = "GHSA-xcq7-p3pf-p88h"
-ignoreUntil = 2026-12-06
-reason = """opentelemetry-api 1.37.0 in semgrep.txt (unbounded tracestate parsing, fixed in 1.45.1).
-Not fixable by a bump: every Semgrep release up to 1.184.0 pins opentelemetry-api~=1.37.0, so the
-resolver cannot take 1.45.1 while Semgrep is installed. CI-only: Semgrep runs in a CI job over this
-repository's own files with metrics off, and is handed no trace context from outside, so the
-tracestate parser never reads attacker input. Remove this entry when Semgrep raises the pin and the
-lock moves past 1.45.0.
-Re-checked 2026-11-07 and renewed to 2026-12-06: Semgrep 1.184.0 (2026-11-05), the newest on PyPI,
-still declares opentelemetry-api~=1.37.0 (cli/pyproject.toml on its default branch too); the upstream
-requests to raise it are open. Pinning it apart as PyJWT once was would mean taking the whole
-opentelemetry family (the sdk and exporter each require one exact api version) outside the ranges
-Semgrep declares, for a medium advisory on input this job never receives."""
-
-[[IgnoredVulns]]
-id = "GHSA-mf5v-w3w3-f6cg"
-ignoreUntil = 2026-12-06
-reason = """opentelemetry-api 1.37.0 in semgrep.txt (quadratic-time traceparent parsing in
-TraceContextTextMapPropagator.extract, fixed in 1.45.2; published 2026-11-13). Not fixable by a bump:
-Semgrep 1.185.0 (the newest on PyPI, checked 2026-11-13) still declares opentelemetry-api~=1.37.0, so
-the resolver cannot take 1.45.2 while Semgrep is installed. CI-only: Semgrep runs in a CI job over this
-repository's own files with metrics off and is handed no trace context from outside, so the
-traceparent parser never reads attacker input. Same pin as GHSA-xcq7-p3pf-p88h above; remove both when
-Semgrep raises it and the lock moves past 1.45.1."""
+#
+# None today. The last two (GHSA-xcq7-p3pf-p88h and GHSA-mf5v-w3w3-f6cg, opentelemetry-api 1.37.0 in
+# semgrep.txt) were fixed by pinning the OpenTelemetry family apart in semgrep-otel.txt (semgrep.in
+# says why and when to undo it).

@@ -10,8 +10,9 @@ the tree before it:
 - pip-audit reads the pins as written (--disable-pip), fails a pin it cannot audit (--strict), and
   must have audited every pin: requirements-bootstrap.txt had been audited as zero packages;
 - Dependency Review fails at any severity; every Dependabot entry has Renovate's release-age cooldown;
-- the Semgrep job installs its lockfile and the one package it pins apart (mcp) with --no-deps, and
-  pip check follows, tolerating only semgrep's own pin of that package;
+- the Semgrep job installs its lockfile and the packages it pins apart (mcp; the OpenTelemetry
+  family, held in part194) with --no-deps, and pip check follows, tolerating only semgrep's own pins
+  of those packages;
 - gitleaks runs its `git` command against an `[[allowlists]]` config, not the deprecated forms.
 
 HOW IT RUNS. The workflows are read as text (PyYAML is not installed in CI's test environment), and
@@ -181,13 +182,11 @@ try:
           _rc == 0 and all("%s: audited %d of its %d pinned packages" % (_f, _n, _n) in _out
                            for _f, _n in _pa_pins27.items()) and min(_pa_pins27.values()) >= 1,
           "rc=%r pins=%r out=%r" % (_rc, _pa_pins27, _out[-600:]))
-    # requirements.txt pins dnspython twice, split at Python 3.11 (CVE-2026-114605's fix needs
-    # 3.11), so on every Python exactly one of the two is not pip-audit's: it is named, left out of
-    # the count, and audited by osv-scanner. Counted as a pin, every audit read "33 of 34" and failed.
-    check("pip-audit: ...a pin whose marker is false on this Python is named and left out of the count",
-          _rc == 0 and len(_pa_off27["panel/install/requirements.txt"]) == 1
-          and all("panel/install/requirements.txt: %s ; %s does not apply on this Python" % _p in _out
-                  for _p in _pa_off27["panel/install/requirements.txt"]),
+    # requirements.txt pinned dnspython twice, split at Python 3.11, until dnspython left the lock:
+    # neither lockfile carries a marker now, so the audit counts every pin, and names none as
+    # skipped. The reader's own handling of a marker is the control above.
+    check("pip-audit: ...no pin is left out of the count as marked for another Python",
+          _rc == 0 and _pa_off27 == {_f: [] for _f in _pa_off27} and "does not apply on this Python" not in _out,
           "off=%r out=%r" % (_pa_off27, _out[-600:]))
     _rc, _out, _argv = _pa27("all-pyfail", P27_PYFAIL="1")
     check("pip-audit: ...and markers it cannot evaluate fail the step, before pip-audit runs",
@@ -485,10 +484,12 @@ _sg_inst27 = [_t for _w, _t in _ci_installs if _w == "security-code.yml"
 _sg_txt27 = _read27(".github", "ci-requirements", "semgrep.txt")
 _sg_mcp27 = _read27(".github", "ci-requirements", "semgrep-mcp.txt")
 _sg_in27 = _read27(".github", "ci-requirements", "semgrep.in")
-check("semgrep: the job installs semgrep.txt and semgrep-mcp.txt, hash-checked, wheels only, --no-deps",
+check("semgrep: the job installs semgrep.txt, semgrep-mcp.txt and semgrep-otel.txt, hash-checked, wheels "
+      "only, --no-deps",
       len(_sg_inst27) == 1
       and [_sg_inst27[0][_i + 1] for _i, _t in enumerate(_sg_inst27[0]) if _t == "-r"]
-      == [".github/ci-requirements/semgrep.txt", ".github/ci-requirements/semgrep-mcp.txt"]
+      == [".github/ci-requirements/semgrep.txt", ".github/ci-requirements/semgrep-mcp.txt",
+          ".github/ci-requirements/semgrep-otel.txt"]
       and {"--require-hashes", "--no-deps", "--only-binary"} <= set(_sg_inst27[0])
       and "-r .github/ci-requirements/semgrep-mcp.txt" in " ".join(_SG27.split()),
       repr(_sg_inst27))
@@ -523,7 +524,9 @@ check("semgrep: semgrep-mcp.txt is constrained by semgrep.txt, and pins nothing 
 _PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile leaves out"
 _SG_PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile pins apart"
 _CX27 = _read27(".github", "workflows", "complexity.yml")
-_nodeps27 = sorted(_w for _w, _t in _ci_installs if "--no-deps" in _t)
+# (The panel's own requirements.txt goes in --no-deps everywhere too, for dnspython; part193 holds
+# those installs and the check after each.)
+_nodeps27 = sorted(_w for _w, _t in _ci_installs if "--no-deps" in _t and "panel/install/requirements.txt" not in _t)
 
 
 def _follows27(text, before, step):
@@ -581,20 +584,25 @@ def _sg_pipcheck27(report):
         return _run_step27(_wf_run_block(_SG27, _SG_PC_STEP27), _env)
 
 
-# The report pip check gives with semgrep-mcp.txt installed (measured in python:3.11-slim), built
-# from the pins so a Dependabot bump of either file moves it too.
+# The report pip check gives with semgrep-mcp.txt and semgrep-otel.txt installed (measured in
+# python:3.11-slim), built from the pins so a Dependabot bump of any of the files moves it too.
+_sg_op27 = _sg_pins27(_read27(".github", "ci-requirements", "semgrep-otel.txt"))
+_SG_OTEL27 = "".join("semgrep %s has requirement %s~=1.37.0, but you have %s %s.\n" % (
+    _sg_p27.get("semgrep"), _n, _n, _sg_op27.get(_n))
+    for _n in ("opentelemetry-api", "opentelemetry-exporter-otlp-proto-http", "opentelemetry-sdk"))
 _SG_PIN27 = "semgrep %s has requirement mcp==1.29.0, but you have mcp %s.\n" % (
-    _sg_p27.get("semgrep"), _sg_mp27.get("mcp"))
+    _sg_p27.get("semgrep"), _sg_mp27.get("mcp")) + _SG_OTEL27
 _sg_ok27 = _sg_pipcheck27(_SG_PIN27)
 # A clean report means semgrep no longer pins mcp, and another requirement means it needs a
 # different one: both fail, so the split is undone or its record updated (review 1015c: any
 # `semgrep … has requirement mcp…` against the pinned version passed, and so did a clean report).
 _sg_clean27 = _sg_pipcheck27("No broken requirements found.\n")
 _sg_newer27 = _sg_pipcheck27("semgrep %s has requirement mcp>=1.31.0, but you have mcp %s.\n" % (
-    _sg_p27.get("semgrep"), _sg_mp27.get("mcp")))
+    _sg_p27.get("semgrep"), _sg_mp27.get("mcp")) + _SG_OTEL27)
 _sg_other27 = _sg_pipcheck27("semgrep %s has requirement mcp==1.29.0, but you have mcp 1.28.0.\n"
-                             % _sg_p27.get("semgrep"))
-_sg_gone27 = _sg_pipcheck27("semgrep %s requires mcp, which is not installed.\n" % _sg_p27.get("semgrep"))
+                             % _sg_p27.get("semgrep") + _SG_OTEL27)
+_sg_gone27 = _sg_pipcheck27("semgrep %s requires mcp, which is not installed.\n" % _sg_p27.get("semgrep")
+                            + _SG_OTEL27)
 _sg_dep27 = _sg_pipcheck27("mcp %s requires httpx-sse, which is not installed.\n%s"
                            % (_sg_mp27.get("mcp"), _SG_PIN27))
 check("semgrep job: pip check passes semgrep's own mcp pin, as semgrep-mcp.in records it, against the "

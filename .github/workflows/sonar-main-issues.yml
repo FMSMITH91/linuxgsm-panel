@@ -18,8 +18,10 @@ name: SonarCloud open issues (main)
 # HOW
 #   On a push to main: wait until SonarCloud lists an analysis of this commit (about 4-5 minutes
 #   after the merge; up to 15), then read main's open issues and fail on any whose key is not in
-#   KNOWN_OPEN, naming each. A KNOWN_OPEN issue that is missing fails too: the positive control that
-#   the read returned main's issues at all (and the prompt to drop it once fixed or Accepted).
+#   KNOWN_OPEN, naming each. Then read main's Accepted issues (issueStatuses=ACCEPTED) and fail,
+#   naming it, on any KNOWN_ACCEPTED issue not among them: the positive control that the reads
+#   returned main's issues at all, which still holds when nothing is open (and the prompt to update
+#   KNOWN_ACCEPTED once one is reopened or fixed). A KNOWN_OPEN issue that is missing fails too.
 #   Daily, and on demand: judge whatever commit SonarCloud analysed last, which catches a rule
 #   rollout that comes with no commit. The schedule never waits on a commit SonarCloud may not
 #   analyse again.

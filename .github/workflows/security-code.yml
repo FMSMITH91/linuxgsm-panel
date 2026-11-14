@@ -100,11 +100,10 @@ jobs:
       #     requirement) FAILS the run. Without it the pin is listed as "skipped" and the run passes.
       #   The count: the audit must have read exactly the file's pins that apply on this runner's
       #     Python. A pin dropped silently (a parser change in a pip-audit bump) fails here.
-      #     pip-audit evaluates each pin's environment marker and skips one that is false here:
-      #     requirements.txt pins dnspython 2.8.0 for Python 3.10 alone, because its fix needs 3.11.
-      #     Such a pin is named in the log and left out of the count, and osv-scanner below, which
-      #     reads every pin whatever its marker, audits it (osv-scanner.toml has its exemption;
-      #     pip-audit takes none).
+      #     pip-audit evaluates each pin's environment marker and skips one that is false here.
+      #     Neither file carries a marker today; one that did would be named in the log and left
+      #     out of the count, and osv-scanner below, which reads every pin whatever its marker,
+      #     would audit it (pip-audit takes no exemption).
       - name: Audit the panel's pins (pip-audit)
         if: steps.scope.outputs.docs_only != 'true'
         run: |
@@ -348,45 +347,52 @@ jobs:
         with:
           python-version: "3.11"
       # --no-deps: semgrep.txt is semgrep's whole closure except mcp, which semgrep-mcp.txt pins
-      # past semgrep's own ==1.29.0 (GHSA-84m7-p3x7-pcfv; fixed in 1.30.0). Together they are every
-      # package the scan needs, each hash-checked; see .github/ci-requirements/semgrep.in, which
-      # also says when to undo this.
+      # past semgrep's own ==1.29.0 (GHSA-84m7-p3x7-pcfv; fixed in 1.30.0), and the OpenTelemetry
+      # family, which semgrep-otel.txt pins past semgrep's ~=1.37.0 (GHSA-mf5v-w3w3-f6cg, fixed in
+      # 1.45.2). Together they are every package the scan needs, each hash-checked; see
+      # .github/ci-requirements/semgrep.in, which also says when to undo this.
       - if: steps.scope.outputs.docs_only != 'true'
         run: >-
           python -m pip install --quiet --require-hashes --only-binary :all: --no-deps
           -r .github/ci-requirements/semgrep.txt
           -r .github/ci-requirements/semgrep-mcp.txt
-      # --no-deps also turns off pip's check that the two files are the whole closure, so a semgrep
-      # bump that adds a dependency neither has would install and fail later as "wrote no SARIF".
-      # pip check puts it back. The one report it may make is semgrep's pin of a package the
-      # lockfile's header leaves out with --unsafe-package (mcp), against exactly the version its
-      # own file installs, and only the requirement that package's .in records (`# semgrep-pins:`):
-      # a semgrep needing another version, or no longer pinning it (the split can be undone), fails
-      # the job too, named. Anything else fails the job, named.
+          -r .github/ci-requirements/semgrep-otel.txt
+      # --no-deps also turns off pip's check that the files are the whole closure, so a semgrep
+      # bump that adds a dependency none has would install and fail later as "wrote no SARIF".
+      # pip check puts it back. The only reports it may make are semgrep's pins of packages the
+      # lockfile's header leaves out with --unsafe-package (mcp, the opentelemetry family), each
+      # against exactly the version the semgrep-*.txt holding it installs, and only the requirements
+      # that file's .in records (`# semgrep-pins:`, one line per package): a semgrep needing another
+      # version, or no longer pinning one (that split can be undone), fails the job too, named.
+      # Anything else fails the job, named.
       - name: The installed tools are the whole closure, apart from what the lockfile pins apart
         if: steps.scope.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
           dir=.github/ci-requirements
-          # name|version|requirement for each package the lockfile pins apart: the version read
-          # from its own .txt, the requirement semgrep declares for it from its .in's record.
+          # name|version|requirement|record for each package the lockfile pins apart that semgrep
+          # pins itself: the version read from the semgrep-*.txt that holds it, the requirement
+          # semgrep declares for it from that file's .in (its `# semgrep-pins:` line naming the
+          # package), and that .in's name.
           apart=""
           while read -r u; do
-            if [ -f "${dir}/semgrep-${u}.txt" ]; then
-              ver="$(awk -v u="${u}" 'index(tolower($1), u "==") == 1 { sub(/^[^=]*==/, "", $1); print $1 }' "${dir}/semgrep-${u}.txt")"
-              req="$(sed -n 's/^# semgrep-pins: *//p' "${dir}/semgrep-${u}.in" 2>/dev/null | head -n 1)"
-              apart="${apart} ${u}|${ver}|${req}"
-            fi
-          done < <(grep -oE -- '--unsafe-package=[A-Za-z0-9._-]+' "${dir}/semgrep.txt" | cut -d= -f2 | sort -u)
+            for txt in "${dir}"/semgrep-*.txt; do
+              ver="$(awk -v u="${u}" 'index(tolower($1), u "==") == 1 { sub(/^[^=]*==/, "", $1); print $1 }' "${txt}")"
+              [ -n "${ver}" ] || continue
+              req="$(sed -n 's/^# semgrep-pins: *//p' "${txt%.txt}.in" 2>/dev/null | awk -v u="${u}" 'index(tolower($1), u) == 1 && substr($1, length(u) + 1, 1) ~ /[=~<>!]/ { print $1; exit }')"
+              rec="${txt##*/}"
+              [ -z "${req}" ] || apart="${apart} ${u}|${ver}|${req}|${rec%.txt}.in"
+            done
+          done < <(grep -oE -- '--unsafe-package=[A-Za-z0-9._-]+' "${dir}/semgrep.txt" | cut -d= -f2 | tr '[:upper:]' '[:lower:]' | sort -u)
           rc=0
           out="$(python -m pip check 2>&1)" || rc=$?
           printf '%s\n' "${out}"
           bad="$(printf '%s\n' "${out}" | awk -v apart="${apart}" '
-            BEGIN { n = split(apart, a, " "); for (i = 1; i <= n; i++) { split(a[i], p, "|"); want[tolower(p[3]) ", " tolower(p[1]) " " p[2] "."] = p[1] } }
+            BEGIN { n = split(apart, a, " "); for (i = 1; i <= n; i++) { split(a[i], p, "|"); k = tolower(p[3]) ", " tolower(p[1]) " " p[2] "."; want[k] = p[1]; rec[k] = p[4] } }
             $0 == "" || $0 == "No broken requirements found." { next }
             $1 == "semgrep" && $3 == "has" && $4 == "requirement" && NF == 10 && (tolower($5) " " tolower($9) " " $10) in want { seen[tolower($5) " " tolower($9) " " $10] = 1; next }
             { print }
-            END { for (k in want) if (!(k in seen)) print "pip check no longer reports semgrep pinning " want[k] " as semgrep-" want[k] ".in records (expected: " k "): undo the split or update the record" }')"
+            END { for (k in want) if (!(k in seen)) print "pip check no longer reports semgrep pinning " want[k] " as " rec[k] " records (expected: " k "): undo the split or update the record" }')"
           if [ -n "${bad}" ]; then
             echo "::error::pip check (exit ${rc}) found requirements semgrep.txt and the files it pins apart do not satisfy (pinned apart:${apart:- none}):"
             printf '%s\n' "${bad}"

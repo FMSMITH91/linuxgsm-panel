@@ -25,6 +25,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "panel", "install"))   # app.py, manage.py, db_maintenance.py
+# _greenify_first imports eventlet before anything of the panel's, and eventlet reads this once, at
+# its first import: no greendns, so no dnspython, as app.py (panel/core/green_dns.py).
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 
 BLOCKED = []
 # What a real `sudo -n` prints when it wants a password. Callers act on the non-zero rc.

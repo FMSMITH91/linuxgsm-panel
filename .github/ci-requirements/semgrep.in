@@ -5,8 +5,15 @@
 # header names (3.11), so a bump never pins a set that cannot be installed together. Edit
 # THIS file, then regenerate (run in python:3.11-slim):
 #   pip-compile --generate-hashes --no-annotate --strip-extras --unsafe-package=mcp \
-#     --output-file=semgrep.txt semgrep.in
-# then semgrep-mcp.txt from semgrep-mcp.in (its header says how).
+#     --unsafe-package=opentelemetry-api --unsafe-package=opentelemetry-exporter-otlp-proto-common \
+#     --unsafe-package=opentelemetry-exporter-otlp-proto-http \
+#     --unsafe-package=opentelemetry-instrumentation \
+#     --unsafe-package=opentelemetry-instrumentation-requests \
+#     --unsafe-package=opentelemetry-instrumentation-threading --unsafe-package=opentelemetry-proto \
+#     --unsafe-package=opentelemetry-sdk --unsafe-package=opentelemetry-semantic-conventions \
+#     --unsafe-package=opentelemetry-util-http --output-file=semgrep.txt semgrep.in
+# then semgrep-mcp.txt from semgrep-mcp.in and semgrep-otel.txt from semgrep-otel.in (each header
+# says how).
 #
 # mcp is left out of semgrep.txt (--unsafe-package) and pinned on its own in semgrep-mcp.txt.
 # semgrep 1.183.0, the release semgrep.txt pins (1.179.0 to 1.182.x alike), declares mcp==1.29.0
@@ -21,8 +28,23 @@
 # serves. Dependabot keeps --unsafe-package (it reads it back from the header) and updates
 # semgrep-mcp.txt on its own.
 #
-# UNDO when a semgrep release allows mcp>=1.30.0: drop --unsafe-package and semgrep-mcp.in/.txt,
-# install semgrep.txt alone without --no-deps, and remove the job's pip-check step.
+# The OpenTelemetry family is left out the same way and pinned in semgrep-otel.txt. semgrep 1.183.0
+# (1.185.0, the newest, alike) declares opentelemetry-api, -sdk and -exporter-otlp-proto-http
+# ~=1.37.0, and every 1.37 api has GHSA-mf5v-w3w3-f6cg (quadratic traceparent parsing; fixed in
+# 1.45.2) and GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing; fixed in 1.45.1). The sdk requires
+# one exact api, the exporter one sdk release line, and the betas (instrumentation, semantic
+# conventions) one exact release of each other and of the api, so the family moves together: every
+# opentelemetry-* package semgrep pulls in is an --unsafe-package here, and semgrep-otel.txt pins
+# the matching set (1.45.2 with the 0.66b2 betas), its other dependencies held at semgrep.txt's
+# versions. pip check may report semgrep's three ~=1.37.0 pins against what that file installs
+# (semgrep-otel.in records them); semgrep's ~=0.58b0 instrumentation pins are met by 0.66b2.
+# semgrep scan imports the family at startup for its tracing (--trace, off by default; the job does
+# not pass it). The scan was run on both sets over this repository: identical findings.
+#
+# UNDO when a semgrep release allows mcp>=1.30.0: drop --unsafe-package=mcp and semgrep-mcp.in/.txt.
+# UNDO when a semgrep release allows opentelemetry-api>=1.45.2 (and the sdk and exporter with it):
+# drop the opentelemetry --unsafe-package options and semgrep-otel.in/.txt. With both gone, install
+# semgrep.txt alone without --no-deps, and remove the job's pip-check step.
 #
 # The same split was made once before, for PyJWT (semgrep 1.178.0 pinned a vulnerable ~=2.13.0),
 # and undone when semgrep 1.179.0 allowed pyjwt>=2.15.0.

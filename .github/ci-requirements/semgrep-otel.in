@@ -1,0 +1,25 @@
+# The OpenTelemetry packages for the Semgrep job, pinned apart from semgrep.txt: see semgrep.in for
+# why. The constraint holds every other package at semgrep.txt's version, so the files install
+# together and never disagree. Regenerate after semgrep.txt (run in python:3.11-slim):
+#   pip-compile --generate-hashes --no-annotate --strip-extras \
+#     --output-file=semgrep-otel.txt semgrep-otel.in
+-c semgrep.txt
+# The requirements semgrep.txt's semgrep declares for these, which pip check reports against the
+# versions this file installs: the Semgrep job tolerates exactly those reports, and fails when one
+# changes or goes (a semgrep release that allows opentelemetry-api>=1.45.2 means the split can be
+# undone; see semgrep.in). Read by the job's pip-check step; keep them in step with semgrep.txt.
+# Its ~=0.58b0 pins of the two instrumentation packages are met by the 0.66 betas, so pip check
+# reports nothing for them and nothing is recorded.
+# semgrep-pins: opentelemetry-api~=1.37.0
+# semgrep-pins: opentelemetry-exporter-otlp-proto-http~=1.37.0
+# semgrep-pins: opentelemetry-sdk~=1.37.0
+# 1.45.2 is the first api with GHSA-mf5v-w3w3-f6cg fixed (and GHSA-xcq7-p3pf-p88h, fixed in 1.45.1);
+# the sdk and the exporter are released with it at the same version, and 0.66b2 is the
+# instrumentation release that matches 1.45.2 (each pins opentelemetry-instrumentation==0.66b2,
+# which pins opentelemetry-semantic-conventions==0.66b2, which pins opentelemetry-api==1.45.2).
+# Below 2 and 1: semgrep is written against the 1.x api and the 0.x instrumentation.
+opentelemetry-api>=1.45.2,<2
+opentelemetry-sdk>=1.45.2,<2
+opentelemetry-exporter-otlp-proto-http>=1.45.2,<2
+opentelemetry-instrumentation-requests>=0.66b2,<1
+opentelemetry-instrumentation-threading>=0.66b2,<1

@@ -1589,7 +1589,36 @@ install_deps() {
     fi
     # No --require-hashes: pip turns hash checking on by itself whenever a requirement carries a
     # hash, and an older pinned commit's requirements.txt may carry none (requirements.in).
-    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${req_txt}"
+    if ! grep -q -- '--unsafe-package=dnspython' "${req_txt}"; then
+        # An older commit (a pinned update, or the rollback putting one back): it pins dnspython
+        # and its app.py still resolves names through eventlet's greendns, which needs it.
+        ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${req_txt}"
+        return 0
+    fi
+    # --no-deps: the file is the whole closure apart from dnspython, which eventlet's metadata
+    # still names and this panel no longer uses (requirements.in). Without it pip fetches it anyway.
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --no-deps -r "${req_txt}"
+    # A venv from before keeps the dnspython it was given. Nothing imports it now; take it out, so no
+    # advisory against it applies to this host. "Skipping ... not installed" exits 0: idempotent.
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" uninstall --quiet --yes dnspython >/dev/null 2>&1 \
+        || warn "Could not remove dnspython from ${PANEL_DIR}/venv (the panel no longer uses it)."
+    _pip_check_deps "${PANEL_DIR}/venv/bin/pip"
+}
+
+# `pip check` over a venv installed --no-deps, which turns off pip's own check that the file is the
+# whole closure. The one report allowed is eventlet's dnspython requirement, by name (requirements.in
+# says why it is left out); any other is printed and fails. The arguments are the pip command to
+# run (the venv's pip, or `python -m pip` in CI, which runs this same function), as install_deps's
+# ${as_owner} when it is set (bash scoping: the caller's local).
+_pip_check_deps() {
+    local out bad
+    out="$(${as_owner:-} "$@" check 2>&1)" || true
+    bad="$(printf '%s\n' "${out}" \
+        | grep -vxE 'No broken requirements found\.|eventlet [^ ]+ requires dnspython, which is not installed\.|' \
+        || true)"
+    [[ -z "${bad}" ]] && return 0
+    printf 'pip check: the panel venv is missing or mismatching what it needs:\n%s\n' "${bad}" >&2
+    return 1
 }
 
 # What decides whether an update reinstalls dependencies: requirements.txt, and pip's own lockfile
