@@ -71,6 +71,7 @@ def _remote_listening_ports(remote):
         _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)
     return ports
 
+
 # Games that do not listen on the port the panel holds for them, and where they do instead, as
 # offsets from it. Valheim: LinuxGSM's vhserver starts it with `-port ${port}` (2456) and, since
 # v24.3.0, -crossplay (its _default.cfg); a crossplay server was found listening on 2457/udp only
