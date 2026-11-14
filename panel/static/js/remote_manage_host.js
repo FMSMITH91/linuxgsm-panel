@@ -368,57 +368,65 @@ function renderUpdate(d){
   var cur=document.getElementById('pu-current'); if(cur) cur.textContent=(d.current_version||'?')+(d.current_sha?' · '+d.current_sha:'');
   _r20cUpdateShown=d;
   if(d.git===false && !d.check_failed){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
-  if(d.update_available){
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> '+tfHtml(d.behind===1
-        ? 'Update available: {version} ({n} commit behind).' : 'Update available: {version} ({n} commits behind).',
-        {version: {html: '<strong data-no-i18n>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong>'},
-         n: d.behind})+'</span>';  // nosemgrep
-    btn.style.display='';
-    var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
-    // Each changelog line is "<short sha> <subject>". Link the sha to the commit so the entry can
-    // actually be read — the subject alone rarely says enough to decide whether to update.
-    //
-    // The href is built from two things that cannot carry markup: a sha the regex has already
-    // proved is hex, and a repo URL matched against an https://host/owner/repo shape. Anything
-    // else falls through to the old plain-text line rather than producing a link nobody vetted.
-    var repo = (typeof d.repo_url === 'string'
-                && /^https:\/\/[a-z0-9.-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(d.repo_url))
-               ? d.repo_url : '';
-    (d.changes||[]).forEach(function(c){
-      var li=document.createElement('li');
-      // The subject starts at the first character after the sha that is not a blank, or, on a line
-      // of nothing but blanks after it, is the last blank - what `[ \t]+([\s\S]+)$` captured, with
-      // no second run-of-anything for the blanks to be handed back and forth to.
-      var m = /^([0-9a-f]{7,40})[ \t]+([^ \t][\s\S]*|[ \t])$/.exec(String(c));
-      if (repo && m) {
-        var a = document.createElement('a');
-        a.href = repo + '/commit/' + m[1];
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-        a.className = 'font-monospace';
-        a.setAttribute('data-no-i18n', '');   // a sha is never a catalog key
-        a.textContent = m[1];
-        li.appendChild(a);
-        li.appendChild(document.createTextNode(' '));
-        appendSubject(li, m[2], repo);
-      } else {
-        li.textContent = c;
-      }
-      ul.appendChild(li);
-    });
-    changes.style.display=(renderReleaseNotes(d, repo)+(d.changes||[]).length)?'':'none';
+  if(d.update_available) renderUpdateOffer(d, st, btn, changes);
+  else renderUpToDate(d, st, btn, changes);
+}
+// RegExp strings, not literals, like _r20cHexSha: a repo URL of the https://host/owner/repo shape,
+// and a changelog line "<short sha> <subject>".
+var _r20cRepoUrl=new RegExp('^https://[a-z0-9.-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$');
+var _r20cChangeLine=new RegExp('^([0-9a-f]{7,40})[ \\t]+([^ \\t][\\s\\S]*|[ \\t])$');
+// An update to install: the offer, the Update button, and the changes it brings.
+function renderUpdateOffer(d, st, btn, changes){
+  st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> '+tfHtml(d.behind===1
+      ? 'Update available: {version} ({n} commit behind).' : 'Update available: {version} ({n} commits behind).',
+      {version: {html: '<strong data-no-i18n>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong>'},
+       n: d.behind})+'</span>';  // nosemgrep
+  btn.style.display='';
+  var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
+  // Each changelog line is "<short sha> <subject>". Link the sha to the commit so the entry can
+  // actually be read — the subject alone rarely says enough to decide whether to update.
+  //
+  // The href is built from two things that cannot carry markup: a sha the regex has already
+  // proved is hex, and a repo URL matched against an https://host/owner/repo shape. Anything
+  // else falls through to the old plain-text line rather than producing a link nobody vetted.
+  var repo = (typeof d.repo_url === 'string' && _r20cRepoUrl.test(d.repo_url)) ? d.repo_url : '';
+  (d.changes||[]).forEach(function(c){ ul.appendChild(puChangeItem(c, repo)); });
+  changes.style.display=(renderReleaseNotes(d, repo)+(d.changes||[]).length)?'':'none';
+}
+// One "<short sha> <subject>" changelog line as a list item.
+function puChangeItem(c, repo){
+  var li=document.createElement('li');
+  // The subject starts at the first character after the sha that is not a blank, or, on a line
+  // of nothing but blanks after it, is the last blank - what `[ \t]+([\s\S]+)$` captured, with
+  // no second run-of-anything for the blanks to be handed back and forth to.
+  var m = _r20cChangeLine.exec(String(c));
+  if (repo && m) {
+    var a = document.createElement('a');
+    a.href = repo + '/commit/' + m[1];
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.className = 'font-monospace';
+    a.setAttribute('data-no-i18n', '');   // a sha is never a catalog key
+    a.textContent = m[1];
+    li.appendChild(a);
+    li.appendChild(document.createTextNode(' '));
+    appendSubject(li, m[2], repo);
   } else {
-    // Two states and nothing else: an update to install,
-    // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
-    // verified", not "couldn't reach the update source", not "docs, tests or tooling". Each was
-    // added back after the rule was set; the server's reasons stay in the API response.
-    // The release this panel runs is named by its date (current_version, YYYY.M.D) and its commit.
-    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(d.current_sha && d.current_version
-        ? tfHtml('You\'re up to date: release {version} ({sha}).', {version: d.current_version, sha: d.current_sha})
-        : d.current_sha ? tfHtml('You\'re up to date ({sha}).', {sha: d.current_sha})
-        : escapeHtml(t('You\'re up to date.')))+'</span>';  // nosemgrep
-    btn.style.display='none'; changes.style.display='none';
+    li.textContent = c;
   }
+  return li;
+}
+function renderUpToDate(d, st, btn, changes){
+  // Two states and nothing else: an update to install,
+  // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
+  // verified", not "couldn't reach the update source", not "docs, tests or tooling". Each was
+  // added back after the rule was set; the server's reasons stay in the API response.
+  // The release this panel runs is named by its date (current_version, YYYY.M.D) and its commit.
+  st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(d.current_sha && d.current_version
+      ? tfHtml('You\'re up to date: release {version} ({sha}).', {version: d.current_version, sha: d.current_sha})
+      : d.current_sha ? tfHtml('You\'re up to date ({sha}).', {sha: d.current_sha})
+      : escapeHtml(t('You\'re up to date.')))+'</span>';  // nosemgrep
+  btn.style.display='none'; changes.style.display='none';
 }
 function checkPanelUpdate(force){
   var st=document.getElementById('pu-status'); if(!st) return;

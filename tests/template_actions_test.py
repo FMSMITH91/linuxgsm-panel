@@ -4074,8 +4074,8 @@ check("nav.querySelector('[data-mtab-btn=\"' + h + '\"]')" in _js_code_only(_rmj
 # here: the sha comes out of a hex-only regex, and the repo URL is matched against an
 # https://host/owner/repo shape before it is used at all. Anything else falls back to the plain
 # text line — a link nobody vetted is worse than no link.
-_upd = _rh[_rh.index("function renderUpdate"):]
-_upd = _upd[:_upd.index("\n}")]
+# renderUpdate and the helpers after it that draw each state, up to checkPanelUpdate.
+_upd = _rh[_rh.index("function renderUpdate("):_rh.index("function checkPanelUpdate(")]
 check("'/commit/'" in _upd or "'/commit/' +" in _upd or "/commit/" in _upd,
       "js: the update changelog builds a commit URL")
 check("[0-9a-f]{7,40}" in _upd,
