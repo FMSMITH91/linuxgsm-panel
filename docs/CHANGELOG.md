@@ -1323,6 +1323,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **Game passwords no longer show in the live console.** Project Zomboid prints its admin password when it starts, and other games
+  echo RCON or server passwords and Steam server tokens the same way. The console, its history and the
+  Telegram and Discord console replies now show these as ******** to everyone; whoever may open the
+  server's configs still reads them there.
+
 - **Five unused Python packages are no longer installed.** invoke, simple-websocket, wsproto, h11 and pycparser were
   installed only because other packages list them for features the panel does not use. An update removes
   them from the panel's environment, so no advisory against them can apply.
