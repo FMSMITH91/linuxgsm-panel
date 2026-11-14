@@ -19,8 +19,9 @@ compares git commits, not this file.
   ready-made config for LuckPerms, CoreProtect, Plan, FiveM, SourceMod, extDB3 or MySQLOO; reset its
   password, restore it, or delete it. A host with no database server installs MariaDB from Ubuntu
   in one click, listening on that machine only; a MariaDB or MySQL server already there is used and
-  never reconfigured. A new permission, Manage databases, is given to no group until an admin
-  grants it.
+  never reconfigured; if that server stops accepting a stored admin login, the tab says so and a
+  superadmin can replace or clear it. A new permission, Manage databases, is given to no group until
+  an admin grants it.
 
 - **Backups include a server's databases.** Each backup first saves the server's databases into its
   files, an uninstall deletes them (a copy stays on the host for 30 days), and a server removed from
