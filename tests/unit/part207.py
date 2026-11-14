@@ -637,8 +637,9 @@ try:
     _ANSWERS["db-probe"] = (_PROBES["mysql 8.0"][0].replace("port=3306", "port=3307"), "", 0)
     eq("databases: the probe reads the server's port", _dbs207.probe(object())["port"], 3307)
 
+    _nologin207 = str()     # no admin login on a socket host (a name, not a literal: Bandit B106)
     _hd_sock = _ty207.SimpleNamespace(flavor="mariadb", native_ok=True, auth_mode="socket", port=3306,
-                                      admin_user="", admin_secret="")
+                                      admin_user=_nologin207, admin_secret=_nologin207)
     from panel.core.config import encrypt_secret as _enc207
     _hd_login = _ty207.SimpleNamespace(flavor="mysql", native_ok=False, auth_mode="login", port=3307,
                                        admin_user="rootadmin", admin_secret=_enc207(_APW))

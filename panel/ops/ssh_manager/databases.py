@@ -79,8 +79,10 @@ def db_name(server_id, slug):
 
 
 def new_password():
-    """A random database password: PASSWORD_LENGTH characters from `secrets`, starting with a letter,
-    with at least one upper-case letter, lower-case letter, digit and one of - _ .
+    """Return a random database password.
+
+    PASSWORD_LENGTH characters from `secrets`, starting with a letter, with at least one upper-case
+    letter, lower-case letter, digit and one of - _ .
 
     Nothing in it needs quoting in SQL, a client option file, YAML, KeyValues, INI or an oxmysql
     connection URI, and it passes MySQL's validate_password MEDIUM policy.
@@ -343,8 +345,10 @@ def _account_refusal(remote, account):
 
 
 def dump(remote, hostdb, dest, account, names):
-    """Dump `names` (one call): dest 'game' into the account's ~/panel-db-dumps, written as the
-    account, or 'archive' into the host's root-only archive. (ok, sentence).
+    """Dump `names` in one call. -> (ok, sentence).
+
+    dest 'game' writes into the account's ~/panel-db-dumps, as the account; 'archive' into the
+    host's root-only archive.
 
     A dump into the game's files first asks the root-capable-account guard: an account that can
     become root is never written as.
@@ -369,8 +373,11 @@ def _dump_answer(rc, out, dest, names):
 
 
 def restore(remote, hostdb, account, name, pw):
-    """Import ~/panel-db-dumps/<name>.sql.gz into `name`, run as `account` and signed in as the
-    database's own account (password `pw`). (ok, sentence). Asks the root-capable-account guard first."""
+    """Import ~/panel-db-dumps/<name>.sql.gz into `name`. -> (ok, sentence).
+
+    Run as `account` and signed in as the database's own account (password `pw`). Asks the
+    root-capable-account guard first.
+    """
     why = _account_refusal(remote, account)
     if why:
         return False, why
