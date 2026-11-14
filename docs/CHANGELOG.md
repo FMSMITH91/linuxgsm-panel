@@ -222,6 +222,9 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The HTTPS guide says when an IP ban keeps a visitor out.** Behind Caddy or nginx on the same host the firewall drops a banned
+  address; behind a Cloudflare Tunnel or Tailscale Funnel the panel refuses it itself, on the panel only.
+
 - **The dashboard's server list fits a phone or tablet.** Below 992px each server is a compact card:
   name, game and status, then the player count, map and connect address, then every action in one
   row of large buttons, with nothing to scroll sideways. On a very narrow screen, Console, Files,
