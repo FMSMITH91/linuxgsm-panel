@@ -2139,6 +2139,12 @@ def db_sql_pw(pw):
     return pw
 
 
+def db_plugin_check(flavor, plugin):
+    """Refuse a password type the server cannot take: MariaDB makes native passwords only."""
+    if flavor == "mariadb" and plugin != "native":
+        raise VerbError("MariaDB accounts are made with native passwords")
+
+
 def db_identified(flavor, plugin, pw):
     """The IDENTIFIED clause for a new or changed password.
 
@@ -2146,9 +2152,8 @@ def db_identified(flavor, plugin, pw):
     not loaded by default. MySQL takes native where the server still offers it (8.0, or 8.4 with
     mysql_native_password=ON) and caching_sha2_password otherwise (plugin_for decides).
     """
+    db_plugin_check(flavor, plugin)
     if flavor == "mariadb":
-        if plugin != "native":
-            raise VerbError("MariaDB accounts are made with native passwords")
         return "IDENTIFIED VIA mysql_native_password USING PASSWORD('%s')" % db_sql_pw(pw)
     return "IDENTIFIED WITH %s BY '%s'" % (
         "mysql_native_password" if plugin == "native" else "caching_sha2_password", db_sql_pw(pw))
@@ -2411,7 +2416,7 @@ def _db_drop_remote(a):
 
 def _db_create_remote(a):
     """db-create: flavor auth name plugin maxconn. Never adopts; cleans up after itself."""
-    db_identified(a[0], a[3], "x")       # refuse MariaDB + sha2 before anything runs
+    db_plugin_check(a[0], a[3])          # refuse MariaDB + sha2 before anything runs
     return (_db_prelude(a[0], a[1])
             + "x=$(cl -e %s </dev/null) || exit 1; "
             '[ "$x" = 0 ] || { echo "panel-db: that database or account already exists"; exit 3; }; '
@@ -2421,7 +2426,7 @@ def _db_create_remote(a):
 
 def _db_password_remote(a):
     """db-password: flavor auth name plugin. The ALTER USER statements arrive on stdin."""
-    db_identified(a[0], a[3], "x")
+    db_plugin_check(a[0], a[3])
     return _db_prelude(a[0], a[1]) + "cl && echo changed"
 
 
