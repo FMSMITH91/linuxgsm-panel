@@ -1298,6 +1298,10 @@ compares git commits, not this file.
 
 ### Security
 
+- **Five unused Python packages are no longer installed.** invoke, simple-websocket, wsproto, h11 and pycparser were
+  installed only because other packages list them for features the panel does not use. An update removes
+  them from the panel's environment, so no advisory against them can apply.
+
 - **dnspython is no longer installed.** The panel now looks up host names with the operating system's own
   resolver on a worker thread, so dnspython and its advisories (GHSA-vvf4-9x63-8xvv) no longer apply on
   any supported Ubuntu, 22.04 included. An update removes it from the panel's environment.

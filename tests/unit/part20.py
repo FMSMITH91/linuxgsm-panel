@@ -510,12 +510,13 @@ def _p20_dependencies():
 
 
 def _p20_real_pins():
+    # 29 pins since invoke, simple-websocket, wsproto, h11 and pycparser left the lock (requirements.in).
     try:
         real = HD._pins()
     except (OSError, ValueError) as exc:          # a failed parse fails the check below, by name
         real = [("raised", type(exc).__name__, None)]
     check("debug report deps: the checkout's requirements.txt parses into its pins",
-          len(real) >= 30 and any(n == "greenlet" and v and m is None for n, v, m in real),
+          len(real) >= 25 and any(n == "greenlet" and v and m is None for n, v, m in real),
           repr(real[:3]))
 
 

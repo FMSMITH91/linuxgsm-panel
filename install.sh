@@ -1595,27 +1595,45 @@ install_deps() {
         ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${req_txt}"
         return 0
     fi
-    # --no-deps: the file is the whole closure apart from dnspython, which eventlet's metadata
-    # still names and this panel no longer uses (requirements.in). Without it pip fetches it anyway.
+    # --no-deps: the file is the whole closure apart from the packages its header leaves out by name
+    # (--unsafe-package), which other packages' metadata still names and the panel never imports
+    # (requirements.in says why, for each). Without it pip fetches them anyway.
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --no-deps -r "${req_txt}"
-    # A venv from before keeps the dnspython it was given. Nothing imports it now; take it out, so no
-    # advisory against it applies to this host. "Skipping ... not installed" exits 0: idempotent.
-    ${as_owner} "${PANEL_DIR}/venv/bin/pip" uninstall --quiet --yes dnspython >/dev/null 2>&1 \
-        || warn "Could not remove dnspython from ${PANEL_DIR}/venv (the panel no longer uses it)."
+    # A venv from before keeps what it was given then. Nothing imports those now; take them out, so
+    # no advisory against them applies to this host. One pip run for the lot; "Skipping ... not
+    # installed" exits 0, so it is idempotent.
+    local -a left_out=()
+    mapfile -t left_out < <(_lock_left_out "${req_txt}")
+    if [[ "${#left_out[@]}" -gt 0 ]]; then
+        ${as_owner} "${PANEL_DIR}/venv/bin/pip" uninstall --quiet --yes "${left_out[@]}" >/dev/null 2>&1 \
+            || warn "Could not remove ${left_out[*]} from ${PANEL_DIR}/venv (the panel does not use them)."
+    fi
     _pip_check_deps "${PANEL_DIR}/venv/bin/pip"
 }
 
+# The names a pip-compile lockfile's header leaves out on purpose (--unsafe-package), one per line.
+# Only from comment lines, and only names pip itself could spell, so nothing else reaches pip's argv.
+# Never fails: install_deps runs under `set -e`.
+_lock_left_out() {
+    { grep -E '^#' -- "$1" 2>/dev/null || true; } \
+        | { grep -oE -- '--unsafe-package[= ][A-Za-z0-9._-]+' || true; } \
+        | sed -E 's/^--unsafe-package[= ]//' | sort -u
+}
+
 # `pip check` over a venv installed --no-deps, which turns off pip's own check that the file is the
-# whole closure. The one report allowed is eventlet's dnspython requirement, by name (requirements.in
-# says why it is left out); any other is printed and fails. The arguments are the pip command to
-# run (the venv's pip, or `python -m pip` in CI, which runs this same function), as install_deps's
-# ${as_owner} when it is set (bash scoping: the caller's local).
+# whole closure. The reports allowed are the requirements requirements.txt leaves out, each as
+# `requirer:package` below and only from that requirer (requirements.in says why each is left out);
+# any other is printed and fails. wsproto and h11 are left out too, but only simple-websocket wants
+# them, and pip check reads only installed packages' requirements. The arguments are the pip command
+# to run (the venv's pip, or `python -m pip` in CI, which runs this same function), as
+# install_deps's ${as_owner} when it is set (bash scoping: the caller's local).
 _pip_check_deps() {
-    local out bad
+    local out bad pair allowed=""
+    for pair in eventlet:dnspython paramiko:invoke python-engineio:simple-websocket cffi:pycparser; do
+        allowed+="${pair%%:*} [^ ]+ requires ${pair#*:}, which is not installed\\.|"
+    done
     out="$(${as_owner:-} "$@" check 2>&1)" || true
-    bad="$(printf '%s\n' "${out}" \
-        | grep -vxE 'No broken requirements found\.|eventlet [^ ]+ requires dnspython, which is not installed\.|' \
-        || true)"
+    bad="$(printf '%s\n' "${out}" | grep -vxE "No broken requirements found\\.|${allowed}" || true)"
     [[ -z "${bad}" ]] && return 0
     printf 'pip check: the panel venv is missing or mismatching what it needs:\n%s\n' "${bad}" >&2
     return 1

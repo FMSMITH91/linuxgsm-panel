@@ -14,9 +14,9 @@ Held here:
   from another native thread and from the hub greenlet itself runs inline instead of deadlocking.
 * install.sh's install_deps (cut out and run under bash with a recording pip): a lockfile that
   leaves dnspython out is installed --no-deps, dnspython is uninstalled from the venv (an update's
-  venv had it), and pip check may report only eventlet's dnspython requirement; anything else fails,
-  named. An older lockfile (a pinned update, the rollback) installs as before. All of it as the
-  panel user on a root run.
+  venv had it), and pip check may report only the requirements the lockfile leaves out (part196
+  holds the other five); anything else fails, named. An older lockfile (a pinned update, the
+  rollback) installs as before. All of it as the panel user on a root run.
 * CI: every workflow step installing panel/install/requirements.txt does it --no-deps and then runs
   .github/scripts/panel_pip_check.sh, which runs install.sh's own check and refuses an importable
   dnspython; the fuzz image installs --no-deps and bundles no dns.
@@ -411,7 +411,7 @@ def _deps193(tag, req_text, **extra):
     _os193.chmod(pip, 0o700)  # nosec B103
     env = dict(_os193.environ, PANEL_DIR=pd, PANEL_USER="lgsmpanel", P193_LOG=log, **extra)
     script = ("set -euo pipefail\n" + _STUBS193 + _fn193(_INS193, "install_deps")
-              + _fn193(_INS193, "_pip_check_deps") + "install_deps\n")
+              + _fn193(_INS193, "_pip_check_deps") + _fn193(_INS193, "_lock_left_out") + "install_deps\n")
     r = _sp193.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, env=env,  # nosec B603 B607
                    cwd=_TMP193, stdin=_sp193.DEVNULL)
     try:
@@ -517,13 +517,13 @@ def _ppc193(root=_root, **extra):
 
 _rc, _out = _ppc193(P193_CHECK=_TOLERATED193, P193_CHECK_RC="1")
 check("panel_pip_check.sh: install.sh's check passes eventlet's dnspython line, with dnspython absent",
-      _rc == 0 and "dnspython is not installed" in _out, "rc=%r %s" % (_rc, _out[-300:]))
+      _rc == 0 and "none of dnspython " in _out and "is installed." in _out, "rc=%r %s" % (_rc, _out[-300:]))
 _rc, _out = _ppc193(P193_CHECK="paramiko 4.0.0 requires bcrypt, which is not installed.", P193_CHECK_RC="1")
 check("panel_pip_check.sh: ...fails on any other report, named", _rc != 0
       and "paramiko 4.0.0 requires bcrypt" in _out and "::error::" in _out, "rc=%r %s" % (_rc, _out[-300:]))
 _rc, _out = _ppc193(P193_CHECK=_TOLERATED193, P193_CHECK_RC="1", P193_DNS_RC="0")
 check("panel_pip_check.sh: ...and fails when dnspython is importable", _rc != 0
-      and "dnspython is installed" in _out, "rc=%r %s" % (_rc, _out[-300:]))
+      and "is installed in this job's Python" in _out, "rc=%r %s" % (_rc, _out[-300:]))
 _fake193 = _os193.path.join(_TMP193, "fakeroot")
 _os193.makedirs(_os193.path.join(_fake193, ".github", "scripts"))
 _sh193.copy(_os193.path.join(_root, ".github", "scripts", "panel_pip_check.sh"),
