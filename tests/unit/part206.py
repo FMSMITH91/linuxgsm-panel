@@ -336,6 +336,26 @@ def _fctr_cases206(sid, home, admin):
     _R206["f_list_bad"] = _fctr_list_json206(home)
 
 
+def _fctr_running206(sid, home, admin):
+    """GET and POST while a process of the account runs serverfiles/bin/x64/factorio (a copy of python)."""
+    import sys as _sys206
+    exe = _os206.path.join(home, "serverfiles", "bin", "x64", "factorio")
+    _os206.makedirs(_os206.path.dirname(exe), exist_ok=True)
+    _shutil206.copy2(_os206.path.realpath(_sys206.executable), exe)
+    path = _os206.path.join(home, "serverfiles", "mods", "mod-list.json")
+    before = _read206(path)
+    proc = _sp206.Popen([exe, "-S", "-c", "import time; time.sleep(60)"],  # nosec B603 - a stand-in game in a temp home
+                        stdout=_sp206.DEVNULL, stderr=_sp206.DEVNULL)
+    try:
+        running = _p9_json(admin.get("/api/server/%d/factorio-mods" % sid)).get("running")
+        post = _fctr_post206(admin, sid, "krastorio2", False)[1]
+    finally:
+        proc.kill()
+        proc.wait()
+    stopped = _p9_json(admin.get("/api/server/%d/factorio-mods" % sid)).get("running")
+    return running, post.get("success"), post.get("message", ""), _read206(path) == before, stopped
+
+
 def _fctr_refusals206(sid, home, admin):
     uid, gid = _ro_user206()
     try:
@@ -352,6 +372,7 @@ def _fctr_refusals206(sid, home, admin):
     _R206["f_where"] = _p9_json(admin.get("/api/server/%d/factorio-mods" % sid)).get("where")
     _R206["f_elsewhere"] = _fctr_post206(admin, sid, "krastorio2", False)[1].get("message")
     _touch206(cfg, 'port="34197"\n')
+    _R206["f_running"] = _fctr_running206(sid, home, admin)
     _os206.remove(_os206.path.join(home, "serverfiles", "mods", "mod-list.json"))
     _R206["f_missing"] = (_p9_json(admin.get("/api/server/%d/factorio-mods" % sid)).get("mod_list"),
                           _fctr_post206(admin, sid, "krastorio2", False)[1].get("message"))
@@ -704,3 +725,16 @@ if _out206 is not None:
           "can't tell which world folder" in _out206.get("mcWorld", "") and "it is empty" in _out206.get("mcWorld", ""),
           repr(_out206))
 eq("game mods: nothing reached a real transport", _P9_TRIPPED[_trips206:], [])
+
+_fr206 = _R206.get("f_running") or (None,) * 5
+check("factorio mods: while the game runs (a process of the account running serverfiles/bin/*/factorio) the card "
+      "says so and a change is refused, the list untouched (Factorio writes it back when it stops); stopped, it is not",
+      _fr206[0] is True and _fr206[1] is False and "Stop the server first" in _fr206[2] and _fr206[3] is True
+      and _fr206[4] is False, repr(_fr206))
+check("datapack card: a Paper build that writes no version_history.json is read from paper.jar's version.json, "
+      "version_history.json still first",
+      _mp206.java_mc_version({"paper": None, "paperjar": '{"id": "26.3"}'}, "pmc") == "26.3"
+      and _mp206.java_mc_version({"paper": '{"currentVersion": "1.21.4-212-abc (MC: 1.21.4)"}',
+                                  "paperjar": '{"id": "26.3"}'}, "pmc") == "1.21.4"
+      and _mp206.java_mc_version({"paper": None, "paperjar": None}, "pmc") is None
+      and 'unzip -p "$sf/paper.jar" version.json' in _mp206.java_sh("p206u"))

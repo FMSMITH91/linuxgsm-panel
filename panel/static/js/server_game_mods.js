@@ -175,6 +175,8 @@
     if (d.where === 'mod-directory') return _tr('This server\'s start line passes --mod-directory, so the panel does not change its mods here.');
     if (d.mod_list === 'missing') return _tr('Factorio writes mods/mod-list.json the first time the server starts. Start it once, then change mods here.');
     if (d.mod_list === 'bad') return _tr('mods/mod-list.json isn\'t the list Factorio writes, so the panel won\'t change it.');
+    // Factorio writes its mod list back when it stops, so a change made while it runs would be undone.
+    if (d.running) return _tr('Stop the server to change its mods: Factorio writes its mod list back when it stops.');
     return '';
   }
 

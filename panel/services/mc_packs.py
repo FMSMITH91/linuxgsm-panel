@@ -86,6 +86,9 @@ def java_sh(user):
             + _file_sh("F:paper", '"$sf/version_history.json"')
             + "printf 'F:vanilla '; [ -n \"$sf\" ] && unzip -p \"$sf/minecraft_server.jar\" version.json 2>/dev/null "
             "| head -c %d | base64 | tr -d '\\n'; printf '\\n'; " % _FILE_MAX
+            # Paper's jar carries the same version.json: read when version_history.json is not written.
+            + "printf 'F:paperjar '; [ -n \"$sf\" ] && unzip -p \"$sf/paper.jar\" version.json 2>/dev/null "
+            "| head -c %d | base64 | tr -d '\\n'; printf '\\n'; " % _FILE_MAX
             + '[ -n "$sf" ] && { ' + _dirs_sh('"$sf"', "w", _JAVA_WORLD_SH) + "}; "
             + "printf '%s\\n' " + _E)
 
@@ -232,16 +235,25 @@ def _java_files_problem(files, game_type):
     return _wr.bukkit_problem(files.get("bukkit") or "")
 
 
+def _jar_id(text):
+    """The "id" of a server jar's version.json text, or None."""
+    try:
+        data = json.loads(text or "")
+    except ValueError:
+        data = None
+    return data.get("id") if isinstance(data, dict) else None
+
+
 def java_mc_version(files, game_type):
-    """The server's Minecraft release (N.N or N.N.N), or None when it cannot be told."""
+    """The server's Minecraft release (N.N or N.N.N), or None when it cannot be told.
+
+    Paper: its version_history.json, else the version.json inside paper.jar (a build that writes no
+    version_history.json, seen on the test host with Paper 26.3-249).
+    """
     if game_type == "pmc":
-        v = _mr.paper_mc_version(files.get("paper") or "")
+        v = _mr.paper_mc_version(files.get("paper") or "") or _jar_id(files.get("paperjar"))
     else:
-        try:
-            data = json.loads(files.get("vanilla") or "")
-        except ValueError:
-            data = None
-        v = data.get("id") if isinstance(data, dict) else None
+        v = _jar_id(files.get("vanilla"))
     return v if _mr.valid_mc_version(v) else None
 
 

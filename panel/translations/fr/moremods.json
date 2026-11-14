@@ -76,5 +76,7 @@
   "This datapack's file is larger than the 50 MB the panel will install.": "Le fichier de ce datapack dépasse les 50 Mo que le panneau installe.",
   "server.properties could not be read": "server.properties n'a pas pu être lu",
   "bukkit.yml could not be read": "bukkit.yml n'a pas pu être lu",
-  "level-name names one of the server's own folders": "level-name désigne l'un des dossiers propres au serveur"
+  "level-name names one of the server's own folders": "level-name désigne l'un des dossiers propres au serveur",
+  "Stop the server to change its mods: Factorio writes its mod list back when it stops.": "Arrêtez le serveur pour changer ses mods : Factorio réécrit sa liste de mods à l'arrêt.",
+  "Stop the server first: Factorio writes its mod list back when it stops, which would undo this change. Stop it, change the mods, then start it — nothing has been changed.": "Arrêtez d'abord le serveur : Factorio réécrit sa liste de mods à l'arrêt, ce qui annulerait ce changement. Arrêtez-le, changez les mods, puis démarrez-le — rien n'a été modifié."
 }

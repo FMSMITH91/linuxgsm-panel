@@ -19,7 +19,10 @@ THE CHANGE sets one entry's `enabled` in mod-list.json and keeps everything else
 keys, other entries, their order), written as the game account through the file editor's own write
 (ssh_manager.write_file: inside the home, atomic, the file's mode kept). base is never turned off.
 The read and the write run under the instance's config lock, so two changes cannot cross. The
-server reads the file when it starts: a restart applies it.
+server reads the file when it starts, and WRITES IT BACK when it stops (measured on the test host:
+a change made while it ran was undone by the next stop, a restart included). So a change is refused
+while the server runs: the same read looks for a process of the account running
+serverfiles/bin/*/factorio. Stopped, changed, started: the change holds.
 
 Downloading from the Factorio mod portal needs a player's username and token, so the panel does not:
 a mod is uploaded through the file manager.
@@ -50,7 +53,9 @@ BAD_LIST = "mods/mod-list.json isn't the list Factorio writes, so the panel won'
 BASE_ON = "The base game can't be turned off."
 ELSEWHERE = ("This server's start line passes --mod-directory, so its mods are somewhere the panel does not "
              "look. Change them there — nothing has been changed.")
-REASONS = (UNREAD, NOT_A_MOD, NO_LIST, BAD_LIST, BASE_ON, ELSEWHERE)
+RUNNING = ("Stop the server first: Factorio writes its mod list back when it stops, which would undo this "
+           "change. Stop it, change the mods, then start it — nothing has been changed.")
+REASONS = (UNREAD, NOT_A_MOD, NO_LIST, BAD_LIST, BASE_ON, ELSEWHERE, RUNNING)
 
 
 def supported(game_type):
@@ -80,6 +85,9 @@ def list_sh(user):
             + "printf '%s\\n' " + _LE + "; else printf 'N\\n'; fi; "
             + '[ -n "$md" ] && find -P "$md" -mindepth 1 -maxdepth 1 \\( -type f -name "*.zip" -o -type d \\) '
             + "! -name '*[!A-Za-z0-9._-]*' -printf '%%y %%f\\n' 2>/dev/null | head -n %d; " % MAX_LISTED
+            # The game running: a process of this account whose program is serverfiles/bin/*/factorio.
+            + '[ -n "$sf" ] && for p in /proc/[0-9]*; do [ -O "$p" ] || continue; '
+            + 'case "$(readlink "$p/exe" 2>/dev/null)" in "$sf"/bin/*/factorio) printf "R\\n"; break ;; esac; done; '
             + "printf '%s\\n' " + _E)
 
 
@@ -110,7 +118,7 @@ def _decoded_list(body):
 
 
 def parse_listing(out):
-    """({name: [entries]}, mod-list text or "" when absent) from list_sh's output, or None."""
+    """({name: [entries]}, mod-list text or "" when absent, whether the game runs) from list_sh's output, or None."""
     body = out or ""
     i, j = body.find(_B), body.find(_E)
     if i == -1 or j < i:
@@ -125,7 +133,7 @@ def parse_listing(out):
         mod = _mod_of(kind, entry) if kind in ("f", "d") else None
         if mod:
             files.setdefault(mod[0], []).append(mod[1])
-    return files, text
+    return files, text, any(line.strip() == "R" for line in body.splitlines())
 
 
 def mod_list(text):
@@ -161,7 +169,7 @@ def _elsewhere(texts):
 
 
 def _read(server, user, selfname):
-    """(config texts, files, mod-list text) from ONE command as the account, or None."""
+    """(config texts, files, mod-list text, running) from ONE command as the account, or None."""
     if not _smc.game_idents_ok(user, selfname):
         return None
     sh = _smf.lgsm_cfg_texts_sh(user, selfname) + list_sh(user)
@@ -175,15 +183,16 @@ def _read(server, user, selfname):
 def read(server, user, selfname):
     """The card's state, or None when the host did not answer.
 
-    {"mods": rows, "mod_list": "ok" | "missing" | "bad", "where": "" | "mod-directory", "dir": MODS_DIR}.
+    {"mods": rows, "mod_list": "ok" | "missing" | "bad", "where": "" | "mod-directory", "dir": MODS_DIR,
+    "running": whether the game runs (changes are refused then)}.
     """
     got = _read(server, user, selfname)
     if got is None:
         return None
-    texts, files, text = got
+    texts, files, text, running = got
     data = mod_list(text) if text else None
     return {"mods": rows(files, data), "mod_list": "missing" if not text else ("ok" if data else "bad"),
-            "where": "mod-directory" if _elsewhere(texts) else "", "dir": MODS_DIR}
+            "where": "mod-directory" if _elsewhere(texts) else "", "dir": MODS_DIR, "running": running}
 
 
 def with_enabled(data, name, enabled):
@@ -223,8 +232,8 @@ def set_enabled(server, user, selfname, name, enabled):
         got = _read(server, user, selfname)
         if got is None:
             return False, UNREAD, False, ""
-        texts, files, text = got
-        why, data = _refusal(texts, files, text, name, enabled)
+        texts, files, text, running = got
+        why, data = (RUNNING, None) if running else _refusal(texts, files, text, name, enabled)
         if why:
             return False, why, False, ""
         before = next((r["enabled"] for r in rows(files, data) if r["name"] == name), "")
