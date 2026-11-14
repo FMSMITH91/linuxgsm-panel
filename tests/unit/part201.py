@@ -162,6 +162,7 @@ def _host201(owner_uids, answer=True, user=None):
                 if data and answer:
                     srv.sendto(bytes.fromhex(_REAL201), addr)
             except OSError:
+                # The stand-in server's socket closes when the probe is done: nothing to answer.
                 pass
         th = _th201.Thread(target=_serve, daemon=True)
         th.start()
