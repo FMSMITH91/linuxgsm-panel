@@ -177,6 +177,19 @@ _ri193 = _sp193.run([_sys193.executable, "-c", _INIT_PROBE193, _root], capture_o
 check("panel/__init__: a tool importing a panel module before eventlet gets greendns off too (dns refused)",
       _ri193.returncode == 0 and _ri193.stdout.split() == ["NO-GREENDNS"],
       "rc=%r out=%r err=%r" % (_ri193.returncode, _ri193.stdout, _ri193.stderr[-600:]))
+# Importing the package (and green_dns itself) must not import eventlet: only an entry point decides
+# when eventlet comes in and when it patches (app.py's monkey_patch() has to come first there).
+_PKG_PROBE193 = _BLOCK_DNS193 + r'''
+sys.path.insert(0, sys.argv[1])
+import panel, panel.core.green_dns
+print("EVENTLET" if any(m == "eventlet" or m.startswith("eventlet.") for m in sys.modules) else "NO-EVENTLET",
+      os.environ.get("EVENTLET_NO_GREENDNS"))
+'''
+_rp193 = _sp193.run([_sys193.executable, "-c", _PKG_PROBE193, _root], capture_output=True, text=True,  # nosec B603
+                    timeout=120, env=_env193, cwd=_TMP193, stdin=_sp193.DEVNULL)
+check("panel/__init__ and green_dns: importing them imports no part of eventlet (they only set the variable)",
+      _rp193.returncode == 0 and _rp193.stdout.split() == ["NO-EVENTLET", "yes"],
+      "rc=%r out=%r err=%r" % (_rp193.returncode, _rp193.stdout, _rp193.stderr[-300:]))
 _rc193 = _sp193.run([_sys193.executable, "-c", _BLOCK_DNS193 + "import eventlet\n"], capture_output=True,  # nosec B603
                     text=True, timeout=120, env=_env193, cwd=_TMP193, stdin=_sp193.DEVNULL)
 check("greendns off: ...without the variable, eventlet itself fails to import once dns is refused, which "
