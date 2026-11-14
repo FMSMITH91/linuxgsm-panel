@@ -30,8 +30,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
-from panel.services import (console_secrets as _console_secrets, host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data,
-                            lgsm_players as _lgp, schedule_chains as _sch)
+from panel.services import (console_secrets as _csec, host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
 from itertools import count, groupby
 import re
 import secrets
@@ -662,7 +661,7 @@ def _emit_console_lines(socketio, gs, server_id, out, at=None):
     """
     if out:
         # Masked after cleaning, as every console view masks it (services/console_secrets).
-        out = _console_secrets.mask_for(gs, _clean_console_text(out))
+        out = _csec.mask_for(gs, _clean_console_text(out))
     if out:
         # Parsed per line: a LinuxGSM-stamped line carries its OWN time, which is more accurate
         # than the moment the poller happened to read it. `ts` is when the panel READ these
@@ -841,7 +840,7 @@ def _placed_rows(gs, lines, since, since_ok):
     gap = since is not None and not since_ok
     if len(lines) > _CONSOLE_LINES_MAX:
         lines, gap = lines[-_CONSOLE_LINES_MAX:], gap or since_ok
-    rows = (_console_rows(_console_secrets.mask_for(gs, _clean_console_text("\n".join(lines))).split("\n"),
+    rows = (_console_rows(_csec.mask_for(gs, _clean_console_text("\n".join(lines))).split("\n"),
                           _host_timezone_cached(gs.remote)) if lines else [])
     return rows, gap
 
@@ -1686,7 +1685,7 @@ def _read_console_window(remote, gs, want, host_tz):
             # (_console_place_read keeps the same rule): kept here as well, the fragment showed
             # once now and again as the start of the finished line — the page-load duplicate.
             body = body.rpartition("\n")[0]
-        lines = _console_rows(_console_secrets.mask_for(gs, _clean_console_text(body)).split("\n"), host_tz) if framed else []
+        lines = _console_rows(_csec.mask_for(gs, _clean_console_text(body)).split("\n"), host_tz) if framed else []
     except Exception:
         lines, whole = [], False
     return readable, lines, (at if readable else None), whole
