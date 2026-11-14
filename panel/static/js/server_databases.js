@@ -32,7 +32,6 @@ var DB_STATE = {
     m.textContent = text || '';
     m.className = 'small mt-1 ' + (cls || 'text-secondary');
   }
-  function getJson(url) { return fetch(url, {cache: 'no-store'}).then(function (r) { return r.json(); }); }
   function postJson(url, body) {
     return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})})
       .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d || {}}; }); });
@@ -189,7 +188,7 @@ var DB_STATE = {
     var pw = st.pw[db.id];
     card.appendChild(kvRow(T('Password'), pw || st.d.pw_mark, [
       iconButton(pw ? 'bi-eye-slash' : 'bi-eye', pw ? T('Hide the password') : T('Show the password'), 'dbReveal', [db.id], 'fpm-edit'),
-      iconButton('bi-clipboard', T('Copy the password'), 'dbCopyPw', [db.id], 'fpm-edit')]));
+      iconButton('bi-clipboard', T('Copy the password'), 'dbCopy', [db.id, 'password'], 'fpm-edit')]));
     card.appendChild(snippetBlock(db));
     var foot = node('div', 'd-flex flex-wrap gap-2 mt-2 align-items-center');
     foot.appendChild(textButton(T('Reset password'), 'bi-key', 'dbReset', [db.id]));
@@ -225,7 +224,7 @@ var DB_STATE = {
   window.dbLoad = function (force) {
     if (!el('db-card') || (st.loaded && !force)) return Promise.resolve(false);
     st.loaded = true;
-    return getJson(api()).then(function (d) {
+    return fetch(api(), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (d) {
       if (!d || d.error || !d.can) { show('db-loading', false); say((d && d.error) || T('Could not load databases.'), 'text-danger'); return false; }
       draw(d);
       return true;
@@ -295,12 +294,13 @@ var DB_STATE = {
                         function (e) { say('✗ ' + (e && e.message || T('Failed')), 'text-danger'); return false; });
   }
 
+  // One value of a database; the password is fetched first (audited) unless the page already has it.
   window.dbCopy = function (id, field) {
     var db = row(id);
+    if (field === 'password') return copyLater(password(id), T('Password copied'));
     if (db && db[field] != null) window.copyText(String(db[field]), T('Copied'));
   };
 
-  window.dbCopyPw = function (id) { return copyLater(password(id), T('Password copied')); };
 
   window.dbCopySnippet = function (id) {
     var db = row(id);
