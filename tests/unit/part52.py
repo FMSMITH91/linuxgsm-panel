@@ -238,15 +238,15 @@ def _batch_map52():
     if not _shutil52.which("jq"):
         skip("player batch: a long map name is cut in jq", "no jq on this machine")
         return
-    reply = '{"name":"n","map":"%s","players":[],"maxplayers":4}' % ("m" * 5000)
-    flt = _cron52._batch_target_filter(7)
+    reply = '{"k":7,"r":{"name":"n","map":"%s","players":[],"maxplayers":4}}' % ("m" * 5000)
+    flt = _cron52._batch_target_filter()
     p = _sp52.run(["jq", "-c", flt], input=reply, capture_output=True, text=True, timeout=30)  # nosec B603 B607 - jq on a fixed filter
     out = p.stdout.strip()
     d = _cron52._batch_reply(out)
     check("player batch: a game-supplied map of 5000 chars is cut in jq, so the reply stays one "
           "short line (under PIPE_BUF)",
           d is not None and d.get("p") == "m" * 120 and len(out) < 512, repr(out[:200]))
-    p = _sp52.run(["jq", "-c", flt], input='{"map":5,"players":[]}', capture_output=True, text=True,
+    p = _sp52.run(["jq", "-c", flt], input='{"k":7,"r":{"map":5,"players":[]}}', capture_output=True, text=True,
                   timeout=30)  # nosec B603 B607 - jq on a fixed filter
     d = _cron52._batch_reply(p.stdout.strip())
     check("player batch: ...and a map that is not text is still no map (_map_text), not one made "

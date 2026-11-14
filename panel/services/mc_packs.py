@@ -257,6 +257,25 @@ def java_mc_version(files, game_type):
     return v if _mr.valid_mc_version(v) else None
 
 
+def paper_jar_version(server, user):
+    """The Minecraft release in the version.json inside a Paper server's paper.jar, or None.
+
+    For a Paper build that writes no version_history.json (Paper 26.3 on the test host): the
+    plugin browser read only that file and showed "version unknown". One read as the game account,
+    of the same file java_sh reads, under the same serverfiles check.
+    """
+    if not _smc.game_idents_ok(user):
+        return None
+    sh = (_sf_sh(user) + '[ -n "$sf" ] && unzip -p "$sf/paper.jar" version.json 2>/dev/null | head -c %d'
+          % _FILE_MAX)
+    try:
+        out, _, _ = _smc.shell_as_game_user(server, user, sh, timeout=15)
+    except Exception:
+        return None
+    v = _jar_id(out)
+    return v if _mr.valid_mc_version(v) else None
+
+
 def read_java(server, user, selfname, game_type):
     """The datapack card's state, or None when the host did not answer.
 

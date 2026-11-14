@@ -1604,6 +1604,24 @@ def _gamedig_type(game_type, query_type=None):
     return qt or _core.GAMEDIG_TYPE.get(game_type or "", "")
 
 
+# gamedig's socketTimeout (milliseconds to wait for one packet; its default is 2000) for a type
+# whose default wait is pure waste. gamedig's `minecraft` type runs three queries at once (the TCP
+# Server List Ping, a GameSpy3 UDP query and a Bedrock RakNet ping) and answers only once all three
+# have settled. A Java server answers the first, and the UDP two only with enable-query on, so every
+# query waited out the full 2 s: measured on a host's own address, 2.35 s per query, 0.89 s with
+# 500. The query is sent from the game's own host to its own address, so 500 ms per packet is long.
+GAMEDIG_SOCKET_TIMEOUT_MS = {"minecraft": 500}
+
+
+def gamedig_target(server, gdtype, port):
+    """The `<address>:<port>` words of a `gamedig --type <gdtype>` command, plus any socketTimeout.
+
+    The option follows the address: gamedig's option parser (minimist) reads it anywhere.
+    """
+    ms = GAMEDIG_SOCKET_TIMEOUT_MS.get(gdtype or "")
+    return "%s:%d%s" % (_core._gamedig_host(server), int(port), " --socketTimeout %d" % ms if ms else "")
+
+
 def _last_line(out):
     """The last line of `out`, stripped — or "" when there is no output at all."""
     return (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
@@ -1715,7 +1733,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None, selfn
     # `c` is _core.GAMEDIG_HUMANS_JQ, not the list's length: Bedrock answers numplayers with an
     # empty list, and that list counted as a confident 0.
     jqf = '{c:%s, ok:(.players|type=="array")}' % _core.GAMEDIG_HUMANS_JQ
-    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
+    cmd = (f"gamedig --type {gdtype} {gamedig_target(server, gdtype, port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     d = _gamedig_reply(server, user, cmd)
     return None if d is None else _json_int(d.get("c"))
@@ -1754,10 +1772,11 @@ def player_slots(server, user, game_type=None, port=None, query_type=None, selfn
     # game_map's cache from here leaves c/m/n/ok exactly as they were.
     jqf = ('{c:%s, m:.maxplayers, n:(.name // ""), p:(.map // ""), ok:(.players|type=="array")}'
            % _core.GAMEDIG_HUMANS_JQ)
-    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
+    cmd = (f"gamedig --type {gdtype} {gamedig_target(server, gdtype, port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     d = _gamedig_reply(server, user, cmd)
     if d is None:
+        _remember_map_failed(server, port)
         return None, None, None   # gamedig couldn't read the server (error / no A2S response) -> unknown
     _remember_map(server, port, d.get("p"))
     return _slots_from_reply(d)
@@ -1774,6 +1793,12 @@ def _slots_from_reply(d):
 
 _game_map_cache = _core.register_remote_cache({})   # {(remote_id, port): (expiry, mapname)}
 _GAME_MAP_TTL = 30
+# How long a lookup whose query FAILED is remembered. At _GAME_MAP_TTL a server gamedig cannot read
+# (a Valheim on -crossplay answers no Steam query) cost a failing query, measured at 4.4 s and held
+# inside the dashboard's metrics request, every ~36 s per open dashboard: p95 4.8 s against a p50
+# of 0.38 s. The map is display only, and the player poller's reply replaces this entry as soon as
+# the server answers one (_remember_map), so a server that starts answering is not held back by it.
+_GAME_MAP_FAIL_TTL = 300
 # How long a map the PLAYER POLLER read stays good. Longer than the poller's own period (45 s plus
 # the pass), so the dashboard, which polls every 10 s, finds the poller's answer instead of running
 # gamedig itself. The map is display only; in steady state it is at most one poll period old.
@@ -1808,6 +1833,22 @@ def _remember_map(server, port, raw):
     except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
         return
     _game_map_cache[key] = (time.time() + _GAME_MAP_FILL_TTL, val)
+
+
+def _remember_map_failed(server, port):
+    """Record that a player poll's query got no reply, so game_map does not run its own failing query.
+
+    A server gamedig cannot read (a Valheim on -crossplay answers no Steam query) otherwise cost the
+    first dashboard after each _GAME_MAP_FAIL_TTL a failing 4.4 s query of its own (measured on the
+    test host). An unexpired entry is kept: a failure never replaces a map that is still good.
+    Never raises.
+    """
+    try:
+        key = (getattr(server, "id", None), int(port))
+    except (TypeError, ValueError, OverflowError):
+        return
+    if _cached_map(key) is None:
+        _game_map_cache[key] = (time.time() + _GAME_MAP_FAIL_TTL, "")
 
 
 def _map_lock(key):
@@ -1855,67 +1896,113 @@ def game_map(server, user, game_type=None, port=None, query_type=None):
 def _lookup_map(server, user, gdtype, port, key):
     """Run game_map's own gamedig read and cache it — unless something fresher landed meanwhile."""
     started = time.time()
-    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
-           f"| jq -r '.map // \"\"' 2>/dev/null")
-    val = ""
+    cmd = (f"gamedig --type {gdtype} {gamedig_target(server, gdtype, port)} 2>/dev/null "
+           f"| jq -r {_core._quote(_MAP_JQ)} 2>/dev/null")
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
-        val = _map_text(_last_line(out)) or ""
+        line = _last_line(out)
     except Exception:
-        val = ""
+        line = ""
+    answered = line.startswith("=")
+    val = (_map_text(line[1:]) or "") if answered else ""
     # The player poller may have written a longer-lived entry while this query ran. That entry is
     # at least as new as this answer, so this one must not shorten it: overwriting it with a 30 s
     # expiry stamped at the START of this query sent the next dashboard poll to gamedig again.
     if _cached_map(key) is None:
-        _game_map_cache[key] = (started + _GAME_MAP_TTL, val)
+        _game_map_cache[key] = (started + (_GAME_MAP_TTL if answered else _GAME_MAP_FAIL_TTL), val)
     return val
 
 
+# game_map's own read: "=" and the map (one line) when gamedig answered, nothing when it did not.
+# gamedig prints its failure as JSON on stdout ({"error": ...}), with no players array, so the
+# marker is what tells "answered, no map" from "did not answer".
+_MAP_JQ = 'if (.players|type) == "array" then "=" + ((.map // "")|tostring|split("\\n")|join(" ")) else empty end'
+
+
 # How many queries one host's batched player poll runs at once, and how long each may take. The
-# cap is the per-host share of what the per-server pool allowed (_PLAYER_POLL_WORKERS = 8): a host
-# with thirty servers must not start thirty ~80 MB node processes together.
+# cap is the per-host share of what the per-server pool allowed (_PLAYER_POLL_WORKERS = 8).
 _BATCH_PARALLEL = 8
 _BATCH_TARGET_TIMEOUT = 20
 _BATCH_END = "@@lgsm-batch-end"
+# _BATCH_NODE's exit status when it could not load gamedig in-process (no package beside the
+# `gamedig` command, or no GameDig class in it): the batch then prints no end marker, so the
+# poller asks each server on its own through the `gamedig` command, as for any batch that did not run.
+_BATCH_NO_LIB = 3
+
+# The batch's ONE node process. Every query used to start its own `gamedig`: node plus the gamedig
+# module loaded again for each target, measured at 0.37-0.45 CPU s and ~83 MB each, whatever it
+# queried, and the 45 s player poll ran one per batchable server. This loads gamedig once and
+# queries every target in it, _BATCH_PARALLEL at a time, each under its own deadline.
+#
+# Each target's reply is exactly the `gamedig` command's: the same GameDig class (bin/gamedig.js
+# imports ../lib/index.js beside it, which is what this loads, found through the `gamedig` on
+# PATH), a fresh instance per target (the command's port cache lives one process), the options
+# its argument parser gives (every boolean flag false except stripColors, portCache and
+# requestPlayers; the port as text), and on failure the same {"error": message}. A target past
+# its deadline prints nothing, as the `timeout` the command ran under did. One line per answered
+# target, {"k": key, "r": reply}, written by this one process, so no two lines can interleave.
+# argv: the gamedig command's path, the targets [[key, type, host, port, socketTimeout|0], ...]
+# as JSON, the concurrency, and the per-target deadline in ms.
+_BATCH_NODE = "".join((
+    'const fs=require("fs"),path=require("path"),url=require("url");',
+    'const [bin,list,par,wait]=process.argv.slice(1);',
+    'const base={pretty:false,debug:false,givenPortOnly:false,requestRules:false,',
+    'requestRulesRequired:false,requestPlayersRequired:false,noBreadthOrder:false,checkOldIDs:false,',
+    'rejectUnauthorized:false,stripColors:true,portCache:true,requestPlayers:true};',
+    'const put=(k,r)=>{let o;try{o=JSON.stringify({k:k,r:r})}',
+    'catch(e){o=JSON.stringify({k:k,r:{error:e instanceof Error?e.message:String(e)}})}',
+    'process.stdout.write(o+"\\n")};',
+    'const one=async(G,t)=>{const o=Object.assign({},base,{type:t[1],host:t[2],port:String(t[3])});',
+    'if(t[4])o.socketTimeout=t[4];let q;try{q=new G(o).query(o)}catch(e){return}',
+    'const r=await Promise.race([Promise.resolve(q).then(v=>v,e=>({error:e instanceof Error?e.message:e})),',
+    'new Promise(d=>setTimeout(d,+wait,null))]);if(r!==null)put(t[0],r)};',
+    'const run=async G=>{const T=JSON.parse(list);let i=0;',
+    'const w=async()=>{while(i<T.length)await one(G,T[i++])};',
+    'await Promise.all(Array.from({length:Math.max(1,Math.min(+par,T.length))},w));',
+    'process.stdout.write("",()=>process.exit(0))};',
+    'let lib;try{lib=url.pathToFileURL(path.join(path.dirname(fs.realpathSync(bin)),"..","lib","index.js")).href}',
+    'catch(e){process.exit(%d)}' % _BATCH_NO_LIB,
+    'import(lib).then(m=>{const G=m.GameDig||(m.default&&(m.default.GameDig||m.default));',
+    'if(typeof G!=="function")process.exit(%d);return run(G)},()=>process.exit(%d))' % (_BATCH_NO_LIB, _BATCH_NO_LIB),
+    '.catch(()=>process.exit(1));',
+))
 
 
-def _batch_target_filter(key):
-    """player_slots' jq filter for one target of a batch, tagged with the target's key.
-
-    The name and map are cut in jq, so one reply stays a short single line: replies from several
-    queries running at once share one pipe, and a short write is never interleaved with another.
+def _batch_target_filter():
+    """The jq filter of player_slots for one `{"k": key, "r": reply}` line of a batch, tagged with its key.
 
     The count is _core.GAMEDIG_HUMANS_JQ, as in player_slots. It was `.players|length`, so a
     Bedrock server (an EMPTY list and numplayers 7) read as a confident 0 whenever its host had two
     or more batchable servers: the dashboard, the bots and the backup "busy" prompt said nobody was
     on, and "server emptied" fired. Polled alone, the same server read 7.
 
-    The map was not cut, though the first paragraph says it is: a game-supplied map of a few KB made
-    one reply longer than a pipe writes atomically (PIPE_BUF), so it could interleave with another
-    reply and both be dropped as unparseable. It is cut only when it is text: _map_text treats
-    anything else as "no map" (null here is the same answer), and tostring would invent one.
+    The name and map are cut to 120 characters. The map is cut only when it is text: _map_text
+    treats anything else as "no map" (null here is the same answer), and tostring would invent one.
+    One jq reads every line, so a line it cannot evaluate is skipped (`try`) rather than ending the
+    rest: that target alone reads unknown, as when each target had a jq of its own.
     """
-    return ('{k:%d, c:%s, m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
+    return ('.k as $k | try (.r | {k:$k, c:%s, m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
             'p:((.map // "") | if type == "string" then .[:120] else null end), '
-            'ok:(.players|type=="array")}' % (int(key), _core.GAMEDIG_HUMANS_JQ))
+            'ok:(.players|type=="array")})' % _core.GAMEDIG_HUMANS_JQ)
 
 
-def _batch_body(server, queries):
-    """The shell that runs every (key, gdtype, port) query, _BATCH_PARALLEL at a time.
+def _batch_body(queries, host):
+    """The shell that runs every (key, gdtype, port) query at `host` in one node process.
 
     ONE line: sudo logs the command it ran, and a newline in it would print as a log line of its
-    own (the debug report counts these calls by the first line of that entry).
+    own (the debug report counts these calls by the first line of that entry). The end marker is
+    printed whenever the run got as far as asking (no `gamedig` command at all is every target
+    unknown, as before), and NOT when node could not load gamedig: see _BATCH_NO_LIB.
     """
-    host = _core._gamedig_host(server)
-    parts = [f'q() {{ timeout {_BATCH_TARGET_TIMEOUT} gamedig --type "$1" "$2" 2>/dev/null '
-             f'| jq -c "$3" 2>/dev/null; }};']
-    for i, (key, gdtype, port) in enumerate(queries):
-        parts.append(f"q {_core._quote(gdtype)} {_core._quote('%s:%d' % (host, port))} "
-                     f"{_core._quote(_batch_target_filter(key))} &")
-        if (i + 1) % _BATCH_PARALLEL == 0:
-            parts.append("wait;")
-    parts += ["wait;", f"echo {_BATCH_END}"]
-    return " ".join(parts)
+    import json as _json
+    targets = [[int(key), gdtype, host, int(port), GAMEDIG_SOCKET_TIMEOUT_MS.get(gdtype, 0)]
+               for key, gdtype, port in queries]
+    groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
+    return (f"g=$(command -v gamedig) || {{ echo {_BATCH_END}; exit 0; }}; "
+            f"timeout -k 5 {groups * _BATCH_TARGET_TIMEOUT + 5} node -e {_core._quote(_BATCH_NODE)} "
+            f"\"$g\" {_core._quote(_json.dumps(targets, separators=(',', ':')))} {_BATCH_PARALLEL} "
+            f"{_BATCH_TARGET_TIMEOUT * 1000} 2>/dev/null | jq -c {_core._quote(_batch_target_filter())} "
+            f"2>/dev/null; [ \"${{PIPESTATUS[0]}}\" = {_BATCH_NO_LIB} ] || echo {_BATCH_END}")
 
 
 def _batch_queries(targets):
@@ -1980,7 +2067,8 @@ def player_slots_batch(server, user, targets):
         return None
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     try:
-        out, _, rc = _core.shell_as_game_user(server, user, _batch_body(server, queries),
+        body = _batch_body(queries, _core._gamedig_host(server))
+        out, _, rc = _core.shell_as_game_user(server, user, body,
                                               timeout=groups * (_BATCH_TARGET_TIMEOUT + 5) + 5)
     except Exception:
         return None
@@ -1991,6 +2079,7 @@ def player_slots_batch(server, user, targets):
     for key, _gdtype, port in queries:
         d = replies.get(key)
         if not (d and d.get("ok")):
+            _remember_map_failed(server, port)
             result[key] = (None, None, None)
             continue
         _remember_map(server, port, d.get("p"))
@@ -2030,8 +2119,8 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None, cach
     # as 'don't reboot'"). player_slots has carried this guard from the start and player_count
     # gained it later; this one never got it. The count is _core.GAMEDIG_HUMANS_JQ, as there.
     jqf = '{c:%s, ok:(.players|type=="array")}' % _core.GAMEDIG_HUMANS_JQ
-    cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -c %s 2>/dev/null"
-           % (qtype, _core._gamedig_host(server), int(qport), _core._quote(jqf)))
+    cmd = ("gamedig --type %s %s 2>/dev/null | jq -c %s 2>/dev/null"
+           % (qtype, gamedig_target(server, qtype, qport), _core._quote(jqf)))
     d = _gamedig_reply(server, user, cmd)
     return None if d is None else _json_int(d.get("c"))
 

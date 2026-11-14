@@ -1933,7 +1933,7 @@ try:
                                    game_type="gmod", query_type=None, remote_id=3),
                                 NS(installed=False, remote=_R10, id=2, short_name="b", port=2,
                                    game_type="gmod", query_type=None, remote_id=3)])
-          == [(_R10, 1, "a", 1, "gmod", None, 3)], "")
+          == [(_R10, 1, "a", 1, "gmod", None, 3, None)], "")
     _maps10 = []
     _mon10.game_map = lambda r, sn, gt, port, qt: (_maps10.append(sn) or "de_dust2")
     _mon10.server_live_metrics = lambda r, sn, port: {"game_procs": 2 if sn == "run" else 0,

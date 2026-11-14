@@ -381,6 +381,22 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Valheim shows as online while it runs.** A Valheim server started with crossplay listens on the
+  port after its own, so the panel read it as offline; that port now counts as its own.
+
+- **The Paper plugin browser knows the server's Minecraft version on newer Paper builds.** A Paper
+  build that writes no version_history.json had every plugin search marked unverified; the version
+  is now read from paper.jar, as the datapack card already did.
+
+- **Open pages cost the server less.** Player counts query every game on a host in one process
+  instead of one per game. Minecraft queries answer in under a second instead of over two. The
+  server page's player list and the dashboard's map ask the game less often.
+
+- **A tab opened in the background no longer loads everything twice when you switch to it.**
+
+- **The first page after a restart is faster.** LinuxGSM's server list and latest release are
+  fetched in the background when the panel starts, so the first visit no longer waits for them.
+
 - **LinuxGSM's release notes show on the first visit after a restart.** The panel reads them in the
   background, so the first server page after it started said they could not be read yet; the page now
   asks again a few seconds later, and the dialog fetches them itself when they are still missing.
@@ -1392,6 +1408,10 @@ compares git commits, not this file.
   database's password reach the database client only through its input, are scrubbed from any
   error it prints, and are stored encrypted; every name and password a statement holds is checked
   where the statement is made.
+
+- **The raw config editor's LinuxGSM-config test can no longer be slowed by a crafted path.** It
+  matched a pattern that took quadratic time on a path of repeated folder names; it is now plain
+  string checks with the same answers.
 
 - **World resets run only as a plain game account.** A scheduled world reset now checks, as the
   file tools do, that the game's account cannot become root before it deletes anything as that
