@@ -1431,9 +1431,11 @@ def _py_ignored(lines, node):
                if n <= len(lines))
 
 
-# Parsed trees and what is derived from them, kept per root for as long as no scanned file changes:
-# the gates ask for the same scan many times in one run (each one ~5 s), and a check that edits a file
-# (a mutation, a temp tree) changes the fingerprint, so it is scanned afresh. The trees are only read.
+# The scans' answers (small: dicts and lists of sentences), kept per root for as long as no scanned
+# file changes: the gates ask for the same scan many times in one run (each one ~5 s), and a check
+# that edits a file (a mutation, a temp tree) changes the fingerprint, so it is scanned afresh. The
+# parsed trees are NOT kept: holding every file's tree for the rest of the suite raised the unit
+# run's peak memory from 2.2 GB to 2.9 GB.
 _MEMO = {}
 
 
@@ -1451,22 +1453,23 @@ def _fingerprint(root):
 
 
 def _memo(kind, root, compute):
-    """`compute()` for (`kind`, `root`), computed again only when a scanned file changed."""
-    key = (kind, _fingerprint(root))
-    if key not in _MEMO:
-        if len(_MEMO) > 64:     # temp trees: each is scanned once, keep the cache small
+    """`compute()` for (`kind`, `root`), computed again only when a scanned file changed.
+
+    One entry per kind and root, replaced when the files change: a run that edits files keeps
+    one parse of each root, never a parse per edit (each one holds every scanned file's tree).
+    """
+    fp = _fingerprint(root)
+    key = (kind, fp[0])
+    held = _MEMO.get(key)
+    if held is None or held[0] != fp:
+        if len(_MEMO) > 64:     # many temp roots: each is scanned once, keep the cache small
             _MEMO.clear()
-        _MEMO[key] = compute()
-    return _MEMO[key]
+        _MEMO[key] = (fp, compute())
+    return _MEMO[key][1]
 
 
 def _py_trees(root):
-    """[(relpath, source lines, ast)] for every scanned file (shared: callers only read them)."""
-    return _memo("trees", root, lambda: _py_trees_read(root))
-
-
-def _py_trees_read(root):
-    """_py_trees, read from disk."""
+    """[(relpath, source lines, ast)] for every scanned file."""
     out = []
     for path in _py_files(root):
         with open(path, encoding="utf-8") as fh:
@@ -1998,7 +2001,7 @@ def route_answer_keys(root=ROOT):
 def _route_answer_keys_read(root):
     """route_answer_keys, computed."""
     trees = _py_trees(root)
-    table = _memo("returns", root, lambda: _r16c_returns(trees))
+    table = _r16c_returns(trees)
     wrappers = _py_wrappers(trees)
     keys = {}
     for rel, lines, tree in (t for t in trees if _r16c_is_route(t[0])):
@@ -2122,7 +2125,12 @@ def _r17b_fed_calls(rel, lines, tree, wanted):
 
 def step_name_keys(root=ROOT):
     """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
-    table = _memo("returns", root, lambda: _r16c_returns(_py_trees(root)))
+    return dict(_memo("step_name_keys", root, lambda: _step_name_keys_read(root)))
+
+
+def _step_name_keys_read(root):
+    """step_name_keys, computed."""
+    table = _r16c_returns(_py_trees(root))
     keys = {}
     for rel, _line, v, consts, binds, _lines in _r16c_step_walk(root):
         for t, f, ln in _r16c_found(v, rel, (consts, binds), table):
@@ -2133,6 +2141,11 @@ def step_name_keys(root=ROOT):
 
 def step_names_built(root=ROOT):
     """[(file, line)]: a job's progress text built in plain English, which no key can match."""
+    return list(_memo("step_names_built", root, lambda: _step_names_built_read(root)))
+
+
+def _step_names_built_read(root):
+    """step_names_built, computed."""
     return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
                    if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))}
                   | set(_r17b_forwarded(_py_trees(root))[1]))
