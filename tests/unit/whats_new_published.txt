@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+f650843c Game passwords no longer show in the live console.
 6e6e5991 Scheduled Tasks' last-run times are no longer an hour behind.
 c7d369e9 Minecraft Bedrock servers show how many players are on.
 8e044ab2 Bedrock's hourly restart when empty works again.
