@@ -1662,13 +1662,13 @@ def _gamedig_reply(server, user, cmd):
 
 
 def _bedrock_first(server, user, game_type, selfname):
-    """A Bedrock server's (settled, slots): its console-log count, before any gamedig query.
+    """A Bedrock server's (settled, slots): its own LAN answer or console-log count, before any gamedig query.
 
     settled is False when gamedig should still be asked: not a Bedrock server, a log the count
     could not be read from (bedrock.bedrock_slots' "unread"), which a RakNet server still answers
     gamedig's `mbe` for, or a read that failed. Otherwise slots is the answer, (count, max, name,
-    level): all four from a counted log and server.properties, all None for a server LinuxGSM sees
-    no session for (gamedig could only fail there too).
+    level): all four from the server's answer, or from a counted log and server.properties; all
+    None for a server LinuxGSM sees no session for (gamedig could only fail there too).
     """
     unknown = (None, None, None, None)
     if not bedrock.is_bedrock(game_type):
@@ -1689,8 +1689,9 @@ def player_count(server, user, game_type=None, port=None, query_type=None, selfn
     None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
     as the restart cron invokes it (install-gamedig.sh links it in /usr/local/bin and /usr/bin).
 
-    Minecraft Bedrock is counted from its console log first (bedrock.py: a NetherNet server
-    answers no gamedig query); `selfname` is its LinuxGSM script, mcbserver when not given.
+    Minecraft Bedrock is asked over LAN discovery first, then counted from its console log
+    (bedrock.py: a NetherNet server answers no gamedig query); `selfname` is its LinuxGSM script,
+    mcbserver when not given.
     """
     if not _core.game_idents_ok(user):
         return None      # refused: unknown, which no caller reads as "nobody is on"

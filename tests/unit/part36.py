@@ -873,11 +873,20 @@ def _sh_with36(fake):
     return _run
 
 
+def _no_lan36(orig):
+    """A run_command stand-in under which Bedrock's LAN query and log read answer nothing; all else goes to `orig`.
+
+    These checks are about gamedig's reply, which a Bedrock server is asked for only after both.
+    """
+    return lambda server, cmd, **k: ("", "", 1) if "mcbq:" in cmd else orig(server, cmd, **k)
+
+
 def _readers36(reply, game_type="mcb", gdtype="mbe"):
     """{reader: answer} for one gamedig reply, every reader through its real command."""
     srv = NS(id=93608, host=_GD_HOST36, username="admin", is_local=False, auth_method="key")
     with _fake_gamedig36(reply, gdtype) as fake:
         _p9_patch(_p9_core, "shell_as_game_user", _sh_with36(fake))
+        _p9_patch(_p9_core, "run_command", _no_lan36(_p9_core.run_command))
         _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
         _p9_patch(_files36, "lgsm_get_values",
                   lambda *a, **k: {"querymode": "2", "querytype": gdtype, "queryport": "19132",
