@@ -182,13 +182,11 @@ try:
           _rc == 0 and all("%s: audited %d of its %d pinned packages" % (_f, _n, _n) in _out
                            for _f, _n in _pa_pins27.items()) and min(_pa_pins27.values()) >= 1,
           "rc=%r pins=%r out=%r" % (_rc, _pa_pins27, _out[-600:]))
-    # requirements.txt pins dnspython twice, split at Python 3.11 (CVE-2026-114605's fix needs
-    # 3.11), so on every Python exactly one of the two is not pip-audit's: it is named, left out of
-    # the count, and audited by osv-scanner. Counted as a pin, every audit read "33 of 34" and failed.
-    check("pip-audit: ...a pin whose marker is false on this Python is named and left out of the count",
-          _rc == 0 and len(_pa_off27["panel/install/requirements.txt"]) == 1
-          and all("panel/install/requirements.txt: %s ; %s does not apply on this Python" % _p in _out
-                  for _p in _pa_off27["panel/install/requirements.txt"]),
+    # requirements.txt pinned dnspython twice, split at Python 3.11, until dnspython left the lock:
+    # neither lockfile carries a marker now, so the audit counts every pin, and names none as
+    # skipped. The reader's own handling of a marker is the control above.
+    check("pip-audit: ...no pin is left out of the count as marked for another Python",
+          _rc == 0 and _pa_off27 == {_f: [] for _f in _pa_off27} and "does not apply on this Python" not in _out,
           "off=%r out=%r" % (_pa_off27, _out[-600:]))
     _rc, _out, _argv = _pa27("all-pyfail", P27_PYFAIL="1")
     check("pip-audit: ...and markers it cannot evaluate fail the step, before pip-audit runs",
@@ -526,7 +524,9 @@ check("semgrep: semgrep-mcp.txt is constrained by semgrep.txt, and pins nothing 
 _PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile leaves out"
 _SG_PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile pins apart"
 _CX27 = _read27(".github", "workflows", "complexity.yml")
-_nodeps27 = sorted(_w for _w, _t in _ci_installs if "--no-deps" in _t)
+# (The panel's own requirements.txt goes in --no-deps everywhere too, for dnspython; part193 holds
+# those installs and the check after each.)
+_nodeps27 = sorted(_w for _w, _t in _ci_installs if "--no-deps" in _t and "panel/install/requirements.txt" not in _t)
 
 
 def _follows27(text, before, step):

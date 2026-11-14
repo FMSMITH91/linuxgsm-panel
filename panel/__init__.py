@@ -21,7 +21,13 @@ db_maintenance.py (installed root-owned beside the helper), VERSION, release-sig
 the requirements lockfiles, recover.sh and uninstall.sh. It is not a package; app.py
 and manage.py put the checkout on sys.path themselves.
 """
+import os
 from pathlib import Path
+
+# eventlet reads this once, when it is first imported, and loads greendns (and with it dnspython,
+# which the panel does not install) unless it is "yes". Set here as well as in app.py, so a tool or
+# test that imports a panel module before eventlet gets the same resolver: panel/core/green_dns.py.
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 
 # The panel's checkout directory — the one every on-disk path is relative to: data/ (database,
 # secret key, credential key, TLS certs), panel/translations/, panel/templates/, panel/static/, panel/install/VERSION, and the

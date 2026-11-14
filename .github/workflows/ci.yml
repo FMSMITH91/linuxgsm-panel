@@ -144,13 +144,21 @@ jobs:
         # requirements-bootstrap.txt first: the pip install.sh puts in every panel venv, installed
         # the way install.sh installs it, so a Dependabot bump of it is proved on each Python here,
         # and the requirements below go in through the same pip the hosts use.
+        # requirements.txt goes in --no-deps, as install.sh installs it: it is the whole closure
+        # apart from dnspython, which eventlet still declares and the panel does not use
+        # (requirements.in). panel_pip_check.sh then runs install.sh's own pip check over the lot.
         run: |
           python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements-bootstrap.txt
-          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements-checks/build.txt
           python -m pip install --quiet --require-hashes --only-binary :all: --no-binary=esprima \
             --no-build-isolation -r .github/ci-requirements-checks/checks.txt
+
+      - name: The panel's requirements are complete (install.sh's pip check)
+        # Not on the docs-only leg: a pull request that changes only documentation installs nothing new.
+        if: steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse != 'true'
+        run: bash .github/scripts/panel_pip_check.sh
 
       - name: Install zsh and systemd-journal-remote
         if: steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse != 'true'
@@ -429,9 +437,13 @@ jobs:
         # coverage is hash-pinned, like every CI tool. (This job used to hold CODACY_PROJECT_TOKEN in
         # a later step; the upload is codacy-coverage.yml's now, and this job holds no secret.)
         run: |
-          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements/coverage.txt
+
+      - name: The panel's requirements are complete (install.sh's pip check)
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        run: bash .github/scripts/panel_pip_check.sh
 
       - name: Measure
         if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
@@ -593,7 +605,11 @@ jobs:
       - name: Install dependencies
         if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
         run: |
-          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt
+
+      - name: The panel's requirements are complete (install.sh's pip check)
+        if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
+        run: bash .github/scripts/panel_pip_check.sh
 
       - name: Measure
         if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')

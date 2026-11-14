@@ -6,33 +6,6 @@
 # ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
 # entry to a reason and a date. The model and its history: tools/gamedig/osv-scanner.toml.
 #
-# pip-audit takes NO exemption from this file. It runs on Python 3.11 and audits the pins that apply
-# there, so a fixed version for 3.11 and newer stays a hard gate. osv-scanner reads every pin in
-# requirements.txt whatever its marker, and is the only audit of a pin marked for Python 3.10 alone.
-
-[[IgnoredVulns]]
-id = "GHSA-45c3-73f7-pv4m"
-ignoreUntil = 2026-12-27
-reason = """dnspython 2.8.0, CVE-2026-114605: dns.name.from_wire_parser spends unbounded CPU on a
-crafted DNS message (name decompression). The fix, 2.9.0, requires Python 3.11, so it cannot install
-on Python 3.10, Ubuntu 22.04's python3. requirements.txt pins 2.9.0 for Python 3.11 and newer
-(Ubuntu 24.04 and 26.04) and keeps 2.8.0 only behind `python_version < "3.11"`; pip-audit still
-audits the 3.11+ pin with no exemption. Exposure on a 22.04 host: eventlet's greendns parses the
-replies to the panel's own lookups (remote hosts, GitHub, game query targets), so a malicious or
-spoofed DNS server can make the panel burn CPU; it is denial of service only, nothing is read or
-written. Remove this entry when dnspython ships a fix for 3.10 or the panel drops 3.10.
-Re-checked 2026-11-07 and renewed to 2026-12-27: the newest release, 2.9.2 (2026-11-03), still
-requires Python 3.11; dnspython's 2.8 branch has had no release after 2.8.0 and no backport of the
-fix, and the advisory (updated 2026-10-27) still lists 2.9.0 as the first fixed version."""
-
-[[IgnoredVulns]]
-id = "GHSA-vvf4-9x63-8xvv"
-ignoreUntil = 2026-12-27
-reason = """dnspython 2.8.0 (published 2026-11-13): a crafted WKS record in zone-file TEXT makes
-dns.rdata.from_text allocate without bound. The fix, 2.9.2, requires Python 3.11, so it cannot install
-on Python 3.10 (Ubuntu 22.04); requirements.txt pins 2.9.2 for Python 3.11 and newer and keeps 2.8.0
-only behind `python_version < "3.11"`, and pip-audit audits the 3.11+ pin with no exemption. Not
-reachable on a 22.04 host: the panel never imports dnspython and never parses zone files; eventlet's
-greendns, its only user, decodes DNS replies in wire format, which never calls the WKS text parser.
-Remove this entry with GHSA-45c3-73f7-pv4m above, when dnspython ships a fix for 3.10 or the panel
-drops 3.10."""
+# pip-audit takes NO exemption from this file. There is no entry today: the two dnspython advisories
+# (GHSA-45c3-73f7-pv4m, GHSA-vvf4-9x63-8xvv) left with dnspython itself, which requirements.txt no
+# longer installs (requirements.in says why).

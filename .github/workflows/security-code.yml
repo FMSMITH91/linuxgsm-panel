@@ -100,11 +100,10 @@ jobs:
       #     requirement) FAILS the run. Without it the pin is listed as "skipped" and the run passes.
       #   The count: the audit must have read exactly the file's pins that apply on this runner's
       #     Python. A pin dropped silently (a parser change in a pip-audit bump) fails here.
-      #     pip-audit evaluates each pin's environment marker and skips one that is false here:
-      #     requirements.txt pins dnspython 2.8.0 for Python 3.10 alone, because its fix needs 3.11.
-      #     Such a pin is named in the log and left out of the count, and osv-scanner below, which
-      #     reads every pin whatever its marker, audits it (osv-scanner.toml has its exemption;
-      #     pip-audit takes none).
+      #     pip-audit evaluates each pin's environment marker and skips one that is false here.
+      #     Neither file carries a marker today; one that did would be named in the log and left
+      #     out of the count, and osv-scanner below, which reads every pin whatever its marker,
+      #     would audit it (pip-audit takes no exemption).
       - name: Audit the panel's pins (pip-audit)
         if: steps.scope.outputs.docs_only != 'true'
         run: |

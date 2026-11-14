@@ -248,7 +248,7 @@ _jcj_steps = _jcj.split("\n      - ")
 _jcj_coe = [_s.split("\n", 1)[0] for _s in _jcj_steps if "continue-on-error" in _s]
 check("js coverage (CI): ...installs only requirements.txt, hash-checked, and runs the harness "
       "with nothing that turns its failure into a pass",
-      _jcj_pip == ["pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt"]
+      _jcj_pip == ["pip install --quiet --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt"]
       and "python tools/js_coverage/run.py --chrome" in _jcj and "--out lcov.info" in _jcj
       and "|| true" not in _jcj and "set -euo pipefail" in _jcj
       and _jcj_coe == ["name: Take the report the pull request's run made on the same tree"]

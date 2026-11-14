@@ -18,7 +18,7 @@ input, never raise; any uncaught exception is a finding to fix in the parser, no
 ## Run locally
 
 ```sh
-pip install atheris          # plus the panel's own deps: pip install -r panel/install/requirements.txt
+pip install atheris          # plus the panel's own deps: pip install --no-deps -r panel/install/requirements.txt
 python tests/fuzz/fuzz_game_status.py -max_total_time=60 tests/fuzz/corpus/game_status
 ```
 
