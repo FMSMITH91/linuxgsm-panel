@@ -1811,7 +1811,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
 # its request, its DB session and the channel then leaked permanently.
 #
 # It is not only a hostile-host problem. Three ordinary things here clear 2 MiB: the cron tab's
-# `journalctl _COMM=cron --since "-14 days"` (no -n, and the [-800:] slice happens after the whole
+# `journalctl SYSLOG_IDENTIFIER=CRON _UID=0 --since "-14 days"` (no -n, and the [-800:] slice happens after the whole
 # thing is read), the security page's `zcat -f /var/log/fail2ban.log* | grep -E 'Ban|Found'` on a
 # host under sustained SSH brute force, and a long update's `cat` of the full SteamCMD log.
 #
