@@ -16,8 +16,6 @@ from panel.security.auth import (_can_manage_files, _fpm_can_edit, get_game, log
                                  server_access_required)
 from panel.services import cod_mods as _cm
 
-_AUDIT = "mods_select"
-
 
 def _read_answer(gs):
     """GET: the card's state, or why there is none."""
@@ -52,7 +50,7 @@ def _switched(gs, value, result):
                  "message": (i18n.tr("Saved. Restart the server to start it with {mod}.", mod=value) if value
                              else i18n.tr("Saved. Restart the server to start it without a mod."))}
     with _r42r_audit_after(reply):      # the cfg is written by now (_r42r_audit_after)
-        log_action(current_user, _AUDIT, target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_select", target=gs.name, detail=detail, success=ok, server=gs)
     return jsonify(reply)
 
 
@@ -60,11 +58,11 @@ def _switch_answer(gs):
     """POST: start the server with another mod folder (or none) from its next start."""
     from panel.routes import server_files as _sf
     value = _json_str(_json_body(), "mod")
-    refused = _sf._write_refused(gs, _AUDIT, value)
+    refused = _sf._write_refused(gs, "mods_select", value)
     if refused is not None:
         return refused
     try:
-        with _r20b_audit_on_raise(_AUDIT, target=gs.name, detail=value or "(none)", server=gs):
+        with _r20b_audit_on_raise("mods_select", target=gs.name, detail=value or "(none)", server=gs):
             result = _cm.switch(gs.remote, gs.short_name, gs.lgsm_name, gs.game_type, value)
     except ConnectionError:
         return _unreachable("change the mod")
