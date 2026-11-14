@@ -1443,7 +1443,7 @@ _RAWLTS_UNCHECKED = ("This file sets LinuxGSM's logtimestamp on, which freezes t
                      "config — nothing has been changed.")
 _RAWLTS_ASSIGN_RE = re.compile(
     r"(?<![\w$])logtimestamp\s*=\s*((?:\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s;&|\"'])*)", re.IGNORECASE)
-_RAWLTS_CFG_RE = re.compile(r"/lgsm/config-(?:lgsm|default/config-lgsm)/.*\.cfg\Z")
+_RAWLTS_CFG_DIRS = ("/lgsm/config-lgsm/", "/lgsm/config-default/config-lgsm/")
 _RAWLTS_HOST_PATTERNS = "*/lgsm/config-lgsm/*.cfg|*/lgsm/config-default/config-lgsm/*.cfg"
 _RAWLTS_HIT, _RAWLTS_CLEAR = "__RAWLTS_CFG__", "__RAWLTS_NOTCFG__"
 
@@ -1498,11 +1498,22 @@ def _rawlts_host_says_cfg(server, user, ap):
     return _RAWLTS_HIT in out
 
 
+def _rawlts_cfg_path(ap):
+    r"""Whether `ap` is a LinuxGSM config file by its name: under a config-lgsm folder, ending in .cfg.
+
+    Plain string tests on the path's last line, which is what /lgsm/config-…/.*\.cfg\Z matched (`.`
+    stops at a line break): that regex, searched, started again at every repeat of the folder name, so
+    a path of many repeats took quadratic time.
+    """
+    last = ap.rsplit("\n", 1)[-1]
+    return last.endswith(".cfg") and any(d in last for d in _RAWLTS_CFG_DIRS)
+
+
 def _rawlts_refusal(server, user, ap, data):
     """Why writing `data` at `ap` is refused for turning logtimestamp on, else None."""
     if not _rawlts_turns_on(data):
         return None
-    if _RAWLTS_CFG_RE.search(ap):
+    if _rawlts_cfg_path(ap):
         return _RAWLTS_REFUSED
     is_cfg = _rawlts_host_says_cfg(server, user, ap)
     if is_cfg is None:
