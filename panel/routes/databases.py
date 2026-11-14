@@ -230,9 +230,12 @@ def _refresh_sizes(gs, hd, rows):
         got = _dbs.sizes(gs.remote, hd, gs.short_name, [r.name for r in rows])
     except Exception:
         got = None
-    if not isinstance(got, dict):
-        return
-    sizes, dumps = got.get("sizes") or {}, got.get("dumps") or {}
+    if isinstance(got, dict):
+        _store_sizes(rows, got.get("sizes") or {}, got.get("dumps") or {}, now)
+
+
+def _store_sizes(rows, sizes, dumps, now):
+    """Store what one sizes call read: each row's size, and when its dump in the files was written."""
     for r in rows:
         if isinstance(sizes.get(r.name), int):
             r.size_bytes, r.size_at = sizes[r.name], now

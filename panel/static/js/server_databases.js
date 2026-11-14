@@ -17,10 +17,70 @@ var DB_STATE = {
   needs_login: 'A database server is already running here, but the panel can\'t sign in to it yet. A super admin can add its admin login.'
 };
 
+// Plain builders the tab's rows are made of (no state of the tab's own).
+function dbNode(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function dbIconButton(icon, label, action, args, cls) {
+  var b = dbNode('button', 'btn btn-sm btn-outline-secondary db-icon-btn ' + (cls || ''));
+  b.type = 'button';
+  b.title = label;
+  b.setAttribute('aria-label', label);
+  var i = dbNode('i');
+  i.className = 'bi ' + icon;
+  i.setAttribute('aria-hidden', 'true');
+  b.appendChild(i);
+  b.setAttribute('data-action', action);
+  b.setAttribute('data-args', JSON.stringify(args));
+  return b;
+}
+function dbTextButton(text, icon, action, args, cls) {
+  var b = dbNode('button', 'btn btn-sm ' + (cls || 'btn-outline-secondary') + ' fpm-edit');
+  b.type = 'button';
+  if (icon) { var i = dbNode('i'); i.className = 'bi ' + icon; i.setAttribute('aria-hidden', 'true'); b.appendChild(i); b.appendChild(document.createTextNode(' ')); }
+  b.appendChild(dbNode('span', null, text));
+  b.setAttribute('data-action', action);
+  b.setAttribute('data-args', JSON.stringify(args));
+  return b;
+}
+function dbKvRow(label, value, buttons) {
+  var r = dbNode('div', 'db-kv');
+  r.appendChild(dbNode('span', 'db-k small text-secondary', label));
+  var v = dbNode('code', 'db-v', value);
+  v.setAttribute('data-no-i18n', '');
+  r.appendChild(v);
+  buttons.forEach(function (b) { r.appendChild(b); });
+  return r;
+}
+function dbSizeText(b) {
+  var GIB = 1024 * 1024 * 1024;   // bytes in one GiB
+  if (typeof b !== 'number') return '';
+  if (b <= 0) return '0 B';
+  if (b < 1024) return '< 1 KB';
+  if (b < 1048576) return '≈ ' + Math.max(1, Math.round(b / 1024)) + ' KB';
+  if (b < GIB) return '≈ ' + Math.round(b / 1048576) + ' MB';
+  return '≈ ' + (b / GIB).toFixed(1) + ' GB';
+}
+
+// A superadmin's link after the host line: "Show the panel's admin login" (dbAdminReveal), or
+// "Change the admin login" (dbLoginShow).
+function dbHostLink(h, text, action) {
+  h.appendChild(document.createTextNode(' '));
+  var b = dbNode('button', 'btn btn-link btn-sm p-0 align-baseline', text);
+  b.type = 'button';
+  b.setAttribute('data-action', action);
+  b.setAttribute('data-args', JSON.stringify(['@self']));
+  h.appendChild(b);
+}
+
 (function () {
   'use strict';
   var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false};
 
+  var node = dbNode, iconButton = dbIconButton, textButton = dbTextButton, kvRow = dbKvRow;
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
   function el(id) { return document.getElementById(id); }
@@ -35,43 +95,6 @@ var DB_STATE = {
   function postJson(url, body) {
     return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})})
       .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d || {}}; }); });
-  }
-  function node(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text != null) e.textContent = text;
-    return e;
-  }
-  function iconButton(icon, label, action, args, cls) {
-    var b = node('button', 'btn btn-sm btn-outline-secondary db-icon-btn ' + (cls || ''));
-    b.type = 'button';
-    b.title = label;
-    b.setAttribute('aria-label', label);
-    var i = node('i');
-    i.className = 'bi ' + icon;
-    i.setAttribute('aria-hidden', 'true');
-    b.appendChild(i);
-    b.setAttribute('data-action', action);
-    b.setAttribute('data-args', JSON.stringify(args));
-    return b;
-  }
-  function textButton(text, icon, action, args, cls) {
-    var b = node('button', 'btn btn-sm ' + (cls || 'btn-outline-secondary') + ' fpm-edit');
-    b.type = 'button';
-    if (icon) { var i = node('i'); i.className = 'bi ' + icon; i.setAttribute('aria-hidden', 'true'); b.appendChild(i); b.appendChild(document.createTextNode(' ')); }
-    b.appendChild(node('span', null, text));
-    b.setAttribute('data-action', action);
-    b.setAttribute('data-args', JSON.stringify(args));
-    return b;
-  }
-  function dbSize(b) {
-    var GIB = 1024 * 1024 * 1024;   // bytes in one GiB
-    if (typeof b !== 'number') return '';
-    if (b <= 0) return '0 B';
-    if (b < 1024) return '< 1 KB';
-    if (b < 1048576) return '≈ ' + Math.max(1, Math.round(b / 1024)) + ' KB';
-    if (b < GIB) return '≈ ' + Math.round(b / 1048576) + ' MB';
-    return '≈ ' + (b / GIB).toFixed(1) + ' GB';
   }
   function row(id) {
     var list = (st.d && st.d.databases) || [];
@@ -106,15 +129,11 @@ var DB_STATE = {
       + (su ? '' : ' ' + T('A super admin can replace or clear it on this tab.'));
   }
 
-  // A superadmin's link after the host line: "Show the panel's admin login" (dbAdminReveal), or
-  // "Change the admin login" (dbLoginShow).
-  function hostLink(h, text, action) {
-    h.appendChild(document.createTextNode(' '));
-    var b = node('button', 'btn btn-link btn-sm p-0 align-baseline', text);
-    b.type = 'button';
-    b.setAttribute('data-action', action);
-    b.setAttribute('data-args', JSON.stringify(['@self']));
-    h.appendChild(b);
+  // A superadmin's links after the host line.
+  function hostLinks(h, d) {
+    if (!d.can.su || !d.host) return;
+    if (d.host.installed_by_panel) dbHostLink(h, T('Show the panel\'s admin login'), 'dbAdminReveal');
+    if (d.host.login) dbHostLink(h, T('Change the admin login'), 'dbLoginShow');
   }
 
   // The admin login form: a server the panel can't sign in to yet, or a superadmin replacing or
@@ -132,11 +151,10 @@ var DB_STATE = {
     h.textContent = line.text + (d.setup_error ? (line.text ? ' ' : '') + d.setup_error : '');
     h.className = 'small mb-2 text-break ' + (line.warn || d.setup_error ? 'text-warning' : 'text-secondary');
     show('db-host', !!h.textContent);
-    if (d.can.su && d.host && d.host.installed_by_panel) hostLink(h, T('Show the panel\'s admin login'), 'dbAdminReveal');
-    if (d.can.su && d.host && d.host.login) hostLink(h, T('Change the admin login'), 'dbLoginShow');
     show('db-setup', d.state === 'none');
     show('db-setup-can', d.can.setup);
     show('db-setup-ask', !d.can.setup);
+    hostLinks(h, d);
     drawLogin(d);
   }
 
@@ -154,15 +172,6 @@ var DB_STATE = {
   }
 
   // ── one database ────────────────────────────────────────────────────────────────────────────
-  function kvRow(label, value, buttons) {
-    var r = node('div', 'db-kv');
-    r.appendChild(node('span', 'db-k small text-secondary', label));
-    var v = node('code', 'db-v', value);
-    v.setAttribute('data-no-i18n', '');
-    r.appendChild(v);
-    buttons.forEach(function (b) { r.appendChild(b); });
-    return r;
-  }
 
   // The chosen snippet, with `pw` (else the shown password, else the mask) where the password goes.
   function snippetText(db, pw) {
@@ -213,7 +222,7 @@ var DB_STATE = {
     var title = node('strong', 'text-break', db.name);
     title.setAttribute('data-no-i18n', '');
     head.appendChild(title);
-    head.appendChild(node('span', 'small text-secondary text-nowrap', dbSize(db.size)));
+    head.appendChild(node('span', 'small text-secondary text-nowrap', dbSizeText(db.size)));
     card.appendChild(head);
     if (db.old_logins) card.appendChild(node('div', 'small text-warning mb-1', T('This database server only offers newer logins. SourceMod 1.12 and some older plugins can\'t sign in to it.')));
     var kvs = card.appendChild(node('div', 'db-kvs'));
@@ -309,10 +318,7 @@ var DB_STATE = {
       .then(function (r) { pw.value = ''; if (r.ok) st.loginOpen = false; return after(r, true); }).catch(failed);
   };
 
-  window.dbLoginShow = function () {
-    st.loginOpen = !st.loginOpen;
-    if (st.d) drawLogin(st.d);
-  };
+  window.dbLoginShow = function () { st.loginOpen = !st.loginOpen; if (st.d) drawLogin(st.d); };
 
   // Drop the stored admin login: the panel signs in as root over the socket again, when the server
   // lets it (the route keeps the login otherwise, and says so).
