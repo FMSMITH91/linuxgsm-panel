@@ -17,11 +17,15 @@
 FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23
 # No USER line, deliberately: root is the base-builder contract. ClusterFuzzLite's build step runs
 # `cd / && rm -rf /src/linuxgsm-panel/* && cp -r <checkout> /src && cd - && compile` in this image
-# (oss-fuzz infra/cifuzz/continuous_integration.py), and compile writes $OUT and $WORK. As any
-# other user the rm and the cp fail on the root-owned /src. The image only compiles, on an
-# ephemeral runner: nothing pushes or deploys it, and the fuzz targets run inside the run_fuzzers
-# action's own image, not this one. Sonar's docker:S6471 on the FROM line wants a review in
-# SonarCloud rather than a NOSONAR: a Dockerfile allows no trailing comment for one to sit in.
+# (oss-fuzz infra/cifuzz/continuous_integration.py), with no --user (infra/cifuzz/docker.py). As
+# any other user the rm fails on the root-owned tree the COPY lines below make, and compile itself
+# stops at its first step: compile_libfuzzer copies the engine to /usr/lib/libFuzzingEngine.a
+# ("cp: cannot create regular file '/usr/lib/libFuzzingEngine.a': Permission denied" as uid 1001).
+# $OUT, which compile then fills, is made by the build action's own root container. The image
+# only compiles, on an ephemeral runner: nothing pushes or deploys it, and the fuzz targets run
+# inside the run_fuzzers action's own image, not this one. Sonar's docker:S6471 on the FROM line
+# wants a review in SonarCloud rather than a NOSONAR: a Dockerfile allows no trailing comment for
+# one to sit in.
 
 # The panel's runtime dependencies. They have to be present at BUILD time, not just at run time:
 # PyInstaller bundles what it can import while compiling each fuzzer, so a missing dependency here
