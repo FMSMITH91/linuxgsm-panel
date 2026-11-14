@@ -82,17 +82,26 @@ _ARG_RE = re.compile(
 _values = register_server_state({})
 
 
+def _is_secret_key(key, in_secrets_file):
+    """Whether a LinuxGSM setting holds a secret: in a secrets file, LinuxGSM's own list, or by its name."""
+    low = key.lower()
+    return in_secrets_file or low in LGSM_MASKED_KEYS or bool(_SECRET_NAME_RE.search(low))
+
+
+def _maskable(value):
+    """Whether a secret setting's value is masked wherever it appears in the console.
+
+    Not an unexpanded reference (rconpassword="${adminpassword}" is never printed as written; the
+    value it names is masked on its own), a switch, or a value shorter than _MIN_VALUE.
+    """
+    return len(value) >= _MIN_VALUE and value.strip().lower() not in _NOT_SECRET and "${" not in value
+
+
 def secret_values(texts):
     """The secret values in an instance's LinuxGSM config texts (lgsm_cfg_texts' list), as a set."""
-    found = set()
-    for i, text in enumerate(texts or ()):
-        for key, value in _sm._parse_cfg(text).items():
-            if i in _SECRETS_FILES or key.lower() in LGSM_MASKED_KEYS or _SECRET_NAME_RE.search(key.lower()):
-                found.add(value)
-    # An unexpanded reference (rconpassword="${adminpassword}") is never printed as written; the
-    # value it names is in the set on its own.
-    return {v for v in found
-            if len(v) >= _MIN_VALUE and v.strip().lower() not in _NOT_SECRET and "${" not in v}
+    return {value for i, text in enumerate(texts or ())
+            for key, value in _sm._parse_cfg(text).items()
+            if _is_secret_key(key, i in _SECRETS_FILES) and _maskable(value)}
 
 
 def refresh(gs, now=None):

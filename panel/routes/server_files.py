@@ -653,17 +653,6 @@ def _console_read_start(server_id, ino, size):
     return state, pos
 
 
-def _console_shown_text(gs, text):
-    """Console-log text as every console view shows it: cleaned, then its secrets masked.
-
-    The one step the poller's pushes, the window read, the read from a place and the catch-up all
-    take, so the same line reads the same in each and the page's stitching still matches them
-    (services/console_secrets).
-    """
-    text = _clean_console_text(text)
-    return _console_secrets.mask_for(gs, text) if text else text
-
-
 def _emit_console_lines(socketio, gs, server_id, out, at=None):
     """Push a chunk of whole console lines to the server's room, once cleaned (nothing if empty).
 
@@ -672,7 +661,8 @@ def _emit_console_lines(socketio, gs, server_id, out, at=None):
     before it, and goes on from any that ends after it — by position, never by the lines' text.
     """
     if out:
-        out = _console_shown_text(gs, out)
+        # Masked after cleaning, as every console view masks it (services/console_secrets).
+        out = _console_secrets.mask_for(gs, _clean_console_text(out))
     if out:
         # Parsed per line: a LinuxGSM-stamped line carries its OWN time, which is more accurate
         # than the moment the poller happened to read it. `ts` is when the panel READ these
@@ -851,7 +841,7 @@ def _placed_rows(gs, lines, since, since_ok):
     gap = since is not None and not since_ok
     if len(lines) > _CONSOLE_LINES_MAX:
         lines, gap = lines[-_CONSOLE_LINES_MAX:], gap or since_ok
-    rows = (_console_rows(_console_shown_text(gs, "\n".join(lines)).split("\n"),
+    rows = (_console_rows(_console_secrets.mask_for(gs, _clean_console_text("\n".join(lines))).split("\n"),
                           _host_timezone_cached(gs.remote)) if lines else [])
     return rows, gap
 
@@ -1696,7 +1686,7 @@ def _read_console_window(remote, gs, want, host_tz):
             # (_console_place_read keeps the same rule): kept here as well, the fragment showed
             # once now and again as the start of the finished line — the page-load duplicate.
             body = body.rpartition("\n")[0]
-        lines = _console_rows(_console_shown_text(gs, body).split("\n"), host_tz) if framed else []
+        lines = _console_rows(_console_secrets.mask_for(gs, _clean_console_text(body)).split("\n"), host_tz) if framed else []
     except Exception:
         lines, whole = [], False
     return readable, lines, (at if readable else None), whole
