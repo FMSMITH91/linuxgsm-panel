@@ -1952,7 +1952,7 @@ _BATCH_NODE = "".join((
 
 
 def _batch_target_filter():
-    """player_slots' jq filter for one `{"k": key, "r": reply}` line of a batch, tagged with its key.
+    """The jq filter of player_slots for one `{"k": key, "r": reply}` line of a batch, tagged with its key.
 
     The count is _core.GAMEDIG_HUMANS_JQ, as in player_slots. It was `.players|length`, so a
     Bedrock server (an EMPTY list and numplayers 7) read as a confident 0 whenever its host had two
