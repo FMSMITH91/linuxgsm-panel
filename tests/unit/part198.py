@@ -112,7 +112,7 @@ for _side198 in ("helper", "panel"):
           repr([a for a in _BAD198 if not _refused198(_side198, a)]))
     check("cron journal (%s): ...and takes an account name and each span (positive control)" % _side198,
           not any(_refused198(_side198, [u, sp]) for u in ("codserver", "c.d") for sp in ("hour", "day", "fortnight")))
-_JHEAD198, _JTAIL198 = ["journalctl", "-r", "_COMM=cron", "--since"], ["-o", "short-unix", "--no-pager"]
+_JHEAD198, _JTAIL198 = ["journalctl", "-r", "SYSLOG_IDENTIFIER=CRON", "_UID=0", "--since"], ["-o", "short-unix", "--no-pager"]
 _JARGV198 = {"hour": _JHEAD198 + ["-1h"] + _JTAIL198,
              "day": _JHEAD198 + ["-24h", "--until", "-1h"] + _JTAIL198,
              "fortnight": _JHEAD198 + ["-14 days", "--until", "-24h"] + _JTAIL198}

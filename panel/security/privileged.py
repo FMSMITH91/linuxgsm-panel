@@ -138,7 +138,7 @@ CRON_JOURNAL_BUDGET = 3
 def cron_journal_account_argv(span):
     """The journalctl argv for journal-cron-account: cron's lines in one span, newest first."""
     since, until = CRON_JOURNAL_SPANS[span]
-    return (["journalctl", "-r", "_COMM=cron", "--since", since] + (["--until", until] if until else [])
+    return (["journalctl", "-r", "SYSLOG_IDENTIFIER=CRON", "_UID=0", "--since", since] + (["--until", until] if until else [])
             + ["-o", "short-unix", "--no-pager"])
 
 
@@ -1191,7 +1191,7 @@ _ARGV = {
     # fixed set and this table maps it to units or to a path, so no path crosses the boundary.
     "journal": ([_choice(*JOURNAL_SOURCES), _linecount],
                 lambda a: journal_argv(a[0], a[1]), None),
-    "journal-cron": ([], lambda a: ["journalctl", "_COMM=cron", "--since", CRON_JOURNAL_SINCE,
+    "journal-cron": ([], lambda a: ["journalctl", "SYSLOG_IDENTIFIER=CRON", "_UID=0", "--since", CRON_JOURNAL_SINCE,
                                     "-o", "short-unix", "--no-pager"], None),
     # ...and the newest run of each command ONE account's cron ran: a few lines rather than every
     # account's 14 days. The helper reads and filters it; a remote gets the same as journalctl|awk.

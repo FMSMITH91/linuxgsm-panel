@@ -337,6 +337,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Scheduled Tasks' last-run times are no longer an hour behind.** The panel found cron's log lines by the name of the running process, which
+  for a sixth of them had already changed to the shell, so a job could show its run before last. It now
+  matches cron's own log name, and only lines root wrote, so another account cannot fake a run time.
+
 - **Minecraft Bedrock servers show how many players are on.** Current Bedrock servers answer no player
   query the panel had, so their players read unknown on the dashboard, in the bots and to every
   "wait until empty". The panel now counts the joins and leaves in the server's console log, without
