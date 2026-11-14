@@ -57,7 +57,7 @@ class GameDig {
   query(o) {
     live += 1;
     const at = live, i = this.i;
-    if (o.port === "27999") return new Promise(() => {});
+    if (o.port === "27999") { setInterval(() => {}, 1000); return new Promise(() => {}); }  // a socket still open
     if (o.port === "27998") return new Promise((r, j) => setTimeout(() => { live -= 1; j(new Error("Failed all 1 attempts")); }, 50));
     const n = JSON.stringify({p: o.port, st: o.socketTimeout === undefined ? null : o.socketTimeout, sc: o.stripColors,
                               pc: o.portCache, rp: o.requestPlayers, g: o.givenPortOnly, i: i});
@@ -292,7 +292,7 @@ def _poll_js209():
         js = fh.read()
     start = js.find("window.pollWhenVisible = function")
     src = js[start:js.find("\n};\n", start) + 3] if start >= 0 else ""
-    prog = ("var t = 1000; Date.now = function(){ return t; }; var on = {}, n = 0;\n"
+    prog = ("var t = 1763100000000; Date.now = function(){ return t; }; var on = {}, n = 0;\n"
             "var document = {hidden: false, addEventListener: function(e, f){ on[e] = f; }};\n"
             "var window = {}, _visPolls = {}; var setInterval = function(){ return 1; };\n" + src
             + "\nwindow.pollWhenVisible(function(){ n++; }, 15000);\n"
