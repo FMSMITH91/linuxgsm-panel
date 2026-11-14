@@ -14,6 +14,22 @@ compares git commits, not this file.
 
 ### Added
 
+- **Mods for Arma 3 and DayZ: the mod folders the server loads.** The Mods tab lists the @folders in
+  serverfiles and serverfiles/mods and edits LinuxGSM's Mods and Server mods lists in load order; Steam
+  Workshop mods are still added after them by LinuxGSM.
+
+- **NS2: Combat's mods in the Steam Workshop card.** Add Workshop items by id or link; the panel writes
+  them as the hex mod ids the game takes.
+
+- **Factorio mods on or off.** The Mods tab lists the mods in serverfiles/mods and turns each on or off in
+  mod-list.json; a restart applies it.
+
+- **Minecraft datapacks from Modrinth.** A Java server's Mods tab lists its world's datapacks, removes
+  them and installs new ones from Modrinth, checked against Modrinth's checksum.
+
+- **Bedrock behavior and resource packs on or off.** A Bedrock server's Mods tab lists the shared packs
+  and applies one to the world, or stops applying it.
+
 - **"Update LinuxGSM" from the version line.** When a newer LinuxGSM release is out, the server
   page's "available" note opens that release's notes and an Update LinuxGSM button for anyone
   allowed to run update-lgsm.
@@ -344,6 +360,10 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **LinuxGSM's release notes show on the first visit after a restart.** The panel reads them in the
+  background, so the first server page after it started said they could not be read yet; the page now
+  asks again a few seconds later, and the dialog fetches them itself when they are still missing.
 
 - **The server page shows the new LinuxGSM release right after update-lgsm.** The version line kept
   the old release until the page was reloaded; it now changes as soon as the update finishes, on
