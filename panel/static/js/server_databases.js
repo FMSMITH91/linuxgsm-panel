@@ -253,34 +253,33 @@ var DB_STATE = {
   }
   function failed() { st.busy = false; say('✗ ' + T('Could not reach the panel. Try again.'), 'text-danger'); return false; }
 
+  // Form and button handlers: the forms cancel their own submit (ev.preventDefault), so none
+  // returns a value for the dispatcher to act on.
   window.dbAdd = function (ev) {
     if (ev) ev.preventDefault();
-    if (st.busy) return false;
+    if (st.busy) return;
     st.busy = true;
     say(T('Adding the database…'));
     postJson(api(), {name: String(el('db-name').value || '').trim().toLowerCase()})
       .then(function (r) { if (r.ok) st.edited = false; return after(r, true); }).catch(failed);
-    return false;
   };
 
   window.dbSetup = function (btn) {
-    if (st.busy || !st.d) return false;
+    if (st.busy || !st.d) return;
     st.busy = true;
     if (btn) btn.disabled = true;
     postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/setup', {})
       .then(function (r) { if (btn) btn.disabled = false; return after(r, true); }).catch(failed);
-    return false;
   };
 
   window.dbLogin = function (ev) {
     if (ev) ev.preventDefault();
-    if (st.busy || !st.d) return false;
+    if (st.busy || !st.d) return;
     st.busy = true;
     var pw = el('db-login-pw');
     postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login',
              {user: el('db-login-user').value, password: pw.value})
       .then(function (r) { pw.value = ''; return after(r, true); }).catch(failed);
-    return false;
   };
 
   // The password, fetched from the panel (audited) unless this page already has it.

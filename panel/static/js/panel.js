@@ -73,7 +73,8 @@ document.addEventListener('click', function(e){
   var dbs = sid ? fetch((window.MOUNT || '') + '/api/server/' + sid[1] + '/databases?names=1', {cache: 'no-store'})
     .then(function(r){ return r.ok ? r.json() : {}; }).then(function(d){ return (d && d.names) || []; })
     .catch(function(){ return []; }) : Promise.resolve([]);
-  dbs.then(function(names){ _uninstallDialog(form, name, short, names); });
+  dbs.then(function(names){ _uninstallDialog(form, name, short, names); },
+           function(){ _uninstallDialog(form, name, short, []); });
 });
 function _uninstallDialog(form, name, short, names){
   confirmDialog({
