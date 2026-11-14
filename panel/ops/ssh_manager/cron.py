@@ -1776,6 +1776,7 @@ def player_slots(server, user, game_type=None, port=None, query_type=None, selfn
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     d = _gamedig_reply(server, user, cmd)
     if d is None:
+        _remember_map_failed(server, port)
         return None, None, None   # gamedig couldn't read the server (error / no A2S response) -> unknown
     _remember_map(server, port, d.get("p"))
     return _slots_from_reply(d)
@@ -1832,6 +1833,22 @@ def _remember_map(server, port, raw):
     except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
         return
     _game_map_cache[key] = (time.time() + _GAME_MAP_FILL_TTL, val)
+
+
+def _remember_map_failed(server, port):
+    """Record that a player poll's query got no reply, so game_map does not run its own failing query.
+
+    A server gamedig cannot read (a Valheim on -crossplay answers no Steam query) otherwise cost the
+    first dashboard after each _GAME_MAP_FAIL_TTL a failing 4.4 s query of its own (measured on the
+    test host). An unexpired entry is kept: a failure never replaces a map that is still good.
+    Never raises.
+    """
+    try:
+        key = (getattr(server, "id", None), int(port))
+    except (TypeError, ValueError, OverflowError):
+        return
+    if _cached_map(key) is None:
+        _game_map_cache[key] = (time.time() + _GAME_MAP_FAIL_TTL, "")
 
 
 def _map_lock(key):
@@ -2062,6 +2079,7 @@ def player_slots_batch(server, user, targets):
     for key, _gdtype, port in queries:
         d = replies.get(key)
         if not (d and d.get("ok")):
+            _remember_map_failed(server, port)
             result[key] = (None, None, None)
             continue
         _remember_map(server, port, d.get("p"))

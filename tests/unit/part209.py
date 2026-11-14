@@ -354,3 +354,32 @@ try:
 finally:
     _p9_restore_all()
     _shutil209.rmtree(_TMP209, ignore_errors=True)
+
+
+# A player poll whose query got no reply records that in game_map's cache, so the dashboard's map
+# lookup does not run its own failing query (a Valheim on -crossplay: 4.4 s per lookup on the test
+# host); a failure never replaces a map that is still good.
+def _map_fail209():
+    srv = NS(id=920991, host="127.0.0.1", is_local=True)
+    calls = []
+    saved = (_cron209._gamedig_reply, _cron209._core.shell_as_game_user, _cron209._core.game_idents_ok)
+    _cron209._gamedig_reply = lambda *a, **k: None
+    _cron209._core.shell_as_game_user = lambda *a, **k: (calls.append(a), ("", "", 0))[1]
+    _cron209._core.game_idents_ok = lambda *a, **k: True
+    try:
+        _cron209._game_map_cache.pop((srv.id, 2456), None)
+        _cron209.player_slots(srv, "vhserver", game_type="vh", port=2456)
+        first = (_cron209.game_map(srv, "vhserver", game_type="vh", port=2456), len(calls))
+        _cron209._game_map_cache[(srv.id, 2456)] = (_time209.time() + 100, "Meadows")
+        _cron209.player_slots(srv, "vhserver", game_type="vh", port=2456)
+        kept = _cron209.game_map(srv, "vhserver", game_type="vh", port=2456)
+    finally:
+        (_cron209._gamedig_reply, _cron209._core.shell_as_game_user, _cron209._core.game_idents_ok) = saved
+        _cron209._game_map_cache.pop((srv.id, 2456), None)
+    return first, kept
+
+
+_mf209 = _map_fail209()
+eq("dashboard map: after a player poll that got no reply, the map lookup answers from the cache (no query of its own), "
+   "and a failure never replaces a map that is still good",
+   _mf209, (("", 0), "Meadows"))
