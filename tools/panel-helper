@@ -277,13 +277,15 @@ CRON_ENTRY_RE = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,9})?[ \t]")
 
 
 def cron_journal_account_argv():
-    """journalctl's argv for journal-cron-account: cron's lines in the window, newest first.
+    """The journalctl argv for journal-cron-account: cron's lines in the window, newest first.
 
     `-r --since` with no `-n` is bounded by the window: journalctl walks back from the end and
     stops at the first entry older than it (see JOURNAL_SINCE for why `-n` with a match is not).
     """
     return ["journalctl", "-r", "_COMM=cron", "--since", CRON_JOURNAL_SINCE, "-o", "short-unix",
             "--no-pager"]
+
+
 LOG_FILES = {
     "fail2ban": "/var/log/fail2ban.log",
     "auth": "/var/log/auth.log",
@@ -6298,31 +6300,42 @@ def do_journal_cron_account(args, content):
     command (its newest run) and stops after CRON_JOURNAL_MATCHES of them. Whatever it prints is
     that command's newest run in the window, wherever the read stopped.
     """
-    marker = "(%s) CMD " % args[0]
     argv = cron_journal_account_argv()
     argv[0] = resolve(argv[0])
     proc = subprocess.Popen(argv, shell=False, env=_clean_env(),  # nosec B603 - fixed argv
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace")
-    seen, matched = set(), 0
     try:
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            at = line.find(marker)
-            if at < 0 or len(line) > CRON_JOURNAL_LINE_MAX or not CRON_ENTRY_RE.match(line):
-                continue
-            if line[at:] not in seen:
-                seen.add(line[at:])
-                sys.stdout.write(line + "\n")
-            matched += 1
-            if matched >= CRON_JOURNAL_MATCHES:
-                break
+        for line in newest_cron_lines(proc.stdout, "(%s) CMD " % args[0]):
+            sys.stdout.write(line + "\n")
     finally:
-        if proc.poll() is None:
+        # Still running means this read stopped it: it has what it came for.
+        stopped = proc.poll() is None
+        if stopped:
             proc.kill()
         proc.stdout.close()
         rc = proc.wait()
-    return 0 if matched >= CRON_JOURNAL_MATCHES or rc == 0 else 1
+    return 0 if stopped or rc == 0 else 1
+
+
+def newest_cron_lines(lines, marker):
+    """The first line of each command among `lines` (newest first) that carry `marker`.
+
+    Only an entry's first line (CRON_ENTRY_RE) up to CRON_JOURNAL_LINE_MAX counts, and the read
+    ends after CRON_JOURNAL_MATCHES of them. `marker` is found as text, never as a pattern.
+    """
+    seen, matched = set(), 0
+    for line in lines:
+        line = line.rstrip("\n")
+        at = line.find(marker)
+        if at < 0 or len(line) > CRON_JOURNAL_LINE_MAX or not CRON_ENTRY_RE.match(line):
+            continue
+        matched += 1
+        if line[at:] not in seen:
+            seen.add(line[at:])
+            yield line
+        if matched >= CRON_JOURNAL_MATCHES:
+            return
 
 
 def do_content_scan(args, content):

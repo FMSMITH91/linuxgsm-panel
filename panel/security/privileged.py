@@ -133,9 +133,11 @@ CRON_JOURNAL_LINE_MAX = 4096
 
 
 def cron_journal_account_argv():
-    """journalctl's argv for journal-cron-account: cron's lines in the window, newest first."""
+    """The journalctl argv for journal-cron-account: cron's lines in the window, newest first."""
     return ["journalctl", "-r", "_COMM=cron", "--since", CRON_JOURNAL_SINCE, "-o", "short-unix",
             "--no-pager"]
+
+
 LOG_FILES = {
     "fail2ban": "/var/log/fail2ban.log",
     "auth": "/var/log/auth.log",
