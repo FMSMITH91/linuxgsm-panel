@@ -1609,6 +1609,7 @@ _VERB_SAMPLES = {
     "gamedig-install": [],
     "nodesource-setup": [],
     "journal-cron": [],
+    "journal-cron-account": ["codserver"],
     "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
     "tailscale-up-login": ["yes", "-"],
     "os-update-run": [],

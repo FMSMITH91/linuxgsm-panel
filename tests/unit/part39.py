@@ -824,8 +824,9 @@ _READ_VERBS39 = frozenset({
     "apt-any-running", "apt-upgrade-running", "content-game-present", "content-scan",
     "content-script-present", "crontab-list", "disk-free", "dpkg-lock-held", "f2b-log-lines",
     "f2b-status", "f2b-status-jail", "game-backup-read", "game-dir-tar", "game-file-read",
-    "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
-    "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running", "pro-status",
+    "gmod-mount-read", "journal", "journal-cron", "journal-cron-account", "lgsm-discover",
+    "listening-sockets", "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running",
+    "pro-status",
     "restart-flags", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
     "ufw-show-added", "ufw-status", "ufw-stored-rules",
 })

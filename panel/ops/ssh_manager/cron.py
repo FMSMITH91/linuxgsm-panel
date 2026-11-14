@@ -463,13 +463,23 @@ def _read_cron_run_times(server, user):
     they last ran. Cron logs the command it ran but not its exit status, so this is time-only.
     Best-effort (empty if cron logging is off/unavailable).
     """
-    # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went
-    # into a grep pattern running as root. The verb reads the window; the filtering is here.
-    out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
-    # The verb prints 14 days OLDEST FIRST, and every transport keeps the first _MAX_OUTPUT_BYTES
-    # and discards the rest. A busy host's cron journal passes 8 MB well inside that window, so a
-    # read at the cap holds only the oldest days and "last run" would be the last run BEFORE the
-    # cut — days stale, shown as current. Such a read says nothing about when a job last ran.
+    # journal-cron-account answers with the newest line of each command THIS account ran: a few
+    # lines. journal-cron, which printed every account's 14 days oldest first, passed the
+    # transport's output cap on a host with a few */5 jobs (the read below then reports nothing),
+    # and it is only asked now of a panel-host helper too old for the new verb.
+    try:
+        out, err, rc = _core.run_privileged(server, "journal-cron-account", [user], timeout=12,
+                                            merge_stderr=False)
+    except _priv.VerbError:
+        return {}           # not a name the panel acts on (crontab-list refuses it too)
+    if rc == 2 and "unknown verb" in (err or ""):
+        # The panel host's helper predates the verb: install.sh refreshes it, a plain git pull
+        # does not. The window read, as before; filtered here.
+        out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
+    # Every transport keeps the first _MAX_OUTPUT_BYTES and discards the rest. journal-cron prints
+    # its window OLDEST first, so a read at the cap holds only the oldest days, and "last run"
+    # would be the last run BEFORE the cut — days stale, shown as current. Such a read says
+    # nothing about when a job last ran.
     if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - _JOURNAL_CAP_MARGIN:
         _core._log.warning("cron journal read for %s reached the output cap; last-run times from "
                            "it would be stale, so none are reported", user)
@@ -478,7 +488,11 @@ def _read_cron_run_times(server, user):
 
 
 def _cron_run_times_from(out, marker):
-    """{command: last_run_epoch} from the journal text `out`, for the lines carrying `marker`."""
+    """{command: last_run_epoch} from the journal text `out`, for the lines carrying `marker`.
+
+    In either order: journal-cron-account prints newest first, journal-cron oldest first, so the
+    newest time seen for a command is the one kept.
+    """
     # Over-long lines are skipped before anything else looks at them. The journal is the remote's
     # to write, and this runs on the request greenlet: the regex that used to pull the command out
     # (`\)\s+CMD\s+\((.*)\)\s*$`) is quadratic on a line of repeated ") CMD (" fragments with
@@ -498,7 +512,7 @@ def _cron_run_times_from(out, marker):
         m = _R39C_CRON_EPOCH.match(line)
         if not m:
             continue
-        times[cmd] = int(m.group(1))   # chronological log → last occurrence wins
+        times[cmd] = max(times.get(cmd, 0), int(m.group(1)))
     return times
 
 
