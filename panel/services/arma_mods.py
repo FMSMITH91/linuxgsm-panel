@@ -167,15 +167,19 @@ def save(server, user, selfname, posted):
         state = read_state(server, user, selfname)
         if state is None:
             return False, UNREAD, {}, {}
-        before = {k: state[k] for k in KEYS}
-        lists, why = check_lists(state, posted)
-        if why:
-            return False, why, before, before
-        changed = {k: join_value(lists[k]) for k in KEYS if lists[k] != before[k]}
-        locked = [k for k in changed if k in state["secrets"]]
-        if locked:
-            return False, IN_SECRETS, before, before
-        if not changed:
-            return True, "", before, before
-        ok, msg = _smf.lgsm_write_config(server, user, selfname, changed)
-        return ok, ("" if ok else msg), before, (lists if ok else before)
+        return _save_checked(server, user, selfname, state, posted)
+
+
+def _save_checked(server, user, selfname, state, posted):
+    """save's checks and write, once the state is read: (ok, why, before, after)."""
+    before = {k: state[k] for k in KEYS}
+    lists, why = check_lists(state, posted)
+    if why:
+        return False, why, before, before
+    changed = {k: join_value(lists[k]) for k in KEYS if lists[k] != before[k]}
+    if any(k in state["secrets"] for k in changed):
+        return False, IN_SECRETS, before, before
+    if not changed:
+        return True, "", before, before
+    ok, msg = _smf.lgsm_write_config(server, user, selfname, changed)
+    return ok, ("" if ok else msg), before, (lists if ok else before)

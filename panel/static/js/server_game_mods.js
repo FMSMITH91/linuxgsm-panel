@@ -320,22 +320,28 @@
   // ── Minecraft Bedrock: shared packs, on or off for the world ──────────────────────────────────
   var mcb = {busy: false};
 
+  // Why the world's packs cannot be changed, or ''.
+  function mcbProblem(d) {
+    if (!d.world) return tf('The panel can\'t tell which world folder this server uses: {why}.', {why: d.why || ''});
+    if (!d.world_dir) return _tr('The world folder isn\'t there yet: start the server once, then turn packs on here.');
+    if ((d.bad_lists || []).length) return _tr('The world\'s pack list isn\'t the list Bedrock writes, so the panel won\'t change it.');
+    return '';
+  }
+
+  function mcbRow(p, problem) {
+    var label = (p.type === 'behavior' ? _tr('Behavior pack') : _tr('Resource pack')) + ': ' + (p.name || p.folder);
+    if (p.ok) label += ' ' + p.version.join('.') + ' · ' + (p.enabled ? _tr('On') : _tr('Off'));
+    var buttons = p.ok && !problem ? [textButton(p.enabled ? _tr('Turn off') : _tr('Turn on'), 'gmMcbSet', [p.type, p.uuid, !p.enabled])] : [];
+    return listRow(label, p.ok ? '' : _tr('(no readable manifest.json)'), buttons);
+  }
+
   function mcbDraw(d) {
-    var w = el('gm-mcb-world');
-    var problem = !d.world ? tf('The panel can\'t tell which world folder this server uses: {why}.', {why: d.why || ''})
-      : (!d.world_dir ? _tr('The world folder isn\'t there yet: start the server once, then turn packs on here.')
-        : ((d.bad_lists || []).length ? _tr('The world\'s pack list isn\'t the list Bedrock writes, so the panel won\'t change it.') : ''));
+    var w = el('gm-mcb-world'), problem = mcbProblem(d);
     w.textContent = problem || tf('World: {world}', {world: d.world});
     w.className = 'small mb-1 text-break ' + (problem ? 'text-warning' : 'text-secondary');
     var ul = el('gm-mcb-list');
     ul.textContent = '';
-    (d.packs || []).forEach(function (p) {
-      var label = (p.type === 'behavior' ? _tr('Behavior pack') : _tr('Resource pack')) + ': ' + (p.name || p.folder)
-        + (p.ok ? ' ' + p.version.join('.') + ' · ' + (p.enabled ? _tr('On') : _tr('Off')) : '');
-      var canEdit = p.ok && !problem;
-      var buttons = canEdit ? [textButton(p.enabled ? _tr('Turn off') : _tr('Turn on'), 'gmMcbSet', [p.type, p.uuid, !p.enabled])] : [];
-      ul.appendChild(listRow(label, p.ok ? '' : _tr('(no readable manifest.json)'), buttons));
-    });
+    (d.packs || []).forEach(function (p) { ul.appendChild(mcbRow(p, problem)); });
     if (!(d.packs || []).length) ul.appendChild(emptyRow(_tr('No packs in behavior_packs or resource_packs.')));
   }
 

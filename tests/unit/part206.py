@@ -12,10 +12,13 @@ r"""Part 206 of the unit suite: Mods cards for Arma 3 / DayZ folders, NS2: Comba
 Every route check drives part12's app with the account's shell run by bash against a temp home and
 the transport tripwire armed. Nothing reaches a host or data/.
 """
+import hashlib as _hl206
+import json as _js206
 import os as _os206
 import shutil as _shutil206
 import subprocess as _sp206  # nosec B404 - bash over the commands this part builds, in a temp folder
 import tempfile as _tf206
+import zipfile as _zf206
 
 from unit.part01 import check, eq
 from unit.part05 import _root
@@ -314,9 +317,8 @@ def _fctr_post206(c, sid, name, enabled):
 
 
 def _fctr_list_json206(home):
-    import json as _json206
     try:
-        return _json206.loads(_read206(_os206.path.join(home, "serverfiles", "mods", "mod-list.json")) or "null")
+        return _js206.loads(_read206(_os206.path.join(home, "serverfiles", "mods", "mod-list.json")) or "null")
     except ValueError:
         return None
 
@@ -409,10 +411,6 @@ check("files page: a Factorio server's Mods tab holds the Factorio card and says
       'id="gm-fctr-card"' in _R206.get("f_page", "") and "Factorio mod portal" in _R206.get("f_page", ""))
 
 # ── 6. Minecraft Java: datapacks, and Modrinth's, through the app ───────────────────────────────
-import hashlib as _hl206  # noqa: E402 - with the section that uses it
-import json as _js206  # noqa: E402
-import shutil as _which206  # noqa: E402
-import zipfile as _zf206  # noqa: E402
 
 _MCDEF206 = ('startparameters="nogui"\nextraparams=""\nexecutabledir="${serverfiles}"\n'
              'executable="./minecraft_server.jar"\npreexecutable="java -Xmx${javaram}M -jar"\n')
@@ -527,7 +525,7 @@ eq("datapacks route: GET finds the world level-name names, its datapacks (files 
    (_mg206.get("world"), [(p.get("name"), p.get("folder"), p.get("managed")) for p in _mg206.get("datapacks", [])],
     _mg206.get("mc_version"), _mg206.get("dir"), _mg206.get("kind")),
    ("world", [("VanillaTweaks (1).zip", False, True), ("vt", True, True)],
-    "1.21.4" if _which206.which("unzip") else None, "serverfiles/world/datapacks", "java"))
+    "1.21.4" if _shutil206.which("unzip") else None, "serverfiles/world/datapacks", "java"))
 check("datapacks route: search asks Modrinth for datapacks on the server's version",
       _R206.get("m_search", {}).get("hits", [{}])[0].get("project_id") == "AbCdEf12"
       and "project_type%3Adatapack" in _R206.get("m_search_url", "") and "versions%3A1.21.4" in _R206.get("m_search_url", ""),

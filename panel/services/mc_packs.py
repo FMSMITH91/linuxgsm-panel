@@ -203,21 +203,33 @@ def _texts_and(server, user, selfname, sh):
 # ── Java datapacks ──────────────────────────────────────────────────────────────────────────────
 def java_world(texts, files, game_type):
     """The world folder a Java server loads: (name, None), or (None, why)."""
-    values, why = _wr.cfg_values(texts, _JAVA_KEYS)
-    if why is None:
-        judge = _wr.pmc_start_problem if game_type == "pmc" else _wr.mc_start_problem
-        why = _wr.java_pre_problem(values.get("preexecutable") or "", judge) or judge(values)
-    if why is None and files.get("props") is None:
-        why = "server.properties could not be read"
-    if why is None and game_type == "pmc":
-        why = _wr.bukkit_problem(files.get("bukkit") or "") if files.get("bukkit") is not None else \
-            "bukkit.yml could not be read"
+    why = _java_start_problem(texts, game_type) or _java_files_problem(files, game_type)
     if why is not None:
         return None, why
     name, why = _wr.level_name(files.get("props") or "")
     if name is not None and name.lower() in _wr._WWR_JAVA_SERVER_DIRS:
         name, why = None, "level-name names one of the server's own folders"
     return name, why
+
+
+def _java_start_problem(texts, game_type):
+    """Why the LinuxGSM config may move the world (as the world reset judges it), else None."""
+    values, why = _wr.cfg_values(texts, _JAVA_KEYS)
+    if why is not None:
+        return why
+    judge = _wr.pmc_start_problem if game_type == "pmc" else _wr.mc_start_problem
+    return _wr.java_pre_problem(values.get("preexecutable") or "", judge) or judge(values)
+
+
+def _java_files_problem(files, game_type):
+    """Why server.properties (or, for Paper, bukkit.yml) does not settle the world folder, else None."""
+    if files.get("props") is None:
+        return "server.properties could not be read"
+    if game_type != "pmc":
+        return None
+    if files.get("bukkit") is None:
+        return "bukkit.yml could not be read"
+    return _wr.bukkit_problem(files.get("bukkit") or "")
 
 
 def java_mc_version(files, game_type):
@@ -268,16 +280,16 @@ def manifest_header(text):
     except ValueError:
         return None
     header = data.get("header") if isinstance(data, dict) else None
-    if not isinstance(header, dict):
-        return None
-    uuid, version = header.get("uuid"), header.get("version")
-    if not isinstance(uuid, str) or not _UUID.match(uuid):
-        return None
-    if not (isinstance(version, list) and len(version) == 3
-            and all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in version)):
+    if not isinstance(header, dict) or not _valid_header(header.get("uuid"), header.get("version")):
         return None
     name = header.get("name") if isinstance(header.get("name"), str) else ""
-    return uuid.lower(), version, name[:100]
+    return header["uuid"].lower(), header["version"], name[:100]
+
+
+def _valid_header(uuid, version):
+    """Whether a manifest header's uuid is a UUID and its version three whole numbers."""
+    return (isinstance(uuid, str) and bool(_UUID.match(uuid)) and isinstance(version, list) and len(version) == 3
+            and all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in version))
 
 
 def world_list(text):
