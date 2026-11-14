@@ -1792,6 +1792,12 @@ def _slots_from_reply(d):
 
 _game_map_cache = _core.register_remote_cache({})   # {(remote_id, port): (expiry, mapname)}
 _GAME_MAP_TTL = 30
+# How long a lookup whose query FAILED is remembered. At _GAME_MAP_TTL a server gamedig cannot read
+# (a Valheim on -crossplay answers no Steam query) cost a failing query, measured at 4.4 s and held
+# inside the dashboard's metrics request, every ~36 s per open dashboard: p95 4.8 s against a p50
+# of 0.38 s. The map is display only, and the player poller's reply replaces this entry as soon as
+# the server answers one (_remember_map), so a server that starts answering is not held back by it.
+_GAME_MAP_FAIL_TTL = 300
 # How long a map the PLAYER POLLER read stays good. Longer than the poller's own period (45 s plus
 # the pass), so the dashboard, which polls every 10 s, finds the poller's answer instead of running
 # gamedig itself. The map is display only; in steady state it is at most one poll period old.
@@ -1874,19 +1880,26 @@ def _lookup_map(server, user, gdtype, port, key):
     """Run game_map's own gamedig read and cache it — unless something fresher landed meanwhile."""
     started = time.time()
     cmd = (f"gamedig --type {gdtype} {gamedig_target(server, gdtype, port)} 2>/dev/null "
-           f"| jq -r '.map // \"\"' 2>/dev/null")
-    val = ""
+           f"| jq -r {_core._quote(_MAP_JQ)} 2>/dev/null")
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
-        val = _map_text(_last_line(out)) or ""
+        line = _last_line(out)
     except Exception:
-        val = ""
+        line = ""
+    answered = line.startswith("=")
+    val = (_map_text(line[1:]) or "") if answered else ""
     # The player poller may have written a longer-lived entry while this query ran. That entry is
     # at least as new as this answer, so this one must not shorten it: overwriting it with a 30 s
     # expiry stamped at the START of this query sent the next dashboard poll to gamedig again.
     if _cached_map(key) is None:
-        _game_map_cache[key] = (started + _GAME_MAP_TTL, val)
+        _game_map_cache[key] = (started + (_GAME_MAP_TTL if answered else _GAME_MAP_FAIL_TTL), val)
     return val
+
+
+# game_map's own read: "=" and the map (one line) when gamedig answered, nothing when it did not.
+# gamedig prints its failure as JSON on stdout ({"error": ...}), with no players array, so the
+# marker is what tells "answered, no map" from "did not answer".
+_MAP_JQ = 'if (.players|type) == "array" then "=" + ((.map // "")|tostring|split("\\n")|join(" ")) else empty end'
 
 
 # How many queries one host's batched player poll runs at once, and how long each may take. The

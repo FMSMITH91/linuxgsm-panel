@@ -393,12 +393,12 @@ def _metrics_work(servers):
     servers meant ~1000 queries per poll. The rows are already loaded here (get_user_servers
     joinedloads the host), so read them once and hand the workers plain values.
     """
-    return [(gs.remote, gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.remote_id)
-            for gs in servers if gs.installed]
+    return [(gs.remote, gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.remote_id,
+             gs.status) for gs in servers if gs.installed]
 
 
 def _host_metrics_work(servers):
-    """Group the installed servers by HOST: [(remote, [(sid, short_name, port, game_type, query_type)])].
+    """Group the installed servers by HOST: [(remote, [(sid, short_name, port, game_type, query_type, status)])].
 
     The rows are read HERE, in the caller's thread, for the same reason _metrics_work does it — a
     worker that touches the ORM needs a session of its own, which costs a query per server on an
@@ -409,8 +409,19 @@ def _host_metrics_work(servers):
         if not gs.installed or gs.remote is None:
             continue
         by_host.setdefault(gs.remote_id, (gs.remote, []))[1].append(
-            (gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type))
+            (gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.status))
     return list(by_host.values())
+
+
+def _map_wanted(m, status):
+    """Whether the dashboard asks for a server's map: it runs, and its port was not found closed.
+
+    `status` is [gs.status] from the work row ([] from an older caller's row: asked, as before).
+    "offline" is the port scan's answer (/api/servers), the rule _batchable already uses: a server
+    whose port is closed answers no query, and its map lookup cost a failing gamedig run (4.4 s,
+    measured) held inside the metrics request.
+    """
+    return bool(m.get("game_procs")) and not (status and status[0] == "offline")
 
 
 def _query_host_metrics(work, want_map=True):
@@ -430,7 +441,7 @@ def _query_host_metrics(work, want_map=True):
     try:
         sample = host_live_metrics(remote)
     except Exception:
-        return [(sid, None, getattr(remote, "id", None), "") for sid, _s, _p, _g, _q in games]
+        return [(row[0], None, getattr(remote, "id", None), "") for row in games]
     # The same ram_total sentinel the sampler below already applies, and for the same reason —
     # this guarded only the RAISING transport. host_live_metrics builds its answer up front
     # ({"cpu_percent": 0.0, "ram_total": 0, ...}), runs one command whose rc it discards, and
@@ -443,12 +454,12 @@ def _query_host_metrics(work, want_map=True):
     # unreachable (or at 95% disk) rendered as "Reachable · CPU 0% · RAM 0% · Disk 0%". None is
     # the answer the route already knows how to show, because it is what the raising path gives.
     if not (sample.get("host") or {}).get("ram_total"):
-        return [(sid, None, getattr(remote, "id", None), "") for sid, _s, _p, _g, _q in games]
+        return [(row[0], None, getattr(remote, "id", None), "") for row in games]
     out = []
-    for sid, short_name, port, game_type, query_type in games:
+    for sid, short_name, port, game_type, query_type, *status in games:
         m = metrics_for_game(sample, short_name, port)
         mp = ""
-        if want_map and m.get("game_procs"):     # only query the map for a running server
+        if want_map and _map_wanted(m, status):
             try:
                 mp = game_map(remote, short_name, game_type, port, query_type)
             except Exception:
@@ -465,13 +476,13 @@ def _query_server_metrics(work):
     pool thread, where a session of its own costs a query per server and sharing the caller's would
     not be thread-safe. Reads only already-loaded columns. Never raises.
     """
-    remote, sid, short_name, port, game_type, query_type, remote_id = work
+    remote, sid, short_name, port, game_type, query_type, remote_id, *status = work
     try:
         m = server_live_metrics(remote, short_name, port)
     except Exception:
         return sid, None, remote_id, ""
     mp = ""
-    if m.get("game_procs"):     # only query the map for a running server
+    if _map_wanted(m, status):
         try:
             mp = game_map(remote, short_name, game_type, port, query_type)
         except Exception:
