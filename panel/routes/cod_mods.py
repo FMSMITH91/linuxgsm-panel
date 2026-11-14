@@ -86,6 +86,6 @@ def register(app):
         if not _can_manage_files() or (request.method == "POST" and not _fpm_can_edit()):
             return jsonify({"success": False, "error": "Permission denied", "message": "Permission denied"}), 403
         if _cm.mods_kind(gs.game_type) != "cod":
-            return jsonify({"success": False, "error": "Not a Call of Duty server.",
-                            "message": "Not a Call of Duty server."}), 404
+            said = i18n.tr("Not a Call of Duty server.")
+            return jsonify({"success": False, "error": said, "message": said}), 404
         return _read_answer(gs) if request.method == "GET" else _switch_answer(gs)

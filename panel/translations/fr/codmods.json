@@ -18,5 +18,6 @@
   "Couldn't save the config.": "Impossible d'enregistrer la configuration.",
   "Nothing to change.": "Rien à modifier.",
   "Saved. Restart the server to start it with {mod}.": "Enregistré. Redémarrez le serveur pour le démarrer avec {mod}.",
-  "Saved. Restart the server to start it without a mod.": "Enregistré. Redémarrez le serveur pour le démarrer sans mod."
+  "Saved. Restart the server to start it without a mod.": "Enregistré. Redémarrez le serveur pour le démarrer sans mod.",
+  "Not a Call of Duty server.": "Ce n'est pas un serveur Call of Duty."
 }

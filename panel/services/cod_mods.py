@@ -70,6 +70,8 @@ _VALUE_RE = re.compile(r"(?:mods/)?" + _NAME + r"\Z")
 # At most this many folders are listed (a mods folder is a handful).
 _MAX_LISTED = 200
 
+# What a byte the config file holds that is not UTF-8 reads as: such a file is not rewritten.
+_UNDECODABLE = chr(0xFFFD)
 _LIST_B, _LIST_E = "__CODM_LIST_B__", "__CODM_LIST_E__"
 
 # `+set fs_game <value>` as the server receives it (a parsed, merged value) and as a cfg file spells
@@ -78,7 +80,7 @@ _TOKEN = r'(?:\\?"[^"\s]*\\?"|[^\s"]+)'
 _FSG_RE = re.compile(r"\+set\s+fs_game\s+(" + _TOKEN + ")")
 _FSG_RAW_MID = re.compile(r"\+set[ \t]+fs_game[ \t]+" + _TOKEN + r"[ \t]+")
 _FSG_RAW_END = re.compile(r"[ \t]*\+set[ \t]+fs_game[ \t]+" + _TOKEN)
-_SP_LINE = re.compile(r"^\s*startparameters\s*=(.*)$")
+_SP_LINE = re.compile(r"^\s*startparameters\s*=(.*)\Z")
 
 # Why a switch was not made. Whole sentences, translated by the route.
 UNREAD = "Couldn't read this server's config and mod folders — the host didn't answer. Nothing was changed."
@@ -236,7 +238,7 @@ def new_instance_text(texts, value):
     inst = texts[3]
     own = _raw_rhs(inst)
     new = with_fs_game(own if own is not None else inherited, value)
-    if new is None or "�" in inst:
+    if new is None or _UNDECODABLE in inst:
         return None, NOT_PLAIN
     if inherited is not None and new == inherited.strip():
         # The line now says what the files LinuxGSM reads first already say: take it out.

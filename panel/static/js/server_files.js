@@ -1954,7 +1954,7 @@ var _codModsUpload = '';   // the folder a mod is uploaded into, from the last l
 function codModsMsg(t,cls){ var m=document.getElementById('codmods-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
 function _codModRow(label, value, active, missing){
   var right = active
-    ? '<span class="badge text-bg-success">'+esc(_tr('Active'))+'</span>'
+    ? '<span class="btn btn-sm btn-success disabled" aria-disabled="true">'+esc(_tr('Active'))+'</span>'   // a button's height, so a switch moves no row
     : '<button class="btn btn-sm btn-outline-primary fpm-edit"' + _da('codModUse', [value, '@self']) + '>'+esc(_tr('Use'))+'</button>';
   var note = missing ? ' <span class="text-warning">'+esc(_tr('(folder not found)'))+'</span>' : '';
   return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1 gap-2">'
