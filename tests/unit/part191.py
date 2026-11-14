@@ -16,8 +16,9 @@ Held here:
   blank in it goes, the other worlds and the server's own files stay; a worlds folder that is a
   symlink is refused, nothing deleted.
 * The card and the sweep, through the app: both games get a reset card with their own text; the
-  player box is ticked for Paper (gamedig counts it) and for Bedrock (its console log counts it,
-  part200). A due reset runs state, stop, backup, delete, start, or stops short as each refusal says.
+  player box is ticked for Paper (gamedig counts it); for Bedrock it starts unticked although its
+  console log counts players (part200), because no real client join has been counted on a test server
+  yet. A due reset runs state, stop, backup, delete, start, or stops short as each refusal says.
 
 HOW IT RUNS. part12's app with its transport tripwire armed and every host call stubbed (part183's
 sweep helper); host commands run under local bash in a temp folder (part183's helper). Times are
@@ -457,9 +458,9 @@ check("world reset page: Paper's card says its world folder goes and plugins and
       and "plugins, worlds a plugin created, Paper" in _pg191.get("pmc", "")
       and "s folder in worlds/ (the one level-name names" in _pg191.get("mcb", "")
       and "Packs the old world applied are not applied to the new one" in _pg191.get("mcb", ""), "")
-check("world reset page: the player box is ticked for Paper and for Bedrock, whose card says its players are "
-      "counted from the console log, which LinuxGSM's console logging must keep",
-      'id="wipe-wait" checked' in _pg191.get("pmc", "") and 'id="wipe-wait" checked' in _pg191.get("mcb", "")
+check("world reset page: the player box is ticked for Paper and starts unticked for Bedrock, whose card says its "
+      "players are counted from the console log, which LinuxGSM's console logging must keep",
+      'id="wipe-wait" checked' in _pg191.get("pmc", "") and 'id="wipe-wait">' in _pg191.get("mcb", "")
       and "counted from the joins and leaves in the server's console log" in _pg191.get("mcb", "")
       and "needs LinuxGSM's console logging on" in _pg191.get("mcb", ""), "")
 

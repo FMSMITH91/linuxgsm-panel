@@ -621,7 +621,7 @@
       </div>
       <div class="col-12">
         <div class="form-check mb-0">
-          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type != 'fctr' %} checked{% endif %}>
+          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type not in ('fctr', 'mcb') %} checked{% endif %}>
           <label class="form-check-label small" for="wipe-wait">Wait until the server is empty (up to 12 hours)</label>
         </div>
       </div>
