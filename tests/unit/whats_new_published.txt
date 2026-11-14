@@ -3,6 +3,9 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+da70d0b4 Databases for game plugins.
+bb0a111a Backups include a server's databases.
+a9c9ae51 Database passwords stay off command lines and logs.
 7a63c643 Mods for Arma 3 and DayZ: the mod folders the server loads.
 3de04ab0 NS2: Combat's mods in the Steam Workshop card.
 0b30b0c1 Factorio mods on or off.

@@ -558,7 +558,8 @@ check("remote delete: delete_remote clears the host's database rows (routes/data
 def _page208():
     out = {}
     sid = _p9_new_server(P9_HOST, "p208p", "pmc", 25567, name="p208 page")
-    users = [_user208("pv", ["view_servers", "view_files"], [P9_HOST]), _user208("pf", ["view_files"], [P9_HOST])]
+    users = [_user208("pv", ["view_servers", "view_files"], [P9_HOST]), _user208("pf", ["view_files"], [P9_HOST]),
+             _user208("pm", ["view_servers", "manage_databases"], [P9_HOST])]
     _S208.reset()
     trips = len(_P9_TRIPPED)
     try:
@@ -569,6 +570,8 @@ def _page208():
         _p9_patch(_sf208, "_host_timezone_cached", lambda *a, **k: "")   # the page's background read
         for key, uid in (("view", users[0][0]), ("files", users[1][0])):
             out[key] = _p9_client(uid).get("/server/%d/files" % sid).get_data(as_text=True)
+        _r = _p9_client(users[2][0]).get("/server/%d/files" % sid)
+        out["dbonly"] = (_r.status_code, _r.get_data(as_text=True))
         out["calls"] = list(_S208.calls)
         out["trips"] = len(_P9_TRIPPED) - trips
     finally:
@@ -588,6 +591,11 @@ check("files page: the view permission gets the Databases tab, its card (read-on
       'data-sfsub-btn="databases"' in _pg208.get("view", "") and 'id="db-card"' in _pg208.get("view", "")
       and "server_databases.js" in _pg208.get("view", "") and "data-fpm-ro" in
       _pg208.get("view", "").split('id="db-card"', 1)[-1][:120], _pg208.get("view", "")[:200])
+_dbo208 = _pg208.get("dbonly", (0, ""))
+check("files page: a user whose only grant here is Manage databases can open it and reach the Databases tab, "
+      "and is not given the files",
+      _dbo208[0] == 200 and 'data-sfsub-btn="databases"' in _dbo208[1] and '"view": false' in _dbo208[1]
+      and '"edit": false' in _dbo208[1], repr(_dbo208[0]))
 check("files page: the render reached no host transport", _pg208.get("trips") == 0, repr(_P9_TRIPPED[-2:]))
 check("files page: without the view permission no tab, card or script; rendering asked the host nothing",
       'data-sfsub-btn="databases"' not in _pg208.get("files", "x") and "server_databases.js" not in _pg208.get("files", "x")

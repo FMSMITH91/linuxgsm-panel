@@ -1942,7 +1942,8 @@ def _fpm_can_edit():
 
 # Any one of these is a reason to open a server's Files & Config page: its Config and Files tabs
 # (VIEW_FILES), its Schedule, Alerts and Mods tabs (MANAGE_SERVERS) and its Backups tab.
-FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP, RESTORE_BACKUP)
+# MANAGE_DATABASES too: its Databases tab is on this page, and a database manager may hold nothing else here.
+FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP, RESTORE_BACKUP, MANAGE_DATABASES)
 
 
 def files_access(user, perms=None):

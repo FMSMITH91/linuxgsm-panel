@@ -14,6 +14,18 @@ compares git commits, not this file.
 
 ### Added
 
+- **Databases for game plugins.** A server's Files & Config page has a Databases tab: add a
+  MariaDB/MySQL database with one name, copy its host, port, name, user and password, or a
+  ready-made config for LuckPerms, CoreProtect, Plan, FiveM, SourceMod, extDB3 or MySQLOO; reset its
+  password, restore it, or delete it. A host with no database server installs MariaDB from Ubuntu
+  in one click, listening on that machine only; a MariaDB or MySQL server already there is used and
+  never reconfigured. A new permission, Manage databases, is given to no group until an admin
+  grants it.
+
+- **Backups include a server's databases.** Each backup first saves the server's databases into its
+  files, an uninstall deletes them (a copy stays on the host for 30 days), and a server removed from
+  the panel leaves its databases listed on the host's page.
+
 - **Mods for Arma 3 and DayZ: the mod folders the server loads.** The Mods tab lists the @folders in
   serverfiles and serverfiles/mods and edits LinuxGSM's Mods and Server mods lists in load order; Steam
   Workshop mods are still added after them by LinuxGSM.
@@ -1375,6 +1387,11 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Database passwords stay off command lines and logs.** The panel's database logins and each
+  database's password reach the database client only through its input, are scrubbed from any
+  error it prints, and are stored encrypted; every name and password a statement holds is checked
+  where the statement is made.
 
 - **World resets run only as a plain game account.** A scheduled world reset now checks, as the
   file tools do, that the game's account cannot become root before it deletes anything as that
