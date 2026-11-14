@@ -318,7 +318,7 @@ def _list198(crontab, status=None):
 
 
 _TAB198 = "*/5 * * * * %s\n0 5 * * * /home/codserver/codserver update\n" % _MON198
-_KEY198 = _sm_core.cron_times_key(_SRV198, "codserver")
+_KEY198 = _sm_cron.cron_times_key(_SRV198, "codserver")
 _sm_core.CRON_TIMES.pop(_KEY198, None)
 eq("cron list: an empty crontab (comments and blank lines only) reads no status and no journal",
    _list198("# nothing here\n\n"), ([], [("crontab-list",)]))
@@ -347,7 +347,7 @@ _e198 = _sm_core.CRON_TIMES[_KEY198]
 _sm_core.CRON_TIMES[_KEY198] = (_e198[0] - 61,) + _e198[1:]
 eq("cron list: ...and so does age: a read 61 s old is not reused", _list198(_TAB198)[1][2:],
    [("journal-cron-account", "hour"), ("journal-cron-account", "day")])
-eq("cron list: a record with no id is never kept", _sm_core.cron_times_key(NS(is_local=True), "codserver"), None)
+eq("cron list: a record with no id is never kept", _sm_cron.cron_times_key(NS(is_local=True), "codserver"), None)
 _sm_core.CRON_TIMES.pop(_KEY198, None)
 
 

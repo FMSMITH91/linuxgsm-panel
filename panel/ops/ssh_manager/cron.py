@@ -526,7 +526,7 @@ def _cron_read_capped(out, user):
 
 def _cron_run_times_for(server, user, wants):
     """_read_cron_run_times for list_cron_jobs, reused for _RUN_TIMES_TTL s per (host, account, jobs)."""
-    key = _core.cron_times_key(server, user)
+    key = cron_times_key(server, user)
     wanted = tuple(sorted(set(wants)))
     hit = _core.CRON_TIMES.get(key) if key else None
     if hit and hit[1] == wanted and 0 <= time.monotonic() - hit[0] < _RUN_TIMES_TTL:
@@ -539,6 +539,15 @@ def _cron_run_times_for(server, user, wants):
     return times
 
 
+def cron_times_key(server, user):
+    """_core.CRON_TIMES's key for `user` on `server`, or None for a record with no id (nothing is kept).
+
+    _core._rewrite_crontab drops the same (id, account) key.
+    """
+    sid = getattr(server, "id", None)
+    return (sid, user) if isinstance(sid, int) else None
+
+
 def _cron_journal_wants(lines, status):
     """The commands of the crontab `lines` whose last run only cron's journal can tell.
 
@@ -546,7 +555,7 @@ def _cron_journal_wants(lines, status):
     """
     wants = []
     for raw in lines:
-        sched, cmd = _split_cron_line(raw.strip())
+        cmd = _split_cron_line(raw.strip())[1]
         display_cmd, jid = _unwrap_cron_command(cmd)
         if not status.get(jid or _cron_job_id(display_cmd)):
             wants.append(display_cmd or cmd)
