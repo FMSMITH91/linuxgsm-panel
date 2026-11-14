@@ -824,7 +824,8 @@ def _fresh208(body, **over):
         "  const out = {}, txt = id => document.getElementById(id).textContent;\n"
         "  const walk = (e, f) => { f(e); (e.children || []).forEach(c => walk(c, f)); };\n"
         "  const find = (id, tag) => { const r = []; walk(document.getElementById(id), e => { if (e.tagName === tag) r.push(e); }); return r; };\n"
-        "  const acts = id => { const r = []; walk(document.getElementById(id), e => { if (e.attrs && e.attrs['data-action']) r.push(e.attrs['data-action']); }); return r; };\n"
+        "  const acts = id => { const r = []; walk(document.getElementById(id), e => {\n"
+        "    if (e.attrs && e.attrs['data-action']) r.push(e.attrs['data-action']); }); return r; };\n"
         "  reply(" + _js208.dumps(dict(_LIST208, **over)) + "); out.loaded = await dbLoad(true);\n"
         + body + "  console.log(JSON.stringify(out));\n"), "")
 

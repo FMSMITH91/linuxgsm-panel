@@ -322,6 +322,57 @@ def _r(verb, args, secrets=None):
     return p.returncode, p.stdout + p.stderr
 
 
+def _p207_dump_listed_once():
+    """Run db-dump through a real (buffered) stdout: each failed database is listed once."""
+    # Through a real (buffered) file, as the helper's stdout is: a forked writer must not write out
+    # the lines the parent had buffered before the fork a second time.
+    _reset(dump_fail="1")
+    _outf = _os207.path.join(_T, "stdout.txt")
+    _saved = (_sys207.stdin, _sys207.stdout, _sys207.stderr)
+    _sys207.stdin = _io207.StringIO(_priv207.helper_stdin("db-dump", ["mariadb", "socket", "game", _ACCT,
+                                                                        "gs12_lp", "gs12_x"], {}))
+    _sys207.stdout, _sys207.stderr = open(_outf, "w", encoding="utf-8"), _io207.StringIO()
+    try:
+        _rcf = _helper.main(["panel-helper", "db-dump", "mariadb", "socket", "game", _ACCT, "gs12_lp", "gs12_x"])
+    finally:
+        _sys207.stdout.close()
+        _sys207.stdin, _sys207.stdout, _sys207.stderr = _saved
+    eq("db-dump game (helper): each failed database is listed once (the forked writers print nothing twice)",
+       (_rcf, [x for x in open(_outf, encoding="utf-8").read().splitlines() if x.startswith(("failed=", "dumped="))]),
+       (1, ["failed=gs12_lp", "failed=gs12_x"]))
+
+
+def _p207_dump_presence(_dd):
+    """Check db-sizes' dump lines and db-import's rc 4 with no dump, on both paths (`_dd`: ~/panel-db-dumps)."""
+    # db-sizes says which databases have a dump in the files (a link is none); db-import with no dump
+    # answers rc 4 (the "no dump" sentence), whether the file or the whole directory is missing.
+    with _gz207.open(_os207.path.join(_dd, "gs12_x.sql.gz"), "wb") as _fh:
+        _fh.write(b"SELECT 1;\n")
+    _os207.utime(_os207.path.join(_dd, "gs12_x.sql.gz"), (1700000000, 1700000000))
+    for _side, _run in (("helper", _h), ("remote", _r)):
+        _reset(sizes="gs12_lp\t1\n")
+        _res = _run("db-sizes", *_VERB_ARGS["db-sizes"])
+        eq("db-sizes (%s): a dump=<name><TAB><mtime> line for each database with a dump in the server's files, none "
+           "for a link" % _side, (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]),
+           (0, ["dump=gs12_x\t1700000000"]))
+    _os207.rename(_dd, _dd + ".real")
+    _os207.symlink(_dd + ".real", _dd)
+    for _side, _run in (("helper", _h), ("remote", _r)):
+        _reset(sizes="gs12_lp\t1\n")
+        _res = _run("db-sizes", *_VERB_ARGS["db-sizes"])
+        eq("db-sizes (%s): a ~/panel-db-dumps that is a link is not read" % _side,
+           (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]), (0, []))
+    _os207.unlink(_dd)
+    _sh207.rmtree(_dd + ".real", ignore_errors=True)
+    for _what in ("directory", "file"):
+        for _side, _run in (("helper", _h), ("remote", _r)):
+            _reset()
+            _res = _run("db-import", *_VERB_ARGS["db-import"])
+            eq("db-import (%s): no dump (its %s missing) answers rc 4 and feeds the client nothing" % (_side, _what),
+               (_res[0], [s for s in _sqls() if s]), (4, []))
+        _os207.makedirs(_dd, exist_ok=True)
+
+
 try:
     # db-create: a free name is made, as the panel's statements, signed in with the login file.
     for _side, _run in (("helper", _h), ("remote", _r)):
@@ -470,22 +521,7 @@ try:
     _res = _h("db-dump", *_VERB_ARGS["db-dump"])
     check("db-dump game (helper): a dump that failed leaves no file and no .tmp behind",
           _res[0] == 1 and (not _os207.path.isdir(_dd) or _os207.listdir(_dd) == []), repr(_res))
-    # Through a real (buffered) file, as the helper's stdout is: a forked writer must not write out
-    # the lines the parent had buffered before the fork a second time.
-    _reset(dump_fail="1")
-    _outf = _os207.path.join(_T, "stdout.txt")
-    _saved = (_sys207.stdin, _sys207.stdout, _sys207.stderr)
-    _sys207.stdin = _io207.StringIO(_priv207.helper_stdin("db-dump", ["mariadb", "socket", "game", _ACCT,
-                                                                        "gs12_lp", "gs12_x"], {}))
-    _sys207.stdout, _sys207.stderr = open(_outf, "w", encoding="utf-8"), _io207.StringIO()
-    try:
-        _rcf = _helper.main(["panel-helper", "db-dump", "mariadb", "socket", "game", _ACCT, "gs12_lp", "gs12_x"])
-    finally:
-        _sys207.stdout.close()
-        _sys207.stdin, _sys207.stdout, _sys207.stderr = _saved
-    eq("db-dump game (helper): each failed database is listed once (the forked writers print nothing twice)",
-       (_rcf, [x for x in open(_outf, encoding="utf-8").read().splitlines() if x.startswith(("failed=", "dumped="))]),
-       (1, ["failed=gs12_lp", "failed=gs12_x"]))
+    _p207_dump_listed_once()
     _sh207.rmtree(_dd, ignore_errors=True)
     _os207.symlink(_os207.path.join(_T, "elsewhere"), _dd)
     _reset()
@@ -534,33 +570,7 @@ try:
         check("db-import (%s): a dump that is a link is refused, nothing fed to the client" % _side,
               _res[0] != 0 and not [s for s in _sqls() if s], repr((_res, _sqls())))
 
-    # db-sizes says which databases have a dump in the files (a link is none); db-import with no dump
-    # answers rc 4 (the "no dump" sentence), whether the file or the whole directory is missing.
-    with _gz207.open(_os207.path.join(_dd, "gs12_x.sql.gz"), "wb") as _fh:
-        _fh.write(b"SELECT 1;\n")
-    _os207.utime(_os207.path.join(_dd, "gs12_x.sql.gz"), (1700000000, 1700000000))
-    for _side, _run in (("helper", _h), ("remote", _r)):
-        _reset(sizes="gs12_lp\t1\n")
-        _res = _run("db-sizes", *_VERB_ARGS["db-sizes"])
-        eq("db-sizes (%s): a dump=<name><TAB><mtime> line for each database with a dump in the server's files, none "
-           "for a link" % _side, (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]),
-           (0, ["dump=gs12_x\t1700000000"]))
-    _os207.rename(_dd, _dd + ".real")
-    _os207.symlink(_dd + ".real", _dd)
-    for _side, _run in (("helper", _h), ("remote", _r)):
-        _reset(sizes="gs12_lp\t1\n")
-        _res = _run("db-sizes", *_VERB_ARGS["db-sizes"])
-        eq("db-sizes (%s): a ~/panel-db-dumps that is a link is not read" % _side,
-           (_res[0], [x for x in _res[1].splitlines() if x.startswith("dump=")]), (0, []))
-    _os207.unlink(_dd)
-    _sh207.rmtree(_dd + ".real", ignore_errors=True)
-    for _what in ("directory", "file"):
-        for _side, _run in (("helper", _h), ("remote", _r)):
-            _reset()
-            _res = _run("db-import", *_VERB_ARGS["db-import"])
-            eq("db-import (%s): no dump (its %s missing) answers rc 4 and feeds the client nothing" % (_side, _what),
-               (_res[0], [s for s in _sqls() if s]), (4, []))
-        _os207.makedirs(_dd, exist_ok=True)
+    _p207_dump_presence(_dd)
 
     # db-probe: the helper and the remote rendering say the same thing about the same host.
     _PROBE_FILES = {"dpkg": "mariadb-server\tii \t1:10.11.14-0ubuntu0.24.04.1\nmysql-server\tun \t\n",
