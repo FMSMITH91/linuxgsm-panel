@@ -851,15 +851,17 @@ def status_of(out):
 def _wwr_busy_wait(polls):
     """Wait (up to `polls` x 2 s) until no process of the account has its cwd or an open file in serverfiles ($sf).
 
-    Or in the world's own folder ($b, when it is outside serverfiles: Valheim, Project Zomboid).
+    Or in the world's own folder ($wwrb, when it is outside serverfiles: Valheim, Project Zomboid). A
+    caller that sets no $wwrb (the backup restore) watches serverfiles alone.
 
     /proc/<pid> belongs to the process's user, so `[ -O ]` keeps the account's own; the script itself
     (cwd /) is skipped. Still busy at the end: refused, nothing deleted.
     """
     return [
         'busy() { for p in /proc/[0-9]*; do [ -O "$p" ] || continue; [ "${p#/proc/}" = "$$" ] && continue; '
-        'c=$(readlink "$p/cwd" 2>/dev/null) || continue; case "$c" in "$sf"|"$sf"/*|"$b"|"$b"/*) return 0;; esac; '
-        'for f in "$p"/fd/*; do t=$(readlink "$f" 2>/dev/null) || continue; case "$t" in "$sf"/*|"$b"/*) return 0;; '
+        'c=$(readlink "$p/cwd" 2>/dev/null) || continue; '
+        'case "$c" in "$sf"|"$sf"/*|"${wwrb:-$sf}"|"${wwrb:-$sf}"/*) return 0;; esac; '
+        'for f in "$p"/fd/*; do t=$(readlink "$f" 2>/dev/null) || continue; case "$t" in "$sf"/*|"${wwrb:-$sf}"/*) return 0;; '
         'esac; '
         'done; done; return 1; }',
         'i=0; while busy; do i=$((i+1)); if [ "$i" -ge %d ]; then echo %s; exit 4; fi; sleep 2; done'
@@ -894,7 +896,7 @@ def script(user, selfname, plan, busy_polls=_WWR_BUSY_POLLS):
         'sf=$(cd -P -- %s 2>/dev/null && pwd -P && printf x) && sf=${sf%%?x} || sf=' % _q(home + "/serverfiles"),
         'case "$sf" in ""|/) echo %s; exit 3;; esac' % _M_NOSF,
         "if %s; then echo %s; exit 4; fi" % (_wwr_tmux_up(selfname), _M_RUNNING),
-    ] + (_wwr_base(home, plan["base"]) if plan.get("base") else ['b="$sf"']) + _wwr_busy_wait(busy_polls)
+    ] + (_wwr_base(home, plan["base"]) if plan.get("base") else []) + _wwr_busy_wait(busy_polls)
     if not plan.get("base"):
         lines.append('d="$sf"')
     if sub:
@@ -941,10 +943,10 @@ def _wwr_world_test(plan):
 
 
 def _wwr_base(home, base):
-    """Script lines: the world's folder under the account's home (`base`), resolved, as $d and $b.
+    """Script lines: the world's folder under the account's home (`base`), resolved, as $d and $wwrb.
 
     Missing is "nothing found"; resolving anywhere but <home, resolved>/<base> (a symlink on the
-    way) refuses. $b is the folder the busy wait watches beside serverfiles.
+    way) refuses. $wwrb is the folder the busy wait watches beside serverfiles.
     """
     return [
         'h=$(cd -P -- %s 2>/dev/null && pwd -P && printf x) && h=${h%%?x} || h=' % _q(home),
@@ -953,7 +955,7 @@ def _wwr_base(home, base):
         'if [ -z "$d" ]; then if [ -L %s ]; then echo %s; exit 5; fi; echo %s; exit 8; fi'
         % (_q(home + "/" + base), _M_LINK, _M_NOTHING),
         'if [ "$d" != "$h"/%s ]; then echo %s; exit 5; fi' % (_q(base), _M_LINK),
-        'b="$d"',
+        'wwrb="$d"',
     ]
 
 

@@ -279,6 +279,8 @@ def _sweep200(reply, wait_empty=True):
         _p9_patch(_shr200, "_marked_backup", lambda *a, **k: (got["cmds"].append("backup"), (True, "Backed up", False))[1])
         _p9_patch(_shr200, "_alert_backup", lambda *a, **k: None)
         _p9_patch(_shr200, "_reboot_holds", lambda gs: False)
+        # The reset asks whether the account can become root (a host round trip): a plain game account here.
+        _p9_patch(_shr200, "game_account_write_refusal", lambda *a, **k: None)
         _p9_patch(_lgp200, "allowance_seconds", lambda *a, **k: 0)
         _p9_patch_sm("run_as_game_user", _run)
         _p9_patch_sm("shell_as_game_user", _shell)
