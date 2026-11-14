@@ -171,7 +171,7 @@ def save(server, user, selfname, posted):
 
 
 def _save_checked(server, user, selfname, state, posted):
-    """save's checks and write, once the state is read: (ok, why, before, after)."""
+    """Run save()'s checks and write once the state is read: (ok, why, before, after)."""
     before = {k: state[k] for k in KEYS}
     lists, why = check_lists(state, posted)
     if why:
