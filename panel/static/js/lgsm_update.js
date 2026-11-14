@@ -44,11 +44,13 @@
     return box;
   }
 
-  function notesNode(notes) {
+  // `reading`: the notes are being asked for now (fillNotes), so say so instead of "could not be read".
+  function notesNode(notes, reading) {
     var wrap = el('div', 'mt-3');
     wrap.appendChild(el('h6', 'mb-2', t("What's new")));
     if (!notes || !notes.length) {
-      wrap.appendChild(el('p', 'small text-secondary mb-1', t('The release notes could not be read yet.')));
+      wrap.appendChild(el('p', 'small text-secondary mb-1',
+                          reading ? t('Reading the release notes…') : t('The release notes could not be read yet.')));
     }
     (notes || []).forEach(function (r) { wrap.appendChild(releaseNode(r)); });
     wrap.appendChild(releaseLink(RELEASES, t('All LinuxGSM release notes on GitHub')));
@@ -110,8 +112,22 @@
       go.addEventListener('click', function () { shut(); _doServerAction('update-lgsm', btn, true); });
       foot.push(go);
     }
-    shut = dialog(t('LinuxGSM update available'), true, [lead, notesNode(st.notes)], foot);
+    var notes = notesNode(st.notes, !(st.notes && st.notes.length));
+    shut = dialog(t('LinuxGSM update available'), true, [lead, notes], foot);
+    if (!(st.notes && st.notes.length)) fillNotes(notes);
   };
+
+  // The notes were not read yet when the page asked: ask again now, and put them in the dialog.
+  function fillNotes(node) {
+    fetch(MOUNT + '/api/server/' + serverId + '/version', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var fresh = (d && d.lgsm_notes) || [];
+        if (window._lgsmState) window._lgsmState.notes = fresh;
+        node.replaceWith(notesNode(fresh, false));
+      })
+      .catch(function () { node.replaceWith(notesNode([], false)); });
+  }
 
   // update-lgsm's reply: the page's LinuxGSM line now, then what happened and what's new.
   window.lgsmUpdateResult = function (d) {

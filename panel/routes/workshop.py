@@ -1,6 +1,6 @@
 """A server's Steam Workshop content, on its server page: the ids its config lists, with their titles.
 
-Three kinds of game, by where the list lives:
+Four kinds of game, by where the list lives:
 
 * WORKSHOPMODS (LinuxGSM's `workshopmods` setting): arma3, dayz, squad, squad44, ohd, bt, hw, col,
   st, l4d2, sb and sol. An ordered list of Workshop item or collection ids, in load order;
@@ -10,6 +10,12 @@ Three kinds of game, by where the list lives:
 * WSCOLLECTIONID (LinuxGSM's `wscollectionid`): gmod and csgo. One collection id, which the game
   itself downloads when it starts (+host_workshop_collection). csgo's `wsapikey` is a secret and
   is never read, shown or written here: only `wscollectionid` is asked for.
+* NS2: COMBAT (ns2c): LinuxGSM's `mods`. ns2cserver's _default.cfg (lgsm/config-default/config-lgsm/
+  ns2cserver/_default.cfg, master 98be8a98) sets `mods=""` and starts the server with
+  `-mods '${mods}'`: Natural Selection 2's mod ids, space separated. An NS2 mod id is the item's Steam
+  Workshop id written in hexadecimal (Shine's Workshop id 117887554 is mod id 706d242), and the
+  server downloads the mods itself into its -modstorage folder when it starts. The card shows and
+  takes Workshop ids, as for the other games, and writes them as the hex ids the game reads.
 * PROJECT ZOMBOID (pz): no LinuxGSM setting. The game's own Zomboid/Server/<selfname>.ini holds
   `WorkshopItems=` (ids it downloads at start) and `Mods=` (the Mod IDs it loads, which are not
   Workshop ids: each comes from an item's mods/<dir>/mod.info). The card offers the Mod IDs found in
@@ -40,6 +46,11 @@ MODS_GAMES = frozenset({"arma3", "dayz", "squad", "squad44", "ohd", "bt", "hw", 
                         "sol"})
 COLLECTION_GAMES = frozenset({"gmod", "csgo"})
 PZ_GAMES = frozenset({"pz"})
+NS2_GAMES = frozenset({"ns2c"})
+# What the instance cfg key of each LinuxGSM-setting kind is.
+_WSC_KEYS = {"mods": "workshopmods", "collection": "wscollectionid", "ns2": "mods"}
+# An NS2 mod id: a Workshop id (at most 20 decimal digits) in hexadecimal.
+_WSC_NS2_HEX = re.compile(r"[0-9a-fA-F]{1,17}")
 _WSC_PZ_CONTENT = "serverfiles/steamapps/workshop/content/108600"
 # A Mod ID goes into the ini's Mods= line, so only what breaks that line is refused: `;` (the
 # separator), `=`, and any control or line-separator character (a line break would start a key of its
@@ -66,13 +77,32 @@ _WSC_SAVED = "Saved."
 
 
 def workshop_kind(game_type):
-    """'mods', 'collection' or 'pz' for a game whose Workshop list the card edits, else None."""
+    """'mods', 'collection', 'ns2' or 'pz' for a game whose Workshop list the card edits, else None."""
     g = (game_type or "").lower()
     if g in MODS_GAMES:
         return "mods"
     if g in COLLECTION_GAMES:
         return "collection"
+    if g in NS2_GAMES:
+        return "ns2"
     return "pz" if g in PZ_GAMES else None
+
+
+def ns2_ids(value):
+    """(Workshop ids, ignored words) from ns2c's `mods` value: each hex mod id as Steam's decimal id."""
+    ids, ignored = [], []
+    for word in (value or "").split():
+        wid = str(int(word, 16)) if _WSC_NS2_HEX.fullmatch(word) else None
+        if wid is None or not _ws.valid_id(wid):
+            ignored.append(word)
+        elif wid not in ids:
+            ids.append(wid)
+    return ids, ignored
+
+
+def ns2_value(ids):
+    """ns2c's `mods` value for Workshop ids: each in lower-case hexadecimal, space separated."""
+    return " ".join(format(int(i), "x") for i in ids)
 
 
 def workshop_supported(game_type):
@@ -232,11 +262,11 @@ def _wsc_read(gs, kind):
     """(the card's view of the server's list, None), or (None, why)."""
     if kind == "pz":
         return _wsc_read_pz(gs)
-    key = "workshopmods" if kind == "mods" else "wscollectionid"
+    key = _WSC_KEYS[kind]
     value = _wsc_cfg_value(gs, key)
     if value is None:
         return None, UNREAD
-    ids, ignored = _ws.split_ids(value)
+    ids, ignored = ns2_ids(value) if kind == "ns2" else _ws.split_ids(value)
     if kind == "collection" and len(ids) > 1:
         # One collection id is all the game takes; anything else is shown as it is, not guessed at.
         ids, ignored = [], [value.strip()]
@@ -272,25 +302,26 @@ def _wsc_change(label, before, after):
 
 
 def _wsc_cfg_ids(kind, data):
-    """(ids, None) from a save's body: `ids` for workshopmods, one `id` (or "" to clear) for a collection."""
-    if kind == "mods":
+    """(ids, None) from a save's body: `ids` for a list, one `id` (or "" to clear) for a collection."""
+    if kind in ("mods", "ns2"):
         return _ws.check_ids(data.get("ids"))
     ids, why = _ws.check_ids([data["id"]] if data.get("id") else [])
     return (None, _ws.BAD_ID) if why is None and len(ids) > 1 else (ids, why)
 
 
 def _wsc_save_cfg(gs, kind, data):
-    """Write workshopmods or wscollectionid in the instance cfg: the save route's answer."""
-    key = "workshopmods" if kind == "mods" else "wscollectionid"
+    """Write workshopmods, wscollectionid or ns2c's mods in the instance cfg: the save route's answer."""
+    key = _WSC_KEYS[kind]
     ids, why = _wsc_cfg_ids(kind, data)
     if why:
         return _wsc_refuse(gs, key, why)
     before = _wsc_cfg_value(gs, key)
     if before is None:
         return _wsc_refuse(gs, key, UNREAD, 409)
-    detail = _wsc_change(key, _ws.split_ids(before)[0], ids)
+    detail = _wsc_change(key, (ns2_ids(before) if kind == "ns2" else _ws.split_ids(before))[0], ids)
+    value = ns2_value(ids) if kind == "ns2" else " ".join(ids)
     with _r20b_audit_on_raise("workshop_save", detail=detail, target=gs.name, server=gs):
-        ok, msg = _sm.lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, {key: " ".join(ids)})
+        ok, msg = _sm.lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, {key: value})
     return _wsc_written(gs, detail, (ok, msg), {"ids": ids})
 
 

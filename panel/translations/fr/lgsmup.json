@@ -11,5 +11,6 @@
   "All LinuxGSM release notes on GitHub": "Toutes les notes de version de LinuxGSM sur GitHub",
   "This server is on {release}. LinuxGSM {latest} is available.": "Ce serveur est en {release}. LinuxGSM {latest} est disponible.",
   "Update LinuxGSM": "Mettre à jour LinuxGSM",
-  "LinuxGSM update available": "Mise à jour de LinuxGSM disponible"
+  "LinuxGSM update available": "Mise à jour de LinuxGSM disponible",
+  "Reading the release notes…": "Lecture des notes de version…"
 }

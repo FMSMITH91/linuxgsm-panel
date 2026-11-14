@@ -825,3 +825,19 @@ finally:
 
 check("part60: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP60_START, repr(_P9_TRIPPED[_TRIP60_START:][:6]))
+
+
+# The config-path test is plain string work: the regex it replaced restarted at every repeat of the
+# folder name when searched, so a path of many repeats took quadratic time (CodeQL py/polynomial-redos).
+import time as _time60   # noqa: E402
+
+_cfgp60 = [_files60._rawlts_cfg_path(p) for p in (
+    "/home/a/lgsm/config-lgsm/aserver/aserver.cfg", "/home/a/lgsm/config-default/config-lgsm/aserver/_default.cfg",
+    "/home/a/serverfiles/server.cfg", "/home/a/lgsm/config-lgsm/x.cfgx", "/home/a/lgsm/config-lgsm/a\nb.cfg")]
+_t60 = _time60.monotonic()
+_slow60 = _files60._rawlts_cfg_path("/lgsm/config-lgsm/" * 30000 + "x")
+_took60 = _time60.monotonic() - _t60
+check("raw editor logtimestamp: a LinuxGSM config is told by its path (config-lgsm or config-default, ending .cfg, "
+      "on one line), and a path of 30,000 repeated folder names is answered at once (the regex took ~4 s)",
+      _cfgp60 == [True, True, False, False, False] and _slow60 is False and _took60 < 0.5,
+      repr((_cfgp60, _slow60, round(_took60, 3))))

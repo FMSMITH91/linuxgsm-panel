@@ -651,6 +651,17 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/mc-packs/search": {
+    "endpoint": "api_server_mc_packs_search",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_packs_search"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/playerlist": {
     "endpoint": "api_server_playerlist",
     "guards": [
@@ -1117,6 +1128,18 @@
       "POST"
     ]
   },
+  "GET,POST /api/server/<int:server_id>/factorio-mods": {
+    "endpoint": "api_server_factorio_mods",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_factorio_mods"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /api/server/<int:server_id>/file": {
     "endpoint": "api_server_file",
     "guards": [
@@ -1159,6 +1182,30 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_log_timestamps"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "GET,POST /api/server/<int:server_id>/mc-packs": {
+    "endpoint": "api_server_mc_packs",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_packs"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "GET,POST /api/server/<int:server_id>/mod-folders": {
+    "endpoint": "api_server_mod_folders",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mod_folders"
     ],
     "methods": [
       "GET",
@@ -2225,6 +2272,17 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_mc_list_change"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/mc-packs/install": {
+    "endpoint": "api_server_mc_packs_install",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mc_packs_install"
     ],
     "methods": [
       "POST"

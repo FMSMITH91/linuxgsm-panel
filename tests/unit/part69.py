@@ -862,3 +862,22 @@ for _tpl_r16u in ("remote_manage.html",):
 
 check("part69: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP69_START, repr(_P9_TRIPPED[_TRIP69_START:][:6]))
+
+# The scanner keeps a scan per root until a scanned file changes (i18n_scan._memo): an edit, as a
+# mutation run or a check's temp tree makes, must be scanned afresh, never answered from the cache.
+_tdm69 = os.path.realpath(_tf69.mkdtemp(prefix="lgsm-unit-p69m-"))
+try:
+    os.makedirs(os.path.join(_tdm69, "panel", "routes"))
+    _rm69 = os.path.join(_tdm69, "panel", "routes", "r.py")
+    with open(_rm69, "w") as _fh69:
+        _fh69.write("def a():\n    return jsonify({'message': 'Answer one is here.'})\n")
+    _m1_69 = sorted(_scan69.route_answer_keys(root=_tdm69))
+    _m1b_69 = sorted(_scan69.route_answer_keys(root=_tdm69))
+    with open(_rm69, "w") as _fh69:
+        _fh69.write("def a():\n    return jsonify({'message': 'Answer two is here.'})\n")
+    _m2_69 = sorted(_scan69.route_answer_keys(root=_tdm69))
+finally:
+    _shutil69.rmtree(_tdm69, ignore_errors=True)
+check("i18n scanner cache: the same tree answers the same, and a file edited since is scanned again",
+      _m1_69 == _m1b_69 == ["Answer one is here."] and _m2_69 == ["Answer two is here."],
+      repr((_m1_69, _m1b_69, _m2_69)))

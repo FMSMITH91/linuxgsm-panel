@@ -5809,8 +5809,12 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # and EDIT_FILES per server) and the panel's (/api/panel/backup/upload/<uid>/cancel, superadmin).
 # 257, was 256: one genuinely new view, panel/routes/cod_mods.py's read and switch of a Call of Duty
 # server's mod folder (/api/server/<id>/cod-mods, the Mods tab's MANAGE_SERVERS, EDIT_FILES to switch).
-check("register_routes: every one of the 257 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 257,
+# 262, was 257: five genuinely new views, panel/routes/game_mods.py's Mods tab cards: an Arma 3 / DayZ
+# server's mod folder lists (/api/server/<id>/mod-folders), a Factorio server's mods (/factorio-mods), and a
+# Minecraft server's packs (/mc-packs, with /mc-packs/search and /mc-packs/install for Java datapacks), each
+# behind the Mods tab's MANAGE_SERVERS, with EDIT_FILES to change anything.
+check("register_routes: every one of the 262 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 262,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

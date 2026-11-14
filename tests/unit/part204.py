@@ -46,7 +46,7 @@ check("mods tab: every game the panel offers a Mods card for is a LinuxGSM short
 eq("mods tab: LinuxGSM's installer for source-engine and core_getopt's named games, the fs_game switch "
    "for CoD, nothing for a game with neither",
    [_cm204.mods_kind(g) for g in ("csgo", "gmod", "rust", "vh", "cs", "cod", "coduo", "cod2", "cod4", "codwaw",
-                                  "mc", "ark", "q3", "")],
+                                  "ns2", "ark", "q3", "")],
    ["lgsm"] * 5 + ["cod"] * 5 + [""] * 4)
 eq("mods tab: 30 source-engine games plus cs2, rust, sdtd, cs, dod, tfc, ns, ts, hldm and vh",
    len(_cm204.LGSM_MODS_GAMES), 40)
@@ -251,7 +251,7 @@ try:
     _route_cases204(_sid204, _home204v, _admin204)
     _refusal_cases204(_sid204, _home204v, _admin204)
     _R204["page"] = _admin204.get("/server/%d/files" % _sid204).get_data(as_text=True)
-    _mc204 = _p9_new_server(P9_HOST, "p204mc", "mc", 25565)
+    _mc204 = _p9_new_server(P9_HOST, "p204mc", "ns2", 27015)
     _R204["page_mc"] = _admin204.get("/server/%d/files" % _mc204).get_data(as_text=True)
     _p9_delete_server(_mc204)
 finally:

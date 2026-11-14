@@ -256,6 +256,10 @@ def _switch_seen190(sb, out, rc, rec, before):
 def _switch190(edit=None, recover=False, polls=None, lgsm=False):
     sb = _Sb190()
     saved = _grs190._GRS_LGSM_POLLS
+    # A case cut short by `kill -9 $$` skips the script's EXIT trap, so its heartbeat subshell runs on
+    # until its next `sleep HEARTBEAT` ends, holding the output open: 20 s per such case at the default.
+    beat = _grs190.HEARTBEAT
+    _grs190.HEARTBEAT = 1
     sleeper = None
     try:
         ready = sb.vet()[1][1]
@@ -271,6 +275,7 @@ def _switch190(edit=None, recover=False, polls=None, lgsm=False):
         return _switch_seen190(sb, out, rc, rec, before)
     finally:
         _grs190._GRS_LGSM_POLLS = saved
+        _grs190.HEARTBEAT = beat
         if sleeper is not None:      # its group: the script and the sleep it is running
             try:
                 _os190.killpg(sleeper.pid, 9)

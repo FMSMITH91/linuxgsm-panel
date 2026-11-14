@@ -537,7 +537,7 @@
       <i class="bi bi-hourglass-split"></i></div>
     <div class="form-text">The game downloads this collection when it starts: a change applies at the next restart.</div>
     {% else %}
-    <div class="small fw-semibold mb-1">{% if _wsc_kind == 'pz' %}Workshop items{% else %}Workshop items and collections, in load order{% endif %}</div>
+    <div class="small fw-semibold mb-1">{% if _wsc_kind == 'pz' %}Workshop items{% elif _wsc_kind == 'ns2' %}Workshop items, in load order{% else %}Workshop items and collections, in load order{% endif %}</div>
     <div class="border rounded small mb-1" style="height:11rem; overflow-y:auto;" aria-live="polite">
       <div class="text-secondary p-2" id="wsc-items-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
       <ul class="list-unstyled mb-0" id="wsc-items" data-no-i18n></ul>
@@ -575,7 +575,9 @@
         <i class="bi bi-cloud-download"></i> <span>Download now</span></button>
       {% endif %}
     </div>
-    {% if _wsc_kind == 'pz' %}
+    {% if _wsc_kind == 'ns2' %}
+    <div class="form-text">Saving writes mods in this server's LinuxGSM config, as the hex mod ids the game takes. The server downloads the mods itself when it next starts.</div>
+    {% elif _wsc_kind == 'pz' %}
     <div class="form-text">Project Zomboid downloads Workshop items when the server next starts, so the Mod IDs of new items show here after that start.</div>
     {% else %}
     <div class="form-text">Saving writes workshopmods in this server's LinuxGSM config. LinuxGSM's workshop-update downloads the list and expands each collection into its items.</div>

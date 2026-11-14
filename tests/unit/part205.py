@@ -352,3 +352,62 @@ check("server_actions.js: an update-lgsm reply goes to the what's-new dialog",
       in _sa205)
 check("part205: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP205_START, repr(_P9_TRIPPED[_TRIP205_START:]))
+
+
+# ── the first ask after a restart: the notes are not read yet ──────────────────────────────────
+# The latest release and the notes are read in the background, started by the first ask: that first
+# answer has neither. The page asks once more a few seconds later, and the dialog asks for the notes
+# itself when they are still missing as it opens, rather than saying they could not be read.
+from unit.part99 import _js99, _read99   # noqa: E402
+
+_SD205 = _read99("panel", "static", "js", "server_detail.js")
+_out205 = _js99("lgsm notes re-ask", (
+    "var serverId = 1; global.MOUNT = ''; let shown = [], timers = [];\n"
+    "function _showLgsmVersion(i, n){ shown.push([i && i.latest, (n || []).length]); }\n"
+    "global.setTimeout = (f, ms) => { timers.push(ms); f(); };\n"), (
+    "function _lgsmUnread(", "function loadGameVersion("), (
+    "  const out = {};\n"
+    "  reply({lgsm: {release: 'v26.5.0', latest: '', behind: false}, lgsm_notes: []});\n"
+    "  loadGameVersion(); await settle(); await settle();\n"
+    "  out.unread = {asks: sent.length, timers: timers.slice()}; sent.length = 0; timers.length = 0;\n"
+    "  reply({lgsm: {release: 'v26.5.0', latest: 'v26.6.0', behind: true}, lgsm_notes: []});\n"
+    "  loadGameVersion(); await settle(); await settle();\n"
+    "  out.nonotes = {asks: sent.length, timers: timers.slice()}; sent.length = 0; timers.length = 0;\n"
+    "  reply({lgsm: {release: 'v26.5.0', latest: 'v26.6.0', behind: true}, lgsm_notes: [{tag: 'v26.6.0'}]});\n"
+    "  loadGameVersion(); await settle();\n"
+    "  out.read = {asks: sent.length, timers: timers.slice()};\n"
+    "  console.log(JSON.stringify(out));\n"), _SD205)
+check("lgsm version: an answer before the background reads (no latest, or behind with no notes) is asked "
+      "once more after 5 s, and only once; a full answer is not asked again",
+      _out205 == {"unread": {"asks": 2, "timers": [5000]}, "nonotes": {"asks": 2, "timers": [5000]},
+                  "read": {"asks": 1, "timers": []}}, repr(_out205))
+
+_out205 = _js99("lgsm notes in the dialog", (
+    "var serverId = 1; global.MOUNT = ''; global.window = global;\n"
+    "function t(s){ return s; } function tf(s){ return s; }\n"
+    "var RELEASES = 'https://github.com/GameServerManagers/LinuxGSM/releases';\n"
+    "function mk(tag){ const n = {tag, kids: [], attrs: {}, className: '', _t: '',\n"
+    "  appendChild(c){ this.kids.push(c); return c; }, setAttribute(k, v){ this.attrs[k] = v; },\n"
+    "  querySelectorAll(){ return []; }, replaceWith(x){ this.replacedBy = x; } };\n"
+    "  Object.defineProperty(n, 'textContent', {get(){ return [this._t].concat(this.kids.map(k => k.textContent)).join(' '); },\n"
+    "                                           set(v){ this._t = v; }}); return n; }\n"
+    "document.createElement = mk;\n"), (
+    "function el(", "function releaseLink(", "function releaseNode(", "function notesNode(", "function fillNotes("), (
+    "  const out = {};\n"
+    "  const first = notesNode([], true); out.reading = first.textContent;\n"
+    "  window._lgsmState = {notes: []};\n"
+    "  reply({lgsm_notes: [{tag: 'v26.6.0', date: '2026-11-07', blocks: [{k: 'p', t: 'Fresh notes'}], cut: false,\n"
+    "                       url: RELEASES + '/tag/v26.6.0'}]});\n"
+    "  fillNotes(first); await settle();\n"
+    "  out.filled = first.replacedBy ? first.replacedBy.textContent : null;\n"
+    "  out.state = window._lgsmState.notes.length; out.asked = sent.map(s => s[0]);\n"
+    "  const second = notesNode([], true); reply(undefined); fillNotes(second); await settle();\n"
+    "  out.failed = second.replacedBy ? second.replacedBy.textContent : null;\n"
+    "  console.log(JSON.stringify(out));\n"), _js205)
+_o205 = _out205 or {}
+check("lgsm dialog: notes missing as it opens are asked for (it says it is reading them), then shown and kept; "
+      "a failed ask says they could not be read",
+      "Reading the release notes" in _o205.get("reading", "") and "Fresh notes" in (_o205.get("filled") or "")
+      and "Reading" not in (_o205.get("filled") or "") and _o205.get("state") == 1
+      and _o205.get("asked") == ["/api/server/1/version"]
+      and "could not be read yet" in (_o205.get("failed") or ""), repr(_out205))
