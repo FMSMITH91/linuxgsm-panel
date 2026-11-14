@@ -100,7 +100,7 @@ def held_kinds(sid):
     run of this process has registered it yet: every busy check (a cron or Autostart write, the cron
     listing's sync, a backup, Start/Stop/Update, a wipe, uninstall, a host reboot) and the card read it.
     """
-    return (_shared.GRS_KIND,) if _grs_held_for(sid) is not None else ()
+    return frozenset((_shared.GRS_KIND,)) if _grs_held_for(sid) is not None else frozenset()
 
 
 register_route_job_source(held_kinds)
