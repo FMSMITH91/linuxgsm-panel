@@ -111,6 +111,7 @@ def _cleanup197():
             # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, a cut-short run left it 0000
             os.chmod(path, 0o700)  # nosec B103 - owner-only; a run cut short may have left it 0000
         except OSError:
+            # Already gone (a clean earlier run, or another cleanup): nothing to make removable.
             pass
         _shutil197.rmtree(path, ignore_errors=True)
 
