@@ -49,10 +49,15 @@ BEDROCK_TALLY_AWK = (
     'END{for(k in n)c+=n[k];print(b?"B":s?"OK "c+0:"N")}'
 )
 
+# The longest command Debian and Ubuntu's cron runs whole: entry.c reads it into MAX_COMMAND (1000)
+# bytes and drops the rest without a word, leaving a shell syntax error that never restarts.
+CRON_COMMAND_MAX = 999
+
 # What the panel's own read prints before the tally, so a reply that did not run to it (a dropped
 # connection, a refused account) is told from a tally.
 _MARK = "mcbp:"
 _TALLY_LINE = re.compile(r"mcbp:(?:OK ([0-9]{1,6})|(D)|(N)|(B))\Z")
+_FAILED = ("failed", None, None, None, None)
 _PROPS_LINE = re.compile(r"(max-players|server-name|level-name)=([^\r\n]{0,120})\r?\Z")
 
 
@@ -74,6 +79,24 @@ def bedrock_count_sh(selfname):
             "||{ echo D;exit;};"
             f"timeout 20 cut -b 1-256 -- log/console/{selfname}-console.log 2>/dev/null"
             f"|grep -aE 'INFO\\] (Player|Server started)'|awk {_core._quote(BEDROCK_TALLY_AWK)}")
+
+
+def bedrock_restart_check(game_type, user, selfname):
+    """The hourly restart-when-empty check for a Minecraft Bedrock server, or None.
+
+    None for any other game, and for a line too long for cron (an account name past the 32
+    characters useradd allows): _core.daily_restart_check_cmd then writes its gamedig query, which
+    a RakNet server still answers. Cron runs the line in the account's home; only a counted "OK 0"
+    restarts, and D (no session), N (no start line), B (an unreadable join) or nothing at all wait
+    for the next hour. Head and tail are _core.daily_restart_check_cmd's, which the cron upgrade's
+    table (cron._restart_check_res) reads back. Names must already have passed game_idents_ok.
+    """
+    if not is_bedrock(game_type):
+        return None
+    flag = f"/home/{user}/.restart-pending"
+    line = (f"[ -f {flag} ] && {{ P=$({bedrock_count_sh(selfname)}); if [ \"$P\" = \"OK 0\" ]; then "
+            f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f {flag}; fi; }}")
+    return line if len(line) <= CRON_COMMAND_MAX else None
 
 
 def bedrock_read_sh(user, selfname):
@@ -118,19 +141,23 @@ def bedrock_slots(server, user, selfname=None):
     server.properties when it was read, else None. Never raises.
     """
     selfname = selfname or BEDROCK_SELFNAME
-    none = ("failed", None, None, None, None)
     if not _core.game_idents_ok(user, selfname):
-        return none
+        return _FAILED
     try:
         out, _, _ = _core.shell_as_game_user(server, user, bedrock_read_sh(user, selfname),
                                              timeout=30, selfname=selfname)
     except Exception:
-        return none
+        return _FAILED
+    return _reply(out)
+
+
+def _reply(out):
+    """bedrock_slots' answer from the read's output: exactly one tally line, then server.properties."""
     lines = (out or "").splitlines()
     tally = [ln.strip() for ln in lines if ln.strip().startswith(_MARK)]
     state, count = _state(tally[0]) if len(tally) == 1 else (None, None)
     if state is None:
-        return none
+        return _FAILED
     props = _props(ln for ln in lines if not ln.strip().startswith(_MARK))
     return (state, count, _capacity(props.get("max-players")),
             props.get("server-name") or None, props.get("level-name"))

@@ -50,6 +50,7 @@ _LOG200 = [
     _T200 % 7 + "Player connected: Ghost, xuid: 2535400000000001",
     "Player disconnected: Steve Two, xuid: 2535412345678901",
     "say " + _T200 % 8 + "Player disconnected: Ghost, xuid: 2535400000000001",
+    "Player disconnected: Steve Two, xuid: 2535412345678901 (typed, with INFO] Player in it)",
 ]
 _LEAVE200 = [_T200 % 9 + "Player disconnected: Steve Two, xuid: 2535412345678901, pfid: 1a",
              _T200 % 10 + "Player disconnected: Ghost, xuid: 2535400000000001, pfid: 0a"]
@@ -92,6 +93,9 @@ def _count200(lines, up=True, uid=True, eol="\r\n", log=True):
 eq("bedrock tally: joins less leaves per player: a leave before its own join and a typed or echoed line do "
    "not count, the offline-mode 'Player Connected' form does (CRLF log)", _count200(_LOG200), "OK 2")
 eq("bedrock tally: ...the same log with LF line ends", _count200(_LOG200, eol="\n"), "OK 2")
+check("bedrock tally: each line is cut to 256 bytes before grep and awk read it, so no line is held whole",
+      "timeout 20 cut -b 1-256 -- log/console/mcbserver-console.log 2>/dev/null|grep -aE"
+      in _bd200.bedrock_count_sh("mcbserver"), _bd200.bedrock_count_sh("mcbserver")[:200])
 eq("bedrock tally: everyone left is a counted 0", _count200(_LOG200 + _LEAVE200), "OK 0")
 eq("bedrock tally: one player joined twice and left once is still on",
    _count200(_LOG200[:4] + [_T200 % 11 + "Player connected: Steve Two, xuid: 2535412345678901"] + _LEAVE200[:1]),

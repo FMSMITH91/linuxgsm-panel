@@ -609,7 +609,7 @@ def _restart_check_now(server, user, selfname, found, target, host_of):
     gdtype, qport = _restart_check_target(got, *target)
     mcb = _restart_check_bedrock(got, target[0], target[1])
     host = _restart_check_host(got, host_of) if (gdtype and qport) else None
-    return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport, bedrock=mcb)
+    return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport, bedrock.BEDROCK_GAME if mcb else None)
 
 
 def _restart_check_bedrock(got, game_type, port):
