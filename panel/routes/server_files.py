@@ -30,7 +30,8 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
-from panel.services import (host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
+from panel.services import (console_secrets as _console_secrets, host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data,
+                            lgsm_players as _lgp, schedule_chains as _sch)
 from itertools import count, groupby
 import re
 import secrets
@@ -532,7 +533,7 @@ def _console_tick(app, socketio, gs, server_id):
         return
     # The partial line held from here on is the poller's own (see _console_catchup).
     state["fresh"] = False
-    _emit_console_lines(socketio, remote, server_id, out, [_console_chain(state), ino, pos + diff])
+    _emit_console_lines(socketio, gs, server_id, out, [_console_chain(state), ino, pos + diff])
     # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
     # to what the file holds), and this line is reached only past the frame check above.
     state["pos"] = pos + diff
@@ -652,7 +653,18 @@ def _console_read_start(server_id, ino, size):
     return state, pos
 
 
-def _emit_console_lines(socketio, remote, server_id, out, at=None):
+def _console_shown_text(gs, text):
+    """Console-log text as every console view shows it: cleaned, then its secrets masked.
+
+    The one step the poller's pushes, the window read, the read from a place and the catch-up all
+    take, so the same line reads the same in each and the page's stitching still matches them
+    (services/console_secrets).
+    """
+    text = _clean_console_text(text)
+    return _console_secrets.mask_for(gs, text) if text else text
+
+
+def _emit_console_lines(socketio, gs, server_id, out, at=None):
     """Push a chunk of whole console lines to the server's room, once cleaned (nothing if empty).
 
     `at` is where in the log those lines END, as [chain, inode, byte offset] (see _console_chain):
@@ -660,12 +672,12 @@ def _emit_console_lines(socketio, remote, server_id, out, at=None):
     before it, and goes on from any that ends after it — by position, never by the lines' text.
     """
     if out:
-        out = _clean_console_text(out)
+        out = _console_shown_text(gs, out)
     if out:
         # Parsed per line: a LinuxGSM-stamped line carries its OWN time, which is more accurate
         # than the moment the poller happened to read it. `ts` is when the panel READ these
         # bytes, alongside the payload rather than inside it (see _console_push).
-        rows = _console_rows(out.split("\n"), _host_timezone_cached(remote))
+        rows = _console_rows(out.split("\n"), _host_timezone_cached(gs.remote))
         payload = {"server_id": server_id, "data": out, "rows": rows, "ts": time.time()}
         if at is not None:
             payload["at"] = at
@@ -839,7 +851,7 @@ def _placed_rows(gs, lines, since, since_ok):
     gap = since is not None and not since_ok
     if len(lines) > _CONSOLE_LINES_MAX:
         lines, gap = lines[-_CONSOLE_LINES_MAX:], gap or since_ok
-    rows = (_console_rows(_clean_console_text("\n".join(lines)).split("\n"),
+    rows = (_console_rows(_console_shown_text(gs, "\n".join(lines)).split("\n"),
                           _host_timezone_cached(gs.remote)) if lines else [])
     return rows, gap
 
@@ -1684,7 +1696,7 @@ def _read_console_window(remote, gs, want, host_tz):
             # (_console_place_read keeps the same rule): kept here as well, the fragment showed
             # once now and again as the start of the finished line — the page-load duplicate.
             body = body.rpartition("\n")[0]
-        lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
+        lines = _console_rows(_console_shown_text(gs, body).split("\n"), host_tz) if framed else []
     except Exception:
         lines, whole = [], False
     return readable, lines, (at if readable else None), whole
