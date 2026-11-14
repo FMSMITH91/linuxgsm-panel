@@ -247,7 +247,10 @@ window.pollWhenVisible = function(fn, intervalMs){
   // per switch. Measured: ten focus events on a one-HOUR poll ran the work ten times. And the
   // returned id could not stop it, because clearInterval leaves the listener behind and the
   // listener was unreachable; five more focuses still ran after clearInterval.
-  var last = 0;
+  // `last` starts at registration, not 0: every caller has just loaded what it polls (or the poll
+  // has nothing to show yet), and from 0 the first return to the tab ran every poll again at once,
+  // the server page's 2.4 s player query included, seconds after the page had run them.
+  var last = Date.now();
   var gap = Math.min(intervalMs, 60000);
   function run(){ last = Date.now(); try { fn(); } catch(e){} }
   var id = setInterval(function(){ if(!document.hidden) run(); }, intervalMs);
