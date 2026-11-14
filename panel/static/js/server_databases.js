@@ -272,6 +272,8 @@ function dbHostLink(h, text, action) {
   window.dbLoad = function (force, probe) {
     if (!el('db-card') || (st.loaded && !force)) return Promise.resolve(false);
     st.loaded = true;
+    // Refresh starts from what the host says now: an earlier action's line may no longer be true.
+    if (probe) say('');
     return fetch(api(probe ? '?refresh=1' : ''), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (d) {
       if (!d || d.error || !d.can) { show('db-loading', false); say((d && d.error) || T('Could not load databases.'), 'text-danger'); return false; }
       draw(d);

@@ -69,7 +69,6 @@
   "The database server refused that user and password.": "El servidor de bases de datos rechazó ese usuario y contraseña.",
   "That login works but can't create users and grant them rights (it needs CREATE USER and GRANT OPTION).": "Ese inicio de sesión funciona, pero no puede crear usuarios ni concederles permisos (necesita CREATE USER y GRANT OPTION).",
   "The panel has no admin password for this host's database server.": "El panel no tiene contraseña de administrador para el servidor de bases de datos de este host.",
-  "Databases were not included: {why}": "No se incluyeron las bases de datos: {why}",
   "the host's database server is not set up in the panel.": "el servidor de bases de datos del host no está configurado en el panel.",
   "the dump failed.": "el volcado falló.",
   "the dump failed ({error}).": "el volcado falló ({error}).",
@@ -82,5 +81,6 @@
   "The panel signs in with a stored admin login.": "El panel inicia sesión con un inicio de sesión de administrador guardado.",
   "The database server refused the panel's stored admin login.": "El servidor de bases de datos rechazó el inicio de sesión de administrador guardado del panel.",
   "A super admin can replace or clear it on this tab.": "Un superadministrador puede reemplazarlo o borrarlo en esta pestaña.",
-  "Change the admin login": "Cambiar el inicio de sesión de administrador"
+  "Change the admin login": "Cambiar el inicio de sesión de administrador",
+  "Not every database is in this backup: {why}": "No todas las bases de datos están en esta copia de seguridad: {why}"
 }

@@ -17,6 +17,7 @@ The host side's functions are replaced, on ssh_manager.databases itself, by stan
 same arguments (checked here) and record each call; part207 drives that module against the helper.
 Nothing reaches a host or data/.
 """
+import datetime as _dt208
 import inspect as _insp208
 import json as _js208
 import logging as _lg208
@@ -125,9 +126,9 @@ def _stub_module208():
         _S208.calls.append(("install",))
         return True, "", "Zadmin208" + "y" * 20
 
-    def check_admin_login(remote, port, user, pw):
+    def admin_check(remote, port, user, pw):
         _S208.calls.append(("admin", port, user, pw))
-        return _S208.ans["admin"]
+        return _S208.ans["admin"], dict(_S208.ans.get("admin_vars") or {})
 
     def create(remote, hostdb, name, pw, maxconn):
         _S208.calls.append(("create", name, pw, maxconn))
@@ -154,7 +155,7 @@ def _stub_module208():
         _S208.calls.append(("drop", account, name))
         return _S208.ans.get("drop", (True, ""))
 
-    for f in (db_name, new_password, probe, plugin_for, install_mariadb, check_admin_login, create, set_password,
+    for f in (db_name, new_password, probe, plugin_for, install_mariadb, admin_check, create, set_password,
               sizes, dump, restore, drop):
         setattr(m, f.__name__, f)
     return m
@@ -375,6 +376,42 @@ try:
     _R208["clear_ok"] = (_r208.status_code, _login208(""), P9_HOST in _dbs208.LOGIN_REFUSED,
                          [c[0] for c in _S208.calls])
     _R208["clear_again"] = _A208.post(_clear208, json={"clear": True}).status_code
+
+    # ── 8d. a login-only MySQL: what the stored login reads fills in what the socket probe can't ────
+    def _facts208():
+        with _p9.app_context():
+            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
+            return None if h is None else (h.auth_mode, h.version, h.native_ok, _js208.loads(h.warnings or "[]"))
+
+    def _blank208():
+        with _p9.app_context():
+            h = _HD208.query.filter_by(remote_id=P9_HOST).first()
+            h.flavor, h.version, h.native_ok, h.warnings = "mysql", "", False, '["old_logins_only"]'
+            h.checked_at = _dt208.datetime(2000, 1, 1)
+            _db208.session.commit()
+
+    _sock_only208 = {"state": "needs_login", "socket_root": "denied", "flavor": "mysql", "version": "", "port": 3306,
+                     "native_ok": False, "warnings": ["old_logins_only"], "listeners": ["127.0.0.1:3306"]}
+    _read208 = {"version": "8.0.46-0ubuntu0.24.04.1", "version_comment": "(Ubuntu)", "port": "3306",
+                "native": "ACTIVE"}
+    _blank208()
+    _dbr._PROBES.clear()
+    _S208.reset(probe=_sock_only208, admin="ok", admin_vars=_read208)
+    _r208 = _A208.post(_clear208, json={"user": "rootadmin", "password": "Zlogin208pw-real"})
+    _R208["login_save"] = (_r208.status_code, _facts208())
+    _blank208()
+    _S208.reset(probe=_sock_only208, admin="ok", admin_vars=_read208)
+    _M208.get(_api208 + "?refresh=1")
+    _R208["login_recheck"] = (_facts208(), [c[:3] for c in _S208.calls if c[0] == "admin"])
+    _blank208()
+    _S208.reset(probe=_sock_only208, admin="denied", admin_vars=_read208)
+    _M208.get(_api208 + "?refresh=1")
+    _R208["login_recheck_denied"] = _facts208()
+    # Back to the socket, as the sections below expect.
+    _S208.reset(probe={"state": "ready", "flavor": "mariadb", "version": "10.11.14-MariaDB", "port": 3306,
+                       "native_ok": True, "warnings": [], "socket_root": "ok"})
+    _A208.post(_clear208, json={"clear": True})
+    _dbr._PROBES.clear()
 
     # ── 9. the backup hook, through _marked_backup ────────────────────────────────────────────────
     def _backup208(sid, short):
@@ -608,6 +645,14 @@ check("databases admin: once root signs in over the socket, clearing drops the l
       "and there is then nothing to clear",
       _R208.get("clear_ok") == (200, ("socket", "", False), False, ["probe"]) and _R208.get("clear_again") == 409,
       repr((_R208.get("clear_ok"), _R208.get("clear_again"))))
+_mysql208 = ("8.0.46-0ubuntu0.24.04.1", True, [])
+eq("databases: saving an admin login on a login-only MySQL stores the version and native-login support that login "
+   "reads (the socket probe can't), so the tab names the version and new accounts get native passwords",
+   _R208.get("login_save"), (200, ("login",) + _mysql208))
+eq("databases: the 10-minute recheck of a login-mode host reads them again through the stored login",
+   _R208.get("login_recheck"), (("login",) + _mysql208, [("admin", 3306, "rootadmin")]))
+eq("databases: a recheck whose stored login is refused keeps what was stored (the next write reports the refusal)",
+   _R208.get("login_recheck_denied"), ("login", "", False, ["old_logins_only"]))
 
 # ── checks: the backup hook ─────────────────────────────────────────────────────────────────────
 _bk208 = _R208.get("bk", ([], [], None))
@@ -851,6 +896,13 @@ if None not in _rs208b:
           "dbRestore" not in _rs208b[0].get("acts", ["dbRestore"]) and "dbDelete" in _rs208b[0].get("acts", [])
           and "dbRestore" in _rs208b[1].get("acts", []), repr(_rs208b))
 
+_rf208 = _fresh208(
+    "  document.getElementById('db-msg').textContent = 'x There is no dump';\n"
+    "  reply(" + _js208.dumps(_LIST208) + "); await dbLoad(true); out.reload = txt('db-msg');\n"
+    "  reply(" + _js208.dumps(_LIST208) + "); await dbLoad(true, true); out.refresh = txt('db-msg');\n")
+if _rf208 is not None:
+    eq("databases script: Refresh clears an earlier action's line (it may no longer be true); the redraw after an "
+       "action keeps it", (_rf208.get("reload"), _rf208.get("refresh")), ("x There is no dump", ""))
 
 # ── 17. the tab's script: a refused stored login, the sizes, the end of a setup ─────────────────
 _LOGINHOST208 = dict(_LIST208["host"], login=True, login_refused=True)

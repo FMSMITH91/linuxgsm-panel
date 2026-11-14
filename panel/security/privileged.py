@@ -2409,9 +2409,9 @@ def _db_drop_remote(a):
     """db-drop: flavor auth name. Keep an archive copy, or drop only an empty database."""
     flavor, auth, name = a
     return (_db_prelude(flavor, auth, dump=True) + _db_dd_sh(flavor) + _db_archive_sh([name])
-            + 'if [ "$rc" != 0 ]; then t=$(cl -e %s </dev/null) || exit 1; '
-            '[ "$t" = 0 ] || { echo "panel-db: no copy could be kept and the database is not empty"; exit 3; }; fi; '
-            "cl -e %s </dev/null && echo dropped"
+            + 'k=; if [ "$rc" != 0 ]; then t=$(cl -e %s </dev/null) || exit 1; '
+            '[ "$t" = 0 ] || { echo "panel-db: no copy could be kept and the database is not empty"; exit 3; }; '
+            "k=nocopy; fi; cl -e %s </dev/null && echo dropped $k"
             % (shlex.quote(db_sql_tables(name)), shlex.quote(db_sql_drop(name))))
 
 
@@ -2454,8 +2454,10 @@ def _db_admin_check_remote(a):
             'if [ "$rc" != 0 ]; then case "$o" in *"%s"*|*"%s"*) echo denied; exit 0;; esac; '
             'echo unreadable; exit 1; fi; '
             "printf '%%s\\n' \"$o\" | grep -F ' ON *.* ' | grep -F 'WITH GRANT OPTION' "
-            "| grep -qE 'ALL PRIVILEGES|CREATE USER' && echo ok || echo lacks_grants"
-            % ((shlex.quote(DB_SQL_GRANTS),) + DB_DENIED_ERRORS))
+            "| grep -qE 'ALL PRIVILEGES|CREATE USER' && echo ok || echo lacks_grants; "
+            # Signed in already: what the server is (version, port, native logins), as db-probe reads it.
+            "cl -e %s </dev/null 2>/dev/null | awk -F'\\t' 'NF==2 {print \"var.\" $1 \"=\" $2}'; exit 0"
+            % ((shlex.quote(DB_SQL_GRANTS),) + DB_DENIED_ERRORS + (shlex.quote(DB_SQL_PROBE),)))
 
 
 def _db_harden_remote(a):

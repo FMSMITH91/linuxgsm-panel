@@ -52,6 +52,7 @@ S_RESTORED = "Database {name} was restored from the dump in the server's files."
 S_NO_DUMP = "There is no dump of {name} in the server's files (panel-db-dumps/{name}.sql.gz)."
 S_RESTORE_FAILED = "The restore of {name} did not finish; the database may hold part of the dump."
 S_DROPPED = "Database {name} was deleted. A copy is kept on the host for 30 days."
+S_DROPPED_EMPTY = "Database {name} was deleted. It held nothing, so no copy was kept."
 S_NOT_EMPTY = "No copy of {name} could be kept, and it is not empty, so it was not deleted."
 S_DROP_FAILED = "Database {name} could not be deleted."
 S_INSTALLED = "MariaDB was installed and set up, listening on this machine only."
@@ -306,17 +307,45 @@ def install_mariadb(remote):
     return False, S_HARDEN_FAILED, ""
 
 
-def check_admin_login(remote, port, user, pw):
-    """'ok', 'denied', 'lacks_grants' or 'unreadable' for an admin login on 127.0.0.1:`port`."""
+def admin_check(remote, port, user, pw):
+    """(verdict, server variables) for an admin login on 127.0.0.1:`port`.
+
+    verdict: 'ok', 'denied', 'lacks_grants' or 'unreadable'. The variables are what the login read
+    of the server (version, port, native logins: db-probe's var. lines), {} when it could not sign in.
+    """
     if not (re.fullmatch(_priv.DB_ADMIN_USER_RE, str(user or ""))
             and re.fullmatch(_priv.DB_ADMIN_PW_RE, str(pw or ""))):
-        return "denied"             # a login no client could be handed is a login that cannot sign in
+        return "denied", {}         # a login no client could be handed is a login that cannot sign in
     rc, out = _verb(remote, "db-admin-check", ["mariadb", "tcp%d" % int(port)], {"admin": (user, pw)})
-    words = out.split()
+    facts = _parse_probe(out)
+    # The verdict is a word of its own line; a variable's value (var.x=…) never counts as one.
+    words = [w for line in out.splitlines() if not line.startswith("var.") for w in line.split()]
     for answer in ("ok", "denied", "lacks_grants"):
         if rc == 0 and answer in words:
-            return answer
-    return "unreadable"
+            return answer, (facts["vars"] if answer != "denied" else {})
+    return "unreadable", {}
+
+
+def check_admin_login(remote, port, user, pw):
+    """'ok', 'denied', 'lacks_grants' or 'unreadable' for an admin login on 127.0.0.1:`port`."""
+    return admin_check(remote, port, user, pw)[0]
+
+
+def with_login_facts(p, v):
+    """Probe `p` (root could not sign in over the socket) completed with what an admin login read.
+
+    The socket probe sees packages and listeners only, so a server reached through a stored login had
+    no version and no native-login answer, and every account was made caching_sha2 even where
+    mysql_native_password is offered. `v` is admin_check's variables; {} leaves `p` as it is.
+    """
+    if not v:
+        return p
+    text = (v.get("version", "") + " " + v.get("version_comment", "")).lower()
+    flavor = "mariadb" if "mariadb" in text else "mysql"
+    native_ok = flavor == "mariadb" or v.get("native", "").upper() == "ACTIVE"
+    port = int(v["port"]) if v.get("port", "").isdecimal() else p.get("port", 3306)
+    return dict(p, flavor=flavor, version=v.get("version", "")[:40], port=port, native_ok=native_ok,
+                warnings=_warnings(v, p.get("listeners") or [], flavor, native_ok))
 
 
 def _sentence(rc, ok, fail, **vals):
@@ -445,4 +474,5 @@ def drop(remote, hostdb, account, name):
         return False, S_LOGIN_REFUSED
     if rc == 3:
         return False, i18n.Sentence(S_NOT_EMPTY, name=name)
-    return _sentence(rc, S_DROPPED, S_DROP_FAILED, name=name)
+    # "nocopy": the database held nothing (or was already gone), so there was nothing to keep.
+    return _sentence(rc, S_DROPPED_EMPTY if "nocopy" in _out.split() else S_DROPPED, S_DROP_FAILED, name=name)

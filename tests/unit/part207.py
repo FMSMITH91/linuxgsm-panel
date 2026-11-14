@@ -438,6 +438,17 @@ try:
             _got.append((_res[0], _res[1].split()[-1] if _res[1].split() else ""))
         eq("db-admin-check (%s): ok, lacks_grants, denied (rc 0), and an unreadable answer is rc 1" % _side,
            _got, [(0, "ok"), (0, "lacks_grants"), (0, "denied"), (1, "unreadable")])
+        # Signed in, it reads what the server is (the socket probe can't, for a login-only server).
+        _reset(grants="1\nGRANT ALL PRIVILEGES ON *.* TO `r`@`localhost` WITH GRANT OPTION\n",
+               probe="version\t8.0.46-0ubuntu0.24.04.1\nport\t3306\nnative\tACTIVE\n")
+        _res = _run("db-admin-check", *_VERB_ARGS["db-admin-check"])
+        eq("db-admin-check (%s): signed in, the verdict line then the server's variables as db-probe's var. lines"
+           % _side, (_res[0], [ln for ln in _res[1].splitlines() if ln.strip()]),
+           (0, ["ok", "var.version=8.0.46-0ubuntu0.24.04.1", "var.port=3306", "var.native=ACTIVE"]))
+        _reset(grants_err="ERROR 1045 (28000): Access denied for user 'r'@'localhost'\n", probe="version\t8.0.46\n")
+        _res = _run("db-admin-check", *_VERB_ARGS["db-admin-check"])
+        eq("db-admin-check (%s): a refused login reads nothing more" % _side,
+           (_res[1].split(), len(_sqls())), (["denied"], 1))
 
     # db-harden
     for _side, _run in (("helper", _h), ("remote", _r)):
@@ -487,8 +498,13 @@ try:
               _res[0] == 3 and not any("DROP" in (s or "") for s in _sqls()), repr((_res, _sqls())))
         _reset(dump_fail="1", tables="0\n")
         _res = _run("db-drop", *_VERB_ARGS["db-drop"])
-        check("db-drop (%s): no copy but an empty database: it goes" % _side,
-              _res[0] == 0 and "DROP DATABASE IF EXISTS `gs12_lp`" in (_sqls() or [""])[-1], repr((_res, _sqls())))
+        check("db-drop (%s): no copy but an empty database: it goes, and says no copy was kept" % _side,
+              _res[0] == 0 and "DROP DATABASE IF EXISTS `gs12_lp`" in (_sqls() or [""])[-1]
+              and "nocopy" in _res[1].split(), repr((_res, _sqls())))
+        _reset()
+        _res = _run("db-drop", *_VERB_ARGS["db-drop"])
+        check("db-drop (%s): with a copy kept it never says nocopy" % _side,
+              _res[0] == 0 and "dropped" in _res[1].split() and "nocopy" not in _res[1].split(), repr(_res))
     # The prune: whole days, as find -mtime +30 counts them.
     _pd = _os207.path.join(_T, "prune")
     _os207.makedirs(_pd, exist_ok=True)
@@ -734,6 +750,12 @@ try:
     _ANSWERS["db-drop"] = ("panel-db: no copy", "", 3)
     eq("databases: a drop with no copy of a database holding tables says so",
        str(_dbs207.drop(object(), _hd_sock, _ACCT, "gs12_lp")[1]), _dbs207.S_NOT_EMPTY.format(name="gs12_lp"))
+    _drops207 = []
+    for _ans207 in (("dropped nocopy", "", 0), ("dropped ", "", 0)):
+        _ANSWERS["db-drop"] = _ans207
+        _drops207.append(str(_dbs207.drop(object(), _hd_sock, _ACCT, "gs12_lp")[1]))
+    eq("databases: a database deleted with nothing to copy (empty, or already gone) never claims a kept copy",
+       _drops207, [_dbs207.S_DROPPED_EMPTY.format(name="gs12_lp"), _dbs207.S_DROPPED.format(name="gs12_lp")])
     _CALLS.clear()
     _ANSWERS["db-sizes"] = ("gs12_lp\t49152\ndump=gs12_x\t1700000000\ndump=gs99_no\t5\ndump=gs12_lp\tx\n", "", 0)
     eq("databases: sizes makes ONE call for every name, with the game account; a name with no tables is 0, and "
@@ -778,6 +800,30 @@ try:
     _CALLS.clear()
     eq("databases: a login no client could be handed is denied without a call",
        (_dbs207.check_admin_login(object(), 3306, "root", "pä\nss"), _CALLS), ("denied", []))
+    _ANSWERS["db-admin-check"] = ("ok\nvar.version=8.0.46-0ubuntu0.24.04.1\nvar.version_comment=(Ubuntu)\n"
+                                  "var.port=3307\nvar.native=ACTIVE\n", "", 0)
+    _ac = _dbs207.admin_check(object(), 3307, "rootadmin", _APW)
+    _ANSWERS["db-admin-check"] = ("lacks_grants\nvar.version_comment=build ok denied\n", "", 0)
+    _ac2 = _dbs207.admin_check(object(), 3307, "rootadmin", _APW)
+    _ANSWERS["db-admin-check"] = ("var.version_comment=a build ok\n", "", 0)
+    _ac3 = _dbs207.admin_check(object(), 3307, "rootadmin", _APW)
+    eq("databases: admin_check hands back the login's verdict and what it read of the server; a word inside a "
+       "variable's value is never the verdict",
+       [_ac, _ac2[0], _ac3], [("ok", {"version": "8.0.46-0ubuntu0.24.04.1", "version_comment": "(Ubuntu)",
+                                       "port": "3307", "native": "ACTIVE"}), "lacks_grants", ("unreadable", {})])
+    # A login-only MySQL 8.0 (root refused on the socket): the socket probe knows packages and listeners only.
+    _p_sock = {"state": "needs_login", "flavor": "mysql", "version": "", "port": 3306, "native_ok": False,
+               "warnings": ["old_logins_only"], "listeners": ["127.0.0.1:3306"]}
+    _wl = _dbs207.with_login_facts(_p_sock, _ac[1])
+    _wl_off = _dbs207.with_login_facts(_p_sock, {"version": "8.4.11", "native": "DISABLED"})
+    eq("databases: what a stored login read fills in the version, port and native logins the socket probe could "
+       "not, and the warnings follow (no false 'only newer logins'); nothing read leaves the probe as it was",
+       [(_wl["flavor"], _wl["version"], _wl["port"], _wl["native_ok"], _wl["warnings"], _wl["state"]),
+        (_wl_off["native_ok"], _wl_off["warnings"]), _dbs207.with_login_facts(_p_sock, {}) is _p_sock],
+       [("mysql", "8.0.46-0ubuntu0.24.04.1", 3307, True, [], "needs_login"), (False, ["old_logins_only"]), True])
+    _hd_plug = _ty207.SimpleNamespace(flavor=_wl["flavor"], native_ok=_wl["native_ok"])
+    eq("databases: so a login-only MySQL offering mysql_native_password gets native accounts",
+       _dbs207.plugin_for(_hd_plug), "native")
 
     # The root-capable-account guard comes before any dump into a game's files, and any import.
     from panel.routes import _shared as _shared207

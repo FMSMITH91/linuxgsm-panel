@@ -69,7 +69,6 @@
   "The database server refused that user and password.": "Le serveur de bases de données a refusé cet utilisateur et ce mot de passe.",
   "That login works but can't create users and grant them rights (it needs CREATE USER and GRANT OPTION).": "Cet identifiant fonctionne mais ne peut pas créer d'utilisateurs ni leur accorder des droits (il lui faut CREATE USER et GRANT OPTION).",
   "The panel has no admin password for this host's database server.": "Le panel n'a pas de mot de passe administrateur pour le serveur de bases de données de cet hôte.",
-  "Databases were not included: {why}": "Les bases de données n'ont pas été incluses : {why}",
   "the host's database server is not set up in the panel.": "le serveur de bases de données de l'hôte n'est pas configuré dans le panel.",
   "the dump failed.": "le dump a échoué.",
   "the dump failed ({error}).": "le dump a échoué ({error}).",
@@ -82,5 +81,6 @@
   "The panel signs in with a stored admin login.": "Le panel se connecte avec un identifiant administrateur enregistré.",
   "The database server refused the panel's stored admin login.": "Le serveur de bases de données a refusé l'identifiant administrateur enregistré du panel.",
   "A super admin can replace or clear it on this tab.": "Un super administrateur peut le remplacer ou l'effacer dans cet onglet.",
-  "Change the admin login": "Changer l'identifiant administrateur"
+  "Change the admin login": "Changer l'identifiant administrateur",
+  "Not every database is in this backup: {why}": "Toutes les bases de données ne sont pas dans cette sauvegarde : {why}"
 }

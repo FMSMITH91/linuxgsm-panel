@@ -156,10 +156,21 @@ def _recheck(remote, hd):
     state = p.get("state")
     if state == "needs_login" and hd.auth_mode == "login":
         state = "ready"          # the socket is refused, and the panel signs in with the stored login
+        p = _login_probe(remote, hd, p)
     if state == "ready":
         _store_probe(hd, p)
         db.session.commit()
     return state or "unreadable"
+
+
+def _login_probe(remote, hd, p):
+    """`p` completed through the stored admin login: the version and native logins the socket can't read.
+
+    A refused or unreadable login leaves `p` as it was (its refusal is the next write's to report).
+    """
+    user, secret = _dbs._secrets_for(hd)["admin"]
+    verdict, v = _dbs.admin_check(remote, hd.port or 3306, user, secret)
+    return _dbs.with_login_facts(p, v) if verdict in ("ok", "lacks_grants") else p
 
 
 def _probe_again(hd, may_probe):
@@ -520,11 +531,11 @@ def _admin_login_answer(remote):
     p = _probe(remote)
     port = p.get("port") if isinstance(p.get("port"), int) else 3306
     with _r20b_audit_on_raise("db_admin_login", target=remote.name, detail=user, remote=remote):
-        verdict = _dbs.check_admin_login(remote, port, user, secret)
+        verdict, v = _dbs.admin_check(remote, port, user, secret)
     if verdict == "ok":
         hd = _host_row(remote.id) or _new_host_row(remote, p, installed_by_panel=False)
+        _store_probe(hd, _dbs.with_login_facts(p, v))    # the version and native logins, read through it
         hd.auth_mode, hd.port, hd.admin_user, hd.admin_secret = "login", port, user, encrypt_secret(secret)
-        hd.checked_at = _now()
         db.session.commit()
         _dbs.LOGIN_REFUSED.pop(remote.id, None)
     said = {"ok": "Saved. The panel signs in to this database server with that login.",
@@ -577,7 +588,8 @@ def _orphan_delete_answer(remote, db_id):
 
 # ── hooks into other flows ──────────────────────────────────────────────────────────────────────
 def _note(why):
-    return i18n.Sentence("Databases were not included: {why}", why=why)
+    # "Not every": a dump that failed for one database still saved the others (db-dump goes on).
+    return i18n.Sentence("Not every database is in this backup: {why}", why=why)
 
 
 def dump_for_backup(sid, remote, account):

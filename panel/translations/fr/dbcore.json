@@ -24,5 +24,6 @@
   "The database server refused the panel's stored admin login. A super admin can replace or clear it on the Databases tab.": "Le serveur de bases de données a refusé l'identifiant administrateur enregistré du panel. Un super administrateur peut le remplacer ou l'effacer dans l'onglet Bases de données.",
   "There is no stored admin login for this host's database server.": "Aucun identifiant administrateur n'est enregistré pour le serveur de bases de données de cet hôte.",
   "The panel can't sign in as root over the socket on this host, so the stored login was kept. Enter a new one to replace it.": "Le panel ne peut pas se connecter en root par le socket sur cet hôte, donc l'identifiant enregistré a été conservé. Saisissez-en un nouveau pour le remplacer.",
-  "Cleared. The panel signs in as root over the socket again.": "Effacé. Le panel se connecte de nouveau en root par le socket."
+  "Cleared. The panel signs in as root over the socket again.": "Effacé. Le panel se connecte de nouveau en root par le socket.",
+  "Database {name} was deleted. It held nothing, so no copy was kept.": "La base de données {name} a été supprimée. Elle était vide, aucune copie n'a donc été conservée."
 }
