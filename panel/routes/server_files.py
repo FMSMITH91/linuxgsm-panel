@@ -26,6 +26,7 @@ from panel.ops import socket_hooks as _socket_hooks
 # server_detail's log_action is the one seam for both routes.
 from panel.routes import server_detail as _sd
 from panel.routes import game_config_form as _gcf_routes
+from panel.routes import cod_mods as _cod_mods_routes
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
     _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
@@ -1929,7 +1930,9 @@ def _register_alerts(app):
 
 
 def _register_mods(app):
-    """Listing, installing and removing LinuxGSM mods."""
+    """Listing, installing and removing LinuxGSM mods; a Call of Duty server's mod folder (routes/cod_mods)."""
+    _cod_mods_routes.register(app)
+
     @app.route("/api/server/<int:server_id>/mods", methods=["GET", "POST"])
     @login_required
     @server_access_required

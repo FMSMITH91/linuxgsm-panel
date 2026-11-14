@@ -1,0 +1,22 @@
+{
+  "Pick the mod folder this server starts with. The change applies the next time the server starts. Players download the mod's files from the server when its game config allows downloads.": "Choisissez le dossier de mod avec lequel ce serveur démarre. Le changement s'applique au prochain démarrage du serveur. Les joueurs téléchargent les fichiers du mod depuis le serveur lorsque sa configuration de jeu autorise les téléchargements.",
+  "Open in Files": "Ouvrir dans Fichiers",
+  "Use": "Utiliser",
+  "(folder not found)": "(dossier introuvable)",
+  "None (the base game)": "Aucun (le jeu de base)",
+  "fs_game is set in extraparams, so the panel does not change it here. Change it in the LinuxGSM config.": "fs_game est défini dans extraparams, donc le panneau ne le modifie pas ici. Modifiez-le dans la configuration LinuxGSM.",
+  "startparameters is set in the secrets file, so the panel does not change it here. Change it there.": "startparameters est défini dans le fichier de secrets, donc le panneau ne le modifie pas ici. Modifiez-le là-bas.",
+  "To add a mod, upload its folder into {dir}.": "Pour ajouter un mod, envoyez son dossier dans {dir}.",
+  "To add a mod, make a folder named mods in serverfiles and upload the mod's folder into it.": "Pour ajouter un mod, créez un dossier nommé mods dans serverfiles et envoyez-y le dossier du mod.",
+  "To add a mod, upload its folder (with its .pk3 files) into {dir}.": "Pour ajouter un mod, envoyez son dossier (avec ses fichiers .pk3) dans {dir}.",
+  "Could not save — connection error": "Impossible d'enregistrer — erreur de connexion",
+  "Couldn't read this server's config and mod folders — the host didn't answer. Nothing was changed.": "Impossible de lire la configuration et les dossiers de mods de ce serveur — l'hôte n'a pas répondu. Rien n'a été modifié.",
+  "That folder isn't one of this server's mods. Refresh the list and pick again.": "Ce dossier n'est pas l'un des mods de ce serveur. Actualisez la liste et choisissez à nouveau.",
+  "This server's fs_game is set in extraparams, which LinuxGSM adds after startparameters. Change it there in the LinuxGSM config — nothing has been changed.": "Le fs_game de ce serveur est défini dans extraparams, que LinuxGSM ajoute après startparameters. Modifiez-le là, dans la configuration LinuxGSM — rien n'a été modifié.",
+  "startparameters is set in this server's secrets file, which LinuxGSM reads last. Change the mod there — nothing has been changed.": "startparameters est défini dans le fichier de secrets de ce serveur, que LinuxGSM lit en dernier. Modifiez le mod là-bas — rien n'a été modifié.",
+  "This server's startparameters isn't one plain double-quoted line, so the panel won't edit it. Change fs_game in the LinuxGSM config — nothing has been changed.": "Le startparameters de ce serveur n'est pas une simple ligne entre guillemets doubles, donc le panneau ne le modifie pas. Modifiez fs_game dans la configuration LinuxGSM — rien n'a été modifié.",
+  "Couldn't save the config.": "Impossible d'enregistrer la configuration.",
+  "Nothing to change.": "Rien à modifier.",
+  "Saved. Restart the server to start it with {mod}.": "Enregistré. Redémarrez le serveur pour le démarrer avec {mod}.",
+  "Saved. Restart the server to start it without a mod.": "Enregistré. Redémarrez le serveur pour le démarrer sans mod."
+}
