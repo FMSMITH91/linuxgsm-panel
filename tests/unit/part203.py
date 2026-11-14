@@ -105,6 +105,11 @@ _BAD_START203 = {
 for _why203, _texts203 in _BAD_START203.items():
     check("world reset start parameters: %s is refused" % _why203, _words203(_texts203)[0] is None,
           repr(_words203(_texts203)))
+eq("world reset start parameters: a command substitution or another expansion form is refused as an expansion the "
+   "panel does not read (the operator is told which rule, not a generic one)",
+   [_words203(_vh203('startparameters="-world $(cat w)"\n'))[1],
+    _words203(_vh203('startparameters="-world ${worldname:-x}"\n'))[1]],
+   ["the start parameters use a shell expansion the panel does not read"] * 2)
 check("world reset config: another setting's line that sets the key (${port:=1}, arithmetic) is still a "
       "form the panel refuses; one that only expands it is not",
       _wwr203.cfg_values(['x="${port:=27015}"\nport="1"\n'], ["port"])[0] is None
@@ -140,10 +145,22 @@ _VH_BAD203 = {
     "--savedir with two dashes": _wwr203.vh_layout(_vhw203 + ["--savedir", "/home/vhserver/x"], "vhserver"),
     "no -savedir (the folder would be the game's guess)":
         _wwr203.vh_layout([w for w in _vhw203 if w != "-savedir"], "vhserver"),
-    "-world with no value": _wwr203.vh_layout(["-world"], "vhserver"),
 }
+
+
+def _vh_last203(words):
+    """vh_layout's answer, or what it raised (a crash must fail the check by name, not end the part)."""
+    try:
+        return _wwr203.vh_layout(words, "vhserver")
+    except Exception as exc:  # noqa: BLE001 - recorded, and named by the check that reads it
+        return None, None, repr(exc)
+
+
+_VH_BAD203["-world last, with no value"] = _vh_last203(["-savedir", "/home/vhserver/v", "-world"])
+_VH_BAD203["-world followed by another option, not a value"] = _vh_last203(
+    ["-world", "-savedir", "/home/vhserver/v"])
 for _why203, _res203 in _VH_BAD203.items():
-    check("world reset vh: %s is refused" % _why203, _res203[0] is None and _res203[1], repr(_res203))
+    check("world reset vh: %s is refused" % _why203, _res203[0] is None and bool(_res203[1]), repr(_res203))
 
 _pzw203 = ["-servername", "pzserver", "-adminpassword", "p203Invented9"]
 eq("world reset pz: the save is ~/Zomboid/Saves/Multiplayer/<servername>, held to map_t.bin",
