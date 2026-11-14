@@ -3478,8 +3478,12 @@ if __name__ == "__main__":
 
     # Keep gamedig, the player-query tool, installed from its pinned lockfile on every host: the
     # weekly repair cron everywhere, and the lockfile's tree itself on remotes. See the pass above.
-    threading.Thread(target=lambda: _node_tools_cron_watch(app), name="node-tools",
-                     daemon=True).start()
+    threading.Thread(target=lambda: _node_tools_cron_watch(app), name="node-tools", daemon=True).start()
+    # LinuxGSM's server list, dependency list and latest release, fetched now in the background:
+    # the first install page after a start otherwise fetched the list on its request, and the first
+    # server page could not yet say "LinuxGSM update available". Here, not in create_app, which
+    # the test suites call: a fetch thread started there outlives the test that started it.
+    lgsm_data.warm()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
     threading.Thread(target=lambda: _monitor_watch(app), name="monitor", daemon=True).start()
