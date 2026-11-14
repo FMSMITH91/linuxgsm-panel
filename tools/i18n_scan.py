@@ -1451,13 +1451,19 @@ def _fingerprint(root):
 
 
 def _memo(kind, root, compute):
-    """`compute()` for (`kind`, `root`), computed again only when a scanned file changed."""
-    key = (kind, _fingerprint(root))
-    if key not in _MEMO:
-        if len(_MEMO) > 64:     # temp trees: each is scanned once, keep the cache small
+    """`compute()` for (`kind`, `root`), computed again only when a scanned file changed.
+
+    One entry per kind and root, replaced when the files change: a run that edits files keeps
+    one parse of each root, never a parse per edit (each one holds every scanned file's tree).
+    """
+    fp = _fingerprint(root)
+    key = (kind, fp[0])
+    held = _MEMO.get(key)
+    if held is None or held[0] != fp:
+        if len(_MEMO) > 64:     # many temp roots: each is scanned once, keep the cache small
             _MEMO.clear()
-        _MEMO[key] = compute()
-    return _MEMO[key]
+        _MEMO[key] = (fp, compute())
+    return _MEMO[key][1]
 
 
 def _py_trees(root):
