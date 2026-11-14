@@ -3838,8 +3838,8 @@ try:
             name, ver, requires_python, ", ".join(v[:-2] for v in missed))
 
     # Each supported Python on Linux, as a marker environment. A pin may carry a marker (dnspython
-    # is split by hand: its fix needs 3.11, so 3.10 keeps the old release), and is then judged only
-    # on the Pythons it applies to.
+    # was split that way by hand until it left the lock), and is then judged only on the Pythons it
+    # applies to.
     _RQ_ENVS = {v: [{"python_version": v[:-2], "python_full_version": v, "sys_platform": "linux",
                      "platform_system": "Linux", "platform_machine": mach,
                      "implementation_name": "cpython", "platform_python_implementation": "CPython",
@@ -3888,7 +3888,13 @@ try:
                                 % (name, len(on), v[:-2], (": " + ", ".join(on)) if on else ""))
         return gaps
 
+    def _rq_unsafe(text):
+        """The names the lockfile's header leaves out on purpose (pip-compile --unsafe-package)."""
+        head = "\n".join(_l for _l in text.splitlines() if _l.startswith("#"))
+        return {_rq_canon(_n) for _n in re.findall(r"--unsafe-package[= ]([A-Za-z0-9._-]+)", head)}
+
     def _rq_closure_gaps(text):
+        unsafe = _rq_unsafe(text)
         entries = _rq_entries(text)
         gaps = [e for e in entries if isinstance(e, str)]
         entries = [e for e in entries if not isinstance(e, str)]
@@ -3918,6 +3924,8 @@ try:
                 if sub.marker is not None and not any(sub.marker.evaluate(e) for e in envs):
                     continue
                 sub_name = _rq_canon(sub.name)
+                if sub_name in unsafe and sub_name not in pins:
+                    continue   # left out by name in the header; requirements.in says why
                 if sub_name not in pins:
                     gaps.append("%s needs %s, which is not pinned" % (name, rd))
                 elif not sub.specifier.contains(pins[sub_name], prereleases=True):
@@ -3949,8 +3957,8 @@ try:
           and _rq_python_gap("bidict", "0.23.1", ">=3.8") is None
           and "3.14" in (_rq_python_gap("x", "1", "<3.14") or ""),
           repr(_rq_python_gap("bidict", "0.24.1", ">=3.11")))
-    # A pin with a marker is judged on the Pythons it applies to: dnspython 2.9.0 requires 3.11, and
-    # behind `python_version >= "3.11"` that is no gap; unmarked, it is.
+    # A pin with a marker is judged on the Pythons it applies to: a release that requires 3.11 is no
+    # gap behind `python_version >= "3.11"`; unmarked, it is.
     _rq_m311 = _RqReq('x ; python_version >= "3.11"').marker
     _rq_m310 = _RqReq('x ; python_version < "3.11"').marker
     check("requirements.txt: ...a marked pin is judged only on the Pythons its marker applies to "
@@ -3966,28 +3974,20 @@ try:
           _rq_split_bad == ["d has 2 pins that apply on Python 3.10: d==1, d==2",
                             "e has 0 pins that apply on Python 3.10"]
           and _rq_split_gaps([("d", "1", _rq_m310), ("d", "2", _rq_m311)]) == [], repr(_rq_split_bad))
-    # CVE-2026-114605 (GHSA-45c3-73f7-pv4m): dnspython before 2.9.0 spends unbounded CPU on a
-    # (and GHSA-vvf4-9x63-8xvv, fixed in 2.9.2: WKS zone-file text)
-    # crafted DNS reply, and eventlet's greendns parses every reply the panel's lookups get. 2.9.0
-    # requires 3.11, so the split is made by hand after pip-compile (requirements.txt's header),
-    # and a recompile on 3.10, Dependabot's included, writes one unmarked 2.8.0 back. Every Python
-    # that CAN run the fix must get it; 3.10 alone keeps 2.8.0 (osv-scanner.toml, dated).
-    def _rq_dns_gaps(entries):
-        return ["dnspython==%s applies on Python %s, which can run the fixed 2.9.2" % (e[1], v[:-2])
-                for e in entries if not isinstance(e, str) and e[0] == "dnspython"
-                and not _RqSpec(">=2.9.2").contains(e[1])
-                for v in _rq_where(e[2]) if v != "3.10.0"]
-
-    _rq_dns_bad = _rq_dns_gaps(_rq_entries(_rq_txt))
-    check("requirements.txt: dnspython is 2.9.2 or later on every Python but 3.10 (CVE-2026-114605, GHSA-vvf4); "
-          "after a recompile, re-apply the split its header describes",
-          not _rq_dns_bad and any(not isinstance(e, str) and e[0] == "dnspython"
-                                  for e in _rq_entries(_rq_txt)), repr(_rq_dns_bad))
-    check("requirements.txt: ...and what a 3.10 recompile writes back, one unmarked 2.8.0, is named "
-          "(control)",
-          _rq_dns_gaps([("dnspython", "2.8.0", None)])
-          == ["dnspython==2.8.0 applies on Python %s, which can run the fixed 2.9.2" % v[:-2]
-              for v in _RQ_PYTHONS[1:]])
+    # dnspython is not installed at all (CVE-2026-114605, GHSA-vvf4-9x63-8xvv: its fixes need Python
+    # 3.11, which Ubuntu 22.04 lacks). eventlet declares it for greendns, which the panel turns off
+    # (panel/core/green_dns.py); pip-compile leaves it out by name, and Dependabot keeps that flag
+    # because it reads --unsafe-package back from this header. --allow-unsafe would pin it anyway.
+    _rq_dns_pins = [e for e in _rq_entries(_rq_txt) if not isinstance(e, str) and e[0] == "dnspython"]
+    check("requirements.txt: no dnspython, left out by name (--unsafe-package=dnspython in the "
+          "header, no --allow-unsafe)",
+          not _rq_dns_pins and _rq_unsafe(_rq_txt) == {"dnspython"}
+          and "--allow-unsafe" not in "".join(_l for _l in _rq_txt.splitlines() if _l.startswith("#    pip-compile ")),
+          repr((_rq_dns_pins, sorted(_rq_unsafe(_rq_txt)))))
+    check("requirements.txt: ...and the closure check names eventlet's dnspython when the header "
+          "does not leave it out (control)",
+          any("dnspython" in g for g in _rq_closure_gaps(
+              _rq_txt.replace("--unsafe-package=dnspython", ""))[1]))
     # Dependabot must resolve as the OLDEST supported Python, or it proposes releases 22.04 cannot
     # install (it proposed bidict 0.24, Requires-Python >= 3.11). requirements.txt is pip-compile's
     # lockfile for requirements.in, and Dependabot re-runs pip-compile on the Python the header

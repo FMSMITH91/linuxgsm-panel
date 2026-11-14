@@ -32,8 +32,10 @@ FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cf
 # becomes a fuzzer that dies on startup instead of a build that fails loudly.
 # Copied on its own first so this layer caches across source-only changes. It is a hashed lockfile
 # (see requirements.in): every file pip fetches must match a hash in it, and all of them are wheels.
+# --no-deps, as install.sh installs it: the file is the whole closure apart from dnspython, which
+# eventlet still declares and the panel does not use (requirements.in).
 COPY panel/install/requirements.txt $SRC/requirements.txt
-RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r "$SRC/requirements.txt"
+RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r "$SRC/requirements.txt"
 
 # What the fuzz build reads, not the whole context. The harnesses import panel.* and nothing else
 # (a part06 gate holds them to that), and build.sh reads tests/fuzz/ and its seed corpora; the

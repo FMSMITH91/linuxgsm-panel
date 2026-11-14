@@ -41,6 +41,8 @@ sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 # a perf change gets justified by, and half-greened locks measure a concurrency model the real app
 # does not have. The real app is unaffected — app.py patches before it imports Flask, and the smoke
 # suite boots it with zero patcher errors.
+# Before eventlet's first import, as app.py does: no greendns, so no dnspython (panel/core/green_dns.py).
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 import warnings as _w
 with _w.catch_warnings():
     _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")

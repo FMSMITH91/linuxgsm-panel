@@ -25,6 +25,8 @@ import atheris
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Pre-load ssh_manager's heavy dependencies UNINSTRUMENTED (see fuzz_game_status).
+# eventlet.tpool is the first eventlet import: greendns off, so no dnspython (panel/core/green_dns.py).
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
              "sqlalchemy.dialects.sqlite", "panel.core.config"):
     importlib.import_module(_dep)

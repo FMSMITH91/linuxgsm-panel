@@ -128,9 +128,13 @@ jobs:
       - name: Install dependencies + Atheris
         if: steps.scope.outputs.run == 'true'
         run: |
-          python -m pip install --quiet --require-hashes --only-binary :all: -r panel/install/requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements/atheris.txt
+
+      - name: The panel's requirements are complete (install.sh's pip check)
+        if: steps.scope.outputs.run == 'true'
+        run: bash .github/scripts/panel_pip_check.sh
 
       - name: Fuzz
         if: steps.scope.outputs.run == 'true'
