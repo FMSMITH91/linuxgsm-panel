@@ -106,7 +106,7 @@ check("cron journal: journal-cron-account is a read, ended when its caller gives
 
 # ── the helper's read, for real against the stand-in ─────────────────────────────────────────────
 def _run_helper198(user):
-    """(rc, stdout, seconds) of do_journal_cron_account(user) with the stand-in as journalctl."""
+    """Run do_journal_cron_account(user) with the stand-in as journalctl: (rc, stdout, seconds)."""
     saved = _helper.TOOLS.get("journalctl")
     out_path = _os198.path.join(_TMP198, "helper.out")
     t0 = _time198.monotonic()
@@ -140,7 +140,7 @@ eq("cron journal helper: an account name is matched as text, so `c.d` is not a p
 
 # ── the remote rendering, run under bash against the same stand-in ───────────────────────────────
 def _run_shell198(cmd):
-    """stdout of `cmd` under bash with the stand-in first on PATH."""
+    """Return what `cmd` prints under bash with the stand-in first on PATH."""
     env = {"PATH": _os198.path.dirname(_STAND198) + ":/usr/bin:/bin", "HOME": _TMP198}
     res = _sp198.run(["bash", "-c", cmd], env=env, capture_output=True, text=True,  # nosec B603 B607
                      timeout=60, stdin=_sp198.DEVNULL, check=False)
@@ -169,7 +169,7 @@ _OLD198 = "\n".join([   # journal-cron's window, oldest first, every account
 
 
 def _local198(answers, user="codserver"):
-    """(_read_cron_run_times on the panel host with the helper installed, the argv run)."""
+    """Run _read_cron_run_times on the panel host with the helper installed: (its answer, the argv run)."""
     seen = []
 
     def _exec(argv, timeout=30, stdin_text=None):
@@ -204,7 +204,7 @@ for _why198, _ans198 in (("a failed read", ("", "panel-helper: journal-cron-acco
 
 
 def _remote198(user):
-    """(_read_cron_run_times on a remote, the command sent): that command run for real under bash."""
+    """Run _read_cron_run_times on a remote, the command sent run for real under bash: (answer, commands)."""
     sent = []
 
     def _run(server, command, timeout=30, sudo=None, stdin_text=None):
