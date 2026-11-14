@@ -156,7 +156,8 @@ jobs:
             --no-build-isolation -r .github/ci-requirements-checks/checks.txt
 
       - name: The panel's requirements are complete (install.sh's pip check)
-        if: (steps.scope.outputs.docs_only != 'true' || matrix.docs) && steps.reuse.outputs.reuse != 'true'
+        # Not on the docs-only leg: a pull request that changes only documentation installs nothing new.
+        if: steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse != 'true'
         run: bash .github/scripts/panel_pip_check.sh
 
       - name: Install zsh and systemd-journal-remote
