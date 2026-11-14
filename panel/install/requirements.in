@@ -1,6 +1,6 @@
 # Runtime dependencies: the packages the panel imports directly. EDIT THIS FILE, then regenerate
 # requirements.txt from it (run in python:3.10-slim):
-#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#   pip-compile --generate-hashes --no-annotate --strip-extras --unsafe-package=dnspython \
 #     --output-file=requirements.txt requirements.in
 #
 # requirements.txt is pip-compile's lockfile: the WHOLE resolved set, every package these pull in,
@@ -26,8 +26,18 @@
 # because the resolved set is the same on each, and every pin ships wheels for each. No environment
 # markers here: a 3.10 compile drops a requirement whose marker is false on 3.10, so a package
 # needed only on a newer Python must be listed bare (tests/unit refuses a marker in this file).
-# requirements.txt carries one split by hand after compiling, dnspython by Python version: its
-# header says why, and how to put it back after a recompile.
+#
+# dnspython is left out (--unsafe-package; Dependabot reads the flag back from the header and keeps
+# it). eventlet declares it for eventlet.support.greendns, its DNS resolver written in Python, and it
+# is the only package here that does. The panel turns greendns off instead (EVENTLET_NO_GREENDNS=yes,
+# set before eventlet is imported: panel/install/app.py and panel/__init__.py) and resolves names
+# with the operating system's own resolver on a worker thread (panel/core/green_dns.py). That keeps
+# one dependency, and its advisories, off every host: dnspython's fixes now need Python 3.11, which
+# Ubuntu 22.04 does not have. Without --allow-unsafe on purpose: with it, pip-compile pins the
+# unsafe package anyway. Because eventlet's metadata still names dnspython, every install of this
+# file passes --no-deps (the file is the whole closure apart from that one) and then runs pip check,
+# which may report only "eventlet ... requires dnspython, which is not installed." (install.sh
+# _pip_check_deps; CI runs the same function). tests/unit (part06, part193) holds all of this.
 flask
 flask-socketio
 flask-login

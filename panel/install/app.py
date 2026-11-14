@@ -82,6 +82,8 @@ if _dd_rebind:
     _dd_del.__defaults__ = (threading._PyRLock(), _dd_defaults[1])
 del _dd_defaults   # it still holds the original lock, and eventlet counts every one that survives
 
+# Before eventlet's first import, which reads it once: no greendns, so no dnspython (green_dns below).
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 with _w.catch_warnings():
     _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")  # i18n-ignore: a warnings filter
     import eventlet
@@ -94,11 +96,12 @@ del _w, _dd_del, _dd_rebind
 # Panel imports live AFTER the patch, all of them. terminal/clock used to sit above it and got
 # away with it only because neither pulls in anything eventlet needs to green — a latent trap for
 # whichever of them grows a dependency first. tests/unit asserts this ordering now.
-from panel.core import green_write, runtime_stats, terminal
+from panel.core import green_dns, green_write, runtime_stats, terminal
 # eventlet's green os.write retries a broken pipe for ever, so communicate(input) to a child that
 # exits unread would spin and never return; install() lets it raise. First, before anything below
 # can start a process.
 green_write.install()
+green_dns.install()   # name lookups on tpool's threads, so the OS resolver never blocks the hub
 from panel.core.clock import utcnow
 
 import secrets
@@ -1362,8 +1365,7 @@ def load_game_list():
         if sn and name:
             # The serverlist's os column rides along as data. It is not a cap
             # (lgsm_data._LGC_DISTRO_CAPS says why); legacy_os below is.
-            games.append({"shortname": sn, "name": name,
-                          "os": (row.get("os") or "").strip()})
+            games.append({"shortname": sn, "name": name, "os": (row.get("os") or "").strip()})
     # Mark the games LinuxGSM refuses on newer releases. The picker cannot know which host is about
     # to be chosen, so it states the game's OWN Ubuntu limit; the install route and the picker's
     # script compare it against the host once one is (_os_cap_refusal, filterGamesForHost).

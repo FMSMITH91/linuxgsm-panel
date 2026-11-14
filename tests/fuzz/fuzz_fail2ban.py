@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # for this target (eventlet, dnspython, asyncio, cryptography...) against 20 for its siblings, and
 # ClusterFuzzLite killed it as "process timed out" on every PR and nightly run while the job stayed
 # green. The same list as the four ssh_manager harnesses; part29 holds all five to it.
+# eventlet.tpool is the first eventlet import: greendns off, so no dnspython (panel/core/green_dns.py).
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
              "sqlalchemy.dialects.sqlite", "panel.core.config"):
     importlib.import_module(_dep)

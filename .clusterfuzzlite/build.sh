@@ -20,12 +20,12 @@ export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 #
 # so naming --hidden-import eventlet.tpool built five targets that all died on
 # `No module named 'eventlet.hubs.epolls'`. --collect-submodules takes the whole package and does
-# not need updating when a new submodule shows up. dns arrives transitively (eventlet's greendns);
-# paramiko resolves its kex/cipher backends the same dynamic way.
+# not need updating when a new submodule shows up. paramiko resolves its kex/cipher backends the same
+# dynamic way. No dns: the panel turns eventlet's greendns off and does not install dnspython
+# (panel/install/requirements.in).
 COMPILE_ARGS=(
   --collect-submodules eventlet
   --collect-submodules paramiko
-  --collect-submodules dns
   --hidden-import panel.core.config
 )
 
