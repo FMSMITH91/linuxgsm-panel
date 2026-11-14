@@ -506,6 +506,9 @@ try:
     _ul_rc141 = [0]
     _p9_patch_sm("run_as_game_user", lambda remote, user, action, **k: ("", "", _ul_rc141[0]))
     _p9_patch(_sd141, "_after_power_action", lambda *a, **k: None)
+    # update-lgsm reads the release before and after it runs (_lgsm_update): unread here.
+    _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: (None, None))
+    _p9_patch(_lgd141, "latest_release", lambda: None)
     with _p9.app_context():
         _g141 = _sh141.db.session.get(_sh141.GameServer, P9_GS)
         _sd141._run_sync_action(_p9, _g141, _g141.remote, "update-lgsm", None, None)

@@ -16,6 +16,7 @@ from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
+from panel.routes import _lgsm_update
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS, _perm_for_action, _r17c_row_id,
     get_game, get_remote, get_user_servers, has_permission, permission_required, server_access_required)
 
@@ -428,7 +429,11 @@ def _register_server_stats(app):
             # dismiss the alert.
             _log.debug("game version read failed for server %s", row_label(gs, "id"), exc_info=True)
             info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
-        return jsonify({"supports_update": gs.supports_update, **info, "lgsm": _lgsm_version_info(gs)})
+        lgsm = _lgsm_version_info(gs)
+        # A server behind LinuxGSM's latest gets the notes of the releases it would move through, from
+        # the panel's cached copy (lgsm_releases): the page shows them before anything runs.
+        return jsonify({"supports_update": gs.supports_update, **info, "lgsm": lgsm,
+                        "lgsm_notes": _lgsm_update.notes_behind(lgsm)})
 
 
 def _lgsm_version_info(gs):
@@ -438,16 +443,7 @@ def _lgsm_version_info(gs):
     be read. `behind` only when both are known and the server's is older: a release the panel has
     not read yet is never reported as out of date.
     """
-    from panel.services import lgsm_data
-    try:
-        release, _modules = _sm.lgsm_versions(gs.remote, gs.short_name, gs.lgsm_name)
-    except Exception:
-        _log.debug("LinuxGSM version read failed for server %s", row_label(gs, "id"), exc_info=True)
-        release = None
-    latest = lgsm_data.latest_release()
-    behind = bool(release and latest and not lgsm_data.release_at_least(
-        release, tuple(int(p) for p in latest[1:].split("."))))
-    return {"release": release or "", "latest": latest or "", "behind": behind}
+    return _lgsm_update.state(_lgsm_update.script_release(gs.remote, gs.short_name, gs.lgsm_name))
 
 
 def _register_installs(app):
