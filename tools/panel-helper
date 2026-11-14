@@ -7180,7 +7180,7 @@ def _db_done(sess):
         try:
             os.unlink(sess["file"])
         except FileNotFoundError:
-            pass
+            pass                    # already gone: nothing of the login is left either way
 
 
 def _db_tool(flavor, dump=False):
@@ -7290,7 +7290,7 @@ def _db_write_cnf():
     try:
         os.unlink(tmp)
     except FileNotFoundError:
-        pass
+        pass                        # no leftover from an earlier run: O_EXCL below makes it fresh
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w") as fh:
         fh.write(DB_HARDEN_CNF_TEXT)
@@ -7411,7 +7411,7 @@ def _db_archive_dir():
         try:
             os.mkdir(path, 0o700)
         except FileExistsError:
-            pass
+            pass                    # made by an earlier run: the lstat below checks what it is
         st = os.lstat(path)
         if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
             raise OSError("the archive directory is not root's own")
@@ -7481,13 +7481,21 @@ def _db_game_writer(pw, name, src_fd, commit_fd):
     try:
         os.mkdir(path, 0o700)
     except FileExistsError:
-        pass
+        pass                        # made by an earlier dump: opened below without following a link
     dfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        return _db_game_write(dfd, name, src_fd, commit_fd)
+    finally:
+        os.close(dfd)
+
+
+def _db_game_write(dfd, name, src_fd, commit_fd):
+    """Write <name>.sql.gz.tmp in the open directory `dfd`, then rename it in on the parent's word."""
     tmp, final = name + ".sql.gz.tmp", name + ".sql.gz"
     try:
         os.unlink(tmp, dir_fd=dfd)
     except FileNotFoundError:
-        pass
+        pass                        # no leftover from an earlier dump: O_EXCL below makes it fresh
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
     with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw) as gz:
         with os.fdopen(src_fd, "rb") as src:
@@ -7500,14 +7508,20 @@ def _db_game_writer(pw, name, src_fd, commit_fd):
 
 
 def _db_child(fn, *args):
-    """fn(*args)'s int result as this forked child's exit code; 1 on any exception. Never returns."""
+    """fn(*args)'s int result as this forked child's exit code; 1 on any exception. Never returns.
+
+    os._exit runs in `finally`, so nothing a forked child raises (SystemExit included) can carry
+    it back into the parent's code.
+    """
+    code = 1
     try:
         code = fn(*args)
-    except BaseException:  # noqa: BLE001 - a forked child must never return into the parent's code
+    except Exception:
         code = 1
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(code)
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
 
 
 def _db_dump_one_game(sess, pw, name):
@@ -7576,9 +7590,13 @@ def _db_import_child(pw, client, port, name, secret):
         return 1
     dfd = os.open(os.path.join(os.path.realpath(pw.pw_dir), DB_DUMP_DIR),
                   os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    fd = os.open(name + ".sql.gz", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    try:
+        fd = os.open(name + ".sql.gz", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    finally:
+        os.close(dfd)
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode) or st.st_size > DB_IMPORT_MAX:
+        os.close(fd)
         print("panel-db: the dump is not a regular file of at most 2 GiB")
         return 4
     help_text = subprocess.run([client, "--help"], shell=False, capture_output=True, text=True,  # nosec B603
@@ -7609,7 +7627,7 @@ def _db_feed(sess, argv, fd, pw):
         try:
             p.stdin.close()
         except OSError:
-            pass
+            pass                    # the client has gone; p.wait below gives its exit status
     rc = p.wait(timeout=DB_DUMP_TIMEOUT)
     outf.seek(0)
     sys.stdout.write(db_scrub(outf.read().decode("utf-8", "replace"), sess["secrets"]))

@@ -852,7 +852,7 @@ def _sql_refusals207(mod, err):
             fn()
             bad.append(label)
         except err:
-            pass
+            pass                    # refused: what this check wants
     ok = (good_n in mod.db_sql_create("mariadb", good_n, "native", 5, good_pw)
           and "'gs12_lp'" in mod.db_sql_sizes([good_n]) and good_pw in mod.db_sql_harden(good_pw))
     return bad, ok
