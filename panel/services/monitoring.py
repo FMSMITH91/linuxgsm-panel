@@ -394,7 +394,7 @@ def _metrics_work(servers):
     joinedloads the host), so read them once and hand the workers plain values.
     """
     return [(gs.remote, gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.remote_id,
-             gs.status) for gs in servers if gs.installed]
+             getattr(gs, "status", None)) for gs in servers if gs.installed]
 
 
 def _host_metrics_work(servers):
@@ -409,7 +409,7 @@ def _host_metrics_work(servers):
         if not gs.installed or gs.remote is None:
             continue
         by_host.setdefault(gs.remote_id, (gs.remote, []))[1].append(
-            (gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.status))
+            (gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, getattr(gs, "status", None)))
     return list(by_host.values())
 
 
