@@ -22,7 +22,11 @@ export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 # `No module named 'eventlet.hubs.epolls'`. --collect-submodules takes the whole package and does
 # not need updating when a new submodule shows up. paramiko resolves its kex/cipher backends the same
 # dynamic way. No dns: the panel turns eventlet's greendns off and does not install dnspython
-# (panel/install/requirements.in).
+# (panel/install/requirements.in). --collect-submodules IMPORTS the package to list its submodules,
+# in a child that inherits this environment, so greendns has to be off here too: with it on,
+# `import eventlet` fails on the missing dns, nothing is collected, and every fuzzer dies at start-up
+# on `No module named 'eventlet.hubs.epolls'`.
+export EVENTLET_NO_GREENDNS=yes
 COMPILE_ARGS=(
   --collect-submodules eventlet
   --collect-submodules paramiko

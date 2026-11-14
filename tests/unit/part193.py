@@ -474,9 +474,11 @@ check("CI: every step installing panel/install/requirements.txt does it --no-dep
       "%d found; %r" % (_wf_hits193, _wf_bad193))
 _df193 = _read193(".clusterfuzzlite", "Dockerfile")
 _bs193 = _read193(".clusterfuzzlite", "build.sh")
-check("fuzz image: installs requirements.txt --no-deps and bundles no dns",
+check("fuzz image: installs requirements.txt --no-deps, bundles no dns, and turns greendns off before "
+      "PyInstaller imports eventlet to collect its submodules",
       _re193.search(r"(?m)^RUN pip3 install [^\n]*--no-deps [^\n]*requirements\.txt", _df193) is not None
-      and "--collect-submodules dns" not in _bs193)
+      and "--collect-submodules dns" not in _bs193
+      and 0 <= _bs193.find("\nexport EVENTLET_NO_GREENDNS=yes\n") < _bs193.find("compile_python_fuzzer"))
 
 # panel_pip_check.sh with a stand-in python: pip check's output and whether `import dns` works.
 _PY193 = r"""#!/bin/sh
