@@ -220,8 +220,7 @@ _ANY208, _NONE208 = "x", ""
 _SID208 = _OTHER208 = None
 _MINE208 = []
 def _login_facts208():
-    """8d (called from the run below): a login-only MySQL; what the stored login reads fills in what the
-    socket probe can't."""
+    """8d, called from the run below: a login-only MySQL, filled in through its stored login."""
     def _facts208():
         with _p9.app_context():
             h = _HD208.query.filter_by(remote_id=P9_HOST).first()
