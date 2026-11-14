@@ -1,8 +1,9 @@
 """What an update-lgsm run did, in plain words, and the LinuxGSM release notes the server page shows.
 
 update-lgsm (LinuxGSM's command_update_linuxgsm.sh) prints which files it checked and replaced but
-never the release it moved to, so the release is read before and after the run: the instance
-script's `version=` line (hosts.lgsm_versions), the same read the server page's LinuxGSM line uses.
+never the release it moved to, so the release is read before and after the run: the older of the
+instance script's `version=` and its modules' `modulesversion=` (hosts.lgsm_versions, script_release),
+the same read the server page's LinuxGSM line uses.
 The reply then says "updated from v26.5.0 to v26.6.0", "already up to date" or why it failed, and
 carries the new state for the page's LinuxGSM line and the notes of every release in between.
 """
@@ -24,12 +25,21 @@ class LgsmUpdated(i18n.Sentence):
 
 
 def script_release(remote, account, selfname):
-    """The release an instance script says it runs ('v26.6.0'), or None when it could not be read."""
+    """The release an instance runs ('v26.6.0'): the older of its script's and its modules', or None if unread.
+
+    update-lgsm replaces the script first and the modules after it, so a run that fails part way
+    leaves a new script over old modules: read from the script alone, that server looked current
+    and the next run was reported "already up to date" while it updated every module (measured on
+    the test host, a v26.1.0 account). Modules that were not read leave the script's release.
+    """
     try:
-        release, _modules = _sm.lgsm_versions(remote, account, selfname)
+        release, modules = _sm.lgsm_versions(remote, account, selfname)
     except Exception:
         _log.debug("LinuxGSM version read failed", exc_info=True)
         return None
+    if release and modules and modules != release and not lgsm_data.release_at_least(
+            modules, tuple(int(p) for p in release[1:].split("."))):
+        return modules
     return release
 
 

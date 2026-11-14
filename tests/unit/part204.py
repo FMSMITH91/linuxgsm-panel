@@ -113,6 +113,29 @@ eq("cod mods list: CoD2 lists both forms (no .iwd in a top folder here)",
    _listed204("cod2"), (["mods/ok2", "mods/promod"], True))
 eq("cod mods list: serverfiles that leads out of the home lists nothing",
    (_listed204("cod", _sf_out204), _listed204("cod4", _sf_out204)), (([], False), ([], False)))
+def _with_module204(tmp, home):
+    """Put CoD1's game module in main/, and one more mod folder that carries its own copy."""
+    sf = _os204.path.join(home, "serverfiles")
+    for f in ("main/game.mp.i386.so", "good/b.pk3", "good/game.mp.i386.so"):
+        _touch204(_os204.path.join(sf, f))
+
+
+def _flags204(prep):
+    tmp = _tf204.mkdtemp(prefix="p204-")
+    try:
+        home = _home204(tmp)
+        prep(tmp, home)
+        got = _cm204._parse_listing(_bash204(_cm204.list_sh(_U, "cod"), home)[0])
+        return None if got is None else [(m["value"], bool(m.get("no_module"))) for m in got[0]]
+    finally:
+        _shutil204.rmtree(tmp, ignore_errors=True)
+
+
+eq("cod mods list: when main holds the game module, a CoD1 mod folder without its own copy is flagged "
+   "(the server will not start from it) and one with a copy is not",
+   _flags204(_with_module204), [("awe", True), ("good", False)])
+eq("cod mods list: with no game module in main, nothing is flagged",
+   _flags204(lambda tmp, home: None), [("awe", False)])
 eq("cod mods list: an answer without the listing's frame is no answer, not an empty list",
    _cm204._parse_listing("T awe\n"), None)
 
@@ -201,6 +224,12 @@ def _refusal_cases204(sid, home, admin):
     _p9_patch(_sf204, "game_account_write_refusal", lambda *a, **k: "Refused: p204 is root-capable")
     _R204["root"] = _post204(admin, sid, "awe")
     _p9_patch(_sf204, "game_account_write_refusal", lambda *a, **k: None)
+    _module = _os204.path.join(home, "serverfiles", "main", "game.mp.i386.so")
+    _touch204(_module)
+    _R204["nomod_get"] = _get204(admin, sid)[1]
+    _R204["nomod"] = _post204(admin, sid, "awe")
+    _R204["inst_nomod"] = _inst_text204(home)
+    _os204.remove(_module)
     _touch204(_os204.path.join(_cfgdir204(home), "common.cfg"), 'extraparams="+set fs_game awe"\n')
     _R204["extra_get"] = _get204(admin, sid)[1]
     _R204["extra"] = _post204(admin, sid, "")
@@ -257,6 +286,12 @@ eq("cod mods route: a path, the base game's folder, a link out of the home, a fo
    (_R204.get("bad"), _R204.get("inst_bad") == _INST204), ([False] * 5, True))
 eq("cod mods route: without EDIT_FILES the list reads but a switch is refused (403)",
    (_R204.get("ro_get"), _R204.get("ro_post")), (200, 403))
+check("cod mods route: a CoD1 folder without the game module is flagged in the listing, and Use is refused "
+      "with the reason and writes nothing",
+      [m.get("no_module") for m in _R204.get("nomod_get", {}).get("mods", [])] == [True]
+      and _R204.get("nomod", (0, {}))[1].get("success") is False
+      and "game.mp*.so" in _R204.get("nomod", (0, {}))[1].get("message", "")
+      and _R204.get("inst_nomod") == _INST204, repr((_R204.get("nomod"), _R204.get("inst_nomod"))))
 eq("cod mods route: a root-capable account is refused (409) before the host is asked",
    (_R204.get("root", (0, {}))[0], _R204.get("root", (0, {}))[1].get("success")), (409, False))
 check("cod mods route: fs_game held in extraparams is shown, and a switch is refused with the cfg untouched",
@@ -284,7 +319,9 @@ _out204 = _js99("cod mods card", (
     "  for (const [k, d] of [['top', {mods: [{value: 'awe', name: 'awe'}], active: 'gone', where: '',\n"
     "                                upload_dir: 'serverfiles', mods_dir: false}],\n"
     "                        ['sub', {mods: [{value: 'mods/p<b>', name: 'p<b>'}], active: '', where: 'extraparams',\n"
-    "                                upload_dir: 'serverfiles/mods', mods_dir: false}]]) {\n"
+    "                                upload_dir: 'serverfiles/mods', mods_dir: false}],\n"
+    "                        ['nomod', {mods: [{value: 'awe', name: 'awe', no_module: true}, {value: 'ok', name: 'ok'}],\n"
+    "                                active: '', where: '', upload_dir: 'serverfiles', mods_dir: false}]]) {\n"
     "    answer(d); const drew = await loadCodMods(true);\n"
     "    out[k] = {drew, list: document.getElementById('codmods-list').innerHTML,\n"
     "              where: document.getElementById('codmods-where').style.display,\n"
@@ -302,3 +339,10 @@ if _out204 is not None:
           "p&lt;b&gt;" in _sub204.get("list", "") and "<b>" not in _sub204.get("list", "")
           and _sub204.get("where") == "" and "make a folder named mods" in _sub204.get("up", "")
           and _sub204.get("dir") == "serverfiles", repr(_sub204))
+    _nm204 = _out204.get("nomod", {}).get("list", "")
+    _rows204 = {r.split("data-no-i18n>", 1)[1].split("<", 1)[0].strip(): r
+                for r in _nm204.split("</div>") if "data-no-i18n>" in r}
+    check("cod mods card: a folder without the game module says what it needs and gets no Use button; the "
+          "other folder keeps its own",
+          "game.mp*.so from main" in _rows204.get("awe", "") and "fpm-edit" not in _rows204.get("awe", "x fpm-edit")
+          and "fpm-edit" in _rows204.get("ok", ""), _nm204)

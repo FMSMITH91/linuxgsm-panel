@@ -175,7 +175,8 @@ def _update205(before, after, rc=0, out="", latest="v30.3.0", client=P9_ADMIN):
 
     def _versions(remote, account, selfname):
         events.append(("read", account, selfname))
-        return next(reads), None
+        got = next(reads)       # a release, or (script release, modules release)
+        return got if isinstance(got, tuple) else (got, None)
 
     def _run(remote, user, action, **k):
         events.append(("run", user, action))
@@ -231,6 +232,18 @@ _fail_out205 = ("[  OK  ] Updating LinuxGSM csgoserver: Selecting repo: GitHub\n
                 "[ FAIL ] Updating LinuxGSM csgoserver: Selecting repo: Unable to to access GitHub or "
                 "Bitbucket repositories\n")
 _d205, _ev205, _push205 = _update205("v30.1.0", "v30.1.0", rc=1, out=_fail_out205)
+_d205m = _update205(("v30.3.0", "v30.1.0"), ("v30.3.0", "v30.3.0"))[0]
+check("update-lgsm: a new script over old modules (a run that failed part way) reads as the modules' "
+      "release, so the run that updates them says it moved rather than 'already up to date'",
+      _d205m.get("success") is True
+      and _d205m.get("message") == "LinuxGSM on 'p9-cs' updated from v30.1.0 to v30.3.0.", repr(_d205m))
+_bare_out205 = ("Downloading distro csv\ncurl: (22) The requested URL returned error: 404\n... FAIL\n")
+_d205b = _update205("v30.1.0", "v30.1.0", rc=1, out=_bare_out205)[0]
+check("update-lgsm: a bare '... FAIL' status line is passed over for the line that says why",
+      _d205b.get("success") is False and "returned error: 404" in _d205b.get("message", ""), repr(_d205b))
+check("action failure reason: a bare status word is used only when no other line says anything",
+      _p9_sd._action_failure_reason("starting\n... FAIL") == "... FAIL"
+      and _p9_sd._action_failure_reason("Unable to reach the repo\n[ FAIL ]") == "Unable to reach the repo")
 check("update-lgsm: a failure names LinuxGSM's own line for it",
       _d205.get("success") is False and _d205.get("message") == (
           "LinuxGSM could not be updated on 'p9-cs': [ FAIL ] Updating LinuxGSM csgoserver: Selecting "
@@ -267,7 +280,8 @@ def _version205(release):
     _p9_arm(who="part205")
     _p9_patch_sm("game_version", lambda *a, **k: {"reported": "", "build": "", "appid": "",
                                                    "updated": None, "label": ""})
-    _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: (release, None))
+    _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: release if isinstance(release, tuple)
+                 else (release, None))
     _p9_patch(_lgd205, "latest_release", lambda: "v30.3.0")
     try:
         _seed205(_PARSED205)
@@ -282,6 +296,12 @@ _v205 = _version205("v30.1.0")
 check("version endpoint: a server behind gets the notes of the releases it would move through",
       [r["tag"] for r in _v205.get("lgsm_notes", [])] == ["v30.3.0", "v30.2.0"]
       and (_v205.get("lgsm") or {}).get("behind") is True, repr(_v205))
+_v205m = _version205(("v30.3.0", "v30.1.0"))
+check("version endpoint: a script newer than its modules shows the modules' release, behind the latest",
+      (_v205m.get("lgsm") or {}).get("release") == "v30.1.0" and (_v205m.get("lgsm") or {}).get("behind") is True,
+      repr(_v205m))
+check("version endpoint: modules newer than the script (another instance updated them) keep the script's",
+      (_version205(("v30.1.0", "v30.3.0")).get("lgsm") or {}).get("release") == "v30.1.0")
 check("version endpoint: an up-to-date or unread server gets none",
       _version205("v30.3.0").get("lgsm_notes") == [] and _version205(None).get("lgsm_notes") == [])
 

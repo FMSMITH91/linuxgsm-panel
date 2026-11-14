@@ -369,17 +369,27 @@ def _after_power_action(app, gs, remote, short_name, action, rc):
             app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
 
 
+_BARE_STATUS = frozenset(("fail", "failed", "error"))
+
+
 def _action_failure_reason(clean):
-    """The most relevant LinuxGSM line of a failed action's output: the last error-ish one, else the last."""
-    reason = ""
+    """The most relevant LinuxGSM line of a failed action's output: the last error-ish one, else the last.
+
+    A line that is only LinuxGSM's status word ("... FAIL", printed after the step's own line has
+    been overwritten) says nothing about why: the error-ish line before it is taken instead, and
+    the bare one only when there is no other.
+    """
+    bare = ""
     for line in reversed(clean.splitlines()):
         low = line.lower()
         if any(k in low for k in ("fail", "unable", "error", "missing", "not found", "no such")):
-            reason = line.strip()
-            break
-    if not reason and clean.splitlines():
-        reason = clean.splitlines()[-1].strip()
-    return reason
+            if set(re.findall(r"[a-z]+", low)) <= _BARE_STATUS:
+                bare = bare or line.strip()
+                continue
+            return line.strip()
+    if bare:
+        return bare
+    return clean.splitlines()[-1].strip() if clean.splitlines() else ""
 
 
 def _run_sync_action(app, gs, remote, action, actor, origin):

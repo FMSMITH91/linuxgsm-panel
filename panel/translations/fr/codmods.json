@@ -19,5 +19,7 @@
   "Nothing to change.": "Rien à modifier.",
   "Saved. Restart the server to start it with {mod}.": "Enregistré. Redémarrez le serveur pour le démarrer avec {mod}.",
   "Saved. Restart the server to start it without a mod.": "Enregistré. Redémarrez le serveur pour le démarrer sans mod.",
-  "Not a Call of Duty server.": "Ce n'est pas un serveur Call of Duty."
+  "Not a Call of Duty server.": "Ce n'est pas un serveur Call of Duty.",
+  "(needs a copy of game.mp*.so from main)": "(il faut une copie de game.mp*.so depuis main)",
+  "That mod folder has no copy of the game's server module (the game.mp*.so file in main), and the server won't start with it. Copy that file into the mod folder, then pick it again — nothing has been changed.": "Ce dossier de mod n'a pas de copie du module serveur du jeu (le fichier game.mp*.so de main), et le serveur ne démarrera pas avec. Copiez ce fichier dans le dossier du mod, puis choisissez-le de nouveau — rien n'a été modifié."
 }

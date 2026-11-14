@@ -25,6 +25,13 @@ Where the folders are, per game:
   the classic layout of Call of Duty 1 and United Offensive mods.
 The base game's own folders (main, and uo for United Offensive) are never a mod.
 
+A CoD1 server loads its game module (game.mp.i386.so, which LinuxGSM installs in main/) from the
+fs_game folder only: started with a folder that holds just .pk3 files, it stops at
+"Sys_Error: Sys_LoadDll(game) failed" (measured on a LinuxGSM codserver, 2026-11-14), and a mod
+folder works once that file is copied into it. So when the base game's folders hold a
+game.mp*.so, a top folder without a file of each of those names is listed as missing it, and the
+switch refuses it: the server would not start.
+
 Players get the mod's files from the server when its game config allows downloads (sv_allowDownload,
 or sv_wwwDownload with sv_wwwBaseURL for a web redirect); the card says so and does not change those.
 
@@ -91,7 +98,10 @@ IN_SECRETS = ("startparameters is set in this server's secrets file, which Linux
               "Change the mod there — nothing has been changed.")
 NOT_PLAIN = ("This server's startparameters isn't one plain double-quoted line, so the panel won't edit it. "
              "Change fs_game in the LinuxGSM config — nothing has been changed.")
-REASONS = (UNREAD, NOT_A_MOD, IN_EXTRAPARAMS, IN_SECRETS, NOT_PLAIN)
+NO_GAME_MODULE = ("That mod folder has no copy of the game's server module (the game.mp*.so file in main), and "
+                  "the server won't start with it. Copy that file into the mod folder, then pick it again — "
+                  "nothing has been changed.")
+REASONS = (UNREAD, NOT_A_MOD, IN_EXTRAPARAMS, IN_SECRETS, NOT_PLAIN, NO_GAME_MODULE)
 
 
 def mods_kind(game_type):
@@ -113,7 +123,8 @@ def list_sh(user, game_type):
     """Shell listing the mod folders of `user`'s serverfiles: "M <name>" for mods/<name>, "T <name>" for a top folder.
 
     serverfiles must resolve inside the home (no link out of it), and nothing is followed through a
-    link: find -P lists real folders only, and a `mods` that is a link is not looked in.
+    link: find -P lists real folders only, and a `mods` that is a link is not looked in. A top
+    folder that lacks one of the base game's game.mp*.so files also gets "X <name>".
     """
     ext, sub = _COD[game_type]
     home = _smc._quote("/home/%s" % user)
@@ -128,9 +139,12 @@ def list_sh(user, game_type):
                "| head -n %d; }; " % (safe, _MAX_LISTED))
     if ext:
         pat = "".join("[%s%s]" % (c.lower(), c.upper()) if c.isalpha() else c for c in ext)
-        sh += ('[ -n "$sf" ] && find -P "$sf" -mindepth 1 -maxdepth 1 -type d %s -exec sh -c '
-               '\'for d; do for f in "$d"/*%s; do [ -f "$f" ] && { printf "T %%s\\n" "${d##*/}"; break; }; '
-               "done; done' x {} + 2>/dev/null | head -n %d; " % (safe, pat, _MAX_LISTED))
+        sh += ('bm=; [ -n "$sf" ] && for f in "$sf"/main/game.mp*.so "$sf"/uo/game.mp*.so; do '
+               '[ -f "$f" ] && bm="$bm ${f##*/}"; done; '
+               '[ -n "$sf" ] && bm="$bm" find -P "$sf" -mindepth 1 -maxdepth 1 -type d %s -exec sh -c '
+               '\'for d; do for f in "$d"/*%s; do [ -f "$f" ] && { printf "T %%s\\n" "${d##*/}"; '
+               'for m in $bm; do [ -f "$d/$m" ] || { printf "X %%s\\n" "${d##*/}"; break; }; done; break; }; '
+               "done; done' x {} + 2>/dev/null | head -n %d; " % (safe, pat, 2 * _MAX_LISTED))
     return sh + "printf '%s\\n' " + _LIST_E
 
 
@@ -146,6 +160,10 @@ def _parse_listing(out):
         mod = _listed_mod(line)
         if mod is not None:
             mods.setdefault(mod["value"], mod)
+    for line in lines:
+        kind, _, name = line.strip().partition(" ")
+        if kind == "X" and name in mods:
+            mods[name]["no_module"] = True
     has_dir = any(line.strip() == "D" for line in lines)
     return sorted(mods.values(), key=lambda m: m["value"].lower()), has_dir
 
@@ -304,8 +322,11 @@ def switch(server, user, selfname, game_type, value):
 
 def _switch_refusal(texts, merged, mods, value):
     """Why switching to `value` is refused before anything is written, or ""."""
-    if value and value not in {m["value"] for m in mods}:
+    listed = {m["value"]: m for m in mods}
+    if value and value not in listed:
         return NOT_A_MOD
+    if value and listed[value].get("no_module"):
+        return NO_GAME_MODULE
     where = _locked_where(texts, merged)
     if where:
         return IN_EXTRAPARAMS if where == "extraparams" else IN_SECRETS

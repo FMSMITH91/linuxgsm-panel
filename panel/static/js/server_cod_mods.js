@@ -5,22 +5,26 @@
 // "None"; the active one is marked, the others get Use (.fpm-edit: hidden without EDIT_FILES).
 var _codModsUpload = '';   // the folder a mod is uploaded into, from the last listing
 function codModsMsg(t,cls){ var m=document.getElementById('codmods-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
-function _codModRow(label, value, active, missing){
+// `warn`: a note shown after the name ('' for none); `usable`: false keeps the Use button off the row.
+function _codModRow(label, value, active, warn, usable){
   var right = active
     ? '<span class="btn btn-sm btn-success disabled" aria-disabled="true">'+esc(_tr('Active'))+'</span>'   // a button's height, so a switch moves no row
-    : '<button class="btn btn-sm btn-outline-primary fpm-edit"' + _da('codModUse', [value, '@self']) + '>'+esc(_tr('Use'))+'</button>';
-  var note = missing ? ' <span class="text-warning">'+esc(_tr('(folder not found)'))+'</span>' : '';
+    : (usable === false ? ''
+       : '<button class="btn btn-sm btn-outline-primary fpm-edit"' + _da('codModUse', [value, '@self']) + '>'+esc(_tr('Use'))+'</button>');
+  var note = warn ? ' <span class="text-warning">'+esc(warn)+'</span>' : '';
   return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1 gap-2">'
     + '<span class="small text-break" data-no-i18n>'+label+note+'</span>'+right+'</div>';
 }
 function _codModsRows(d){
   var mods=d.mods||[], active=d.active||'', listed=false, rows=[];
-  rows.push(_codModRow(esc(_tr('None (the base game)')), '', !active, false));
+  rows.push(_codModRow(esc(_tr('None (the base game)')), '', !active, '', true));
   mods.forEach(function(m){
     if(m.value===active) listed=true;
-    rows.push(_codModRow(esc(m.value), m.value, m.value===active, false));
+    // A CoD1 server will not start from a mod folder without the game module (cod_mods.py).
+    var warn = m.no_module ? _tr('(needs a copy of game.mp*.so from main)') : '';
+    rows.push(_codModRow(esc(m.value), m.value, m.value===active, warn, !m.no_module));
   });
-  if(active && !listed) rows.push(_codModRow(esc(active), active, true, true));
+  if(active && !listed) rows.push(_codModRow(esc(active), active, true, _tr('(folder not found)'), true));
   return rows.join('');
 }
 function _codModsWhere(where){
