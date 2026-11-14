@@ -2187,8 +2187,9 @@ def db_sql_password(flavor, name, plugin, pw):
 
 def db_sql_exists(name):
     """How many of database `name` and accounts called `name` exist already (0: none)."""
+    name = db_sql_name(name)
     return ("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')"
-            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (db_sql_name(name), name))
+            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (name, name))
 
 
 def db_sql_drop(name):
