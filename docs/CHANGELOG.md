@@ -334,6 +334,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **The file browser no longer calls readable folders unreadable.** Commands run as a game server's account now start in `/`, so `find`
+  no longer ends with an error when it cannot return to the panel's own folder. The same error made the
+  upload check say it could not look for files that already exist.
+
 - **The dashboard's server table fits the card on smaller desktop screens.** From 992 to 1399 pixels
   wide the table no longer scrolls sideways and every row's buttons stay inside the card: they wrap
   onto two or three rows when there is not room for one.
