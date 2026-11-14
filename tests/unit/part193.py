@@ -349,7 +349,7 @@ try:
     def _on_hub193():
         try:
             _hub_out193.append(_sock193.getaddrinfo("hub.invalid", 3))
-        except BaseException as _e:  # noqa: B036 - recorded and reported by the check below
+        except Exception as _e:  # recorded, and reported by the check below
             _hub_out193.append(repr(_e))
 
     _hubs193.get_hub().schedule_call_global(0, _on_hub193)
