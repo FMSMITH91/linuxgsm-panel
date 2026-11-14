@@ -184,6 +184,60 @@ check("greendns off: ...without the variable, eventlet itself fails to import on
       _rc193.returncode != 0 and "dnspython is not installed (part193)" in _rc193.stderr,
       "rc=%r err=%r" % (_rc193.returncode, _rc193.stderr[-300:]))
 
+# ...and the whole boot, the way the panel is started for real: tools/nosudo_runner.py (which runs
+# eventlet.monkey_patch() before anything of the panel's) running a script that imports app and
+# serves /healthz, as tools/js_coverage/serve.py does, and app.py run as a script, as the systemd
+# unit does. Fresh interpreters, the variable unset, `import dns` refused, in a copy of panel/ and
+# the runner with its own data/ (DATA_DIR is fixed inside the tree).
+_BOOT_TREE193 = _os193.path.join(_TMP193, "boot")
+_sh193.copytree(_os193.path.join(_root, "panel"), _os193.path.join(_BOOT_TREE193, "panel"),
+                ignore=_sh193.ignore_patterns("__pycache__", "data"))
+_os193.makedirs(_os193.path.join(_BOOT_TREE193, "tools"))
+_sh193.copy(_os193.path.join(_root, "tools", "nosudo_runner.py"), _os193.path.join(_BOOT_TREE193, "tools"))
+with open(_os193.path.join(_BOOT_TREE193, "boot193.py"), "w", encoding="utf-8") as _fh193:
+    _fh193.write("import os, sys\nfrom app import NO_WORKERS_ENV, create_app\nos.environ[NO_WORKERS_ENV] = '1'\n"
+                 "import eventlet, socket\n_r = create_app().test_client().get('/healthz')\n"
+                 "print('HEALTHZ', _r.status_code, hasattr(eventlet, 'green'),\n"
+                 "      getattr(socket.getaddrinfo, 'lgsm_green_dns', False), 'eventlet.support.greendns' in sys.modules)\n"
+                 "sys.stdout.flush()\nos._exit(0)\n")
+_RUNNER_BOOT193 = _BLOCK_DNS193 + r'''
+import runpy
+os.chdir(sys.argv[1])
+sys.argv = ["tools/nosudo_runner.py", "boot193.py"]
+runpy.run_path("tools/nosudo_runner.py", run_name="__main__")
+'''
+_rb193 = _sp193.run([_sys193.executable, "-W", "ignore", "-c", _RUNNER_BOOT193, _BOOT_TREE193],  # nosec B603
+                    capture_output=True, text=True, timeout=180, env=_env193, cwd=_TMP193, stdin=_sp193.DEVNULL)
+check("boot, fresh interpreter, no dnspython: tools/nosudo_runner.py running a script that imports app "
+      "(as tools/js_coverage/serve.py runs) gets a 200 from /healthz, with eventlet whole and the lookups routed",
+      "HEALTHZ 200 True True False" in _rb193.stdout,
+      "rc=%r out=%r err=%r" % (_rb193.returncode, _rb193.stdout[-300:], _rb193.stderr[-900:]))
+_APP_BOOT193 = _BLOCK_DNS193 + r'''
+import runpy
+tree = sys.argv[1]
+os.chdir(tree)
+os.environ["LGSM_PANEL_NO_WORKERS"] = "1"
+# `python panel/install/app.py` puts the script's directory first on sys.path; the route modules'
+# `from app import ...` find it there.
+sys.path.insert(0, os.path.join(tree, "panel", "install"))
+g = runpy.run_path(os.path.join(tree, "panel", "install", "app.py"), run_name="lgsm_p193_unit")
+import eventlet, socket
+r = g["create_app"]().test_client().get("/healthz")
+print("HEALTHZ", r.status_code, hasattr(eventlet, "green"), getattr(socket.getaddrinfo, "lgsm_green_dns", False),
+      "eventlet.support.greendns" in sys.modules)
+sys.stdout.flush()
+os._exit(0)
+'''
+# "were not greened" is eventlet's report of a lock made before monkey_patch(). app.py works around the
+# one Python 3.13+ makes at start-up (its _dd_rebind); the runner's bare patch above does not, so the
+# lock half is asserted here only.
+_ra193 = _sp193.run([_sys193.executable, "-W", "ignore", "-c", _APP_BOOT193, _BOOT_TREE193],  # nosec B603
+                    capture_output=True, text=True, timeout=180, env=_env193, cwd=_TMP193, stdin=_sp193.DEVNULL)
+check("boot, fresh interpreter, no dnspython: app.py run by path (as the systemd unit runs it) gets a 200 "
+      "from /healthz, with eventlet whole, every lock greened and the lookups routed",
+      "HEALTHZ 200 True True False" in _ra193.stdout and "were not greened" not in _ra193.stderr,
+      "rc=%r out=%r err=%r" % (_ra193.returncode, _ra193.stdout[-300:], _ra193.stderr[-900:]))
+
 # ── 3. the resolver, as app.py installed it in this process ─────────────────────────────────────
 _real193 = _patcher193.original("socket")
 _rthreading193 = _patcher193.original("threading")
