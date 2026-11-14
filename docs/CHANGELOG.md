@@ -14,6 +14,14 @@ compares git commits, not this file.
 
 ### Added
 
+- **Scheduled world resets for Valheim and Project Zomboid.** The Schedule tab's world reset now also
+  works for Valheim and Project Zomboid servers: after a LinuxGSM backup the world is deleted and the
+  server makes a new one, while player accounts, the whitelist, admin and ban lists and server
+  settings are kept.
+
+- **Project Zomboid's player count.** Project Zomboid servers are now asked for their players, so
+  "wait until empty", restart-when-empty and the backup's player check work for them.
+
 - **"Update LinuxGSM" from the version line.** When a newer LinuxGSM release is out, the server
   page's "available" note opens that release's notes and an Update LinuxGSM button for anyone
   allowed to run update-lgsm.
@@ -1347,6 +1355,10 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **World resets run only as a plain game account.** A scheduled world reset now checks, as the
+  file tools do, that the game's account cannot become root before it deletes anything as that
+  account.
 
 - **Game passwords no longer show in the live console.** Project Zomboid prints its admin password when it starts, and other games
   echo RCON or server passwords and Steam server tokens the same way. The console, its history and the
