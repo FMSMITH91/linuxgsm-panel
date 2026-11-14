@@ -117,12 +117,12 @@ def _props(lines):
 
 
 def _capacity(text):
-    """max-players as an int, or None when it is not a plain number."""
+    """The max-players value as an int, or None when it is not a plain number."""
     return int(text) if text and text.isdecimal() and len(text) <= 6 else None
 
 
 def _state(line):
-    """(state, count) for the tally line: ok/down/unread, or (None, None) when it is not one."""
+    """The tally line as (state, count): ok/down/unread, or (None, None) when it is not one."""
     m = _TALLY_LINE.match(line)
     if not m:
         return None, None
@@ -132,7 +132,7 @@ def _state(line):
 
 
 def bedrock_slots(server, user, selfname=None):
-    """(state, count, max, name, level) for a Bedrock server, from ONE command run as its account.
+    """A Bedrock server's (state, count, max, name, level), from ONE command run as its account.
 
     state is "ok" (count is the int the log adds up to), "down" (LinuxGSM's running test sees no
     server: no count), "unread" (no start line in the log, or a join line it could not read: the
@@ -152,7 +152,7 @@ def bedrock_slots(server, user, selfname=None):
 
 
 def _reply(out):
-    """bedrock_slots' answer from the read's output: exactly one tally line, then server.properties."""
+    """The answer bedrock_slots gives for the read's output: one tally line, then server.properties."""
     lines = (out or "").splitlines()
     tally = [ln.strip() for ln in lines if ln.strip().startswith(_MARK)]
     state, count = _state(tally[0]) if len(tally) == 1 else (None, None)

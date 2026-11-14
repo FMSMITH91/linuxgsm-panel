@@ -116,7 +116,7 @@ _PROPS200 = "max-players=10\r\nserver-name=My   Bedrock\nlevel-name=Bedrock leve
 
 
 def _slots200(reply, user="p200mcb"):
-    """(bedrock_slots' answer, [(user, sh, selfname)] sent) with the account's shell answering `reply`."""
+    """What bedrock_slots answers, and [(user, sh, selfname)] sent, with the account's shell answering `reply`."""
     sent = []
 
     def _shell(server, u, sh, **k):
@@ -153,7 +153,7 @@ eq("bedrock slots: a capacity that is not a plain number is no capacity",
 
 
 def _pc200(reply, game_type="mcb", gamedig='{"c":4,"ok":true}', fn="player_count"):
-    """(cron.<fn>'s answer, [commands sent]) for one server; the bedrock read answers `reply`."""
+    """What cron.<fn> answers, and [commands sent], for one server; the bedrock read answers `reply`."""
     sent = []
 
     def _shell(server, u, sh, **k):
@@ -312,7 +312,7 @@ _U32_200 = "m" + "c" * 31          # the longest account name the panel creates 
 
 
 def _written200(user, game_type="mcb"):
-    """(flag line, check line, address lookups) as set_daily_restart writes them for `user`."""
+    """The flag line, check line and address lookups as set_daily_restart writes them for `user`."""
     cap, looks = {}, []
     try:
         _p9_patch(_core200, "_rewrite_crontab", lambda s, u, grep, add, extra_pre="": (cap.update(add=list(add)), (True, "ok"))[1])
@@ -325,7 +325,7 @@ def _written200(user, game_type="mcb"):
 
 
 def _upgrade200(listing, user, **kw):
-    """(returned, lines written or None) for one cron upgrade pass over `listing`."""
+    """What one cron upgrade pass over `listing` returns, and the lines it wrote (or None)."""
     cap = {}
     try:
         _p9_patch(_core200, "run_command", lambda s, c, **k: (listing, "", 0))
