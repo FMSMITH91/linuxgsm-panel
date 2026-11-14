@@ -291,7 +291,7 @@ def cron_journal_account_argv(span):
     match is not).
     """
     since, until = CRON_JOURNAL_SPANS[span]
-    return (["journalctl", "-r", "_COMM=cron", "--since", since] + (["--until", until] if until else [])
+    return (["journalctl", "-r", "SYSLOG_IDENTIFIER=CRON", "_UID=0", "--since", since] + (["--until", until] if until else [])
             + ["-o", "short-unix", "--no-pager"])
 
 
@@ -2620,9 +2620,11 @@ VERBS = {
         [v_choice(*JOURNAL_SOURCES), v_linecount],
         lambda a: journal_argv(a[0], a[1]),
         None),
-    # cron logs the command it ran, matched by _COMM rather than by unit. Fixed matcher, fixed
-    # window, no argument — the caller filters the result.
-    "journal-cron": ([], lambda a: ["journalctl", "_COMM=cron", "--since", CRON_JOURNAL_SINCE,
+    # cron logs the command it ran. Matched by cron's syslog identifier AND journald's own _UID=0 (a
+    # trusted field no unprivileged process can set), not by _COMM: by the time journald reads a CMD
+    # line's comm, cron's child has often become `sh`, and _COMM=cron missed 12-17% of them. Fixed
+    # matcher, fixed window, no argument — the caller filters the result.
+    "journal-cron": ([], lambda a: ["journalctl", "SYSLOG_IDENTIFIER=CRON", "_UID=0", "--since", CRON_JOURNAL_SINCE,
                                     "-o", "short-unix", "--no-pager"], None),
     # The newest run of each command ONE account's cron ran -- see do_journal_cron_account. The
     # account is a validated name, matched here as a fixed string; nothing the caller sends is a
