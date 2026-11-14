@@ -5,6 +5,7 @@
 # listed here; delete a line only together with its entry.
 b17af323 Scheduled Tasks opens quickly and shows when each task last ran again.
 c70392fd The HTTPS guide says when an IP ban keeps a visitor out.
+d3f28fd9 The file browser no longer calls readable folders unreadable.
 0984b743 Five unused Python packages are no longer installed.
 ddcfb81c dnspython is no longer installed.
 14c5aeae Semgrep's CI install no longer carries a vulnerable OpenTelemetry.

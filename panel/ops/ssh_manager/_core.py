@@ -2323,23 +2323,38 @@ def _require_game_idents(user, selfname=None):
         raise UnsafeGameAccount(GAME_ACCOUNT_REFUSED[1])
 
 
+# Every game-account shell starts with this. sudo keeps the caller's working directory: the panel
+# unit's WorkingDirectory on its own host, and the SSH login's home on a remote. Both sit under a
+# home the game account cannot enter (0750 on Ubuntu). GNU find saves the directory it starts in
+# and returns to it before exiting (findutils find/util.c, record_initial_cwd and
+# cleanup_initial_cwd); when it cannot, it prints "Failed to restore initial working directory"
+# and exits 1 AFTER a complete listing. The file browser reads rc 1 as "unreadable", so it called
+# folders it had just listed unreadable. `/` is enterable by every account, and nothing a body
+# does relies on where it starts: that place was one the account could not use anyway. Put here,
+# in the shell text, it holds on every transport (local, paramiko, tailscale ssh) and under the
+# user scope wrapper, which a Popen cwd= would not reach.
+GAME_SHELL_CWD = "cd / || exit; "
+
+
 def game_user_cmd(user, inner, selfname=None):
-    """`sudo -u <user> bash -c <inner>`: the account validated, both halves shell-quoted.
+    """`sudo -u <user> bash -c 'cd / || exit; <inner>'`: the account validated, both halves quoted.
 
     `selfname` is the LinuxGSM script name. A caller whose `inner` names the script MUST pass it:
-    the body is built before this is called, so this is where the name is checked. For a safe name
-    the text is byte-for-byte what the builders used to spell by hand — shlex leaves a plain word
-    unquoted. Raises UnsafeGameAccount; a caller that returns (out, err, rc) wants
-    shell_as_game_user, which turns the raise into GAME_ACCOUNT_REFUSED.
+    the body is built before this is called, so this is where the name is checked. The body starts
+    in `/` (see GAME_SHELL_CWD). Raises UnsafeGameAccount; a caller that returns (out, err, rc)
+    wants shell_as_game_user, which turns the raise into GAME_ACCOUNT_REFUSED.
     """
     _require_game_idents(user, selfname)
-    return f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
+    return f"sudo -u {_quote(user)} bash -c {_quote(GAME_SHELL_CWD + inner)}"
 
 
 def game_user_exec_cmd(user, argv, selfname=None):
     """`sudo -u <user> <argv…>` — one program and its arguments, no shell body.
 
-    Held to the same check, every word quoted. Raises UnsafeGameAccount.
+    Held to the same check, every word quoted. Raises UnsafeGameAccount. It starts in the
+    caller's working directory, which the account usually cannot enter (see GAME_SHELL_CWD):
+    fine for `cat`, `rm` and `python3 -c`, which never go back to it. A program that saves and
+    restores its starting directory, as GNU find does, belongs in game_user_cmd instead.
     """
     _require_game_idents(user, selfname)
     return " ".join([f"sudo -u {_quote(user)}"] + [_quote(str(a)) for a in argv])
