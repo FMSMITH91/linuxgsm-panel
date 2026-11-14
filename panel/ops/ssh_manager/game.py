@@ -1346,7 +1346,7 @@ def _backup_players_online(server, user, game_type, port, query_type, selfname=N
     which STOPS the server, and disconnected everyone on it. The override exists for exactly
     the servers this guard was blind on.
     """
-    pc = cron.player_count(server, user, game_type, port, query_type)
+    pc = cron.player_count(server, user, game_type, port, query_type, selfname=selfname)
     if pc is not None and pc > 0:
         return f"{pc} player(s) online — backup skipped so nobody gets disconnected"
     if pc is None and (game_type or "").lower() == "vh":

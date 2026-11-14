@@ -3738,8 +3738,11 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
     #   daily <hour>:<minute>: set the "pending" flag
     #   hourly :10           : if flag set and server empty (gamedig), restart + clear flag
+    # Minecraft Bedrock counts from its console log (bedrock.py). Its address is still looked up
+    # (cached): a line too long for cron keeps the gamedig query (daily_restart_check_cmd).
     check_cmd = daily_restart_check_cmd(user, selfname, gdtype,
-                                        _gamedig_host(server) if (gdtype and port) else None, port)
+                                        _gamedig_host(server) if (gdtype and port) else None, port,
+                                        bedrock=_bedrock_mod().is_bedrock(game_type))
     touch_line = f"{minute} {hour} * * * {cron._record_managed_cmd(user, f'touch {flag}')}"
     check_line = f"10 * * * * {check_cmd}"
     # Both lines contain the flag path — strip by that to remove/rebuild idempotently.
@@ -3782,7 +3785,18 @@ def _r20b_query_port(port):
         return None
 
 
-def daily_restart_check_cmd(user, selfname, gdtype, host, port):
+# The longest command Debian and Ubuntu's cron runs whole: entry.c reads it into MAX_COMMAND (1000)
+# bytes and drops the rest without a word, leaving a shell syntax error that never restarts.
+CRON_COMMAND_MAX = 999
+
+
+def _bedrock_mod():
+    """panel.ops.ssh_manager.bedrock, imported at call time (it imports this module)."""
+    from panel.ops.ssh_manager import bedrock
+    return bedrock
+
+
+def daily_restart_check_cmd(user, selfname, gdtype, host, port, bedrock=False):
     """The hourly restart-when-empty check's COMMAND (no schedule).
 
     Exactly as set_daily_restart writes it for a server whose gamedig type is `gdtype`, queried at
@@ -3792,7 +3806,6 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
     cron.upgrade_managed_cron_tracking rewrites every older shape of it to this — so a line healed in
     place and one written by toggling the setting cannot drift apart.
     """
-    flag = f"/home/{user}/.restart-pending"
     # The player test is "did we COUNT zero", not "did we fail to count". gamedig writes its
     # failure to stdout as a JSON object ({"error":"Failed all 1 attempts"}), so `.players` is null
     # and jq reports the length of null as 0 — and the old condition,
@@ -3808,6 +3821,17 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
     # The no-query case stays unconditional, and that is not the same thing: when the panel knows
     # at cron-writing time that the game has no gamedig type or no port, there is no reading to
     # fail, and restarting at the daily time is the behaviour the operator asked for.
+    if bedrock:
+        # Minecraft Bedrock: its console log's tally (bedrock.bedrock_count_sh), which cron runs in
+        # the account's home. Only a counted "OK 0" restarts it; "D" (no session), "N" (no start
+        # line), "B" (an unreadable join) and nothing at all wait for the next hour. A NetherNet
+        # server answers no gamedig query, so the gamedig line below never counted one. A line too
+        # long for cron (an account name past the 32 characters useradd allows) keeps the gamedig
+        # query, which a RakNet server still answers.
+        line = _restart_check_line(user, selfname, f"P=$({_bedrock_mod().bedrock_count_sh(selfname)}); ",
+                                   '[ "$P" = "OK 0" ]')
+        if len(line) <= CRON_COMMAND_MAX:
+            return line
     if gdtype and port:
         # An int, or ValueError — never stored text in a line /bin/sh runs (set_daily_restart and
         # cron.upgrade_managed_cron_tracking refuse such a port before they get here).
@@ -3819,6 +3843,12 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
         cond = '[ "$P" = 0 ]'
     else:
         getp, cond = "", "true"
+    return _restart_check_line(user, selfname, getp, cond)
+
+
+def _restart_check_line(user, selfname, getp, cond):
+    """The hourly check around its player read `getp` and its restart condition `cond`."""
+    flag = f"/home/{user}/.restart-pending"
     return (
         f"[ -f {flag} ] && {{ {getp}"
         f"if {cond}; then "

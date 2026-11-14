@@ -12,6 +12,7 @@ in comments, so each file is a subject rather than an arbitrary slice:
     gmod      GMod mountable game content
     portscan  the cached listening-port scan
     ufweval   whether ufw would accept one connection: the lock-out guards' one evaluator
+    bedrock   Minecraft Bedrock's player count, read from its console log
 
 WHY THE PACKAGE RESOLVES NAMES DYNAMICALLY, AND WHY THAT IS THE WHOLE POINT.
 
@@ -37,9 +38,10 @@ bound objects. The consequences are the ones you want:
 Do not "optimise" this into `from ._core import *`. It would restore the fast path and quietly
 disconnect the tests.
 """
-from panel.ops.ssh_manager import _core, cron, game, firewall, hosts, files, gmod, portscan, ufweval  # noqa: F401,E402
+from panel.ops.ssh_manager import (_core, cron, game, firewall, hosts, files, gmod, portscan,  # noqa: F401,E402
+                                   ufweval, bedrock)
 
-_MODULES = (_core, cron, game, firewall, hosts, files, gmod, portscan, ufweval)
+_MODULES = (_core, cron, game, firewall, hosts, files, gmod, portscan, ufweval, bedrock)
 
 
 def __getattr__(name):
