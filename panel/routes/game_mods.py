@@ -38,7 +38,7 @@ def _not_this_game(said):
 def _am_read_answer(gs):
     """GET: the folders, and the two lists in load order."""
     from panel.routes import server_files as _sf
-    refused = _sf._read_refused(gs, "mod_folders_read")
+    refused = _sf._read_refused(gs, "mods_folders_read")
     if refused is not None:
         return refused
     try:
@@ -71,7 +71,7 @@ def _am_saved(gs, result):
     else:
         reply = {"success": True, "changed": True, "message": i18n.tr(_SAVED_RESTART)}
     with _r42r_audit_after(reply):      # the cfg is written by now (_r42r_audit_after)
-        log_action(current_user, "mod_folders_save", target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_folders_save", target=gs.name, detail=detail, success=ok, server=gs)
     return jsonify(reply)
 
 
@@ -79,11 +79,11 @@ def _am_save_answer(gs):
     """POST {"mods": [...], "servermods": [...]}: the new lists, written into the instance cfg."""
     from panel.routes import server_files as _sf
     posted = _json_body()
-    refused = _sf._write_refused(gs, "mod_folders_save")
+    refused = _sf._write_refused(gs, "mods_folders_save")
     if refused is not None:
         return refused
     try:
-        with _r20b_audit_on_raise("mod_folders_save", target=gs.name, detail="mods/servermods", server=gs):
+        with _r20b_audit_on_raise("mods_folders_save", target=gs.name, detail="mods/servermods", server=gs):
             result = _am.save(gs.remote, gs.short_name, gs.lgsm_name, posted if isinstance(posted, dict) else {})
     except ConnectionError:
         return _unreachable("save the mod folders")
@@ -96,7 +96,7 @@ def _am_save_answer(gs):
 def _fm_read_answer(gs):
     """GET: the mods in the server's mods folder and mod-list.json."""
     from panel.routes import server_files as _sf
-    refused = _sf._read_refused(gs, "factorio_mods_read")
+    refused = _sf._read_refused(gs, "mods_factorio_read")
     if refused is not None:
         return refused
     try:
@@ -113,9 +113,9 @@ def _fm_read_answer(gs):
 def _fm_audit(gs, enabled, detail, ok):
     """One audit row for a Factorio mod turned on or off, its action spelled out at the call."""
     if enabled:
-        log_action(current_user, "factorio_mod_enable", target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_factorio_enable", target=gs.name, detail=detail, success=ok, server=gs)
     else:
-        log_action(current_user, "factorio_mod_disable", target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_factorio_disable", target=gs.name, detail=detail, success=ok, server=gs)
 
 
 def _fm_changed(gs, name, enabled, result):
@@ -141,11 +141,11 @@ def _fm_change_answer(gs):
     data = _json_body()
     name = _json_str(data, "name")
     enabled = isinstance(data, dict) and data.get("enabled") is True
-    refused = _sf._write_refused(gs, "factorio_mod_enable" if enabled else "factorio_mod_disable", _fm.MOD_LIST)
+    refused = _sf._write_refused(gs, "mods_factorio_enable" if enabled else "mods_factorio_disable", _fm.MOD_LIST)
     if refused is not None:
         return refused
     try:
-        with _r20b_audit_on_raise("factorio_mod_enable" if enabled else "factorio_mod_disable", target=gs.name,
+        with _r20b_audit_on_raise("mods_factorio_enable" if enabled else "mods_factorio_disable", target=gs.name,
                                   detail=_sf._audit_safe(name, 120), server=gs):
             result = _fm.set_enabled(gs.remote, gs.short_name, gs.lgsm_name, name, enabled)
     except ConnectionError:
@@ -159,7 +159,7 @@ def _fm_change_answer(gs):
 def _mp_read_answer(gs):
     """GET: a Java server's datapacks, or a Bedrock server's packs."""
     from panel.routes import server_files as _sf
-    refused = _sf._read_refused(gs, "mc_packs_read")
+    refused = _sf._read_refused(gs, "mods_packs_read")
     if refused is not None:
         return refused
     try:
@@ -179,8 +179,11 @@ def _mp_read_answer(gs):
 
 def _mp_refuse(gs, action, detail, why, status=400):
     """Audit a change refused before the server was written, and answer it."""
-    log_action(current_user, action, target=gs.name, detail="%s (refused: %s)" % (detail, why), success=False,
-               server=gs)
+    said = "%s (refused: %s)" % (detail, why)
+    if action == "mods_datapack_install":
+        log_action(current_user, "mods_datapack_install", target=gs.name, detail=said, success=False, server=gs)
+    else:
+        log_action(current_user, "mods_datapack_remove", target=gs.name, detail=said, success=False, server=gs)
     return jsonify({"success": False, "message": i18n.tr(why)}), status
 
 
@@ -190,16 +193,16 @@ def _mp_remove(gs, name):
     detail = _sf._audit_safe(name, 140)
     state = _mp.read_java(gs.remote, gs.short_name, gs.lgsm_name, gs.game_type)
     if state is None:
-        return _mp_refuse(gs, "datapack_remove", detail, _mp.UNREAD, 409)
+        return _mp_refuse(gs, "mods_datapack_remove", detail, _mp.UNREAD, 409)
     rel = _mp.remove_target(state, name)
     if rel is None:
-        return _mp_refuse(gs, "datapack_remove", detail, _mp.NOT_A_PACK)
-    with _r20b_audit_on_raise("datapack_remove", detail=detail, target=gs.name, server=gs):
+        return _mp_refuse(gs, "mods_datapack_remove", detail, _mp.NOT_A_PACK)
+    with _r20b_audit_on_raise("mods_datapack_remove", detail=detail, target=gs.name, server=gs):
         ok, msg = _sm.delete_path(gs.remote, gs.short_name, rel, selfname=gs.lgsm_name)
     reply = ({"success": True, "message": i18n.tr(_SAVED_RESTART_REMOVED)} if ok
              else {"success": False, "message": i18n.tr(_sm.delete_failure_reason(msg) or "Failed")})
     with _r42r_audit_after(reply):      # the datapack is gone by now (_r42r_audit_after)
-        log_action(current_user, "datapack_remove", target=gs.name, detail="%s/%s" % (state["world"], detail),
+        log_action(current_user, "mods_datapack_remove", target=gs.name, detail="%s/%s" % (state["world"], detail),
                    success=ok, server=gs)
     return jsonify(reply)
 
@@ -207,9 +210,9 @@ def _mp_remove(gs, name):
 def _mp_pack_audit(gs, enabled, detail, ok):
     """One audit row for a Bedrock pack turned on or off, its action spelled out at the call."""
     if enabled:
-        log_action(current_user, "bedrock_pack_enable", target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_bedrock_enable", target=gs.name, detail=detail, success=ok, server=gs)
     else:
-        log_action(current_user, "bedrock_pack_disable", target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_bedrock_disable", target=gs.name, detail=detail, success=ok, server=gs)
 
 
 def _mp_toggle(gs, data):
@@ -217,7 +220,7 @@ def _mp_toggle(gs, data):
     from panel.routes import server_files as _sf
     pack_type, uuid = _json_str(data, "type"), _json_str(data, "uuid")
     enabled = data.get("enabled") is True
-    with _r20b_audit_on_raise("bedrock_pack_enable" if enabled else "bedrock_pack_disable", target=gs.name,
+    with _r20b_audit_on_raise("mods_bedrock_enable" if enabled else "mods_bedrock_disable", target=gs.name,
                               detail=_sf._audit_safe(uuid, 60), server=gs):
         ok, why, changed, label = _mp.set_pack(gs.remote, gs.short_name, gs.lgsm_name, pack_type, uuid, enabled)
     known = why in _mp.REASONS or isinstance(why, i18n.Sentence)
@@ -240,14 +243,14 @@ def _mp_change_answer(gs):
     data = _json_body()
     data = data if isinstance(data, dict) else {}
     java = _mp.kind(gs.game_type) == "java"
-    action = "datapack_remove" if java else ("bedrock_pack_enable" if data.get("enabled") is True
-                                             else "bedrock_pack_disable")
+    action = "mods_datapack_remove" if java else ("mods_bedrock_enable" if data.get("enabled") is True
+                                             else "mods_bedrock_disable")
     refused = _sf._write_refused(gs, action)
     if refused is not None:
         return refused
     try:
         if java and data.get("action") != "remove":
-            return _mp_refuse(gs, "datapack_remove", "?", _mp.NOT_A_PACK)
+            return _mp_refuse(gs, "mods_datapack_remove", "?", _mp.NOT_A_PACK)
         return _mp_remove(gs, _json_str(data, "name")) if java else _mp_toggle(gs, data)
     except ConnectionError:
         return _unreachable("change the packs")
@@ -271,29 +274,30 @@ def _mp_install(gs, project_id):
     from panel.routes import server_files as _sf
     state = _mp.read_java(gs.remote, gs.short_name, gs.lgsm_name, gs.game_type)
     if state is None:
-        return _mp_refuse(gs, "datapack_install", project_id, _mp.UNREAD, 409)
+        return _mp_refuse(gs, "mods_datapack_install", project_id, _mp.UNREAD, 409)
     if not state["world"]:
-        return _mp_refuse(gs, "datapack_install", project_id, i18n.Sentence(_mp.NO_WORLD, why=state["why"]), 409)
+        return _mp_refuse(gs, "mods_datapack_install", project_id,
+                          i18n.Sentence(_mp.NO_WORLD, why=state["why"]), 409)
     info, why = _mr.resolve(project_id, state["mc_version"], kind="datapack")
     if why:
-        return _mp_refuse(gs, "datapack_install", project_id, why, 502 if why == _mr.UNAVAILABLE else 400)
+        return _mp_refuse(gs, "mods_datapack_install", project_id, why, 502 if why == _mr.UNAVAILABLE else 400)
     plan = info["plan"]
     detail = _sf._audit_safe("%s %s (%s, %s/%s) -> %s" % (info["title"], info["version_number"], plan["filename"],
                                                           project_id, info["version_id"], state["world"]), 300)
     data, why = _mr.download(plan, kind="datapack")
     if why:
-        return _mp_refuse(gs, "datapack_install", detail, why, 502)
-    with _r20b_audit_on_raise("datapack_install", detail=detail, target=gs.name, server=gs):
+        return _mp_refuse(gs, "mods_datapack_install", detail, why, 502)
+    with _r20b_audit_on_raise("mods_datapack_install", detail=detail, target=gs.name, server=gs):
         ok, msg = _sm.upload_file(gs.remote, gs.short_name, state["dir"], plan["filename"], data,
                                   overwrite=False, selfname=gs.lgsm_name)
     if not ok and msg == _sm.UPLOAD_EXISTS:
-        return _mp_refuse(gs, "datapack_install", detail + " (name taken)",
+        return _mp_refuse(gs, "mods_datapack_install", detail + " (name taken)",
                           i18n.Sentence(_mp.EXISTS, name=plan["filename"]), 409)
     reply = ({"success": True, "name": plan["filename"],
               "message": i18n.tr("Installed {name}. It loads when the server next starts.", name=plan["filename"])}
              if ok else {"success": False, "message": i18n.tr(_sm.write_failure_reason(msg) or "Failed")})
     with _r42r_audit_after(reply):      # the datapack is on the server by now (_r42r_audit_after)
-        log_action(current_user, "datapack_install", target=gs.name, detail=detail, success=ok, server=gs)
+        log_action(current_user, "mods_datapack_install", target=gs.name, detail=detail, success=ok, server=gs)
     return jsonify(reply)
 
 
@@ -302,8 +306,8 @@ def _mp_install_answer(gs):
     from panel.routes import server_files as _sf
     project_id = _json_str(_json_body(), "project_id")
     if not _mr.valid_id(project_id):
-        return _mp_refuse(gs, "datapack_install", "?", _mr.BAD_ID)
-    refused = _sf._write_refused(gs, "datapack_install")
+        return _mp_refuse(gs, "mods_datapack_install", "?", _mr.BAD_ID)
+    refused = _sf._write_refused(gs, "mods_datapack_install")
     if refused is not None:
         return refused
     try:

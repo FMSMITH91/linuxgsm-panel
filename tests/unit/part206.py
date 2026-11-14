@@ -163,7 +163,7 @@ def _arma_cases206(sid, home, admin):
     _R206["a_get"] = _arma_get206(admin, sid)
     _R206["a_save"] = _arma_post206(admin, sid, {"mods": ["@CBA_A3", "mods/@ace", "@gone"],
                                                  "servermods": ["mods/@acex"]})
-    _R206["a_audit"] = _p9_audit("mod_folders_save")
+    _R206["a_audit"] = _p9_audit("mods_folders_save")
     _R206["a_inst"] = _read206(_arma_cfg206(home))
     _R206["a_get2"] = _arma_get206(admin, sid)
     _R206["a_same"] = _arma_post206(admin, sid, {"mods": ["@CBA_A3", "mods/@ace", "@gone"],
@@ -326,9 +326,9 @@ def _fctr_list_json206(home):
 def _fctr_cases206(sid, home, admin):
     _R206["f_get"] = _p9_json(admin.get("/api/server/%d/factorio-mods" % sid))
     _R206["f_on"] = _fctr_post206(admin, sid, "krastorio2", True)
-    _R206["f_on_audit"] = _p9_audit("factorio_mod_enable")
+    _R206["f_on_audit"] = _p9_audit("mods_factorio_enable")
     _R206["f_off"] = _fctr_post206(admin, sid, "Squeak-Through", False)
-    _R206["f_off_audit"] = _p9_audit("factorio_mod_disable")
+    _R206["f_off_audit"] = _p9_audit("mods_factorio_disable")
     _R206["f_list"] = _fctr_list_json206(home)
     _R206["f_again"] = _fctr_post206(admin, sid, "krastorio2", True)
     _R206["f_bad"] = [_fctr_post206(admin, sid, n, e)[1].get("message") for n, e in (
@@ -460,7 +460,7 @@ def _mc_cases206(sid, home, admin):
     _R206["m_search"] = _p9_json(admin.get("/api/server/%d/mc-packs/search?q=terra&mc=1.21.4" % sid))
     _R206["m_search_url"] = asked[-1] if asked else ""
     _R206["m_install"] = _p9_json(admin.post("/api/server/%d/mc-packs/install" % sid, json={"project_id": "AbCdEf12"}))
-    _R206["m_install_audit"] = _p9_audit("datapack_install")
+    _R206["m_install_audit"] = _p9_audit("mods_datapack_install")
     _R206["m_version_url"] = next((u for u in asked if "/version?" in u), "")
     _R206["m_file"] = open(_os206.path.join(dp, "Terralith_1.21_v2.5.8.zip"), "rb").read() \
         if _os206.path.exists(_os206.path.join(dp, "Terralith_1.21_v2.5.8.zip")) else None
@@ -472,7 +472,7 @@ def _mc_cases206(sid, home, admin):
                                               json={"project_id": "AbCdEf12"})).get("message"),
                           _os206.path.exists(_os206.path.join(dp, "Terralith_1.21_v2.5.8.zip")))
     _R206["m_remove"] = _p9_json(admin.post("/api/server/%d/mc-packs" % sid, json={"action": "remove", "name": "vt"}))
-    _R206["m_remove_audit"] = _p9_audit("datapack_remove")
+    _R206["m_remove_audit"] = _p9_audit("mods_datapack_remove")
     _R206["m_vt_gone"] = not _os206.path.exists(_os206.path.join(dp, "vt"))
     _R206["m_bad"] = [_p9_json(admin.post("/api/server/%d/mc-packs" % sid, json={"action": "remove", "name": n}))
                       .get("message") for n in ("../server.properties", "plugins", "nope.zip")]
@@ -595,13 +595,13 @@ def _mcb_world_json206(home, t):
 def _mcb_cases206(sid, home, admin):
     _R206["b_get"] = _p9_json(admin.get("/api/server/%d/mc-packs" % sid))
     _R206["b_on"] = _mcb_post206(admin, sid, "behavior", _BP206, True)
-    _R206["b_on_audit"] = _p9_audit("bedrock_pack_enable")
+    _R206["b_on_audit"] = _p9_audit("mods_bedrock_enable")
     _R206["b_rp_on"] = _mcb_post206(admin, sid, "resource", _RP206, True)
     _R206["b_lists_on"] = (_mcb_world_json206(home, "behavior"), _mcb_world_json206(home, "resource"))
     _R206["b_get_on"] = _p9_json(admin.get("/api/server/%d/mc-packs" % sid))
     _R206["b_again"] = _mcb_post206(admin, sid, "behavior", _BP206, True)[1].get("changed")
     _R206["b_off"] = _mcb_post206(admin, sid, "behavior", _BP206, False)
-    _R206["b_off_audit"] = _p9_audit("bedrock_pack_disable")
+    _R206["b_off_audit"] = _p9_audit("mods_bedrock_disable")
     _R206["b_list_off"] = _mcb_world_json206(home, "behavior")
     _R206["b_bad"] = [_mcb_post206(admin, sid, t, u, True)[1].get("message") for t, u in (
         ("behavior", "not-a-uuid"), ("resource", _BP206), ("skin", _BP206), ("behavior", _RP206.replace("1", "7")))]
