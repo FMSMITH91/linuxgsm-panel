@@ -347,6 +347,10 @@ compares git commits, not this file.
   wait for an empty Bedrock server too when the box is ticked; it starts unticked until a real join has
   been counted on a test server.
 
+- **Scheduled Tasks opens quickly and shows when each task last ran again.** On a host with several game servers, the panel read every
+  account's cron history for two weeks to show one server's tasks, ran past its size limit and showed no
+  last-run times. It now reads only that server's newest runs.
+
 - **The file browser no longer calls readable folders unreadable.** Commands run as a game server's account now start in `/`, so `find`
   no longer ends with an error when it cannot return to the panel's own folder. The same error made the
   upload check say it could not look for files that already exist.

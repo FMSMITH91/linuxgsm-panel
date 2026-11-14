@@ -158,7 +158,7 @@ argument vector: no shell, and only the programs its verbs name. Its shebang is
 It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management, the sshd port
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
-and more — 120 verbs. The narrowing is in the argument types:
+and more — 121 verbs. The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `ssh.socket`, `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). The panel's own unit is

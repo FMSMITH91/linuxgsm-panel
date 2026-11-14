@@ -456,29 +456,118 @@ def _read_cron_status(server, user):
     return status
 
 
-def _read_cron_run_times(server, user):
+# Scheduled Tasks reads cron's journal one span at a time, newest first (tools/panel-helper's
+# CRON_JOURNAL_SPANS), and stops after the first span that leaves every job it needs a time for with
+# one. Most jobs ran within the hour, so most reads are one short call.
+_CRON_SPANS = ("hour", "day", "fortnight")
+# How long list_cron_jobs reuses a read for the same account and the same jobs. Every crontab write
+# the panel makes drops the account's entry (_core._rewrite_crontab).
+_RUN_TIMES_TTL = 60
+_RUN_TIMES_MAX = 256
+
+
+def _read_cron_run_times(server, user, wants=None):
     """{command_string: last_run_epoch} from cron's OWN execution log (journald).
 
     So that panel-managed and legacy entries — which the recorder doesn't wrap — still show WHEN
     they last ran. Cron logs the command it ran but not its exit status, so this is time-only.
-    Best-effort (empty if cron logging is off/unavailable).
+    Best-effort (empty if cron logging is off/unavailable). `wants`: the commands a time is
+    wanted for; the read stops once each has one. None reads every span.
     """
-    # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went
-    # into a grep pattern running as root. The verb reads the window; the filtering is here.
-    out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
-    # The verb prints 14 days OLDEST FIRST, and every transport keeps the first _MAX_OUTPUT_BYTES
-    # and discards the rest. A busy host's cron journal passes 8 MB well inside that window, so a
-    # read at the cap holds only the oldest days and "last run" would be the last run BEFORE the
-    # cut — days stale, shown as current. Such a read says nothing about when a job last ran.
-    if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - _JOURNAL_CAP_MARGIN:
-        _core._log.warning("cron journal read for %s reached the output cap; last-run times from "
-                           "it would be stale, so none are reported", user)
-        return {}
-    return _cron_run_times_from(out, "(%s) CMD " % user)
+    # journal-cron-account answers with the newest line of each command THIS account ran in a span:
+    # a few lines. journal-cron, which printed every account's 14 days oldest first, passed the
+    # transport's output cap on a host with a few */5 jobs (the read then reported nothing), and it
+    # is only asked now of a panel-host helper too old for the new verb.
+    times = {}
+    for span in _CRON_SPANS:
+        got, more = _cron_span_times(server, user, span)
+        if got is None:
+            return {}
+        for cmd, epoch in got.items():
+            times[cmd] = max(times.get(cmd, 0), epoch)
+        if not more or (wants is not None and all(_match_run_time(times, w) is not None for w in wants)):
+            break
+    return times
+
+
+def _cron_span_times(server, user, span):
+    """({command: epoch} from one span's read, whether a wider span may be read); None: report none."""
+    try:
+        out, err, rc = _core.run_privileged(server, "journal-cron-account", [user, span], timeout=12,
+                                            merge_stderr=False)
+    except _priv.VerbError:
+        return None, False      # not a name the panel acts on (crontab-list refuses it too)
+    if rc == 2 and "unknown verb" in (err or ""):
+        # The panel host's helper predates the verb: install.sh refreshes it, a plain git pull
+        # does not. The window read, as before; filtered here.
+        out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
+        whole = True            # that read is the whole window: nothing wider to ask for
+    elif rc != 0:
+        return {}, False        # a host that did not answer is not asked for a wider span
+    else:
+        whole = False
+    if _cron_read_capped(out, user):
+        return None, False
+    return _cron_run_times_from(out, "(%s) CMD " % user), not whole
+
+
+def _cron_read_capped(out, user):
+    """Whether a journal read reached the transport's output cap (and so says nothing)."""
+    # Every transport keeps the first _MAX_OUTPUT_BYTES and discards the rest. journal-cron prints
+    # its window OLDEST first, so a read at the cap holds only the oldest days, and "last run"
+    # would be the last run BEFORE the cut — days stale, shown as current. Such a read says
+    # nothing about when a job last ran.
+    if len((out or "").encode("utf-8", "replace")) < _core._MAX_OUTPUT_BYTES - _JOURNAL_CAP_MARGIN:
+        return False
+    _core._log.warning("cron journal read for %s reached the output cap; last-run times from "
+                       "it would be stale, so none are reported", user)
+    return True
+
+
+def _cron_run_times_for(server, user, wants):
+    """_read_cron_run_times for list_cron_jobs, reused for _RUN_TIMES_TTL s per (host, account, jobs)."""
+    key = cron_times_key(server, user)
+    wanted = tuple(sorted(set(wants)))
+    hit = _core.CRON_TIMES.get(key) if key else None
+    if hit and hit[1] == wanted and 0 <= time.monotonic() - hit[0] < _RUN_TIMES_TTL:
+        return hit[2]
+    times = _read_cron_run_times(server, user, wanted)
+    if key:
+        if len(_core.CRON_TIMES) >= _RUN_TIMES_MAX:
+            _core.CRON_TIMES.clear()
+        _core.CRON_TIMES[key] = (time.monotonic(), wanted, times)
+    return times
+
+
+def cron_times_key(server, user):
+    """_core.CRON_TIMES's key for `user` on `server`, or None for a record with no id (nothing is kept).
+
+    _core._rewrite_crontab drops the same (id, account) key.
+    """
+    sid = getattr(server, "id", None)
+    return (sid, user) if isinstance(sid, int) else None
+
+
+def _cron_journal_wants(lines, status):
+    """The commands of the crontab `lines` whose last run only cron's journal can tell.
+
+    A job the recorder has a status for shows that (_cron_job_history), so it needs no journal read.
+    """
+    wants = []
+    for raw in lines:
+        cmd = _split_cron_line(raw.strip())[1]
+        display_cmd, jid = _unwrap_cron_command(cmd)
+        if not status.get(jid or _cron_job_id(display_cmd)):
+            wants.append(display_cmd or cmd)
+    return wants
 
 
 def _cron_run_times_from(out, marker):
-    """{command: last_run_epoch} from the journal text `out`, for the lines carrying `marker`."""
+    """{command: last_run_epoch} from the journal text `out`, for the lines carrying `marker`.
+
+    In either order: journal-cron-account prints newest first, journal-cron oldest first, so the
+    newest time seen for a command is the one kept.
+    """
     # Over-long lines are skipped before anything else looks at them. The journal is the remote's
     # to write, and this runs on the request greenlet: the regex that used to pull the command out
     # (`\)\s+CMD\s+\((.*)\)\s*$`) is quadratic on a line of repeated ") CMD (" fragments with
@@ -498,7 +587,7 @@ def _cron_run_times_from(out, marker):
         m = _R39C_CRON_EPOCH.match(line)
         if not m:
             continue
-        times[cmd] = int(m.group(1))   # chronological log → last occurrence wins
+        times[cmd] = max(times.get(cmd, 0), int(m.group(1)))
     return times
 
 
@@ -921,14 +1010,29 @@ def list_cron_jobs(server, user, selfname=None):
     out, err, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
     if rc != 0 and not _NO_CRONTAB_RE.search("%s\n%s" % (err or "", out or "")):
         return None
-    status = _read_cron_status(server, user)
-    run_times = _read_cron_run_times(server, user)
+    lines = _cron_entries(out)
+    status, run_times = _cron_history_inputs(server, user, lines)
     jobs = []
-    for raw in (out or "").splitlines():
+    for raw in lines:
         job = _cron_job_row(raw, user, selfname, status, run_times)
         if job is not None:
             jobs.append(job)
     return jobs
+
+
+def _cron_history_inputs(server, user, lines):
+    """(recorder status, journal run times) for the crontab job `lines`; the journal only if needed."""
+    if not lines:
+        return {}, {}       # no job: nothing to read a status or a run time for
+    status = _read_cron_status(server, user)
+    wants = _cron_journal_wants(lines, status)
+    return status, (_cron_run_times_for(server, user, wants) if wants else {})
+
+
+def _cron_entries(listing):
+    """The lines of a crontab listing that are jobs: not blank, not a comment, a schedule and a command."""
+    return [raw for raw in (listing or "").splitlines()
+            if raw.strip() and not raw.strip().startswith("#") and _split_cron_line(raw.strip())[0] is not None]
 
 
 def _cron_job_row(raw, user, selfname, status, run_times):
