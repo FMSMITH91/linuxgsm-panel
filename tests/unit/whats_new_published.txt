@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+14c5aeae Semgrep's CI install no longer carries a vulnerable OpenTelemetry.
 412ef958 The dashboard's server list fits a phone or tablet.
 b7eaef5e The dashboard's server table fits the card on smaller desktop screens.
 1ddac173 dnspython 2.9.2 on Ubuntu 24.04 and 26.04 (GHSA-vvf4-9x63-8xvv).
