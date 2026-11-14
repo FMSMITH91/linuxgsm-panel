@@ -6991,24 +6991,43 @@ def db_defaults_text(user, password):
     return "[client]\nuser=%s\npassword=%s\n" % (db_option_value(user), db_option_value(password))
 
 
+def db_sql_name(name):
+    """`name` when it is a panel database name (DB_NAME_RE), else refuse.
+
+    Every SQL builder below puts names and passwords into statement text (a database name cannot be
+    a bound parameter, and the client runs a script), so each checks them here, where the text is
+    made, not only where the verb's arguments were read: no caller can get a quote into a statement.
+    """
+    if not isinstance(name, str) or not re.fullmatch(DB_NAME_RE, name):
+        raise ValueError("not a panel database name")
+    return name
+
+
+def db_sql_pw(pw):
+    """`pw` when it is a panel-made password (DB_PW_RE: letters, digits, . _ -), else refuse."""
+    if not isinstance(pw, str) or not re.fullmatch(DB_PW_RE, pw):
+        raise ValueError("not a panel-made password")
+    return pw
+
+
 def db_identified(flavor, plugin, pw):
     """The IDENTIFIED clause for a new or changed password — see privileged.db_identified."""
     if flavor == "mariadb":
         if plugin != "native":
             raise ValueError("MariaDB accounts are made with native passwords")
-        return "IDENTIFIED VIA mysql_native_password USING PASSWORD('%s')" % pw
+        return "IDENTIFIED VIA mysql_native_password USING PASSWORD('%s')" % db_sql_pw(pw)
     return "IDENTIFIED WITH %s BY '%s'" % (
-        "mysql_native_password" if plugin == "native" else "caching_sha2_password", pw)
+        "mysql_native_password" if plugin == "native" else "caching_sha2_password", db_sql_pw(pw))
 
 
 def db_grant_target(name):
     r"""The database-level GRANT target for `name`, `_` escaped (`gs12\_lp`.*): an exact match."""
-    return "`%s`.*" % name.replace("_", "\\_")
+    return "`%s`.*" % db_sql_name(name).replace("_", "\\_")
 
 
 def db_sql_create(flavor, name, plugin, maxconn, pw):
     """The statements that make database `name` and its two accounts (localhost and 127.0.0.1)."""
-    ident = db_identified(flavor, plugin, pw)
+    name, ident = db_sql_name(name), db_identified(flavor, plugin, pw)
     out = ["CREATE DATABASE `%s` CHARACTER SET utf8mb4;" % name]
     out += ["CREATE USER '%s'@'%s' %s WITH MAX_USER_CONNECTIONS %d;" % (name, h, ident, int(maxconn))
             for h in DB_HOSTS]
@@ -7019,31 +7038,32 @@ def db_sql_create(flavor, name, plugin, maxconn, pw):
 
 def db_sql_password(flavor, name, plugin, pw):
     """The statements that give both of `name`'s accounts a new password."""
-    ident = db_identified(flavor, plugin, pw)
+    name, ident = db_sql_name(name), db_identified(flavor, plugin, pw)
     return "".join("ALTER USER '%s'@'%s' %s;\n" % (name, h, ident) for h in DB_HOSTS)
 
 
 def db_sql_exists(name):
     """How many of database `name` and accounts called `name` exist already (0: none)."""
     return ("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')"
-            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (name, name))
+            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (db_sql_name(name), name))
 
 
 def db_sql_drop(name):
     """The statements that remove database `name` and both of its accounts; each may run twice."""
+    name = db_sql_name(name)
     return ("".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in DB_HOSTS)
             + "DROP DATABASE IF EXISTS `%s`;\n" % name)
 
 
 def db_sql_tables(name):
     """How many tables database `name` holds."""
-    return "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='%s';\n" % name
+    return "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='%s';\n" % db_sql_name(name)
 
 
 def db_sql_sizes(names):
     """One query for the size of every database in `names`: name<TAB>bytes per line."""
     return ("SELECT table_schema, COALESCE(SUM(data_length+index_length),0) FROM information_schema.TABLES "
-            "WHERE table_schema IN (%s) GROUP BY table_schema;\n" % ",".join("'%s'" % n for n in names))
+            "WHERE table_schema IN (%s) GROUP BY table_schema;\n" % ",".join("'%s'" % db_sql_name(n) for n in names))
 
 
 def db_sql_harden(pw):
