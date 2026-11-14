@@ -7,7 +7,7 @@ password with a copy button each and a ready-to-paste config for the game's plug
 files, and deletes it (an archive dump first). The first database on a host with no database server
 offers one click to install MariaDB from Ubuntu, listening on this machine only; a server that is
 already there is used as it is and never reconfigured. Everything on the host goes through
-ssh_manager.databases, imported when first used.
+ssh_manager.databases.
 
 PERMISSION. Seeing the list (no passwords) takes the server's view permission (VIEW_SERVERS) and
 access to the server; every change and every password takes MANAGE_DATABASES too. Installing MariaDB
@@ -18,10 +18,8 @@ server it installed, are superadmin only. Passwords leave the panel only through
 
 ROWS. GameDatabase (one per database; game_server_id None once its server was removed from the panel
 and the database kept) and HostDatabaseServer (one per host the panel signs in to), in
-panel/db/models.py. This build reads them by name from that module (_tables), so a build without
-them answers as a host with no databases.
+panel/db/models.py.
 """
-import importlib
 import json
 import re
 import threading
@@ -33,16 +31,12 @@ from flask_login import current_user, login_required
 from panel.core import i18n
 from panel.core.config import decrypt_secret, encrypt_secret, load_config
 from panel.core.http import _json_body, _json_str, _log_and_generic, _unreachable
-from panel.db import models as _models
-from panel.db.models import RemoteServer, claim_row, db, row_birth
+from panel.db.models import GameDatabase, HostDatabaseServer, RemoteServer, claim_row, db, row_birth
+from panel.ops.ssh_manager import databases as _dbs
 from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after, game_account_write_refusal
-from panel.security import auth as _auth
-from panel.security.auth import (MANAGE_REMOTES, VIEW_SERVERS, get_game, get_host_remote, get_remote,
+from panel.security.auth import (MANAGE_DATABASES, MANAGE_REMOTES, VIEW_SERVERS, get_game, get_host_remote, get_remote,
                                  has_permission, log_action, server_access_required, superadmin_required)
 from panel.services import db_snippets as _snip
-
-# The permission (security/auth.py). Read off the module so this file and the tables can land apart.
-MANAGE_DATABASES = getattr(_auth, "MANAGE_DATABASES", "manage_databases")
 
 _SLUG_RE = re.compile(r"[a-z0-9]{1,16}\Z")
 _ADMIN_USER_RE = re.compile(r"[A-Za-z0-9_.@-]{1,32}\Z")
@@ -50,7 +44,7 @@ _ADMIN_PW_RE = re.compile(r"[\x20-\x7e]{1,128}\Z")
 PW_MARK = "•" * 8          # what a snippet shows where the password goes, until it is revealed
 _PROBE_FRESH = 600              # a host's probe is reused for 10 minutes
 _SIZE_FRESH = 60                # sizes are asked of the host at most once a minute
-_PLUGIN_NAME = {"native": "mysql_native_password", "sha2": "caching_sha2_password"}
+_SHA2 = "caching_sha2_password"
 
 _DENIED = "Permission denied"
 _NO_SUCH = "No such database on this server."
@@ -63,18 +57,6 @@ _PROBES = {}
 # remote id -> {"running": bool, "why": str}: "Set up databases on this host" in the background.
 _SETUP = {}
 _SETUP_LOCK = threading.Lock()
-
-
-def _svc():
-    """The host side (panel/ops/ssh_manager/databases.py)."""
-    return importlib.import_module("panel.ops.ssh_manager.databases")
-
-
-def _tables():
-    """(GameDatabase, HostDatabaseServer), or None on a build without the tables."""
-    gd = getattr(_models, "GameDatabase", None)
-    hd = getattr(_models, "HostDatabaseServer", None)
-    return None if gd is None or hd is None else (gd, hd)
 
 
 def _now():
@@ -122,8 +104,7 @@ def _maxconn():
 
 # ── the host's database server ──────────────────────────────────────────────────────────────────
 def _host_row(remote_id):
-    t = _tables()
-    return None if t is None else t[1].query.filter_by(remote_id=remote_id).first()
+    return HostDatabaseServer.query.filter_by(remote_id=remote_id).first()
 
 
 def _warnings(hd):
@@ -152,7 +133,7 @@ def _probe(remote, force=False):
     hit = _PROBES.get(remote.id)
     if hit and not force and time.monotonic() - hit[0] < _PROBE_FRESH:
         return hit[1]
-    p = _svc().probe(remote)
+    p = _dbs.probe(remote)
     p = p if isinstance(p, dict) else {"state": "unreadable"}
     # A host that did not answer is asked again next time, not reported down for ten minutes.
     if p.get("state") == "unreadable":
@@ -163,8 +144,7 @@ def _probe(remote, force=False):
 
 
 def _new_host_row(remote, p, **fields):
-    t = _tables()
-    hd = t[1](remote_id=remote.id, flavor=p.get("flavor") or "mariadb", **fields)
+    hd = HostDatabaseServer(remote_id=remote.id, flavor=p.get("flavor") or "mariadb", **fields)
     _store_probe(hd, p)
     db.session.add(hd)
     return hd
@@ -227,10 +207,7 @@ def _host_info(hd):
 
 # ── the databases ───────────────────────────────────────────────────────────────────────────────
 def _server_rows(server_id):
-    t = _tables()
-    if t is None:
-        return []
-    return t[0].query.filter_by(game_server_id=server_id).order_by(t[0].id).all()
+    return GameDatabase.query.filter_by(game_server_id=server_id).order_by(GameDatabase.id).all()
 
 
 def _fresh(when, seconds):
@@ -244,7 +221,7 @@ def _refresh_sizes(remote, hd, rows):
     if hd is None or all(_fresh(r.size_at, _SIZE_FRESH) for r in rows):
         return
     try:
-        got = _svc().sizes(remote, hd, [r.name for r in rows])
+        got = _dbs.sizes(remote, hd, [r.name for r in rows])
     except Exception:
         got = None
     if not isinstance(got, dict):
@@ -264,7 +241,7 @@ def _row_json(gs, hd, r):
     flavor = hd.flavor if hd is not None else "mariadb"
     return {"id": r.id, "name": r.name, "user": r.name, "host": _snip.HOST, "port": port,
             "size": r.size_bytes, "dumped_at": _iso(r.dumped_at),
-            "old_logins": r.auth_plugin == _PLUGIN_NAME["sha2"],
+            "old_logins": r.auth_plugin == _SHA2,
             "snippets": [{"kind": k, "label": label, "text": text} for k, label, text
                          in _snip.render_all(gs.game_type, flavor, port, r.name, PW_MARK)]}
 
@@ -298,8 +275,7 @@ def _add_refusal(gs, slug, rows):
         return 400, i18n.Sentence("A name is 1 to 16 lower-case letters and digits.")
     if len(rows) >= _cap():
         return 409, i18n.Sentence("This server already has {n} databases, the most it may have.", n=len(rows))
-    t = _tables()
-    if t[0].query.filter_by(remote_id=gs.remote_id, name="gs%d_%s" % (gs.id, slug)).first() is not None:
+    if GameDatabase.query.filter_by(remote_id=gs.remote_id, name="gs%d_%s" % (gs.id, slug)).first() is not None:
         return 409, i18n.Sentence("This server already has a database with that name.")
     return None
 
@@ -307,22 +283,19 @@ def _add_refusal(gs, slug, rows):
 def _add_answer(gs):
     """POST {"name"}: a new database and its own user, with a new password."""
     slug = _json_str(_json_body(), "name").lower()
-    if _tables() is None:
-        return _say(409, _NOT_READY)
     refused = _add_refusal(gs, slug, _server_rows(gs.id))
     if refused:
         return _say(*refused)
     state, hd, _p = host_state(gs.remote, may_probe=True)
     if state != "ready":
         return _say(409, _NOT_READY if state != "unreadable" else _UNREAD, state=state)
-    svc = _svc()
-    name, secret = svc.db_name(gs.id, slug), svc.new_password()
-    plugin, maxconn = svc.plugin_for(hd), _maxconn()
+    name, secret = _dbs.db_name(gs.id, slug), _dbs.new_password()
+    plugin, maxconn = _dbs.auth_plugin_name(_dbs.plugin_for(hd)), _maxconn()
     with _r20b_audit_on_raise("db_create", target=gs.name, detail=name, server=gs):
-        ok, said = svc.create(gs.remote, hd, name, secret, maxconn)
+        ok, said = _dbs.create(gs.remote, hd, name, secret, maxconn)
     if ok:
-        db.session.add(_tables()[0](remote_id=gs.remote_id, game_server_id=gs.id, name=name,
-                                    secret=encrypt_secret(secret), auth_plugin=_PLUGIN_NAME.get(plugin, plugin),
+        db.session.add(GameDatabase(remote_id=gs.remote_id, game_server_id=gs.id, name=name,
+                                    secret=encrypt_secret(secret), auth_plugin=plugin,
                                     max_conn=maxconn, created_by=current_user.username[:80]))
         db.session.commit()
     reply = {"success": bool(ok), "message": i18n.tr(said or ("Database added." if ok else "Failed"))}
@@ -334,8 +307,7 @@ def _add_answer(gs):
 
 def _own_row(gs, db_id):
     """This server's database `db_id`, or None (another server's is None too)."""
-    t = _tables()
-    r = db.session.get(t[0], db_id) if t is not None else None
+    r = db.session.get(GameDatabase, db_id)
     return r if r is not None and r.game_server_id == gs.id and r.remote_id == gs.remote_id else None
 
 
@@ -360,13 +332,12 @@ def _reset_answer(gs, r):
     hd = _host_row(gs.remote_id)
     if hd is None:
         return _say(409, _NOT_READY)
-    svc = _svc()
-    secret = svc.new_password()
+    secret = _dbs.new_password()
     with _r20b_audit_on_raise("db_password", target=gs.name, detail=r.name, server=gs):
-        ok, said = svc.set_password(gs.remote, hd, r.name, secret)
+        ok, said = _dbs.set_password(gs.remote, hd, r.name, secret)
     if ok:
         r.secret = encrypt_secret(secret)
-        r.auth_plugin = _PLUGIN_NAME.get(svc.plugin_for(hd), r.auth_plugin)
+        r.auth_plugin = _dbs.auth_plugin_name(_dbs.plugin_for(hd))
         db.session.commit()
     reply = {"success": bool(ok), "message": i18n.tr(
         said or ("New password set. Update it in the game's config, then restart the server." if ok else "Failed"))}
@@ -389,7 +360,7 @@ def _delete_answer(gs, r):
         return _say(409, _NOT_READY)
     name = r.name
     with _r20b_audit_on_raise("db_delete", target=gs.name, detail=name, server=gs):
-        ok, said = _svc().drop(gs.remote, hd, gs.short_name, name)
+        ok, said = _dbs.drop(gs.remote, hd, gs.short_name, name)
     if ok:
         db.session.delete(r)
         db.session.commit()
@@ -415,7 +386,7 @@ def _restore_answer(gs, r):
                    success=False, server=gs)
         return _say(409, refused)
     with _r20b_audit_on_raise("db_restore", target=gs.name, detail=r.name, server=gs):
-        ok, said = _svc().restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
+        ok, said = _dbs.restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
     reply = {"success": bool(ok), "message": i18n.tr(said or ("Database restored." if ok else "Failed"))}
     with _r42r_audit_after(reply):
         log_action(current_user, "db_restore", target=gs.name, detail="restored database %s from its dump" % r.name,
@@ -444,7 +415,7 @@ def _setup_steps(remote_id, born, who):
     if remote is None:
         return ""
     # Never over a server that is already there: the probe must find none.
-    if (_svc().probe(remote) or {}).get("state") != "none":
+    if (_dbs.probe(remote) or {}).get("state") != "none":
         why = i18n.Sentence("A database server is already on this host, so nothing was installed.")
     else:
         why = _install(remote)
@@ -455,11 +426,10 @@ def _setup_steps(remote_id, born, who):
 
 def _install(remote):
     """Install MariaDB and record the host's row: '' when it worked, else why not."""
-    svc = _svc()
-    ok, said, admin_pw = svc.install_mariadb(remote)
+    ok, said, admin_pw = _dbs.install_mariadb(remote)
     if not ok:
         return said or i18n.Sentence("The install failed.")
-    p = svc.probe(remote) or {}
+    p = _dbs.probe(remote) or {}
     hd = _host_row(remote.id) or _new_host_row(remote, p)
     _store_probe(hd, p)
     hd.flavor, hd.installed_by_panel, hd.auth_mode = "mariadb", True, "socket"
@@ -470,8 +440,6 @@ def _install(remote):
 
 def _setup_answer(app, remote):
     """POST: start installing MariaDB on `remote` in the background (202); the tab's GET says how it went."""
-    if _tables() is None:
-        return _say(409, _NOT_READY)
     if _host_row(remote.id) is not None:
         return _say(409, "This host's database server is already set up.")
     with _SETUP_LOCK:
@@ -489,12 +457,12 @@ def _admin_login_answer(remote):
     """POST {"user", "password"}: an existing server's admin login, stored only once it is shown to work."""
     data = _json_body()
     user, secret = _json_str(data, "user"), data.get("password") if isinstance(data.get("password"), str) else ""
-    if not _ADMIN_USER_RE.match(user) or not _ADMIN_PW_RE.match(secret) or _tables() is None:
+    if not _ADMIN_USER_RE.match(user) or not _ADMIN_PW_RE.match(secret):
         return _say(400, "Enter the database server's admin user and password.")
     p = _probe(remote)
     port = p.get("port") if isinstance(p.get("port"), int) else 3306
     with _r20b_audit_on_raise("db_admin_login", target=remote.name, detail=user, remote=remote):
-        verdict = _svc().check_admin_login(remote, port, user, secret)
+        verdict = _dbs.check_admin_login(remote, port, user, secret)
     if verdict == "ok":
         hd = _host_row(remote.id) or _new_host_row(remote, p, installed_by_panel=False)
         hd.auth_mode, hd.port, hd.admin_user, hd.admin_secret = "login", port, user, encrypt_secret(secret)
@@ -522,10 +490,7 @@ def _admin_reveal_answer(remote):
 
 # ── databases kept after their server was removed from the panel ────────────────────────────────
 def _orphans(remote_id):
-    t = _tables()
-    if t is None:
-        return []
-    return t[0].query.filter_by(remote_id=remote_id, game_server_id=None).order_by(t[0].id).all()
+    return GameDatabase.query.filter_by(remote_id=remote_id, game_server_id=None).order_by(GameDatabase.id).all()
 
 
 def _orphan_delete_answer(remote, db_id):
@@ -540,7 +505,7 @@ def _orphan_delete_answer(remote, db_id):
         return _say(409, _NOT_READY)
     name = r.name
     with _r20b_audit_on_raise("db_delete", target=remote.name, detail=name, remote=remote):
-        ok, said = _svc().drop(remote, hd, None, name)
+        ok, said = _dbs.drop(remote, hd, None, name)
     if ok:
         db.session.delete(r)
         db.session.commit()
@@ -584,7 +549,7 @@ def _dump_rows(remote, account, hd, rows):
     refused = game_account_write_refusal(remote, account)
     if refused is not None:
         return refused
-    ok, said = _svc().dump(remote, hd, "game", account, [r.name for r in rows])
+    ok, said = _dbs.dump(remote, hd, "game", account, [r.name for r in rows])
     if not ok:
         return said or i18n.Sentence("the dump failed.")
     for r in rows:
@@ -616,7 +581,7 @@ def drop_for_uninstall(remote, server_id):
     for r in rows:
         name = r.name
         try:
-            ok, said = _svc().drop(remote, hd, None, name) if hd is not None else (False, "")
+            ok, said = _dbs.drop(remote, hd, None, name) if hd is not None else (False, "")
         except Exception:
             ok, said = False, _log_and_generic("database drop failed")
         if ok:
@@ -630,11 +595,8 @@ def drop_for_uninstall(remote, server_id):
 
 def orphan_rows(server_id):
     """A server's database rows kept with no server: it was removed from the panel, not its databases."""
-    t = _tables()
-    if t is None:
-        return
     try:
-        t[0].query.filter_by(game_server_id=server_id).update({"game_server_id": None})
+        GameDatabase.query.filter_by(game_server_id=server_id).update({"game_server_id": None})
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -643,11 +605,8 @@ def orphan_rows(server_id):
 
 def forget_remote(remote_id):
     """A deleted host's database rows, removed in the caller's transaction (its id goes to the next host)."""
-    t = _tables()
-    if t is None:
-        return
-    t[0].query.filter_by(remote_id=remote_id).delete()
-    t[1].query.filter_by(remote_id=remote_id).delete()
+    GameDatabase.query.filter_by(remote_id=remote_id).delete()
+    HostDatabaseServer.query.filter_by(remote_id=remote_id).delete()
     _PROBES.pop(remote_id, None)
 
 

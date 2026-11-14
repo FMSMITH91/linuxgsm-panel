@@ -13,16 +13,13 @@
 * The Files page carries the tab for the view permission only; the debug report prints no secret;
   the tab's script in node.
 
-Until the tables and the host side land (panel/db/models.py, panel/ops/ssh_manager/databases.py)
-this part declares the two tables as the design gives them; once they exist it uses theirs, and
-checks that the host side's functions take the arguments the recorder here takes.
+The host side's functions are replaced, on ssh_manager.databases itself, by stand-ins that take the
+same arguments (checked here) and record each call; part207 drives that module against the helper.
 Nothing reaches a host or data/.
 """
-import importlib as _il208
 import inspect as _insp208
 import json as _js208
 import logging as _lg208
-import sys as _sys208
 import types as _ty208
 from types import SimpleNamespace as _NS208
 
@@ -34,13 +31,13 @@ from unit.part12 import (P9_ADMIN, P9_HOST, P9_HOST2, _P9_TRIPPED, _p9, _p9_arm,
 from panel.core import config as _cfg208
 from panel.db import models as _m208
 from panel.db.models import AuditLog as _AL208, Group as _G208, RemoteServer as _RS208, User as _U208, db as _db208
+from panel.ops.ssh_manager import databases as _dbs208
 from panel.routes import _shared as _sh208, databases as _dbr, manage_servers as _ms208
 from panel.security import auth as _auth208
 from panel.services import db_snippets as _sn208
 
 _trips208 = len(_P9_TRIPPED)
 _R208 = {}
-_SVC208 = "panel.ops.ssh_manager.databases"
 
 # ── 1. snippets ─────────────────────────────────────────────────────────────────────────────────
 _PW208 = "Zsnip" + "q" * 27
@@ -82,56 +79,7 @@ eq("snippets: the suggested name is the game's usual one, then data, data2... on
    ["luckperms", "sourcebans", "data", "data2", "data"])
 
 
-# ── 2. the tables (the design's, until panel/db/models.py has them) ────────────────────────────
-def _tables208():
-    """The models' two tables, declared here as the design gives them when the models lack them."""
-    if getattr(_m208, "GameDatabase", None) is not None:
-        return False
-    cols = _db208.Column
-
-    class HostDatabaseServer(_db208.Model):  # noqa: D401 - the design's table
-        __tablename__ = "host_database_server"
-        __table_args__ = {"sqlite_autoincrement": True, "extend_existing": True}
-        id = cols(_db208.Integer, primary_key=True)
-        remote_id = cols(_db208.Integer, nullable=False, unique=True)
-        flavor = cols(_db208.String(8), default="mariadb")
-        version = cols(_db208.String(40), default="")
-        installed_by_panel = cols(_db208.Boolean, default=False)
-        auth_mode = cols(_db208.String(8), default="socket")
-        port = cols(_db208.Integer, default=3306)
-        admin_user = cols(_m208.EncryptedString, default="")
-        admin_secret = cols(_db208.Text, default="")
-        panel_admin_secret = cols(_db208.Text, default="")
-        native_ok = cols(_db208.Boolean, default=True)
-        warnings = cols(_db208.Text, default="")
-        checked_at = cols(_db208.DateTime)
-
-    class GameDatabase(_db208.Model):  # noqa: D401 - the design's table
-        __tablename__ = "game_database"
-        __table_args__ = (_db208.UniqueConstraint("remote_id", "name"),
-                          {"sqlite_autoincrement": True, "extend_existing": True})
-        id = cols(_db208.Integer, primary_key=True)
-        remote_id = cols(_db208.Integer, nullable=False, index=True)
-        game_server_id = cols(_db208.Integer, nullable=True, index=True)
-        name = cols(_db208.String(32), nullable=False)
-        secret = cols(_db208.Text, nullable=False)
-        auth_plugin = cols(_db208.String(24))
-        max_conn = cols(_db208.Integer, default=30)
-        size_bytes = cols(_db208.BigInteger, nullable=True)
-        size_at = cols(_db208.DateTime, nullable=True)
-        dumped_at = cols(_db208.DateTime, nullable=True)
-        created_at = cols(_db208.DateTime, default=_m208.utcnow if hasattr(_m208, "utcnow") else None)
-        created_by = cols(_db208.String(80), default="")
-
-    # By name, as these are names the models module gains when its own tables land.
-    for _name, _cls in (("HostDatabaseServer", HostDatabaseServer), ("GameDatabase", GameDatabase)):
-        setattr(_m208, _name, _cls)
-    return True
-
-
-_tables208()
-with _p9.app_context():
-    _db208.create_all()
+# ── 2. the tables ──────────────────────────────────────────────────────────────────────────────
 _GD208, _HD208 = _m208.GameDatabase, _m208.HostDatabaseServer
 
 
@@ -158,7 +106,7 @@ _S208 = _Svc208()
 
 
 def _stub_module208():
-    m = _ty208.ModuleType(_SVC208)
+    m = _ty208.ModuleType("p208_databases")
 
     def db_name(server_id, slug):
         return "gs%d_%s" % (server_id, slug)
@@ -212,19 +160,18 @@ def _stub_module208():
 
 
 _STUB208 = _stub_module208()
-try:
-    _REAL208 = _il208.import_module(_SVC208)
-except ImportError:
-    _REAL208 = None
-if _REAL208 is not None:
-    _sig208 = {n: (list(_insp208.signature(getattr(_REAL208, n, None) or (lambda: None)).parameters),
-                   list(_insp208.signature(getattr(_STUB208, n)).parameters))
-               for n in vars(_STUB208) if not n.startswith("_")}
-    check("databases: ssh_manager.databases takes the arguments the routes pass (the design's interface)",
-          all(a == b for a, b in _sig208.values()),
-          repr({n: v for n, v in _sig208.items() if v[0] != v[1]}))
-_SAVED_MOD208 = _sys208.modules.get(_SVC208)
-_sys208.modules[_SVC208] = _STUB208
+_NAMES208 = sorted(n for n in vars(_STUB208) if not n.startswith("_"))
+_sig208 = {n: (list(_insp208.signature(getattr(_dbs208, n, None) or (lambda: None)).parameters),
+               list(_insp208.signature(getattr(_STUB208, n)).parameters)) for n in _NAMES208}
+check("databases: ssh_manager.databases takes the arguments the routes pass (the stand-ins below take the same)",
+      len(_sig208) == 12 and all(a == b for a, b in _sig208.values()),
+      repr({n: v for n, v in _sig208.items() if v[0] != v[1]}))
+
+
+def _stub_in208():
+    """The recorder's functions in place of ssh_manager.databases' own, undone by _p9_restore_all."""
+    for _n in _NAMES208:
+        _p9_patch(_dbs208, _n, getattr(_STUB208, _n))
 
 
 def _user208(tag, perms, hosts):
@@ -270,6 +217,7 @@ _LOG208 = _Logs208()
 _lg208.getLogger().addHandler(_LOG208)
 try:
     _p9_arm(who="part208")
+    _stub_in208()
     _p9_patch(_dbr, "game_account_write_refusal", lambda remote, user, **k: None)
     _SID208 = _p9_new_server(P9_HOST, "p208u", "pmc", 25565, name="p208 paper")
     _OTHER208 = _p9_new_server(P9_HOST, "p208v", "pmc", 25566, name="p208 other")
@@ -446,10 +394,6 @@ try:
 finally:
     _p9_restore_all()
     _lg208.getLogger().removeHandler(_LOG208)
-    if _SAVED_MOD208 is None:
-        _sys208.modules.pop(_SVC208, None)
-    else:
-        _sys208.modules[_SVC208] = _SAVED_MOD208
     _dbr._PROBES.clear()
     _dbr._SETUP.clear()
     for _sid208 in (_SID208, _OTHER208):
@@ -616,10 +560,10 @@ def _page208():
     sid = _p9_new_server(P9_HOST, "p208p", "pmc", 25567, name="p208 page")
     users = [_user208("pv", ["view_servers", "view_files"], [P9_HOST]), _user208("pf", ["view_files"], [P9_HOST])]
     _S208.reset()
-    _sys208.modules[_SVC208] = _STUB208
     trips = len(_P9_TRIPPED)
     try:
         _p9_arm(who="part208")
+        _stub_in208()
         _p9_patch_sm("list_server_commands", lambda *a, **k: [])
         from panel.routes import server_files as _sf208
         _p9_patch(_sf208, "_host_timezone_cached", lambda *a, **k: "")   # the page's background read
@@ -629,10 +573,6 @@ def _page208():
         out["trips"] = len(_P9_TRIPPED) - trips
     finally:
         _p9_restore_all()
-        if _SAVED_MOD208 is None:
-            _sys208.modules.pop(_SVC208, None)
-        else:
-            _sys208.modules[_SVC208] = _SAVED_MOD208
         with _p9.app_context():
             for uid, gid in users:
                 for mdl, i in ((_U208, uid), (_G208, gid)):
