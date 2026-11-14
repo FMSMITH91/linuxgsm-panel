@@ -306,7 +306,7 @@ def _add_answer(gs):
 
 
 def _own_row(gs, db_id):
-    """This server's database `db_id`, or None (another server's is None too)."""
+    """Return the server's own database `db_id`, or None (another server's is None too)."""
     r = db.session.get(GameDatabase, db_id)
     return r if r is not None and r.game_server_id == gs.id and r.remote_id == gs.remote_id else None
 
@@ -624,82 +624,68 @@ def _row_route(server_id, db_id):
     return gs, _own_row(gs, db_id)
 
 
+def _list_or_add(server_id):
+    """GET: the server's databases and the host's database server; POST: a new database."""
+    gs = get_game(server_id)
+    need = VIEW_SERVERS if request.method == "GET" else MANAGE_DATABASES
+    if not (has_permission(current_user, need) or has_permission(current_user, MANAGE_DATABASES)):
+        return _say(403, _DENIED)
+    try:
+        if request.method == "GET":
+            return _names_answer(gs) if request.args.get("names") else _list_answer(gs)
+        return _add_answer(gs)
+    except Exception as exc:
+        return _failed(exc, "list" if request.method == "GET" else "create")
+
+
+def _row_action(server_id, db_id, answer, what):
+    """One change to one of the server's databases: MANAGE_DATABASES, its own row, then `answer(gs, row)`."""
+    if not has_permission(current_user, MANAGE_DATABASES):
+        return _say(403, _DENIED)
+    gs, r = _row_route(server_id, db_id)
+    if r is None:
+        return _say(404, _NO_SUCH)
+    try:
+        return answer(gs, r)
+    except Exception as exc:
+        return _failed(exc, what)
+
+
 def _server_routes(app):
     @app.route("/api/server/<int:server_id>/databases", methods=["GET", "POST"])
     @login_required
     @server_access_required
     def api_server_databases(server_id):
-        """This server's databases and the host's database server (GET), or a new database (POST)."""
-        gs = get_game(server_id)
-        need = VIEW_SERVERS if request.method == "GET" else MANAGE_DATABASES
-        if not (has_permission(current_user, need) or has_permission(current_user, MANAGE_DATABASES)):
-            return _say(403, _DENIED)
-        try:
-            if request.method == "GET":
-                return _names_answer(gs) if request.args.get("names") else _list_answer(gs)
-            return _add_answer(gs)
-        except Exception as exc:
-            return _failed(exc, "list" if request.method == "GET" else "create")
+        """Return the server's databases and the host's database server (GET), or add one (POST)."""
+        return _list_or_add(server_id)
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/reveal", methods=["POST"])
     @login_required
     @server_access_required
     def api_server_database_reveal(server_id, db_id):
         """The database's password, for the viewer's screen or clipboard (audited, not stored)."""
-        if not has_permission(current_user, MANAGE_DATABASES):
-            return _say(403, _DENIED)
-        gs, r = _row_route(server_id, db_id)
-        if r is None:
-            return _say(404, _NO_SUCH)
-        try:
-            return _reveal_answer(gs, r)
-        except Exception as exc:
-            return _failed(exc, "reveal")
+        return _row_action(server_id, db_id, _reveal_answer, "reveal")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/reset-password", methods=["POST"])
     @login_required
     @server_access_required
     def api_server_database_reset(server_id, db_id):
         """A new password for the database's user."""
-        if not has_permission(current_user, MANAGE_DATABASES):
-            return _say(403, _DENIED)
-        gs, r = _row_route(server_id, db_id)
-        if r is None:
-            return _say(404, _NO_SUCH)
-        try:
-            return _reset_answer(gs, r)
-        except Exception as exc:
-            return _failed(exc, "password reset")
+        return _row_action(server_id, db_id, _reset_answer, "password reset")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/delete", methods=["POST"])
     @login_required
     @server_access_required
     def api_server_database_delete(server_id, db_id):
         """Delete the database and its user, a dump kept on the host first."""
-        if not has_permission(current_user, MANAGE_DATABASES):
-            return _say(403, _DENIED)
-        gs, r = _row_route(server_id, db_id)
-        if r is None:
-            return _say(404, _NO_SUCH)
-        try:
-            return _delete_answer(gs, r)
-        except Exception as exc:
-            return _failed(exc, "delete")
+        return _row_action(server_id, db_id, _delete_answer, "delete")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/restore", methods=["POST"])
     @login_required
     @server_access_required
     def api_server_database_restore(server_id, db_id):
         """Load the database from the dump in the server's files (panel-db-dumps/<name>.sql.gz)."""
-        if not has_permission(current_user, MANAGE_DATABASES):
-            return _say(403, _DENIED)
-        gs, r = _row_route(server_id, db_id)
-        if r is None:
-            return _say(404, _NO_SUCH)
-        try:
-            return _restore_answer(gs, r)
-        except Exception as exc:
-            return _failed(exc, "restore")
+        return _row_action(server_id, db_id, _restore_answer, "restore")
 
 
 def _remote_routes(app):
@@ -732,7 +718,7 @@ def _remote_routes(app):
     @app.route("/api/remote/<int:remote_id>/databases")
     @login_required
     def api_remote_databases(remote_id):
-        """This host's databases whose game server was removed from the panel."""
+        """Return the host's databases whose game server was removed from the panel."""
         if not has_permission(current_user, MANAGE_DATABASES):
             return _say(403, _DENIED)
         remote = get_remote(remote_id)

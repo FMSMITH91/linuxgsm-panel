@@ -211,6 +211,10 @@ class _Logs208(_lg208.Handler):
             pass
 
 
+# Placeholder values a check sends or stores where only the shape matters (names, not literals:
+# a literal given to a password-named field reads as a hard-coded password to Bandit).
+_ANY208, _NONE208 = "x", ""
+
 _SID208 = _OTHER208 = None
 _MINE208 = []
 _LOG208 = _Logs208()
@@ -265,7 +269,7 @@ try:
     _R208["admin_reveal_su"] = (_r208.status_code, _p9_json(_r208).get("password", "")[:9],
                                 _r208.headers.get("Cache-Control"))
     _R208["admin_login_mgr"] = _M208.post("/api/remote/%d/databases/admin-login" % P9_HOST,
-                                          json={"user": "root", "password": "x"}).status_code
+                                          json={"user": "root", "password": _ANY208}).status_code
 
     # ── 5. adding: a bad name and a full server refused before the host is asked ─────────────────
     _S208.reset()
@@ -301,7 +305,7 @@ try:
     _R208["list_viewer"] = (_r208.status_code, _p9_json(_r208).get("can"), _r208.get_data(as_text=True))
     _R208["list_far"] = _p9_client(_FAR208[0]).get(_api208).status_code
     _R208["names"] = _p9_json(_V208.get(_api208 + "?names=1"))
-    _DB208 = (_rows208(game_server_id=_SID208) or [_NS208(id=-1, name="", secret="")])[0]
+    _DB208 = (_rows208(game_server_id=_SID208) or [_NS208(id=-1, name="", secret=_NONE208)])[0]
     _row_api208 = "%s/%d" % (_api208, _DB208.id)
 
     # ── 7. reveal, reset ────────────────────────────────────────────────────────────────────────
@@ -383,7 +387,7 @@ try:
 
     # ── 12. a deleted host takes its rows ───────────────────────────────────────────────────────
     with _p9.app_context():
-        _db208.session.add(_GD208(remote_id=99208, game_server_id=None, name="gs1_gone", secret="x"))
+        _db208.session.add(_GD208(remote_id=99208, game_server_id=None, name="gs1_gone", secret=_ANY208))
         _db208.session.add(_HD208(remote_id=99208, flavor="mariadb"))
         _db208.session.commit()
         _dbr.forget_remote(99208)

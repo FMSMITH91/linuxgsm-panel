@@ -65,10 +65,11 @@ var DB_STATE = {
     return b;
   }
   function dbSize(b) {
+    var GIB = 1024 * 1024 * 1024;   // bytes in one GiB
     if (typeof b !== 'number') return '';
     if (b < 1048576) return '≈ ' + Math.max(1, Math.round(b / 1024)) + ' KB';
-    if (b < 1073741824) return '≈ ' + Math.round(b / 1048576) + ' MB';
-    return '≈ ' + (b / 1073741824).toFixed(1) + ' GB';
+    if (b < GIB) return '≈ ' + Math.round(b / 1048576) + ' MB';
+    return '≈ ' + (b / GIB).toFixed(1) + ' GB';
   }
   function row(id) {
     var list = (st.d && st.d.databases) || [];
