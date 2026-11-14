@@ -47,7 +47,8 @@ var DB_STATE = {
     b.type = 'button';
     b.title = label;
     b.setAttribute('aria-label', label);
-    var i = node('i', 'bi ' + icon);
+    var i = node('i');
+    i.className = 'bi ' + icon;
     i.setAttribute('aria-hidden', 'true');
     b.appendChild(i);
     b.setAttribute('data-action', action);
@@ -57,7 +58,7 @@ var DB_STATE = {
   function textButton(text, icon, action, args, cls) {
     var b = node('button', 'btn btn-sm ' + (cls || 'btn-outline-secondary') + ' fpm-edit');
     b.type = 'button';
-    if (icon) { var i = node('i', 'bi ' + icon); i.setAttribute('aria-hidden', 'true'); b.appendChild(i); b.appendChild(document.createTextNode(' ')); }
+    if (icon) { var i = node('i'); i.className = 'bi ' + icon; i.setAttribute('aria-hidden', 'true'); b.appendChild(i); b.appendChild(document.createTextNode(' ')); }
     b.appendChild(node('span', null, text));
     b.setAttribute('data-action', action);
     b.setAttribute('data-args', JSON.stringify(args));
@@ -225,7 +226,7 @@ var DB_STATE = {
       var until = Date.now() + 15 * 60000;
       st.poll = setInterval(function () {
         if (Date.now() > until || !st.d || st.d.state !== 'setting_up') { clearInterval(st.poll); st.poll = null; return; }
-        window.dbLoad(true);
+        void window.dbLoad(true);
       }, 5000);
     }
   }
@@ -355,7 +356,7 @@ var DB_STATE = {
     if (!db) return;
     window.confirmDialog({title: T('Reset password'), icon: 'key', confirmClass: 'btn-warning', confirmLabel: T('Reset password'),
       bodyText: T('Anything using the old password stops connecting until you update its config.'),
-      onConfirm: function () { act(id, 'reset-password', {}, T('Setting a new password…')); }});
+      onConfirm: function () { void act(id, 'reset-password', {}, T('Setting a new password…')); }});
   };
 
   window.dbDelete = function (id) {
@@ -364,7 +365,7 @@ var DB_STATE = {
     window.confirmDialog({title: T('Delete database'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Delete'),
       bodyText: T('Delete this database and its user? A copy is kept on the host for 30 days.'),
       requireText: db.name, requireLabel: TF('Type the database name ({name}) to confirm:', {name: db.name}),
-      onConfirm: function () { act(id, 'delete', {confirm: db.name}, T('Deleting the database…')); }});
+      onConfirm: function () { void act(id, 'delete', {confirm: db.name}, T('Deleting the database…')); }});
   };
 
   window.dbRestore = function (id) {
@@ -373,7 +374,7 @@ var DB_STATE = {
     window.confirmDialog({title: T('Restore from dump'), icon: 'arrow-counterclockwise', confirmClass: 'btn-warning', confirmLabel: T('Restore'),
       bodyText: TF('Replace this database\'s contents with panel-db-dumps/{file} from this server\'s files? Each backup writes that file; a restored backup brings it back.', {file: db.name + '.sql.gz'}),
       requireText: db.name, requireLabel: TF('Type the database name ({name}) to confirm:', {name: db.name}),
-      onConfirm: function () { act(id, 'restore', {confirm: db.name}, T('Restoring the database…')); }});
+      onConfirm: function () { void act(id, 'restore', {confirm: db.name}, T('Restoring the database…')); }});
   };
 
   window.dbAdminReveal = function (btn) {
@@ -392,7 +393,7 @@ var DB_STATE = {
 
   // Load when the tab is first opened (or the page opens on it).
   document.addEventListener('click', function (e) {
-    if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="databases"]')) window.dbLoad(false); });
-  window.addEventListener('hashchange', function () { if (location.hash === '#databases') window.dbLoad(false); });
-  if (location.hash === '#databases') window.dbLoad(false);
+    if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="databases"]')) void window.dbLoad(false); });
+  window.addEventListener('hashchange', function () { if (location.hash === '#databases') void window.dbLoad(false); });
+  if (location.hash === '#databases') void window.dbLoad(false);
 })();

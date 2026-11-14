@@ -48,5 +48,5 @@
       }});
   };
 
-  window.hostDbLoad();
+  void window.hostDbLoad();
 })();

@@ -60,7 +60,7 @@ _UNREAD = "Couldn't read the database server on this host: it did not answer. Tr
 
 # remote id -> (monotonic time, probe dict) for a host with no HostDatabaseServer row yet.
 _PROBES = {}
-# remote id -> {"running": bool, "error": str}: "Set up databases on this host" in the background.
+# remote id -> {"running": bool, "why": str}: "Set up databases on this host" in the background.
 _SETUP = {}
 _SETUP_LOCK = threading.Lock()
 
@@ -263,7 +263,7 @@ def _list_answer(gs):
     return jsonify({
         "state": state, "remote_id": gs.remote_id, "host": _host_info(hd),
         "probe_warnings": [w for w in (p.get("warnings") or []) if isinstance(w, str)],
-        "setup_error": i18n.tr(setup["error"]) if setup.get("error") else "",
+        "setup_error": i18n.tr(setup["why"]) if setup.get("why") else "",
         "can": {"manage": manage, "setup": _can_setup(), "su": bool(current_user.is_superadmin)},
         "prefix": "gs%d_" % gs.id, "suggest": _snip.suggest_slug(gs.game_type, taken),
         "cap": _cap(), "used": len(rows), "pw_mark": PW_MARK,
@@ -275,7 +275,7 @@ def _names_answer(gs):
     return jsonify({"names": [r.name for r in _server_rows(gs.id)]})
 
 
-def _create_refusal(gs, slug, rows):
+def _add_refusal(gs, slug, rows):
     """Why a new database `slug` can't be added to `gs` now (status, sentence), or None."""
     if not _SLUG_RE.match(slug):
         return 400, i18n.Sentence("A name is 1 to 16 lower-case letters and digits.")
@@ -287,12 +287,12 @@ def _create_refusal(gs, slug, rows):
     return None
 
 
-def _create_answer(gs):
+def _add_answer(gs):
     """POST {"name"}: a new database and its own user, with a new password."""
     slug = _json_str(_json_body(), "name").lower()
     if _tables() is None:
         return _say(409, _NOT_READY)
-    refused = _create_refusal(gs, slug, _server_rows(gs.id))
+    refused = _add_refusal(gs, slug, _server_rows(gs.id))
     if refused:
         return _say(*refused)
     state, hd, _p = host_state(gs.remote, may_probe=True)
@@ -410,14 +410,14 @@ def _restore_answer(gs, r):
 def _setup_worker(app, remote_id, born, who):
     """Install MariaDB on a host that has no database server, then record it. Runs in a thread."""
     with app.app_context():
-        error = ""
+        why = ""
         try:
-            error = _setup_steps(remote_id, born, who)
+            why = _setup_steps(remote_id, born, who)
         except Exception:
-            error = _log_and_generic("database setup failed")
+            why = _log_and_generic("database setup failed")
         finally:
             with _SETUP_LOCK:
-                _SETUP[remote_id] = {"running": False, "error": error}
+                _SETUP[remote_id] = {"running": False, "why": why}
             _PROBES.pop(remote_id, None)
 
 
@@ -460,7 +460,7 @@ def _setup_answer(app, remote):
     with _SETUP_LOCK:
         if _SETUP.get(remote.id, {}).get("running"):
             return _say(409, "Databases are already being set up on this host.")
-        _SETUP[remote.id] = {"running": True, "error": ""}
+        _SETUP[remote.id] = {"running": True, "why": ""}
     log_action(current_user, "db_setup", target=remote.name, detail="started", remote=remote)
     threading.Thread(target=_setup_worker, args=(app, remote.id, row_birth(remote), current_user.username),
                      daemon=True).start()
@@ -661,7 +661,7 @@ def _server_routes(app):
         try:
             if request.method == "GET":
                 return _names_answer(gs) if request.args.get("names") else _list_answer(gs)
-            return _create_answer(gs)
+            return _add_answer(gs)
         except Exception as exc:
             return _failed(exc, "list" if request.method == "GET" else "create")
 
