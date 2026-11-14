@@ -184,7 +184,8 @@
   {% if _uis_backups %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="backups"><i class="bi bi-archive"></i> Backups</button></li>{% endif %}
   {% if fpm.manage %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="schedule"><i class="bi bi-clock-history"></i> Schedule</button></li>
   <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="alerts"><i class="bi bi-bell"></i> Alerts</button></li>{% endif %}
-  {# A Mods tab only for a game with mods the panel can manage: LinuxGSM's installer, or CoD's fs_game (services/cod_mods). #}
+  {# A Mods tab only for a game with mods the panel can manage: LinuxGSM's installer, CoD's fs_game, or a card
+     of routes/game_mods (services/cod_mods.mods_kind). #}
   {% if fpm.manage and not install_failed and mods_kind(server.game_type) %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
 </ul>
 
@@ -707,6 +708,107 @@
 </div>
 {% endif %}
 
+{# Arma 3 / DayZ: the local @folders LinuxGSM's mods and servermods settings load (services/arma_mods). #}
+{% if not install_failed and mods_kind(server.game_type) == "arma" %}
+<div class="card" id="gm-arma-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-puzzle"></i> Mod folders</span>
+    <button class="btn btn-sm btn-outline-secondary" data-action="gmArmaLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      Pick the mod folders this server loads, in load order. Mods load on the server and players need them too;
+      server mods load on the server only. The change applies the next time the server starts.
+    </p>
+    <div class="small fw-semibold mb-1">Mods</div>
+    <div class="border rounded small mb-2" style="height:6.5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-mods" data-no-i18n></ul></div>
+    <div class="small fw-semibold mb-1">Server mods</div>
+    <div class="border rounded small mb-2" style="height:5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-servermods" data-no-i18n></ul></div>
+    <div class="small fw-semibold mb-1">Other folders</div>
+    <div class="border rounded small mb-2" style="height:5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-other" data-no-i18n></ul></div>
+    <div id="gm-arma-note" class="small text-secondary mb-2" style="min-height:1.5em;"></div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <button class="btn btn-sm btn-primary fpm-edit" data-action="gmArmaSave" data-args='["@self"]'><i class="bi bi-save"></i> Save mod lists</button>
+      {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
+      <span id="gm-arma-msg" class="small" role="status"></span>
+    </div>
+    <div class="form-text">To add a mod, upload its @folder into serverfiles or serverfiles/mods.</div>
+  </div>
+</div>
+{% endif %}
+
+{# Factorio: the mods in serverfiles/mods, on or off in mod-list.json (services/fctr_mods). #}
+{% if not install_failed and mods_kind(server.game_type) == "fctr" %}
+<div class="card" id="gm-fctr-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-puzzle"></i> Mods</span>
+    <button class="btn btn-sm btn-outline-secondary" data-action="gmFctrLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      Turn this server's mods on or off. The server reads mods/mod-list.json when it starts, so a change applies at the next restart.
+    </p>
+    <div class="border rounded small mb-2" style="height:14rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-fctr-list" data-no-i18n></ul></div>
+    <div id="gm-fctr-note" class="small text-warning mb-2" style="min-height:1.5em;"></div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles/mods","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
+      <span id="gm-fctr-msg" class="small" role="status"></span>
+    </div>
+    <div class="form-text">To add a mod, upload its .zip into serverfiles/mods. Downloading from the Factorio mod portal needs a player's login, so the panel does not do it.</div>
+  </div>
+</div>
+{% endif %}
+
+{# Minecraft Java: the world's datapacks, and Modrinth's (services/mc_packs, services/modrinth). #}
+{% if not install_failed and mods_kind(server.game_type) == "mc" %}
+<div class="card" id="gm-mc-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-puzzle"></i> Datapacks</span>
+    <button class="btn btn-sm btn-outline-secondary" data-action="gmMcLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      The datapacks in this server's world. The server loads them when it loads the world, so a change applies at the next restart.
+    </p>
+    <div id="gm-mc-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;" data-no-i18n></div>
+    <div class="border rounded small mb-2" style="height:7rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-list" data-no-i18n></ul></div>
+    <form class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="gmMcSearch" data-args='["@event"]' data-on="submit">
+      <input type="search" id="gm-mc-q" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+             maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search Modrinth's datapacks" aria-label="Search Modrinth's datapacks">
+      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-search"></i> Search</button>
+    </form>
+    <div class="border rounded small mb-2 fpm-edit" style="height:9rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-hits" data-no-i18n></ul></div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmMcOpenFolder" data-args='["@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
+      <span id="gm-mc-msg" class="small" role="status"></span>
+    </div>
+    <div class="form-text">Datapacks from Modrinth are downloaded by the panel and checked against Modrinth's checksum. To add your own, upload its .zip into the world's datapacks folder.</div>
+  </div>
+</div>
+{% endif %}
+
+{# Minecraft Bedrock: shared behavior and resource packs, on or off for the world (services/mc_packs). #}
+{% if not install_failed and mods_kind(server.game_type) == "mcb" %}
+<div class="card" id="gm-mcb-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-puzzle"></i> Packs</span>
+    <button class="btn btn-sm btn-outline-secondary" data-action="gmMcbLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      The behavior and resource packs in this server's shared packs folders. Turn one on to apply it to the server's world; a change applies at the next restart.
+    </p>
+    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;" data-no-i18n></div>
+    <div class="border rounded small mb-2" style="height:13rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mcb-list" data-no-i18n></ul></div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles/behavior_packs","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
+      <span id="gm-mcb-msg" class="small" role="status"></span>
+    </div>
+    <div class="form-text">To add a pack, upload its folder (with its manifest.json) into serverfiles/behavior_packs or serverfiles/resource_packs.</div>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
 {% block scripts %}
 {# Server-rendered values for server_files.js. Kept inline (and BEFORE it, so its top-level code can
@@ -722,5 +824,6 @@ var SF_CAN = {{ fpm|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_backup_restore.js') }}"></script>
 {% if mods_kind(server.game_type) == "cod" and not install_failed %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_cod_mods.js') }}"></script>{% endif %}
+{% if mods_kind(server.game_type) in ("arma", "fctr", "mc", "mcb") and not install_failed %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_game_mods.js') }}"></script>{% endif %}
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}

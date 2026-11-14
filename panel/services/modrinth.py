@@ -1,4 +1,9 @@
-"""Modrinth (https://api.modrinth.com/v2) for a PaperMC server's plugins: search, and one verified download.
+"""Modrinth (https://api.modrinth.com/v2) for a PaperMC server's plugins and a Java server's datapacks.
+
+Search, and one verified download. Two kinds of project (KINDS): a "plugin" (Paper, Spigot or
+Bukkit builds, a .jar) and a "datapack" (Modrinth's datapack project type, whose builds list the
+"datapack" loader and ship a .zip; checked against the API on 2026-11-14: Terralith's 1.21 builds are
+loaders ["datapack"] with one primary .zip on cdn.modrinth.com and a sha512).
 
 The PANEL HOST is the only thing that talks to Modrinth; the browser never does, and the game
 server never downloads anything. What the panel fetches is held to:
@@ -46,6 +51,16 @@ NO_VERSION = "Modrinth lists no build of this plugin for Paper, Spigot or Bukkit
 NO_FILE = "This plugin's build on Modrinth has no file the panel can install (it must be a .jar file)."
 TOO_LARGE = "This plugin's file is larger than the 50 MB the panel will install."
 BAD_HASH = "The downloaded file did not match the checksum Modrinth gave for it, so it was not installed."
+DP_NO_VERSION = "Modrinth lists no datapack build of this project for this Minecraft version."
+DP_NO_FILE = "This datapack's build on Modrinth has no file the panel can install (it must be a .zip file)."
+DP_TOO_LARGE = "This datapack's file is larger than the 50 MB the panel will install."
+# Per kind: the search facets, the loaders a build must list, the file extension, and its refusals.
+KINDS = {
+    "plugin": {"facets": [["project_type:plugin"], ["categories:" + x for x in LOADERS]], "loaders": LOADERS,
+               "ext": ".jar", "no_version": NO_VERSION, "no_file": NO_FILE, "too_large": TOO_LARGE},
+    "datapack": {"facets": [["project_type:datapack"]], "loaders": ("datapack",), "ext": ".zip",
+                 "no_version": DP_NO_VERSION, "no_file": DP_NO_FILE, "too_large": DP_TOO_LARGE},
+}
 
 
 class _MdrNoRedirect(urllib.request.HTTPRedirectHandler):
@@ -146,12 +161,12 @@ def _mdr_hit(hit):
             "downloads": _mdr_count(hit.get("downloads"))}
 
 
-def search(query, mc_version=None):
+def search(query, mc_version=None, kind="plugin"):
     """(hits, None) for a checked query, or (None, why). With no version, every version is searched."""
     why = query_problem(query)
     if why:
         return None, why
-    facets = [["project_type:plugin"], ["categories:" + x for x in LOADERS]]
+    facets = [list(f) for f in KINDS[kind]["facets"]]
     if mc_version:
         facets.append(["versions:" + mc_version])
     params = {"query": query, "facets": json.dumps(facets), "limit": SEARCH_LIMIT,
@@ -163,15 +178,15 @@ def search(query, mc_version=None):
     return [h for h in (_mdr_hit(x) for x in hits) if h is not None], None
 
 
-def safe_filename(name):
-    """A plugin file name from the API's: basename only, [A-Za-z0-9._+-], ending .jar; else None."""
+def safe_filename(name, ext=".jar"):
+    """A file name from the API's: basename only, [A-Za-z0-9._+-], ending `ext` (.jar, .zip); else None."""
     if not isinstance(name, str):
         return None
     base = re.split(r"[/\\]", name)[-1]
     base = re.sub(r"[^A-Za-z0-9._+-]", "_", base).lstrip(".")[:128]
-    if not base.lower().endswith(".jar") or len(base) <= 4:
+    if not base.lower().endswith(ext) or len(base) <= len(ext):
         return None
-    return base[:-4] + ".jar"
+    return base[:-len(ext)] + ext
 
 
 def _mdr_primary(files):
@@ -197,35 +212,37 @@ def _mdr_file_ok(url, sha):
             and isinstance(sha, str) and bool(_MDR_SHA512.fullmatch(sha)))
 
 
-def file_plan(version):
+def file_plan(version, kind="plugin"):
     """(plan, None) for the version's primary file, or (None, why).
 
     plan = {"url", "filename", "sha512", "size"}: a URL on Modrinth's CDN over https, a sanitized
-    .jar name, a 128-hex sha512, and a size within FILE_CAP.
+    .jar (a plugin) or .zip (a datapack) name, a 128-hex sha512, and a size within FILE_CAP.
     """
+    k = KINDS[kind]
     f = _mdr_primary(version.get("files"))
     if f is None:
-        return None, NO_FILE
+        return None, k["no_file"]
     hashes = f.get("hashes") if isinstance(f.get("hashes"), dict) else {}
     url, sha = f.get("url"), hashes.get("sha512")
-    name = safe_filename(f.get("filename"))
+    name = safe_filename(f.get("filename"), k["ext"])
     if name is None or not _mdr_file_ok(url, sha):
-        return None, NO_FILE
+        return None, k["no_file"]
     size = f.get("size")
     if isinstance(size, int) and size > FILE_CAP:
-        return None, TOO_LARGE
+        return None, k["too_large"]
     return {"url": url, "filename": name, "sha512": sha, "size": size if isinstance(size, int) else None}, None
 
 
-def resolve(project_id, mc_version=None):
+def resolve(project_id, mc_version=None, kind="plugin"):
     """(info, None) for the build to install, or (None, why).
 
     info = {"title", "version_id", "version_number", "plan"}: the newest release of the project for
-    Paper, Spigot or Bukkit (on `mc_version` when it is known), and its primary file's plan.
+    the kind's loaders (Paper, Spigot or Bukkit; or "datapack"), on `mc_version` when it is known,
+    and its primary file's plan.
     """
     if not valid_id(project_id):
         return None, BAD_ID
-    params = {"loaders": json.dumps(list(LOADERS)), "include_changelog": "false"}
+    params = {"loaders": json.dumps(list(KINDS[kind]["loaders"])), "include_changelog": "false"}
     if mc_version:
         params["game_versions"] = json.dumps([mc_version])
     # Already held to valid_id (8 base62 characters); quoted as well, so the path segment can never be
@@ -237,19 +254,19 @@ def resolve(project_id, mc_version=None):
         return None, UNAVAILABLE
     version = _mdr_pick(versions, project_id)
     if version is None:
-        return None, NO_VERSION
-    plan, why = file_plan(version)
+        return None, KINDS[kind]["no_version"]
+    plan, why = file_plan(version, kind)
     if why:
         return None, why
     return {"title": _mdr_text(project.get("title"), 100) or project_id, "version_id": version["id"],
             "version_number": _mdr_text(version.get("version_number"), 64), "plan": plan}, None
 
 
-def download(plan):
+def download(plan, kind="plugin"):
     """(bytes, None) for the plan's file once its sha512 matches, or (None, why). Nothing is kept else."""
     body, _why = _mdr_http_get(plan["url"], FILE_CAP, _MDR_CDN_HOSTS, timeout=_MDR_FILE_TIMEOUT)
     if body is None:
-        return None, TOO_LARGE if _why == "too large" else UNAVAILABLE
+        return None, KINDS[kind]["too_large"] if _why == "too large" else UNAVAILABLE
     if hashlib.sha512(body).hexdigest() != plan["sha512"]:
         return None, BAD_HASH
     return body, None

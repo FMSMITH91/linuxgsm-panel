@@ -67,6 +67,8 @@ _COD = {
     "codwaw": ("", True),
 }
 COD_GAMES = frozenset(_COD)
+# The other games with a Mods card of their own (routes/game_mods.py): the card each one gets.
+OTHER_KINDS = {"arma3": "arma", "dayz": "arma", "fctr": "fctr", "mc": "mc", "pmc": "mc", "mcb": "mcb"}
 # The base game's folders, and the mods folder itself: never a mod of their own.
 _NOT_A_MOD = frozenset({"main", "uo", "mods"})
 # A mod folder's name: what the listing passes (find's `! -name` below keeps the rest out) and what a
@@ -105,13 +107,13 @@ REASONS = (UNREAD, NOT_A_MOD, IN_EXTRAPARAMS, IN_SECRETS, NOT_PLAIN, NO_GAME_MOD
 
 
 def mods_kind(game_type):
-    """The Mods tab a game gets: "lgsm" (LinuxGSM's installer), "cod" (the fs_game switch) or ""."""
+    """The Mods tab a game gets: "lgsm" (LinuxGSM's installer), "cod" (the fs_game switch), OTHER_KINDS's, or ""."""
     gt = (game_type or "").lower()
     if gt in LGSM_MODS_GAMES:
         return "lgsm"
     if gt in COD_GAMES:
         return "cod"
-    return ""
+    return OTHER_KINDS.get(gt, "")
 
 
 def upload_dir(game_type):
