@@ -3,6 +3,19 @@
 // nothing of the host. Every row is built with textContent: names and values come from the server.
 // A password is fetched only when the viewer asks to see or copy it (each fetch is audited) and is
 // kept in this page's memory only; a connection snippet shows a mask where it goes until then.
+
+// What the tab says about the host's database server: a warning it shows, and a state with no row yet.
+var DB_WARN = {
+  exposed: 'This database server also listens on the network. The panel won\'t change it: set bind-address = 127.0.0.1 in its config, or block its port in the firewall.',
+  skip_networking: 'This database server doesn\'t accept network connections (skip-networking), so games that connect by address can\'t use it.',
+  tls_required: 'This database server only accepts encrypted connections (require_secure_transport), which some game plugins can\'t make.'
+};
+var DB_STATE = {
+  setting_up: 'Setting up databases on this host. This takes a minute or two.',
+  unsupported: 'This host\'s database server isn\'t one the panel can use: it needs MariaDB 10.4 or later, or MySQL 8.0 or later.',
+  unreadable: 'Couldn\'t read the database server on this host: it did not answer. Try again.'
+};
+
 (function () {
   'use strict';
   var st = {d: null, pw: {}, kind: {}, loaded: false, busy: false, edited: false, poll: null};
@@ -63,25 +76,24 @@
   }
 
   // ── the host's database server ──────────────────────────────────────────────────────────────
-  var WARN = {
-    exposed: 'This database server also listens on the network. The panel won\'t change it: set bind-address = 127.0.0.1 in its config, or block its port in the firewall.',
-    skip_networking: 'This database server doesn\'t accept network connections (skip-networking), so games that connect by address can\'t use it.',
-    tls_required: 'This database server only accepts encrypted connections (require_secure_transport), which some game plugins can\'t make.'
-  };
-  var STATE = {
-    setting_up: 'Setting up databases on this host. This takes a minute or two.',
-    unsupported: 'This host\'s database server isn\'t one the panel can use: it needs MariaDB 10.4 or later, or MySQL 8.0 or later.',
-    unreadable: 'Couldn\'t read the database server on this host: it did not answer. Try again.'
-  };
-
   function hostLine(d) {
     var h = d.host, warns = (h ? h.warnings : d.probe_warnings) || [];
-    if (!h) return {text: STATE[d.state] ? T(STATE[d.state]) : '', warn: d.state === 'unreadable'};
+    if (!h) return {text: DB_STATE[d.state] ? T(DB_STATE[d.state]) : '', warn: d.state === 'unreadable'};
     var ver = /^(\d+\.\d+)/.exec(h.version || ''), name = h.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
     var text = TF('{server} on this host.', {server: name + (ver ? ' ' + ver[1] : '')});
-    var bad = warns.filter(function (w) { return WARN[w]; }).map(function (w) { return T(WARN[w]); });
+    var bad = warns.filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
     if (!bad.length && warns.indexOf('exposed') < 0) text += ' ' + T('Only reachable from this machine.');
     return {text: [text].concat(bad).join(' '), warn: bad.length > 0};
+  }
+
+  // A superadmin's "Show the panel's admin login", after the host line.
+  function adminLink(h) {
+    h.appendChild(document.createTextNode(' '));
+    var b = node('button', 'btn btn-link btn-sm p-0 align-baseline', T('Show the panel\'s admin login'));
+    b.type = 'button';
+    b.setAttribute('data-action', 'dbAdminReveal');
+    b.setAttribute('data-args', JSON.stringify(['@self']));
+    h.appendChild(b);
   }
 
   function drawHost(d) {
@@ -89,14 +101,7 @@
     h.textContent = line.text + (d.setup_error ? (line.text ? ' ' : '') + d.setup_error : '');
     h.className = 'small mb-2 text-break ' + (line.warn || d.setup_error ? 'text-warning' : 'text-secondary');
     show('db-host', !!h.textContent);
-    if (d.can.su && d.host && d.host.installed_by_panel) {
-      h.appendChild(document.createTextNode(' '));
-      var b = node('button', 'btn btn-link btn-sm p-0 align-baseline', T('Show the panel\'s admin login'));
-      b.type = 'button';
-      b.setAttribute('data-action', 'dbAdminReveal');
-      b.setAttribute('data-args', JSON.stringify(['@self']));
-      h.appendChild(b);
-    }
+    if (d.can.su && d.host && d.host.installed_by_panel) adminLink(h);
     show('db-setup', d.state === 'none');
     show('db-setup-can', d.can.setup);
     show('db-setup-ask', !d.can.setup);

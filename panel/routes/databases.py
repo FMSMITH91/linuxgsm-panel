@@ -189,10 +189,7 @@ def host_state(remote, may_probe):
     if _SETUP.get(remote.id, {}).get("running"):
         return "setting_up", hd, {}
     if hd is not None:
-        fresh = hd.checked_at and (_now() - hd.checked_at).total_seconds() < _PROBE_FRESH
-        if fresh or not may_probe:
-            return "ready", hd, {}
-        return _recheck(remote, hd), hd, {}
+        return ("ready" if _fresh(hd.checked_at, _PROBE_FRESH) or not may_probe else _recheck(remote, hd)), hd, {}
     if not may_probe:
         hit = _PROBES.get(remote.id)
         return ((hit[1].get("state") or "unreadable") if hit else "unknown"), None, {}
@@ -219,11 +216,15 @@ def _server_rows(server_id):
     return t[0].query.filter_by(game_server_id=server_id).order_by(t[0].id).all()
 
 
+def _fresh(when, seconds):
+    """Whether `when` (a naive UTC time, or None) is less than `seconds` ago."""
+    return bool(when) and (_now() - when).total_seconds() < seconds
+
+
 def _refresh_sizes(remote, hd, rows):
     """Ask the host for the sizes of `rows` when any is older than a minute (one call for all)."""
     now = _now()
-    if hd is None or not rows or all(r.size_at and (now - r.size_at).total_seconds() < _SIZE_FRESH
-                                     for r in rows):
+    if hd is None or all(_fresh(r.size_at, _SIZE_FRESH) for r in rows):
         return
     try:
         got = _svc().sizes(remote, hd, [r.name for r in rows])
@@ -425,23 +426,29 @@ def _setup_steps(remote_id, born, who):
     remote = claim_row(RemoteServer, remote_id, born)
     if remote is None:
         return ""
-    svc = _svc()
     # Never over a server that is already there: the probe must find none.
-    if (svc.probe(remote) or {}).get("state") != "none":
+    if (_svc().probe(remote) or {}).get("state") != "none":
         why = i18n.Sentence("A database server is already on this host, so nothing was installed.")
     else:
-        ok, said, admin_pw = svc.install_mariadb(remote)
-        why = "" if ok else (said or i18n.Sentence("The install failed."))
-        if ok:
-            p = svc.probe(remote) or {}
-            hd = _host_row(remote_id) or _new_host_row(remote, p)
-            _store_probe(hd, p)
-            hd.flavor, hd.installed_by_panel, hd.auth_mode = "mariadb", True, "socket"
-            hd.panel_admin_secret = encrypt_secret(admin_pw or "")
-            db.session.commit()
+        why = _install(remote)
     log_action(None, "db_setup", target=remote.name, actor=who, success=not why, remote=remote,
                detail="MariaDB installed" if not why else "not installed: %s" % why)
     return why
+
+
+def _install(remote):
+    """Install MariaDB and record the host's row: '' when it worked, else why not."""
+    svc = _svc()
+    ok, said, admin_pw = svc.install_mariadb(remote)
+    if not ok:
+        return said or i18n.Sentence("The install failed.")
+    p = svc.probe(remote) or {}
+    hd = _host_row(remote.id) or _new_host_row(remote, p)
+    _store_probe(hd, p)
+    hd.flavor, hd.installed_by_panel, hd.auth_mode = "mariadb", True, "socket"
+    hd.panel_admin_secret = encrypt_secret(admin_pw or "")
+    db.session.commit()
+    return ""
 
 
 def _setup_answer(app, remote):
@@ -547,20 +554,26 @@ def dump_for_backup(sid, remote, account):
     if not rows:
         return None
     try:
-        if hd is None:
-            return _note(i18n.Sentence("the host's database server is not set up in the panel."))
-        refused = game_account_write_refusal(remote, account)
-        if refused is not None:
-            return _note(refused)
-        ok, said = _svc().dump(remote, hd, "game", account, [r.name for r in rows])
-        if not ok:
-            return _note(said or i18n.Sentence("the dump failed."))
-        for r in rows:
-            r.dumped_at = _now()
-        db.session.commit()
-        return None
+        why = _dump_rows(remote, account, hd, rows)
     except Exception:
-        return _note(i18n.Sentence("the dump failed ({error}).", error=_log_and_generic("database dump failed")))
+        why = i18n.Sentence("the dump failed ({error}).", error=_log_and_generic("database dump failed"))
+    return _note(why) if why else None
+
+
+def _dump_rows(remote, account, hd, rows):
+    """Dump `rows` into the game's files as `account`: '' when done, else why not."""
+    if hd is None:
+        return i18n.Sentence("the host's database server is not set up in the panel.")
+    refused = game_account_write_refusal(remote, account)
+    if refused is not None:
+        return refused
+    ok, said = _svc().dump(remote, hd, "game", account, [r.name for r in rows])
+    if not ok:
+        return said or i18n.Sentence("the dump failed.")
+    for r in rows:
+        r.dumped_at = _now()
+    db.session.commit()
+    return ""
 
 
 def with_note(result, note):
