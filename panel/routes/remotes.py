@@ -446,6 +446,9 @@ def _register_remote_delete_and_test(app):
             from panel.db.models import MetricSample
             db.session.execute(MetricSample.__table__.delete()
                                .where(MetricSample.server_id.in_(_doomed_ids)))
+        # ...and its databases' rows (the databases themselves stay on that machine).
+        from panel.routes import databases as _dbr
+        _dbr.forget_remote(remote_id)
         # Delete group associations
         group_servers_table = db.Table(
             "group_servers", db.metadata, autoload_with=db.engine

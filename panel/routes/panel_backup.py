@@ -412,6 +412,9 @@ def register(app):
     _register_game_backup_files(app)
     _grs.register(app)
     _bup.register(app)
+    # The Databases tab: its databases go into each game backup (_shared._marked_backup).
+    from panel.routes import databases as _dbr
+    _dbr.register(app)
     _register_game_backup_settings(app)
     _register_backup_overview(app)
     _register_panel_backups(app)

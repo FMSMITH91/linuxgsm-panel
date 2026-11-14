@@ -5813,8 +5813,13 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # server's mod folder lists (/api/server/<id>/mod-folders), a Factorio server's mods (/factorio-mods), and a
 # Minecraft server's packs (/mc-packs, with /mc-packs/search and /mc-packs/install for Java datapacks), each
 # behind the Mods tab's MANAGE_SERVERS, with EDIT_FILES to change anything.
-check("register_routes: every one of the 262 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 262,
+# 272, was 262: ten genuinely new views, panel/routes/databases.py's Databases tab: a server's databases
+# (/api/server/<id>/databases, GET with the view permission, POST to add) and each one's reveal,
+# reset-password, delete and restore (MANAGE_DATABASES); a host's setup (MANAGE_DATABASES and
+# MANAGE_REMOTES, get_host_remote), admin login and admin password (superadmin), and its databases with no
+# game server, listed and deleted (MANAGE_DATABASES, get_remote).
+check("register_routes: every one of the 272 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 272,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

@@ -1,0 +1,45 @@
+{# The Databases tab (routes/databases.py, js/server_databases.js). Its body loads when the tab is first
+   opened, so the page itself asks nothing of the host. [data-fpm-ro] hides the controls that change
+   anything from a viewer without Manage databases; the routes refuse them anyway. #}
+<div class="card" id="db-card" data-sfsub="databases" style="display:none;"{% if not _db.manage %} data-fpm-ro{% endif %}>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-database"></i> Databases</span>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbLoad" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <div id="db-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading databases…</div>
+    <div id="db-host" class="small mb-2 text-break" role="status" style="display:none;"></div>
+    <div id="db-setup" class="border rounded p-2 mb-2" style="display:none;">
+      <p class="small mb-2">Databases need a database server on this host.</p>
+      <div id="db-setup-can" class="fpm-edit">
+        <button type="button" class="btn btn-sm btn-primary" data-action="dbSetup" data-args='["@self"]'><i class="bi bi-database-add"></i> Set up databases on this host</button>
+        <div class="form-text">Installs MariaDB from Ubuntu, listening on this machine only. It is kept up to date by OS updates.</div>
+      </div>
+      <p id="db-setup-ask" class="small text-secondary mb-0" style="display:none;">Ask an administrator to set up databases on this host.</p>
+    </div>
+    <form id="db-login" class="border rounded p-2 mb-2" style="display:none;" data-action="dbLogin" data-args='["@event"]' data-on="submit">
+      <p class="small mb-2">A database server is already running here, but the panel can't sign in to it yet. Enter an admin login that can create users and grant them rights. The panel keeps it encrypted.</p>
+      <div class="d-flex flex-wrap gap-2">
+        <label for="db-login-user" class="visually-hidden">Admin user</label>
+        <input type="text" id="db-login-user" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
+        <label for="db-login-pw" class="visually-hidden">Admin password</label>
+        <input type="password" id="db-login-pw" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="128" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
+        <button type="submit" class="btn btn-sm btn-primary">Save</button>
+      </div>
+    </form>
+    <form id="db-add" class="mb-2 fpm-edit" style="display:none;" data-action="dbAdd" data-args='["@event"]' data-on="submit">
+      <label for="db-name" class="form-label small mb-1">Add database</label>
+      <div class="d-flex flex-wrap gap-2">
+        <div class="input-group input-group-sm" style="flex:1 1 12rem;min-width:0;">
+          <span class="input-group-text" id="db-prefix" data-no-i18n></span>
+          <input type="text" id="db-name" class="form-control" maxlength="16" autocomplete="off" spellcheck="false" pattern="[a-z0-9]{1,16}" aria-describedby="db-prefix db-count" aria-label="Database name" data-action="dbEdited" data-on="input">
+        </div>
+        <button type="submit" id="db-add-btn" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Add database</button>
+      </div>
+      <div id="db-count" class="form-text"></div>
+    </form>
+    <div id="db-list" class="d-flex flex-column gap-2"></div>
+    <div id="db-msg" class="small mt-1" role="status"></div>
+    <div class="form-text">Each backup of this server also saves its databases into its files (panel-db-dumps), so restoring the backup brings them back with Restore from dump. Changes made while the backup stops and archives the server are not in it.</div>
+  </div>
+</div>

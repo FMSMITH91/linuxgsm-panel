@@ -40,6 +40,7 @@ from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN
 from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _prune_jobs,
     _resolve_source_aux_ports, _sync_toggles_from_cron, game_os_unsupported, load_game_list,
     resolve_free_port)
+from panel.routes import databases as _dbr
 from panel.routes._shared import (INVALID_ACCOUNT_NAME, _looks_installed, _notify_servers_changed,
     _record_game_clock, grs_or_wipe_sentence, grs_restore_running, privileged_accounts)
 
@@ -2738,6 +2739,8 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
             fw_notes.append(i18n.Sentence("The account was removed but its home directory could not "
                                           "be — check /home/{user} on the host.", user=short_name))
 
+        # Its databases go with it, each dumped on the host first (routes/databases.py).
+        fw_notes.extend(_dbr.drop_for_uninstall(remote, server_id))
         # Remove from DB
         db.session.delete(gs)
         db.session.commit()
@@ -2916,6 +2919,9 @@ def _forget_game_server(server_id):
     # would tail its action log on the new server's host. The monitor also prunes them, a minute
     # later; the INSERT that takes the id does as well (models.py).
     forget_rows(server_ids=(server_id,))
+    # Databases it still has were kept (removed from the panel only, or a drop that failed): listed on
+    # the host's page with no server, never handed to the next server given this id.
+    _dbr.orphan_rows(server_id)
     try:
         bk.remove_game_schedule(server_id)
     except Exception:

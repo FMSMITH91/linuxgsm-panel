@@ -2472,3 +2472,39 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
     width: calc(4 * (2.425rem + 4px) + .7rem);
   }
 }
+
+/* The Databases tab (js/server_databases.js): each value on one line, its label, the value cut short
+   with an ellipsis (selected whole on a click), then its buttons, so a long value never widens the
+   page. A connection snippet scrolls inside its own box. On a phone the buttons are 44px targets. */
+.db-kv{
+  display:flex;
+  align-items:center;
+  gap:.35rem;
+  min-height:2rem;
+}
+
+.db-k{ flex:0 0 5.5rem; }
+
+.db-v{
+  flex:1 1 auto;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  user-select:all;
+}
+
+.db-icon-btn{ padding:.1rem .4rem; }
+
+.db-snip{
+  max-height:9rem;
+  overflow:auto;
+  white-space:pre;
+}
+
+@media (width <= 767.98px){
+  .db-icon-btn{
+    min-width:44px;
+    min-height:44px;
+  }
+}

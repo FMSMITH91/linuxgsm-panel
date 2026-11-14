@@ -321,6 +321,16 @@
       "GET"
     ]
   },
+  "GET /api/remote/<int:remote_id>/databases": {
+    "endpoint": "api_remote_databases",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_remote_databases"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/remote/<int:remote_id>/discover": {
     "endpoint": "api_remote_discover",
     "guards": [
@@ -1128,6 +1138,18 @@
       "POST"
     ]
   },
+  "GET,POST /api/server/<int:server_id>/databases": {
+    "endpoint": "api_server_databases",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_databases"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "GET,POST /api/server/<int:server_id>/factorio-mods": {
     "endpoint": "api_server_factorio_mods",
     "guards": [
@@ -1804,6 +1826,48 @@
       "POST"
     ]
   },
+  "POST /api/remote/<int:remote_id>/databases/<int:db_id>/delete": {
+    "endpoint": "api_remote_database_delete",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_remote_database_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/remote/<int:remote_id>/databases/admin-login": {
+    "endpoint": "api_remote_databases_admin_login",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_remote_databases_admin_login"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/remote/<int:remote_id>/databases/admin-reveal": {
+    "endpoint": "api_remote_databases_admin_reveal",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_remote_databases_admin_reveal"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/remote/<int:remote_id>/databases/setup": {
+    "endpoint": "api_remote_databases_setup",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_remote_databases_setup"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/remote/<int:remote_id>/firewall/allow-from": {
     "endpoint": "api_remote_firewall_allow_from",
     "guards": [
@@ -2239,6 +2303,50 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_daily_restart"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/delete": {
+    "endpoint": "api_server_database_delete",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/reset-password": {
+    "endpoint": "api_server_database_reset",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_reset"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/restore": {
+    "endpoint": "api_server_database_restore",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_restore"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/reveal": {
+    "endpoint": "api_server_database_reveal",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_reveal"
     ],
     "methods": [
       "POST"

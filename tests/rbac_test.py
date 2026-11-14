@@ -1274,6 +1274,8 @@ def _check_vps_prep_refuses_panel_host():
 # stops calling it is named, and a new view that starts calling it must be added here.
 _HOST_LEVEL_VIEWS = {
     "close_port22.py": {"api_remote_close_port_22"},
+    # Installing MariaDB on a host is a root package install: the Databases tab's host setup.
+    "databases.py": {"api_remote_databases_setup"},
     "remote_security.py": {"api_remote_security_bans", "api_remote_security_top_ips",
                            "api_remote_security_block", "api_remote_security_autoblock",
                            "api_remote_security_unban", "api_remote_security_log"},
