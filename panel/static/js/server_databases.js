@@ -77,15 +77,20 @@ var DB_STATE = {
   }
 
   // ── the host's database server ──────────────────────────────────────────────────────────────
-  function hostLine(d) {
-    var h = d.host, warns = (h ? h.warnings : d.probe_warnings) || [];
-    // A superadmin gets the admin login form for needs_login instead of a line.
+  // A host with no database server row yet: what its state says (a superadmin gets the admin login
+  // form for needs_login instead of a line).
+  function stateLine(d) {
     var said = DB_STATE[d.state === 'needs_login' && d.can.su ? '' : d.state];
-    if (!h) return {text: said ? T(said) : '', warn: d.state === 'unreadable'};
+    return {text: said ? T(said) : '', warn: d.state === 'unreadable'};
+  }
+
+  function hostLine(d) {
+    var h = d.host;
+    if (!h) return stateLine(d);
     var ver = /^(\d+\.\d+)/.exec(h.version || ''), name = h.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
     var text = TF('{server} on this host.', {server: name + (ver ? ' ' + ver[1] : '')});
-    var bad = warns.filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
-    if (!bad.length && warns.indexOf('exposed') < 0) text += ' ' + T('Only reachable from this machine.');
+    var bad = (h.warnings || []).filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
+    if (!bad.length) text += ' ' + T('Only reachable from this machine.');
     return {text: [text].concat(bad).join(' '), warn: bad.length > 0};
   }
 
