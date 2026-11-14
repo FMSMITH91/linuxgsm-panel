@@ -3811,8 +3811,7 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port, game_type=None):
     Bedrock) counts its console log instead, where that line fits cron (bedrock.py).
     """
     from panel.ops.ssh_manager import bedrock as _bedrock   # at call time: it imports this module
-    line = _bedrock.bedrock_restart_check(game_type, user, selfname)
-    if line:
+    if (line := _bedrock.bedrock_restart_check(game_type, user, selfname)):
         return line
     flag = f"/home/{user}/.restart-pending"
     # The player test is "did we COUNT zero", not "did we fail to count". gamedig writes its
