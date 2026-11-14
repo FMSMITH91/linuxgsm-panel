@@ -73,6 +73,10 @@ DOWNLOAD_BACKUP = "download_backup"     # Download a game server's backup archiv
 DELETE_BACKUP = "delete_backup"         # Delete them
 RESTORE_BACKUP = "restore_backup"       # Restore the server from one (replaces its current files)
 MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
+# A server's MariaDB/MySQL databases: add, delete, restore, reset, and read their passwords. Granted
+# to no group on upgrade (it reveals passwords); setting up a host's database server also needs
+# MANAGE_REMOTES, and the admin login is superadmin-only.
+MANAGE_DATABASES = "manage_databases"
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
@@ -108,6 +112,8 @@ ALL_PERMISSIONS = {
                      "server files: an uploaded archive can hold any file, including the scripts the "
                      "server runs"),
     MANAGE_REMOTES: "Add/edit/delete remote VPS nodes",
+    MANAGE_DATABASES: ("Manage a server's databases: add, delete, restore and reset them, and see "
+                       "their passwords"),
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",
