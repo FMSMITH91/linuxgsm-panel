@@ -665,7 +665,7 @@ check("backup: a server with no databases asks the host nothing more", _R208.get
 _bkf208 = _R208.get("bk_fail", ([], [], (None, "", None)))
 check("backup: a dump that fails still runs the backup, and its outcome says the databases were not included",
       _bkf208[0] == ["runner:dump"] and _bkf208[2][0] is True
-      and "Databases were not included: mariadb-dump failed" in str(_bkf208[2][1]), repr(_bkf208))
+      and "Not every database is in this backup: mariadb-dump failed" in str(_bkf208[2][1]), repr(_bkf208))
 _bkr208 = _R208.get("bk_root", ([], [1], (None, "", None)))
 check("backup: a root-capable game account gets no dump (it is written as that account), and the outcome says why",
       _bkr208[0] == ["runner:"] and not _bkr208[1] and "p208u can become root" in str(_bkr208[2][1]), repr(_bkr208))
@@ -677,12 +677,12 @@ check("Back up now: the server's databases are dumped into its files in ONE call
 _nwf208 = _R208.get("now_fail", ([], [], None, ""))
 check("Back up now: a dump that fails still runs the backup, and the card's outcome says the databases were not "
       "included", _nwf208[0] == ["runner:dump"] and _nwf208[2] is True
-      and "Databases were not included: mariadb-dump failed" in _nwf208[3], repr(_nwf208))
+      and "Not every database is in this backup: mariadb-dump failed" in _nwf208[3], repr(_nwf208))
 _lb208 = _R208.get("lgsm_backup", ([], [], []))
 check("Backup action (and a bot's /backup): the databases are dumped in ONE call before LinuxGSM's backup runs, "
       "and a failed dump is said in the console without stopping it",
       _lb208[0] == ["backup:dump"] and _lb208[1] == [("game", "p208u", ["gs%s_luckperms" % _SID208])]
-      and any("Databases were not included" in t for t in _lb208[2]), repr(_lb208))
+      and any("Not every database is in this backup" in t for t in _lb208[2]), repr(_lb208))
 check("other LinuxGSM actions dump nothing", _R208.get("lgsm_update", ([1], [1], []))[:2] == (["update:"], []),
       repr(_R208.get("lgsm_update")))
 

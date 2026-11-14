@@ -317,13 +317,14 @@ def admin_check(remote, port, user, pw):
             and re.fullmatch(_priv.DB_ADMIN_PW_RE, str(pw or ""))):
         return "denied", {}         # a login no client could be handed is a login that cannot sign in
     rc, out = _verb(remote, "db-admin-check", ["mariadb", "tcp%d" % int(port)], {"admin": (user, pw)})
-    facts = _parse_probe(out)
-    # The verdict is a word of its own line; a variable's value (var.x=…) never counts as one.
+    verdict = _admin_verdict(rc, out)
+    return verdict, (_parse_probe(out)["vars"] if verdict in ("ok", "lacks_grants") else {})
+
+
+def _admin_verdict(rc, out):
+    """db-admin-check's verdict: a word of its own line; a variable's value (var.x=…) never counts as one."""
     words = [w for line in out.splitlines() if not line.startswith("var.") for w in line.split()]
-    for answer in ("ok", "denied", "lacks_grants"):
-        if rc == 0 and answer in words:
-            return answer, (facts["vars"] if answer != "denied" else {})
-    return "unreadable", {}
+    return next((a for a in ("ok", "denied", "lacks_grants") if rc == 0 and a in words), "unreadable")
 
 
 def check_admin_login(remote, port, user, pw):
