@@ -3384,6 +3384,18 @@ _CRON_DROP_AWK = (
 CRON_DROP_GONE = "drop_line_gone"
 
 
+# Scheduled Tasks' last-run times read from cron's journal, per (host, account): {key: (monotonic
+# time, the commands it was read for, {command: epoch})}. cron.list_cron_jobs fills it; every crontab
+# write below drops the account's entry.
+CRON_TIMES = {}
+
+
+def cron_times_key(server, user):
+    """CRON_TIMES's key for `user` on `server`, or None for a record with no id (nothing is kept)."""
+    sid = getattr(server, "id", None)
+    return (sid, user) if isinstance(sid, int) else None
+
+
 def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line=None):
     """Reliably rewrite `user`'s crontab.
 
@@ -3408,6 +3420,7 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     than `-v`, because `-v` processes backslash escapes in the value and a cron command may
     contain one.
     """
+    CRON_TIMES.pop(cron_times_key(server, user), None)
     env_pre, gone = "", ""
     # `filt_ok` is the highest exit status that still means the filter did its job: grep answers 1
     # when it selected no line (every line filtered out — a legitimate empty result), cat and awk

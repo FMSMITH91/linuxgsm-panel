@@ -126,16 +126,20 @@ def journal_argv(source, lines):
 
 # cron's execution log is matched by COMM, not by unit — see tools/panel-helper.
 CRON_JOURNAL_SINCE = "-14 days"
-# journal-cron-account: one account's lines of that window, NEWEST first, read until this many of
-# them have been seen, and only lines up to this long. Both mirror tools/panel-helper.
+# journal-cron-account: one account's lines in ONE SPAN of that window, newest first, read until this
+# many of them have been seen or for this many seconds, and only lines up to this long. All mirror
+# tools/panel-helper, which explains the spans.
+CRON_JOURNAL_SPANS = {"hour": ("-1h", None), "day": ("-24h", "-1h"), "fortnight": (CRON_JOURNAL_SINCE, "-24h")}
 CRON_JOURNAL_MATCHES = 800
 CRON_JOURNAL_LINE_MAX = 4096
+CRON_JOURNAL_BUDGET = 3
 
 
-def cron_journal_account_argv():
-    """The journalctl argv for journal-cron-account: cron's lines in the window, newest first."""
-    return ["journalctl", "-r", "_COMM=cron", "--since", CRON_JOURNAL_SINCE, "-o", "short-unix",
-            "--no-pager"]
+def cron_journal_account_argv(span):
+    """The journalctl argv for journal-cron-account: cron's lines in one span, newest first."""
+    since, until = CRON_JOURNAL_SPANS[span]
+    return (["journalctl", "-r", "_COMM=cron", "--since", since] + (["--until", until] if until else [])
+            + ["-o", "short-unix", "--no-pager"])
 
 
 LOG_FILES = {
@@ -1191,7 +1195,7 @@ _ARGV = {
                                     "-o", "short-unix", "--no-pager"], None),
     # ...and the newest run of each command ONE account's cron ran: a few lines rather than every
     # account's 14 days. The helper reads and filters it; a remote gets the same as journalctl|awk.
-    "journal-cron-account": ([_managed_user], lambda a: [], None),
+    "journal-cron-account": ([_managed_user, _choice(*CRON_JOURNAL_SPANS)], lambda a: [], None),
     "log-tail": ([_choice(*LOG_FILES), _linecount],
                  lambda a: ["tail", "-n", a[1], LOG_FILES[a[0]]], None),
     "os-update-log": ([], lambda a: ["tail", "-c", "20000", OS_UPDATE_LOG], None),
@@ -1565,14 +1569,15 @@ def _cron_journal_account_remote(a):
 
     The account is matched as a FIXED string (awk's index(), never a pattern), only on an entry's
     first line (its epoch in column 0), and only in lines up to CRON_JOURNAL_LINE_MAX. The first
-    line of each command is printed, which is its newest run; awk exits after CRON_JOURNAL_MATCHES
-    of the account's lines, and journalctl stops at its next write. LC_ALL=C makes gawk count bytes.
+    line of each command is printed, which is its newest run in the span; awk exits after
+    CRON_JOURNAL_MATCHES of the account's lines, and journalctl stops at its next write, or at
+    CRON_JOURNAL_BUDGET seconds (`timeout`). LC_ALL=C makes gawk count bytes.
     """
-    return ("%s 2>/dev/null | LC_ALL=C awk -v m=%s -v n=%d -v w=%d "
+    return ("timeout %d %s 2>/dev/null | LC_ALL=C awk -v m=%s -v n=%d -v w=%d "
             "'length($0) <= w && /^[0-9]+(\\.[0-9]+)?[ \\t]/ && (i = index($0, m)) { "
             "k = substr($0, i); if (!(k in s)) { s[k] = 1; print } if (++c >= n) exit }'"
-            % (shlex.join(cron_journal_account_argv()), shlex.quote("(%s) CMD " % a[0]),
-               CRON_JOURNAL_MATCHES, CRON_JOURNAL_LINE_MAX))
+            % (CRON_JOURNAL_BUDGET, shlex.join(cron_journal_account_argv(a[1])),
+               shlex.quote("(%s) CMD " % a[0]), CRON_JOURNAL_MATCHES, CRON_JOURNAL_LINE_MAX))
 
 
 def _f2b_log_lines_remote(a):

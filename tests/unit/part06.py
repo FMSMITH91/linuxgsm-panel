@@ -8536,7 +8536,7 @@ def _outside_single_quotes(cmd):
 # the point is only to get past check_args so the position being probed is actually reached.
 _INJ_FILLERS = ["abc", "1", "22", "root", "yes", "no", "prohibit-password", "-", "gmod",
                 "gmodserver", "PermitRootLogin", "PasswordAuthentication", "1720000000", "2",
-                "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05"]
+                "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05", "hour"]
 _inj_bad, _inj_checked, _inj_nofill, _inj_base_exposed = [], 0, [], {}
 for _verb in sorted(_priv._REMOTE_ACTIONS):
     _spec = _priv._ARGV.get(_verb)

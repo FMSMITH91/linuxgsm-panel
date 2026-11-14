@@ -58,6 +58,7 @@ import json
 import os
 import pwd
 import re
+import select
 import shutil
 import signal
 import socket
@@ -266,24 +267,32 @@ def journal_argv(source, lines):
 # cron's own execution log is matched by COMM, not by unit, so it needs its own verb rather than a
 # JOURNAL_UNITS entry. The window is fixed here; the caller passes nothing.
 CRON_JOURNAL_SINCE = "-14 days"
-# journal-cron-account reads that window NEWEST first and stops after this many of the account's
-# lines (the newest 800 are what the panel kept of journal-cron's answer), and skips a line longer
-# than this (a crontab command is a few hundred bytes). privileged.py holds the same two numbers.
+# journal-cron-account reads ONE SPAN of that window NEWEST first: the last hour, the rest of the last
+# day, or the rest of the fortnight. The panel asks for the next span only while a job it needs a time
+# for has not been found, so most reads are the hour. Each read also stops after CRON_JOURNAL_MATCHES of
+# the account's lines (the newest 800 are what the panel kept of journal-cron's answer) and after
+# CRON_JOURNAL_BUDGET seconds, and skips a line longer than CRON_JOURNAL_LINE_MAX (a crontab command
+# is a few hundred bytes). Newest first, a read cut short still holds each command's newest run.
+# privileged.py holds the same values.
+CRON_JOURNAL_SPANS = {"hour": ("-1h", None), "day": ("-24h", "-1h"), "fortnight": (CRON_JOURNAL_SINCE, "-24h")}
 CRON_JOURNAL_MATCHES = 800
 CRON_JOURNAL_LINE_MAX = 4096
+CRON_JOURNAL_BUDGET = 3
 # An entry's first line in `-o short-unix`: its epoch in column 0. A message's continuation lines
 # are indented, and any local account can fill one (it sets its own comm to "cron").
 CRON_ENTRY_RE = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,9})?[ \t]")
 
 
-def cron_journal_account_argv():
-    """The journalctl argv for journal-cron-account: cron's lines in the window, newest first.
+def cron_journal_account_argv(span):
+    """The journalctl argv for journal-cron-account: cron's lines in one span, newest first.
 
-    `-r --since` with no `-n` is bounded by the window: journalctl walks back from the end and
-    stops at the first entry older than it (see JOURNAL_SINCE for why `-n` with a match is not).
+    `-r` with --since (and --until) and no `-n` is bounded by the span: journalctl starts at its
+    newest end and stops at the first entry older than it (see JOURNAL_SINCE for why `-n` with a
+    match is not).
     """
-    return ["journalctl", "-r", "_COMM=cron", "--since", CRON_JOURNAL_SINCE, "-o", "short-unix",
-            "--no-pager"]
+    since, until = CRON_JOURNAL_SPANS[span]
+    return (["journalctl", "-r", "_COMM=cron", "--since", since] + (["--until", until] if until else [])
+            + ["-o", "short-unix", "--no-pager"])
 
 
 LOG_FILES = {
@@ -2618,7 +2627,7 @@ VERBS = {
     # The newest run of each command ONE account's cron ran -- see do_journal_cron_account. The
     # account is a validated name, matched here as a fixed string; nothing the caller sends is a
     # pattern, a path or a journalctl option.
-    "journal-cron-account": ([v_game_account], lambda a: [], None),
+    "journal-cron-account": ([v_game_account, v_choice(*CRON_JOURNAL_SPANS)], lambda a: [], None),
     "log-tail": (
         [v_choice(*LOG_FILES), v_linecount],
         lambda a: ["tail", "-n", a[1], LOG_FILES[a[0]]],
@@ -6290,32 +6299,52 @@ def do_f2b_log_lines(args, content):
 
 
 def do_journal_cron_account(args, content):
-    """Print the newest cron journal line of each command one account ran, newest first.
+    """Print the newest cron journal line of each command one account ran in one span, newest first.
 
     journal-cron prints every account's lines for 14 days, oldest first, and the panel kept one
     account's. A host with a few accounts on */5 LinuxGSM monitor jobs passes the transport's 8 MB
     in that window, so the read was cut, judged stale and thrown away -- every time, after paying
-    for all of it. This reads the same window newest first, keeps the lines that carry
+    for all of it. This reads one span (CRON_JOURNAL_SPANS) newest first, keeps the lines that carry
     `(<account>) CMD ` (a fixed-string match on a validated name), prints the first line of each
-    command (its newest run) and stops after CRON_JOURNAL_MATCHES of them. Whatever it prints is
-    that command's newest run in the window, wherever the read stopped.
+    command (its newest run in the span) and stops after CRON_JOURNAL_MATCHES of them or
+    CRON_JOURNAL_BUDGET seconds. Whatever it prints is that command's newest run in the span.
     """
-    argv = cron_journal_account_argv()
+    argv = cron_journal_account_argv(args[1])
     argv[0] = resolve(argv[0])
     proc = subprocess.Popen(argv, shell=False, env=_clean_env(),  # nosec B603 - fixed argv
-                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace")
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    lines = lines_until(proc.stdout, time.monotonic() + CRON_JOURNAL_BUDGET)
     try:
-        for line in newest_cron_lines(proc.stdout, "(%s) CMD " % args[0]):
+        for line in newest_cron_lines(lines, "(%s) CMD " % args[0]):
             sys.stdout.write(line + "\n")
     finally:
-        # Still running means this read stopped it: it has what it came for.
+        # Still running means this read stopped it (the count or the budget): what it printed holds.
         stopped = proc.poll() is None
         if stopped:
             proc.kill()
         proc.stdout.close()
         rc = proc.wait()
     return 0 if stopped or rc == 0 else 1
+
+
+def lines_until(pipe, deadline):
+    """The lines read from the binary `pipe` until it ends or time.monotonic() passes `deadline`.
+
+    select() before each read, so the deadline holds while the writer prints nothing at all.
+    """
+    fd, buf = pipe.fileno(), b""
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            return
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        *done, buf = (buf + chunk).split(b"\n")
+        for line in done:
+            yield line.decode("utf-8", "replace")
+    if buf:
+        yield buf.decode("utf-8", "replace")
 
 
 def newest_cron_lines(lines, marker):
