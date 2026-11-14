@@ -74,5 +74,7 @@
   "the dump failed.": "le dump a échoué.",
   "the dump failed ({error}).": "le dump a échoué ({error}).",
   "Database {name} was not deleted ({why}); it is listed on the host's page.": "La base de données {name} n'a pas été supprimée ({why}) ; elle figure sur la page de l'hôte.",
-  "no database server": "aucun serveur de bases de données"
+  "no database server": "aucun serveur de bases de données",
+  "Show the settings": "Afficher les paramètres",
+  "Hide the settings": "Masquer les paramètres"
 }

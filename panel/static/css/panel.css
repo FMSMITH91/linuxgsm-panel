@@ -2485,6 +2485,20 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 
 .db-k{ flex:0 0 5.5rem; }
 
+/* Side by side where there is room: the databases two to a row, and in each, its values in two
+   columns (Host beside Port, Database beside User). */
+.db-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(min(100%, 26rem), 1fr));
+  gap:.5rem;
+}
+
+.db-kvs{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(min(100%, 13.5rem), 1fr));
+  column-gap:.75rem;
+}
+
 .db-v{
   flex:1 1 auto;
   min-width:0;

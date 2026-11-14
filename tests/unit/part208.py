@@ -681,6 +681,7 @@ _out208 = _js99("databases tab script", (
     "  const walk = (e, f) => { f(e); (e.children || []).forEach(c => walk(c, f)); };\n"
     "  const find = (id, tag) => { const r = []; walk(document.getElementById(id), e => { if (e.tagName === tag) r.push(e); }); return r; };\n"
     "  reply(" + _js208.dumps(_LIST208) + "); out.loaded = await dbLoad(true);\n"
+    "  out.preHidden = find('db-list', 'pre').map(p => p.style.display);\n"
     "  out.host = txt('db-host'); out.prefix = txt('db-prefix'); out.name = document.getElementById('db-name').value;\n"
     "  out.count = txt('db-count'); out.list = txt('db-list'); out.pre = find('db-list', 'pre').map(p => p.textContent);\n"
     "  reply({success: true, password: 'REALPW'}); sent = []; await dbReveal(4); await settle();\n"
@@ -703,7 +704,8 @@ if _out208 is not None:
           _out208.get("loaded") is True and _out208.get("host", "").startswith("MariaDB 10.11 on this host.")
           and _out208.get("prefix") == "gs7_" and _out208.get("name") == "luckperms"
           and _out208.get("count") == "1 of 5 used" and "gs7_lp" in _out208.get("list", "")
-          and "only offers newer logins" in _out208.get("list", "") and _out208.get("pre") == ["pw: MASK\n"],
+          and "only offers newer logins" in _out208.get("list", "") and _out208.get("pre") == ["pw: MASK\n"]
+          and _out208.get("preHidden") == ["none"],
           repr(_out208)[:900])
     check("databases script: Show password asks the reveal route once and puts it in the field and the snippet",
           _out208.get("revealSent") == ["/api/server/7/databases/4/reveal"] and _out208.get("preAfter") == ["pw: REALPW\n"]

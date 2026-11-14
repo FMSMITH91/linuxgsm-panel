@@ -74,5 +74,7 @@
   "the dump failed.": "el volcado falló.",
   "the dump failed ({error}).": "el volcado falló ({error}).",
   "Database {name} was not deleted ({why}); it is listed on the host's page.": "La base de datos {name} no se eliminó ({why}); aparece en la página del host.",
-  "no database server": "no hay servidor de bases de datos"
+  "no database server": "no hay servidor de bases de datos",
+  "Show the settings": "Mostrar los ajustes",
+  "Hide the settings": "Ocultar los ajustes"
 }

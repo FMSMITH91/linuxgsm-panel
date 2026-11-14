@@ -19,7 +19,7 @@ var DB_STATE = {
 
 (function () {
   'use strict';
-  var st = {d: null, pw: {}, kind: {}, loaded: false, busy: false, edited: false, poll: null};
+  var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null};
 
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
@@ -147,14 +147,17 @@ var DB_STATE = {
   }
 
   function snippetBlock(db) {
-    var box = node('div', 'mt-2');
-    var bar = node('div', 'd-flex flex-wrap gap-2 align-items-center mb-1');
-    var lab = node('label', 'small text-secondary', T('Connection settings for'));
+    var box = node('div', 'mt-1');
+    var bar = node('div', 'd-flex flex-wrap gap-2 align-items-center');
+    // The label is the desktop's; a phone keeps the row to the select and its buttons (the select's
+    // aria-label says the same).
+    var lab = node('label', 'small text-secondary d-none d-md-inline', T('Connection settings for'));
     lab.htmlFor = 'db-kind-' + db.id;
     bar.appendChild(lab);
     var sel = node('select', 'form-select form-select-sm w-auto');
     sel.id = 'db-kind-' + db.id;
     sel.setAttribute('data-no-i18n', '');
+    sel.setAttribute('aria-label', T('Connection settings for'));
     db.snippets.forEach(function (s) {
       var o = node('option', null, s.label);
       o.value = s.kind;
@@ -166,9 +169,14 @@ var DB_STATE = {
     sel.setAttribute('data-args', JSON.stringify([db.id, '@self']));
     bar.appendChild(sel);
     bar.appendChild(textButton(T('Copy settings'), 'bi-clipboard', 'dbCopySnippet', [db.id]));
+    var open = !!st.open[db.id];
+    bar.appendChild(iconButton(open ? 'bi-chevron-up' : 'bi-chevron-down', open ? T('Hide the settings') : T('Show the settings'),
+                               'dbShowSnippet', [db.id]));
     box.appendChild(bar);
+    // Folded until asked for: the copy button needs no look at it, and each one is a dozen lines.
     var pre = node('pre', 'db-snip small border rounded p-2 mb-0', snippetText(db));
     pre.id = 'db-snip-' + db.id;
+    pre.style.display = open ? '' : 'none';
     box.appendChild(pre);
     return box;
   }
@@ -182,17 +190,18 @@ var DB_STATE = {
     head.appendChild(node('span', 'small text-secondary text-nowrap', dbSize(db.size)));
     card.appendChild(head);
     if (db.old_logins) card.appendChild(node('div', 'small text-warning mb-1', T('This database server only offers newer logins. SourceMod 1.12 and some older plugins can\'t sign in to it.')));
+    var kvs = card.appendChild(node('div', 'db-kvs'));
     [['Host', 'host'], ['Port', 'port'], ['Database', 'name'], ['User', 'user']].forEach(function (f) {
-      card.appendChild(kvRow(T(f[0]), String(db[f[1]]), [iconButton('bi-clipboard', TF('Copy {what}', {what: T(f[0])}), 'dbCopy', [db.id, f[1]])]));
+      kvs.appendChild(kvRow(T(f[0]), String(db[f[1]]), [iconButton('bi-clipboard', TF('Copy {what}', {what: T(f[0])}), 'dbCopy', [db.id, f[1]])]));
     });
     var pw = st.pw[db.id];
-    card.appendChild(kvRow(T('Password'), pw || st.d.pw_mark, [
+    kvs.appendChild(kvRow(T('Password'), pw || st.d.pw_mark, [
       iconButton(pw ? 'bi-eye-slash' : 'bi-eye', pw ? T('Hide the password') : T('Show the password'), 'dbReveal', [db.id], 'fpm-edit'),
       iconButton('bi-clipboard', T('Copy the password'), 'dbCopy', [db.id, 'password'], 'fpm-edit')]));
     card.appendChild(snippetBlock(db));
-    var foot = node('div', 'd-flex flex-wrap gap-2 mt-2 align-items-center');
+    var foot = node('div', 'd-flex flex-wrap gap-1 mt-2 align-items-center');
     foot.appendChild(textButton(T('Reset password'), 'bi-key', 'dbReset', [db.id]));
-    foot.appendChild(textButton(T('Restore from dump'), 'bi-arrow-counterclockwise', 'dbRestore', [db.id]));
+    foot.appendChild(textButton(T('Restore'), 'bi-arrow-counterclockwise', 'dbRestore', [db.id]));
     foot.appendChild(textButton(T('Delete'), 'bi-trash', 'dbDelete', [db.id], 'btn-outline-danger'));
     if (db.dumped_at) foot.appendChild(node('span', 'small text-secondary', TF('Last dump: {when}', {when: new Date(db.dumped_at).toLocaleString()})));
     card.appendChild(foot);
@@ -322,6 +331,8 @@ var DB_STATE = {
     return password(id).then(function (pw) { st.pw[id] = pw; redraw(id); return true; },
                              function (e) { say('✗ ' + e.message, 'text-danger'); return false; });
   };
+
+  window.dbShowSnippet = function (id) { st.open[id] = !st.open[id]; redraw(id); };
 
   window.dbKind = function (id, sel) {
     st.kind[id] = sel.value;
