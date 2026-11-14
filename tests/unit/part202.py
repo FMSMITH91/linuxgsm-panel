@@ -149,6 +149,15 @@ check("console secrets: nine 512 KB hostile lines (dashes, one word, flags with 
 check("console secrets: ...and a run of flags with no value masks each flag's next flag as nothing",
       _out202[7] == _HOSTILE202[7], _out202[7][:80])
 
+# Project Zomboid's own line after a start ("... changed via -adminpassword option") is prose about the
+# flag: "option" is not its value (the test box showed it masked); a real value after the flag still is.
+_PROSE202 = "admin password changed via -adminpassword option"
+check("console secrets: prose after a flag ('via -adminpassword option') is left as written, while the same flag "
+      "followed by a value is still masked",
+      _cs202.mask_text(_PROSE202) == _PROSE202
+      and _cs202.mask_text("pzexe: arg: -adminpassword hunter2x") == "pzexe: arg: -adminpassword " + _cs202.MASK,
+      repr((_cs202.mask_text(_PROSE202), _cs202.mask_text("pzexe: arg: -adminpassword hunter2x"))))
+
 _TMP202 = _tf202.mkdtemp(prefix="lgsm-unit-p202-")
 _log202 = _os202.path.join(_TMP202, "pzserver-console.log")
 _host202 = _Host202(_log202)

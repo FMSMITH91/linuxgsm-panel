@@ -77,6 +77,11 @@ _ARG_RE = re.compile(
     r"(?P<value>\"[^\"\n]{0,256}\"|'[^'\n]{0,256}'|[^\s\"'?&;,\x1b]{1,256})",
     re.IGNORECASE)
 
+# Words that follow a flag in prose rather than as its value ("set via -adminpassword option").
+# A real secret spelled like one of these is still masked by its value from the config.
+_PROSE_AFTER_FLAG = frozenset(("option", "options", "argument", "parameter", "flag", "switch", "setting", "value",
+                               "is", "was", "to", "for", "and", "or", "changed", "set", "given", "used", "from"))
+
 # server id -> (monotonic time it is good until, frozenset of values). Registered, so a deleted
 # server's values are dropped rather than applied to whichever server takes its id.
 _values = register_server_state({})
@@ -142,6 +147,8 @@ def _arg_mask(m):
     bare = value.strip("\"'").strip()
     if bare.lower() in _NOT_SECRET or bare.lower() == "not":
         return m.group(0)
+    if m.group("flag") and bare.lower() in _PROSE_AFTER_FLAG and "=" not in m.group("sep") and ":" not in m.group("sep"):
+        return m.group(0)       # "changed via -adminpassword option": prose about the flag, not its value
     if m.group("flag") and "=" not in m.group("sep") and ":" not in m.group("sep") and value[0] in "-+":
         return m.group(0)       # `-password -port 27015`: an empty password, and the next flag
     return m.group("key") + m.group("sep") + MASK
