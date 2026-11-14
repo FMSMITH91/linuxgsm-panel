@@ -63,8 +63,8 @@ _TTL = 120.0
 _RETRY = 30.0
 
 # The word in a flag or key that makes the value after it a secret.
-_SECRET_WORD = (r"(?:password|passwd|passwort|passphrase|pass(?![a-z])|pwd?(?![a-z])|secret|token"
-                r"|api_?key|auth_?key|gslt|setsteamaccount)")
+_KEY_NAME_WORDS = (r"(?:password|passwd|passwort|passphrase|pass(?![a-z])|pwd?(?![a-z])|secret|token"
+                   r"|api_?key|auth_?key|gslt|setsteamaccount)")
 # A flag (`-adminpassword X`, `+rcon_password X`) takes the next token after blanks, or after SGR
 # colour codes the console kept; a key (`ServerPassword=X`, `password: X`) only after `=` or `:`.
 # Either starts a word, or follows a colour code (render_colour writes them as ESC[Nm, ESC[NNm and
@@ -72,7 +72,7 @@ _SECRET_WORD = (r"(?:password|passwd|passwort|passphrase|pass(?![a-z])|pwd?(?![a
 # Every repeat is bounded and no two repeats overlap on the same characters, so a hostile line
 # costs a constant per position: no catastrophic backtracking.
 _ARG_RE = re.compile(
-    r"(?:(?<![\w.+-])|(?<=\x1b\[\dm)|(?<=\x1b\[\d\dm)|(?<=\x1b\[\d;\d\dm))(?P<key>(?P<flag>[-+]{1,2})?[\w.]{0,40}?" + _SECRET_WORD + r"[\w.]{0,40})"
+    r"(?:(?<![\w.+-])|(?<=\x1b\[\dm)|(?<=\x1b\[\d\dm)|(?<=\x1b\[\d;\d\dm))(?P<key>(?P<flag>[-+]{1,2})?[\w.]{0,40}?" + _KEY_NAME_WORDS + r"[\w.]{0,40})"
     r"(?P<sep>[ \t]{0,8}[=:][ \t]{0,8}|(?(flag)(?:[ \t]|\x1b\[[0-9;]{0,32}m){1,16}|(?!)))"
     r"(?P<value>\"[^\"\n]{0,256}\"|'[^'\n]{0,256}'|[^\s\"'?&;,\x1b]{1,256})",
     re.IGNORECASE)
@@ -105,7 +105,7 @@ def secret_values(texts):
 
 
 def refresh(gs, now=None):
-    """This server's cached secret values, read from its LinuxGSM config when the cache is stale.
+    """Return the server's cached secret values, read from its LinuxGSM config when the cache is stale.
 
     At most one read per _TTL per server (a failed one is tried again after _RETRY and keeps what
     was known). A row with no id is never read for. Never raises.
