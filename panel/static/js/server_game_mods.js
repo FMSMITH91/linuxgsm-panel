@@ -366,10 +366,6 @@
     }).catch(function () { mcb.busy = false; say('gm-mcb-msg', '✗ ' + _tr('Could not save — connection error'), 'text-danger'); return false; });
   };
 
-  if (SF_CAN.manage) {
-    void window.gmArmaLoad();
-    void window.gmFctrLoad();
-    void window.gmMcLoad();
-    void window.gmMcbLoad();
-  }
+  // Each card's load returns at once when its card is not on this page.
+  if (SF_CAN.manage) [window.gmArmaLoad, window.gmFctrLoad, window.gmMcLoad, window.gmMcbLoad].forEach(function (f) { void f(); });
 })();
