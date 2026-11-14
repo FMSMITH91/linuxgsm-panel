@@ -14,7 +14,7 @@ Held here:
   resolve to itself. A removal that fails is a failure; output that did not come back is "unread",
   never done.
 * The card's route: `reset` is the only kind for these games, map/full stays Rust's, a game with no
-  resolver (Valheim) is not offered; the page renders the game's own description and no map/full choice.
+  resolver (Garry's Mod) is not offered; the page renders the game's own description and no map/full choice.
 * The sweep, end to end with every host call stubbed: backup, players, stop, the delete (and
   create), start, in that order, under the wipe registration; and each way it stops short.
 
@@ -355,7 +355,7 @@ check("world reset host: names reach the shell quoted and are removed with `rm -
 _mc_sid183 = _p9_new_server(P9_HOST, "p183mc", "mc", 25565, name="p183-mc")
 _fctr_sid183 = _p9_new_server(P9_HOST, "p183fctr", "fctr", 34197, name="p183-fctr")
 _rust_sid183 = _p9_new_server(P9_HOST, "p183rust", "rust", 28015, name="p183-rust")
-_vh_sid183 = _p9_new_server(P9_HOST, "p183vh", "vh", 2456, name="p183-vh")
+_vh_sid183 = _p9_new_server(P9_HOST, "p183gm", "gmod", 27015, name="p183-gmod")   # a game with no resolver
 _CRON183 = "0 3 * * *"
 _BODY183 = {"enabled": True, "kind": "reset", "preset": "custom", "cron": _CRON183, "tz": "UTC"}
 _r183 = {}
@@ -386,14 +386,14 @@ check("world reset route: a Minecraft server's card is a reset card, and saving 
       and (_r183["save"].get_json() or {}).get("describe", "").startswith("World reset, cron '0 3 * * *'"),
       repr((_r183["get"], _r183["saved"])))
 check("world reset route: map/full is refused for Factorio, `reset` for Rust, and a game with no resolver "
-      "(Valheim) is not offered at all",
+      "(Garry's Mod) is not offered at all",
       _r183["map_fctr"].status_code == 400 and _r183["map_fctr"].get_json()["message"] == "kind must be reset."
       and _r183["reset_rust"].status_code == 400
       and _r183["reset_rust"].get_json()["message"] == "kind must be map or full."
       and _r183["vh"].status_code == 400, repr([_r183[k].get_json() for k in ("map_fctr", "reset_rust", "vh")]))
 _pg183 = _r183["pages"]
 check("world reset page: Minecraft and Factorio get their own description and a fixed `reset` kind, no map/full "
-      "choice; Rust keeps its select; a game with no resolver (Valheim) has no card",
+      "choice; Rust keeps its select; a game with no resolver (Garry's Mod) has no card",
       'id="wipe-kind" value="reset"' in _pg183["mc"] and "ops, whitelist, bans and server.properties are kept"
       in _pg183["mc"] and '<option value="map">' not in _pg183["mc"]
       and 'id="wipe-kind" value="reset"' in _pg183["fctr"] and "deletes the map save and its autosaves" in _pg183["fctr"]
@@ -417,7 +417,7 @@ def _sweep_case183(sid, **o):
 
     `o` sets each stub's answer: props (every read_file), or read (a function of the path read), values
     (the LinuxGSM config, as one _default.cfg: _cfg_texts183), or cfg (the five config texts as given), status,
-    delete, stop, players, backup, wait_empty, backed_up, again.
+    delete, stop, players, backup, wait_empty, backed_up, again, guard (game_account_write_refusal's answer).
     """
     got = {"sid": sid, "cmds": [], "jobs": [], "alerts": [], "backups": [], "players_asked": 0}
     with _p9.app_context():
@@ -456,6 +456,7 @@ def _sweep_case183(sid, **o):
         _p9_patch(_sh183, "_marked_backup", _bk)
         _p9_patch(_sh183, "_alert_backup", lambda *a, **k: got["alerts"].append(a[2]))
         _p9_patch(_sh183, "_reboot_holds", lambda gs: False)
+        _p9_patch(_sh183, "game_account_write_refusal", lambda *a, **k: o.get("guard"))
         _p9_patch(_lgp183, "allowance_seconds", lambda *a, **k: 0)
         _p9_patch_sm("run_as_game_user", _run)
         _p9_patch_sm("shell_as_game_user", _shell)

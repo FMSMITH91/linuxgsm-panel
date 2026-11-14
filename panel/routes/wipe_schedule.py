@@ -1,8 +1,8 @@
 """Scheduled wipes: the schedule card's two routes, and the sweep that runs a due wipe.
 
-Rust's wipe is LinuxGSM's `wipe` / `full-wipe`. Minecraft (Java, Paper, Bedrock) and Factorio have no LinuxGSM wipe, so
-their "world reset" is the panel's own (_wwr_run, services/world_reset): the same schedule, backup,
-waits, audit and alert, with step 3 replaced by: players checked, LinuxGSM `stop`, one command as the
+Rust's wipe is LinuxGSM's `wipe` / `full-wipe`. Minecraft (Java, Paper, Bedrock), Factorio, Valheim and
+Project Zomboid have no LinuxGSM wipe, so their "world reset" is the panel's own (_wwr_run,
+services/world_reset): the same schedule, backup, waits, audit and alert, with step 3 replaced by: players checked, LinuxGSM `stop`, one command as the
 game account that checks the server is down and deletes the world (Factorio: creates the new save),
 and LinuxGSM `start`.
 
@@ -280,7 +280,7 @@ def _cmpd_run_wipe(app, gs, entry):
                  i18n.Sentence("{command}: {result}", command=cmd, result=why))
 
 
-# ── the world reset (Minecraft Java, Paper and Bedrock; Factorio) ──────────────────────────────
+# ── the world reset (Minecraft, Factorio, Valheim, Project Zomboid) ──────────────────────────────
 def _wwr_said(sentence):
     """A world reset's outcome sentence, as the card and the audit row show it."""
     return i18n.Sentence("world reset: {result}", result=sentence)
@@ -301,7 +301,12 @@ def _wwr_run(app, gs, entry):
     own wipe does (command_wipe.sh). Players are the panel's to check: with "wait until empty" on, a
     running server with players, or whose players cannot be counted, waits, its backup kept.
     LinuxGSM's own stoponlyifnoplayers refusal of the stop keeps it waiting too.
+
+    First of all, the account the delete runs as must be a plain game account (_wwr_account): the
+    same rule the file tools hold to.
     """
+    if not _wwr_account(app, gs):
+        return None
     plan, why = _wwr.plan_for(gs)
     if plan is None and isinstance(why, _wwr.Unread):
         return _r37b_wait(gs.id, why)       # a read that failed is tried again, never guessed past
@@ -318,6 +323,23 @@ def _wwr_run(app, gs, entry):
         _mark_expected_offline(gs.id, "restart")   # the backup took its time: the window starts again here
     _wwr_delete_and_start(app, gs, plan, up)
     return None
+
+
+def _wwr_account(app, gs):
+    """Whether the delete may run as `gs`'s account: it is not one that can become root. Settled when not.
+
+    The delete runs as the game account, like a file tool's delete, so it asks the same question
+    (_shared.game_account_write_refusal). A host that could not be asked waits for the next try; an
+    account the host says can become root ends the reset with nothing stopped or read.
+    """
+    why = _shared.game_account_write_refusal(gs.remote, gs.short_name)
+    if why is None:
+        return True
+    if getattr(why, "template", "").startswith("Couldn't check"):
+        _r37b_wait(gs.id, i18n.Sentence("whether the game account can become root could not be checked"))
+    else:
+        _cmpd_finish(app, gs, False, i18n.Sentence("not reset: {reason}", reason=why))
+    return False
 
 
 def _wwr_backup(app, gs, entry, up):

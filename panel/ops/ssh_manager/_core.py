@@ -3615,7 +3615,7 @@ GAMEDIG_TYPE = {
     "tf2": "teamfortress2",
     "hl2dm": "hl2d", "dods": "dods", "l4d2": "l4d2",
     "ins": "insurgency", "rust": "rust",
-    "vh": "valheim",
+    "vh": "valheim", "pz": "projectzomboid",
     "sdtd": "sdtd",
     # Minecraft: Java editions (vanilla + Paper/Velocity/Waterfall, which answer Server List Ping)
     # use "minecraft"; Bedrock uses "mbe" (gamedig 5's "Minecraft: Bedrock Edition"). This is what

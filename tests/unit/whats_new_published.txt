@@ -9,6 +9,9 @@
 2403be67 Minecraft datapacks from Modrinth.
 97f9b5c1 Bedrock behavior and resource packs on or off.
 f34c1253 LinuxGSM's release notes show on the first visit after a restart.
+be833324 Scheduled world resets for Valheim and Project Zomboid.
+4a5ba2f6 Project Zomboid's player count.
+6a7749fa World resets run only as a plain game account.
 d7313bd8 "Update LinuxGSM" from the version line.
 3a2d94e3 Call of Duty servers can switch their mod.
 6f2508e2 The server page shows the new LinuxGSM release right after update-lgsm.
