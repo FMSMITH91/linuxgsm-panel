@@ -771,8 +771,7 @@ def _finish(p, timeout, stdin_text=None):
         return "", "Command timed out", -1
     out, err, rc, truncated = res
     if truncated:
-        _log.warning("local command output exceeded %d bytes and was truncated",
-                     _MAX_OUTPUT_BYTES)
+        _log.warning("local command output exceeded %d bytes and was truncated", _MAX_OUTPUT_BYTES)
     return _decode_command_output(out).strip(), _decode_command_output(err).strip(), rc
 
 
@@ -1794,8 +1793,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
             return "", "SSH command timed out", -1
         out, err, rc, truncated = res
         if truncated:
-            _log.warning("ssh command output exceeded %d bytes and was truncated",
-                         _MAX_OUTPUT_BYTES)
+            _log.warning("ssh command output exceeded %d bytes and was truncated", _MAX_OUTPUT_BYTES)
         return _decode_command_output(out).strip(), _decode_command_output(err).strip(), rc
     except Exception:
         # Generic message only; the real error is logged, not returned (it can
