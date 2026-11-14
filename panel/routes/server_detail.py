@@ -1646,6 +1646,14 @@ def _r12c_not_a_flag(value, name):
     return None
 
 
+def _autostart_restore_gate(gs):
+    """A 409 while the server is being restored (its crontab is set aside for the switch-over), else None."""
+    if grs_restore_running(gs.id):
+        return jsonify({"success": False, "message": i18n.tr(i18n.Sentence(
+            "'{name}' is being restored from a backup. Try again once it has finished.", name=gs.name))}), 409
+    return None
+
+
 def _autostart_reboot_gate(gs, enabled):
     """The Autostart switch while its host is being rebooted: a 409 to return, or None to go on.
 
@@ -1694,14 +1702,12 @@ def _register_schedules(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        if grs_restore_running(server_id):     # its crontab is set aside for the restore's switch-over
-            return jsonify({"success": False, "message": i18n.tr(i18n.Sentence(
-                "'{name}' is being restored from a backup. Try again once it has finished.", name=gs.name))}), 409
         data = _json_body()
         # A JSON boolean or a 400: bool("false") is True, so a request to turn autostart off
-        # turned it ON (and installed the monitor cron).
+        # turned it ON (and installed the monitor cron). A restore's 409 still comes first.
         enabled = _r12c_json_flag(data, "enabled", None)
-        refused = _r12c_not_a_flag(enabled, "enabled") or _autostart_reboot_gate(gs, enabled)
+        refused = (_autostart_restore_gate(gs) or _r12c_not_a_flag(enabled, "enabled")
+                   or _autostart_reboot_gate(gs, enabled))
         if refused is not None:
             return refused
         try:
