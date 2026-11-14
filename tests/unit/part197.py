@@ -45,12 +45,12 @@ def _locked_shell197(text, timeout, stdin_text):
     """`text` through the real local transport, started in a directory nobody but root can enter."""
     here = os.getcwd()
     os.chdir(_LOCKED197)
-    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0000: closes this test's own temp dir
     os.chmod(_LOCKED197, 0)  # nosec B103 - closes the directory: no bits at all
     try:
         return _REAL_SHELL197(text, timeout=timeout, stdin_text=stdin_text)
     finally:
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, as mkdtemp made it
         os.chmod(_LOCKED197, 0o700)  # nosec B103 - owner-only, as mkdtemp made it
         os.chdir(here)
 
@@ -108,6 +108,7 @@ def _cleanup197():
             db.session.commit()
     for path in (_LOCKED197, _HOME197):
         try:
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, a cut-short run left it 0000
             os.chmod(path, 0o700)  # nosec B103 - owner-only; a run cut short may have left it 0000
         except OSError:
             pass
@@ -138,36 +139,50 @@ def _built197():
 
 
 # ── 2. the file browser and the upload check, from a directory the account cannot enter ──────────
+_LOCKED_NAMES197 = (
+    "game shell: the file browser lists a folder when the panel's working directory is one the game "
+    "account cannot enter",
+    "game shell: the upload check finds an existing file when the panel's working directory is one the "
+    "game account cannot enter",
+    "game shell: the backup listing lists the archives when the panel's working directory is one the "
+    "game account cannot enter (control)")
+
+
+def _names197(entries):
+    return sorted(e.get("name") for e in entries or [])
+
+
+def _browse_route197(client, sid):
+    r = client.get("/api/server/%d/browse?path=" % sid)
+    body = _p9_json(r)
+    ok = (r.status_code == 200 and not body.get("unreadable")
+          and _names197(body.get("entries")) == ["a.cfg", "lgsm", "serverfiles"])
+    check(_LOCKED_NAMES197[0], ok, repr((r.status_code, body)))
+
+
+def _upload_check197(client, sid):
+    r = client.post("/api/server/%d/upload-check" % sid, json={"path": "", "names": ["a.cfg", "new.cfg"]})
+    body = _p9_json(r)
+    ok = r.status_code == 200 and body.get("checked") is True and _names197(body.get("existing")) == ["a.cfg"]
+    check(_LOCKED_NAMES197[1], ok, repr((r.status_code, body)))
+
+
+def _backups197():
+    listing = _cron197.list_game_backups(_NS197(name="local", is_local=True), _USER197)
+    check(_LOCKED_NAMES197[2], _names197(listing) == ["csgoserver-2026-11-14-120000.tar.zst"], repr(listing))
+
+
 def _browse197(client, sid):
     if os.geteuid() == 0:
-        for name in ("game shell: the file browser lists a folder when the panel's working directory "
-                     "is one the game account cannot enter",
-                     "game shell: the upload check finds an existing file when the panel's working "
-                     "directory is one the game account cannot enter",
-                     "game shell: the backup listing lists the archives when the panel's working "
-                     "directory is one the game account cannot enter (control)"):
+        for name in _LOCKED_NAMES197:
             skip(name, "root enters every directory, so the working directory cannot be made unreadable")
         return
     _write197("a.cfg", "x\n")
     _write197("serverfiles/b.cfg", "y\n")
     _write197("lgsm/backup/csgoserver-2026-11-14-120000.tar.zst", "z")
-    r = client.get("/api/server/%d/browse?path=" % sid)
-    body = _p9_json(r)
-    check("game shell: the file browser lists a folder when the panel's working directory is one the "
-          "game account cannot enter",
-          r.status_code == 200 and not body.get("unreadable")
-          and sorted(e.get("name") for e in body.get("entries") or []) == ["a.cfg", "lgsm", "serverfiles"],
-          repr((r.status_code, body)))
-    r = client.post("/api/server/%d/upload-check" % sid, json={"path": "", "names": ["a.cfg", "new.cfg"]})
-    body = _p9_json(r)
-    check("game shell: the upload check finds an existing file when the panel's working directory is "
-          "one the game account cannot enter",
-          r.status_code == 200 and body.get("checked") is True
-          and [e.get("name") for e in body.get("existing") or []] == ["a.cfg"], repr((r.status_code, body)))
-    listing = _cron197.list_game_backups(_NS197(name="local", is_local=True), _USER197)
-    check("game shell: the backup listing lists the archives when the panel's working directory is one "
-          "the game account cannot enter (control)",
-          [b.get("name") for b in listing or []] == ["csgoserver-2026-11-14-120000.tar.zst"], repr(listing))
+    _browse_route197(client, sid)
+    _upload_check197(client, sid)
+    _backups197()
 
 
 try:
