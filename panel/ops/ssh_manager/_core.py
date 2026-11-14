@@ -1013,8 +1013,11 @@ def write_content_cron(server, content_user, body, timeout=15):
                       timeout=timeout, sudo=True)
 
 
-def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
+def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, secrets=None):
     """Run a privileged VERB (see privileged.py) against `server`.
+
+    `secrets`: a database verb's sign-in and password ({"admin": (user, password), "pw": ...}).
+    They go on stdin on every path, and are scrubbed out of whatever comes back.
 
     Local, helper installed:  sudo -n <helper> <verb> <args...>   — argv, no shell anywhere.
     Local, helper missing:    the old `sudo bash -c '<command>'` path.
@@ -1032,6 +1035,10 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     and narrowing under that would break every privileged action rather than secure anything. The
     installer prints which one it wrote; SECURITY.md carries the full account.
     """
+    if secrets is not None:
+        res = _run_privileged(server, verb, args, timeout, merge_stderr, sudo, secrets)
+        hidden = _priv._db_secret_values(secrets)
+        return tuple(_priv.db_scrub(x, hidden) if isinstance(x, str) else x for x in res)
     if _ufw_mutating(verb):
         with ufw_lock(server):
             return _run_privileged(server, verb, args, timeout, merge_stderr, sudo)
@@ -1082,12 +1089,12 @@ def _r20a_c_env():
     return env
 
 
-def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
+def _run_privileged(server, verb, args, timeout, merge_stderr, sudo, secrets=None):
     """run_privileged's body — every transport. See run_privileged."""
-    # A verb with a SECRET argument (privileged.SECRET_STDIN) sends it on stdin on every path
-    # below, and no command line carries it. Passed only when there is one, so a transport stubbed
-    # without the keyword still sees exactly the call it always did.
-    _secret_in = _priv.remote_stdin(verb, args)
+    # A verb with a SECRET argument (privileged.SECRET_STDIN), and every database verb, sends it on
+    # stdin on every path below, and no command line carries it. Passed only when there is one, so
+    # a transport stubbed without the keyword still sees exactly the call it always did.
+    _secret_in = _priv.remote_stdin(verb, args, secrets)
     _secret_kw = {"stdin_text": _secret_in} if _secret_in is not None else {}
     if not is_local_server(server):
         return run_command(server, _R19A_C_LOCALE + _priv.remote_command(verb, args, merge_stderr=merge_stderr),
@@ -1109,7 +1116,7 @@ def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
 
     if helper_present():
         out, err, rc = _exec_local_argv(_priv.helper_argv(verb, args), timeout=timeout,
-                                        stdin_text=_priv.helper_stdin(verb, args))
+                                        stdin_text=_priv.helper_stdin(verb, args, secrets))
         note_privileged(verb, "helper", (out, err, rc))
         if merge_stderr:
             # The shell form used `2>&1`, and callers read tool errors out of stdout. Merge here so

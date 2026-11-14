@@ -199,6 +199,7 @@ check.
 | `view_files` / `edit_files` | Browse, read and download a server's files and configs, including the passwords in them / upload, edit, rename, create and delete them and save its config forms (give `view_files` with it) |
 | `download_backup` / `delete_backup` | Download / delete a game server's backup archives (a deleted backup is gone for good). Taking a backup, its schedule and the panel's own backups stay with superadmins |
 | `restore_backup` | Restore a game server from one of its backups: the server is stopped, a backup of its current state is taken first, then its files are replaced with the archive's. The most destructive backup permission. Uploading a backup to restore also needs `edit_files` (an uploaded archive can hold any file, including the scripts the server runs) |
+| `manage_databases` | A server's MariaDB/MySQL databases: add, delete, restore and reset them, and see their passwords. Given to no group by default. Setting up a host's database server also needs `manage_remotes`; the admin login of an existing server is for superadmins |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
 
 ## Production deployment

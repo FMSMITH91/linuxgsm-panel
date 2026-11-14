@@ -822,6 +822,7 @@ def _section_helper_work39():
 # up) has to be a decision made here as well, not a side effect.
 _READ_VERBS39 = frozenset({
     "apt-any-running", "apt-upgrade-running", "content-game-present", "content-scan",
+    "db-admin-check", "db-probe", "db-sizes",
     "content-script-present", "crontab-list", "disk-free", "dpkg-lock-held", "f2b-log-lines",
     "f2b-status", "f2b-status-jail", "game-backup-read", "game-dir-tar", "game-file-read",
     "gmod-mount-read", "journal", "journal-cron", "journal-cron-account", "lgsm-discover",

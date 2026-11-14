@@ -339,6 +339,10 @@ _DOUBLE_SHELL37 = {
     # keep-installed step (review 1022a). The quoted text is constants and the verb's own rendering,
     # which takes no argument at all.
     ("panel/security/privileged.py", "_r34a_keep_installed_cmd"): None,
+    # The game databases' remote renderings: the script run as the game account (runuser ... bash -c)
+    # is a module constant, _DB_GAME_WRITE_SH / _DB_IMPORT_SH, which takes its values as $1.. words.
+    ("panel/security/privileged.py", "_db_game_dump_sh"): None,
+    ("panel/security/privileged.py", "_db_import_remote"): None,
 }
 # The helpers that wrap run_command's text for a second shell. A caller outside _core.py would reach
 # one past every entry-point row, so outside it they may only be handed a constant command.

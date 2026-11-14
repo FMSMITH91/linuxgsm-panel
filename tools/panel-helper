@@ -123,6 +123,13 @@ TOOLS = {
     # root-owned file the tailscale-install verb just wrote under /run.
     "sh_installer": ("/bin/sh", "/usr/bin/sh"),
     "curl": ("/usr/bin/curl", "/bin/curl"),
+    # The game databases' clients and dump tools (the db-* verbs), and dpkg-query for db-probe.
+    # Each runs a fixed argv; SQL goes to the client on stdin, a login in a root-only temp file.
+    "dpkg-query": ("/usr/bin/dpkg-query",),
+    "mariadb": ("/usr/bin/mariadb",),
+    "mysql": ("/usr/bin/mysql",),
+    "mariadb-dump": ("/usr/bin/mariadb-dump",),
+    "mysqldump": ("/usr/bin/mysqldump",),
 }
 # The ENTIRE environment a child of this helper starts with. Every child used to get
 # `dict(os.environ)` -- whatever sudo let through -- and the ones with no env= at all inherited it
@@ -6880,6 +6887,765 @@ def do_write_file(args, content):
     return 0
 
 
+# ── Game databases (MariaDB / MySQL) ─────────────────────────────────────────────────────────────
+# Nine verbs create, dump, restore and drop one game server's databases on this host. The panel's
+# privileged.py keeps the same constants, validators and SQL builders (a unit test compares them
+# byte for byte) and renders the same verbs as shell for a remote host.
+#
+# Root signs in to the database server over its unix socket with no password ("socket") where the
+# server allows it, or with an admin login the operator gave ("tcp<port>", over 127.0.0.1). No
+# socket path or data directory is ever named; the client takes its packaged default.
+#
+# The admin login and a database's password arrive on stdin, never on argv (/proc/<pid>/cmdline is
+# world-readable, and game accounts live on this box), as a small document:
+#     admin <user>\n<password>\n      only when the verb signs in with a login
+#     pw <password>\n                 only for db-harden, db-create, db-password and db-import
+#     end\n
+# A login is handed to the client in a root-only temp file (--defaults-extra-file), and every word
+# the client prints is scrubbed of both passwords before it is passed on: a syntax error can quote
+# the statement it failed on.
+DB_FLAVORS = ("mariadb", "mysql")
+DB_NAME_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"
+DB_ADMIN_USER_RE = r"[A-Za-z0-9_.@-]{1,32}"
+DB_ADMIN_PW_RE = r"[\x20-\x7e]{1,128}"
+DB_DOC_MAX = 4096
+DB_HOSTS = ("localhost", "127.0.0.1")
+DB_PANEL_ADMIN = "linuxgsm_panel_admin"
+DB_DUMP_DIR = "panel-db-dumps"
+DB_ARCHIVE_ROOT = "/var/backups/linuxgsm-panel"
+DB_ARCHIVE_DIR = DB_ARCHIVE_ROOT + "/databases"
+DB_ARCHIVE_DAYS = 30
+DB_ARCHIVE_FILE_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}-[0-9]{8}T[0-9]{6}Z\.sql\.gz"
+DB_IMPORT_MAX = 2 * 1024 * 1024 * 1024
+DB_HARDEN_CNF = "/etc/mysql/mariadb.conf.d/60-linuxgsm-panel.cnf"
+DB_HARDEN_CNF_TEXT = ("# Written by linuxgsm-panel when it installed this database server.\n"
+                      "[mysqld]\nbind-address = 127.0.0.1\nlocal-infile = 0\nskip-name-resolve\n")
+DB_SYSTEM_SCHEMAS = ("information_schema", "mysql", "performance_schema", "sys", "test")
+DB_SANDBOX_LINE = "/*!999999\\- enable the sandbox mode */"
+DB_DUMP_OPTS = ("--single-transaction", "--quick", "--routines", "--triggers", "--events",
+                "--hex-blob", "--default-character-set=utf8mb4")
+DB_DUMP_OPTS_MYSQL = ("--set-gtid-purged=OFF", "--no-tablespaces")
+DB_SQL_PROBE = ("SHOW GLOBAL VARIABLES WHERE Variable_name IN ('version','version_comment','port',"
+                "'bind_address','skip_networking','socket','local_infile','require_secure_transport');\n"
+                "SELECT 'native', PLUGIN_STATUS FROM information_schema.PLUGINS "
+                "WHERE PLUGIN_NAME='mysql_native_password';\n")
+DB_SQL_GRANTS = "SELECT 1;\nSHOW GRANTS;\n"
+DB_SQL_SHOW = "SHOW DATABASES;\n"
+DB_PROBE_PACKAGES = ("mariadb-server", "mysql-server", "mariadb-server-*", "mysql-server-8*",
+                     "percona-server-server")
+DB_PORT_DEFAULT = "3306"
+DB_DENIED_ERRORS = ("ERROR 1045", "ERROR 1698")
+DB_NO_SERVER_ERRORS = ("ERROR 2002",)
+DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import"})
+DB_AUTH_ARG = {"db-create": 1, "db-password": 1, "db-sizes": 1, "db-dump": 1, "db-drop": 1,
+               "db-admin-check": 1}
+DB_CLIENT_TIMEOUT = 120
+DB_DUMP_TIMEOUT = 1800
+
+
+def v_db_name(s):
+    """A game database's name, gs<server id>_<slug>; also the name of its two accounts."""
+    if not re.fullmatch(DB_NAME_RE, s):
+        raise ValueError("not a game database name")
+    return s
+
+
+def v_db_auth(s):
+    """How a verb signs in: `socket` (root over the unix socket) or `tcp<port>` (an admin login)."""
+    if s == "socket":
+        return s
+    if not s.startswith("tcp"):
+        raise ValueError("not a database sign-in")
+    v_port(s[3:])
+    return s
+
+
+def v_db_auth_tcp(s):
+    """An admin login's sign-in: `tcp<port>` only (db-admin-check)."""
+    s = v_db_auth(s)
+    if s == "socket":
+        raise ValueError("an admin login is checked over TCP")
+    return s
+
+
+def v_db_maxconn(s):
+    """A per-account connection cap, 1..500."""
+    if not re.fullmatch(r"[1-9][0-9]{0,2}", s) or int(s) > 500:
+        raise ValueError("not a connection cap in 1..500")
+    return s
+
+
+def v_db_account(s):
+    """The game account a dump is written as, or "-" when it goes to the root-only archive."""
+    return "-" if s == "-" else v_game_account(s)
+
+
+def db_option_value(s):
+    """`s` as a double-quoted client option-file value — see privileged.db_option_value."""
+    return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def db_defaults_text(user, password):
+    """The client option file that signs in as `user`: exactly three lines."""
+    return "[client]\nuser=%s\npassword=%s\n" % (db_option_value(user), db_option_value(password))
+
+
+def db_identified(flavor, plugin, pw):
+    """The IDENTIFIED clause for a new or changed password — see privileged.db_identified."""
+    if flavor == "mariadb":
+        if plugin != "native":
+            raise ValueError("MariaDB accounts are made with native passwords")
+        return "IDENTIFIED VIA mysql_native_password USING PASSWORD('%s')" % pw
+    return "IDENTIFIED WITH %s BY '%s'" % (
+        "mysql_native_password" if plugin == "native" else "caching_sha2_password", pw)
+
+
+def db_grant_target(name):
+    r"""The database-level GRANT target for `name`, `_` escaped (`gs12\_lp`.*): an exact match."""
+    return "`%s`.*" % name.replace("_", "\\_")
+
+
+def db_sql_create(flavor, name, plugin, maxconn, pw):
+    """The statements that make database `name` and its two accounts (localhost and 127.0.0.1)."""
+    ident = db_identified(flavor, plugin, pw)
+    out = ["CREATE DATABASE `%s` CHARACTER SET utf8mb4;" % name]
+    out += ["CREATE USER '%s'@'%s' %s WITH MAX_USER_CONNECTIONS %d;" % (name, h, ident, int(maxconn))
+            for h in DB_HOSTS]
+    out += ["GRANT ALL PRIVILEGES ON %s TO '%s'@'%s';" % (db_grant_target(name), name, h)
+            for h in DB_HOSTS]
+    return "\n".join(out) + "\n"
+
+
+def db_sql_password(flavor, name, plugin, pw):
+    """The statements that give both of `name`'s accounts a new password."""
+    ident = db_identified(flavor, plugin, pw)
+    return "".join("ALTER USER '%s'@'%s' %s;\n" % (name, h, ident) for h in DB_HOSTS)
+
+
+def db_sql_exists(name):
+    """How many of database `name` and accounts called `name` exist already (0: none)."""
+    return ("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')"
+            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (name, name))
+
+
+def db_sql_drop(name):
+    """The statements that remove database `name` and both of its accounts; each may run twice."""
+    return ("".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in DB_HOSTS)
+            + "DROP DATABASE IF EXISTS `%s`;\n" % name)
+
+
+def db_sql_tables(name):
+    """How many tables database `name` holds."""
+    return "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='%s';\n" % name
+
+
+def db_sql_sizes(names):
+    """One query for the size of every database in `names`: name<TAB>bytes per line."""
+    return ("SELECT table_schema, COALESCE(SUM(data_length+index_length),0) FROM information_schema.TABLES "
+            "WHERE table_schema IN (%s) GROUP BY table_schema;\n" % ",".join("'%s'" % n for n in names))
+
+
+def db_sql_harden(pw):
+    """What mariadb-secure-installation does, without its root-password step, plus the panel's admin."""
+    a = "'%s'@'localhost'" % DB_PANEL_ADMIN
+    ident = db_identified("mariadb", "native", pw)
+    return ("DELETE FROM mysql.global_priv WHERE User='';\n"
+            "DELETE FROM mysql.global_priv WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');\n"
+            "DROP DATABASE IF EXISTS test;\n"
+            "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\\\_%';\n"
+            "FLUSH PRIVILEGES;\n"
+            "CREATE USER IF NOT EXISTS " + a + " " + ident + ";\n"
+            "ALTER USER " + a + " " + ident + ";\n"
+            "GRANT ALL PRIVILEGES ON *.* TO " + a + " WITH GRANT OPTION;\n"
+            "FLUSH PRIVILEGES;\n")
+
+
+def db_foreign(listing):
+    """The databases in a SHOW DATABASES listing the panel did not make (or the system's own)."""
+    return [d for d in listing.splitlines() if d.strip() and d not in DB_SYSTEM_SCHEMAS
+            and not re.fullmatch(DB_NAME_RE, d)]
+
+
+def db_grants_verdict(text):
+    """'ok' for every privilege on *.* WITH GRANT OPTION on one SHOW GRANTS line, else 'lacks_grants'."""
+    for line in text.splitlines():
+        if (" ON *.* " in line and "WITH GRANT OPTION" in line
+                and ("ALL PRIVILEGES" in line or "CREATE USER" in line)):
+            return "ok"
+    return "lacks_grants"
+
+
+def db_error_kind(text):
+    """'denied', 'nosocket' or 'error' for a client that failed with `text`."""
+    if any(e in text for e in DB_DENIED_ERRORS):
+        return "denied"
+    if any(e in text for e in DB_NO_SERVER_ERRORS):
+        return "nosocket"
+    return "error"
+
+
+def db_scrub(text, secrets):
+    """`text` with every secret in `secrets`, as typed or as an option file holds it, replaced by ***."""
+    for s in secrets:
+        if s:
+            text = text.replace(s, "***").replace(db_option_value(s)[1:-1], "***")
+    return text
+
+
+def _db_doc_fields(lines):
+    """(admin (user, password) or None, pw or None) from a document's lines up to its "end" line."""
+    admin = pw = None
+    i = 0
+    while lines[i] != "end":
+        line = lines[i]
+        if line.startswith("admin ") and admin is None and i + 2 < len(lines):
+            admin, i = (line[6:], lines[i + 1]), i + 2
+        elif line.startswith("pw ") and pw is None:
+            pw, i = line[3:], i + 1
+        else:
+            raise ValueError("unexpected line")
+        if i >= len(lines):
+            raise ValueError("no end line")
+    return admin, pw
+
+
+def db_read_doc(text, want_admin, want_pw):
+    """(admin (user, password) or None, pw or None) from a database verb's stdin document.
+
+    ValueError on anything else: a document longer than DB_DOC_MAX, a line out of place, no "end"
+    line, a missing or extra secret, or a value of the wrong shape. The values are never echoed.
+    """
+    if len(text) > DB_DOC_MAX or "end" not in text.split("\n"):
+        raise ValueError("not a document")
+    admin, pw = _db_doc_fields(text.split("\n"))
+    if bool(admin) != want_admin or bool(pw) != want_pw:
+        raise ValueError("the document does not fit the verb")
+    if admin and not (re.fullmatch(DB_ADMIN_USER_RE, admin[0]) and re.fullmatch(DB_ADMIN_PW_RE, admin[1])):
+        raise ValueError("not an admin login")
+    if pw and not re.fullmatch(DB_PW_RE, pw):
+        raise ValueError("not a database password")
+    return admin, pw
+
+
+def _db_session(verb, args, content):
+    """What a database verb signs in with, read from its stdin document."""
+    auth = args[DB_AUTH_ARG[verb]] if verb in DB_AUTH_ARG else "socket"
+    admin, pw = db_read_doc(content, auth.startswith("tcp"), verb in DB_PW_VERBS)
+    return {"flavor": args[0], "auth": auth, "admin": admin, "pw": pw, "file": None,
+            "secrets": [s for s in ((admin or ("", ""))[1], pw) if s]}
+
+
+def _db_conn_args(sess):
+    """The client's connection options; a login is written to a root-only temp file first.
+
+    --defaults-extra-file must be the client's FIRST option, so these go straight after the tool.
+    A file rather than /dev/fd/N: MariaDB's option loader resolves the path with my_realpath(),
+    which a pipe's /proc link does not survive.
+    """
+    if sess["auth"] == "socket":
+        return ["--protocol=socket", "--user=root"]
+    if not sess["file"]:
+        fd, path = tempfile.mkstemp(prefix="panel-db-")
+        sess["file"] = path
+        with os.fdopen(fd, "w") as fh:
+            fh.write(db_defaults_text(*sess["admin"]))
+    return ["--defaults-extra-file=" + sess["file"], "--protocol=tcp", "--host=127.0.0.1",
+            "--port=" + sess["auth"][3:]]
+
+
+def _db_done(sess):
+    """Remove the session's login file, if it wrote one."""
+    if sess.get("file"):
+        try:
+            os.unlink(sess["file"])
+        except FileNotFoundError:
+            pass
+
+
+def _db_tool(flavor, dump=False):
+    """The client (or dump tool) for `flavor`. MariaDB 11 ships the mysql* names only in a compat package."""
+    if flavor == "mariadb":
+        names = ("mariadb-dump", "mysqldump") if dump else ("mariadb", "mysql")
+    else:
+        names = ("mysqldump",) if dump else ("mysql",)
+    for name in names:
+        try:
+            return resolve(name)
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(names[0])
+
+
+def _db_run(sess, sql):
+    """Run `sql` through the client: (rc, stdout, stderr), both scrubbed of the session's secrets."""
+    argv = [_db_tool(sess["flavor"])] + _db_conn_args(sess) + ["--batch", "--skip-column-names"]
+    p = subprocess.run(argv, shell=False, input=sql, env=_clean_env(),  # nosec B603 - fixed argv
+                       capture_output=True, text=True, timeout=DB_CLIENT_TIMEOUT)
+    return p.returncode, db_scrub(p.stdout, sess["secrets"]), db_scrub(p.stderr, sess["secrets"])
+
+
+def _db_fail(sess, err, rc=1):
+    """Pass the client's (already scrubbed) error on, and answer `rc`."""
+    sys.stderr.write(db_scrub(err, sess["secrets"]))
+    return rc or 1
+
+
+def _db_with(verb, args, content, body):
+    """Run `body(sess, args)` for a database verb, with its sign-in read from `content`."""
+    try:
+        sess = _db_session(verb, args, content)
+    except ValueError:
+        print("panel-helper: %s: the sign-in on stdin was rejected" % verb, file=sys.stderr)
+        return 2
+    try:
+        return body(sess, args)
+    except FileNotFoundError:
+        print("panel-db: no database client")
+        return 127
+    except ValueError as e:
+        print("panel-helper: %s refused: %s" % (verb, e), file=sys.stderr)
+        return 2
+    except subprocess.TimeoutExpired:
+        print("panel-helper: %s timed out" % verb, file=sys.stderr)
+        return 124
+    finally:
+        _db_done(sess)
+
+
+def _db_quiet(argv):
+    """A tool's stdout, stripped; "" when it is not installed. For db-probe's facts."""
+    try:
+        argv = [resolve(argv[0])] + argv[1:]
+    except FileNotFoundError:
+        return ""
+    p = subprocess.run(argv, shell=False, env=_clean_env(), capture_output=True,  # nosec B603
+                       text=True, timeout=30)
+    return p.stdout.strip()
+
+
+def _db_probe_socket():
+    """db-probe's lines about signing in as root over the socket: the outcome, then the variables."""
+    try:
+        client = _db_tool("mariadb")
+    except FileNotFoundError:
+        return ["socket_root=noclient"]
+    p = subprocess.run([client, "--protocol=socket", "--user=root", "--batch", "--skip-column-names"],
+                       shell=False, input=DB_SQL_PROBE, env=_clean_env(),  # nosec B603 - fixed argv
+                       capture_output=True, text=True, timeout=30)
+    if p.returncode != 0:
+        return ["socket_root=" + db_error_kind(p.stdout + p.stderr)]
+    return ["socket_root=ok"] + ["var.%s=%s" % tuple(f) for f in
+                                 (line.split("\t") for line in p.stdout.splitlines()) if len(f) == 2]
+
+
+def do_db_probe(args, content):
+    """Which database server is on this host, and whether root signs in over its socket.
+
+    Prints key=value lines and writes nothing: installed packages (pkg=), the two service names
+    (active.<unit>=), listeners on the default port (listen=, which also finds a Docker server with
+    no package), and the outcome of a socket sign-in as root with the server's variables.
+    """
+    out = []
+    for line in _db_quiet(["dpkg-query", "-W", "-f=${Package}\t${db:Status-Abbrev}\t${Version}\n"]
+                          + list(DB_PROBE_PACKAGES)).splitlines():
+        f = line.split("\t")
+        if len(f) == 3 and f[1].startswith("ii"):
+            out.append("pkg=%s\t%s" % (f[0], f[2]))
+    for unit in ("mariadb", "mysql"):
+        out.append("active.%s=%s" % (unit, _db_quiet([SYSTEMCTL, "is-active", unit])))
+    for line in _db_quiet(["ss", "-Hltn", "sport = :%s" % DB_PORT_DEFAULT]).splitlines():
+        f = line.split()
+        if len(f) >= 4:
+            out.append("listen=" + f[3])
+    out += _db_probe_socket()
+    print("\n".join(out))
+    return 0
+
+
+def _db_write_cnf():
+    """Write DB_HARDEN_CNF (root:root 0644) by temp file and rename, never through a link."""
+    os.makedirs(os.path.dirname(DB_HARDEN_CNF), 0o755, exist_ok=True)
+    tmp = DB_HARDEN_CNF + ".tmp"
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(DB_HARDEN_CNF_TEXT)
+        os.fchmod(fh.fileno(), 0o644)
+    os.rename(tmp, DB_HARDEN_CNF)
+
+
+def _db_harden(sess, args):
+    if args[0] != "mariadb":
+        raise ValueError("only a MariaDB server the panel installed is hardened")
+    rc, out, err = _db_run(sess, DB_SQL_SHOW)
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    if db_foreign(out):
+        print("panel-db: the server holds databases the panel did not make")
+        return 3
+    _db_write_cnf()
+    p = subprocess.run([resolve(SYSTEMCTL), "restart", "mariadb"], shell=False,  # nosec B603
+                       env=_clean_env(), capture_output=True, text=True, timeout=DB_CLIENT_TIMEOUT)
+    if p.returncode != 0:
+        return _db_fail(sess, p.stdout + p.stderr, p.returncode)
+    rc, out, err = _db_run(sess, db_sql_harden(sess["pw"]))
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    print("hardened")
+    return 0
+
+
+def do_db_harden(args, content):
+    """MariaDB only, on a server holding no database the panel did not make: listen on loopback,
+    no LOCAL INFILE, no name lookups; drop anonymous and remote root accounts and `test`; make or
+    re-key linuxgsm_panel_admin. Idempotent. A server it did not install is never reached: it
+    always holds a foreign database or the panel never asks."""
+    return _db_with("db-harden", args, content, _db_harden)
+
+
+def _db_create(sess, args):
+    flavor, _auth, name, plugin, maxconn = args
+    sql = db_sql_create(flavor, name, plugin, maxconn, sess["pw"])
+    rc, out, err = _db_run(sess, db_sql_exists(name))
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    if out.strip() != "0":
+        print("panel-db: that database or account already exists")
+        return 3
+    rc, out, err = _db_run(sess, sql)
+    if rc != 0:
+        # What this call made goes again, so a retry starts clean: nothing existed before it.
+        _db_run(sess, db_sql_drop(name))
+        return _db_fail(sess, err, rc)
+    print("created")
+    return 0
+
+
+def do_db_create(args, content):
+    """Make database `name` and its two accounts. Refuses one that exists: it never adopts."""
+    return _db_with("db-create", args, content, _db_create)
+
+
+def _db_password(sess, args):
+    rc, out, err = _db_run(sess, db_sql_password(args[0], args[2], args[3], sess["pw"]))
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    print("changed")
+    return 0
+
+
+def do_db_password(args, content):
+    """Give both of a database's accounts the password on stdin."""
+    return _db_with("db-password", args, content, _db_password)
+
+
+def _db_sizes(sess, args):
+    rc, out, err = _db_run(sess, db_sql_sizes(args[2:]))
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    sys.stdout.write(out)
+    return 0
+
+
+def do_db_sizes(args, content):
+    """Each named database's size in bytes (data and indexes), one name<TAB>bytes line each."""
+    return _db_with("db-sizes", args, content, _db_sizes)
+
+
+def _db_admin_check(sess, _args):
+    rc, out, err = _db_run(sess, DB_SQL_GRANTS)
+    if rc != 0:
+        if db_error_kind(out + err) == "denied":
+            print("denied")
+            return 0
+        print("unreadable")
+        return 1
+    print(db_grants_verdict(out))
+    return 0
+
+
+def do_db_admin_check(args, content):
+    """Whether the admin login on stdin signs in, and holds every privilege WITH GRANT OPTION."""
+    return _db_with("db-admin-check", args, content, _db_admin_check)
+
+
+def _db_dump_argv(sess, name):
+    """The dump tool's argv for one database."""
+    opts = DB_DUMP_OPTS + (DB_DUMP_OPTS_MYSQL if sess["flavor"] == "mysql" else ())
+    return [_db_tool(sess["flavor"], dump=True)] + _db_conn_args(sess) + list(opts) + [name]
+
+
+def _db_archive_dir():
+    """DB_ARCHIVE_DIR, made root-only (0700) if needed; OSError if either level is not this
+    process's own real directory."""
+    for path in (DB_ARCHIVE_ROOT, DB_ARCHIVE_DIR):
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            pass
+        st = os.lstat(path)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+            raise OSError("the archive directory is not root's own")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- owner-only
+    os.chmod(DB_ARCHIVE_DIR, 0o700)  # nosec B103 - owner-only, as the archive must be
+    return DB_ARCHIVE_DIR
+
+
+def _db_prune_archive(path, now=None):
+    """Remove archive dumps older than DB_ARCHIVE_DAYS whole days (find's -mtime +N)."""
+    now = time.time() if now is None else now
+    for entry in os.scandir(path):
+        if re.fullmatch(DB_ARCHIVE_FILE_RE, entry.name) and entry.is_file(follow_symlinks=False):
+            if int((now - entry.stat(follow_symlinks=False).st_mtime) // 86400) > DB_ARCHIVE_DAYS:
+                os.unlink(entry.path)
+
+
+def _db_dump_one_archive(sess, directory, name, stamp):
+    """Dump `name` into the archive, gzip'd, as root 0600. True when it is complete."""
+    final = os.path.join(directory, "%s-%s.sql.gz" % (name, stamp))
+    tmp = final + ".tmp"
+    argv = _db_dump_argv(sess, name)
+    errf = tempfile.TemporaryFile()
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        p = subprocess.Popen(argv, shell=False, stdout=subprocess.PIPE,  # nosec B603 - fixed argv
+                             stderr=errf, env=_clean_env())
+        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw) as gz:
+            shutil.copyfileobj(p.stdout, gz)
+        p.stdout.close()
+        ok = p.wait(timeout=DB_DUMP_TIMEOUT) == 0
+        if ok:
+            os.rename(tmp, final)
+        errf.seek(0)
+        _db_fail(sess, errf.read().decode("utf-8", "replace"))
+        return ok
+    finally:
+        errf.close()
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+
+
+def _db_dump_archive(sess, names):
+    """Dump each of `names` into the archive and prune it: 0, or 1 when any dump failed."""
+    directory = _db_archive_dir()
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    rc = 0
+    for name in names:
+        ok = _db_dump_one_archive(sess, directory, name, stamp)
+        print(("dumped=%s" if ok else "failed=%s") % name)
+        rc = rc if ok else 1
+    _db_prune_archive(directory)
+    return rc
+
+
+def _db_game_writer(pw, name, src_fd, commit_fd):
+    """In a child: become the game account, write ~/panel-db-dumps/<name>.sql.gz.tmp from `src_fd`
+    (gzip'd), then rename it into place when the parent says the dump completed. Its exit code.
+
+    The account makes the directory and the file itself, through descriptors that refuse a link,
+    so a link it planted reaches nothing it could not already write; root only hands it bytes.
+    """
+    if not _drop_to(pw):
+        return 1
+    home = os.path.realpath(pw.pw_dir)
+    path = os.path.join(home, DB_DUMP_DIR)
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    dfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    tmp, final = name + ".sql.gz.tmp", name + ".sql.gz"
+    try:
+        os.unlink(tmp, dir_fd=dfd)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+    with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw) as gz:
+        with os.fdopen(src_fd, "rb") as src:
+            shutil.copyfileobj(src, gz)
+    if os.read(commit_fd, 1) == b"1":
+        os.rename(tmp, final, src_dir_fd=dfd, dst_dir_fd=dfd)
+        return 0
+    os.unlink(tmp, dir_fd=dfd)
+    return 1
+
+
+def _db_child(fn, *args):
+    """fn(*args)'s int result as this forked child's exit code; 1 on any exception. Never returns."""
+    try:
+        code = fn(*args)
+    except BaseException:  # noqa: BLE001 - a forked child must never return into the parent's code
+        code = 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
+def _db_dump_one_game(sess, pw, name):
+    """Dump `name` into the game account's files, written by the account. True when complete."""
+    errf = tempfile.TemporaryFile()
+    p = subprocess.Popen(_db_dump_argv(sess, name), shell=False, stdout=subprocess.PIPE,  # nosec B603
+                         stderr=errf, env=_clean_env())
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(w)
+        _db_child(_db_game_writer, pw, name, p.stdout.fileno(), r)
+    os.close(r)
+    p.stdout.close()
+    rc = p.wait(timeout=DB_DUMP_TIMEOUT)
+    try:
+        os.write(w, b"1" if rc == 0 else b"0")
+    except OSError:
+        pass                       # the writer is gone already; its exit status says so
+    os.close(w)
+    _pid, status = os.waitpid(pid, 0)
+    errf.seek(0)
+    _db_fail(sess, errf.read().decode("utf-8", "replace"))
+    errf.close()
+    return rc == 0 and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+
+
+def _db_dump_game(sess, account, names):
+    pw = pwd.getpwnam(account)
+    if pw.pw_uid == 0:
+        raise ValueError("refusing a uid-0 account")
+    rc = 0
+    for name in names:
+        ok = _db_dump_one_game(sess, pw, name)
+        print(("dumped=%s" if ok else "failed=%s") % name)
+        rc = rc if ok else 1
+    return rc
+
+
+def _db_dump(sess, args):
+    dest, account, names = args[2], args[3], args[4:]
+    if dest == "archive":
+        return _db_dump_archive(sess, names)
+    if account == "-":
+        raise ValueError("a dump into a server's files needs its account")
+    return _db_dump_game(sess, account, names)
+
+
+def do_db_dump(args, content):
+    """Dump databases: into a game account's ~/panel-db-dumps (dest game, written AS the account,
+    so the server's own backup carries them), or into the root-only archive (dest archive, kept
+    DB_ARCHIVE_DAYS days). One line per database: dumped=<name> or failed=<name>."""
+    return _db_with("db-dump", args, content, _db_dump)
+
+
+def _db_import_child(pw, client, port, name, secret):
+    """In a child: as the game account, feed ~/panel-db-dumps/<name>.sql.gz to the client signed in
+    as the database's own account. The dump is the game's content, so the game's rights apply on
+    both sides. Its exit code."""
+    if not _drop_to(pw):
+        return 1
+    dfd = os.open(os.path.join(os.path.realpath(pw.pw_dir), DB_DUMP_DIR),
+                  os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = os.open(name + ".sql.gz", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > DB_IMPORT_MAX:
+        print("panel-db: the dump is not a regular file of at most 2 GiB")
+        return 4
+    help_text = subprocess.run([client, "--help"], shell=False, capture_output=True, text=True,  # nosec B603
+                               env=_clean_env(HOME=pw.pw_dir), timeout=30).stdout
+    sess = {"auth": "tcp" + port, "admin": (name, secret), "file": None, "secrets": [secret]}
+    try:
+        conn = _db_conn_args(sess)
+        argv = [client, conn[0]] + (["--sandbox"] if "--sandbox" in help_text else []) + conn[1:] + ["--batch", name]
+        return _db_feed(sess, argv, fd, pw)
+    finally:
+        _db_done(sess)
+
+
+def _db_feed(sess, argv, fd, pw):
+    """Run the client with the gunzipped dump on stdin, its first sandbox line dropped. Its rc."""
+    outf = tempfile.TemporaryFile()
+    p = subprocess.Popen(argv, shell=False, stdin=subprocess.PIPE, stdout=outf,  # nosec B603
+                         stderr=subprocess.STDOUT, env=_clean_env(HOME=pw.pw_dir))
+    try:
+        with os.fdopen(fd, "rb") as raw, gzip.GzipFile(fileobj=raw, mode="rb") as gz:
+            first = gz.readline()
+            if first.rstrip(b"\r\n") != DB_SANDBOX_LINE.encode():
+                p.stdin.write(first)
+            shutil.copyfileobj(gz, p.stdin)
+    except (BrokenPipeError, OSError, EOFError):
+        pass                       # the client stopped reading; its own rc and words say why
+    finally:
+        try:
+            p.stdin.close()
+        except OSError:
+            pass
+    rc = p.wait(timeout=DB_DUMP_TIMEOUT)
+    outf.seek(0)
+    sys.stdout.write(db_scrub(outf.read().decode("utf-8", "replace"), sess["secrets"]))
+    if rc == 0:
+        print("restored")
+    return rc
+
+
+def _db_import(sess, args):
+    flavor, port, account, name = args
+    pw = pwd.getpwnam(account)
+    if pw.pw_uid == 0:
+        raise ValueError("refusing a uid-0 account")
+    client = _db_tool(flavor)
+    pid = os.fork()
+    if pid == 0:
+        _db_child(_db_import_child, pw, client, port, name, sess["pw"])
+    _pid, status = os.waitpid(pid, 0)
+    return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
+
+
+def do_db_import(args, content):
+    """Restore a database from the dump in its game server's files (~/panel-db-dumps/<name>.sql.gz),
+    run AS the game account and signed in as the database's own account, never as root."""
+    return _db_with("db-import", args, content, _db_import)
+
+
+def _db_drop(sess, args):
+    name = args[2]
+    if _db_dump_archive(sess, [name]) != 0:
+        rc, out, err = _db_run(sess, db_sql_tables(name))
+        if rc != 0:
+            return _db_fail(sess, err, rc)
+        if out.strip() != "0":
+            print("panel-db: no copy could be kept and the database is not empty")
+            return 3
+    rc, out, err = _db_run(sess, db_sql_drop(name))
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    print("dropped")
+    return 0
+
+
+def do_db_drop(args, content):
+    """Remove a database and its two accounts, after keeping a copy in the root-only archive. With
+    no copy it removes only an empty database."""
+    return _db_with("db-drop", args, content, _db_drop)
+
+
+VERBS.update({
+    "db-probe": ([], lambda a: [], None),
+    "db-harden": ([v_choice(*DB_FLAVORS)], lambda a: [], None),
+    "db-create": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, v_choice("native", "sha2"), v_db_maxconn],
+                  lambda a: [], None),
+    "db-password": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, v_choice("native", "sha2")],
+                    lambda a: [], None),
+    "db-sizes": ([v_choice(*DB_FLAVORS), v_db_auth, Rest(v_db_name, maximum=64)], lambda a: [], None),
+    "db-dump": ([v_choice(*DB_FLAVORS), v_db_auth, v_choice("game", "archive"), v_db_account,
+                 Rest(v_db_name, maximum=64)], lambda a: [], None),
+    "db-import": ([v_choice(*DB_FLAVORS), v_port, v_game_account, v_db_name], lambda a: [], None),
+    "db-drop": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name], lambda a: [], None),
+    "db-admin-check": ([v_choice(*DB_FLAVORS), v_db_auth_tcp], lambda a: [], None),
+})
+
+
+
 # Verbs implemented by a function here instead of by running a tool. Each takes the validated
 # arguments and the content read from this process's stdin -- but only the verbs in STDIN_VERBS
 # below are actually SENT anything, and only those have their stdin read.
@@ -6930,6 +7696,15 @@ ACTIONS = {
     "create-swapfile": do_create_swapfile,
     "nodesource-setup": do_nodesource_setup,
     "gamedig-install": do_gamedig_install,
+    "db-probe": do_db_probe,
+    "db-harden": do_db_harden,
+    "db-create": do_db_create,
+    "db-password": do_db_password,
+    "db-sizes": do_db_sizes,
+    "db-dump": do_db_dump,
+    "db-import": do_db_import,
+    "db-drop": do_db_drop,
+    "db-admin-check": do_db_admin_check,
 }
 
 # The only two ACTIONS verbs that CONSUME their payload. The others take the parameter and
@@ -6941,7 +7716,9 @@ ACTIONS = {
 #
 # tests/unit/part05.py derives this set from the source and fails if it drifts, so adding a verb
 # that reads stdin without listing it here cannot silently start returning "".
-STDIN_VERBS = frozenset({"write-file", "content-cron-write"})
+# The database verbs (but db-probe) read their sign-in document (db_read_doc).
+STDIN_VERBS = frozenset({"write-file", "content-cron-write", "db-harden", "db-create", "db-password",
+                         "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check"})
 
 # Verbs whose arguments are fine but which may still be refused by the state of the host, read
 # here as root: {verb: a function answering why not, or ""}. Run after validation and before the
@@ -7000,6 +7777,7 @@ SECRET_STDIN = {
 # is decided by is_read(verb, args): lgsm-command is a read for its read-only LinuxGSM actions.
 READ_VERBS = frozenset({
     "apt-any-running", "apt-upgrade-running", "content-game-present", "content-scan",
+    "db-admin-check", "db-probe", "db-sizes",
     "content-script-present", "crontab-list", "disk-free", "dpkg-lock-held", "f2b-log-lines",
     "f2b-status", "f2b-status-jail", "game-backup-read", "game-dir-tar", "game-file-read",
     "gmod-mount-read", "journal", "journal-cron", "journal-cron-account", "lgsm-discover",

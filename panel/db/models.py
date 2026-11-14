@@ -1522,6 +1522,70 @@ def _unzone_audit_ips():
     return len(rows)
 
 
+class HostDatabaseServer(db.Model):
+    """The database server (MariaDB or MySQL) on one host, as the panel last found it.
+
+    One row per host that has had its Databases tab opened. `auth_mode` says how the panel signs
+    in as the server's administrator: 'socket' (root over the unix socket, no password anywhere)
+    or 'login' (an admin login a superadmin gave, used over TCP on 127.0.0.1). `warnings` is a JSON
+    list of keys (exposed, skip_networking, tls_required, old_logins_only) the tab explains; the
+    panel never changes an existing server to clear them.
+
+    Secrets are encrypted at rest like SSH credentials (config.encrypt_secret under cred_key).
+    The host's row going away removes this one with it (_register_database_cleanup): the panel
+    never sets PRAGMA foreign_keys, so the ondelete below documents the rule rather than enforcing
+    it.
+    """
+
+    __tablename__ = "host_database_server"
+    # AUTOINCREMENT: a deleted row's id is never handed to a new one (panel/db/id_sequence.py).
+    __table_args__ = {"sqlite_autoincrement": True}
+    id = db.Column(db.Integer, primary_key=True)
+    remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id", ondelete="CASCADE"),
+                          unique=True, nullable=False)
+    flavor = db.Column(db.String(8), default="mariadb")         # 'mariadb' | 'mysql'
+    version = db.Column(db.String(40), default="")               # SELECT VERSION()
+    installed_by_panel = db.Column(db.Boolean, default=False)    # True only after db-harden succeeded
+    auth_mode = db.Column(db.String(8), default="socket")        # 'socket' | 'login'
+    port = db.Column(db.Integer, default=3306)                   # @@port, for a login and snippets
+    admin_user = db.Column(EncryptedString, default="")          # login mode only
+    admin_secret = db.Column(db.Text, default="")                # encrypt_secret(password), login mode
+    panel_admin_secret = db.Column(db.Text, default="")          # linuxgsm_panel_admin's, panel-installed
+    native_ok = db.Column(db.Boolean, default=True)              # mysql_native_password is ACTIVE
+    warnings = db.Column(db.Text, default="")                    # JSON list of warning keys
+    checked_at = db.Column(db.DateTime, nullable=True)
+
+
+class GameDatabase(db.Model):
+    """One game server's database on its host's database server, and its account's password.
+
+    `name` (gs<server id>_<slug>) is the database and the name of its two accounts ('name'@
+    'localhost' and 'name'@'127.0.0.1'). Plaintext: it is unique-checked and the helper's
+    allow-list reads it, and a database name is not a secret. `secret` is the password, encrypted.
+    A game server removed from the panel leaves its rows with game_server_id NULL (orphans the
+    host's card lists); a host removed takes its rows with it (_register_database_cleanup).
+    """
+
+    __tablename__ = "game_database"
+    # AUTOINCREMENT: a page still holding a deleted row's id must never act on a new database.
+    __table_args__ = (db.UniqueConstraint("remote_id", "name", name="uq_game_database_remote_name"),
+                      {"sqlite_autoincrement": True})
+    id = db.Column(db.Integer, primary_key=True)
+    remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    game_server_id = db.Column(db.Integer, db.ForeignKey("game_server.id", ondelete="SET NULL"),
+                               nullable=True, index=True)
+    name = db.Column(db.String(32), nullable=False)
+    secret = db.Column(db.Text, nullable=False)                  # encrypt_secret(password)
+    auth_plugin = db.Column(db.String(24), default="mysql_native_password")
+    max_conn = db.Column(db.Integer, default=30)
+    size_bytes = db.Column(db.BigInteger, nullable=True)
+    size_at = db.Column(db.DateTime, nullable=True)
+    dumped_at = db.Column(db.DateTime, nullable=True)            # last dump written into the game's files
+    created_at = db.Column(db.DateTime, default=utcnow)
+    created_by = db.Column(db.String(80), default="")
+
+
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
 # login cookie, a page's own URLs — and so must never be handed to a new row
 # (panel/db/id_sequence.py). The last three are keyed only by URLs: a Global Bans page left open
@@ -1530,7 +1594,7 @@ def _unzone_audit_ips():
 # session's Revoke are the same shape. Every one has `sqlite_autoincrement` in its __table_args__;
 # a unit check holds the two lists together.
 _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
-                         GlobalBan, Invite, UserSession)
+                         GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {
@@ -2358,6 +2422,32 @@ def _register_host_sample_pruning():
             _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
 
 
+def _register_database_cleanup():
+    """Remove a deleted host's database rows, and detach a deleted game server's databases."""
+    from sqlalchemy import event
+
+    # The ON DELETE rules on HostDatabaseServer and GameDatabase, done here because the panel never
+    # turns on PRAGMA foreign_keys. A host's rows go with it: its id must not leave records a new
+    # host could inherit. A game server's databases stay on the host (they hold the game's data and
+    # a password something may still use) and become orphans the host's card lists.
+    @event.listens_for(RemoteServer, "after_delete")
+    def _drop_database_rows_of_deleted_host(_mapper, connection, target):
+        try:
+            for model in (GameDatabase, HostDatabaseServer):
+                connection.execute(model.__table__.delete().where(model.__table__.c.remote_id == target.id))
+        except Exception:
+            _log.debug("removing a deleted host's database rows failed", exc_info=True)
+
+    @event.listens_for(GameServer, "after_delete")
+    def _detach_databases_of_deleted_server(_mapper, connection, target):
+        try:
+            _t = GameDatabase.__table__
+            connection.execute(_t.update().where(_t.c.game_server_id == target.id)
+                               .values(game_server_id=None))
+        except Exception:
+            _log.debug("detaching a deleted server's databases failed", exc_info=True)
+
+
 def _register_new_row_forgetting():
     """Forget every in-memory entry keyed by a host's or game server's id when a row TAKES it."""
     from sqlalchemy import event
@@ -2629,6 +2719,7 @@ _register_audit_detach()
 _register_audit_object_detach()
 _register_host_sample_pruning()
 _register_new_row_forgetting()
+_register_database_cleanup()
 _register_row_identity_guard()
 
 

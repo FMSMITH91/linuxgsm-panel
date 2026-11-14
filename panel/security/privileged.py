@@ -2000,6 +2000,511 @@ _REMOTE_ACTIONS = {
 }
 
 
+# ── Game databases (MariaDB / MySQL on the game's own host) ───────────────────────────────────
+# Nine verbs create, dump, restore and drop one game server's databases. tools/panel-helper holds
+# the same constants, validators and SQL builders (a unit test compares them byte for byte); the
+# helper runs them on the panel's own host, and the renderings below run them on a remote.
+#
+# The database server's ROOT signs in over its unix socket with no password where the server
+# allows it ("socket"); otherwise an admin login the operator gave is used over TCP on 127.0.0.1
+# ("tcp<port>"). No socket path and no data directory is ever named: the client takes its packaged
+# default, which moved between Debian MariaDB releases (/run/mysqld, /run/mariadbd).
+#
+# SECRETS NEVER REACH A COMMAND LINE. The admin login and a database's password travel on stdin:
+#   helper  a small document (db_doc): "admin <user>" then the password on the next line, when the
+#           verb signs in with a login; "pw <password>", for the verbs that set or use one; "end".
+#   remote  the client option file's three lines ([client], user, password) when the verb signs in
+#           with a login, copied into a root-only mktemp file named to the client, then any SQL
+#           that carries a password. Every other statement is a fixed text built here from
+#           validated names, so it is safe on a command line.
+# Whatever the client prints is scrubbed of every secret before anyone reads it: by the helper on
+# the panel's host, and by run_privileged (db_scrub) for every transport.
+DB_FLAVORS = ("mariadb", "mysql")
+# gs<server id>_<slug>: also the user name, so at most 29 characters (MySQL user names hold 32).
+DB_NAME_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+# A database password (databases.new_password): no quote, backslash or URI delimiter anywhere, so
+# it is inert in SQL, option files, YAML, KeyValues, INI and an oxmysql connection URI.
+DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"
+# An admin login the operator types: the user's shape, and any printable ASCII password.
+DB_ADMIN_USER_RE = r"[A-Za-z0-9_.@-]{1,32}"
+DB_ADMIN_PW_RE = r"[\x20-\x7e]{1,128}"
+DB_DOC_MAX = 4096
+DB_HOSTS = ("localhost", "127.0.0.1")
+DB_PANEL_ADMIN = "linuxgsm_panel_admin"
+DB_DUMP_DIR = "panel-db-dumps"
+DB_ARCHIVE_ROOT = "/var/backups/linuxgsm-panel"
+DB_ARCHIVE_DIR = DB_ARCHIVE_ROOT + "/databases"
+DB_ARCHIVE_DAYS = 30
+DB_IMPORT_MAX = 2 * 1024 * 1024 * 1024
+DB_HARDEN_CNF = "/etc/mysql/mariadb.conf.d/60-linuxgsm-panel.cnf"
+DB_HARDEN_CNF_TEXT = ("# Written by linuxgsm-panel when it installed this database server.\n"
+                      "[mysqld]\nbind-address = 127.0.0.1\nlocal-infile = 0\nskip-name-resolve\n")
+# The databases a server the panel may harden can hold besides its own gs<n>_* ones.
+DB_SYSTEM_SCHEMAS = ("information_schema", "mysql", "performance_schema", "sys", "test")
+# The first line mariadb-dump writes from 10.6.18 / 10.11.8 / 11.x, which older clients and every
+# MySQL client refuse. An import drops it; the client's --sandbox (where it has one) does its job.
+DB_SANDBOX_LINE = "/*!999999\\- enable the sandbox mode */"
+DB_DUMP_OPTS = ("--single-transaction", "--quick", "--routines", "--triggers", "--events",
+                "--hex-blob", "--default-character-set=utf8mb4")
+DB_DUMP_OPTS_MYSQL = ("--set-gtid-purged=OFF", "--no-tablespaces")
+DB_SQL_PROBE = ("SHOW GLOBAL VARIABLES WHERE Variable_name IN ('version','version_comment','port',"
+                "'bind_address','skip_networking','socket','local_infile','require_secure_transport');\n"
+                "SELECT 'native', PLUGIN_STATUS FROM information_schema.PLUGINS "
+                "WHERE PLUGIN_NAME='mysql_native_password';\n")
+DB_SQL_GRANTS = "SELECT 1;\nSHOW GRANTS;\n"
+DB_SQL_SHOW = "SHOW DATABASES;\n"
+# The packages db-probe asks dpkg about (patterns for the versioned names older releases used).
+DB_PROBE_PACKAGES = ("mariadb-server", "mysql-server", "mariadb-server-*", "mysql-server-8*",
+                     "percona-server-server")
+DB_PORT_DEFAULT = "3306"
+# The client's own error numbers for "this login is refused" (1045 access denied, 1698 a socket
+# login the server refuses for this account) and "nothing listens on the socket" (2002).
+DB_DENIED_ERRORS = ("ERROR 1045", "ERROR 1698")
+DB_NO_SERVER_ERRORS = ("ERROR 2002",)
+# Which verbs carry a password in the document, and where each verb's auth argument is.
+DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import"})
+DB_AUTH_ARG = {"db-create": 1, "db-password": 1, "db-sizes": 1, "db-dump": 1, "db-drop": 1,
+               "db-admin-check": 1}
+
+
+def _db_name(s):
+    """A game database's name, gs<server id>_<slug>; also the name of its two accounts."""
+    if not re.fullmatch(DB_NAME_RE, str(s)):
+        raise VerbError("not a game database name")
+    return str(s)
+
+
+def _db_auth(s):
+    """How the verb signs in: `socket` (root over the unix socket) or `tcp<port>` (an admin login)."""
+    s = str(s)
+    if s == "socket":
+        return s
+    if not s.startswith("tcp"):
+        raise VerbError("not a database sign-in")
+    _port(s[3:])
+    return s
+
+
+def _db_auth_tcp(s):
+    """An admin login's sign-in: `tcp<port>` only (db-admin-check)."""
+    s = _db_auth(s)
+    if s == "socket":
+        raise VerbError("an admin login is checked over TCP")
+    return s
+
+
+def _db_maxconn(s):
+    """A per-account connection cap, 1..500."""
+    if not re.fullmatch(r"[1-9][0-9]{0,2}", str(s)) or int(s) > 500:
+        raise VerbError("not a connection cap in 1..500")
+    return str(s)
+
+
+def _db_account(s):
+    """The game account a dump is written as, or "-" when the dump goes to the root-only archive."""
+    return "-" if str(s) == "-" else _managed_user(s)
+
+
+def db_option_value(s):
+    """`s` as a double-quoted client option-file value.
+
+    The parser (mysys/my_default.c in both servers) strips one pair of surrounding quotes, keeps a
+    '#' inside them, and turns \\\\ and \\" back into one character; every backslash is escaped so
+    that \\b or \\s in a password stays what was typed.
+    """
+    return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def db_defaults_text(user, password):
+    """The client option file that signs in as `user`: exactly three lines."""
+    return "[client]\nuser=%s\npassword=%s\n" % (db_option_value(user), db_option_value(password))
+
+
+def db_identified(flavor, plugin, pw):
+    """The IDENTIFIED clause for a new or changed password.
+
+    MariaDB makes every account with mysql_native_password; its caching_sha2_password plugin is
+    not loaded by default. MySQL takes native where the server still offers it (8.0, or 8.4 with
+    mysql_native_password=ON) and caching_sha2_password otherwise (plugin_for decides).
+    """
+    if flavor == "mariadb":
+        if plugin != "native":
+            raise VerbError("MariaDB accounts are made with native passwords")
+        return "IDENTIFIED VIA mysql_native_password USING PASSWORD('%s')" % pw
+    return "IDENTIFIED WITH %s BY '%s'" % (
+        "mysql_native_password" if plugin == "native" else "caching_sha2_password", pw)
+
+
+def db_grant_target(name):
+    r"""The database-level GRANT target for `name`, its `_` escaped.
+
+    In a database-level GRANT `_` and `%` are wildcards, so `gs12_lp`.* also matched gs12Xlp; the
+    escaped form `gs12\_lp`.* is exact whether partial_revokes is on or off.
+    """
+    return "`%s`.*" % name.replace("_", "\\_")
+
+
+def db_sql_create(flavor, name, plugin, maxconn, pw):
+    """The statements that make database `name` and its two accounts (localhost and 127.0.0.1)."""
+    ident = db_identified(flavor, plugin, pw)
+    out = ["CREATE DATABASE `%s` CHARACTER SET utf8mb4;" % name]
+    out += ["CREATE USER '%s'@'%s' %s WITH MAX_USER_CONNECTIONS %d;" % (name, h, ident, int(maxconn))
+            for h in DB_HOSTS]
+    out += ["GRANT ALL PRIVILEGES ON %s TO '%s'@'%s';" % (db_grant_target(name), name, h)
+            for h in DB_HOSTS]
+    return "\n".join(out) + "\n"
+
+
+def db_sql_password(flavor, name, plugin, pw):
+    """The statements that give both of `name`'s accounts a new password."""
+    ident = db_identified(flavor, plugin, pw)
+    return "".join("ALTER USER '%s'@'%s' %s;\n" % (name, h, ident) for h in DB_HOSTS)
+
+
+def db_sql_exists(name):
+    """How many of database `name` and accounts called `name` exist already (0: none)."""
+    return ("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')"
+            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (name, name))
+
+
+def db_sql_drop(name):
+    """The statements that remove database `name` and both of its accounts; each may run twice."""
+    return ("".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in DB_HOSTS)
+            + "DROP DATABASE IF EXISTS `%s`;\n" % name)
+
+
+def db_sql_tables(name):
+    """How many tables database `name` holds."""
+    return "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='%s';\n" % name
+
+
+def db_sql_sizes(names):
+    """One query for the size of every database in `names`: name<TAB>bytes per line."""
+    return ("SELECT table_schema, COALESCE(SUM(data_length+index_length),0) FROM information_schema.TABLES "
+            "WHERE table_schema IN (%s) GROUP BY table_schema;\n" % ",".join("'%s'" % n for n in names))
+
+
+def db_sql_harden(pw):
+    """What mariadb-secure-installation does, without its root-password step, plus the panel's admin.
+
+    Root keeps signing in over the unix socket, so it never gets a password. Every statement may
+    run again: an admin that exists already only gets the new password.
+    """
+    a = "'%s'@'localhost'" % DB_PANEL_ADMIN
+    ident = db_identified("mariadb", "native", pw)
+    return ("DELETE FROM mysql.global_priv WHERE User='';\n"
+            "DELETE FROM mysql.global_priv WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');\n"
+            "DROP DATABASE IF EXISTS test;\n"
+            "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\\\_%';\n"
+            "FLUSH PRIVILEGES;\n"
+            "CREATE USER IF NOT EXISTS " + a + " " + ident + ";\n"
+            "ALTER USER " + a + " " + ident + ";\n"
+            "GRANT ALL PRIVILEGES ON *.* TO " + a + " WITH GRANT OPTION;\n"
+            "FLUSH PRIVILEGES;\n")
+
+
+def db_foreign(listing):
+    """The databases in a SHOW DATABASES listing the panel did not make (or the system's own)."""
+    return [d for d in listing.splitlines() if d.strip() and d not in DB_SYSTEM_SCHEMAS
+            and not re.fullmatch(DB_NAME_RE, d)]
+
+
+def db_grants_verdict(text):
+    """'ok' when SHOW GRANTS gives the login every privilege on *.* with GRANT OPTION, else 'lacks_grants'.
+
+    Every privilege means ALL PRIVILEGES (MariaDB), or a list holding CREATE USER (MySQL 8 spells
+    root's grant out privilege by privilege). Read one line at a time: MySQL prints its dynamic
+    privileges on a line of their own.
+    """
+    for line in text.splitlines():
+        if (" ON *.* " in line and "WITH GRANT OPTION" in line
+                and ("ALL PRIVILEGES" in line or "CREATE USER" in line)):
+            return "ok"
+    return "lacks_grants"
+
+
+def db_error_kind(text):
+    """'denied', 'nosocket' or 'error' for a client that failed with `text`."""
+    if any(e in text for e in DB_DENIED_ERRORS):
+        return "denied"
+    if any(e in text for e in DB_NO_SERVER_ERRORS):
+        return "nosocket"
+    return "error"
+
+
+def db_scrub(text, secrets):
+    """`text` with every secret in `secrets`, as typed or as an option file holds it, replaced by ***."""
+    for s in secrets:
+        if s:
+            text = text.replace(s, "***").replace(db_option_value(s)[1:-1], "***")
+    return text
+
+
+def _db_secret_values(secrets):
+    """The passwords in a run_privileged `secrets` mapping, for db_scrub."""
+    secrets = secrets or {}
+    admin = secrets.get("admin") or ("", "")
+    return [v for v in (admin[1], secrets.get("pw")) if v]
+
+
+def _db_checked_secrets(verb, checked, secrets):
+    """(admin (user, password) or None, pw or None), validated for this verb and its auth."""
+    secrets = secrets or {}
+    admin, pw = secrets.get("admin"), secrets.get("pw")
+    wants_admin = verb in DB_AUTH_ARG and checked[DB_AUTH_ARG[verb]].startswith("tcp")
+    if wants_admin:
+        if not admin or not re.fullmatch(DB_ADMIN_USER_RE, str(admin[0])) \
+                or not re.fullmatch(DB_ADMIN_PW_RE, str(admin[1])):
+            raise VerbError("this sign-in needs a valid admin login")
+        admin = (str(admin[0]), str(admin[1]))
+    else:
+        admin = None
+    if verb in DB_PW_VERBS:
+        if not pw or not re.fullmatch(DB_PW_RE, str(pw)):
+            raise VerbError("not a database password")
+        pw = str(pw)
+    else:
+        pw = None
+    return admin, pw
+
+
+def db_doc(verb, args, secrets=None):
+    """The helper's stdin for a database verb: the admin login and password it needs, then 'end'."""
+    admin, pw = _db_checked_secrets(verb, check_args(verb, args), secrets)
+    out = ""
+    if admin:
+        out += "admin %s\n%s\n" % admin
+    if pw:
+        out += "pw %s\n" % pw
+    return out + "end\n"
+
+
+def _db_remote_sql(verb, a, pw):
+    """The SQL a remote rendering reads on stdin: only the statements that carry a password."""
+    if verb == "db-create":
+        return db_sql_create(a[0], a[2], a[3], a[4], pw)
+    if verb == "db-password":
+        return db_sql_password(a[0], a[2], a[3], pw)
+    if verb == "db-harden":
+        return db_sql_harden(pw)
+    return ""
+
+
+def db_remote_stdin(verb, args, secrets=None):
+    """A remote rendering's stdin: the option-file lines it signs in with, then any secret SQL."""
+    a = check_args(verb, args)
+    admin, pw = _db_checked_secrets(verb, a, secrets)
+    if verb == "db-import":
+        return db_defaults_text(a[3], pw)
+    head = db_defaults_text(*admin) if admin else ""
+    return head + _db_remote_sql(verb, a, pw)
+
+
+# ── the remote renderings (and the panel's own host before the helper is installed) ──
+# Each is one bash script run as root. stderr is folded into stdout, as the helper's merged
+# answer is, and run_privileged scrubs both. The client and dump tool are found by name, as
+# root's PATH has them: MariaDB 11 ships mysql/mysqldump only in mariadb-client-compat.
+def _db_client_sh(flavor, dump=False):
+    """Shell that sets C (the client) or D (the dump tool) for `flavor`, or ends saying none is there."""
+    if dump:
+        names = "mariadb-dump || command -v mysqldump" if flavor == "mariadb" else "mysqldump"
+        return 'D=$(command -v %s) || { echo "panel-db: no dump tool"; exit 127; }; ' % names
+    names = "mariadb || command -v mysql" if flavor == "mariadb" else "mysql"
+    return 'C=$(command -v %s) || { echo "panel-db: no database client"; exit 127; }; ' % names
+
+
+def _db_conn_sh(auth):
+    """Shell that reads the sign-in from stdin (a login) and sets CONN to the connection options."""
+    if auth == "socket":
+        return "CONN=(--protocol=socket --user=root); "
+    return ('f=$(mktemp) || exit 1; '
+            '{ IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 '
+            '&& printf "%%s\\n" "$l1" "$l2" "$l3"; } > "$f" || exit 2; '
+            'CONN=(--defaults-extra-file="$f" --protocol=tcp --host=127.0.0.1 --port=%s); ' % auth[3:])
+
+
+def _db_prelude(flavor, auth, dump=False):
+    """The opening every database rendering shares: streams, umask, client, sign-in and cl()."""
+    return ("exec 2>&1; set -o pipefail; umask 077; f=; trap '[ -n \"$f\" ] && rm -f -- \"$f\"' EXIT; "
+            + _db_client_sh(flavor) + (_db_client_sh(flavor, dump=True) if dump else "")
+            + _db_conn_sh(auth)
+            # --defaults-extra-file must be the first option, so CONN comes straight after the tool.
+            + 'cl() { "$C" "${CONN[@]}" --batch --skip-column-names "$@"; }; ')
+
+
+def _db_dump_opts(flavor):
+    return " ".join(DB_DUMP_OPTS + (DB_DUMP_OPTS_MYSQL if flavor == "mysql" else ()))
+
+
+def _db_dd_sh(flavor):
+    """Shell defining dump1 NAME: the dump of one database on stdout."""
+    return 'dump1() { "$D" "${CONN[@]}" %s "$1"; }; ' % _db_dump_opts(flavor)
+
+
+def _db_archive_sh(names):
+    """Shell that dumps each of `names` into the root-only archive; rc 1 if any dump failed."""
+    return ("A=%s; mkdir -p -m 700 %s \"$A\" && chmod 700 \"$A\" && [ ! -L \"$A\" ] || exit 1; "
+            "t=$(date -u +%%Y%%m%%dT%%H%%M%%SZ); rc=0; "
+            "for n in %s; do o=\"$A/$n-$t.sql.gz\"; "
+            "if dump1 \"$n\" | gzip > \"$o.tmp\" && mv -f \"$o.tmp\" \"$o\"; then echo \"dumped=$n\"; "
+            "else rm -f \"$o.tmp\"; echo \"failed=$n\"; rc=1; fi; done; "
+            "find \"$A\" -maxdepth 1 -type f -name 'gs*_*-*.sql.gz' -mtime +%d -delete; "
+            % (shlex.quote(DB_ARCHIVE_DIR), shlex.quote(DB_ARCHIVE_ROOT), " ".join(names), DB_ARCHIVE_DAYS))
+
+
+# Run AS THE GAME ACCOUNT: makes ~/panel-db-dumps and writes one dump's .tmp from stdin. A link
+# planted at either name is followed as that account, so it can reach only what the account can.
+_DB_GAME_WRITE_SH = ('umask 077; d="$1/%s"; mkdir -p "$d" && [ ! -L "$d" ] '
+                     '&& rm -f -- "$d/$2.sql.gz.tmp" && set -C && cat > "$d/$2.sql.gz.tmp"' % DB_DUMP_DIR)
+
+
+def _db_game_dump_sh(account, names):
+    """Shell that dumps each of `names` into the account's ~/panel-db-dumps, written as the account."""
+    u, h = shlex.quote(account), shlex.quote(home_of(account))
+    p = '"$H/%s/$n.sql.gz' % DB_DUMP_DIR
+    return ("H=%s; rc=0; for n in %s; do "
+            "if dump1 \"$n\" | gzip | runuser -u %s -- bash -c %s _ \"$H\" \"$n\"; then "
+            "if runuser -u %s -- mv -f %s.tmp\" %s\"; then echo \"dumped=$n\"; "
+            "else echo \"failed=$n\"; rc=1; fi; "
+            "else runuser -u %s -- rm -f %s.tmp\"; echo \"failed=$n\"; rc=1; fi; done; "
+            % (h, " ".join(names), u, shlex.quote(_DB_GAME_WRITE_SH), u, p, p, u, p))
+
+
+def _db_dump_remote(a):
+    """db-dump: flavor auth dest account name..."""
+    flavor, auth, dest, account, names = a[0], a[1], a[2], a[3], a[4:]
+    if dest == "game" and account == "-":
+        raise VerbError("a dump into a server's files needs its account")
+    body = _db_archive_sh(names) if dest == "archive" else _db_game_dump_sh(account, names)
+    return _db_prelude(flavor, auth, dump=True) + _db_dd_sh(flavor) + body + "exit $rc"
+
+
+def _db_drop_remote(a):
+    """db-drop: flavor auth name. Keep an archive copy, or drop only an empty database."""
+    flavor, auth, name = a
+    return (_db_prelude(flavor, auth, dump=True) + _db_dd_sh(flavor) + _db_archive_sh([name])
+            + 'if [ "$rc" != 0 ]; then t=$(cl -e %s </dev/null) || exit 1; '
+            '[ "$t" = 0 ] || { echo "panel-db: no copy could be kept and the database is not empty"; exit 3; }; fi; '
+            "cl -e %s </dev/null && echo dropped"
+            % (shlex.quote(db_sql_tables(name)), shlex.quote(db_sql_drop(name))))
+
+
+def _db_create_remote(a):
+    """db-create: flavor auth name plugin maxconn. Never adopts; cleans up after itself."""
+    db_identified(a[0], a[3], "x")       # refuse MariaDB + sha2 before anything runs
+    return (_db_prelude(a[0], a[1])
+            + "x=$(cl -e %s </dev/null) || exit 1; "
+            '[ "$x" = 0 ] || { echo "panel-db: that database or account already exists"; exit 3; }; '
+            "if cl; then echo created; else rc=$?; cl -e %s </dev/null; exit $rc; fi"
+            % (shlex.quote(db_sql_exists(a[2])), shlex.quote(db_sql_drop(a[2]))))
+
+
+def _db_password_remote(a):
+    """db-password: flavor auth name plugin. The ALTER USER statements arrive on stdin."""
+    db_identified(a[0], a[3], "x")
+    return _db_prelude(a[0], a[1]) + "cl && echo changed"
+
+
+def _db_sizes_remote(a):
+    """db-sizes: flavor auth name..."""
+    return _db_prelude(a[0], a[1]) + "cl -e %s </dev/null" % shlex.quote(db_sql_sizes(a[2:]))
+
+
+def _db_admin_check_remote(a):
+    """db-admin-check: flavor tcp<port>. Answers ok / denied / lacks_grants, or fails (unreadable)."""
+    return (_db_prelude(a[0], a[1])
+            + "o=$(cl -e %s </dev/null 2>&1); rc=$?; "
+            'if [ "$rc" != 0 ]; then case "$o" in *"%s"*|*"%s"*) echo denied; exit 0;; esac; '
+            'echo unreadable; exit 1; fi; '
+            "printf '%%s\\n' \"$o\" | grep -F ' ON *.* ' | grep -F 'WITH GRANT OPTION' "
+            "| grep -qE 'ALL PRIVILEGES|CREATE USER' && echo ok || echo lacks_grants"
+            % ((shlex.quote(DB_SQL_GRANTS),) + DB_DENIED_ERRORS))
+
+
+def _db_harden_remote(a):
+    """db-harden: mariadb. Refuses a server holding databases the panel did not make."""
+    if a[0] != "mariadb":
+        raise VerbError("only a MariaDB server the panel installed is hardened")
+    keep = "|".join(DB_SYSTEM_SCHEMAS) + "|" + DB_NAME_RE
+    cnf, tmp = shlex.quote(DB_HARDEN_CNF), shlex.quote(DB_HARDEN_CNF + ".tmp")
+    return (_db_prelude("mariadb", "socket")
+            + "x=$(cl -e %s </dev/null) || exit 1; "
+            "bad=$(printf '%%s\\n' \"$x\" | grep -Ev %s | grep -v '^$'); "
+            '[ -z "$bad" ] || { echo "panel-db: the server holds databases the panel did not make"; exit 3; }; '
+            "mkdir -p %s && printf '%%s' %s > %s && chmod 644 %s && mv -f %s %s || exit 1; "
+            "systemctl restart mariadb || exit 1; cl && echo hardened"
+            % (shlex.quote(DB_SQL_SHOW), shlex.quote("^(%s)$" % keep),
+               shlex.quote(os.path.dirname(DB_HARDEN_CNF)), shlex.quote(DB_HARDEN_CNF_TEXT),
+               tmp, tmp, tmp, cnf))
+
+
+# Run AS THE GAME ACCOUNT by db-import: $1 home, $2 database, $3 port, $4 client. Reads the
+# database's own sign-in from stdin into the account's own mktemp file.
+_DB_IMPORT_SH = (
+    'set -o pipefail; umask 077; f=$(mktemp) || exit 1; trap \'rm -f -- "$f"\' EXIT; '
+    '{ IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && printf "%%s\\n" "$l1" "$l2" "$l3"; } '
+    '> "$f" || exit 2; z="$1/%s/$2.sql.gz"; '
+    '[ -f "$z" ] && [ ! -L "$z" ] || { echo "panel-db: no dump of that database in the server\'s files"; exit 4; }; '
+    '[ "$(stat -c %%s -- "$z")" -le %d ] || { echo "panel-db: the dump is larger than 2 GiB"; exit 4; }; '
+    'sb=; case "$("$4" --help 2>/dev/null)" in *--sandbox*) sb=--sandbox;; esac; '
+    "gzip -dc -- \"$z\" | sed %s | \"$4\" --defaults-extra-file=\"$f\" $sb --protocol=tcp "
+    '--host=127.0.0.1 --port="$3" --batch "$2" && echo restored'
+    % (DB_DUMP_DIR, DB_IMPORT_MAX,
+       shlex.quote("1{\\%^" + re.sub(r"([*\\])", r"\\\1", DB_SANDBOX_LINE) + "$%d;}")))
+
+
+def _db_import_remote(a):
+    """db-import: flavor port account name. Runs the client as the account, as the database's user."""
+    flavor, port, account, name = a
+    return ("exec 2>&1; " + _db_client_sh(flavor)
+            + "runuser -u %s -- bash -c %s _ %s %s %s \"$C\""
+            % (shlex.quote(account), shlex.quote(_DB_IMPORT_SH), shlex.quote(home_of(account)), name, port))
+
+
+def _db_probe_remote(_a):
+    """db-probe: which server is here, and whether root signs in over the socket. Writes nothing."""
+    pk = " ".join(shlex.quote(p) for p in DB_PROBE_PACKAGES)
+    return ("exec 2>&1; dpkg-query -W -f='${Package}\\t${db:Status-Abbrev}\\t${Version}\\n' %s 2>/dev/null "
+            "| awk -F'\\t' '$2 ~ /^ii/ {print \"pkg=\" $1 \"\\t\" $3}'; "
+            "for u in mariadb mysql; do echo \"active.$u=$(systemctl is-active \"$u\" 2>/dev/null)\"; done; "
+            "ss -Hltn 'sport = :%s' 2>/dev/null | awk '{print \"listen=\" $4}'; "
+            "C=$(command -v mariadb || command -v mysql) || { echo socket_root=noclient; exit 0; }; "
+            "o=$(\"$C\" --protocol=socket --user=root --batch --skip-column-names -e %s </dev/null 2>&1); "
+            'if [ $? = 0 ]; then echo socket_root=ok; '
+            "printf '%%s\\n' \"$o\" | awk -F'\\t' 'NF==2 {print \"var.\" $1 \"=\" $2}'; "
+            'else case "$o" in *"%s"*|*"%s"*) echo socket_root=denied;; *"%s"*) echo socket_root=nosocket;; '
+            "*) echo socket_root=error;; esac; fi; exit 0"
+            % ((pk, DB_PORT_DEFAULT, shlex.quote(DB_SQL_PROBE)) + DB_DENIED_ERRORS + DB_NO_SERVER_ERRORS))
+
+
+_ARGV.update({
+    "db-probe": ([], lambda a: [], None),
+    "db-harden": ([_choice(*DB_FLAVORS)], lambda a: [], None),
+    "db-create": ([_choice(*DB_FLAVORS), _db_auth, _db_name, _choice("native", "sha2"), _db_maxconn],
+                  lambda a: [], None),
+    "db-password": ([_choice(*DB_FLAVORS), _db_auth, _db_name, _choice("native", "sha2")],
+                    lambda a: [], None),
+    "db-sizes": ([_choice(*DB_FLAVORS), _db_auth, Rest(_db_name, maximum=64)], lambda a: [], None),
+    "db-dump": ([_choice(*DB_FLAVORS), _db_auth, _choice("game", "archive"), _db_account,
+                 Rest(_db_name, maximum=64)], lambda a: [], None),
+    "db-import": ([_choice(*DB_FLAVORS), _port, _managed_user, _db_name], lambda a: [], None),
+    "db-drop": ([_choice(*DB_FLAVORS), _db_auth, _db_name], lambda a: [], None),
+    "db-admin-check": ([_choice(*DB_FLAVORS), _db_auth_tcp], lambda a: [], None),
+})
+_REMOTE_ACTIONS.update({
+    "db-probe": _db_probe_remote,
+    "db-harden": _db_harden_remote,
+    "db-create": _db_create_remote,
+    "db-password": _db_password_remote,
+    "db-sizes": _db_sizes_remote,
+    "db-dump": _db_dump_remote,
+    "db-import": _db_import_remote,
+    "db-drop": _db_drop_remote,
+    "db-admin-check": _db_admin_check_remote,
+})
+DB_VERBS = frozenset(v for v in _ARGV if v.startswith("db-"))
+
+
 
 
 def check_args(verb, args):
@@ -2073,19 +2578,26 @@ def stdin_for(verb, args=None):
     return _ARGV[verb][2]
 
 
-def helper_stdin(verb, args):
+def helper_stdin(verb, args, secrets=None):
     """Text for the HELPER's stdin.
 
     The bare secret for a SECRET_STDIN verb (the helper checks it and formats it for the tool
-    itself), else what stdin_for gives.
+    itself), a database verb's document (db_doc, with `secrets`), else what stdin_for gives.
     """
+    if verb in DB_VERBS:
+        return db_doc(verb, args, secrets)
     if verb in SECRET_STDIN:
         return check_args(verb, args)[SECRET_STDIN[verb][0]] + "\n"
     return stdin_for(verb)
 
 
-def remote_stdin(verb, args):
-    """Text for the remote command's stdin, or None — only a SECRET_STDIN verb sends any."""
+def remote_stdin(verb, args, secrets=None):
+    """Text for the remote command's stdin, or None — only a SECRET_STDIN or database verb sends any.
+
+    A database verb always sends something (db_remote_stdin), even "", so its stdin ends at once.
+    """
+    if verb in DB_VERBS:
+        return db_remote_stdin(verb, args, secrets)
     return stdin_for(verb, args) if verb in SECRET_STDIN else None
 
 
