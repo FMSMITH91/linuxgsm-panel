@@ -37,6 +37,7 @@ Usage:
 import ast
 import copy
 import glob
+import hashlib
 import html
 import json
 import os
@@ -1430,8 +1431,42 @@ def _py_ignored(lines, node):
                if n <= len(lines))
 
 
+# Parsed trees and what is derived from them, kept per root for as long as no scanned file changes:
+# the gates ask for the same scan many times in one run (each one ~5 s), and a check that edits a file
+# (a mutation, a temp tree) changes the fingerprint, so it is scanned afresh. The trees are only read.
+_MEMO = {}
+
+
+def _fingerprint(root):
+    """Every scanned file of `root` with a digest of its bytes: unchanged files, unchanged answer.
+
+    The bytes, not the mtime: two writes within one clock tick can share an mtime, and an edit of
+    the same length would then be answered from the cache.
+    """
+    out = []
+    for path in _py_files(root):
+        with open(path, "rb") as fh:
+            out.append((path, hashlib.blake2b(fh.read(), digest_size=16).digest()))
+    return (os.path.realpath(root), tuple(out))
+
+
+def _memo(kind, root, compute):
+    """`compute()` for (`kind`, `root`), computed again only when a scanned file changed."""
+    key = (kind, _fingerprint(root))
+    if key not in _MEMO:
+        if len(_MEMO) > 64:     # temp trees: each is scanned once, keep the cache small
+            _MEMO.clear()
+        _MEMO[key] = compute()
+    return _MEMO[key]
+
+
 def _py_trees(root):
-    """[(relpath, source lines, ast)] for every scanned file."""
+    """[(relpath, source lines, ast)] for every scanned file (shared: callers only read them)."""
+    return _memo("trees", root, lambda: _py_trees_read(root))
+
+
+def _py_trees_read(root):
+    """_py_trees, read from disk."""
     out = []
     for path in _py_files(root):
         with open(path, encoding="utf-8") as fh:
@@ -1957,8 +1992,13 @@ def route_answer_keys(root=ROOT):
     Its sinks (flash, _form_*, a "message"/"error"/"warning" in a reply) and its tr() arguments:
     a literal, a module constant, or a service's answer (see _r16c_returns). Codes are left out.
     """
+    return dict(_memo("route_answer_keys", root, lambda: _route_answer_keys_read(root)))
+
+
+def _route_answer_keys_read(root):
+    """route_answer_keys, computed."""
     trees = _py_trees(root)
-    table = _r16c_returns(trees)
+    table = _memo("returns", root, lambda: _r16c_returns(trees))
     wrappers = _py_wrappers(trees)
     keys = {}
     for rel, lines, tree in (t for t in trees if _r16c_is_route(t[0])):
@@ -2082,7 +2122,7 @@ def _r17b_fed_calls(rel, lines, tree, wanted):
 
 def step_name_keys(root=ROOT):
     """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
-    table = _r16c_returns(_py_trees(root))
+    table = _memo("returns", root, lambda: _r16c_returns(_py_trees(root)))
     keys = {}
     for rel, _line, v, consts, binds, _lines in _r16c_step_walk(root):
         for t, f, ln in _r16c_found(v, rel, (consts, binds), table):
