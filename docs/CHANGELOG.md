@@ -337,6 +337,16 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Minecraft Bedrock servers show how many players are on.** Current Bedrock servers answer no player
+  query the panel had, so their players read unknown on the dashboard, in the bots and to every
+  "wait until empty". The panel now counts the joins and leaves in the server's console log, without
+  typing anything into the console.
+
+- **Bedrock's hourly restart when empty works again.** It never restarted, because the player count it
+  waited for could not be read; it now waits for the count from the console log. The world reset card can
+  wait for an empty Bedrock server too when the box is ticked; it starts unticked until a real join has
+  been counted on a test server.
+
 - **Scheduled Tasks opens quickly and shows when each task last ran again.** On a host with several game servers, the panel read every
   account's cron history for two weeks to show one server's tasks, ran past its size limit and showed no
   last-run times. It now reads only that server's newest runs.

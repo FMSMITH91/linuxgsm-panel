@@ -11,7 +11,7 @@ import threading
 from panel.core import i18n, terminal
 import time
 from panel.security import privileged as _priv
-from panel.ops.ssh_manager import (_core, files)  # noqa: E402,F401  (module objects: the
+from panel.ops.ssh_manager import (_core, bedrock, files)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
 # visible to every caller — see the package docstring.
 
@@ -671,6 +671,9 @@ def _restart_check_res(user, selfname):
         query(_RC_PATH_362, _RC_JQ_GUARD) + re.escape(_RC_COND_COUNTED),   # 0816ced (#362)
         query(_RC_PATH_362, _RC_JQ_HUMANS) + re.escape(_RC_COND_COUNTED),  # ws6-security, today
         re.escape("if true; then "),                                  # #331 onward, no query
+        # Minecraft Bedrock's console-log tally (bedrock.bedrock_count_sh), today.
+        re.escape("P=$(%s); " % bedrock.bedrock_count_sh(selfname))
+        + "(?P<mcb>" + re.escape('if [ "$P" = "OK 0" ]; then ') + ")",
     )
     head = re.escape("[ -f ") + flag + re.escape(" ] && { ")
     tail = (re.escape(f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f ") + flag
@@ -693,8 +696,21 @@ def _restart_check_now(server, user, selfname, found, target, host_of):
     """
     got = found.groupdict()
     gdtype, qport = _restart_check_target(got, *target)
+    mcb = _restart_check_bedrock(got, target[0], target[1])
     host = _restart_check_host(got, host_of) if (gdtype and qport) else None
-    return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport)
+    return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport, bedrock.BEDROCK_GAME if mcb else None)
+
+
+def _restart_check_bedrock(got, game_type, port):
+    """Whether the rewritten check counts Minecraft Bedrock's console log (bedrock.py).
+
+    The server's game decides, as in set_daily_restart; a caller that knows neither its game type
+    nor its port keeps what the line already does. A Bedrock line written with gamedig's `mbe`
+    query, which a NetherNet server never answers, becomes the log tally on the next upgrade pass.
+    """
+    if game_type is None and port is None:
+        return got.get("mcb") is not None
+    return bedrock.is_bedrock(game_type)
 
 
 def _restart_check_target(got, game_type, port, query_type=None):
@@ -1645,16 +1661,42 @@ def _gamedig_reply(server, user, cmd):
     return d
 
 
-def player_count(server, user, game_type=None, port=None, query_type=None):
+def _bedrock_first(server, user, game_type, selfname):
+    """A Bedrock server's (settled, slots): its console-log count, before any gamedig query.
+
+    settled is False when gamedig should still be asked: not a Bedrock server, a log the count
+    could not be read from (bedrock.bedrock_slots' "unread"), which a RakNet server still answers
+    gamedig's `mbe` for, or a read that failed. Otherwise slots is the answer, (count, max, name,
+    level): all four from a counted log and server.properties, all None for a server LinuxGSM sees
+    no session for (gamedig could only fail there too).
+    """
+    unknown = (None, None, None, None)
+    if not bedrock.is_bedrock(game_type):
+        return False, unknown
+    state, count, mx, name, level = bedrock.bedrock_slots(server, user, selfname)
+    if state == "down":
+        return True, unknown
+    if state != "ok":
+        return False, unknown
+    return True, (count, mx, name, level)
+
+
+def player_count(server, user, game_type=None, port=None, query_type=None, selfname=None):
     """Best-effort CURRENT player count for a running instance, via gamedig.
 
     Gamedig is the same tool the empty-only daily restart uses. Returns an int, or None when the
     game isn't queryable (no gamedig type / no port) or the query fails — callers treat
     None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
     as the restart cron invokes it (install-gamedig.sh links it in /usr/local/bin and /usr/bin).
+
+    Minecraft Bedrock is counted from its console log first (bedrock.py: a NetherNet server
+    answers no gamedig query); `selfname` is its LinuxGSM script, mcbserver when not given.
     """
     if not _core.game_idents_ok(user):
         return None      # refused: unknown, which no caller reads as "nobody is on"
+    settled, slots = _bedrock_first(server, user, game_type, selfname)
+    if settled:
+        return slots[0]
     gdtype = _gamedig_type(game_type, query_type)
     port = _core._r20b_query_port(port)   # a REAL inf port row is "no port", not an OverflowError
     if not gdtype or not port:
@@ -1678,16 +1720,23 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     return None if d is None else _json_int(d.get("c"))
 
 
-def player_slots(server, user, game_type=None, port=None, query_type=None):
+def player_slots(server, user, game_type=None, port=None, query_type=None, selfname=None):
     """(current, max, name) from a SINGLE gamedig query.
 
     Player count, the capacity the game reports (or None), and the server's own advertised in-game
     name/hostname (what players see in the server browser, or None). (None, None, None) when the
     game isn't gamedig-queryable or the query fails, so the caller can fall back to the console /
     LinuxGSM config. Never raises.
+
+    Minecraft Bedrock is read from its console log and server.properties first, as in
+    player_count; its level name fills game_map's cache the way a gamedig reply's map does.
     """
     if not _core.game_idents_ok(user):
         return None, None, None
+    settled, slots = _bedrock_first(server, user, game_type, selfname)
+    if settled:
+        _remember_map(server, port, slots[3])
+        return slots[0], slots[1], slots[2]
     gdtype = _gamedig_type(game_type, query_type)
     port = _core._r20b_query_port(port)   # as player_count
     if not gdtype or not port:

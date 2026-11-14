@@ -29,7 +29,8 @@ What the re-check found still open, each driven through the code that calls it:
   Every reader now counts _core.GAMEDIG_HUMANS_JQ (numplayers less bots, or the list, whichever is
   larger), driven here through each reader's REAL jq filter against a stand-in gamedig, and the
   daily upgrade pass heals the hourly lines already on hosts. The longest such line still fits
-  cron's 1000-byte command buffer.
+  cron's 1000-byte command buffer. A Bedrock server's hourly line now counts its console log
+  (part200: a NetherNet server answers no gamedig query), driven here against a real log.
 * The maintenance probe's pgrep pattern was built from an unchecked stored name, and the
   _rewrite_crontab and run_as_game_user own guards were held by no check (each was redundant to a
   later refusal, so deleting it failed nothing).
@@ -1035,22 +1036,38 @@ def _restart_line_length36():
           0 < len(cmd) < 1000 and "numplayers" in cmd, "%d characters: %r" % (len(cmd), cmd[:120]))
 
 
-def _drive_line36(line, reply):
-    """Did crontab `line`'s command restart the server, with gamedig answering `reply`?
+def _drive_log36(line, on, started=True):
+    """Did crontab `line`'s command restart a Bedrock server whose console log has `on` players on?
 
-    Run as cron runs it (sh, cron's own environment). The line removes its flag in the same branch
-    that runs the restart, so a flag that is gone is a restart: no stand-in script is needed.
+    Run as cron runs it: sh, cron's own environment, in the account's home (cron changes into
+    HOME), with a stand-in tmux showing LinuxGSM's session. The log is BDS's own lines; `started`
+    False leaves out this run's "Server started." line, which a cleared log no longer has.
     """
-    with _fake_gamedig36(reply) as (root, define):
+    root = _tf36.mkdtemp(prefix="lgsm-unit-p36log-")
+    try:
         home = os.path.join(root, "home")
-        os.makedirs(home)
-        flag = os.path.join(home, ".restart-pending")
-        open(flag, "w", encoding="utf-8").close()
+        for d in ("lgsm/data", "log/console", "stubs"):
+            os.makedirs(os.path.join(root if d == "stubs" else home, d))
+        open(os.path.join(home, ".restart-pending"), "w", encoding="utf-8").close()
+        with open(os.path.join(home, "lgsm/data/bedrockserver.uid"), "w", encoding="utf-8") as fh:
+            fh.write("0f0f0f0f")
+        stamp = "[2026-11-13 15:00:00:001 INFO] "
+        lines = ([stamp + "Server started."] if started else []) + [
+            stamp + "Player connected: P%d, xuid: 25354%d" % (i, i) for i in range(on)]
+        with open(os.path.join(home, "log/console/bedrockserver-console.log"), "w", encoding="utf-8") as fh:
+            fh.write("".join(ln + "\r\n" for ln in lines))
+        tmux = os.path.join(root, "stubs", "tmux")
+        with open(tmux, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\n[ "$2" = bedrockserver-0f0f0f0f ] && echo bedrockserver\nexit 0\n')
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- owner-only temp stand-in
+        os.chmod(tmux, 0o700)  # nosec B103
         cmd = line.split(None, 5)[5].replace("/home/p36mcb/", home + "/")
-        _sp36.run(["env", "-i", "HOME=" + home, "SHELL=/bin/sh", "PATH=/usr/bin:/bin",  # nosec B603 B607 - cron's own env
-                   "sh", "-c", define + cmd], capture_output=True, text=True, timeout=60,
-                  check=False)
-        return not os.path.exists(flag)
+        _sp36.run(["env", "-i", "HOME=" + home, "SHELL=/bin/sh",  # nosec B603 B607 - cron's own env
+                   "PATH=" + os.path.join(root, "stubs") + ":/usr/bin:/bin", "sh", "-c", cmd],
+                  cwd=home, capture_output=True, text=True, timeout=60, check=False)
+        return not os.path.exists(os.path.join(home, ".restart-pending"))
+    finally:
+        _shutil36.rmtree(root, ignore_errors=True)
 
 
 # What main wrote for a Bedrock server (0816ced's shape, with main's "minecraftpe"), and what this
@@ -1081,17 +1098,16 @@ def _upgrade36(listing):
 def _restart_check36():
     """The hourly restart-when-empty line: written, healed in place, and driven under sh."""
     now = _restart_line36()[1]
-    check("V8 restart line: a Bedrock server's hourly check asks gamedig 5's id and counts "
-          "numplayers", "--type mbe " in now and "numplayers" in now, now)
-    seen = (_drive_line36(now, _bedrock36(7)), _drive_line36(now, _bedrock36(0)),
-            _drive_line36(now, _GD_FAILED36))
-    check("V8 restart line (driven): with 7 on it does NOT restart; with 0 it does; a failed query "
-          "does not (it restarted with 7 on while it counted the empty list)",
-          seen == (False, True, False), repr(seen))
+    check("V8 restart line: a Bedrock server's hourly check counts its console log (a NetherNet "
+          "server answers no gamedig query)", "OK 0" in now and "gamedig" not in now
+          and "log/console/bedrockserver-console.log" in now, now)
+    seen = (_drive_log36(now, 7), _drive_log36(now, 0), _drive_log36(now, 0, started=False))
+    check("V8 restart line (driven): with 7 on it does NOT restart; with 0 it does; a log it cannot "
+          "count (no start line) does not", seen == (False, True, False), repr(seen))
     healed = {}
     for label, gdtype in (("main's (minecraftpe)", "minecraftpe"), ("the pre-review (mbe)", "mbe")):
         ret, add = _upgrade36(_RC_MAIN36 % gdtype)
-        healed[label] = (ret, add == [now], _drive_line36(add[0], _bedrock36(7)) if add else None)
+        healed[label] = (ret, add == [now], _drive_log36(add[0], 7) if add else None)
     check("V8 restart line: the daily upgrade pass rewrites main's and the pre-review line to "
           "today's, which does not restart a Bedrock server with 7 on — installed hosts are healed "
           "with no operator action", healed == {k: (True, True, False) for k in healed},
