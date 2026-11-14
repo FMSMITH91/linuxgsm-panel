@@ -196,6 +196,21 @@ with open(os.path.join(_BIN34, "gamedig"), "w", encoding="utf-8") as _fh34:
     _fh34.write(_FAKE_GAMEDIG34)
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
 os.chmod(os.path.join(_BIN34, "gamedig"), 0o700)
+# ...and the gamedig package beside it, which the batched player poll loads in one node process
+# (bin/gamedig's ../lib/index.js, as the real bin/gamedig.js imports it): the same answers by port.
+_FAKE_GAMEDIG_LIB34 = r"""
+const A = {"27015": {players: [{name: "a"}, {name: "b"}], maxplayers: 16, name: "Box  Server",
+                     map: "gm_<b>construct</b>"},
+           "28960": {players: [], maxplayers: "16", name: "COD", map: "mp_crash"}};
+class GameDig { query(o) {
+  if (o.port === "27020") return new Promise(() => {});
+  return A[o.port] ? Promise.resolve(A[o.port]) : Promise.reject(new Error("Failed all 1 attempts"));
+} }
+module.exports = { GameDig };
+"""
+os.makedirs(os.path.join(_TMP34, "lib"), exist_ok=True)
+with open(os.path.join(_TMP34, "lib", "index.js"), "w", encoding="utf-8") as _fh34:
+    _fh34.write(_FAKE_GAMEDIG_LIB34)
 _HAVE_JQ34 = _shutil34.which("jq") is not None
 
 
@@ -442,10 +457,11 @@ def _section_batch_shell34():
                        4: (None, None, None)}, took < 15)),
           repr((got, round(took, 1))))
     body = shell.calls[-1][1] if shell.calls else ""
-    many = _cron34._batch_body(NS(id=1), [(i, "garrysmod", 27015 + i) for i in range(17)])
-    check("C batch: at most _BATCH_PARALLEL queries run at once (a `wait` after each group), and the "
+    many = _cron34._batch_body([(i, "garrysmod", 27015 + i) for i in range(17)], "127.0.0.1")
+    check("C batch: the 17 queries run in ONE node process, at most _BATCH_PARALLEL at once, and the "
           "whole command is ONE line (sudo logs it; a newline would print as a log line of its own)",
-          all((many.count("wait;") == 3, "\n" not in many, "wait;" in body)), many[:120])
+          all((many.count("node -e") == 1, " %d %d 2>" % (_cron34._BATCH_PARALLEL, 20000) in many,
+               "\n" not in many, "node -e" in body)), many[:120])
 
 
 def _section_map_cache34():

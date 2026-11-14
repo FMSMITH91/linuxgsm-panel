@@ -722,7 +722,8 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     jqf = ('{p:[.players[] | {name:(.name // ""), '
            'score:(.raw.score // .score // .raw.frags // .frags // null), '
            'time:(.raw.time // .time // null)}], c:%s}' % _core.GAMEDIG_HUMANS_JQ)
-    cmd = f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null | jq -c {_core._quote(jqf)} 2>/dev/null"
+    cmd = (f"gamedig --type {gdtype} {cron.gamedig_target(server, gdtype, port)} 2>/dev/null "
+           f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
@@ -2538,7 +2539,7 @@ def _queried_version(server, user, game_type=None, port=None, query_type=None):
     jqf = ('[.version, .raw.version, .raw.shortversion, .raw.gamever, '
            '.raw.vanilla.raw.version.name] | map(select(. != null and . != "") | tostring) '
            '| .[0] // empty')
-    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
+    cmd = (f"gamedig --type {gdtype} {cron.gamedig_target(server, gdtype, port)} 2>/dev/null "
            f"| jq -r {_core._quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
