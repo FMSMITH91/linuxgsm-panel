@@ -185,6 +185,8 @@ _PER_JOB50 = {("ci.yml", "coverage"), ("ci.yml", "js-coverage"), ("lighthouse.ym
 def _gate50(key, docs_gate):
     """`docs_gate` as job `key` (workflow, job, ...) spells it: on `skip` for the per-job ones."""
     return docs_gate.replace("outputs.docs_only", "outputs.skip") if key[:2] in _PER_JOB50 else docs_gate
+
+
 _REUSE_AND50 = " && steps.reuse.outputs.reuse != 'true'"
 # ...or, in the coverage jobs, which measure after all when the pull request's report could not be
 # taken: ` && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')`.
