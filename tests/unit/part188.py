@@ -31,6 +31,7 @@ from panel.routes import _shared as _sh188, server_detail as _sd188, server_file
 from panel.routes import game_config_form as _gcfr188, mc_lists as _mcl188, modrinth_plugins as _mdr188
 from panel.routes import pz_admin as _pza188, workshop as _wsc188
 from panel.services import game_config_form as _gcf188, lgsm_players as _lgp188, modrinth as _mr188
+from panel.services import mc_packs as _mc_packs188
 
 _r188 = {}
 
@@ -128,6 +129,8 @@ try:
     _n_trips188 = len(_P9_TRIPPED)
     _p9_patch_sm("send_console_command", lambda *a, **k: ("", "", _send_rc188["rc"]))
     _p9_patch_sm("read_file", _read188)
+    # The plugin install's version fallback reads paper.jar as the game account: no version there.
+    _p9_patch(_mc_packs188, "paper_jar_version", lambda *a, **k: None)
     _p9_patch_sm("write_file", lambda *a, **k: (True, ""))
     _p9_patch_sm("lgsm_get_values", lambda *a, **k: {"workshopmods": ""})
     _p9_patch_sm("lgsm_write_config", lambda *a, **k: (True, ""))

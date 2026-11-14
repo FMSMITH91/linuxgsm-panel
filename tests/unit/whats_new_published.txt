@@ -3,6 +3,12 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+de095bd2 Valheim shows as online while it runs.
+17bc1d43 The Paper plugin browser knows the server's Minecraft version on newer Paper builds.
+7d31fe99 Open pages cost the server less.
+cbcdfa06 A tab opened in the background no longer loads everything twice when you switch to it.
+9c430d83 The first page after a restart is faster.
+7c5474ef The raw config editor's LinuxGSM-config test can no longer be slowed by a crafted path.
 7a63c643 Mods for Arma 3 and DayZ: the mod folders the server loads.
 3de04ab0 NS2: Combat's mods in the Steam Workshop card.
 0b30b0c1 Factorio mods on or off.

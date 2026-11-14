@@ -6,7 +6,9 @@ provides network diagnostics, and recommends optimal bind settings.
 import json
 import logging
 import ipaddress
+import os
 import re
+import shutil
 import socket
 import subprocess  # nosec B404 - argv lists only (tailscale, ping), never a shell
 import threading
@@ -55,6 +57,9 @@ class TailscaleInfo:
     # which prints counts and booleans from them and never a value: no second CLI call for them.
     status_json: Optional[dict] = None
     prefs_json: Optional[dict] = None
+    # The tailscale binary this reading's version came from, (path, inode, mtime, size): see
+    # _same_binary. None when there was none on PATH.
+    binary_id: Optional[tuple] = None
 
 
 # Cache results to avoid hammering `tailscale` CLI on every page load
@@ -92,7 +97,6 @@ def _run_ts(args, timeout=5):
 def _current_os_user():
     """The OS user the panel runs as (the one that should own Tailscale management)."""
     try:
-        import os
         import pwd
         return pwd.getpwuid(os.getuid()).pw_name
     except Exception:
@@ -233,20 +237,44 @@ def _route_all_of(prefs):
     return v if isinstance(v, bool) else None
 
 
-def _get_tailscale_info() -> TailscaleInfo:
-    """Internal - discover all Tailscale info by calling the CLI."""
-    info = TailscaleInfo()
+def _binary_id():
+    """(path, inode, mtime, size) of the `tailscale` on PATH, or None when there is none."""
+    path = shutil.which("tailscale")
+    try:
+        st = os.stat(path) if path else None
+    except OSError:
+        st = None
+    return (path, st.st_ino, st.st_mtime_ns, st.st_size) if st else None
 
-    # Check if tailscale binary exists
-    info.installed = _run_ts(["version"])[0] != "" or \
-                     _run_ts(["--version"])[0] != ""
+
+def _same_binary(prev):
+    """Whether `prev`, the last reading, was of an installed tailscale that is still the one on PATH.
+
+    Its version then still holds: an upgrade or a removal replaces or deletes the file, which
+    changes or ends its identity, and the next reading asks the binary again.
+    """
+    return (isinstance(prev, TailscaleInfo) and prev.installed and prev.binary_id is not None
+            and prev.binary_id == _binary_id())
+
+
+def _get_tailscale_info(known=None) -> TailscaleInfo:
+    """Internal - discover all Tailscale info by calling the CLI.
+
+    `known` is the last reading when the binary is unchanged since (_same_binary): its version is
+    kept, and `tailscale version` is not run again. It used to run TWICE on every reading (once to
+    see that tailscale is installed, once for the version), two of the five commands, measured at
+    71-98 ms, that a full page render waited for whenever the 15 s cache had expired.
+    """
+    info = TailscaleInfo(binary_id=_binary_id())
+    if known is not None:
+        info.installed, info.version = True, known.version
+    else:
+        ver = _run_ts(["version"])[0]
+        info.installed = ver != "" or _run_ts(["--version"])[0] != ""
+        info.version = ver.split("\n")[0] if ver else ""
 
     if not info.installed:
         return info
-
-    # Get version
-    ver, _, _ = _run_ts(["version"])
-    info.version = ver.split("\n")[0] if ver else ""
 
     # Get status
     status = _run_ts_json(["status"])
@@ -485,7 +513,8 @@ def get_tailscale_info(force_refresh=False) -> TailscaleInfo:
     now = time.time()
     with _cache_lock:
         if force_refresh or _cache["info"] is None or (now - _cache["ts"]) > _cache["ttl"]:
-            _cache["info"] = _get_tailscale_info()
+            prev = None if force_refresh else _cache["info"]
+            _cache["info"] = _get_tailscale_info(prev) if _same_binary(prev) else _get_tailscale_info()
             _cache["ts"] = now
     return _cache["info"]
 

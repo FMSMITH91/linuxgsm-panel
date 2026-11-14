@@ -722,7 +722,8 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     jqf = ('{p:[.players[] | {name:(.name // ""), '
            'score:(.raw.score // .score // .raw.frags // .frags // null), '
            'time:(.raw.time // .time // null)}], c:%s}' % _core.GAMEDIG_HUMANS_JQ)
-    cmd = f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null | jq -c {_core._quote(jqf)} 2>/dev/null"
+    cmd = (f"gamedig --type {gdtype} {cron.gamedig_target(server, gdtype, port)} 2>/dev/null "
+           f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
@@ -773,8 +774,13 @@ def _gamedig_player_rows(data):
 # own `sudo -u <account> gamedig` run: two viewers of one server, or one viewer and a quick re-poll,
 # paid twice for one answer. A list gamedig READ is kept this long, keyed by what was queried, and
 # a second caller that arrives while a query is running waits for it instead of starting another.
-# Shorter than the page's own period, so a lone viewer always sees a fresh list.
-_PLAYERLIST_TTL = 10
+#
+# Longer than the page's 15 s period, plus a margin for the request itself: at 10 s it expired
+# before every poll, so a lone viewer ran gamedig on every poll (measured 4 per minute, 2.4 s each)
+# and the cache never answered. Now a lone viewer asks every other poll. What changes the list is
+# never served from it: a read the page asks for itself (the refresh button, the re-read after a
+# kick) replaces the entry, and a start, stop or restart drops the host's entries (forget_lists).
+_PLAYERLIST_TTL = 20
 _playerlist_cache = _core.register_remote_cache({})   # {(remote_id, port, gdtype): (expiry, list)}
 _playerlist_locks = _core.register_remote_cache({})
 _playerlist_guard = threading.Lock()
@@ -797,11 +803,9 @@ def _playerlist_hit(key):
 
 def _gamedig_player_list_shared(server, user, game_type, port, query_type):
     """_gamedig_player_list through the short shared cache. Only a list gamedig read is stored."""
-    gdtype = cron._gamedig_type(game_type, query_type)
-    port = _core._r20b_query_port(port)   # a REAL inf port row is "no port": nothing to query
-    if not _core.game_idents_ok(user) or not gdtype or not port:
+    key = _list_key(server, user, game_type, port, query_type)
+    if key is None:
         return _gamedig_player_list(server, user, game_type, port, query_type)
-    key = (getattr(server, "id", None), port, gdtype)
     hit = _playerlist_hit(key)
     if hit is not None:
         return hit
@@ -810,9 +814,29 @@ def _gamedig_player_list_shared(server, user, game_type, port, query_type):
         if hit is not None:
             return hit
         pl = _gamedig_player_list(server, user, game_type, port, query_type)
-        if pl is not None:
-            _playerlist_cache[key] = (time.time() + _PLAYERLIST_TTL, [dict(p) for p in pl])
+        _keep_list(key, pl)
         return pl
+
+
+def _keep_list(key, pl):
+    """Store a list gamedig read under `key` for the shared poll; None (no reading) stores nothing."""
+    if pl is not None and key is not None:
+        _playerlist_cache[key] = (time.time() + _PLAYERLIST_TTL, [dict(p) for p in pl])
+
+
+def _list_key(server, user, game_type, port, query_type):
+    """The shared cache's key for this read, or None when it is not one the cache holds."""
+    gdtype = cron._gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # a REAL inf port row is "no port": nothing to query
+    if not _core.game_idents_ok(user) or not gdtype or not port:
+        return None
+    return (getattr(server, "id", None), port, gdtype)
+
+
+def forget_lists(remote_id):
+    """Drop every shared player list of one host: its servers were started, stopped or restarted."""
+    for key in [k for k in list(_playerlist_cache) if k[0] == remote_id]:
+        _playerlist_cache.pop(key, None)
 
 
 def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None,
@@ -828,12 +852,16 @@ def player_list(server, user, game_type=None, port=None, query_type=None, selfna
     network and the console wasn't allowed. Never raises.
 
     `shared=True` is for the page's timed poll: it may be answered by a list gamedig read in the
-    last _PLAYERLIST_TTL seconds. An explicit refresh (after a kick, say) passes False and asks.
+    last _PLAYERLIST_TTL seconds. An explicit refresh (after a kick, say) passes False and asks,
+    and what it read becomes the shared list.
     """
     if shared:
         pl = _gamedig_player_list_shared(server, user, game_type, port, query_type)
     else:
         pl = _gamedig_player_list(server, user, game_type, port, query_type)
+        # The fresh read replaces the shared one, so the next timed poll does not bring back a
+        # list from before it (a kicked player, for up to _PLAYERLIST_TTL).
+        _keep_list(_list_key(server, user, game_type, port, query_type), pl)
     if pl is not None:
         return pl                       # gamedig answered (players, or a confirmed-empty server)
     if allow_console and game_engine(game_type):   # explicit, on-demand console read only
@@ -2455,7 +2483,7 @@ def _really_serving(server, game_server):
         return True
     if ports is None:          # the scan failed; that is not an empty set
         return True
-    return port in ports
+    return portscan.game_port_listening(getattr(game_server, "game_type", None), port, ports)
 
 
 # ── Which build of the game is actually installed ─────────────────────────────────────────────
@@ -2538,7 +2566,7 @@ def _queried_version(server, user, game_type=None, port=None, query_type=None):
     jqf = ('[.version, .raw.version, .raw.shortversion, .raw.gamever, '
            '.raw.vanilla.raw.version.name] | map(select(. != null and . != "") | tostring) '
            '| .[0] // empty')
-    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
+    cmd = (f"gamedig --type {gdtype} {cron.gamedig_target(server, gdtype, port)} 2>/dev/null "
            f"| jq -r {_core._quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
