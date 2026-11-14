@@ -1286,6 +1286,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **Semgrep's CI install no longer carries a vulnerable OpenTelemetry.** The code scanner CI runs pinned opentelemetry-api 1.37.0
+  (GHSA-mf5v-w3w3-f6cg, GHSA-xcq7-p3pf-p88h). The OpenTelemetry packages are now pinned apart at the
+  fixed 1.45.2, hash-checked, and the scan finds exactly what it found before. Panels never install
+  these packages.
+
 - **dnspython 2.9.2 on Ubuntu 24.04 and 26.04 (GHSA-vvf4-9x63-8xvv).** A crafted record in DNS
   zone-file text could make dnspython use unbounded memory; panels on Python 3.11 and newer now
   install the fixed release. Ubuntu 22.04's Python 3.10 cannot run it, and the panel never parses
