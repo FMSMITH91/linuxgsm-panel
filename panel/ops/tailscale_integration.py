@@ -97,7 +97,6 @@ def _run_ts(args, timeout=5):
 def _current_os_user():
     """The OS user the panel runs as (the one that should own Tailscale management)."""
     try:
-        import os
         import pwd
         return pwd.getpwuid(os.getuid()).pw_name
     except Exception:

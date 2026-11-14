@@ -881,6 +881,10 @@ def _no_lan36(orig):
     return lambda server, cmd, **k: ("", "", 1) if "mcbq:" in cmd else orig(server, cmd, **k)
 
 
+# Where node and jq are, for a stand-in shell whose PATH is otherwise only /usr/bin and /bin.
+_TOOL_DIRS36 = sorted({os.path.dirname(p) for p in (_shutil36.which("node"), _shutil36.which("jq")) if p})
+
+
 def _readers36(reply, game_type="mcb", gdtype="mbe"):
     """{reader: answer} for one gamedig reply, every reader through its real command."""
     srv = NS(id=93608, host=_GD_HOST36, username="admin", is_local=False, auth_method="key")
@@ -895,19 +899,26 @@ def _readers36(reply, game_type="mcb", gdtype="mbe"):
                "slots": _cron36.player_slots(srv, "p36mcb", game_type, 19132),
                "lgsm": _cron36.player_count_via_lgsm_query(srv, "p36mcb", "bedrockserver"),
                "list": _game36._gamedig_player_list(srv, "p36mcb", game_type, 19132)}
-        # The batched poll (two or more servers on a host) runs gamedig under `timeout`, which
-        # execs a program — so the stand-in is also a FILE on PATH, answering the same way.
+        # The batched poll (two or more servers on a host) loads gamedig in one node process, from
+        # the package beside the `gamedig` on PATH (bin/gamedig -> ../lib/index.js) — so the
+        # stand-in is also a package, answering the same way.
         root, _define = fake
-        exe = os.path.join(root, "gamedig")
+        os.makedirs(os.path.join(root, "bin"), exist_ok=True)
+        os.makedirs(os.path.join(root, "lib"), exist_ok=True)
+        exe = os.path.join(root, "bin", "gamedig")
         with open(exe, "w", encoding="utf-8") as fh:
-            fh.write('#!/bin/sh\nif [ "$1 $2" = "--type %s" ]; then cat "%s"; '
-                     'else echo \'{"error":"Invalid game"}\'; fi\n'
-                     % (gdtype, os.path.join(root, "reply.json")))
+            fh.write('#!/bin/sh\necho \'{"error":"the batch ran the command"}\'\n')
         os.chmod(exe, 0o755)  # nosec B103 - a stand-in program in this part's own temp dir  # nosemgrep
+        with open(os.path.join(root, "lib", "index.js"), "w", encoding="utf-8") as fh:
+            fh.write('const fs = require("fs");\nclass GameDig { query(o) { return o.type === %s ? '
+                     'Promise.resolve(JSON.parse(fs.readFileSync(%s, "utf8"))) : '
+                     'Promise.reject(new Error("Invalid game")); } }\nmodule.exports = { GameDig };\n'
+                     % (_json36.dumps(gdtype), _json36.dumps(os.path.join(root, "reply.json"))))
 
         def _batch_sh(_server, _user, sh, **_k):
             p = _sp36.run(["bash", "-c", sh],  # nosec B603 B607 - bash on the panel's own batch command
-                          env={"PATH": root + ":/usr/bin:/bin", "HOME": root},
+                          env={"PATH": os.pathsep.join([os.path.join(root, "bin")] + _TOOL_DIRS36 + ["/usr/bin:/bin"]),
+                               "HOME": root},
                           capture_output=True, text=True, timeout=60, check=False)
             return p.stdout, p.stderr, p.returncode
         _p9_patch(_p9_core, "shell_as_game_user", _batch_sh)

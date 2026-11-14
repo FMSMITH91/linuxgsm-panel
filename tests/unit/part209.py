@@ -40,6 +40,9 @@ from panel.services import monitoring as _mon209
 
 _TMP209 = _tf209.mkdtemp(prefix="lgsm-unit-p209-")
 _HAVE209 = bool(_shutil209.which("node") and _shutil209.which("jq"))
+# The stand-in shell's PATH after the rig's bin/: where node and jq are, then /usr/bin and /bin.
+_TOOLS209 = os.pathsep.join(sorted({os.path.dirname(p) for p in (_shutil209.which("node"), _shutil209.which("jq"))
+                                    if p}) + ["/usr/bin", "/bin"])
 
 # A gamedig package: bin/gamedig (never run by the batch) and lib/index.js, whose GameDig answers by
 # port. Each answer carries what the batch handed it: the options (in the name), the queries in
@@ -81,7 +84,7 @@ def _rig209(name, with_lib=True):
 def _bash209(path, log):
     """shell_as_game_user's stand-in: the body run by bash with `path` first on PATH."""
     def _run(server, user, sh, timeout=30, selfname=None):
-        env = dict(os.environ, PATH=path + os.pathsep + "/usr/bin:/bin", P209_LOG=log)
+        env = dict(os.environ, PATH=path + os.pathsep + _TOOLS209, P209_LOG=log)
         try:
             r = _sp209.run(["bash", "-c", sh], capture_output=True, text=True, timeout=60,  # nosec B603 B607
                            env=env, check=False)
@@ -112,28 +115,32 @@ def _batch209():
     got = _cron209.player_slots_batch(NS(id=209001), "gmodsrv209", targets) or {}
     took = _time209.monotonic() - t0
     opts = {k: _json209.loads(v[2]) for k, v in got.items() if v[2]}
-    check("batch: ONE node process loads gamedig once for all 13 targets (it was a gamedig per target)",
-          _loads209(log) == 1 and len(got) == 13, repr((_loads209(log), sorted(got))))
-    check("batch: at most _BATCH_PARALLEL queries run at once, and that many do",
-          max((v[1] or 0) for v in got.values()) == _cron209._BATCH_PARALLEL, repr({k: v[1] for k, v in got.items()}))
-    check("batch: a target past its own deadline, and one gamedig failed, read unknown; the others answer",
-          got.get(12) == (None, None, None) and got.get(13) == (None, None, None) and len(opts) == 11
-          and took < 6, repr((got.get(12), got.get(13), len(opts), round(took, 1))))
-    want = {"p": "27015", "st": None, "sc": True, "pc": True, "rp": True, "g": False}
-    check("batch: each query gets the gamedig command's options (port as text, stripColors, portCache and "
-          "requestPlayers on, givenPortOnly off) and an instance of its own",
-          all(opts.get(1, {}).get(k) == v for k, v in want.items())
-          and len({o.get("i") for o in opts.values()}) == len(opts), repr(opts.get(1)))
+    eq("batch: ONE node process loads gamedig once for all 13 targets (it was a gamedig per target)",
+       (_loads209(log), len(got)), (1, 13))
+    eq("batch: at most _BATCH_PARALLEL queries run at once, and that many do",
+       max(v[1] or 0 for v in got.values()) if got else None, _cron209._BATCH_PARALLEL)
+    eq("batch: a target past its own deadline, and one gamedig failed, read unknown; the others answer",
+       (got.get(12), got.get(13), len(opts), took < 6), ((None, None, None), (None, None, None), 11, True))
+    first = opts.get(1, {})
+    eq("batch: each query gets the gamedig command's options (port as text, stripColors, portCache and "
+       "requestPlayers on, givenPortOnly off) and an instance of its own",
+       ([first.get(k) for k in ("p", "st", "sc", "pc", "rp", "g")], len({o.get("i") for o in opts.values()})),
+       (["27015", None, True, True, True, False], len(opts)))
     eq("batch: a Minecraft target waits 500 ms per packet, the others gamedig's default",
        (opts.get(11, {}).get("st"), opts.get(2, {}).get("st")), (500, None))
+    _batch_fallbacks209(targets, log)
+
+
+def _batch_fallbacks209(targets, log):
+    """The batch when gamedig cannot be loaded in-process, and on a host with no gamedig at all."""
     _p9_patch_sm("shell_as_game_user", _bash209(_rig209("nolib", with_lib=False), log))
     check("batch: a gamedig node cannot load in-process leaves the batch unrun (None: each server is "
           "then asked on its own), never 'every server unknown'",
           _cron209.player_slots_batch(NS(id=209001), "gmodsrv209", targets[:3]) is None)
     empty = os.path.join(_TMP209, "empty")
     os.makedirs(empty, exist_ok=True)
-    if _shutil209.which("gamedig", path="/usr/bin:/bin"):
-        skip("batch: no gamedig command reads every target unknown", "this machine has a gamedig in /usr/bin")
+    if _shutil209.which("gamedig", path=_TOOLS209):
+        skip("batch: no gamedig command reads every target unknown", "this machine has a gamedig on PATH")
         return
     _p9_patch_sm("shell_as_game_user", _bash209(empty, log))
     eq("batch: a host with no gamedig command reads every target unknown, as before",
@@ -155,12 +162,11 @@ def _cli_flags209():
         _cron209.game_map(srv, "mcsrv209", gt, 25565)
         _game209.player_list(srv, "mcsrv209", gt, 25565)
         _game209._queried_version(srv, "mcsrv209", gt, 25565)
-    mc = [s for s in sent if "--type minecraft" in s]
-    other = [s for s in sent if "--type garrysmod" in s]
-    check("gamedig command: every Minecraft query (counts, slots, map, list, version) passes "
-          "--socketTimeout 500 after its address, and no other game's does",
-          len(mc) == 5 and all("127.0.0.1:25565 --socketTimeout 500 " in s for s in mc)
-          and len(other) == 5 and not any("socketTimeout" in s for s in other), repr(sent)[:400])
+    kinds = [("minecraft" if "--type minecraft" in s else "other", "127.0.0.1:25565 --socketTimeout 500 " in s,
+              "socketTimeout" in s) for s in sent]
+    eq("gamedig command: every Minecraft query (counts, slots, map, list, version) passes "
+       "--socketTimeout 500 after its address, and no other game's does",
+       kinds, [("minecraft", True, True)] * 5 + [("other", False, False)] * 5)
 
 
 def _map209():
