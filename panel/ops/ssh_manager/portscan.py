@@ -75,6 +75,8 @@ def _invalidate_port_scan(remote_id):
     """Drop a remote's cached port scan so the next status poll re-reads it.
 
     Call after any action that changes what's listening (start/stop/restart), so status is fresh
-    immediately.
+    immediately. The host's shared player lists go with it: a stopped server's players are gone.
     """
     _port_scan_cache.pop(remote_id, None)
+    from panel.ops.ssh_manager import game as _game   # at call time: game imports this module's package
+    _game.forget_lists(remote_id)
