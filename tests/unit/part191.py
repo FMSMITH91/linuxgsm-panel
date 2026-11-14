@@ -16,9 +16,8 @@ Held here:
   blank in it goes, the other worlds and the server's own files stay; a worlds folder that is a
   symlink is refused, nothing deleted.
 * The card and the sweep, through the app: both games get a reset card with their own text; the
-  player box is ticked for Paper (gamedig counts it) and unticked for Bedrock, whose current servers
-  answer no player query the panel has (it waits for a count only when ticked). A due reset runs
-  state, stop, backup, delete, start, or stops short as each refusal says.
+  player box is ticked for Paper (gamedig counts it) and for Bedrock (its console log counts it,
+  part200). A due reset runs state, stop, backup, delete, start, or stops short as each refusal says.
 
 HOW IT RUNS. part12's app with its transport tripwire armed and every host call stubbed (part183's
 sweep helper); host commands run under local bash in a temp folder (part183's helper). Times are
@@ -338,8 +337,7 @@ _munread191 = _sweep_case183(_mcb_sid191, values=None, read=_reads191((_MCB_PROP
 check("world reset sweep (mcb): a LinuxGSM config that could not be read waits, nothing stopped",
       _munread191["cmds"] == [] and _munread191["entry"].get("pending_since"), repr(_munread191))
 _mplayers191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_reads191((_MCB_PROPS191, None)), players=2)
-check("world reset sweep (mcb): where Bedrock's players can be counted (a RakNet server gamedig reaches), with "
-      "'wait until empty' on, players online keep it waiting with nothing stopped",
+check("world reset sweep (mcb): with 'wait until empty' on, players online keep it waiting with nothing stopped",
       _mplayers191["cmds"] == ["status"] and _mplayers191["players_asked"] == 1
       and "2 player(s) online" in (_mplayers191["entry"].get("wait") or "")
       and _core191.GAMEDIG_TYPE.get("mcb") == "mbe" and _core191.GAMEDIG_TYPE.get("pmc") == "minecraft",
@@ -348,7 +346,7 @@ _mnocount191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_reads191
 _mnowait191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_reads191((_MCB_PROPS191, None)), players=None,
                              wait_empty=False)
 check("world reset sweep (mcb): players that cannot be counted wait only when 'wait until empty' is ticked; "
-      "unticked (the card's default for Bedrock) the reset runs without asking",
+      "unticked the reset runs without asking",
       _mnocount191["cmds"] == ["status"] and "could not be counted" in (_mnocount191["entry"].get("wait") or "")
       and _mnowait191["players_asked"] == 0 and _last183(_mnowait191).get("ok") is True
       and len(_mnowait191["cmds"]) == 5, repr((_mnocount191, _mnowait191)))
@@ -459,11 +457,11 @@ check("world reset page: Paper's card says its world folder goes and plugins and
       and "plugins, worlds a plugin created, Paper" in _pg191.get("pmc", "")
       and "s folder in worlds/ (the one level-name names" in _pg191.get("mcb", "")
       and "Packs the old world applied are not applied to the new one" in _pg191.get("mcb", ""), "")
-check("world reset page: the player box is ticked for Paper and unticked for Bedrock, whose card says its players "
-      "can't be counted and to leave the box unticked",
-      'id="wipe-wait" checked' in _pg191.get("pmc", "") and 'id="wipe-wait">' in _pg191.get("mcb", "")
-      and "Bedrock servers can't be asked for their player count" in _pg191.get("mcb", "")
-      and "so leave it unticked" in _pg191.get("mcb", ""), "")
+check("world reset page: the player box is ticked for Paper and for Bedrock, whose card says its players are "
+      "counted from the console log, which LinuxGSM's console logging must keep",
+      'id="wipe-wait" checked' in _pg191.get("pmc", "") and 'id="wipe-wait" checked' in _pg191.get("mcb", "")
+      and "counted from the joins and leaves in the server's console log" in _pg191.get("mcb", "")
+      and "needs LinuxGSM's console logging on" in _pg191.get("mcb", ""), "")
 
 for _sid191 in (_pmc_sid191, _mcb_sid191):
     _p9_delete_server(_sid191)

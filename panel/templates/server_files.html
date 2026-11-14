@@ -581,7 +581,7 @@
     {% elif server.game_type == 'pmc' %}
     <p class="small text-secondary mb-2">World reset: deletes the world folder level-name names in server.properties (with its nether and end, its datapacks and its own Paper settings, and any world_nether and world_the_end folders beside it) and starts a new one; plugins, worlds a plugin created, Paper's config folder, ops, whitelist, bans and server.properties are kept. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped.</p>
     {% elif server.game_type == 'mcb' %}
-    <p class="small text-secondary mb-2">World reset: deletes the world's folder in worlds/ (the one level-name names in server.properties, with the player data and packs stored inside it) and the server makes a new world when it starts; server.properties, permissions.json, allowlist.json, the shared behavior_packs and resource_packs folders and other worlds are kept. Packs the old world applied are not applied to the new one: add them to it again. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Bedrock servers can't be asked for their player count, so the reset can't wait for an empty server: with “Wait until the server is empty” ticked it waits and gives up after 12 hours, so leave it unticked.</p>
+    <p class="small text-secondary mb-2">World reset: deletes the world's folder in worlds/ (the one level-name names in server.properties, with the player data and packs stored inside it) and the server makes a new world when it starts; server.properties, permissions.json, allowlist.json, the shared behavior_packs and resource_packs folders and other worlds are kept. Packs the old world applied are not applied to the new one: add them to it again. The new world uses level-seed from server.properties when one is set, otherwise a random seed. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Players are counted from the joins and leaves in the server's console log, so “Wait until the server is empty” needs LinuxGSM's console logging on (its default): without it the reset waits and gives up after 12 hours.</p>
     {% elif server.game_type == 'fctr' %}
     <p class="small text-secondary mb-2">World reset: deletes the map save and its autosaves and creates a new map the way LinuxGSM's install does (Factorio's default map settings); server settings, mods and other saves are kept. The panel takes a LinuxGSM backup first and does not reset if that backup fails. A server that is stopped stays stopped. Factorio's players cannot be counted, so with “Wait until the server is empty” ticked the reset waits and gives up after 12 hours: leave it unticked.</p>
     {% else %}
@@ -621,7 +621,7 @@
       </div>
       <div class="col-12">
         <div class="form-check mb-0">
-          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type not in ('fctr', 'mcb') %} checked{% endif %}>
+          <input class="form-check-input" type="checkbox" id="wipe-wait"{% if server.game_type != 'fctr' %} checked{% endif %}>
           <label class="form-check-label small" for="wipe-wait">Wait until the server is empty (up to 12 hours)</label>
         </div>
       </div>
