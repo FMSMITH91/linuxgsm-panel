@@ -14,8 +14,9 @@ report" (https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/pull
 and such an issue is backdated into overall code, which main's "Sonar way" gate does not judge. So
 a change that makes an UNCHANGED line wrong, or a rule SonarCloud rolls out, lands on main with every
 check green. This waits for SonarCloud's analysis of the commit, reads every open issue on the
-branch, and fails on any that is not in KNOWN_OPEN. It also fails when a KNOWN_OPEN issue is
-missing: the positive control that the read returned the branch's issues at all.
+branch, and fails on any that is not in KNOWN_OPEN. It also reads the branch's Accepted issues and
+fails when a KNOWN_ACCEPTED issue is not among them: the positive control that the reads returned the
+branch's issues at all, which holds with no issue open. A KNOWN_OPEN issue that is missing fails too.
 
 Usage:
     sonar_new_issues.py --pr NUMBER --sha HEAD_SHA [--timeout SECONDS]
@@ -35,10 +36,17 @@ PROJECT = "FMSMITH91_linuxgsm-panel"
 API = "https://sonarcloud.io/api/"
 # The open issues main is known to carry, by issue key, each with why it stays. Removing one when it
 # is fixed or Accepted is part of that change: the --branch check fails while one is missing.
-KNOWN_OPEN = {
-    "AaDejKLMfWz637hiAQny": "docker:S6471 in .clusterfuzzlite/Dockerfile: the fuzz image runs as "
-                            "root, which is ClusterFuzzLite's build contract. A Dockerfile has no "
-                            "NOSONAR, and it was left un-Accepted in SonarCloud (2026-09-29).",
+KNOWN_OPEN = {}
+# The issues Accepted in SonarCloud on main, by issue key, each with why. They are the --branch
+# check's positive control: each must be in SonarCloud's list of the branch's Accepted issues, or the
+# read returned less than the branch holds. One that is reopened, or fixed, comes out of here.
+KNOWN_ACCEPTED = {
+    "AaDejKLMfWz637hiAQny": "docker:S6471 in .clusterfuzzlite/Dockerfile: the fuzz build image runs "
+                            "as root. ClusterFuzzLite's build step runs `compile` in it with no "
+                            "--user (oss-fuzz infra/cifuzz/docker.py), and as uid 1001 the base "
+                            "image's compile stops at its first step: \"cp: cannot create regular "
+                            "file '/usr/lib/libFuzzingEngine.a': Permission denied\" (measured "
+                            "2026-11-14). The image only compiles, on an ephemeral runner.",
 }
 
 
@@ -151,6 +159,7 @@ def branch_verdict(entry, issues, total, known):
     Every open issue whose key is not in `known` fails, named. Every key in `known` that is not
     open fails too: either the read returned none of the branch's issues, or that one was fixed or
     Accepted and KNOWN_OPEN still lists it. So does a list shorter than SonarCloud's own counts.
+    The Accepted issues are judged apart, by _missing_accepted.
     """
     lines = [_issue_line(i) for i in issues if i.get("key") not in known]
     lines += _missing_known(issues, known)
@@ -171,8 +180,31 @@ def _missing_known(issues, known):
             for k, why in sorted(known.items()) if k not in keys]
 
 
+def _missing_accepted(accepted, known):
+    """One line for each issue in `known` that the Accepted list `accepted` does not hold.
+
+    The positive control: KNOWN_ACCEPTED holds an issue whatever is open, so an empty or short read
+    of the branch fails here, named, even when no issue is open at all.
+    """
+    keys = {i.get("key") for i in accepted}
+    return ["the Accepted issue %s is not in SonarCloud's list of the branch's Accepted issues (%s). "
+            "If it was reopened or fixed, update KNOWN_ACCEPTED in .github/scripts/sonar_new_issues.py; "
+            "if not, the read returned less than the branch holds" % (k, why)
+            for k, why in sorted(known.items()) if k not in keys]
+
+
 def _open_issues(branch, deadline=None):
-    """Every open issue on `branch` and SonarCloud's total, paging until the total is read.
+    """Every open issue on `branch` and SonarCloud's total: _branch_issues with resolved=false."""
+    return _branch_issues(branch, deadline, resolved="false")
+
+
+def _accepted_issues(branch, deadline=None):
+    """Every Accepted issue on `branch` and SonarCloud's total (issueStatuses=ACCEPTED)."""
+    return _branch_issues(branch, deadline, issueStatuses="ACCEPTED")
+
+
+def _branch_issues(branch, deadline=None, **which):
+    """Every issue on `branch` that `which` selects, and SonarCloud's total, paging until it is read.
 
     Kept once per key: a list that shifted between pages must not make up the count with repeats.
     None when SonarCloud did not answer a page before `deadline`.
@@ -181,7 +213,7 @@ def _open_issues(branch, deadline=None):
     deadline = time.time() + 900 if deadline is None else deadline
     for page in range(1, 21):                 # bounded: 20 pages of 500 is far past plausible
         got = _retrying(lambda p=page: _get("issues/search", componentKeys=PROJECT, branch=branch,
-                                            resolved="false", ps=500, p=p), deadline)
+                                            ps=500, p=p, **which), deadline)
         if got is None:
             return None
         total = int((got.get("paging") or {}).get("total", got.get("total", 0)) or 0)
@@ -210,18 +242,23 @@ def _wait_for_branch(branch, sha, timeout, sleep=None):
         sleep(20)
 
 
-def run_branch(branch, sha, timeout, known=None):
-    """Wait for SonarCloud's analysis of `sha` on `branch`, then return (problems, judged sha)."""
+def run_branch(branch, sha, timeout, known=None, accepted=None):
+    """Wait for SonarCloud's analysis of `sha` on `branch`, then return (problems, judged sha).
+
+    `known` and `accepted` stand in for KNOWN_OPEN and KNOWN_ACCEPTED.
+    """
     start = time.time()
     entry, why = _wait_for_branch(branch, sha, timeout)
     if why:
         return [why], ""
     judged = (entry.get("commit") or {}).get("sha") or "?"
     read = _open_issues(branch, start + timeout)
-    if read is None:
+    acc = None if read is None else _accepted_issues(branch, start + timeout)
+    if acc is None:
         return ["SonarCloud did not answer the issue read on %s within %ds" % (branch, timeout)], judged
     issues, total = read
-    return branch_verdict(entry, issues, total, KNOWN_OPEN if known is None else known), judged
+    lines = branch_verdict(entry, issues, total, KNOWN_OPEN if known is None else known)
+    return lines + _missing_accepted(acc[0], KNOWN_ACCEPTED if accepted is None else accepted), judged
 
 
 def _branch_cases():
@@ -246,6 +283,9 @@ def _branch_cases():
             len(branch_verdict(entry, [], 0, known)) == 2,
         "branch: a list shorter than SonarCloud's total fails":
             branch_verdict(entry, [kept], 3, known) != [],
+        "branch: the Accepted issue in the Accepted list passes": _missing_accepted([kept], known) == [],
+        "branch: the Accepted issue missing from that list fails, named":
+            len(_missing_accepted([], known)) == 1 and "K1" in _missing_accepted([new], known)[0],
     }
 
 
@@ -340,9 +380,9 @@ def main_branch(branch, sha, timeout):
         read = "read at its analysis of %s" % judged[:12]
     else:
         read = "read at its analysis of %s, a newer commit than %s" % (judged[:12], sha[:12])
-    print("SonarCloud: %d problem(s) with the open issues on %s, %s (%d known open issue(s) "
-          "expected; waited %ds)" % (len(problems), branch, read, len(KNOWN_OPEN),
-                                     int(time.time() - start)))
+    print("SonarCloud: %d problem(s) with the issues on %s, %s (%d known open and %d Accepted "
+          "issue(s) expected; waited %ds)" % (len(problems), branch, read, len(KNOWN_OPEN),
+                                             len(KNOWN_ACCEPTED), int(time.time() - start)))
     return 1 if problems else 0
 
 

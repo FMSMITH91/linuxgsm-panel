@@ -365,61 +365,75 @@ function onFbAutoToggle(){
   var fi=document.getElementById('fb-interval'); if(fi) fi.disabled=!on;
   saveBackupSettings();
 }
+// The summary under "Automatic game backups": the schedule, what is kept, and whether it fits.
+// Split into the pieces below so each stays small; the text and markup are the summary's own.
 function fbSummary(){
   var el=document.getElementById('fb-summary'); if(!el) return;
   var on=document.getElementById('fb-auto-enabled').checked;
   var keep=Number.parseInt(document.getElementById('fb-keep').value,10)||1;
-  var dk=window._bkDisk||{free:0,est_cycle:0};
-  var cycle=dk.est_cycle||0;        // size of one full backup run (all servers)
-  var free=dk.free||0;
-  var projected=cycle*keep;         // rough space the retained backups will occupy
-  function fmt(b){ return (typeof bkFmtBytes==='function')?bkFmtBytes(b):(b+' B'); }
-  var parts=[];
-
-  if(!on){
-    // Whole sentences with the number put in after translation (tfHtml): built from pieces around
-    // the count and the bold words, every one was English on a translated page.
-    parts.push('<i class="bi bi-info-circle"></i> '+(keep===1
-      ? tfHtml('Automatic backups are off — nothing runs on a schedule. Use “Back up game servers now” for a one-off; only the latest backup per server is kept.')
-      : tfHtml('Automatic backups are off — nothing runs on a schedule. Use “Back up game servers now” for a one-off; the {n} most recent backups per server are kept.', {n: keep})));
-    el.innerHTML=parts.join('<br>'); return;  // nosemgrep
-  }
-
+  if(!on){ el.innerHTML=fbOffLine(keep); return; }  // nosemgrep
   var days=Number.parseInt(document.getElementById('fb-interval').value,10)||7;
-  // Any other stored interval says its number: it read "once a month" for every 3 days.
-  var every=(days===1?'By default, each server is backed up every day.':(days===7?'By default, each server is backed up once a week.'
-            :(days===14?'By default, each server is backed up once every 2 weeks.':(days===30?'By default, each server is backed up once a month.'
-            :'By default, each server is backed up every {n} days.'))));
+  var dk=fbDiskReading(keep);
+  var parts=[fbScheduleLine(days, keep, dk)];
+  fbNoteLines(parts, days, keep, dk);
+  el.innerHTML=parts.join('<br>');  // nosemgrep
+}
+function fbFmtBytes(b){ return (typeof bkFmtBytes==='function')?bkFmtBytes(b):(b+' B'); }
+// Whole sentences with the number put in after translation (tfHtml): built from pieces around
+// the count and the bold words, every one was English on a translated page.
+function fbOffLine(keep){
+  return '<i class="bi bi-info-circle"></i> '+(keep===1
+    ? tfHtml('Automatic backups are off — nothing runs on a schedule. Use “Back up game servers now” for a one-off; only the latest backup per server is kept.')
+    : tfHtml('Automatic backups are off — nothing runs on a schedule. Use “Back up game servers now” for a one-off; the {n} most recent backups per server are kept.', {n: keep}));
+}
+// The last disk reading: one full backup run of all servers (cycle), the free space, the rough
+// space the retained backups will occupy (projected), and whether the servers span hosts.
+function fbDiskReading(keep){
+  var dk=window._bkDisk||{free:0,est_cycle:0};
+  var cycle=dk.est_cycle||0;
+  return {cycle: cycle, free: dk.free||0, projected: cycle*keep, multi: !!window._bkMultiHost};
+}
+// Any other stored interval says its number: it read "once a month" for every 3 days.
+var _fbEvery={1: 'By default, each server is backed up every day.', 7: 'By default, each server is backed up once a week.',
+              14: 'By default, each server is backed up once every 2 weeks.', 30: 'By default, each server is backed up once a month.'};
+function fbScheduleLine(days, keep, dk){
+  var every=_fbEvery[days]||'By default, each server is backed up every {n} days.';
   var s='<i class="bi bi-info-circle"></i> '+tfHtml(every, {n: days})+' '
     +(keep===1 ? tfHtml('The newest backup is kept per server; older ones are deleted automatically.')
                : tfHtml('The {n} newest backups are kept per server; older ones are deleted automatically.', {n: {html: '<strong>'+escapeHtml(String(keep))+'</strong>'}}))
     +' '+tfHtml('(Override per server below.)');
-  var multi = !!window._bkMultiHost;
-  if(cycle>0 && !multi){ s+=' '+(free>0
-      ? tfHtml('At the current size that\'s up to {size} of backups ({free} free now).', {size: {html: '<strong>'+escapeHtml(fmt(projected))+'</strong>'}, free: fmt(free)})
-      : tfHtml('At the current size that\'s up to {size} of backups.', {size: {html: '<strong>'+escapeHtml(fmt(projected))+'</strong>'}})); }
-  parts.push(s);
-
+  if(dk.cycle>0 && !dk.multi){ s+=' '+fbSizeText(dk); }
+  return s;
+}
+function fbSizeText(dk){
+  var size={html: '<strong>'+escapeHtml(fbFmtBytes(dk.projected))+'</strong>'};
+  return dk.free>0
+    ? tfHtml('At the current size that\'s up to {size} of backups ({free} free now).', {size: size, free: fbFmtBytes(dk.free)})
+    : tfHtml('At the current size that\'s up to {size} of backups.', {size: size});
+}
+function fbNoteLines(parts, days, keep, dk){
   if(days===1){
     parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Daily full backups of game files eat disk fast — keep a low “keep” count unless you have lots of free space.</span>');
   }
-  if(multi){
+  if(dk.multi){
     parts.push('<span class="text-secondary"><i class="bi bi-hdd-network"></i> Disk usage is shown per server below (they\'re on different hosts).</span>');
   }
-  if(cycle>0 && free>0 && !multi){
-    if(projected>free){
-      parts.push('<span class="text-danger"><i class="bi bi-exclamation-octagon"></i> '+tfHtml('This needs more than your free disk ({free}) — backups will fail once it fills up.', {free: fmt(free)})+'</span>');
-    } else if(projected>free*0.5){
-      parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> This would use over half your free disk.</span>');
-    }
-    var recKeep=Math.max(1, Math.floor(free*0.4/cycle));
-    if(recKeep<keep){
-      parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> '+tfHtml('Recommended: keep ≤ {n} at ~{size} per run (leaves comfortable headroom).', {n: {html: '<strong>'+escapeHtml(String(recKeep))+'</strong>'}, size: fmt(cycle)})+'</span>');
-    }
-  } else if(cycle===0){
+  if(dk.cycle>0 && dk.free>0 && !dk.multi){
+    fbSpaceLines(parts, keep, dk);
+  } else if(dk.cycle===0){
     parts.push('<span class="text-secondary">Run a backup once and this will estimate the space each cycle uses and recommend a safe “keep”.</span>');
   }
-  el.innerHTML=parts.join('<br>');  // nosemgrep
+}
+function fbSpaceLines(parts, keep, dk){
+  if(dk.projected>dk.free){
+    parts.push('<span class="text-danger"><i class="bi bi-exclamation-octagon"></i> '+tfHtml('This needs more than your free disk ({free}) — backups will fail once it fills up.', {free: fbFmtBytes(dk.free)})+'</span>');
+  } else if(dk.projected>dk.free*0.5){
+    parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> This would use over half your free disk.</span>');
+  }
+  var recKeep=Math.max(1, Math.floor(dk.free*0.4/dk.cycle));
+  if(recKeep<keep){
+    parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> '+tfHtml('Recommended: keep ≤ {n} at ~{size} per run (leaves comfortable headroom).', {n: {html: '<strong>'+escapeHtml(String(recKeep))+'</strong>'}, size: fbFmtBytes(dk.cycle)})+'</span>');
+  }
 }
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;

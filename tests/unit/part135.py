@@ -381,6 +381,11 @@ check("settings read: tailscale/local's no-answer (-1) is unreadable, a sudo ref
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. The refusals, over a stand-in host
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+# _Host135's options, by keyword, and what each is when not given (see its docstring).
+_HOST_OPTIONS135 = {"enabled": True, "incoming": "deny", "outgoing": "allow", "stored_rules": "", "rc": 0,
+                    "ts": (False, False), "sshd": ("22",), "stick": False, "fail": ()}
+
+
 class _Host135:
     """A host's UFW: its rules (rows as `ufw status numbered` prints them), policies, and what it was sent.
 
@@ -389,11 +394,14 @@ class _Host135:
     sshd serves (None: the read fails); `stick`: a change exits 0 and changes nothing.
     """
 
-    def __init__(self, rules=(), enabled=True, incoming="deny", outgoing="allow", stored_rules="", rc=0,
-                 ts=(False, False), sshd=("22",), stick=False, fail=()):
-        self.rules, self.enabled, self.stored_rules, self.rc = list(rules), enabled, stored_rules, rc
-        self.pol = {"incoming": incoming, "outgoing": outgoing, "routed": "deny"}
-        self.logging, self.ts, self.sshd, self.stick, self.fail = "low", ts, sshd, stick, set(fail)
+    def __init__(self, rules=(), **options):
+        unknown = sorted(set(options) - set(_HOST_OPTIONS135))
+        if unknown:
+            raise TypeError("_Host135 has no option %s" % ", ".join(unknown))
+        o = dict(_HOST_OPTIONS135, **options)
+        self.rules, self.enabled, self.stored_rules, self.rc = list(rules), o["enabled"], o["stored_rules"], o["rc"]
+        self.pol = {"incoming": o["incoming"], "outgoing": o["outgoing"], "routed": "deny"}
+        self.logging, self.ts, self.sshd, self.stick, self.fail = "low", o["ts"], o["sshd"], o["stick"], set(o["fail"])
         self.sent = []
 
     def _status(self, kind):
