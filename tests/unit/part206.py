@@ -195,6 +195,7 @@ try:
     _touch206(_arma_cfg206(_home206), _ARMA_INST206)
     _sid206 = _p9_new_server(P9_HOST, _U, "arma3", 2302)
     _p9_arm(who="part206")
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
     _admin206 = _p9_client(P9_ADMIN)
@@ -259,6 +260,7 @@ try:
     _touch206(_ns2_cfg206(_tmp206n), 'port="27015"\nmods="706d242"\n')
     _sid206n = _p9_new_server(P9_HOST, _U, "ns2c", 27015)
     _p9_arm(who="part206")
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_tmp206n))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
     _c206n = _p9_client(P9_ADMIN)
@@ -359,6 +361,7 @@ try:
     _home206f = _fctr_home206(_tmp206f)
     _sid206f = _p9_new_server(P9_HOST, _U, "fctr", 34197)
     _p9_arm(who="part206")
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206f))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
     _c206f = _p9_client(P9_ADMIN)
@@ -504,6 +507,7 @@ try:
     _home206m = _mc_home206(_tmp206m)
     _sid206m = _p9_new_server(P9_HOST, _U, "mc", 25565)
     _p9_arm(who="part206")
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206m))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
     _c206m = _p9_client(P9_ADMIN)
@@ -614,6 +618,7 @@ try:
     _home206b = _mcb_home206(_tmp206b)
     _sid206b = _p9_new_server(P9_HOST, _U, "mcb", 19132)
     _p9_arm(who="part206")
+    _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206b))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
     _c206b = _p9_client(P9_ADMIN)
