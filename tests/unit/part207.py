@@ -117,7 +117,7 @@ _SQL_CASES = [("db_sql_create", ("mariadb", "gs12_lp", "native", "30", _PW)),
               ("db_sql_password", ("mysql", "gs3_x", "sha2", _PW)),
               ("db_sql_exists", ("gs3_x",)), ("db_sql_drop", ("gs3_x",)), ("db_sql_tables", ("gs3_x",)),
               ("db_sql_sizes", (["gs3_x", "gs3_y"],)), ("db_sql_harden", (_PW,)),
-              ("db_defaults_text", ("root", _APW)), ("db_grant_target", ("gs12_l_",))]
+              ("db_defaults_text", ("root", _APW)), ("db_grant_target", ("gs12_lp",))]
 eq("db SQL: the helper and the panel build the same bytes for every statement",
    [c for c, a in _SQL_CASES if getattr(_helper, c)(*a) != getattr(_priv207, c)(*a)], [])
 eq("db constants: both copies agree on every shared constant",
