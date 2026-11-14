@@ -13,7 +13,8 @@ var DB_WARN = {
 var DB_STATE = {
   setting_up: 'Setting up databases on this host. This takes a minute or two.',
   unsupported: 'This host\'s database server isn\'t one the panel can use: it needs MariaDB 10.4 or later, or MySQL 8.0 or later.',
-  unreadable: 'Couldn\'t read the database server on this host: it did not answer. Try again.'
+  unreadable: 'Couldn\'t read the database server on this host: it did not answer. Try again.',
+  needs_login: 'A database server is already running here, but the panel can\'t sign in to it yet. A super admin can add its admin login.'
 };
 
 (function () {
@@ -78,7 +79,9 @@ var DB_STATE = {
   // ── the host's database server ──────────────────────────────────────────────────────────────
   function hostLine(d) {
     var h = d.host, warns = (h ? h.warnings : d.probe_warnings) || [];
-    if (!h) return {text: DB_STATE[d.state] ? T(DB_STATE[d.state]) : '', warn: d.state === 'unreadable'};
+    // A superadmin gets the admin login form for needs_login instead of a line.
+    var said = DB_STATE[d.state === 'needs_login' && d.can.su ? '' : d.state];
+    if (!h) return {text: said ? T(said) : '', warn: d.state === 'unreadable'};
     var ver = /^(\d+\.\d+)/.exec(h.version || ''), name = h.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
     var text = TF('{server} on this host.', {server: name + (ver ? ' ' + ver[1] : '')});
     var bad = warns.filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
@@ -106,10 +109,6 @@ var DB_STATE = {
     show('db-setup-can', d.can.setup);
     show('db-setup-ask', !d.can.setup);
     show('db-login', d.state === 'needs_login' && d.can.su);
-    if (d.state === 'needs_login' && !d.can.su) {
-      h.textContent = T('A database server is already running here, but the panel can\'t sign in to it yet. A super admin can add its admin login.');
-      show('db-host', true);
-    }
   }
 
   function drawAdd(d) {
