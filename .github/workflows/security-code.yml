@@ -57,7 +57,7 @@ jobs:
       pull-requests: read   # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -211,7 +211,7 @@ jobs:
       pull-requests: read      # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -306,7 +306,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Bandit results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -321,7 +321,7 @@ jobs:
       pull-requests: read      # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -493,7 +493,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Semgrep results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: semgrep.sarif
           category: semgrep
