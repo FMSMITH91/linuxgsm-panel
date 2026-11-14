@@ -465,15 +465,19 @@ def _lg265_after_update_lgsm(app, gs, who, run):
     after = _lgu.script_release(*who[:3])
     ok, msg = _lgu.outcome(name, before, after, rc, _action_failure_reason(clean)[:280] if rc else "")
     _console_push(app, who[3], f"[panel] update-lgsm: {msg}")
-    if rc != 0:
-        return ok, msg
+    if rc == 0:
+        _lg265_refresh_after_update(gs)
+    return ok, msg
+
+
+def _lg265_refresh_after_update(gs):
+    """Re-read the command list a newer LinuxGSM release may have grown; a failure only logs."""
     try:
         lg265_refresh_commands(gs)
     except Exception:
         db.session.rollback()
         _log.debug("command list refresh after update-lgsm failed for %s", row_label(gs, "name"),
                    exc_info=True)
-    return ok, msg
 
 
 def _r15e_said(msg):
