@@ -381,9 +381,7 @@ var DB_STATE = {
 
   // Load when the tab is first opened (or the page opens on it).
   document.addEventListener('click', function (e) {
-    var b = e.target && e.target.closest ? e.target.closest('[data-sfsub-btn="databases"]') : null;
-    if (b) window.dbLoad(false);
-  });
+    if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="databases"]')) window.dbLoad(false); });
   window.addEventListener('hashchange', function () { if (location.hash === '#databases') window.dbLoad(false); });
   if (location.hash === '#databases') window.dbLoad(false);
 })();
