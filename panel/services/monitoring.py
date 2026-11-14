@@ -35,8 +35,8 @@ from panel.core.panel_state import (
     forget_rows, keyed_state_with_locks, register_remote_state,
 )
 from panel.ops.ssh_manager import (
-    _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
-    is_bedrock, is_local_server, lgsm_get_values, metrics_for_game, register_remote_cache,
+    _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, game_port_listening,
+    host_live_metrics, is_bedrock, is_local_server, lgsm_get_values, metrics_for_game, register_remote_cache,
     remote_fail2ban_attempt_counts,
     fwa_block_target, fwa_panel_source, remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip,
     run_command,
@@ -1234,7 +1234,7 @@ def _monitor_server(remote, gs, probe, ports):
     """
     if gs.status in ("installing", "configuring"):
         return False
-    up = gs.port in ports
+    up = game_port_listening(gs.game_type, gs.port, ports)
     # Display-only: does the BOX think a restart is queued for this server?
     # None means "could not look", and that must not be written as "no restart pending"
     # — the badge would simply go out, which is indistinguishable from the cron having

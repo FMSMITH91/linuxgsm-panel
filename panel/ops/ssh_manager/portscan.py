@@ -71,6 +71,23 @@ def _remote_listening_ports(remote):
         _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)
     return ports
 
+# Games that do not listen on the port the panel holds for them, and where they do instead, as
+# offsets from it. Valheim: LinuxGSM's vhserver starts it with `-port ${port}` (2456) and, since
+# v24.3.0, -crossplay (its _default.cfg); a crossplay server was found listening on 2457/udp only
+# (port + 1, Valheim's Steam query port, gamedig's valheim port_query_offset 1), so a scan for
+# 2456 read a running server as offline. Its own port still counts, for a server off crossplay.
+_LISTENS_ALSO_ON = {"vh": (1,)}
+
+
+def game_port_listening(game_type, port, ports):
+    """Whether a game whose port is `port` is listening, by a scan's set of listening `ports`."""
+    if port in ports:
+        return True
+    offsets = _LISTENS_ALSO_ON.get((game_type or "").lower(), ())
+    return (isinstance(port, int) and not isinstance(port, bool)
+            and any(port + off in ports for off in offsets))
+
+
 def _invalidate_port_scan(remote_id):
     """Drop a remote's cached port scan so the next status poll re-reads it.
 

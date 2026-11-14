@@ -10,7 +10,7 @@ from panel.core.panel_state import (_install_jobs, _install_lock)
 from panel.db.models import (GameServer, HostSample, MetricSample, db, rows_still_held,
     row_label, still_held)
 from panel.db.prefs import (_apply_user_server_order, _effective_prefs)
-from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
+from panel.ops.ssh_manager import (_remote_listening_ports, game_port_listening, get_server_status)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -646,7 +646,7 @@ def _status_flips(app, scanned):
             # progress row vanish and show "Not installed" the moment you navigated back.
             if not gs.installed or gs.status in ("installing", "configuring"):
                 continue
-            st = "online" if gs.port in ports else "offline"
+            st = "online" if game_port_listening(gs.game_type, gs.port, ports) else "offline"
             if gs.status != st:
                 # Deliberately NOT `gs.status = st`. Assigning marks the object dirty, and the
                 # commit then flushes one UPDATE per server no matter what bulk statement runs
