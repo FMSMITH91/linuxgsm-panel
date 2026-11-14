@@ -7300,10 +7300,13 @@ def _db_harden(sess, args):
 
 
 def do_db_harden(args, content):
-    """MariaDB only, on a server holding no database the panel did not make: listen on loopback,
-    no LOCAL INFILE, no name lookups; drop anonymous and remote root accounts and `test`; make or
-    re-key linuxgsm_panel_admin. Idempotent. A server it did not install is never reached: it
-    always holds a foreign database or the panel never asks."""
+    """Harden a MariaDB server the panel has just installed; idempotent.
+
+    Only on a server holding no database the panel did not make: listen on loopback, no LOCAL
+    INFILE, no name lookups; drop anonymous and remote root accounts and `test`; make or re-key
+    linuxgsm_panel_admin. A server it did not install is never reached: it always holds a foreign
+    database or the panel never asks.
+    """
     return _db_with("db-harden", args, content, _db_harden)
 
 
@@ -7331,7 +7334,7 @@ def do_db_create(args, content):
 
 
 def _db_password(sess, args):
-    rc, out, err = _db_run(sess, db_sql_password(args[0], args[2], args[3], sess["pw"]))
+    rc, _out, err = _db_run(sess, db_sql_password(args[0], args[2], args[3], sess["pw"]))
     if rc != 0:
         return _db_fail(sess, err, rc)
     print("changed")
@@ -7380,8 +7383,10 @@ def _db_dump_argv(sess, name):
 
 
 def _db_archive_dir():
-    """DB_ARCHIVE_DIR, made root-only (0700) if needed; OSError if either level is not this
-    process's own real directory."""
+    """Return DB_ARCHIVE_DIR, made root-only (0700) if needed.
+
+    OSError if either level is not this process's own real directory.
+    """
     for path in (DB_ARCHIVE_ROOT, DB_ARCHIVE_DIR):
         try:
             os.mkdir(path, 0o700)
@@ -7443,10 +7448,10 @@ def _db_dump_archive(sess, names):
 
 
 def _db_game_writer(pw, name, src_fd, commit_fd):
-    """In a child: become the game account, write ~/panel-db-dumps/<name>.sql.gz.tmp from `src_fd`
-    (gzip'd), then rename it into place when the parent says the dump completed. Its exit code.
+    """In a child, write one dump into the game account's files as that account; its exit code.
 
-    The account makes the directory and the file itself, through descriptors that refuse a link,
+    It becomes the account, writes ~/panel-db-dumps/<name>.sql.gz.tmp from `src_fd` (gzip'd), then
+    renames it into place when the parent says the dump completed. The account makes the directory and the file itself, through descriptors that refuse a link,
     so a link it planted reaches nothing it could not already write; root only hands it bytes.
     """
     if not _drop_to(pw):
@@ -7532,16 +7537,21 @@ def _db_dump(sess, args):
 
 
 def do_db_dump(args, content):
-    """Dump databases: into a game account's ~/panel-db-dumps (dest game, written AS the account,
-    so the server's own backup carries them), or into the root-only archive (dest archive, kept
-    DB_ARCHIVE_DAYS days). One line per database: dumped=<name> or failed=<name>."""
+    """Dump databases into a game account's files or into the root-only archive.
+
+    dest game: ~/panel-db-dumps, written AS the account, so the server's own backup carries them.
+    dest archive: DB_ARCHIVE_DIR, kept DB_ARCHIVE_DAYS days. One line per database: dumped=<name>
+    or failed=<name>.
+    """
     return _db_with("db-dump", args, content, _db_dump)
 
 
 def _db_import_child(pw, client, port, name, secret):
-    """In a child: as the game account, feed ~/panel-db-dumps/<name>.sql.gz to the client signed in
-    as the database's own account. The dump is the game's content, so the game's rights apply on
-    both sides. Its exit code."""
+    """In a child, import one dump as the game account; its exit code.
+
+    It feeds ~/panel-db-dumps/<name>.sql.gz to the client signed in as the database's own account.
+    The dump is the game's content, so the game's rights apply on both sides.
+    """
     if not _drop_to(pw):
         return 1
     dfd = os.open(os.path.join(os.path.realpath(pw.pw_dir), DB_DUMP_DIR),
@@ -7602,8 +7612,11 @@ def _db_import(sess, args):
 
 
 def do_db_import(args, content):
-    """Restore a database from the dump in its game server's files (~/panel-db-dumps/<name>.sql.gz),
-    run AS the game account and signed in as the database's own account, never as root."""
+    """Restore a database from the dump in its game server's files.
+
+    The dump is ~/panel-db-dumps/<name>.sql.gz; the import runs AS the game account, signed in as
+    the database's own account, never as root.
+    """
     return _db_with("db-import", args, content, _db_import)
 
 
@@ -7624,8 +7637,10 @@ def _db_drop(sess, args):
 
 
 def do_db_drop(args, content):
-    """Remove a database and its two accounts, after keeping a copy in the root-only archive. With
-    no copy it removes only an empty database."""
+    """Remove a database and its two accounts, after keeping a copy in the root-only archive.
+
+    With no copy it removes only an empty database.
+    """
     return _db_with("db-drop", args, content, _db_drop)
 
 

@@ -1017,7 +1017,7 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     """Run a privileged VERB (see privileged.py) against `server`.
 
     `secrets`: a database verb's sign-in and password ({"admin": (user, password), "pw": ...}).
-    They go on stdin on every path, and are scrubbed out of whatever comes back.
+    They go on stdin on every path; databases._verb scrubs them out of whatever comes back.
 
     Local, helper installed:  sudo -n <helper> <verb> <args...>   — argv, no shell anywhere.
     Local, helper missing:    the old `sudo bash -c '<command>'` path.
@@ -1035,14 +1035,10 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     and narrowing under that would break every privileged action rather than secure anything. The
     installer prints which one it wrote; SECURITY.md carries the full account.
     """
-    if secrets is not None:
-        res = _run_privileged(server, verb, args, timeout, merge_stderr, sudo, secrets)
-        hidden = _priv._db_secret_values(secrets)
-        return tuple(_priv.db_scrub(x, hidden) if isinstance(x, str) else x for x in res)
     if _ufw_mutating(verb):
         with ufw_lock(server):
             return _run_privileged(server, verb, args, timeout, merge_stderr, sudo)
-    return _run_privileged(server, verb, args, timeout, merge_stderr, sudo)
+    return _run_privileged(server, verb, args, timeout, merge_stderr, sudo, secrets)
 
 
 # The locale a privileged verb's tool runs in when it is rendered as shell: a remote, or the panel's

@@ -116,13 +116,18 @@ def _secrets_for(hostdb, pw=None):
 
 
 def _verb(remote, verb, args, secrets=None):
-    """One db-* verb: (rc, output). A verb the panel's own table refuses is rc 2, nothing run."""
+    """One db-* verb: (rc, output), the output scrubbed of every secret it was given.
+
+    The helper scrubs what the client printed on the panel's own host; this covers a remote and the
+    pre-helper shell too, before any caller sees a word. A verb the panel's own table refuses is
+    rc 2, with nothing run.
+    """
     try:
         out, err, rc = _core.run_privileged(remote, verb, list(args), timeout=TIMEOUTS[verb],
                                             secrets=secrets or {})
     except _priv.VerbError:
         return 2, ""
-    return rc, "\n".join(x for x in (out, err) if x)
+    return rc, _priv.db_scrub("\n".join(x for x in (out, err) if x), _priv._db_secret_values(secrets))
 
 
 def _version_tuple(text):

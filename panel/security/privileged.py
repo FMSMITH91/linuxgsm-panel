@@ -2106,7 +2106,7 @@ def _db_account(s):
 
 
 def db_option_value(s):
-    """`s` as a double-quoted client option-file value.
+    r"""`s` as a double-quoted client option-file value.
 
     The parser (mysys/my_default.c in both servers) strips one pair of surrounding quotes, keeps a
     '#' inside them, and turns \\\\ and \\" back into one character; every backslash is escaped so

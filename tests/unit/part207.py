@@ -743,7 +743,7 @@ try:
 finally:
     _smc207.run_privileged = _rp_saved
 
-# ── 7. run_privileged: secrets on stdin and scrubbed from the answer, on every transport ────────
+# ── 7. run_privileged (through databases._verb): secrets on stdin, and scrubbed, on every transport ──
 _TP = {}
 _tp_saved = {k: getattr(_smc207, k) for k in ("is_local_server", "helper_present", "_exec_local_argv",
                                                "run_command", "_run_local")}
@@ -767,10 +767,10 @@ try:
     for _where, _local, _helped in (("helper", True, True), ("remote", False, True), ("shell", True, False)):
         _smc207.is_local_server = (lambda loc: (lambda s: loc))(_local)
         _smc207.helper_present = (lambda h: (lambda recheck=False: h))(_helped)
-        _res[_where] = _smc207.run_privileged(object(), "db-create", _a, secrets=_s)
+        _res[_where] = _dbs207._verb(object(), "db-create", _a, _s)
     eq("run_privileged: each transport was the one taken", sorted(_TP), ["helper", "remote", "shell"])
-    eq("run_privileged: the answer is scrubbed of both secrets on every transport",
-       [w for w, r in _res.items() if _PW in "".join(r[:2]) or _APW in "".join(r[:2]) or "***" not in r[0]], [])
+    eq("databases: what every transport answers is scrubbed of both secrets before a caller sees it",
+       [w for w, r in _res.items() if _PW in r[1] or _APW in r[1] or "***" not in r[1] or r[0] != 1], [])
     check("run_privileged: the helper gets the document on stdin and no secret on argv",
           _TP["helper"][1] == _priv207.db_doc("db-create", _a, _s) and _PW not in " ".join(_TP["helper"][0])
           and _TP["helper"][0][3] == "db-create", repr(_TP["helper"]))
