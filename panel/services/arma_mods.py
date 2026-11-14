@@ -1,9 +1,9 @@
-"""Arma 3 and DayZ: the local mod folders LinuxGSM's `mods` and `servermods` settings load.
+r"""Arma 3 and DayZ: the local mod folders LinuxGSM's `mods` and `servermods` settings load.
 
 LINUXGSM (master 98be8a98, 2026-11-13): arma3server's and dayzserver's _default.cfg
 (lgsm/config-default/config-lgsm/<game>server/_default.cfg) set `mods=""` and `servermods=""` and
 start the server with `-mod=${mods} -servermod=${servermods}`. The comment above `mods` says how
-it is written: paths relative to serverfiles, separated by `\\;` (`mods="mods/@ace\\;mods/@cba_a3"`).
+it is written: paths relative to serverfiles, separated by `\;` (`mods="mods/@ace\;mods/@cba_a3"`).
 The backslash is needed because LinuxGSM hands the start line to tmux, whose shell would end the
 command at a bare `;`. The server runs in serverfiles (executabledir="${serverfiles}"), so `@x`
 names serverfiles/@x and `mods/@x` names serverfiles/mods/@x.
@@ -11,7 +11,7 @@ names serverfiles/@x and `mods/@x` names serverfiles/mods/@x.
 STEAM WORKSHOP mods are another setting, `workshopmods`, edited by the Workshop card
 (routes/workshop.py). LinuxGSM's workshop-update (lgsm/modules/workshop_core.sh) installs them in
 serverfiles/workshop/@<id> and never writes `mods`: at start, fn_workshop_mods_startparameters
-appends them to the `mods` value it passes (`mods="${mods:+${mods}\\;}workshop/@<id>..."`), after
+appends them to the `mods` value it passes (`mods="${mods:+${mods}\;}workshop/@<id>..."`), after
 the folders here. So this card lists only the folders in serverfiles and serverfiles/mods, never
 serverfiles/workshop, and leaves the Workshop's own list alone.
 
@@ -58,12 +58,12 @@ def valid_name(name):
 
 
 def split_value(value):
-    """The folders of a `mods` value in order: split at `\\;` (or a bare `;`), blanks dropped."""
+    r"""The folders of a `mods` value in order: split at `\;` (or a bare `;`), blanks dropped."""
     return [t.strip() for t in _SEP_RE.split(value or "") if t.strip()]
 
 
 def join_value(folders):
-    """A `mods` value LinuxGSM passes as one -mod= word: the folders joined with `\\;`."""
+    r"""A `mods` value LinuxGSM passes as one -mod= word: the folders joined with `\;`."""
     return "\\;".join(folders)
 
 

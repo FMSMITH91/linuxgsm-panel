@@ -1,10 +1,10 @@
-"""Part 206 of the unit suite: Mods cards for Arma 3 / DayZ folders, NS2: Combat, Factorio and Minecraft.
+r"""Part 206 of the unit suite: Mods cards for Arma 3 / DayZ folders, NS2: Combat, Factorio and Minecraft.
 
 * Which games get which Mods card (cod_mods.mods_kind): arma3 and dayz the folder lists, and the
   Workshop card's kind for ns2c (workshop.workshop_kind).
 * Arma 3 / DayZ (services/arma_mods, routes/game_mods): the @folder listing run by bash in a temp
   home (real folders only, never serverfiles/workshop, a link or an odd name), then the route through
-  the app: GET lists the folders and both lists, POST writes `mods` / `servermods` joined by `\\;` into
+  the app: GET lists the folders and both lists, POST writes `mods` / `servermods` joined by `\;` into
   the instance cfg (every other line kept), a folder not listed is refused, a key the secrets file
   sets is refused, without EDIT_FILES a save is 403, a root-capable account 409, each save audited.
 * ns2c (routes/workshop): the hex mod ids in `mods` read as Workshop ids and saved back as hex.
@@ -668,7 +668,7 @@ _out206 = _js99("game mods cards", (
     "  out.armaLoaded = await gmArmaLoad();\n"
     "  out.armaMods = txt('gm-arma-mods'); out.armaOther = btns('gm-arma-other'); out.armaNote = txt('gm-arma-note');\n"
     "  gmArmaAdd('mods', '@CBA_A3'); gmArmaMove('mods', 2, -1); gmArmaAdd('servermods', 'mods/@ace');\n"
-    "  reply({success: true, message: 'Saved.'}); sent = []; await gmArmaSave(null); out.armaSent = sent;\n"
+    "  reply({success: true, message: 'Saved.'}); sent = []; await gmArmaSave(null); out.armaSent = sent.slice();\n"
     "  reply({mods: [{name: 'base', enabled: true, builtin: true, files: []},\n"
     "                {name: 'k2', enabled: false, builtin: false, files: ['k2_1.0.0.zip']}], mod_list: 'ok', where: ''});\n"
     "  await gmFctrLoad(); out.fctr = btns('gm-fctr-list'); out.fctrText = txt('gm-fctr-list');\n"

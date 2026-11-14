@@ -723,9 +723,9 @@
     <div class="small fw-semibold mb-1">Mods</div>
     <div class="border rounded small mb-2" style="height:6.5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-mods" data-no-i18n></ul></div>
     <div class="small fw-semibold mb-1">Server mods</div>
-    <div class="border rounded small mb-2" style="height:5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-servermods" data-no-i18n></ul></div>
+    <div class="border rounded small mb-2" style="height:4.25rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-servermods" data-no-i18n></ul></div>
     <div class="small fw-semibold mb-1">Other folders</div>
-    <div class="border rounded small mb-2" style="height:5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-other" data-no-i18n></ul></div>
+    <div class="border rounded small mb-2" style="height:4.25rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-other" data-no-i18n></ul></div>
     <div id="gm-arma-note" class="small text-secondary mb-2" style="min-height:1.5em;"></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       <button class="btn btn-sm btn-primary fpm-edit" data-action="gmArmaSave" data-args='["@self"]'><i class="bi bi-save"></i> Save mod lists</button>
@@ -770,14 +770,14 @@
     <p class="small text-secondary mb-2">
       The datapacks in this server's world. The server loads them when it loads the world, so a change applies at the next restart.
     </p>
-    <div id="gm-mc-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;" data-no-i18n></div>
+    <div id="gm-mc-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;"></div>
     <div class="border rounded small mb-2" style="height:7rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-list" data-no-i18n></ul></div>
     <form class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="gmMcSearch" data-args='["@event"]' data-on="submit">
       <input type="search" id="gm-mc-q" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
              maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search Modrinth's datapacks" aria-label="Search Modrinth's datapacks">
       <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-search"></i> Search</button>
     </form>
-    <div class="border rounded small mb-2 fpm-edit" style="height:9rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-hits" data-no-i18n></ul></div>
+    <div class="border rounded small mb-2 fpm-edit" style="height:7rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-hits" data-no-i18n></ul></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmMcOpenFolder" data-args='["@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
       <span id="gm-mc-msg" class="small" role="status"></span>
@@ -798,7 +798,7 @@
     <p class="small text-secondary mb-2">
       The behavior and resource packs in this server's shared packs folders. Turn one on to apply it to the server's world; a change applies at the next restart.
     </p>
-    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;" data-no-i18n></div>
+    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;"></div>
     <div class="border rounded small mb-2" style="height:13rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mcb-list" data-no-i18n></ul></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles/behavior_packs","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}

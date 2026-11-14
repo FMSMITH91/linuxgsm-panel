@@ -59,7 +59,7 @@ REASONS = (UNREAD, NOT_A_PACK, NO_WORLD_DIR, BAD_WORLD_FILE)
 
 
 def kind(game_type):
-    """"java" (datapacks), "bedrock" (packs) or ""."""
+    """The kind of card a game gets: "java" (datapacks), "bedrock" (packs) or ""."""
     g = (game_type or "").lower()
     return "java" if g in JAVA_GAMES else ("bedrock" if g in BEDROCK_GAMES else "")
 
@@ -156,7 +156,7 @@ def parse_java(out):
 def _java_entry(rest):
     """One datapacks entry: {"name", "folder", "size", "managed"}, or None."""
     kind_, size, name = (rest.split(" ", 2) + ["", ""])[:3]
-    if kind_ not in ("f", "d") or not size.isdigit() or not name:
+    if kind_ not in ("f", "d") or not size.isdecimal() or not name:
         return None
     return {"name": name, "folder": kind_ == "d", "size": int(size), "managed": removable(name)}
 
