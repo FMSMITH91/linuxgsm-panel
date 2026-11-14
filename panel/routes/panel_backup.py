@@ -11,9 +11,10 @@ from panel.db.models import (_NO_BIRTH, AuditLog, GameServer, LOCAL_HOST_LABEL, 
 from panel.ops import (backup as bk, system_ops as so)
 from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_game_backups,
     run_game_backup, stream_game_backup)
-from panel.security.auth import (DELETE_BACKUP, DOWNLOAD_BACKUP, get_game, log_action, permission_required,
+from panel.security.auth import (DELETE_BACKUP, DOWNLOAD_BACKUP, RESTORE_BACKUP, get_game, log_action, permission_required,
     server_access_required, superadmin_required)
 from panel.services import (notifications)
+from panel.routes import backup_upload as _bup, game_restore as _grs
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count)
 import calendar
 import concurrent.futures
@@ -409,6 +410,8 @@ def register(app):
     _register_full_backup(app)
     _register_game_backup(app)
     _register_game_backup_files(app)
+    _grs.register(app)
+    _bup.register(app)
     _register_game_backup_settings(app)
     _register_backup_overview(app)
     _register_panel_backups(app)
@@ -535,8 +538,8 @@ def _register_game_backup(app):
             # Its scheduled wipe (or a queued stop/restart) is running: LinuxGSM's backup would
             # archive files as the wipe deleted them, its stop and start racing the wipe's. The
             # worker's own run asks again under its mark (_shared._marked_backup).
-            _why = i18n.Sentence("A scheduled wipe or a queued stop or restart of {name} is running. Try "
-                                 "again once it has finished.", name=gs.name)
+            _why = i18n.Sentence("A scheduled wipe, a restore from a backup, or a queued stop or restart of "
+                                 "{name} is running. Try again once it has finished.", name=gs.name)
             log_action(current_user, "game_backup", target=gs.name, detail="refused: %s" % _why,
                        success=False, server=gs)
             return jsonify({"success": False, "message": i18n.tr(_why)}), 409
@@ -742,11 +745,12 @@ def _register_game_backup_settings(app):
                    server=gs)
         return jsonify({"success": True, "schedule": sched})
 
-    # The listing the Backups tab's download and delete buttons sit in: either permission reads it.
-    # Taking a backup and changing the schedule (the routes above) stay superadmin-only.
+    # The listing the Backups tab's download, delete and restore buttons sit in: any of the three
+    # permissions reads it. Taking a backup and changing the schedule (the routes above) stay
+    # superadmin-only.
     @app.route("/api/panel/backup/game/<int:server_id>/info")
     @login_required
-    @permission_required(DOWNLOAD_BACKUP, DELETE_BACKUP)
+    @permission_required(DOWNLOAD_BACKUP, DELETE_BACKUP, RESTORE_BACKUP)
     @server_access_required
     def api_panel_backup_game_info(server_id):
         """One server's backup picture for its Files & Config tab.
@@ -782,6 +786,7 @@ def _register_game_backup_settings(app):
             "disk": {"free": disk.get("free", 0), "total": disk.get("total", 0)},
             "est_backup": est,
             "status": _game_backup_status.get(gs.id),
+            "restore": _grs.status_for_view(gs.id),
         })
 
 

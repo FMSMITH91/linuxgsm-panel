@@ -1859,17 +1859,28 @@ def _r13b_bkverify_code(server, user, name, started):
     return out if rc == 0 and out in _BKVERIFY_WHY else "ASK"
 
 
-def _bkverify_unconfirmed(server, user, selfname, before, out):
-    """None when this run's archive is proven whole, else why it is not (no prune follows)."""
+def _bkverify_unconfirmed(server, user, selfname, before, out, named=None):
+    """None when this run's archive is proven whole, else why it is not (no prune follows).
+
+    `named`, a list, gets the archive's name appended when it is known.
+    """
     name = _bkverify_name(server, user, selfname, before, out)
+    if name and named is not None:
+        named.append(name)
     if not name:
         return "which archive it wrote could not be found"
     return _bkverify_archive(server, user, name, before[0] if before else None)
 
 
-def _bkverify_success(server, user, selfname, before, out, keep, headroom_note):
-    """run_game_backup's answer to an exit-0 run: pruned and "Backed up" only once it is proven."""
-    why = _bkverify_unconfirmed(server, user, selfname, before, out)
+def _bkverify_success(server, user, selfname, before, out, keep, headroom_note, made=None):
+    """run_game_backup's answer to an exit-0 run: pruned and "Backed up" only once it is proven.
+
+    `made`, a list, gets the proven archive's name (run_game_backup's `made`).
+    """
+    named = []
+    why = _bkverify_unconfirmed(server, user, selfname, before, out, named=named)
+    if not why and made is not None:
+        made.extend(named[:1])
     if why:
         return False, ("LinuxGSM said the backup finished, but it is not confirmed: %s. "
                        "No old backups were removed." % why), False
@@ -1877,7 +1888,7 @@ def _bkverify_success(server, user, selfname, before, out, keep, headroom_note):
     return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
 
 
-def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note):
+def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note, made=None):
     """run_game_backup's answer to an exit-0 run whose output has a LinuxGSM backup FAIL line.
 
     The archive decides, not the text (_r13b_bkpart_judge): one that reads to the end is a backup —
@@ -1894,6 +1905,8 @@ def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note)
     code = _r13b_bkverify_code(server, user, name, started)
     if code is None:
         _bkprune_after_success(server, user, keep)
+        if made is not None:
+            made.append(name)
         msg = ("Backed up, with a warning from LinuxGSM: %s. The archive (%s) was checked and "
                "reads to the end." % (reason, name))
         return True, (msg + " " + headroom_note if headroom_note else msg), False
@@ -2010,7 +2023,7 @@ def _lg264_bk_after(server, user, selfname, out):
     return False, _lg264_bk_note(msg, "lgsm_postponed", req), True
 
 
-def _bk_after_run(server, user, selfname, before, run, keep, headroom_note):
+def _bk_after_run(server, user, selfname, before, run, keep, headroom_note, made=None):
     """run_game_backup's answer once LinuxGSM's `backup` has run: run = _run_linuxgsm_backup's tuple."""
     ok, lock_refused, out, err, rc = run
     lg = _lg264_bk_after(server, user, selfname, out) if rc == 0 else None
@@ -2018,9 +2031,9 @@ def _bk_after_run(server, user, selfname, before, run, keep, headroom_note):
         return lg
     text_failed = _bkverify_text_failed(out, err)
     if ok and not text_failed:
-        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
+        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note, made)
     if ok:
-        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note)
+        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note, made)
     if lock_refused:
         return False, ("A backup lock was in the way — a previous backup may still be running, or it "
                        "left a stale lock. Try again in a minute."), False
@@ -2028,6 +2041,19 @@ def _bk_after_run(server, user, selfname, before, run, keep, headroom_note):
     return False, (_backup_failure_reason(out, err)
                    + _bkpart_cleanup(server, user, selfname, before, rc, lock_refused,
                                      text_failed)), False
+
+
+# (server id, account) -> the archive the last run_game_backup proved it wrote (last_backup_made).
+_LAST_MADE = {}
+
+
+def last_backup_made(server, user):
+    """The name of the archive the last run_game_backup for `user` on `server` proved it wrote, or None.
+
+    A restore names its pre-restore archive by it, never by "the newest new name" (an upload
+    finished meanwhile would be that). Cleared when the next run starts.
+    """
+    return _LAST_MADE.get((getattr(server, "id", None), user))
 
 
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
@@ -2046,8 +2072,11 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     An unknown/unqueryable player count (None) is treated as empty, so games gamedig
     can't query still back up on schedule (matching the daily-restart behaviour) —
     which is exactly why `query_type` has to be threaded in (see below).
+
+    The name of the archive it proved it wrote is kept for last_backup_made.
     """
     selfname = selfname or user
+    _LAST_MADE.pop((getattr(server, "id", None), user), None)
     # Refused before the player query, the headroom prune and the listing, which would otherwise
     # each reach the host first: the backup itself is refused by shell_as_game_user anyway.
     if not _core.game_idents_ok(user, selfname):
@@ -2078,8 +2107,12 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, refusal, False
     # Taken last, just before the run: the headroom prune above may have removed archives.
     before = _bkpart_listing(server, user)
-    return _bk_after_run(server, user, selfname, before, _run_linuxgsm_backup(server, user, selfname),
-                         keep, headroom_note)
+    made = []
+    result = _bk_after_run(server, user, selfname, before, _run_linuxgsm_backup(server, user, selfname),
+                           keep, headroom_note, made)
+    if made:
+        _LAST_MADE[(getattr(server, "id", None), user)] = made[0]
+    return result
 
 
 # One row of the command table the instance script prints with no arguments:

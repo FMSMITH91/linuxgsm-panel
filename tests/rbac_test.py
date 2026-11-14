@@ -1723,6 +1723,34 @@ def _check_backup_permission_split():
               "got %d" % _r.status_code)
 
 
+def _check_restore_permission():
+    """RESTORE_BACKUP opens a game server's restore on its own, per server; the other two do not.
+
+    The body probed carries a typed name that is not the server's, so past the permission the route
+    answers 400 and starts nothing on either branch.
+    """
+    _none = client_as(_fpm_user("_rsnone", [auth.VIEW_FILES, auth.EDIT_FILES, auth.MANAGE_SERVERS]))
+    _both = client_as(_fpm_user("_rsboth", [auth.DOWNLOAD_BACKUP, auth.DELETE_BACKUP]))
+    _rs = client_as(_fpm_user("_bkrs", [auth.RESTORE_BACKUP]))
+    _rsu = "/api/panel/backup/game/%d/restore" % accessible_id
+    _rsb = {"name": "rbac-no-such-backup.tar.zst", "confirm": "rbac-not-the-server-name"}
+    for _who, _c in (("no backup permission", _none), ("DOWNLOAD_BACKUP + DELETE_BACKUP", _both)):
+        _r = _c.post(_rsu, json=_rsb)
+        check("%s: backup restore -> 403" % _who, _r.status_code == 403, "got %d" % _r.status_code)
+    _r = _rs.post(_rsu, json=_rsb)
+    check("RESTORE_BACKUP: the restore gets past the permission to its own checks (control, 400)",
+          _r.status_code == 400, "got %d" % _r.status_code)
+    check("RESTORE_BACKUP: the backup listing opens",
+          _rs.get("/api/panel/backup/game/%d/info" % accessible_id).status_code == 200)
+    _r = _rs.post("/api/panel/backup/game/%d" % accessible_id, json={"force": "not-a-flag"})
+    check("RESTORE_BACKUP holders still cannot TAKE a backup (superadmin only) -> 403",
+          _r.status_code == 403, "got %d" % _r.status_code)
+    if other_id:
+        _r = _rs.post("/api/panel/backup/game/%d/restore" % other_id, json=_rsb)
+        check("IDOR: backup restore on a non-granted server BLOCKED (for a RESTORE_BACKUP holder)",
+              _r.status_code == 403, "got %d" % _r.status_code)
+
+
 def _check_limited_user_server_actions():
     """The limited user's server actions and file/cron/tag writes are refused; tag reads scoped."""
     global _dl
@@ -4035,6 +4063,7 @@ try:
     _check_create_idor()
     _check_file_permission_split()
     _check_backup_permission_split()
+    _check_restore_permission()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
     _check_denials_and_limited_pages()
@@ -4340,6 +4369,14 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
+    # One piece of a backup upload, appended to a part file nothing lists: the upload's outcome (the
+    # archive kept, or why not) is audited once, by its finish (game_backup_upload / panel_backup_upload).
+    "api_panel_backup_game_upload_piece",
+    "api_panel_backup_upload_piece",
+    "api_panel_backup_upload",       # makes an empty part file; the finish audits what became of it
+    # A cancelled upload removes its own part file, which nothing listed: no archive came or went.
+    "api_panel_backup_game_upload_cancel",
+    "api_panel_backup_upload_cancel",
     "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
     "api_remote_bootstrap_dismiss",  # dismisses a banner
     "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)

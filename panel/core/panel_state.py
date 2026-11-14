@@ -331,10 +331,28 @@ def r36j_route_job(gid, kind):
                 _r36j_jobs.pop(gid, None)
 
 
+# Kinds a server holds that outlive this process's registrations: each source answers the kinds it
+# holds for a server id from what it stored (routes/game_restore: a restore's config.json record, which
+# a panel restart in the middle leaves behind until the recovery sweep settles it).
+_r36j_sources = []
+
+
+def register_route_job_source(source):
+    """Add `source(gid) -> kinds` to what r36j_route_jobs answers (once per source)."""
+    if source not in _r36j_sources:
+        _r36j_sources.append(source)
+
+
 def r36j_route_jobs(gid):
-    """The kinds r36j_route_job has registered on server `gid` now, each once (for the reboot census)."""
+    """The kinds r36j_route_job has registered on server `gid` now, each once (for the reboot census).
+
+    With every kind a registered source holds for it (register_route_job_source).
+    """
     with _r36j_jobs_lock:
-        return sorted(set(_r36j_jobs.get(gid) or ()))
+        kinds = set(_r36j_jobs.get(gid) or ())
+    for source in list(_r36j_sources):
+        kinds.update(source(gid))
+    return sorted(kinds)
 
 
 def live_actions(gid):

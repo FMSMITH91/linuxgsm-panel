@@ -1062,6 +1062,7 @@ class AuditLog(db.Model):
 AUDIT_SERVER_ACTIONS = frozenset({
     "install_complete", "install_server", "retry_install", "uninstall_server", "edit_server",
     "game_backup", "game_backup_delete", "game_backup_download", "game_backup_schedule",
+    "game_backup_restore", "game_backup_upload",
     "scheduled_backup", "queued_backup", "scheduled_backup_overdue", "queued_backup_waiting",
     "sync_ports", "port_resync", "set_daily_restart",
     "set_notify_when_empty", "refresh_commands", "send_command", "set_query_type",

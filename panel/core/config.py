@@ -254,27 +254,50 @@ def _r29a_whitelist(config):
     return config
 
 
+def _cfg_current():
+    """The parsed config.json, re-read only when the file changed (one stat otherwise). Raises as load_config handles."""
+    st = CONFIG_FILE.stat()
+    key = (st.st_ino, st.st_mtime_ns, st.st_size)
+    if _cfg_cache["key"] != key:
+        with open(CONFIG_FILE) as f:
+            loaded = json.load(f)
+        # A file that is VALID JSON but not an object is as unusable as a truncated one, and
+        # config.json is explicitly hand-editable ("a file a human can hand-edit"). The except
+        # in load_config catches a malformed file; it does not catch `null`, `[1,2,3]`, `"hello"`
+        # or `123`, each of which parses fine and then blows up inside dict.update — a TypeError
+        # or ValueError out of a function on every request path and in every background
+        # poller. Measured: a truncated file degrades to defaults, a stray `null` raises.
+        # Rejected at PARSE time so it falls into the same defaults path, cache dropped so a
+        # corrected file is picked up on the next call.
+        if not isinstance(loaded, dict):
+            raise ValueError("config.json is %s, not an object" % type(loaded).__name__)
+        _cfg_cache["data"] = loaded
+        _cfg_cache["key"] = key
+    return _cfg_cache["data"]
+
+
+def config_value(name, default=None):
+    """One top-level key of config.json as stored (a deep copy of that key only), or `default`.
+
+    For a reader asked on many paths (a server's restore record, routes/game_restore): one stat
+    while the file is unchanged, and none of load_config's copy of the whole file. Unreadable or
+    missing, it is `default`, as load_config falls back to its defaults.
+    """
+    try:
+        data = _cfg_current()
+    except FileNotFoundError:
+        _cfg_cache["key"] = None
+        return default
+    except (json.JSONDecodeError, ValueError, OSError):
+        _cfg_cache["key"] = None
+        return default
+    return copy.deepcopy(data[name]) if name in data else default
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:
-        st = CONFIG_FILE.stat()
-        key = (st.st_ino, st.st_mtime_ns, st.st_size)
-        if _cfg_cache["key"] != key:
-            with open(CONFIG_FILE) as f:
-                loaded = json.load(f)
-            # A file that is VALID JSON but not an object is as unusable as a truncated one, and
-            # config.json is explicitly hand-editable ("a file a human can hand-edit"). The except
-            # below catches a malformed file; it does not catch `null`, `[1,2,3]`, `"hello"` or
-            # `123`, each of which parses fine and then blows up inside dict.update — a TypeError
-            # or ValueError out of a function on every request path and in every background
-            # poller. Measured: a truncated file degrades to defaults, a stray `null` raises.
-            # Rejected at PARSE time so it falls into the same defaults path, cache dropped so a
-            # corrected file is picked up on the next call.
-            if not isinstance(loaded, dict):
-                raise ValueError("config.json is %s, not an object" % type(loaded).__name__)
-            _cfg_cache["data"] = loaded
-            _cfg_cache["key"] = key
-        config.update(copy.deepcopy(_cfg_cache["data"]))
+        config.update(copy.deepcopy(_cfg_current()))
         _r16a_flags(config)
         _r26a_port(config)
         _r29a_whitelist(config)

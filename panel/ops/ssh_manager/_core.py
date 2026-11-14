@@ -19,6 +19,7 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
+from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
 from panel.security import privileged as _priv
 from panel.ops import netdev as _netdev
@@ -612,8 +613,8 @@ def _pump_capped(stream, buf, cap, flags, stop=None, sel=None):
 def _feed_stdin(p, stdin_bytes):
     """Write `stdin_bytes` (when there are any) to `p`'s stdin, then close it so `p` sees EOF."""
     try:
-        if stdin_bytes:
-            p.stdin.write(stdin_bytes)
+        for piece in (_stdin_pieces(stdin_bytes) if stdin_bytes else ()):
+            p.stdin.write(piece)
     except (OSError, ValueError):
         pass            # the command exited without reading it all; its rc says what happened
     finally:
@@ -765,8 +766,7 @@ def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
     res = _collect_capped(p, timeout, kill=lambda: _signal_process_tree(p),
                           threads=_real_threading,
-                          stdin_bytes=(stdin_text.encode("utf-8")
-                                       if stdin_text is not None else None))
+                          stdin_bytes=_stdin_bytes(stdin_text))
     if res is None:
         return "", "Command timed out", -1
     out, err, rc, truncated = res
@@ -1789,8 +1789,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
                              stdin=(subprocess.PIPE if stdin_text is not None
                                     else subprocess.DEVNULL))
         res = _collect_capped(p, timeout, kill=p.kill, threads=threading,
-                              stdin_bytes=(stdin_text.encode("utf-8")
-                                           if stdin_text is not None else None))
+                              stdin_bytes=_stdin_bytes(stdin_text))
         if res is None:
             return "", "SSH command timed out", -1
         out, err, rc, truncated = res
@@ -2083,9 +2082,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         # transport has from _POPEN_KW, and the same shutdown_write files.py:911 already sends —
         # and it is what the "deliberately no deadline" note above _drain_exec rests on.
         # A secret from run_privileged goes down the channel first; the EOF still follows.
-        if stdin_text is not None:
-            stdin.write(stdin_text)
-            stdin.flush()
+        write_channel_stdin(stdin, stdin_text)
         try:
             stdin.channel.shutdown_write()
         except Exception:

@@ -273,7 +273,7 @@ _out87 = _node87(_name87, _DOM87 + (
     "els['bk-interval'] = sel(['default', '0', '1', '3', '7', '14', '30']); els['bk-keep'] = sel(['default', '2']);\n"
     "els['bk-loading'] = null; els['bk-wrap'] = null; els['bk-now'] = null;\n"
     "global._bkRenderDisk = () => {}; global._bkRenderStatus = () => {}; global._bkRenderRows = () => {};\n"
-    "global._bkPollWhileRunning = () => {};\n"
+    "global._bkPollWhileRunning = () => {}; global._grsRenderStatus = () => {};\n"
     + _cut_or87(_SF87, "function _bkShow(") + "\n" + _cut_or87(_SF87, "function renderBackups(") + "\n"
     "renderBackups({schedule: {interval_days: 5, keep: 2, interval_set: true, keep_set: false}});\n"
     "const o = els['bk-interval'].options.slice(-1)[0];\n"

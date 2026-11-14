@@ -2039,23 +2039,24 @@ function _bkRenderStatus(s){
   else st.textContent='';
 }
 // Poll while a backup is running; stop once it finishes.
-function _bkPollWhileRunning(s){
-  var running=s && s.running;
+function _bkPollWhileRunning(s, restoring){
+  var running=(s && s.running) || restoring;
   if(running && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
   if(!running && _bkPoll){ clearInterval(_bkPoll); _bkPoll=null; }
 }
 // Backup rows.
 function _bkRenderRows(d){
-  var rows=(d.backups||[]).map(function(b){
+  var restoring=(d.restore && d.restore.running) ? ' disabled' : '', rows=(d.backups||[]).map(function(b){
     var ip=b.in_progress;
     return '<tr>'
       + '<td><span class="font-monospace" style="font-size:.72rem;word-break:break-all;">'+esc(b.name)+'</span>'+(ip?' <span class="badge bg-info">in progress</span>':'')+'</td>'
       + '<td class="text-nowrap">'+bkFmt(b.size)+'</td>'
       + '<td class="text-nowrap" style="font-size:.72rem;">'+esc(bkWhen(b.created))+'</td>'
       + '<td class="text-nowrap">'
-      // .fpm-dl / .fpm-del: hidden without DOWNLOAD_BACKUP / DELETE_BACKUP (#backup-card, panel.css).
+      // .fpm-dl / .fpm-del / .fpm-rs: hidden without DOWNLOAD_BACKUP / DELETE_BACKUP / RESTORE_BACKUP (#backup-card,
+      // panel.css); Restore is disabled while a restore of this server runs.
       +   (ip?'':('<a class="btn btn-sm btn-outline-secondary py-0 px-1 fpm-dl" href="'+MOUNT+'/backup/game/'+serverId+'/download?name='+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
-      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1 fpm-del" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button>'))
+      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1 fpm-del" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button> <button class="btn btn-sm btn-outline-warning py-0 px-1 fpm-rs" title="Restore" data-name="'+esc(b.name)+'"' + restoring + _da('restoreBk', ['@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button>'))
       + '</td></tr>';
   });
   var tb=document.getElementById('bk-rows');
@@ -2101,8 +2102,8 @@ function renderBackups(d, settled, noSchedule){
   _bkRenderStatus(s);
   var nowBtn=document.getElementById('bk-now'); if(nowBtn) nowBtn.disabled=!!(s && s.running);
   _bkRenderRows(d);
-  // Poll while a backup is running; stop once it finishes.
-  _bkPollWhileRunning(s);
+  // Poll while a backup or a restore (server_backup_restore.js) is running; stop once it finishes.
+  _bkPollWhileRunning(s, _grsRenderStatus(d.restore));
 }
 
 function saveBkSchedule(){
@@ -2169,5 +2170,6 @@ function deleteBk(btn){
         }).catch(function(){ window.toast('Delete failed','danger'); btn.disabled=false; });
     }});
 }
+
 
 loadBackups();

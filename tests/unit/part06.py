@@ -5797,8 +5797,16 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # config file's Form view (/api/server/<id>/game-config/form, behind the Settings tab's permission).
 # 247, was 246: one genuinely new view, panel/routes/api.py's host history for the host page's History card
 # (/api/remote/<id>/history, behind the host page's own MANAGE_REMOTES and get_remote).
-check("register_routes: every one of the 247 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 247,
+# 254, was 247: seven genuinely new views. panel/routes/game_restore.py's restore of a game server from
+# one of its backups (/api/panel/backup/game/<id>/restore, RESTORE_BACKUP per server), and
+# panel/routes/backup_upload.py's uploads in pieces: a game server's backup (/api/panel/backup/game/<id>/
+# upload, its pieces and its finish, RESTORE_BACKUP per server) and the panel's own
+# (/api/panel/backup/upload, its pieces and its finish, superadmin).
+# 256, was 254: two genuinely new views, the cancel of a backup upload in pieces (panel/routes/
+# backup_upload.py): a game server's (/api/panel/backup/game/<id>/upload/<uid>/cancel, RESTORE_BACKUP
+# and EDIT_FILES per server) and the panel's (/api/panel/backup/upload/<uid>/cancel, superadmin).
+check("register_routes: every one of the 256 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 256,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

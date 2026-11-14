@@ -391,8 +391,9 @@
 {% if _uis_backups %}
 <!-- Backups (this server) — reuses the existing game-backup endpoints. The schedule and Back up now
      are superadmin-only (.fpm-su); a row's download needs DOWNLOAD_BACKUP (.fpm-dl), its delete
-     DELETE_BACKUP (.fpm-del). Nothing to back up when the game files never downloaded. -->
-<div class="card" id="backup-card" data-sfsub="backups" style="display:none;"{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}>
+     DELETE_BACKUP (.fpm-del), its restore RESTORE_BACKUP (.fpm-rs). Nothing to back up when the game
+     files never downloaded. -->
+<div class="card" id="backup-card" data-sfsub="backups" style="display:none;"{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}{% if not fpm.rs %} data-fpm-nors{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
     <span class="text-secondary" style="font-size:.66rem;">
@@ -433,8 +434,18 @@
       </div>
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
         <button class="btn btn-primary btn-sm fpm-su" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
+        {% if fpm.rs and fpm.edit %}{# an uploaded archive is any file the uploader chose: RESTORE_BACKUP and EDIT_FILES #}
+        <button class="btn btn-outline-secondary btn-sm" id="bk-upload" data-action="uploadBk"><i class="bi bi-upload"></i> Upload a backup</button>
+        <input type="file" id="bk-upload-file" class="d-none" aria-label="Backup archive to upload" accept=".zst,.gz,.tgz,.tar" data-action="uploadBkPicked" data-on="change" data-args='["@self"]'>
+        {% endif %}
         <span id="bk-status" class="small"></span>
+        <span id="bk-restore-status" class="small"></span>
       </div>
+      {% if fpm.rs and fpm.edit %}
+      <div class="small text-secondary mb-2" style="font-size:.7rem;">
+        Upload a LinuxGSM backup of this server (.tar.zst, .tar.gz or .tar, up to 32 GB). It is checked as a restore checks it, then listed here under a LinuxGSM backup's name.
+      </div>
+      {% endif %}
       <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">
           <thead><tr><th>Backup</th><th style="width:1%;white-space:nowrap;">Size</th><th style="width:1%;white-space:nowrap;">When</th><th style="width:1%;"></th></tr></thead>
@@ -682,5 +693,6 @@ var SF_CAN = {{ fpm|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
 {% if sch_verb %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_schedule_chains.js') }}"></script>{% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_files.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_backup_restore.js') }}"></script>
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% endblock %}

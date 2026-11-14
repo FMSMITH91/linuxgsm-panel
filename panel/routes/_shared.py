@@ -571,17 +571,36 @@ def _button_backup_running(sid):
 
 
 # What a backup and a queued stop/restart do not run beside: LinuxGSM's scheduled wipe (routes/
-# wipe_schedule registers "wipe" for its whole try) and a queued stop/restart being run ("queued",
-# _settle_queued_action). Each side registers before it asks about the other, so of two that start
-# together at least one sees the other and waits.
-_R39A_WIPE_KINDS = frozenset(("wipe",))
-_R39A_BACKUP_HOLD_KINDS = frozenset(("wipe", "queued"))
-_R39A_BACKUP_HELD = i18n.Sentence("a scheduled wipe or a queued stop or restart of this server is running")
+# wipe_schedule registers "wipe" for its whole try), a restore from a backup (routes/game_restore
+# registers "restore" for its whole run: it stops the server, takes its own backup and replaces the
+# files) and a queued stop/restart being run ("queued", _settle_queued_action). Each side registers
+# before it asks about the other, so of two that start together at least one sees the other and waits.
+GRS_KIND = "restore"
+_R39A_WIPE_KINDS = frozenset(("wipe", GRS_KIND))
+_R39A_BACKUP_HOLD_KINDS = frozenset(("wipe", GRS_KIND, "queued"))
+_R39A_BACKUP_HELD = i18n.Sentence("a scheduled wipe, a restore from a backup, or a queued stop or restart of "
+                                  "this server is running")
 
 
 def _r39a_wipe_running(sid):
-    """Whether the scheduled wipe of server `sid` is being tried now (its backup, or LinuxGSM's wipe)."""
+    """Whether the scheduled wipe of server `sid` is being tried now (its backup, or LinuxGSM's wipe), or a restore.
+
+    A restore from a backup holds the server the way a wipe does (it stops it and replaces its
+    files), so every caller refuses beside it too; grs_restore_running says which one it is.
+    """
     return bool(_R39A_WIPE_KINDS.intersection(r36j_route_jobs(sid)))
+
+
+def grs_restore_running(sid):
+    """Whether server `sid` is being restored from one of its backups now (routes/game_restore)."""
+    return GRS_KIND in r36j_route_jobs(sid)
+
+
+def grs_or_wipe_sentence(sid, name):
+    """Why a write is refused on server `sid` (shown as `name`) while its restore or its scheduled wipe runs."""
+    if grs_restore_running(sid):
+        return i18n.Sentence("'{name}' is being restored from a backup. Try again once it has finished.", name=name)
+    return i18n.Sentence("A scheduled wipe of '{name}' is running. Try again once it has finished.", name=name)
 
 
 def _r39a_backup_held(sid, wipe_ok=False):

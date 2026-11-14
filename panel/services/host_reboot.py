@@ -770,7 +770,13 @@ def panel_host_busy():
 
     For the panel-host routes that have no host row in hand (its self-update, its OS update): a
     lookup that fails refuses nothing, as the reboot route's own lookup does.
+
+    Also while a game server is being restored from a backup (routes/game_restore): a restart of the
+    panel ends that run part way, the server stopped and its files partly replaced.
     """
+    from panel.routes import game_restore as _grs
+    if _grs.restore_running():
+        return _grs.RESTART_REFUSED
     try:
         local = RemoteServer.query.filter_by(is_local=True).first()
     except Exception:  # noqa: BLE001 - a courtesy check never blocks on an unreadable row
