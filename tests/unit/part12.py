@@ -1307,10 +1307,15 @@ try:
 
     # ── the synchronous action path (update-lgsm is the one runnable action that is neither long,
     #    a power action, nor read-only) and the read-only one ─────────────────────────────────────
+    # update-lgsm reads the release before and after (_lgsm_update): the same one here, the latest.
+    _p9_patch_sm("lgsm_versions", lambda *a, **k: ("v26.5.0", "v26.5.0"))
+    from panel.services import lgsm_data as _sd_lgd   # noqa: E402
+    _p9_patch(_sd_lgd, "latest_release", lambda: "v26.5.0")
     _sd_result[0] = ("\x1b[32mUpdating LinuxGSM\x1b[0m\nOK", "", 0)
     _d = _p9_json(_A.post("/api/server/%d/action" % P9_GS, json={"action": "update-lgsm"}))
-    check("action update-lgsm: rc 0 is reported as success, naming the server",
-          _d == {"success": True, "message": "'update-lgsm' succeeded for 'p9-cs'."}, repr(_d))
+    check("action update-lgsm: rc 0 is reported as success, naming the server and its release",
+          _d.get("success") is True
+          and _d.get("message") == "LinuxGSM on 'p9-cs' is already up to date (v26.5.0).", repr(_d))
     check("action update-lgsm: the audit row holds the output with its colour codes stripped",
           _p9_audit("update-lgsm_server").detail.startswith("Updating LinuxGSM")
           and "\x1b" not in _p9_audit("update-lgsm_server").detail)
@@ -1325,8 +1330,8 @@ try:
           _d.get("message", "").endswith(": last words"), repr(_d))
     _sd_result[0] = ("", "", 1)
     _d = _p9_json(_A.post("/api/server/%d/action" % P9_GS, json={"action": "update-lgsm"}))
-    check("action failure: no output at all says 'unknown — check the console'",
-          "unknown — check the console" in _d.get("message", ""), repr(_d))
+    check("action failure: no output at all says so, with the exit code",
+          "exited with code 1 and printed nothing" in _d.get("message", ""), repr(_d))
     _sd_result[0] = ("Status:      \x1b[32mSTARTED\x1b[0m", "", 0)
     _d = _p9_json(_A.post("/api/server/%d/action" % P9_GS, json={"action": "details"}))
     check("action details (read-only): the output comes back, cleaned, whitespace collapsed",

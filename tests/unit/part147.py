@@ -18,7 +18,7 @@ from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_arm, _p9_client, _p9_
                          _p9_patch_sm, _p9_restore_all)
 from panel.ops.ssh_manager import _core as _smc147, hosts as _hosts147
 from panel.routes import api as _api147
-from panel.services import lgsm_data as _lgd147
+from panel.services import lgsm_data as _lgd147, lgsm_releases as _lgr147
 
 _TRIP147_START = len(_P9_TRIPPED)
 _reads147 = []
@@ -143,6 +143,8 @@ try:
                                                    "updated": None, "label": "1.5"})
     _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: ("v26.4.0", "v26.4.0"))
     _p9_patch(_lgd147, "latest_release", lambda: "v26.5.0")
+    # Behind, so the endpoint asks for the release notes in between (lgsm_releases): no fetch here.
+    _p9_patch(_lgr147, "_fetch", lambda: None)
     _ep147 = _p9_client(P9_ADMIN).get("/api/server/%d/version" % P9_GS).get_json()
     _p9_patch_sm("lgsm_versions", lambda remote, account, selfname: (_ for _ in ()).throw(OSError("down")))
     _ep_down147 = _p9_client(P9_ADMIN).get("/api/server/%d/version" % P9_GS)
@@ -163,7 +165,7 @@ with open(os.path.join(_root, "panel", "static", "js", "server_detail.js"), enco
 check("server page: the LinuxGSM line is there from the first paint, with a dash to fill in",
       '<span id="lgsm-version" data-no-i18n>&mdash;</span>' in _tpl147
       and 'id="lgsm-behind" class="text-warning d-none"' in _tpl147)
-check("server page: the version fetch fills it in", "_showLgsmVersion(d && d.lgsm);" in _js147
+check("server page: the version fetch fills it in", "_showLgsmVersion(d && d.lgsm, d && d.lgsm_notes);" in _js147
       and "tf('{latest} available', {latest: info.latest})" in _js147)
 check("part147: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP147_START, repr(_P9_TRIPPED[_TRIP147_START:]))
