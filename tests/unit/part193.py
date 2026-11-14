@@ -42,9 +42,9 @@ import socket as _sock193
 
 from panel.core import green_dns as _gd193
 
-_ENV_RX193 = _re193.compile(r"""^\s*os\.environ\[["']EVENTLET_NO_GREENDNS["']\]\s*=\s*["']yes["']""", _re193.M)
+_ENV_RX193 = _re193.compile(r"""^os\.environ\[["']EVENTLET_NO_GREENDNS["']\]\s*=\s*["']yes["']""", _re193.M)
 _EVENTLET_RX193 = _re193.compile(r"""^\s*(?:import|from)\s+eventlet\b|["']eventlet[."']""")
-_PANEL_RX193 = _re193.compile(r"""^\s*(?:import|from)\s+(?:panel|app)\b|import_module\(\s*["'](?:panel|app)[."']""")
+_PANEL_RX193 = _re193.compile(r"""^(?:import|from)\s+(?:panel|app)\b""")
 _TMP193 = _tf193.mkdtemp(prefix="lgsm-unit-p193-")
 
 
@@ -58,7 +58,10 @@ def _first_eventlet_unguarded(text):
     """The first line importing eventlet with neither the variable set nor a panel import above it.
 
     None when the file is safe: no eventlet at all, the variable set first, or a panel/app import
-    first (panel/__init__.py and app.py set it themselves).
+    first (panel/__init__.py and app.py set it themselves). Only an unindented assignment or import
+    counts as first: one inside a function runs when it is called, which may be after a function
+    defined below it (tools/nosudo_runner.py imports eventlet in _greenify_first, called before
+    _install, whose panel import sits higher in the file).
     """
     for ln in text.splitlines():
         code = ln.split("#", 1)[0]
@@ -117,7 +120,9 @@ check("greendns off: ...and the gate names eventlet imported first, plainly or b
       and _first_eventlet_unguarded('for d in ("paramiko", "eventlet.tpool"):\n    pass\n') is not None
       and _first_eventlet_unguarded('os.environ["EVENTLET_NO_GREENDNS"] = "yes"\nimport eventlet\n') is None
       and _first_eventlet_unguarded("from panel.core import config\nimport eventlet\n") is None
-      and _first_eventlet_unguarded("# import eventlet\nx = 1\n") is None)
+      and _first_eventlet_unguarded("# import eventlet\nx = 1\n") is None
+      and _first_eventlet_unguarded("def a():\n    from panel.ops import x\ndef b():\n    import eventlet\n")
+      == "import eventlet")
 _init193 = _read193("panel", "__init__.py")
 check("greendns off: panel/__init__.py sets the variable at import, before anything else of the panel runs",
       _ENV_RX193.search(_init193) is not None)
