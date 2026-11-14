@@ -31,7 +31,6 @@ from unit.part01 import check, eq
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9_arm, _p9_client, _p9_delete_server, _p9_new_server,
                          _p9_patch, _p9_patch_sm, _p9_restore_all)
 import unit.part183 as _p183
-from unit.part183 import _host183, _is_delete183, _last183, _sweep_case183
 from panel.core import i18n as _i18n203
 from panel.ops.ssh_manager import _core as _core203, cron as _cron203
 from panel.routes import _shared as _sh203, server_detail as _sd203, server_files as _sf203
@@ -205,7 +204,7 @@ _VH_FILES203 = ("serverfiles/valheim_server.x86_64", _VD203 + "adminlist.txt", _
                 _W203 + "vhserver/_main.1.db2", _W203 + "vhserver/_main.1.chunks", _W203 + "vhserver/_main.1.ok",
                 _W203 + "vhserver/00_00__0_1.chunk", _W203 + "vhserver.fwl", _W203 + "vhserver.db",
                 _W203 + "other/_main.0.fwl2", _W203 + "vhserver_backup_auto-20261114/_main.0.fwl2")
-_vh203run = _host183(_VHP203, _VH_FILES203)
+_vh203run = _p183._host183(_VHP203, _VH_FILES203)
 eq("world reset host (vh): the world folder and its pre-1.0 files go; the lists, prefs, another world and the "
    "server's own backup folder stay",
    _vh203run[0], sorted(["serverfiles/valheim_server.x86_64", _VD203 + "adminlist.txt", _VD203 + "bannedlist.txt",
@@ -220,7 +219,7 @@ _PZ_FILES203 = ("serverfiles/start-server.sh", "Zomboid/Saves/Multiplayer/pzserv
                 "Zomboid/Saves/Multiplayer/other/map_t.bin", "Zomboid/db/pzserver.db", "Zomboid/Server/pzserver.ini",
                 "Zomboid/Server/pzserver_SandboxVars.lua", "Zomboid/Server/pzserver_spawnregions.lua",
                 "Zomboid/backups/startup/backup_1.zip", "Zomboid/mods/m.txt")
-_pz203run = _host183(_PZP203, _PZ_FILES203)
+_pz203run = _p183._host183(_PZP203, _PZ_FILES203)
 eq("world reset host (pz): the save folder goes; accounts/whitelist db, settings, another save, mods and the "
    "game's backups stay",
    _pz203run[0], sorted(["serverfiles/start-server.sh", "Zomboid/Saves/Multiplayer/other/map_t.bin",
@@ -229,9 +228,9 @@ eq("world reset host (pz): the save folder goes; accounts/whitelist db, settings
                          "Zomboid/backups/startup/backup_1.zip", "Zomboid/mods/m.txt"]))
 eq("world reset host (pz): ...done", _wwr203.outcome(_pz203run[1], _pz203run[2], _PZP203)[0], "done")
 
-_nofwl203 = _host183(_VHP203, ("serverfiles/x", _W203 + "vhserver/notes.txt", _W203 + "vhserver.fwl"))
-_dirfwl203 = _host183(_VHP203, ("serverfiles/x", _W203 + "vhserver/_main.1.fwl2", _W203 + "vhserver.db/x"))
-_nomap203 = _host183(_PZP203, ("serverfiles/x", "Zomboid/Saves/Multiplayer/pzserver/notes.txt"))
+_nofwl203 = _p183._host183(_VHP203, ("serverfiles/x", _W203 + "vhserver/notes.txt", _W203 + "vhserver.fwl"))
+_dirfwl203 = _p183._host183(_VHP203, ("serverfiles/x", _W203 + "vhserver/_main.1.fwl2", _W203 + "vhserver.db/x"))
+_nomap203 = _p183._host183(_PZP203, ("serverfiles/x", "Zomboid/Saves/Multiplayer/pzserver/notes.txt"))
 check("world reset host: a folder without the game's save marker (Valheim _main.<N>.fwl2, Zomboid map_t.bin), or "
       "a pre-1.0 Valheim name that is a folder, is refused, nothing deleted",
       all("__WWR_NOTWORLD__" in r[1] and "__WWR_GONE__" not in r[1] for r in (_nofwl203, _dirfwl203, _nomap203))
@@ -241,8 +240,8 @@ check("world reset host: a folder without the game's save marker (Valheim _main.
       == ("refused", "a path the reset would delete does not look like this game's world save; nothing was deleted"),
       repr((_nofwl203[:3], _dirfwl203[:3], _nomap203[:3])))
 
-_baselink203 = _host183(_VHP203, ("serverfiles/x", _VD203 + "adminlist.txt"), links=[(_W203.rstrip("/"), "@OUT")])
-_worldlink203 = _host183(_PZP203, ("serverfiles/x", "Zomboid/db/pzserver.db", "Zomboid/Saves/Multiplayer/other/map_t.bin"),
+_baselink203 = _p183._host183(_VHP203, ("serverfiles/x", _VD203 + "adminlist.txt"), links=[(_W203.rstrip("/"), "@OUT")])
+_worldlink203 = _p183._host183(_PZP203, ("serverfiles/x", "Zomboid/db/pzserver.db", "Zomboid/Saves/Multiplayer/other/map_t.bin"),
                          links=[("Zomboid/Saves/Multiplayer/pzserver", "@OUT")])
 check("world reset host: a world folder's parent (worlds_local) or the save itself as a symlink is refused, "
       "the target untouched",
@@ -250,11 +249,11 @@ check("world reset host: a world folder's parent (worlds_local) or the save itse
       and _wwr203.outcome(_baselink203[1], _baselink203[2], _VHP203)[1]
       == "part of the world is a symbolic link or outside its folder; nothing was deleted",
       repr((_baselink203[:3], _worldlink203[:3])))
-_nobase203 = _host183(_PZP203, ("serverfiles/x", "Zomboid/db/pzserver.db"))
+_nobase203 = _p183._host183(_PZP203, ("serverfiles/x", "Zomboid/db/pzserver.db"))
 eq("world reset host: no save folder at all is 'nothing found', named by the folder it looked in",
    _wwr203.outcome(_nobase203[1], _nobase203[2], _PZP203),
    ("refused", "no world was found in ~/Zomboid/Saves/Multiplayer (looked for: pzserver); nothing was deleted"))
-_up203 = _host183(_PZP203, _PZ_FILES203, up=True)
+_up203 = _p183._host183(_PZP203, _PZ_FILES203, up=True)
 check("world reset host (pz): a server LinuxGSM's test still finds running is refused, nothing deleted",
       "__WWR_RUNNING__" in _up203[1] and "Zomboid/Saves/Multiplayer/pzserver/map_t.bin" in _up203[0], repr(_up203[:3]))
 
@@ -271,7 +270,7 @@ def _save_holder203(home, hold):
 _held_by183 = _p183._holder183
 try:
     _p183._holder183 = _save_holder203
-    _busy203 = _host183(_PZP203, _PZ_FILES203, hold=("file", 30), busy_polls=1)
+    _busy203 = _p183._host183(_PZP203, _PZ_FILES203, hold=("file", 30), busy_polls=1)
 finally:
     _p183._holder183 = _held_by183
 check("world reset host (pz): a process with a file open in the save folder (outside serverfiles) after the "
@@ -294,44 +293,44 @@ def _pzread203(json_answer=(_PZJSON203, None)):
     return _read
 
 
-_vhok203 = _sweep_case183(_vh_sid203, cfg=_vh203('public="0"\n'), wait_empty=False)
+_vhok203 = _p183._sweep_case183(_vh_sid203, cfg=_vh203('public="0"\n'), wait_empty=False)
 _vhc203 = _vhok203["cmds"]
 check("world reset sweep (vh): state, stop, backup, the delete of worlds_local/vhserver (and its pre-1.0 "
       "files), start; done",
-      len(_vhc203) == 5 and _vhc203[:3] == ["status", "stop", "backup"] and _is_delete183(_vhc203[3])
+      len(_vhc203) == 5 and _vhc203[:3] == ["status", "stop", "backup"] and _p183._is_delete183(_vhc203[3])
       and "set -- vhserver vhserver.fwl vhserver.db vhserver.fwl.old vhserver.db.old" in _vhc203[3]
       and "/home/vhserver/.config/unity3d/IronGate/Valheim/worlds_local" in _vhc203[3]
-      and _vhc203[4] == "start" and _last183(_vhok203).get("ok") is True and _vhok203["players_asked"] == 0,
+      and _vhc203[4] == "start" and _p183._last183(_vhok203).get("ok") is True and _vhok203["players_asked"] == 0,
       repr(_vhok203))
-_vhcount203 = _sweep_case183(_vh_sid203, cfg=_vh203(), players=None)
+_vhcount203 = _p183._sweep_case183(_vh_sid203, cfg=_vh203(), players=None)
 check("world reset sweep (vh): with 'wait until empty' ticked, a Valheim whose players cannot be counted "
       "(-crossplay) waits, nothing stopped",
       _vhcount203["cmds"] == ["status"] and _vhcount203["entry"].get("pending_since")
       and "could not be counted" in (_vhcount203["entry"].get("wait") or ""), repr(_vhcount203))
-_vhbad203 = _sweep_case183(_vh_sid203, cfg=_vh203('savedir="/srv/valheim"\n'))
+_vhbad203 = _p183._sweep_case183(_vh_sid203, cfg=_vh203('savedir="/srv/valheim"\n'))
 check("world reset sweep (vh): a -savedir outside the account's home ends the reset, server untouched, alerted",
-      _vhbad203["cmds"] == [] and _last183(_vhbad203).get("ok") is False
-      and "-savedir is not a plain folder" in (_last183(_vhbad203).get("detail") or "")
+      _vhbad203["cmds"] == [] and _p183._last183(_vhbad203).get("ok") is False
+      and "-savedir is not a plain folder" in (_p183._last183(_vhbad203).get("detail") or "")
       and _vhbad203["alerts"] == ["Scheduled wipe did not run"], repr(_vhbad203))
 
 _pzr203 = _pzread203()
-_pzok203 = _sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzr203, players=0)
+_pzok203 = _p183._sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzr203, players=0)
 _pzc203 = _pzok203["cmds"]
 check("world reset sweep (pz): ProjectZomboid64.json read, players counted (0), state, stop, backup, the "
       "delete of Saves/Multiplayer/pzserver, start; done",
       _pzr203.asked == ["serverfiles/ProjectZomboid64.json"] and _pzok203["players_asked"] == 1
-      and len(_pzc203) == 5 and _pzc203[:3] == ["status", "stop", "backup"] and _is_delete183(_pzc203[3])
+      and len(_pzc203) == 5 and _pzc203[:3] == ["status", "stop", "backup"] and _p183._is_delete183(_pzc203[3])
       and "set -- pzserver" in _pzc203[3] and "/home/pzserver/Zomboid/Saves/Multiplayer" in _pzc203[3]
-      and _pzc203[4] == "start" and _last183(_pzok203).get("ok") is True, repr(_pzok203))
-_pzmove203 = _sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzread203(
+      and _pzc203[4] == "start" and _p183._last183(_pzok203).get("ok") is True, repr(_pzok203))
+_pzmove203 = _p183._sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzread203(
     (_PZJSON203.replace("-Xmx2g", "-Ddeployment.user.cachedir=/srv/z"), None)))
-_pzunread203 = _sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzread203((None, "Could not read that file — the host did not answer.")))
-_pzgone203 = _sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzread203((None, "File not found")))
+_pzunread203 = _p183._sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzread203((None, "Could not read that file — the host did not answer.")))
+_pzgone203 = _p183._sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzread203((None, "File not found")))
 check("world reset sweep (pz): a ProjectZomboid64.json that moves the game's folder, or is not there, ends the "
       "reset untouched; one that could not be read waits",
-      _pzmove203["cmds"] == [] and _last183(_pzmove203).get("ok") is False
-      and "ProjectZomboid64.json sets cachedir" in (_last183(_pzmove203).get("detail") or "")
-      and _pzgone203["cmds"] == [] and _last183(_pzgone203).get("ok") is False
+      _pzmove203["cmds"] == [] and _p183._last183(_pzmove203).get("ok") is False
+      and "ProjectZomboid64.json sets cachedir" in (_p183._last183(_pzmove203).get("detail") or "")
+      and _pzgone203["cmds"] == [] and _p183._last183(_pzgone203).get("ok") is False
       and _pzunread203["cmds"] == [] and _pzunread203["entry"].get("pending_since")
       and "could not be read" in (_pzunread203["entry"].get("wait") or ""), repr((_pzmove203, _pzunread203)))
 
@@ -345,12 +344,12 @@ try:
 finally:
     _p9_restore_all()
 _pzr2_203 = _pzread203()
-_rooty203 = _sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzr2_203, guard=_ROOTY203)
-_unasked203 = _sweep_case183(_pz_sid203, cfg=_pz203(), guard=_UNASKED203)
+_rooty203 = _p183._sweep_case183(_pz_sid203, cfg=_pz203(), read=_pzr2_203, guard=_ROOTY203)
+_unasked203 = _p183._sweep_case183(_pz_sid203, cfg=_pz203(), guard=_UNASKED203)
 check("world reset sweep: a game account that can become root ends the reset before anything is read, "
       "stopped or deleted (alerted); one the host could not be asked about waits",
       isinstance(_ROOTY203, _i18n203.Sentence) and _rooty203["cmds"] == [] and _pzr2_203.asked == []
-      and _last183(_rooty203).get("ok") is False and _rooty203["alerts"] == ["Scheduled wipe did not run"]
+      and _p183._last183(_rooty203).get("ok") is False and _rooty203["alerts"] == ["Scheduled wipe did not run"]
       and _unasked203["cmds"] == [] and _unasked203["entry"].get("pending_since")
       and "could not be checked" in (_unasked203["entry"].get("wait") or ""), repr((_rooty203, _unasked203)))
 eq("world reset: Project Zomboid's players are counted by gamedig's projectzomboid type (its game port answers "
