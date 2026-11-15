@@ -173,7 +173,15 @@ def moved_to(gs_remote, rows):
 def _listens_on(p, address):
     """Whether a probe's listeners or bind address reach `address` (the address itself, or every one)."""
     hosts = [a.rsplit(":", 1)[0].strip("[]") for a in p.get("listeners") or []]
-    return any(h in (address, "0.0.0.0", "*", "::") for h in hosts)
+    return any(h in (address, "*") or _unspecified(h) for h in hosts)
+
+
+def _unspecified(host):
+    """Whether `host` is the any-address (0.0.0.0 or ::): a listener there answers on every address."""
+    try:
+        return ipaddress.ip_address(host).is_unspecified
+    except ValueError:
+        return False
 
 
 def _ensure_client(remote, flavor):

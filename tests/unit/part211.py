@@ -133,7 +133,8 @@ eq("databases grant: the statements the tab offers make exactly the narrow grant
 
 def _shell_verdict211(text):
     """The remote shell's verdict on SHOW GRANTS `text` (bash over _db_scoped_sh)."""
-    r = _sp211.run(["bash", "-c", 'o=$1; if %s; then echo scoped; else echo no; fi' % _priv211._db_scoped_sh(),
+    # bash over the panel's own fixed rendering; `text` is an argument ($1), never part of the script.
+    r = _sp211.run(["bash", "-c", 'o=$1; if %s; then echo scoped; else echo no; fi' % _priv211._db_scoped_sh(),  # nosec B603 B607
                     "_", text], capture_output=True, text=True, timeout=30)
     return r.stdout.strip()
 
@@ -512,3 +513,9 @@ check("databases overview: a superadmin sees every server's databases, and the s
 check("databases remote: a superadmin can send the host's new databases back to its own server",
       _R211.get("clear_su") == 200 and _R211.get("clear_row") == 0, repr((_R211.get("clear_su"), _R211.get("clear_row"))))
 check("part211: nothing reached a real transport", len(_P9_TRIPPED) == _trips211, repr(_P9_TRIPPED[_trips211:][:4]))
+_lst211 = [_net211._listens_on({"listeners": [a]}, "100.64.7.8")
+           for a in ("0.0.0.0:3306", "[::]:3306", "*:3306", "100.64.7.8:3306", "127.0.0.1:3306", "[::1]:3306",
+                     "100.64.7.9:3306", "not-an-address:3306")]
+eq("databases remote: a server listening on every address (0.0.0.0, ::, *) or on the tailnet address itself "
+   "is reachable there; loopback, another address or an unparsable listener is not",
+   _lst211, [True, True, True, True, False, False, False, False])
