@@ -384,7 +384,8 @@ def _aged212(uid, hours, remember=False):
         row = _US212.query.filter_by(user_id=uid).first()
         if row is None:
             return False
-        now = _auth212.utcnow()
+        from panel.core import clock as _clock212
+        now = _clock212.utcnow()
         row.created_at, row.last_seen, row.remember = now - _td212(hours=hours), now - _td212(minutes=1), remember
         _db212.session.commit()
         return True
@@ -396,7 +397,19 @@ def _s212_absolute():
     check("session: a plain login ends 8 hours after sign-in (OWASP's full-day absolute timeout), a remember-me "
           "login after its 3-day cookie, however active either is",
           (plain, remember) == (8 * 3600.0, 3 * 86400.0), repr((plain, remember)))
-    results = {}
+    from datetime import timedelta as _tdl212
+    results, saved = {}, {k: _p9.config.get(k) for k in ("PERMANENT_SESSION_LIFETIME", "REMEMBER_COOKIE_DURATION")}
+    # The shipped defaults (8 h idle, 3-day remember-me): the test app's own windows are longer, and an
+    # idle window longer than 8 h raises the absolute limit with it (session_absolute_limits).
+    _p9.config.update(PERMANENT_SESSION_LIFETIME=8 * 3600, REMEMBER_COOKIE_DURATION=_tdl212(days=3))
+    try:
+        _absolute_runs212(results)
+    finally:
+        _p9.config.update(saved)
+    _absolute_checks212(results)
+
+
+def _absolute_runs212(results):
     for label, hours, rem in (("7h", 7, False), ("9h", 9, False), ("rem-2d", 48, True), ("rem-4d", 96, True)):
         name = "p212_abs_%s" % label.replace("-", "")
         uid = _user212(name, _auth212.hash_password(_K212_CUR))
@@ -407,6 +420,9 @@ def _s212_absolute():
         with _p9.app_context():
             left = _US212.query.filter_by(user_id=uid).count()
         results[label] = (aged, r.status_code, left)
+
+
+def _absolute_checks212(results):
     check("session: an active login signed in 7 hours ago still works; at 9 hours the server ends it (the page "
           "asks for a sign-in) and drops the session row",
           results["7h"] == (True, 200, 1) and results["9h"][0] is True and results["9h"][1] in (302, 401)
@@ -414,6 +430,34 @@ def _s212_absolute():
     check("session: a remember-me login signed in 2 days ago still works; at 4 days it ends the same way",
           results["rem-2d"] == (True, 200, 1) and results["rem-4d"][0] is True
           and results["rem-4d"][1] in (302, 401) and results["rem-4d"][2] == 0, repr(results))
+
+
+# ── 9. __Host- cookies when the login cookies are Secure (OWASP Session Management) ──────────────
+def _s212_host_prefix():
+    from flask import Flask as _Flask212, session as _fsession212
+    names = {}
+    for secure in (True, False):
+        app = _Flask212("unit_part212_cookies_%s" % secure)
+        app.config.update(SECRET_KEY="k" * 32, SESSION_COOKIE_NAME="lgpanel_session", SESSION_COOKIE_SECURE=secure,
+                          REMEMBER_COOKIE_SECURE=secure, SESSION_COOKIE_DOMAIN="example.invalid")
+        _auth212._host_prefix_cookies(app)
+        app.session_interface = _auth212._session_cookie.ThrottledCookieSessions()
+
+        @app.route("/set")
+        def _set212():
+            _fsession212["x"] = 1
+            return "ok"
+        hdr = app.test_client().get("/set", base_url="https://panel.invalid").headers.get("Set-Cookie", "")
+        names[secure] = (app.config["SESSION_COOKIE_NAME"], app.config["REMEMBER_COOKIE_NAME"], hdr)
+    sec_hdr = names[True][2]
+    check("cookies: over HTTPS (Secure cookies) the login cookies are __Host-lgpanel_session and "
+          "__Host-remember_token, sent Secure with Path=/ and no Domain",
+          names[True][:2] == ("__Host-lgpanel_session", "__Host-remember_token")
+          and sec_hdr.startswith("__Host-lgpanel_session=") and "Secure" in sec_hdr and "Path=/" in sec_hdr
+          and "Domain=" not in sec_hdr, repr(names[True]))
+    check("cookies: ...while an install served over plain HTTP keeps the plain names",
+          names[False][0] == "lgpanel_session" and not str(names[False][1] or "").startswith("__Host-"),
+          repr(names[False][:2]))
 
 
 try:
@@ -427,6 +471,7 @@ try:
     _s212_backup_codes()
     _s212_backups()
     _s212_absolute()
+    _s212_host_prefix()
 finally:
     _p9_restore_all()
     _cleanup212()

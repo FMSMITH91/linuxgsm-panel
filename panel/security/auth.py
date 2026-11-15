@@ -902,6 +902,26 @@ def _warm():
 def init_auth(app):
     login_manager.init_app(app)
     app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
+    _host_prefix_cookies(app)
+
+
+def _host_prefix_cookies(app):
+    """Name the login cookies `__Host-…` when they are Secure (the panel is reached over HTTPS).
+
+    OWASP Session Management Cheat Sheet, "Cookie Name Prefixes": a browser accepts a `__Host-`
+    cookie only when it is Secure, has Path=/ and no Domain, so a sibling subdomain or a plain-HTTP
+    page on the same host can neither set nor overwrite the login (cookie tossing / fixation). Over
+    plain HTTP the cookies are not Secure and keep their names, so such an install keeps working.
+    The first visit after this changes signs the browser in again once (the old name is ignored).
+    """
+    if not app.config.get("SESSION_COOKIE_SECURE"):
+        return
+    for key, default in (("SESSION_COOKIE_NAME", "session"), ("REMEMBER_COOKIE_NAME", "remember_token")):
+        name = app.config.get(key) or default
+        app.config[key] = name if name.startswith("__Host-") else "__Host-" + name
+    for prefix in ("SESSION", "REMEMBER"):
+        app.config[prefix + "_COOKIE_DOMAIN"] = None
+        app.config[prefix + "_COOKIE_PATH"] = "/"
     # Pre-compute the login-timing dummy hash so it's ready before the first login WITHOUT adding
     # it to startup or to the first failed-login timing. hash_password runs it on a real worker
     # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
