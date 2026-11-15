@@ -28,6 +28,7 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, UNINSTALL_SERVER,
     accessible_remote_ids, get_game, get_remote, log_action, permission_required,
     server_access_required)
+from panel.security.account_guard import step_up_required
 import json
 import shlex
 import threading
@@ -2544,6 +2545,8 @@ def _register_uninstall_and_edit(app):
     @app.route("/servers/<int:server_id>/delete", methods=["POST"])
     @login_required
     @permission_required(UNINSTALL_SERVER)
+    # Above server_access_required, which reads the view's own parameters (a wrapper has none).
+    @step_up_required
     @server_access_required   # get_game() does NOT check access; the permission alone is not enough
     def uninstall_server(server_id):
         gs = get_game(server_id)

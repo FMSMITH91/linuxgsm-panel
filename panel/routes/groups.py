@@ -14,6 +14,7 @@ from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok)
 from panel.core.validation import group_name_problem
 from app import (_selected_game_servers, _selected_remotes)
+from panel.security.account_guard import step_up_required
 
 
 def register(app):
@@ -85,6 +86,7 @@ def register(app):
     @app.route("/groups/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_GROUPS)
+    @step_up_required
     def add_group():
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
@@ -119,6 +121,7 @@ def register(app):
     @app.route("/groups/<int:group_id>/edit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_GROUPS)
+    @step_up_required
     def edit_group(group_id):
         group = Group.query.get_or_404(group_id)
         _refused = _refuse_unmanageable(group, "edit_group", i18n.Sentence(
@@ -151,6 +154,7 @@ def register(app):
     @app.route("/groups/<int:group_id>/delete", methods=["POST"])
     @login_required
     @permission_required(MANAGE_GROUPS)
+    @step_up_required
     def delete_group(group_id):
         group = Group.query.get_or_404(group_id)
         # The default group is the one every new account and every invite starts pre-ticked with

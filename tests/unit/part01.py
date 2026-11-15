@@ -245,25 +245,10 @@ check("perf: auth import does no password-hash work (dummy hash stays lazy)",
       sys.modules["panel.security.auth"]._DUMMY_HASH is None)
 
 # ── password policy ───────────────────────────────────────────
+# OWASP's length rule and no composition rules: tests/unit/part215.py drives it in full.
 check("weak: too short", password_problem("Ab1!") is not None)
-check("weak: no upper", password_problem("test1234!@") is not None)
-check("weak: no lower", password_problem("TEST1234!@") is not None)
-check("weak: no digit", password_problem("TestTest!@") is not None)
-check("weak: no symbol", password_problem("TestTest12") is not None)
-check("strong password accepted", password_problem("Test1234!@") is None)
-# ...and the refusal names the class that is MISSING, checked in a fixed order. The four class
-# checks are one table in validation.py (_PW_CLASSES): a swapped row there still refuses, so the
-# checks above stay green, while telling the user to add the class they already have.
-eq("weak: no upper is told to add an uppercase letter",
-   password_problem("test1234!@"), "Password must include an uppercase letter.")
-eq("weak: no lower is told to add a lowercase letter",
-   password_problem("TEST1234!@"), "Password must include a lowercase letter.")
-eq("weak: no digit is told to add a number",
-   password_problem("TestTest!@"), "Password must include a number.")
-eq("weak: no symbol is told to add a symbol",
-   password_problem("TestTest12"), "Password must include a symbol (e.g. !@#$%).")
-eq("weak: missing several classes, the lowercase one is named first",
-   password_problem("12345678!@"), "Password must include a lowercase letter.")
+check("a long passphrase of plain lowercase words is accepted (no composition rules)",
+      password_problem("quiet harbour lantern") is None)
 
 # ── generate_password: the panel issues these, so they must pass its own rules every time ──────
 # Admin-created accounts and admin password resets get a generated password. If one of them could
@@ -275,7 +260,7 @@ check("generated: every one satisfies password_problem",
       repr([p for p in _gen if password_problem(p)][:3]))
 check("generated: default length is 16", all(len(p) == 16 for p in _gen))
 check("generated: a shorter request is still floored at the policy minimum",
-      len(generate_password(4)) >= 10)
+      len(generate_password(4)) >= 15)
 # Read off one screen, typed into another — so the look-alikes are out. A password nobody can
 # transcribe gets "reset it again", which is the same failure as a weak one, slower.
 check("generated: no look-alike characters (O0 Il1 S5 B8 Z2)",
@@ -941,7 +926,8 @@ eq("session lifetime: junk falls back to the defaults instead of breaking sign-i
    _slt_safe({"session_lifetime_hours": "eight", "remember_days": "three"}), (8 * 3600, _sl_td(days=3)))
 eq("session lifetime: 0 cannot expire every session on arrival; the form's bounds apply",
    _slt_safe({"session_lifetime_hours": 0, "remember_days": 10 ** 9}), (3600, _sl_td(days=90)))
-eq("session lifetime: missing keys are the defaults", _slt_safe({}), (8 * 3600, _sl_td(days=3)))
+eq("session lifetime: missing keys are the defaults (a new install's 30-minute idle timeout)",
+   _slt_safe({}), (30 * 60, _sl_td(days=3)))
 _sl_src = open(os.path.join(_root, "panel", "install", "app.py"), encoding="utf-8").read()
 _sl_fn = next(n for n in _sl_ast.walk(_sl_ast.parse(_sl_src))
               if isinstance(n, _sl_ast.FunctionDef) and n.name == "create_app")

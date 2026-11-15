@@ -68,18 +68,42 @@
       <div class="card" id="sec-security">
         <div class="card-header"><i class="bi bi-shield-lock"></i> Sessions &amp; Security</div>
         <div class="card-body">
+          {# OWASP Session Management Cheat Sheet, "Session Expiration": idle 15-30 minutes for a
+             low-risk application (2-5 for a high-value one), absolute 4-8 hours; no number for a
+             persistent login ("Expire and Max-Age Attributes"). Every value stays editable; past the
+             range a note says so (settings.js keeps it in step while typing) and the save goes ahead. #}
           <div class="row g-2">
             <div class="col-6">
-              <label class="form-label small mb-1" for="s-idle">Session idle timeout (hours)</label>
-              <input type="number" id="s-idle" name="session_lifetime_hours" min="1" max="168"
-                     class="form-control form-control-sm" value="{{ settings.session_lifetime_hours }}">
+              <label class="form-label small mb-1" for="s-idle">Session idle timeout (minutes)</label>
+              <input type="number" id="s-idle" name="session_idle_minutes" min="5" max="10080"
+                     class="form-control form-control-sm" value="{{ settings.session_idle_minutes }}"
+                     data-owasp-max="30">
+              <div class="small text-secondary mt-1">OWASP recommends 15–30 minutes (2–5 for high-value panels).</div>
+              <div class="small text-warning{% if not settings.idle_past_owasp %} d-none{% endif %}" id="s-idle-note">Longer than OWASP recommends.</div>
+            </div>
+            <div class="col-6">
+              <label class="form-label small mb-1" for="s-absolute">Absolute session limit (hours)</label>
+              <input type="number" id="s-absolute" name="session_absolute_hours" min="1" max="168"
+                     class="form-control form-control-sm" value="{{ settings.session_absolute_hours }}"
+                     data-owasp-max="8">
+              <div class="small text-secondary mt-1">OWASP recommends 4–8 hours.</div>
+              <div class="small text-warning{% if not settings.absolute_past_owasp %} d-none{% endif %}" id="s-absolute-note">Longer than OWASP recommends.</div>
             </div>
             <div class="col-6">
               <label class="form-label small mb-1" for="s-remember">"Remember me" (days)</label>
               <input type="number" id="s-remember" name="remember_days" min="1" max="90"
                      class="form-control form-control-sm" value="{{ settings.remember_days }}">
+              <div class="small text-secondary mt-1">OWASP gives no number; it advises keeping persistent logins short.</div>
             </div>
           </div>
+          <div class="small text-secondary mt-1">A login ends after the idle timeout without use, and at the absolute limit however active. Background refreshes do not count as use.</div>
+
+          <div class="form-check mt-3">
+            <input class="form-check-input" type="checkbox" id="s-require-2fa" name="require_2fa"
+                   {% if settings.require_2fa %}checked{% endif %}>
+            <label class="form-check-label small" for="s-require-2fa">Require two-factor authentication for administrators</label>
+          </div>
+          <div class="small text-secondary mt-1">Superadmins and anyone allowed the terminal, users or groups must set up 2FA right after signing in before they can do anything else.</div>
 
           <label class="form-label small mb-1 mt-3" for="s-prot">Session protection</label>
           <select id="s-prot" name="session_protection" class="form-select form-select-sm">

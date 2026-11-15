@@ -27,7 +27,8 @@ from panel.ops.debug_report._base import Result
 DEBUG_CONFIG_KEYS = (
     "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
     "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount", "tailscale_use_funnel",
-    "setup_complete", "remember_days", "session_lifetime_hours",
+    "setup_complete", "remember_days", "session_lifetime_hours", "session_idle_minutes",
+    "session_absolute_hours",
     "session_protection", "audit_log_retention_days", "audit_ip_retention_days",
     "ssh_timeout", "site_title", "site_domain",
     "trusted_proxies", "trusted_proxy_users", "security_whitelist", "autoblock_hosts",
@@ -38,6 +39,7 @@ _PLAIN_MOUNT_RE = re.compile(r"/[A-Za-z0-9_-]{0,32}\Z")
 # prints in _other_lines, through its classifier when it has one, else as a scalar or its type.
 _RUNNING_KEYS = frozenset(("port", "bind_host", "trust_proxy", "trusted_proxies", "trusted_proxy_users",
                            "socketio_cors_origins", "cookie_secure", "session_lifetime_hours",
+                           "session_idle_minutes",
                            "remember_days", "session_protection", "use_https"))
 # What an unset key means, for the keys DEFAULT_CONFIG does not carry.
 _UNSET_EFFECTIVE = {"audit_log_retention_days": "0: audit rows are kept forever"}
@@ -117,10 +119,10 @@ def _both(label, file_txt, run_txt, why="no app context"):
     return "- **%s**: file %s · running %s%s" % (label, file_txt, run_txt, pending)
 
 
-def _hours(value):
+def _minutes(value):
     if isinstance(value, timedelta):
         value = value.total_seconds()
-    return "%d h" % (int(value) // 3600) if isinstance(value, (int, float)) else None
+    return "%d min" % (int(value) // 60) if isinstance(value, (int, float)) else None
 
 
 def _days(value):
@@ -139,14 +141,14 @@ def _clamp(value, default, lo, hi):
 
 
 def _session_values(ctx, cfg, res):
-    hours = _clamp(cfg.get("session_lifetime_hours", 8), 8, 1, 168)
+    from panel.core import session_policy
+    mins = session_policy.idle_minutes(cfg)        # an older install's hours, converted
     days = _clamp(cfg.get("remember_days", 3), 3, 1, 90)
     run_h = _running(ctx, "PERMANENT_SESSION_LIFETIME")
     run_d = _running(ctx, "REMEMBER_COOKIE_DURATION")
-    res.add(_both("session_lifetime_hours", "%s (%d h)" % (
-        _scalar(cfg.get("session_lifetime_hours")), hours),
-        None if run_h is _NO_APP else "%s (%s)" % (
-            _scalar(cfg.get("session_lifetime_hours")), _hours(run_h))))
+    _was = cfg.get("session_idle_minutes", cfg.get("session_lifetime_hours"))
+    res.add(_both("session_idle_minutes", "%s (%d min)" % (_scalar(_was), mins),
+                  None if run_h is _NO_APP else "%s (%s)" % (_scalar(_was), _minutes(run_h))))
     res.add(_both("remember_days", "%s (%d d)" % (_scalar(cfg.get("remember_days")), days),
                   None if run_d is _NO_APP else "%s (%s)" % (
                       _scalar(cfg.get("remember_days")), _days(run_d))))

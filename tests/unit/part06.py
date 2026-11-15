@@ -5843,8 +5843,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (/api/remote/<id>/databases/endpoint, superadmin).
 # 277, was 275: two genuinely new views, panel/routes/host_local.py's encryption key status
 # (/api/panel/encryption) and its rotation (/api/panel/encryption/rotate), both superadmin.
-check("register_routes: every one of the 277 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 277,
+# 278, was 277: one genuinely new view, panel/routes/account_security.py's step-up confirmation
+# (/account/reauth, login_required: any signed-in account confirms its own password).
+check("register_routes: every one of the 278 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 278,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

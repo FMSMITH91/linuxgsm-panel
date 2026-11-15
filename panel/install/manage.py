@@ -84,8 +84,8 @@ def _read_password(args):
         # password value never reaches output.
         if password_problem(pw):
             # Fixed hint (not built from any password-related value, to keep static analysis happy).
-            print("  Password must be at least 10 characters and include a lowercase letter, an "
-                  "uppercase letter, a number and a symbol — try again.\n")
+            print("  Password must be at least 15 characters and not a common or easily guessed "
+                  "one — try again.\n")
             continue
         return pw
 

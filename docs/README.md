@@ -118,7 +118,7 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - Users and groups (Super Admin / Server Admin / Moderator / Viewer) with per-action permissions and per-server access, enforced server-side on every route.
 - One host page for the panel and every remote: specs, live resources, OS updates, UFW firewall with lock-out checks, power controls, Ubuntu Pro, SSH lockdown, and lock-out-safe port changes.
 - **Brute-force defense** — fail2ban logs and top offenders, one-click UFW blocking, and an optional rolling **auto-block**. A whitelist is never banned or blocked, and your Tailscale peers are never banned from the panel or auto-blocked. Bans still keep a visitor out of the panel behind a Cloudflare Tunnel or Funnel ([how](https.md#bans-and-blocks-behind-a-proxy-or-tunnel)).
-- **Admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 20 events — server down, host unreachable, disk low, high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more.
+- **Admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 23 events — server down, host unreachable, disk low, high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more.
 - **Chat command bot** (Telegram *or* Discord): `/status`, `/servers`, `/players <name>`, `/start` / `/stop` / `/restart <name>`, `/update` and more. Opt-in and locked to the configured chat.
 - Tailscale integration, multiple SSH remotes with host-key pinning, a web terminal, diagnostics, and audit logging.
 
@@ -230,7 +230,8 @@ location / {
 ## Security
 
 - **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
-- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in) with a strength policy; logins are rate-limited. Optional **TOTP 2FA** with backup codes.
+- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup and changing users or groups ask for the password again after 10 minutes (`step_up_minutes` in `config.json`; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
+  - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page, or on the panel host run `linuxgsm-panel-recover` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Encryption at rest** — SSH credentials, database logins, emails, 2FA secrets and bot tokens are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Host → Maintenance → Diagnostics); `data/` is `chmod 700`.
 - **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict CSP and security headers, and input validation on anything that becomes an OS operation.

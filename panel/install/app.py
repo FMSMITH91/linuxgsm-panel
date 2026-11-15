@@ -1494,23 +1494,20 @@ def _clean_console_text(text):
                       if not _CONSOLE_PROMPT_RE.match(_sgr_bare.sub("", ln)))
 
 
-def _session_lifetimes(cfg):
+def _session_lifetimes(cfg, app=None):
     """(PERMANENT_SESSION_LIFETIME seconds, REMEMBER_COOKIE_DURATION) from config.json, coerced
-    and held to the ranges the Settings form enforces (1-168 hours, 1-90 days).
+    and held to the ranges the Settings form enforces (panel/core/session_policy.py). Given `app`,
+    its SESSION_ABSOLUTE_SECONDS (the absolute limit, models.session_absolute_limits) is set too.
 
     config.json is hand-editable and these were read raw. "session_lifetime_hours": "8" made the
     lifetime a 3,600-character STRING, which only fails when Flask adds it to a datetime while
     saving a permanent session — so the panel started, and every sign-in answered 500. A
     non-numeric remember_days raised in int() and the panel did not start at all."""
-    def _num(value, default, lo, hi):
-        try:
-            n = int(float(value))
-        except (TypeError, ValueError, OverflowError):
-            return default
-        return max(lo, min(n, hi))
-    hours = _num(cfg.get("session_lifetime_hours", 8), 8, 1, 168)
-    days = _num(cfg.get("remember_days", 3), 3, 1, 90)
-    return hours * 3600, timedelta(days=days)
+    from panel.core import session_policy
+    idle, absolute, remember = session_policy.lifetimes(cfg)
+    if app is not None:
+        app.config["SESSION_ABSOLUTE_SECONDS"] = absolute
+    return idle, remember
 
 
 def _attach_debug_logging(app, cfg=None):
@@ -1626,7 +1623,7 @@ def create_app():
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
     # Idle session timeout (sliding — refreshed on each request). 8h by default so a
     # forgotten browser doesn't stay logged in overnight; configurable.
-    app.config["PERMANENT_SESSION_LIFETIME"] = _session_lifetimes(cfg)[0]
+    app.config["PERMANENT_SESSION_LIFETIME"] = _session_lifetimes(cfg, app)[0]
 
     # Cookie path must cover the mount point — always use root to be safe
     # since we don't know the final mount until after setup
@@ -2215,7 +2212,7 @@ def register_context_processors(app):
             # it HERE, once, means a page added to that chrome later is covered without anyone
             # remembering to cover it.
             "show_app_chrome": (getattr(current_user, "is_authenticated", False)
-                                and not getattr(current_user, "must_change_password", False)),
+                                and not getattr(current_user, "must_change_password", False) and not g.get("_twofa_gate")),
             # i18n: `t()` translates a string for the active language (falls back to English);
             # the catalog is also handed to the browser so client JS can translate too.
             "t": lambda s: i18n.translate(lang, s),

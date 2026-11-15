@@ -25,6 +25,7 @@ from panel.ops.ssh_manager import is_local_server
 from panel.routes._shared import _json_int
 from panel.security.auth import (USE_TERMINAL, _deny, _r17c_row_id, get_remote, has_permission, log_action,
     permission_required)
+from panel.security.account_guard import step_up_needed, step_up_required
 
 # sid -> (remote_id, models.row_birth of that host). Labels audit rows, tears down on disconnect,
 # and is what every access re-check asks about. The row's identity, not just its id: SQLite handed a
@@ -223,6 +224,7 @@ def _register_terminal_page(app):
     @app.route("/terminal/<int:remote_id>")
     @login_required
     @permission_required(USE_TERMINAL)
+    @step_up_required
     def host_terminal(remote_id):
         """A shell on one host.
 
@@ -258,6 +260,10 @@ def _register_terminal_open(app, socketio):
     def on_term_open(data):
         sid = request.sid
         remote_id, remote, why = _terminal_target(data)
+        if why is None and step_up_needed():
+            # The page route asks for the password again (step_up_required); this event is
+            # reachable without the page, and a page left open outlives the confirmation.
+            why = "Confirm your password to open a terminal: reload the page."
         if why is not None:
             emit("term_error", _r16c_said("message", why))
             return

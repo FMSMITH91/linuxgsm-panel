@@ -14,14 +14,15 @@ from panel.security.auth import (MANAGE_USERS, accessible_remote_ids, can_admini
                                  grantable_groups, hash_password, log_action,
     permission_required, superadmin_required)
 from panel.services import (notifications)
+from panel.security.account_guard import step_up_required
 from panel.services.monitoring import _autoblock_threshold
 from panel.services import host_reboot as _hr
-from datetime import (timedelta)
 from sqlalchemy.exc import IntegrityError
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
-from app import (_new_user_language, _session_lifetimes)
+from app import (_new_user_language)
+from panel.core import session_policy
 from panel.routes.groups import _posted_ids
 
 
@@ -40,11 +41,11 @@ def _register_panel_settings(app):
     @superadmin_required
     def panel_settings():
         cfg = load_config()
-        # The values in force, read as the boot reads them (_session_lifetimes: coerced and held to
+        # The values in force, read as the boot reads them (session_policy: coerced and held to
         # the form's ranges). A bare int() here raised on a hand-edited `Infinity` or "abc", and the
         # Settings page answered 500.
-        _life_s, _remember = _session_lifetimes(cfg)
-        return render_template("settings.html", languages=i18n.LANGUAGES, settings={
+        return render_template("settings.html", languages=i18n.LANGUAGES, settings=dict(
+            session_policy.form_values(cfg), **{
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
             "site_domain": cfg.get("site_domain", ""),
             "login_tagline": cfg.get("login_tagline", ""),
@@ -52,13 +53,12 @@ def _register_panel_settings(app):
             # Always concrete — an older install may still hold "" from the removed
             # "creator's language" option, which means English.
             "default_language": (cfg.get("default_language") or "en"),
-            "session_lifetime_hours": _life_s // 3600,
-            "remember_days": _remember.days,
             "session_protection": cfg.get("session_protection", "strong"),
             "autoblock_threshold": _autoblock_threshold(),
             "reboot_wait_max_hours": _hr.wait_max_hours(),
             "reboot_restore_no_autostart": _hr.restore_no_autostart(),
-        })
+            "require_2fa": bool(cfg.get("require_2fa")),
+        }))
 
     @app.route("/settings/save", methods=["POST"])
     @login_required
@@ -72,8 +72,12 @@ def _register_panel_settings(app):
         lang = _json_str(f, "default_language")
         lang = lang if lang in i18n.LANGUAGES else "en"           # always store a real language
         protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
-        hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
-        days = max(1, min(_int_or(f.get("remember_days"), 3), 90))                # 1 .. 90 days
+        # Idle minutes, absolute hours and remember-me days; refused only when the idle timeout
+        # would outlast the absolute limit (a value past OWASP's range is noted, never refused).
+        lifetimes, _why = session_policy.parse_form(f)
+        if _why:
+            flash(_why, "danger")
+            return redirect(url_for("panel_settings"))
         # No autoblock_threshold here: it is set on a host page's Security tab (the one editor, beside
         # the switch it governs), and this form no longer carries it. Read with a default, as it was,
         # a save of this page would have put every install back to 20.
@@ -85,16 +89,17 @@ def _register_panel_settings(app):
             cfg.update({
                 "site_title": title, "site_domain": domain, "login_tagline": tagline,
                 "accent_color": accent, "default_language": lang, "session_protection": protection,
-                "session_lifetime_hours": hours, "remember_days": days,
+                "require_2fa": bool(f.get("require_2fa")),
                 "reboot_wait_max_hours": reboot_wait,
                 "reboot_restore_no_autostart": reboot_restore,
-            })
+            }, **lifetimes)
+            cfg.pop("session_lifetime_hours", None)   # replaced by session_idle_minutes
         update_config(_mut)
         # Session/security keys are read from app.config per request, so apply them live —
         # no panel restart needed for the change to take effect.
-        app.config["PERMANENT_SESSION_LIFETIME"] = hours * 3600
-        app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=days)
+        session_policy.apply(app, lifetimes)
         app.config["SESSION_PROTECTION"] = protection
+        app.config["REQUIRE_2FA"] = bool(f.get("require_2fa"))
         log_action(current_user, "settings_update", target="panel")
         flash("Settings saved.", "success")
         return redirect(url_for("panel_settings"))
@@ -179,6 +184,7 @@ def _register_user_edits(app):
     @app.route("/users/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_USERS)
+    @step_up_required
     def add_user():
         username = request.form.get("username", "").strip()
         email = request.form.get("email", "").strip()
@@ -232,6 +238,7 @@ def _register_user_edits(app):
     @app.route("/users/<int:user_id>/edit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_USERS)
+    @step_up_required
     def edit_user(user_id):
         user = User.query.get_or_404(user_id)
         want_superadmin = request.form.get("is_superadmin") == "on"
@@ -305,6 +312,7 @@ def _register_invites(app):
     @app.route("/users/invite", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def create_invite():
         """Mint a one-time link that lets someone create their OWN account.
 
@@ -347,6 +355,7 @@ def _register_invites(app):
     @app.route("/users/invite/<int:invite_id>/revoke", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def revoke_invite(invite_id):
         """Take back an invite that has not been redeemed.
 
@@ -466,6 +475,7 @@ def _register_user_delete(app):
     @app.route("/users/<int:user_id>/delete", methods=["POST"])
     @login_required
     @permission_required(MANAGE_USERS)
+    @step_up_required
     def delete_user(user_id):
         user = User.query.get_or_404(user_id)
         # Only a superadmin may delete a superadmin (else a MANAGE_USERS user could remove
@@ -702,7 +712,7 @@ def _invite_form():
         return username, password, "That username is taken."
     if password != confirm:
         return username, password, "The two passwords do not match."
-    return username, password, password_problem(password)
+    return username, password, password_problem(password, avoid=(username,))
 
 
 def _invited_groups(inv):

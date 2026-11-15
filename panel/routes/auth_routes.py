@@ -4,6 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 import collections
 import re
+from datetime import timedelta
 from contextlib import (suppress)
 from flask import (flash, g, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
@@ -19,6 +20,7 @@ from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
     session_fingerprint, throttle_key, verify_totp_step)
 from panel.services import (notifications)
+from panel.security import account_guard, account_notices
 import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
     _LOGIN_FAILS_LOCK, _authlog, _log, _log_ip, _maybe_alert_admin_bruteforce,
@@ -59,6 +61,9 @@ def register(app):
     # The manifest, colour scheme and "What's new" (app.py is at its size limit).
     from panel.routes import app_shell
     app_shell.register(app)
+    # Required 2FA, step-up confirmation, denial logging and the Fetch Metadata guard.
+    from panel.routes import account_security
+    account_security.register(app)
 
 
 def _register_sign_in(app):
@@ -92,6 +97,12 @@ def _register_sign_in(app):
                 if not g.get("_login_failed"):
                     _release_login_slot(attempt)
 
+        _bye = request.args.get("signed_out")
+        if _bye == "1":
+            flash("You have been logged out.", "info")
+        elif _bye == "2":
+            flash("Signed out on this device, but the server could not revoke the session — "
+                  "change your password to revoke it everywhere.", "warning")
         return render_template("login.html")
 
     @app.route("/logout", methods=["POST"])
@@ -143,12 +154,14 @@ def _register_sign_in(app):
                 with suppress(Exception):
                     _log.warning("logout: the auth_epoch fallback failed too", exc_info=True)
         logout_user()
-        if revoked:
-            flash("You have been logged out.", "info")
-        else:
-            flash("Signed out on this device, but the server could not revoke the session — "
-                  "change your password to revoke it everywhere.", "warning")
-        return redirect("/login")
+        # Clear-Site-Data (Session Management Cheat Sheet, "Web Content Caching and Clear-Site-Data"):
+        # the browser drops this site's cookies and storage (the console's command history among
+        # them). Not "cache": the panel's own pages are no-cache already, and it would also throw
+        # away the cached scripts and styles. The message rides the URL, not a flash: the flash is
+        # kept in the session cookie this header deletes.
+        resp = redirect("/login?signed_out=%d" % (1 if revoked else 2))
+        resp.headers["Clear-Site-Data"] = '"cookies", "storage"'
+        return resp
 
 
 def _register_account(app):
@@ -156,7 +169,8 @@ def _register_account(app):
     @app.route("/account")
     @login_required
     def account():
-        return render_template("account.html", languages=i18n.LANGUAGES)
+        return render_template("account.html", languages=i18n.LANGUAGES,
+                               changes=account_notices.recent_changes(current_user))
 
     @app.route("/password/change")
     @login_required
@@ -230,6 +244,8 @@ def _register_account(app):
             if _why is not None:
                 return _auth_token_refused(u, _why)
         token = u.generate_api_token()
+        _days = _token_days(request.form.get("expires_days"))
+        u.api_token_expires = (utcnow() + timedelta(days=_days)) if _days else None
         # The token, and with it the spent step / backup code. NOT redundant with the commit
         # inside log_action on the next line, even though that one happens to flush this same
         # session today: deleting this line left both suites entirely green, which is how it came
@@ -240,9 +256,11 @@ def _register_account(app):
         # write is pinned to the database rather than to whoever commits next.
         db.session.commit()
         log_action(u, "api_token_generate", target=u.username)
+        account_notices.alert_credential_change(u, "new API token created")
         # Render directly (not a redirect) so the plaintext token is shown exactly once and never
         # stored in the session cookie.
-        return no_store(render_template("account.html", languages=i18n.LANGUAGES, new_token=token))
+        return no_store(render_template("account.html", languages=i18n.LANGUAGES, new_token=token,
+                                        changes=account_notices.recent_changes(u)))
 
     @app.route("/account/api-token/revoke", methods=["POST"])
     @login_required
@@ -256,8 +274,14 @@ def _register_account(app):
         current_user.revoke_api_token()
         db.session.commit()
         log_action(current_user, "api_token_revoke", target=current_user.username)
+        account_notices.alert_credential_change(current_user, "API token revoked")
         flash("API token revoked.", "success")
         return redirect(url_for("account"))
+
+
+def _token_days(value):
+    """A new API token's lifetime in days from the form: 30, 90 (the default), 365, or 0 for none."""
+    return {"30": 30, "90": 90, "365": 365, "0": 0}.get(str(value or "90"), 90)
 
 
 def _auth_token_refused(u, why):
@@ -427,7 +451,14 @@ def _register_2fa_and_profile(app):
                 current_user.totp_enabled = True
                 db.session.commit()
                 session.pop("_2fa_setup_secret", None)
-                log_action(current_user, "2fa_enabled", target=current_user.username)
+                log_action(_u, "2fa_enabled", target=_u.username)
+                account_notices.alert_credential_change(_u, "two-factor authentication turned on")
+                # A privilege-level change: every other session ends (they signed in without the
+                # factor) and this one gets a new identifier (account_guard.rotate_sessions).
+                if not account_guard.rotate_sessions(_u):
+                    flash("Two-factor authentication is now enabled. Every session was signed out, "
+                          "including this one — please sign in again.", "warning")
+                    return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
                 flash("Two-factor authentication is now enabled.", "success")
                 # Show the one-time backup codes once, right now — they're never shown again.
                 return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
@@ -624,7 +655,9 @@ def _login_throttled(attempt):
     with _LOGIN_FAILS_LOCK:
         _prune_login_fails(now)   # keep the map bounded to recently-active IPs
         fails = [t for t in _LOGIN_FAILS.get(_tk, []) if now - t < LOGIN_WINDOW]
-        blocked = len(fails) >= LOGIN_MAX_FAILS
+        # ...and a day limit for the address (account_guard.IP_DAY_FAILS): a slow spray across many
+        # names stays under 8 in 5 minutes for ever.
+        blocked = len(fails) >= LOGIN_MAX_FAILS or account_guard.ip_day_blocked(_tk, now)
         if not blocked:
             # RESERVE the attempt as a failure now, in the same critical section as the count.
             # The failure used to be recorded only after bcrypt, which runs in tpool and yields
@@ -694,8 +727,24 @@ def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
     log_action(None, "login_failed", actor=who,
                detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
     _maybe_alert_admin_bruteforce(who, ip, now)   # alert if a super admin is being targeted
+    account_guard.ip_day_note(_tk, now)
+    _note_lockout(who, ip, now)
     flash(msg, "danger")
     return render_template("login.html", **kw)
+
+
+def _note_lockout(who, ip, now):
+    """When this failure paused sign-ins for `who`: one audit row and one alert for the pause."""
+    pause = account_guard.account_new_lockout(who, now)
+    if not pause:
+        return
+    minutes = max(1, (pause + 59) // 60)
+    log_action(None, "login_locked", target=who, actor=who, success=False,
+               detail="sign-ins for this name paused %d min after repeated failures (last from %s)"
+                      % (minutes, ip))
+    notifications.notify("account_locked", "Sign-ins paused for an account",
+                         "Sign-ins for '%s' are paused for %d min after repeated failed attempts "
+                         "(last from %s)." % (who, minutes, ip))
 
 
 def _login_succeed(attempt, user, remember):
@@ -732,9 +781,12 @@ def _login_succeed(attempt, user, remember):
     # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
     # session, and this one is permanent.
     session["_bind"] = session_fingerprint()
+    account_guard.mark_authenticated()      # the proof step-up re-authentication counts from
+    _since = user.last_login
     user.last_login = utcnow()
     db.session.commit()
     log_action(user, "login", detail=f"User logged in from {ip}")
+    account_notices.flash_changes_since(user, _since)
     if user.is_superadmin:
         notifications.notify("admin_login", "Super admin signed in",
                              "%s signed in from %s" % (user.username, ip))
@@ -854,8 +906,18 @@ def _login_password(attempt):
     password = request.form.get("password", "")
     remember = request.form.get("remember") == "on"
 
+    # Counted per NAME as well as per address (account_guard), before the hash runs. A paused name
+    # is refused with the address throttle's own sentence and no password check at all, so the
+    # answer says nothing about the account, and a guess sent during the pause is not even tried.
+    stamp, _left = account_guard.account_reserve(username, attempt.now)
+    if stamp is None:
+        g._login_failed = True
+        _authlog.warning("panel login blocked from %s", _log_ip(attempt.ip))   # fail2ban: a hit
+        flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
+        return render_template("login.html")
     user = User.query.filter_by(username=username).first()
     if user and user.is_active and check_password(password, user.password_hash):
+        account_guard.account_release(username, stamp)
         return _login_password_ok(attempt, user, password, remember)
     # For a missing/inactive user we skipped the (slow) hash compare above;
     # run a dummy one now so response time doesn't reveal whether the account
