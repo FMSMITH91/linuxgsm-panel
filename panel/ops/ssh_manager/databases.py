@@ -388,6 +388,12 @@ def probe(remote):
         flavor, state = _flavor_state(v, facts["pkgs"])
     else:
         state, detail = _no_socket_state(facts)
+    return _probe_answer(remote, facts, state, detail, flavor)
+
+
+def _probe_answer(remote, facts, state, detail, flavor):
+    """The probe's dict from what it read; the host's firewall is read for a server on the network only."""
+    v = facts["vars"]
     native_ok = flavor == "mariadb" or v.get("native", "").upper() == "ACTIVE"
     port = int(v["port"]) if v.get("port", "").isdecimal() else 3306
     # The firewall is read only for a server that listens on the network: one more call, then.
@@ -443,9 +449,16 @@ def admin_check(remote, port, user, pw):
     rc, out = _verb(remote, "db-admin-check", ["mariadb", "tcp%d" % int(port)], {"admin": (user, pw)})
     verdict = _admin_verdict(rc, out)
     v = _parse_probe(out)["vars"] if verdict in ("ok", "scoped", "lacks_grants") else {}
+    return _scoped(verdict, v)
+
+
+def _scoped(verdict, v):
+    """(verdict, v) with the narrow grant's 'scoped' read as a working login, or as 'partial_revokes'.
+
+    The narrow grant names its databases `gs%`: a wildcard, unless MySQL's partial_revokes is on,
+    which reads % and _ in a grant literally, so the login could make no gs<n>_ database.
+    """
     if verdict == "scoped":
-        # The narrow grant names its databases `gs%`: a wildcard, unless MySQL's partial_revokes is
-        # on, which reads % and _ in a grant literally, so the login could make no gs<n>_ database.
         verdict = "partial_revokes" if v.get("partial_revokes", "").upper() == "ON" else "ok"
     return verdict, v
 
@@ -681,9 +694,7 @@ def endpoint_check(remote, address, port, user, pw):
     rc, out = _verb(remote, "db-admin-check", ["mariadb", "tcp%d@%s" % (int(port), address)],
                     {"admin": (user, pw)})
     if rc == 0:
-        verdict, v = _admin_verdict(rc, out), _parse_probe(out)["vars"]
-        if verdict == "scoped":
-            verdict = "partial_revokes" if v.get("partial_revokes", "").upper() == "ON" else "ok"
+        verdict, v = _scoped(_admin_verdict(rc, out), _parse_probe(out)["vars"])
         return verdict, (v if verdict != "denied" else {})
     if rc == 127:
         return "noclient", {}

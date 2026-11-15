@@ -147,15 +147,7 @@ def tailnet_ip(remote, force=False):
         got = _hosts.remote_check_tailscale(remote) or {}
     except Exception:
         got = {}
-    ip = ""
-    for word in str(got.get("tailscale_ip") or "").split(","):
-        try:
-            a = ipaddress.ip_address(word.strip())
-        except ValueError:
-            continue
-        if a.version == 4 and a in _TAILNET_V4:
-            ip = str(a)
-            break
+    ip = next((w.strip() for w in str(got.get("tailscale_ip") or "").split(",") if _is_tailnet_v4(w.strip())), "")
     if ip or not got.get("unreachable"):
         _TS_IPS[remote.id] = (time.monotonic(), ip)
     return ip
@@ -193,14 +185,9 @@ def _managed_endpoint(game, db_remote_id):
     hd = HostDatabaseServer.query.filter_by(remote_id=host.id).first()
     if hd is None:
         return None, _say(409, S_DB_HOST_NOT_SET_UP, host=host.name)
-    address = tailnet_ip(host, force=True)
-    if not address:
-        return None, _say(409, S_NO_TAILNET, host=host.name)
-    p = _dbs.probe(host) or {}
-    if p.get("state") == "unreadable":
-        return None, _say(502, _dbs.S_UNREADABLE)
-    if not _listens_on(p, address):
-        return None, _say(409, S_NOT_LISTENING, host=host.name, game=game.name, address=address)
+    address, refused = _managed_address(game, host)
+    if refused is not None:
+        return None, refused
     ep = DatabaseEndpoint.query.filter_by(kind="managed", remote_id=host.id).first()
     if ep is None:
         ep = DatabaseEndpoint(kind="managed", remote_id=host.id, label=host.name[:80],
@@ -211,19 +198,37 @@ def _managed_endpoint(game, db_remote_id):
     return ep, None
 
 
+def _managed_address(game, host):
+    """(the database host's tailnet address, None), or ("", refusal) when it has none or its server is not there.
+
+    The server must listen on that address (or on every one): the panel never changes where it listens.
+    """
+    address = tailnet_ip(host, force=True)
+    if not address:
+        return "", _say(409, S_NO_TAILNET, host=host.name)
+    p = _dbs.probe(host) or {}
+    if p.get("state") == "unreadable":
+        return "", _say(502, _dbs.S_UNREADABLE)
+    if not _listens_on(p, address):
+        return "", _say(409, S_NOT_LISTENING, host=host.name, game=game.name, address=address)
+    return address, None
+
+
 def _external_fields(data):
     """(address, port, user, password, label) from the form, or None when one is not acceptable."""
     address, user = _json_str(data, "address"), _json_str(data, "user")
     pw = data.get("password") if isinstance(data.get("password"), str) else ""
     port = data.get("port", 3306)
-    try:
-        a = ipaddress.ip_address(address)
-    except ValueError:
+    if not (_is_tailnet_v4(address) and _ok_port(port) and 0 < len(user) <= _ADMIN_USER_LEN
+            and 0 < len(pw) <= _ADMIN_PW_LEN):
         return None
-    if (a.version != 4 or a not in _TAILNET_V4 or isinstance(port, bool) or not isinstance(port, int)
-            or not 1 <= port <= 65535 or not 0 < len(user) <= _ADMIN_USER_LEN or not 0 < len(pw) <= _ADMIN_PW_LEN):
-        return None
-    return str(a), port, user, pw, _json_str(data, "label")[:80] or str(a)
+    a = str(ipaddress.ip_address(address))
+    return a, port, user, pw, _json_str(data, "label")[:80] or a
+
+
+def _ok_port(port):
+    """Whether `port` is a TCP port number (an int, not a bool)."""
+    return not isinstance(port, bool) and isinstance(port, int) and 1 <= port <= 65535
 
 
 def _check_external(game, address, port, user, pw):
@@ -332,24 +337,35 @@ def overview_rows(user):
     rows = (GameDatabase.query.filter(GameDatabase.game_server_id.in_(list(servers)))
             .order_by(GameDatabase.game_server_id, GameDatabase.id).all() if servers else [])
     remote_ids = sorted({gs.remote_id for gs in servers.values()})
-    hds = {h.remote_id: h for h in HostDatabaseServer.query.filter(HostDatabaseServer.remote_id.in_(remote_ids))}
     eps = {e.id: e for e in DatabaseEndpoint.query.all()} if remote_ids else {}
-    cls = {c.remote_id: c for c in EndpointClient.query.filter(EndpointClient.remote_id.in_(remote_ids))}
     names = {gs.remote_id: gs.remote.name for gs in servers.values()}
-    hosts = []
-    for rid in remote_ids:
-        hd, cl = hds.get(rid), cls.get(rid)
-        ep = eps.get(cl.endpoint_id) if cl is not None else None
-        hd_ver = (hd.flavor, hd.version) if hd is not None else ("", "")
-        hosts.append({"name": names.get(rid, ""), "state": i18n.tr(_host_word(hd, ep, _dbs.LOGIN_REFUSED.get(rid))),
-                      "server": ("MySQL" if hd_ver[0] == "mysql" else "MariaDB") + " " + hd_ver[1][:8]
-                      if hd is not None else ""})
+    hosts = _overview_hosts(remote_ids, names, eps)
     dbs = []
     for r in rows:
         gs, ep = servers[r.game_server_id], eps.get(r.endpoint_id)
         dbs.append({"name": r.name, "server_id": gs.id, "server": gs.name, "host": names.get(gs.remote_id, ""),
                     "where": ep.label if ep is not None else "", "size": r.size_bytes})
     return hosts, dbs
+
+
+def _overview_hosts(remote_ids, names, eps):
+    """One line per host in `remote_ids`: its name, how the panel uses its database server, and which one."""
+    hds = {h.remote_id: h for h in HostDatabaseServer.query.filter(HostDatabaseServer.remote_id.in_(remote_ids))}
+    cls = {c.remote_id: c for c in EndpointClient.query.filter(EndpointClient.remote_id.in_(remote_ids))}
+    hosts = []
+    for rid in remote_ids:
+        hd, cl = hds.get(rid), cls.get(rid)
+        ep = eps.get(cl.endpoint_id) if cl is not None else None
+        hosts.append({"name": names.get(rid, ""), "state": i18n.tr(_host_word(hd, ep, _dbs.LOGIN_REFUSED.get(rid))),
+                      "server": _server_name(hd)})
+    return hosts
+
+
+def _server_name(hd):
+    """'MariaDB 10.11.14' / 'MySQL 8.4.11' for a host's server row, or "" with none."""
+    if hd is None:
+        return ""
+    return ("MySQL" if hd.flavor == "mysql" else "MariaDB") + " " + (hd.version or "")[:8]
 
 
 def _size_text(b):

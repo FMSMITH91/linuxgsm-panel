@@ -2098,8 +2098,11 @@ def _db_name(s):
 
 
 def _db_auth(s):
-    """How a verb signs in: `socket` (root over the unix socket), `tcp<port>` (an admin login on
-    127.0.0.1) or `tcp<port>@<address>` (a login on a server at that tailnet address)."""
+    """How a verb signs in: the socket, a login on 127.0.0.1, or a login on a server on the tailnet.
+
+    `socket` is root over the unix socket, `tcp<port>` an admin login on 127.0.0.1, and
+    `tcp<port>@<address>` a login on a server at that tailnet address.
+    """
     s = str(s)
     if s == "socket":
         return s

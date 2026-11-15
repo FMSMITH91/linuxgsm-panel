@@ -241,18 +241,22 @@ def _refresh_sizes(gs, hd, rows):
         return
     # One call per server the databases are on (in practice one): where their accounts are made.
     for ep_id in sorted({r.endpoint_id for r in rows}, key=lambda x: (x is not None, x or 0)):
-        group = [r for r in rows if r.endpoint_id == ep_id]
-        remote, target = _net.admin_target(gs.remote, hd, group[0])
-        if remote is None:
-            continue
-        # The game host's files are read for its dumps only where the call runs on the game host.
-        account = gs.short_name if remote is gs.remote else "-"
-        try:
-            got = _dbs.sizes(remote, target, account, [r.name for r in group])
-        except Exception:
-            got = None
-        if isinstance(got, dict):
-            _store_sizes(group, got.get("sizes") or {}, got.get("dumps") or {}, now, account != "-")
+        _sizes_of(gs, hd, [r for r in rows if r.endpoint_id == ep_id], now)
+
+
+def _sizes_of(gs, hd, group, now):
+    """One sizes call for `group` (databases on one server), where their accounts are made."""
+    remote, target = _net.admin_target(gs.remote, hd, group[0])
+    if remote is None:
+        return
+    # The game host's files are read for its dumps only where the call runs on the game host.
+    account = gs.short_name if remote is gs.remote else "-"
+    try:
+        got = _dbs.sizes(remote, target, account, [r.name for r in group])
+    except Exception:
+        got = None
+    if isinstance(got, dict):
+        _store_sizes(group, got.get("sizes") or {}, got.get("dumps") or {}, now, account != "-")
 
 
 def _store_sizes(rows, sizes, dumps, now, read_dumps=True):
@@ -299,12 +303,7 @@ def _row_json(gs, hd, r, moved=""):
 def _list_answer(gs):
     """GET: the host's state and this server's databases (never a password)."""
     manage = _can_manage()
-    ep = _net.endpoint_for_host(gs.remote_id)
-    if ep is not None:
-        # New databases go to a server on another machine: the host's own is not looked at.
-        state, hd, p = "ready", _host_row(gs.remote_id), {}
-    else:
-        state, hd, p = host_state(gs.remote, may_probe=_probe_mode(manage))
+    ep, (state, hd, p) = _list_host(gs, manage)
     rows = _server_rows(gs.id)
     _refresh_sizes(gs, hd, rows)
     taken = [r.name.split("_", 1)[1] for r in rows if "_" in r.name]
@@ -320,9 +319,29 @@ def _list_answer(gs):
         "cap": _cap(), "used": len(rows), "pw_mark": PW_MARK,
         # The dedicated login's statements, for a superadmin's admin login form (its password is made
         # on the viewer's page, where GRANT_PW_MARK stands).
-        "grant": ({"user": _dbs.SCOPED_USER, "mark": GRANT_PW_MARK, "sql": _dbs.scoped_grant_sql(GRANT_PW_MARK)}
-                  if current_user.is_superadmin else None),
+        "grant": _grant_offer(),
         "databases": [_row_json(gs, hd, r, moved) for r in rows]})
+
+
+def _list_host(gs, manage):
+    """(endpoint or None, (state, host row, probe)) for the list.
+
+    With an endpoint, new databases go to a server on another machine: the host's own is not looked at.
+    """
+    ep = _net.endpoint_for_host(gs.remote_id)
+    if ep is not None:
+        return ep, ("ready", _host_row(gs.remote_id), {})
+    return None, host_state(gs.remote, may_probe=_probe_mode(manage))
+
+
+def _grant_offer():
+    """The dedicated login's statements, for a superadmin's admin login form, else None.
+
+    The password is made on the viewer's page, where GRANT_PW_MARK stands.
+    """
+    if not current_user.is_superadmin:
+        return None
+    return {"user": _dbs.SCOPED_USER, "mark": GRANT_PW_MARK, "sql": _dbs.scoped_grant_sql(GRANT_PW_MARK)}
 
 
 def _names_answer(gs):
@@ -347,26 +366,18 @@ def _add_answer(gs):
     refused = _add_refusal(gs, slug, _server_rows(gs.id))
     if refused:
         return _say(*refused)
-    ep = _net.endpoint_for_host(gs.remote_id)
-    if ep is not None:
-        remote, hd, client = _net.new_target(gs.remote, ep)
-        state = "ready" if remote is not None else "gone"
-    else:
-        remote, client = gs.remote, None
-        state, hd, _p = host_state(gs.remote, may_probe=True)
+    ep, remote, hd, client, state = _add_target(gs)
     if state != "ready":
         return _say(409, _NOT_READY if state != "unreadable" else _UNREAD, state=state)
     name, secret = _dbs.db_name(gs.id, slug), _dbs.new_password()
     plugin, maxconn = _dbs.auth_plugin_name(_dbs.plugin_for(hd)), _maxconn()
     with _r20b_audit_on_raise("db_create", target=gs.name, detail=name, server=gs):
-        ok, said = _dbs.create(remote, hd, name, secret, maxconn)
-        if ok and ep is not None:
-            ok, said = _proved(gs, ep, remote, hd, name, secret, client)
+        ok, said = _create_proved(gs, (ep, remote, hd, client), name, secret, maxconn)
     if ok:
         db.session.add(GameDatabase(remote_id=gs.remote_id, game_server_id=gs.id, name=name,
                                     secret=encrypt_secret(secret), auth_plugin=plugin,
                                     max_conn=maxconn, created_by=current_user.username[:80],
-                                    endpoint_id=ep.id if ep is not None else None, account_host=client))
+                                    endpoint_id=getattr(ep, "id", None), account_host=client))
         db.session.commit()
     reply = {"success": bool(ok), "message": i18n.tr(said or ("Database added." if ok else "Failed"))}
     where = " on %s for %s" % (ep.label, client) if ep is not None else ""
@@ -374,6 +385,25 @@ def _add_answer(gs):
         log_action(current_user, "db_create", target=gs.name, detail="created database %s%s" % (name, where)
                    if ok else "database %s not created: %s" % (name, said), success=bool(ok), server=gs)
     return jsonify(reply), 200 if ok else 502
+
+
+def _add_target(gs):
+    """(endpoint or None, remote, verb target, account host or None, state) for a new database of `gs`."""
+    ep = _net.endpoint_for_host(gs.remote_id)
+    if ep is not None:
+        remote, hd, client = _net.new_target(gs.remote, ep)
+        return ep, remote, hd, client, ("ready" if remote is not None else "gone")
+    state, hd, _p = host_state(gs.remote, may_probe=True)
+    return None, gs.remote, hd, None, state
+
+
+def _create_proved(gs, where, name, secret, maxconn):
+    """Create the database where `where` (endpoint, remote, target, client) says; an endpoint's must sign in."""
+    ep, remote, hd, client = where
+    ok, said = _dbs.create(remote, hd, name, secret, maxconn)
+    if ok and ep is not None:
+        ok, said = _proved(gs, ep, remote, hd, name, secret, client)
+    return ok, said
 
 
 def _proved(gs, ep, remote, target, name, secret, client):
@@ -471,8 +501,7 @@ def _restore_answer(gs, r):
     """POST {"confirm": name}: the database loaded from panel-db-dumps/<name>.sql.gz in the game's files."""
     if not _confirmed(r):
         return _say(400, "Type the database's name to confirm.")
-    # A database on another machine is loaded from the game host too, at the server's tailnet address.
-    hd = _net.game_view(r) if r.endpoint_id is not None else _host_row(gs.remote_id)
+    hd = _restore_target(gs, r)
     if hd is None:
         return _say(409, _NOT_READY)
     # The dump is the game's file and the import runs as the game account.
@@ -497,6 +526,14 @@ def _restore_answer(gs, r):
     return jsonify(reply), 200 if ok else (409 if ok is None else 502)
 
 
+def _restore_target(gs, r):
+    """What a restore of `r` signs in to: the host's own server, or one on another machine at its tailnet address.
+
+    Either way the import runs on the game host, as its game account.
+    """
+    return _net.game_view(r) if r.endpoint_id is not None else _host_row(gs.remote_id)
+
+
 def _move_answer(gs, r):
     """POST: move an endpoint database's account to the game host's tailnet address now.
 
@@ -512,22 +549,34 @@ def _move_answer(gs, r):
     if remote is None or ep is None:
         return _say(409, _NOT_READY)
     with _r20b_audit_on_raise("db_rehost", target=gs.name, detail=r.name, server=gs):
-        ok, said = _dbs.rehost(remote, target, r.name, old, new)
-        if ok and _dbs.sign_in_check(gs.remote, ep, r.name, decrypt_secret(r.secret))[0] != "ok":
-            _dbs.rehost(remote, target, r.name, new, old)
-            ok, said = False, i18n.Sentence(_dbs.S_NET_ERROR, host=gs.remote.name)
+        ok, said = _rehost_proved(gs, ep, (remote, target), r, (old, new))
     if ok:
-        r.account_host = new
-        cl = _net.client_of(gs.remote_id)
-        if cl is not None and cl.endpoint_id == r.endpoint_id:
-            cl.seen_addr = new
-        db.session.commit()
+        _moved_rows(gs, r, new)
     reply = {"success": bool(ok), "message": i18n.tr(said or "Failed")}
     with _r42r_audit_after(reply):
         log_action(current_user, "db_rehost", target=gs.name, detail=_done_or_not(
             ok, "account of %s moved from %s to %s" % (r.name, old, new), "account of %s not moved" % r.name, said),
             success=bool(ok), server=gs)
     return jsonify(reply), 200 if ok else 502
+
+
+def _rehost_proved(gs, ep, where, r, move):
+    """Rename `r`'s account (old, new) where its accounts are made; moved back unless it signs in from the host."""
+    (remote, target), (old, new) = where, move
+    ok, said = _dbs.rehost(remote, target, r.name, old, new)
+    if ok and _dbs.sign_in_check(gs.remote, ep, r.name, decrypt_secret(r.secret))[0] != "ok":
+        _dbs.rehost(remote, target, r.name, new, old)
+        return False, i18n.Sentence(_dbs.S_NET_ERROR, host=gs.remote.name)
+    return ok, said
+
+
+def _moved_rows(gs, r, new):
+    """Record that `r`'s account now signs in from `new`, and the host's own choice says so too."""
+    r.account_host = new
+    cl = _net.client_of(gs.remote_id)
+    if cl is not None and cl.endpoint_id == r.endpoint_id:
+        cl.seen_addr = new
+    db.session.commit()
 
 
 # ── setting up a host ───────────────────────────────────────────────────────────────────────────
@@ -723,17 +772,21 @@ def _dump_rows(remote, account, hd, rows):
     if refused is not None:
         return refused
     calls = ([(hd, local)] if local else []) + [(_net.game_view(r), [r]) for r in rows if r.endpoint_id is not None]
-    why = []
-    for target, group in calls:
-        ok, said = _dbs.dump(remote, target, "game", account, [r.name for r in group]) if target is not None \
-            else (False, i18n.Sentence("the database server it is on is no longer set up."))
-        if not ok:
-            why.append(said or i18n.Sentence("the dump failed."))
-            continue
-        for r in group:
-            r.dumped_at = _now()
+    why = [w for w in (_dump_group(remote, account, target, group) for target, group in calls) if w]
     db.session.commit()
     return i18n.Sentences(*why) if why else ""
+
+
+def _dump_group(remote, account, target, group):
+    """Dump `group` (databases on one server, signed in to as `target`) into the game's files: '' or why not."""
+    if target is None:
+        return i18n.Sentence("the database server it is on is no longer set up.")
+    ok, said = _dbs.dump(remote, target, "game", account, [r.name for r in group])
+    if not ok:
+        return said or i18n.Sentence("the dump failed.")
+    for r in group:
+        r.dumped_at = _now()
+    return ""
 
 
 def with_note(result, note):

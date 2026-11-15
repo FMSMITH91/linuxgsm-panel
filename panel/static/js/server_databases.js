@@ -479,57 +479,6 @@ function dbHostLink(h, text, action) {
       onConfirm: function () { void act(id, 'restore', {confirm: db.name}, T('Restoring the database…')); }});
   };
 
-  window.dbMove = function (id) {
-    var db = row(id);
-    if (!db) return;
-    window.confirmDialog({title: T('Move the account'), icon: 'arrow-left-right', confirmClass: 'btn-warning', confirmLabel: T('Move the account'),
-      bodyText: TF('Let {name} sign in from {now} instead of {old}? Its password stays the same.', {name: db.name, now: st.d.moved_to, old: db.account_host}),
-      onConfirm: function () { void act(id, 'move', {}, T('Moving the account…')); }});
-  };
-
-  // ── a database server on another machine (a super admin chooses it) ────────────────────────
-  function remoteApi() { return MOUNT + '/api/remote/' + st.d.remote_id + '/databases/endpoint'; }
-  function remoteOpt(sel, value, text) { var o = node('option', null, text); o.value = value; sel.appendChild(o); return o; }
-
-  window.dbRemoteShow = function () {
-    var f = el('db-remote');
-    if (!f || !st.d) return Promise.resolve(false);
-    if (f.style.display !== 'none') { show('db-remote', false); return Promise.resolve(true); }
-    return fetch(remoteApi(), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (c) {
-      var sel = el('db-remote-kind');
-      sel.textContent = '';
-      remoteOpt(sel, '', T('Choose a database server…'));
-      (c.hosts || []).forEach(function (h) { remoteOpt(sel, 'h:' + h.id, TF('{host} (a host the panel manages)', {host: h.name})); });
-      (c.external || []).forEach(function (e) { remoteOpt(sel, 'e:' + e.id, e.label + ' (' + e.address + ':' + e.port + ')'); });
-      remoteOpt(sel, 'new', T('Another server: enter its address'));
-      show('db-remote-ext', false);
-      show('db-remote-clear', !!c.current);
-      show('db-remote', true);
-      return true;
-    }).catch(failed);
-  };
-
-  window.dbRemoteKind = function () { show('db-remote-ext', el('db-remote-kind').value === 'new'); };
-
-  window.dbRemoteSave = function (ev) {
-    if (ev) ev.preventDefault();
-    var v = el('db-remote-kind').value, body;
-    if (st.busy || !v) return;
-    if (v.indexOf('h:') === 0) body = {kind: 'managed', db_remote_id: Number.parseInt(v.slice(2), 10)};
-    else if (v.indexOf('e:') === 0) body = {endpoint_id: Number.parseInt(v.slice(2), 10)};
-    else body = {kind: 'external', address: el('db-remote-addr').value.trim(), port: Number.parseInt(el('db-remote-port').value, 10),
-                 user: el('db-remote-user').value, password: el('db-remote-pw').value};
-    st.busy = true;
-    say(T('Checking the database server from this host…'));
-    postJson(remoteApi(), body).then(function (r) { el('db-remote-pw').value = ''; if (r.ok) show('db-remote', false); return after(r, true); }).catch(failed);
-  };
-
-  window.dbRemoteClear = function () {
-    if (st.busy) return;
-    st.busy = true;
-    postJson(remoteApi(), {clear: true}).then(function (r) { if (r.ok) show('db-remote', false); return after(r, true); }).catch(failed);
-  };
-
   window.dbAdminReveal = function (btn) {
     if (!st.d) return Promise.resolve(false);
     return postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-reveal', {}).then(function (r) {
@@ -541,6 +490,9 @@ function dbHostLink(h, text, action) {
     }).catch(failed);
   };
 
+  // What the remote-server form and Move (below, in their own scope) use of this tab's.
+  window.dbTabCtx = {st: st, row: row, act: act, show: show, el: el, say: say, postJson: postJson, after: after, failed: failed};
+
   // Typing in the name field keeps what was typed when the tab is drawn again.
   window.dbEdited = function () { st.edited = true; };
 
@@ -549,4 +501,64 @@ function dbHostLink(h, text, action) {
     if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="databases"]')) void window.dbLoad(false); });
   window.addEventListener('hashchange', function () { if (location.hash === '#databases') void window.dbLoad(false); });
   if (location.hash === '#databases') void window.dbLoad(false);
+})();
+
+// Move account, and a super admin's choice of a database server on another machine (over Tailscale).
+// The tab's own state and helpers are reached through window.dbTabCtx.
+(function () {
+  'use strict';
+  var c = window.dbTabCtx, node = dbNode;
+  function T(s) { return window.t ? window.t(s) : s; }
+  function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
+  if (!c) return;
+  window.dbMove = function (id) {
+    var db = c.row(id);
+    if (!db) return;
+    window.confirmDialog({title: T('Move the account'), icon: 'arrow-left-right', confirmClass: 'btn-warning', confirmLabel: T('Move the account'),
+      bodyText: TF('Let {name} sign in from {now} instead of {old}? Its password stays the same.', {name: db.name, now: c.st.d.moved_to, old: db.account_host}),
+      onConfirm: function () { void c.act(id, 'move', {}, T('Moving the account…')); }});
+  };
+
+  function remoteApi() { return MOUNT + '/api/remote/' + c.st.d.remote_id + '/databases/endpoint'; }
+  function remoteOpt(sel, value, text) { var o = node('option', null, text); o.value = value; sel.appendChild(o); return o; }
+
+  window.dbRemoteShow = function () {
+    var f = c.el('db-remote');
+    if (!f || !c.st.d) return Promise.resolve(false);
+    if (f.style.display !== 'none') { c.show('db-remote', false); return Promise.resolve(true); }
+    return fetch(remoteApi(), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (ch) {
+      var sel = c.el('db-remote-kind');
+      sel.textContent = '';
+      remoteOpt(sel, '', T('Choose a database server…'));
+      (ch.hosts || []).forEach(function (h) { remoteOpt(sel, 'h:' + h.id, TF('{host} (a host the panel manages)', {host: h.name})); });
+      (ch.external || []).forEach(function (e) { remoteOpt(sel, 'e:' + e.id, e.label + ' (' + e.address + ':' + e.port + ')'); });
+      remoteOpt(sel, 'new', T('Another server: enter its address'));
+      c.show('db-remote-ext', false);
+      c.show('db-remote-clear', !!ch.current);
+      c.show('db-remote', true);
+      return true;
+    }).catch(c.failed);
+  };
+
+  window.dbRemoteKind = function () { c.show('db-remote-ext', c.el('db-remote-kind').value === 'new'); };
+
+  window.dbRemoteSave = function (ev) {
+    if (ev) ev.preventDefault();
+    var v = c.el('db-remote-kind').value, body;
+    if (c.st.busy || !v) return;
+    if (v.indexOf('h:') === 0) body = {kind: 'managed', db_remote_id: Number.parseInt(v.slice(2), 10)};
+    else if (v.indexOf('e:') === 0) body = {endpoint_id: Number.parseInt(v.slice(2), 10)};
+    else body = {kind: 'external', address: c.el('db-remote-addr').value.trim(), port: Number.parseInt(c.el('db-remote-port').value, 10),
+                 user: c.el('db-remote-user').value, password: c.el('db-remote-pw').value};
+    c.st.busy = true;
+    c.say(T('Checking the database server from this host…'));
+    c.postJson(remoteApi(), body).then(function (r) { c.el('db-remote-pw').value = ''; if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
+  };
+
+  window.dbRemoteClear = function () {
+    if (c.st.busy) return;
+    c.st.busy = true;
+    c.postJson(remoteApi(), {clear: true}).then(function (r) { if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
+  };
+
 })();
