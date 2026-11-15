@@ -611,12 +611,13 @@ lr = victim.post("/login", data={"username": "smoke_admin",
 check("real login succeeds (302 to app)", lr.status_code == 302, "got %d" % lr.status_code)
 names = _cookie_names(victim)
 check("login issued a session cookie", any("session" in n for n in names), str(names))
-check("login issued a remember_token cookie", "remember_token" in names, str(names))
+_RT_NAME = app.config.get("REMEMBER_COOKIE_NAME", "remember_token")   # __Host-… when the cookies are Secure
+check("login issued a remember_token cookie", _RT_NAME in names, str(names))
 
 # Snapshot the cookies a thief would hold — BOTH cookies, and the remember_token
 # (the long-lived one) on its own — while the victim is still logged in.
 thief = _clone_cookies(victim)
-thief_rt = _clone_cookies(victim, keep={"remember_token"})
+thief_rt = _clone_cookies(victim, keep={_RT_NAME})
 check("stolen cookie works BEFORE logout (200)", thief.get("/").status_code == 200)
 
 # Log the victim out (a real login carries a sid, so this deletes the victim's own session row; only
@@ -3138,7 +3139,7 @@ s1, r1 = _real_login()
 # the browser process — and on Android the browser is killed constantly — which shows up as
 # "it forgets my login every time", with a new server-side session row per re-login.
 _login_cookies = {h.split("=", 1)[0]: h for h in r1.headers.getlist("Set-Cookie")}
-_sess_cookie = _login_cookies.get("lgpanel_session", "")
+_sess_cookie = _login_cookies.get(app.config["SESSION_COOKIE_NAME"], "")
 check("session: the login cookie is persistent, not a browser-session cookie",
       "Expires=" in _sess_cookie or "Max-Age=" in _sess_cookie,
       "Set-Cookie: %s" % (_sess_cookie[:160] or "(none issued)"))
