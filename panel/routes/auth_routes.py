@@ -387,13 +387,13 @@ def _register_language(app):
         return resp
 
 
-def _flash_2fa_rotated(user, done):
-    """Rotate `user`'s sessions after a 2FA change and say so (account_guard.rotate_sessions)."""
+def _flash_2fa_enabled(user):
+    """Rotate `user`'s sessions after turning 2FA on, and say so (account_guard.rotate_sessions)."""
     if account_guard.rotate_sessions(user):
-        flash(done, "success")
+        flash("Two-factor authentication is now enabled.", "success")
     else:
-        flash(done + " Every session was signed out, including this one — please sign in again.",
-              "warning")
+        flash("Two-factor authentication is now enabled. Every session was signed out, "
+              "including this one — please sign in again.", "warning")
 
 
 def _register_2fa_and_profile(app):
@@ -466,7 +466,7 @@ def _register_2fa_and_profile(app):
                 account_notices.alert_credential_change(_u, "two-factor authentication turned on")
                 # A privilege-level change: every other session ends (they signed in without the
                 # factor) and this one gets a new identifier (account_guard.rotate_sessions).
-                _flash_2fa_rotated(_u, "Two-factor authentication is now enabled.")
+                _flash_2fa_enabled(_u)
                 # Show the one-time backup codes once, right now — they're never shown again.
                 return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
             flash("That code didn't match — check your device's time and try again.", "danger")

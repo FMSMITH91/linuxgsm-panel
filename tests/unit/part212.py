@@ -46,9 +46,9 @@ from panel.services import notifications as _notif212
 _trips212 = len(_P9_TRIPPED)
 _R212 = {"users": [], "ips": []}
 # The fixtures' secrets, as named constants (none is a real credential).
-_K212_CUR = "Argon2id!" + "Now1"
+_K212_CUR = "Argon2id!" + "Now1 river"      # 15+ characters: the new-password rule
 _K212_OLD = "Bcrypt256!" + "Then2"
-_K212_RAW = "Bare2b!" + "Then3"
+_K212_RAW = "Bare2b!" + "Then3 harbour"
 _K212_NEW = "Fresh!" + "Choice4 meadow"     # 20 characters: past the 15 a password without 2FA needs
 _K212_WRONG = "Wrong!" + "Guess5"
 _K212_BK = "backup " + "phrase 212"

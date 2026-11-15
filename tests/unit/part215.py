@@ -154,7 +154,10 @@ def _s215_settings():
         applied = (_p9.config.get("PERMANENT_SESSION_LIFETIME"), _p9.config.get("SESSION_ABSOLUTE_SECONDS"),
                    _p9.config.get("REQUIRE_2FA"))
         stored = dict(saved)
-        _p9.config["REQUIRE_2FA"] = False       # or the switch just saved would gate this admin
+        # The save just put its own values in force: undo the two that would gate this admin's next
+        # request (the 2FA switch, and "strong" session protection on a test client's session).
+        _p9.config["REQUIRE_2FA"] = False
+        _p9.config["SESSION_PROTECTION"] = live["SESSION_PROTECTION"]
         rc = _p9_client(P9_ADMIN)
         refused = rc.post("/settings/save", data={"session_idle_minutes": "900", "session_absolute_hours": "8"})
         refused_said = _p9_flashes(rc)
@@ -588,6 +591,7 @@ def _s215_binding():
     first = _last_id215()
     was = _p9.config.get("SESSION_PROTECTION")
     _p9.config["SESSION_PROTECTION"] = "strong"
+    _ag215.reset_denials()      # earlier parts' refusals count toward the per-minute audit cap
     try:
         c, _r = _login215("p215_bind", ip="198.51.100.30")
         c.environ_base["REMOTE_ADDR"] = "203.0.113.31"
@@ -602,6 +606,7 @@ def _s215_binding():
     legacy = _user215("p215_bind_old")
     first = _last_id215()
     _p9.config["SESSION_PROTECTION"] = "strong"
+    _ag215.reset_denials()
     try:
         c = _p9.test_client()
         with c.session_transaction() as s:
