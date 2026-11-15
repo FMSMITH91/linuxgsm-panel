@@ -3437,6 +3437,20 @@ try:
     check("session protection: ...and strong still refuses it from another /64 (control)",
           _sp6_away == 401, "got %s" % _sp6_away)
     _sp6.post("/logout", headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
+    # "Remember me" under strong: once the session cookie has expired (idle timeout), the remember
+    # cookie signs the browser back in. flask-login restores that login into a NON-permanent session
+    # with no "_id", and its strong mode wiped such a session on the NEXT request and cleared the
+    # remember cookie, so a remembered sign-in lasted one idle timeout plus one click.
+    _rm = app.test_client()
+    _rm.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd", "remember": "on"},
+             headers=_sp_ua)
+    _rm_back = _clone_cookies(_rm, keep={_RT_NAME})     # the session cookie has expired; the remember one has not
+    _rm_codes = [_rm_back.get("/api/account/sessions", headers=_sp_ua).status_code for _ in range(3)]
+    check("remember me (strong): after the session cookie expires, the remember cookie keeps the browser "
+          "signed in on every later request, not just the first", _rm_codes == [200, 200, 200], repr(_rm_codes))
+    check("remember me (strong): ...and the remember cookie is still held afterwards",
+          _RT_NAME in _cookie_names(_rm_back), repr(_cookie_names(_rm_back)))
+    _rm_back.post("/logout", headers=_sp_ua)
 finally:
     app.config["SESSION_PROTECTION"] = _sp_saved
 _ping = s1.get("/api/auth/ping")
