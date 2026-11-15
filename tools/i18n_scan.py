@@ -1727,6 +1727,11 @@ def spliced_py(root=ROOT):
     built in plain English, by an f-string, `%` or `+` anywhere upstream (a service's `(ok, message)`
     unpacked by the route included): tr() can only look that up, never match it.
     """
+    return list(_memo("spliced_py", root, lambda: _spliced_py_read(root)))
+
+
+def _spliced_py_read(root):
+    """Compute spliced_py's answer."""
     trees = _py_trees(root)
     builders, wrappers = _py_builders(trees), _py_wrappers(trees)
     plain = _py_builders(trees, plain=True)
@@ -1747,6 +1752,11 @@ def tr_keys_py(root=ROOT):
 
     A module constant handed to one counts too.
     """
+    return dict(_memo("tr_keys_py", root, lambda: _tr_keys_py_read(root)))
+
+
+def _tr_keys_py_read(root):
+    """Compute tr_keys_py's answer."""
     keys = {}
     for rel, _lines, tree in _py_trees(root):
         consts = _py_module_consts(tree)
@@ -2298,6 +2308,11 @@ class _R21cDefaultsIn(ast.NodeTransformer):
 
 def shown_literals_py(root=ROOT):
     """{text: "file:line"} for every fixed message a sink or a service's (ok, message) answer shows."""
+    return dict(_memo("shown_literals_py", root, lambda: _shown_literals_py_read(root)))
+
+
+def _shown_literals_py_read(root):
+    """Compute shown_literals_py's answer."""
     trees = _py_trees(root)
     wrappers = _py_wrappers(trees)
     found = {}

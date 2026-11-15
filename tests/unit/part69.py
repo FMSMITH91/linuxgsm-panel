@@ -865,19 +865,33 @@ check("part69: nothing it drove reached a real transport (every host call was st
 
 # The scanner keeps a scan per root until a scanned file changes (i18n_scan._memo): an edit, as a
 # mutation run or a check's temp tree makes, must be scanned afresh, never answered from the cache.
+# Every scan it keeps is asked: each answers the same twice, and after the edit what a fresh read of
+# the edited tree answers.
 _tdm69 = os.path.realpath(_tf69.mkdtemp(prefix="lgsm-unit-p69m-"))
+_MEMO69 = ("route_answer_keys", "spliced_py", "tr_keys_py", "shown_literals_py")
+
+
+def _memo_src69(word, gap):
+    """A route file whose every scanned answer names `word`; `gap` blank lines move its built one."""
+    return ("def a(x):\n    i18n.tr('Key %s.')\n    return jsonify({'message': 'Answer %s is here.'})\n%s\n\n"
+            "def b(x):\n    return jsonify({'message': 'Built %s %%s' %% x})\n" % (word, word, "\n" * gap, word))
+
+
 try:
     os.makedirs(os.path.join(_tdm69, "panel", "routes"))
     _rm69 = os.path.join(_tdm69, "panel", "routes", "r.py")
     with open(_rm69, "w") as _fh69:
-        _fh69.write("def a():\n    return jsonify({'message': 'Answer one is here.'})\n")
-    _m1_69 = sorted(_scan69.route_answer_keys(root=_tdm69))
-    _m1b_69 = sorted(_scan69.route_answer_keys(root=_tdm69))
+        _fh69.write(_memo_src69("one", 0))
+    _m1_69 = {_k: getattr(_scan69, _k)(root=_tdm69) for _k in _MEMO69}
+    _m1b_69 = {_k: getattr(_scan69, _k)(root=_tdm69) for _k in _MEMO69}
     with open(_rm69, "w") as _fh69:
-        _fh69.write("def a():\n    return jsonify({'message': 'Answer two is here.'})\n")
-    _m2_69 = sorted(_scan69.route_answer_keys(root=_tdm69))
+        _fh69.write(_memo_src69("two", 1))
+    _m2_69 = {_k: getattr(_scan69, _k)(root=_tdm69) for _k in _MEMO69}
+    _m2r_69 = {_k: getattr(_scan69, "_%s_read" % _k)(_tdm69) for _k in _MEMO69}
 finally:
     _shutil69.rmtree(_tdm69, ignore_errors=True)
 check("i18n scanner cache: the same tree answers the same, and a file edited since is scanned again",
-      _m1_69 == _m1b_69 == ["Answer one is here."] and _m2_69 == ["Answer two is here."],
+      sorted(_m1_69["route_answer_keys"]) == ["Answer one is here.", "Key one."] and _m1_69 == _m1b_69
+      and sorted(_m2_69["route_answer_keys"]) == ["Answer two is here.", "Key two."]
+      and all(_m1_69[_k] and _m2_69[_k] != _m1_69[_k] for _k in _MEMO69) and _m2_69 == _m2r_69,
       repr((_m1_69, _m1b_69, _m2_69)))
