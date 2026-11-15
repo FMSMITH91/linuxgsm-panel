@@ -91,6 +91,25 @@ function dbHostLink(h, text, action) {
   h.appendChild(b);
 }
 
+// New databases go to a server on another machine (over Tailscale): the tab's host line.
+function dbEndpointLine(e) {
+  var T = function (s) { return window.t ? window.t(s) : s; }, TF = function (s, v) { return window.tf ? window.tf(s, v) : s; };
+  var ver = /^(\d+\.\d+)/.exec(e.version || ''), name = e.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
+  var bad = (e.warnings || []).filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
+  return {text: [TF('New databases go to {server} on {label} ({address}), over Tailscale.',
+                    {server: name + (ver ? ' ' + ver[1] : ''), label: e.label, address: e.address})].concat(bad).join(' '),
+          warn: bad.length > 0};
+}
+
+// The dedicated login's statements, with a password made here (it never leaves this page until the
+// form is saved), and the form filled in with that login unless something was typed already.
+function dbDrawGrant(g, st) {
+  if (!st.grantPw) st.grantPw = dbNewPassword();
+  document.getElementById('db-grant').textContent = g.sql.split(g.mark).join(st.grantPw);
+  var u = document.getElementById('db-login-user'), p = document.getElementById('db-login-pw');
+  if (!u.value && !p.value) { u.value = g.user; p.value = st.grantPw; }
+}
+
 (function () {
   'use strict';
   var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false, grantPw: ''};
@@ -127,7 +146,7 @@ function dbHostLink(h, text, action) {
 
   function hostLine(d) {
     var h = d.host;
-    if (d.endpoint) return endpointLine(d.endpoint);
+    if (d.endpoint) return dbEndpointLine(d.endpoint);
     if (!h) return stateLine(d);
     var ver = /^(\d+\.\d+)/.exec(h.version || ''), name = h.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
     var text = TF('{server} on this host.', {server: name + (ver ? ' ' + ver[1] : '')});
@@ -135,15 +154,6 @@ function dbHostLink(h, text, action) {
     var reach = ws.filter(function (w) { return DB_REACH[w]; })[0];
     if (!bad.length) text += ' ' + T(reach ? DB_REACH[reach] : 'Only reachable from this machine.');
     return {text: [text].concat(bad).join(' ') + loginLine(h, d.can.su), warn: bad.length > 0 || !!h.login_refused};
-  }
-
-  // New databases go to a server on another machine (over Tailscale).
-  function endpointLine(e) {
-    var ver = /^(\d+\.\d+)/.exec(e.version || ''), name = e.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
-    var bad = (e.warnings || []).filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
-    return {text: [TF('New databases go to {server} on {label} ({address}), over Tailscale.',
-                      {server: name + (ver ? ' ' + ver[1] : ''), label: e.label, address: e.address})].concat(bad).join(' '),
-            warn: bad.length > 0};
   }
 
   // A server the panel signs in to with a stored admin login: say so, and say plainly when the
@@ -172,18 +182,8 @@ function dbHostLink(h, text, action) {
     show('db-login-old', login);
     show('db-login-clear', login);
     show('db-grant-box', on && !!d.grant);
-    if (on && d.grant) drawGrant(d.grant);
+    if (on && d.grant) dbDrawGrant(d.grant, st);
   }
-
-  // The dedicated login's statements, with a password made here (it never leaves this page until the
-  // form is saved), and the form filled in with that login unless something was typed already.
-  function drawGrant(g) {
-    if (!st.grantPw) st.grantPw = dbNewPassword();
-    el('db-grant').textContent = g.sql.split(g.mark).join(st.grantPw);
-    var u = el('db-login-user'), p = el('db-login-pw');
-    if (!u.value && !p.value) { u.value = g.user; p.value = st.grantPw; }
-  }
-
 
   function drawHost(d) {
     var line = hostLine(d), h = el('db-host');
@@ -489,8 +489,6 @@ function dbHostLink(h, text, action) {
   // What the remote-server form and Move (below, in their own scope) use of this tab's.
   window.dbTabCtx = {st: st, row: row, act: act, show: show, el: el, say: say, postJson: postJson, after: after, failed: failed};
 
-  // Typing in the name field keeps what was typed when the tab is drawn again.
-  window.dbEdited = function () { st.edited = true; };
 
   // Load when the tab is first opened (or the page opens on it).
   document.addEventListener('click', function (e) {
@@ -507,6 +505,9 @@ function dbHostLink(h, text, action) {
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
   if (!c) return;
+  // Typing in the name field keeps what was typed when the tab is drawn again.
+  window.dbEdited = function () { c.st.edited = true; };
+
   window.dbCopyGrant = function () {
     var pre = c.el('db-grant');
     if (pre && pre.textContent) window.copyText(pre.textContent, T('Copied'));
