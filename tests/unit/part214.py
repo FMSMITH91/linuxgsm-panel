@@ -81,7 +81,7 @@ for _lo214 in ("127.0.0.1", "::1"):
           repr((_lconf214, _lsaid214)))
 _okargs214, _okconf214, _ = _tls_boot214("0.0.0.0", fail=False)   # nosec B104 - a bind string
 check("tls: HTTPS that starts keeps the configured bind",
-      bool(_okargs214) and _okconf214["BOOT_BIND"] == "0.0.0.0" and _okconf214["BOOT_TLS"] is True,
+      bool(_okargs214) and _okconf214["BOOT_BIND"] == "0.0.0.0" and _okconf214["BOOT_TLS"] is True,  # nosec B104 - the bind under test
       repr(_okconf214))
 with open(_app214.__file__, encoding="utf-8") as _fh214:
     _main214 = _fh214.read().split('if __name__ == "__main__":', 1)[1]
@@ -163,7 +163,7 @@ def _ntfy214(addrs, via_route=False):
 
 
 for _addrs214 in (["127.0.0.1"], ["::1"], ["169.254.169.254"], ["::ffff:169.254.169.254"],
-                  ["64:ff9b::a9fe:a9fe"], ["fd00:ec2::254"], ["100.100.100.200"], ["0.0.0.0"], ["0.1.2.3"],
+                  ["64:ff9b::a9fe:a9fe"], ["fd00:ec2::254"], ["100.100.100.200"], ["0.0.0.0"], ["0.1.2.3"],  # nosec B104 - a refused ntfy address
                   ["224.0.0.251"], ["ff02::1"], ["fe80::1%2"], ["2002:7f00:1::1"], ["240.0.0.1"],
                   ["255.255.255.255"], ["198.51.100.20", "127.0.0.1"]):
     _ans214, _look214, _conn214 = _ntfy214(_addrs214)
