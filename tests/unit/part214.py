@@ -91,4 +91,32 @@ check("tls: the run line listens on the recorded bind, not on the configured hos
 eq("tls: the fallback bind is loopback", _certs214.TLS_FAILED_BIND, "127.0.0.1")
 
 
+# ── 2. an uploaded file's name is held to the rules a rename's is ───────────────────────────────
+def _upload214(name):
+    """POST one file named `name` through the upload route; return (json, names written)."""
+    wrote = []
+    _p9_patch(_sf214, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_files214, "_write_file_as_user",
+              lambda server, user, ap, data, selfname=None: wrote.append(ap) or (True, ""))
+    try:
+        r = _p9_client(P9_ADMIN).post("/api/server/%d/upload" % P9_GS, content_type="multipart/form-data",
+                                      data={"path": "cfg", "overwrite": "1",
+                                            "file": (_io214.BytesIO(b"x"), name)})
+        return _p9_json(r), wrote
+    finally:
+        _p9_restore_all()
+
+
+_good214, _gw214 = _upload214("server.cfg")
+check("upload: an ordinary name is written into the folder",
+      _good214.get("success") is True and _gw214 == ["/home/csgoserver/cfg/server.cfg"], repr((_good214, _gw214)))
+for _bad214, _why214 in (("evil\u202egfc.exe", "direction"), ("bell\x07.cfg", "control characters"),
+                         ("server.cfg ", None), (" server.cfg", None)):
+    _res214, _bw214 = _upload214(_bad214)
+    check("upload: %r is refused with name_problem's reason and nothing is written" % _bad214,
+          _res214.get("success") is False and _bw214 == []
+          and _res214.get("message") == _files214.name_problem(_bad214)
+          and (_why214 is None or _why214 in _res214.get("message", "")), repr((_res214, _bw214)))
+
+
 eq("part214: nothing reached a real transport", _P9_TRIPPED[_trips214:], [])
