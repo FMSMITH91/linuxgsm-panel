@@ -114,9 +114,10 @@ def _login212(name, secret, ip):
 # ── 1. what a new hash is ──────────────────────────────────────────────────────────────────────
 def _s212_new_hash():
     new = _auth212.hash_password(_K212_CUR)
-    params = _xp212(new)
+    # Read only from an Argon2id string: anything else fails the check by name, not the part.
+    params = _xp212(new) if new.startswith("$argon2id$") else None
     check("argon2: a new password hash is an Argon2id PHC string at the pinned parameters",
-          new.startswith(_PINNED212) and params.type is _AT212.ID
+          params is not None and new.startswith(_PINNED212) and params.type is _AT212.ID
           and (params.memory_cost, params.time_cost, params.parallelism) == (19456, 2, 1)
           and _auth212.check_password(_K212_CUR, new)
           and not _auth212.check_password(_K212_WRONG, new), new[:40])
