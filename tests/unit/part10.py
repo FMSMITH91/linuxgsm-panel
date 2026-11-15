@@ -1261,7 +1261,8 @@ _pb7_gbs_snap = {}
 try:
     _pb7.register(_pb7_app)
     _pb7_c = _pb7_app.test_client()
-    _p7_auth.current_user = _P7NS(is_authenticated=True, is_superadmin=True, id=1, username="p7admin")
+    _p7_auth.current_user = _P7NS(is_authenticated=True, is_superadmin=True, is_owner=True,
+                                  id=1, username="p7admin")
     _pb7.current_user = _p7_auth.current_user
     _pb7.log_action = lambda user, action, target="", detail="", success=True, **k: _pb7_log.append(
         (action, str(target), str(detail), success))
