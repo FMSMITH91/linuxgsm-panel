@@ -1440,6 +1440,12 @@ compares git commits, not this file.
 
 ### Security
 
+- **Passwords are stored the way OWASP recommends.** Account passwords and new 2FA backup codes are
+  hashed with Argon2id at OWASP's recommended settings, in place of bcrypt over SHA-256; each
+  existing password is upgraded the next time its owner signs in, with no reset. New encrypted
+  backups derive their key with scrypt at OWASP's recommended strength; older backups still restore,
+  and a backup asking for an unreasonable amount of memory is refused.
+
 - **Database passwords stay off command lines and logs.** The panel's database logins and each
   database's password reach the database client only through its input, are scrubbed from any
   error it prints, and are stored encrypted; every name and password a statement holds is checked
