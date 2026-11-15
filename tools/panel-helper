@@ -6927,19 +6927,42 @@ DB_DUMP_OPTS = ("--single-transaction", "--quick", "--routines", "--triggers", "
                 "--hex-blob", "--default-character-set=utf8mb4")
 DB_DUMP_OPTS_MYSQL = ("--set-gtid-purged=OFF", "--no-tablespaces")
 DB_SQL_PROBE = ("SHOW GLOBAL VARIABLES WHERE Variable_name IN ('version','version_comment','port',"
-                "'bind_address','skip_networking','socket','local_infile','require_secure_transport');\n"
+                "'bind_address','skip_networking','socket','local_infile','require_secure_transport',"
+                "'partial_revokes');\n"
                 "SELECT 'native', PLUGIN_STATUS FROM information_schema.PLUGINS "
-                "WHERE PLUGIN_NAME='mysql_native_password';\n")
+                "WHERE PLUGIN_NAME='mysql_native_password';\n"
+                "SELECT 'seen', SUBSTRING_INDEX(USER(),'@',-1);\n")
 DB_SQL_GRANTS = "SELECT 1;\nSHOW GRANTS;\n"
+# The narrow grant for a dedicated panel login, as SHOW GRANTS prints it (MySQL backquotes the
+# column names, MariaDB does not): each tuple is what one line must hold. CREATE USER on *.* (make,
+# re-key and drop the game accounts), SELECT on mysql.user's User and Host columns only (the check
+# that a name is free; no password hash), and every privilege on the gs% databases WITH GRANT OPTION
+# (make them, and grant each account its own).
+DB_SCOPED_GRANT_MARKS = (("GRANT CREATE USER ON *.* ",),
+                         ("GRANT SELECT (", "User", "ON `mysql`.`user` "),
+                         ("GRANT ALL PRIVILEGES ON `gs%`.* ", "WITH GRANT OPTION"))
 DB_SQL_SHOW = "SHOW DATABASES;\n"
 DB_PROBE_PACKAGES = ("mariadb-server", "mysql-server", "mariadb-server-*", "mysql-server-8*",
                      "percona-server-server")
 DB_PORT_DEFAULT = "3306"
 DB_DENIED_ERRORS = ("ERROR 1045", "ERROR 1698")
 DB_NO_SERVER_ERRORS = ("ERROR 2002",)
+# ...and, for a server on another machine, "nothing answered there" (2002, 2003 TCP, 2013 lost in
+# the handshake) and "it takes TLS connections only" (MySQL 3159, MariaDB 4036).
+DB_UNREACHABLE_ERRORS = ("ERROR 2002", "ERROR 2003", "ERROR 2013")
+DB_TLS_ERRORS = ("ERROR 3159", "ERROR 4036")
 DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import"})
 DB_AUTH_ARG = {"db-create": 1, "db-password": 1, "db-sizes": 1, "db-dump": 1, "db-drop": 1,
-               "db-admin-check": 1}
+               "db-admin-check": 1, "db-rehost": 1}
+# A database server on another machine is reached over Tailscale only (this release): its address,
+# and the address each game host's account is made for, are tailnet addresses.
+DB_NET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
+# The client's options for such a server: TLS off. Tailscale's WireGuard tunnel already encrypts
+# and authenticates every packet between the two machines, and a MariaDB 11.4+ client otherwise
+# insists on a verified certificate a stock server does not have. Never for any other address:
+# no other kind is accepted. `loose-` makes the client that does not know an option skip it
+# (MariaDB's client knows skip-ssl, MySQL's ssl-mode).
+DB_NET_TLS_OFF = ("--loose-skip-ssl", "--loose-ssl-mode=DISABLED")
 DB_CLIENT_TIMEOUT = 120
 DB_DUMP_TIMEOUT = 1800
 
@@ -6952,12 +6975,51 @@ def v_db_name(s):
 
 
 def v_db_auth(s):
-    """How a verb signs in: `socket` (root over the unix socket) or `tcp<port>` (an admin login)."""
+    """How a verb signs in: `socket` (root over the unix socket), `tcp<port>` (an admin login on
+    127.0.0.1) or `tcp<port>@<address>` (a login on a server at that tailnet address)."""
     if s == "socket":
         return s
     if not s.startswith("tcp"):
         raise ValueError("not a database sign-in")
-    v_port(s[3:])
+    port, _sep, addr = s[3:].partition("@")
+    v_port(port)
+    if _sep:
+        db_net_addr(addr)
+    return s
+
+
+def db_net_addr(s):
+    """`s` when it is a tailnet address written as Python writes it (no other spelling), else refuse."""
+    try:
+        a = ipaddress.ip_address(str(s))
+    except ValueError:
+        raise ValueError("not a tailnet address") from None
+    if str(a) != str(s) or not any(a.version == n.version and a in n
+                                   for n in (ipaddress.ip_network(r) for r in DB_NET_RANGES)):
+        raise ValueError("not a tailnet address")
+    return str(s)
+
+
+def db_net_target(auth):
+    """(port, address) of a `tcp<port>[@<address>]` sign-in; the address is 127.0.0.1 without one."""
+    port, _sep, addr = auth[3:].partition("@")
+    return port, (addr or "127.0.0.1")
+
+
+def db_conn_net(auth):
+    """The client's TCP options for a `tcp...` sign-in: host, port, and TLS off for a tailnet server."""
+    port, addr = db_net_target(auth)
+    return ["--protocol=tcp", "--host=" + addr, "--port=" + port] + (list(DB_NET_TLS_OFF) if "@" in auth else [])
+
+
+def db_client_host(s):
+    """The one address a game host's account is made for (a tailnet address): never a wildcard."""
+    return db_net_addr(s)
+
+
+def v_db_target(s):
+    """Where db-import's client connects: `<port>` (127.0.0.1) or `<port>@<tailnet address>`."""
+    v_db_auth("tcp" + s)
     return s
 
 
@@ -7025,35 +7087,46 @@ def db_grant_target(name):
     return "`%s`.*" % db_sql_name(name).replace("_", "\\_")
 
 
-def db_sql_create(flavor, name, plugin, maxconn, pw):
-    """The statements that make database `name` and its two accounts (localhost and 127.0.0.1)."""
+def db_hosts(client=None):
+    """The hosts a database's accounts are made for: localhost and 127.0.0.1, or one game host's address."""
+    return DB_HOSTS if client is None else (db_net_addr(client),)
+
+
+def db_sql_create(flavor, name, plugin, maxconn, pw, client=None):
+    """The statements that make database `name` and its accounts (db_hosts(client))."""
     name, ident = db_sql_name(name), db_identified(flavor, plugin, pw)
     out = ["CREATE DATABASE `%s` CHARACTER SET utf8mb4;" % name]
     out += ["CREATE USER '%s'@'%s' %s WITH MAX_USER_CONNECTIONS %d;" % (name, h, ident, int(maxconn))
-            for h in DB_HOSTS]
+            for h in db_hosts(client)]
     out += ["GRANT ALL PRIVILEGES ON %s TO '%s'@'%s';" % (db_grant_target(name), name, h)
-            for h in DB_HOSTS]
+            for h in db_hosts(client)]
     return "\n".join(out) + "\n"
 
 
-def db_sql_password(flavor, name, plugin, pw):
-    """The statements that give both of `name`'s accounts a new password."""
+def db_sql_password(flavor, name, plugin, pw, client=None):
+    """The statements that give `name`'s accounts (db_hosts(client)) a new password."""
     name, ident = db_sql_name(name), db_identified(flavor, plugin, pw)
-    return "".join("ALTER USER '%s'@'%s' %s;\n" % (name, h, ident) for h in DB_HOSTS)
+    return "".join("ALTER USER '%s'@'%s' %s;\n" % (name, h, ident) for h in db_hosts(client))
 
 
 def db_sql_exists(name):
     """How many of database `name` and accounts called `name` exist already (0: none)."""
     name = db_sql_name(name)
     return ("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')"
-            "+(SELECT COUNT(*) FROM mysql.user WHERE User='%s');\n" % (name, name))
+            "+(SELECT COUNT(User) FROM mysql.user WHERE User='%s');\n" % (name, name))
 
 
-def db_sql_drop(name):
-    """The statements that remove database `name` and both of its accounts; each may run twice."""
+def db_sql_drop(name, client=None):
+    """The statements that remove database `name` and its accounts (db_hosts(client)); each may run twice."""
     name = db_sql_name(name)
-    return ("".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in DB_HOSTS)
+    return ("".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in db_hosts(client))
             + "DROP DATABASE IF EXISTS `%s`;\n" % name)
+
+
+def db_sql_rehost(name, old, new):
+    """The statement that moves `name`'s account from game-host address `old` to `new` (password and grants kept)."""
+    name = db_sql_name(name)
+    return "RENAME USER '%s'@'%s' TO '%s'@'%s';\n" % (name, db_net_addr(old), name, db_net_addr(new))
 
 
 def db_sql_tables(name):
@@ -7089,11 +7162,20 @@ def db_foreign(listing):
 
 
 def db_grants_verdict(text):
-    """'ok' for every privilege on *.* WITH GRANT OPTION on one SHOW GRANTS line, else 'lacks_grants'."""
-    for line in text.splitlines():
+    """'ok', 'scoped' or 'lacks_grants' for a login's SHOW GRANTS `text`.
+
+    'ok': every privilege on *.* WITH GRANT OPTION on one line (ALL PRIVILEGES, or a list holding
+    CREATE USER: MySQL 8 spells root's grant out privilege by privilege). 'scoped': the narrow grant
+    the Databases tab offers for a dedicated panel login (DB_SCOPED_GRANT_MARKS), every part of it.
+    Each line is read on its own: MySQL prints its dynamic privileges on a line of their own.
+    """
+    lines = text.splitlines()
+    for line in lines:
         if (" ON *.* " in line and "WITH GRANT OPTION" in line
                 and ("ALL PRIVILEGES" in line or "CREATE USER" in line)):
             return "ok"
+    if all(any(all(m in line for m in marks) for line in lines) for marks in DB_SCOPED_GRANT_MARKS):
+        return "scoped"
     return "lacks_grants"
 
 
@@ -7104,6 +7186,13 @@ def db_error_kind(text):
     if any(e in text for e in DB_NO_SERVER_ERRORS):
         return "nosocket"
     return "error"
+
+
+def db_failed_word(text):
+    """'unreachable', 'tls' or 'unreadable' for a sign-in that failed with `text` (not a refused login)."""
+    if any(e in text for e in DB_UNREACHABLE_ERRORS):
+        return "unreachable"
+    return "tls" if any(e in text for e in DB_TLS_ERRORS) else "unreadable"
 
 
 def db_scrub(text, secrets):
@@ -7171,8 +7260,7 @@ def _db_conn_args(sess):
         sess["file"] = path
         with os.fdopen(fd, "w") as fh:
             fh.write(db_defaults_text(*sess["admin"]))
-    return ["--defaults-extra-file=" + sess["file"], "--protocol=tcp", "--host=127.0.0.1",
-            "--port=" + sess["auth"][3:]]
+    return ["--defaults-extra-file=" + sess["file"]] + db_conn_net(sess["auth"])
 
 
 def _db_done(sess):
@@ -7331,9 +7419,15 @@ def do_db_harden(args, content):
     return _db_with("db-harden", args, content, _db_harden)
 
 
+def _db_client(args, at):
+    """The optional client-host argument at index `at`: one game host's address, or None (this host)."""
+    return args[at] if len(args) > at else None
+
+
 def _db_create(sess, args):
-    flavor, _auth, name, plugin, maxconn = args
-    sql = db_sql_create(flavor, name, plugin, maxconn, sess["pw"])
+    flavor, _auth, name, plugin, maxconn = args[:5]
+    client = _db_client(args, 5)
+    sql = db_sql_create(flavor, name, plugin, maxconn, sess["pw"], client)
     rc, out, err = _db_run(sess, db_sql_exists(name))
     if rc != 0:
         return _db_fail(sess, err, rc)
@@ -7343,7 +7437,7 @@ def _db_create(sess, args):
     rc, out, err = _db_run(sess, sql)
     if rc != 0:
         # What this call made goes again, so a retry starts clean: nothing existed before it.
-        _db_run(sess, db_sql_drop(name))
+        _db_run(sess, db_sql_drop(name, client))
         return _db_fail(sess, err, rc)
     print("created")
     return 0
@@ -7355,7 +7449,7 @@ def do_db_create(args, content):
 
 
 def _db_password(sess, args):
-    rc, _out, err = _db_run(sess, db_sql_password(args[0], args[2], args[3], sess["pw"]))
+    rc, _out, err = _db_run(sess, db_sql_password(args[0], args[2], args[3], sess["pw"], _db_client(args, 4)))
     if rc != 0:
         return _db_fail(sess, err, rc)
     print("changed")
@@ -7424,7 +7518,7 @@ def _db_admin_check(sess, _args):
         if db_error_kind(out + err) == "denied":
             print("denied")
             return 0
-        print("unreadable")
+        print(db_failed_word(out + err))
         return 1
     print(db_grants_verdict(out))
     # Signed in already: what the server is (version, port, native logins), as db-probe reads it.
@@ -7730,11 +7824,24 @@ def _db_drop(sess, args):
         if out.strip() != "0":
             print("panel-db: no copy could be kept and the database is not empty")
             return 3
-    rc, out, err = _db_run(sess, db_sql_drop(name))
+    rc, out, err = _db_run(sess, db_sql_drop(name, _db_client(args, 3)))
     if rc != 0:
         return _db_fail(sess, err, rc)
     print("dropped" + kept)
     return 0
+
+
+def _db_rehost(sess, args):
+    rc, _out, err = _db_run(sess, db_sql_rehost(args[2], args[3], args[4]))
+    if rc != 0:
+        return _db_fail(sess, err, rc)
+    print("moved")
+    return 0
+
+
+def do_db_rehost(args, content):
+    """Move a database's account from one game-host address to another (RENAME USER keeps its password and grants)."""
+    return _db_with("db-rehost", args, content, _db_rehost)
 
 
 def do_db_drop(args, content):
@@ -7748,16 +7855,19 @@ def do_db_drop(args, content):
 VERBS.update({
     "db-probe": ([], lambda a: [], None),
     "db-harden": ([v_choice(*DB_FLAVORS)], lambda a: [], None),
-    "db-create": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, v_choice("native", "sha2"), v_db_maxconn],
-                  lambda a: [], None),
-    "db-password": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, v_choice("native", "sha2")],
-                    lambda a: [], None),
+    "db-create": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, v_choice("native", "sha2"), v_db_maxconn,
+                   Rest(db_client_host, minimum=0, maximum=1)], lambda a: [], None),
+    "db-password": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, v_choice("native", "sha2"),
+                     Rest(db_client_host, minimum=0, maximum=1)], lambda a: [], None),
     "db-sizes": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_account, Rest(v_db_name, maximum=64)],
                  lambda a: [], None),
     "db-dump": ([v_choice(*DB_FLAVORS), v_db_auth, v_choice("game", "archive"), v_db_account,
                  Rest(v_db_name, maximum=64)], lambda a: [], None),
-    "db-import": ([v_choice(*DB_FLAVORS), v_port, v_game_account, v_db_name], lambda a: [], None),
-    "db-drop": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name], lambda a: [], None),
+    "db-import": ([v_choice(*DB_FLAVORS), v_db_target, v_game_account, v_db_name], lambda a: [], None),
+    "db-drop": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, Rest(db_client_host, minimum=0, maximum=1)],
+                lambda a: [], None),
+    "db-rehost": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, db_client_host, db_client_host],
+                  lambda a: [], None),
     "db-admin-check": ([v_choice(*DB_FLAVORS), v_db_auth_tcp], lambda a: [], None),
 })
 
@@ -7822,6 +7932,7 @@ ACTIONS = {
     "db-import": do_db_import,
     "db-drop": do_db_drop,
     "db-admin-check": do_db_admin_check,
+    "db-rehost": do_db_rehost,
 }
 
 # The only two ACTIONS verbs that CONSUME their payload. The others take the parameter and
@@ -7835,7 +7946,7 @@ ACTIONS = {
 # that reads stdin without listing it here cannot silently start returning "".
 # The database verbs (but db-probe) read their sign-in document (db_read_doc).
 STDIN_VERBS = frozenset({"write-file", "content-cron-write", "db-harden", "db-create", "db-password",
-                         "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check"})
+                         "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check", "db-rehost"})
 
 # Verbs whose arguments are fine but which may still be refused by the state of the host, read
 # here as root: {verb: a function answering why not, or ""}. Run after validation and before the

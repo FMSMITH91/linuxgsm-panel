@@ -1586,6 +1586,63 @@ class GameDatabase(db.Model):
     dumped_at = db.Column(db.DateTime, nullable=True)            # last dump written into the game's files
     created_at = db.Column(db.DateTime, default=utcnow)
     created_by = db.Column(db.String(80), default="")
+    # A database on a server on another machine: its DatabaseEndpoint, and the one address its
+    # account was made for (the game host's, as that server sees it). Both NULL: the game host's own
+    # server, with the two accounts 'name'@'localhost' and 'name'@'127.0.0.1'.
+    endpoint_id = db.Column(db.Integer, nullable=True, index=True)
+    account_host = db.Column(db.String(45), nullable=True)
+
+
+class DatabaseEndpoint(db.Model):
+    """A MariaDB/MySQL server on another machine that game hosts reach over Tailscale.
+
+    kind 'managed': a host the panel manages (`remote_id`), whose own HostDatabaseServer row says
+    how the panel signs in there; the accounts are made on that host. kind 'external': a server the
+    panel does not manage, signed in to with `admin_user`/`admin_secret` (a superadmin's, encrypted
+    like an SSH credential) from each game host that uses it. `address` is a tailnet address (plain:
+    it is validated and compared, and an address is not a secret); `warnings` a JSON list of keys
+    as HostDatabaseServer's.
+    """
+
+    __tablename__ = "database_endpoint"
+    # AUTOINCREMENT: a deleted row's id is never handed to a new one (panel/db/id_sequence.py).
+    __table_args__ = {"sqlite_autoincrement": True}
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(80), default="")
+    kind = db.Column(db.String(8), default="external")          # 'managed' | 'external'
+    remote_id = db.Column(db.Integer, nullable=True, index=True)  # managed: the database's host
+    address = db.Column(db.String(45), default="")
+    port = db.Column(db.Integer, default=3306)
+    flavor = db.Column(db.String(8), default="mariadb")
+    version = db.Column(db.String(40), default="")
+    native_ok = db.Column(db.Boolean, default=True)
+    warnings = db.Column(db.Text, default="")
+    admin_user = db.Column(EncryptedString, default="")          # external only
+    admin_secret = db.Column(db.Text, default="")                # encrypt_secret(password), external only
+    created_by = db.Column(db.String(80), default="")
+    created_at = db.Column(db.DateTime, default=utcnow)
+    checked_at = db.Column(db.DateTime, nullable=True)
+
+    @property
+    def auth_mode(self):
+        """How the panel signs in, as HostDatabaseServer says it: always with a login (over the tailnet)."""
+        return "login"
+
+
+class EndpointClient(db.Model):
+    """A game host whose new databases go to a DatabaseEndpoint, and its address as that server sees it.
+
+    One per game host (the unique `remote_id`): a superadmin chose it. Databases made before keep
+    their own server (GameDatabase.endpoint_id says where each one is).
+    """
+
+    __tablename__ = "endpoint_client"
+    __table_args__ = {"sqlite_autoincrement": True}
+    id = db.Column(db.Integer, primary_key=True)
+    endpoint_id = db.Column(db.Integer, nullable=False, index=True)
+    remote_id = db.Column(db.Integer, nullable=False, unique=True)
+    seen_addr = db.Column(db.String(45), default="")
+    checked_at = db.Column(db.DateTime, nullable=True)
 
 
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
@@ -1596,7 +1653,8 @@ class GameDatabase(db.Model):
 # session's Revoke are the same shape. Every one has `sqlite_autoincrement` in its __table_args__;
 # a unit check holds the two lists together.
 _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
-                         GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase)
+                         GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase, DatabaseEndpoint,
+                         EndpointClient)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {
@@ -1681,6 +1739,9 @@ _LIGHT_MIGRATIONS = {
     # real value.
     ("user_session", "remember"):
         "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
+    # NULL on upgrade: every database made before is on its game host's own server.
+    ("game_database", "endpoint_id"): "ALTER TABLE game_database ADD COLUMN endpoint_id INTEGER",
+    ("game_database", "account_host"): "ALTER TABLE game_database ADD COLUMN account_host VARCHAR(45)",
 }
 
 

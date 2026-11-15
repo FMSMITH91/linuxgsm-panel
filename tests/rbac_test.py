@@ -1047,6 +1047,15 @@ def _check_limited_user_denied_pages():
         # < 500 too: a guard that regressed into a crash (a route reaching git or GitHub in CI)
         # answers 500, which `!= 200` read as DENIED.
         check("limited user DENIED %s" % p, code != 200 and code < 500, "got %d" % code)
+    # The Databases overview is a viewer's page, scoped to the servers they can see: the limited user
+    # (VIEW_SERVERS, one host) opens it, and it lists no database of a host they were not given.
+    _ov = c.get("/databases")
+    with app.app_context():
+        from panel.db.models import GameDatabase as _GDb
+        _far = [r.name for r in _GDb.query.filter(_GDb.remote_id != granted_remote).all()]
+    check("limited user CAN open /databases, and sees no other host's database",
+          _ov.status_code == 200 and not any(n in _ov.get_data(as_text=True) for n in _far),
+          "got %d" % _ov.status_code)
 
 
 def _check_specs_os_slug_for_installers():
@@ -4045,7 +4054,7 @@ def _check_superadmin_full_access():
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale",
-              "/settings", "/notifications"]:
+              "/settings", "/notifications", "/databases"]:
         code = ca.get(p).status_code
         check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
 

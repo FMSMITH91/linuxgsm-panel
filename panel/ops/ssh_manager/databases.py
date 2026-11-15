@@ -11,12 +11,14 @@ This module is not one of the package's _MODULES (its generic names, create and 
 shadow another submodule's through the package's __getattr__): import it by name,
 `from panel.ops.ssh_manager import databases`.
 """
+import ipaddress
 import re
 import secrets as _secrets
 import string
+from types import SimpleNamespace
 
 from panel.core import i18n
-from panel.ops.ssh_manager import _core
+from panel.ops.ssh_manager import _core, firewall as _fw, ufweval
 from panel.security import privileged as _priv
 
 SLUG_RE = r"^[a-z0-9]{1,16}$"
@@ -26,7 +28,7 @@ _PW_ALPHABET = string.ascii_letters + string.digits + "-_."
 _PW_CLASSES = (str.isupper, str.islower, str.isdecimal, "-_.".__contains__)
 
 # Seconds each verb may take. A dump and an import scale with the database; an install with apt.
-TIMEOUTS = {"db-probe": 45, "db-admin-check": 30, "db-create": 60, "db-password": 60,
+TIMEOUTS = {"db-probe": 45, "db-admin-check": 30, "db-create": 60, "db-password": 60, "db-rehost": 60,
             "db-sizes": 30, "db-dump": 1800, "db-import": 1800, "db-drop": 1800, "db-harden": 180}
 APT_TIMEOUT = 900
 # The oldest servers the panel manages: MariaDB 10.4 (unix_socket root, ALTER USER, DROP USER IF
@@ -34,6 +36,11 @@ APT_TIMEOUT = 900
 MIN_MARIADB = (10, 4)
 MIN_MYSQL = (8, 0)
 _LOOPBACK = ("127.0.0.1", "::1", "localhost")
+# The ports a MySQL or MariaDB server answers on besides the one it reports (MySQL's X protocol).
+DB_PORTS = (3306, 33060)
+# What the host's firewall verdict makes of a server listening on the network (_reach_keys): the
+# firewall lets no other machine reach it (an info line, not a warning), or it could not be read.
+_FIREWALL_KEY = {"blocked": "firewalled", "unknown": "firewall_unknown"}
 
 S_UNREADABLE = ("The host did not answer, so the database server could not be checked. "
                 "Nothing was changed.")
@@ -114,7 +121,36 @@ def auth_plugin_name(plugin):
 
 
 def _auth(hostdb):
-    return "socket" if hostdb.auth_mode != "login" else "tcp%d" % int(hostdb.port or 3306)
+    """The verb's sign-in for `hostdb`: the socket, a login on 127.0.0.1, or a login on a tailnet server.
+
+    `hostdb` is a HostDatabaseServer, a DatabaseEndpoint, or a view of either (target_view) that
+    carries the server's `address` and the game host's `client` address its accounts are made for.
+    """
+    if hostdb.auth_mode != "login":
+        return "socket"
+    addr = getattr(hostdb, "address", "") or ""
+    return "tcp%d" % int(hostdb.port or 3306) + ("@" + addr if addr else "")
+
+
+def _client_args(hostdb):
+    """The verb's optional last argument: the one game-host address the accounts are made for."""
+    client = getattr(hostdb, "client", None)
+    return [client] if client else []
+
+
+def target_view(hostdb, client=None, login=None, address=None):
+    """`hostdb` as a verb target that makes accounts for `client`, signs in with `login`, at `address`.
+
+    login: (user, encrypted secret) in place of the stored admin login (a database's own account,
+    for a dump or a sign-in check from its game host); address: the tailnet address a game host
+    reaches the server at. Nothing is written to `hostdb`.
+    """
+    user, secret = login if login else (getattr(hostdb, "admin_user", ""), getattr(hostdb, "admin_secret", ""))
+    return SimpleNamespace(
+        flavor=hostdb.flavor, native_ok=hostdb.native_ok, port=hostdb.port,
+        auth_mode="login" if (login or address or hostdb.auth_mode == "login") else "socket",
+        address=address if address is not None else (getattr(hostdb, "address", "") or ""),
+        admin_user=user, admin_secret=secret, client=client)
 
 
 def _secrets_for(hostdb, pw=None):
@@ -190,15 +226,45 @@ def _is_loopback(addr):
     return host in _LOOPBACK or host.startswith("127.")
 
 
+def _private_bind(host):
+    """Whether a bind address reaches no other machine but over Tailscale: loopback, or a tailnet address."""
+    if host in _LOOPBACK or host.startswith("127."):
+        return True
+    try:
+        return ufweval.in_tailnet(ipaddress.ip_address(host))
+    except ValueError:
+        return False                # '*', '0.0.0.0', '::' and a name all reach every interface
+
+
 def _exposed(v, listeners):
-    """Whether the server listens beyond loopback: its bind-address, or a listener ss saw."""
+    """Whether the server listens beyond loopback and the tailnet: its bind-address, or a listener ss saw."""
     binds = [b.strip() for b in v.get("bind_address", "").split(",") if b.strip()]
-    return any(b not in _LOOPBACK for b in binds) or any(not _is_loopback(a) for a in listeners)
+    return (any(not _private_bind(b) for b in binds)
+            or any(not _private_bind(a.rsplit(":", 1)[0].strip("[]")) for a in listeners))
 
 
-def _warnings(v, listeners, flavor, native_ok):
-    """The warning keys for a server's variables and listeners."""
-    out = ["exposed"] if _exposed(v, listeners) else []
+def _on_tailnet(v, listeners):
+    """Whether the server listens on a tailnet address (and nowhere beyond it: _exposed is False)."""
+    binds = [b.strip() for b in v.get("bind_address", "").split(",") if b.strip()]
+    hosts = binds + [a.rsplit(":", 1)[0].strip("[]") for a in listeners]
+    return any(_private_bind(h) and not _is_loopback(h + ":0") for h in hosts)
+
+
+def _reach_keys(v, listeners, firewall):
+    """Who can reach the server, as one key: exposed, firewall_unknown, firewalled, tailnet, or none."""
+    if _exposed(v, listeners):
+        return [_FIREWALL_KEY.get(firewall, "exposed")]
+    return ["tailnet"] if _on_tailnet(v, listeners) else []
+
+
+def _warnings(v, listeners, flavor, native_ok, firewall=None):
+    """The warning keys for a server's variables and listeners.
+
+    `firewall` is _firewall_verdict's answer for a server that listens on the network: 'blocked'
+    drops the exposed warning (the host's firewall lets no other machine reach the port), 'unknown'
+    says it could not be checked instead, and 'open' or None keeps it.
+    """
+    out = _reach_keys(v, listeners, firewall)
     if v.get("skip_networking", "").upper() == "ON":
         out.append("skip_networking")
     if v.get("require_secure_transport", "").upper() == "ON":
@@ -216,6 +282,62 @@ def _flavor_state(v, pkgs):
         return flavor, "unsupported"
     floor = MIN_MARIADB if flavor == "mariadb" else MIN_MYSQL
     return flavor, ("ready" if _version_tuple(v.get("version")) >= floor else "unsupported")
+
+
+def _ufw_rule_lines(out):
+    """The rule lines of `ufw status verbose`: everything after its "--" underline."""
+    lines = out.splitlines()
+    at = next((i for i, line in enumerate(lines) if line.strip().startswith("--")), None)
+    return [] if at is None else [line for line in lines[at + 1:] if line.strip()]
+
+
+def _rule_opens(line, ports):
+    """Whether one ufw rule line lets another machine reach any of `ports` (a maybe counts as yes).
+
+    A rule on a Tailscale interface or on one that carries only this machine's own traffic (lo,
+    docker0...) reaches no other machine but the tailnet.
+    """
+    spec = ufweval.row_spec(_fw._parse_ufw_rule(line))
+    iface = spec["iface"]
+    if spec["action"] not in ("ALLOW", "LIMIT") or spec["direction"] != "IN":
+        return False
+    if iface.startswith("tailscale") or ufweval._HOST_ONLY_IFACE_RE.match(iface.rstrip("+") or "-"):
+        return False
+    return any(ufweval._port_match(spec["dports"], spec["proto"], p, None) != ufweval.NO for p in ports)
+
+
+def ufw_db_verdict(out, rc, ports):
+    """'blocked', 'open' or 'unknown': whether the host's ufw lets another machine reach `ports`.
+
+    `out`/`rc` are `ufw status verbose`'s. 'open' for no ufw, an inactive one, a default incoming
+    allow, or an IN rule allowing one of the ports other than on tailscale0 or a host-only
+    interface; 'unknown' for a read that failed or a status this cannot read (never 'open': a host
+    that could not be checked is said to be so).
+    """
+    if rc == 127:
+        return "open"
+    if rc != 0 or not (out or "").strip():
+        return "unknown"
+    if not _fw._ufw_is_active(out):
+        return "open"
+    m = _fw._FWA_DEFAULT_RE.search(out)
+    if not m:
+        return "unknown"
+    if m.group(1) == "allow" or any(_rule_opens(line, ports) for line in _ufw_rule_lines(out)):
+        return "open"
+    return "blocked"
+
+
+def _firewall_verdict(remote, port):
+    """ufw_db_verdict for `remote`'s database ports (3306, 33060 and `port`), read with one ufw-status.
+
+    Read only, through the verb the Network tab reads it with; nothing is changed.
+    """
+    try:
+        out, _err, rc = _core.run_privileged(remote, "ufw-status", ["verbose"], timeout=15, sudo=None)
+    except Exception:
+        return "unknown"
+    return ufw_db_verdict(out, rc, sorted(set(DB_PORTS) | {int(port)}))
 
 
 _ROOT_STATES = {"denied": ("needs_login", ""), "error": ("unreadable", "")}
@@ -268,16 +390,18 @@ def probe(remote):
         state, detail = _no_socket_state(facts)
     native_ok = flavor == "mariadb" or v.get("native", "").upper() == "ACTIVE"
     port = int(v["port"]) if v.get("port", "").isdecimal() else 3306
+    # The firewall is read only for a server that listens on the network: one more call, then.
+    fw = _firewall_verdict(remote, port) if state != "none" and _exposed(v, facts["listeners"]) else None
     return {"state": state, "detail": detail, "flavor": flavor, "version": v.get("version", "")[:40],
-            "port": port, "native_ok": native_ok,
-            "warnings": _warnings(v, facts["listeners"], flavor, native_ok) if state != "none" else [],
+            "port": port, "native_ok": native_ok, "firewall": fw,
+            "warnings": _warnings(v, facts["listeners"], flavor, native_ok, fw) if state != "none" else [],
             "socket_root": facts["socket_root"], "packages": facts["pkgs"],
             "listeners": facts["listeners"]}
 
 
-def _apt_install(remote):
-    """apt-install mariadb-server; on 22.04/24.04 add universe and retry once. True when it worked."""
-    out, err, rc = _core.run_privileged(remote, "apt-install", ["mariadb-server"], timeout=APT_TIMEOUT)
+def _apt_install(remote, package="mariadb-server"):
+    """apt-install `package`; on 22.04/24.04 add universe and retry once. True when it worked."""
+    out, err, rc = _core.run_privileged(remote, "apt-install", [package], timeout=APT_TIMEOUT)
     if rc == 0:
         return True
     text = "%s\n%s" % (out, err)
@@ -285,7 +409,7 @@ def _apt_install(remote):
         return False
     _core.run_privileged(remote, "apt-add-repo", ["universe"], timeout=APT_TIMEOUT)
     _core.run_privileged(remote, "apt-update", [], timeout=APT_TIMEOUT)
-    return _core.run_privileged(remote, "apt-install", ["mariadb-server"], timeout=APT_TIMEOUT)[2] == 0
+    return _core.run_privileged(remote, "apt-install", [package], timeout=APT_TIMEOUT)[2] == 0
 
 
 def install_mariadb(remote):
@@ -318,13 +442,39 @@ def admin_check(remote, port, user, pw):
         return "denied", {}         # a login no client could be handed is a login that cannot sign in
     rc, out = _verb(remote, "db-admin-check", ["mariadb", "tcp%d" % int(port)], {"admin": (user, pw)})
     verdict = _admin_verdict(rc, out)
-    return verdict, (_parse_probe(out)["vars"] if verdict in ("ok", "lacks_grants") else {})
+    v = _parse_probe(out)["vars"] if verdict in ("ok", "scoped", "lacks_grants") else {}
+    if verdict == "scoped":
+        # The narrow grant names its databases `gs%`: a wildcard, unless MySQL's partial_revokes is
+        # on, which reads % and _ in a grant literally, so the login could make no gs<n>_ database.
+        verdict = "partial_revokes" if v.get("partial_revokes", "").upper() == "ON" else "ok"
+    return verdict, v
 
 
 def _admin_verdict(rc, out):
     """db-admin-check's verdict: a word of its own line; a variable's value (var.x=…) never counts as one."""
     words = [w for line in out.splitlines() if not line.startswith("var.") for w in line.split()]
-    return next((a for a in ("ok", "denied", "lacks_grants") if rc == 0 and a in words), "unreadable")
+    return next((a for a in ("ok", "scoped", "denied", "lacks_grants") if rc == 0 and a in words), "unreadable")
+
+
+# The dedicated login the tab offers instead of a server's own root or master login (`password` is
+# filled in on the viewer's page). It signs in over TCP from this host, so its host is 127.0.0.1.
+SCOPED_USER = "linuxgsm_panel"
+SCOPED_HOST = "127.0.0.1"
+
+
+def scoped_grant_sql(password, user=SCOPED_USER, host=SCOPED_HOST):
+    """The statements that make the dedicated panel login with the narrow grant (DB_SCOPED_GRANT_MARKS).
+
+    For the operator to run on their own server, as its administrator; the panel never runs them.
+    CREATE USER is a server-wide right (it can change or drop any account), so the login is as
+    trusted as an administrator in that respect; the rest is limited to the gs% databases and to
+    mysql.user's User and Host columns.
+    """
+    a = "'%s'@'%s'" % (user, host)
+    return ("CREATE USER %s IDENTIFIED BY '%s';\n"
+            "GRANT CREATE USER ON *.* TO %s;\n"
+            "GRANT SELECT (User, Host) ON mysql.user TO %s;\n"
+            "GRANT ALL PRIVILEGES ON `gs%%`.* TO %s WITH GRANT OPTION;\n" % (a, password, a, a, a))
 
 
 def check_admin_login(remote, port, user, pw):
@@ -346,7 +496,7 @@ def with_login_facts(p, v):
     native_ok = flavor == "mariadb" or v.get("native", "").upper() == "ACTIVE"
     port = int(v["port"]) if v.get("port", "").isdecimal() else p.get("port", 3306)
     return dict(p, flavor=flavor, version=v.get("version", "")[:40], port=port, native_ok=native_ok,
-                warnings=_warnings(v, p.get("listeners") or [], flavor, native_ok))
+                warnings=_warnings(v, p.get("listeners") or [], flavor, native_ok, p.get("firewall")))
 
 
 def _sentence(rc, ok, fail, **vals):
@@ -362,7 +512,7 @@ def _sentence(rc, ok, fail, **vals):
 
 def create(remote, hostdb, name, pw, maxconn):
     """Make database `name` and its two accounts with password `pw`: (ok, sentence)."""
-    args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb), str(int(maxconn))]
+    args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb), str(int(maxconn))] + _client_args(hostdb)
     with db_lock(remote):
         rc, _out, refused = _admin_verb(remote, hostdb, "db-create", args, pw)
     if refused:
@@ -374,7 +524,7 @@ def create(remote, hostdb, name, pw, maxconn):
 
 def set_password(remote, hostdb, name, pw):
     """Give both of `name`'s accounts password `pw`: (ok, sentence)."""
-    args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb)]
+    args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb)] + _client_args(hostdb)
     with db_lock(remote):
         rc, _out, refused = _admin_verb(remote, hostdb, "db-password", args, pw)
     if refused:
@@ -455,8 +605,9 @@ def restore(remote, hostdb, account, name, pw):
     why = _account_refusal(remote, account)
     if why:
         return False, why
-    rc, _out = _verb(remote, "db-import", [hostdb.flavor, str(int(hostdb.port or 3306)), account, name],
-                    {"pw": pw})
+    addr = getattr(hostdb, "address", "") or ""
+    target = str(int(hostdb.port or 3306)) + ("@" + addr if addr else "")
+    rc, _out = _verb(remote, "db-import", [hostdb.flavor, target, account, name], {"pw": pw})
     if rc == 4:
         return None, i18n.Sentence(S_NO_DUMP, name=name)
     return _sentence(rc, S_RESTORED, S_RESTORE_FAILED, name=name)
@@ -470,10 +621,105 @@ def drop(remote, hostdb, account, name):
     """
     del account
     with db_lock(remote):
-        rc, _out, refused = _admin_verb(remote, hostdb, "db-drop", [hostdb.flavor, _auth(hostdb), name])
+        rc, _out, refused = _admin_verb(remote, hostdb, "db-drop", [hostdb.flavor, _auth(hostdb), name]
+                                        + _client_args(hostdb))
     if refused:
         return False, S_LOGIN_REFUSED
     if rc == 3:
         return False, i18n.Sentence(S_NOT_EMPTY, name=name)
     # "nocopy": the database held nothing (or was already gone), so there was nothing to keep.
     return _sentence(rc, S_DROPPED_EMPTY if "nocopy" in _out.split() else S_DROPPED, S_DROP_FAILED, name=name)
+
+
+# ── a database server on another machine (over Tailscale) ──────────────────────────────────────
+# The client's words for "nothing answered there" (2002 socket, 2003 TCP, 2013 lost during the
+# handshake) and for "this server takes TLS connections only" (MySQL 3159, MariaDB 4036).
+_UNREACHABLE_MARKS = ("ERROR 2002", "ERROR 2003", "ERROR 2013")
+_TLS_MARKS = ("ERROR 3159", "ERROR 4036")
+_SEEN_RE = re.compile(r"Access denied for user '[^']*'@'([0-9A-Fa-f:.]{2,45})'")
+S_NET_UNREACHABLE = ("{host} can't reach the database server at {address}, port {port}. Check that it listens on "
+                     "that address and that its firewall lets {host} in over Tailscale; the panel changes neither.")
+S_NET_DENIED = "The database server refused the new account from {host}."
+S_NET_SEEN = "The database server sees {host} as {seen}, not {client}."
+S_NET_TLS = "This database server only accepts TLS connections; the panel can use it over Tailscale only without TLS."
+S_NET_ERROR = "The database server could not be reached from {host}."
+
+
+def _net_kind(rc, out):
+    """'ok', 'noclient', 'unreachable', 'tls', 'denied' or 'error' for a sign-in from a game host."""
+    if rc == 0:
+        return "ok"
+    if rc == 127:
+        return "noclient"
+    if any(m in out for m in _TLS_MARKS) or "secure transport" in out.lower():
+        return "tls"
+    if any(m in out for m in _UNREACHABLE_MARKS):
+        return "unreachable"
+    return "denied" if any(m in out for m in _DENIED_MARKS) else "error"
+
+
+def seen_in(out):
+    """The address a refused sign-in says the server saw (its 1045 text), when it is a tailnet address."""
+    m = _SEEN_RE.search(out or "")
+    if not m:
+        return ""
+    try:
+        return _priv.db_net_addr(str(ipaddress.ip_address(m.group(1))))
+    except (ValueError, _priv.VerbError):
+        return ""
+
+
+def endpoint_check(remote, address, port, user, pw):
+    """(verdict, server variables) for an admin login on the server at `address`:`port`, signed in from `remote`.
+
+    As admin_check, from a game host to a server on another machine over the tailnet; verdict also
+    'noclient' (the game host has no database client), 'unreachable' or 'tls'.
+    """
+    if not (re.fullmatch(_priv.DB_ADMIN_USER_RE, str(user or ""))
+            and re.fullmatch(_priv.DB_ADMIN_PW_RE, str(pw or ""))):
+        return "denied", {}
+    rc, out = _verb(remote, "db-admin-check", ["mariadb", "tcp%d@%s" % (int(port), address)],
+                    {"admin": (user, pw)})
+    if rc == 0:
+        verdict, v = _admin_verdict(rc, out), _parse_probe(out)["vars"]
+        if verdict == "scoped":
+            verdict = "partial_revokes" if v.get("partial_revokes", "").upper() == "ON" else "ok"
+        return verdict, (v if verdict != "denied" else {})
+    if rc == 127:
+        return "noclient", {}
+    words = out.split()
+    return next((w for w in ("unreachable", "tls") if w in words), "unreadable"), {}
+
+
+def sign_in_check(remote, hostdb, name, pw):
+    """Sign in from game host `remote` as database `name`'s own account: (kind, address the server saw).
+
+    kind as _net_kind. The proof that a new account works from where the game connects, made before
+    the database is kept; one db-sizes call, which reads nothing but its own database's size.
+    """
+    view = target_view(hostdb, login=(name, _encrypt(pw)))
+    rc, out = _verb(remote, "db-sizes", [view.flavor, _auth(view), "-", name], _secrets_for(view))
+    return _net_kind(rc, out), seen_in(out)
+
+
+def _encrypt(pw):
+    from panel.core.config import encrypt_secret
+    return encrypt_secret(pw)
+
+
+def rehost(remote, hostdb, name, old, new):
+    """Move `name`'s account from game-host address `old` to `new`: (ok, sentence)."""
+    with db_lock(remote):
+        rc, _out, refused = _admin_verb(remote, hostdb, "db-rehost", [hostdb.flavor, _auth(hostdb), name, old, new])
+    if refused:
+        return False, S_LOGIN_REFUSED
+    return _sentence(rc, "The account of {name} now signs in from {new}.",
+                     "The database server did not move the account of {name}.", name=name, new=new)
+
+
+CLIENT_PACKAGES = {"mariadb": "mariadb-client", "mysql": "mysql-client"}
+
+
+def install_client(remote, flavor):
+    """Install the database client for `flavor` on `remote` from Ubuntu: True when it worked."""
+    return _apt_install(remote, CLIENT_PACKAGES.get(flavor, "mariadb-client"))

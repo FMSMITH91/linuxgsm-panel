@@ -5818,8 +5818,13 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # reset-password, delete and restore (MANAGE_DATABASES); a host's setup (MANAGE_DATABASES and
 # MANAGE_REMOTES, get_host_remote), admin login and admin password (superadmin), and its databases with no
 # game server, listed and deleted (MANAGE_DATABASES, get_remote).
-check("register_routes: every one of the 272 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 272,
+# 275, was 272: three genuinely new views. panel/routes/databases.py's move of a database's account to its
+# game host's new tailnet address (/api/server/<id>/databases/<db>/move, MANAGE_DATABASES), and
+# panel/routes/databases_net.py's Databases overview page (/databases, VIEW_SERVERS or MANAGE_DATABASES,
+# scoped to the servers the viewer can see) and a host's choice of a database server on another machine
+# (/api/remote/<id>/databases/endpoint, superadmin).
+check("register_routes: every one of the 275 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 275,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -8548,7 +8553,7 @@ def _outside_single_quotes(cmd):
 _INJ_FILLERS = ["abc", "1", "22", "root", "yes", "no", "prohibit-password", "-", "gmod",
                 "gmodserver", "PermitRootLogin", "PasswordAuthentication", "1720000000", "2",
                 "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05", "hour",
-                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game"]
+                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2"]
 _inj_bad, _inj_checked, _inj_nofill, _inj_base_exposed = [], 0, [], {}
 for _verb in sorted(_priv._REMOTE_ACTIONS):
     _spec = _priv._ARGV.get(_verb)

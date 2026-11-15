@@ -170,6 +170,7 @@ _VERB_ARGS = {
     "db-import": (["mariadb", "3306", _ACCT, "gs12_lp"], {"pw": _PW}),
     "db-drop": (["mysql", "tcp3306", "gs12_lp"], {"admin": _ADMIN}),
     "db-admin-check": (["mysql", "tcp3306"], {"admin": _ADMIN}),
+    "db-rehost": (["mysql", "tcp3306", "gs12_lp", "100.70.1.2", "100.70.1.3"], {"admin": _ADMIN}),
 }
 eq("db verbs: every db-* verb is exercised here", sorted(list(_VERB_ARGS) + ["db-probe"]), sorted(_priv207.DB_VERBS))
 _on_argv, _off_stdin = [], []
@@ -436,8 +437,9 @@ try:
             _reset(**_files)
             _res = _run("db-admin-check", *_VERB_ARGS["db-admin-check"])
             _got.append((_res[0], _res[1].split()[-1] if _res[1].split() else ""))
-        eq("db-admin-check (%s): ok, lacks_grants, denied (rc 0), and an unreadable answer is rc 1" % _side,
-           _got, [(0, "ok"), (0, "lacks_grants"), (0, "denied"), (1, "unreadable")])
+        eq("db-admin-check (%s): ok, lacks_grants, denied (rc 0), and a server that did not answer is rc 1, "
+           "said as unreachable" % _side,
+           _got, [(0, "ok"), (0, "lacks_grants"), (0, "denied"), (1, "unreachable")])
         # Signed in, it reads what the server is (the socket probe can't, for a login-only server).
         _reset(grants="1\nGRANT ALL PRIVILEGES ON *.* TO `r`@`localhost` WITH GRANT OPTION\n",
                probe="version\t8.0.46-0ubuntu0.24.04.1\nport\t3306\nnative\tACTIVE\n")
@@ -701,6 +703,12 @@ _rp_saved = _smc207.run_privileged
 _smc207.run_privileged = _fake_rp
 try:
     _wrong = []
+    # A host whose firewall lets every machine reach 3306: a server listening there is exposed
+    # (part211 holds what the firewall's other answers make of it).
+    _ANSWERS["ufw-status"] = ("Status: active\nLogging: on (low)\nDefault: deny (incoming), allow (outgoing), "
+                              "disabled (routed)\n\nTo                         Action      From\n"
+                              "--                         ------      ----\n3306/tcp                   ALLOW IN    "
+                              "Anywhere\n", "", 0)
     for _k, (_out, _want) in _PROBES.items():
         _ANSWERS["db-probe"] = (_out, "", 0)
         _p = _dbs207.probe(object())
