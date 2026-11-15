@@ -206,14 +206,17 @@ function bkRenderList(d, tb){
       // stored SSH credential. Downloading it moves that off the 0700 data dir onto whatever
       // machine the browser is on, so the title says so rather than just "Download".
       + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download — contains the database AND the encryption keys for every stored SSH credential. Keep it somewhere you would keep those keys."><i class="bi bi-download"></i></a> '
-      // Restore is the panel owner's only (the route refuses anyone else): an archive replaces
-      // every account, the owner's included.
-      + (d.can_restore === false ? '' : '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, !!b.encrypted, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> ')
+      + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, !!b.encrypted, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
       + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"' + _da('deleteBackup', [b.name, '@self']) + '><i class="bi bi-trash"></i></button>'
       + '</td></tr>';
   });
   if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
   tb.innerHTML=rows;  // nosemgrep
+  // Restore is the panel owner's only (the route refuses anyone else): an archive replaces every
+  // account, the owner's included. Taken out after rendering, so no flag reaches the markup.
+  if(d.can_restore === false){
+    tb.querySelectorAll('[data-action="restoreBackup"]').forEach(function(el){ el.remove(); });
+  }
   document.getElementById('bk-loading').style.display='none';
   document.getElementById('bk-table-wrap').style.display='';
 }

@@ -2990,8 +2990,10 @@ _sc = client_as(_sole_id)
 # No "reset_password" alongside it any more: resetting your OWN password from this form is
 # refused outright (see the self-reset checks), so that refusal would answer first and this
 # would pass without ever reaching the lockout guard.
+# Active stays ticked: deactivating your own account is refused before the lockout guard (for
+# every account), so only the demotion reaches it.
 _lr = _sc.post("/users/%d/edit" % _sole_id,
-               data={"username": "smoke_sole"},   # superadmin UNticked
+               data={"username": "smoke_sole", "is_active": "on"},   # superadmin UNticked
                headers={"X-Requested-With": "XMLHttpRequest"})
 with app.app_context():
     _left = User.query.filter_by(is_superadmin=True, is_active=True).count()

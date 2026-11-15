@@ -15,7 +15,8 @@ with app.app_context():
     db.session.add(SetupState(step="complete", complete=True))
     admin = User(username="smoke_admin",
                  password_hash=auth.hash_password("Str0ng!passw0rd"),
-                 display_name="Smoke Admin", is_superadmin=True, is_active=True)
+                 display_name="Smoke Admin", is_superadmin=True, is_active=True,
+                 is_owner=True)   # the panel owner, as the account that sets a panel up is
     db.session.add(admin)
     remote = RemoteServer(name="smoke-host", host="127.0.0.1", port=22,
                           username="root", auth_method="key", auth_credential="")
