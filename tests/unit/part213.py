@@ -157,12 +157,16 @@ def _raw213(app, sql, **params):
         return _db213.session.execute(_db213.text(sql), params).fetchall()
 
 
+# Not a bcrypt or Argon2 string, so it matches no password: this seeded user never signs in.
+_UNUSABLE_HASH213 = "x"
+
+
 def _seed213(app, fkey, foreign):
     """Six hosts and a user with legacy v1 values, one host field no key here opens; config too."""
     with app.app_context():
         _db213.session.add_all([_RS213(name="p213-%d" % i, host="h%d.p213.invalid" % i, port=22,
                                        username="root", auth_method="password") for i in range(6)]
-                               + [_U213(username="p213u", password_hash="x")])
+                               + [_U213(username="p213u", password_hash=_UNUSABLE_HASH213)])
         _db213.session.commit()
     # The stored values as an older panel wrote them: enc:v1 under the Fernet key, written raw.
     for i in range(6):
