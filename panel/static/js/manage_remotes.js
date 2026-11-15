@@ -269,7 +269,7 @@ function renderAuthKeyForm(remoteId, name) {
     // Fallback: pre-auth key
     + '<div class="mt-3"><a href="#" class="small text-secondary"' + _da('_showTsKeyAdv') + '>Advanced: use a pre-auth key instead</a></div>'
     + '<div id="ts-key-adv" style="display:none;" class="mt-2">'
-    + '<label class="form-label small"><span>Auth Key</span> (<a href="https://login.tailscale.com/admin/keys" target="_blank">Tailscale admin</a>)</label>'
+    + '<label class="form-label small"><span>Auth Key</span> (<a href="https://login.tailscale.com/admin/keys" target="_blank" rel="noopener noreferrer">Tailscale admin</a>)</label>'
     + '<input type="text" id="ts-auth-key" class="form-control form-control-sm mb-2" placeholder="tskey-auth-...">'
     + '<button class="btn btn-outline-success btn-sm"' + _da('bootstrapTailscale', [remoteId]) + '><i class="bi bi-key"></i> Connect with key</button>'
     + '</div>'
@@ -293,7 +293,7 @@ function tailscaleUp(remoteId) {
     if (d.connected) { el.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Already connected to your tailnet.</span>'; return; }
     el.innerHTML = '<div class="alert alert-info py-2 small mb-2">'  // nosemgrep
       + '<strong>1.</strong> Open this link in your browser and approve the machine:<br>'
-      + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener" class="d-inline-block my-1" style="word-break:break-all;">' + escapeHtml(d.url) + '</a>'
+      + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer" class="d-inline-block my-1" style="word-break:break-all;">' + escapeHtml(d.url) + '</a>'
       + ' <button class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.url]) + '><i class="bi bi-clipboard"></i></button>'
       + '<br><strong>2.</strong> <span id="ts-wait-' + remoteId + '"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
     _tsUpWait(remoteId);

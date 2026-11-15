@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from panel.services import notifications
 from panel.core.clock import aware_utcnow
 from panel.core.config import DATA_DIR
+from panel.core.validation import ip_address_or_none
 
 _log = logging.getLogger("panel.certs")
 
@@ -116,3 +117,41 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
     with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
     return cert_path, key_path
+
+
+# Where a panel listens when its own HTTPS was configured and could not start (OWASP Transport Layer
+# Security Cheat Sheet, "Use TLS for All Pages"). Plain HTTP on a network-facing address would carry
+# every password, session cookie and API token in the clear, so the listener moves to loopback, where
+# only this host (and Tailscale Serve or an SSH tunnel through it) can reach it.
+TLS_FAILED_BIND = "127.0.0.1"
+
+
+def tls_failed_bind(conf, host, port, exc):
+    """The address to listen on after self-signed HTTPS failed to start, said on the console and log.
+
+    A loopback `host` is kept: plain HTTP there is the design whenever Tailscale Serve or a reverse
+    proxy on this host terminates TLS, and nothing off the host can read it. Any other bind is moved
+    to TLS_FAILED_BIND rather than served in the clear, and `conf` (the app's config) records the
+    bind that really listens (BOOT_BIND and _BOOT_BIND), so the pages and the debug report do not
+    claim the configured one. The operator is told what happened, how to reach the panel now and how
+    to fix it. The exception's text goes to the console only; the log gets its class.
+    """
+    addr = ip_address_or_none(host)
+    if addr is not None and addr.is_loopback:
+        print(f"  [!] Could not enable HTTPS ({exc}); serving plain HTTP on loopback {host} only.")
+        _log.warning("self-signed HTTPS failed to start (%s); plain HTTP on loopback only",
+                     type(exc).__name__)
+        return host
+    conf["BOOT_BIND"] = conf["_BOOT_BIND"] = TLS_FAILED_BIND
+    for line in (
+            f"  [!] HTTPS is configured but could not start ({exc}).",
+            f"      Plain HTTP on {host} would send passwords across the network unencrypted, so the",
+            f"      panel listens on {TLS_FAILED_BIND}:{port} only. Reach it through Tailscale Serve",
+            f"      or an SSH tunnel: ssh -L {port}:{TLS_FAILED_BIND}:{port} <this host>.",
+            f"      To fix: let the panel's account write {DATA_DIR / 'ssl'} and check the",
+            "      cryptography package is installed, then restart the panel. Behind a reverse proxy",
+            "      that terminates TLS, set trust_proxy instead."):
+        print(line)
+    _log.error("self-signed HTTPS failed to start (%s): listening on %s only, not on the configured "
+               "bind, so no plain HTTP reaches the network", type(exc).__name__, TLS_FAILED_BIND)
+    return TLS_FAILED_BIND

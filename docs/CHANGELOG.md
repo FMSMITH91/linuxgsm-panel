@@ -1440,6 +1440,28 @@ compares git commits, not this file.
 
 ### Security
 
+- **Built-in HTTPS that fails to start no longer serves plain HTTP to the network.** The panel then
+  listens on 127.0.0.1 only and says why and how to fix it; Tailscale Serve and an SSH tunnel still
+  reach it.
+
+- **ntfy alerts are never sent to this host, link-local or cloud-metadata addresses.** The server's
+  name is checked after it resolves, and the request goes to the address that was checked.
+
+- **Stricter browser security headers.** Pages cannot be framed or given a different base URL, forms
+  post only to the panel, pages and files are isolated from other sites, and HSTS lasts two years.
+
+- **Nothing caches API answers or pages that show a secret.** JSON answers, a new API token, a 2FA
+  setup code and backup codes are sent no-store.
+
+- **Uploaded file names follow the rename rules.** A name with a control character, a text-direction
+  character or a space at either end is refused with the reason.
+
+- **Live console and terminal connections refuse oversized messages.** A large paste into the
+  terminal is sent in pieces, so it still arrives whole.
+
+- **Links that open a new tab never give that tab access to the panel.** Every one carries
+  rel="noopener noreferrer".
+
 - **A login ends 8 hours after sign-in, however active.** An open page polls every few seconds, so a
   signed-in tab used to stay signed in for as long as it stayed open. Following OWASP's session
   guidance, a login now ends 8 hours after sign-in (or after the idle window set in Settings, if

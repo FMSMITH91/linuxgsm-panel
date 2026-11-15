@@ -26,7 +26,7 @@
           <span class="badge bg-success ms-2">Auto-Configured</span>
         </div>
         {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built as https://<tailscale dns name> #}
-        <a href="{{ tailscale_url }}" target="_blank" class="small">{{ tailscale_url }}</a>
+        <a href="{{ tailscale_url }}" target="_blank" rel="noopener noreferrer" class="small">{{ tailscale_url }}</a>
         {# Only while that is TRUE: the stored loopback bind applies from the next start, and until
            then the panel still answers on its public address. #}
         {% if tailnet_private %}
