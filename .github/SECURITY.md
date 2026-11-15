@@ -84,7 +84,8 @@ account.
 
 The panel owner ([docs/README.md](../docs/README.md#the-panel-owner)) is one account that the web UI
 never lets another administrator deactivate, demote, rename, delete or reset, and that alone may open a
-terminal on the panel's host or restore a panel backup (the two ways in to `panel.db` from the UI).
+terminal on the panel's host or restore or download a panel backup (the ways in to `panel.db` and
+the panel's keys from the UI).
 Ownership moves by the owner's password plus a live 2FA code, or by `manage.py set-owner` from the
 host's shell. It guards the account controls; it is not a boundary against a superadmin who uses the
 other root-equivalent powers a superadmin has on the panel's host (see below), so give superadmin only

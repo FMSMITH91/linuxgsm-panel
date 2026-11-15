@@ -462,8 +462,19 @@ def _s216_restore():
     eq("restore: the panel owner's restore reaches the restore (control)", len(called), 1)
     _p9_patch(_pb216, "_fetch_backup_listings", lambda *a, **k: ({}, {}))
     _p9_patch(_pb216.bk, "list_backups", lambda: [])
-    flags = [_p9_json(_p9_client(u).get("/api/panel/backups")).get("can_restore") for u in (own, other)]
-    eq("restore: the backups list offers Restore to the panel owner only", flags, [True, False])
+    flags = [_p9_json(_p9_client(u).get("/api/panel/backups")).get("owner_tools") for u in (own, other)]
+    eq("restore: the backups list offers Restore and Download to the panel owner only", flags, [True, False])
+    sent = []
+    _p9_patch(_pb216.bk, "_safe_path", lambda n: sent.append(n) or None)
+    since = _last_id216()
+    r = _p9_client(other).get("/api/panel/backup/download/x.tar.gz")
+    eq("download: another superadmin's panel backup download is refused with a 403 and reads no file",
+       (r.status_code, _p9_json(r).get("message"), sent), (403, _ow216.DOWNLOAD_OWNER_ONLY, []))
+    check("download: ...and is an access_denied audit row", [(a[0], a[3]) for a in
+          _audits216("access_denied", since)] == [("p216-rs-other", False)], repr(_audits216("access_denied", since)))
+    r = _p9_client(own).get("/api/panel/backup/download/x.tar.gz")
+    eq("download: the panel owner's download reaches the archive lookup (control)", (r.status_code, sent),
+       (404, ["x.tar.gz"]))
 
 
 try:

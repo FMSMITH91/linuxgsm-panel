@@ -212,10 +212,12 @@ function bkRenderList(d, tb){
   });
   if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
   tb.innerHTML=rows;  // nosemgrep
-  // Restore is the panel owner's only (the route refuses anyone else): an archive replaces every
-  // account, the owner's included. Taken out after rendering, so no flag reaches the markup.
-  if(d.can_restore === false){
-    tb.querySelectorAll('[data-action="restoreBackup"]').forEach(function(el){ el.remove(); });
+  // Restore and Download are the panel owner's only (the routes refuse anyone else): an archive
+  // replaces every account, and holds the keys that sign every sign-in. Taken out after rendering,
+  // so no flag reaches the markup.
+  if(d.owner_tools === false){
+    tb.querySelectorAll('[data-action="restoreBackup"], a[href*="/api/panel/backup/download/"]')
+      .forEach(function(el){ el.remove(); });
   }
   document.getElementById('bk-loading').style.display='none';
   document.getElementById('bk-table-wrap').style.display='';

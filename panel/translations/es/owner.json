@@ -26,5 +26,6 @@
   "Owner": "Propietario",
   "The panel owner: no other administrator can deactivate, demote, rename or delete this account, or reset its password or two-factor authentication.": "El propietario del panel: ningún otro administrador puede desactivar, degradar, renombrar ni eliminar esta cuenta, ni restablecer su contraseña o su autenticación de dos factores.",
   "You own this panel, so your account stays active and a superadmin, and its username can't change. To hand the panel to someone else, use Transfer ownership on your Account page.": "Eres el propietario de este panel, así que tu cuenta sigue activa y como superadministrador, y su nombre de usuario no puede cambiar. Para entregar el panel a otra persona, usa Transferir la propiedad en tu página de Cuenta.",
-  "This is your own account: change your password and two-factor authentication on your Account page.": "Esta es tu propia cuenta: cambia tu contraseña y la autenticación de dos factores en tu página de Cuenta."
+  "This is your own account: change your password and two-factor authentication on your Account page.": "Esta es tu propia cuenta: cambia tu contraseña y la autenticación de dos factores en tu página de Cuenta.",
+  "Only the panel owner can download a panel backup: it holds the keys that sign every sign-in and decrypt every stored SSH credential.": "Solo el propietario del panel puede descargar una copia de seguridad del panel: contiene las claves que firman cada inicio de sesión y descifran cada credencial SSH guardada."
 }

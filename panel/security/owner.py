@@ -36,6 +36,8 @@ NO_RENAME = "The panel owner's username can't be changed."
 NO_SELF_DEACTIVATE = "You can't deactivate your own account."
 RESTORE_OWNER_ONLY = ("Only the panel owner can restore a panel backup: it replaces every account, "
                       "the owner's included.")
+DOWNLOAD_OWNER_ONLY = ("Only the panel owner can download a panel backup: it holds the keys that sign "
+                       "every sign-in and decrypt every stored SSH credential.")
 
 
 def owner():

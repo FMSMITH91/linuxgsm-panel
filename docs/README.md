@@ -194,8 +194,9 @@ One account is the panel's **owner**: the one the setup wizard creates (on an up
 active superadmin with the lowest id). It is marked **Owner** on the Users page, and no other
 administrator can deactivate, demote, rename or delete it, or reset its password or 2FA, so one
 superadmin cannot take the panel from another. The owner can still change their own display name,
-password, 2FA and sessions on the Account page. A terminal on the panel's own host and restoring a
-panel backup are the owner's only: both reach the panel's database, where every account lives.
+password, 2FA and sessions on the Account page. A terminal on the panel's own host, and restoring or
+downloading a panel backup, are the owner's only: each reaches the panel's database, where every
+account lives, or the keys that sign every sign-in.
 
 To hand the panel over, the owner uses **Account → Panel owner → Transfer ownership**: it goes to
 another active superadmin who has 2FA turned on, and is confirmed with the owner's password and a
