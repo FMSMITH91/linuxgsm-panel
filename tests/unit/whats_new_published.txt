@@ -665,3 +665,16 @@ daf96f7c Signing out clears the browser.
 fe818fb0 Transfer the panel's ownership.
 9976ce40 The panel owner can no longer be removed by another superadmin.
 3d846343 "Remember me" keeps you signed in.
+eb1789d8 Alerts on your phone or browser.
+7ad847f1 A sign-out that can stop this device's alerts.
+f11545c1 A database manager on the Databases page.
+098a71ac Editing rows and running SQL.
+11b7b832 Step-up window in Settings.
+7f5bfa69 Active Sessions say when each sign-in ends.
+07061008 Clearer sign-in lengths.
+101b5e92 Creating a database says when its admin login needs TLS or the server's key.
+73f5d0c3 A database whose account cannot sign in any more can still be deleted.
+288d8524 Account changes reach the account holder's devices.
+b8b53863 Push alerts show only what a lock screen may.
+cde5533f Deleting, restoring and resetting a database ask for your password again.
+e59be63e A restored dump can no longer run client commands.
