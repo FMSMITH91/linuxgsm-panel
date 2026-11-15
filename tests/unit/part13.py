@@ -4971,6 +4971,20 @@ def _ca13_check_login_behind_proxy(app, client):
         fails.clear()
 
 
+def _ca13_check_page_headers(client):
+    """CSP, X-Frame-Options and Permissions-Policy on a page, not on JSON or a static asset."""
+    page = client.get("/login")
+    js = sorted(p for p in os.listdir(os.path.join(client.application.static_folder, "js")) if p.endswith(".js"))[0]
+    rows = []
+    for r in (page, client.get("/api/auth/ping", headers={"Accept": "application/json"}), client.get("/static/js/" + js)):
+        rows.append((r.mimetype, [h for h in ("Content-Security-Policy", "X-Frame-Options", "Permissions-Policy") if h in r.headers],
+                     all(r.headers.get(h) for h in ("X-Content-Type-Options", "Referrer-Policy", "X-Robots-Tag"))))
+    page_only = ["Content-Security-Policy", "X-Frame-Options", "Permissions-Policy"]
+    eq("app responses: a page carries CSP, X-Frame-Options and Permissions-Policy; a JSON answer and a static "
+       "script none of them, while nosniff, Referrer-Policy and X-Robots-Tag stay on all three",
+       rows, [("text/html", page_only, True), ("application/json", [], True), ("text/javascript", [], True)])
+
+
 def _ca13_check_compression(app, client):
     """gzip for big text answers the client accepts, the Vary merge, and the cache headers."""
     gz = {"Accept-Encoding": "gzip"}
@@ -5348,6 +5362,7 @@ try:
     _ca13_check_proxy(_ca13_app, _ca13_client)
     _ca13_check_login_behind_proxy(_ca13_app, _ca13_client)
     _ca13_check_compression(_ca13_app, _ca13_client)
+    _ca13_check_page_headers(_ca13_client)
     _ca13_check_errors(_ca13_app, _ca13_client)
     _ca13_loops = _tk13_loops(_ca13_runners)
     check("create_app: register_routes hands its loops to the supervisor, and starts none itself",

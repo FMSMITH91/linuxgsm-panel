@@ -1895,15 +1895,12 @@ def create_app():
 
     @app.after_request
     def _security_headers(resp):
-        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
-        # The panel uses none of these powerful browser features, so deny them outright —
-        # a defence-in-depth limit on what any injected/compromised script could reach for.
-        resp.headers.setdefault("Permissions-Policy",
-                                "camera=(), microphone=(), geolocation=(), usb=(), "
-                                "payment=(), interest-cohort=()")
-        resp.headers.setdefault("Content-Security-Policy", _csp())
+        # CSP, X-Frame-Options and Permissions-Policy (camera, microphone, … denied): on anything a
+        # browser could show as a page; a JSON answer, script, stylesheet, image or font is never one.
+        from panel.security import headers as _sec_headers
+        _sec_headers.set_page_headers(resp, _csp)
         # Keep the admin panel out of search engines. This header covers EVERY
         # response (crawlers can't miss it), and /robots.txt asks nicely too — a
         # private management UI has no business being indexed.

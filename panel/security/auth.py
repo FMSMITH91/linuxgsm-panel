@@ -18,6 +18,7 @@ from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
+from panel.security import session_cookie as _session_cookie
 
 # The largest id SQLite can bind (a signed 64-bit INTEGER). A larger Python int is not "no such
 # row" to the driver: binding it raises OverflowError, which every lookup below let straight through
@@ -806,6 +807,7 @@ def _warm():
 
 def init_auth(app):
     login_manager.init_app(app)
+    app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
     # Pre-compute the login-timing dummy hash (~400ms bcrypt) so it's ready before the first login
     # WITHOUT adding it to startup or to the first failed-login timing. Run it on a real worker
     # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
