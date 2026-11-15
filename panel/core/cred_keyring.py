@@ -43,6 +43,11 @@ _V2_RE = re.compile(r"enc:v2:([0-9a-f]{8}):([A-Za-z0-9_-]+)\Z")
 _KID_RE = re.compile(r"[0-9a-f]{8}\Z")
 
 
+def _strings(value):
+    """A list of str from a JSON list (None reads as empty)."""
+    return [str(v) for v in value or []]
+
+
 class UndecryptableValue(ValueError):
     """A stored value that no key in the ring opens (unknown key id, wrong key, or tampered)."""
 
@@ -124,14 +129,13 @@ class KeyRing:
     @classmethod
     def _from_doc(cls, doc):
         """A KeyRing from the parsed JSON document; ValueError for anything that is not one."""
-        if not isinstance(doc, dict) or doc.get("format") != RING_FORMAT or doc.get("version") != 1:
+        if not isinstance(doc, dict) or (doc.get("format"), doc.get("version")) != (RING_FORMAT, 1):
             raise ValueError("not a panel key ring")
-        keys = {kid: cls._entry(kid, ent) for kid, ent in (doc.get("keys") or {}).items()}
+        keys = {kid: cls._entry(kid, ent) for kid, ent in dict(doc.get("keys") or {}).items()}
         current = doc.get("current")
-        if current is not None and current not in keys:
+        if current not in keys and current is not None:
             raise ValueError("the current key is not in the ring")
-        return cls(current, keys, [str(k) for k in doc.get("fernet") or []],
-                   [str(u) for u in doc.get("unused") or []])
+        return cls(current, keys, _strings(doc.get("fernet")), _strings(doc.get("unused")))
 
     @staticmethod
     def _entry(kid, ent):
