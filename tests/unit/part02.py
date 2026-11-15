@@ -3144,7 +3144,7 @@ check("dummy_password_check always returns False", dummy_password_check("anythin
 import eventlet.patcher as _bh_patcher                                               # noqa: E402
 import eventlet.tpool as _bh_tpool                                                   # noqa: E402
 import bcrypt as _bh_bcrypt                                                          # noqa: E402
-from panel.security import auth as _bh_auth                                          # noqa: E402
+_bh_auth = _lp_auth   # the same module part02 imported above as _lp_auth
 from panel.db.models import User as _BhUser                                          # noqa: E402
 _bh_saved = (_bh_patcher.is_monkey_patched, _bh_tpool.execute)
 _bh_calls = []

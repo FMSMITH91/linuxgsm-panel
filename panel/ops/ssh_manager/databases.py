@@ -680,17 +680,15 @@ S_REHOST_DEFINER = ("MySQL refused to move the account of {name}: it defines an 
 
 def _net_kind(rc, out):
     """'ok', 'noclient', 'unreachable', 'tls', 'keyauth', 'denied' or 'error' for a sign-in from a game host."""
-    if rc == 0:
-        return "ok"
-    if rc == 127:
-        return "noclient"
-    if any(m in out for m in _KEY_MARKS):
-        return "keyauth"
-    if any(m in out for m in _TLS_MARKS) or "secure transport" in out.lower():
-        return "tls"
-    if any(m in out for m in _UNREACHABLE_MARKS):
-        return "unreachable"
-    return "denied" if any(m in out for m in _DENIED_MARKS) else "error"
+    if rc in (0, 127):
+        return "ok" if rc == 0 else "noclient"
+    low = out.lower()
+    # The first family the client's words match, in this order; anything else is an error.
+    families = (("keyauth", any(m in out for m in _KEY_MARKS)),
+                ("tls", any(m in out for m in _TLS_MARKS) or "secure transport" in low),
+                ("unreachable", any(m in out for m in _UNREACHABLE_MARKS)),
+                ("denied", any(m in out for m in _DENIED_MARKS)))
+    return next((kind for kind, hit in families if hit), "error")
 
 
 def seen_in(out):
