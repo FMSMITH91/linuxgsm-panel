@@ -448,7 +448,7 @@ def _s212_host_prefix():
             _fsession212["x"] = 1
             return "ok"
         hdr = app.test_client().get("/set", base_url="https://panel.invalid").headers.get("Set-Cookie", "")
-        names[secure] = (app.config["SESSION_COOKIE_NAME"], app.config["REMEMBER_COOKIE_NAME"], hdr)
+        names[secure] = (app.config["SESSION_COOKIE_NAME"], app.config.get("REMEMBER_COOKIE_NAME"), hdr)
     sec_hdr = names[True][2]
     check("cookies: over HTTPS (Secure cookies) the login cookies are __Host-lgpanel_session and "
           "__Host-remember_token, sent Secure with Path=/ and no Domain",
