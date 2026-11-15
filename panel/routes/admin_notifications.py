@@ -85,8 +85,10 @@ def _register_panel_settings(app):
         reboot_wait = max(0, min(_int_or(f.get("reboot_wait_max_hours"),
                                          _hr.DEFAULT_WAIT_HOURS), 720))
         reboot_restore = bool(f.get("reboot_restore_no_autostart"))
+        changed = []
 
         def _mut(cfg):
+            changed[:] = [session_policy.change_note(cfg, lifetimes)]   # once, however often it runs
             cfg.update({
                 "site_title": title, "site_domain": domain, "login_tagline": tagline,
                 "accent_color": accent, "default_language": lang, "session_protection": protection,
@@ -101,7 +103,7 @@ def _register_panel_settings(app):
         session_policy.apply(app, lifetimes)
         app.config["SESSION_PROTECTION"] = protection
         app.config["REQUIRE_2FA"] = bool(f.get("require_2fa"))
-        log_action(current_user, "settings_update", target="panel")
+        log_action(current_user, "settings_update", target="panel", detail="".join(changed))
         flash("Settings saved.", "success")
         return redirect(url_for("panel_settings"))
 

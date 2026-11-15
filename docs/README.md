@@ -174,8 +174,10 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
 | `trusted_proxies` | `["127.0.0.0/8", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
 | `trusted_proxy_users` | `www-data`, `nginx`, `http`, `caddy`, `cloudflared` | With `trust_proxy`, on loopback: the local accounts a proxy may run as (names or uids). Root and the panel's own account always count |
-| `session_lifetime_hours` | 8 | Idle session timeout (sliding) |
-| `remember_days` | 3 | "Remember me" cookie lifetime |
+| `session_idle_minutes` | 30 | A normal sign-in ends after this long without use (older installs: `session_lifetime_hours`) |
+| `session_absolute_hours` | 8 | ...or this long after sign-in, however active |
+| `remember_days` | 3 | A "Remember me" sign-in signs back in by itself until this many days after sign-in, then asks for the password |
+| `step_up_minutes` | 10 | How long a sign-in or password confirmation covers opening a terminal, uninstalling a server, restoring a panel backup and changing users or groups (0 = never ask again) |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
@@ -281,7 +283,7 @@ location / {
 ## Security
 
 - **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
-- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup and changing users or groups ask for the password again after 10 minutes (`step_up_minutes` in `config.json`; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
+- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup and changing users or groups ask for the password again after 10 minutes (Settings > Sessions & Security, 0 to switch it off; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
   - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page (not the panel owner's: only the panel host can), or on the panel host run `linuxgsm-panel-recover disable-2fa <user>` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Encryption at rest** — SSH credentials, database logins, emails, 2FA secrets and bot tokens are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Host → Maintenance → Diagnostics); `data/` is `chmod 700`.

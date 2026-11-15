@@ -1,0 +1,19 @@
+{
+  "Ask for the password again after (minutes)": "Pedir la contraseña de nuevo tras (minutos)",
+  "OWASP gives no number; NIST: 15 min at most. 0 = off.": "OWASP no da una cifra; NIST: 15 min como máximo. 0 = desactivado.",
+  "Longer than NIST recommends.": "Más de lo que recomienda NIST.",
+  "Off: these actions will not ask for the password again.": "Desactivado: estas acciones no volverán a pedir la contraseña.",
+  "A normal sign-in ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.": "Un inicio de sesión normal termina tras el tiempo de inactividad sin uso, o al llegar al límite absoluto. Las actualizaciones en segundo plano no cuentan como uso.",
+  "for {lasts}": "durante {lasts}",
+  "{n} hours": "{n} horas",
+  "1 day": "1 día",
+  "{n} min": "{n} min",
+  "{n} h": "{n} h",
+  "{n} d": "{n} d",
+  "Remembered · signs out {when}": "Recordada · se cierra: {when}",
+  "Signs out {when}": "Se cierra: {when}",
+  "Remembered · signs out after {idle} idle or at {when}": "Recordada · se cierra tras {idle} de inactividad o, como muy tarde, {when}",
+  "Signs out after {idle} idle or at {when}": "Se cierra tras {idle} de inactividad o, como muy tarde, {when}",
+  "With “Remember me”, a sign-in lasts {lasts}, then asks for the password.": "Con «Recordarme», un inicio de sesión dura {lasts} y luego pide la contraseña.",
+  "The password is asked again before a terminal, an uninstall, a backup restore or a user or group change.": "La contraseña se vuelve a pedir antes de un terminal, una desinstalación, una restauración de copia o un cambio de usuarios o grupos."
+}

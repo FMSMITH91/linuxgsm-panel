@@ -39,6 +39,8 @@
           <div class="mb-3 form-check">
             <input type="checkbox" name="remember" class="form-check-input" id="remember">
             <label class="form-check-label" for="remember">Remember me</label>
+            {# How long it lasts, from the limit the server ends such a login at (account_security). #}
+            <span class="small text-secondary" id="remember-for">{{ remember_for() }}</span>
           </div>
           <button type="submit" class="btn btn-primary w-100">Sign In</button>
         </form>
