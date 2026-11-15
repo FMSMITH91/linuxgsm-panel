@@ -200,7 +200,8 @@ def _edit216(actor, target, **form):
 
 
 _EDITS216 = (("display name", {}), ("deactivate", {"is_active": None}), ("demote", {"is_superadmin": None}),
-             ("rename", {"username": "p216-taken"}), ("reset password", {"reset_password": "on"}),
+             ("rename", {"username": "p216-taken"}),
+             ("reset password", {"reset_password": "on"}),  # nosec B105 - a checkbox value
              ("reset 2fa", {"reset_2fa": "on"}))
 
 

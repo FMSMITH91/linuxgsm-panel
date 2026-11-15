@@ -103,7 +103,8 @@ if _HAVE217:
     _git217("init", "-q", "--bare", "-b", "main", _bare217)
     _git217("clone", "-q", _bare217, _dev217)
     # 23:30 on the 4th in UTC-5 is the 5th in UTC: the name is the UTC date.
-    _late217 = dict(_ENV142, GIT_COMMITTER_DATE="2026-03-04T23:30:00-05:00", GIT_AUTHOR_DATE="2026-03-04T23:30:00-05:00")
+    _late217 = dict(_ENV142, GIT_COMMITTER_DATE="2026-03-04T23:30:00-05:00",
+                    GIT_AUTHOR_DATE="2026-03-04T23:30:00-05:00")
     _git217("-C", _dev217, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "one", env=_late217)
     _c1 = _git217("-C", _dev217, "rev-parse", "HEAD")
     _git217("-C", _dev217, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "two", env=_late217)
@@ -135,10 +136,10 @@ exit 0
 """
 
 
-def _signed_run217(dev, sha, log, **extra):
-    """sign-release.sh --yes <sha> in `dev`, the GitHub CLI replaced by the stand-in logging to `log`."""
-    env = dict(_ENV142, SIGN_RELEASE_KEY=_KEY217, FAKEGH_LOG=log,
-               SIGN_RELEASE_GH="bash %s" % _shlex217.quote(_gh217), **extra)
+def _signed_run217(dev, sha, log, key, gh, **extra):
+    """sign-release.sh --yes <sha> in `dev` with `key`; the GitHub CLI is the stand-in `gh`, logging to `log`."""
+    env = dict(_ENV142, SIGN_RELEASE_KEY=key, FAKEGH_LOG=log,
+               SIGN_RELEASE_GH="bash %s" % _shlex217.quote(gh), **extra)
     return _run142(["bash", _TOOL217, "--yes", sha], cwd=dev, env=env, input="")
 
 
@@ -165,7 +166,7 @@ if _HAVE217:
     _git217("-C", _rd217, "push", "-q", "origin", "main")
     _ra217 = _git217("-C", _rd217, "rev-parse", "HEAD")
     _log0 = os.path.join(_SB217, "gh0.log")
-    _r0 = _signed_run217(_rd217, _ra217, _log0, SIGN_RELEASE_NO_RELEASE="1")
+    _r0 = _signed_run217(_rd217, _ra217, _log0, _KEY217, _gh217, SIGN_RELEASE_NO_RELEASE="1")
     with open(os.path.join(_rd217, "docs", "CHANGELOG.md"), "w", encoding="utf-8") as _fh217:
         _fh217.write(_AFTER217)
     # A code change too: a commit of documentation alone starts no deploy (ci_ignored_only).
@@ -176,7 +177,7 @@ if _HAVE217:
     _git217("-C", _rd217, "push", "-q", "origin", "main")
     _rs217 = _git217("-C", _rd217, "rev-parse", "HEAD")
     _log1 = os.path.join(_SB217, "gh1.log")
-    _r1 = _signed_run217(_rd217, _rs217, _log1)
+    _r1 = _signed_run217(_rd217, _rs217, _log1, _KEY217, _gh217)
     _gh1 = open(_log1, encoding="utf-8").read() if os.path.exists(_log1) else ""
     _gh0 = open(_log0, encoding="utf-8").read() if os.path.exists(_log0) else ""
     _tag1 = _tag217(_rd217, _rs217, "origin")
@@ -191,10 +192,10 @@ if _HAVE217:
           _r0.returncode == 0 and "release create" not in _gh0 and "workflow run deploy.yml" in _gh0,
           "rc=%s %s" % (_r0.returncode, _gh0[-300:]))
     _log2 = os.path.join(_SB217, "gh2.log")
-    _r2 = _signed_run217(_rd217, _rs217, _log2, FAKEGH_VIEW_RC="0")
+    _r2 = _signed_run217(_rd217, _rs217, _log2, _KEY217, _gh217, FAKEGH_VIEW_RC="0")
     _gh2 = open(_log2, encoding="utf-8").read() if os.path.exists(_log2) else ""
     _log3 = os.path.join(_SB217, "gh3.log")
-    _r3 = _signed_run217(_rd217, _rs217, _log3, SIGN_RELEASE_NO_DEPLOY="1")
+    _r3 = _signed_run217(_rd217, _rs217, _log3, _KEY217, _gh217, SIGN_RELEASE_NO_DEPLOY="1")
     _gh3 = open(_log3, encoding="utf-8").read() if os.path.exists(_log3) else ""
     check("sign-release.sh: a release that already exists is left alone, and SIGN_RELEASE_NO_DEPLOY "
           "publishes nothing at all",
