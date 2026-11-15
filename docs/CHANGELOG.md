@@ -423,6 +423,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **"Remember me" keeps you signed in.** A remembered sign-in ended about one idle timeout after it
+  began (30 minutes by default) when session protection was set to Strong; it now lasts the
+  "Remember me" days set in Settings.
+
 - **Open pages cost the host less CPU.** The live figures on the dashboard and the server page are
   read with one process listing instead of four, and the server page's Players list comes from the
   player check the panel already runs instead of a query of its own.

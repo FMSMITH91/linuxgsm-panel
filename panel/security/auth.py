@@ -17,7 +17,7 @@ from argon2 import PasswordHasher, Type as Argon2Type, extract_parameters
 from argon2.exceptions import VerificationError
 import hashlib
 from flask import abort, current_app, flash, jsonify, redirect, request, url_for
-from flask_login import LoginManager, current_user
+from flask_login import LoginManager, current_user, user_loaded_from_cookie
 
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.security import session_cookie as _session_cookie
@@ -922,10 +922,24 @@ def _host_prefix_cookies(app):
         app.config[prefix + "_COOKIE_PATH"] = "/"
 
 
+def _remembered_session_is_permanent(_sender, **_kw):
+    """Mark a login restored from the "remember me" cookie permanent, as every other panel login is.
+
+    flask-login restores it into a NON-permanent session that has no "_id", and its "strong" mode
+    wipes exactly such a session on the next request and clears the remember cookie with it, so a
+    remembered sign-in ended one click after its session cookie's idle timeout. Permanent, the
+    session follows the idle lifetime like a password sign-in, and the binding to this client is
+    the panel's own check (load_user: _session_row_binding_ok, then _session_binding_ok).
+    """
+    from flask import session
+    session.permanent = True
+
+
 def init_auth(app):
     login_manager.init_app(app)
     app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
     _host_prefix_cookies(app)
+    user_loaded_from_cookie.connect(_remembered_session_is_permanent, app)
     # Pre-compute the login-timing dummy hash so it's ready before the first login WITHOUT adding
     # it to startup or to the first failed-login timing. hash_password runs it on a real worker
     # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
