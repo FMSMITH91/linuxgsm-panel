@@ -2075,7 +2075,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part162", "part163", "part164", "part165", "part166", "part167", "part168", "part169", "part170", "part171", "part172", "part173", "part174",
           "part175", "part176", "part177", "part178", "part179", "part180", "part181", "part182", "part183", "part184", "part185", "part186", "part187",
           "part188", "part189", "part191", "part192", "part193", "part194", "part195", "part190", "part196", "part199", "part197", "part200", "part198",
-          "part201", "part205", "part202", "part204", "part206", "part203", "part207", "part208", "part209", "part210", "part211", "part212", "part15")
+          "part201", "part205", "part202", "part204", "part206", "part203", "part207", "part208", "part209", "part210", "part211", "part212",
+           "part214", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2207,8 +2208,7 @@ check("unit suite: no part leaves sys.path changed for the parts after it",
 # 96 and 97's Serve section had none (review 1017c). Read once more over the whole run, for the next
 # part that forgets.
 from unit.part12 import _P9_TRIPPED as _r32d_tripped  # noqa: E402
-check("unit suite: no part reached a real transport while part12's tripwire was armed",
-      not _r32d_tripped, repr(_r32d_tripped[:6]))
+check("unit suite: no part reached a real transport while part12's tripwire was armed", not _r32d_tripped, repr(_r32d_tripped[:6]))
 
 # The env-reset reader against a run of value-taking options: it backtracked exponentially there
 # (CodeQL py/redos), so 40 `-C!` words would not finish. Run in a child with a time limit, so a

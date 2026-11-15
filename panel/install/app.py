@@ -125,7 +125,7 @@ from panel.services import notifications
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
 from panel.services.bots.discord import (_discord_command_watch, _report_dc_pending_update)
 from panel.services.bots.telegram import (_report_tg_pending_update, _telegram_command_watch)
-from panel.services.certs import (_ensure_self_signed_cert)
+from panel.services.certs import (_ensure_self_signed_cert, tls_failed_bind)
 from panel.db.prefs import (_effective_prefs, _panel_layout)
 from panel.core.middleware import PrefixMiddleware, ProxiedBanGate
 from panel.security import banlist as _banlist
@@ -3301,7 +3301,7 @@ def _boot_ssl_args(app, cfg, host, port):
 
     app.config["BOOT_TLS"] is whether the panel serves TLS itself since boot; BOOT_TLS_ERROR the
     exception CLASS when TLS was configured and failed to start (never its message: it carries
-    paths). The flow is the one this block always had: a failure prints and serves plain HTTP.
+    paths). A failure serves plain HTTP on loopback only and says so (certs.tls_failed_bind).
     """
     ssl_args = {}
     app.config["BOOT_TLS_ERROR"] = None
@@ -3315,7 +3315,7 @@ def _boot_ssl_args(app, cfg, host, port):
             print("     Browsers will show a certificate warning; click through to proceed.")
         except Exception as e:
             app.config["BOOT_TLS_ERROR"] = type(e).__name__
-            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+            tls_failed_bind(app.config, host, port, e)   # never plain HTTP off this host
     app.config["BOOT_TLS"] = bool(ssl_args)
     return ssl_args
 
@@ -3532,4 +3532,4 @@ if __name__ == "__main__":
     except Exception:
         _log.debug("ignored non-fatal error", exc_info=True)
 
-    app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
+    app.socketio.run(app, app.config["BOOT_BIND"], port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
