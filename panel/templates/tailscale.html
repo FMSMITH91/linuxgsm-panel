@@ -31,7 +31,7 @@
     {% endif %}
     <div class="text-secondary small mt-2">
       Runs on the panel host (needs sudo). Prefer to do it by hand?
-      <a href="https://tailscale.com/download" target="_blank" rel="noopener" data-no-i18n>tailscale.com/download</a>.
+      <a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer" data-no-i18n>tailscale.com/download</a>.
     </div>
     <div id="ts-install-out" class="small mt-3"></div>
   </div>
@@ -212,7 +212,7 @@
         <p class="small mb-1"><i class="bi bi-check-circle-fill text-success"></i> <span>The panel is reached through Tailscale Serve, the recommended setup.</span>
           {% if suggestion.url %}
           {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built by tailscale_integration on a fixed http(s):// scheme #}
-          <a href="{{ suggestion.url }}" target="_blank" class="d-inline-block text-break"><i class="bi bi-box-arrow-up-right"></i> {{ suggestion.url }}</a>
+          <a href="{{ suggestion.url }}" target="_blank" rel="noopener noreferrer" class="d-inline-block text-break"><i class="bi bi-box-arrow-up-right"></i> {{ suggestion.url }}</a>
           {% endif %}
         </p>
         {% endif %}
@@ -229,7 +229,7 @@
             <code>{{ suggestion.note_value }}</code>{% endif %}</p>
           {% if suggestion.url %}
           {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built by tailscale_integration on a fixed http(s):// scheme #}
-          <a href="{{ suggestion.url }}" target="_blank" class="small">
+          <a href="{{ suggestion.url }}" target="_blank" rel="noopener noreferrer" class="small">
             <i class="bi bi-box-arrow-up-right"></i> {{ suggestion.url }}
           </a>
           {% endif %}

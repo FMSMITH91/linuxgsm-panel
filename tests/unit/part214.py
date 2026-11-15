@@ -305,4 +305,58 @@ def _chunks214():
 _chunks214()
 
 
+# ── 6. links that open a new tab, and scripts that build code from strings ──────────────────────
+def _ui_sources214():
+    """(relative path, text) of every template and every panel script (the vendored libraries excepted)."""
+    out = []
+    for sub, ext in (("panel/templates", ".html"), ("panel/static/js", ".js")):
+        base = _os214.path.join(str(_ROOT214), sub)
+        for name in sorted(_os214.listdir(base)):
+            if name.endswith(ext):
+                with open(_os214.path.join(base, name), encoding="utf-8") as fh:
+                    out.append((sub + "/" + name, fh.read()))
+    return out
+
+
+_BLANK_TAG214 = _re214.compile(r"""target\s*=\s*\\?["']_blank""")
+_BLANK_PROP214 = _re214.compile(r"""\.target\s*=\s*["']_blank["']|setAttribute\(\s*["']target["']\s*,\s*["']_blank""")
+_REL_OK214 = _re214.compile(r"""rel\s*=\s*\\?["']noopener noreferrer\\?["']""")
+_REL_PROP_OK214 = _re214.compile(r"""\.rel\s*=\s*["']noopener noreferrer["']|setAttribute\(\s*["']rel["']\s*,\s*["']noopener noreferrer""")
+
+
+def _blank_misses214(sources):
+    """Every target=_blank in `sources` whose anchor (tag, or the next lines that set it up) lacks the rel."""
+    misses = []
+    for path, text in sources:
+        for m in _BLANK_PROP214.finditer(text):
+            if not _REL_PROP_OK214.search(text[m.start():m.start() + 300]):
+                misses.append("%s:%d" % (path, text.count("\n", 0, m.start()) + 1))
+        for m in _BLANK_TAG214.finditer(text):
+            if _BLANK_PROP214.match(text, m.start() - 1):
+                continue
+            start, end = text.rfind("<", 0, m.start()), text.find(">", m.end())
+            if not _REL_OK214.search(text[start:end]):
+                misses.append("%s:%d" % (path, text.count("\n", 0, m.start()) + 1))
+    return misses
+
+
+_ui214 = _ui_sources214()
+_nblank214 = sum(len(_BLANK_TAG214.findall(t)) + len(_BLANK_PROP214.findall(t)) for _, t in _ui214)
+eq("links: every target=_blank anchor in the templates and the panel's JS carries rel=\"noopener noreferrer\"",
+   _blank_misses214(_ui214), [])
+check("links: ...the gate read them (at least the 20 there are today)", _nblank214 >= 20, repr(_nblank214))
+eq("links: ...and it names a tag without it, one with rel=\"noopener\" only, and a DOM-built one (control)",
+   _blank_misses214([("t.html", '<a href="/x"\n   target="_blank" class="small">x</a>'),
+                     ("u.js", "+ '<a href=\"' + u + '\" target=\"_blank\" rel=\"noopener\">'"),
+                     ("v.js", "a.target = '_blank';\n a.className = 'x';"),
+                     ("w.js", "a.target = '_blank';\n a.rel = 'noopener noreferrer';")]),
+   ["t.html:2", "u.js:1", "v.js:1"])
+
+_EVAL214 = _re214.compile(r"""(?<![\w.])eval\s*\(|\bnew\s+Function\s*\(|\bset(?:Timeout|Interval)\s*\(\s*["'`]""")
+_evals214 = ["%s:%d" % (p, t.count("\n", 0, m.start()) + 1) for p, t in _ui214 if p.endswith(".js")
+             for m in _EVAL214.finditer(t)]
+eq("scripts: no panel script runs a string as code (eval, new Function, a string timer)", _evals214, [])
+eq("scripts: ...and the gate names each of the three (control)",
+   len(_EVAL214.findall("eval('1'); var f = new Function('x'); setTimeout(\"go()\", 5); obj.evaluate(1);")), 3)
+
 eq("part214: nothing reached a real transport", _P9_TRIPPED[_trips214:], [])
