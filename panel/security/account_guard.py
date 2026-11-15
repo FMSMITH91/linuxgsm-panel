@@ -326,6 +326,17 @@ def _denial_due(key, now):
     return True
 
 
+def _log_denial(kind, ip):
+    """The panel-log line for a refusal, with nothing the client wrote in it.
+
+    The kind is a constant at every call; the route is the endpoint NAME (a 404 has none, so
+    "(no route)", never the raw path); the address is a parsed IP literal or "unknown".
+    """
+    from panel.core.validation import canonical_ip
+    route = (request.endpoint or "(no route)") if has_request_context() else "(no request)"
+    _log.warning("refused (%s) %s from %s", kind, route[:120], canonical_ip(str(ip)) or "unknown")
+
+
 def note_denial(kind, detail="", user=None):
     """Audit one refused request (`kind`: access_denied, csrf_rejected, session_binding_mismatch).
 
@@ -340,12 +351,7 @@ def note_denial(kind, detail="", user=None):
             due = _denial_due((kind, uid or ip, where), time.time())
         if not due:
             return False
-        # The panel log too, with nothing the client wrote in it: the kind is a constant here, the
-        # route is the endpoint NAME (a 404 has none, so "(no route)", never the raw path), and the
-        # address is a parsed IP literal or "unknown".
-        from panel.core.validation import canonical_ip
-        route = (request.endpoint or "(no route)") if has_request_context() else "(no request)"
-        _log.warning("refused (%s) %s from %s", kind, route[:120], canonical_ip(str(ip)) or "unknown")
+        _log_denial(kind, ip)
         log_action(user, kind, target=where, detail=detail[:300], success=False,
                    actor=None if user is not None else "(not signed in)")
         return True
