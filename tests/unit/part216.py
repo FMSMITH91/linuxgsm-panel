@@ -285,9 +285,9 @@ def _s216_users_page():
 
 
 # ── 4. transfer ──────────────────────────────────────────────────────────────────────────────────
-def _transfer216(actor, target, secret, password=_K216, code=None):
+def _transfer216(actor, target, secret, pw=None, code=None):
     c = _p9_client(actor)
-    data = {"new_owner": str(target), "password": password,
+    data = {"new_owner": str(target), "password": _K216 if pw is None else pw,
             "totp_code": code if code is not None else (_pyotp216.TOTP(secret).now() if secret else "")}
     r = c.post("/account/owner/transfer", data=data)
     return r, _p9_flashes(c)
@@ -320,7 +320,7 @@ def _s216_transfer_refusals():
     out["garbage"] = _transfer216(ids["own"], "1" * 30, s_own)[1]
     eq("transfer: ownership goes only to another active superadmin with 2FA on",
        out, {k: [_ot216.NOT_ELIGIBLE] for k in ("no2fa", "inactive", "plain", "self", "garbage")})
-    out = {"password": _transfer216(ids["own"], ids["new"], s_own, password=_K216_WRONG)[1],
+    out = {"password": _transfer216(ids["own"], ids["new"], s_own, pw=_K216_WRONG)[1],
            "code": _transfer216(ids["own"], ids["new"], s_own, code="000000")[1]}
     with _p9.app_context():
         backup = "p216backupcode"
@@ -329,7 +329,7 @@ def _s216_transfer_refusals():
         _db216.session.commit()
     out["backup code"] = _transfer216(ids["own"], ids["new"], s_own, code=backup)[1]
     eq("transfer: a wrong password, a wrong code and a backup code are each refused",
-       out, {"password": [_ot216.WRONG_PASSWORD], "code": [_ot216.WRONG_CODE],
+       out, {"password": [_ot216.WRONG_PW_MSG], "code": [_ot216.WRONG_CODE],
              "backup code": [_ot216.WRONG_CODE]})
     _set216(ids["own"], last_totp_step=10 ** 12)
     eq("transfer: an authenticator code already spent is refused (one use per code)",

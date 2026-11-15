@@ -28,7 +28,7 @@ NEEDS_2FA = ("Turn on two-factor authentication first: a transfer of ownership i
              "password and a code from your authenticator.")
 NOT_ELIGIBLE = ("Ownership can only go to another active superadmin who has two-factor "
                 "authentication turned on.")
-WRONG_PASSWORD = "Password incorrect — ownership was not transferred."
+WRONG_PW_MSG = "Password incorrect — ownership was not transferred."
 WRONG_CODE = "That authenticator code didn't match — ownership was not transferred."
 REPLAYED_CODE = "That code has already been used — wait for your authenticator to show the next one."
 CHANGED_MEANWHILE = "Ownership changed while this was being confirmed, so nothing was transferred."
@@ -79,7 +79,7 @@ def _refusal(u, target):
         return NOT_ELIGIBLE
     pw = reauth_password(u, request.form.get("password", ""))
     if pw != "ok":
-        return REAUTH_BLOCKED_MSG if pw == "throttled" else WRONG_PASSWORD
+        return REAUTH_BLOCKED_MSG if pw == "throttled" else WRONG_PW_MSG
     stamp = reauth_reserve(u)
     if stamp is None:
         return REAUTH_BLOCKED_MSG
