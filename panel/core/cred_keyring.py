@@ -119,15 +119,19 @@ class KeyRing:
             from cryptography.fernet import Fernet
             Fernet(text)                     # raises ValueError for anything but a Fernet key
             return cls(fernet=[text.decode("ascii")])
-        doc = json.loads(text.decode("utf-8"))
+        return cls._from_doc(json.loads(text.decode("utf-8")))
+
+    @classmethod
+    def _from_doc(cls, doc):
+        """A KeyRing from the parsed JSON document; ValueError for anything that is not one."""
         if not isinstance(doc, dict) or doc.get("format") != RING_FORMAT or doc.get("version") != 1:
             raise ValueError("not a panel key ring")
         keys = {kid: cls._entry(kid, ent) for kid, ent in (doc.get("keys") or {}).items()}
         current = doc.get("current")
         if current is not None and current not in keys:
             raise ValueError("the current key is not in the ring")
-        fernet = [str(k) for k in doc.get("fernet") or []]
-        return cls(current, keys, fernet, [str(u) for u in doc.get("unused") or []])
+        return cls(current, keys, [str(k) for k in doc.get("fernet") or []],
+                   [str(u) for u in doc.get("unused") or []])
 
     @staticmethod
     def _entry(kid, ent):

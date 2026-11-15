@@ -70,28 +70,28 @@ def _s213_format():
     ring = _cfg213._cred_keyring()
     parts = _kr213.split_v2(enc)
     check("v2: encrypt_secret writes enc:v2:<current key id>:..., and it decrypts back",
-          enc.startswith("enc:v2:%s:" % ring.current) and _cfg213.decrypt_secret(enc) == _S213_NEW, enc[:30])
+          all((enc.startswith("enc:v2:%s:" % ring.current), _cfg213.decrypt_secret(enc) == _S213_NEW)), enc[:30])
     check("v2: the key is 256 bits and the nonce 96 bits, fresh for every value",
-          len(ring.keys[ring.current][0]) == 32 and parts is not None
-          and _kr213.split_v2(_cfg213.encrypt_secret(_S213_NEW))[1][:12] != parts[1][:12])
+          all((len(ring.keys[ring.current][0]) == 32, parts is not None,
+               _kr213.split_v2(_cfg213.encrypt_secret(_S213_NEW))[1][:12] != parts[1][:12])))
     raw = bytearray(parts[1])
     raw[-1] ^= 1
     tampered = "enc:v2:%s:%s" % (parts[0], _kr213._b64e(bytes(raw)))
     other = _cfg213.rotate_cred_key()
     moved = "enc:v2:%s:%s" % (other.current, _kr213._b64e(parts[1]))
     check("v2: a value with one bit flipped is refused by the GCM tag and reads as '', not raised",
-          _cfg213.is_encrypted(tampered) and _cfg213.decrypt_secret(tampered) == "")
+          all((_cfg213.is_encrypted(tampered), _cfg213.decrypt_secret(tampered) == "")))
     check("v2: a value moved under another key id of the same ring is refused too (the id is "
-          "authenticated)", _cfg213.decrypt_secret(moved) == "" and _cfg213.decrypt_secret(enc) == _S213_NEW)
+          "authenticated)", all((_cfg213.decrypt_secret(moved) == "", _cfg213.decrypt_secret(enc) == _S213_NEW)))
     col = _RS213.__table__.c.host.type
     check("v2: through an encrypted column a tampered value reads as UnreadableSecret",
           isinstance(col.process_result_value(tampered, None), _UR213))
     once = _cfg213.encrypt_secret("x")
     check("v2: encrypting a value already under the current key is a no-op; one under an older key "
           "is brought up to the current one",
-          _cfg213.encrypt_secret(once) == once and once.startswith("enc:v2:%s:" % other.current)
-          and _cfg213.encrypt_secret(enc).startswith("enc:v2:%s:" % other.current)
-          and _cfg213.decrypt_secret(_cfg213.encrypt_secret(enc)) == _S213_NEW)
+          all((_cfg213.encrypt_secret(once) == once, once.startswith("enc:v2:%s:" % other.current),
+               _cfg213.encrypt_secret(enc).startswith("enc:v2:%s:" % other.current),
+               _cfg213.decrypt_secret(_cfg213.encrypt_secret(enc)) == _S213_NEW)))
 
 
 # ── 2. the legacy key file ───────────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ def _s213_legacy():
     old = _v1(fkey, _S213_OLD)
     read = _cfg213.decrypt_secret(old)
     check("legacy: a bare Fernet cred_key still decrypts enc:v1, and reading does not rewrite the file",
-          read == _S213_OLD and keyf.read_bytes() == fkey + b"\n", repr(read))
+          all((read == _S213_OLD, keyf.read_bytes() == fkey + b"\n")), repr(read))
     seen = []
     workers = [_th213.Thread(target=lambda: seen.append(_cfg213._cred_keyring_for_write().current))
                for _ in range(4)]
@@ -113,12 +113,11 @@ def _s213_legacy():
     again = {_kr213.add_key(keyf, only_if_none=True).current for _ in range(3)}
     ring = _cfg213._cred_keyring()
     check("legacy: the first encryption adds ONE AES key however many callers race to it, and keeps "
-          "the Fernet key", len(set(seen)) == 1 and seen[0] == ring.current and again == {ring.current}
-          and len(ring.keys) == 1
-          and ring.fernet == [fkey.decode()], repr((seen, ring.fernet)))
+          "the Fernet key", all((len(set(seen)) == 1, seen[0] == ring.current, again == {ring.current},
+                                 len(ring.keys) == 1, ring.fernet == [fkey.decode()])), repr((seen, ring.fernet)))
     new = _cfg213.encrypt_secret(old)
     check("legacy: an enc:v1 value through encrypt_secret comes out as v2 with the same plaintext",
-          new.startswith("enc:v2:%s:" % ring.current) and _cfg213.decrypt_secret(new) == _S213_OLD, new[:30])
+          all((new.startswith("enc:v2:%s:" % ring.current), _cfg213.decrypt_secret(new) == _S213_OLD)), new[:30])
 
 
 # ── 3. the re-encryption pass ────────────────────────────────────────────────────────────────────
@@ -214,7 +213,7 @@ def _s213_pass():
     cut = _pass213(app, stop_after=5)
     mid = _values213(app)
     check("pass: an interrupted pass committed the batches it finished, and every value still reads",
-          cut is None and 0 < sum(v.startswith("enc:v2:") for v in mid) < len(mid) and _all_read213(mid),
+          all((cut is None, 0 < sum(v.startswith("enc:v2:") for v in mid) < len(mid), _all_read213(mid))),
           repr([v[:7] for v in mid]))
     done = _pass213(app, prune=True)
     after = _values213(app)
@@ -222,14 +221,14 @@ def _s213_pass():
     pub = _raw213(app, "SELECT public_ip FROM remote_server WHERE name = 'p213-3'")[0][0]
     check("pass: the next pass finishes: every value in panel.db and config.json is v2 under the "
           "current key and reads as before",
-          len(after) == 22 and all(ring.is_current(v) for v in after) and _all_read213(after)
-          and _cfg213.decrypt_secret(after[2]) == _S213_OLD and _cfg213.decrypt_secret(after[-2]) == _S213_TOK,
+          all((len(after) == 22, all(ring.is_current(v) for v in after), _all_read213(after),
+               _cfg213.decrypt_secret(after[2]) == _S213_OLD, _cfg213.decrypt_secret(after[-2]) == _S213_TOK)),
           repr([v[:16] for v in after]))
     check("pass: a value no key opens is left byte for byte, counted, and keeps the Fernet key",
-          pub == foreign and done is not None and done.unreadable == 1 and ring.fernet == [fkey.decode()],
+          all((pub == foreign, done is not None, done.unreadable == 1, ring.fernet == [fkey.decode()])),
           repr((done and done.unreadable, ring.fernet)))
     again = _pass213(app, prune=True)
-    check("pass: a second pass rewrites nothing", again is not None and again.rewritten == 0,
+    check("pass: a second pass rewrites nothing", all((again is not None, again.rewritten == 0)),
           repr(again and again.rewritten))
     return app
 
@@ -241,8 +240,9 @@ def _s213_prune(app):
     _pass213(app, prune=True)
     gone = _cfg213._cred_keyring()
     check("prune: a retired key is only marked unused by the first pass that finds nothing using it, "
-          "and removed by the next", marked.fernet and marked.unused == ["fernet"] and not gone.fernet
-          and gone.unused == [] and _all_read213(_values213(app)), repr((marked.unused, gone.fernet)))
+          "and removed by the next",
+          all((marked.fernet, marked.unused == ["fernet"], not gone.fernet, gone.unused == [],
+               _all_read213(_values213(app)))), repr((marked.unused, gone.fernet)))
 
 
 def _s213_rotate(app):
@@ -250,18 +250,19 @@ def _s213_rotate(app):
     old = _cfg213._cred_keyring().current
     new = _cfg213.rotate_cred_key()
     check("rotate: a new current key, the old one kept, and every value still reads before the pass",
-          new.current != old and old in new.keys and _all_read213(before))
+          all((new.current != old, old in new.keys, _all_read213(before))))
     _pass213(app, stop_after=3)
     mid = _values213(app)
     check("rotate: ...and while the pass is part-way through",
-          any(v.startswith("enc:v2:%s:" % new.current) for v in mid)
-          and any(v.startswith("enc:v2:%s:" % old) for v in mid) and _all_read213(mid))
+          all((any(v.startswith("enc:v2:%s:" % new.current) for v in mid),
+               any(v.startswith("enc:v2:%s:" % old) for v in mid), _all_read213(mid))))
     _pass213(app)
     after = _values213(app)
+    plain_after = [_cfg213.decrypt_secret(v) for v in after]
     check("rotate: after the pass every value is under the new key and reads the same; the old key "
-          "stays until two passes find it unused", all(new.is_current(v) for v in after)
-          and [_cfg213.decrypt_secret(v) for v in after] == [_cfg213.decrypt_secret(v) for v in before]
-          and old in _cfg213._cred_keyring().keys)
+          "stays until two passes find it unused",
+          all((all(new.is_current(v) for v in after), plain_after == [_cfg213.decrypt_secret(v) for v in before],
+               old in _cfg213._cred_keyring().keys)))
 
 
 # ── 4. backups ───────────────────────────────────────────────────────────────────────────────────
@@ -283,12 +284,12 @@ def _s213_backup_keys():
     with _archive213("new.tar", {"cred_key": ring.to_bytes()}) as tar:
         current = _bk213._restore_fernet(tar, tar.getnames())
     check("backup: the restore check reads an archive made before the ring (one Fernet key) and opens "
-          "its enc:v1 values", legacy is not None
-          and _bk213._stored_plaintext(_v1(fkey, "root"), legacy) == "root")
+          "its enc:v1 values", all((legacy is not None,
+                                    _bk213._stored_plaintext(_v1(fkey, "root"), legacy) == "root")))
     check("backup: ...and an archive with the ring opens v2 and v1 values; another key's value is unreadable",
-          current is not None and _bk213._stored_plaintext(ring.encrypt("root"), current) == "root"
-          and _bk213._stored_plaintext(_v1(fkey, "root"), current) == "root"
-          and _bk213._stored_plaintext(_v1(_Fernet213.generate_key(), "x"), current) is _bk213._UNREADABLE)
+          all((current is not None, _bk213._stored_plaintext(ring.encrypt("root"), current) == "root",
+               _bk213._stored_plaintext(_v1(fkey, "root"), current) == "root",
+               _bk213._stored_plaintext(_v1(_Fernet213.generate_key(), "x"), current) is _bk213._UNREADABLE)))
 
 
 def _s213_backup_archive():
@@ -317,7 +318,7 @@ def _s213_backup_archive():
         with _tar213.open(str(_bk213.BACKUP_DIR / name), "r:gz") as tar:
             carried = tar.extractfile("cred_key").read() if ok else b""
         check("backup: a new archive carries the key ring as it is, copied with the database under the "
-              "ring's lock", ok and carried == keyf.read_bytes() and held == [1], repr((ok, held)))
+              "ring's lock", all((ok, carried == keyf.read_bytes(), held == [1])), repr((ok, held)))
     finally:
         for k, v in saved.items():
             setattr(_bk213, k, v)
@@ -362,8 +363,9 @@ def _s213_routes_edit(rid):
                                      {"i": rid}).scalar()
         back = _core213.decrypt_secret(_db213.session.get(_RS213, rid).auth_credential)
     check("app: a legacy enc:v1 credential reads through the SSH path, and the edit route stores the "
-          "new one as v2 that reads back", read_old == _S213_OLD and r.status_code == 200
-          and raw.startswith("enc:v2:%s:" % _cfg213._cred_keyring().current) and back == _S213_NEW,
+          "new one as v2 that reads back", all((read_old == _S213_OLD, r.status_code == 200,
+                                                raw.startswith("enc:v2:%s:" % _cfg213._cred_keyring().current),
+                                                back == _S213_NEW)),
           repr((read_old, r.status_code, raw[:20], back)))
 
 
@@ -379,18 +381,19 @@ def _s213_routes_rotate():
     after = _cfg213._cred_keyring()
     audit = _p9_audit("panel_cred_key_rotate")
     check("app: rotate is refused to a non-superadmin and changes nothing",
-          denied.status_code == 403 and unchanged and n_denied == n_audit, repr(denied.status_code))
+          all((denied.status_code == 403, unchanged, n_denied == n_audit)), repr(denied.status_code))
     check("app: a superadmin's rotate makes a new key current, keeps the old, audits the new id and "
-          "starts the background pass", r.status_code == 200 and _p9_json(r).get("current") == after.current
-          and after.current != before.current and before.current in after.keys
-          and audit.detail == "new key %s" % after.current and started == [{"rotated": True}],
+          "starts the background pass", all((r.status_code == 200, _p9_json(r).get("current") == after.current,
+                                             after.current != before.current, before.current in after.keys,
+                                             audit.detail == "new key %s" % after.current,
+                                             started == [{"rotated": True}])),
           repr((r.status_code, audit.detail, started)))
     st = _p9_client(P9_ADMIN).get("/api/panel/encryption")
     body = st.get_data(as_text=True)
     secret = [_kr213._b64e(k) for k, _c in after.keys.values()] + list(after.fernet)
     check("app: the status route names the current key id and how many older keys are kept, never a key",
-          st.status_code == 200 and _p9_json(st).get("current") == after.current
-          and _p9_json(st).get("retired") == 2 and not any(s in body for s in secret), body[:200])
+          all((st.status_code == 200, _p9_json(st).get("current") == after.current,
+               _p9_json(st).get("retired") == 2, not any(s in body for s in secret))), body[:200])
 
 
 try:

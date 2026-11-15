@@ -836,17 +836,21 @@ function loadEncStatus(){
   var el=document.getElementById('diag-enc-status');
   if(!el) return;
   fetch(MOUNT+'/api/panel/encryption').then(function(r){return r.json();}).then(function(d){
-    if(d.error){ el.textContent=t('Could not read the encryption key status.'); return; }
-    if(!d.present){ el.textContent=t('No key yet: nothing has been encrypted on this panel.'); return; }
-    var p=d.pass||{};
-    var line=tf('{algorithm} · key {id} since {date} · older keys kept: {n}',
-                {algorithm: d.algorithm||'', id: d.current||'—', n: d.retired||0,
-                 date: d.created ? new Date(d.created*1000).toLocaleDateString() : '—'});
-    if(p.running) line+=' · '+t('re-encrypting…');
-    else if(p.unreadable) line+=' · '+tf('{n} stored value(s) could not be decrypted and were left as they are', {n: p.unreadable});
-    el.textContent=line;
-    if(p.running) setTimeout(loadEncStatus, 3000);
+    el.textContent=_encStatusLine(d);
+    if(d.pass && d.pass.running) setTimeout(loadEncStatus, 3000);
   }).catch(function(){});
+}
+// The status line for the route's answer: the key, then a running pass or what the last one left.
+function _encStatusLine(d){
+  if(d.error) return t('Could not read the encryption key status.');
+  if(!d.present) return t('No key yet: nothing has been encrypted on this panel.');
+  var p=d.pass||{};
+  var line=tf('{algorithm} · key {id} since {date} · older keys kept: {n}',
+              {algorithm: d.algorithm||'', id: d.current||'—', n: d.retired||0,
+               date: d.created ? new Date(d.created*1000).toLocaleDateString() : '—'});
+  if(p.running) return line+' · '+t('re-encrypting…');
+  if(p.unreadable) return line+' · '+tf('{n} stored value(s) could not be decrypted and were left as they are', {n: p.unreadable});
+  return line;
 }
 function rotateEncKey(){
   confirmDialog({title:'Rotate encryption key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Rotate',
