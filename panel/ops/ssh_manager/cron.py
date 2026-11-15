@@ -1968,6 +1968,35 @@ _BATCH_NODE = "".join((
 ))
 
 
+# The Players card's list, read from the same reply: the names with score (or frags) and time, as
+# game._gamedig_player_list's own query asks for them.
+_BATCH_LIST_JQ = ('[.players[] | {name:(.name // ""), score:(.raw.score // .score // .raw.frags // .frags // null), '
+                  'time:(.raw.time // .time // null)}]')
+
+# The player list each batch read, for the server page's Players poll: {(remote_id, port, gdtype):
+# (read at, {"p": list, "c": count})}. That poll ran a gamedig of its own every other 15 s poll per
+# open page, an ~85 MB node process beside the batch's, for a list the batch had just read from the
+# same reply. Kept one player-poll period (45 s) plus a margin, so the poll finds the next pass's
+# list before this one lapses; a pass that runs late leaves the poll to ask on its own, as before.
+_batch_lists = _core.register_remote_cache({})
+_BATCH_LIST_TTL = 55
+
+
+def _remember_list(server, gdtype, port, reply):
+    """Keep the player list a batch reply carried (see _batch_lists). Never raises."""
+    if isinstance(reply.get("l"), list):
+        _batch_lists[(getattr(server, "id", None), port, gdtype)] = (
+            time.time(), {"p": reply["l"], "c": reply.get("c")})
+
+
+def batch_list(key):
+    """(read at, {"p", "c"}) of the list the last batch read for `key`, or None when none is fresh."""
+    hit = _batch_lists.get(key)
+    if hit and hit[0] + _BATCH_LIST_TTL > time.time():
+        return hit
+    return None
+
+
 def _batch_target_filter():
     """The jq filter of player_slots for one `{"k": key, "r": reply}` line of a batch, tagged with its key.
 
@@ -1980,10 +2009,14 @@ def _batch_target_filter():
     treats anything else as "no map" (null here is the same answer), and tostring would invent one.
     One jq reads every line, so a line it cannot evaluate is skipped (`try`) rather than ending the
     rest: that target alone reads unknown, as when each target had a jq of its own.
+
+    `l` is the player list the server page's Players card shows (see _remember_list), in its own
+    `try`: a list jq cannot read is no list, and never costs the target its count.
     """
     return ('.k as $k | try (.r | {k:$k, c:%s, m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
             'p:((.map // "") | if type == "string" then .[:120] else null end), '
-            'ok:(.players|type=="array")})' % _core.GAMEDIG_HUMANS_JQ)
+            'ok:(.players|type=="array"), l:(try %s catch null)})'
+            % (_core.GAMEDIG_HUMANS_JQ, _BATCH_LIST_JQ))
 
 
 def _batch_body(queries, host):
@@ -2076,13 +2109,14 @@ def player_slots_batch(server, user, targets):
     if replies is None:
         return None
     result = {}
-    for key, _gdtype, port in queries:
+    for key, gdtype, port in queries:
         d = replies.get(key)
         if not (d and d.get("ok")):
             _remember_map_failed(server, port)
             result[key] = (None, None, None)
             continue
         _remember_map(server, port, d.get("p"))
+        _remember_list(server, gdtype, port, d)
         result[key] = _slots_from_reply(d)
     return result
 

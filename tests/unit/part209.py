@@ -231,6 +231,7 @@ def _playerlist209():
     _p9_patch_sm("shell_as_game_user", lambda server, user, sh, timeout=30, selfname=None:
                  (reads.append(sh), (answer["out"], "", 0))[1])
     _game209._playerlist_cache.clear()
+    _cron209._batch_lists.clear()
     try:
         c = _p9_client(P9_ADMIN)
         url = "/api/server/%d/playerlist" % sid
@@ -251,6 +252,7 @@ def _playerlist209():
            len(reads), 3)
     finally:
         _game209._playerlist_cache.clear()
+        _cron209._batch_lists.clear()
         _p9_delete_server(sid)
 
 

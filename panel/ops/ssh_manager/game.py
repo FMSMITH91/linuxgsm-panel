@@ -795,9 +795,23 @@ def _playerlist_lock(key):
 
 
 def _playerlist_hit(key):
+    """The freshest shared answer for `key`: (True, list or None), or None when there is none.
+
+    Two places hold one. This module's own reads (the timed poll's, and the refresh the page asks
+    for), and the player poller's batch, which reads the same gamedig reply for the dashboard's
+    counts every 45 s (cron.batch_list): with a batch list at hand the timed poll runs no gamedig of
+    its own. The newer of the two answers. A batch reply whose list has no names while its count
+    says someone is on is "cannot be read" (None), as _gamedig_players_from_output reads it.
+    """
+    now = time.time()
     hit = _playerlist_cache.get(key)
-    if hit and hit[0] > time.time():
-        return [dict(p) for p in hit[1]]
+    own = (hit[0] - _PLAYERLIST_TTL, hit[1]) if hit and hit[0] > now else None
+    batch = cron.batch_list(key)
+    if batch is not None and (own is None or batch[0] > own[0]):
+        rows = _gamedig_player_rows(batch[1].get("p"))
+        return True, (rows if rows or batch[1].get("c") == 0 else None)
+    if own is not None:
+        return True, [dict(p) for p in own[1]]
     return None
 
 
@@ -808,11 +822,11 @@ def _gamedig_player_list_shared(server, user, game_type, port, query_type):
         return _gamedig_player_list(server, user, game_type, port, query_type)
     hit = _playerlist_hit(key)
     if hit is not None:
-        return hit
+        return hit[1]
     with _playerlist_lock(key):
         hit = _playerlist_hit(key)
         if hit is not None:
-            return hit
+            return hit[1]
         pl = _gamedig_player_list(server, user, game_type, port, query_type)
         _keep_list(key, pl)
         return pl
@@ -835,8 +849,9 @@ def _list_key(server, user, game_type, port, query_type):
 
 def forget_lists(remote_id):
     """Drop every shared player list of one host: its servers were started, stopped or restarted."""
-    for key in [k for k in list(_playerlist_cache) if k[0] == remote_id]:
-        _playerlist_cache.pop(key, None)
+    for cache in (_playerlist_cache, cron._batch_lists):
+        for key in [k for k in list(cache) if k[0] == remote_id]:
+            cache.pop(key, None)
 
 
 def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None,

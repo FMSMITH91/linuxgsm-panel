@@ -156,7 +156,7 @@ def _fresh_db34():
     db.create_all()
     for m, _snap in _PSTATE34:
         m.clear()
-    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache,
+    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache, _cron34._batch_lists,
                   _mon34._restart_flags_read_at, _mon34._batch_failed_at):
         cache.clear()
 
@@ -1719,7 +1719,7 @@ def _cleanup34():
     for m, snap in _PSTATE34:
         m.clear()
         m.update(snap)
-    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache,
+    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache, _cron34._batch_lists,
                   _mon34._restart_flags_read_at, _mon34._batch_failed_at):
         cache.clear()
     _ps34._console_offsets.pop(-3401, None)
