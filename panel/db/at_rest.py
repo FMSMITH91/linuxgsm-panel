@@ -158,6 +158,34 @@ def _reencrypt_config(ring, tally):
     tally.absorb(done[0] if done else probe)
 
 
+def _stored_refs(ring):
+    """The keys every stored value not under the current key still names (panel.db and config.json)."""
+    from sqlalchemy import column, select, table
+    from panel.core.config import is_unreadable, load_config
+    from panel.db.models import db
+    refs = set()
+    for tname, _pk, cname in _text_columns():
+        col = table(tname, column(cname)).c[cname]
+        stmt = select(col).where(col.like("enc:v%"), ~col.like(_kr.V2_PREFIX + ring.current + ":%"))
+        refs.update(_kr.key_ref(v) for (v,) in db.session.execute(stmt))
+    cfg = load_config()
+    if is_unreadable(cfg):
+        return refs | ring.retired()         # config.json unreadable: keep every key
+    _config_refs(cfg, ring, refs)
+    refs.discard(None)
+    return refs
+
+
+def _config_refs(obj, ring, refs):
+    """Add to `refs` the key named by every encrypted string in a config dict/list not under the current key."""
+    items = obj.values() if isinstance(obj, dict) else obj
+    for val in items:
+        if isinstance(val, (dict, list)):
+            _config_refs(val, ring, refs)
+        elif isinstance(val, str) and not ring.is_current(val):
+            refs.add(_kr.key_ref(val))
+
+
 def reencrypt_pass(prune=False):
     """Bring every stored secret under the current key; with `prune`, retire unused old keys.
 
@@ -175,7 +203,9 @@ def reencrypt_pass(prune=False):
             _reencrypt_column(ring, tally, tname, pkname, cname)
         _reencrypt_config(ring, tally)
     if prune and gen == _generation[0]:
-        unused = ring.retired() - tally.refs
+        # What is still stored, read back after the writes, not what the pass believes it wrote: a
+        # write that did not land, or a save under an older key meanwhile, keeps its key.
+        unused = ring.retired() - (_stored_refs(ring) if ring.retired() else set())
         drop = unused & set(ring.unused)
         after = _kr.update_unused(cfgmod.CRED_KEY_FILE, ring.current, unused, drop)
         tally.pruned = sorted(drop - after.retired())

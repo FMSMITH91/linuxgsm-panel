@@ -249,6 +249,20 @@ def _s213_pass():
 
 
 def _s213_prune(app):
+    # Passes whose writes do not land (here: the column step does nothing) must not retire the key the
+    # stored values still need: pruning reads back what is stored, not what the pass believes it wrote.
+    fkey = _cfg213._cred_keyring().fernet[0].encode()
+    _exec213(app, "UPDATE remote_server SET public_ip = :v WHERE name = 'p213-3'", v=_v1(fkey, "198.51.100.213"))
+    real = _ar213._reencrypt_column
+    _ar213._reencrypt_column = lambda *a: None
+    try:
+        _pass213(app, prune=True)
+        _pass213(app, prune=True)
+    finally:
+        _ar213._reencrypt_column = real
+    kept = _cfg213._cred_keyring()
+    check("prune: passes whose writes did not land keep the Fernet key an enc:v1 value still needs",
+          all((kept.fernet == [fkey.decode()], kept.unused == [])), repr((kept.fernet, kept.unused)))
     _exec213(app, "UPDATE remote_server SET public_ip = '' WHERE name = 'p213-3'")
     _pass213(app, prune=True)
     marked = _cfg213._cred_keyring()
