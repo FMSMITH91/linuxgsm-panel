@@ -31,7 +31,7 @@ from panel.ops.system_ops import _helper_present, _is_system_service, _run_verb
 import time
 
 from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
-                    load_config, update_config, encrypt_secret, decrypt_secret, is_unreadable,
+                    load_config, update_config, encrypt_secret, decrypt_secret, is_unreadable, cred_key_lock,
                     _r15a_cfg_int)
 
 _log = logging.getLogger("panel.backup")
@@ -448,11 +448,14 @@ def _write_archive(tmp, dest, passphrase):
 
     Encrypted under `passphrase` when it is set. Raises on any failure; create_backup cleans up.
     """
-    _snapshot_db(os.path.join(tmp, "panel.db"))
-    for src, member in ((CONFIG_FILE, "config.json"), (SECRET_FILE, "secret_key"),
-                        (CRED_KEY_FILE, "cred_key")):
-        if os.path.exists(src):
-            shutil.copy2(src, os.path.join(tmp, member))
+    # Under the key ring's lock: a rotation or the removal of a retired key between the database
+    # copy and the key copy would pair panel.db with a ring missing a key its values need.
+    with cred_key_lock():
+        _snapshot_db(os.path.join(tmp, "panel.db"))
+        for src, member in ((CONFIG_FILE, "config.json"), (SECRET_FILE, "secret_key"),
+                            (CRED_KEY_FILE, "cred_key")):
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(tmp, member))
     # Built inside the temp dir when encrypting, so a plaintext archive never exists in
     # data/backups even briefly — a crash mid-encrypt must not leave an unencrypted skeleton
     # key sitting in the directory the user thinks is encrypted.
@@ -873,14 +876,15 @@ _RESTORE_ROW_LABEL = {"game_server": i18n.Sentence("game server"), "remote_serve
 
 
 def _restore_fernet(tar, names):
-    """A Fernet for the key the restored panel will decrypt its columns with.
+    """The key ring the restored panel will decrypt its columns with.
 
     That is the archive's own cred_key, or the live one when the archive has none (the restore then
-    keeps it). None if neither can be read — an encrypted value is then unreadable after the
+    keeps it). Either form is read: the key ring, or the single Fernet key of an archive written
+    before the ring. None if neither can be read — an encrypted value is then unreadable after the
     restore too, and an unreadable column reads as "" (models.UnreadableSecret), which no command
     can be built from.
     """
-    from cryptography.fernet import Fernet
+    from panel.core.cred_keyring import KeyRing
     try:
         if "cred_key" in names:
             raw = tar.extractfile("cred_key").read()
@@ -888,7 +892,7 @@ def _restore_fernet(tar, names):
             raw = CRED_KEY_FILE.read_bytes()
         else:
             return None
-        return Fernet(raw.strip())
+        return KeyRing.parse(raw)
     except Exception:
         return None
 
@@ -1042,14 +1046,14 @@ _UNREADABLE = object()
 
 
 def _stored_plaintext(val, fernet):
-    """`val` as the restored panel will read it: decrypted with `fernet`, or _UNREADABLE."""
-    from panel.core.config import _ENC_PREFIX, is_encrypted
+    """`val` as the restored panel will read it: decrypted with the key ring `fernet`, or _UNREADABLE."""
+    from panel.core.config import is_encrypted
     if not (isinstance(val, str) and is_encrypted(val)):
         return val
     if not fernet:
         return _UNREADABLE
     try:
-        return fernet.decrypt(val[len(_ENC_PREFIX):].encode()).decode()
+        return fernet.decrypt(val)
     except Exception:
         return _UNREADABLE
 

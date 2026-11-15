@@ -4973,7 +4973,7 @@ def _diag_encryption_keys():
 
 def _cred_state(raw, key_present):
     """'empty' | 'plain' | 'ok' | 'bad' for one RAW stored value. Decrypts only when the key file
-    exists: decrypt_secret goes through _cred_fernet, which CREATES a missing cred_key — on the
+    exists: decrypt_secret goes through _cred_keyring, which CREATES a missing cred_key — on the
     very host this check is for, that would mint a new key over the lost one's ciphertext."""
     from panel.core import config as _cfg
     if not raw:
@@ -5030,7 +5030,7 @@ def _diag_host_credentials():
     try:
         hosts, session_vals = _read_host_fields()
         # Not .exists(): an EMPTY cred_key passed that, and _cred_state's decrypt then wrote a new
-        # key over it (config._cred_fernet treats empty as missing, as _key_missing does).
+        # key over it (config._cred_keyring treats empty as missing, as _key_missing does).
         key = not _cfg._key_missing(_cfg.CRED_KEY_FILE)
         tally, bad_hosts = _cred_tally(hosts, session_vals, key)
     except Exception as exc:  # noqa: BLE001 - reported by class

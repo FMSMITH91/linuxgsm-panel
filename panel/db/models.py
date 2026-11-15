@@ -188,7 +188,7 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
-    # NOT unique: every writer stores encrypt_secret(email) and Fernet uses a fresh IV per write,
+    # NOT unique: every writer stores encrypt_secret(email) and AES-GCM uses a fresh nonce per write,
     # so two accounts with the same address produce different ciphertext and the constraint never
     # fired. Demonstrated — two rows, one address, both committed. The column is also unindexable
     # for the same reason (EncryptedString's own docstring: "only safe for columns nothing filters,

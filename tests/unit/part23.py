@@ -719,10 +719,10 @@ def _no_key23():
     real_key = _cfg23.CRED_KEY_FILE
     absent = _Path23(_TMP23) / "no-such-cred-key"
     _patch23(_cfg23, "CRED_KEY_FILE", absent)
-    _patch23(_cfg23, "_cred_fernet", lambda: calls.append(1) or _boom23())
+    _patch23(_cfg23, "_cred_keyring", lambda: calls.append(1) or _boom23())
     text = _text23(_section23(_h23.section_hosts))
     brief = _text23(_section23(_h23.section_hosts_brief))
-    _restore_one23(_cfg23, "_cred_fernet")
+    _restore_one23(_cfg23, "_cred_keyring")
     _restore_one23(_cfg23, "CRED_KEY_FILE")
     check("hosts: with cred_key missing nothing is decrypted (a decrypt would mint a new key)",
           all((calls == [], not absent.exists(), _cfg23.CRED_KEY_FILE == real_key)), repr(calls))

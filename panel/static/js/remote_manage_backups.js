@@ -849,7 +849,7 @@ function clearBackupPassphrase(btn){
 // which is where the servers are. Delegated on document, so both pages get it from one place.
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
-if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
+if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadEncStatus(); loadAutoUpd(); loadBackups(); } // panel-only cards
 pollLive();
 pollWhenVisible(pollLive, 2000);
 

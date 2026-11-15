@@ -2261,7 +2261,7 @@ with app.app_context():
         "SELECT host, username, linuxgsm_user, public_ip, host_key FROM remote_server"
         " WHERE id = :i"), {"i": _er_id}).fetchone()
     check("at-rest: the stored hostname is ciphertext, not the hostname",
-          _raw[0] != _SECRET_HOST and _raw[0].startswith("enc:v1:"), str(_raw[0])[:40])
+          _raw[0] != _SECRET_HOST and _raw[0].startswith("enc:v2:"), str(_raw[0])[:40])
     check("at-rest: no plaintext survives in ANY of the five columns",
           not any(v in (_raw[0] or "") + (_raw[1] or "") + (_raw[2] or "")
                          + (_raw[3] or "") + (_raw[4] or "")
@@ -2297,7 +2297,7 @@ with app.app_context():
     _leg_raw2 = db.session.execute(_enc_sql(
         "SELECT host, username FROM remote_server WHERE name = 'legacy-host'")).fetchone()
     check("at-rest: the migration encrypts the legacy row", _n1 >= 1
-          and _leg_raw2[0].startswith("enc:v1:") and "legacy.example" not in _leg_raw2[0]
+          and _leg_raw2[0].startswith("enc:v2:") and "legacy.example" not in _leg_raw2[0]
           and "oldroot" not in (_leg_raw2[1] or ""), "touched=%s raw=%.40s" % (_n1, _leg_raw2[0]))
     db.session.expire_all()
     _leg2 = RemoteServer.query.filter_by(name="legacy-host").first()
@@ -2318,12 +2318,12 @@ with app.app_context():
           _sess_raw is not None and _any_sess is not None,
           "no user_session row carried an IP — this block would prove nothing")
     check("at-rest: session IP and user-agent are ciphertext",
-          _sess_raw is not None and (_sess_raw[0] or "").startswith("enc:v1:")
-          and (not _sess_raw[1] or _sess_raw[1].startswith("enc:v1:")),
+          _sess_raw is not None and (_sess_raw[0] or "").startswith("enc:v2:")
+          and (not _sess_raw[1] or _sess_raw[1].startswith("enc:v2:")),
           str(_sess_raw)[:60])
     check("at-rest: ...and still read back as the real values",
           _any_sess is not None and bool(_any_sess.ip)
-          and not _any_sess.ip.startswith("enc:v1:"),
+          and not _any_sess.ip.startswith("enc:v"),
           repr(getattr(_any_sess, "ip", None)))
 
 # ── audit IPs age out into network prefixes ──────────────────────────────────────────────

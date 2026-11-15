@@ -831,6 +831,45 @@ function checkDbHealth(){
   .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
+// ── The key that encrypts stored secrets (panel host only) ──────────
+function loadEncStatus(){
+  var el=document.getElementById('diag-enc-status');
+  if(!el) return;
+  fetch(MOUNT+'/api/panel/encryption').then(function(r){return r.json();}).then(function(d){
+    if(d.error){ el.textContent=t('Could not read the encryption key status.'); return; }
+    if(!d.present){ el.textContent=t('No key yet: nothing has been encrypted on this panel.'); return; }
+    var p=d.pass||{};
+    var line=tf('{algorithm} · key {id} since {date} · older keys kept: {n}',
+                {algorithm: d.algorithm||'', id: d.current||'—', n: d.retired||0,
+                 date: d.created ? new Date(d.created*1000).toLocaleDateString() : '—'});
+    if(p.running) line+=' · '+t('re-encrypting…');
+    else if(p.unreadable) line+=' · '+tf('{n} stored value(s) could not be decrypted and were left as they are', {n: p.unreadable});
+    el.textContent=line;
+    if(p.running) setTimeout(loadEncStatus, 3000);
+  }).catch(function(){});
+}
+function rotateEncKey(){
+  confirmDialog({title:'Rotate encryption key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Rotate',
+    bodyText:'A new key will encrypt every stored secret, and the existing ones are re-encrypted under it in the background. Older keys are kept until nothing uses them, so nothing stops working meanwhile. Continue?',
+    onConfirm:_rotateEncKey});
+}
+function _rotateEncKey(){
+  var btn=document.getElementById('diag-enc-rotate-btn'), msg=document.getElementById('diag-enc-msg');
+  if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Rotating…'; }
+  fetch(MOUNT+'/api/panel/encryption/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){return r.json();}).then(function(d){
+      if(msg){
+        msg.className='small';
+        msg.innerHTML = d.success  // nosemgrep
+          ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+escapeHtml(d.message||'')+'</span>'
+          : '<span class="text-danger">'+escapeHtml(d.message||t('Rotation failed.'))+'</span>';
+      }
+      loadEncStatus();
+    }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
+    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-arrow-repeat"></i> Rotate encryption key'; } })
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
+}
+
 // Repair a flagged database on-demand: stops the panel, repairs offline, restarts (~1 min).
 function repairDb(){
   confirmDialog({title:'Repair database', icon:'wrench-adjustable', confirmClass:'btn-warning', confirmLabel:'Repair & restart',

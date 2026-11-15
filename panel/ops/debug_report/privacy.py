@@ -231,7 +231,7 @@ def _in_app(ctx, fn):
 
 def _names_db(ctx, st):
     from panel.core import config as cfgmod
-    # _key_missing, not .exists(): an EMPTY cred_key is missing to _cred_fernet too, and a decrypt
+    # _key_missing, not .exists(): an EMPTY cred_key is missing to _cred_keyring too, and a decrypt
     # past this gate would write a new key on the install being diagnosed.
     st.cred_key_missing = cfgmod._key_missing(cfgmod.CRED_KEY_FILE)
     _in_app(ctx, lambda: _read_db_names(st))

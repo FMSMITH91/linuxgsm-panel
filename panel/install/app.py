@@ -118,7 +118,7 @@ from panel.security.auth import (ALL_PERMISSIONS, R17C_MAX_ROW_ID, accessible_re
     init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
-    encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
+    harden_data_permissions, read_setup_token, remove_setup_token,
     autoblock_host_ids, _r13a_cfg_text, _r15a_cfg_int)
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
@@ -1979,19 +1979,8 @@ def create_app():
     # (remote SSH credentials, and user email addresses).
     with app.app_context():
         try:
-            from panel.db.models import RemoteServer, User
-            changed = False
-            for r in RemoteServer.query.all():
-                if r.auth_credential and not is_encrypted(r.auth_credential) \
-                        and r.auth_method in ("password", "key"):
-                    r.auth_credential = encrypt_secret(r.auth_credential)
-                    changed = True
-            for u in User.query.all():
-                if u.email and not is_encrypted(u.email):
-                    u.email = encrypt_secret(u.email)
-                    changed = True
-            if changed:
-                db.session.commit()
+            from panel.db.at_rest import encrypt_legacy_plaintext
+            encrypt_legacy_plaintext()
         except Exception:
             db.session.rollback()
 
@@ -3429,6 +3418,11 @@ if __name__ == "__main__":
     # Game servers a previous run of the panel started may still be in this unit's cgroup — where
     # every stop signals them — from before the helper gave each its own scope. Move them out once.
     threading.Thread(target=_adopt_game_processes, name="cgroup-adopt", daemon=True).start()
+
+    # Every stored secret under the current encryption key: values from before AES-256-GCM, or
+    # under a key retired by a rotation, are re-encrypted in the background (panel/db/at_rest.py).
+    from panel.db.at_rest import start_reencrypt
+    start_reencrypt(app, prune=True)
 
     # Every installed server's port, read again from LinuxGSM once per start: an import used to
     # store whatever port the browser sent, and 27015 when it sent none, so a Minecraft server

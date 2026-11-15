@@ -1,5 +1,4 @@
 """Configuration management for LinuxGSM Panel."""
-import base64
 import copy
 import json
 import logging
@@ -14,6 +13,7 @@ _log = logging.getLogger("panel.config")
 # Path(__file__).parent would put data/ (database, secret key, credential key, TLS certs)
 # under panel/core/ and quietly abandon the real one. See panel/__init__.py.
 from panel import REPO_ROOT as HERE
+from panel.core import cred_keyring as _kr
 DATA_DIR = HERE / "data"
 CONFIG_FILE = DATA_DIR / "config.json"
 DB_PATH = DATA_DIR / "panel.db"
@@ -549,46 +549,80 @@ def remove_setup_token():
         return False
 
 
-# ── Encryption for secrets stored in the DB (remote SSH passwords/key paths) ──
+# ── Encryption for secrets stored in the DB and config.json (see panel/core/cred_keyring.py) ──
 CRED_KEY_FILE = DATA_DIR / "cred_key"
-_ENC_PREFIX = "enc:v1:"
+_ENC_PREFIX = "enc:v1:"     # the legacy (Fernet) format; encrypt_secret writes enc:v2:
 
 
-def _cred_fernet():
-    from cryptography.fernet import Fernet
-    # Create-once (atomic, race-safe): two concurrent first-time credential saves must not each
-    # generate a different key and clobber the other — that would leave the first-saved secret
-    # encrypted with a key the file no longer holds, i.e. permanently undecryptable.
+def _cred_keyring():
+    """The key ring in data/cred_key, creating a new one when the file is absent or empty.
+
+    Create-once (atomic, race-safe): two concurrent first-time credential saves must not each
+    generate a different key and clobber the other — that would leave the first-saved secret
+    encrypted with a key the file no longer holds, i.e. permanently undecryptable.
+    """
     if _key_missing(CRED_KEY_FILE):
-        _create_key_once(CRED_KEY_FILE, Fernet.generate_key)
-    return Fernet(CRED_KEY_FILE.read_bytes().strip())
+        _create_key_once(CRED_KEY_FILE, _kr.new_ring_bytes)
+    return _kr.read_ring(CRED_KEY_FILE)
+
+
+def _cred_keyring_for_write():
+    """The key ring, with a current key added first when the file still holds only a Fernet key."""
+    ring = _cred_keyring()
+    if ring.current is None:
+        ring = _kr.add_key(CRED_KEY_FILE, only_if_none=True)
+    return ring
+
+
+def cred_key_lock():
+    """A context manager holding the key ring still (see cred_keyring.ring_lock)."""
+    return _kr.ring_lock(CRED_KEY_FILE)
+
+
+def rotate_cred_key():
+    """Make a new 256-bit key current; the retired ones stay to read what they encrypted.
+
+    Returns the new ring. Re-encrypting what the old keys hold is panel/db/at_rest.py's pass.
+    """
+    _cred_keyring()
+    return _kr.add_key(CRED_KEY_FILE)
 
 
 def encrypt_secret(plaintext):
     """Encrypt a secret (SSH password / key path) for storage in panel.db.
 
     Encrypted so a leaked DB file doesn't hand over every remote's credentials. Empty stays empty.
-    The key lives in data/cred_key (chmod 600), separate from the Flask secret_key so rotating the
-    session key never orphans stored creds.
+    The key ring lives in data/cred_key (chmod 600), separate from the Flask secret_key so rotating
+    the session key never orphans stored creds. The result is always enc:v2 under the current key:
+    a value that is already encrypted comes back unchanged when it is under the current key, and
+    re-encrypted to it when it is under an older one this ring can still open (an older value
+    passing through a save is brought up to date). One no key here opens is returned as it is.
     """
     if not plaintext:
         return ""
+    ring = _cred_keyring_for_write()
     if is_encrypted(plaintext):
-        return plaintext
-    return _ENC_PREFIX + _cred_fernet().encrypt(plaintext.encode()).decode()
+        if ring.is_current(plaintext):
+            return plaintext
+        try:
+            return ring.encrypt(ring.decrypt(plaintext))
+        except ValueError:
+            return plaintext
+    return ring.encrypt(plaintext)
 
 
 def decrypt_secret(value):
-    """Decrypt a stored secret.
+    """Decrypt a stored secret (enc:v2, or the legacy enc:v1); "" when no key here opens it.
 
     Legacy plaintext values (no prefix) are returned as-is so existing installs keep working until
-    migrated.
+    migrated. A value whose authentication tag does not verify (tampered, or another key's) is
+    never returned: it reads as "" like any other value this host cannot decrypt.
     """
     if not value:
         return ""
     if is_encrypted(value):
         try:
-            return _cred_fernet().decrypt(value[len(_ENC_PREFIX):].encode()).decode()
+            return _cred_keyring().decrypt(value)
         except Exception:
             return ""
     return value
@@ -601,28 +635,21 @@ def _is_fernet_token(blob):
     rotated, every real ciphertext would read as plaintext, and the startup migration in app.py
     would re-encrypt it under a NEW key — destroying any chance of recovering it by restoring the
     original key. Structure is knowable without the key; decryptability is not.
-
-    Fernet layout: 0x80 | 8-byte timestamp | 16-byte IV | AES-CBC ciphertext (16-byte blocks) |
-    32-byte HMAC, base64url-encoded. 57 = 1 + 8 + 16 + 32, i.e. everything but the ciphertext.
     """
-    try:
-        raw = base64.urlsafe_b64decode(blob.encode("ascii"))
-    except Exception:
-        return False
-    return len(raw) >= 57 and raw[0] == 0x80 and (len(raw) - 57) % 16 == 0
+    return _kr.is_fernet_token(blob)
 
 
 def is_encrypted(value):
-    """True only for something encrypt_secret() actually produced.
+    """True only for something encrypt_secret() actually produced (enc:v2, or the legacy enc:v1).
 
     The prefix alone is NOT enough. A secret that itself starts with "enc:v1:" was taken for
     ciphertext and stored verbatim — in plaintext, by the one function whose job is to prevent
     that — and then decrypted to "" forever, so the credential was both exposed and broken.
-    Requiring the remainder to be shaped like a Fernet token closes that, and makes decrypt_secret
-    hand such a value back unchanged (it is legacy plaintext) instead of losing it.
+    Requiring the remainder to be shaped like the format's token closes that, and makes
+    decrypt_secret hand such a value back unchanged (it is legacy plaintext) instead of losing it.
+    Structure only, never the key (see _is_fernet_token).
     """
-    return (bool(value) and value.startswith(_ENC_PREFIX)
-            and _is_fernet_token(value[len(_ENC_PREFIX):]))
+    return _kr.key_ref(value) is not None
 
 
 def harden_data_permissions():
