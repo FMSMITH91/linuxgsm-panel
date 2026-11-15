@@ -2008,26 +2008,31 @@ with app.app_context():
     check("reuse: ...and the password is unchanged",
           auth.check_password(_issued, _hu_r.password_hash))
 
+def _pw03(n):
+    """Fixture password number `n` for the change-password checks: plain words, 15+ characters."""
+    return "amber kettle lighthouse %d" % n
+
+
 # Wrong current password must not clear the flag — the gate is not a formality.
 # Refused (redirected back), not crashed: a 500 also leaves the flag set (review 1016b).
 _gate_r = hc.post("/account/password", data={"current_password": "not-the-one",
-                                             "new_password": "Ch0sen!passphrase-1",
-                                             "confirm_password": "Ch0sen!passphrase-1"})
+                                             "new_password": _pw03(1),
+                                             "confirm_password": _pw03(1)})
 with app.app_context():
     check("gate: a wrong current password leaves the account still flagged (refused, not crashed)",
           _gate_r.status_code == 302 and db.session.get(User, _hu_id).must_change_password is True,
           "status %s" % _gate_r.status_code)
 
 _chg = hc.post("/account/password", data={"current_password": _issued,
-                                          "new_password": "Ch0sen!passphrase-1",
-                                          "confirm_password": "Ch0sen!passphrase-1"},
+                                          "new_password": _pw03(1),
+                                          "confirm_password": _pw03(1)},
                follow_redirects=False)
 with app.app_context():
     _hu2 = db.session.get(User, _hu_id)
     check("change: setting their own password clears the flag",
           _hu2.must_change_password is False)
     check("change: ...and it is really the new password",
-          auth.check_password("Ch0sen!passphrase-1", _hu2.password_hash))
+          auth.check_password(_pw03(1), _hu2.password_hash))
 check("change: they are sent into the panel, not back to the form",
       "/password/change" not in (_chg.headers.get("Location") or ""),
       _chg.headers.get("Location") or "")
@@ -2038,33 +2043,33 @@ check("change: ...and the panel opens normally afterwards", _after.status_code =
 # History, end to end: the password they just left cannot come straight back. Without this,
 # "change your password" is satisfied by changing it and changing it back, which is what
 # someone does when made to replace a password they were happy with.
-_back1 = hc.post("/account/password", data={"current_password": "Ch0sen!passphrase-1",
+_back1 = hc.post("/account/password", data={"current_password": _pw03(1),
                                             "new_password": _issued, "confirm_password": _issued},
                  follow_redirects=True)
 check("history: the admin-issued password cannot be returned to later",
       b"used before" in _back1.data)
-hc.post("/account/password", data={"current_password": "Ch0sen!passphrase-1",
-                                   "new_password": "Ch0sen!passphrase-2", "confirm_password": "Ch0sen!passphrase-2"})
-_back2 = hc.post("/account/password", data={"current_password": "Ch0sen!passphrase-2",
-                                            "new_password": "Ch0sen!passphrase-1",
-                                            "confirm_password": "Ch0sen!passphrase-1"},
+hc.post("/account/password", data={"current_password": _pw03(1),
+                                   "new_password": _pw03(2), "confirm_password": _pw03(2)})
+_back2 = hc.post("/account/password", data={"current_password": _pw03(2),
+                                            "new_password": _pw03(1),
+                                            "confirm_password": _pw03(1)},
                  follow_redirects=True)
 check("history: nor the one before this one", b"used before" in _back2.data)
 with app.app_context():
     check("history: ...and none of those refusals changed the password",
-          auth.check_password("Ch0sen!passphrase-2", db.session.get(User, _hu_id).password_hash))
+          auth.check_password(_pw03(2), db.session.get(User, _hu_id).password_hash))
 # Far enough back and it is allowed again — the window is a window, not an archive.
 for _n in (3, 4, 5):
-    hc.post("/account/password", data={"current_password": "Ch0sen!passphrase-%d" % (_n - 1),
-                                       "new_password": "Ch0sen!passphrase-%d" % _n,
-                                       "confirm_password": "Ch0sen!passphrase-%d" % _n})
-_old_ok = hc.post("/account/password", data={"current_password": "Ch0sen!passphrase-5",
-                                             "new_password": "Ch0sen!passphrase-1",
-                                             "confirm_password": "Ch0sen!passphrase-1"},
+    hc.post("/account/password", data={"current_password": _pw03(_n - 1),
+                                       "new_password": _pw03(_n),
+                                       "confirm_password": _pw03(_n)})
+_old_ok = hc.post("/account/password", data={"current_password": _pw03(5),
+                                             "new_password": _pw03(1),
+                                             "confirm_password": _pw03(1)},
                   follow_redirects=True)
 with app.app_context():
     check("history: a password older than the window can be used again",
-          auth.check_password("Ch0sen!passphrase-1", db.session.get(User, _hu_id).password_hash),
+          auth.check_password(_pw03(1), db.session.get(User, _hu_id).password_hash),
           _old_ok.data[-300:].decode("utf-8", "replace")[:160])
 
 # Admin reset of SOMEONE ELSE's password: generated, flagged, old password dead.
@@ -2074,12 +2079,12 @@ _rst = c.post("/users/%d/edit" % _hu_id,
 _rj = _rst.get_json() or {}
 _reissued = (_rj.get("credential") or {}).get("password") or ""
 check("reset: the response carries a new generated password", bool(_reissued), str(_rj)[:140])
-check("reset: it is not the one they had chosen", _reissued != "Ch0sen!passphrase-1")
+check("reset: it is not the one they had chosen", _reissued != _pw03(1))
 with app.app_context():
     _hu3 = db.session.get(User, _hu_id)
     check("reset: the account must replace it again", _hu3.must_change_password is True)
     check("reset: their chosen password no longer works",
-          not auth.check_password("Ch0sen!passphrase-1", _hu3.password_hash))
+          not auth.check_password(_pw03(1), _hu3.password_hash))
     check("reset: the issued one does", auth.check_password(_reissued, _hu3.password_hash))
 
 # An edit that does NOT tick reset must leave the password alone — renaming someone is not a
