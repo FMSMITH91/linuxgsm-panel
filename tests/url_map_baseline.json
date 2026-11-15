@@ -1396,6 +1396,16 @@
       "POST"
     ]
   },
+  "POST /account/owner/transfer": {
+    "endpoint": "account_owner_transfer",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_owner_transfer"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /account/password": {
     "endpoint": "account_change_password",
     "guards": [
