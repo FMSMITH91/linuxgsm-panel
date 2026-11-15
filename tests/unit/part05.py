@@ -536,16 +536,27 @@ def _r30d_pkg_aliases(tree, exported=None):
     unit.part12, and reboot41_a/b `_sm41` from unit.reboot41_fixtures, so their package stubs were
     never seen).
     """
+    tree = _r31d_imports(tree)
     _own = {_a.asname or "ssh_manager"
-            for _n in _smg_ast.walk(tree) for _cls, _mod, _name in _R30D_PKG_IMPORTS
+            for _n in tree for _cls, _mod, _name in _R30D_PKG_IMPORTS
             if isinstance(_n, _cls) and getattr(_n, "module", None) == _mod
             for _a in _n.names if _a.name == _name}
     return _own | _r31d_imported_aliases(tree, exported or {})
 
 
+def _r31d_imports(tree):
+    """The import statements in `tree`: an AST, or a list already taken from one (handed back as it is).
+
+    Only these bind the package, so the fixed point below reads each file's list, not its tree.
+    """
+    if isinstance(tree, list):
+        return tree
+    return [_n for _n in _smg_ast.walk(tree) if isinstance(_n, (_smg_ast.Import, _smg_ast.ImportFrom))]
+
+
 def _r31d_imported_aliases(tree, exported):
     """The names `tree` imports from a test module in `exported` that binds the package to them there."""
-    return {_a.asname or _a.name for _n in _smg_ast.walk(tree)
+    return {_a.asname or _a.name for _n in _r31d_imports(tree)
             if isinstance(_n, _smg_ast.ImportFrom) and _n.module in exported
             for _a in _n.names if _a.name in exported[_n.module]}
 
@@ -557,7 +568,7 @@ def _r31d_test_module(f):
 
 def _r31d_pkg_exported(trees):
     """Map each test module's name to the names it binds the package to, through other test modules too."""
-    _exp = {}
+    _exp, trees = {}, {_m: _r31d_imports(_t) for _m, _t in trees.items()}
     while True:
         _next = {_m: _r30d_pkg_aliases(_t, _exp) for _m, _t in trees.items()}
         if _next == _exp:
@@ -580,8 +591,9 @@ def _r30d_pkg_stubs(f, src, exported=None):
     "x", f)` and `setattr(sm, "x", f)` set it all the same, and were not seen): one named like
     _patch/setattr/_swap, or any call shaped (module, "name", value), as the stdlib gate reads them.
     """
-    _tree = _smg_ast.parse(src)
-    _aliases = _r30d_pkg_aliases(_tree, exported)
+    _nodes = list(_smg_ast.walk(_smg_ast.parse(src)))      # walked once: the imports, then the stores
+    _aliases = _r30d_pkg_aliases([_n for _n in _nodes if isinstance(_n, (_smg_ast.Import, _smg_ast.ImportFrom))],
+                                 exported)
 
     def _is_pkg(e):
         return ((isinstance(e, _smg_ast.Name) and e.id in _aliases)
@@ -590,7 +602,7 @@ def _r30d_pkg_stubs(f, src, exported=None):
                 or (isinstance(e, _smg_ast.Attribute) and e.attr in _R32D_PKG_ATTRS))
 
     _out = []
-    for _n in _smg_ast.walk(_tree):
+    for _n in _nodes:
         if isinstance(_n, _smg_ast.Attribute) and isinstance(_n.ctx, _smg_ast.Store) and _is_pkg(_n.value):
             _out.append("%s:%d %s.%s" % (f, _n.lineno, _smg_ast.unparse(_n.value), _n.attr))
         elif _r30d_pkg_patcher(_n, _is_pkg):
@@ -599,7 +611,7 @@ def _r30d_pkg_stubs(f, src, exported=None):
 
 
 _r31d_srcs = {_f: open(os.path.join(_root, _f), encoding="utf-8").read() for _f in _r30d_smg_files}
-_r31d_exported = _r31d_pkg_exported({_r31d_test_module(_f): _smg_ast.parse(_s)
+_r31d_exported = _r31d_pkg_exported({_r31d_test_module(_f): _r31d_imports(_smg_ast.parse(_s))
                                      for _f, _s in _r31d_srcs.items() if _r31d_test_module(_f)})
 # Every name a module binds the package to (routes: `from panel.ops import ssh_manager as _sm`; the test
 # modules': `_p9_sm`, `_sm41`, …). A check handed `<module>._sm` sets the attribute on the package all the
@@ -5604,8 +5616,10 @@ check("audit: every _NO_TARGET_OK entry is still a target-less log_action call",
 import functools as _functools05  # noqa: E402
 
 
-def _r17d_root_names(tree, depth):
-    """Names bound in `tree` to the checkout root, whatever they are called (a predicate on a node).
+def _r17d_root_names(nodes, depth):
+    """Names bound in a tree (its `nodes`, as ast.walk lists them) to the checkout root, whatever they are called.
+
+    A predicate on a node.
 
     `depth`: how many dirname()s of the file's own path reach the root (3 for tests/unit/partNN).
     A root is one of the suites' conventional root names (each one a root wherever it is bound:
@@ -5614,11 +5628,11 @@ def _r17d_root_names(tree, depth):
     another root (through abspath/realpath/normpath), followed to a fixed point.
     """
     roots = set()
-    for _n in _smg_ast.walk(tree):
+    for _n in nodes:
         roots |= _r17d_repo_root_imports(_n)
     is_root = _functools05.partial(_r17d_is_root, roots=roots, depth=depth)
     # An annotated copy (`top: str = REPO_ROOT`) is a copy too (review 1012c).
-    _assigns = [_n for _n in _smg_ast.walk(tree)
+    _assigns = [_n for _n in nodes
                 if isinstance(_n, (_smg_ast.Assign, _smg_ast.AnnAssign)) and _n.value is not None]
     _new = True
     while _new:
@@ -5917,10 +5931,10 @@ def _r19d_os_walk(node, os_names):
     return getattr(node.func, "id", None) in _fns
 
 
-def _r19d_os_names(tree):
-    """(names bound to the os module, names bound to os.walk / os.fwalk) in `tree`."""
+def _r19d_os_names(nodes):
+    """(names bound to the os module, names bound to os.walk / os.fwalk) in a tree's `nodes`."""
     _mods, _fns = {"os"}, set()
-    for _n in _smg_ast.walk(tree):
+    for _n in nodes:
         if isinstance(_n, _smg_ast.Import):
             _mods |= _r19d_bound_as(_n, ("os",), asname_only=True)
         elif isinstance(_n, _smg_ast.ImportFrom) and _n.module == "os":
@@ -5956,6 +5970,9 @@ def _r20d_code_only(text):
 _R26D_CLAUDE_LIT = _re.compile(r""""/?\.claude(?:/[\w./-]*)?"|'/?\.claude(?:/[\w./-]*)?'""")
 
 
+_R26D_PATH_NODES = (_smg_ast.Call, _smg_ast.BinOp, _smg_ast.JoinedStr)
+
+
 def _r16d_unpruned_walks(text, depth=3):
     """Line numbers of an `os.walk(<checkout root>)` whose next six lines never name .claude.
 
@@ -5968,11 +5985,13 @@ def _r16d_unpruned_walks(text, depth=3):
     text = _r20d_code_only(text)
     lines = text.splitlines()
     sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*(?:%s)" % _R26D_CLAUDE_LIT.pattern, text)}
-    tree = _smg_ast.parse(text)
-    is_root = _r17d_root_names(tree, depth)
-    _os_names = _r19d_os_names(tree)
+    # The tree is walked once, and only a call, an operator or an f-string can be a read of the
+    # checkout (every reader _r17d_walk_of_root follows starts at one of those).
+    nodes = list(_smg_ast.walk(_smg_ast.parse(text)))
+    is_root = _r17d_root_names(nodes, depth)
+    _os_names = _r19d_os_names(nodes)
     _wins = {_c.lineno: "\n".join(lines[_c.lineno - 1:_c.lineno + 6])
-             for _c in _smg_ast.walk(tree) if _r17d_walk_of_root(_c, is_root, _os_names)}
+             for _c in nodes if isinstance(_c, _R26D_PATH_NODES) and _r17d_walk_of_root(_c, is_root, _os_names)}
     return sorted(_ln for _ln, _win in _wins.items()
                   if not _R26D_CLAUDE_LIT.search(_win) and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets))
 

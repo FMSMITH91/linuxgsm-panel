@@ -1880,61 +1880,77 @@ def _r14d_aliases(tree, carried, path=None):
     (`_H = _sm_hosts`) is one too, followed to a fixed point. `path` is the file `tree` was read
     from, for a module it loads by a path built from its own __file__.
     """
-    alias = _r18d_path_aliases(tree, os.path.relpath(path, _root).replace(os.sep, "/") if path else None)
-    alias.update(_r16d_helper_aliases(tree))
+    return _r14d_plan_aliases(_r14d_alias_plan(tree, path), carried)
+
+
+def _r14d_alias_plan(tree, path=None):
+    """What _r14d_aliases reads of `tree`, taken in one walk: small lists, not the tree.
+
+    Only an import's answer depends on `carried`, so the gate's fixed point below reads each file's
+    plan once per round instead of walking its tree again (about 36 walks of every test file).
+    (base aliases, [an import statement, or the {name: module} an assignment binds] in walk order,
+    [(source, copy)], [(assigned names, the called function's bare name or None)],
+    [(function name, a name one of its returns hands back)]).
+    """
+    base = _r18d_path_aliases(tree, os.path.relpath(path, _root).replace(os.sep, "/") if path else None)
+    base.update(_r16d_helper_aliases(tree))
+    steps, copies, calls, returns = [], [], [], []
     for _n in _ast_scan.walk(tree):
-        alias.update(_r14d_import_aliases(_n, carried))
-        alias.update(_r14d_sys_modules_alias(_n))
-        alias.update(_r16d_import_module_alias(_n))
-    return _r17d_follow_factories(tree, _r16d_follow_copies(tree, alias))
+        if isinstance(_n, (_ast_scan.Import, _ast_scan.ImportFrom)):
+            steps.append(_n)
+        elif isinstance(_n, _ast_scan.Assign):
+            _r14d_plan_assign(_n, steps, copies, calls)
+        elif isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef)):
+            returns += [(_n.name, _r.value.id) for _r in _ast_scan.walk(_n)
+                        if isinstance(_r, _ast_scan.Return) and isinstance(_r.value, _ast_scan.Name)]
+    return base, steps, copies, calls, returns
 
 
-def _r17d_follow_factories(tree, alias):
+def _r14d_plan_assign(node, steps, copies, calls):
+    """Add one `x = …` statement to a plan: what it binds, a copy of a name, a call it is bound from."""
+    _bound = _r14d_sys_modules_alias(node)
+    _bound.update(_r16d_import_module_alias(node))
+    steps += [_bound] if _bound else []
+    _names = [_t.id for _t in node.targets if isinstance(_t, _ast_scan.Name)]
+    if isinstance(node.value, _ast_scan.Name):
+        copies += [(node.value.id, _t) for _t in _names]
+    elif isinstance(node.value, _ast_scan.Call):
+        calls.append((_names, node.value.func.id if isinstance(node.value.func, _ast_scan.Name) else None))
+
+
+def _r14d_plan_aliases(plan, carried):
+    """The answer of _r14d_aliases, from a file's plan (_r14d_alias_plan) and the aliases `carried` from parts."""
+    base, steps, copies, calls, returns = plan
+    alias = dict(base)
+    for _s in steps:
+        alias.update(_s if isinstance(_s, dict) else _r14d_import_aliases(_s, carried))
+    return _r17d_follow_factories(returns, calls, copies, _r16d_follow_copies(copies, alias))
+
+
+def _r17d_follow_factories(returns, calls, copies, alias):
     """`alias` plus each name bound from a function that returns one (`_dbo = _sandboxed_helper()`).
 
     A helper loaded inside a factory and handed back was no alias: part06's eleven stores through
     `_dbo` (SYSTEM_PYTHON, _drop_to, ...) went unread, so a helper rename left them creating new
-    attributes while the real ones ran (review 1012b).
+    attributes while the real ones ran (review 1012b). `returns`, `calls` and `copies` are the plan's.
     """
     for _ in range(4):  # at most 4 rounds, stopping at the first that adds nothing
-        _added = _r17d_factory_binds(tree, _r17d_factories(tree, alias), alias)
+        _makes = {_f: alias[_r] for _f, _r in returns if _r in alias}
+        _added = {_t: _makes[_fn] for _ts, _fn in calls if _fn in _makes for _t in _ts if _t not in alias}
         if not _added:
             break
         alias.update(_added)
-        alias = _r16d_follow_copies(tree, alias)
+        alias = _r16d_follow_copies(copies, alias)
     return alias
 
 
-def _r17d_factories(tree, alias):
-    """{function name: module} for each function that returns a name `alias` maps."""
-    return {_f.name: alias[_r.value.id] for _f in _ast_scan.walk(tree)
-            if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))
-            for _r in _ast_scan.walk(_f) if _r17d_returns_alias(_r, alias)}
+def _r16d_follow_copies(copies, alias):
+    """`alias` plus each name copied from one (`_H = _sm_hosts`), a copy of a copy included.
 
-
-def _r17d_returns_alias(node, alias):
-    return isinstance(node, _ast_scan.Return) and isinstance(node.value, _ast_scan.Name) and node.value.id in alias
-
-
-def _r17d_factory_binds(tree, makes, alias):
-    """{name: module} for each `name = factory(...)` not already an alias."""
-    return {_t: makes[_v.func.id] for _v, _ts in _r16d_call_assigns(tree)
-            if isinstance(_v.func, _ast_scan.Name) and _v.func.id in makes
-            for _t in _ts if _t not in alias}
-
-
-def _r16d_name_copies(tree):
-    """[(source name, copy name)] for each `copy = source` in `tree`."""
-    return [(_n.value.id, _t.id) for _n in _ast_scan.walk(tree)
-            if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Name)
-            for _t in _n.targets if isinstance(_t, _ast_scan.Name)]
-
-
-def _r16d_follow_copies(tree, alias):
-    """`alias` plus each name copied from one (`_H = _sm_hosts`), a copy of a copy included."""
-    _copies = _r16d_name_copies(tree)
+    `copies` is the plan's [(source name, copy name)], one per `copy = source` in the tree.
+    """
     for _ in range(4):  # at most 4 rounds, stopping at the first that adds nothing
-        _added = {_dst: alias[_src] for _src, _dst in _copies if _src in alias and _dst not in alias}
+        _added = {_dst: alias[_src] for _src, _dst in copies if _src in alias and _dst not in alias}
         if not _added:
             break
         alias.update(_added)
@@ -1964,8 +1980,9 @@ def _r14d_dotted_of(path):
 
 # To a fixed point: a part's aliases can be carried from a part that carried them in turn.
 _stub_carry, _stub_alias_of = {}, {}
+_stub_plans = {_f: _r14d_alias_plan(_t, _f) for _f, _t in _stub_trees.items()}    # each tree walked once
 for _ in range(8):  # at most 8 rounds: it stops at the first that changes nothing
-    _stub_alias_of = {_f: _r14d_aliases(_t, _stub_carry, _f) for _f, _t in _stub_trees.items()}
+    _stub_alias_of = {_f: _r14d_plan_aliases(_p, _stub_carry) for _f, _p in _stub_plans.items()}
     _stub_next = {_r14d_dotted_of(_f): _al for _f, _al in _stub_alias_of.items() if _r14d_dotted_of(_f)}
     if _stub_next == _stub_carry:
         break
@@ -2057,12 +2074,13 @@ _r15d_nest_ctl_al = _r14d_aliases(_ast_scan.parse(
     "_s = _ilu.spec_from_loader('ph', _machinery.SourceFileLoader('ph', _helper_path))\n"
     "_ph = _ilu.module_from_spec(_s)\n_nm = _il.import_module('json')\n"
     "def _mk():\n    _s2 = _ilu.spec_from_file_location('ph', _helper_path)\n"
-    "    _m2 = _ilu.module_from_spec(_s2)\n    return _m2\n_dbo = _mk()\n"), {})
+    "    _m2 = _ilu.module_from_spec(_s2)\n    return _m2\n_dbo = _mk()\n_dbc = _dbo\n"), {})
 check("stub gate: an import_module() binding, a copy of an alias (and of a copy), a module "
-      "loaded from tools/panel-helper and one a factory returns are all read as aliases (control)",
+      "loaded from tools/panel-helper and one a factory returns (and a copy of it) are all read as aliases (control)",
       _r15d_nest_ctl_al == {"_m": "panel.services.monitoring", "_x": "panel.ops.system_ops",
                             "_H": "panel.ops.system_ops", "_I": "panel.ops.system_ops",
-                            "_ph": _R16D_HELPER_MOD, "_m2": _R16D_HELPER_MOD, "_dbo": _R16D_HELPER_MOD}
+                            "_ph": _R16D_HELPER_MOD, "_m2": _R16D_HELPER_MOD, "_dbo": _R16D_HELPER_MOD,
+                            "_dbc": _R16D_HELPER_MOD}
       and "VERBS" in _r14d_stub_names(_R16D_HELPER_MOD)
       and "no_such_fn_xyz" not in _r14d_stub_names(_R16D_HELPER_MOD),
       repr(_r15d_nest_ctl_al))
