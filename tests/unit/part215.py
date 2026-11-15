@@ -27,7 +27,7 @@ import pyotp as _pyotp215
 from unit.part01 import check, eq
 from unit.part12 import (P9_ADMIN, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_flashes,
                          _p9_json, _p9_patch, _p9_restore_all)
-from panel.core import config as _cfg215, session_policy as _sp215
+from panel.core import session_policy as _sp215
 from panel.core.clock import utcnow as _now215
 from panel.core.common_passwords import is_common as _common215
 from panel.core.validation import password_problem as _pp215
@@ -98,8 +98,8 @@ def _reset215():
 
 
 def _p9_app_fails215():
-    import app as _app215
-    return _app215._LOGIN_FAILS, _app215._LOGIN_FAILS_LOCK
+    from app import _LOGIN_FAILS, _LOGIN_FAILS_LOCK
+    return _LOGIN_FAILS, _LOGIN_FAILS_LOCK
 
 
 # ── 1. session lifetimes ─────────────────────────────────────────────────────────────────────────
@@ -327,7 +327,6 @@ def _s215_account_throttle():
 
 def _s215_ip_day():
     _reset215()
-    from app import _LOGIN_FAILS  # noqa: F401 - the address bucket must be unaffected by the short window
     bucket = _auth215.throttle_key("203.0.113.90")
     t0 = _time215.time()
     for i in range(_ag215.IP_DAY_FAILS):
@@ -372,8 +371,7 @@ def _s215_required_2fa():
           servers.status_code == 403 and _p9_json(servers).get("error") == "2fa_setup_required"
           and api.status_code == 200, repr((servers.status_code, _p9_json(servers), api.status_code)))
     check("2fa required: the setup page itself stays reachable (the last superadmin cannot be shut out)",
-          setup.status_code == 200 and "otpauth" in setup.get_data(as_text=True).lower()
-          or setup.status_code == 200, repr(setup.status_code))
+          setup.status_code == 200 and 'name="totp_code"' in setup.get_data(as_text=True), repr(setup.status_code))
     check("2fa required: a terminal holder is covered; a viewer is not; with the switch off nobody is",
           term_page.status_code == 302 and viewer.status_code != 403 and off.status_code != 403,
           repr((term_page.status_code, viewer.status_code, off.status_code)))
@@ -416,7 +414,8 @@ def _s215_step_up():
     check("step-up: a wrong password does not confirm and is audited; the right one does and goes back",
           wrong.status_code == 200 and right.status_code == 302 and right.headers.get("Location", "").endswith("/groups")
           and [r[2] for r in _audits215("reauth", first)] == [False, True], repr(_audits215("reauth", first)))
-    check("step-up: ...after which the change goes through", "p215-again" in made, repr(made))
+    check("step-up: ...after which the change goes through", again.status_code == 200 and "p215-again" in made,
+          repr((again.status_code, made)))
 
 
 def _s215_step_up_rules():
@@ -695,4 +694,3 @@ finally:
         _db215.session.commit()
 
 check("part215: nothing reached a real transport", len(_P9_TRIPPED) == _trips215, repr(_P9_TRIPPED[_trips215:]))
-_cfg_unused215 = _cfg215     # imported for the config path the settings checks patch around

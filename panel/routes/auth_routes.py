@@ -169,8 +169,7 @@ def _register_account(app):
     @app.route("/account")
     @login_required
     def account():
-        return render_template("account.html", languages=i18n.LANGUAGES,
-                               changes=account_notices.recent_changes(current_user))
+        return render_template("account.html", languages=i18n.LANGUAGES)
 
     @app.route("/password/change")
     @login_required
@@ -259,8 +258,7 @@ def _register_account(app):
         account_notices.alert_credential_change(u, "new API token created")
         # Render directly (not a redirect) so the plaintext token is shown exactly once and never
         # stored in the session cookie.
-        return no_store(render_template("account.html", languages=i18n.LANGUAGES, new_token=token,
-                                        changes=account_notices.recent_changes(u)))
+        return no_store(render_template("account.html", languages=i18n.LANGUAGES, new_token=token))
 
     @app.route("/account/api-token/revoke", methods=["POST"])
     @login_required
@@ -455,11 +453,11 @@ def _register_2fa_and_profile(app):
                 account_notices.alert_credential_change(_u, "two-factor authentication turned on")
                 # A privilege-level change: every other session ends (they signed in without the
                 # factor) and this one gets a new identifier (account_guard.rotate_sessions).
-                if not account_guard.rotate_sessions(_u):
+                if account_guard.rotate_sessions(_u):
+                    flash("Two-factor authentication is now enabled.", "success")
+                else:
                     flash("Two-factor authentication is now enabled. Every session was signed out, "
                           "including this one — please sign in again.", "warning")
-                    return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
-                flash("Two-factor authentication is now enabled.", "success")
                 # Show the one-time backup codes once, right now — they're never shown again.
                 return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
             flash("That code didn't match — check your device's time and try again.", "danger")

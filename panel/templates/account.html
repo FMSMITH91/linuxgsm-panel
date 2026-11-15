@@ -179,13 +179,14 @@
       <p class="text-secondary mb-2">Every device or browser signed in to your account. Revoke any you
         don't recognise — the one you're using now is marked <span class="badge bg-success">This device</span>.</p>
       <div id="sessions-list" class="mb-2"><div class="text-secondary small">Loading…</div></div>
+      {% set changes = account_changes(current_user) %}
       {% if changes %}
       {# Recent changes to this account's security (account_notices.recent_changes), so a change
          made in a borrowed session or by an admin is seen here as well as at the next sign-in. #}
       <div class="small fw-semibold mt-2" id="acct-changes-title">Recent security changes</div>
       <ul class="list-unstyled small mb-1" id="acct-changes">
         {% for label, when, ip in changes %}
-        <li><span>{{ label }}</span> · <span class="localtime text-secondary" data-utc="{{ when.isoformat() }}Z">{{ when.strftime('%Y-%m-%d %H:%M') }}</span>{% if ip %} · <span class="text-secondary" data-no-i18n>{{ ip }}</span>{% endif %}</li>
+        <li><span>{{ label }}</span> · <span class="text-secondary">{{ when|datetime }}</span>{% if ip %} · <span class="text-secondary" data-no-i18n>{{ ip }}</span>{% endif %}</li>
         {% endfor %}
       </ul>
       <div class="small text-secondary">Wasn't you? Change your password and use "Sign out everywhere" on your Account page.</div>
@@ -231,7 +232,7 @@
       <p class="small mb-2">
         Status:
         {% if current_user.has_api_token %}<span class="badge bg-success">A token is active</span>
-        {% if current_user.api_token_expires %}<span class="small text-secondary">Expires <span class="localtime" data-utc="{{ current_user.api_token_expires.isoformat() }}Z">{{ current_user.api_token_expires.strftime('%Y-%m-%d') }}</span></span>
+        {% if current_user.api_token_expires %}<span class="small text-secondary">Expires <span>{{ current_user.api_token_expires|datetime }}</span></span>
         {% else %}<span class="small text-secondary">Never expires</span>{% endif %}
         {% else %}<span class="badge bg-secondary">No token</span>{% endif %}
       </p>

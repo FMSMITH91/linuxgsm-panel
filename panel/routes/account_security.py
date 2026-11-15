@@ -12,7 +12,7 @@ from panel.core import i18n
 from panel.core.config import load_config
 from panel.core.http import _r23c_error_json, _wants_json, http_error_page, http_error_sentence
 from panel.db.models import db
-from panel.security import account_guard
+from panel.security import account_guard, account_notices
 from panel.security.auth import log_action, verify_totp_step
 
 # A 403 that is not an access-control refusal: the account has a step to take first.
@@ -28,6 +28,9 @@ def register(app):
     app.before_request(account_guard.twofa_gate)
     app.after_request(_log_access_denied)
     app.register_error_handler(CSRFError, _csrf_refused)
+    # The Account page's "Recent security changes" (read by the template, so both of the page's
+    # renders show it without passing it).
+    app.jinja_env.globals["account_changes"] = account_notices.recent_changes
     _register_reauth(app)
 
 

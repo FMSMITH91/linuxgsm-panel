@@ -288,7 +288,7 @@
            the new one (tailscale._serve_change_mount), so the page in use never loses its way in. #}
         {% if config.tailscale_setup_done %}
         <button class="btn btn-outline-secondary btn-sm" data-action="changeServePath" data-args='["@self"]'
-                data-mount="{{ config.tailscale_mount or '/' }}">
+                data-current-mount="{{ config.tailscale_mount or '/' }}">
           <i class="bi bi-signpost-split"></i> Change path
         </button>
         {% endif %}

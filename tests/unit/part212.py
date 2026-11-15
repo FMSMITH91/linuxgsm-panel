@@ -49,7 +49,7 @@ _R212 = {"users": [], "ips": []}
 _K212_CUR = "Argon2id!" + "Now1"
 _K212_OLD = "Bcrypt256!" + "Then2"
 _K212_RAW = "Bare2b!" + "Then3"
-_K212_NEW = "Fresh!" + "Choice4"
+_K212_NEW = "Fresh!" + "Choice4 meadow"     # 20 characters: past the 15 a password without 2FA needs
 _K212_WRONG = "Wrong!" + "Guess5"
 _K212_BK = "backup " + "phrase 212"
 _PINNED212 = "$argon2id$v=19$m=19456,t=2,p=1$"

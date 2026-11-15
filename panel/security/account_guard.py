@@ -185,8 +185,12 @@ def twofa_gate():
 
 
 def _note_enforced(user):
-    """Once per session: audit (2fa_setup_required) and alert that 2FA setup is being required."""
-    if session.get("_2fa_enforced"):
+    """Once per session: audit (2fa_setup_required) and alert that 2FA setup is being required.
+
+    Not for an API token's request: it has no session to remember the note in, so every call would
+    write one (the gate still refuses it).
+    """
+    if session.get("_2fa_enforced") or _bearer():
         return
     session["_2fa_enforced"] = True
     from panel.security.auth import log_action

@@ -213,7 +213,7 @@ function disableServe(btn) {
 // Move the panel's Serve path in one step. The server publishes the new path, checks Serve shows it,
 // and only then removes the old one; the answer names the new address, and the page goes there.
 function changeServePath(btn) {
-  var current = (btn && btn.dataset && btn.dataset.mount) || '/';
+  var current = (btn && btn.dataset && btn.dataset.currentMount) || '/';
   var wrap = document.createElement('div');
   var note = document.createElement('p');
   note.className = 'small mb-2';
