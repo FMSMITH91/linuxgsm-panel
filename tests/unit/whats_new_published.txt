@@ -3,6 +3,7 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+ad1c505c Stored secrets are encrypted with AES-256-GCM, under a key you can rotate.
 ab50fee3 Built-in HTTPS that fails to start no longer serves plain HTTP to the network.
 c7cb7a2b ntfy alerts are never sent to this host, link-local or cloud-metadata addresses.
 5052b42c Stricter browser security headers.

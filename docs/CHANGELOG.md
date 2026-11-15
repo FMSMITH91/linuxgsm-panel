@@ -1440,6 +1440,13 @@ compares git commits, not this file.
 
 ### Security
 
+- **Stored secrets are encrypted with AES-256-GCM, under a key you can rotate.** SSH credentials,
+  database logins, e-mail addresses, 2FA secrets and bot tokens were encrypted with AES-128
+  (Fernet); they are now AES-256-GCM, the option OWASP recommends, and existing values are re-
+  encrypted in the background after the update. Host page > Maintenance > Diagnostics shows the key
+  in use and has Rotate encryption key, which re-encrypts everything under a new key while the old
+  one keeps working until nothing uses it.
+
 - **Built-in HTTPS that fails to start no longer serves plain HTTP to the network.** The panel then
   listens on 127.0.0.1 only and says why and how to fix it; Tailscale Serve and an SSH tunnel still
   reach it.
